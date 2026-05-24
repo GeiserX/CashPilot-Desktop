@@ -71,9 +71,10 @@ pub async fn on_app_ready(app: AppHandle) {
 
 pub fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
     if let WindowEvent::CloseRequested { .. } = event {
+        let state = window.state::<AppState>();
+
         if let Ok(pos) = window.outer_position() {
             if let Ok(size) = window.outer_size() {
-                let state = window.state::<AppState>();
                 if let Ok(mut config) = state.config.lock() {
                     config.window_state.x = pos.x;
                     config.window_state.y = pos.y;
@@ -85,10 +86,9 @@ pub fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
             }
         }
 
-        let state = window.state::<AppState>();
         if let Ok(mut manager) = state.sidecar.lock() {
             let _ = manager.kill();
-        }
+        };
     }
 }
 
