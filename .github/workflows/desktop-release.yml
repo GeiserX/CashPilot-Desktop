@@ -203,9 +203,9 @@ jobs:
           MACOS_X64_SIG=$(find artifacts/desktop-x86_64-apple-darwin -name "*.app.tar.gz.sig" 2>/dev/null -exec cat {} \; || echo "")
           WINDOWS_SIG=$(find artifacts/desktop-x86_64-pc-windows-msvc -name "*.nsis.zip.sig" -o -name "*.exe.sig" 2>/dev/null -exec cat {} \; || echo "")
 
-          MACOS_ARM_URL=$(find artifacts/desktop-aarch64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | xargs -r basename || echo "")
-          MACOS_X64_URL=$(find artifacts/desktop-x86_64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | xargs -r basename || echo "")
-          WINDOWS_URL=$(find artifacts/desktop-x86_64-pc-windows-msvc \( -name "*.nsis.zip" -o -name "*-setup.exe" \) ! -name "*.sig" 2>/dev/null | head -1 | xargs -r basename || echo "")
+          MACOS_ARM_URL=$(find artifacts/desktop-aarch64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
+          MACOS_X64_URL=$(find artifacts/desktop-x86_64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
+          WINDOWS_URL=$(find artifacts/desktop-x86_64-pc-windows-msvc \( -name "*.nsis.zip" -o -name "*-setup.exe" \) ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
 
           echo "=== Signatures found ==="
           echo "MACOS_ARM_SIG length: ${#MACOS_ARM_SIG}"
