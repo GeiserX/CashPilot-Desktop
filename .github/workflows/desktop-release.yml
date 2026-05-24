@@ -36,26 +36,27 @@ jobs:
           path: CashPilot
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Python dependencies
-        run: |
-          if command -v python3 &>/dev/null; then
-            python3 -m pip install -r sidecar/requirements.txt
-          else
-            python -m pip install -r sidecar/requirements.txt
-          fi
-        shell: bash
+      - name: Install Python dependencies (Unix)
+        if: runner.os != 'Windows'
+        run: python3 -m pip install --break-system-packages -r sidecar/requirements.txt
 
-      - name: Build sidecar
+      - name: Install Python dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: python -m pip install -r sidecar/requirements.txt
+
+      - name: Build sidecar (Unix)
+        if: runner.os != 'Windows'
         env:
           CASHPILOT_BACKEND_PATH: ${{ github.workspace }}/CashPilot
         working-directory: sidecar
-        run: |
-          if command -v python3 &>/dev/null; then
-            python3 -m PyInstaller cashpilot-sidecar.spec
-          else
-            python -m PyInstaller cashpilot-sidecar.spec
-          fi
-        shell: bash
+        run: python3 -m PyInstaller cashpilot-sidecar.spec
+
+      - name: Build sidecar (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CASHPILOT_BACKEND_PATH: ${{ github.workspace }}/CashPilot
+        working-directory: sidecar
+        run: python -m PyInstaller cashpilot-sidecar.spec
 
       - uses: actions/upload-artifact@v4
         with:
