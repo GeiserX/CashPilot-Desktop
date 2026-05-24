@@ -373,6 +373,10 @@
         }
 
         async function testConnection() {
+            const btn = document.querySelector('.btn-row .btn:last-child');
+            if (btn && btn.disabled) return;
+            if (btn) btn.disabled = true;
+
             const target = document.getElementById('worker-target').value.trim();
             const fleetKey = document.getElementById('fleet-key').value.trim();
             const statusEl = document.getElementById('connect-status');
@@ -380,11 +384,13 @@
             if (!target) {
                 statusEl.className = 'error';
                 statusEl.textContent = 'Please enter an address.';
+                if (btn) btn.disabled = false;
                 return;
             }
             if (!fleetKey) {
                 statusEl.className = 'error';
                 statusEl.textContent = 'Please enter the fleet key.';
+                if (btn) btn.disabled = false;
                 return;
             }
 
@@ -419,10 +425,12 @@
                 } else {
                     statusEl.className = 'error';
                     statusEl.textContent = `Connection failed (HTTP ${response.status}). Check the address.`;
+                    if (btn) btn.disabled = false;
                 }
             } catch (e) {
                 statusEl.className = 'error';
                 statusEl.textContent = 'Could not reach the address. Check it is correct and reachable.';
+                if (btn) btn.disabled = false;
             }
         }
     </script>
