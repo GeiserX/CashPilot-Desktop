@@ -23,7 +23,7 @@
       "iconAsTemplate": true
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src http://127.0.0.1:* https://github.com https://api.github.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
   },
   "bundle": {

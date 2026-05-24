@@ -78,15 +78,27 @@
             const list = document.getElementById('service-list');
             const services = Object.entries(data);
             if (services.length === 0) {
-                list.innerHTML = '<p style="color: #71717a; font-size: 0.85rem;">No services running.</p>';
+                list.textContent = '';
+                const p = document.createElement('p');
+                p.style.cssText = 'color: #71717a; font-size: 0.85rem;';
+                p.textContent = 'No services running.';
+                list.appendChild(p);
                 return;
             }
-            list.innerHTML = services.map(([name, status]) => `
-                <div class="service-item">
-                    <span class="name">${name}</span>
-                    <span class="badge ${status === 'running' ? '' : 'stopped'}">${status}</span>
-                </div>
-            `).join('');
+            list.textContent = '';
+            for (const [name, status] of services) {
+                const div = document.createElement('div');
+                div.className = 'service-item';
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'name';
+                nameSpan.textContent = name;
+                const badge = document.createElement('span');
+                badge.className = 'badge' + (status === 'running' ? '' : ' stopped');
+                badge.textContent = status;
+                div.appendChild(nameSpan);
+                div.appendChild(badge);
+                list.appendChild(div);
+            }
         }
 
         refresh();

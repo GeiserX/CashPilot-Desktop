@@ -69,7 +69,7 @@ jobs:
 
   build-tauri:
     needs: build-sidecar
-    if: always() && !cancelled()
+    if: needs.build-sidecar.result == 'success'
     strategy:
       fail-fast: false
       matrix:
@@ -181,7 +181,7 @@ jobs:
 
   publish:
     needs: build-tauri
-    if: always() && !cancelled()
+    if: needs.build-tauri.result == 'success'
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
