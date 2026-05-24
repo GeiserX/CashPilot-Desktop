@@ -117,9 +117,13 @@ jobs:
           name: desktop-${{ matrix.target }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb.sig
 
   publish:
     needs: build-tauri
@@ -131,8 +135,57 @@ jobs:
         with:
           path: artifacts/
 
+      - name: Generate updater manifest (latest.json)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_URL="https://github.com/GeiserX/CashPilot-Desktop/releases/download/${GITHUB_REF_NAME}"
+
+          # Read signature files
+          MACOS_ARM_SIG=$(cat artifacts/desktop-aarch64-apple-darwin/**/*.dmg.sig 2>/dev/null || echo "")
+          MACOS_X64_SIG=$(cat artifacts/desktop-x86_64-apple-darwin/**/*.dmg.sig 2>/dev/null || echo "")
+          LINUX_SIG=$(cat artifacts/desktop-x86_64-unknown-linux-gnu/**/*.AppImage.sig 2>/dev/null || echo "")
+          WINDOWS_SIG=$(cat artifacts/desktop-x86_64-pc-windows-msvc/**/*.exe.sig 2>/dev/null || echo "")
+
+          # Find artifact filenames
+          MACOS_ARM_DMG=$(find artifacts/desktop-aarch64-apple-darwin -name "*.dmg" ! -name "*.sig" | head -1 | xargs basename 2>/dev/null || echo "")
+          MACOS_X64_DMG=$(find artifacts/desktop-x86_64-apple-darwin -name "*.dmg" ! -name "*.sig" | head -1 | xargs basename 2>/dev/null || echo "")
+          LINUX_APPIMAGE=$(find artifacts/desktop-x86_64-unknown-linux-gnu -name "*.AppImage" ! -name "*.sig" | head -1 | xargs basename 2>/dev/null || echo "")
+          WINDOWS_EXE=$(find artifacts/desktop-x86_64-pc-windows-msvc -name "*.exe" ! -name "*.sig" | head -1 | xargs basename 2>/dev/null || echo "")
+
+          cat > latest.json << EOF
+          {
+            "version": "${VERSION}",
+            "notes": "See release notes on GitHub",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "signature": "${MACOS_ARM_SIG}",
+                "url": "${RELEASE_URL}/${MACOS_ARM_DMG}"
+              },
+              "darwin-x86_64": {
+                "signature": "${MACOS_X64_SIG}",
+                "url": "${RELEASE_URL}/${MACOS_X64_DMG}"
+              },
+              "linux-x86_64": {
+                "signature": "${LINUX_SIG}",
+                "url": "${RELEASE_URL}/${LINUX_APPIMAGE}"
+              },
+              "windows-x86_64": {
+                "signature": "${WINDOWS_SIG}",
+                "url": "${RELEASE_URL}/${WINDOWS_EXE}"
+              }
+            }
+          }
+          EOF
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: |
+            artifacts/**/*.dmg
+            artifacts/**/*.exe
+            artifacts/**/*.AppImage
+            artifacts/**/*.deb
+            artifacts/**/*.sig
+            latest.json
           generate_release_notes: true
