@@ -277,7 +277,7 @@ dependencies = [
 
 [[package]]
 name = "cashpilot-desktop"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "dirs",
  "keyring",
