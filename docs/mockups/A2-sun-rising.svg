@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800">
+  <defs>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#06060f"/>
+      <stop offset="40%" stop-color="#0a0018"/>
+      <stop offset="60%" stop-color="#150030"/>
+      <stop offset="75%" stop-color="#250048"/>
+      <stop offset="100%" stop-color="#06060f"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="25%" stop-color="#fbbf24"/>
+      <stop offset="45%" stop-color="#fb923c"/>
+      <stop offset="65%" stop-color="#e11d48"/>
+      <stop offset="85%" stop-color="#9f1239"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="50%">
+      <stop offset="30%" stop-color="#fbbf24" stop-opacity="0.18"/>
+      <stop offset="55%" stop-color="#fb923c" stop-opacity="0.1"/>
+      <stop offset="80%" stop-color="#e11d48" stop-opacity="0.04"/>
+      <stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+    <clipPath id="sun-clip"><circle cx="600" cy="380" r="180"/></clipPath>
+    <!-- Half-sun clip (only show top half rising above horizon) -->
+    <clipPath id="half-clip"><rect x="0" y="0" width="1200" height="380"/></clipPath>
+  </defs>
+
+  <rect width="1200" height="800" fill="url(#sky)"/>
+
+  <!-- Stars -->
+  <g fill="#fff">
+    <circle cx="80" cy="30" r="1.3" opacity="0.9"/><circle cx="220" cy="70" r="0.7" opacity="0.5"/>
+    <circle cx="380" cy="20" r="1" opacity="0.7"/><circle cx="540" cy="55" r="0.8" opacity="0.4"/>
+    <circle cx="700" cy="35" r="1.1" opacity="0.6"/><circle cx="870" cy="60" r="0.6" opacity="0.4"/>
+    <circle cx="1020" cy="25" r="1.2" opacity="0.7"/><circle cx="1150" cy="50" r="0.9" opacity="0.6"/>
+    <circle cx="130" cy="140" r="0.5" opacity="0.3"/><circle cx="1080" cy="120" r="0.6" opacity="0.3"/>
+  </g>
+
+  <!-- Sun halo -->
+  <circle cx="600" cy="380" r="260" fill="url(#halo)"/>
+
+  <!-- THE SUN (half visible, rising from horizon) -->
+  <g clip-path="url(#half-clip)">
+    <circle cx="600" cy="380" r="180" fill="url(#sun)"/>
+    <g clip-path="url(#sun-clip)">
+      <rect x="415" y="380" width="370" height="6" fill="#06060f"/>
+      <!-- Only top half scan lines matter since bottom is clipped -->
+      <!-- AIRPLANE (in the visible top portion) -->
+      <g transform="translate(600,300) rotate(27)">
+        <path d="M0,-40 L4,-8 L44,3 L4,7 L6,17 L0,12 L-6,17 L-4,7 L-44,3 L-4,-8 Z"
+              fill="#06060f" opacity="0.65"/>
+      </g>
+    </g>
+  </g>
+
+  <!-- HORIZON (sun rises from here) -->
+  <rect x="0" y="378" width="1200" height="4" fill="#fb7185" opacity="0.85"/>
+  <rect x="0" y="376" width="1200" height="2" fill="#fde68a" opacity="0.4"/>
+
+  <!-- Warm glow on horizon -->
+  <rect x="300" y="350" width="600" height="30" fill="url(#halo)" opacity="0.4"/>
+
+  <!-- Grid floor -->
+  <g stroke="#8b5cf6" opacity="0.45">
+    <line x1="0" y1="410" x2="1200" y2="410" stroke-width="0.8"/>
+    <line x1="0" y1="445" x2="1200" y2="445" stroke-width="0.7"/>
+    <line x1="0" y1="485" x2="1200" y2="485" stroke-width="0.6"/>
+    <line x1="0" y1="535" x2="1200" y2="535" stroke-width="0.5"/>
+    <line x1="0" y1="595" x2="1200" y2="595" stroke-width="0.5"/>
+    <line x1="0" y1="670" x2="1200" y2="670" stroke-width="0.4"/>
+    <line x1="0" y1="760" x2="1200" y2="760" stroke-width="0.3"/>
+  </g>
+  <g stroke="#fb7185" opacity="0.15">
+    <line x1="600" y1="382" x2="-50" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="150" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="300" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="450" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="600" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="750" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="900" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="1050" y2="800" stroke-width="0.7"/>
+    <line x1="600" y1="382" x2="1250" y2="800" stroke-width="0.7"/>
+  </g>
+
+  <!-- Content (below horizon on grid) -->
+  <text x="600" y="480" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="42" font-weight="700" fill="#e4e4e7" text-anchor="middle">
+    Welcome to CashPilot
+  </text>
+  <text x="600" y="520" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="15" fill="#a1a1aa" text-anchor="middle">
+    Passive income from your machine, effortlessly.
+  </text>
+  <text x="600" y="555" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="13" fill="#71717a" text-anchor="middle">
+    Deploys and monitors bandwidth-sharing, DePIN, and compute services using Docker.
+  </text>
+
+  <rect x="510" y="585" rx="6" ry="6" width="180" height="46" fill="#fb7185"/>
+  <text x="600" y="614" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="15" font-weight="600" fill="#fff" text-anchor="middle">
+    Get Started
+  </text>
+
+  <rect x="0" y="0" width="1200" height="2" fill="#fb7185" opacity="0.5"/>
+  <rect x="0" y="798" width="1200" height="2" fill="#22d3ee" opacity="0.3"/>
+
+  <text x="20" y="785" font-family="monospace" font-size="11" fill="#4a4a5a">
+    A2: Half-sun rising from horizon (bottom half hidden). Sunrise moment. Airplane prominent in sky.
+  </text>
+</svg>

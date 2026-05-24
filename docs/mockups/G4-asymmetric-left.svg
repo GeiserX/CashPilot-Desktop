@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" width="1200" height="800">
+  <defs>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#06060f"/>
+      <stop offset="30%" stop-color="#0d0022"/>
+      <stop offset="50%" stop-color="#1a003a"/>
+      <stop offset="60%" stop-color="#2d0050"/>
+      <stop offset="100%" stop-color="#06060f"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="25%" stop-color="#fbbf24"/>
+      <stop offset="45%" stop-color="#fb923c"/>
+      <stop offset="65%" stop-color="#e11d48"/>
+      <stop offset="85%" stop-color="#9f1239"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="50%">
+      <stop offset="35%" stop-color="#fb923c" stop-opacity="0.2"/>
+      <stop offset="65%" stop-color="#e11d48" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="transparent"/>
+    </radialGradient>
+    <clipPath id="sun-clip"><circle cx="350" cy="320" r="140"/></clipPath>
+  </defs>
+
+  <rect width="1200" height="800" fill="url(#sky)"/>
+
+  <!-- Stars -->
+  <g fill="#fff">
+    <circle cx="80" cy="30" r="1.2" opacity="0.8"/><circle cx="600" cy="50" r="0.9" opacity="0.6"/>
+    <circle cx="800" cy="35" r="1.1" opacity="0.7"/><circle cx="1000" cy="60" r="0.7" opacity="0.5"/>
+    <circle cx="1150" cy="30" r="1" opacity="0.6"/><circle cx="900" cy="100" r="0.6" opacity="0.3"/>
+    <circle cx="700" cy="120" r="0.5" opacity="0.3"/>
+  </g>
+
+  <!-- Sun (offset LEFT) -->
+  <circle cx="350" cy="320" r="200" fill="url(#halo)"/>
+  <circle cx="350" cy="320" r="140" fill="url(#sun)"/>
+  <g clip-path="url(#sun-clip)">
+    <rect x="205" y="320" width="290" height="5" fill="#06060f"/>
+    <rect x="205" y="331" width="290" height="6" fill="#06060f"/>
+    <rect x="205" y="344" width="290" height="8" fill="#06060f"/>
+    <rect x="205" y="359" width="290" height="11" fill="#06060f"/>
+    <rect x="205" y="377" width="290" height="14" fill="#06060f"/>
+    <rect x="205" y="400" width="290" height="18" fill="#06060f"/>
+    <rect x="205" y="427" width="290" height="24" fill="#06060f"/>
+    <!-- AIRPLANE -->
+    <g transform="translate(350,272) rotate(27)">
+      <path d="M0,-32 L3,-7 L34,2.5 L3.5,6 L5,14 L0,10 L-5,14 L-3.5,6 L-34,2.5 L-3,-7 Z"
+            fill="#06060f" opacity="0.7"/>
+    </g>
+  </g>
+
+  <!-- Horizon -->
+  <rect x="0" y="430" width="1200" height="3" fill="#fb7185" opacity="0.7"/>
+
+  <!-- Grid (converging to sun's X position) -->
+  <g stroke="#8b5cf6" opacity="0.35">
+    <line x1="0" y1="460" x2="1200" y2="460" stroke-width="0.7"/>
+    <line x1="0" y1="500" x2="1200" y2="500" stroke-width="0.6"/>
+    <line x1="0" y1="550" x2="1200" y2="550" stroke-width="0.5"/>
+    <line x1="0" y1="610" x2="1200" y2="610" stroke-width="0.5"/>
+    <line x1="0" y1="690" x2="1200" y2="690" stroke-width="0.4"/>
+    <line x1="0" y1="780" x2="1200" y2="780" stroke-width="0.3"/>
+  </g>
+  <g stroke="#fb7185" opacity="0.12">
+    <line x1="350" y1="433" x2="-200" y2="800" stroke-width="0.6"/>
+    <line x1="350" y1="433" x2="0" y2="800" stroke-width="0.6"/>
+    <line x1="350" y1="433" x2="200" y2="800" stroke-width="0.6"/>
+    <line x1="350" y1="433" x2="400" y2="800" stroke-width="0.6"/>
+    <line x1="350" y1="433" x2="600" y2="800" stroke-width="0.6"/>
+    <line x1="350" y1="433" x2="800" y2="800" stroke-width="0.6"/>
+    <line x1="350" y1="433" x2="1000" y2="800" stroke-width="0.6"/>
+    <line x1="350" y1="433" x2="1200" y2="800" stroke-width="0.6"/>
+  </g>
+
+  <!-- Content (RIGHT side, clear of sun) -->
+  <text x="820" y="250" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="42" font-weight="700" fill="#e4e4e7" text-anchor="middle">
+    Welcome to
+  </text>
+  <text x="820" y="300" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="42" font-weight="700" fill="#e4e4e7" text-anchor="middle">
+    CashPilot
+  </text>
+  <text x="820" y="340" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="15" fill="#a1a1aa" text-anchor="middle">
+    Passive income from your machine, effortlessly.
+  </text>
+
+  <rect x="730" y="375" rx="6" ry="6" width="180" height="46" fill="#fb7185"/>
+  <text x="820" y="404" font-family="Inter, -apple-system, Arial, sans-serif"
+        font-size="15" font-weight="600" fill="#fff" text-anchor="middle">
+    Get Started
+  </text>
+
+  <rect x="0" y="0" width="1200" height="2" fill="#fb7185" opacity="0.5"/>
+  <rect x="0" y="798" width="1200" height="2" fill="#22d3ee" opacity="0.3"/>
+
+  <text x="20" y="785" font-family="monospace" font-size="11" fill="#4a4a5a">
+    G4: Sun offset left, content right. Asymmetric composition. Grid converges to sun.
+  </text>
+</svg>
