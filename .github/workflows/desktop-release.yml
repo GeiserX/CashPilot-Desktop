@@ -47,12 +47,11 @@ jobs:
       - name: Install Python dependencies (Windows)
         if: runner.os == 'Windows'
         env:
-          TMPDIR: ${{ github.workspace }}/../_tmp
-          TEMP: ${{ github.workspace }}/../_tmp
-          TMP: ${{ github.workspace }}/../_tmp
+          TEMP: E:\tmp
+          TMP: E:\tmp
         run: |
-          New-Item -ItemType Directory -Force -Path "$env:TMPDIR" | Out-Null
-          python -m pip install --cache-dir "$env:TMPDIR\pip-cache" -r sidecar/requirements.txt
+          New-Item -ItemType Directory -Force -Path "E:\tmp" | Out-Null
+          python -m pip install --no-cache-dir -r sidecar/requirements.txt
 
       - name: Build sidecar (Unix)
         if: runner.os != 'Windows'
@@ -75,6 +74,7 @@ jobs:
 
   build-tauri:
     needs: build-sidecar
+    if: always() && !cancelled()
     strategy:
       fail-fast: false
       matrix:
@@ -167,6 +167,7 @@ jobs:
 
   publish:
     needs: build-tauri
+    if: always() && !cancelled()
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
