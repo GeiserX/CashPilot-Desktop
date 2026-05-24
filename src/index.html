@@ -6,19 +6,155 @@
     <title>CashPilot</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e4e4e7; display: flex; align-items: center; justify-content: center; height: 100vh; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #06060f;
+            color: #e4e4e7;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+        .titlebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 28px;
+            background: #06060f;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .titlebar span {
+            font-size: 12px;
+            font-weight: 500;
+            color: #a1a1aa;
+            user-select: none;
+            pointer-events: none;
+        }
+        .synthwave-bg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+        }
+        .content-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 48vh;
+        }
         .loader { text-align: center; }
-        .loader h1 { font-size: 2rem; margin-bottom: 1rem; }
-        .loader p { color: #71717a; }
-        .spinner { width: 40px; height: 40px; border: 3px solid #27272a; border-top-color: #22c55e; border-radius: 50%; animation: spin 1s linear infinite; margin: 1rem auto; }
+        .loader h1 { font-size: 2.4rem; margin-bottom: 0.75rem; font-weight: 700; }
+        .spinner {
+            width: 36px; height: 36px;
+            border: 3px solid #27272a;
+            border-top-color: #fb7185;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        .loader p { color: #a1a1aa; font-size: 0.9rem; }
         @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
-    <div class="loader" id="loader">
-        <h1>CashPilot</h1>
-        <div class="spinner"></div>
-        <p id="status-text">Checking system...</p>
+    <div class="titlebar" data-tauri-drag-region><span>CashPilot Desktop</span></div>
+    <!-- Full-window synthwave background -->
+    <svg class="synthwave-bg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#06060f"/>
+          <stop offset="25%" stop-color="#0d0022"/>
+          <stop offset="40%" stop-color="#1a003a"/>
+          <stop offset="50%" stop-color="#2d0055"/>
+          <stop offset="100%" stop-color="#06060f"/>
+        </linearGradient>
+        <linearGradient id="sun" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#fde68a"/>
+          <stop offset="25%" stop-color="#fbbf24"/>
+          <stop offset="45%" stop-color="#fb923c"/>
+          <stop offset="65%" stop-color="#e11d48"/>
+          <stop offset="85%" stop-color="#9f1239"/>
+          <stop offset="100%" stop-color="#6d28d9"/>
+        </linearGradient>
+        <radialGradient id="halo" cx="50%" cy="50%">
+          <stop offset="35%" stop-color="#fb923c" stop-opacity="0.2"/>
+          <stop offset="65%" stop-color="#e11d48" stop-opacity="0.08"/>
+          <stop offset="100%" stop-color="transparent"/>
+        </radialGradient>
+        <clipPath id="sun-clip"><circle cx="600" cy="240" r="120"/></clipPath>
+        <linearGradient id="reflect" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#fb923c" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="transparent"/>
+        </linearGradient>
+      </defs>
+
+      <rect width="1200" height="800" fill="url(#sky)"/>
+
+      <g fill="#fff">
+        <circle cx="80" cy="30" r="1.2" opacity="0.8"/><circle cx="220" cy="70" r="0.7" opacity="0.5"/>
+        <circle cx="370" cy="20" r="1" opacity="0.7"/><circle cx="520" cy="55" r="0.8" opacity="0.4"/>
+        <circle cx="680" cy="35" r="1.1" opacity="0.6"/><circle cx="840" cy="60" r="0.6" opacity="0.4"/>
+        <circle cx="980" cy="25" r="1.2" opacity="0.7"/><circle cx="1120" cy="50" r="0.9" opacity="0.6"/>
+      </g>
+
+      <rect x="0" y="237" width="1200" height="3" fill="#fb7185" opacity="0.8"/>
+      <rect x="0" y="236" width="1200" height="1" fill="#fde68a" opacity="0.3"/>
+
+      <circle cx="600" cy="240" r="180" fill="url(#halo)"/>
+      <circle cx="600" cy="240" r="120" fill="url(#sun)"/>
+      <g clip-path="url(#sun-clip)">
+        <rect x="475" y="240" width="250" height="3" fill="#06060f"/>
+        <rect x="475" y="249" width="250" height="5" fill="#06060f"/>
+        <rect x="475" y="260" width="250" height="7" fill="#06060f"/>
+        <rect x="475" y="273" width="250" height="9" fill="#06060f"/>
+        <rect x="475" y="288" width="250" height="11" fill="#06060f"/>
+        <rect x="475" y="306" width="250" height="14" fill="#06060f"/>
+        <rect x="475" y="328" width="250" height="18" fill="#06060f"/>
+        <g transform="translate(600,200) rotate(27)">
+          <path d="M0,-25 L2.5,-5 L27,2 L2.5,4.5 L3.5,11 L0,7.5 L-3.5,11 L-2.5,4.5 L-27,2 L-2.5,-5 Z"
+                fill="#06060f" opacity="0.7"/>
+        </g>
+      </g>
+
+      <ellipse cx="600" cy="280" rx="80" ry="20" fill="url(#reflect)"/>
+
+      <g stroke="#8b5cf6" opacity="0.4">
+        <line x1="0" y1="280" x2="1200" y2="280" stroke-width="0.7"/>
+        <line x1="0" y1="330" x2="1200" y2="330" stroke-width="0.6"/>
+        <line x1="0" y1="390" x2="1200" y2="390" stroke-width="0.6"/>
+        <line x1="0" y1="460" x2="1200" y2="460" stroke-width="0.5"/>
+        <line x1="0" y1="540" x2="1200" y2="540" stroke-width="0.5"/>
+        <line x1="0" y1="635" x2="1200" y2="635" stroke-width="0.4"/>
+        <line x1="0" y1="740" x2="1200" y2="740" stroke-width="0.4"/>
+      </g>
+      <g stroke="#fb7185" opacity="0.15">
+        <line x1="600" y1="242" x2="-50" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="150" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="300" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="450" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="600" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="750" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="900" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="1050" y2="800" stroke-width="0.6"/>
+        <line x1="600" y1="242" x2="1250" y2="800" stroke-width="0.6"/>
+      </g>
+
+      <rect x="0" y="3" width="1200" height="2" fill="#fb7185" opacity="0.5"/>
+      <rect x="0" y="795" width="1200" height="2" fill="#22d3ee" opacity="0.3"/>
+    </svg>
+
+    <div class="content-overlay">
+        <div class="loader" id="loader">
+            <div class="spinner"></div>
+            <p id="status-text">Checking system...</p>
+        </div>
     </div>
     <script src="pages/app.js"></script>
 </body>

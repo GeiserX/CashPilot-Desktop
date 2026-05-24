@@ -13,18 +13,17 @@
 
 ## What is CashPilot Desktop?
 
-CashPilot Desktop is a native desktop application for monitoring your [CashPilot](https://github.com/GeiserX/CashPilot) passive income fleet. It connects to your CashPilot backend and provides real-time earnings visibility, service health monitoring, and historical analytics — all from your system tray.
-
-Built with [Tauri v2](https://tauri.app) for a lightweight, cross-platform experience with native performance.
+CashPilot Desktop is a native desktop application for managing your [CashPilot](https://github.com/GeiserX/CashPilot) passive income fleet. It can run as a **full dashboard** (managing services, tracking earnings, and connecting workers) or as a **worker node** (reporting back to an existing CashPilot instance). Built with [Tauri v2](https://tauri.app) for a lightweight, cross-platform experience with native performance.
 
 ## Features
 
-- **Real-time dashboard** — Live earnings, service status, and node health at a glance
-- **System tray** — Runs quietly in the background with quick-access menu
-- **Multi-node monitoring** — Aggregate view across your entire CashPilot fleet
-- **Auto-updater** — Seamless in-app updates with ed25519 signature verification
-- **Cross-platform** — Native builds for macOS (ARM64 + Intel), Windows, and Linux
-- **Lightweight** — ~5 MB installer, minimal resource usage thanks to Tauri
+- **Dual mode** -- Full CashPilot dashboard or lightweight Worker Node
+- **System tray** -- Runs quietly in the background with quick-access status
+- **Real-time monitoring** -- Live earnings, service status, and node health
+- **Multi-node fleet** -- Aggregate view across your entire CashPilot fleet
+- **Auto-updater** -- Seamless in-app updates with ed25519 signature verification
+- **Cross-platform** -- Native builds for macOS (ARM64), Windows, and Linux
+- **Lightweight** -- ~5 MB installer, minimal resource usage thanks to Tauri
 
 ## Installation
 
@@ -33,30 +32,92 @@ Download the latest release for your platform:
 | Platform | Download |
 |----------|----------|
 | macOS (Apple Silicon) | [`.dmg`](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) |
-| macOS (Intel) | [`.dmg`](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) |
-| Windows | [`.exe`](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) |
+| Windows | [`.exe` / `.msi`](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) |
 | Linux (Debian/Ubuntu) | [`.deb`](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) |
+| Linux (AppImage) | [`.AppImage`](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) |
 
 After installation, the app auto-updates itself when new versions are available.
 
 ## Quick Start
 
-1. Install [CashPilot](https://github.com/GeiserX/CashPilot) on your server(s)
-2. Download and install CashPilot Desktop for your platform
-3. Connect to your CashPilot instance
-4. Monitor your earnings from the system tray
+1. Download and install CashPilot Desktop for your platform
+2. Launch the app -- the setup wizard will guide you
+3. Choose **CashPilot** mode (full dashboard) or **Worker Node** mode
+4. If Worker Node, enter your CashPilot instance address and fleet key
+5. Monitor your earnings from the system tray
+
+## Supported Services
+
+CashPilot manages 40+ passive income services across multiple categories. Below is the full catalog.
+
+### Docker-Deployable Services
+
+Services CashPilot can deploy and manage automatically via Docker containers.
+
+| Service | Residential IP | VPS IP | Devices / Acct | Devices / IP | Payout |
+|---------|:-:|:-:|:-:|:-:|--------|
+| [Anyone Protocol](https://anyone.io) | ✅ | ✅ | Unlimited | 1 | Crypto (ANYONE) |
+| [Bitping](https://app.bitping.com) | ✅ | ✅ | Unlimited | 1 | Crypto (SOL) |
+| [Earn.fm](https://earn.fm) | ✅ | ✅ | Unlimited | 1 | Crypto |
+| [EarnApp](https://earnapp.com) | ✅ | ❌ | 15 | 1 | PayPal, Gift Cards, Wise |
+| [Honeygain](https://dashboard.honeygain.com) | ✅ | ❌ | 10 | 1 | PayPal, Crypto |
+| [IPRoyal Pawns](https://pawns.app) | ✅ | ❌ | Unlimited | 1 | PayPal, Crypto, Bank Transfer |
+| [MystNodes](https://mystnodes.co) | ✅ | ✅ | Unlimited | Unlimited | Crypto (MYST) |
+| [PacketStream](https://packetstream.io) | ✅ | ❌ | Unlimited | 1 | PayPal |
+| [Presearch](https://presearch.com) | ✅ | ✅ | Unlimited | 1 | Crypto (PRE) |
+| [ProxyBase](https://peer.proxybase.org) | ✅ | ❌ | Unlimited | 1 | Crypto |
+| [ProxyLite](https://proxylite.ru) | ✅ | ✅ | Unlimited | 1 | Crypto, PayPal |
+| [ProxyRack](https://peer.proxyrack.com) | ✅ | ✅ | 500 | 1 | PayPal, Crypto |
+| [Repocket](https://repocket.com) | ✅ | ❌ | 5 | 2 | PayPal, Crypto |
+| [Storj](https://www.storj.io/node) | ✅ | ✅ | Unlimited | 1 | Crypto (STORJ) |
+| [Traffmonetizer](https://traffmonetizer.com) | ✅ | ✅ | Unlimited | Unlimited | Crypto (USDT), PayPal |
+| [URnetwork](https://ur.io) | ✅ | ✅ | Unlimited | 1 | Crypto |
+
+### Browser Extension / Desktop Only
+
+These services have no Docker image. CashPilot lists them in the catalog with signup links and earning estimates.
+
+| Service | Residential IP | VPS IP | Devices / Acct | Devices / IP | Payout |
+|---------|:-:|:-:|:-:|:-:|--------|
+| [Bytelixir](https://bytelixir.com) | ✅ | ❌ | Unlimited | 1 | Crypto |
+| [Dawn Internet](https://dawninternet.com) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) |
+| [Deeper Network](https://deeper.network) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) |
+| [Ebesucher](https://www.ebesucher.com) | ✅ | ✅ | Unlimited | 1 | PayPal |
+| [Gradient Network](https://app.gradient.network) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) |
+| [Grass](https://app.grass.io) | ✅ | ❌ | Unlimited | 1 | Crypto (GRASS) |
+| [Helium](https://helium.com) | ✅ | ❌ | Unlimited | 1 | Crypto (HNT) |
+| [Nodepay](https://app.nodepay.ai) | ✅ | ❌ | Unlimited | 1 | Crypto (NC) |
+| [Nodle](https://nodle.com) | ✅ | ✅ | Unlimited | 1 | Crypto (NODL) |
+| [PassiveApp](https://passiveapp.com) | ✅ | ❌ | Unlimited | 1 | Crypto, PayPal |
+| [Sentinel dVPN](https://sentinel.co) | ✅ | ✅ | Unlimited | 1 | Crypto (DVPN) |
+| [Spide](https://spide.network) | ✅ | ❌ | Unlimited | 1 | Crypto |
+| [Teneo Protocol](https://dashboard.teneo.pro) | ✅ | ❌ | Unlimited | 1 | Crypto (TENEO) |
+| [Theta Edge Node](https://thetatoken.org) | ✅ | ✅ | Unlimited | 1 | Crypto (TFUEL) |
+| [Titan Network](https://edge.titannet.info) | ✅ | ❌ | Unlimited | 1 | Crypto (TNT) |
+| [Uprock](https://link.uprock.com) | ✅ | ❌ | Unlimited | 1 | Crypto |
+
+### GPU Compute
+
+GPU-intensive computing services. Requires compatible hardware.
+
+| Service | Residential IP | GPU Required | Min Storage | Payout |
+|---------|:-:|:-:|:-:|--------|
+| [Flux](https://runonflux.io) | ✅ | ❌ | 220GB | Crypto (FLUX) |
+| [Golem Network](https://golem.network) | ✅ | ❌ | 20GB | Crypto (GLM) |
+| [io.net](https://io.net) | ✅ | ✅ | N/A | Crypto (IO) |
+| [Nosana](https://nosana.io) | ✅ | ✅ | 50GB | Crypto (NOS) |
+| [Salad](https://salad.io) | ✅ | ✅ | N/A | PayPal, Gift Cards |
+| [Vast.ai](https://cloud.vast.ai) | ✅ | ✅ | 100GB | Crypto, Bank Transfer |
 
 ## Architecture
 
 ```
 CashPilot Desktop (Tauri v2)
-├── Frontend (HTML/CSS/JS)
-├── Rust Core (system tray, updater, IPC)
-└── Python Sidecar (CashPilot backend communication)
-    └── Connects to CashPilot API
+├── Frontend (HTML/CSS/JS) — setup wizard, status popup
+├── Rust Core — system tray, auto-updater, IPC, Docker management
+└── Python Sidecar (PyInstaller) — CashPilot backend communication
+    └── Connects to CashPilot API for earnings & fleet data
 ```
-
-The application bundles a Python sidecar binary (built with PyInstaller) that handles all communication with the CashPilot backend, keeping the frontend lightweight and responsive.
 
 ## Development
 

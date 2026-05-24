@@ -42,12 +42,50 @@ async fn set_mode(
     target: Option<String>,
     fleet_key: Option<String>,
 ) -> Result<(), String> {
+    if let Some(ref key) = fleet_key {
+        store_fleet_key(key).map_err(|e| format!("Failed to store fleet key: {e}"))?;
+    }
     let mut config = state.config.lock().map_err(|e| e.to_string())?;
     config.mode = mode;
     config.worker_target = target;
-    config.fleet_key = fleet_key;
+    config.fleet_key = None;
     config.first_run_complete = true;
     config::save_config(&config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn test_worker_connection(url: String) -> Result<u16, String> {
+    let parsed = url::Url::parse(&url).map_err(|e| format!("Invalid URL: {e}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err("Only HTTP/HTTPS addresses are supported.".to_string());
+    }
+    let health_url = format!("{}/health", url.trim_end_matches('/'));
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(5)))
+        .build()
+        .new_agent();
+    let response = agent.get(&health_url)
+        .call()
+        .map_err(|e| format!("Could not reach the address: {e}"))?;
+    Ok(response.status().as_u16())
+}
+
+fn store_fleet_key(key: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new("com.cashpilot.desktop", "fleet-key")
+        .map_err(|e| e.to_string())?;
+    entry.set_password(key).map_err(|e| e.to_string())
+}
+
+#[allow(dead_code)]
+fn get_fleet_key() -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new("com.cashpilot.desktop", "fleet-key")
+        .map_err(|e| e.to_string())?;
+    match entry.get_password() {
+        Ok(key) => Ok(Some(key)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -85,6 +123,7 @@ pub fn run() {
             get_sidecar_status,
             set_mode,
             get_platform_info,
+            test_worker_connection,
         ])
         .setup(|app| {
             tray::setup_tray(app)?;
