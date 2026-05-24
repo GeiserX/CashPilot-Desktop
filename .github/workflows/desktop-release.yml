@@ -190,6 +190,23 @@ jobs:
         with:
           path: artifacts/
 
+      - name: Rename macOS updater artifacts with arch suffix
+        run: |
+          for arch in aarch64 x86_64; do
+            dir="artifacts/desktop-${arch}-apple-darwin"
+            tar=$(find "$dir" -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
+            sig=$(find "$dir" -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
+            if [ -n "$tar" ]; then
+              base=$(basename "$tar" .app.tar.gz)
+              mv "$tar" "$dir/${base}_${arch}.app.tar.gz"
+              [ -n "$sig" ] && mv "$sig" "$dir/${base}_${arch}.app.tar.gz.sig"
+            fi
+          done
+          # Replace spaces with dots in all artifact filenames
+          find artifacts/desktop-* -type f -name "* *" | while read -r f; do
+            mv "$f" "$(echo "$f" | sed 's/ /./g')"
+          done
+
       - name: Generate updater manifest (latest.json)
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
