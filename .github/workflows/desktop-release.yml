@@ -13,19 +13,19 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14
+          - runner: [self-hosted, macOS, ARM64]
             target: aarch64-apple-darwin
             sidecar_name: cashpilot-sidecar
-          - os: macos-13
+          - runner: [self-hosted, macOS, ARM64]
             target: x86_64-apple-darwin
             sidecar_name: cashpilot-sidecar
-          - os: ubuntu-22.04
+          - runner: [self-hosted, Linux, X64]
             target: x86_64-unknown-linux-gnu
             sidecar_name: cashpilot-sidecar
-          - os: windows-latest
+          - runner: [self-hosted, Windows, X64]
             target: x86_64-pc-windows-msvc
             sidecar_name: cashpilot-sidecar.exe
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -60,19 +60,19 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14
+          - runner: [self-hosted, macOS, ARM64]
             target: aarch64-apple-darwin
             sidecar_artifact: sidecar-aarch64-apple-darwin
-          - os: macos-13
+          - runner: [self-hosted, macOS, ARM64]
             target: x86_64-apple-darwin
             sidecar_artifact: sidecar-x86_64-apple-darwin
-          - os: ubuntu-22.04
+          - runner: [self-hosted, Linux, X64]
             target: x86_64-unknown-linux-gnu
             sidecar_artifact: sidecar-x86_64-unknown-linux-gnu
-          - os: windows-latest
+          - runner: [self-hosted, Windows, X64]
             target: x86_64-pc-windows-msvc
             sidecar_artifact: sidecar-x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -93,6 +93,8 @@ jobs:
         run: npm install
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -100,17 +102,36 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Import Apple certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+
       - name: Build Tauri app
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Cleanup keychain
+        if: runner.os == 'macOS' && always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -127,7 +148,7 @@ jobs:
 
   publish:
     needs: build-tauri
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
