@@ -49,3 +49,49 @@ pub fn get_platform_info() -> PlatformInfo {
         docker_install_url,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_platform_info_os_not_empty() {
+        let info = get_platform_info();
+        assert!(!info.os.is_empty());
+    }
+
+    #[test]
+    fn test_get_platform_info_arch_not_empty() {
+        let info = get_platform_info();
+        assert!(!info.arch.is_empty());
+    }
+
+    #[test]
+    fn test_get_platform_info_valid_os() {
+        let info = get_platform_info();
+        let valid_os = ["macos", "linux", "windows"];
+        assert!(
+            valid_os.contains(&info.os.as_str()),
+            "unexpected OS: {}",
+            info.os
+        );
+    }
+
+    #[test]
+    fn test_get_platform_info_docker_url_is_https() {
+        let info = get_platform_info();
+        assert!(
+            info.docker_install_url.starts_with("https://"),
+            "docker URL should be https: {}",
+            info.docker_install_url
+        );
+    }
+
+    #[test]
+    fn test_docker_status_serialization() {
+        let status = DockerStatus::Available;
+        let json = serde_json::to_string(&status).unwrap();
+        let deserialized: DockerStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, DockerStatus::Available);
+    }
+}

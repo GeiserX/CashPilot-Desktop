@@ -149,3 +149,93 @@ fn allocate_port() -> Result<u16, std::io::Error> {
     drop(listener);
     Ok(port)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_allocate_port_returns_valid_port() {
+        let port = allocate_port().unwrap();
+        assert!(port > 0);
+        // Ephemeral ports are typically above 1024
+        assert!(port >= 1024, "expected ephemeral port, got {port}");
+    }
+
+    #[test]
+    fn test_allocate_port_returns_unique_ports() {
+        let port1 = allocate_port().unwrap();
+        let port2 = allocate_port().unwrap();
+        assert_ne!(port1, port2);
+    }
+
+    #[test]
+    fn test_sidecar_manager_new_initial_state() {
+        let manager = SidecarManager::new();
+        assert!(manager.port().is_none());
+        assert!(matches!(manager.status(), SidecarStatus::Stopped));
+        assert!(manager.can_restart());
+    }
+
+    #[test]
+    fn test_can_restart_under_limit() {
+        let mut manager = SidecarManager::new();
+        assert!(manager.can_restart());
+        manager.increment_restart();
+        assert!(manager.can_restart());
+        manager.increment_restart();
+        assert!(manager.can_restart());
+    }
+
+    #[test]
+    fn test_can_restart_at_limit() {
+        let mut manager = SidecarManager::new();
+        manager.increment_restart();
+        manager.increment_restart();
+        manager.increment_restart();
+        assert!(!manager.can_restart());
+    }
+
+    #[test]
+    fn test_mark_running_sets_status() {
+        let mut manager = SidecarManager::new();
+        // Without a port, mark_running does nothing meaningful
+        manager.mark_running();
+        assert!(matches!(manager.status(), SidecarStatus::Stopped));
+
+        // Simulate having a port
+        manager.port = Some(8080);
+        manager.mark_running();
+        assert!(matches!(manager.status(), SidecarStatus::Running { port: 8080 }));
+    }
+
+    #[test]
+    fn test_mark_crashed_sets_status() {
+        let mut manager = SidecarManager::new();
+        manager.mark_crashed("segfault".to_string());
+        match manager.status() {
+            SidecarStatus::Crashed { logs } => assert_eq!(logs, "segfault"),
+            other => panic!("expected Crashed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_check_health_no_port_returns_false() {
+        let manager = SidecarManager::new();
+        assert!(!manager.check_health());
+    }
+
+    #[test]
+    fn test_is_process_alive_no_child() {
+        let mut manager = SidecarManager::new();
+        assert!(!manager.is_process_alive());
+    }
+
+    #[test]
+    fn test_kill_without_child_succeeds() {
+        let mut manager = SidecarManager::new();
+        assert!(manager.kill().is_ok());
+        assert!(matches!(manager.status(), SidecarStatus::Stopped));
+        assert!(manager.port().is_none());
+    }
+}
