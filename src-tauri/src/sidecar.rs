@@ -75,7 +75,22 @@ impl SidecarManager {
 
     pub fn kill(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
-            // Try graceful shutdown first
+            // Confirm process is still alive before signalling
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    // Already exited
+                    self.status = SidecarStatus::Stopped;
+                    self.port = None;
+                    return Ok(());
+                }
+                Err(_) => {
+                    self.status = SidecarStatus::Stopped;
+                    self.port = None;
+                    return Ok(());
+                }
+                Ok(None) => {} // Still running, proceed with shutdown
+            }
+
             #[cfg(unix)]
             unsafe {
                 libc::kill(child.id() as i32, libc::SIGTERM);
@@ -85,7 +100,6 @@ impl SidecarManager {
                 let _ = child.kill();
             }
 
-            // Wait up to 5 seconds for graceful exit
             let start = std::time::Instant::now();
             loop {
                 match child.try_wait() {
@@ -144,9 +158,19 @@ impl SidecarManager {
 }
 
 fn allocate_port() -> Result<u16, std::io::Error> {
+    // Try multiple times to mitigate TOCTOU race (port reused between drop and sidecar bind)
+    for _ in 0..5 {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        drop(listener);
+        // Verify port is still available
+        if TcpListener::bind(format!("127.0.0.1:{port}")).is_ok() {
+            return Ok(port);
+        }
+    }
+    // Fallback: return whatever the OS gives
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
-    drop(listener);
     Ok(port)
 }
 

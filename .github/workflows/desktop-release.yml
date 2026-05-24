@@ -38,7 +38,7 @@ jobs:
 
       - name: Install libpython (Linux)
         if: runner.os == 'Linux'
-        run: apt-get install -y libpython3.12 || true
+        run: sudo apt-get install -y libpython3.12
 
       - name: Install Python dependencies (Unix)
         if: runner.os != 'Windows'
@@ -53,7 +53,12 @@ jobs:
         env:
           CASHPILOT_BACKEND_PATH: ${{ github.workspace }}/CashPilot
         working-directory: sidecar
-        run: python3 -m PyInstaller cashpilot-sidecar.spec
+        run: |
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            arch -x86_64 python3 -m PyInstaller cashpilot-sidecar.spec
+          else
+            python3 -m PyInstaller cashpilot-sidecar.spec
+          fi
 
       - name: Build sidecar (Windows)
         if: runner.os == 'Windows'
@@ -113,8 +118,8 @@ jobs:
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
-          apt-get update
-          apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
 
       - name: Import Apple certificate
         if: runner.os == 'macOS'

@@ -8,7 +8,7 @@ use crate::AppState;
 
 pub fn setup_tray(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     let state = app.state::<AppState>();
-    let config = state.config.lock().unwrap();
+    let config = state.config.lock().map_err(|e| format!("config lock poisoned: {e}"))?;
 
     let menu = if config.mode == "worker" {
         build_worker_menu(app)?

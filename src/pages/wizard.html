@@ -136,7 +136,20 @@
 
             try {
                 const url = target.startsWith('http') ? target : `http://${target}`;
-                const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
+                let parsed;
+                try {
+                    parsed = new URL(`${url}/health`);
+                } catch {
+                    statusEl.className = 'error';
+                    statusEl.textContent = 'Invalid URL format.';
+                    return;
+                }
+                if (!['http:', 'https:'].includes(parsed.protocol)) {
+                    statusEl.className = 'error';
+                    statusEl.textContent = 'Only HTTP/HTTPS addresses are supported.';
+                    return;
+                }
+                const response = await fetch(parsed.href, { signal: AbortSignal.timeout(5000) });
                 if (response.ok) {
                     statusEl.className = 'success';
                     statusEl.textContent = 'Connected successfully!';
