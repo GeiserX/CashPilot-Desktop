@@ -36,20 +36,26 @@ jobs:
           path: CashPilot
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install Python dependencies
         run: |
-          pip install -r sidecar/requirements.txt
+          if command -v python3 &>/dev/null; then
+            python3 -m pip install -r sidecar/requirements.txt
+          else
+            python -m pip install -r sidecar/requirements.txt
+          fi
+        shell: bash
 
       - name: Build sidecar
         env:
           CASHPILOT_BACKEND_PATH: ${{ github.workspace }}/CashPilot
         working-directory: sidecar
         run: |
-          pyinstaller cashpilot-sidecar.spec
+          if command -v python3 &>/dev/null; then
+            python3 -m PyInstaller cashpilot-sidecar.spec
+          else
+            python -m PyInstaller cashpilot-sidecar.spec
+          fi
+        shell: bash
 
       - uses: actions/upload-artifact@v4
         with:
