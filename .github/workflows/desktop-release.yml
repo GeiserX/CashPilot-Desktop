@@ -36,13 +36,23 @@ jobs:
           path: CashPilot
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install libpython (Linux)
+        if: runner.os == 'Linux'
+        run: apt-get install -y libpython3.12 || true
+
       - name: Install Python dependencies (Unix)
         if: runner.os != 'Windows'
         run: python3 -m pip install --break-system-packages -r sidecar/requirements.txt
 
       - name: Install Python dependencies (Windows)
         if: runner.os == 'Windows'
-        run: python -m pip install -r sidecar/requirements.txt
+        env:
+          TMPDIR: ${{ github.workspace }}/../_tmp
+          TEMP: ${{ github.workspace }}/../_tmp
+          TMP: ${{ github.workspace }}/../_tmp
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:TMPDIR" | Out-Null
+          python -m pip install --cache-dir "$env:TMPDIR\pip-cache" -r sidecar/requirements.txt
 
       - name: Build sidecar (Unix)
         if: runner.os != 'Windows'
