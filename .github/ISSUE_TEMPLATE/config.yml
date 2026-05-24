@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: CashPilot Backend Issues
+    url: https://github.com/GeiserX/CashPilot/issues
+    about: For issues with the CashPilot backend or collectors
