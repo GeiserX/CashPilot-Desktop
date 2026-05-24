@@ -17,9 +17,6 @@ jobs:
           - runner: [self-hosted, macOS, ARM64]
             target: aarch64-apple-darwin
             sidecar_name: cashpilot-sidecar
-          - runner: [self-hosted, macOS, ARM64]
-            target: x86_64-apple-darwin
-            sidecar_name: cashpilot-sidecar
           - runner: [self-hosted, Linux, X64]
             target: x86_64-unknown-linux-gnu
             sidecar_name: cashpilot-sidecar
@@ -53,12 +50,7 @@ jobs:
         env:
           CASHPILOT_BACKEND_PATH: ${{ github.workspace }}/CashPilot
         working-directory: sidecar
-        run: |
-          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
-            arch -x86_64 python3 -m PyInstaller cashpilot-sidecar.spec
-          else
-            python3 -m PyInstaller cashpilot-sidecar.spec
-          fi
+        run: python3 -m PyInstaller cashpilot-sidecar.spec
 
       - name: Build sidecar (Windows)
         if: runner.os == 'Windows'
@@ -82,9 +74,6 @@ jobs:
           - runner: [self-hosted, macOS, ARM64]
             target: aarch64-apple-darwin
             sidecar_artifact: sidecar-aarch64-apple-darwin
-          - runner: [self-hosted, macOS, ARM64]
-            target: x86_64-apple-darwin
-            sidecar_artifact: sidecar-x86_64-apple-darwin
           - runner: [self-hosted, Linux, X64]
             target: x86_64-unknown-linux-gnu
             sidecar_artifact: sidecar-x86_64-unknown-linux-gnu
@@ -195,18 +184,8 @@ jobs:
         with:
           path: artifacts/
 
-      - name: Rename macOS updater artifacts with arch suffix
+      - name: Clean artifact filenames
         run: |
-          for arch in aarch64 x86_64; do
-            dir="artifacts/desktop-${arch}-apple-darwin"
-            tar=$(find "$dir" -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1)
-            sig=$(find "$dir" -name "*.app.tar.gz.sig" 2>/dev/null | head -1)
-            if [ -n "$tar" ]; then
-              base=$(basename "$tar" .app.tar.gz)
-              mv "$tar" "$dir/${base}_${arch}.app.tar.gz"
-              [ -n "$sig" ] && mv "$sig" "$dir/${base}_${arch}.app.tar.gz.sig"
-            fi
-          done
           # Replace spaces with dots in all artifact filenames
           find artifacts/desktop-* -type f -name "* *" | while read -r f; do
             mv "$f" "$(echo "$f" | sed 's/ /./g')"
@@ -218,20 +197,14 @@ jobs:
           RELEASE_URL="https://github.com/GeiserX/CashPilot-Desktop/releases/download/${GITHUB_REF_NAME}"
 
           MACOS_ARM_SIG=$(find artifacts/desktop-aarch64-apple-darwin -name "*.app.tar.gz.sig" -exec cat {} \; 2>/dev/null || echo "")
-          MACOS_X64_SIG=$(find artifacts/desktop-x86_64-apple-darwin -name "*.app.tar.gz.sig" -exec cat {} \; 2>/dev/null || echo "")
           WINDOWS_SIG=$(find artifacts/desktop-x86_64-pc-windows-msvc \( -name "*.nsis.zip.sig" -o -name "*.exe.sig" \) -exec cat {} \; 2>/dev/null || echo "")
 
           MACOS_ARM_URL=$(find artifacts/desktop-aarch64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
-          MACOS_X64_URL=$(find artifacts/desktop-x86_64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
           WINDOWS_URL=$(find artifacts/desktop-x86_64-pc-windows-msvc \( -name "*.nsis.zip" -o -name "*-setup.exe" \) ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
 
-          # Build platforms JSON dynamically (only include platforms with signatures)
           PLATFORMS=""
           if [ -n "$MACOS_ARM_SIG" ]; then
             PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"darwin-aarch64\":{\"signature\":\"${MACOS_ARM_SIG}\",\"url\":\"${RELEASE_URL}/${MACOS_ARM_URL}\"}"
-          fi
-          if [ -n "$MACOS_X64_SIG" ]; then
-            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"darwin-x86_64\":{\"signature\":\"${MACOS_X64_SIG}\",\"url\":\"${RELEASE_URL}/${MACOS_X64_URL}\"}"
           fi
           if [ -n "$WINDOWS_SIG" ]; then
             PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"windows-x86_64\":{\"signature\":\"${WINDOWS_SIG}\",\"url\":\"${RELEASE_URL}/${WINDOWS_URL}\"}"

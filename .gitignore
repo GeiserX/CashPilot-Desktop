@@ -8,3 +8,4 @@ build/
 !sidecar/cashpilot-sidecar.spec
 .DS_Store
 .omc/
+pnpm-lock.yaml
