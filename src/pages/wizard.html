@@ -362,13 +362,14 @@
         }
 
         async function onModeConfirm() {
+            if (!selectedMode) return;
             if (selectedMode === 'worker') {
                 goToStep(3);
             } else {
                 await invoke('set_mode', { mode: 'cashpilot', target: null, fleetKey: null });
                 goToStep(4);
                 document.getElementById('done-message').textContent = 'CashPilot is starting up...';
-                setTimeout(() => { window.location.href = '../index.html'; }, 1500);
+                window.location.href = '../index.html';
             }
         }
 
@@ -398,38 +399,23 @@
             statusEl.textContent = 'Testing connection...';
 
             try {
-                const url = target.startsWith('http') ? target : `http://${target}`;
-                let parsed;
-                try {
-                    parsed = new URL(`${url}/health`);
-                } catch {
-                    statusEl.className = 'error';
-                    statusEl.textContent = 'Invalid URL format.';
-                    return;
-                }
-                if (!['http:', 'https:'].includes(parsed.protocol)) {
-                    statusEl.className = 'error';
-                    statusEl.textContent = 'Only HTTP/HTTPS addresses are supported.';
-                    return;
-                }
-                const response = await fetch(parsed.href, { signal: AbortSignal.timeout(5000) });
-                if (response.ok) {
+                const url = target.startsWith('http://') || target.startsWith('https://') ? target : `http://${target}`;
+                const status = await invoke('test_worker_connection', { url });
+                if (status >= 200 && status < 300) {
                     statusEl.className = 'success';
                     statusEl.textContent = 'Connected successfully!';
                     await invoke('set_mode', { mode: 'worker', target, fleetKey });
-                    setTimeout(() => {
-                        goToStep(4);
-                        document.getElementById('done-message').textContent = 'Worker Node is connecting...';
-                        setTimeout(() => { window.location.href = '../index.html'; }, 1500);
-                    }, 1000);
+                    goToStep(4);
+                    document.getElementById('done-message').textContent = 'Worker Node is connecting...';
+                    window.location.href = '../index.html';
                 } else {
                     statusEl.className = 'error';
-                    statusEl.textContent = `Connection failed (HTTP ${response.status}). Check the address.`;
+                    statusEl.textContent = `Connection failed (HTTP ${status}). Check the address.`;
                     if (btn) btn.disabled = false;
                 }
             } catch (e) {
                 statusEl.className = 'error';
-                statusEl.textContent = 'Could not reach the address. Check it is correct and reachable.';
+                statusEl.textContent = typeof e === 'string' ? e : 'Could not reach the address. Check it is correct and reachable.';
                 if (btn) btn.disabled = false;
             }
         }
