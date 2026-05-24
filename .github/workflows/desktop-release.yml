@@ -169,13 +169,15 @@ jobs:
           name: desktop-${{ matrix.target }}
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb.sig
 
   publish:
     needs: build-tauri
@@ -193,24 +195,24 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           RELEASE_URL="https://github.com/GeiserX/CashPilot-Desktop/releases/download/${GITHUB_REF_NAME}"
 
-          MACOS_ARM_SIG=$(cat artifacts/desktop-aarch64-apple-darwin/**/*.dmg.sig 2>/dev/null || echo "")
-          MACOS_X64_SIG=$(cat artifacts/desktop-x86_64-apple-darwin/**/*.dmg.sig 2>/dev/null || echo "")
-          WINDOWS_SIG=$(cat artifacts/desktop-x86_64-pc-windows-msvc/**/*.exe.sig 2>/dev/null || echo "")
+          MACOS_ARM_SIG=$(cat artifacts/desktop-aarch64-apple-darwin/**/*.app.tar.gz.sig 2>/dev/null || echo "")
+          MACOS_X64_SIG=$(cat artifacts/desktop-x86_64-apple-darwin/**/*.app.tar.gz.sig 2>/dev/null || echo "")
+          WINDOWS_SIG=$(cat artifacts/desktop-x86_64-pc-windows-msvc/**/*.nsis.zip.sig 2>/dev/null || cat artifacts/desktop-x86_64-pc-windows-msvc/**/*.exe.sig 2>/dev/null || echo "")
 
-          MACOS_ARM_DMG=$(find artifacts/desktop-aarch64-apple-darwin -name "*.dmg" ! -name "*.sig" 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
-          MACOS_X64_DMG=$(find artifacts/desktop-x86_64-apple-darwin -name "*.dmg" ! -name "*.sig" 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
-          WINDOWS_EXE=$(find artifacts/desktop-x86_64-pc-windows-msvc -name "*.exe" ! -name "*.sig" 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
+          MACOS_ARM_URL=$(find artifacts/desktop-aarch64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
+          MACOS_X64_URL=$(find artifacts/desktop-x86_64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
+          WINDOWS_URL=$(find artifacts/desktop-x86_64-pc-windows-msvc -name "*.nsis.zip" ! -name "*.sig" 2>/dev/null | head -1 | xargs basename 2>/dev/null || find artifacts/desktop-x86_64-pc-windows-msvc -name "*-setup.exe" ! -name "*.sig" 2>/dev/null | head -1 | xargs basename 2>/dev/null || echo "")
 
           # Build platforms JSON dynamically (only include platforms with signatures)
           PLATFORMS=""
           if [ -n "$MACOS_ARM_SIG" ]; then
-            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"darwin-aarch64\":{\"signature\":\"${MACOS_ARM_SIG}\",\"url\":\"${RELEASE_URL}/${MACOS_ARM_DMG}\"}"
+            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"darwin-aarch64\":{\"signature\":\"${MACOS_ARM_SIG}\",\"url\":\"${RELEASE_URL}/${MACOS_ARM_URL}\"}"
           fi
           if [ -n "$MACOS_X64_SIG" ]; then
-            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"darwin-x86_64\":{\"signature\":\"${MACOS_X64_SIG}\",\"url\":\"${RELEASE_URL}/${MACOS_X64_DMG}\"}"
+            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"darwin-x86_64\":{\"signature\":\"${MACOS_X64_SIG}\",\"url\":\"${RELEASE_URL}/${MACOS_X64_URL}\"}"
           fi
           if [ -n "$WINDOWS_SIG" ]; then
-            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"windows-x86_64\":{\"signature\":\"${WINDOWS_SIG}\",\"url\":\"${RELEASE_URL}/${WINDOWS_EXE}\"}"
+            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"windows-x86_64\":{\"signature\":\"${WINDOWS_SIG}\",\"url\":\"${RELEASE_URL}/${WINDOWS_URL}\"}"
           fi
 
           echo "{\"version\":\"${VERSION}\",\"notes\":\"See release notes on GitHub\",\"pub_date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"platforms\":{${PLATFORMS}}}" > latest.json
@@ -222,12 +224,14 @@ jobs:
         with:
           files: |
             artifacts/desktop-*/**/*.dmg
-            artifacts/desktop-*/**/*.dmg.sig
+            artifacts/desktop-*/**/*.app.tar.gz
+            artifacts/desktop-*/**/*.app.tar.gz.sig
             artifacts/desktop-*/**/*.exe
             artifacts/desktop-*/**/*.exe.sig
+            artifacts/desktop-*/**/*.nsis.zip
+            artifacts/desktop-*/**/*.nsis.zip.sig
             artifacts/desktop-*/**/*.AppImage
             artifacts/desktop-*/**/*.AppImage.sig
             artifacts/desktop-*/**/*.deb
-            artifacts/desktop-*/**/*.deb.sig
             latest.json
           generate_release_notes: true
