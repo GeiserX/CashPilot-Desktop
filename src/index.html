@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CashPilot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e4e4e7; display: flex; align-items: center; justify-content: center; height: 100vh; }
+        .loader { text-align: center; }
+        .loader h1 { font-size: 2rem; margin-bottom: 1rem; }
+        .loader p { color: #71717a; }
+        .spinner { width: 40px; height: 40px; border: 3px solid #27272a; border-top-color: #22c55e; border-radius: 50%; animation: spin 1s linear infinite; margin: 1rem auto; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="loader" id="loader">
+        <h1>CashPilot</h1>
+        <div class="spinner"></div>
+        <p id="status-text">Checking system...</p>
+    </div>
+    <script src="pages/app.js"></script>
+</body>
+</html>

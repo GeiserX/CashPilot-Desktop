@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CashPilot - Setup</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e4e4e7; display: flex; align-items: center; justify-content: center; height: 100vh; padding: 2rem; }
+        .container { max-width: 500px; width: 100%; }
+        h1 { font-size: 1.75rem; margin-bottom: 0.5rem; }
+        .subtitle { color: #71717a; margin-bottom: 2rem; }
+        .step { display: none; }
+        .step.active { display: block; }
+        .card { padding: 1.5rem; background: #1c1c22; border-radius: 8px; margin-bottom: 1rem; cursor: pointer; border: 2px solid transparent; transition: border-color 0.2s; }
+        .card:hover { border-color: #3f3f46; }
+        .card.selected { border-color: #22c55e; }
+        .card h3 { margin-bottom: 0.25rem; }
+        .card p { color: #a1a1aa; font-size: 0.9rem; }
+        .btn { display: inline-block; padding: 0.75rem 1.5rem; background: #22c55e; color: #000; border-radius: 6px; font-weight: 600; cursor: pointer; border: none; font-size: 1rem; margin-top: 1rem; }
+        .btn:hover { background: #16a34a; }
+        .btn:disabled { background: #27272a; color: #71717a; cursor: not-allowed; }
+        input[type="text"] { width: 100%; padding: 0.75rem; background: #1c1c22; border: 1px solid #3f3f46; border-radius: 6px; color: #e4e4e7; font-size: 1rem; margin: 0.5rem 0; }
+        input[type="text"]:focus { outline: none; border-color: #22c55e; }
+        .tip { background: #1c1c22; padding: 0.75rem 1rem; border-radius: 6px; border-left: 3px solid #3b82f6; margin: 1rem 0; font-size: 0.85rem; color: #a1a1aa; }
+        .error { color: #ef4444; font-size: 0.85rem; margin-top: 0.5rem; }
+        .success { color: #22c55e; font-size: 0.85rem; margin-top: 0.5rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Step 1: Welcome -->
+        <div class="step active" id="step-1">
+            <h1>Welcome to CashPilot</h1>
+            <p class="subtitle">Passive income from your machine, effortlessly.</p>
+            <p style="color: #a1a1aa; margin-bottom: 1rem;">CashPilot deploys and monitors bandwidth-sharing, DePIN, and compute services using Docker containers.</p>
+            <button class="btn" onclick="goToStep(2)">Get Started</button>
+        </div>
+
+        <!-- Step 2: Mode selection -->
+        <div class="step" id="step-2">
+            <h1>How will you use this machine?</h1>
+            <p class="subtitle">You can change this later in settings.</p>
+
+            <div class="card" id="mode-cashpilot" onclick="selectMode('cashpilot')">
+                <h3>CashPilot</h3>
+                <p>Full dashboard — manage services, track earnings, and connect workers.</p>
+            </div>
+
+            <div class="card" id="mode-worker" onclick="selectMode('worker')">
+                <h3>Worker Node</h3>
+                <p>Run services and report back to an existing CashPilot instance.</p>
+            </div>
+
+            <button class="btn" id="mode-btn" disabled onclick="onModeConfirm()">Continue</button>
+        </div>
+
+        <!-- Step 3: Worker config -->
+        <div class="step" id="step-3">
+            <h1>Connect to CashPilot</h1>
+            <p class="subtitle">Enter the address of your CashPilot instance.</p>
+
+            <label style="font-size: 0.85rem; color: #a1a1aa;">CashPilot Address</label>
+            <input type="text" id="worker-target" placeholder="e.g. 192.168.1.100:8080 or mypc.tailnet.ts.net:8080">
+
+            <label style="font-size: 0.85rem; color: #a1a1aa; margin-top: 0.5rem; display: block;">Fleet Key</label>
+            <input type="text" id="fleet-key" placeholder="Paste the fleet key from your CashPilot dashboard">
+
+            <div class="tip">
+                <strong>Tip:</strong> Using Tailscale? Enter the MagicDNS hostname (e.g. <code>mypc.mango-alpha.ts.net:8080</code>) for secure cross-network connectivity.
+            </div>
+
+            <p id="connect-status"></p>
+
+            <button class="btn" onclick="testConnection()">Test Connection & Finish</button>
+        </div>
+
+        <!-- Step 4: Done -->
+        <div class="step" id="step-4">
+            <h1>You're all set!</h1>
+            <p class="subtitle" id="done-message">CashPilot is starting up...</p>
+            <div style="margin-top: 1rem;">
+                <div class="spinner" style="width: 30px; height: 30px; border: 3px solid #27272a; border-top-color: #22c55e; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+            </div>
+        </div>
+    </div>
+
+    <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+
+    <script>
+        const { invoke } = window.__TAURI__.core;
+
+        let selectedMode = null;
+
+        function goToStep(n) {
+            document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+            document.getElementById(`step-${n}`).classList.add('active');
+        }
+
+        function selectMode(mode) {
+            selectedMode = mode;
+            document.querySelectorAll('.card').forEach(c => c.classList.remove('selected'));
+            document.getElementById(`mode-${mode}`).classList.add('selected');
+            document.getElementById('mode-btn').disabled = false;
+        }
+
+        async function onModeConfirm() {
+            if (selectedMode === 'worker') {
+                goToStep(3);
+            } else {
+                await invoke('set_mode', { mode: 'cashpilot', target: null, fleetKey: null });
+                goToStep(4);
+                document.getElementById('done-message').textContent = 'CashPilot is starting up...';
+                setTimeout(() => { window.location.href = '../index.html'; }, 1500);
+            }
+        }
+
+        async function testConnection() {
+            const target = document.getElementById('worker-target').value.trim();
+            const fleetKey = document.getElementById('fleet-key').value.trim();
+            const statusEl = document.getElementById('connect-status');
+
+            if (!target) {
+                statusEl.className = 'error';
+                statusEl.textContent = 'Please enter an address.';
+                return;
+            }
+            if (!fleetKey) {
+                statusEl.className = 'error';
+                statusEl.textContent = 'Please enter the fleet key.';
+                return;
+            }
+
+            statusEl.className = '';
+            statusEl.textContent = 'Testing connection...';
+
+            try {
+                const url = target.startsWith('http') ? target : `http://${target}`;
+                const response = await fetch(`${url}/health`, { signal: AbortSignal.timeout(5000) });
+                if (response.ok) {
+                    statusEl.className = 'success';
+                    statusEl.textContent = 'Connected successfully!';
+                    await invoke('set_mode', { mode: 'worker', target, fleetKey });
+                    setTimeout(() => {
+                        goToStep(4);
+                        document.getElementById('done-message').textContent = 'Worker Node is connecting...';
+                        setTimeout(() => { window.location.href = '../index.html'; }, 1500);
+                    }, 1000);
+                } else {
+                    statusEl.className = 'error';
+                    statusEl.textContent = `Connection failed (HTTP ${response.status}). Check the address.`;
+                }
+            } catch (e) {
+                statusEl.className = 'error';
+                statusEl.textContent = 'Could not reach the address. Check it is correct and reachable.';
+            }
+        }
+    </script>
+</body>
+</html>

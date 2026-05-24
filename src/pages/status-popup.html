@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CashPilot Worker Status</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e4e4e7; padding: 1.5rem; }
+        h2 { font-size: 1.25rem; margin-bottom: 1rem; }
+        .status-row { display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid #27272a; }
+        .status-row:last-child { border-bottom: none; }
+        .label { color: #a1a1aa; font-size: 0.85rem; }
+        .value { font-weight: 500; }
+        .connected { color: #22c55e; }
+        .disconnected { color: #ef4444; }
+        .services { margin-top: 1rem; }
+        .service-item { padding: 0.5rem 0.75rem; background: #1c1c22; border-radius: 6px; margin: 0.5rem 0; display: flex; justify-content: space-between; }
+        .service-item .name { font-size: 0.9rem; }
+        .service-item .badge { font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; background: #166534; color: #22c55e; }
+        .service-item .badge.stopped { background: #7f1d1d; color: #ef4444; }
+    </style>
+</head>
+<body>
+    <h2>Worker Status</h2>
+
+    <div class="status-row">
+        <span class="label">Connection</span>
+        <span class="value" id="conn-status">Checking...</span>
+    </div>
+    <div class="status-row">
+        <span class="label">CashPilot Instance</span>
+        <span class="value" id="target-addr">—</span>
+    </div>
+    <div class="status-row">
+        <span class="label">Last Heartbeat</span>
+        <span class="value" id="last-heartbeat">—</span>
+    </div>
+
+    <div class="services">
+        <h3 style="font-size: 0.9rem; color: #a1a1aa; margin-bottom: 0.5rem;">Running Services</h3>
+        <div id="service-list">
+            <p style="color: #71717a; font-size: 0.85rem;">Loading...</p>
+        </div>
+    </div>
+
+    <script>
+        const { invoke } = window.__TAURI__.core;
+
+        async function refresh() {
+            const config = await invoke('get_app_config');
+            const sidecarStatus = await invoke('get_sidecar_status');
+
+            document.getElementById('target-addr').textContent = config.worker_target || '—';
+
+            if (sidecarStatus.Running) {
+                document.getElementById('conn-status').textContent = 'Connected';
+                document.getElementById('conn-status').className = 'value connected';
+
+                try {
+                    const res = await fetch(`http://127.0.0.1:${sidecarStatus.Running.port}/api/status`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        document.getElementById('last-heartbeat').textContent = new Date().toLocaleTimeString();
+                        renderServices(data);
+                    }
+                } catch (e) {
+                    document.getElementById('conn-status').textContent = 'Error';
+                    document.getElementById('conn-status').className = 'value disconnected';
+                }
+            } else {
+                document.getElementById('conn-status').textContent = 'Disconnected';
+                document.getElementById('conn-status').className = 'value disconnected';
+            }
+        }
+
+        function renderServices(data) {
+            const list = document.getElementById('service-list');
+            const services = Object.entries(data);
+            if (services.length === 0) {
+                list.innerHTML = '<p style="color: #71717a; font-size: 0.85rem;">No services running.</p>';
+                return;
+            }
+            list.innerHTML = services.map(([name, status]) => `
+                <div class="service-item">
+                    <span class="name">${name}</span>
+                    <span class="badge ${status === 'running' ? '' : 'stopped'}">${status}</span>
+                </div>
+            `).join('');
+        }
+
+        refresh();
+        setInterval(refresh, 5000);
+    </script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+target/
+node_modules/
+dist/
+*.pyc
+__pycache__/
+build/
+*.spec
+!sidecar/cashpilot-sidecar.spec
+.DS_Store
+.omc/
