@@ -1,0 +1,61 @@
+name: Grass
+slug: grass
+category: depin
+status: active
+website: https://www.grass.io
+description: >
+  Grass is a decentralized network that lets you sell your unused bandwidth for
+  AI training data. It operates as a browser extension and desktop app, routing
+  web scraping requests through your connection to build structured datasets.
+  With 8.5M+ users, it is one of the largest DePIN bandwidth networks. Earns
+  GRASS tokens on the Solana blockchain.
+short_description: DePIN bandwidth sharing for AI data - earns GRASS tokens
+
+referral:
+  signup_url: "https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE"
+
+docker:
+  image: ""
+  platforms: [browser-extension, windows, macos, android, ios]
+  env:
+    - key: GRASS_ACCESS_TOKEN
+      label: "Access Token"
+      required: true
+      secret: true
+      description: "Log in at <a href=\"https://app.grass.io\">app.grass.io</a>, press F12 → Application → Local Storage → click <code>https://app.grass.io</code> → copy the <code>token</code> value"
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+
+requirements:
+  residential_ip: true
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [crypto]
+  minimum_payout: ""
+  currency: GRASS
+  frequency: "Epoch-based airdrop"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 10
+  currency: USD
+  per: "device"
+  notes: "Earns Grass Points convertible to GRASS tokens via airdrops. Actual USD value depends on token price. Browser extension or desktop app required."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://app.grass.io/dashboard"
+  min_amount: 0
+  currency: GRASS
+  notes: "GRASS token airdrop-based. Claim from dashboard when eligible."
+
+platforms: [browser-extension, windows, macos, android, ios]
+
+collector:
+  type: api
+  notes: "Dashboard API at app.grass.io. Auth via session token. Points visible in dashboard."

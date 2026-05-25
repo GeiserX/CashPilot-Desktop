@@ -214,6 +214,33 @@ func (s *Store) ListLatestEarnings() []EarningsRecord {
 	return out
 }
 
+func (s *Store) ListEarningsHistory(limit int) []EarningsRecord {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`
+		SELECT platform, balance, currency, error, created_at
+		FROM earnings
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []EarningsRecord
+	for rows.Next() {
+		var record EarningsRecord
+		if err := rows.Scan(&record.Platform, &record.Balance, &record.Currency, &record.Error, &record.CreatedAt); err == nil {
+			out = append(out, record)
+		}
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }

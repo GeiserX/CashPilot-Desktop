@@ -1,0 +1,56 @@
+name: Titan Network
+slug: titan
+category: depin
+status: active
+website: https://titannet.io
+description: >
+  Titan Network is a DePIN platform that shares your IP address, storage, and
+  bandwidth in exchange for TNT token rewards. Available on Windows, Mac, and
+  Android. Nodes contribute to a decentralized CDN and storage layer. Typical
+  earnings range from $5-30/month depending on resources shared and geographic
+  location.
+short_description: DePIN sharing IP, storage, bandwidth - $5-30/month
+
+referral:
+  signup_url: "https://edge.titannet.info/signup?inviteCode=2GKKJ495"
+
+docker:
+  image: ""
+  platforms: []
+  env: []
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+
+requirements:
+  residential_ip: true
+  min_bandwidth: ""
+  gpu: false
+  min_storage: "50GB"
+
+payment:
+  methods: [crypto]
+  minimum_payout: ""
+  currency: TNT
+  frequency: "Epoch-based"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 30
+  currency: USD
+  per: "device"
+  notes: "Shares IP, storage, and bandwidth. Earnings depend on resources contributed and region. Higher storage allocation yields higher rewards."
+
+cashout:
+  method: manual
+  dashboard_url: "https://edge.titannet.io"
+  min_amount: 0
+  currency: TNT
+  notes: ""
+
+platforms: [windows, macos, android]
+
+collector:
+  type: api
+  notes: "Dashboard at edge.titannet.io. Node status and earnings visible via web UI. API details sparse."

@@ -1,0 +1,72 @@
+name: Traffmonetizer
+slug: traffmonetizer
+category: bandwidth
+status: active
+website: https://traffmonetizer.com
+description: >
+  Traffmonetizer lets you monetize your internet traffic by sharing bandwidth with
+  verified businesses. One of the few bandwidth-sharing services that works well on
+  VPS and datacenter IPs in addition to residential connections. Uses a simple
+  token-based authentication passed via command-line arguments. Supports ARM
+  architectures for Raspberry Pi and similar devices.
+short_description: Bandwidth sharing - works on VPS, token-based auth
+
+referral:
+  signup_url: "https://traffmonetizer.com/?aff=2111758"
+
+docker:
+  image: traffmonetizer/cli_v2
+  platforms: [linux/amd64, linux/arm64]
+  env:
+    - key: TRAFFMONETIZER_TOKEN
+      label: "Token"
+      required: true
+      secret: true
+      description: "Log in at <a href=\"https://app.traffmonetizer.com\">app.traffmonetizer.com</a>, press F12 → Application → Local Storage → click <code>https://app.traffmonetizer.com</code> → copy the <code>token</code> value (a long JWT starting with eyJ)"
+    - key: TRAFFMONETIZER_DEVICE_NAME
+      label: "Device name"
+      required: false
+      secret: false
+      description: "Name displayed in dashboard for device management"
+      default: "cashpilot-{hostname}"
+  ports: []
+  volumes: []
+  command: "start accept --token ${TRAFFMONETIZER_TOKEN} --device-name ${TRAFFMONETIZER_DEVICE_NAME}"
+  network_mode: ""
+  privileged: false
+
+requirements:
+  residential_ip: false
+  devices_per_ip: 0
+  note: "Traffmonetizer ToS requires residential IP, but VPS nodes are accepted in practice."
+  note_column: vps_ip
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [crypto, paypal]
+  crypto_token: USDT
+  minimum_payout: "$10"
+  currency: USD
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 4
+  currency: USD
+  per: "device"
+  notes: "VPS and datacenter IPs earn less than residential. US/EU locations earn more. Multiple IPs supported via Docker networks."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://app.traffmonetizer.com/dashboard"
+  min_amount: 10.0
+  currency: USD
+
+platforms: [docker, windows, macos, android]
+
+collector:
+  type: api
+  auth: browser_jwt
+  notes: "reCAPTCHA blocks programmatic login. Token extracted from browser Local Storage at app.traffmonetizer.com (same as deployment token)."

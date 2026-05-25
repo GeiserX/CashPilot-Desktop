@@ -358,6 +358,9 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 	for key, value := range overrides {
 		env[key] = value
 	}
+	for key, value := range env {
+		env[key] = substitute(value, env)
+	}
 	return env
 }
 
@@ -480,12 +483,20 @@ func InstallGuides() []InstallGuide {
 	osName := goruntime.GOOS
 	guides := []InstallGuide{
 		{
-			ID:          "docker-desktop",
+			ID:          "docker-desktop-macos",
 			Name:        "Docker Desktop",
-			Description: "The easiest option on macOS and Windows. Best compatibility if you already use Docker.",
-			Platforms:   []string{"darwin", "windows"},
+			Description: "The easiest option on macOS. Best compatibility if you already use Docker.",
+			Platforms:   []string{"darwin"},
 			URL:         "https://www.docker.com/products/docker-desktop/",
-			Notes:       []string{"Recommended for most first-time users.", "Windows requires WSL2.", "Commercial use in larger organizations may need a paid Docker subscription."},
+			Notes:       []string{"Recommended for most first-time users.", "Commercial use in larger organizations may need a paid Docker subscription."},
+		},
+		{
+			ID:          "docker-desktop-windows",
+			Name:        "Docker Desktop",
+			Description: "The easiest option on Windows. Best compatibility if you already use Docker.",
+			Platforms:   []string{"windows"},
+			URL:         "https://www.docker.com/products/docker-desktop/",
+			Notes:       []string{"Recommended for most first-time users.", "Requires WSL2 on Windows.", "Commercial use in larger organizations may need a paid Docker subscription."},
 		},
 		{
 			ID:          "docker-engine",

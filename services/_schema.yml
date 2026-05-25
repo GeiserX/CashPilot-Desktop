@@ -1,0 +1,76 @@
+# CashPilot Service Definition Schema
+# Each YAML file in services/ defines one income service.
+# This is the SINGLE SOURCE OF TRUTH — README, web UI, and guides all derive from these files.
+
+# name: Human-readable service name
+# slug: URL/container-safe identifier (lowercase, hyphens)
+# category: bandwidth | depin | storage | compute
+# status: active | beta | broken | dead
+# website: Main URL
+# description: One paragraph description
+# short_description: One line (for tables)
+
+# referral:
+#   signup_url: Full signup URL with referral code already embedded
+#   bonus:
+#     referrer: What the referrer gets
+#     referee: What the new user gets
+
+# docker:
+#   image: Docker Hub image
+#   platforms: [linux/amd64, linux/arm64]
+#   env:
+#     - key: ENV_VAR_NAME
+#       label: "Human label"
+#       required: true/false
+#       secret: true/false
+#       description: "Help text"
+#       default: "" (optional)
+#   ports: ["port:port"]
+#   volumes: ["host:container"]
+#   command: "" (optional override)
+#   network_mode: "" (optional, e.g. "host")
+#   cap_add: [] (optional)
+#   stop_timeout: 30 (optional, seconds to wait before SIGKILL on stop — default 30)
+#   setup: "" (optional, one-time setup instructions/commands to run before first deploy)
+
+# requirements:
+#   residential_ip: true/false
+#   vps_ip: true/false  (default: opposite of residential_ip)
+#   devices_per_account: 0  (0 = unlimited)
+#   devices_per_ip: 1  (0 = unlimited)
+#   note: ""  (footnote text for special cases in README table)
+#   note_column: ""  (which column footnote applies to: vps_ip, devices_per_ip)
+#   min_bandwidth: ""
+#   gpu: false
+#   min_storage: ""
+
+# payment:
+#   methods: [paypal, crypto, bank, giftcard]
+#   crypto_token: ""  (specific token if different from currency, e.g. "SOL", "USDT")
+#   minimum_payout: "$20"
+#   currency: USD
+#   frequency: "On request" | "Monthly" | "Weekly"
+
+# earnings:
+#   monthly_low: 2
+#   monthly_high: 5
+#   currency: USD
+#   per: "device" | "TB" | "GPU-hour"
+#   notes: ""
+
+# cashout:
+#   method: redirect | api | manual
+#     - redirect: user clicks through to service dashboard to request payout
+#     - api: CashPilot can trigger payout via API (rare)
+#     - manual: instructions only (e.g. crypto claim, no dashboard)
+#   dashboard_url: "https://service.com/dashboard/earnings"
+#   min_amount: 20 (numeric, derived from payment.minimum_payout)
+#   currency: USD
+#   notes: "Additional cashout instructions or caveats"
+
+# platforms: [windows, macos, linux, android, ios, docker, browser_extension]
+
+# collector:
+#   type: api | scrape | manual
+#   notes: "Implementation hints for the earnings collector"

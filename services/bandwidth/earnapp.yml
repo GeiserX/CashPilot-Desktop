@@ -1,0 +1,68 @@
+name: EarnApp
+slug: earnapp
+category: bandwidth
+status: active
+website: https://earnapp.com
+description: >
+  EarnApp by Bright Data lets you sell your unused bandwidth for passive income.
+  Bright Data is the world's largest proxy network, powering data collection for
+  Fortune 500 companies. The community Docker image (fazalfarhan01) makes headless
+  deployment easy with a lite mode that requires only a UUID.
+short_description: Bandwidth sharing - backed by Bright Data
+
+referral:
+  signup_url: "https://earnapp.com/i/TSMD9wSm"
+
+docker:
+  image: fazalfarhan01/earnapp:lite
+  platforms: [linux/amd64]
+  env:
+    - key: EARNAPP_UUID
+      label: "Node UUID"
+      required: true
+      secret: false
+      description: "Your EarnApp node ID (run 'earnapp showid' to get it, or generate one with the sdk-node-id format)"
+    - key: EARNAPP_TERM
+      label: "Accept Terms"
+      required: false
+      secret: false
+      description: "Set to 'yes' to accept terms of service"
+      default: "yes"
+  ports: []
+  volumes:
+    - "earnapp-data:/etc/earnapp"
+  command: ""
+  network_mode: ""
+  privileged: false
+
+requirements:
+  residential_ip: true
+  devices_per_account: 15
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [paypal, amazon_giftcard, wise]
+  minimum_payout: "$10"
+  currency: USD
+  frequency: "On request (auto-redeem available: PayPal $10 min, Wise $10 min, Amazon $50 min)"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 5
+  currency: USD
+  per: "device"
+  notes: "Highly location-dependent. US/EU IPs earn the most. Earnings scale with bandwidth consumed."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://earnapp.com/dashboard/cashout"
+  min_amount: 10.0
+  currency: USD
+
+platforms: [docker, windows, macos, linux, android]
+
+collector:
+  type: api
+  notes: "Dashboard API at /dashboard/api/money/. Auth via OAuth refresh token cookie. Returns balance in USD."

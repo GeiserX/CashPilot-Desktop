@@ -21,6 +21,7 @@ export interface AppState {
   services: Service[];
   deployments: Deployment[] | null;
   earnings: EarningsRecord[] | null;
+  history: EarningsRecord[] | null;
   guides: InstallGuide[];
 }
 
@@ -60,10 +61,19 @@ export interface Service {
   shortDescription: string;
   referral: { signupUrl: string };
   docker: DockerConfig;
-  requirements: Record<string, unknown>;
+  requirements: {
+    residentialIp: boolean;
+    vpsIp: boolean;
+    devicesPerAccount: number;
+    devicesPerIp: number;
+    minBandwidth: string;
+    gpu: boolean;
+    minStorage: string;
+    note: string;
+  };
   payment: { methods: string[]; minimumPayout: string; currency: string; frequency: string };
   earnings: { monthlyLow: number; monthlyHigh: number; currency: string; per: string; notes: string };
-  cashout: { dashboardUrl: string; minAmount: number; currency: string; notes: string };
+  cashout: { method: string; dashboardUrl: string; minAmount: number; currency: string; notes: string };
   platforms: string[];
   collector: { type: string; notes: string };
   manualOnly: boolean;

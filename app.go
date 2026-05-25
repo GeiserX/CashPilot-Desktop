@@ -21,6 +21,7 @@ type App struct {
 	runtime    runtime.Provider
 	services   *services.Manager
 	collectors *collectors.Registry
+	trayIcon   []byte
 }
 
 func NewApp() *App {
@@ -29,6 +30,7 @@ func NewApp() *App {
 
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
+	InstallTrayIcon(a.trayIcon)
 
 	cfg, err := config.NewManager()
 	if err != nil {
@@ -68,6 +70,7 @@ type AppState struct {
 	Services    []catalog.Service      `json:"services"`
 	Deployments []store.Deployment     `json:"deployments"`
 	Earnings    []store.EarningsRecord `json:"earnings"`
+	History     []store.EarningsRecord `json:"history"`
 	Guides      []runtime.InstallGuide `json:"guides"`
 }
 
@@ -82,6 +85,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Services:    a.catalog.ListVisible(),
 		Deployments: a.store.ListDeployments(),
 		Earnings:    a.store.ListLatestEarnings(),
+		History:     a.store.ListEarningsHistory(200),
 		Guides:      runtime.InstallGuides(),
 	}, nil
 }
