@@ -1,0 +1,88 @@
+name: Storj
+slug: storj
+category: storage
+status: active
+website: https://www.storj.io
+description: >
+  Decentralized storage node. Earn by renting unused disk space. Requires an
+  identity, forwarded ports, and a stable disk-backed machine.
+short_description: Decentralized storage node - storage and egress payouts
+
+referral:
+  signup_url: "https://storj.dev/node/get-started/setup"
+
+docker:
+  image: storjlabs/storagenode
+  platforms: [linux/amd64, linux/arm64]
+  env:
+    - key: WALLET
+      label: "Wallet address"
+      required: true
+      secret: false
+      description: "ERC-20 wallet address for STORJ payouts."
+    - key: EMAIL
+      label: "Email"
+      required: true
+      secret: false
+      description: "Email address for operator notifications."
+    - key: ADDRESS
+      label: "External address"
+      required: true
+      secret: false
+      description: "Public IP or DDNS hostname with port, e.g. example.com:28967."
+    - key: STORAGE
+      label: "Storage allocation"
+      required: true
+      secret: false
+      description: "Maximum disk space to allocate, e.g. 2TB."
+      default: "1TB"
+    - key: IDENTITY_DIR
+      label: "Identity directory"
+      required: true
+      secret: false
+      description: "Host path where identity files are stored."
+    - key: STORAGE_DIR
+      label: "Storage directory"
+      required: true
+      secret: false
+      description: "Host path for Storj storage data."
+  ports: ["28967:28967/tcp", "28967:28967/udp", "14002:14002"]
+  volumes:
+    - "${IDENTITY_DIR}:/app/identity"
+    - "${STORAGE_DIR}:/app/config"
+  command: "--operator.wallet-features=zksync-era"
+  network_mode: ""
+  stop_timeout: 300
+  setup: >
+    Before first run, initialize the storage node config with SETUP=true.
+
+requirements:
+  residential_ip: false
+  min_bandwidth: "5 Mbps upload"
+  gpu: false
+  min_storage: "550GB"
+
+payment:
+  methods: [crypto]
+  minimum_payout: "$4"
+  currency: STORJ
+  frequency: "Monthly"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 15
+  currency: USD
+  per: "TB"
+  notes: "Earnings scale with disk allocated, node age, and egress demand."
+
+cashout:
+  method: redirect
+  dashboard_url: "http://localhost:14002"
+  min_amount: 4.0
+  currency: STORJ
+
+platforms: [docker, windows, linux]
+
+collector:
+  type: api
+  notes: "Local dashboard API at /api/sno; not ported in the Wails MVP."

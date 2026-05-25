@@ -1,0 +1,68 @@
+name: Honeygain
+slug: honeygain
+category: bandwidth
+status: active
+website: https://www.honeygain.com
+description: >
+  Share unused internet bandwidth and earn passive income. One of the most
+  established bandwidth-sharing platforms.
+short_description: Bandwidth sharing - most established platform
+
+referral:
+  signup_url: "https://dashboard.honeygain.com/ref/SERGIB4014"
+
+docker:
+  image: honeygain/honeygain
+  platforms: [linux/amd64]
+  env:
+    - key: HONEYGAIN_EMAIL
+      label: "Email"
+      required: true
+      secret: false
+      description: "Your Honeygain account email"
+    - key: HONEYGAIN_PASSWORD
+      label: "Password"
+      required: true
+      secret: true
+      description: "Your Honeygain account password"
+    - key: HONEYGAIN_DEVICE_NAME
+      label: "Device name"
+      required: false
+      secret: false
+      description: "Name shown in your Honeygain dashboard"
+      default: "cashpilot-{hostname}"
+  ports: []
+  volumes: []
+  command: "-tou-accept -email ${HONEYGAIN_EMAIL} -pass ${HONEYGAIN_PASSWORD} -device ${HONEYGAIN_DEVICE_NAME}"
+  network_mode: ""
+  privileged: false
+
+requirements:
+  residential_ip: true
+  devices_per_account: 10
+  gpu: false
+
+payment:
+  methods: [paypal, crypto]
+  minimum_payout: "$20"
+  currency: USD
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 5
+  currency: USD
+  per: "device"
+  notes: "US/EU residential IPs usually earn more."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://dashboard.honeygain.com/earnings"
+  min_amount: 20.0
+  currency: USD
+
+platforms: [docker, windows, macos, linux, android]
+
+collector:
+  type: api
+  notes: "JWT auth via Honeygain dashboard API."

@@ -1,11 +1,13 @@
 target/
 node_modules/
 dist/
+!frontend/dist/
+frontend/dist/*
+!frontend/dist/.gitkeep
+frontend/package.json.md5
 *.pyc
 __pycache__/
 build/
-*.spec
-!sidecar/cashpilot-sidecar.spec
 .DS_Store
 .omc/
 pnpm-lock.yaml

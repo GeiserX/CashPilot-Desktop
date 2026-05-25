@@ -9,165 +9,53 @@ permissions:
   contents: write
 
 jobs:
-  build-sidecar:
+  build:
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: [self-hosted, macOS, ARM64]
-            target: aarch64-apple-darwin
-            sidecar_name: cashpilot-sidecar
+            platform: darwin-arm64
+            artifact_glob: build/bin/*
           - runner: [self-hosted, Linux, X64]
-            target: x86_64-unknown-linux-gnu
-            sidecar_name: cashpilot-sidecar
+            platform: linux-amd64
+            artifact_glob: build/bin/*
           - runner: [self-hosted, Windows, X64]
-            target: x86_64-pc-windows-msvc
-            sidecar_name: cashpilot-sidecar.exe
+            platform: windows-amd64
+            artifact_glob: build/bin/*
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          repository: GeiserX/CashPilot
-          path: CashPilot
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install libpython (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y libpython3.12
-
-      - name: Install Python dependencies (Unix)
-        if: runner.os != 'Windows'
-        run: python3 -m pip install --break-system-packages -r sidecar/requirements.txt
-
-      - name: Install Python dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: python -m pip install --no-cache-dir -r sidecar/requirements.txt
-
-      - name: Build sidecar (Unix)
-        if: runner.os != 'Windows'
-        env:
-          CASHPILOT_BACKEND_PATH: ${{ github.workspace }}/CashPilot
-        working-directory: sidecar
-        run: python3 -m PyInstaller cashpilot-sidecar.spec
-
-      - name: Build sidecar (Windows)
-        if: runner.os == 'Windows'
-        env:
-          CASHPILOT_BACKEND_PATH: ${{ github.workspace }}/CashPilot
-        working-directory: sidecar
-        run: python -m PyInstaller cashpilot-sidecar.spec
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sidecar-${{ matrix.target }}
-          path: sidecar/dist/cashpilot-sidecar/
-
-  build-tauri:
-    needs: build-sidecar
-    if: needs.build-sidecar.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: [self-hosted, macOS, ARM64]
-            target: aarch64-apple-darwin
-            sidecar_artifact: sidecar-aarch64-apple-darwin
-          - runner: [self-hosted, Linux, X64]
-            target: x86_64-unknown-linux-gnu
-            sidecar_artifact: sidecar-x86_64-unknown-linux-gnu
-          - runner: [self-hosted, Windows, X64]
-            target: x86_64-pc-windows-msvc
-            sidecar_artifact: sidecar-x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: ${{ matrix.sidecar_artifact }}
-          path: src-tauri/sidecar/
-
-      - name: Make sidecar executable
-        if: runner.os != 'Windows'
-        run: chmod +x src-tauri/sidecar/cashpilot-sidecar
-
-      - name: Sign sidecar (Windows)
-        if: runner.os == 'Windows' && env.WINDOWS_SIGN_CERT != ''
-        env:
-          WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
-          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
-        run: |
-          $cert = [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT)
-          [System.IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
-          & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_SIGN_CERT_PASSWORD" /tr http://timestamp.digicert.com /td sha256 /fd sha256 "src-tauri\sidecar\cashpilot-sidecar.exe"
-          Remove-Item "$env:RUNNER_TEMP\cert.pfx"
-        shell: pwsh
+          go-version: '1.26.x'
+          cache: true
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '26'
 
-      - name: Install Tauri CLI
-        run: npm install
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      - name: Install Wails 2.x
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev nsis
 
-      - name: Import Apple certificate
-        if: runner.os == 'macOS'
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
-          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
 
-      - name: Build Tauri app (macOS)
-        if: runner.os == 'macOS'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npx tauri build --target ${{ matrix.target }}
+      - name: Test
+        run: go test ./...
 
-      - name: Build Tauri app (Linux)
-        if: runner.os == 'Linux'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPIMAGE_EXTRACT_AND_RUN: '1'
-          NO_STRIP: '1'
-        run: npx tauri build --target ${{ matrix.target }} --bundles deb
+      - name: Build Wails app
+        run: $(go env GOPATH)/bin/wails build -clean
 
-      - name: Build Tauri app (Windows)
-        if: runner.os == 'Windows'
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
-          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
-        run: npx tauri build --target ${{ matrix.target }} --bundles nsis
-
-      - name: Sign installer (Windows)
+      - name: Sign Windows binaries
         if: runner.os == 'Windows' && env.WINDOWS_SIGN_CERT != ''
         env:
           WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
@@ -175,35 +63,21 @@ jobs:
         run: |
           $cert = [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT)
           [System.IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
-          Get-ChildItem -Recurse "src-tauri\target\${{ matrix.target }}\release\bundle" -Include "*.exe","*.nsis.zip" | ForEach-Object {
+          Get-ChildItem -Recurse "build\bin" -Include "*.exe" | ForEach-Object {
             & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_SIGN_CERT_PASSWORD" /tr http://timestamp.digicert.com /td sha256 /fd sha256 $_.FullName
           }
           Remove-Item "$env:RUNNER_TEMP\cert.pfx"
         shell: pwsh
 
-      - name: Cleanup keychain
-        if: runner.os == 'macOS' && always()
-        run: |
-          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.target }}
-          path: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.dmg
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.app.tar.gz.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.exe.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.nsis.zip.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.AppImage.sig
-            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.deb
+          name: desktop-${{ matrix.platform }}
+          path: ${{ matrix.artifact_glob }}
 
   publish:
-    needs: build-tauri
-    if: needs.build-tauri.result == 'success'
+    needs: build
+    if: needs.build.result == 'success'
     runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
@@ -212,49 +86,10 @@ jobs:
         with:
           path: artifacts/
 
-      - name: Clean artifact filenames
-        run: |
-          # Replace spaces with dots in all artifact filenames
-          find artifacts/desktop-* -type f -name "* *" | while read -r f; do
-            mv "$f" "$(echo "$f" | sed 's/ /./g')"
-          done
-
-      - name: Generate updater manifest (latest.json)
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          RELEASE_URL="https://github.com/GeiserX/CashPilot-Desktop/releases/download/${GITHUB_REF_NAME}"
-
-          MACOS_ARM_SIG=$(find artifacts/desktop-aarch64-apple-darwin -name "*.app.tar.gz.sig" -exec cat {} \; 2>/dev/null || echo "")
-          WINDOWS_SIG=$(find artifacts/desktop-x86_64-pc-windows-msvc \( -name "*.nsis.zip.sig" -o -name "*.exe.sig" \) -exec cat {} \; 2>/dev/null || echo "")
-
-          MACOS_ARM_URL=$(find artifacts/desktop-aarch64-apple-darwin -name "*.app.tar.gz" ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
-          WINDOWS_URL=$(find artifacts/desktop-x86_64-pc-windows-msvc \( -name "*.nsis.zip" -o -name "*-setup.exe" \) ! -name "*.sig" 2>/dev/null | head -1 | sed 's|.*/||' || echo "")
-
-          PLATFORMS=""
-          if [ -n "$MACOS_ARM_SIG" ]; then
-            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"darwin-aarch64\":{\"signature\":\"${MACOS_ARM_SIG}\",\"url\":\"${RELEASE_URL}/${MACOS_ARM_URL}\"}"
-          fi
-          if [ -n "$WINDOWS_SIG" ]; then
-            PLATFORMS="${PLATFORMS:+$PLATFORMS,}\"windows-x86_64\":{\"signature\":\"${WINDOWS_SIG}\",\"url\":\"${RELEASE_URL}/${WINDOWS_URL}\"}"
-          fi
-
-          echo "{\"version\":\"${VERSION}\",\"notes\":\"See release notes on GitHub\",\"pub_date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"platforms\":{${PLATFORMS}}}" > latest.json
-          python3 -m json.tool latest.json > latest.json.tmp && mv latest.json.tmp latest.json || true
-          cat latest.json
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/desktop-*/**/*.dmg
-            artifacts/desktop-*/**/*.app.tar.gz
-            artifacts/desktop-*/**/*.app.tar.gz.sig
-            artifacts/desktop-*/**/*.exe
-            artifacts/desktop-*/**/*.exe.sig
-            artifacts/desktop-*/**/*.nsis.zip
-            artifacts/desktop-*/**/*.nsis.zip.sig
-            artifacts/desktop-*/**/*.AppImage
-            artifacts/desktop-*/**/*.AppImage.sig
-            artifacts/desktop-*/**/*.deb
-            latest.json
+          files: artifacts/desktop-*/*
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

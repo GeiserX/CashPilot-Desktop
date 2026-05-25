@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "cashpilot-desktop",
+  "outputfilename": "CashPilot Desktop",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "http://localhost:5173",
+  "author": {
+    "name": "Sergio Fernandez",
+    "email": "9169332+GeiserX@users.noreply.github.com"
+  },
+  "info": {
+    "productName": "CashPilot Desktop",
+    "productVersion": "0.4.0",
+    "copyright": "Copyright 2026 Sergio Fernandez",
+    "comments": "Local-first passive income and DePIN service manager"
+  }
+}

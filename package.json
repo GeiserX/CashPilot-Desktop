@@ -1,11 +1,10 @@
 {
   "name": "cashpilot-desktop",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "scripts": {
-    "tauri": "tauri"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "dev": "wails dev",
+    "build": "wails build",
+    "test": "go test ./..."
   }
 }

@@ -1,0 +1,235 @@
+package catalog
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Catalog struct {
+	services []Service
+	bySlug   map[string]Service
+}
+
+type Service struct {
+	Name             string            `json:"name" yaml:"name"`
+	Slug             string            `json:"slug" yaml:"slug"`
+	Category         string            `json:"category" yaml:"category"`
+	Status           string            `json:"status" yaml:"status"`
+	Website          string            `json:"website" yaml:"website"`
+	Description      string            `json:"description" yaml:"description"`
+	ShortDescription string            `json:"shortDescription" yaml:"short_description"`
+	Referral         Referral          `json:"referral" yaml:"referral"`
+	Docker           DockerConfig      `json:"docker" yaml:"docker"`
+	Requirements     Requirements      `json:"requirements" yaml:"requirements"`
+	Payment          Payment           `json:"payment" yaml:"payment"`
+	Earnings         EarningsEstimate  `json:"earnings" yaml:"earnings"`
+	Cashout          Cashout           `json:"cashout" yaml:"cashout"`
+	Platforms        []string          `json:"platforms" yaml:"platforms"`
+	Collector        CollectorMetadata `json:"collector" yaml:"collector"`
+	SourcePath       string            `json:"sourcePath" yaml:"-"`
+	ManualOnly       bool              `json:"manualOnly" yaml:"-"`
+}
+
+type Referral struct {
+	SignupURL string `json:"signupUrl" yaml:"signup_url"`
+}
+
+type DockerConfig struct {
+	Image       string   `json:"image" yaml:"image"`
+	Platforms   []string `json:"platforms" yaml:"platforms"`
+	Env         []EnvVar `json:"env" yaml:"env"`
+	Ports       []string `json:"ports" yaml:"ports"`
+	Volumes     []string `json:"volumes" yaml:"volumes"`
+	Command     string   `json:"command" yaml:"command"`
+	NetworkMode string   `json:"networkMode" yaml:"network_mode"`
+	CapAdd      []string `json:"capAdd" yaml:"cap_add"`
+	Privileged  bool     `json:"privileged" yaml:"privileged"`
+	StopTimeout int      `json:"stopTimeout" yaml:"stop_timeout"`
+	Setup       string   `json:"setup" yaml:"setup"`
+	Notes       string   `json:"notes" yaml:"notes"`
+}
+
+type EnvVar struct {
+	Key         string `json:"key" yaml:"key"`
+	Label       string `json:"label" yaml:"label"`
+	Required    bool   `json:"required" yaml:"required"`
+	Secret      bool   `json:"secret" yaml:"secret"`
+	Description string `json:"description" yaml:"description"`
+	Default     string `json:"default" yaml:"default"`
+}
+
+type Requirements struct {
+	ResidentialIP     bool   `json:"residentialIp" yaml:"residential_ip"`
+	VPSIP             bool   `json:"vpsIp" yaml:"vps_ip"`
+	DevicesPerAccount int    `json:"devicesPerAccount" yaml:"devices_per_account"`
+	DevicesPerIP      int    `json:"devicesPerIp" yaml:"devices_per_ip"`
+	MinBandwidth      string `json:"minBandwidth" yaml:"min_bandwidth"`
+	GPU               bool   `json:"gpu" yaml:"gpu"`
+	MinStorage        string `json:"minStorage" yaml:"min_storage"`
+	Note              string `json:"note" yaml:"note"`
+}
+
+type Payment struct {
+	Methods       []string `json:"methods" yaml:"methods"`
+	MinimumPayout string   `json:"minimumPayout" yaml:"minimum_payout"`
+	Currency      string   `json:"currency" yaml:"currency"`
+	Frequency     string   `json:"frequency" yaml:"frequency"`
+}
+
+type EarningsEstimate struct {
+	MonthlyLow  float64 `json:"monthlyLow" yaml:"monthly_low"`
+	MonthlyHigh float64 `json:"monthlyHigh" yaml:"monthly_high"`
+	Currency    string  `json:"currency" yaml:"currency"`
+	Per         string  `json:"per" yaml:"per"`
+	Notes       string  `json:"notes" yaml:"notes"`
+}
+
+type Cashout struct {
+	Method       string  `json:"method" yaml:"method"`
+	DashboardURL string  `json:"dashboardUrl" yaml:"dashboard_url"`
+	MinAmount    float64 `json:"minAmount" yaml:"min_amount"`
+	Currency     string  `json:"currency" yaml:"currency"`
+	Notes        string  `json:"notes" yaml:"notes"`
+}
+
+type CollectorMetadata struct {
+	Type  string `json:"type" yaml:"type"`
+	Notes string `json:"notes" yaml:"notes"`
+}
+
+func Load() (*Catalog, error) {
+	root, err := locateServicesDir()
+	if err != nil {
+		return nil, err
+	}
+	var services []Service
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") || strings.HasPrefix(entry.Name(), "_") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		var svc Service
+		if err := yaml.Unmarshal(raw, &svc); err != nil {
+			return err
+		}
+		if svc.Slug == "" || svc.Name == "" {
+			return nil
+		}
+		svc.SourcePath = path
+		svc.ManualOnly = svc.Docker.Image == ""
+		services = append(services, svc)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(services, func(i, j int) bool {
+		if services[i].Category == services[j].Category {
+			return services[i].Name < services[j].Name
+		}
+		return services[i].Category < services[j].Category
+	})
+	bySlug := make(map[string]Service, len(services))
+	for _, svc := range services {
+		bySlug[svc.Slug] = svc
+	}
+	return &Catalog{services: services, bySlug: bySlug}, nil
+}
+
+func LoadEmbedded(fsys fs.FS) (*Catalog, error) {
+	services, err := loadFromFS(fsys, "services")
+	if err != nil || len(services) == 0 {
+		return Load()
+	}
+	return newCatalog(services), nil
+}
+
+func (c *Catalog) List() []Service {
+	out := make([]Service, len(c.services))
+	copy(out, c.services)
+	return out
+}
+
+func (c *Catalog) ListVisible() []Service {
+	out := make([]Service, 0, len(c.services))
+	for _, svc := range c.services {
+		if svc.Status == "dead" || svc.Status == "broken" {
+			continue
+		}
+		out = append(out, svc)
+	}
+	return out
+}
+
+func (c *Catalog) Get(slug string) (Service, bool) {
+	svc, ok := c.bySlug[slug]
+	return svc, ok
+}
+
+func locateServicesDir() (string, error) {
+	candidates := []string{
+		filepath.Join("services"),
+		filepath.Join("..", "CashPilot", "services"),
+		filepath.Join("..", "..", "CashPilot", "services"),
+	}
+	for _, candidate := range candidates {
+		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("CashPilot services catalog not found")
+}
+
+func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
+	var services []Service
+	err := fs.WalkDir(fsys, root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") || strings.HasPrefix(entry.Name(), "_") {
+			return nil
+		}
+		raw, err := fs.ReadFile(fsys, path)
+		if err != nil {
+			return err
+		}
+		var svc Service
+		if err := yaml.Unmarshal(raw, &svc); err != nil {
+			return err
+		}
+		if svc.Slug == "" || svc.Name == "" {
+			return nil
+		}
+		svc.SourcePath = path
+		svc.ManualOnly = svc.Docker.Image == ""
+		services = append(services, svc)
+		return nil
+	})
+	return services, err
+}
+
+func newCatalog(services []Service) *Catalog {
+	sort.Slice(services, func(i, j int) bool {
+		if services[i].Category == services[j].Category {
+			return services[i].Name < services[j].Name
+		}
+		return services[i].Category < services[j].Category
+	})
+	bySlug := make(map[string]Service, len(services))
+	for _, svc := range services {
+		bySlug[svc.Slug] = svc
+	}
+	return &Catalog{services: services, bySlug: bySlug}
+}
