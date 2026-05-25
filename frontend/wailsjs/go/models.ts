@@ -281,6 +281,7 @@ export namespace main {
 	    services: catalog.Service[];
 	    deployments: store.Deployment[];
 	    earnings: store.EarningsRecord[];
+	    history: store.EarningsRecord[];
 	    guides: runtime.InstallGuide[];
 	
 	    static createFrom(source: any = {}) {
@@ -294,6 +295,7 @@ export namespace main {
 	        this.services = this.convertValues(source["services"], catalog.Service);
 	        this.deployments = this.convertValues(source["deployments"], store.Deployment);
 	        this.earnings = this.convertValues(source["earnings"], store.EarningsRecord);
+	        this.history = this.convertValues(source["history"], store.EarningsRecord);
 	        this.guides = this.convertValues(source["guides"], runtime.InstallGuide);
 	    }
 	

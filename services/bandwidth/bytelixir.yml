@@ -1,0 +1,69 @@
+name: Bytelixir
+slug: bytelixir
+category: bandwidth
+status: active
+website: https://bytelixir.com
+description: >
+  Bytelixir lets you earn passive income by sharing unused internet bandwidth.
+  Supports Windows, macOS, Linux, and Android. Earnings range $2-50/month
+  depending on location. Web dashboard at dash.bytelixir.com for tracking.
+  No Docker image available.
+short_description: Bandwidth sharing - $2-50/month, desktop + Android
+
+referral:
+  signup_url: "https://bytelixir.com/r/OYEIRE0VSZBZ"
+
+docker:
+  image: ""
+  platforms: []
+  env:
+    - key: BYTELIXIR_SESSION_COOKIE
+      label: "Session Cookie"
+      required: true
+      secret: true
+      description: "Log in at <a href=\"https://dash.bytelixir.com\">dash.bytelixir.com</a>, press F12 → Application → expand <b>Cookies</b> in the left sidebar → click the sub-item <code>https://dash.bytelixir.com</code> → in the cookie list on the right, find <code>bytelixir_session</code> → copy its Value (a long JWT starting with eyJ)"
+    - key: BYTELIXIR_REMEMBER_WEB
+      label: "Remember Web Cookie"
+      required: false
+      secret: true
+      description: "Same location (Cookies → <code>https://dash.bytelixir.com</code>) → find the cookie named <code>remember_web_...</code> → copy its Value (optional, extends session lifetime)"
+    - key: BYTELIXIR_XSRF_TOKEN
+      label: "XSRF Token"
+      required: false
+      secret: true
+      description: "Same location → find <code>XSRF-TOKEN</code> → copy its Value (optional)"
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+
+requirements:
+  residential_ip: true
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [crypto]
+  minimum_payout: "$5"
+  currency: USD
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 3
+  currency: USD
+  per: "device"
+  notes: "Earnings vary by location ($2-50/month). No Docker image. Desktop app or Android app required."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://dash.bytelixir.com"
+  min_amount: 5.0
+  currency: USD
+
+platforms: [windows, macos, linux, android]
+
+collector:
+  type: manual
+  notes: "No public API. Dashboard at dash.bytelixir.com uses email/password auth. Scraping possible."

@@ -4,9 +4,13 @@ category: storage
 status: active
 website: https://www.storj.io
 description: >
-  Decentralized storage node. Earn by renting unused disk space. Requires an
-  identity, forwarded ports, and a stable disk-backed machine.
-short_description: Decentralized storage node - storage and egress payouts
+  Storj is a decentralized cloud storage network where you earn by renting out
+  your unused disk space. Run the storage node via Docker and get paid approximately
+  $1.50/TB stored per month plus $2/TB egress. Payments are in STORJ token or via
+  zkSync L2. Requires at least 550GB of available disk space and a stable internet
+  connection. One of the most mature and truly passive storage income services.
+  No account or signup needed -- nodes are permissionless since mid-2025.
+short_description: Decentralized storage node - ~$1.50/TB stored + $2/TB egress
 
 referral:
   signup_url: "https://storj.dev/node/get-started/setup"
@@ -19,33 +23,33 @@ docker:
       label: "Wallet address"
       required: true
       secret: false
-      description: "ERC-20 wallet address for STORJ payouts."
+      description: "ERC-20 wallet address for STORJ token payouts (e.g. 0x1234...abcd). Must be self-custodial (MetaMask, Ledger, etc.) -- never use an exchange address"
     - key: EMAIL
       label: "Email"
       required: true
       secret: false
-      description: "Email address for operator notifications."
+      description: "Email address for operator notifications"
     - key: ADDRESS
       label: "External address"
       required: true
       secret: false
-      description: "Public IP or DDNS hostname with port, e.g. example.com:28967."
+      description: "Your public IP or DDNS hostname with port (e.g. 84.54.27.229:28967). Port 28967 must be forwarded (TCP+UDP)"
     - key: STORAGE
       label: "Storage allocation"
       required: true
       secret: false
-      description: "Maximum disk space to allocate, e.g. 2TB."
+      description: "Maximum disk space to allocate (e.g. 2TB). Use spinning disks (HDD), not SSD"
       default: "1TB"
     - key: IDENTITY_DIR
       label: "Identity directory"
       required: true
       secret: false
-      description: "Host path where identity files are stored."
+      description: "Host path where identity files are stored (must contain ca.cert, ca.key, identity.cert, identity.key)"
     - key: STORAGE_DIR
       label: "Storage directory"
       required: true
       secret: false
-      description: "Host path for Storj storage data."
+      description: "Host path on a spinning disk (HDD) for Storj data storage. Needs at least 550GB free"
   ports: ["28967:28967/tcp", "28967:28967/udp", "14002:14002"]
   volumes:
     - "${IDENTITY_DIR}:/app/identity"
@@ -54,10 +58,23 @@ docker:
   network_mode: ""
   stop_timeout: 300
   setup: >
-    Before first run, initialize the storage node config with SETUP=true.
+    Before first run, initialize the storage node config:
+    docker run --rm -e SETUP="true"
+    --user $(id -u):$(id -g)
+    --mount type=bind,source="<IDENTITY_DIR>",destination=/app/identity
+    --mount type=bind,source="<STORAGE_DIR>",destination=/app/config
+    --name storagenode storjlabs/storagenode:latest
+  notes: >
+    Image is storjlabs/storagenode (not storj/storagenode).
+    A one-time setup step (SETUP=true) must be run before deploying the main container.
+    Identity must be pre-generated using the identity binary (proof-of-work to difficulty 36, takes hours).
+    Use spinning disks for storage. Port 28967 TCP+UDP must be forwarded.
+    Dashboard at port 14002 — use your server's LAN IP (not localhost) for the collector API URL.
 
 requirements:
   residential_ip: false
+  note: "Storj nodes on the same /24 subnet share data allocation, reducing per-node earnings."
+  note_column: devices_per_ip
   min_bandwidth: "5 Mbps upload"
   gpu: false
   min_storage: "550GB"
@@ -73,16 +90,17 @@ earnings:
   monthly_high: 15
   currency: USD
   per: "TB"
-  notes: "Earnings scale with disk allocated, node age, and egress demand."
+  notes: "~$1.50/TB stored + $2/TB egress + $2.74/TB audit/repair. Earnings scale with disk allocated and node age. First 9 months have held-back escrow. Port 28967 must be forwarded."
 
 cashout:
   method: redirect
   dashboard_url: "http://localhost:14002"
   min_amount: 4.0
   currency: STORJ
+  notes: "Payouts sent monthly in STORJ tokens to configured wallet address. Dashboard at port 14002."
 
 platforms: [docker, windows, linux]
 
 collector:
   type: api
-  notes: "Local dashboard API at /api/sno; not ported in the Wails MVP."
+  notes: "Local dashboard at port 14002. API at /api/sno for node stats, earnings, bandwidth. No auth needed on local interface."

@@ -1,0 +1,56 @@
+name: Salad
+slug: salad
+category: compute
+status: active
+website: https://salad.io
+description: >
+  Salad.io lets you share your GPU for distributed AI workloads and earn Salad
+  balance redeemable for gift cards, games, or cash. Windows only with a native
+  desktop application. Requires a dedicated GPU (NVIDIA or AMD). The platform
+  routes AI inference, rendering, and other compute tasks to your machine when
+  idle. One of the more user-friendly GPU sharing platforms.
+short_description: GPU sharing for AI - Windows only, gift card or cash payout
+
+referral:
+  signup_url: "https://salad.io"
+
+docker:
+  image: ""
+  platforms: []
+  env: []
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+
+requirements:
+  residential_ip: true
+  min_bandwidth: ""
+  gpu: true
+  min_storage: ""
+
+payment:
+  methods: [paypal, giftcard]
+  minimum_payout: "$5"
+  currency: USD
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 100
+  currency: USD
+  per: "GPU-hour"
+  notes: "Earnings depend on GPU model and availability of work. RTX 3060 ~$1-3/day. Windows only. Native app, no Docker support. Redeemable for gift cards, games, or PayPal."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://app.salad.io/earn/summary"
+  min_amount: 5.0
+  currency: USD
+  notes: "PayPal or gift cards via Salad storefront."
+
+platforms: [windows]
+
+collector:
+  type: api
+  notes: "API at app-api.salad.com/api/v1/profile/balance. Auth via 'auth' cookie + X-XSRF-TOKEN header (double-submit). Returns currentBalance (USD) and lifetimeBalance."

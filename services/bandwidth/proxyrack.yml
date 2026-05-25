@@ -1,0 +1,73 @@
+name: ProxyRack
+slug: proxyrack
+category: bandwidth
+status: active
+website: https://peer.proxyrack.com
+description: >
+  ProxyRack's Peer program lets you earn by sharing your bandwidth as part of
+  their proxy network. Each device requires a unique 64-character hex UUID and
+  optionally an API key to auto-register the device. Works on both residential
+  and VPS/datacenter connections. Dashboard is behind Cloudflare, which may
+  require manual browser-based API key retrieval.
+short_description: Bandwidth sharing - UUID per device, works on VPS
+
+referral:
+  signup_url: "https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn"
+
+docker:
+  image: proxyrack/pop
+  platforms: [linux/amd64]
+  env:
+    - key: UUID
+      label: "Device UUID"
+      required: true
+      secret: false
+      description: "Unique 64-character hex ID per device. Generate with: cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 64 | head -n 1"
+    - key: API_KEY
+      label: "API Key"
+      required: false
+      secret: true
+      description: "Log in at <a href=\"https://peer.proxyrack.com\">peer.proxyrack.com</a> → API Key is shown on the main dashboard page (auto-registers device if provided)"
+    - key: DEVICE_NAME
+      label: "Device name"
+      required: false
+      secret: false
+      description: "Friendly name for the device in dashboard"
+      default: "Device-${UUID}"
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+  privileged: false
+
+requirements:
+  residential_ip: false
+  devices_per_account: 500
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [paypal, crypto]
+  minimum_payout: "$20"
+  currency: USD
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 4
+  currency: USD
+  per: "device"
+  notes: "Residential IPs earn more than datacenter. Dashboard behind Cloudflare may complicate automated access."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://peer.proxyrack.com/dashboard"
+  min_amount: 20.0
+  currency: USD
+
+platforms: [docker, windows, macos, linux]
+
+collector:
+  type: api
+  notes: "Dashboard behind Cloudflare. May need API key from browser session. Per-device earnings visible."

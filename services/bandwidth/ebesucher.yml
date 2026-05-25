@@ -1,0 +1,55 @@
+name: Ebesucher
+slug: ebesucher
+category: bandwidth
+status: active
+website: https://www.ebesucher.com
+description: >
+  Ebesucher is a traffic exchange platform where you earn credits by visiting
+  websites through an automated surfbar. Runs as a browser extension/addon.
+  Not a traditional bandwidth-sharing service — it generates traffic by
+  browsing websites automatically.
+short_description: Traffic exchange surfbar - browser extension
+
+referral:
+  signup_url: "https://www.ebesucher.com/?ref=geiserx"
+
+docker:
+  image: ""
+  platforms: []
+  env: []
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+
+requirements:
+  residential_ip: false
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [paypal]
+  minimum_payout: "$2"
+  currency: EUR
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 2
+  currency: EUR
+  per: "device"
+  notes: "Earnings in BTP points convertible to EUR. Browser extension only."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://www.ebesucher.com/account"
+  min_amount: 2.0
+  currency: EUR
+  notes: "Euro payout via PayPal or bank transfer."
+
+platforms: [browser-extension]
+
+collector:
+  type: manual
+  notes: "Browser extension only. No API. Earnings visible in Ebesucher dashboard only."

@@ -1,5 +1,11 @@
 import "./style.css";
 import {
+  BrowserOpenURL,
+  Quit,
+  WindowMinimise,
+  WindowToggleMaximise,
+} from "../wailsjs/runtime/runtime";
+import {
   CheckRuntime,
   CollectService,
   CompleteOnboarding,
@@ -20,6 +26,10 @@ import type { AppState, Deployment, InstallGuide, ManagedRuntimePlan as RuntimeP
 let state: AppState | null = null;
 let selectedService: Service | null = null;
 let onboardingStep: "welcome" | "runtime" = "welcome";
+let activeView: "dashboard" | "wizard" = "dashboard";
+let wizardStep = 1;
+let wizardCategories: string[] = [];
+let wizardSelected: string[] = [];
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -38,6 +48,10 @@ function render() {
     renderOnboarding(state);
     return;
   }
+  if (activeView === "wizard") {
+    renderSetupWizard(state);
+    return;
+  }
   renderDashboard(state);
 }
 
@@ -53,8 +67,8 @@ function renderOnboarding(current: AppState) {
     <main class="onboarding">
       <section class="onboarding-card">
         <p class="eyebrow">CashPilot Desktop</p>
-        <h1>Passive income for you</h1>
-        <p class="subtitle">Share spare bandwidth, CPU, RAM, storage, or GPU with projects that need it. CashPilot helps you install, run, and monitor the services from one place.</p>
+        <h1>Put your idle machine to work</h1>
+        <p class="subtitle">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
         <div class="runtime-card ${runtime.available ? "ok" : "warn"}">
           <strong>${runtime.available ? "Runtime ready" : "Runtime setup needed"}</strong>
           <span>${escapeHtml(runtime.message)}</span>
@@ -68,6 +82,7 @@ function renderOnboarding(current: AppState) {
       </section>
     </main>
   `;
+  wireChrome();
   document.querySelector("#continue-btn")?.addEventListener("click", async () => {
     await CompleteOnboarding();
     state = await GetAppState();
@@ -89,11 +104,12 @@ function renderWelcome() {
       <section class="welcome-copy">
         <p class="eyebrow">CashPilot Desktop</p>
         <h1>Welcome to CashPilot</h1>
-        <p class="subtitle">Turn spare machine resources into side income while supporting bandwidth, storage, compute, and DePIN networks.</p>
+        <p class="subtitle">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
         <button class="primary" id="get-started">Get Started</button>
       </section>
     </main>
   `;
+  wireChrome();
   document.querySelector("#get-started")?.addEventListener("click", () => {
     onboardingStep = "runtime";
     render();
@@ -107,19 +123,32 @@ function renderGuides(guides: InstallGuide[]) {
     <article class="guide">
       <h3>${escapeHtml(guide.name)}</h3>
       <p>${escapeHtml(guide.description)}</p>
-      <a href="${escapeHtml(guide.url)}" target="_blank" rel="noreferrer">Open install guide</a>
+      <button class="guide-link" data-url="${escapeHtml(guide.url)}">Open install guide</button>
       ${(guide.commands || []).map((cmd) => `<code>${escapeHtml(cmd)}</code>`).join("")}
       ${(guide.notes || []).map((note) => `<small>${escapeHtml(note)}</small>`).join("")}
     </article>
   `).join("");
+  holder.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
+  });
 }
 
 function renderDashboard(current: AppState) {
   const services = current.services || [];
   const deployments = current.deployments || [];
   const earnings = current.earnings || [];
-  const selected = selectedService || services.find((svc) => !svc.manualOnly) || services[0];
-  selectedService = selected || null;
+  const history = current.history || [];
+  const runningCount = deployments.filter((dep) => dep.status === "running").length;
+  const deployedSlugs = new Set(deployments.map((dep) => dep.slug));
+  const totalBalance = earnings.reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0);
+  const trackedCount = earnings.filter((record) => !record.error).length;
+  const recentServices = [...services]
+    .filter((svc) => !deployedSlugs.has(svc.slug))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, 6);
 
   root.innerHTML = `
     ${titlebar()}
@@ -127,8 +156,8 @@ function renderDashboard(current: AppState) {
       <aside class="sidebar">
         <div>
           <p class="eyebrow">CashPilot Desktop</p>
-          <h1>Local Service Manager</h1>
-          <p class="muted">Deploy earning services, monitor containers, and track balances from this machine.</p>
+              <h1>Dashboard</h1>
+              <p class="muted">Earnings, services, logs, and payouts for this machine.</p>
         </div>
         <div class="runtime-card compact ${current.runtime.available ? "ok" : "warn"}">
           <strong>${current.runtime.available ? "Runtime ready" : "Runtime offline"}</strong>
@@ -139,49 +168,241 @@ function renderDashboard(current: AppState) {
         </nav>
       </aside>
       <main class="content">
-        <section class="hero-panel">
-          <div>
-            <p class="eyebrow">Dashboard</p>
-            <h2>${deployments.length} managed container${deployments.length === 1 ? "" : "s"}</h2>
-            <p class="muted">Quiting the app leaves containers running. Stop or remove services explicitly from here.</p>
-          </div>
-          <button class="secondary" id="refresh">Refresh runtime</button>
+        <section class="metric-grid">
+          ${metricCard("Total Balance", formatBalance(totalBalance, "USD"), "Latest collected balance")}
+          ${metricCard("Active Services", `${runningCount}`, "Containers currently running")}
+          ${metricCard("Tracked", `${trackedCount}`, "Services with earnings data")}
+          ${metricCard("Catalog", `${services.length}`, "Available providers")}
         </section>
-        <section class="grid two">
-          <div class="panel">
-            <h2>Running Services</h2>
-            ${deployments.length ? deployments.map(renderDeployment).join("") : `<p class="muted">No CashPilot-managed containers yet.</p>`}
+
+        <section class="panel earnings-panel">
+          <div class="split">
+            <div>
+              <p class="eyebrow">Earnings</p>
+              <h2>What your services are earning</h2>
+            </div>
+            <div class="hero-actions">
+              <button class="primary" id="open-wizard">+ Add Service</button>
+              <button class="secondary" id="refresh">Refresh</button>
+            </div>
           </div>
-          <div class="panel">
-            <h2>Latest Earnings</h2>
-            ${earnings.length ? earnings.map(renderEarning).join("") : `<p class="muted">No earnings collected yet.</p>`}
+          ${renderEarningsChart(history, earnings)}
+          <div class="earnings-breakdown">
+            ${earnings.length ? earnings.map((record) => renderEarningBreakdown(record, services)).join("") : `<p class="muted">No earnings yet. Deploy a service, add credentials, then collect earnings.</p>`}
           </div>
         </section>
-        ${selected ? renderServiceDetail(selected, deployments.find((dep) => dep.slug === selected.slug)) : ""}
-        <section class="panel">
-          <h2>Managed Runtime Roadmap</h2>
-          <div id="runtime-plan" class="muted">Loading roadmap...</div>
+
+        <section class="panel dashboard-panel">
+          <div class="split">
+            <div>
+              <p class="eyebrow">Services</p>
+              <h2>Deployed Services</h2>
+            </div>
+            <button class="secondary" id="refresh-services">Refresh status</button>
+          </div>
+          <div class="services-table-wrap">
+            ${renderServicesTable(services, deployments, earnings)}
+          </div>
         </section>
+
+        <section class="panel dashboard-panel">
+          <div class="split">
+            <div>
+              <p class="eyebrow">Catalog</p>
+              <h2>Add another service</h2>
+            </div>
+            <button class="primary" id="open-wizard-bottom">Setup Wizard</button>
+          </div>
+          <div class="service-card-grid">
+            ${recentServices.map((svc) => renderServiceCard(svc, false)).join("")}
+          </div>
+        </section>
+        <pre id="service-output" class="output dashboard-output"></pre>
       </main>
     </div>
   `;
+  wireChrome();
 
   document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
     button.addEventListener("click", () => {
-      selectedService = services.find((svc) => svc.slug === button.dataset.service) || null;
-      render();
+      openWizard(button.dataset.service);
     });
   });
   document.querySelector("#refresh")?.addEventListener("click", refreshState);
-  document.querySelector("#save-creds")?.addEventListener("click", saveCredentials);
-  document.querySelector("#deploy")?.addEventListener("click", deploySelected);
-  document.querySelector("#stop")?.addEventListener("click", () => actionSelected("stop"));
-  document.querySelector("#restart")?.addEventListener("click", () => actionSelected("restart"));
-  document.querySelector("#remove")?.addEventListener("click", () => actionSelected("remove"));
-  document.querySelector("#logs")?.addEventListener("click", showLogs);
-  document.querySelector("#collect")?.addEventListener("click", collectSelected);
-  void renderRuntimePlan();
-  void hydrateCredentialForm(selected);
+  document.querySelector("#refresh-services")?.addEventListener("click", refreshState);
+  document.querySelector("#open-wizard")?.addEventListener("click", openWizard);
+  document.querySelector("#open-wizard-bottom")?.addEventListener("click", openWizard);
+  document.querySelector("#open-wizard-empty")?.addEventListener("click", openWizard);
+  document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.slug || "";
+      const action = button.dataset.rowAction || "";
+      void runServiceAction(slug, action);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
+  });
+}
+
+function metricCard(label: string, value: string, caption: string) {
+  return `
+    <article class="metric-card">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(caption)}</small>
+    </article>
+  `;
+}
+
+function renderEarningsChart(history: {platform: string; balance: number; currency: string; error?: string; createdAt: string}[], latest: {platform: string; balance: number; currency: string; error?: string}[]) {
+  const daily = new Map<string, number>();
+  history.filter((record) => !record.error).forEach((record) => {
+    const day = (record.createdAt || "").slice(5, 10) || "now";
+    daily.set(day, (daily.get(day) || 0) + record.balance);
+  });
+  let points: Array<[string, number]> = [...daily.entries()].slice(-14);
+  if (points.length === 0 && latest.length > 0) {
+    points = latest.filter((record) => !record.error).map((record) => [record.platform, record.balance]);
+  }
+  if (points.length === 0) {
+    return `
+      <div class="chart-empty">
+        <strong>No earnings collected yet</strong>
+        <span>Once collectors run, this becomes the main view of what each service is earning.</span>
+      </div>
+    `;
+  }
+  const width = 720;
+  const height = 240;
+  const max = Math.max(...points.map(([, value]) => value), 1);
+  const step = points.length > 1 ? width / (points.length - 1) : width;
+  const coords = points.map(([, value], index) => {
+    const x = points.length > 1 ? index * step : width / 2;
+    const y = height - (value / max) * 180 - 30;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `
+    <div class="chart-shell">
+      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Earnings chart">
+        <defs>
+          <linearGradient id="chart-fill" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#fb7185" stop-opacity="0.32"/>
+            <stop offset="100%" stop-color="#fb7185" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        ${[40, 80, 120, 160, 200].map((y) => `<line x1="0" y1="${y}" x2="${width}" y2="${y}" />`).join("")}
+        <polyline points="${coords}" fill="none" stroke="#fb7185" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <polygon points="0,${height} ${coords} ${width},${height}" fill="url(#chart-fill)"/>
+        ${points.map(([label, value], index) => {
+          const x = points.length > 1 ? index * step : width / 2;
+          const y = height - (value / max) * 180 - 30;
+          return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" /><text x="${x.toFixed(1)}" y="232">${escapeHtml(label)}</text>`;
+        }).join("")}
+      </svg>
+    </div>
+  `;
+}
+
+function renderEarningBreakdown(record: {platform: string; balance: number; currency: string; error?: string}, services: Service[]) {
+  const service = services.find((svc) => svc.slug === record.platform);
+  return `
+    <div class="earning-chip ${record.error ? "error" : ""}">
+      <span>${escapeHtml(service?.name || record.platform)}</span>
+      <strong>${record.error ? "Needs attention" : formatBalance(record.balance, record.currency)}</strong>
+      <small>${record.error ? escapeHtml(record.error) : escapeHtml(record.currency)}</small>
+    </div>
+  `;
+}
+
+function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[]) {
+  if (deployments.length === 0) {
+    return `
+      <div class="empty-state">
+        <strong>No services deployed yet</strong>
+        <span>Use the setup wizard to choose a provider, create an account, enter credentials, and deploy.</span>
+        <button class="primary" id="open-wizard-empty">Setup Wizard</button>
+      </div>
+    `;
+  }
+  const earningBySlug = new Map(earnings.map((record) => [record.platform, record]));
+  return `
+    <table class="services-table">
+      <thead>
+        <tr>
+          <th>Service</th>
+          <th>Status</th>
+          <th>Balance</th>
+          <th>CPU</th>
+          <th>Memory</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${deployments.map((deployment) => {
+          const service = services.find((svc) => svc.slug === deployment.slug);
+          const earning = earningBySlug.get(deployment.slug);
+          return `
+            <tr>
+              <td>
+                <strong>${escapeHtml(service?.name || deployment.slug)}</strong>
+                <small>${escapeHtml(deployment.image)}</small>
+              </td>
+              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span></td>
+              <td>${earning && !earning.error ? formatBalance(earning.balance, earning.currency) : "<span class=\"muted\">--</span>"}</td>
+              <td>${deployment.cpuPercent.toFixed(1)}%</td>
+              <td>${deployment.memoryMb.toFixed(0)} MB</td>
+              <td>
+                <div class="table-actions">
+                  <button class="secondary compact-btn" data-row-action="collect" data-slug="${deployment.slug}">Collect</button>
+                  <button class="secondary compact-btn" data-row-action="logs" data-slug="${deployment.slug}">Logs</button>
+                  <button class="secondary compact-btn" data-row-action="stop" data-slug="${deployment.slug}">Stop</button>
+                  <button class="danger compact-btn" data-row-action="remove" data-slug="${deployment.slug}">Remove</button>
+                </div>
+              </td>
+            </tr>
+          `;
+        }).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderServiceCard(service: Service, deployed: boolean) {
+  const signupUrl = service.referral?.signupUrl || service.website;
+  return `
+    <article class="service-card">
+      <div>
+        <strong>${escapeHtml(service.name)}</strong>
+        <small>${escapeHtml(service.shortDescription || service.category)}</small>
+      </div>
+      <div class="service-card-actions">
+        <span class="pill">${deployed ? "deployed" : service.manualOnly ? "manual" : "docker"}</span>
+        ${signupUrl ? `<button class="text-link" data-url="${escapeHtml(signupUrl)}">Sign up</button>` : ""}
+        <button class="secondary compact-btn" data-service="${service.slug}">Setup</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderCategoryCards(services: Service[]) {
+  const counts = services.reduce<Record<string, {total: number; docker: number}>>((acc, service) => {
+    const key = service.category || "other";
+    acc[key] ||= {total: 0, docker: 0};
+    acc[key].total += 1;
+    if (!service.manualOnly) acc[key].docker += 1;
+    return acc;
+  }, {});
+  return Object.entries(counts).map(([category, count]) => `
+    <article class="category-card">
+      <span>${escapeHtml(category)}</span>
+      <strong>${count.total}</strong>
+      <small>${count.docker} deployable</small>
+    </article>
+  `).join("");
 }
 
 function serviceButton(service: Service, deployments: Deployment[]) {
@@ -220,6 +441,16 @@ function renderEarning(record: {platform: string; balance: number; currency: str
 
 function renderServiceDetail(service: Service, deployment?: Deployment) {
   const env = service.docker.env || [];
+  const envKeys = new Set(env.map((item) => item.key));
+  const collectorFields = getCollectorFields(service.slug).filter((item) => !envKeys.has(item.key));
+  const payment = [service.payment?.methods?.join(", "), service.payment?.minimumPayout ? `${service.payment.minimumPayout} min` : ""].filter(Boolean).join(" / ");
+  const platforms = (service.platforms || []).join(", ");
+  const requirements = [
+    service.requirements?.residentialIp ? "Residential IP preferred" : "VPS/datacenter ok",
+    service.requirements?.gpu ? "GPU required" : "",
+    service.requirements?.minBandwidth ? `${service.requirements.minBandwidth} bandwidth` : "",
+    service.requirements?.minStorage ? `${service.requirements.minStorage} storage` : "",
+  ].filter(Boolean).join(" / ");
   return `
     <section class="panel service-detail">
       <div class="split">
@@ -231,6 +462,20 @@ function renderServiceDetail(service: Service, deployment?: Deployment) {
         <span class="pill">${deployment ? escapeHtml(deployment.status) : "not deployed"}</span>
       </div>
       ${service.manualOnly ? `<p class="tip">This service has no Docker image in the CashPilot catalog yet. Track it manually and use collectors where supported.</p>` : ""}
+      <div class="provider-overview">
+        ${detailStat("Category", service.category || "service")}
+        ${detailStat("Estimate", `$${(service.earnings?.monthlyLow || 0).toFixed(0)}-${(service.earnings?.monthlyHigh || 0).toFixed(0)}/mo`)}
+        ${detailStat("Payment", payment || "See provider")}
+        ${detailStat("Collector", service.collector?.type || "manual")}
+        ${detailStat("Runtime", service.manualOnly ? "External app" : service.docker.image)}
+        ${detailStat("Requirements", requirements || "No special requirements")}
+      </div>
+      <p class="muted">${escapeHtml(stripHtml(service.description || service.shortDescription || ""))}</p>
+      <div class="link-row">
+        ${service.website ? `<button class="text-link" data-url="${escapeHtml(service.website)}">Open provider</button>` : ""}
+        ${service.referral?.signupUrl ? `<button class="text-link" data-url="${escapeHtml(service.referral.signupUrl)}">Sign up</button>` : ""}
+        ${service.cashout?.dashboardUrl ? `<button class="text-link" data-url="${escapeHtml(service.cashout.dashboardUrl)}">Dashboard / cashout</button>` : ""}
+      </div>
       <div class="credential-grid">
         ${env.map((item) => `
           <label>
@@ -238,10 +483,12 @@ function renderServiceDetail(service: Service, deployment?: Deployment) {
             <input data-env="${item.key}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(stripHtml(item.description || item.key))}" value="${escapeHtml(item.default || "")}" />
           </label>
         `).join("")}
-        ${service.slug === "earnfm" ? `
-          <label><span>Earn.fm email for collector</span><input data-env="EARNFM_EMAIL" type="text" /></label>
-          <label><span>Earn.fm password for collector</span><input data-env="EARNFM_PASSWORD" type="password" /></label>
-        ` : ""}
+        ${collectorFields.map((item) => `
+          <label>
+            <span>${escapeHtml(item.label)}${item.required ? " *" : ""}</span>
+            <input data-env="${item.key}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(item.description)}" />
+          </label>
+        `).join("")}
       </div>
       <div class="actions left">
         <button class="secondary" id="save-creds">Save Credentials</button>
@@ -255,6 +502,377 @@ function renderServiceDetail(service: Service, deployment?: Deployment) {
       <pre id="service-output" class="output"></pre>
     </section>
   `;
+}
+
+function detailStat(label: string, value: string) {
+  return `
+    <div class="detail-stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `;
+}
+
+function openWizard(input?: string | Event) {
+  const slug = typeof input === "string" ? input : "";
+  activeView = "wizard";
+  wizardStep = slug ? 3 : 1;
+  wizardSelected = slug ? [slug] : [];
+  const service = state?.services.find((svc) => svc.slug === slug);
+  wizardCategories = service ? [service.category] : [];
+  render();
+}
+
+function renderSetupWizard(current: AppState) {
+  const services = current.services || [];
+  const categories = ["bandwidth", "depin", "storage", "compute"].filter((category) => services.some((svc) => svc.category === category));
+  if (wizardCategories.length === 0 && categories.length > 0) {
+    wizardCategories = [categories[0]];
+  }
+  const filtered = services.filter((svc) => wizardCategories.includes(svc.category));
+  const selectedServices = services.filter((svc) => wizardSelected.includes(svc.slug));
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="setup-shell">
+      <main class="setup-content">
+        <div class="split">
+          <div>
+            <p class="eyebrow">Setup Wizard</p>
+            <h1>Add earning services</h1>
+            <p class="muted">Choose what to share, sign up through CashPilot, then deploy or track each provider.</p>
+          </div>
+          <button class="secondary" id="close-wizard">Back to Dashboard</button>
+        </div>
+        ${renderWizardProgress()}
+        <section class="panel wizard-panel active">
+          ${wizardStep === 1 ? renderWizardCategories(categories) : ""}
+          ${wizardStep === 2 ? renderWizardServices(filtered) : ""}
+          ${wizardStep === 3 ? renderWizardSetup(selectedServices) : ""}
+          ${wizardStep === 4 ? renderWizardSummary(selectedServices) : ""}
+        </section>
+        <div class="wizard-footer">
+          <button class="secondary" id="wizard-prev" ${wizardStep === 1 ? "disabled" : ""}>Back</button>
+          <button class="primary" id="wizard-next">${wizardStep === 4 ? "Go to Dashboard" : wizardStep === 3 ? "Summary" : "Next"}</button>
+        </div>
+      </main>
+    </div>
+  `;
+  wireChrome();
+  document.querySelector("#close-wizard")?.addEventListener("click", closeWizard);
+  document.querySelector("#wizard-prev")?.addEventListener("click", () => {
+    if (wizardStep > 1) {
+      wizardStep -= 1;
+      render();
+    }
+  });
+  document.querySelector("#wizard-next")?.addEventListener("click", () => {
+    if (wizardStep === 1 && wizardCategories.length === 0) return;
+    if (wizardStep === 2 && wizardSelected.length === 0) return;
+    if (wizardStep === 4) {
+      closeWizard();
+      return;
+    }
+    wizardStep += 1;
+    render();
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-category]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const category = button.dataset.category || "";
+      wizardCategories = wizardCategories.includes(category)
+        ? wizardCategories.filter((item) => item !== category)
+        : [...wizardCategories, category];
+      wizardSelected = wizardSelected.filter((slug) => {
+        const service = services.find((svc) => svc.slug === slug);
+        return service ? wizardCategories.includes(service.category) : false;
+      });
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-wizard-service]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.wizardService || "";
+      wizardSelected = wizardSelected.includes(slug)
+        ? wizardSelected.filter((item) => item !== slug)
+        : [...wizardSelected, slug];
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-wizard-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.slug || "";
+      const action = button.dataset.wizardAction || "";
+      void runWizardAction(slug, action);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
+  });
+  selectedServices.forEach((service) => void hydrateWizardForm(service));
+}
+
+function renderWizardProgress() {
+  const labels = ["Categories", "Services", "Setup", "Summary"];
+  return `
+    <div class="wizard-progress">
+      ${labels.map((label, index) => {
+        const step = index + 1;
+        return `
+          <div class="wizard-step ${wizardStep === step ? "active" : step < wizardStep ? "completed" : ""}">
+            <span class="wizard-step-number">${step}</span>
+            <span class="wizard-step-label">${label}</span>
+          </div>
+          ${step < labels.length ? `<div class="wizard-step-connector ${step < wizardStep ? "completed" : ""}"></div>` : ""}
+        `;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderWizardCategories(categories: string[]) {
+  const copy: Record<string, string> = {
+    bandwidth: "Share your internet connection",
+    depin: "Run decentralized infrastructure",
+    storage: "Rent out disk space",
+    compute: "Share CPU or GPU power",
+  };
+  return `
+    <h2>What would you like to share?</h2>
+    <p class="muted">Pick one or more categories and CashPilot will show matching services.</p>
+    <div class="wizard-category-grid">
+      ${categories.map((category) => `
+        <button class="wizard-category ${wizardCategories.includes(category) ? "selected" : ""}" data-category="${category}">
+          <strong>${escapeHtml(capitalize(category))}</strong>
+          <span>${escapeHtml(copy[category] || "Available providers")}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderWizardServices(services: Service[]) {
+  return `
+    <h2>Select services</h2>
+    <p class="muted">Choose providers to set up. Earnings vary by location, hardware, uptime, and demand, so CashPilot does not promise a fixed amount.</p>
+    <div class="wizard-service-grid">
+      ${services.map((service) => `
+        <button class="wizard-service ${wizardSelected.includes(service.slug) ? "selected" : ""}" data-wizard-service="${service.slug}">
+          <div class="service-icon">${escapeHtml(service.name[0] || "?")}</div>
+          <div>
+            <strong>${escapeHtml(service.name)}</strong>
+            <span>${escapeHtml(service.shortDescription || service.category)}</span>
+            <small>${service.manualOnly ? "External app / tracking" : "Docker managed"}${service.requirements?.residentialIp ? " / Residential IP" : ""}</small>
+          </div>
+        </button>
+      `).join("") || `<p class="muted">No services match these categories.</p>`}
+    </div>
+  `;
+}
+
+function renderWizardSetup(services: Service[]) {
+  if (services.length === 0) {
+    return `<p class="muted">Go back and select at least one service.</p>`;
+  }
+  return `
+    <h2>Configure and deploy</h2>
+    <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
+    <div class="wizard-setup-list">
+      ${services.map(renderWizardServiceSetup).join("")}
+    </div>
+  `;
+}
+
+function renderWizardServiceSetup(service: Service) {
+  const signupUrl = service.referral?.signupUrl || service.website;
+  const dashboardUrl = service.cashout?.dashboardUrl || service.website;
+  const fields = getServiceFields(service);
+  return `
+    <article class="wizard-setup-card" data-form-slug="${service.slug}">
+      <div class="split">
+        <div>
+          <h3>${escapeHtml(service.name)}</h3>
+          <p class="muted">${escapeHtml(service.shortDescription || service.description)}</p>
+        </div>
+        <span class="pill">${service.manualOnly ? "manual" : "docker"}</span>
+      </div>
+      <div class="signup-strip">
+        ${signupUrl ? `<button class="primary" data-url="${escapeHtml(signupUrl)}">Create account</button>` : ""}
+        ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
+        <button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>
+      </div>
+      ${service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
+      <div class="credential-grid">
+        ${fields.map((item) => `
+          <label>
+            <span>${escapeHtml(item.label)}${item.required ? " *" : ""}</span>
+            <input data-wizard-env="${item.key}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(item.description)}" value="${escapeHtml(item.default || "")}" />
+          </label>
+        `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
+      </div>
+      <div class="actions left">
+        <button class="secondary" data-wizard-action="save" data-slug="${service.slug}">Save Credentials</button>
+        <button class="primary" data-wizard-action="deploy" data-slug="${service.slug}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
+        <button class="secondary" data-wizard-action="collect" data-slug="${service.slug}">Collect Earnings</button>
+      </div>
+      <pre class="output wizard-output" data-output-slug="${service.slug}"></pre>
+    </article>
+  `;
+}
+
+function renderWizardSummary(services: Service[]) {
+  return `
+    <div class="wizard-summary">
+      <h2>You're all set</h2>
+      <p class="muted">Return to the dashboard to monitor balances, status, logs, and payout progress.</p>
+      <div class="earnings-breakdown">
+        ${services.map((service) => `<div class="earning-chip"><span>${escapeHtml(service.name)}</span><strong>${service.manualOnly ? "Tracking" : "Ready"}</strong><small>${escapeHtml(service.category)}</small></div>`).join("")}
+      </div>
+    </div>
+  `;
+}
+
+function closeWizard() {
+  activeView = "dashboard";
+  wizardStep = 1;
+  render();
+}
+
+type ServiceField = CollectorField & {default?: string};
+
+function getServiceFields(service: Service): ServiceField[] {
+  const env = (service.docker.env || []).map((item) => ({
+    key: item.key,
+    label: item.label || item.key,
+    description: stripHtml(item.description || item.key),
+    secret: item.secret,
+    required: item.required,
+    default: item.default,
+  }));
+  const envKeys = new Set(env.map((item) => item.key));
+  return [
+    ...env,
+    ...getCollectorFields(service.slug).filter((item) => !envKeys.has(item.key)),
+  ];
+}
+
+async function hydrateWizardForm(service: Service) {
+  const creds = await GetCredentials(service.slug);
+  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${service.slug}"] [data-wizard-env]`).forEach((input) => {
+    const key = input.dataset.wizardEnv || "";
+    if (creds[key]) input.value = creds[key];
+  });
+}
+
+function readWizardForm(slug: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env]`).forEach((input) => {
+    values[input.dataset.wizardEnv || ""] = input.value;
+  });
+  return values;
+}
+
+async function runWizardAction(slug: string, action: string) {
+  const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
+  const values = readWizardForm(slug);
+  if (action === "save") {
+    await SaveCredentials(slug, values);
+    if (output) output.textContent = "Credentials saved.";
+    return;
+  }
+  if (action === "deploy") {
+    if (output) output.textContent = "Deploying...";
+    await SaveCredentials(slug, values);
+    await DeployService(slug, values);
+    state = await GetAppState();
+    if (output) output.textContent = "Deployed.";
+    return;
+  }
+  if (action === "collect") {
+    await SaveCredentials(slug, values);
+    const record = await CollectService(slug);
+    if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
+    state = await GetAppState();
+  }
+}
+
+async function runServiceAction(slug: string, action: string) {
+  selectedService = state?.services.find((svc) => svc.slug === slug) || null;
+  try {
+    if (action === "collect") {
+      const record = await CollectService(slug);
+      await refreshState();
+      setOutput(record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`);
+      return;
+    }
+    if (action === "logs") {
+      setOutput(await GetLogs(slug, 200));
+      return;
+    }
+    if (action === "stop") {
+      await StopService(slug);
+      setOutput(`${slug} stopped.`);
+    }
+    if (action === "remove") {
+      await RemoveService(slug);
+      setOutput(`${slug} removed.`);
+    }
+    await refreshState();
+    setOutput(`${slug} ${action} complete.`);
+  } catch (error) {
+    setOutput(String(error));
+  }
+}
+
+type CollectorField = {
+  key: string;
+  label: string;
+  description: string;
+  secret?: boolean;
+  required?: boolean;
+};
+
+function getCollectorFields(slug: string): CollectorField[] {
+  const fields: Record<string, CollectorField[]> = {
+    "anyone-protocol": [
+      {key: "ANYONE_FINGERPRINTS", label: "Relay fingerprints", description: "Comma-separated relay fingerprints", required: true},
+    ],
+    bitping: [
+      {key: "BITPING_EMAIL", label: "Bitping email", description: "Email used for app.bitping.com", required: true},
+      {key: "BITPING_PASSWORD", label: "Bitping password", description: "Password used for app.bitping.com", secret: true, required: true},
+    ],
+    bytelixir: [
+      {key: "BYTELIXIR_SESSION", label: "Bytelixir session", description: "bytelixir_session browser cookie", secret: true, required: true},
+      {key: "BYTELIXIR_REMEMBER_WEB", label: "Remember cookie", description: "Optional remember_web cookie", secret: true},
+      {key: "BYTELIXIR_XSRF_TOKEN", label: "XSRF token", description: "Optional XSRF-TOKEN cookie", secret: true},
+    ],
+    earnapp: [
+      {key: "EARNAPP_OAUTH_TOKEN", label: "OAuth refresh token", description: "oauth-refresh-token browser cookie", secret: true, required: true},
+      {key: "EARNAPP_BRD_SESS_ID", label: "Bright Data session", description: "Optional brd_sess_id cookie", secret: true},
+    ],
+    earnfm: [
+      {key: "EARNFM_EMAIL", label: "Earn.fm email", description: "Email used for app.earn.fm", required: true},
+      {key: "EARNFM_PASSWORD", label: "Earn.fm password", description: "Password used for app.earn.fm", secret: true, required: true},
+    ],
+    grass: [
+      {key: "GRASS_ACCESS_TOKEN", label: "Grass access token", description: "accessToken from app.grass.io local storage", secret: true, required: true},
+    ],
+    mysterium: [
+      {key: "MYSTNODES_EMAIL", label: "MystNodes email", description: "Email used for my.mystnodes.com", required: true},
+      {key: "MYSTNODES_PASSWORD", label: "MystNodes password", description: "Password used for my.mystnodes.com", secret: true, required: true},
+    ],
+    packetstream: [
+      {key: "PACKETSTREAM_AUTH_TOKEN", label: "PacketStream auth cookie", description: "auth cookie from app.packetstream.io", secret: true, required: true},
+    ],
+    salad: [
+      {key: "SALAD_AUTH_COOKIE", label: "Salad auth cookie", description: "auth cookie from salad.com", secret: true, required: true},
+    ],
+    storj: [
+      {key: "STORJ_API_URL", label: "Storj API URL", description: "Local node dashboard URL, default http://localhost:14002"},
+    ],
+  };
+  return fields[slug] || [];
 }
 
 async function hydrateCredentialForm(service: Service | null) {
@@ -331,10 +949,31 @@ function setOutput(value: string) {
 
 function renderError(error: unknown) {
   root.innerHTML = `${titlebar()}<main class="center"><section class="panel"><h1>CashPilot failed to start</h1><pre>${escapeHtml(String(error))}</pre></section></main>`;
+  wireChrome();
 }
 
 function titlebar() {
-  return `<div class="titlebar"><span>CashPilot Desktop</span></div>`;
+  return `
+    <div class="titlebar">
+      <div class="traffic-lights">
+        <button class="traffic close" data-window-action="close" aria-label="Close"></button>
+        <button class="traffic minimise" data-window-action="minimise" aria-label="Minimise"></button>
+        <button class="traffic maximise" data-window-action="maximise" aria-label="Maximise"></button>
+      </div>
+      <span>CashPilot Desktop</span>
+    </div>
+  `;
+}
+
+function wireChrome() {
+  document.querySelectorAll<HTMLButtonElement>("[data-window-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.windowAction;
+      if (action === "close") Quit();
+      if (action === "minimise") WindowMinimise();
+      if (action === "maximise") WindowToggleMaximise();
+    });
+  });
 }
 
 function escapeHtml(value: string | undefined | null) {
@@ -345,6 +984,17 @@ function escapeHtml(value: string | undefined | null) {
     '"': "&quot;",
     "'": "&#039;",
   }[ch] || ch));
+}
+
+function capitalize(value: string) {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
+}
+
+function formatBalance(value: number, currency: string) {
+  if (currency === "USD") {
+    return `$${value.toFixed(2)}`;
+  }
+  return `${value.toFixed(4)} ${currency}`;
 }
 
 function stripHtml(value: string) {

@@ -7,7 +7,9 @@ frontend/dist/*
 frontend/package.json.md5
 *.pyc
 __pycache__/
-build/
+build/*
+!build/appicon.svg
+!build/appicon.png
 .DS_Store
 .omc/
 pnpm-lock.yaml

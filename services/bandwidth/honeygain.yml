@@ -4,8 +4,10 @@ category: bandwidth
 status: active
 website: https://www.honeygain.com
 description: >
-  Share unused internet bandwidth and earn passive income. One of the most
-  established bandwidth-sharing platforms.
+  Share your unused internet bandwidth and earn passive income. Honeygain routes
+  web intelligence, content delivery, and market research traffic through your
+  connection. One of the most established bandwidth-sharing platforms with 12M+
+  users and over 1M payouts completed.
 short_description: Bandwidth sharing - most established platform
 
 referral:
@@ -40,7 +42,9 @@ docker:
 requirements:
   residential_ip: true
   devices_per_account: 10
+  min_bandwidth: ""
   gpu: false
+  min_storage: ""
 
 payment:
   methods: [paypal, crypto]
@@ -53,16 +57,17 @@ earnings:
   monthly_high: 5
   currency: USD
   per: "device"
-  notes: "US/EU residential IPs usually earn more."
+  notes: "Varies by location. US/EU IPs earn more. Max 10 devices per account."
 
 cashout:
   method: redirect
   dashboard_url: "https://dashboard.honeygain.com/earnings"
   min_amount: 20.0
   currency: USD
+  notes: "PayPal payout or BTC/JumpToken via dashboard. Lucky Pot daily bonus available."
 
 platforms: [docker, windows, macos, linux, android]
 
 collector:
   type: api
-  notes: "JWT auth via Honeygain dashboard API."
+  notes: "JWT auth via /v1/users/me and /v2/earnings endpoints"

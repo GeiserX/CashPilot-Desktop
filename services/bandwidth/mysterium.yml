@@ -1,0 +1,61 @@
+name: MystNodes
+slug: mysterium
+category: bandwidth
+status: active
+website: https://mystnodes.com
+description: >
+  MystNodes (Mysterium Network) is a decentralized VPN and proxy network built on
+  blockchain technology. You earn MYST tokens by running a node that provides VPN,
+  proxy, and data scraping services to users. Requires NET_ADMIN capability and
+  host networking for full functionality. Includes a built-in web UI for node
+  management. Works on both residential and VPS connections.
+short_description: Decentralized VPN node - blockchain-based, works on VPS
+
+referral:
+  signup_url: "https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE"
+
+docker:
+  image: mysteriumnetwork/myst
+  platforms: [linux/amd64, linux/arm64]
+  env: []
+  ports:
+    - "4449:4449"
+  volumes:
+    - "mysterium-data:/var/lib/mysterium-node"
+  command: "--ui.address=0.0.0.0 --tequilapi.address=0.0.0.0 service --agreed-terms-and-conditions"
+  network_mode: "host"
+  cap_add: [NET_ADMIN]
+  privileged: false
+
+requirements:
+  residential_ip: false
+  devices_per_ip: 0
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [crypto]
+  minimum_payout: "4 MYST"
+  currency: MYST
+  frequency: "Auto-settle every 4 MYST to your beneficiary wallet"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 10
+  currency: USD
+  per: "device"
+  notes: "Earnings in MYST tokens. Residential IPs earn significantly more. Node WebUI at port 4449 for management. VPS accepted. Port forwarding UDP 56000-56100 strongly recommended -- without it, nodes get Strict NAT status and many VPN sessions fail, severely reducing income. Important: after first run, set your beneficiary (settlement) wallet via the node WebUI or CLI to match your mystnodes.com account -- this links on-chain earnings to your cloud dashboard."
+
+cashout:
+  method: auto
+  dashboard_url: "https://my.mystnodes.com/rewards"
+  min_amount: 4.0
+  currency: MYST
+  notes: "Auto-settles every 4 MYST to your beneficiary wallet. No manual cashout needed. Visit Rewards page to claim bonus MYST."
+
+platforms: [docker, windows, macos, linux, android, browser-extension]
+
+collector:
+  type: api
+  notes: "Tequila API at http://localhost:4449/tequilapi/settlement/total-fees. Returns MYST in wei (10^18). No auth needed."

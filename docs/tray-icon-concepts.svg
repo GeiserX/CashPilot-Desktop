@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 300" width="900" height="300">
+  <defs>
+    <linearGradient id="pink" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fb7185"/>
+      <stop offset="100%" stop-color="#e11d48"/>
+    </linearGradient>
+    <linearGradient id="orange" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde68a"/>
+      <stop offset="50%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#e11d48"/>
+    </linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feFlood flood-color="#fb7185" flood-opacity="0.45"/><feComposite in2="b" operator="in"/><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="900" height="300" fill="#06060f"/>
+
+  <g transform="translate(150 150)" filter="url(#glow)">
+    <circle r="72" fill="none" stroke="url(#pink)" stroke-width="8"/>
+    <path d="M-8,-58 L0,-13 L61,4 L7,12 L16,38 L0,23 L-16,38 L-7,12 L-61,4 L0,-13 Z" fill="#f4f4f5"/>
+    <text x="42" y="55" fill="#fb923c" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="900" text-anchor="middle">$</text>
+    <text x="0" y="110" fill="#a1a1aa" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700" text-anchor="middle">Plane + Dollar</text>
+  </g>
+
+  <g transform="translate(450 150)" filter="url(#glow)">
+    <circle r="78" fill="url(#orange)" opacity="0.9"/>
+    <path d="M-52,10 C-20,-8 16,-8 52,10" fill="none" stroke="#06060f" stroke-width="8" stroke-linecap="round"/>
+    <path d="M-42,35 C-14,22 16,22 42,35" fill="none" stroke="#06060f" stroke-width="8" stroke-linecap="round"/>
+    <path d="M-5,-60 L0,-16 L48,-2 L5,5 L10,28 L0,16 L-10,28 L-5,5 L-48,-2 L0,-16 Z" fill="#06060f" opacity="0.86"/>
+    <text x="0" y="110" fill="#a1a1aa" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700" text-anchor="middle">Sun Flight</text>
+  </g>
+
+  <g transform="translate(750 150)" filter="url(#glow)">
+    <rect x="-76" y="-76" width="152" height="152" rx="38" fill="#11111a" stroke="url(#pink)" stroke-width="7"/>
+    <text x="-20" y="32" fill="#fb7185" font-family="Inter, Arial, sans-serif" font-size="82" font-weight="900" text-anchor="middle">$</text>
+    <path d="M18,-48 L23,-14 L58,-3 L24,4 L31,22 L19,13 L7,22 L13,4 L-22,-3 L14,-14 Z" fill="#f4f4f5"/>
+    <text x="0" y="110" fill="#a1a1aa" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700" text-anchor="middle">CashPilot Badge</text>
+  </g>
+</svg>

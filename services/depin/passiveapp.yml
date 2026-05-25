@@ -1,0 +1,53 @@
+name: PassiveApp
+slug: passiveapp
+category: depin
+status: active
+website: https://passiveapp.com
+description: >
+  PassiveApp is a DePIN platform that lets you earn crypto and PayPal rewards
+  by sharing unused bandwidth and computing resources. Relatively new service
+  with limited Docker support through community images.
+short_description: DePIN bandwidth/compute - crypto and PayPal payouts
+
+referral:
+  signup_url: "https://passiveapp.com/i/bqpC4M"
+
+docker:
+  image: ""
+  platforms: []
+  env: []
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+
+requirements:
+  residential_ip: true
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [crypto, paypal]
+  minimum_payout: "$5"
+  currency: USD
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 4
+  currency: USD
+  per: "device"
+  notes: "Relatively new. No official Docker image available yet."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://passiveapp.com/dashboard"
+  min_amount: 5.0
+  currency: USD
+
+platforms: [windows, linux, android, ios]
+
+collector:
+  type: manual
+  notes: "No official Docker image or public API."

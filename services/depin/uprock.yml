@@ -1,0 +1,55 @@
+name: Uprock
+slug: uprock
+category: depin
+status: active
+website: https://uprock.com
+description: >
+  Uprock is a DePIN (Decentralized Physical Infrastructure Network) platform that
+  lets you earn cryptocurrency by sharing your internet connection. Part of the
+  broader Web3 ecosystem. Community Docker images available but no official image.
+  Browser extension is the primary interface.
+short_description: DePIN internet sharing - crypto payout, browser extension primary
+
+referral:
+  signup_url: "https://link.uprock.com/i/33e8492e"
+
+docker:
+  image: ""
+  platforms: [browser-extension, android]
+  env: []
+  ports: []
+  volumes: []
+  command: ""
+  network_mode: ""
+
+requirements:
+  residential_ip: true
+  min_bandwidth: ""
+  gpu: false
+  min_storage: ""
+
+payment:
+  methods: [crypto]
+  minimum_payout: "$5"
+  currency: USD
+  frequency: "On request"
+
+earnings:
+  monthly_low: 0
+  monthly_high: 5
+  currency: USD
+  per: "device"
+  notes: "Crypto/token-based earnings. No official Docker image — browser extension is the primary client."
+
+cashout:
+  method: redirect
+  dashboard_url: "https://uprock.com"
+  min_amount: 5.0
+  currency: USD
+  notes: "Crypto token-based rewards. Claim from dashboard."
+
+platforms: [browser-extension, android]
+
+collector:
+  type: manual
+  notes: "No official Docker image or public API."
