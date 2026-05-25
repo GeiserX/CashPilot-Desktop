@@ -22,7 +22,7 @@
     <filter id="pg"><feGaussianBlur stdDeviation="6" result="b"/><feFlood flood-color="#f43f5e" flood-opacity="0.5" result="c"/><feComposite in="c" in2="b" operator="in" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
     <filter id="cg"><feGaussianBlur stdDeviation="3" result="b"/><feFlood flood-color="#06b6d4" flood-opacity="0.4" result="c"/><feComposite in="c" in2="b" operator="in" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
     <filter id="sg"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <clipPath id="sc"><circle cx="1120" cy="150" r="65"/></clipPath>
+    <clipPath id="sc"><circle cx="1000" cy="150" r="65"/></clipPath>
   </defs>
 
   <rect width="1200" height="300" fill="url(#bg)"/>
@@ -45,15 +45,15 @@
     <circle cx="650" cy="108" r="0.6" opacity="0.3"/><circle cx="1150" cy="100" r="0.7" opacity="0.3"/>
   </g>
 
-  <!-- Sun — far right to clear title -->
-  <circle cx="1120" cy="150" r="65" fill="url(#sun)" opacity="0.8"/>
+  <!-- Sun -->
+  <circle cx="1000" cy="150" r="65" fill="url(#sun)" opacity="0.8"/>
   <g clip-path="url(#sc)">
-    <rect x="1050" y="150" width="140" height="3" fill="#000010"/>
-    <rect x="1050" y="158" width="140" height="5" fill="#000010"/>
-    <rect x="1050" y="168" width="140" height="7" fill="#000010"/>
-    <rect x="1050" y="180" width="140" height="9" fill="#000010"/>
-    <rect x="1050" y="194" width="140" height="13" fill="#000010"/>
-    <g transform="translate(1120,120) rotate(30)">
+    <rect x="930" y="150" width="140" height="3" fill="#000010"/>
+    <rect x="930" y="158" width="140" height="5" fill="#000010"/>
+    <rect x="930" y="168" width="140" height="7" fill="#000010"/>
+    <rect x="930" y="180" width="140" height="9" fill="#000010"/>
+    <rect x="930" y="194" width="140" height="13" fill="#000010"/>
+    <g transform="translate(1000,120) rotate(30)">
       <path d="M0,-22 L2,-5 L24,2 L2.5,4 L3,10 L0,7 L-3,10 L-2.5,4 L-24,2 L-2,-5 Z"
             fill="#000010" opacity="0.65"/>
     </g>
