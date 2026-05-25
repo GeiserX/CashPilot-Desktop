@@ -19,14 +19,10 @@
       <stop offset="0%" stop-color="#06b6d4"/>
       <stop offset="100%" stop-color="#22d3ee"/>
     </linearGradient>
-    <linearGradient id="wh" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#e4e4e7"/>
-      <stop offset="100%" stop-color="#a1a1aa"/>
-    </linearGradient>
     <filter id="pg"><feGaussianBlur stdDeviation="6" result="b"/><feFlood flood-color="#f43f5e" flood-opacity="0.5" result="c"/><feComposite in="c" in2="b" operator="in" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
     <filter id="cg"><feGaussianBlur stdDeviation="3" result="b"/><feFlood flood-color="#06b6d4" flood-opacity="0.4" result="c"/><feComposite in="c" in2="b" operator="in" result="g"/><feMerge><feMergeNode in="g"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
     <filter id="sg"><feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    <clipPath id="sc"><circle cx="1020" cy="150" r="90"/></clipPath>
+    <clipPath id="sc"><circle cx="1120" cy="150" r="65"/></clipPath>
   </defs>
 
   <rect width="1200" height="300" fill="url(#bg)"/>
@@ -49,16 +45,16 @@
     <circle cx="650" cy="108" r="0.6" opacity="0.3"/><circle cx="1150" cy="100" r="0.7" opacity="0.3"/>
   </g>
 
-  <!-- Sun — pushed right to avoid text overlap -->
-  <circle cx="1020" cy="150" r="90" fill="url(#sun)" opacity="0.8"/>
+  <!-- Sun — far right to clear title -->
+  <circle cx="1120" cy="150" r="65" fill="url(#sun)" opacity="0.8"/>
   <g clip-path="url(#sc)">
-    <rect x="925" y="150" width="190" height="4" fill="#000010"/>
-    <rect x="925" y="160" width="190" height="6" fill="#000010"/>
-    <rect x="925" y="172" width="190" height="8" fill="#000010"/>
-    <rect x="925" y="186" width="190" height="11" fill="#000010"/>
-    <rect x="925" y="204" width="190" height="16" fill="#000010"/>
-    <g transform="translate(1020,116) rotate(30)">
-      <path d="M0,-32 L3,-7 L34,2 L3.5,5.5 L4.5,14 L0,9 L-4.5,14 L-3.5,5.5 L-34,2 L-3,-7 Z"
+    <rect x="1050" y="150" width="140" height="3" fill="#000010"/>
+    <rect x="1050" y="158" width="140" height="5" fill="#000010"/>
+    <rect x="1050" y="168" width="140" height="7" fill="#000010"/>
+    <rect x="1050" y="180" width="140" height="9" fill="#000010"/>
+    <rect x="1050" y="194" width="140" height="13" fill="#000010"/>
+    <g transform="translate(1120,120) rotate(30)">
+      <path d="M0,-22 L2,-5 L24,2 L2.5,4 L3,10 L0,7 L-3,10 L-2.5,4 L-24,2 L-2,-5 Z"
             fill="#000010" opacity="0.65"/>
     </g>
   </g>
@@ -78,23 +74,19 @@
     <line x1="600" y1="225" x2="1200" y2="300" opacity="0.07"/>
   </g>
 
-  <!-- Title: "CashPilot" large + "Desktop" as styled suffix -->
-  <text x="80" y="165" font-family="Inter, -apple-system, Arial, sans-serif"
+  <!-- Title: "CashPilot Desktop" — same style for both words -->
+  <text x="60" y="170" font-family="Inter, -apple-system, Arial, sans-serif"
         font-size="90" font-weight="900" fill="url(#pk)" letter-spacing="-2" filter="url(#pg)">
-    CashPilot
+    CashPilot Desktop
   </text>
-  <text x="80" y="165" font-family="Inter, -apple-system, Arial, sans-serif"
+  <text x="60" y="170" font-family="Inter, -apple-system, Arial, sans-serif"
         font-size="90" font-weight="900" fill="none" stroke="#fff" stroke-width="0.3" letter-spacing="-2" opacity="0.2">
-    CashPilot
-  </text>
-  <text x="640" y="165" font-family="Inter, -apple-system, Arial, sans-serif"
-        font-size="50" font-weight="300" fill="url(#wh)" letter-spacing="1" opacity="0.9">
-    Desktop
+    CashPilot Desktop
   </text>
 
-  <text x="88" y="198" font-family="Inter, -apple-system, Arial, sans-serif"
+  <text x="68" y="198" font-family="Inter, -apple-system, Arial, sans-serif"
         font-size="17" font-weight="600" fill="url(#cy)" letter-spacing="6" filter="url(#cg)">
-    MONITOR YOUR PASSIVE INCOME FLEET
+    PASSIVE INCOME ON AUTOPILOT
   </text>
 
   <rect x="0" y="0" width="1200" height="2" fill="url(#pk)" filter="url(#pg)"/>

@@ -36,6 +36,12 @@ async fn get_sidecar_status(state: tauri::State<'_, AppState>) -> Result<Sidecar
 }
 
 #[tauri::command]
+async fn get_sidecar_auth_token(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let manager = state.sidecar.lock().map_err(|e| e.to_string())?;
+    Ok(manager.auth_token().to_string())
+}
+
+#[tauri::command]
 async fn set_mode(
     state: tauri::State<'_, AppState>,
     mode: String,
@@ -121,6 +127,7 @@ pub fn run() {
             save_app_config,
             get_docker_status,
             get_sidecar_status,
+            get_sidecar_auth_token,
             set_mode,
             get_platform_info,
             test_worker_connection,

@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use crate::config;
 
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SidecarStatus {
     Running { port: u16 },
@@ -24,6 +26,9 @@ pub struct SidecarManager {
     port: Option<u16>,
     status: SidecarStatus,
     restart_count: u32,
+    auth_token: String,
+    mode: Option<Mode>,
+    sidecar_path: Option<PathBuf>,
 }
 
 #[allow(dead_code)]
@@ -34,6 +39,9 @@ impl SidecarManager {
             port: None,
             status: SidecarStatus::Stopped,
             restart_count: 0,
+            auth_token: generate_token(),
+            mode: None,
+            sidecar_path: None,
         }
     }
 
@@ -45,6 +53,10 @@ impl SidecarManager {
         self.port
     }
 
+    pub fn auth_token(&self) -> &str {
+        &self.auth_token
+    }
+
     pub fn spawn(&mut self, mode: Mode, sidecar_path: PathBuf) -> Result<u16, String> {
         let port = allocate_port().map_err(|e| format!("Port allocation failed: {e}"))?;
         let data_dir = config::backend_data_dir();
@@ -52,7 +64,7 @@ impl SidecarManager {
         std::fs::create_dir_all(&data_dir)
             .map_err(|e| format!("Failed to create data dir: {e}"))?;
 
-        let entry = match mode {
+        let entry = match &mode {
             Mode::CashPilot => "desktop_main",
             Mode::Worker => "desktop_worker",
         };
@@ -62,23 +74,33 @@ impl SidecarManager {
             .env("UVICORN_PORT", port.to_string())
             .env("DATA_DIR", data_dir.to_string_lossy().to_string())
             .env("CASHPILOT_HOST", "127.0.0.1")
+            .env("CASHPILOT_AUTH_TOKEN", &self.auth_token)
+            .env("CASHPILOT_VERSION", APP_VERSION)
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?;
 
         self.child = Some(child);
         self.port = Some(port);
         self.status = SidecarStatus::Starting;
+        self.mode = Some(mode);
+        self.sidecar_path = Some(sidecar_path);
         self.restart_count = 0;
 
         Ok(port)
     }
 
+    pub fn respawn(&mut self) -> Result<u16, String> {
+        let mode = self.mode.clone().ok_or("No mode set for respawn")?;
+        let path = self.sidecar_path.clone().ok_or("No sidecar path for respawn")?;
+        let _ = self.kill();
+        self.increment_restart();
+        self.spawn(mode, path)
+    }
+
     pub fn kill(&mut self) -> Result<(), String> {
         if let Some(mut child) = self.child.take() {
-            // Confirm process is still alive before signalling
             match child.try_wait() {
                 Ok(Some(_)) => {
-                    // Already exited
                     self.status = SidecarStatus::Stopped;
                     self.port = None;
                     return Ok(());
@@ -88,7 +110,7 @@ impl SidecarManager {
                     self.port = None;
                     return Ok(());
                 }
-                Ok(None) => {} // Still running, proceed with shutdown
+                Ok(None) => {}
             }
 
             #[cfg(unix)]
@@ -119,15 +141,38 @@ impl SidecarManager {
         Ok(())
     }
 
-    pub fn check_health(&self) -> bool {
+    pub fn check_health(&self) -> HealthResult {
         let Some(port) = self.port else {
-            return false;
+            return HealthResult::Unreachable;
         };
-        std::net::TcpStream::connect_timeout(
-            &format!("127.0.0.1:{port}").parse().unwrap(),
-            Duration::from_secs(1),
-        )
-        .is_ok()
+        let url = format!("http://127.0.0.1:{port}/health");
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(2)))
+            .build()
+            .new_agent();
+        match agent.get(&url).call() {
+            Ok(resp) if resp.status().as_u16() == 200 => {
+                match resp.into_body().read_to_string() {
+                    Ok(body) => {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                            let version = json
+                                .get("version")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            if version == APP_VERSION {
+                                HealthResult::Healthy
+                            } else {
+                                HealthResult::VersionMismatch(version.to_string())
+                            }
+                        } else {
+                            HealthResult::Healthy
+                        }
+                    }
+                    Err(_) => HealthResult::Healthy,
+                }
+            }
+            _ => HealthResult::Unreachable,
+        }
     }
 
     pub fn mark_running(&mut self) {
@@ -157,18 +202,28 @@ impl SidecarManager {
     }
 }
 
+#[derive(Debug, PartialEq)]
+pub enum HealthResult {
+    Healthy,
+    Unreachable,
+    VersionMismatch(String),
+}
+
+fn generate_token() -> String {
+    let mut buf = [0u8; 32];
+    getrandom::getrandom(&mut buf).expect("failed to generate random token");
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 fn allocate_port() -> Result<u16, std::io::Error> {
-    // Try multiple times to mitigate TOCTOU race (port reused between drop and sidecar bind)
     for _ in 0..5 {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let port = listener.local_addr()?.port();
         drop(listener);
-        // Verify port is still available
         if TcpListener::bind(format!("127.0.0.1:{port}")).is_ok() {
             return Ok(port);
         }
     }
-    // Fallback: return whatever the OS gives
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
     Ok(port)
@@ -182,7 +237,6 @@ mod tests {
     fn test_allocate_port_returns_valid_port() {
         let port = allocate_port().unwrap();
         assert!(port > 0);
-        // Ephemeral ports are typically above 1024
         assert!(port >= 1024, "expected ephemeral port, got {port}");
     }
 
@@ -194,11 +248,20 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_token_length_and_uniqueness() {
+        let t1 = generate_token();
+        let t2 = generate_token();
+        assert_eq!(t1.len(), 64); // 32 bytes = 64 hex chars
+        assert_ne!(t1, t2);
+    }
+
+    #[test]
     fn test_sidecar_manager_new_initial_state() {
         let manager = SidecarManager::new();
         assert!(manager.port().is_none());
         assert!(matches!(manager.status(), SidecarStatus::Stopped));
         assert!(manager.can_restart());
+        assert_eq!(manager.auth_token().len(), 64);
     }
 
     #[test]
@@ -223,11 +286,9 @@ mod tests {
     #[test]
     fn test_mark_running_sets_status() {
         let mut manager = SidecarManager::new();
-        // Without a port, mark_running does nothing meaningful
         manager.mark_running();
         assert!(matches!(manager.status(), SidecarStatus::Stopped));
 
-        // Simulate having a port
         manager.port = Some(8080);
         manager.mark_running();
         assert!(matches!(manager.status(), SidecarStatus::Running { port: 8080 }));
@@ -244,9 +305,9 @@ mod tests {
     }
 
     #[test]
-    fn test_check_health_no_port_returns_false() {
+    fn test_check_health_no_port_returns_unreachable() {
         let manager = SidecarManager::new();
-        assert!(!manager.check_health());
+        assert_eq!(manager.check_health(), HealthResult::Unreachable);
     }
 
     #[test]
@@ -261,5 +322,11 @@ mod tests {
         assert!(manager.kill().is_ok());
         assert!(matches!(manager.status(), SidecarStatus::Stopped));
         assert!(manager.port().is_none());
+    }
+
+    #[test]
+    fn test_respawn_without_mode_fails() {
+        let mut manager = SidecarManager::new();
+        assert!(manager.respawn().is_err());
     }
 }
