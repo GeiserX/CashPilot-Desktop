@@ -43,7 +43,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev nsis
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev nsis
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -52,7 +52,12 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Build Wails app (Linux)
+        if: runner.os == 'Linux'
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -tags webkit2_41
+
       - name: Build Wails app
+        if: runner.os != 'Linux'
         run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean
 
       - name: Sign Windows binaries
