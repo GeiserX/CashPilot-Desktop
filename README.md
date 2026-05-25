@@ -205,7 +205,7 @@ Yes. CashPilot Desktop manages Docker containers for you, but Docker (or Podman)
 
 **How much can I earn?**
 
-A single residential machine running 10-15 services typically earns **$30-$100/month**. Earnings depend on location, network speed, uptime, and which services you choose. The dashboard tracks your actual earnings over time.
+Earnings vary widely based on location, ISP, number of devices, and which services you run. The dashboard tracks your actual earnings over time so you can optimize your setup.
 
 **Is it safe?**
 
@@ -228,7 +228,6 @@ Yes. Use **Worker Node** mode on additional machines -- they connect to your mai
 | Project | Type | Description |
 |---------|------|-------------|
 | [CashPilot](https://github.com/GeiserX/CashPilot) | Backend | Multi-service passive income aggregator and fleet manager |
-| [CashPilot-Desktop](https://github.com/GeiserX/CashPilot-Desktop) | Desktop App | Native desktop dashboard (this repo) |
 | [CashPilot-android](https://github.com/GeiserX/CashPilot-android) | Android Agent | Monitoring agent for passive income apps on Android |
 | [cashpilot-mcp](https://github.com/GeiserX/cashpilot-mcp) | MCP Server | Monitor earnings from AI assistants via Model Context Protocol |
 | [cashpilot-ha](https://github.com/GeiserX/cashpilot-ha) | Home Assistant | Earnings and service status sensors for your smart home |
