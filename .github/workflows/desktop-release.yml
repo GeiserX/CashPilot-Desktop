@@ -25,9 +25,9 @@ jobs:
             sidecar_name: cashpilot-sidecar.exe
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: GeiserX/CashPilot
           path: CashPilot
@@ -59,7 +59,7 @@ jobs:
         working-directory: sidecar
         run: python -m PyInstaller cashpilot-sidecar.spec
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sidecar-${{ matrix.target }}
           path: sidecar/dist/cashpilot-sidecar/
@@ -82,9 +82,9 @@ jobs:
             sidecar_artifact: sidecar-x86_64-pc-windows-msvc
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.sidecar_artifact }}
           path: src-tauri/sidecar/
@@ -105,7 +105,7 @@ jobs:
           Remove-Item "$env:RUNNER_TEMP\cert.pfx"
         shell: pwsh
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -186,7 +186,7 @@ jobs:
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.target }}
           path: |
@@ -206,9 +206,9 @@ jobs:
     if: needs.build-tauri.result == 'success'
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts/
 
@@ -243,7 +243,7 @@ jobs:
           cat latest.json
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             artifacts/desktop-*/**/*.dmg
