@@ -37,13 +37,13 @@ jobs:
           node-version: '26'
 
       - name: Install Wails 2.x
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev nsis
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev nsis
 
       - name: Install frontend dependencies
         working-directory: frontend
@@ -53,7 +53,7 @@ jobs:
         run: go test ./...
 
       - name: Build Wails app
-        run: $(go env GOPATH)/bin/wails build -clean
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean
 
       - name: Sign Windows binaries
         if: runner.os == 'Windows' && env.WINDOWS_SIGN_CERT != ''
