@@ -19,6 +19,7 @@ import type { AppState, Deployment, InstallGuide, ManagedRuntimePlan as RuntimeP
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
+let onboardingStep: "welcome" | "runtime" = "welcome";
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -41,14 +42,19 @@ function render() {
 }
 
 function renderOnboarding(current: AppState) {
+  if (onboardingStep === "welcome") {
+    renderWelcome();
+    return;
+  }
   const runtime = current.runtime;
   root.innerHTML = `
+    ${titlebar()}
     ${synthwaveBackground()}
     <main class="onboarding">
       <section class="onboarding-card">
         <p class="eyebrow">CashPilot Desktop</p>
-        <h1>Passive income from your machine, with guardrails.</h1>
-        <p class="subtitle">CashPilot now runs as a local Wails/Go app. Start with an existing Docker-compatible runtime, then move to the managed VM appliance when it lands.</p>
+        <h1>Passive income for you</h1>
+        <p class="subtitle">Share spare bandwidth, CPU, RAM, storage, or GPU with projects that need it. CashPilot helps you install, run, and monitor the services from one place.</p>
         <div class="runtime-card ${runtime.available ? "ok" : "warn"}">
           <strong>${runtime.available ? "Runtime ready" : "Runtime setup needed"}</strong>
           <span>${escapeHtml(runtime.message)}</span>
@@ -75,6 +81,25 @@ function renderOnboarding(current: AppState) {
   renderGuides(current.guides || []);
 }
 
+function renderWelcome() {
+  root.innerHTML = `
+    ${titlebar()}
+    ${synthwaveBackground()}
+    <main class="welcome-screen">
+      <section class="welcome-copy">
+        <p class="eyebrow">CashPilot Desktop</p>
+        <h1>Welcome to CashPilot</h1>
+        <p class="subtitle">Turn spare machine resources into side income while supporting bandwidth, storage, compute, and DePIN networks.</p>
+        <button class="primary" id="get-started">Get Started</button>
+      </section>
+    </main>
+  `;
+  document.querySelector("#get-started")?.addEventListener("click", () => {
+    onboardingStep = "runtime";
+    render();
+  });
+}
+
 function renderGuides(guides: InstallGuide[]) {
   const holder = document.querySelector<HTMLDivElement>("#install-guides");
   if (!holder) return;
@@ -97,12 +122,13 @@ function renderDashboard(current: AppState) {
   selectedService = selected || null;
 
   root.innerHTML = `
+    ${titlebar()}
     <div class="shell">
       <aside class="sidebar">
         <div>
           <p class="eyebrow">CashPilot Desktop</p>
           <h1>Local Service Manager</h1>
-          <p class="muted">Wails + Go runtime orchestration. No Python sidecar, no server users.</p>
+          <p class="muted">Deploy earning services, monitor containers, and track balances from this machine.</p>
         </div>
         <div class="runtime-card compact ${current.runtime.available ? "ok" : "warn"}">
           <strong>${current.runtime.available ? "Runtime ready" : "Runtime offline"}</strong>
@@ -304,7 +330,11 @@ function setOutput(value: string) {
 }
 
 function renderError(error: unknown) {
-  root.innerHTML = `<main class="center"><section class="panel"><h1>CashPilot failed to start</h1><pre>${escapeHtml(String(error))}</pre></section></main>`;
+  root.innerHTML = `${titlebar()}<main class="center"><section class="panel"><h1>CashPilot failed to start</h1><pre>${escapeHtml(String(error))}</pre></section></main>`;
+}
+
+function titlebar() {
+  return `<div class="titlebar"><span>CashPilot Desktop</span></div>`;
 }
 
 function escapeHtml(value: string | undefined | null) {
@@ -326,19 +356,53 @@ function synthwaveBackground() {
     <svg class="synthwave-bg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice">
       <defs>
         <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#06060f"/><stop offset="35%" stop-color="#1a003a"/><stop offset="100%" stop-color="#06060f"/>
+          <stop offset="0%" stop-color="#06060f"/><stop offset="25%" stop-color="#0d0022"/><stop offset="40%" stop-color="#1a003a"/><stop offset="50%" stop-color="#2d0055"/><stop offset="100%" stop-color="#06060f"/>
         </linearGradient>
         <linearGradient id="sun" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#fde68a"/><stop offset="45%" stop-color="#fb923c"/><stop offset="75%" stop-color="#e11d48"/><stop offset="100%" stop-color="#6d28d9"/>
+          <stop offset="0%" stop-color="#fde68a"/><stop offset="25%" stop-color="#fbbf24"/><stop offset="45%" stop-color="#fb923c"/><stop offset="65%" stop-color="#e11d48"/><stop offset="85%" stop-color="#9f1239"/><stop offset="100%" stop-color="#6d28d9"/>
         </linearGradient>
-        <clipPath id="sun-clip"><circle cx="600" cy="240" r="120"/></clipPath>
+        <radialGradient id="halo" cx="50%" cy="50%">
+          <stop offset="35%" stop-color="#fb923c" stop-opacity="0.2"/>
+          <stop offset="65%" stop-color="#e11d48" stop-opacity="0.08"/>
+          <stop offset="100%" stop-color="transparent"/>
+        </radialGradient>
+        <linearGradient id="horizon" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#fb7185" stop-opacity="0.65"/>
+          <stop offset="38%" stop-color="#fb923c" stop-opacity="0.88"/>
+          <stop offset="50%" stop-color="#fb923c" stop-opacity="0.95"/>
+          <stop offset="62%" stop-color="#fb923c" stop-opacity="0.88"/>
+          <stop offset="100%" stop-color="#fb7185" stop-opacity="0.65"/>
+        </linearGradient>
+        <linearGradient id="reflect" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#fb923c" stop-opacity="0.12"/>
+          <stop offset="100%" stop-color="transparent"/>
+        </linearGradient>
+        <filter id="star-glow"><feGaussianBlur stdDeviation="1.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        <clipPath id="sun-clip"><circle cx="600" cy="280" r="130"/></clipPath>
       </defs>
       <rect width="1200" height="800" fill="url(#sky)"/>
-      <rect x="0" y="237" width="1200" height="3" fill="#fb7185" opacity="0.8"/>
-      <circle cx="600" cy="240" r="120" fill="url(#sun)"/>
-      <g clip-path="url(#sun-clip)">${[240,249,260,273,288,306,328].map((y, i) => `<rect x="475" y="${y}" width="250" height="${3 + i * 2}" fill="#06060f"/>`).join("")}</g>
-      <g stroke="#8b5cf6" opacity="0.4">${[280,330,390,460,540,635,740].map((y) => `<line x1="0" y1="${y}" x2="1200" y2="${y}" stroke-width="0.6"/>`).join("")}</g>
-      <g stroke="#fb7185" opacity="0.15">${[-50,150,300,450,600,750,900,1050,1250].map((x) => `<line x1="600" y1="242" x2="${x}" y2="800" stroke-width="0.6"/>`).join("")}</g>
+      <g fill="#fff" filter="url(#star-glow)">
+        ${[
+          [80,30,1.2,.8],[220,70,.7,.5],[370,20,1,.7],[520,55,.8,.4],[680,35,1.1,.6],[840,60,.6,.4],[980,25,1.2,.7],[1120,50,.9,.6],
+          [120,115,.7,.35],[310,125,.8,.3],[455,100,.6,.35],[760,112,.8,.32],[1030,118,.7,.3],[1160,100,.6,.35],
+          [55,175,.6,.25],[175,200,.9,.32],[1060,190,.7,.25]
+        ].map(([cx, cy, r, opacity]) => `<circle cx="${cx}" cy="${cy}" r="${r}" opacity="${opacity}"/>`).join("")}
+      </g>
+      <rect x="0" y="0" width="1200" height="2" fill="#fb7185" opacity="0.5"/>
+      <rect x="0" y="798" width="1200" height="2" fill="#22d3ee" opacity="0.3"/>
+      <rect x="0" y="277" width="1200" height="3" fill="url(#horizon)"/>
+      <rect x="0" y="276" width="1200" height="1" fill="#fde68a" opacity="0.26"/>
+      <circle cx="600" cy="280" r="200" fill="url(#halo)"/>
+      <circle cx="600" cy="280" r="130" fill="url(#sun)"/>
+      <g clip-path="url(#sun-clip)">
+        ${[280,290,302,316,333,354,380].map((y, i) => `<rect x="465" y="${y}" width="270" height="${[4,6,8,10,13,17,22][i]}" fill="#06060f"/>`).join("")}
+        <g transform="translate(600,235) rotate(27)">
+          <path d="M0,-30 L3,-6 L32,2.5 L3,5.5 L4.5,13 L0,9 L-4.5,13 L-3,5.5 L-32,2.5 L-3,-6 Z" fill="#06060f" opacity="0.7"/>
+        </g>
+      </g>
+      <ellipse cx="600" cy="320" rx="90" ry="25" fill="url(#reflect)"/>
+      <g stroke="#8b5cf6" opacity="0.4">${[320,365,420,485,560,650,750].map((y, i) => `<line x1="0" y1="${y}" x2="1200" y2="${y}" stroke-width="${i < 2 ? 0.7 : 0.5}"/>`).join("")}</g>
+      <g stroke="#fb7185" opacity="0.15">${[-50,150,300,450,600,750,900,1050,1250].map((x) => `<line x1="600" y1="282" x2="${x}" y2="800" stroke-width="0.6"/>`).join("")}</g>
     </svg>
   `;
 }

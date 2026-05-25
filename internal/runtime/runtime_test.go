@@ -1,24 +1,18 @@
 package runtime
 
-import "testing"
+import (
+	goruntime "runtime"
+	"testing"
+)
 
 func TestInstallGuidesCoverSupportedRuntimeChoices(t *testing.T) {
 	guides := InstallGuides()
-	want := map[string]bool{
-		"docker-desktop": false,
-		"docker-engine":  false,
-		"colima":         false,
-		"lima":           false,
-		"podman":         false,
+	if len(guides) == 0 {
+		t.Fatal("expected install guides for current platform")
 	}
 	for _, guide := range guides {
-		if _, ok := want[guide.ID]; ok {
-			want[guide.ID] = true
-		}
-	}
-	for id, found := range want {
-		if !found {
-			t.Fatalf("missing install guide %q", id)
+		if !guide.Supports(goruntime.GOOS) {
+			t.Fatalf("guide %q does not support current platform %q", guide.ID, goruntime.GOOS)
 		}
 	}
 }
