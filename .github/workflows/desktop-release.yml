@@ -62,7 +62,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sidecar-${{ matrix.target }}
-          path: sidecar/dist/${{ matrix.sidecar_name }}
+          path: sidecar/dist/cashpilot-sidecar/
 
   build-tauri:
     needs: build-sidecar
@@ -92,6 +92,18 @@ jobs:
       - name: Make sidecar executable
         if: runner.os != 'Windows'
         run: chmod +x src-tauri/sidecar/cashpilot-sidecar
+
+      - name: Sign sidecar (Windows)
+        if: runner.os == 'Windows' && env.WINDOWS_SIGN_CERT != ''
+        env:
+          WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
+          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+        run: |
+          $cert = [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT)
+          [System.IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
+          & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_SIGN_CERT_PASSWORD" /tr http://timestamp.digicert.com /td sha256 /fd sha256 "src-tauri\sidecar\cashpilot-sidecar.exe"
+          Remove-Item "$env:RUNNER_TEMP\cert.pfx"
+        shell: pwsh
 
       - uses: actions/setup-node@v4
         with:
@@ -151,7 +163,23 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
+          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
         run: npx tauri build --target ${{ matrix.target }} --bundles nsis
+
+      - name: Sign installer (Windows)
+        if: runner.os == 'Windows' && env.WINDOWS_SIGN_CERT != ''
+        env:
+          WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
+          WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
+        run: |
+          $cert = [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT)
+          [System.IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
+          Get-ChildItem -Recurse "src-tauri\target\${{ matrix.target }}\release\bundle" -Include "*.exe","*.nsis.zip" | ForEach-Object {
+            & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_SIGN_CERT_PASSWORD" /tr http://timestamp.digicert.com /td sha256 /fd sha256 $_.FullName
+          }
+          Remove-Item "$env:RUNNER_TEMP\cert.pfx"
+        shell: pwsh
 
       - name: Cleanup keychain
         if: runner.os == 'macOS' && always()

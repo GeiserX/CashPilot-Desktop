@@ -41,7 +41,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "sidecar/.gitkeep"
+      "sidecar/**/*"
     ],
     "macOS": {
       "signingIdentity": null,
