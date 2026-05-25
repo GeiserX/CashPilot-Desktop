@@ -19,11 +19,13 @@ func main() {
 	app := NewApp()
 
 	err := wails.Run(&options.App{
-		Title:     "CashPilot Desktop",
-		Width:     1200,
-		Height:    800,
-		MinWidth:  900,
-		MinHeight: 640,
+		Title:            "CashPilot Desktop",
+		Width:            1200,
+		Height:           800,
+		MinWidth:         900,
+		MinHeight:        640,
+		Frameless:        true,
+		BackgroundColour: options.NewRGB(6, 6, 15),
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

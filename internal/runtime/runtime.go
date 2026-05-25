@@ -96,7 +96,7 @@ func (p *DockerProvider) Status(ctx context.Context) Status {
 		return Status{
 			Available: false,
 			Kind:      "existing-docker",
-			Message:   "Docker-compatible CLI was found, but the daemon is not reachable. Start Docker Desktop, Docker Engine, Colima, Lima, or Podman machine and try again.",
+			Message:   "A container runtime is installed, but it is not running yet. Start your runtime and try again.",
 			Tools:     tools,
 		}
 	}
@@ -450,9 +450,9 @@ func dockerContext() string {
 
 func friendlyRuntimeMessage(tools map[string]string) string {
 	if _, ok := tools["docker"]; ok {
-		return "Docker CLI is installed, but the daemon is not reachable. Start Docker Desktop, Docker Engine, Colima, Lima, or Podman machine."
+		return "Docker is installed, but the engine is not reachable yet. Start your runtime and try again."
 	}
-	return "No Docker-compatible runtime is ready. Choose Docker Desktop, Docker Engine, Colima/Lima, or Podman from the setup guide."
+	return "Choose one of the supported runtimes below so CashPilot can run earning services on this machine."
 }
 
 func stripDockerLogHeaders(raw []byte) string {
@@ -478,19 +478,19 @@ func stripDockerLogHeaders(raw []byte) string {
 
 func InstallGuides() []InstallGuide {
 	osName := goruntime.GOOS
-	return []InstallGuide{
+	guides := []InstallGuide{
 		{
 			ID:          "docker-desktop",
 			Name:        "Docker Desktop",
-			Description: "Most familiar option for macOS and Windows. Best compatibility, but subject to Docker Desktop licensing for larger organizations.",
+			Description: "The easiest option on macOS and Windows. Best compatibility if you already use Docker.",
 			Platforms:   []string{"darwin", "windows"},
 			URL:         "https://www.docker.com/products/docker-desktop/",
-			Notes:       []string{"Recommended if you already use Docker Desktop.", "Windows requires WSL2.", "Commercial use in larger organizations may need a paid Docker subscription."},
+			Notes:       []string{"Recommended for most first-time users.", "Windows requires WSL2.", "Commercial use in larger organizations may need a paid Docker subscription."},
 		},
 		{
 			ID:          "docker-engine",
 			Name:        "Docker Engine",
-			Description: "Native Linux Docker daemon. Best first choice on Linux hosts.",
+			Description: "Native Linux container engine. Best first choice on Linux hosts.",
 			Platforms:   []string{"linux"},
 			URL:         "https://docs.docker.com/engine/install/",
 			Commands:    linuxCommands(osName),
@@ -499,8 +499,8 @@ func InstallGuides() []InstallGuide {
 		{
 			ID:          "colima",
 			Name:        "Colima",
-			Description: "Lightweight Docker-compatible runtime for macOS and Linux using Lima.",
-			Platforms:   []string{"darwin", "linux"},
+			Description: "Lightweight Docker-compatible runtime for macOS, built on Lima.",
+			Platforms:   []string{"darwin"},
 			URL:         "https://colima.run/",
 			Commands:    []string{"brew install colima docker", "colima start --runtime docker"},
 			Notes:       []string{"Good Docker Desktop alternative on macOS.", "CashPilot Desktop will use the Docker context Colima activates."},
@@ -508,8 +508,8 @@ func InstallGuides() []InstallGuide {
 		{
 			ID:          "lima",
 			Name:        "Lima",
-			Description: "Linux VM manager for macOS/Linux. Useful if you want direct control over the VM layer.",
-			Platforms:   []string{"darwin", "linux"},
+			Description: "Linux VM manager for macOS. Useful if you want more control over the VM layer.",
+			Platforms:   []string{"darwin"},
 			URL:         "https://lima-vm.io/",
 			Commands:    []string{"brew install lima docker", "limactl start template://docker"},
 			Notes:       []string{"More technical than Colima.", "Good stepping stone toward CashPilot's future managed VM runtime."},
@@ -524,6 +524,22 @@ func InstallGuides() []InstallGuide {
 			Notes:       []string{"Docker API compatibility is good but not perfect.", "Some services that expect Docker-specific behavior may need testing."},
 		},
 	}
+	filtered := make([]InstallGuide, 0, len(guides))
+	for _, guide := range guides {
+		if guide.Supports(osName) {
+			filtered = append(filtered, guide)
+		}
+	}
+	return filtered
+}
+
+func (g InstallGuide) Supports(osName string) bool {
+	for _, platform := range g.Platforms {
+		if platform == osName {
+			return true
+		}
+	}
+	return false
 }
 
 func linuxCommands(osName string) []string {
