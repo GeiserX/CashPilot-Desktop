@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/zalando/go-keyring"
 )
@@ -35,53 +36,14 @@ type Manager struct {
 	appDir  string
 	dataDir string
 	path    string
+	mu      sync.RWMutex
 	cfg     AppConfig
 }
 
-func NewManager() (*Manager, error) {
-	appDir, err := appDataDir()
-	if err != nil {
-		return nil, err
-	}
-	dataDir := filepath.Join(appDir, "data")
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return nil, err
-	}
-
-	m := &Manager{
-		appDir:  appDir,
-		dataDir: dataDir,
-		path:    filepath.Join(appDir, "config.json"),
-		cfg: AppConfig{
-			DisplayCurrency:        "USD",
-			RuntimeProvider:        "existing-docker",
-			AutoUpdate:             true,
-			HostnamePrefix:         "cashpilot",
-			CollectIntervalMinutes: 60,
-			Timezone:               "UTC",
-			FleetBindAddress:       "0.0.0.0",
-			FleetPort:              8085,
-		},
-	}
-	if err := m.load(); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func (m *Manager) Config() AppConfig {
-	return m.cfg
-}
-
-func (m *Manager) AppDir() string {
-	return m.appDir
-}
-
-func (m *Manager) DataDir() string {
-	return m.dataDir
-}
-
-func (m *Manager) Save(cfg AppConfig) error {
+// applyDefaults fills zero/invalid fields with safe defaults. The fleet bind
+// address defaults to loopback (127.0.0.1) so the worker API is never exposed
+// to the network unless the user explicitly changes it to a routable address.
+func applyDefaults(cfg AppConfig) AppConfig {
 	if cfg.DisplayCurrency == "" {
 		cfg.DisplayCurrency = "USD"
 	}
@@ -98,11 +60,52 @@ func (m *Manager) Save(cfg AppConfig) error {
 		cfg.Timezone = "UTC"
 	}
 	if cfg.FleetBindAddress == "" {
-		cfg.FleetBindAddress = "0.0.0.0"
+		cfg.FleetBindAddress = "127.0.0.1"
 	}
 	if cfg.FleetPort <= 0 {
 		cfg.FleetPort = 8085
 	}
+	return cfg
+}
+
+func NewManager() (*Manager, error) {
+	appDir, err := appDataDir()
+	if err != nil {
+		return nil, err
+	}
+	dataDir := filepath.Join(appDir, "data")
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return nil, err
+	}
+
+	m := &Manager{
+		appDir:  appDir,
+		dataDir: dataDir,
+		path:    filepath.Join(appDir, "config.json"),
+		cfg:     applyDefaults(AppConfig{AutoUpdate: true}),
+	}
+	if err := m.load(); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (m *Manager) Config() AppConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.cfg
+}
+
+func (m *Manager) AppDir() string {
+	return m.appDir
+}
+
+func (m *Manager) DataDir() string {
+	return m.dataDir
+}
+
+func (m *Manager) Save(cfg AppConfig) error {
+	cfg = applyDefaults(cfg)
 	if err := os.MkdirAll(m.appDir, 0o700); err != nil {
 		return err
 	}
@@ -113,10 +116,14 @@ func (m *Manager) Save(cfg AppConfig) error {
 	if err := os.WriteFile(m.path, raw, 0o600); err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.cfg = cfg
+	m.mu.Unlock()
 	return nil
 }
 
+// load runs once during NewManager (single-threaded, before the Manager is
+// shared with the background fleet HTTP server), so it does not take the lock.
 func (m *Manager) load() error {
 	raw, err := os.ReadFile(m.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -129,7 +136,7 @@ func (m *Manager) load() error {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return err
 	}
-	m.cfg = cfg
+	m.cfg = applyDefaults(cfg)
 	return nil
 }
 

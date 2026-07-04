@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -61,6 +63,19 @@ func TestHandleFleetHealth(t *testing.T) {
 	}
 	if body["status"] != "ok" {
 		t.Fatalf("expected status ok, got %q", body["status"])
+	}
+}
+
+// TestHandleFleetHealthRejectsNonGet pins the GET-only health endpoint.
+func TestHandleFleetHealthRejectsNonGet(t *testing.T) {
+	app := newFleetTestApp(t, "unused")
+	req := httptest.NewRequest(http.MethodPost, "/api/health", nil)
+	w := httptest.NewRecorder()
+
+	app.handleFleetHealth(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for POST /api/health, got %d", w.Code)
 	}
 }
 
@@ -164,6 +179,66 @@ func TestHandleWorkerHeartbeatRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerHeartbeatEmptyKeyRejects pins that an App with no configured
+// fleet API key rejects every heartbeat: validFleetBearer returns false when the
+// key is empty, so even a "Bearer " header gets a 401.
+func TestHandleWorkerHeartbeatEmptyKeyRejects(t *testing.T) {
+	app := newFleetTestApp(t, "")
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{"name":"worker-7"}`))
+	req.Header.Set("Authorization", "Bearer ")
+	w := httptest.NewRecorder()
+
+	app.handleWorkerHeartbeat(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 when no API key is configured, got %d", w.Code)
+	}
+	if devices := app.store.ListFleetDevices(); len(devices) != 0 {
+		t.Fatalf("expected no device persisted for an unauthorized request, got %d", len(devices))
+	}
+}
+
+// TestHandleWorkerHeartbeatNameFallsBackToClientID pins the name fallback: an
+// empty name uses client_id as the device name.
+func TestHandleWorkerHeartbeatNameFallsBackToClientID(t *testing.T) {
+	app := newFleetTestApp(t, "tok")
+	payload := `{"client_id":"abc","system_info":{"os":"linux","arch":"amd64"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+
+	app.handleWorkerHeartbeat(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body %s)", w.Code, w.Body.String())
+	}
+	devices := app.store.ListFleetDevices()
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 persisted device, got %d", len(devices))
+	}
+	if devices[0].Name != "abc" {
+		t.Fatalf("expected the device name to fall back to client_id \"abc\", got %q", devices[0].Name)
+	}
+}
+
+// TestHandleWorkerHeartbeatRequiresNameOrClientID pins the 400 when both name and
+// client_id are empty, with nothing persisted.
+func TestHandleWorkerHeartbeatRequiresNameOrClientID(t *testing.T) {
+	app := newFleetTestApp(t, "tok")
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+
+	app.handleWorkerHeartbeat(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when name and client_id are both empty, got %d", w.Code)
+	}
+	if devices := app.store.ListFleetDevices(); len(devices) != 0 {
+		t.Fatalf("expected no device persisted for a nameless heartbeat, got %d", len(devices))
+	}
+}
+
 func TestValidFleetBearer(t *testing.T) {
 	app := newFleetTestApp(t, "abc123")
 
@@ -229,18 +304,58 @@ func TestFleetUIURLIncludesPort(t *testing.T) {
 	}
 }
 
+// freeTCPPort reserves an ephemeral loopback port and releases it, returning the
+// port number. applyDefaults coerces FleetPort<=0 back to 8085, so a literal
+// port 0 can never reach net.Listen through the config; picking a known-free
+// port keeps the bind conflict-proof in CI where 8085 may be in use.
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve free port: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
 func TestStartFleetAPIBindsAndCloses(t *testing.T) {
 	app := newFleetTestApp(t, "tok")
+
+	cfg := app.cfg.Config()
+	cfg.FleetPort = freeTCPPort(t)
+	if err := app.cfg.Save(cfg); err != nil {
+		t.Fatalf("config.Save error: %v", err)
+	}
+
 	if err := app.startFleetAPI(); err != nil {
-		// A busy port (or a restricted environment) still exercised the bind
-		// path; that is an acceptable outcome for this test.
-		t.Logf("startFleetAPI returned %v (acceptable when the port is unavailable)", err)
-		return
+		t.Fatalf("startFleetAPI error: %v", err)
 	}
 	if app.fleetAPI == nil {
 		t.Fatal("expected fleetAPI to be set after a successful start")
 	}
+	addr := app.fleetAPI.addr
+	if addr == "" {
+		t.Fatal("expected the bound listener address to be recorded")
+	}
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + addr + "/api/health")
+	if err != nil {
+		t.Fatalf("GET /api/health error: %v", err)
+	}
+	statusCode := resp.StatusCode
+	_ = resp.Body.Close()
+	if statusCode != http.StatusOK {
+		t.Fatalf("expected 200 from a live /api/health, got %d", statusCode)
+	}
+
 	if err := app.fleetAPI.Close(); err != nil {
 		t.Fatalf("Close error: %v", err)
+	}
+
+	// After shutdown the listener is closed; a follow-up request must fail.
+	if resp, err := client.Get("http://" + addr + "/api/health"); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("expected the follow-up request to fail after Close")
 	}
 }

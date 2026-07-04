@@ -172,7 +172,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_DISPLAY_CURRENCY", Label: "Display Currency", Value: cfg.DisplayCurrency, Source: "Config", Help: "Currency used in the topbar and dashboard summaries."},
 		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: cfg.FleetAPIKey, Source: "Config", Secret: true, Help: "Bearer token used by external workers and mobile clients."},
 		{Key: "CASHPILOT_UI_URL", Label: "Desktop API URL", Value: a.fleetUIURL(), Source: "Runtime", ReadOnly: true, Help: "URL that external workers should use for CASHPILOT_UI_URL."},
-		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Address the desktop worker API listens on. Use 0.0.0.0 for LAN workers."},
+		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
@@ -200,7 +200,11 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	}
 	cfg := a.cfg.Config()
 	if value := strings.TrimSpace(values["displayCurrency"]); value != "" {
-		cfg.DisplayCurrency = strings.ToUpper(value)
+		upper := strings.ToUpper(value)
+		if !isSupportedCurrency(upper) {
+			return SettingsState{}, fmt.Errorf("unsupported display currency: %s", value)
+		}
+		cfg.DisplayCurrency = upper
 	}
 	if value := strings.TrimSpace(values["hostnamePrefix"]); value != "" {
 		cfg.HostnamePrefix = value
@@ -541,6 +545,15 @@ func supportedCurrencies() []string {
 		"PLN", "RON", "SEK", "SGD", "THB", "TRY", "ZAR", "AED", "ARS", "CLP", "COP", "EGP",
 		"MAD", "NGN", "PEN", "SAR", "TWD", "UAH", "VND", "MYST",
 	}
+}
+
+func isSupportedCurrency(code string) bool {
+	for _, c := range supportedCurrencies() {
+		if c == code {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) ready() error {

@@ -15,6 +15,7 @@ import (
 
 type fleetAPIServer struct {
 	server *http.Server
+	addr   string
 }
 
 type workerHeartbeat struct {
@@ -49,12 +50,15 @@ func (a *App) startFleetAPI() error {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
-	a.fleetAPI = &fleetAPIServer{server: server}
+	a.fleetAPI = &fleetAPIServer{server: server, addr: listener.Addr().String()}
 	go func() {
 		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			a.emitError("fleet-api", err)
@@ -69,7 +73,11 @@ func (s *fleetAPIServer) Close() error {
 	return s.server.Shutdown(ctx)
 }
 
-func (a *App) handleFleetHealth(w http.ResponseWriter, _ *http.Request) {
+func (a *App) handleFleetHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "app": "CashPilot Desktop"})
 }
 
@@ -90,6 +98,10 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(body.Name) == "" {
 		body.Name = body.ClientID
 	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker name or client_id is required"})
+		return
+	}
 	device, err := a.store.UpsertFleetHeartbeat(store.FleetDevice{
 		Name:     strings.TrimSpace(body.Name),
 		Kind:     heartbeatKind(body),
@@ -101,14 +113,19 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
 	})
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		a.emitError("fleet-heartbeat", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record heartbeat"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "worker_id": device.ID})
 }
 
 func (a *App) validFleetBearer(r *http.Request) bool {
-	expected := "Bearer " + a.cfg.Config().FleetAPIKey
+	key := a.cfg.Config().FleetAPIKey
+	if key == "" {
+		return false
+	}
+	expected := "Bearer " + key
 	got := r.Header.Get("Authorization")
 	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }

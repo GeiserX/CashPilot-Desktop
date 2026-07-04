@@ -2,7 +2,12 @@ package config
 
 import (
 	"bytes"
+	"encoding/base64"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -29,7 +34,7 @@ func TestNewManagerAppliesDefaults(t *testing.T) {
 		HostnamePrefix:         "cashpilot",
 		CollectIntervalMinutes: 60,
 		Timezone:               "UTC",
-		FleetBindAddress:       "0.0.0.0",
+		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
 	}
 	if cfg != want {
@@ -49,7 +54,7 @@ func TestSaveCoercesEmptyAndInvalidValues(t *testing.T) {
 		HostnamePrefix:         "cashpilot",
 		CollectIntervalMinutes: 60,
 		Timezone:               "UTC",
-		FleetBindAddress:       "0.0.0.0",
+		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
 	}
 
@@ -176,5 +181,99 @@ func TestAppDataDirOverrideAndDefault(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(dir), "cashpilot") {
 		t.Fatalf("expected the default data dir to include the app identifier, got %q", dir)
+	}
+}
+
+// TestConfigConcurrentAccessIsRaceFree pins the RWMutex added to Manager: a
+// writer goroutine hammering Config()+Save() while the main goroutine reads
+// Config() must be clean under `go test -race`.
+func TestConfigConcurrentAccessIsRaceFree(t *testing.T) {
+	m := newTestManager(t)
+
+	const iterations = 200
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			cfg := m.Config()
+			cfg.CollectIntervalMinutes = (i % 30) + 1
+			if err := m.Save(cfg); err != nil {
+				// t.Errorf is safe from another goroutine; t.Fatalf is not.
+				t.Errorf("Save error: %v", err)
+				return
+			}
+		}
+	}()
+
+	for i := 0; i < iterations; i++ {
+		_ = m.Config()
+	}
+	wg.Wait()
+}
+
+// TestLoadCoercesInvalidOnDisk pins that load() runs applyDefaults over the
+// on-disk config, so out-of-range values persisted by an older build (or a
+// hand-edited file) are corrected when a fresh Manager reads them.
+func TestLoadCoercesInvalidOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", dir)
+
+	raw := []byte(`{"fleetPort":0,"collectIntervalMinutes":-5}`)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), raw, 0o600); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager error: %v", err)
+	}
+	cfg := m.Config()
+	if cfg.FleetPort != 8085 {
+		t.Fatalf("expected on-disk fleetPort=0 coerced to 8085, got %d", cfg.FleetPort)
+	}
+	if cfg.CollectIntervalMinutes != 60 {
+		t.Fatalf("expected on-disk collectIntervalMinutes=-5 coerced to 60, got %d", cfg.CollectIntervalMinutes)
+	}
+}
+
+// TestMasterKeyFileFallbackWhenKeyringUnavailable pins the file-backed fallback:
+// when the OS keyring is unavailable, MasterKey persists a base64 32-byte key to
+// <appDir>/.credential_key and reuses it on subsequent calls.
+func TestMasterKeyFileFallbackWhenKeyringUnavailable(t *testing.T) {
+	keyring.MockInitWithError(errors.New("no keyring"))
+	defer keyring.MockInit()
+
+	dir := t.TempDir()
+	key1, err := MasterKey(dir)
+	if err != nil {
+		t.Fatalf("MasterKey error: %v", err)
+	}
+	if len(key1) != 32 {
+		t.Fatalf("expected a 32-byte key, got %d", len(key1))
+	}
+
+	keyPath := filepath.Join(dir, ".credential_key")
+	stored, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("expected the fallback key file %q to exist: %v", keyPath, err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(string(stored))
+	if err != nil {
+		t.Fatalf("fallback key file is not valid base64: %v", err)
+	}
+	if len(decoded) != 32 {
+		t.Fatalf("expected the persisted key to decode to 32 bytes, got %d", len(decoded))
+	}
+	if !bytes.Equal(decoded, key1) {
+		t.Fatal("expected the persisted key file to hold the returned key")
+	}
+
+	key2, err := MasterKey(dir)
+	if err != nil {
+		t.Fatalf("MasterKey (reuse) error: %v", err)
+	}
+	if !bytes.Equal(key1, key2) {
+		t.Fatal("expected the file-backed key to be byte-identical across calls")
 	}
 }

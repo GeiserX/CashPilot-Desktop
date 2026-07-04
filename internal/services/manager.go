@@ -134,10 +134,16 @@ func (m *Manager) Refresh(ctx context.Context) ([]store.Deployment, error) {
 			_ = m.store.UpsertDeployment(dep)
 		}
 	}
-	for _, dep := range m.store.ListDeployments() {
-		if !active[dep.Slug] {
-			_ = m.store.DeleteDeployment(dep.Slug)
-			m.store.RecordEvent(dep.Slug, "missing_from_runtime", "removed stale deployment record")
+	// Only reconcile away stale records when the runtime actually returned
+	// containers. An empty (but error-free) list usually means a different
+	// runtime/context is active, not that every managed container vanished —
+	// deleting on that would wipe the dashboard and reset CreatedAt.
+	if len(containers) > 0 {
+		for _, dep := range m.store.ListDeployments() {
+			if !active[dep.Slug] {
+				_ = m.store.DeleteDeployment(dep.Slug)
+				m.store.RecordEvent(dep.Slug, "missing_from_runtime", "removed stale deployment record")
+			}
 		}
 	}
 	return m.store.ListDeployments(), nil

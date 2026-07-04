@@ -139,6 +139,41 @@ func TestRefreshReconcilesStaleDeployments(t *testing.T) {
 	}
 }
 
+// TestRefreshEmptyListKeepsTracked pins the reconcile guard: an error-free empty
+// list from the runtime (a different runtime/context is likely active) must NOT
+// delete tracked deployments — they stay in the store and in the returned slice.
+func TestRefreshEmptyListKeepsTracked(t *testing.T) {
+	st := newTestStore(t)
+	if err := st.UpsertDeployment(store.Deployment{Slug: "storj", ContainerID: "c1", Status: "running", Name: "n1", Image: "i1", Runtime: "existing-docker"}); err != nil {
+		t.Fatalf("seed storj error: %v", err)
+	}
+	if err := st.UpsertDeployment(store.Deployment{Slug: "mysterium", ContainerID: "c2", Status: "running", Name: "n2", Image: "i2", Runtime: "existing-docker"}); err != nil {
+		t.Fatalf("seed mysterium error: %v", err)
+	}
+
+	fake := &fakeProvider{listResult: nil} // empty, error-free list
+	m := NewManager(fake, newTestCatalog(t), st)
+
+	deps, err := m.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("Refresh error: %v", err)
+	}
+
+	slugs := map[string]bool{}
+	for _, d := range deps {
+		slugs[d.Slug] = true
+	}
+	if !slugs["storj"] || !slugs["mysterium"] {
+		t.Fatalf("expected both tracked deployments in the returned slice, got %v", slugs)
+	}
+	if _, ok, _ := st.GetDeployment("storj"); !ok {
+		t.Fatal("expected storj to remain in the store")
+	}
+	if _, ok, _ := st.GetDeployment("mysterium"); !ok {
+		t.Fatal("expected mysterium to remain in the store")
+	}
+}
+
 func TestRefreshReturnsRuntimeError(t *testing.T) {
 	st := newTestStore(t)
 	fake := &fakeProvider{listErr: errors.New("runtime down")}
