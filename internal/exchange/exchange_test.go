@@ -200,6 +200,23 @@ func TestEnsureFreshRefreshesOnce(t *testing.T) {
 	}
 }
 
+func TestIsPoints(t *testing.T) {
+	svc := NewService()
+	// GRASS is a declared reward point (case-insensitive), regardless of rates.
+	for _, c := range []string{"GRASS", "grass", "Grass"} {
+		if !svc.IsPoints(c) {
+			t.Fatalf("IsPoints(%q) = false, want true", c)
+		}
+	}
+	// Priceable currencies (and unknown tokens) are never points — classification
+	// is by intent, not by whether a live rate happens to exist.
+	for _, c := range []string{"USD", "EUR", "MYST", "DOGE"} {
+		if svc.IsPoints(c) {
+			t.Fatalf("IsPoints(%q) = true, want false", c)
+		}
+	}
+}
+
 // assertCachePreserved checks the last-good rates survived a failed refresh.
 func assertCachePreserved(t *testing.T, svc *Service) {
 	t.Helper()

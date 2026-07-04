@@ -738,9 +738,12 @@ function renderPointsSection(points: PointsBalance[]) {
 
 function renderEarningBreakdown(item: ServiceEarning, displayCurrency: string) {
   const native = `${item.balance.toFixed(2)} ${item.currency}`;
+  // When a service is convertible but its display balance is 0 the live rate is
+  // missing, so show the native `balance currency` instead of a misleading
+  // display-currency 0.
   const primary = item.error
     ? "Needs attention"
-    : item.convertible
+    : item.convertible && item.balanceDisplay !== 0
       ? formatBalance(item.balanceDisplay, displayCurrency)
       : formatBalance(item.balance, item.currency);
   const cashout = item.cashout;
@@ -1456,7 +1459,10 @@ function capitalize(value: string) {
 }
 
 function formatBalance(value: number, currency: string) {
-  const code = (currency || "USD").toUpperCase();
+  // Sanitize to A-Z0-9 only: `code` is interpolated unescaped into a couple of
+  // innerHTML sinks (the topbar and services-table balance cells), so stripping
+  // everything else closes those injection points and keeps Intl happy.
+  const code = (currency || "USD").toUpperCase().replace(/[^A-Z0-9]/g, "");
   const amount = Number.isFinite(value) ? value : 0;
   // Intl.NumberFormat throws RangeError on non-ISO codes (e.g. reward "points"
   // like MYST or GRASS); those fall back to a plain "1234.00 CODE" string.

@@ -262,6 +262,15 @@ func (s *Service) Convertible(currency string) bool {
 	return false
 }
 
+// IsPoints reports whether a currency is a declared reward "point" (it has no
+// market price by design). Classification is by INTENT — membership in
+// PointsCurrencies — not by whether a live rate happens to be available, so a
+// priceable token that is momentarily unpriced (a rate outage) is never
+// misclassified as a reward point. The lookup is case-insensitive.
+func (s *Service) IsPoints(cur string) bool {
+	return PointsCurrencies[strings.ToUpper(cur)]
+}
+
 // fetchCrypto pulls token->USD prices from CoinGecko's simple/price endpoint,
 // mapping each configured CoinGecko id back to its currency code.
 func (s *Service) fetchCrypto(ctx context.Context) (map[string]float64, error) {

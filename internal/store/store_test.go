@@ -366,9 +366,9 @@ func TestListDailyBalances(t *testing.T) {
 	s := openTestStore(t)
 
 	// Build timestamps relative to "now" so the rows land inside the window that
-	// ListDailyBalances computes with SQLite's date('now', '-N days'). A fixed
-	// RFC3339 layout with no fractional seconds keeps the string MAX(created_at)
-	// SQLite computes in the same order as chronological time.
+	// ListDailyBalances computes with SQLite's date('now', '-N days'). The latest
+	// row per (platform, day) is chosen by MAX(id); rows are inserted in ascending
+	// balance order so the last-written (highest-id) row is the expected winner.
 	ts := func(daysAgo, hour int) string {
 		d := time.Now().UTC().AddDate(0, 0, -daysAgo)
 		return time.Date(d.Year(), d.Month(), d.Day(), hour, 0, 0, 0, time.UTC).Format(time.RFC3339)
@@ -455,5 +455,39 @@ func TestListDailyBalances(t *testing.T) {
 		if got[i-1].Day > got[i].Day {
 			t.Fatalf("results not ordered ascending by day: %+v", got)
 		}
+	}
+}
+
+// TestListDailyBalancesTieBreakByID pins the deterministic intra-day tie-break.
+// Two successful rows land in the SAME second of the same day, differing only in
+// sub-second fraction and balance. Because created_at is RFC3339Nano (variable
+// length: trailing zeros trimmed, the fraction omitted entirely at .0), a
+// lexicographic MAX(created_at) mis-orders them — "…:00.9Z" sorts ABOVE "…:00.1Z"
+// yet a plain "…:00Z" would sort above BOTH ('Z' > '.'). The row returned must be
+// the last-written one (highest AUTOINCREMENT id), independent of that string
+// ordering.
+func TestListDailyBalancesTieBreakByID(t *testing.T) {
+	s := openTestStore(t)
+
+	now := time.Now().UTC()
+	sec := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+	// Insert the ".9" row FIRST (lower id, balance 5.0), then the ".1" row (higher
+	// id, balance 9.0). Under a string MAX(created_at) the ".9" row wins (5.0);
+	// under MAX(id) the later-written ".1" row wins (9.0).
+	firstWritten := sec.Add(900 * time.Millisecond).Format(time.RFC3339Nano)
+	lastWritten := sec.Add(100 * time.Millisecond).Format(time.RFC3339Nano)
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "alpha", Balance: 5.0, Currency: "USD", CreatedAt: firstWritten}); err != nil {
+		t.Fatalf("SaveEarnings(first) error: %v", err)
+	}
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "alpha", Balance: 9.0, Currency: "USD", CreatedAt: lastWritten}); err != nil {
+		t.Fatalf("SaveEarnings(second) error: %v", err)
+	}
+
+	got := s.ListDailyBalances(2)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one (platform, day) row, got %d: %+v", len(got), got)
+	}
+	if got[0].Balance != 9.0 {
+		t.Fatalf("intra-day tie-break did not pick the higher-id row: got balance=%v, want 9.0", got[0].Balance)
 	}
 }

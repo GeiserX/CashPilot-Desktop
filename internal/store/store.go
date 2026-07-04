@@ -262,18 +262,23 @@ func (s *Store) ListEarningsHistory(limit int) []EarningsRecord {
 }
 
 // ListDailyBalances returns the latest successful balance (rows whose error column
-// is empty) for each (platform, day) over the last daysBack days.
+// is empty) for each (platform, day) over the last daysBack days. The latest row
+// per (platform, day) is chosen by MAX(id), not MAX(created_at): created_at is
+// stored as RFC3339Nano whose variable-length fraction makes a lexicographic
+// MAX(created_at) mis-order same-second rows (e.g. "…:00Z" sorts AFTER "…:00.5Z"
+// because 'Z' > '.'), so the monotonic AUTOINCREMENT id is the deterministic
+// "last written wins" key.
 func (s *Store) ListDailyBalances(daysBack int) []DailyBalance {
 	rows, err := s.db.Query(`
 		SELECT e.platform, e.currency, date(e.created_at) AS day, e.balance
 		FROM earnings e
 		JOIN (
-			SELECT platform, date(created_at) AS day, MAX(created_at) AS mx
+			SELECT platform, date(created_at) AS day, MAX(id) AS mx
 			FROM earnings
 			WHERE error = '' AND date(created_at) >= date('now', ?)
 			GROUP BY platform, date(created_at)
 		) latest
-			ON e.platform = latest.platform AND date(e.created_at) = latest.day AND e.created_at = latest.mx
+			ON e.id = latest.mx
 		WHERE e.error = ''
 		ORDER BY day, e.platform
 	`, fmt.Sprintf("-%d days", daysBack))

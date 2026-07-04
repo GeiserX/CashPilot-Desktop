@@ -190,3 +190,182 @@ func TestComputeEarningsSummary(t *testing.T) {
 		t.Fatal("expected RatesUpdated to be set after a refresh")
 	}
 }
+
+// newEarningsTestApp wires an App with an in-memory store and an exchange pointed
+// at httptest servers serving the given CoinGecko / Frankfurter bodies. When
+// refresh is true the cache is populated up front (so Stale() is false).
+func newEarningsTestApp(t *testing.T, cgBody, frBody string, cryptoIDs map[string]string, refresh bool) (*App, *store.Store) {
+	t.Helper()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatalf("config.NewManager error: %v", err)
+	}
+	st, err := store.Open(cfg.DataDir())
+	if err != nil {
+		t.Fatalf("store.Open error: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cat, err := catalog.LoadEmbedded(serviceFiles)
+	if err != nil {
+		t.Fatalf("catalog.LoadEmbedded error: %v", err)
+	}
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, cgBody)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, frBody)
+	}))
+	t.Cleanup(fr.Close)
+	svc := exchange.NewService(
+		exchange.WithBaseURLs(cg.URL, fr.URL),
+		exchange.WithHTTPClient(&http.Client{Timeout: 5 * time.Second}),
+		exchange.WithCryptoIDs(cryptoIDs),
+	)
+	if refresh {
+		if err := svc.Refresh(context.Background()); err != nil {
+			t.Fatalf("exchange refresh error: %v", err)
+		}
+	}
+	app := &App{cfg: cfg, store: st, catalog: cat, exchange: svc, ctx: context.Background()}
+	return app, st
+}
+
+func seedEarnings(t *testing.T, st *store.Store, records ...store.EarningsRecord) {
+	t.Helper()
+	for _, r := range records {
+		if _, err := st.SaveEarnings(r); err != nil {
+			t.Fatalf("SaveEarnings(%+v) error: %v", r, err)
+		}
+	}
+}
+
+// atUTC formats a day at a fixed hour as RFC3339 (UTC), so date(created_at) in the
+// store groups it under that calendar day.
+func atUTC(d time.Time, hour int) string {
+	return time.Date(d.Year(), d.Month(), d.Day(), hour, 0, 0, 0, time.UTC).Format(time.RFC3339)
+}
+
+// TestEarningsSummaryFirstObservationContributesZero pins the fix for both the
+// first-observation inflation and the unreachable-baseline bug: a platform seen
+// for the FIRST time today has no prior baseline, so its cumulative balance shows
+// in Total but books 0 for Today and Month (it is not "earned" the day it first
+// appears).
+func TestEarningsSummaryFirstObservationContributesZero(t *testing.T) {
+	app, st := newEarningsTestApp(t,
+		`{"mysterium":{"usd":0.25}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"MYST": "mysterium"}, true)
+
+	now := time.Now().UTC()
+	seedEarnings(t, st, store.EarningsRecord{Platform: "honeygain", Balance: 50.0, Currency: "USD", CreatedAt: atUTC(now, 10)})
+
+	sum := app.computeEarningsSummary()
+	if !approxEq(sum.Total, 50.0) {
+		t.Fatalf("Total = %v, want 50.00 (latest cumulative still shows in Total)", sum.Total)
+	}
+	if !approxEq(sum.Today, 0) {
+		t.Fatalf("Today = %v, want 0 (a first observation books no accrual, not its whole balance)", sum.Today)
+	}
+	if !approxEq(sum.Month, 0) {
+		t.Fatalf("Month = %v, want 0 (no baseline before the first observation)", sum.Month)
+	}
+}
+
+// TestEarningsSummaryCarryForwardAcrossGap proves asOf carries the last known
+// cumulative balance across days with no observation, so accrual over a gap is the
+// real delta — not the first-observation inflation and not zero.
+func TestEarningsSummaryCarryForwardAcrossGap(t *testing.T) {
+	app, st := newEarningsTestApp(t,
+		`{"mysterium":{"usd":0.25}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"MYST": "mysterium"}, true)
+
+	now := time.Now().UTC()
+	// Baseline 4 days ago (3.00), then a gap (no rows on -3/-2/-1), then today
+	// (5.00). "yesterday" has no row, so asOf must carry 3.00 forward: Today is the
+	// real +2.00, not 5.00 (first-obs inflation) and not 0.
+	seedEarnings(t, st,
+		store.EarningsRecord{Platform: "honeygain", Balance: 3.0, Currency: "USD", CreatedAt: atUTC(now.AddDate(0, 0, -4), 10)},
+		store.EarningsRecord{Platform: "honeygain", Balance: 5.0, Currency: "USD", CreatedAt: atUTC(now, 10)},
+	)
+
+	sum := app.computeEarningsSummary()
+	if !approxEq(sum.Today, 2.0) {
+		t.Fatalf("Today = %v, want 2.00 (5.00 today minus 3.00 carried across the gap)", sum.Today)
+	}
+	if !approxEq(sum.Total, 5.0) {
+		t.Fatalf("Total = %v, want 5.00", sum.Total)
+	}
+}
+
+// TestEarningsSummaryMonthWindow pins concrete Month AND MonthChange by anchoring
+// the seeds to the exact month boundaries the summary uses, so the result is
+// deterministic regardless of the calendar date the test runs on. The baselines
+// land in the fetched window only because fix 2 widened it to two months.
+func TestEarningsSummaryMonthWindow(t *testing.T) {
+	app, st := newEarningsTestApp(t,
+		`{"mysterium":{"usd":0.25}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"MYST": "mysterium"}, true)
+
+	now := time.Now().UTC()
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	beforeMonthStart := monthStart.AddDate(0, 0, -1)                       // last day of the previous month
+	beforeLastMonthStart := monthStart.AddDate(0, -1, 0).AddDate(0, 0, -1) // last day of the month before that
+
+	// last-month baseline: 2.00; this-month baseline: 3.00 (prev month earned 1.00);
+	// today: 8.00 (this month earned 8.00 - 3.00 = 5.00).
+	seedEarnings(t, st,
+		store.EarningsRecord{Platform: "honeygain", Balance: 2.0, Currency: "USD", CreatedAt: atUTC(beforeLastMonthStart, 8)},
+		store.EarningsRecord{Platform: "honeygain", Balance: 3.0, Currency: "USD", CreatedAt: atUTC(beforeMonthStart, 8)},
+		store.EarningsRecord{Platform: "honeygain", Balance: 8.0, Currency: "USD", CreatedAt: atUTC(now, 8)},
+	)
+
+	sum := app.computeEarningsSummary()
+	if !approxEq(sum.Month, 5.0) {
+		t.Fatalf("Month = %v, want 5.00 (8.00 today minus 3.00 at the month baseline)", sum.Month)
+	}
+	// prevMonthEarned = 3.00 - 2.00 = 1.00; MonthChange = (5.00 - 1.00) / 1.00 * 100.
+	if !approxEq(sum.MonthChange, 400.0) {
+		t.Fatalf("MonthChange = %v, want 400 ((5-1)/1*100)", sum.MonthChange)
+	}
+}
+
+// TestEarningsSummaryPointsClassificationDuringOutage proves a convertible
+// currency that is momentarily unpriced (a rate outage for one token) is excluded
+// from Total, is NOT surfaced as a reward point, and flags the rates stale — even
+// though the exchange itself refreshed successfully (Stale() == false).
+func TestEarningsSummaryPointsClassificationDuringOutage(t *testing.T) {
+	// CoinGecko prices BTC only (NOT MYST); Frankfurter succeeds, so the refresh is
+	// fully successful and Stale() is false, yet MYST has no live rate.
+	app, st := newEarningsTestApp(t,
+		`{"bitcoin":{"usd":50000}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"BTC": "bitcoin"}, true)
+	if app.exchange.Stale() {
+		t.Fatal("precondition: exchange should be fresh after a successful refresh")
+	}
+
+	now := time.Now().UTC()
+	seedEarnings(t, st,
+		store.EarningsRecord{Platform: "mysterium", Balance: 6.0, Currency: "MYST", CreatedAt: atUTC(now.AddDate(0, 0, -1), 10)},
+		store.EarningsRecord{Platform: "mysterium", Balance: 8.0, Currency: "MYST", CreatedAt: atUTC(now, 10)},
+	)
+
+	sum := app.computeEarningsSummary()
+	if !approxEq(sum.Total, 0) {
+		t.Fatalf("Total = %v, want 0 (MYST is unpriced during the outage -> excluded)", sum.Total)
+	}
+	for _, p := range sum.Points {
+		if p.Currency == "MYST" {
+			t.Fatalf("MYST must NOT be classified as a reward point, got points=%+v", sum.Points)
+		}
+	}
+	if !sum.RatesStale {
+		t.Fatal("expected RatesStale=true when a non-points currency cannot be priced")
+	}
+}

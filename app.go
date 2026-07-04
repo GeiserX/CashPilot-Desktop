@@ -280,12 +280,27 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 	}
 	a.exchange.EnsureFresh(a.ctx)
 
+	now := time.Now().UTC()
+	dayStr := func(offset int) string { return now.AddDate(0, 0, offset).Format("2006-01-02") }
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	beforeMonthStart := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
+	lastMonthStart := monthStart.AddDate(0, -1, 0)
+	beforeLastMonthStartTime := lastMonthStart.AddDate(0, 0, -1)
+	beforeLastMonthStart := beforeLastMonthStartTime.Format("2006-01-02")
+
+	// Fetch a window wide enough to reach the day BEFORE last month started (two
+	// months plus a margin) so the month and last-month baselines are actually in
+	// the map. A hardcoded window would leave those baselines unreachable; combined
+	// with per-platform accrual below, an unreachable baseline just degrades to
+	// "contributes 0", never a garbage cumulative number.
+	daysBack := int(now.Sub(beforeLastMonthStartTime).Hours()/24) + 7
+
 	// Build per-platform day -> cumulative balance maps, the platform's currency,
 	// and a sorted list of the days it was actually collected.
 	perPlat := map[string]map[string]float64{}
 	perCur := map[string]string{}
 	daysByPlat := map[string][]string{}
-	for _, b := range a.store.ListDailyBalances(40) {
+	for _, b := range a.store.ListDailyBalances(daysBack) {
 		if perPlat[b.Platform] == nil {
 			perPlat[b.Platform] = map[string]float64{}
 		}
@@ -300,7 +315,8 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 	}
 
 	// asOf carries the cumulative balance forward: the balance on the latest
-	// collected day on or before `day` (ok=false when nothing was collected yet).
+	// collected day on or before `day` (ok=false when nothing was collected on or
+	// before that day, i.e. there is no established baseline yet).
 	asOf := func(plat, day string) (float64, bool) {
 		var val float64
 		found := false
@@ -315,27 +331,48 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 		return val, found
 	}
 
-	// dayTotalDisplay is the summed cumulative balance across convertible
-	// platforms, in the display currency, as of `day`.
-	dayTotalDisplay := func(day string) float64 {
+	// platformDelta is a SINGLE platform's display-currency accrual between two
+	// days, from its own cumulative balances (not the whole-portfolio total). It
+	// books 0 unless BOTH endpoints have an established, convertible baseline: a
+	// platform's first-ever observation (or a baseline that predates the fetch
+	// window) has no `fromDay` balance, so its whole lifetime cumulative is never
+	// counted as a single day's earning. Per-platform clamping at 0 keeps one
+	// platform's dip from cancelling another's gain.
+	platformDelta := func(plat, fromDay, toDay string) float64 {
+		fromBal, fromOK := asOf(plat, fromDay)
+		if !fromOK {
+			return 0
+		}
+		toBal, toOK := asOf(plat, toDay)
+		if !toOK {
+			return 0
+		}
+		cur := perCur[plat]
+		fromDisp, ok := a.exchange.ToDisplay(fromBal, cur, disp)
+		if !ok {
+			return 0
+		}
+		toDisp, ok := a.exchange.ToDisplay(toBal, cur, disp)
+		if !ok {
+			return 0
+		}
+		return max(0, toDisp-fromDisp)
+	}
+	// sumDelta accrues every platform's per-platform delta over one period.
+	sumDelta := func(fromDay, toDay string) float64 {
 		var sum float64
-		for plat, cur := range perCur {
-			if !a.exchange.Convertible(cur) {
-				continue
-			}
-			bal, ok := asOf(plat, day)
-			if !ok {
-				continue
-			}
-			if conv, cok := a.exchange.ToDisplay(bal, cur, disp); cok {
-				sum += conv
-			}
+		for plat := range daysByPlat {
+			sum += platformDelta(plat, fromDay, toDay)
 		}
 		return sum
 	}
 
-	// Total = latest cumulative balance per platform (convertible only). Non
-	// convertible platforms become native "points" and are never summed.
+	// Total / Points from each platform's LATEST cumulative balance, classified by
+	// INTENT: a declared reward point (PointsCurrencies) is surfaced natively and
+	// never summed; any other currency is added to the fiat Total when it can be
+	// priced right now; a non-points currency that cannot currently be priced (a
+	// rate outage or a zero rate) is dropped from BOTH and flags the rates stale,
+	// so it is never mislabeled as a reward point.
 	var total float64
 	latestDay := ""
 	for plat, days := range daysByPlat {
@@ -348,44 +385,41 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 		}
 		cur := perCur[plat]
 		bal := perPlat[plat][last]
-		if a.exchange.Convertible(cur) {
-			if conv, ok := a.exchange.ToDisplay(bal, cur, disp); ok {
-				total += conv
-			}
+		if a.exchange.IsPoints(cur) {
+			summary.Points = append(summary.Points, PointsBalance{
+				Platform: plat,
+				Name:     a.serviceName(plat),
+				Balance:  bal,
+				Currency: cur,
+			})
 			continue
 		}
-		summary.Points = append(summary.Points, PointsBalance{
-			Platform: plat,
-			Name:     a.serviceName(plat),
-			Balance:  bal,
-			Currency: cur,
-		})
+		if conv, ok := a.exchange.ToDisplay(bal, cur, disp); ok {
+			total += conv
+			continue
+		}
+		summary.RatesStale = true
 	}
 	summary.Total = total
 
-	now := time.Now().UTC()
-	dayStr := func(offset int) string { return now.AddDate(0, 0, offset).Format("2006-01-02") }
 	today := dayStr(0)
 	if latestDay == "" {
 		latestDay = today
 	}
 
-	// Today / yesterday accrual = difference of cumulative day totals; clamp at 0
-	// so a data gap or a rate change can never show negative earnings.
-	todayEarned := max(0, dayTotalDisplay(today)-dayTotalDisplay(dayStr(-1)))
-	yesterdayEarned := max(0, dayTotalDisplay(dayStr(-1))-dayTotalDisplay(dayStr(-2)))
+	// Today / yesterday accrual = per-platform deltas across the two day pairs.
+	todayEarned := sumDelta(dayStr(-1), today)
+	yesterdayEarned := sumDelta(dayStr(-2), dayStr(-1))
 	summary.Today = todayEarned
 	if yesterdayEarned > 0 {
 		summary.TodayChange = (todayEarned - yesterdayEarned) / yesterdayEarned * 100
 	}
 
-	// Month = accrual since the day before this month started (best-effort).
-	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	beforeMonthStart := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
-	summary.Month = max(0, dayTotalDisplay(latestDay)-dayTotalDisplay(beforeMonthStart))
-	lastMonthStart := monthStart.AddDate(0, -1, 0)
-	beforeLastMonthStart := lastMonthStart.AddDate(0, 0, -1).Format("2006-01-02")
-	prevMonthEarned := max(0, dayTotalDisplay(beforeMonthStart)-dayTotalDisplay(beforeLastMonthStart))
+	// Month = per-platform accrual since the day before this month started; a
+	// platform whose baseline is unknown (before first collection or outside the
+	// window) contributes 0 rather than its whole cumulative balance.
+	summary.Month = sumDelta(beforeMonthStart, latestDay)
+	prevMonthEarned := sumDelta(beforeLastMonthStart, beforeMonthStart)
 	if prevMonthEarned > 0 {
 		summary.MonthChange = (summary.Month - prevMonthEarned) / prevMonthEarned * 100
 	}
@@ -393,11 +427,11 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 	// Daily = last 30 days of per-day accrual in the display currency.
 	for i := 29; i >= 0; i-- {
 		d := now.AddDate(0, 0, -i)
-		cur := d.Format("2006-01-02")
-		prev := d.AddDate(0, 0, -1).Format("2006-01-02")
+		curDay := d.Format("2006-01-02")
+		prevDay := d.AddDate(0, 0, -1).Format("2006-01-02")
 		summary.Daily = append(summary.Daily, DailyPoint{
 			Day:    d.Format("Jan 02"),
-			Amount: max(0, dayTotalDisplay(cur)-dayTotalDisplay(prev)),
+			Amount: sumDelta(prevDay, curDay),
 		})
 	}
 
@@ -435,14 +469,16 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 			Comparable:   rec.Currency == cash.Currency,
 		}
 		if cp.Comparable && cash.MinAmount > 0 {
-			cp.Percent = min(100, rec.Balance/cash.MinAmount*100)
+			cp.Percent = max(0, min(100, rec.Balance/cash.MinAmount*100))
 		}
-		cp.Eligible = cp.Comparable && rec.Balance >= cash.MinAmount && rec.Balance > 0
+		cp.Eligible = cp.Comparable && cash.MinAmount > 0 && rec.Balance >= cash.MinAmount
 		se.Cashout = cp
 		summary.Breakdown = append(summary.Breakdown, se)
 	}
 
-	summary.RatesStale = a.exchange.Stale()
+	// Preserve any stale flag already raised above (a non-points currency that
+	// could not be priced) and OR in the exchange's own staleness.
+	summary.RatesStale = summary.RatesStale || a.exchange.Stale()
 	summary.RatesUpdated = a.exchange.Snapshot().LastUpdated
 	return summary
 }
