@@ -6,30 +6,41 @@ import {
   WindowToggleMaximise,
 } from "../wailsjs/runtime/runtime";
 import {
+  AddFleetDevice,
   CheckRuntime,
   CollectService,
   CompleteOnboarding,
   DeployService,
   GetAppState,
   GetCredentials,
+  GetFleetState,
   GetLogs,
   GetRuntimeGuides,
+  GetSettingsState,
   ManagedRuntimePlan,
+  RemoveFleetDevice,
   RefreshDeployments,
   RemoveService,
   RestartService,
+  SaveSettings,
   SaveCredentials,
+  StartService,
   StopService,
 } from "../wailsjs/go/main/App";
-import type { AppState, Deployment, InstallGuide, ManagedRuntimePlan as RuntimePlan, Service } from "./wails";
+import type { AppState, Deployment, FleetState, InstallGuide, ManagedRuntimePlan as RuntimePlan, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
 let onboardingStep: "welcome" | "runtime" = "welcome";
-let activeView: "dashboard" | "wizard" = "dashboard";
+type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet";
+
+let activeView: View = "dashboard";
 let wizardStep = 1;
 let wizardCategories: string[] = [];
 let wizardSelected: string[] = [];
+let catalogFilter = "all";
+let catalogSearch = "";
+let resetScrollAfterRender = false;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -50,6 +61,18 @@ function render() {
   }
   if (activeView === "wizard") {
     renderSetupWizard(state);
+    return;
+  }
+  if (activeView === "catalog") {
+    renderCatalog(state);
+    return;
+  }
+  if (activeView === "settings") {
+    void renderSettings(state);
+    return;
+  }
+  if (activeView === "fleet") {
+    void renderFleet(state);
     return;
   }
   renderDashboard(state);
@@ -142,48 +165,32 @@ function renderDashboard(current: AppState) {
   const earnings = current.earnings || [];
   const history = current.history || [];
   const runningCount = deployments.filter((dep) => dep.status === "running").length;
-  const deployedSlugs = new Set(deployments.map((dep) => dep.slug));
   const totalBalance = earnings.reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0);
   const trackedCount = earnings.filter((record) => !record.error).length;
-  const recentServices = [...services]
-    .filter((svc) => !deployedSlugs.has(svc.slug))
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .slice(0, 6);
 
   root.innerHTML = `
     ${titlebar()}
-    <div class="shell">
-      <aside class="sidebar">
-        <div>
-          <p class="eyebrow">CashPilot Desktop</p>
-              <h1>Dashboard</h1>
-              <p class="muted">Earnings, services, logs, and payouts for this machine.</p>
-        </div>
-        <div class="runtime-card compact ${current.runtime.available ? "ok" : "warn"}">
-          <strong>${current.runtime.available ? "Runtime ready" : "Runtime offline"}</strong>
-          <span>${escapeHtml(current.runtime.message)}</span>
-        </div>
-        <nav class="service-list">
-          ${services.map((svc) => serviceButton(svc, deployments)).join("")}
-        </nav>
-      </aside>
-      <main class="content">
-        <section class="metric-grid">
+    <div class="app-layout">
+      ${appSidebar("dashboard")}
+      <div class="main-content">
+        ${topbar("Dashboard", totalBalance, current)}
+        <main class="page-content">
+        <section class="stats-grid">
           ${metricCard("Total Balance", formatBalance(totalBalance, "USD"), "Latest collected balance")}
+          ${metricCard("Today", "$0.00", "Awaiting daily history")}
+          ${metricCard("This Month", "$0.00", "Awaiting monthly history")}
           ${metricCard("Active Services", `${runningCount}`, "Containers currently running")}
-          ${metricCard("Tracked", `${trackedCount}`, "Services with earnings data")}
-          ${metricCard("Catalog", `${services.length}`, "Available providers")}
         </section>
 
-        <section class="panel earnings-panel">
-          <div class="split">
+        <section class="card earnings-panel">
+          <div class="card-header">
             <div>
-              <p class="eyebrow">Earnings</p>
-              <h2>What your services are earning</h2>
+              <span class="card-title">Earnings</span>
+              <p class="muted compact-copy">What each service has earned so far.</p>
             </div>
-            <div class="hero-actions">
-              <button class="primary" id="open-wizard">+ Add Service</button>
-              <button class="secondary" id="refresh">Refresh</button>
+            <div class="tab-strip">
+              <button class="tab-btn active">7 days</button>
+              <button class="tab-btn">30 days</button>
             </div>
           </div>
           ${renderEarningsChart(history, earnings)}
@@ -192,46 +199,30 @@ function renderDashboard(current: AppState) {
           </div>
         </section>
 
-        <section class="panel dashboard-panel">
-          <div class="split">
-            <div>
-              <p class="eyebrow">Services</p>
-              <h2>Deployed Services</h2>
+        <section class="card dashboard-panel">
+          <div class="card-header">
+            <span class="card-title">Deployed Services</span>
+            <div class="header-actions">
+              <button class="secondary compact-btn" id="refresh">Refresh</button>
+              <button class="primary compact-btn" id="open-wizard">+ Add Service</button>
             </div>
-            <button class="secondary" id="refresh-services">Refresh status</button>
           </div>
           <div class="services-table-wrap">
             ${renderServicesTable(services, deployments, earnings)}
           </div>
         </section>
-
-        <section class="panel dashboard-panel">
-          <div class="split">
-            <div>
-              <p class="eyebrow">Catalog</p>
-              <h2>Add another service</h2>
-            </div>
-            <button class="primary" id="open-wizard-bottom">Setup Wizard</button>
-          </div>
-          <div class="service-card-grid">
-            ${recentServices.map((svc) => renderServiceCard(svc, false)).join("")}
-          </div>
-        </section>
         <pre id="service-output" class="output dashboard-output"></pre>
-      </main>
+        </main>
+      </div>
     </div>
   `;
   wireChrome();
+  wireShellNav();
+  maybeResetScroll();
 
-  document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
-    button.addEventListener("click", () => {
-      openWizard(button.dataset.service);
-    });
-  });
   document.querySelector("#refresh")?.addEventListener("click", refreshState);
   document.querySelector("#refresh-services")?.addEventListener("click", refreshState);
   document.querySelector("#open-wizard")?.addEventListener("click", openWizard);
-  document.querySelector("#open-wizard-bottom")?.addEventListener("click", openWizard);
   document.querySelector("#open-wizard-empty")?.addEventListener("click", openWizard);
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -256,6 +247,418 @@ function metricCard(label: string, value: string, caption: string) {
       <small>${escapeHtml(caption)}</small>
     </article>
   `;
+}
+
+function appSidebar(active: View) {
+  return `
+    <aside class="cp-sidebar">
+      <div class="sidebar-brand">
+        ${officialLogoMark()}
+        CashPilot
+      </div>
+      <nav class="sidebar-nav">
+        ${navButton("dashboard", "Dashboard", active)}
+        ${navButton("wizard", "Setup Wizard", active)}
+        ${navButton("catalog", "Service Catalog", active)}
+        ${navButton("settings", "Settings", active)}
+        ${navButton("fleet", "Fleet", active)}
+      </nav>
+      <div class="sidebar-footer">
+        <div class="footer-links">
+          <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot" title="GitHub">GitHub</button>
+          <button class="footer-link" data-url="https://github.com/sponsors/GeiserX" title="Sponsor">Sponsor</button>
+        </div>
+        <span>Desktop v0.5.0</span>
+      </div>
+    </aside>
+  `;
+}
+
+function officialLogoMark() {
+  return `
+    <svg class="brand-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" aria-hidden="true">
+      <defs>
+        <linearGradient id="brand-sun-gradient" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#FFD54F"/>
+          <stop offset="35%" stop-color="#FF9800"/>
+          <stop offset="65%" stop-color="#E91E63"/>
+          <stop offset="100%" stop-color="#7B1FA2"/>
+        </linearGradient>
+        <clipPath id="brand-sun-clip"><circle cx="16" cy="16" r="11"/></clipPath>
+      </defs>
+      <circle cx="16" cy="16" r="11" fill="url(#brand-sun-gradient)"/>
+      <g clip-path="url(#brand-sun-clip)">
+        <rect x="4" y="16" width="24" height="1.2" fill="#0A0A1A" opacity="0.85"/>
+        <rect x="4" y="18.5" width="24" height="1.5" fill="#0A0A1A" opacity="0.85"/>
+        <rect x="4" y="21.5" width="24" height="2" fill="#0A0A1A" opacity="0.85"/>
+        <rect x="4" y="25" width="24" height="3" fill="#0A0A1A" opacity="0.85"/>
+        <g transform="translate(16,12) rotate(30) scale(0.4)">
+          <path d="M0,-28 L2.5,-6 L30,2 L3,5 L4,12 L0,8 L-4,12 L-3,5 L-30,2 L-2.5,-6 Z" fill="#0A0A1A" opacity="0.65"/>
+        </g>
+      </g>
+    </svg>
+  `;
+}
+
+function navButton(view: View, label: string, active: string) {
+  return `<button class="sidebar-link ${active === view ? "active" : ""}" data-view="${view}">${escapeHtml(label)}</button>`;
+}
+
+function topbar(title: string, totalBalance: number, current: AppState) {
+  const notifications = current.notifications || [];
+  return `
+    <header class="topbar">
+      <div class="topbar-left">
+        <span class="topbar-title">${escapeHtml(title)}</span>
+      </div>
+      <div class="topbar-right">
+        <span class="runtime-dot ${current.runtime.available ? "ok" : "warn"}"></span>
+        <span class="topbar-runtime">${current.runtime.available ? "Runtime ready" : "Runtime offline"}</span>
+        <span class="topbar-earnings">${formatBalance(totalBalance, current.config.displayCurrency || "USD")}</span>
+        <select class="currency-select" id="currency-select" title="Display currency">
+          ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
+        </select>
+        <details class="notification-menu">
+          <summary aria-label="Notifications">Alerts <span class="notify-badge">${notifications.length}</span></summary>
+          <div class="notification-popover">
+            <strong>Notifications</strong>
+            ${notifications.length ? notifications.map((item) => `
+              <div class="notification-item ${escapeHtml(item.level)}">
+                <span>${escapeHtml(item.title)}</span>
+                <small>${escapeHtml(item.message)}</small>
+              </div>
+            `).join("") : `<p class="muted">No alerts right now.</p>`}
+          </div>
+        </details>
+      </div>
+    </header>
+  `;
+}
+
+function wireShellNav() {
+  document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const next = button.dataset.view;
+      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet") {
+        activeView = next;
+        if (next === "wizard") {
+          wizardStep = 1;
+        }
+        resetScrollAfterRender = true;
+        render();
+      }
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
+  });
+  document.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
+    const currency = (event.target as HTMLSelectElement).value;
+    await SaveSettings({displayCurrency: currency});
+    state = await GetAppState();
+    render();
+  });
+}
+
+function renderCatalog(current: AppState) {
+  const totalBalance = (current.earnings || []).reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0);
+  const services = (current.services || []).filter((service) => {
+    const matchesCategory = catalogFilter === "all" || service.category === catalogFilter;
+    const haystack = `${service.name} ${service.shortDescription} ${service.description}`.toLowerCase();
+    return matchesCategory && haystack.includes(catalogSearch.toLowerCase());
+  });
+  const categories = ["all", "bandwidth", "depin", "storage", "compute"];
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      ${appSidebar("catalog")}
+      <div class="main-content">
+        ${topbar("Service Catalog", totalBalance, current)}
+        <main class="page-content">
+          <section class="card">
+            <div class="card-header">
+              <span class="card-title">Available Services</span>
+              <input class="catalog-search" id="catalog-search" type="search" placeholder="Search services..." value="${escapeHtml(catalogSearch)}" />
+            </div>
+            <div class="filter-tabs">
+              ${categories.map((category) => `<button class="filter-tab ${catalogFilter === category ? "active" : ""}" data-filter="${category}">${escapeHtml(capitalize(category))}</button>`).join("")}
+            </div>
+            <div class="catalog-grid">
+              ${services.map((service) => renderCatalogCard(service, current.deployments || [])).join("")}
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  document.querySelector<HTMLInputElement>("#catalog-search")?.addEventListener("input", (event) => {
+    catalogSearch = (event.target as HTMLInputElement).value;
+    render();
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      catalogFilter = button.dataset.filter || "all";
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
+    button.addEventListener("click", () => openWizard(button.dataset.service));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
+  });
+}
+
+function renderCatalogCard(service: Service, deployments: Deployment[]) {
+  const deployed = deployments.some((deployment) => deployment.slug === service.slug);
+  const signupUrl = service.referral?.signupUrl || service.website;
+  return `
+    <article class="catalog-card">
+      <div class="service-card-header">
+        <div class="service-icon">${escapeHtml(service.name[0] || "?")}</div>
+        <div>
+          <strong>${escapeHtml(service.name)}</strong>
+          <div class="badge-row">
+            <span class="badge">${escapeHtml(service.category)}</span>
+            <span class="badge ${deployed ? "success" : ""}">${deployed ? "Deployed" : service.manualOnly ? "Manual" : "Available"}</span>
+          </div>
+        </div>
+      </div>
+      <p>${escapeHtml(service.shortDescription || service.description)}</p>
+      <div class="card-actions">
+        ${service.manualOnly && signupUrl ? `<button class="primary compact-btn" data-url="${escapeHtml(signupUrl)}">Visit</button>` : `<button class="primary compact-btn" data-service="${service.slug}">${deployed ? "Manage" : "Deploy"}</button>`}
+        ${signupUrl ? `<button class="secondary compact-btn" data-url="${escapeHtml(signupUrl)}">Sign Up</button>` : ""}
+      </div>
+    </article>
+  `;
+}
+
+async function renderSettings(current: AppState) {
+  const settings = await GetSettingsState();
+  const total = totalBalance(current);
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      ${appSidebar("settings")}
+      <div class="main-content">
+        ${topbar("Settings", total, current)}
+        <main class="page-content">
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <span class="card-title">Environment Variables</span>
+                <p class="muted compact-copy">Variables that affect this desktop node. Locked values are controlled by the app or OS.</p>
+              </div>
+              <button class="primary compact-btn" id="save-settings">Save Variables</button>
+            </div>
+            <div class="settings-list">
+              ${settings.environment.map(renderEnvSetting).join("")}
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <span class="card-title">Earnings Collection</span>
+                <p class="muted compact-copy">Credentials for automated earnings tracking. Manual/mobile-first services can be tracked without deploying a container.</p>
+              </div>
+            </div>
+            <div class="collector-grid">
+              ${settings.collectors.map(renderCollectorSetting).join("")}
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  document.querySelector("#save-settings")?.addEventListener("click", () => void saveSettingsFromForm());
+  document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
+    button.addEventListener("click", () => openWizard(button.dataset.service));
+  });
+}
+
+function renderEnvSetting(item: SettingsState["environment"][number]) {
+  const editableKey = envInputName(item.key);
+  return `
+    <label class="setting-row">
+      <span>
+        <strong>${escapeHtml(item.label)}</strong>
+        <small>${escapeHtml(item.key)} · ${escapeHtml(item.source)}</small>
+      </span>
+      <input data-setting="${editableKey}" value="${escapeHtml(item.value)}" ${item.readOnly ? "readonly" : ""} />
+      <small>${escapeHtml(item.help)}</small>
+    </label>
+  `;
+}
+
+function renderCollectorSetting(item: SettingsState["collectors"][number]) {
+  return `
+    <button class="collector-row" data-service="${escapeHtml(item.slug)}">
+      <span>${escapeHtml(item.name)}</span>
+      <small>${escapeHtml(item.collector || "manual")}</small>
+      <strong class="${item.configured ? "configured" : ""}">${item.configured ? "Configured" : "Not configured"}</strong>
+    </button>
+  `;
+}
+
+async function saveSettingsFromForm() {
+  const values: Record<string, string> = {};
+  document.querySelectorAll<HTMLInputElement>("[data-setting]").forEach((input) => {
+    if (!input.readOnly) values[input.dataset.setting || ""] = input.value;
+  });
+  await SaveSettings(values);
+  state = await GetAppState();
+  render();
+}
+
+function envInputName(key: string) {
+  const names: Record<string, string> = {
+    CASHPILOT_HOSTNAME_PREFIX: "hostnamePrefix",
+    CASHPILOT_COLLECT_INTERVAL: "collectIntervalMinutes",
+    CASHPILOT_DISPLAY_CURRENCY: "displayCurrency",
+    CASHPILOT_FLEET_BIND: "fleetBindAddress",
+    CASHPILOT_FLEET_PORT: "fleetPort",
+    TZ: "timezone",
+  };
+  return names[key] || key;
+}
+
+async function renderFleet(current: AppState) {
+  const fleet = await GetFleetState();
+  const total = totalBalance(current);
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      ${appSidebar("fleet")}
+      <div class="main-content">
+        ${topbar("Fleet Management", total, current)}
+        <main class="page-content">
+          <section class="stats-grid">
+            ${metricCard("Workers", `${fleet.workers}`, "Desktop and server workers")}
+            ${metricCard("Mobiles", `${fleet.mobiles}`, "Registered mobile devices")}
+            ${metricCard("Online", `${fleet.online}`, "Devices currently reachable")}
+            ${metricCard("Services", `${fleet.services}`, "Available providers")}
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <span class="card-title">Add Worker or Mobile</span>
+            </div>
+            <p class="muted">Point CashPilot workers, mobile companions, or another machine on your LAN at this desktop API. The API listens for authenticated heartbeats and registers devices automatically.</p>
+            <div class="connection-grid">
+              ${detailStat("UI URL", fleet.uiUrl)}
+              ${detailStat("Local API", fleet.localApiUrl)}
+              ${detailStat("API Key", fleet.apiKey ? "Generated" : "Missing")}
+              ${detailStat("Listener", fleet.apiListening ? "Listening" : "Offline")}
+            </div>
+            <div class="fleet-snippets">
+              <div>
+                <div class="snippet-header"><strong>Docker worker</strong><button class="secondary compact-btn" data-copy="${escapeHtml(fleet.workerSnippet)}">Copy</button></div>
+                <code>${escapeHtml(fleet.workerSnippet)}</code>
+              </div>
+              <div>
+                <div class="snippet-header"><strong>Mobile / companion</strong><button class="secondary compact-btn" data-copy="${escapeHtml(fleet.mobileSnippet)}">Copy</button></div>
+                <code>${escapeHtml(fleet.mobileSnippet)}</code>
+              </div>
+            </div>
+            <div class="fleet-form">
+              <input id="fleet-name" placeholder="Device name" />
+              <select id="fleet-kind">
+                <option value="worker">Worker</option>
+                <option value="mobile">Mobile</option>
+              </select>
+              <input id="fleet-endpoint" placeholder="Endpoint or device note" />
+              <input id="fleet-services" placeholder="Services, comma-separated" />
+              <button class="primary compact-btn" id="add-fleet-device">Register</button>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <span class="card-title">Devices</span>
+            </div>
+            <div class="fleet-list">
+              ${fleet.devices.map(renderFleetDevice).join("")}
+            </div>
+          </section>
+        </main>
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  document.querySelector("#add-fleet-device")?.addEventListener("click", () => void addFleetDevice());
+  document.querySelectorAll<HTMLButtonElement>("[data-remove-device]").forEach((button) => {
+    button.addEventListener("click", () => void removeFleetDevice(Number(button.dataset.removeDevice || 0)));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(button.dataset.copy || "");
+      button.textContent = "Copied";
+    });
+  });
+}
+
+function renderFleetDevice(device: FleetState["devices"][number]) {
+  return `
+    <article class="fleet-device ${device.kind}">
+      <div class="split">
+        <div>
+          <strong><span class="runtime-dot ${device.status === "online" ? "ok" : "warn"}"></span> ${escapeHtml(device.name)}</strong>
+          <p class="muted compact-copy">${escapeHtml(device.endpoint || "No endpoint")} · ${escapeHtml(device.os || "unknown")} ${escapeHtml(device.arch || "")} · ${escapeHtml(device.lastSeen || "never seen")}</p>
+        </div>
+        <div class="device-actions">
+          <span class="badge">${escapeHtml(device.kind)}</span>
+          ${device.id > 0 ? `<button class="danger compact-btn" data-remove-device="${device.id}">Remove</button>` : ""}
+        </div>
+      </div>
+      <div class="badge-row">${(device.services || []).map((service) => `<span class="badge success">${escapeHtml(service)}</span>`).join("") || `<span class="badge">No services yet</span>`}</div>
+    </article>
+  `;
+}
+
+async function addFleetDevice() {
+  const values = {
+    name: valueOf("#fleet-name"),
+    kind: valueOf("#fleet-kind"),
+    endpoint: valueOf("#fleet-endpoint"),
+    services: valueOf("#fleet-services"),
+  };
+  await AddFleetDevice(values);
+  render();
+}
+
+async function removeFleetDevice(id: number) {
+  if (!confirm("Remove this fleet device from CashPilot Desktop?")) return;
+  await RemoveFleetDevice(id);
+  render();
+}
+
+function totalBalance(current: AppState) {
+  return (current.earnings || []).reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0);
+}
+
+function valueOf(selector: string) {
+  return document.querySelector<HTMLInputElement | HTMLSelectElement>(selector)?.value || "";
+}
+
+function maybeResetScroll() {
+  if (!resetScrollAfterRender) return;
+  resetScrollAfterRender = false;
+  requestAnimationFrame(() => window.scrollTo({top: 0, left: 0}));
 }
 
 function renderEarningsChart(history: {platform: string; balance: number; currency: string; error?: string; createdAt: string}[], latest: {platform: string; balance: number; currency: string; error?: string}[]) {
@@ -359,7 +762,9 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
                 <div class="table-actions">
                   <button class="secondary compact-btn" data-row-action="collect" data-slug="${deployment.slug}">Collect</button>
                   <button class="secondary compact-btn" data-row-action="logs" data-slug="${deployment.slug}">Logs</button>
-                  <button class="secondary compact-btn" data-row-action="stop" data-slug="${deployment.slug}">Stop</button>
+                  ${deployment.status === "running"
+                    ? `<button class="secondary compact-btn" data-row-action="stop" data-slug="${deployment.slug}">Stop</button>`
+                    : `<button class="secondary compact-btn" data-row-action="start" data-slug="${deployment.slug}">Start</button>`}
                   <button class="danger compact-btn" data-row-action="remove" data-slug="${deployment.slug}">Remove</button>
                 </div>
               </td>
@@ -533,8 +938,11 @@ function renderSetupWizard(current: AppState) {
   const selectedServices = services.filter((svc) => wizardSelected.includes(svc.slug));
   root.innerHTML = `
     ${titlebar()}
-    <div class="setup-shell">
-      <main class="setup-content">
+    <div class="app-layout">
+      ${appSidebar("wizard")}
+      <div class="main-content">
+        ${topbar("Setup Wizard", (current.earnings || []).reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0), current)}
+      <main class="page-content setup-content">
         <div class="split">
           <div>
             <p class="eyebrow">Setup Wizard</p>
@@ -555,9 +963,12 @@ function renderSetupWizard(current: AppState) {
           <button class="primary" id="wizard-next">${wizardStep === 4 ? "Go to Dashboard" : wizardStep === 3 ? "Summary" : "Next"}</button>
         </div>
       </main>
+      </div>
     </div>
   `;
   wireChrome();
+  wireShellNav();
+  maybeResetScroll();
   document.querySelector("#close-wizard")?.addEventListener("click", closeWizard);
   document.querySelector("#wizard-prev")?.addEventListener("click", () => {
     if (wizardStep > 1) {
@@ -782,6 +1193,9 @@ async function runWizardAction(slug: string, action: string) {
     return;
   }
   if (action === "deploy") {
+    if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
+      return;
+    }
     if (output) output.textContent = "Deploying...";
     await SaveCredentials(slug, values);
     await DeployService(slug, values);
@@ -800,6 +1214,9 @@ async function runWizardAction(slug: string, action: string) {
 async function runServiceAction(slug: string, action: string) {
   selectedService = state?.services.find((svc) => svc.slug === slug) || null;
   try {
+    if (action === "remove" && !confirm(`Remove ${selectedService?.name || slug}? This deletes the managed container and its Docker volumes. Host bind-mount folders are left untouched.`)) {
+      return;
+    }
     if (action === "collect") {
       const record = await CollectService(slug);
       await refreshState();
@@ -813,6 +1230,10 @@ async function runServiceAction(slug: string, action: string) {
     if (action === "stop") {
       await StopService(slug);
       setOutput(`${slug} stopped.`);
+    }
+    if (action === "start") {
+      await StartService(slug);
+      setOutput(`${slug} started.`);
     }
     if (action === "remove") {
       await RemoveService(slug);
@@ -991,10 +1412,11 @@ function capitalize(value: string) {
 }
 
 function formatBalance(value: number, currency: string) {
-  if (currency === "USD") {
-    return `$${value.toFixed(2)}`;
+  const symbols: Record<string, string> = {USD: "$", EUR: "€", GBP: "£", JPY: "¥", CAD: "C$", AUD: "A$", BRL: "R$"};
+  if (symbols[currency]) {
+    return `${symbols[currency]}${value.toFixed(2)}`;
   }
-  return `${value.toFixed(4)} ${currency}`;
+  return `${value.toFixed(2)} ${currency}`;
 }
 
 function stripHtml(value: string) {

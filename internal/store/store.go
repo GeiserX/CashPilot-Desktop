@@ -43,6 +43,19 @@ type EarningsRecord struct {
 	CreatedAt string  `json:"createdAt"`
 }
 
+type FleetDevice struct {
+	ID        int64    `json:"id"`
+	Name      string   `json:"name"`
+	Kind      string   `json:"kind"`
+	Endpoint  string   `json:"endpoint"`
+	OS        string   `json:"os"`
+	Arch      string   `json:"arch"`
+	Status    string   `json:"status"`
+	Services  []string `json:"services"`
+	LastSeen  string   `json:"lastSeen"`
+	CreatedAt string   `json:"createdAt"`
+}
+
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, err
@@ -241,6 +254,96 @@ func (s *Store) ListEarningsHistory(limit int) []EarningsRecord {
 	return out
 }
 
+func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
+	if device.Kind == "" {
+		device.Kind = "worker"
+	}
+	if device.Status == "" {
+		device.Status = "offline"
+	}
+	servicesRaw, err := json.Marshal(device.Services)
+	if err != nil {
+		return FleetDevice{}, err
+	}
+	if device.ID > 0 {
+		_, err = s.db.Exec(`
+			UPDATE fleet_devices
+			SET name = ?, kind = ?, endpoint = ?, os = ?, arch = ?, status = ?, services = ?, last_seen = ?, updated_at = datetime('now')
+			WHERE id = ?
+		`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen, device.ID)
+		return device, err
+	}
+	result, err := s.db.Exec(`
+		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen)
+	if err != nil {
+		return FleetDevice{}, err
+	}
+	device.ID, _ = result.LastInsertId()
+	return device, nil
+}
+
+func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
+	if device.Name == "" {
+		return FleetDevice{}, fmt.Errorf("device name is required")
+	}
+	if device.Kind == "" {
+		device.Kind = "worker"
+	}
+	if device.Status == "" {
+		device.Status = "online"
+	}
+	if device.LastSeen == "" {
+		device.LastSeen = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	servicesRaw, err := json.Marshal(device.Services)
+	if err != nil {
+		return FleetDevice{}, err
+	}
+	var id int64
+	err = s.db.QueryRow(`SELECT id FROM fleet_devices WHERE kind = ? AND name = ?`, device.Kind, device.Name).Scan(&id)
+	if err == nil {
+		device.ID = id
+		_, err = s.db.Exec(`
+			UPDATE fleet_devices
+			SET endpoint = ?, os = ?, arch = ?, status = ?, services = ?, last_seen = ?, updated_at = datetime('now')
+			WHERE id = ?
+		`, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen, id)
+		return device, err
+	}
+	if err != sql.ErrNoRows {
+		return FleetDevice{}, err
+	}
+	return s.UpsertFleetDevice(device)
+}
+
+func (s *Store) ListFleetDevices() []FleetDevice {
+	rows, err := s.db.Query(`
+		SELECT id, name, kind, endpoint, os, arch, status, services, last_seen, created_at
+		FROM fleet_devices ORDER BY kind, name
+	`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []FleetDevice
+	for rows.Next() {
+		var device FleetDevice
+		var servicesRaw string
+		if err := rows.Scan(&device.ID, &device.Name, &device.Kind, &device.Endpoint, &device.OS, &device.Arch, &device.Status, &servicesRaw, &device.LastSeen, &device.CreatedAt); err == nil {
+			_ = json.Unmarshal([]byte(servicesRaw), &device.Services)
+			out = append(out, device)
+		}
+	}
+	return out
+}
+
+func (s *Store) DeleteFleetDevice(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM fleet_devices WHERE id = ?`, id)
+	return err
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -289,6 +392,19 @@ func (s *Store) migrate() error {
 			event TEXT NOT NULL,
 			detail TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS fleet_devices (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			endpoint TEXT NOT NULL DEFAULT '',
+			os TEXT NOT NULL DEFAULT '',
+			arch TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'offline',
+			services TEXT NOT NULL DEFAULT '[]',
+			last_seen TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
 		);
 	`)
 	return err

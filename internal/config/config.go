@@ -19,10 +19,16 @@ const (
 )
 
 type AppConfig struct {
-	FirstRunComplete bool   `json:"firstRunComplete"`
-	DisplayCurrency  string `json:"displayCurrency"`
-	RuntimeProvider  string `json:"runtimeProvider"`
-	AutoUpdate       bool   `json:"autoUpdate"`
+	FirstRunComplete       bool   `json:"firstRunComplete"`
+	DisplayCurrency        string `json:"displayCurrency"`
+	RuntimeProvider        string `json:"runtimeProvider"`
+	AutoUpdate             bool   `json:"autoUpdate"`
+	HostnamePrefix         string `json:"hostnamePrefix"`
+	CollectIntervalMinutes int    `json:"collectIntervalMinutes"`
+	Timezone               string `json:"timezone"`
+	FleetAPIKey            string `json:"fleetApiKey"`
+	FleetBindAddress       string `json:"fleetBindAddress"`
+	FleetPort              int    `json:"fleetPort"`
 }
 
 type Manager struct {
@@ -47,9 +53,14 @@ func NewManager() (*Manager, error) {
 		dataDir: dataDir,
 		path:    filepath.Join(appDir, "config.json"),
 		cfg: AppConfig{
-			DisplayCurrency: "USD",
-			RuntimeProvider: "existing-docker",
-			AutoUpdate:      true,
+			DisplayCurrency:        "USD",
+			RuntimeProvider:        "existing-docker",
+			AutoUpdate:             true,
+			HostnamePrefix:         "cashpilot",
+			CollectIntervalMinutes: 60,
+			Timezone:               "UTC",
+			FleetBindAddress:       "0.0.0.0",
+			FleetPort:              8085,
 		},
 	}
 	if err := m.load(); err != nil {
@@ -76,6 +87,21 @@ func (m *Manager) Save(cfg AppConfig) error {
 	}
 	if cfg.RuntimeProvider == "" {
 		cfg.RuntimeProvider = "existing-docker"
+	}
+	if cfg.HostnamePrefix == "" {
+		cfg.HostnamePrefix = "cashpilot"
+	}
+	if cfg.CollectIntervalMinutes <= 0 {
+		cfg.CollectIntervalMinutes = 60
+	}
+	if cfg.Timezone == "" {
+		cfg.Timezone = "UTC"
+	}
+	if cfg.FleetBindAddress == "" {
+		cfg.FleetBindAddress = "0.0.0.0"
+	}
+	if cfg.FleetPort <= 0 {
+		cfg.FleetPort = 8085
 	}
 	if err := os.MkdirAll(m.appDir, 0o700); err != nil {
 		return err

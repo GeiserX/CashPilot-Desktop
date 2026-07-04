@@ -39,6 +39,7 @@ func main() {
 			Assets: assets,
 		},
 		OnStartup:  app.Startup,
+		OnDomReady: app.DomReady,
 		OnShutdown: app.Shutdown,
 		Mac: &mac.Options{
 			Appearance: mac.NSAppearanceNameDarkAqua,

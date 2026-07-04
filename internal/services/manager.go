@@ -70,6 +70,19 @@ func (m *Manager) Stop(ctx context.Context, slug string) error {
 	return nil
 }
 
+func (m *Manager) Start(ctx context.Context, slug string) error {
+	if err := m.runtime.Start(ctx, slug); err != nil {
+		m.store.RecordEvent(slug, "start_error", err.Error())
+		return err
+	}
+	if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
+		dep.Status = "running"
+		_ = m.store.UpsertDeployment(dep)
+	}
+	m.store.RecordEvent(slug, "started", "")
+	return nil
+}
+
 func (m *Manager) Restart(ctx context.Context, slug string) error {
 	if err := m.runtime.Restart(ctx, slug); err != nil {
 		m.store.RecordEvent(slug, "restart_error", err.Error())
@@ -104,6 +117,7 @@ func (m *Manager) Refresh(ctx context.Context) ([]store.Deployment, error) {
 	if err != nil {
 		return nil, err
 	}
+	active := make(map[string]bool, len(containers))
 	for _, info := range containers {
 		dep := store.Deployment{
 			Slug:        info.Slug,
@@ -116,7 +130,14 @@ func (m *Manager) Refresh(ctx context.Context) ([]store.Deployment, error) {
 			MemoryMB:    info.MemoryMB,
 		}
 		if dep.Slug != "" {
+			active[dep.Slug] = true
 			_ = m.store.UpsertDeployment(dep)
+		}
+	}
+	for _, dep := range m.store.ListDeployments() {
+		if !active[dep.Slug] {
+			_ = m.store.DeleteDeployment(dep.Slug)
+			m.store.RecordEvent(dep.Slug, "missing_from_runtime", "removed stale deployment record")
 		}
 	}
 	return m.store.ListDeployments(), nil
