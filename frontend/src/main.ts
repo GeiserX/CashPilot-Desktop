@@ -27,7 +27,7 @@ import {
   StartService,
   StopService,
 } from "../wailsjs/go/main/App";
-import type { AppState, Deployment, FleetState, InstallGuide, ManagedRuntimePlan as RuntimePlan, Service, SettingsState } from "./wails";
+import type { AppState, DailyPoint, Deployment, FleetState, InstallGuide, ManagedRuntimePlan as RuntimePlan, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -163,22 +163,25 @@ function renderDashboard(current: AppState) {
   const services = current.services || [];
   const deployments = current.deployments || [];
   const earnings = current.earnings || [];
-  const history = current.history || [];
+  const summary = current.summary;
+  const disp = summary?.displayCurrency || current.config.displayCurrency || "USD";
   const runningCount = deployments.filter((dep) => dep.status === "running").length;
-  const totalBalance = earnings.reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0);
-  const trackedCount = earnings.filter((record) => !record.error).length;
+  const total = summary?.total ?? 0;
+  const daily = summary?.daily || [];
+  const breakdown = summary?.breakdown || [];
+  const points = summary?.points || [];
 
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
       ${appSidebar("dashboard")}
       <div class="main-content">
-        ${topbar("Dashboard", totalBalance, current)}
+        ${topbar("Dashboard", total, current)}
         <main class="page-content">
         <section class="stats-grid">
-          ${metricCard("Total Balance", formatBalance(totalBalance, "USD"), "Latest collected balance")}
-          ${metricCard("Today", "$0.00", "Awaiting daily history")}
-          ${metricCard("This Month", "$0.00", "Awaiting monthly history")}
+          ${metricCard("Total Balance", formatBalance(total, disp), summary?.ratesStale ? "Rates may be stale" : "Across convertible services")}
+          ${metricCard("Today", formatBalance(summary?.today ?? 0, disp), changeCaption(summary?.todayChange ?? 0, "vs yesterday"))}
+          ${metricCard("This Month", formatBalance(summary?.month ?? 0, disp), summary?.monthChange ? changeCaption(summary.monthChange, "vs last month") : "So far this month")}
           ${metricCard("Active Services", `${runningCount}`, "Containers currently running")}
         </section>
 
@@ -186,18 +189,19 @@ function renderDashboard(current: AppState) {
           <div class="card-header">
             <div>
               <span class="card-title">Earnings</span>
-              <p class="muted compact-copy">What each service has earned so far.</p>
+              <p class="muted compact-copy">Daily earnings in ${escapeHtml(disp)}.${summary?.ratesStale ? ` <span class="badge warn">rates stale</span>` : ""}</p>
             </div>
             <div class="tab-strip">
-              <button class="tab-btn active">7 days</button>
-              <button class="tab-btn">30 days</button>
+              <button class="tab-btn active">30 days</button>
             </div>
           </div>
-          ${renderEarningsChart(history, earnings)}
+          ${renderEarningsChart(daily, disp)}
           <div class="earnings-breakdown">
-            ${earnings.length ? earnings.map((record) => renderEarningBreakdown(record, services)).join("") : `<p class="muted">No earnings yet. Deploy a service, add credentials, then collect earnings.</p>`}
+            ${breakdown.length ? breakdown.map((item) => renderEarningBreakdown(item, disp)).join("") : `<p class="muted">No earnings yet. Deploy a service, add credentials, then collect earnings.</p>`}
           </div>
         </section>
+
+        ${points.length ? renderPointsSection(points) : ""}
 
         <section class="card dashboard-panel">
           <div class="card-header">
@@ -364,7 +368,7 @@ function wireShellNav() {
 }
 
 function renderCatalog(current: AppState) {
-  const totalBalance = (current.earnings || []).reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0);
+  const total = totalBalance(current);
   const services = (current.services || []).filter((service) => {
     const matchesCategory = catalogFilter === "all" || service.category === catalogFilter;
     const haystack = `${service.name} ${service.shortDescription} ${service.description}`.toLowerCase();
@@ -376,7 +380,7 @@ function renderCatalog(current: AppState) {
     <div class="app-layout">
       ${appSidebar("catalog")}
       <div class="main-content">
-        ${topbar("Service Catalog", totalBalance, current)}
+        ${topbar("Service Catalog", total, current)}
         <main class="page-content">
           <section class="card">
             <div class="card-header">
@@ -648,7 +652,7 @@ async function removeFleetDevice(id: number) {
 }
 
 function totalBalance(current: AppState) {
-  return (current.earnings || []).reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0);
+  return current.summary?.total ?? 0;
 }
 
 function valueOf(selector: string) {
@@ -661,36 +665,29 @@ function maybeResetScroll() {
   requestAnimationFrame(() => window.scrollTo({top: 0, left: 0}));
 }
 
-function renderEarningsChart(history: {platform: string; balance: number; currency: string; error?: string; createdAt: string}[], latest: {platform: string; balance: number; currency: string; error?: string}[]) {
-  const daily = new Map<string, number>();
-  history.filter((record) => !record.error).forEach((record) => {
-    const day = (record.createdAt || "").slice(5, 10) || "now";
-    daily.set(day, (daily.get(day) || 0) + record.balance);
-  });
-  let points: Array<[string, number]> = [...daily.entries()].slice(-14);
-  if (points.length === 0 && latest.length > 0) {
-    points = latest.filter((record) => !record.error).map((record) => [record.platform, record.balance]);
-  }
-  if (points.length === 0) {
+function renderEarningsChart(points: DailyPoint[], displayCurrency: string) {
+  const data = (points || []).filter((point) => Number.isFinite(point.amount));
+  if (data.length === 0 || !data.some((point) => point.amount > 0)) {
     return `
       <div class="chart-empty">
         <strong>No earnings collected yet</strong>
-        <span>Once collectors run, this becomes the main view of what each service is earning.</span>
+        <span>Once collectors run, daily earnings in ${escapeHtml(displayCurrency)} appear here.</span>
       </div>
     `;
   }
   const width = 720;
   const height = 240;
-  const max = Math.max(...points.map(([, value]) => value), 1);
-  const step = points.length > 1 ? width / (points.length - 1) : width;
-  const coords = points.map(([, value], index) => {
-    const x = points.length > 1 ? index * step : width / 2;
-    const y = height - (value / max) * 180 - 30;
+  const max = Math.max(...data.map((point) => point.amount), 1);
+  const step = data.length > 1 ? width / (data.length - 1) : width;
+  const labelEvery = Math.max(1, Math.ceil(data.length / 6));
+  const coords = data.map((point, index) => {
+    const x = data.length > 1 ? index * step : width / 2;
+    const y = height - (point.amount / max) * 180 - 30;
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(" ");
   return `
     <div class="chart-shell">
-      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Earnings chart">
+      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily earnings chart">
         <defs>
           <linearGradient id="chart-fill" x1="0%" y1="0%" x2="0%" y2="100%">
             <stop offset="0%" stop-color="#fb7185" stop-opacity="0.32"/>
@@ -700,23 +697,70 @@ function renderEarningsChart(history: {platform: string; balance: number; curren
         ${[40, 80, 120, 160, 200].map((y) => `<line x1="0" y1="${y}" x2="${width}" y2="${y}" />`).join("")}
         <polyline points="${coords}" fill="none" stroke="#fb7185" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
         <polygon points="0,${height} ${coords} ${width},${height}" fill="url(#chart-fill)"/>
-        ${points.map(([label, value], index) => {
-          const x = points.length > 1 ? index * step : width / 2;
-          const y = height - (value / max) * 180 - 30;
-          return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" /><text x="${x.toFixed(1)}" y="232">${escapeHtml(label)}</text>`;
+        ${data.map((point, index) => {
+          const x = data.length > 1 ? index * step : width / 2;
+          const y = height - (point.amount / max) * 180 - 30;
+          const label = index % labelEvery === 0 ? `<text x="${x.toFixed(1)}" y="232">${escapeHtml(point.day)}</text>` : "";
+          return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"><title>${escapeHtml(point.day)}: ${escapeHtml(formatBalance(point.amount, displayCurrency))}</title></circle>${label}`;
         }).join("")}
       </svg>
     </div>
   `;
 }
 
-function renderEarningBreakdown(record: {platform: string; balance: number; currency: string; error?: string}, services: Service[]) {
-  const service = services.find((svc) => svc.slug === record.platform);
+function changeCaption(pct: number, suffix: string) {
+  if (!pct || !Number.isFinite(pct)) return `No change ${suffix}`;
+  const arrow = pct > 0 ? "▲" : "▼";
+  return `${arrow} ${Math.abs(pct).toFixed(1)}% ${suffix}`;
+}
+
+function renderPointsSection(points: PointsBalance[]) {
   return `
-    <div class="earning-chip ${record.error ? "error" : ""}">
-      <span>${escapeHtml(service?.name || record.platform)}</span>
-      <strong>${record.error ? "Needs attention" : formatBalance(record.balance, record.currency)}</strong>
-      <small>${record.error ? escapeHtml(record.error) : escapeHtml(record.currency)}</small>
+    <section class="card points-panel">
+      <div class="card-header">
+        <div>
+          <span class="card-title">Points / rewards</span>
+          <p class="muted compact-copy">Not included in totals — these rewards have no market price yet.</p>
+        </div>
+      </div>
+      <div class="earnings-breakdown">
+        ${points.map((item) => `
+          <div class="earning-chip points" title="${escapeHtml(formatBalance(item.balance, item.currency))}">
+            <span>${escapeHtml(item.name || item.platform)}</span>
+            <strong>${escapeHtml(formatBalance(item.balance, item.currency))}</strong>
+            <small>${escapeHtml(item.currency)}</small>
+          </div>
+        `).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function renderEarningBreakdown(item: ServiceEarning, displayCurrency: string) {
+  const native = `${item.balance.toFixed(2)} ${item.currency}`;
+  const primary = item.error
+    ? "Needs attention"
+    : item.convertible
+      ? formatBalance(item.balanceDisplay, displayCurrency)
+      : formatBalance(item.balance, item.currency);
+  const cashout = item.cashout;
+  const showBar = !item.error && cashout.comparable && cashout.minAmount > 0;
+  const pct = Math.max(0, Math.min(100, cashout.percent || 0));
+  const sub = item.error
+    ? escapeHtml(item.error)
+    : item.convertible
+      ? `${escapeHtml(native)}${cashout.eligible ? " · ready to cash out" : ""}`
+      : `${escapeHtml(item.currency)} · not converted`;
+  return `
+    <div class="earning-chip ${item.error ? "error" : ""}" title="${escapeHtml(native)}">
+      <span>${escapeHtml(item.name || item.platform)}</span>
+      <strong>${escapeHtml(primary)}</strong>
+      <small>${sub}</small>
+      ${showBar ? `
+        <div class="payout-progress" title="${pct.toFixed(0)}% of ${escapeHtml(formatBalance(cashout.minAmount, cashout.currency))} minimum">
+          <div class="payout-progress-bar" style="width: ${pct.toFixed(1)}%"></div>
+        </div>
+      ` : ""}
     </div>
   `;
 }
@@ -941,7 +985,7 @@ function renderSetupWizard(current: AppState) {
     <div class="app-layout">
       ${appSidebar("wizard")}
       <div class="main-content">
-        ${topbar("Setup Wizard", (current.earnings || []).reduce((sum, record) => sum + (record.error ? 0 : record.balance), 0), current)}
+        ${topbar("Setup Wizard", totalBalance(current), current)}
       <main class="page-content setup-content">
         <div class="split">
           <div>
@@ -1412,11 +1456,19 @@ function capitalize(value: string) {
 }
 
 function formatBalance(value: number, currency: string) {
-  const symbols: Record<string, string> = {USD: "$", EUR: "€", GBP: "£", JPY: "¥", CAD: "C$", AUD: "A$", BRL: "R$"};
-  if (symbols[currency]) {
-    return `${symbols[currency]}${value.toFixed(2)}`;
+  const code = (currency || "USD").toUpperCase();
+  const amount = Number.isFinite(value) ? value : 0;
+  // Intl.NumberFormat throws RangeError on non-ISO codes (e.g. reward "points"
+  // like MYST or GRASS); those fall back to a plain "1234.00 CODE" string.
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${code}`;
   }
-  return `${value.toFixed(2)} ${currency}`;
 }
 
 function stripHtml(value: string) {

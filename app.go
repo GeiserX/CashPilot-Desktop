@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	stdruntime "runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -28,6 +30,7 @@ type App struct {
 	runtime    runtime.Provider
 	services   *services.Manager
 	collectors *collectors.Registry
+	exchange   *exchange.Service
 	trayIcon   []byte
 	fleetAPI   *fleetAPIServer
 }
@@ -63,6 +66,25 @@ func (a *App) Startup(ctx context.Context) {
 	a.runtime = runtime.NewDockerProvider()
 	a.services = services.NewManager(a.runtime, a.catalog, a.store)
 	a.collectors = collectors.NewRegistry(a.store)
+
+	// Exchange rates power the earnings summary. Kick a best-effort initial fetch
+	// and a periodic refresh; a failed fetch must never fail Startup (the summary
+	// is stale-graceful and flags stale rates rather than blanking balances).
+	a.exchange = exchange.NewService()
+	go func() { _ = a.exchange.Refresh(ctx) }()
+	go func() {
+		ticker := time.NewTicker(exchange.CacheTTL)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = a.exchange.Refresh(ctx)
+			}
+		}
+	}()
+
 	if err := a.ensureFleetAPIKey(); err != nil {
 		a.emitError("fleet-api", err)
 		return
@@ -98,12 +120,75 @@ type AppState struct {
 	Guides        []runtime.InstallGuide `json:"guides"`
 	Notifications []Notification         `json:"notifications"`
 	Currencies    []string               `json:"currencies"`
+	Summary       EarningsSummary        `json:"summary"`
 }
 
 type Notification struct {
 	Level   string `json:"level"`
 	Title   string `json:"title"`
 	Message string `json:"message"`
+}
+
+// EarningsSummary is the dashboard's converted, aggregated view of earnings.
+// Balances stored per service are CUMULATIVE lifetime totals; the summary turns
+// them into a single display-currency total plus per-day accrual figures.
+type EarningsSummary struct {
+	DisplayCurrency string           `json:"displayCurrency"`
+	Total           float64          `json:"total"`
+	Today           float64          `json:"today"`
+	Month           float64          `json:"month"`
+	TodayChange     float64          `json:"todayChange"`
+	MonthChange     float64          `json:"monthChange"`
+	Breakdown       []ServiceEarning `json:"breakdown"`
+	Points          []PointsBalance  `json:"points"`
+	Daily           []DailyPoint     `json:"daily"`
+	RatesStale      bool             `json:"ratesStale"`
+	RatesUpdated    string           `json:"ratesUpdated"`
+}
+
+// ServiceEarning is one service's latest balance, both native and converted to
+// the display currency, with its payout/cashout progress. Error rows are kept so
+// the UI can surface a "needs attention" chip.
+type ServiceEarning struct {
+	Platform       string          `json:"platform"`
+	Name           string          `json:"name"`
+	Balance        float64         `json:"balance"`
+	Currency       string          `json:"currency"`
+	BalanceDisplay float64         `json:"balanceDisplay"`
+	Convertible    bool            `json:"convertible"`
+	Delta          float64         `json:"delta"`
+	Error          string          `json:"error"`
+	Cashout        CashoutProgress `json:"cashout"`
+}
+
+// CashoutProgress describes how close a service is to its minimum payout. It is
+// only meaningful (Comparable) when the balance currency matches the cashout
+// currency; otherwise the UI hides the progress bar.
+type CashoutProgress struct {
+	MinAmount    float64 `json:"minAmount"`
+	Currency     string  `json:"currency"`
+	Percent      float64 `json:"percent"`
+	Eligible     bool    `json:"eligible"`
+	Comparable   bool    `json:"comparable"`
+	Method       string  `json:"method"`
+	DashboardURL string  `json:"dashboardUrl"`
+	Notes        string  `json:"notes"`
+}
+
+// PointsBalance is a non-convertible reward balance (e.g. GRASS points) shown in
+// native units and deliberately excluded from fiat totals.
+type PointsBalance struct {
+	Platform string  `json:"platform"`
+	Name     string  `json:"name"`
+	Balance  float64 `json:"balance"`
+	Currency string  `json:"currency"`
+}
+
+// DailyPoint is one day's earnings (accrual) in the display currency, for the
+// dashboard chart.
+type DailyPoint struct {
+	Day    string  `json:"day"`
+	Amount float64 `json:"amount"`
 }
 
 type EnvSetting struct {
@@ -158,7 +243,219 @@ func (a *App) GetAppState() (AppState, error) {
 		Guides:        runtime.InstallGuides(),
 		Notifications: a.notifications(runtimeStatus),
 		Currencies:    supportedCurrencies(),
+		Summary:       a.computeEarningsSummary(),
 	}, nil
+}
+
+// GetEarningsSummary returns the converted, aggregated earnings summary on its
+// own so the frontend can refresh it without pulling the whole app state.
+func (a *App) GetEarningsSummary() (EarningsSummary, error) {
+	if err := a.ready(); err != nil {
+		return EarningsSummary{}, err
+	}
+	return a.computeEarningsSummary(), nil
+}
+
+// computeEarningsSummary converts the per-service CUMULATIVE daily balances into
+// a single display-currency total plus per-day accrual figures. Convertible
+// currencies (USD, known fiat, priced crypto) are summed; non-convertible reward
+// points (e.g. GRASS) are surfaced separately and never summed. It is
+// stale-graceful: missing rates simply drop a service from the total and set
+// RatesStale, rather than erroring.
+func (a *App) computeEarningsSummary() EarningsSummary {
+	disp := "USD"
+	if a.cfg != nil {
+		if c := a.cfg.Config().DisplayCurrency; c != "" {
+			disp = c
+		}
+	}
+	summary := EarningsSummary{
+		DisplayCurrency: disp,
+		Breakdown:       []ServiceEarning{},
+		Points:          []PointsBalance{},
+		Daily:           []DailyPoint{},
+	}
+	if a.exchange == nil || a.store == nil || a.catalog == nil {
+		return summary
+	}
+	a.exchange.EnsureFresh(a.ctx)
+
+	// Build per-platform day -> cumulative balance maps, the platform's currency,
+	// and a sorted list of the days it was actually collected.
+	perPlat := map[string]map[string]float64{}
+	perCur := map[string]string{}
+	daysByPlat := map[string][]string{}
+	for _, b := range a.store.ListDailyBalances(40) {
+		if perPlat[b.Platform] == nil {
+			perPlat[b.Platform] = map[string]float64{}
+		}
+		if _, seen := perPlat[b.Platform][b.Day]; !seen {
+			daysByPlat[b.Platform] = append(daysByPlat[b.Platform], b.Day)
+		}
+		perPlat[b.Platform][b.Day] = b.Balance
+		perCur[b.Platform] = b.Currency
+	}
+	for plat := range daysByPlat {
+		sort.Strings(daysByPlat[plat])
+	}
+
+	// asOf carries the cumulative balance forward: the balance on the latest
+	// collected day on or before `day` (ok=false when nothing was collected yet).
+	asOf := func(plat, day string) (float64, bool) {
+		var val float64
+		found := false
+		for _, d := range daysByPlat[plat] {
+			if d <= day {
+				val = perPlat[plat][d]
+				found = true
+				continue
+			}
+			break
+		}
+		return val, found
+	}
+
+	// dayTotalDisplay is the summed cumulative balance across convertible
+	// platforms, in the display currency, as of `day`.
+	dayTotalDisplay := func(day string) float64 {
+		var sum float64
+		for plat, cur := range perCur {
+			if !a.exchange.Convertible(cur) {
+				continue
+			}
+			bal, ok := asOf(plat, day)
+			if !ok {
+				continue
+			}
+			if conv, cok := a.exchange.ToDisplay(bal, cur, disp); cok {
+				sum += conv
+			}
+		}
+		return sum
+	}
+
+	// Total = latest cumulative balance per platform (convertible only). Non
+	// convertible platforms become native "points" and are never summed.
+	var total float64
+	latestDay := ""
+	for plat, days := range daysByPlat {
+		if len(days) == 0 {
+			continue
+		}
+		last := days[len(days)-1]
+		if last > latestDay {
+			latestDay = last
+		}
+		cur := perCur[plat]
+		bal := perPlat[plat][last]
+		if a.exchange.Convertible(cur) {
+			if conv, ok := a.exchange.ToDisplay(bal, cur, disp); ok {
+				total += conv
+			}
+			continue
+		}
+		summary.Points = append(summary.Points, PointsBalance{
+			Platform: plat,
+			Name:     a.serviceName(plat),
+			Balance:  bal,
+			Currency: cur,
+		})
+	}
+	summary.Total = total
+
+	now := time.Now().UTC()
+	dayStr := func(offset int) string { return now.AddDate(0, 0, offset).Format("2006-01-02") }
+	today := dayStr(0)
+	if latestDay == "" {
+		latestDay = today
+	}
+
+	// Today / yesterday accrual = difference of cumulative day totals; clamp at 0
+	// so a data gap or a rate change can never show negative earnings.
+	todayEarned := max(0, dayTotalDisplay(today)-dayTotalDisplay(dayStr(-1)))
+	yesterdayEarned := max(0, dayTotalDisplay(dayStr(-1))-dayTotalDisplay(dayStr(-2)))
+	summary.Today = todayEarned
+	if yesterdayEarned > 0 {
+		summary.TodayChange = (todayEarned - yesterdayEarned) / yesterdayEarned * 100
+	}
+
+	// Month = accrual since the day before this month started (best-effort).
+	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	beforeMonthStart := monthStart.AddDate(0, 0, -1).Format("2006-01-02")
+	summary.Month = max(0, dayTotalDisplay(latestDay)-dayTotalDisplay(beforeMonthStart))
+	lastMonthStart := monthStart.AddDate(0, -1, 0)
+	beforeLastMonthStart := lastMonthStart.AddDate(0, 0, -1).Format("2006-01-02")
+	prevMonthEarned := max(0, dayTotalDisplay(beforeMonthStart)-dayTotalDisplay(beforeLastMonthStart))
+	if prevMonthEarned > 0 {
+		summary.MonthChange = (summary.Month - prevMonthEarned) / prevMonthEarned * 100
+	}
+
+	// Daily = last 30 days of per-day accrual in the display currency.
+	for i := 29; i >= 0; i-- {
+		d := now.AddDate(0, 0, -i)
+		cur := d.Format("2006-01-02")
+		prev := d.AddDate(0, 0, -1).Format("2006-01-02")
+		summary.Daily = append(summary.Daily, DailyPoint{
+			Day:    d.Format("Jan 02"),
+			Amount: max(0, dayTotalDisplay(cur)-dayTotalDisplay(prev)),
+		})
+	}
+
+	// Breakdown = every service's latest record, INCLUDING error rows so the UI
+	// keeps a "needs attention" chip.
+	for _, rec := range a.store.ListLatestEarnings() {
+		se := ServiceEarning{
+			Platform: rec.Platform,
+			Name:     rec.Platform,
+			Balance:  rec.Balance,
+			Currency: rec.Currency,
+			Error:    rec.Error,
+		}
+		var cash catalog.Cashout
+		if svc, ok := a.catalog.Get(rec.Platform); ok {
+			se.Name = svc.Name
+			cash = svc.Cashout
+		}
+		if a.exchange.Convertible(rec.Currency) {
+			se.Convertible = true
+			if conv, ok := a.exchange.ToDisplay(rec.Balance, rec.Currency, disp); ok {
+				se.BalanceDisplay = conv
+			}
+		}
+		// Native day-over-day change from the last two collected days.
+		if days := daysByPlat[rec.Platform]; len(days) >= 2 {
+			se.Delta = perPlat[rec.Platform][days[len(days)-1]] - perPlat[rec.Platform][days[len(days)-2]]
+		}
+		cp := CashoutProgress{
+			MinAmount:    cash.MinAmount,
+			Currency:     cash.Currency,
+			Method:       cash.Method,
+			DashboardURL: cash.DashboardURL,
+			Notes:        cash.Notes,
+			Comparable:   rec.Currency == cash.Currency,
+		}
+		if cp.Comparable && cash.MinAmount > 0 {
+			cp.Percent = min(100, rec.Balance/cash.MinAmount*100)
+		}
+		cp.Eligible = cp.Comparable && rec.Balance >= cash.MinAmount && rec.Balance > 0
+		se.Cashout = cp
+		summary.Breakdown = append(summary.Breakdown, se)
+	}
+
+	summary.RatesStale = a.exchange.Stale()
+	summary.RatesUpdated = a.exchange.Snapshot().LastUpdated
+	return summary
+}
+
+// serviceName resolves a catalog display name for a slug, falling back to the
+// slug itself when the service is not in the catalog.
+func (a *App) serviceName(slug string) string {
+	if a.catalog != nil {
+		if svc, ok := a.catalog.Get(slug); ok {
+			return svc.Name
+		}
+	}
+	return slug
 }
 
 func (a *App) GetSettingsState() (SettingsState, error) {

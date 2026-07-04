@@ -43,6 +43,13 @@ type EarningsRecord struct {
 	CreatedAt string  `json:"createdAt"`
 }
 
+type DailyBalance struct {
+	Platform string
+	Currency string
+	Day      string // "YYYY-MM-DD" (UTC)
+	Balance  float64
+}
+
 type FleetDevice struct {
 	ID        int64    `json:"id"`
 	Name      string   `json:"name"`
@@ -250,6 +257,36 @@ func (s *Store) ListEarningsHistory(limit int) []EarningsRecord {
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
+// ListDailyBalances returns the latest successful balance (rows whose error column
+// is empty) for each (platform, day) over the last daysBack days.
+func (s *Store) ListDailyBalances(daysBack int) []DailyBalance {
+	rows, err := s.db.Query(`
+		SELECT e.platform, e.currency, date(e.created_at) AS day, e.balance
+		FROM earnings e
+		JOIN (
+			SELECT platform, date(created_at) AS day, MAX(created_at) AS mx
+			FROM earnings
+			WHERE error = '' AND date(created_at) >= date('now', ?)
+			GROUP BY platform, date(created_at)
+		) latest
+			ON e.platform = latest.platform AND date(e.created_at) = latest.day AND e.created_at = latest.mx
+		WHERE e.error = ''
+		ORDER BY day, e.platform
+	`, fmt.Sprintf("-%d days", daysBack))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []DailyBalance
+	for rows.Next() {
+		var record DailyBalance
+		if err := rows.Scan(&record.Platform, &record.Currency, &record.Day, &record.Balance); err == nil {
+			out = append(out, record)
+		}
 	}
 	return out
 }

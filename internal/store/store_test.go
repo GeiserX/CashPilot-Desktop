@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -358,5 +359,101 @@ func TestEarningsLatestAndHistory(t *testing.T) {
 	// History is reversed to oldest-first.
 	if history[0].Balance != 1.0 || history[1].Balance != 2.5 {
 		t.Fatalf("unexpected history order: %+v", history)
+	}
+}
+
+func TestListDailyBalances(t *testing.T) {
+	s := openTestStore(t)
+
+	// Build timestamps relative to "now" so the rows land inside the window that
+	// ListDailyBalances computes with SQLite's date('now', '-N days'). A fixed
+	// RFC3339 layout with no fractional seconds keeps the string MAX(created_at)
+	// SQLite computes in the same order as chronological time.
+	ts := func(daysAgo, hour int) string {
+		d := time.Now().UTC().AddDate(0, 0, -daysAgo)
+		return time.Date(d.Year(), d.Month(), d.Day(), hour, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	}
+	day := func(daysAgo int) string {
+		return time.Now().UTC().AddDate(0, 0, -daysAgo).Format("2006-01-02")
+	}
+
+	seed := []EarningsRecord{
+		// alpha, busy day (2 days ago): three successful rows with increasing
+		// timestamps -> the last-written (9.0) has the max created_at.
+		{Platform: "alpha", Balance: 5.0, Currency: "USD", CreatedAt: ts(2, 10)},
+		{Platform: "alpha", Balance: 7.0, Currency: "USD", CreatedAt: ts(2, 11)},
+		{Platform: "alpha", Balance: 9.0, Currency: "USD", CreatedAt: ts(2, 12)},
+		// alpha, busy day: a FAILED scrape with the newest timestamp of the day;
+		// it must be ignored by both the inner MAX and the outer filter.
+		{Platform: "alpha", Balance: 999.0, Currency: "USD", Error: "boom", CreatedAt: ts(2, 13)},
+		// alpha, two earlier in-window days.
+		{Platform: "alpha", Balance: 3.0, Currency: "USD", CreatedAt: ts(10, 9)},
+		{Platform: "alpha", Balance: 2.0, Currency: "USD", CreatedAt: ts(20, 9)},
+		// beta, a single in-window row (different currency).
+		{Platform: "beta", Balance: 100.0, Currency: "EUR", CreatedAt: ts(5, 8)},
+		// alpha, out of the 40-day window: must be excluded.
+		{Platform: "alpha", Balance: 1.0, Currency: "USD", CreatedAt: ts(50, 8)},
+	}
+	for _, r := range seed {
+		if _, err := s.SaveEarnings(r); err != nil {
+			t.Fatalf("SaveEarnings(%+v) error: %v", r, err)
+		}
+	}
+
+	got := s.ListDailyBalances(40)
+
+	// Exactly one row per (platform, day) inside the window: alpha has 3 days and
+	// beta has 1; the error row and the out-of-window row contribute nothing.
+	if len(got) != 4 {
+		t.Fatalf("expected 4 daily balances, got %d: %+v", len(got), got)
+	}
+
+	type key struct{ platform, day string }
+	byKey := map[key]DailyBalance{}
+	for _, b := range got {
+		byKey[key{b.Platform, b.Day}] = b
+		if b.Balance == 999.0 {
+			t.Fatalf("the error row leaked into the results: %+v", b)
+		}
+		if b.Balance == 1.0 {
+			t.Fatalf("the out-of-window row leaked into the results: %+v", b)
+		}
+	}
+	// One entry per (platform, day) means no key collisions.
+	if len(byKey) != len(got) {
+		t.Fatalf("expected one row per (platform, day), got duplicates: %+v", got)
+	}
+
+	want := []DailyBalance{
+		{Platform: "alpha", Currency: "USD", Day: day(20), Balance: 2.0},
+		{Platform: "alpha", Currency: "USD", Day: day(10), Balance: 3.0},
+		{Platform: "beta", Currency: "EUR", Day: day(5), Balance: 100.0},
+		{Platform: "alpha", Currency: "USD", Day: day(2), Balance: 9.0}, // last-written wins on the busy day
+	}
+	for _, w := range want {
+		g, ok := byKey[key{w.Platform, w.Day}]
+		if !ok {
+			t.Fatalf("missing daily balance for %s on %s; got %+v", w.Platform, w.Day, got)
+		}
+		if g.Balance != w.Balance || g.Currency != w.Currency {
+			t.Fatalf("for %s on %s: got balance=%v currency=%q, want balance=%v currency=%q",
+				w.Platform, w.Day, g.Balance, g.Currency, w.Balance, w.Currency)
+		}
+	}
+
+	// Both platforms are represented.
+	platforms := map[string]bool{}
+	for _, b := range got {
+		platforms[b.Platform] = true
+	}
+	if !platforms["alpha"] || !platforms["beta"] {
+		t.Fatalf("expected both platforms present, got %v", platforms)
+	}
+
+	// Results are ordered ascending by day.
+	for i := 1; i < len(got); i++ {
+		if got[i-1].Day > got[i].Day {
+			t.Fatalf("results not ordered ascending by day: %+v", got)
+		}
 	}
 }
