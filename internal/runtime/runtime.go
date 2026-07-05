@@ -288,11 +288,16 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	// stats() waits cpuSampleInterval between its two samples per container, so a
-	// serial loop would make List O(N * interval). Sample every container
-	// concurrently instead: each goroutine owns its own out[i] slot, so the added
-	// latency stays ~one interval regardless of how many containers there are and
-	// no locking is needed.
+	return p.statsForContainers(ctx, cli, containers), nil
+}
+
+// statsForContainers builds the ContainerInfo list, sampling every container's CPU
+// and memory concurrently. stats() waits cpuSampleInterval between its two samples,
+// so a serial loop would make this O(N * interval); with one goroutine per container
+// the added latency stays ~one interval regardless of N. Each goroutine owns its own
+// out[i] slot, so no locking is needed. It takes a statsClient (not *client.Client)
+// so the concurrency and mapping can be unit-tested with a fake, no Docker daemon.
+func (p *DockerProvider) statsForContainers(ctx context.Context, cli statsClient, containers []container.Summary) []ContainerInfo {
 	out := make([]ContainerInfo, len(containers))
 	var wg sync.WaitGroup
 	for i := range containers {
@@ -300,24 +305,30 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 		go func(i int) {
 			defer wg.Done()
 			c := containers[i]
-			name := ""
-			if len(c.Names) > 0 {
-				name = strings.TrimPrefix(c.Names[0], "/")
-			}
 			cpu, mem := p.stats(ctx, cli, c.ID, c.State == "running")
-			out[i] = ContainerInfo{
-				Slug:        c.Labels[LabelService],
-				ContainerID: c.ID,
-				Name:        name,
-				Image:       c.Image,
-				Status:      c.State,
-				CPUPercent:  cpu,
-				MemoryMB:    mem,
-			}
+			out[i] = toContainerInfo(c, cpu, mem)
 		}(i)
 	}
 	wg.Wait()
-	return out, nil
+	return out
+}
+
+// toContainerInfo maps a Docker container summary plus its sampled CPU% and memory
+// into a ContainerInfo. Split out so the field mapping is unit-testable.
+func toContainerInfo(c container.Summary, cpu, mem float64) ContainerInfo {
+	name := ""
+	if len(c.Names) > 0 {
+		name = strings.TrimPrefix(c.Names[0], "/")
+	}
+	return ContainerInfo{
+		Slug:        c.Labels[LabelService],
+		ContainerID: c.ID,
+		Name:        name,
+		Image:       c.Image,
+		Status:      c.State,
+		CPUPercent:  cpu,
+		MemoryMB:    mem,
+	}
 }
 
 // cpuSampleInterval is the delay between the two container-stats samples used to
@@ -335,12 +346,19 @@ type containerSample struct {
 	memoryMB   float64 // docker-stats-style memory (Usage minus inactive_file)
 }
 
+// statsClient is the small subset of *client.Client that the sampling code needs.
+// Narrowing it to an interface lets stats(), sampleStats() and statsForContainers()
+// be unit-tested with a fake that returns canned stats, with no Docker daemon.
+type statsClient interface {
+	ContainerStatsOneShot(ctx context.Context, containerID string) (container.StatsResponseReader, error)
+}
+
 // stats returns the container's current CPU percentage and memory in MB. It reads
 // two stats samples cpuSampleInterval apart and derives the percentage from the
 // delta between them; a single one-shot sample would report a meaningless lifetime
 // average (see cpuSampleInterval). If ctx is cancelled during the wait it returns
 // 0 CPU with sample A's memory, which is still a valid reading.
-func (p *DockerProvider) stats(ctx context.Context, cli *client.Client, containerID string, running bool) (float64, float64) {
+func (p *DockerProvider) stats(ctx context.Context, cli statsClient, containerID string, running bool) (float64, float64) {
 	if !running {
 		return 0, 0
 	}
@@ -357,14 +375,12 @@ func (p *DockerProvider) stats(ctx context.Context, cli *client.Client, containe
 	if !ok {
 		return 0, a.memoryMB
 	}
-	return cpuPercent(a.cpuTotal, b.cpuTotal, a.systemCPU, b.systemCPU, b.onlineCPUs), b.memoryMB
+	return combineSamples(a, b)
 }
 
-// sampleStats reads one ContainerStatsOneShot sample and extracts the raw counters
-// needed to compute CPU% and memory. ok is false if the sample cannot be read or
-// decoded. onlineCPUs falls back to the number of per-CPU entries when the daemon
-// does not report OnlineCPUs.
-func sampleStats(ctx context.Context, cli *client.Client, containerID string) (containerSample, bool) {
+// sampleStats reads one ContainerStatsOneShot sample and extracts its counters via
+// sampleFromResponse. ok is false if the sample cannot be read or decoded.
+func sampleStats(ctx context.Context, cli statsClient, containerID string) (containerSample, bool) {
 	reader, err := cli.ContainerStatsOneShot(ctx, containerID)
 	if err != nil {
 		return containerSample{}, false
@@ -374,6 +390,14 @@ func sampleStats(ctx context.Context, cli *client.Client, containerID string) (c
 	if err := json.NewDecoder(reader.Body).Decode(&stats); err != nil {
 		return containerSample{}, false
 	}
+	return sampleFromResponse(stats), true
+}
+
+// sampleFromResponse extracts the counters needed to compute CPU% and memory from an
+// already-decoded stats response. It is pure (no IO), so the extraction — including
+// the OnlineCPUs==0 → len(PercpuUsage) fallback and the inactive_file memory
+// adjustment via memoryMB — is unit-testable without a Docker daemon.
+func sampleFromResponse(stats container.StatsResponse) containerSample {
 	onlineCPUs := float64(stats.CPUStats.OnlineCPUs)
 	if onlineCPUs == 0 {
 		onlineCPUs = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
@@ -383,7 +407,16 @@ func sampleStats(ctx context.Context, cli *client.Client, containerID string) (c
 		systemCPU:  stats.CPUStats.SystemUsage,
 		onlineCPUs: onlineCPUs,
 		memoryMB:   memoryMB(stats.MemoryStats),
-	}, true
+	}
+}
+
+// combineSamples derives the current CPU percentage and memory (MB) from two samples
+// taken cpuSampleInterval apart: a is the earlier sample, b the later one. CPU% comes
+// from the A→B delta (see cpuPercent, which applies the guards) and memory from the
+// more recent sample b. It is pure so the two-sample combination is unit-testable
+// without a Docker daemon.
+func combineSamples(a, b containerSample) (float64, float64) {
+	return cpuPercent(a.cpuTotal, b.cpuTotal, a.systemCPU, b.systemCPU, b.onlineCPUs), b.memoryMB
 }
 
 // cpuPercent computes the Docker-style CPU percentage from two samples:

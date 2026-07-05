@@ -2,11 +2,15 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os/exec"
 	goruntime "runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -180,6 +184,251 @@ func TestMemoryMBFallsBackToUsage(t *testing.T) {
 		Stats: map[string]uint64{"inactive_file": 999 * mib},
 	}); got != 64 {
 		t.Fatalf("memoryMB with oversized inactive_file = %v, want 64", got)
+	}
+}
+
+// mib is one mebibyte, used to build memory figures in the stats-math tests.
+const mib = 1024 * 1024
+
+// statsJSON marshals a container.StatsResponse with the given counters, mimicking the
+// JSON the daemon streams from ContainerStatsOneShot. It drives the sampling code
+// without a Docker daemon.
+func statsJSON(t *testing.T, total, system uint64, onlineCPUs uint32, memUsage, inactiveFile uint64) string {
+	t.Helper()
+	var sr container.StatsResponse
+	sr.CPUStats.CPUUsage.TotalUsage = total
+	sr.CPUStats.SystemUsage = system
+	sr.CPUStats.OnlineCPUs = onlineCPUs
+	sr.MemoryStats.Usage = memUsage
+	if inactiveFile > 0 {
+		sr.MemoryStats.Stats = map[string]uint64{"inactive_file": inactiveFile}
+	}
+	b, err := json.Marshal(sr)
+	if err != nil {
+		t.Fatalf("marshal stats: %v", err)
+	}
+	return string(b)
+}
+
+// fakeStat is one canned ContainerStatsOneShot result: either a JSON body or an error.
+type fakeStat struct {
+	body string
+	err  error
+}
+
+// fakeStatsClient implements statsClient, returning canned results in sequence (the
+// last entry repeats once the sequence is exhausted, e.g. for the concurrent calls
+// statsForContainers makes). It is safe for concurrent use so -race can vet the fan-out.
+type fakeStatsClient struct {
+	mu    sync.Mutex
+	seq   []fakeStat
+	calls int
+}
+
+func (f *fakeStatsClient) ContainerStatsOneShot(_ context.Context, _ string) (container.StatsResponseReader, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var s fakeStat
+	switch {
+	case f.calls < len(f.seq):
+		s = f.seq[f.calls]
+	case len(f.seq) > 0:
+		s = f.seq[len(f.seq)-1]
+	}
+	f.calls++
+	if s.err != nil {
+		return container.StatsResponseReader{}, s.err
+	}
+	return container.StatsResponseReader{Body: io.NopCloser(strings.NewReader(s.body))}, nil
+}
+
+// TestSampleFromResponseExtractsCountersAndMemory covers the pure field extraction,
+// including the inactive_file memory adjustment, with no Docker daemon.
+func TestSampleFromResponseExtractsCountersAndMemory(t *testing.T) {
+	var sr container.StatsResponse
+	sr.CPUStats.CPUUsage.TotalUsage = 6_000_000_000
+	sr.CPUStats.SystemUsage = 500_000_000_000
+	sr.CPUStats.OnlineCPUs = 8
+	sr.MemoryStats.Usage = 200 * mib
+	sr.MemoryStats.Stats = map[string]uint64{"inactive_file": 50 * mib}
+
+	got := sampleFromResponse(sr)
+	if got.cpuTotal != 6_000_000_000 || got.systemCPU != 500_000_000_000 {
+		t.Fatalf("cpu counters = %d/%d, want 6e9/5e11", got.cpuTotal, got.systemCPU)
+	}
+	if got.onlineCPUs != 8 {
+		t.Fatalf("onlineCPUs = %v, want 8", got.onlineCPUs)
+	}
+	if got.memoryMB != 150 { // 200 MiB Usage minus 50 MiB inactive_file
+		t.Fatalf("memoryMB = %v, want 150", got.memoryMB)
+	}
+}
+
+// TestSampleFromResponseFallsBackToPercpuUsage covers the OnlineCPUs==0 fallback path.
+func TestSampleFromResponseFallsBackToPercpuUsage(t *testing.T) {
+	var sr container.StatsResponse
+	sr.CPUStats.OnlineCPUs = 0 // daemon did not report it
+	sr.CPUStats.CPUUsage.PercpuUsage = []uint64{10, 20, 30, 40}
+	if got := sampleFromResponse(sr); got.onlineCPUs != 4 {
+		t.Fatalf("onlineCPUs fallback = %v, want 4 (len PercpuUsage)", got.onlineCPUs)
+	}
+}
+
+// TestCombineSamplesKnownAnswer pins the two-sample combination: cpuDelta = 1e9,
+// systemDelta = 10e9, onlineCPUs = 4 -> 40%, with memory taken from the later sample.
+func TestCombineSamplesKnownAnswer(t *testing.T) {
+	a := containerSample{cpuTotal: 5_000_000_000, systemCPU: 500_000_000_000, onlineCPUs: 4, memoryMB: 10}
+	b := containerSample{cpuTotal: 6_000_000_000, systemCPU: 510_000_000_000, onlineCPUs: 4, memoryMB: 42}
+	cpu, mem := combineSamples(a, b)
+	if cpu != 40 {
+		t.Fatalf("combineSamples cpu = %v, want 40", cpu)
+	}
+	if mem != 42 { // memory taken from the later sample b
+		t.Fatalf("combineSamples mem = %v, want 42 (sample b)", mem)
+	}
+}
+
+// TestCombineSamplesGuardsAndMemoryFromB covers the guard paths (zero and backwards
+// deltas), and that memory always comes from the later sample b.
+func TestCombineSamplesGuardsAndMemoryFromB(t *testing.T) {
+	a := containerSample{cpuTotal: 5_000_000_000, systemCPU: 100_000_000_000, onlineCPUs: 4, memoryMB: 1}
+	b := containerSample{cpuTotal: 5_000_000_000, systemCPU: 110_000_000_000, onlineCPUs: 4, memoryMB: 7}
+	if cpu, mem := combineSamples(a, b); cpu != 0 || mem != 7 {
+		t.Fatalf("zero cpu delta: cpu=%v mem=%v, want 0 and 7", cpu, mem)
+	}
+	a2 := containerSample{cpuTotal: 1_000_000_000, systemCPU: 200_000_000_000, onlineCPUs: 4, memoryMB: 3}
+	b2 := containerSample{cpuTotal: 2_000_000_000, systemCPU: 100_000_000_000, onlineCPUs: 4, memoryMB: 9}
+	if cpu, _ := combineSamples(a2, b2); cpu != 0 {
+		t.Fatalf("backwards system counter: cpu=%v, want 0", cpu)
+	}
+}
+
+// TestSampleStatsDecodesCannedResponse covers the read+decode path via a fake client.
+func TestSampleStatsDecodesCannedResponse(t *testing.T) {
+	f := &fakeStatsClient{seq: []fakeStat{{body: statsJSON(t, 6_000_000_000, 500_000_000_000, 8, 200*mib, 50*mib)}}}
+	got, ok := sampleStats(context.Background(), f, "id")
+	if !ok {
+		t.Fatal("sampleStats ok = false, want true")
+	}
+	if got.cpuTotal != 6_000_000_000 || got.onlineCPUs != 8 || got.memoryMB != 150 {
+		t.Fatalf("sampleStats decoded %+v, want cpuTotal 6e9 / onlineCPUs 8 / mem 150", got)
+	}
+}
+
+// TestSampleStatsReaderErrorReturnsNotOK covers the ContainerStatsOneShot error path.
+func TestSampleStatsReaderErrorReturnsNotOK(t *testing.T) {
+	f := &fakeStatsClient{seq: []fakeStat{{err: errors.New("stats unavailable")}}}
+	if _, ok := sampleStats(context.Background(), f, "id"); ok {
+		t.Fatal("sampleStats ok = true on reader error, want false")
+	}
+}
+
+// TestSampleStatsDecodeErrorReturnsNotOK covers the JSON-decode error path.
+func TestSampleStatsDecodeErrorReturnsNotOK(t *testing.T) {
+	f := &fakeStatsClient{seq: []fakeStat{{body: "this is not json"}}}
+	if _, ok := sampleStats(context.Background(), f, "id"); ok {
+		t.Fatal("sampleStats ok = true on decode error, want false")
+	}
+}
+
+// TestStatsReturnsZeroWhenNotRunning covers the early return; cli is never touched.
+func TestStatsReturnsZeroWhenNotRunning(t *testing.T) {
+	p := &DockerProvider{}
+	if cpu, mem := p.stats(context.Background(), nil, "id", false); cpu != 0 || mem != 0 {
+		t.Fatalf("stats(running=false) = %v,%v want 0,0", cpu, mem)
+	}
+}
+
+// TestStatsTwoSampleComputesLiveCPU covers the full two-sample orchestration (read A,
+// wait, read B, combine) via a fake client, with no Docker daemon.
+func TestStatsTwoSampleComputesLiveCPU(t *testing.T) {
+	f := &fakeStatsClient{seq: []fakeStat{
+		{body: statsJSON(t, 5_000_000_000, 500_000_000_000, 4, 100*mib, 0)},
+		{body: statsJSON(t, 6_000_000_000, 510_000_000_000, 4, 128*mib, 0)},
+	}}
+	p := &DockerProvider{}
+	cpu, mem := p.stats(context.Background(), f, "id", true)
+	if cpu != 40 {
+		t.Fatalf("stats cpu = %v, want 40", cpu)
+	}
+	if mem != 128 {
+		t.Fatalf("stats mem = %v, want 128 (sample b)", mem)
+	}
+}
+
+// TestStatsFirstSampleFailureReturnsZero covers the sample-A failure branch.
+func TestStatsFirstSampleFailureReturnsZero(t *testing.T) {
+	f := &fakeStatsClient{seq: []fakeStat{{err: errors.New("boom")}}}
+	p := &DockerProvider{}
+	if cpu, mem := p.stats(context.Background(), f, "id", true); cpu != 0 || mem != 0 {
+		t.Fatalf("first-sample failure = %v,%v want 0,0", cpu, mem)
+	}
+}
+
+// TestStatsCtxCancelledDuringWaitReturnsSampleAMemory covers the ctx.Done() branch of
+// the wait: CPU is 0 but sample A's memory is still returned.
+func TestStatsCtxCancelledDuringWaitReturnsSampleAMemory(t *testing.T) {
+	f := &fakeStatsClient{seq: []fakeStat{{body: statsJSON(t, 5_000_000_000, 500_000_000_000, 4, 64*mib, 0)}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled: the wait select takes the ctx.Done() branch at once
+	p := &DockerProvider{}
+	cpu, mem := p.stats(ctx, f, "id", true)
+	if cpu != 0 {
+		t.Fatalf("ctx-cancelled cpu = %v, want 0", cpu)
+	}
+	if mem != 64 {
+		t.Fatalf("ctx-cancelled mem = %v, want 64 (sample A memory)", mem)
+	}
+}
+
+// TestStatsSecondSampleFailureReturnsSampleAMemory covers the sample-B failure branch
+// after a successful sample A.
+func TestStatsSecondSampleFailureReturnsSampleAMemory(t *testing.T) {
+	f := &fakeStatsClient{seq: []fakeStat{
+		{body: statsJSON(t, 5_000_000_000, 500_000_000_000, 4, 96*mib, 0)},
+		{err: errors.New("container gone")},
+	}}
+	p := &DockerProvider{}
+	cpu, mem := p.stats(context.Background(), f, "id", true)
+	if cpu != 0 {
+		t.Fatalf("second-sample failure cpu = %v, want 0", cpu)
+	}
+	if mem != 96 {
+		t.Fatalf("second-sample failure mem = %v, want 96 (sample A memory)", mem)
+	}
+}
+
+// TestStatsForContainersMapsFieldsAndSamplesConcurrently covers the concurrent fan-out
+// and the ContainerInfo mapping (via toContainerInfo) with a fake client and -race.
+func TestStatsForContainersMapsFieldsAndSamplesConcurrently(t *testing.T) {
+	// One body, repeated for every (concurrent) call: A==B, so running containers
+	// report CPU 0 with the sample's memory; exited containers are not sampled.
+	f := &fakeStatsClient{seq: []fakeStat{{body: statsJSON(t, 5_000_000_000, 500_000_000_000, 4, 64*mib, 0)}}}
+	containers := []container.Summary{
+		{ID: "id-a", Names: []string{"/cashpilot-alpha"}, Image: "img-a", State: "running", Labels: map[string]string{LabelService: "alpha"}},
+		{ID: "id-b", Names: []string{"/cashpilot-beta"}, Image: "img-b", State: "running", Labels: map[string]string{LabelService: "beta"}},
+		{ID: "id-c", Names: []string{"/cashpilot-gamma"}, Image: "img-c", State: "exited", Labels: map[string]string{LabelService: "gamma"}},
+		{ID: "id-d", Names: nil, Image: "img-d", State: "exited", Labels: map[string]string{LabelService: "delta"}},
+	}
+	p := &DockerProvider{}
+	out := p.statsForContainers(context.Background(), f, containers)
+	if len(out) != 4 {
+		t.Fatalf("len(out) = %d, want 4", len(out))
+	}
+	if out[0].Slug != "alpha" || out[0].ContainerID != "id-a" || out[0].Name != "cashpilot-alpha" || out[0].Image != "img-a" || out[0].Status != "running" {
+		t.Fatalf("out[0] mapping wrong: %+v", out[0])
+	}
+	if out[0].MemoryMB != 64 { // running -> sampled
+		t.Fatalf("out[0] memory = %v, want 64", out[0].MemoryMB)
+	}
+	if out[2].Slug != "gamma" || out[2].Name != "cashpilot-gamma" || out[2].Status != "exited" {
+		t.Fatalf("out[2] mapping wrong: %+v", out[2])
+	}
+	if out[2].CPUPercent != 0 || out[2].MemoryMB != 0 { // exited -> not sampled
+		t.Fatalf("exited container out[2] = cpu %v mem %v, want 0/0", out[2].CPUPercent, out[2].MemoryMB)
+	}
+	if out[3].Name != "" { // empty Names -> empty display name
+		t.Fatalf("out[3] name = %q, want empty", out[3].Name)
 	}
 }
 
