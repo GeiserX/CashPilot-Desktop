@@ -257,6 +257,12 @@ export namespace config {
 	    displayCurrency: string;
 	    runtimeProvider: string;
 	    autoUpdate: boolean;
+	    hostnamePrefix: string;
+	    collectIntervalMinutes: number;
+	    timezone: string;
+	    fleetApiKey: string;
+	    fleetBindAddress: string;
+	    fleetPort: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -268,6 +274,12 @@ export namespace config {
 	        this.displayCurrency = source["displayCurrency"];
 	        this.runtimeProvider = source["runtimeProvider"];
 	        this.autoUpdate = source["autoUpdate"];
+	        this.hostnamePrefix = source["hostnamePrefix"];
+	        this.collectIntervalMinutes = source["collectIntervalMinutes"];
+	        this.timezone = source["timezone"];
+	        this.fleetApiKey = source["fleetApiKey"];
+	        this.fleetBindAddress = source["fleetBindAddress"];
+	        this.fleetPort = source["fleetPort"];
 	    }
 	}
 
@@ -275,6 +287,22 @@ export namespace config {
 
 export namespace main {
 	
+	export class Notification {
+	    level: string;
+	    title: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Notification(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.level = source["level"];
+	        this.title = source["title"];
+	        this.message = source["message"];
+	    }
+	}
 	export class AppState {
 	    config: config.AppConfig;
 	    runtime: runtime.Status;
@@ -283,6 +311,8 @@ export namespace main {
 	    earnings: store.EarningsRecord[];
 	    history: store.EarningsRecord[];
 	    guides: runtime.InstallGuide[];
+	    notifications: Notification[];
+	    currencies: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -297,6 +327,135 @@ export namespace main {
 	        this.earnings = this.convertValues(source["earnings"], store.EarningsRecord);
 	        this.history = this.convertValues(source["history"], store.EarningsRecord);
 	        this.guides = this.convertValues(source["guides"], runtime.InstallGuide);
+	        this.notifications = this.convertValues(source["notifications"], Notification);
+	        this.currencies = source["currencies"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CollectorSetting {
+	    slug: string;
+	    name: string;
+	    configured: boolean;
+	    collector: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CollectorSetting(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.configured = source["configured"];
+	        this.collector = source["collector"];
+	    }
+	}
+	export class EnvSetting {
+	    key: string;
+	    label: string;
+	    value: string;
+	    source: string;
+	    secret: boolean;
+	    readOnly: boolean;
+	    help: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EnvSetting(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.value = source["value"];
+	        this.source = source["source"];
+	        this.secret = source["secret"];
+	        this.readOnly = source["readOnly"];
+	        this.help = source["help"];
+	    }
+	}
+	export class FleetState {
+	    workers: number;
+	    mobiles: number;
+	    online: number;
+	    services: number;
+	    devices: store.FleetDevice[];
+	    uiUrl: string;
+	    localApiUrl: string;
+	    apiKey: string;
+	    apiListening: boolean;
+	    workerSnippet: string;
+	    mobileSnippet: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workers = source["workers"];
+	        this.mobiles = source["mobiles"];
+	        this.online = source["online"];
+	        this.services = source["services"];
+	        this.devices = this.convertValues(source["devices"], store.FleetDevice);
+	        this.uiUrl = source["uiUrl"];
+	        this.localApiUrl = source["localApiUrl"];
+	        this.apiKey = source["apiKey"];
+	        this.apiListening = source["apiListening"];
+	        this.workerSnippet = source["workerSnippet"];
+	        this.mobileSnippet = source["mobileSnippet"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class SettingsState {
+	    environment: EnvSetting[];
+	    collectors: CollectorSetting[];
+	    config: config.AppConfig;
+	
+	    static createFrom(source: any = {}) {
+	        return new SettingsState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.environment = this.convertValues(source["environment"], EnvSetting);
+	        this.collectors = this.convertValues(source["collectors"], CollectorSetting);
+	        this.config = this.convertValues(source["config"], config.AppConfig);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -438,6 +597,36 @@ export namespace store {
 	        this.balance = source["balance"];
 	        this.currency = source["currency"];
 	        this.error = source["error"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class FleetDevice {
+	    id: number;
+	    name: string;
+	    kind: string;
+	    endpoint: string;
+	    os: string;
+	    arch: string;
+	    status: string;
+	    services: string[];
+	    lastSeen: string;
+	    createdAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetDevice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.endpoint = source["endpoint"];
+	        this.os = source["os"];
+	        this.arch = source["arch"];
+	        this.status = source["status"];
+	        this.services = source["services"];
+	        this.lastSeen = source["lastSeen"];
 	        this.createdAt = source["createdAt"];
 	    }
 	}

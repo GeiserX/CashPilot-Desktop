@@ -1,5 +1,10 @@
 declare module "../wailsjs/go/main/App" {
   export function GetAppState(): Promise<AppState>;
+  export function GetSettingsState(): Promise<SettingsState>;
+  export function SaveSettings(values: Record<string, string>): Promise<SettingsState>;
+  export function GetFleetState(): Promise<FleetState>;
+  export function AddFleetDevice(values: Record<string, string>): Promise<FleetState>;
+  export function RemoveFleetDevice(id: number): Promise<FleetState>;
   export function CompleteOnboarding(): Promise<void>;
   export function CheckRuntime(): Promise<RuntimeStatus>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
@@ -23,6 +28,8 @@ export interface AppState {
   earnings: EarningsRecord[] | null;
   history: EarningsRecord[] | null;
   guides: InstallGuide[];
+  notifications: NotificationItem[];
+  currencies: string[];
 }
 
 export interface AppConfig {
@@ -30,6 +37,68 @@ export interface AppConfig {
   displayCurrency: string;
   runtimeProvider: string;
   autoUpdate: boolean;
+  hostnamePrefix: string;
+  collectIntervalMinutes: number;
+  timezone: string;
+  fleetApiKey: string;
+  fleetBindAddress: string;
+  fleetPort: number;
+}
+
+export interface NotificationItem {
+  level: string;
+  title: string;
+  message: string;
+}
+
+export interface EnvSetting {
+  key: string;
+  label: string;
+  value: string;
+  source: string;
+  secret: boolean;
+  readOnly: boolean;
+  help: string;
+}
+
+export interface CollectorSetting {
+  slug: string;
+  name: string;
+  configured: boolean;
+  collector: string;
+}
+
+export interface SettingsState {
+  environment: EnvSetting[];
+  collectors: CollectorSetting[];
+  config: AppConfig;
+}
+
+export interface FleetDevice {
+  id: number;
+  name: string;
+  kind: string;
+  endpoint: string;
+  os: string;
+  arch: string;
+  status: string;
+  services: string[];
+  lastSeen: string;
+  createdAt: string;
+}
+
+export interface FleetState {
+  workers: number;
+  mobiles: number;
+  online: number;
+  services: number;
+  devices: FleetDevice[];
+  uiUrl: string;
+  localApiUrl: string;
+  apiKey: string;
+  apiListening: boolean;
+  workerSnippet: string;
+  mobileSnippet: string;
 }
 
 export interface RuntimeStatus {

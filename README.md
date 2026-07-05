@@ -221,7 +221,7 @@ Yes. Use **Worker Node** mode on additional machines -- they connect to your mai
 
 ## Disclosure
 
-> This project contains affiliate/referral links in the service catalog. If you sign up through these links, the project maintainer may earn a small commission at no extra cost to you. This helps support development. You can replace referral codes with your own in the Settings page.
+> This project's service catalog may contain affiliate/referral links. If you sign up through them, the project maintainer may earn a small commission at no extra cost to you. This helps support development.
 
 ## Ecosystem
 

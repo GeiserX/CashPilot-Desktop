@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 
 	"github.com/zalando/go-keyring"
 )
@@ -19,17 +20,52 @@ const (
 )
 
 type AppConfig struct {
-	FirstRunComplete bool   `json:"firstRunComplete"`
-	DisplayCurrency  string `json:"displayCurrency"`
-	RuntimeProvider  string `json:"runtimeProvider"`
-	AutoUpdate       bool   `json:"autoUpdate"`
+	FirstRunComplete       bool   `json:"firstRunComplete"`
+	DisplayCurrency        string `json:"displayCurrency"`
+	RuntimeProvider        string `json:"runtimeProvider"`
+	AutoUpdate             bool   `json:"autoUpdate"`
+	HostnamePrefix         string `json:"hostnamePrefix"`
+	CollectIntervalMinutes int    `json:"collectIntervalMinutes"`
+	Timezone               string `json:"timezone"`
+	FleetAPIKey            string `json:"fleetApiKey"`
+	FleetBindAddress       string `json:"fleetBindAddress"`
+	FleetPort              int    `json:"fleetPort"`
 }
 
 type Manager struct {
 	appDir  string
 	dataDir string
 	path    string
+	mu      sync.RWMutex
 	cfg     AppConfig
+}
+
+// applyDefaults fills zero/invalid fields with safe defaults. The fleet bind
+// address defaults to loopback (127.0.0.1) so the worker API is never exposed
+// to the network unless the user explicitly changes it to a routable address.
+func applyDefaults(cfg AppConfig) AppConfig {
+	if cfg.DisplayCurrency == "" {
+		cfg.DisplayCurrency = "USD"
+	}
+	if cfg.RuntimeProvider == "" {
+		cfg.RuntimeProvider = "existing-docker"
+	}
+	if cfg.HostnamePrefix == "" {
+		cfg.HostnamePrefix = "cashpilot"
+	}
+	if cfg.CollectIntervalMinutes <= 0 {
+		cfg.CollectIntervalMinutes = 60
+	}
+	if cfg.Timezone == "" {
+		cfg.Timezone = "UTC"
+	}
+	if cfg.FleetBindAddress == "" {
+		cfg.FleetBindAddress = "127.0.0.1"
+	}
+	if cfg.FleetPort <= 0 {
+		cfg.FleetPort = 8085
+	}
+	return cfg
 }
 
 func NewManager() (*Manager, error) {
@@ -46,11 +82,7 @@ func NewManager() (*Manager, error) {
 		appDir:  appDir,
 		dataDir: dataDir,
 		path:    filepath.Join(appDir, "config.json"),
-		cfg: AppConfig{
-			DisplayCurrency: "USD",
-			RuntimeProvider: "existing-docker",
-			AutoUpdate:      true,
-		},
+		cfg:     applyDefaults(AppConfig{AutoUpdate: true}),
 	}
 	if err := m.load(); err != nil {
 		return nil, err
@@ -59,6 +91,8 @@ func NewManager() (*Manager, error) {
 }
 
 func (m *Manager) Config() AppConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.cfg
 }
 
@@ -71,12 +105,7 @@ func (m *Manager) DataDir() string {
 }
 
 func (m *Manager) Save(cfg AppConfig) error {
-	if cfg.DisplayCurrency == "" {
-		cfg.DisplayCurrency = "USD"
-	}
-	if cfg.RuntimeProvider == "" {
-		cfg.RuntimeProvider = "existing-docker"
-	}
+	cfg = applyDefaults(cfg)
 	if err := os.MkdirAll(m.appDir, 0o700); err != nil {
 		return err
 	}
@@ -87,10 +116,14 @@ func (m *Manager) Save(cfg AppConfig) error {
 	if err := os.WriteFile(m.path, raw, 0o600); err != nil {
 		return err
 	}
+	m.mu.Lock()
 	m.cfg = cfg
+	m.mu.Unlock()
 	return nil
 }
 
+// load runs once during NewManager (single-threaded, before the Manager is
+// shared with the background fleet HTTP server), so it does not take the lock.
 func (m *Manager) load() error {
 	raw, err := os.ReadFile(m.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -103,7 +136,7 @@ func (m *Manager) load() error {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return err
 	}
-	m.cfg = cfg
+	m.cfg = applyDefaults(cfg)
 	return nil
 }
 

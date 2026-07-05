@@ -30,6 +30,7 @@ const (
 type Provider interface {
 	Status(ctx context.Context) Status
 	Deploy(ctx context.Context, spec DeploySpec, progress func(string)) (ContainerInfo, error)
+	Start(ctx context.Context, slug string) error
 	Stop(ctx context.Context, slug string) error
 	Restart(ctx context.Context, slug string) error
 	Remove(ctx context.Context, slug string) error
@@ -203,6 +204,15 @@ func (p *DockerProvider) Stop(ctx context.Context, slug string) error {
 	return cli.ContainerStop(ctx, containerName(slug), container.StopOptions{Timeout: &timeout})
 }
 
+func (p *DockerProvider) Start(ctx context.Context, slug string) error {
+	cli, err := dockerClient()
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+	return cli.ContainerStart(ctx, containerName(slug), container.StartOptions{})
+}
+
 func (p *DockerProvider) Restart(ctx context.Context, slug string) error {
 	cli, err := dockerClient()
 	if err != nil {
@@ -219,7 +229,20 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string) error {
 		return err
 	}
 	defer cli.Close()
-	return cli.ContainerRemove(ctx, containerName(slug), container.RemoveOptions{Force: true, RemoveVolumes: false})
+	name := containerName(slug)
+	volumes, err := managedContainerVolumes(ctx, cli, name)
+	if err != nil {
+		return err
+	}
+	if err := cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+		return err
+	}
+	for _, volumeName := range volumes {
+		if err := cli.VolumeRemove(ctx, volumeName, true); err != nil {
+			return fmt.Errorf("container removed, but volume %s could not be deleted: %w", volumeName, err)
+		}
+	}
+	return nil
 }
 
 func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (string, error) {
@@ -411,6 +434,23 @@ func buildMounts(raw []string, env map[string]string) []mount.Mount {
 		mounts = append(mounts, mnt)
 	}
 	return mounts
+}
+
+func managedContainerVolumes(ctx context.Context, cli *client.Client, name string) ([]string, error) {
+	inspect, err := cli.ContainerInspect(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if inspect.Config == nil || inspect.Config.Labels[LabelManaged] != "true" {
+		return nil, fmt.Errorf("%s is not managed by CashPilot", name)
+	}
+	volumes := make([]string, 0, len(inspect.Mounts))
+	for _, mnt := range inspect.Mounts {
+		if mnt.Type == mount.TypeVolume && mnt.Name != "" {
+			volumes = append(volumes, mnt.Name)
+		}
+	}
+	return volumes, nil
 }
 
 func isNamedVolume(source string) bool {

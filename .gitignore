@@ -10,6 +10,9 @@ __pycache__/
 build/*
 !build/appicon.svg
 !build/appicon.png
+!build/darwin/
+!build/darwin/Info.plist
+!build/darwin/Info.dev.plist
 .DS_Store
 .omc/
 pnpm-lock.yaml
