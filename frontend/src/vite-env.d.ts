@@ -3,3 +3,6 @@
 declare module "*.css";
 declare module "*.svg";
 declare module "*.png";
+
+// Compile-time constant injected by Vite (see vite.config.ts) from package.json.
+declare const __APP_VERSION__: string;
