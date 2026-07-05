@@ -14,13 +14,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: [self-hosted, macOS, ARM64]
+          - runner: macos-latest
             platform: darwin-arm64
             artifact_glob: build/bin/*
-          - runner: [self-hosted, Linux, X64]
+          - runner: ubuntu-latest
             platform: linux-amd64
             artifact_glob: build/bin/*
-          - runner: [self-hosted, Windows, X64]
+          - runner: windows-latest
             platform: windows-amd64
             artifact_glob: build/bin/*
     runs-on: ${{ matrix.runner }}
