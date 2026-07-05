@@ -7,6 +7,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/store"
+	"github.com/zalando/go-keyring"
 )
 
 // roundTripFunc adapts a function into an http.RoundTripper so a Registry can be
@@ -130,5 +133,39 @@ func TestRegistrySupports(t *testing.T) {
 		if r.Supports(slug) {
 			t.Errorf("Supports(%q) = true, want false (no collector wired)", slug)
 		}
+	}
+}
+
+// TestCollectDispatch covers Registry.Collect: an unsupported slug persists a
+// "not ported yet" error record, and a supported slug dispatches through the
+// collectorDispatch map to its collector.
+func TestCollectDispatch(t *testing.T) {
+	keyring.MockInit()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	// Unsupported slug -> not-ported error, still persisted with the slug as Platform.
+	rec, err := (&Registry{store: st}).Collect(context.Background(), "gaganode", nil)
+	if err != nil {
+		t.Fatalf("Collect(gaganode) unexpected error: %v", err)
+	}
+	if rec.Platform != "gaganode" || rec.Error == "" {
+		t.Fatalf("Collect(gaganode) = %+v, want Platform=gaganode with a not-ported Error", rec)
+	}
+
+	// Supported slug dispatches to its collector (mock HTTP; the {} body makes the
+	// collector fail, which still exercises the dispatch + error persistence path).
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header)}, nil
+	})
+	rec2, err := (&Registry{http: &http.Client{Transport: rt}, store: st}).Collect(context.Background(), "honeygain", map[string]string{})
+	if err != nil {
+		t.Fatalf("Collect(honeygain) unexpected error: %v", err)
+	}
+	if rec2.Platform != "honeygain" {
+		t.Fatalf("Collect(honeygain) Platform=%q, want honeygain (dispatch reached the collector)", rec2.Platform)
 	}
 }
