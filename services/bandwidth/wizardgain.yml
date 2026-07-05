@@ -13,7 +13,7 @@ referral:
   signup_url: "https://wizardgain.com"
 
 docker:
-  image: wizardgain/worker
+  image: "wizardgain/worker@sha256:52fa25e26b0255c1a2b97fcd2ea18f9450bc484dc115ee02382fe98ebf08df46"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: EMAIL

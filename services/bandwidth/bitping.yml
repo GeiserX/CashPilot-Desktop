@@ -15,7 +15,7 @@ referral:
   signup_url: "https://app.bitping.com"
 
 docker:
-  image: bitping/bitpingd
+  image: "bitping/bitpingd@sha256:6f923c4f5e0fe7fa188f621f3dde0cf62e5d3a28848c08f3f84f1a3d8d875dd9"
   platforms: [linux/amd64, linux/arm64]
   env: []
   ports: []

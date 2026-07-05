@@ -15,7 +15,7 @@ referral:
   signup_url: "https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn"
 
 docker:
-  image: proxyrack/pop
+  image: "proxyrack/pop@sha256:7de6719f37b31d5dd354f8cdd3ae601b4ed401832d0935ff460f968e0b6731bc"
   platforms: [linux/amd64]
   env:
     - key: UUID

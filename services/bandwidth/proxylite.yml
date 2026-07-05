@@ -14,7 +14,7 @@ referral:
   signup_url: "https://proxylite.ru/?r=KMUPRZIZ"
 
 docker:
-  image: proxylite/proxyservice
+  image: "proxylite/proxyservice@sha256:e6da7e1793a0777b2c4aea2fe69ed7d7aa664777857271b19dc3d72405b86133"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: USER_ID

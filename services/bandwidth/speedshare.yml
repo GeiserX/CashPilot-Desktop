@@ -14,7 +14,7 @@ referral:
   signup_url: "https://speedshare.app"
 
 docker:
-  image: mrcolorrain/speedshare
+  image: "mrcolorrain/speedshare@sha256:168373ac4f80c261927b90f4c5b2ede25f6e6cc7f76e028eaaa756977809c03b"
   platforms: [linux/amd64]
   env:
     - key: CODE

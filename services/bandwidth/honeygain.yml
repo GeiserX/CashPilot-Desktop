@@ -14,7 +14,7 @@ referral:
   signup_url: "https://dashboard.honeygain.com/ref/SERGIB4014"
 
 docker:
-  image: honeygain/honeygain
+  image: "honeygain/honeygain@sha256:159d120caac9f482074d3e8d82d4cc247cd07e65af37bcc8e6b89c60674d5ed4"
   platforms: [linux/amd64]
   env:
     - key: HONEYGAIN_EMAIL

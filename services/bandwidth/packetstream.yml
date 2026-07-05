@@ -15,7 +15,7 @@ referral:
   signup_url: "https://packetstream.io/?psr=7xgZ"
 
 docker:
-  image: packetstream/psclient
+  image: "packetstream/psclient@sha256:e5015592031fb6f3876582117f47995ecec8157a639e9fc3fcfe4af28b2c497a"
   platforms: [linux/amd64]
   env:
     - key: CID

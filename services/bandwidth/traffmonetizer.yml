@@ -15,7 +15,7 @@ referral:
   signup_url: "https://traffmonetizer.com/?aff=2111758"
 
 docker:
-  image: traffmonetizer/cli_v2
+  image: "traffmonetizer/cli_v2@sha256:6dbf8e75cc93e25131e2e701b1d478b3ccbf89212636b08d629621c270f0c966"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: TRAFFMONETIZER_TOKEN
