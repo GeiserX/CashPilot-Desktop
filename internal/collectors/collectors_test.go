@@ -108,3 +108,27 @@ func TestStorjPayoutUSD(t *testing.T) {
 		t.Fatalf("unexpected balance: %f", balance)
 	}
 }
+
+// TestRegistrySupports pins the collectorDispatch map / Supports contract the
+// scheduler relies on: every wired collector reports true, and unported or
+// unknown slugs report false (so the scheduler skips them instead of writing a
+// spurious "not ported yet" error row every cycle).
+func TestRegistrySupports(t *testing.T) {
+	r := &Registry{}
+	supported := []string{
+		"anyone-protocol", "bitping", "bytelixir", "earnapp", "honeygain", "earnfm",
+		"grass", "iproyal", "mysterium", "packetstream", "proxyrack", "repocket",
+		"salad", "storj", "traffmonetizer",
+	}
+	for _, slug := range supported {
+		if !r.Supports(slug) {
+			t.Errorf("Supports(%q) = false, want true (it has a native collector)", slug)
+		}
+	}
+	unsupported := []string{"gaganode", "presearch", "vast-ai", "golem", "unknown-service", ""}
+	for _, slug := range unsupported {
+		if r.Supports(slug) {
+			t.Errorf("Supports(%q) = true, want false (no collector wired)", slug)
+		}
+	}
+}
