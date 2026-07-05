@@ -156,7 +156,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		Hostname: fmt.Sprintf("cashpilot-%s", spec.Slug),
 	}
 	if svc.Docker.Command != "" {
-		config.Cmd = []string{"sh", "-c", substitute(svc.Docker.Command, env)}
+		config.Cmd = buildCommandArgs(svc.Docker.Command, env)
 	}
 
 	hostConfig := &container.HostConfig{
@@ -597,6 +597,86 @@ func substitute(value string, env map[string]string) string {
 		out = strings.ReplaceAll(out, "${"+key+"}", val)
 	}
 	return out
+}
+
+// buildCommandArgs turns a maintainer command template into the argv slice passed to
+// the container as Docker Cmd (which Docker appends to the image ENTRYPOINT, so argv
+// ["-email","x","-pass","y"] runs the entrypoint binary with those flags).
+//
+// SECURITY (fix S3, CWE-78): the template is tokenized FIRST — its token boundaries
+// are trusted because a template contains only static flags and ${VAR} placeholders,
+// never user data — and each resulting token is substituted individually. A ${VAR}
+// therefore expands into exactly ONE argv element even when the credential value
+// contains shell metacharacters (;, $(), backticks, quotes, &, |) or whitespace. The
+// argv is exec'd directly with no shell, so those characters are inert data and can
+// never be re-split or interpreted. This replaces the old sh -c "<substituted>" form,
+// where a credential holding shell syntax could break the deploy or inject commands
+// into the container. Returns nil for a template that tokenizes to nothing (so an
+// all-whitespace command leaves Cmd unset, keeping the image default, as before).
+func buildCommandArgs(template string, env map[string]string) []string {
+	tokens := tokenizeCommand(template)
+	if len(tokens) == 0 {
+		return nil
+	}
+	args := make([]string, len(tokens))
+	for i, tok := range tokens {
+		args[i] = substitute(tok, env)
+	}
+	return args
+}
+
+// tokenizeCommand splits a command template into argv tokens the way a POSIX shell
+// word-splits, but WITHOUT any expansion: runs of unquoted whitespace separate
+// tokens, while single-quoted ('...') and double-quoted ("...") groups are kept as
+// one token with the surrounding quotes stripped. Adjacent quoted and unquoted
+// segments concatenate into a single token (foo"a b" -> `fooa b`), and a quoted empty
+// string ("") yields an empty token. There is no backslash escaping and no ${VAR}
+// expansion here by design — expansion is applied per-token AFTER tokenizing (see
+// buildCommandArgs), so a value's own quotes/metacharacters can never change token
+// boundaries. Templates are maintainer-authored (static flags + ${VAR} placeholders),
+// so an unterminated quote is not expected; if one occurs the accumulated text is
+// still emitted as a final token rather than dropped.
+func tokenizeCommand(s string) []string {
+	var tokens []string
+	var cur strings.Builder
+	started := false // a token is in progress (distinguishes "" from no token)
+	inSingle := false
+	inDouble := false
+	for _, r := range s {
+		switch {
+		case inSingle:
+			if r == '\'' {
+				inSingle = false
+			} else {
+				cur.WriteRune(r)
+			}
+		case inDouble:
+			if r == '"' {
+				inDouble = false
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '\'':
+			inSingle = true
+			started = true
+		case r == '"':
+			inDouble = true
+			started = true
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			if started {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+				started = false
+			}
+		default:
+			cur.WriteRune(r)
+			started = true
+		}
+	}
+	if started {
+		tokens = append(tokens, cur.String())
+	}
+	return tokens
 }
 
 func envSlice(env map[string]string) []string {
