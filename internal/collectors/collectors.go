@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"regexp"
@@ -85,7 +86,10 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 		Platform: result.Platform,
 		Balance:  result.Balance,
 		Currency: result.Currency,
-		Error:    result.Error,
+		// Redact any secret embedded in a URL query (e.g. the Repocket Firebase
+		// sign-in URL carries ?key=<FIREBASE_KEY>) before the error is persisted
+		// verbatim into earnings.error, where it would be readable in the dashboard/DB.
+		Error: redactURLSecrets(result.Error),
 	}
 	return r.store.SaveEarnings(record)
 }
@@ -700,6 +704,20 @@ func (r *Registry) doRaw(ctx context.Context, method, url string, body any, head
 	return raw, resp.StatusCode, resp.Header, nil
 }
 
+// urlSecretRe matches a sensitive query parameter and its value inside any URL that
+// may surface in an error string. Anchoring on a leading ? or & keeps it to real
+// query params (so a path segment like signInWithPassword is never matched).
+var urlSecretRe = regexp.MustCompile(`(?i)([?&](?:access_token|api_key|password|token|key)=)[^&\s"'<>]+`)
+
+// redactURLSecrets replaces the value of any sensitive query parameter
+// (key/token/password/access_token/api_key) with REDACTED. Collector errors can
+// embed a request URL — the Repocket Firebase sign-in URL carries ?key=<FIREBASE_KEY>,
+// and other collectors put keys in the query too — and Collect persists the error
+// string verbatim into earnings.error, so the secret must be scrubbed first.
+func redactURLSecrets(msg string) string {
+	return urlSecretRe.ReplaceAllString(msg, "${1}REDACTED")
+}
+
 func firstCredential(credentials map[string]string, keys ...string) string {
 	for _, key := range keys {
 		if value := strings.TrimSpace(credentials[key]); value != "" {
@@ -733,7 +751,10 @@ func round(value float64, places int) float64 {
 	for i := 0; i < places; i++ {
 		scale *= 10
 	}
-	return float64(int(value*scale+0.5)) / scale
+	// math.Round rounds half away from zero and handles negatives correctly; the
+	// prior float64(int(value*scale+0.5)) truncated toward zero (wrong sign for
+	// negative values) and risked overflow on very large balances.
+	return math.Round(value*scale) / scale
 }
 
 func randomIdentifier(length int) string {
@@ -758,9 +779,18 @@ func grassHeaders(token string) map[string]string {
 	}
 }
 
+// bytelixirBalanceRe and packetStreamBalanceRes are compiled once at package init
+// rather than on every collect: the parse functions run on the hot dashboard-scrape
+// path, so recompiling the same patterns per call is wasted work.
+var bytelixirBalanceRe = regexp.MustCompile(`<span>\$</span>(\d+\.\d+)<span[^>]*>(\d*)</span>`)
+
+var packetStreamBalanceRes = []*regexp.Regexp{
+	regexp.MustCompile(`(?s)<h3>Balance</h3>.*?<h2[^>]*>\$?([\d.]+)</h2>`),
+	regexp.MustCompile(`"balance"\s*:\s*([\d.]+)`),
+}
+
 func parseBytelixirBalance(html string) (float64, bool) {
-	re := regexp.MustCompile(`<span>\$</span>(\d+\.\d+)<span[^>]*>(\d*)</span>`)
-	matches := re.FindAllStringSubmatch(html, -1)
+	matches := bytelixirBalanceRe.FindAllStringSubmatch(html, -1)
 	for _, match := range matches {
 		value, err := strconv.ParseFloat(match[1]+match[2], 64)
 		if err == nil && value > 0 {
@@ -775,11 +805,7 @@ func parseBytelixirBalance(html string) (float64, bool) {
 }
 
 func parsePacketStreamBalance(html string) (float64, bool) {
-	patterns := []*regexp.Regexp{
-		regexp.MustCompile(`(?s)<h3>Balance</h3>.*?<h2[^>]*>\$?([\d.]+)</h2>`),
-		regexp.MustCompile(`"balance"\s*:\s*([\d.]+)`),
-	}
-	for _, pattern := range patterns {
+	for _, pattern := range packetStreamBalanceRes {
 		if match := pattern.FindStringSubmatch(html); len(match) > 1 {
 			value, err := strconv.ParseFloat(match[1], 64)
 			return value, err == nil

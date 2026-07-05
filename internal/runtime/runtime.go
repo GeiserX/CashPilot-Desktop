@@ -337,13 +337,28 @@ func dockerClient() (*client.Client, error) {
 	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 }
 
+// maxPullLogLine caps a single progress line at 1 MiB. bufio.Scanner's default max
+// token size is 64 KiB, so without this a single line longer than that would stop
+// the scan early with bufio.ErrTooLong and fail the pull; 1 MiB is generous for a
+// JSON progress line while still bounding memory.
+const maxPullLogLine = 1 << 20
+
 func pullImage(ctx context.Context, cli *client.Client, imageName string, progress func(string)) error {
 	reader, err := cli.ImagePull(ctx, imageName, image.PullOptions{})
 	if err != nil {
 		return err
 	}
 	defer reader.Close()
+	return streamPullProgress(reader, progress)
+}
+
+// streamPullProgress decodes the Docker image-pull progress stream (one JSON object
+// per line), forwarding status lines to progress and returning the first embedded
+// error. It is split out of pullImage so it can be unit-tested against an io.Reader,
+// and raises bufio.Scanner's token buffer so a long line does not truncate the pull.
+func streamPullProgress(reader io.Reader, progress func(string)) error {
 	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxPullLogLine)
 	for scanner.Scan() {
 		var msg struct {
 			Status string `json:"status"`

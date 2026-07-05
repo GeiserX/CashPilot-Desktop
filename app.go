@@ -549,7 +549,13 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		if svc.Collector.Type == "" && !svc.ManualOnly {
 			continue
 		}
-		creds, _ := a.store.GetCredentials(svc.Slug)
+		creds, err := a.store.GetCredentials(svc.Slug)
+		if err != nil {
+			// A credential blob that fails to decrypt/parse must not be silently
+			// dropped (which would wrongly show the service as "not configured");
+			// surface it while keeping the rest of the settings list usable.
+			a.emitError("credentials", err)
+		}
 		collectors = append(collectors, CollectorSetting{
 			Slug:       svc.Slug,
 			Name:       svc.Name,
