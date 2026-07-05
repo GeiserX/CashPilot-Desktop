@@ -367,7 +367,7 @@ func TestDeploymentRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEarningsLatestAndHistory(t *testing.T) {
+func TestEarningsLatest(t *testing.T) {
 	s := openTestStore(t)
 
 	if _, err := s.SaveEarnings(EarningsRecord{Platform: "storj", Balance: 1.0, Currency: "USD", CreatedAt: "2026-01-01T00:00:00Z"}); err != nil {
@@ -383,15 +383,6 @@ func TestEarningsLatestAndHistory(t *testing.T) {
 	}
 	if latest[0].Balance != 2.5 {
 		t.Fatalf("expected the latest balance 2.5, got %v", latest[0].Balance)
-	}
-
-	history := s.ListEarningsHistory(10)
-	if len(history) != 2 {
-		t.Fatalf("expected 2 history records, got %d", len(history))
-	}
-	// History is reversed to oldest-first.
-	if history[0].Balance != 1.0 || history[1].Balance != 2.5 {
-		t.Fatalf("unexpected history order: %+v", history)
 	}
 }
 

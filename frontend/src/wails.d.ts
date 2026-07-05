@@ -27,7 +27,6 @@ export interface AppState {
   services: Service[];
   deployments: Deployment[] | null;
   earnings: EarningsRecord[] | null;
-  history: EarningsRecord[] | null;
   guides: InstallGuide[];
   notifications: NotificationItem[];
   currencies: string[];
@@ -55,7 +54,6 @@ export interface ServiceEarning {
   currency: string;
   balanceDisplay: number;
   convertible: boolean;
-  delta: number;
   error: string;
   cashout: CashoutProgress;
 }
