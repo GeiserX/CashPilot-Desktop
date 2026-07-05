@@ -3,11 +3,15 @@ package collectors
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/zalando/go-keyring"
 )
@@ -121,14 +125,14 @@ func TestRegistrySupports(t *testing.T) {
 	supported := []string{
 		"anyone-protocol", "bitping", "bytelixir", "earnapp", "honeygain", "earnfm",
 		"grass", "iproyal", "mysterium", "packetstream", "proxyrack", "repocket",
-		"salad", "storj", "traffmonetizer",
+		"salad", "storj", "traffmonetizer", "vast-ai",
 	}
 	for _, slug := range supported {
 		if !r.Supports(slug) {
 			t.Errorf("Supports(%q) = false, want true (it has a native collector)", slug)
 		}
 	}
-	unsupported := []string{"gaganode", "presearch", "vast-ai", "golem", "unknown-service", ""}
+	unsupported := []string{"gaganode", "presearch", "golem", "unknown-service", ""}
 	for _, slug := range unsupported {
 		if r.Supports(slug) {
 			t.Errorf("Supports(%q) = true, want false (no collector wired)", slug)
@@ -167,5 +171,164 @@ func TestCollectDispatch(t *testing.T) {
 	}
 	if rec2.Platform != "honeygain" {
 		t.Fatalf("Collect(honeygain) Platform=%q, want honeygain (dispatch reached the collector)", rec2.Platform)
+	}
+}
+
+// TestCollectVast covers the Vast.ai GPU-marketplace collector: it must sum the
+// per-machine earnings into a USD balance, send the API key as a Bearer token to
+// the machine-earnings endpoint, and treat a valid empty response (no GPU rented
+// yet) as Balance 0 rather than an error.
+func TestCollectVast(t *testing.T) {
+	t.Run("sums per-machine earnings and sends Bearer auth", func(t *testing.T) {
+		var authHeader, gotPath string
+		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			authHeader = req.Header.Get("Authorization")
+			gotPath = req.URL.Path
+			// Two machines: (5+1+0.25+0.25)=6.5 and (3+0.5+0.25+0.25)=4.0 => 10.5.
+			// current.total (9.75) is deliberately different so the test pins that
+			// the per-machine SUM is used, not the current-balance fallback.
+			body := `{
+				"current": {"balance": 9.75, "service_fee": 0.25, "total": 9.75, "credit": 0},
+				"summary": {"total_gpu": 8.0, "total_stor": 1.5, "total_bwu": 0.5, "total_bwd": 0.5},
+				"per_machine": [
+					{"machine_id": 1001, "gpu_earn": 5.0, "sto_earn": 1.0, "bwu_earn": 0.25, "bwd_earn": 0.25},
+					{"machine_id": 1002, "gpu_earn": 3.0, "sto_earn": 0.5, "bwu_earn": 0.25, "bwd_earn": 0.25}
+				],
+				"per_day": []
+			}`
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})
+		r := &Registry{http: &http.Client{Transport: rt}}
+
+		res, err := r.collectVast(context.Background(), map[string]string{"VAST_API_KEY": "vast-secret-123"})
+		if err != nil {
+			t.Fatalf("collectVast error: %v", err)
+		}
+		if res.Platform != "vast-ai" {
+			t.Fatalf("Platform = %q, want vast-ai", res.Platform)
+		}
+		if res.Currency != "USD" {
+			t.Fatalf("Currency = %q, want USD", res.Currency)
+		}
+		if res.Balance != 10.5 {
+			t.Fatalf("Balance = %v, want 10.5 (sum of per-machine gpu+sto+bwu+bwd earnings)", res.Balance)
+		}
+		if authHeader != "Bearer vast-secret-123" {
+			t.Fatalf("Authorization = %q, want %q", authHeader, "Bearer vast-secret-123")
+		}
+		if gotPath != "/api/v0/users/me/machine-earnings" {
+			t.Fatalf("request path = %q, want /api/v0/users/me/machine-earnings", gotPath)
+		}
+	})
+
+	t.Run("empty earnings is Balance 0, not an error", func(t *testing.T) {
+		rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+			// A host with no GPU rented yet: valid response, no machine earnings.
+			body := `{"current": {"balance": 0, "total": 0, "credit": 0}, "per_machine": [], "per_day": []}`
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})
+		r := &Registry{http: &http.Client{Transport: rt}}
+
+		res, err := r.collectVast(context.Background(), map[string]string{"VAST_API_KEY": "k"})
+		if err != nil {
+			t.Fatalf("collectVast (empty) error: %v", err)
+		}
+		if res.Balance != 0 {
+			t.Fatalf("Balance = %v, want 0 for an empty earnings response", res.Balance)
+		}
+		if res.Currency != "USD" {
+			t.Fatalf("Currency = %q, want USD", res.Currency)
+		}
+	})
+
+	t.Run("missing API key is an error", func(t *testing.T) {
+		r := &Registry{http: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("collector must not hit the network without an API key")
+			return nil, nil
+		})}}
+		if _, err := r.collectVast(context.Background(), map[string]string{}); err == nil {
+			t.Fatal("collectVast with no API key = nil error, want an error")
+		}
+	})
+}
+
+// TestCatalogCollectorParity is the Slice 1 / T2 guard: every service the catalog
+// marks automatable (collector.type api/scrape/auto) and still live (status not
+// dead/dropped/broken) MUST either have a native collector wired in
+// collectorDispatch or be explicitly listed in knownUnported below. It fails when
+// a new automatable service is added without a collector or an allowlist entry, or
+// when a slug is renamed out from under its collector — either is a real gap that
+// would otherwise silently stop earning data from being collected.
+func TestCatalogCollectorParity(t *testing.T) {
+	// Active api/scrape/auto catalog slugs that do NOT yet have a native collector.
+	// Each is a deliberate, known gap. Remove a slug the moment its collector lands:
+	// the checks below fail if an allowlisted slug is actually supported or is no
+	// longer an active automatable service, so this list cannot silently rot.
+	// vast-ai is intentionally absent — this slice ports it.
+	knownUnported := map[string]bool{
+		"dawn":      true,
+		"golem":     true,
+		"gradient":  true,
+		"helium":    true,
+		"nodepay":   true,
+		"nosana":    true,
+		"presearch": true,
+		"proxylite": true,
+		"teneo":     true,
+		"titan":     true,
+	}
+
+	cat, err := catalog.LoadEmbedded(os.DirFS("../.."))
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+	if len(cat.List()) == 0 {
+		t.Fatal(`catalog loaded 0 services; check the LoadEmbedded(os.DirFS("../..")) path`)
+	}
+
+	reg := &Registry{}
+	automatable := map[string]bool{"api": true, "scrape": true, "auto": true}
+	inactive := map[string]bool{"dead": true, "dropped": true, "broken": true}
+
+	var offenders []string
+	allowlistUsed := map[string]bool{}
+	for _, svc := range cat.List() {
+		if !automatable[svc.Collector.Type] || inactive[svc.Status] {
+			continue
+		}
+		switch {
+		case reg.Supports(svc.Slug):
+			// has a native collector — good
+		case knownUnported[svc.Slug]:
+			allowlistUsed[svc.Slug] = true
+		default:
+			offenders = append(offenders, fmt.Sprintf("%s (status=%s, collector.type=%s)", svc.Slug, svc.Status, svc.Collector.Type))
+		}
+	}
+	sort.Strings(offenders)
+	if len(offenders) > 0 {
+		t.Fatalf("automatable catalog services with neither a collector nor a knownUnported entry:\n  %s\n"+
+			"Wire a collector into collectorDispatch (preferred), or if it truly can't be automated yet add the slug to knownUnported in this test.",
+			strings.Join(offenders, "\n  "))
+	}
+
+	// vast-ai is ported by this slice: it must be supported and must not sit in the
+	// allowlist.
+	if !reg.Supports("vast-ai") {
+		t.Error("vast-ai must have a native collector wired in collectorDispatch")
+	}
+	if knownUnported["vast-ai"] {
+		t.Error("vast-ai now has a collector; it must not be in knownUnported")
+	}
+
+	// Keep the allowlist honest: prune any entry that has since gained a collector
+	// or is no longer an active api/scrape/auto catalog service.
+	for slug := range knownUnported {
+		switch {
+		case reg.Supports(slug):
+			t.Errorf("knownUnported lists %q but it now has a native collector; remove it from the allowlist", slug)
+		case !allowlistUsed[slug]:
+			t.Errorf("knownUnported lists %q but no active api/scrape/auto catalog service has that slug (renamed/removed/deactivated?); prune it", slug)
+		}
 	}
 }
