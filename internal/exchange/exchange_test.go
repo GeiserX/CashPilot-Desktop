@@ -186,17 +186,98 @@ func TestRefreshTransportErrorKeepsUSD(t *testing.T) {
 func TestEnsureFreshRefreshesOnce(t *testing.T) {
 	svc, _, _ := newTestService(t)
 
-	// First call populates the cache (was never fetched).
+	// First call kicks a background refresh (the cache was never fetched). It is
+	// non-blocking, so poll until the async refresh has populated the cache.
 	svc.EnsureFresh(context.Background())
-	if svc.Stale() {
-		t.Fatal("EnsureFresh should have populated the cache")
-	}
+	waitUntil(t, 2*time.Second, func() bool { return !svc.Stale() })
 	before := svc.Snapshot().LastUpdated
 
-	// Second call within CacheTTL must be a no-op (no re-fetch).
+	// A second call within CacheTTL sees a fresh cache and must NOT refetch.
 	svc.EnsureFresh(context.Background())
+	time.Sleep(50 * time.Millisecond) // give any (erroneous) background refresh a chance to run
 	if after := svc.Snapshot().LastUpdated; after != before {
 		t.Fatalf("EnsureFresh refetched inside CacheTTL: %q -> %q", before, after)
+	}
+}
+
+// blockingRoundTripper blocks every request until release is closed, simulating a
+// hung HTTP GET. It reports the first request via hit (buffered, size 1).
+type blockingRoundTripper struct {
+	release chan struct{}
+	hit     chan struct{}
+}
+
+func (b *blockingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	select {
+	case b.hit <- struct{}{}:
+	default:
+	}
+	<-b.release
+	return nil, errors.New("released")
+}
+
+// TestEnsureFreshNonBlocking pins fix 3: EnsureFresh must return promptly even
+// when the underlying HTTP transport hangs forever, because it kicks the refresh
+// onto a background goroutine guarded by a single-flight flag. A second call
+// while the first refresh is still in flight must also return immediately and
+// must not stack a second refresh.
+func TestEnsureFreshNonBlocking(t *testing.T) {
+	rt := &blockingRoundTripper{release: make(chan struct{}), hit: make(chan struct{}, 1)}
+	defer close(rt.release) // let the background goroutine unwind at the end
+	svc := NewService(
+		WithBaseURLs("http://cg.invalid", "http://fr.invalid"),
+		WithHTTPClient(&http.Client{Transport: rt}),
+		WithCryptoIDs(map[string]string{"MYST": "mysterium"}),
+	)
+
+	returned := make(chan struct{})
+	go func() {
+		svc.EnsureFresh(context.Background())
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("EnsureFresh blocked on a hung HTTP transport; it must return immediately")
+	}
+
+	// The background refresh actually started (the transport was hit) and the cache
+	// stays stale until it completes.
+	select {
+	case <-rt.hit:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected EnsureFresh to kick a background refresh")
+	}
+	if !svc.Stale() {
+		t.Fatal("cache must remain stale while the background refresh is still hung")
+	}
+
+	// A second EnsureFresh while the first is still in flight must also return
+	// immediately (single-flight: it does not stack or block).
+	returned2 := make(chan struct{})
+	go func() {
+		svc.EnsureFresh(context.Background())
+		close(returned2)
+	}()
+	select {
+	case <-returned2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second EnsureFresh blocked; single-flight must return immediately")
+	}
+}
+
+// waitUntil polls cond up to timeout, failing the test if it never becomes true.
+func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !cond() {
+		t.Fatal("condition not met within timeout")
 	}
 }
 
