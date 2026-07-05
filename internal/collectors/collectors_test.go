@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"sort"
@@ -100,6 +101,99 @@ func TestParsePacketStreamBalance(t *testing.T) {
 	}
 	if balance != 1.23 {
 		t.Fatalf("unexpected balance: %f", balance)
+	}
+}
+
+// TestRound pins round's half-away-from-zero behavior for BOTH signs. The prior
+// float64(int(value*scale+0.5)) implementation rounded negatives toward +inf (e.g.
+// -2.5 -> -2, -0.5 -> 0) instead of away from zero; math.Round fixes that.
+func TestRound(t *testing.T) {
+	const eps = 1e-9
+	cases := []struct {
+		value  float64
+		places int
+		want   float64
+	}{
+		{1.23456, 4, 1.2346},
+		{1.0, 4, 1.0},
+		{0, 4, 0},
+		{2.5, 0, 3},   // half away from zero
+		{-2.5, 0, -3}, // negatives round away from zero, not toward +inf (old: -2)
+		{-0.5, 0, -1}, // old code gave 0
+		{-1.23456, 4, -1.2346},
+		{123.456, 2, 123.46},
+	}
+	for _, tc := range cases {
+		if got := round(tc.value, tc.places); math.Abs(got-tc.want) > eps {
+			t.Errorf("round(%v, %d) = %v, want %v", tc.value, tc.places, got, tc.want)
+		}
+	}
+}
+
+// TestRedactURLSecrets pins fix 5's helper: a secret carried in a URL query must be
+// scrubbed, in both the "<url> returned HTTP" and the net/url.Error quoted forms,
+// while non-secret text and query keys (and path segments) are left intact.
+func TestRedactURLSecrets(t *testing.T) {
+	const key = "AIzaSyD-EXAMPLE-firebase-key-1234567890"
+	cases := []string{
+		"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=" + key + " returned HTTP 400",
+		`Post "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=` + key + `": dial tcp: lookup host: no such host`,
+	}
+	for _, in := range cases {
+		out := redactURLSecrets(in)
+		if strings.Contains(out, key) {
+			t.Errorf("key not removed from %q -> %q", in, out)
+		}
+		if !strings.Contains(out, "REDACTED") {
+			t.Errorf("redactURLSecrets(%q) = %q, want a REDACTED marker", in, out)
+		}
+	}
+	// Other sensitive params are scrubbed, and the surrounding non-secret query is kept.
+	if got := redactURLSecrets("https://x/y?token=abc123&page=2"); strings.Contains(got, "abc123") || !strings.Contains(got, "page=2") {
+		t.Errorf("token redaction mishandled: %q", got)
+	}
+	// A plain message and a path segment that merely contains 'password' are untouched.
+	if got := redactURLSecrets("could not sign in"); got != "could not sign in" {
+		t.Errorf("plain message mangled: %q", got)
+	}
+	if got := redactURLSecrets("POST /accounts:signInWithPassword failed"); got != "POST /accounts:signInWithPassword failed" {
+		t.Errorf("non-query path touched: %q", got)
+	}
+}
+
+// TestCollectRepocketRedactsFirebaseKey pins fix 5 end-to-end: the Repocket
+// collector signs in via a Firebase URL that embeds the API key as ?key=<KEY>. A
+// failed request must not leak that key into the persisted earnings.error string.
+func TestCollectRepocketRedactsFirebaseKey(t *testing.T) {
+	keyring.MockInit()
+	const firebaseKey = "AIzaSyD-TEST-firebase-key-DO-NOT-LEAK"
+	t.Setenv("CASHPILOT_REPOCKET_FIREBASE_KEY", firebaseKey)
+
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	defer st.Close()
+
+	// The Firebase sign-in returns 400, so doJSON builds "<url> returned HTTP 400"
+	// with the key still in the query string.
+	rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 400, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"INVALID_PASSWORD"}}`)), Header: make(http.Header)}, nil
+	})
+	reg := &Registry{http: &http.Client{Transport: rt}, store: st}
+
+	rec, err := reg.Collect(context.Background(), "repocket", map[string]string{"REPOCKET_EMAIL": "a@b.co", "REPOCKET_PASSWORD": "pw"})
+	if err != nil {
+		t.Fatalf("Collect(repocket): %v", err)
+	}
+	if rec.Error == "" {
+		t.Fatal("expected a persisted collector error for a 400 sign-in")
+	}
+	if strings.Contains(rec.Error, firebaseKey) {
+		t.Fatalf("Firebase key leaked into persisted error: %q", rec.Error)
+	}
+	if !strings.Contains(rec.Error, "REDACTED") {
+		t.Fatalf("expected the leaked key to be replaced with REDACTED, got: %q", rec.Error)
 	}
 }
 
