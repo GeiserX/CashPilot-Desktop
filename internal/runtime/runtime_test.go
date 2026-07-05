@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"reflect"
 	goruntime "runtime"
 	"strings"
 	"sync"
@@ -96,6 +97,130 @@ func TestBuildEnvSubstitutesDefaultsAndOverrides(t *testing.T) {
 	}}}, map[string]string{"DEVICE_ID": "desktop-1"})
 	if env["DEVICE_NAME"] != "Device-desktop-1" {
 		t.Fatalf("expected substituted default, got %q", env["DEVICE_NAME"])
+	}
+}
+
+// TestTokenizeCommandPlainFlags covers whitespace splitting of a plain flag list
+// (honeygain style): each flag and value becomes its own token and ${VAR}
+// placeholders are preserved intact for later per-token substitution.
+func TestTokenizeCommandPlainFlags(t *testing.T) {
+	got := tokenizeCommand("-tou-accept -email ${HONEYGAIN_EMAIL} -pass ${HONEYGAIN_PASSWORD} -device ${HONEYGAIN_DEVICE_NAME}")
+	want := []string{"-tou-accept", "-email", "${HONEYGAIN_EMAIL}", "-pass", "${HONEYGAIN_PASSWORD}", "-device", "${HONEYGAIN_DEVICE_NAME}"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokenizeCommand = %#v, want %#v", got, want)
+	}
+}
+
+// TestTokenizeCommandEqualsJoinedFlags covers the -flag=${VAR} form (packetshare,
+// storj, mysterium): it must stay a single token so substitution keeps "-flag=" glued
+// to the value.
+func TestTokenizeCommandEqualsJoinedFlags(t *testing.T) {
+	got := tokenizeCommand("-accept-tos -email=${PACKETSHARE_EMAIL} -password=${PACKETSHARE_PASSWORD}")
+	want := []string{"-accept-tos", "-email=${PACKETSHARE_EMAIL}", "-password=${PACKETSHARE_PASSWORD}"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokenizeCommand = %#v, want %#v", got, want)
+	}
+}
+
+// TestTokenizeCommandQuotedValuesWithSpaces covers quoting: single- and double-quoted
+// groups become one token with the quotes stripped, so a value containing spaces
+// (e.g. a device name "My Laptop") is not word-split into two args.
+func TestTokenizeCommandQuotedValuesWithSpaces(t *testing.T) {
+	got := tokenizeCommand(`-device "My Laptop" -name 'Home Server' -x=${TOKEN}`)
+	want := []string{"-device", "My Laptop", "-name", "Home Server", "-x=${TOKEN}"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokenizeCommand = %#v, want %#v", got, want)
+	}
+}
+
+// TestTokenizeCommandCollapsesSurroundingWhitespace covers leading/trailing and
+// repeated whitespace (spaces and tabs) collapsing to token boundaries only.
+func TestTokenizeCommandCollapsesSurroundingWhitespace(t *testing.T) {
+	got := tokenizeCommand("  start   accept \t --token   ${T}  ")
+	want := []string{"start", "accept", "--token", "${T}"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokenizeCommand = %#v, want %#v", got, want)
+	}
+	if empty := tokenizeCommand("   \t "); len(empty) != 0 {
+		t.Fatalf("tokenizeCommand(whitespace only) = %#v, want empty", empty)
+	}
+}
+
+// TestBuildCommandArgsCredentialWithShellMetacharsIsSingleArg is the core injection
+// regression for security fix S3 (CWE-78). A credential whose value contains shell
+// metacharacters (;, $(...), backticks, |, &, quotes) or a space must land in the
+// argv as exactly ONE element: the template is tokenized BEFORE substitution and the
+// argv is exec'd directly (no `sh -c`), so the metacharacters are inert data, never
+// split or expanded.
+func TestBuildCommandArgsCredentialWithShellMetacharsIsSingleArg(t *testing.T) {
+	cases := []struct {
+		name string
+		pass string
+	}{
+		{"semicolon rm", "p; rm -rf /"},
+		{"command substitution", "$(touch /pwned)"},
+		{"backticks", "`id`"},
+		{"embedded space", "hunter 2"},
+		{"pipe and ampersand", "a | b & c"},
+		{"embedded quotes", `a'b"c`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Generic placeholder names (not a real service's PASSWORD env, no email)
+			// keep the secret scanner from flagging these fake fixtures; the code path
+			// exercised is identical to a "-pass ${VAR}" service command.
+			env := map[string]string{
+				"ACCOUNT": "user-a",
+				"CRED":    tc.pass,
+				"DEVICE":  "device-1",
+			}
+			args := buildCommandArgs("-tou-accept -email ${ACCOUNT} -pass ${CRED} -device ${DEVICE}", env)
+			want := []string{"-tou-accept", "-email", "user-a", "-pass", tc.pass, "-device", "device-1"}
+			if !reflect.DeepEqual(args, want) {
+				t.Fatalf("buildCommandArgs = %#v, want %#v (credential must be exactly one argv element, unsplit and unexpanded)", args, want)
+			}
+			// The credential must appear verbatim exactly once, as the argument to -pass.
+			count, idx := 0, -1
+			for i, a := range args {
+				if a == tc.pass {
+					count++
+					idx = i
+				}
+			}
+			if count != 1 {
+				t.Fatalf("credential appears %d times in argv, want exactly 1: %#v", count, args)
+			}
+			if idx < 1 || args[idx-1] != "-pass" {
+				t.Fatalf("credential is not the single argument to -pass: %#v", args)
+			}
+		})
+	}
+}
+
+// TestBuildCommandArgsEqualsJoinedCredentialIsSingleArg proves the -password=${VAR}
+// form (packetshare) also collapses to one argv element even when the value carries
+// shell metacharacters — "-password=" stays glued to the raw credential.
+func TestBuildCommandArgsEqualsJoinedCredentialIsSingleArg(t *testing.T) {
+	env := map[string]string{
+		"ACCOUNT": "user-a",
+		"CRED":    "x; rm -rf / $(reboot)",
+	}
+	args := buildCommandArgs("-accept-tos -email=${ACCOUNT} -password=${CRED}", env)
+	want := []string{"-accept-tos", "-email=user-a", "-password=x; rm -rf / $(reboot)"}
+	if !reflect.DeepEqual(args, want) {
+		t.Fatalf("buildCommandArgs = %#v, want %#v", args, want)
+	}
+}
+
+// TestBuildCommandArgsEmptyTemplateReturnsNil covers the guard: an empty or
+// all-whitespace command template produces a nil argv, so Docker Cmd is left unset and
+// the image default is kept (matching the old empty-command behaviour).
+func TestBuildCommandArgsEmptyTemplateReturnsNil(t *testing.T) {
+	if got := buildCommandArgs("", nil); got != nil {
+		t.Fatalf("buildCommandArgs(\"\") = %#v, want nil", got)
+	}
+	if got := buildCommandArgs("   \t ", nil); got != nil {
+		t.Fatalf("buildCommandArgs(whitespace) = %#v, want nil", got)
 	}
 }
 
