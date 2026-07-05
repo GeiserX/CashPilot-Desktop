@@ -1,6 +1,7 @@
 import "./style.css";
 import {
   BrowserOpenURL,
+  EventsOn,
   Quit,
   WindowMinimise,
   WindowToggleMaximise,
@@ -46,8 +47,34 @@ async function boot() {
   try {
     state = await GetAppState();
     render();
+    wireBackendEvents();
   } catch (error) {
     renderError(error);
+  }
+}
+
+let eventRefreshInFlight = false;
+
+// The Go backend emits these after background collection cycles and deployment
+// changes. Refresh state so passive earnings appear without the user navigating.
+function wireBackendEvents() {
+  EventsOn("earnings:changed", () => void onBackendEvent());
+  EventsOn("deployment:changed", () => void onBackendEvent());
+}
+
+async function onBackendEvent() {
+  if (eventRefreshInFlight) return;
+  if (!state || !state.config.firstRunComplete) return;
+  eventRefreshInFlight = true;
+  try {
+    state = await GetAppState();
+    // Only re-render on the dashboard; other views own an in-progress form, so
+    // update state silently and let them pick it up on their next natural render.
+    if (activeView === "dashboard") render();
+  } catch {
+    // transient background refresh failure — ignore; next event/read recovers
+  } finally {
+    eventRefreshInFlight = false;
   }
 }
 
@@ -267,7 +294,7 @@ function appSidebar(active: View) {
       </nav>
       <div class="sidebar-footer">
         <div class="footer-links">
-          <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot" title="GitHub">GitHub</button>
+          <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop" title="GitHub">GitHub</button>
           <button class="footer-link" data-url="https://github.com/sponsors/GeiserX" title="Sponsor">Sponsor</button>
         </div>
         <span>Desktop v0.6.0</span>
