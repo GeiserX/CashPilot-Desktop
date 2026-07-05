@@ -17,17 +17,15 @@ import {
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
-  ManagedRuntimePlan,
   RemoveFleetDevice,
   RefreshDeployments,
   RemoveService,
-  RestartService,
   SaveSettings,
   SaveCredentials,
   StartService,
   StopService,
 } from "../wailsjs/go/main/App";
-import type { AppState, DailyPoint, Deployment, FleetState, InstallGuide, ManagedRuntimePlan as RuntimePlan, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
+import type { AppState, DailyPoint, Deployment, FleetState, InstallGuide, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -272,7 +270,7 @@ function appSidebar(active: View) {
           <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot" title="GitHub">GitHub</button>
           <button class="footer-link" data-url="https://github.com/sponsors/GeiserX" title="Sponsor">Sponsor</button>
         </div>
-        <span>Desktop v0.5.0</span>
+        <span>Desktop v0.6.0</span>
       </div>
     </aside>
   `;
@@ -823,139 +821,6 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
   `;
 }
 
-function renderServiceCard(service: Service, deployed: boolean) {
-  const signupUrl = service.referral?.signupUrl || service.website;
-  return `
-    <article class="service-card">
-      <div>
-        <strong>${escapeHtml(service.name)}</strong>
-        <small>${escapeHtml(service.shortDescription || service.category)}</small>
-      </div>
-      <div class="service-card-actions">
-        <span class="pill">${deployed ? "deployed" : service.manualOnly ? "manual" : "docker"}</span>
-        ${signupUrl ? `<button class="text-link" data-url="${escapeHtml(signupUrl)}">Sign up</button>` : ""}
-        <button class="secondary compact-btn" data-service="${service.slug}">Setup</button>
-      </div>
-    </article>
-  `;
-}
-
-function renderCategoryCards(services: Service[]) {
-  const counts = services.reduce<Record<string, {total: number; docker: number}>>((acc, service) => {
-    const key = service.category || "other";
-    acc[key] ||= {total: 0, docker: 0};
-    acc[key].total += 1;
-    if (!service.manualOnly) acc[key].docker += 1;
-    return acc;
-  }, {});
-  return Object.entries(counts).map(([category, count]) => `
-    <article class="category-card">
-      <span>${escapeHtml(category)}</span>
-      <strong>${count.total}</strong>
-      <small>${count.docker} deployable</small>
-    </article>
-  `).join("");
-}
-
-function serviceButton(service: Service, deployments: Deployment[]) {
-  const active = deployments.some((dep) => dep.slug === service.slug);
-  return `
-    <button class="${selectedService?.slug === service.slug ? "selected" : ""}" data-service="${service.slug}">
-      <span>${escapeHtml(service.name)}</span>
-      <small>${service.manualOnly ? "manual" : service.category}${active ? " / deployed" : ""}</small>
-    </button>
-  `;
-}
-
-function renderDeployment(dep: Deployment) {
-  return `
-    <div class="row">
-      <div>
-        <strong>${escapeHtml(dep.slug)}</strong>
-        <small>${escapeHtml(dep.image)}</small>
-      </div>
-      <span class="pill">${escapeHtml(dep.status)}</span>
-    </div>
-  `;
-}
-
-function renderEarning(record: {platform: string; balance: number; currency: string; error?: string}) {
-  return `
-    <div class="row">
-      <div>
-        <strong>${escapeHtml(record.platform)}</strong>
-        <small>${record.error ? escapeHtml(record.error) : "latest balance"}</small>
-      </div>
-      <span class="pill">${record.balance.toFixed(4)} ${escapeHtml(record.currency)}</span>
-    </div>
-  `;
-}
-
-function renderServiceDetail(service: Service, deployment?: Deployment) {
-  const env = service.docker.env || [];
-  const envKeys = new Set(env.map((item) => item.key));
-  const collectorFields = getCollectorFields(service.slug).filter((item) => !envKeys.has(item.key));
-  const payment = [service.payment?.methods?.join(", "), service.payment?.minimumPayout ? `${service.payment.minimumPayout} min` : ""].filter(Boolean).join(" / ");
-  const platforms = (service.platforms || []).join(", ");
-  const requirements = [
-    service.requirements?.residentialIp ? "Residential IP preferred" : "VPS/datacenter ok",
-    service.requirements?.gpu ? "GPU required" : "",
-    service.requirements?.minBandwidth ? `${service.requirements.minBandwidth} bandwidth` : "",
-    service.requirements?.minStorage ? `${service.requirements.minStorage} storage` : "",
-  ].filter(Boolean).join(" / ");
-  return `
-    <section class="panel service-detail">
-      <div class="split">
-        <div>
-          <p class="eyebrow">${escapeHtml(service.category)} / ${service.manualOnly ? "manual tracking" : "docker managed"}</p>
-          <h2>${escapeHtml(service.name)}</h2>
-          <p class="muted">${escapeHtml(service.shortDescription || service.description)}</p>
-        </div>
-        <span class="pill">${deployment ? escapeHtml(deployment.status) : "not deployed"}</span>
-      </div>
-      ${service.manualOnly ? `<p class="tip">This service has no Docker image in the CashPilot catalog yet. Track it manually and use collectors where supported.</p>` : ""}
-      <div class="provider-overview">
-        ${detailStat("Category", service.category || "service")}
-        ${detailStat("Estimate", `$${(service.earnings?.monthlyLow || 0).toFixed(0)}-${(service.earnings?.monthlyHigh || 0).toFixed(0)}/mo`)}
-        ${detailStat("Payment", payment || "See provider")}
-        ${detailStat("Collector", service.collector?.type || "manual")}
-        ${detailStat("Runtime", service.manualOnly ? "External app" : service.docker.image)}
-        ${detailStat("Requirements", requirements || "No special requirements")}
-      </div>
-      <p class="muted">${escapeHtml(stripHtml(service.description || service.shortDescription || ""))}</p>
-      <div class="link-row">
-        ${service.website ? `<button class="text-link" data-url="${escapeHtml(service.website)}">Open provider</button>` : ""}
-        ${service.referral?.signupUrl ? `<button class="text-link" data-url="${escapeHtml(service.referral.signupUrl)}">Sign up</button>` : ""}
-        ${service.cashout?.dashboardUrl ? `<button class="text-link" data-url="${escapeHtml(service.cashout.dashboardUrl)}">Dashboard / cashout</button>` : ""}
-      </div>
-      <div class="credential-grid">
-        ${env.map((item) => `
-          <label>
-            <span>${escapeHtml(item.label || item.key)}${item.required ? " *" : ""}</span>
-            <input data-env="${item.key}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(stripHtml(item.description || item.key))}" value="${escapeHtml(item.default || "")}" />
-          </label>
-        `).join("")}
-        ${collectorFields.map((item) => `
-          <label>
-            <span>${escapeHtml(item.label)}${item.required ? " *" : ""}</span>
-            <input data-env="${item.key}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(item.description)}" />
-          </label>
-        `).join("")}
-      </div>
-      <div class="actions left">
-        <button class="secondary" id="save-creds">Save Credentials</button>
-        <button class="primary" id="deploy" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
-        <button class="secondary" id="stop" ${deployment ? "" : "disabled"}>Stop</button>
-        <button class="secondary" id="restart" ${deployment ? "" : "disabled"}>Restart</button>
-        <button class="danger" id="remove" ${deployment ? "" : "disabled"}>Remove</button>
-        <button class="secondary" id="logs" ${deployment ? "" : "disabled"}>Logs</button>
-        <button class="secondary" id="collect">Collect Earnings</button>
-      </div>
-      <pre id="service-output" class="output"></pre>
-    </section>
-  `;
-}
-
 function detailStat(label: string, value: string) {
   return `
     <div class="detail-stat">
@@ -1343,71 +1208,11 @@ function getCollectorFields(slug: string): CollectorField[] {
   return fields[slug] || [];
 }
 
-async function hydrateCredentialForm(service: Service | null) {
-  if (!service) return;
-  const creds = await GetCredentials(service.slug);
-  document.querySelectorAll<HTMLInputElement>("[data-env]").forEach((input) => {
-    const key = input.dataset.env || "";
-    if (creds[key]) input.value = creds[key];
-  });
-}
-
-async function saveCredentials() {
-  if (!selectedService) return;
-  await SaveCredentials(selectedService.slug, readCredentialForm());
-  setOutput("Credentials saved.");
-}
-
-async function deploySelected() {
-  if (!selectedService) return;
-  setOutput("Deploying...");
-  await DeployService(selectedService.slug, readCredentialForm());
-  await refreshState();
-}
-
-async function actionSelected(action: "stop" | "restart" | "remove") {
-  if (!selectedService) return;
-  if (action === "stop") await StopService(selectedService.slug);
-  if (action === "restart") await RestartService(selectedService.slug);
-  if (action === "remove") await RemoveService(selectedService.slug);
-  await refreshState();
-}
-
-async function showLogs() {
-  if (!selectedService) return;
-  setOutput(await GetLogs(selectedService.slug, 200));
-}
-
-async function collectSelected() {
-  if (!selectedService) return;
-  const record = await CollectService(selectedService.slug);
-  setOutput(record.error ? record.error : `Collected ${record.balance} ${record.currency}`);
-  await refreshState();
-}
-
-function readCredentialForm(): Record<string, string> {
-  const values: Record<string, string> = {};
-  document.querySelectorAll<HTMLInputElement>("[data-env]").forEach((input) => {
-    values[input.dataset.env || ""] = input.value;
-  });
-  return values;
-}
-
 async function refreshState() {
   if (!state) return;
   const [runtime, deployments] = await Promise.all([CheckRuntime(), RefreshDeployments().catch(() => state?.deployments || [])]);
   state = {...await GetAppState(), runtime, deployments};
   render();
-}
-
-async function renderRuntimePlan() {
-  const plan: RuntimePlan = await ManagedRuntimePlan();
-  const node = document.querySelector("#runtime-plan");
-  if (!node) return;
-  node.innerHTML = `
-    <p>${escapeHtml(plan.summary)}</p>
-    <div class="guide-grid">${plan.phases.map((phase) => `<article class="guide"><p>${escapeHtml(phase)}</p></article>`).join("")}</div>
-  `;
 }
 
 function setOutput(value: string) {
