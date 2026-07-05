@@ -881,6 +881,26 @@ code {
   border-color: rgba(251, 113, 133, 0.45);
 }
 
+.earning-chip.points {
+  border-color: rgba(139, 92, 246, 0.4);
+  background: rgba(24, 16, 40, 0.7);
+}
+
+.payout-progress {
+  margin-top: 0.4rem;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(63, 63, 70, 0.5);
+  overflow: hidden;
+}
+
+.payout-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #fb923c, #fb7185);
+  transition: width 0.3s ease;
+}
+
 .category-strip {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1022,6 +1042,13 @@ code {
 .badge.success {
   color: var(--success);
   background: rgba(34, 197, 94, 0.1);
+}
+
+.badge.warn {
+  color: #fdba74;
+  background: rgba(251, 146, 60, 0.16);
+  border-color: rgba(251, 146, 60, 0.4);
+  text-transform: none;
 }
 
 .services-table-wrap {

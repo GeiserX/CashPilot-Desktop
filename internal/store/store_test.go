@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -358,5 +359,135 @@ func TestEarningsLatestAndHistory(t *testing.T) {
 	// History is reversed to oldest-first.
 	if history[0].Balance != 1.0 || history[1].Balance != 2.5 {
 		t.Fatalf("unexpected history order: %+v", history)
+	}
+}
+
+func TestListDailyBalances(t *testing.T) {
+	s := openTestStore(t)
+
+	// Build timestamps relative to "now" so the rows land inside the window that
+	// ListDailyBalances computes with SQLite's date('now', '-N days'). The latest
+	// row per (platform, day) is chosen by MAX(id); rows are inserted in ascending
+	// balance order so the last-written (highest-id) row is the expected winner.
+	ts := func(daysAgo, hour int) string {
+		d := time.Now().UTC().AddDate(0, 0, -daysAgo)
+		return time.Date(d.Year(), d.Month(), d.Day(), hour, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	}
+	day := func(daysAgo int) string {
+		return time.Now().UTC().AddDate(0, 0, -daysAgo).Format("2006-01-02")
+	}
+
+	seed := []EarningsRecord{
+		// alpha, busy day (2 days ago): three successful rows with increasing
+		// timestamps -> the last-written (9.0) has the max created_at.
+		{Platform: "alpha", Balance: 5.0, Currency: "USD", CreatedAt: ts(2, 10)},
+		{Platform: "alpha", Balance: 7.0, Currency: "USD", CreatedAt: ts(2, 11)},
+		{Platform: "alpha", Balance: 9.0, Currency: "USD", CreatedAt: ts(2, 12)},
+		// alpha, busy day: a FAILED scrape with the newest timestamp of the day;
+		// it must be ignored by both the inner MAX and the outer filter.
+		{Platform: "alpha", Balance: 999.0, Currency: "USD", Error: "boom", CreatedAt: ts(2, 13)},
+		// alpha, two earlier in-window days.
+		{Platform: "alpha", Balance: 3.0, Currency: "USD", CreatedAt: ts(10, 9)},
+		{Platform: "alpha", Balance: 2.0, Currency: "USD", CreatedAt: ts(20, 9)},
+		// beta, a single in-window row (different currency).
+		{Platform: "beta", Balance: 100.0, Currency: "EUR", CreatedAt: ts(5, 8)},
+		// alpha, out of the 40-day window: must be excluded.
+		{Platform: "alpha", Balance: 1.0, Currency: "USD", CreatedAt: ts(50, 8)},
+	}
+	for _, r := range seed {
+		if _, err := s.SaveEarnings(r); err != nil {
+			t.Fatalf("SaveEarnings(%+v) error: %v", r, err)
+		}
+	}
+
+	got := s.ListDailyBalances(40)
+
+	// Exactly one row per (platform, day) inside the window: alpha has 3 days and
+	// beta has 1; the error row and the out-of-window row contribute nothing.
+	if len(got) != 4 {
+		t.Fatalf("expected 4 daily balances, got %d: %+v", len(got), got)
+	}
+
+	type key struct{ platform, day string }
+	byKey := map[key]DailyBalance{}
+	for _, b := range got {
+		byKey[key{b.Platform, b.Day}] = b
+		if b.Balance == 999.0 {
+			t.Fatalf("the error row leaked into the results: %+v", b)
+		}
+		if b.Balance == 1.0 {
+			t.Fatalf("the out-of-window row leaked into the results: %+v", b)
+		}
+	}
+	// One entry per (platform, day) means no key collisions.
+	if len(byKey) != len(got) {
+		t.Fatalf("expected one row per (platform, day), got duplicates: %+v", got)
+	}
+
+	want := []DailyBalance{
+		{Platform: "alpha", Currency: "USD", Day: day(20), Balance: 2.0},
+		{Platform: "alpha", Currency: "USD", Day: day(10), Balance: 3.0},
+		{Platform: "beta", Currency: "EUR", Day: day(5), Balance: 100.0},
+		{Platform: "alpha", Currency: "USD", Day: day(2), Balance: 9.0}, // last-written wins on the busy day
+	}
+	for _, w := range want {
+		g, ok := byKey[key{w.Platform, w.Day}]
+		if !ok {
+			t.Fatalf("missing daily balance for %s on %s; got %+v", w.Platform, w.Day, got)
+		}
+		if g.Balance != w.Balance || g.Currency != w.Currency {
+			t.Fatalf("for %s on %s: got balance=%v currency=%q, want balance=%v currency=%q",
+				w.Platform, w.Day, g.Balance, g.Currency, w.Balance, w.Currency)
+		}
+	}
+
+	// Both platforms are represented.
+	platforms := map[string]bool{}
+	for _, b := range got {
+		platforms[b.Platform] = true
+	}
+	if !platforms["alpha"] || !platforms["beta"] {
+		t.Fatalf("expected both platforms present, got %v", platforms)
+	}
+
+	// Results are ordered ascending by day.
+	for i := 1; i < len(got); i++ {
+		if got[i-1].Day > got[i].Day {
+			t.Fatalf("results not ordered ascending by day: %+v", got)
+		}
+	}
+}
+
+// TestListDailyBalancesTieBreakByID pins the deterministic intra-day tie-break.
+// Two successful rows land in the SAME second of the same day, differing only in
+// sub-second fraction and balance. Because created_at is RFC3339Nano (variable
+// length: trailing zeros trimmed, the fraction omitted entirely at .0), a
+// lexicographic MAX(created_at) mis-orders them — "…:00.9Z" sorts ABOVE "…:00.1Z"
+// yet a plain "…:00Z" would sort above BOTH ('Z' > '.'). The row returned must be
+// the last-written one (highest AUTOINCREMENT id), independent of that string
+// ordering.
+func TestListDailyBalancesTieBreakByID(t *testing.T) {
+	s := openTestStore(t)
+
+	now := time.Now().UTC()
+	sec := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+	// Insert the ".9" row FIRST (lower id, balance 5.0), then the ".1" row (higher
+	// id, balance 9.0). Under a string MAX(created_at) the ".9" row wins (5.0);
+	// under MAX(id) the later-written ".1" row wins (9.0).
+	firstWritten := sec.Add(900 * time.Millisecond).Format(time.RFC3339Nano)
+	lastWritten := sec.Add(100 * time.Millisecond).Format(time.RFC3339Nano)
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "alpha", Balance: 5.0, Currency: "USD", CreatedAt: firstWritten}); err != nil {
+		t.Fatalf("SaveEarnings(first) error: %v", err)
+	}
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "alpha", Balance: 9.0, Currency: "USD", CreatedAt: lastWritten}); err != nil {
+		t.Fatalf("SaveEarnings(second) error: %v", err)
+	}
+
+	got := s.ListDailyBalances(2)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one (platform, day) row, got %d: %+v", len(got), got)
+	}
+	if got[0].Balance != 9.0 {
+		t.Fatalf("intra-day tie-break did not pick the higher-id row: got balance=%v, want 9.0", got[0].Balance)
 	}
 }

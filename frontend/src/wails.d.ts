@@ -18,6 +18,7 @@ declare module "../wailsjs/go/main/App" {
   export function RefreshDeployments(): Promise<Deployment[]>;
   export function CollectService(slug: string): Promise<EarningsRecord>;
   export function ManagedRuntimePlan(): Promise<ManagedRuntimePlan>;
+  export function GetEarningsSummary(): Promise<EarningsSummary>;
 }
 
 export interface AppState {
@@ -30,6 +31,56 @@ export interface AppState {
   guides: InstallGuide[];
   notifications: NotificationItem[];
   currencies: string[];
+  summary: EarningsSummary;
+}
+
+export interface EarningsSummary {
+  displayCurrency: string;
+  total: number;
+  today: number;
+  month: number;
+  todayChange: number;
+  monthChange: number;
+  breakdown: ServiceEarning[];
+  points: PointsBalance[];
+  daily: DailyPoint[];
+  ratesStale: boolean;
+  ratesUpdated: string;
+}
+
+export interface ServiceEarning {
+  platform: string;
+  name: string;
+  balance: number;
+  currency: string;
+  balanceDisplay: number;
+  convertible: boolean;
+  delta: number;
+  error: string;
+  cashout: CashoutProgress;
+}
+
+export interface CashoutProgress {
+  minAmount: number;
+  currency: string;
+  percent: number;
+  eligible: boolean;
+  comparable: boolean;
+  method: string;
+  dashboardUrl: string;
+  notes: string;
+}
+
+export interface PointsBalance {
+  platform: string;
+  name: string;
+  balance: number;
+  currency: string;
+}
+
+export interface DailyPoint {
+  day: string;
+  amount: number;
 }
 
 export interface AppConfig {
