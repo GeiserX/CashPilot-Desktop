@@ -16,7 +16,7 @@ referral:
   signup_url: "https://storj.dev/node/get-started/setup"
 
 docker:
-  image: storjlabs/storagenode
+  image: "storjlabs/storagenode@sha256:21ca0ac819d1d66240830d28097eeb693923e51383aa3bb07bf823f9fad1f6e9"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: WALLET

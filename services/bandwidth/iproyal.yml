@@ -15,7 +15,7 @@ referral:
   signup_url: "https://pawns.app?r=19266874"
 
 docker:
-  image: iproyal/pawns-cli
+  image: "iproyal/pawns-cli@sha256:b8bd21d755a7bd33cdde59da31f9b39d13e67fc67d00cb5f895d1c606eb5a95d"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: IPROYALPAWNS_EMAIL

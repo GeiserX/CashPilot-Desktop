@@ -14,7 +14,7 @@ referral:
   signup_url: "https://repocket.com/"
 
 docker:
-  image: repocket/repocket
+  image: "repocket/repocket@sha256:5888d756de7e0e74b95b5eb08bb93f4240a0ce840c910a7e528d1143ad0c502b"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: REPOCKET_EMAIL

@@ -14,7 +14,7 @@ referral:
   signup_url: "https://www.packetshare.io/register.html"
 
 docker:
-  image: packetshare/packetshare
+  image: "packetshare/packetshare@sha256:52ddf3c71ce4eda7b49f700565b071a71731a57d2d67d3d2b4a446ea11f68235"
   platforms: [linux/amd64]
   env:
     - key: PACKETSHARE_EMAIL

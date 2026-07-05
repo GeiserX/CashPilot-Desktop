@@ -14,7 +14,7 @@ referral:
   signup_url: "https://ur.io/?referral_code=1Q3G19"
 
 docker:
-  image: bringyour/community-provider
+  image: "bringyour/community-provider@sha256:ce51efac7cd44233e2856344a683e977abb90c10952da37230313cccfa077086"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: UR_AUTH_TOKEN

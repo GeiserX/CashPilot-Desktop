@@ -13,7 +13,7 @@ referral:
   signup_url: "https://earn.fm/ref/GEISYB91"
 
 docker:
-  image: earnfm/earnfm-client
+  image: "earnfm/earnfm-client@sha256:96169b3cd1b5cf2fce74b24b72949037d9539eeceb70ecdbe6d8081839a5db32"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: EARNFM_TOKEN

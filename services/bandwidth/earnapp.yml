@@ -14,7 +14,7 @@ referral:
   signup_url: "https://earnapp.com/i/TSMD9wSm"
 
 docker:
-  image: fazalfarhan01/earnapp:lite
+  image: "fazalfarhan01/earnapp:lite@sha256:0dbce82a18aaee0b0252d07d70d27d0e9e31a8e85f3fc2713d4f097f48e29b7b"
   platforms: [linux/amd64]
   env:
     - key: EARNAPP_UUID

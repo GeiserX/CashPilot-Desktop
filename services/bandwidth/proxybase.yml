@@ -13,7 +13,7 @@ referral:
   signup_url: "https://peer.proxybase.org?referral=nXzS3c6iTO"
 
 docker:
-  image: proxybase/proxybase
+  image: "proxybase/proxybase@sha256:04d63c3b7727fe7b988600a5b7663144957aee9997ddf82bdb0f6d6007dfb3e3"
   platforms: [linux/amd64]
   env:
     - key: USER_ID

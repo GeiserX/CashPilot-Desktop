@@ -14,7 +14,7 @@ referral:
   signup_url: "https://presearch.com/signup?rid=4872322"
 
 docker:
-  image: presearch/node
+  image: "presearch/node@sha256:4444ad126f3acd376db0da3fdcdcfa2368e7f308c161e4b4e52a92646f5b3bf6"
   platforms: [linux/amd64, linux/arm64]
   env:
     - key: REGISTRATION_CODE
