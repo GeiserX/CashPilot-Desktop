@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -29,10 +31,29 @@ type App struct {
 	store      *store.Store
 	runtime    runtime.Provider
 	services   *services.Manager
-	collectors *collectors.Registry
+	collectors collectorRegistry
 	exchange   *exchange.Service
 	trayIcon   []byte
 	fleetAPI   *fleetAPIServer
+
+	// Background collection scheduler. collecting is a single-flight guard so
+	// overlapping collectAll runs (the ticker, a post-deploy kick, a future manual
+	// refresh) never stack. schedCancel/schedDone are the running loop's stop
+	// handle, guarded by schedMu because Startup, SaveSettings and Shutdown touch
+	// them from different goroutines.
+	collecting  atomic.Bool
+	schedMu     sync.Mutex
+	schedCancel context.CancelFunc
+	schedDone   chan struct{}
+}
+
+// collectorRegistry is the slice of *collectors.Registry the app depends on: run a
+// single service's collector (persisting its earnings record) and report whether a
+// slug has a native collector at all. It is an interface so the scheduler tests can
+// inject a fake collector without a live store or network.
+type collectorRegistry interface {
+	Collect(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error)
+	Supports(slug string) bool
 }
 
 func NewApp() *App {
@@ -92,6 +113,11 @@ func (a *App) Startup(ctx context.Context) {
 	if err := a.startFleetAPI(); err != nil {
 		a.emitError("fleet-api", err)
 	}
+
+	// Start background earnings collection so the app is genuinely "passive":
+	// balances refresh on a timer without the user clicking Collect. This never
+	// blocks Startup — startScheduler only launches a goroutine.
+	a.startScheduler(ctx)
 }
 
 func (a *App) DomReady(ctx context.Context) {
@@ -106,6 +132,9 @@ func (a *App) DomReady(ctx context.Context) {
 }
 
 func (a *App) Shutdown(_ context.Context) {
+	// Stop the collection loop before closing the store so no in-flight collect
+	// writes to a database that is about to close.
+	a.stopScheduler()
 	if a.fleetAPI != nil {
 		_ = a.fleetAPI.Close()
 	}
@@ -536,6 +565,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		return SettingsState{}, err
 	}
 	cfg := a.cfg.Config()
+	previousInterval := cfg.CollectIntervalMinutes
 	if value := strings.TrimSpace(values["displayCurrency"]); value != "" {
 		upper := strings.ToUpper(value)
 		if !isSupportedCurrency(upper) {
@@ -568,6 +598,11 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	}
 	if err := a.cfg.Save(cfg); err != nil {
 		return SettingsState{}, err
+	}
+	// If the collection cadence changed, restart the ticker so the new interval
+	// takes effect immediately instead of waiting for the next app launch.
+	if cfg.CollectIntervalMinutes != previousInterval && a.ctx != nil {
+		a.runScheduler(a.ctx, a.collectInterval())
 	}
 	return a.GetSettingsState()
 }
@@ -733,6 +768,13 @@ func (a *App) DeployService(slug string, values map[string]string) (store.Deploy
 		return store.Deployment{}, err
 	}
 	wailsruntime.EventsEmit(a.ctx, "deployment:changed", deployment)
+	// Collect this service's balance right away so the dashboard shows a figure
+	// shortly after deploy instead of waiting for the next scheduled tick. Only
+	// services with a native collector are worth kicking; the rest would merely
+	// persist a "not ported yet" error row.
+	if a.collectors != nil && a.collectors.Supports(slug) {
+		go a.collectOne(a.ctx, slug)
+	}
 	return deployment, nil
 }
 
@@ -813,6 +855,147 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 	}
 	wailsruntime.EventsEmit(a.ctx, "earnings:changed", record)
 	return record, nil
+}
+
+// collectOne runs a single service's collector and emits earnings:changed. It is
+// the fire-and-forget variant of CollectService used for the post-deploy balance
+// fetch: a collector failure is already persisted as an error record (surfaced by
+// notifications()), so only store/transport errors are reported here.
+func (a *App) collectOne(ctx context.Context, slug string) {
+	if a.store == nil || a.collectors == nil {
+		return
+	}
+	creds, err := a.store.GetCredentials(slug)
+	if err != nil {
+		a.emitError("collector", err)
+		return
+	}
+	record, err := a.collectors.Collect(ctx, slug, creds)
+	if err != nil {
+		a.emitError("collector", err)
+		return
+	}
+	a.emitEvent("earnings:changed", record)
+}
+
+// collectAll runs one full background collection cycle: it collects every deployed
+// service that has a native collector, loading each service's stored credentials.
+// A failing collector never aborts the batch — its error is already persisted as an
+// EarningsRecord (surfaced by notifications()); a store/transport error is logged
+// via emitError and the loop continues to the next service. A single-flight guard
+// (a.collecting) means overlapping triggers — the ticker, a post-deploy kick, a
+// manual refresh — never stack; a run already in progress is skipped rather than
+// queued. One earnings:changed event is emitted after the batch so the dashboard
+// refreshes once per cycle.
+func (a *App) collectAll(ctx context.Context) {
+	if a.store == nil || a.collectors == nil {
+		return
+	}
+	if !a.collecting.CompareAndSwap(false, true) {
+		return
+	}
+	defer a.collecting.Store(false)
+
+	collected := 0
+	for _, dep := range a.store.ListDeployments() {
+		if ctx.Err() != nil {
+			return
+		}
+		if !a.collectors.Supports(dep.Slug) {
+			continue
+		}
+		creds, err := a.store.GetCredentials(dep.Slug)
+		if err != nil {
+			a.emitError("collector", err)
+			continue
+		}
+		if _, err := a.collectors.Collect(ctx, dep.Slug, creds); err != nil {
+			a.emitError("collector", err)
+			continue
+		}
+		collected++
+	}
+	if collected > 0 {
+		a.emitEvent("earnings:changed", collected)
+	}
+}
+
+// collectInterval is the configured collection cadence as a duration, applying the
+// 60-minute default for a non-positive setting.
+func (a *App) collectInterval() time.Duration {
+	minutes := 60
+	if a.cfg != nil {
+		if m := a.cfg.Config().CollectIntervalMinutes; m > 0 {
+			minutes = m
+		}
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+// startScheduler launches the background collection loop from Startup. It never
+// blocks: runScheduler starts a goroutine and returns immediately.
+func (a *App) startScheduler(ctx context.Context) {
+	a.runScheduler(ctx, a.collectInterval())
+}
+
+// runScheduler starts (or restarts) the periodic collection loop with the given
+// interval. The interval is a parameter rather than read from config so tests can
+// inject a short cadence; a non-positive value falls back to the 60-minute default.
+// Any previously running loop is cancelled first. The loop runs one collectAll
+// immediately, then every interval, and exits cleanly when ctx is cancelled or the
+// loop is stopped/replaced — no goroutine leak.
+func (a *App) runScheduler(ctx context.Context, interval time.Duration) {
+	if ctx == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = 60 * time.Minute
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+
+	a.schedMu.Lock()
+	if a.schedCancel != nil {
+		a.schedCancel() // cancel the prior loop; it drains and exits on its own
+	}
+	a.schedCancel = cancel
+	a.schedDone = done
+	a.schedMu.Unlock()
+
+	go func() {
+		defer close(done)
+		a.collectAll(loopCtx) // one run shortly after start
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+				a.collectAll(loopCtx)
+			}
+		}
+	}()
+}
+
+// stopScheduler cancels the background collection loop and waits for it to exit, so
+// Shutdown never leaves the goroutine writing to a closing store. It is idempotent;
+// cancelling the context also aborts any in-flight collector HTTP request, so the
+// join returns promptly.
+func (a *App) stopScheduler() {
+	a.schedMu.Lock()
+	cancel := a.schedCancel
+	done := a.schedDone
+	a.schedCancel = nil
+	a.schedDone = nil
+	a.schedMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
 }
 
 func (a *App) ManagedRuntimePlan() runtime.ManagedRuntimePlan {
@@ -901,10 +1084,21 @@ func (a *App) ready() error {
 }
 
 func (a *App) emitError(scope string, err error) {
-	if a.ctx != nil {
-		wailsruntime.EventsEmit(a.ctx, "app:error", map[string]string{
-			"scope": scope,
-			"error": err.Error(),
-		})
+	a.emitEvent("app:error", map[string]string{
+		"scope": scope,
+		"error": err.Error(),
+	})
+}
+
+// emitEvent emits a Wails event, but only when a.ctx is a real Wails runtime
+// context. Wails' EventsEmit fatally exits the process (log.Fatalf inside
+// getEvents) if the context has no internal "events" value — the case under tests
+// that inject a plain context.Background(). Guarding on that value lets background
+// collection and its event emission be exercised in tests while behaving normally
+// at runtime, where the OnStartup context always carries "events".
+func (a *App) emitEvent(name string, data ...interface{}) {
+	if a.ctx == nil || a.ctx.Value("events") == nil {
+		return
 	}
+	wailsruntime.EventsEmit(a.ctx, name, data...)
 }

@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -367,5 +370,190 @@ func TestEarningsSummaryPointsClassificationDuringOutage(t *testing.T) {
 	}
 	if !sum.RatesStale {
 		t.Fatal("expected RatesStale=true when a non-points currency cannot be priced")
+	}
+}
+
+// fakeCollector is an injectable collectorRegistry for the scheduler tests. It
+// records how many times each slug was collected, can be told to fail specific
+// slugs, and tracks the maximum number of Collect calls in flight at once so the
+// single-flight guard can be asserted. All shared state is mutex/atomic-guarded so
+// the scheduler goroutine and the test observer stay race-free under -race.
+type fakeCollector struct {
+	mu        sync.Mutex
+	supported map[string]bool
+	fail      map[string]bool
+	collected map[string]int
+
+	inFlight atomic.Int32
+	maxSeen  atomic.Int32
+	hold     time.Duration
+}
+
+func newFakeCollector(supported, fail []string) *fakeCollector {
+	f := &fakeCollector{
+		supported: map[string]bool{},
+		fail:      map[string]bool{},
+		collected: map[string]int{},
+	}
+	for _, s := range supported {
+		f.supported[s] = true
+	}
+	for _, s := range fail {
+		f.fail[s] = true
+	}
+	return f
+}
+
+func (f *fakeCollector) Supports(slug string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.supported[slug]
+}
+
+func (f *fakeCollector) Collect(_ context.Context, slug string, _ map[string]string) (store.EarningsRecord, error) {
+	// Track concurrent in-flight collects to prove the single-flight guard.
+	cur := f.inFlight.Add(1)
+	for {
+		m := f.maxSeen.Load()
+		if cur <= m || f.maxSeen.CompareAndSwap(m, cur) {
+			break
+		}
+	}
+	if f.hold > 0 {
+		time.Sleep(f.hold)
+	}
+	f.inFlight.Add(-1)
+
+	f.mu.Lock()
+	f.collected[slug]++
+	shouldFail := f.fail[slug]
+	f.mu.Unlock()
+
+	if shouldFail {
+		// Mirror the real registry: the error is captured on the persisted record,
+		// and a store/transport-style error is also returned to the caller.
+		return store.EarningsRecord{Platform: slug, Error: "boom"}, fmt.Errorf("collector %s failed", slug)
+	}
+	return store.EarningsRecord{Platform: slug, Balance: 1, Currency: "USD"}, nil
+}
+
+func (f *fakeCollector) counts() map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make(map[string]int, len(f.collected))
+	for k, v := range f.collected {
+		out[k] = v
+	}
+	return out
+}
+
+// newSchedulerTestApp wires an App with a real in-memory store (seeded with the
+// given deployment slugs) and the given fake collector. The store is real so the
+// deployment iteration and credential lookup in collectAll are exercised for real;
+// only the collector is faked. ctx is a plain background context, so emitEvent is a
+// safe no-op (see emitEvent's doc) and the test never touches the Wails runtime.
+func newSchedulerTestApp(t *testing.T, fake *fakeCollector, slugs ...string) (*App, context.Context, context.CancelFunc) {
+	t.Helper()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatalf("config.NewManager error: %v", err)
+	}
+	st, err := store.Open(cfg.DataDir())
+	if err != nil {
+		t.Fatalf("store.Open error: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	for _, s := range slugs {
+		if err := st.UpsertDeployment(store.Deployment{Slug: s}); err != nil {
+			t.Fatalf("UpsertDeployment(%s) error: %v", s, err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &App{cfg: cfg, store: st, collectors: fake, ctx: ctx}
+	return app, ctx, cancel
+}
+
+// TestSchedulerCollectsEachDeploymentOnTick pins the core Slice 4 behavior: the
+// scheduler ticks on a short injected interval, runs collectAll on every tick, and
+// collects each deployed service — and a collector that fails every run does NOT
+// stop the others from being collected.
+func TestSchedulerCollectsEachDeploymentOnTick(t *testing.T) {
+	// svc-b's collector fails on every run; svc-a and svc-c must keep collecting.
+	fake := newFakeCollector([]string{"svc-a", "svc-b", "svc-c"}, []string{"svc-b"})
+	app, ctx, cancel := newSchedulerTestApp(t, fake, "svc-a", "svc-b", "svc-c")
+	defer cancel()
+
+	app.runScheduler(ctx, 5*time.Millisecond)
+	t.Cleanup(app.stopScheduler)
+
+	// Wait until every service has been collected at least twice: the first count
+	// is the immediate initial run, so >=2 proves the ticker fired collectAll again
+	// (i.e. collection really runs "on tick", not only once at start).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c := fake.counts()
+		if c["svc-a"] >= 2 && c["svc-b"] >= 2 && c["svc-c"] >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for repeated collection on tick, counts=%v", c)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	cancel()
+	app.stopScheduler() // returns only once the loop goroutine has exited (no leak)
+
+	c := fake.counts()
+	if c["svc-a"] < 2 || c["svc-c"] < 2 {
+		t.Fatalf("a failing collector (svc-b) must not stop the others, counts=%v", c)
+	}
+	if c["svc-b"] < 2 {
+		t.Fatalf("expected the failing collector to keep being attempted each cycle, counts=%v", c)
+	}
+}
+
+// TestCollectAllSkipsUnsupportedAndContinuesOnError pins one full cycle in
+// isolation: only deployed services with a native collector are collected (an
+// unsupported deployment is skipped, not turned into an error row), and one failing
+// collector does not abort the rest of the batch.
+func TestCollectAllSkipsUnsupportedAndContinuesOnError(t *testing.T) {
+	// svc-a/b/c have collectors (b fails); svc-x is deployed but unsupported.
+	fake := newFakeCollector([]string{"svc-a", "svc-b", "svc-c"}, []string{"svc-b"})
+	app, _, cancel := newSchedulerTestApp(t, fake, "svc-a", "svc-b", "svc-c", "svc-x")
+	defer cancel()
+
+	app.collectAll(context.Background())
+
+	c := fake.counts()
+	if c["svc-a"] != 1 || c["svc-b"] != 1 || c["svc-c"] != 1 {
+		t.Fatalf("expected each supported service collected once (continuing past svc-b's error), counts=%v", c)
+	}
+	if _, ok := c["svc-x"]; ok {
+		t.Fatalf("expected the unsupported deployment svc-x to be skipped, counts=%v", c)
+	}
+}
+
+// TestCollectAllSingleFlight pins the single-flight guard: many concurrent
+// collectAll calls never overlap, so at most one Collect is ever in flight.
+func TestCollectAllSingleFlight(t *testing.T) {
+	fake := newFakeCollector([]string{"svc-a", "svc-b", "svc-c"}, nil)
+	fake.hold = 2 * time.Millisecond // hold each collect so an overlap would be observable
+	app, _, cancel := newSchedulerTestApp(t, fake, "svc-a", "svc-b", "svc-c")
+	defer cancel()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			app.collectAll(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	if got := fake.maxSeen.Load(); got != 1 {
+		t.Fatalf("single-flight violated: max concurrent collects = %d, want 1", got)
 	}
 }

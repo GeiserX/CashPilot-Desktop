@@ -37,41 +37,44 @@ func NewRegistry(st *store.Store) *Registry {
 	}
 }
 
+// collectorFunc runs one service's collector against the given credentials.
+type collectorFunc func(*Registry, context.Context, map[string]string) (Result, error)
+
+// collectorDispatch is the single source of truth for which slugs have a native
+// collector. Collect dispatches through it and Supports reports membership, so the
+// two can never drift: a slug either has an entry here or it does not.
+var collectorDispatch = map[string]collectorFunc{
+	"anyone-protocol": (*Registry).collectAnyone,
+	"bitping":         (*Registry).collectBitping,
+	"bytelixir":       (*Registry).collectBytelixir,
+	"earnapp":         (*Registry).collectEarnApp,
+	"honeygain":       (*Registry).collectHoneygain,
+	"earnfm":          (*Registry).collectEarnFM,
+	"grass":           (*Registry).collectGrass,
+	"iproyal":         (*Registry).collectIPRoyal,
+	"mysterium":       (*Registry).collectMystNodes,
+	"packetstream":    (*Registry).collectPacketStream,
+	"proxyrack":       (*Registry).collectProxyRack,
+	"repocket":        (*Registry).collectRepocket,
+	"salad":           (*Registry).collectSalad,
+	"storj":           (*Registry).collectStorj,
+	"traffmonetizer":  (*Registry).collectTraffmonetizer,
+}
+
+// Supports reports whether slug has a native collector wired up. The scheduler
+// uses it to skip deployed services that have no automated collector rather than
+// persisting a spurious "not ported yet" error row for them on every cycle.
+func (r *Registry) Supports(slug string) bool {
+	_, ok := collectorDispatch[slug]
+	return ok
+}
+
 func (r *Registry) Collect(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error) {
 	var result Result
 	var err error
-	switch slug {
-	case "anyone-protocol":
-		result, err = r.collectAnyone(ctx, credentials)
-	case "bitping":
-		result, err = r.collectBitping(ctx, credentials)
-	case "bytelixir":
-		result, err = r.collectBytelixir(ctx, credentials)
-	case "earnapp":
-		result, err = r.collectEarnApp(ctx, credentials)
-	case "honeygain":
-		result, err = r.collectHoneygain(ctx, credentials)
-	case "earnfm":
-		result, err = r.collectEarnFM(ctx, credentials)
-	case "grass":
-		result, err = r.collectGrass(ctx, credentials)
-	case "iproyal":
-		result, err = r.collectIPRoyal(ctx, credentials)
-	case "mysterium":
-		result, err = r.collectMystNodes(ctx, credentials)
-	case "packetstream":
-		result, err = r.collectPacketStream(ctx, credentials)
-	case "proxyrack":
-		result, err = r.collectProxyRack(ctx, credentials)
-	case "repocket":
-		result, err = r.collectRepocket(ctx, credentials)
-	case "salad":
-		result, err = r.collectSalad(ctx, credentials)
-	case "storj":
-		result, err = r.collectStorj(ctx, credentials)
-	case "traffmonetizer":
-		result, err = r.collectTraffmonetizer(ctx, credentials)
-	default:
+	if fn, ok := collectorDispatch[slug]; ok {
+		result, err = fn(r, ctx, credentials)
+	} else {
 		err = fmt.Errorf("collector for %s is not ported yet", slug)
 	}
 	if err != nil {
