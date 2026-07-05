@@ -59,6 +59,7 @@ var collectorDispatch = map[string]collectorFunc{
 	"salad":           (*Registry).collectSalad,
 	"storj":           (*Registry).collectStorj,
 	"traffmonetizer":  (*Registry).collectTraffmonetizer,
+	"vast-ai":         (*Registry).collectVast,
 }
 
 // Supports reports whether slug has a native collector wired up. The scheduler
@@ -538,6 +539,94 @@ func (r *Registry) collectTraffmonetizer(ctx context.Context, credentials map[st
 		return Result{}, err
 	}
 	return Result{Platform: "traffmonetizer", Balance: round(resp.Data.Balance, 4), Currency: "USD"}, nil
+}
+
+func (r *Registry) collectVast(ctx context.Context, credentials map[string]string) (Result, error) {
+	apiKey := firstCredential(credentials, "VAST_API_KEY", "vast_api_key", "api_key")
+	if apiKey == "" {
+		return Result{}, fmt.Errorf("Vast.ai API key is required")
+	}
+	var resp vastEarnings
+	headers := map[string]string{"Authorization": "Bearer " + apiKey, "Accept": "application/json"}
+	if err := r.doJSON(ctx, "GET", "https://console.vast.ai/api/v0/users/me/machine-earnings", nil, headers, &resp); err != nil {
+		return Result{}, err
+	}
+	// A valid response with no earnings (no GPU rented yet, or a brand-new host) is
+	// Balance 0, never an error — a GPU is required to earn, so an empty machine
+	// list is expected. vastEarningsUSD returns 0 when every earnings field is absent.
+	return Result{Platform: "vast-ai", Balance: round(vastEarningsUSD(resp), 4), Currency: "USD"}, nil
+}
+
+// vastMachineEarning is one row of Vast.ai's per-machine earnings. The endpoint
+// splits earnings across GPU, storage, and up/down bandwidth; some responses also
+// carry a pre-summed total on the row.
+type vastMachineEarning struct {
+	MachineID int     `json:"machine_id"`
+	GPUEarn   float64 `json:"gpu_earn"`
+	StoEarn   float64 `json:"sto_earn"`
+	BWUEarn   float64 `json:"bwu_earn"`
+	BWDEarn   float64 `json:"bwd_earn"`
+	Total     float64 `json:"total"`
+	TotalEarn float64 `json:"total_earn"`
+}
+
+func (m vastMachineEarning) earnings() float64 {
+	if m.Total != 0 {
+		return m.Total
+	}
+	if m.TotalEarn != 0 {
+		return m.TotalEarn
+	}
+	return m.GPUEarn + m.StoEarn + m.BWUEarn + m.BWDEarn
+}
+
+// vastEarnings is the shape of GET /api/v0/users/me/machine-earnings: a per-machine
+// breakdown (per_machine), a windowed summary, and a current account-balance block.
+// machine_earnings is tolerated as an alternate name for the per-machine array.
+type vastEarnings struct {
+	Current struct {
+		Balance float64 `json:"balance"`
+		Total   float64 `json:"total"`
+		Credit  float64 `json:"credit"`
+	} `json:"current"`
+	Summary struct {
+		TotalGPU  float64 `json:"total_gpu"`
+		TotalStor float64 `json:"total_stor"`
+		TotalBWU  float64 `json:"total_bwu"`
+		TotalBWD  float64 `json:"total_bwd"`
+	} `json:"summary"`
+	PerMachine      []vastMachineEarning `json:"per_machine"`
+	MachineEarnings []vastMachineEarning `json:"machine_earnings"`
+	Total           float64              `json:"total"`
+}
+
+// vastEarningsUSD reduces a machine-earnings response to a single USD figure: it
+// sums the per-machine earnings the endpoint returned, and when that array is
+// absent falls back to the current account total, then the current balance, then
+// the windowed summary, then a top-level total. Everything absent -> 0 (a valid
+// "earned nothing yet" response, not an error).
+func vastEarningsUSD(e vastEarnings) float64 {
+	machines := e.PerMachine
+	if len(machines) == 0 {
+		machines = e.MachineEarnings
+	}
+	total := 0.0
+	for _, m := range machines {
+		total += m.earnings()
+	}
+	if total != 0 {
+		return total
+	}
+	if e.Current.Total != 0 {
+		return e.Current.Total
+	}
+	if e.Current.Balance != 0 {
+		return e.Current.Balance
+	}
+	if s := e.Summary.TotalGPU + e.Summary.TotalStor + e.Summary.TotalBWU + e.Summary.TotalBWD; s != 0 {
+		return s
+	}
+	return e.Total
 }
 
 func (r *Registry) doJSON(ctx context.Context, method, url string, body any, headers map[string]string, out any) error {
