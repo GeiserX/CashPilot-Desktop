@@ -149,7 +149,6 @@ type AppState struct {
 	Services      []catalog.Service      `json:"services"`
 	Deployments   []store.Deployment     `json:"deployments"`
 	Earnings      []store.EarningsRecord `json:"earnings"`
-	History       []store.EarningsRecord `json:"history"`
 	Guides        []runtime.InstallGuide `json:"guides"`
 	Notifications []Notification         `json:"notifications"`
 	Currencies    []string               `json:"currencies"`
@@ -189,7 +188,6 @@ type ServiceEarning struct {
 	Currency       string          `json:"currency"`
 	BalanceDisplay float64         `json:"balanceDisplay"`
 	Convertible    bool            `json:"convertible"`
-	Delta          float64         `json:"delta"`
 	Error          string          `json:"error"`
 	Cashout        CashoutProgress `json:"cashout"`
 }
@@ -272,7 +270,6 @@ func (a *App) GetAppState() (AppState, error) {
 		Services:      a.catalog.ListVisible(),
 		Deployments:   a.store.ListDeployments(),
 		Earnings:      a.store.ListLatestEarnings(),
-		History:       a.store.ListEarningsHistory(200),
 		Guides:        runtime.InstallGuides(),
 		Notifications: a.notifications(runtimeStatus),
 		Currencies:    supportedCurrencies(),
@@ -488,10 +485,6 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 			if conv, ok := a.exchange.ToDisplay(rec.Balance, rec.Currency, disp); ok {
 				se.BalanceDisplay = conv
 			}
-		}
-		// Native day-over-day change from the last two collected days.
-		if days := daysByPlat[rec.Platform]; len(days) >= 2 {
-			se.Delta = perPlat[rec.Platform][days[len(days)-1]] - perPlat[rec.Platform][days[len(days)-2]]
 		}
 		cp := CashoutProgress{
 			MinAmount:    cash.MinAmount,
