@@ -129,18 +129,13 @@ func (r *Registry) collectAnyone(ctx context.Context, credentials map[string]str
 		}
 		totalTokens += raw / 1_000_000_000_000_000_000
 	}
-	if totalTokens <= 0 {
-		return Result{Platform: "anyone-protocol", Balance: 0, Currency: "ANYONE"}, nil
-	}
-	var price struct {
-		Anyone struct {
-			USD float64 `json:"usd"`
-		} `json:"airtor-protocol"`
-	}
-	if err := r.doJSON(ctx, "GET", "https://api.coingecko.com/api/v3/simple/price?ids=airtor-protocol&vs_currencies=usd", nil, nil, &price); err != nil || price.Anyone.USD <= 0 {
-		return Result{Platform: "anyone-protocol", Balance: round(totalTokens, 6), Currency: "ANYONE"}, nil
-	}
-	return Result{Platform: "anyone-protocol", Balance: round(totalTokens*price.Anyone.USD, 2), Currency: "USD"}, nil
+	// Always emit the raw ANYONE token count and let the exchange layer price it
+	// (internal/exchange maps ANYONE -> airtor-protocol). Pricing here previously
+	// flipped the currency to USD on a successful CoinGecko fetch and back to
+	// ANYONE on failure/zero; because computeEarningsSummary collapses each
+	// platform to a single currency, that flip corrupted Today/Month accrual. A
+	// single, stable currency keeps the summary's conversion consistent.
+	return Result{Platform: "anyone-protocol", Balance: round(totalTokens, 6), Currency: "ANYONE"}, nil
 }
 
 func (r *Registry) collectBitping(ctx context.Context, credentials map[string]string) (Result, error) {
@@ -603,7 +598,10 @@ func (r *Registry) doRaw(ctx context.Context, method, url string, body any, head
 		return nil, 0, nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(resp.Body)
+	// Cap the read at 8 MiB so a hostile or misconfigured endpoint returning a
+	// huge (or unbounded) body cannot OOM the app — mirrors the fleet server's
+	// http.MaxBytesReader defense on inbound requests.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, resp.StatusCode, resp.Header, err
 	}

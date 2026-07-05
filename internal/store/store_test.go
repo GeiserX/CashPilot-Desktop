@@ -362,6 +362,40 @@ func TestEarningsLatestAndHistory(t *testing.T) {
 	}
 }
 
+// TestListLatestEarningsTieBreakByID pins the deterministic intra-second
+// tie-break for ListLatestEarnings. Two successful rows for one platform land in
+// the SAME second, differing only in sub-second fraction and balance. Because
+// created_at is RFC3339Nano (variable length: trailing zeros trimmed), a
+// lexicographic MAX(created_at) mis-orders them — "…:00.9Z" sorts ABOVE
+// "…:00.1Z" — so the row returned must be the last-written one (highest
+// AUTOINCREMENT id), independent of that string ordering. This FAILS under the
+// old MAX(created_at) subquery (which would return the .9 row, balance 5.0).
+func TestListLatestEarningsTieBreakByID(t *testing.T) {
+	s := openTestStore(t)
+
+	now := time.Now().UTC()
+	sec := time.Date(now.Year(), now.Month(), now.Day(), 12, 0, 0, 0, time.UTC)
+	// Insert the ".9" row FIRST (lower id, balance 5.0), then the ".1" row (higher
+	// id, balance 9.0). Under a string MAX(created_at) the ".9" row wins (5.0);
+	// under MAX(id) the later-written ".1" row wins (9.0).
+	firstWritten := sec.Add(900 * time.Millisecond).Format(time.RFC3339Nano)
+	lastWritten := sec.Add(100 * time.Millisecond).Format(time.RFC3339Nano)
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "alpha", Balance: 5.0, Currency: "USD", CreatedAt: firstWritten}); err != nil {
+		t.Fatalf("SaveEarnings(first) error: %v", err)
+	}
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "alpha", Balance: 9.0, Currency: "USD", CreatedAt: lastWritten}); err != nil {
+		t.Fatalf("SaveEarnings(second) error: %v", err)
+	}
+
+	latest := s.ListLatestEarnings()
+	if len(latest) != 1 {
+		t.Fatalf("expected exactly one latest row per platform, got %d: %+v", len(latest), latest)
+	}
+	if latest[0].Balance != 9.0 {
+		t.Fatalf("intra-second tie-break did not pick the higher-id row: got balance=%v, want 9.0", latest[0].Balance)
+	}
+}
+
 func TestListDailyBalances(t *testing.T) {
 	s := openTestStore(t)
 

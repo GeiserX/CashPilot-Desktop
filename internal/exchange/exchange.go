@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -74,6 +75,10 @@ type Service struct {
 	fiat      map[string]float64
 	cryptoUSD map[string]float64
 	lastFetch time.Time
+
+	// refreshing is a single-flight guard for the background refresh kicked by
+	// EnsureFresh, so concurrent/awaited callers never stack refreshes or block.
+	refreshing atomic.Bool
 }
 
 // Option customises a Service at construction time.
@@ -152,9 +157,14 @@ func (s *Service) Refresh(ctx context.Context) error {
 	return nil
 }
 
-// EnsureFresh refreshes the cache only if it is older than CacheTTL (or has
-// never been fetched). It never panics and swallows refresh errors so callers
-// can invoke it opportunistically; Stale reports whether the data is trustworthy.
+// EnsureFresh triggers a refresh when the cache is older than CacheTTL (or has
+// never been fetched), but is NON-blocking: it kicks the refresh onto a
+// background goroutine and returns immediately, so the awaited dashboard path
+// (computeEarningsSummary / GetAppState) never stalls on up to ~30s of
+// sequential HTTP GETs. A single-flight guard (refreshing) means concurrent or
+// repeatedly-awaited callers never stack refreshes or block on one another;
+// they keep serving the last snapshot, and Stale reports whether that data is
+// trustworthy. Refresh errors are swallowed (the cache is stale-graceful).
 func (s *Service) EnsureFresh(ctx context.Context) {
 	s.mu.RLock()
 	fresh := !s.lastFetch.IsZero() && time.Since(s.lastFetch) <= CacheTTL
@@ -162,7 +172,15 @@ func (s *Service) EnsureFresh(ctx context.Context) {
 	if fresh {
 		return
 	}
-	_ = s.Refresh(ctx)
+	// Only one background refresh may be in flight at a time; if one already is,
+	// return immediately and let it land.
+	if !s.refreshing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer s.refreshing.Store(false)
+		_ = s.Refresh(ctx)
+	}()
 }
 
 // Snapshot returns a deep copy of the current cache for serialisation.

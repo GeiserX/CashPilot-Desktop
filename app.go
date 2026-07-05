@@ -95,7 +95,11 @@ func (a *App) Startup(ctx context.Context) {
 }
 
 func (a *App) DomReady(ctx context.Context) {
-	a.ctx = ctx
+	// a.ctx is set once in Startup with the same Wails app context; deliberately do
+	// NOT reassign it here. Binding goroutines (GetAppState -> runtime.Status,
+	// computeEarningsSummary -> EnsureFresh, CollectService) read a.ctx
+	// concurrently, so a second write would race with those reads under -race.
+	// DomReady uses its local ctx parameter directly for the window/tray setup.
 	wailsruntime.WindowShow(ctx)
 	PositionMainWindowOnPrimaryScreen()
 	InstallTrayIcon(a.trayIcon)

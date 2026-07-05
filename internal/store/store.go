@@ -211,13 +211,21 @@ func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
 	return record, err
 }
 
+// ListLatestEarnings returns the most recently written row per platform,
+// INCLUDING error rows (the dashboard breakdown and notifications rely on the
+// latest row even when it failed). The latest row per platform is chosen by
+// MAX(id), not MAX(created_at): created_at is RFC3339Nano whose variable-length
+// fraction makes a lexicographic MAX(created_at) mis-order same-second rows
+// (e.g. "…:00Z" sorts ABOVE "…:00.5Z" because 'Z' > '.'), so the monotonic
+// AUTOINCREMENT id is the deterministic "last written wins" key — matching the
+// shape ListDailyBalances already uses.
 func (s *Store) ListLatestEarnings() []EarningsRecord {
 	rows, err := s.db.Query(`
 		SELECT e.platform, e.balance, e.currency, e.error, e.created_at
 		FROM earnings e
 		INNER JOIN (
-			SELECT platform, max(created_at) AS created_at FROM earnings GROUP BY platform
-		) latest ON latest.platform = e.platform AND latest.created_at = e.created_at
+			SELECT platform, MAX(id) AS mx FROM earnings GROUP BY platform
+		) latest ON e.id = latest.mx
 		ORDER BY e.platform
 	`)
 	if err != nil {
