@@ -535,6 +535,45 @@ func TestCollectAllSkipsUnsupportedAndContinuesOnError(t *testing.T) {
 	}
 }
 
+// TestCollectAllCollectsCredentialOnlyServicesAndDedups pins the imageless fix:
+// collectAll collects the union of deployed slugs and slugs that merely have saved
+// credentials. A supported service with credentials but NO deployment row (the
+// imageless case: vast-ai, salad, grass, bytelixir) is collected — proving it no
+// longer waits for a manual click. A service present in BOTH sets is collected
+// exactly once (the collect count is the number of earnings rows one cycle writes,
+// so ==1 means no duplicate row). The Supports gate still applies to credential-only
+// slugs, so an unsupported one is skipped rather than turned into an error.
+func TestCollectAllCollectsCredentialOnlyServicesAndDedups(t *testing.T) {
+	// svc-both and svc-cred are supported; svc-unsup is NOT.
+	fake := newFakeCollector([]string{"svc-both", "svc-cred"}, nil)
+	// Only svc-both is deployed; svc-cred and svc-unsup exist solely as credentials.
+	app, _, cancel := newSchedulerTestApp(t, fake, "svc-both")
+	defer cancel()
+
+	for _, slug := range []string{"svc-both", "svc-cred", "svc-unsup"} {
+		if err := app.store.SaveCredentials(slug, map[string]string{"api_key": slug}); err != nil {
+			t.Fatalf("SaveCredentials(%s) error: %v", slug, err)
+		}
+	}
+
+	app.collectAll(context.Background())
+
+	c := fake.counts()
+	// New behavior: a supported credentials-only service (no deployment) collects.
+	if c["svc-cred"] != 1 {
+		t.Fatalf("expected the credentials-only supported service to be collected once, counts=%v", c)
+	}
+	// Dedup: a service in both the deployment and credential sets collects exactly
+	// once per cycle (no duplicate earnings row).
+	if c["svc-both"] != 1 {
+		t.Fatalf("expected a service in both sets collected exactly once, counts=%v", c)
+	}
+	// The Supports gate still applies to credential-only slugs.
+	if _, ok := c["svc-unsup"]; ok {
+		t.Fatalf("expected the unsupported credentials-only slug to be skipped, counts=%v", c)
+	}
+}
+
 // TestCollectAllSingleFlight pins the single-flight guard: many concurrent
 // collectAll calls never overlap, so at most one Collect is ever in flight.
 func TestCollectAllSingleFlight(t *testing.T) {

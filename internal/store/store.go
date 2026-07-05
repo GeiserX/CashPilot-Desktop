@@ -135,6 +135,26 @@ func (s *Store) GetCredentials(slug string) (map[string]string, error) {
 	return values, nil
 }
 
+// ListCredentialSlugs returns the slug of every service that has saved
+// credentials, ordered by slug. collectAll unions this with the deployment set
+// so imageless supported services (which never create a deployment row) still
+// participate in the scheduled collection cycle.
+func (s *Store) ListCredentialSlugs() []string {
+	rows, err := s.db.Query(`SELECT slug FROM credentials ORDER BY slug`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err == nil {
+			out = append(out, slug)
+		}
+	}
+	return out
+}
+
 func (s *Store) UpsertDeployment(dep Deployment) error {
 	now := time.Now().UTC()
 	if dep.CreatedAt == "" {
