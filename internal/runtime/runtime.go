@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	goruntime "runtime"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/docker/docker/api/types/container"
@@ -286,51 +288,168 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]ContainerInfo, 0, len(containers))
-	for _, c := range containers {
-		slug := c.Labels[LabelService]
-		name := ""
-		if len(c.Names) > 0 {
-			name = strings.TrimPrefix(c.Names[0], "/")
-		}
-		cpu, mem := p.stats(ctx, cli, c.ID, c.State == "running")
-		out = append(out, ContainerInfo{
-			Slug:        slug,
-			ContainerID: c.ID,
-			Name:        name,
-			Image:       c.Image,
-			Status:      c.State,
-			CPUPercent:  cpu,
-			MemoryMB:    mem,
-		})
-	}
-	return out, nil
+	return p.statsForContainers(ctx, cli, containers), nil
 }
 
-func (p *DockerProvider) stats(ctx context.Context, cli *client.Client, containerID string, running bool) (float64, float64) {
+// statsForContainers builds the ContainerInfo list, sampling every container's CPU
+// and memory concurrently. stats() waits cpuSampleInterval between its two samples,
+// so a serial loop would make this O(N * interval); with one goroutine per container
+// the added latency stays ~one interval regardless of N. Each goroutine owns its own
+// out[i] slot, so no locking is needed. It takes a statsClient (not *client.Client)
+// so the concurrency and mapping can be unit-tested with a fake, no Docker daemon.
+func (p *DockerProvider) statsForContainers(ctx context.Context, cli statsClient, containers []container.Summary) []ContainerInfo {
+	out := make([]ContainerInfo, len(containers))
+	var wg sync.WaitGroup
+	for i := range containers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			c := containers[i]
+			cpu, mem := p.stats(ctx, cli, c.ID, c.State == "running")
+			out[i] = toContainerInfo(c, cpu, mem)
+		}(i)
+	}
+	wg.Wait()
+	return out
+}
+
+// toContainerInfo maps a Docker container summary plus its sampled CPU% and memory
+// into a ContainerInfo. Split out so the field mapping is unit-testable.
+func toContainerInfo(c container.Summary, cpu, mem float64) ContainerInfo {
+	name := ""
+	if len(c.Names) > 0 {
+		name = strings.TrimPrefix(c.Names[0], "/")
+	}
+	return ContainerInfo{
+		Slug:        c.Labels[LabelService],
+		ContainerID: c.ID,
+		Name:        name,
+		Image:       c.Image,
+		Status:      c.State,
+		CPUPercent:  cpu,
+		MemoryMB:    mem,
+	}
+}
+
+// cpuSampleInterval is the delay between the two container-stats samples used to
+// compute a live CPU percentage. Docker's one-shot stats endpoint zeroes
+// PreCPUStats, so a single sample makes cpuDelta the container's entire lifetime
+// CPU time and systemDelta the entire system CPU time — a lifetime average, not
+// current load. Two time-separated samples give a true "CPU% right now".
+const cpuSampleInterval = 1 * time.Second
+
+// containerSample holds the raw counters read from one ContainerStatsOneShot call.
+type containerSample struct {
+	cpuTotal   uint64  // CPUStats.CPUUsage.TotalUsage
+	systemCPU  uint64  // CPUStats.SystemUsage
+	onlineCPUs float64 // CPUStats.OnlineCPUs, falling back to len(PercpuUsage)
+	memoryMB   float64 // docker-stats-style memory (Usage minus inactive_file)
+}
+
+// statsClient is the small subset of *client.Client that the sampling code needs.
+// Narrowing it to an interface lets stats(), sampleStats() and statsForContainers()
+// be unit-tested with a fake that returns canned stats, with no Docker daemon.
+type statsClient interface {
+	ContainerStatsOneShot(ctx context.Context, containerID string) (container.StatsResponseReader, error)
+}
+
+// stats returns the container's current CPU percentage and memory in MB. It reads
+// two stats samples cpuSampleInterval apart and derives the percentage from the
+// delta between them; a single one-shot sample would report a meaningless lifetime
+// average (see cpuSampleInterval). If ctx is cancelled during the wait it returns
+// 0 CPU with sample A's memory, which is still a valid reading.
+func (p *DockerProvider) stats(ctx context.Context, cli statsClient, containerID string, running bool) (float64, float64) {
 	if !running {
 		return 0, 0
 	}
+	a, ok := sampleStats(ctx, cli, containerID)
+	if !ok {
+		return 0, 0
+	}
+	select {
+	case <-ctx.Done():
+		return 0, a.memoryMB
+	case <-time.After(cpuSampleInterval):
+	}
+	b, ok := sampleStats(ctx, cli, containerID)
+	if !ok {
+		return 0, a.memoryMB
+	}
+	return combineSamples(a, b)
+}
+
+// sampleStats reads one ContainerStatsOneShot sample and extracts its counters via
+// sampleFromResponse. ok is false if the sample cannot be read or decoded.
+func sampleStats(ctx context.Context, cli statsClient, containerID string) (containerSample, bool) {
 	reader, err := cli.ContainerStatsOneShot(ctx, containerID)
 	if err != nil {
-		return 0, 0
+		return containerSample{}, false
 	}
 	defer reader.Body.Close()
 	var stats container.StatsResponse
 	if err := json.NewDecoder(reader.Body).Decode(&stats); err != nil {
-		return 0, 0
+		return containerSample{}, false
 	}
-	memoryMB := float64(stats.MemoryStats.Usage) / 1024 / 1024
-	cpuDelta := float64(stats.CPUStats.CPUUsage.TotalUsage - stats.PreCPUStats.CPUUsage.TotalUsage)
-	systemDelta := float64(stats.CPUStats.SystemUsage - stats.PreCPUStats.SystemUsage)
+	return sampleFromResponse(stats), true
+}
+
+// sampleFromResponse extracts the counters needed to compute CPU% and memory from an
+// already-decoded stats response. It is pure (no IO), so the extraction — including
+// the OnlineCPUs==0 → len(PercpuUsage) fallback and the inactive_file memory
+// adjustment via memoryMB — is unit-testable without a Docker daemon.
+func sampleFromResponse(stats container.StatsResponse) containerSample {
 	onlineCPUs := float64(stats.CPUStats.OnlineCPUs)
 	if onlineCPUs == 0 {
 		onlineCPUs = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
 	}
-	if systemDelta <= 0 || cpuDelta <= 0 || onlineCPUs <= 0 {
-		return 0, memoryMB
+	return containerSample{
+		cpuTotal:   stats.CPUStats.CPUUsage.TotalUsage,
+		systemCPU:  stats.CPUStats.SystemUsage,
+		onlineCPUs: onlineCPUs,
+		memoryMB:   memoryMB(stats.MemoryStats),
 	}
-	return (cpuDelta / systemDelta) * onlineCPUs * 100, memoryMB
+}
+
+// combineSamples derives the current CPU percentage and memory (MB) from two samples
+// taken cpuSampleInterval apart: a is the earlier sample, b the later one. CPU% comes
+// from the A→B delta (see cpuPercent, which applies the guards) and memory from the
+// more recent sample b. It is pure so the two-sample combination is unit-testable
+// without a Docker daemon.
+func combineSamples(a, b containerSample) (float64, float64) {
+	return cpuPercent(a.cpuTotal, b.cpuTotal, a.systemCPU, b.systemCPU, b.onlineCPUs), b.memoryMB
+}
+
+// cpuPercent computes the Docker-style CPU percentage from two samples:
+//
+//	(cpuDelta / systemDelta) * onlineCPUs * 100
+//
+// cpuDelta and systemDelta are the differences between the current (cur) and
+// previous (pre) counters. Deltas are computed in float64 so that a counter which
+// appears to move backwards produces a non-positive delta and trips the guard
+// instead of underflowing an unsigned subtraction. It returns 0 when either delta
+// is non-positive or onlineCPUs is non-positive.
+//
+// NOTE: passing a single one-shot sample (pre counters = 0) reproduces the original
+// bug — cpuDelta becomes lifetime CPU and systemDelta lifetime system time, so the
+// result is a lifetime average that does not reflect current load.
+func cpuPercent(preTotal, curTotal, preSystem, curSystem uint64, onlineCPUs float64) float64 {
+	cpuDelta := float64(curTotal) - float64(preTotal)
+	systemDelta := float64(curSystem) - float64(preSystem)
+	if systemDelta <= 0 || cpuDelta <= 0 || onlineCPUs <= 0 {
+		return 0
+	}
+	return (cpuDelta / systemDelta) * onlineCPUs * 100
+}
+
+// memoryMB converts Docker's MemoryStats to megabytes the way `docker stats` does.
+// MemoryStats.Usage includes reclaimable page cache, so inactive_file is subtracted
+// when the key is present and not larger than Usage; otherwise raw Usage is used.
+func memoryMB(mem container.MemoryStats) float64 {
+	usage := mem.Usage
+	if inactive, ok := mem.Stats["inactive_file"]; ok && inactive <= usage {
+		usage -= inactive
+	}
+	return float64(usage) / 1024 / 1024
 }
 
 func dockerClient() (*client.Client, error) {
