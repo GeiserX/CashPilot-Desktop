@@ -332,3 +332,32 @@ func TestCatalogCollectorParity(t *testing.T) {
 		}
 	}
 }
+
+// TestVastEarningsUSD exercises every branch of the defensive Vast.ai earnings
+// reducer + the per-machine earnings() fallback so the whole chain is covered.
+func TestVastEarningsUSD(t *testing.T) {
+	check := func(name string, e vastEarnings, want float64) {
+		if got := vastEarningsUSD(e); got != want {
+			t.Errorf("%s: vastEarningsUSD = %v, want %v", name, got, want)
+		}
+	}
+	check("per_machine total field", vastEarnings{PerMachine: []vastMachineEarning{{Total: 3}, {Total: 4}}}, 7)
+	check("per_machine total_earn field", vastEarnings{PerMachine: []vastMachineEarning{{TotalEarn: 2.5}}}, 2.5)
+	check("per_machine component sum", vastEarnings{PerMachine: []vastMachineEarning{{GPUEarn: 1, StoEarn: 0.5, BWUEarn: 0.25, BWDEarn: 0.25}}}, 2.0)
+	check("machine_earnings alt key", vastEarnings{MachineEarnings: []vastMachineEarning{{Total: 5}}}, 5)
+
+	var e5 vastEarnings
+	e5.Current.Total = 9
+	check("current.total fallback", e5, 9)
+
+	var e6 vastEarnings
+	e6.Current.Balance = 11
+	check("current.balance fallback", e6, 11)
+
+	var e7 vastEarnings
+	e7.Summary.TotalGPU, e7.Summary.TotalStor, e7.Summary.TotalBWU, e7.Summary.TotalBWD = 1, 2, 0.5, 0.5
+	check("summary fallback", e7, 4.0)
+
+	check("top-level total fallback", vastEarnings{Total: 13}, 13)
+	check("empty -> 0", vastEarnings{}, 0)
+}
