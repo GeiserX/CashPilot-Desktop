@@ -32,6 +32,11 @@
 #   network_mode: "" (optional, e.g. "host")
 #   cap_add: [] (optional)
 #   stop_timeout: 30 (optional, seconds to wait before SIGKILL on stop — default 30)
+#   resources:  (optional, per-container limits applied at creation on HostConfig)
+#     mem_limit: "768m"  (hard memory ceiling; Docker size string like "256m"/"2g". Omit = unlimited)
+#     mem_reservation: "256m"  (optional soft memory limit; Docker size string)
+#     oom_score_adj: -100  (optional OOM-killer priority, -1000..1000; negative protects the
+#                           container, positive makes the kernel kill it first under memory pressure)
 #   setup: "" (optional, one-time setup instructions/commands to run before first deploy)
 
 # requirements:

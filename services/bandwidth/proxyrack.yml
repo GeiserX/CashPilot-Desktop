@@ -39,6 +39,9 @@ docker:
   command: ""
   network_mode: ""
   privileged: false
+  resources:
+    mem_limit: "256m"
+    oom_score_adj: 300
 
 requirements:
   residential_ip: false

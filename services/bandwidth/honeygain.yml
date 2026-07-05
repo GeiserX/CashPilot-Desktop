@@ -38,6 +38,9 @@ docker:
   command: "-tou-accept -email ${HONEYGAIN_EMAIL} -pass ${HONEYGAIN_PASSWORD} -device ${HONEYGAIN_DEVICE_NAME}"
   network_mode: ""
   privileged: false
+  resources:
+    mem_limit: "256m"
+    oom_score_adj: 200
 
 requirements:
   residential_ip: true

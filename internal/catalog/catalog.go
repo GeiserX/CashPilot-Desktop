@@ -41,18 +41,32 @@ type Referral struct {
 }
 
 type DockerConfig struct {
-	Image       string   `json:"image" yaml:"image"`
-	Platforms   []string `json:"platforms" yaml:"platforms"`
-	Env         []EnvVar `json:"env" yaml:"env"`
-	Ports       []string `json:"ports" yaml:"ports"`
-	Volumes     []string `json:"volumes" yaml:"volumes"`
-	Command     string   `json:"command" yaml:"command"`
-	NetworkMode string   `json:"networkMode" yaml:"network_mode"`
-	CapAdd      []string `json:"capAdd" yaml:"cap_add"`
-	Privileged  bool     `json:"privileged" yaml:"privileged"`
-	StopTimeout int      `json:"stopTimeout" yaml:"stop_timeout"`
-	Setup       string   `json:"setup" yaml:"setup"`
-	Notes       string   `json:"notes" yaml:"notes"`
+	Image       string         `json:"image" yaml:"image"`
+	Platforms   []string       `json:"platforms" yaml:"platforms"`
+	Env         []EnvVar       `json:"env" yaml:"env"`
+	Ports       []string       `json:"ports" yaml:"ports"`
+	Volumes     []string       `json:"volumes" yaml:"volumes"`
+	Command     string         `json:"command" yaml:"command"`
+	NetworkMode string         `json:"networkMode" yaml:"network_mode"`
+	CapAdd      []string       `json:"capAdd" yaml:"cap_add"`
+	Privileged  bool           `json:"privileged" yaml:"privileged"`
+	StopTimeout int            `json:"stopTimeout" yaml:"stop_timeout"`
+	Resources   ResourceLimits `json:"resources" yaml:"resources"`
+	Setup       string         `json:"setup" yaml:"setup"`
+	Notes       string         `json:"notes" yaml:"notes"`
+}
+
+// ResourceLimits is the optional docker.resources block from a service YAML. Its
+// fields map to Docker HostConfig knobs applied at container creation (see
+// internal/runtime.applyResourceLimits) so a service's memory ceiling and OOM
+// priority survive restarts instead of being set out-of-band. MemLimit and
+// MemReservation are Docker-style size strings ("768m", "2g"); an empty string
+// leaves that limit unset. OomScoreAdj is a pointer so an absent value is
+// distinguishable from an explicit 0 and is applied only when present.
+type ResourceLimits struct {
+	MemLimit       string `json:"memLimit" yaml:"mem_limit"`
+	MemReservation string `json:"memReservation" yaml:"mem_reservation"`
+	OomScoreAdj    *int   `json:"oomScoreAdj" yaml:"oom_score_adj"`
 }
 
 type EnvVar struct {

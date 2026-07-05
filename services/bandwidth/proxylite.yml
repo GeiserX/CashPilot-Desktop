@@ -26,6 +26,9 @@ docker:
   volumes: []
   command: ""
   network_mode: ""
+  resources:
+    mem_limit: "128m"
+    oom_score_adj: 300
 
 requirements:
   residential_ip: false

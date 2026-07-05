@@ -26,6 +26,9 @@ docker:
   network_mode: "host"
   cap_add: [NET_ADMIN]
   privileged: false
+  resources:
+    mem_limit: "768m"
+    oom_score_adj: -100
 
 requirements:
   residential_ip: false

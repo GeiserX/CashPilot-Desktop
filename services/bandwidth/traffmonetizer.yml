@@ -34,6 +34,9 @@ docker:
   command: "start accept --token ${TRAFFMONETIZER_TOKEN} --device-name ${TRAFFMONETIZER_DEVICE_NAME}"
   network_mode: ""
   privileged: false
+  resources:
+    mem_limit: "128m"
+    oom_score_adj: 300
 
 requirements:
   residential_ip: false

@@ -57,6 +57,9 @@ docker:
   command: "--operator.wallet-features=zksync-era"
   network_mode: ""
   stop_timeout: 300
+  resources:
+    mem_limit: "2g"
+    oom_score_adj: -100
   setup: >
     Before first run, initialize the storage node config:
     docker run --rm -e SETUP="true"
