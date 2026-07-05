@@ -14,24 +14,27 @@
 - [x] Container deploy/stop/restart/remove/logs
 - [x] Honeygain and Earn.fm collectors ported
 - [x] Synthwave onboarding UI
-- [ ] Remaining collector ports (13 services from CashPilot server)
-- [ ] Earnings dashboard with Chart.js
-- [ ] System tray integration with status indicator
+- [x] All remaining collectors ported (15 total — parity with CashPilot server)
+- [x] Earnings dashboard (custom inline-SVG chart)
+- [x] System tray integration with status indicator (macOS native; Windows/Linux stubbed)
+- [x] Settings view (display currency + preferences)
 - [ ] Auto-updates (Wails native update channel)
 
 ## Milestone 2 — Earnings Intelligence
 
-- [ ] All 14 collectors ported from CashPilot server
-- [ ] Historical earnings charts (daily/weekly/monthly)
-- [ ] Per-service progress-to-payout bars
-- [ ] Aggregate portfolio view ("on track for $X/month")
+- [x] All 15 collectors ported from CashPilot server
+- [x] Daily earnings chart (custom inline-SVG)
+- [ ] Weekly/monthly earnings charts
+- [x] Per-service progress-to-payout bars
+- [x] Aggregate FX-normalized portfolio view (total / today / month + change-%)
+- [x] Multi-currency display (44 currencies)
 - [ ] **Auto-claim daily rewards** — automated daily reward collection for services that support it (Honeygain lucky pot, Grass daily check-in, etc.); per-service opt-in with schedule configuration
 - [ ] Collector health alerts (in-app notification when a collector fails)
 
 ## Milestone 3 — Fleet & Multi-Node
 
-- [ ] Connect to CashPilot server instance as worker (heartbeat protocol)
-- [ ] Fleet status display (nodes, services, earnings from master)
+- [x] Fleet heartbeat API (token-authenticated worker/mobile heartbeats; desktop-as-master, loopback by default)
+- [x] Fleet status display (nodes, services, earnings)
 - [ ] Remote deploy from master to this Desktop node
 - [ ] Flight sheets — pre-built service bundles deployable with one click
 

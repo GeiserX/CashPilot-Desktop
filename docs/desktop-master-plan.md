@@ -37,7 +37,7 @@ flowchart TB
     UI <-->|Wails bindings| App
     App --> RT["internal/runtime\nDocker SDK: deploy / stop / logs"]
     App --> COL["internal/collectors\n15 earnings collectors"]
-    App --> FX["internal/exchange (planned)\ncrypto + fiat → display currency"]
+    App --> FX["internal/exchange\ncrypto + fiat → display currency"]
     App --> SCH["internal/scheduler (planned)\nauto-collect on interval"]
     App --> STORE["internal/store\nSQLite + AES-GCM credentials"]
     App --> CAT["internal/catalog\n49-service embedded YAML"]

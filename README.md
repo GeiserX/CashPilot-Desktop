@@ -13,26 +13,26 @@
 
 ## What is CashPilot Desktop?
 
-CashPilot Desktop is a local-first, cross-platform desktop application for deploying and monitoring passive-income and DePIN services. Instead of running CashPilot as a Docker container and accessing it via browser, CashPilot Desktop bundles everything into a single installable app with system tray integration, auto-updates, and a guided setup wizard.
+CashPilot Desktop is a local-first, cross-platform desktop application for deploying and monitoring passive-income and DePIN services. Instead of running CashPilot as a Docker container and accessing it via browser, CashPilot Desktop bundles everything into a single installable app with system tray integration and a guided setup wizard.
 
 It can run in two modes:
 
 - **CashPilot mode** -- Full dashboard with service management, earnings tracking, container deployment, and fleet orchestration
 - **Worker Node mode** -- Lightweight agent that connects to an existing CashPilot instance to run services on this machine
 
-Built with [Wails](https://wails.io) (Go + Svelte) for a lightweight, cross-platform experience with native performance.
+Built with [Wails](https://wails.io) (Go + vanilla TypeScript) for a lightweight, cross-platform experience with native performance.
 
 ## Features
 
 - **One-click install** -- No Docker knowledge required; the app handles container setup for you
-- **System tray** -- Runs quietly in the background with quick-access status and earnings summary
+- **System tray (macOS)** -- Runs quietly in the background with quick-access status and earnings summary; menu-bar icon is macOS-only today (Windows/Linux planned)
 - **Real-time monitoring** -- Live earnings, service health, container stats, and node uptime
 - **Multi-node fleet** -- Aggregate view across your entire CashPilot fleet from a single window
-- **Auto-updater** -- Seamless in-app updates
+- **Auto-updater** -- Planned (not yet implemented)
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
-- **Secure** -- macOS code-signed and notarized, Windows code-signed, encrypted credential storage via OS keychain
+- **Secure** -- Credentials encrypted at rest with AES-256-GCM; master key in the OS keychain. Signed/notarized installers are planned.
 
 ## Installation
 
@@ -40,11 +40,9 @@ Download the latest release for your platform:
 
 | Platform | Format | Download | Notes |
 |----------|--------|----------|-------|
-| macOS (Apple Silicon) | `.dmg` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Signed and notarized |
-| Windows (x64) | `.exe` (NSIS) | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Code-signed |
-| Linux (Debian/Ubuntu) | `.deb` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | systemd integration |
-
-After installation, the app auto-updates itself when new versions are available.
+| macOS (Apple Silicon) | `.dmg` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Unsigned (right-click → Open to bypass Gatekeeper) |
+| Windows (x64) | `.exe` (NSIS) | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Unsigned unless a signing cert is configured in CI |
+| Linux (Debian/Ubuntu) | `.deb` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Raw binary (.deb packaging planned) |
 
 ### System Requirements
 
@@ -65,7 +63,7 @@ After installation, the app auto-updates itself when new versions are available.
 
 ## Supported Services
 
-CashPilot manages 40+ passive income services across multiple categories. Below is the full catalog.
+CashPilot bundles a catalog of 49 passive-income services across multiple categories. A representative selection is shown below.
 
 ### Docker-Deployable Services
 
@@ -138,8 +136,8 @@ GPU-intensive computing services. Requires compatible hardware.
 |---------|:-----------:|:------------:|
 | Installation | One-click installer | `docker compose up -d` |
 | Docker management | Built-in (auto-detects, guides install) | Requires Docker pre-installed |
-| System tray integration | **Yes** | No |
-| Auto-updates | **Yes** (in-app) | Manual image pull |
+| System tray integration | macOS only | No |
+| Auto-updates | Planned | Manual image pull |
 | Background operation | Native OS service | Container must stay running |
 | Fleet management | **Yes** | **Yes** |
 | Earnings dashboard | **Yes** | **Yes** |
@@ -152,17 +150,21 @@ GPU-intensive computing services. Requires compatible hardware.
 CashPilot Desktop (Wails 2.x)
 ├── Go Backend (app.go, internal/)
 │   ├── Container runtime    — Docker/Podman detection, deploy/stop/restart
-│   ├── Earnings collectors  — Polls service APIs on schedule
+│   ├── Earnings collectors  — Polls service APIs for earnings
+│   ├── internal/exchange    — FX rates (crypto + fiat → display currency)
 │   ├── Fleet management     — Multi-node coordination via HTTP
+│   ├── fleet_server.go      — Token-auth worker/mobile heartbeat API
 │   └── SQLite database      — Config, credentials (OS keychain), earnings history
-├── Frontend (Svelte + TypeScript)
-│   ├── Setup wizard         — Onboarding flow with runtime detection
+├── Frontend (vanilla TypeScript + Vite)
 │   ├── Dashboard            — Real-time earnings and service status
-│   └── Service catalog      — Browse and deploy services
+│   ├── Setup wizard         — Onboarding flow with runtime detection
+│   ├── Service catalog      — Browse and deploy services
+│   ├── Settings             — Display currency and preferences
+│   └── Fleet                — Connected worker/node status
 └── Wails Runtime            — Window management, system tray, native bindings
 ```
 
-The Go backend handles all business logic, container orchestration, and data collection. The Svelte frontend communicates via Wails bindings (direct Go function calls, no HTTP). State is persisted in a local SQLite database with credentials stored in the OS keychain.
+The Go backend handles all business logic, container orchestration, and data collection. The TypeScript frontend communicates via Wails bindings (direct Go function calls, no HTTP). State is persisted in a local SQLite database, with credentials encrypted at rest (AES-256-GCM) under a master key held in the OS keychain.
 
 ## Development
 
@@ -175,7 +177,7 @@ The Go backend handles all business logic, container orchestration, and data col
 ### Dev Workflow
 
 ```bash
-wails dev              # Hot-reload dev mode (Go + Svelte)
+wails dev              # Hot-reload dev mode (Go + TypeScript)
 go test -race ./...    # Run Go tests
 ```
 
