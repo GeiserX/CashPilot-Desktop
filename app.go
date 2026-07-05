@@ -878,8 +878,11 @@ func (a *App) collectOne(ctx context.Context, slug string) {
 	a.emitEvent("earnings:changed", record)
 }
 
-// collectAll runs one full background collection cycle: it collects every deployed
-// service that has a native collector, loading each service's stored credentials.
+// collectAll runs one full background collection cycle: it collects every supported
+// service that is either deployed OR has saved credentials (deduped), loading each
+// service's stored credentials. Imageless services (e.g. vast-ai, salad, grass,
+// bytelixir) never create a deployment row, so unioning the credential set makes them
+// participate in the scheduled cycle instead of only collecting on a manual click.
 // A failing collector never aborts the batch — its error is already persisted as an
 // EarningsRecord (surfaced by notifications()); a store/transport error is logged
 // via emitError and the loop continues to the next service. A single-flight guard
@@ -896,20 +899,38 @@ func (a *App) collectAll(ctx context.Context) {
 	}
 	defer a.collecting.Store(false)
 
-	collected := 0
+	// Collect every supported service that is either deployed OR has saved
+	// credentials. Imageless services (e.g. vast-ai, salad, grass, bytelixir)
+	// never create a deployment row, so without the credential set they would
+	// only collect on a manual Collect click; unioning the two sets makes them
+	// participate in the scheduled cycle. A service in both sets is collected once.
+	slugs := make([]string, 0)
+	seen := make(map[string]bool)
+	add := func(slug string) {
+		if seen[slug] || !a.collectors.Supports(slug) {
+			return
+		}
+		seen[slug] = true
+		slugs = append(slugs, slug)
+	}
 	for _, dep := range a.store.ListDeployments() {
+		add(dep.Slug)
+	}
+	for _, slug := range a.store.ListCredentialSlugs() {
+		add(slug)
+	}
+
+	collected := 0
+	for _, slug := range slugs {
 		if ctx.Err() != nil {
 			return
 		}
-		if !a.collectors.Supports(dep.Slug) {
-			continue
-		}
-		creds, err := a.store.GetCredentials(dep.Slug)
+		creds, err := a.store.GetCredentials(slug)
 		if err != nil {
 			a.emitError("collector", err)
 			continue
 		}
-		if _, err := a.collectors.Collect(ctx, dep.Slug, creds); err != nil {
+		if _, err := a.collectors.Collect(ctx, slug, creds); err != nil {
 			a.emitError("collector", err)
 			continue
 		}

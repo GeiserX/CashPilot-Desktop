@@ -143,6 +143,39 @@ func TestCredentialsEncryptedAtRest(t *testing.T) {
 	}
 }
 
+// TestListCredentialSlugs pins the credential-set source used by collectAll's
+// union: every slug with a saved credential row is returned, ordered by slug, an
+// empty store returns nothing, and overwriting an existing slug's credentials
+// (ON CONFLICT upsert) never duplicates it in the list.
+func TestListCredentialSlugs(t *testing.T) {
+	s := openTestStore(t)
+
+	// An empty store has no credential slugs.
+	if got := s.ListCredentialSlugs(); len(got) != 0 {
+		t.Fatalf("expected no credential slugs on an empty store, got %v", got)
+	}
+
+	if err := s.SaveCredentials("vast-ai", map[string]string{"api_key": "x"}); err != nil {
+		t.Fatalf("SaveCredentials(vast-ai) error: %v", err)
+	}
+	if err := s.SaveCredentials("grass", map[string]string{"user": "a", "pass": "b"}); err != nil {
+		t.Fatalf("SaveCredentials(grass) error: %v", err)
+	}
+
+	// Returned ordered by slug: "grass" < "vast-ai".
+	if got, want := s.ListCredentialSlugs(), []string{"grass", "vast-ai"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ListCredentialSlugs = %v, want %v", got, want)
+	}
+
+	// Overwriting an existing slug upserts the same row; it must not duplicate.
+	if err := s.SaveCredentials("vast-ai", map[string]string{"api_key": "y"}); err != nil {
+		t.Fatalf("SaveCredentials(vast-ai overwrite) error: %v", err)
+	}
+	if got, want := s.ListCredentialSlugs(), []string{"grass", "vast-ai"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after overwrite ListCredentialSlugs = %v, want %v (no duplicate)", got, want)
+	}
+}
+
 func TestFleetDeviceInsertListAndDelete(t *testing.T) {
 	s := openTestStore(t)
 
