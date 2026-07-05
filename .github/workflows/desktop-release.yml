@@ -16,13 +16,10 @@ jobs:
         include:
           - runner: macos-latest
             platform: darwin-arm64
-            artifact_glob: build/bin/*
           - runner: ubuntu-latest
             platform: linux-amd64
-            artifact_glob: build/bin/*
           - runner: windows-latest
             platform: windows-amd64
-            artifact_glob: build/bin/*
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -74,11 +71,38 @@ jobs:
           Remove-Item "$env:RUNNER_TEMP\cert.pfx"
         shell: pwsh
 
+      # Package each platform into a uniquely named, uploadable asset. The macOS
+      # output is a `.app` bundle (a directory) that cannot be a release asset on
+      # its own, and the bare Linux/Windows binaries share the base name
+      # "CashPilot Desktop" — so without per-platform packaging the release ends up
+      # with a collision/missing binary (only Windows survived cleanly before).
+      - name: Package release asset (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          tar -czf "dist/CashPilot-Desktop-${{ matrix.platform }}.tar.gz" -C build/bin "CashPilot Desktop"
+
+      - name: Package release asset (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          app="$(find build/bin -maxdepth 1 -name '*.app' | head -1)"
+          test -n "$app" || { echo "no .app bundle found in build/bin"; ls -la build/bin; exit 1; }
+          ditto -c -k --keepParent "$app" "dist/CashPilot-Desktop-${{ matrix.platform }}.zip"
+
+      - name: Package release asset (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "build\bin\CashPilot Desktop.exe" "dist\CashPilot-Desktop-${{ matrix.platform }}.exe"
+        shell: pwsh
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.platform }}
-          path: ${{ matrix.artifact_glob }}
+          path: dist/*
+          if-no-files-found: error
 
   publish:
     needs: build
