@@ -297,7 +297,7 @@ function appSidebar(active: View) {
           <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop" title="GitHub">GitHub</button>
           <button class="footer-link" data-url="https://github.com/sponsors/GeiserX" title="Sponsor">Sponsor</button>
         </div>
-        <span>Desktop v0.6.0</span>
+        <span>Desktop v${__APP_VERSION__}</span>
       </div>
     </aside>
   `;
