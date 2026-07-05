@@ -45,6 +45,9 @@ docker:
   command: "-email ${IPROYALPAWNS_EMAIL} -password ${IPROYALPAWNS_PASSWORD} -device-name ${IPROYALPAWNS_DEVICE_NAME} -device-id ${IPROYALPAWNS_DEVICE_ID} -accept-tos"
   network_mode: ""
   privileged: false
+  resources:
+    mem_limit: "128m"
+    oom_score_adj: 300
 
 requirements:
   residential_ip: true

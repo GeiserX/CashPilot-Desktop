@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -171,6 +172,9 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	if svc.Docker.NetworkMode == "" {
 		hostConfig.NetworkMode = "bridge"
+	}
+	if err := applyResourceLimits(hostConfig, svc.Docker.Resources); err != nil {
+		return ContainerInfo{}, err
 	}
 
 	if progress != nil {
@@ -568,6 +572,77 @@ func buildMounts(raw []string, env map[string]string) []mount.Mount {
 		mounts = append(mounts, mnt)
 	}
 	return mounts
+}
+
+// applyResourceLimits sets the optional memory and OOM-priority knobs from a
+// service's docker.resources block onto the container HostConfig. Each limit is
+// applied only when present in the YAML: an empty MemLimit/MemReservation leaves
+// Docker's default (unlimited) in place, and a nil OomScoreAdj leaves the daemon
+// default. Memory strings use Docker's binary units ("768m" = 768 MiB, "2g" =
+// 2 GiB), matching `docker run --memory` / compose mem_limit. memory-swap is left
+// unset (0) on purpose so Docker derives it from Memory rather than pinning swap.
+// It returns an error for a malformed size string so a bad service definition
+// fails fast at deploy instead of silently running unbounded.
+func applyResourceLimits(hostConfig *container.HostConfig, res catalog.ResourceLimits) error {
+	if res.MemLimit != "" {
+		bytes, err := parseMemoryBytes(res.MemLimit)
+		if err != nil {
+			return fmt.Errorf("invalid mem_limit %q: %w", res.MemLimit, err)
+		}
+		hostConfig.Memory = bytes
+	}
+	if res.MemReservation != "" {
+		bytes, err := parseMemoryBytes(res.MemReservation)
+		if err != nil {
+			return fmt.Errorf("invalid mem_reservation %q: %w", res.MemReservation, err)
+		}
+		hostConfig.MemoryReservation = bytes
+	}
+	if res.OomScoreAdj != nil {
+		hostConfig.OomScoreAdj = *res.OomScoreAdj
+	}
+	return nil
+}
+
+// parseMemoryBytes converts a Docker-style memory size string into a byte count
+// using binary units, matching `docker run --memory` and compose mem_limit: a bare
+// number is bytes, and a k/m/g/t suffix (case-insensitive, with an optional
+// trailing "b", e.g. "768m" or "2gb") multiplies by 1024, 1024^2, 1024^3 or
+// 1024^4. So "768m" is 768*1024*1024 = 805306368 bytes and "2g" is 2147483648. A
+// fractional mantissa ("1.5g") is allowed and truncated toward zero. It returns an
+// error for an empty string, a non-positive value, or an unparseable number.
+func parseMemoryBytes(s string) (int64, error) {
+	raw := strings.ToLower(strings.TrimSpace(s))
+	if raw == "" {
+		return 0, errors.New("empty memory value")
+	}
+	// An explicit trailing "b" ("768mb") is treated the same as the bare unit.
+	raw = strings.TrimSuffix(raw, "b")
+	if raw == "" {
+		return 0, fmt.Errorf("%q has no numeric value", s)
+	}
+	var multiplier int64 = 1
+	switch raw[len(raw)-1] {
+	case 'k':
+		multiplier = 1 << 10
+	case 'm':
+		multiplier = 1 << 20
+	case 'g':
+		multiplier = 1 << 30
+	case 't':
+		multiplier = 1 << 40
+	}
+	if multiplier != 1 {
+		raw = raw[:len(raw)-1]
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a valid size: %w", s, err)
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("%q must be a positive size", s)
+	}
+	return int64(value * float64(multiplier)), nil
 }
 
 func managedContainerVolumes(ctx context.Context, cli *client.Client, name string) ([]string, error) {

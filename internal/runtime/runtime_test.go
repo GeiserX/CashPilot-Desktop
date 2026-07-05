@@ -658,3 +658,132 @@ func TestDockerStatsIntegrationReportsLiveCPU(t *testing.T) {
 		t.Fatalf("expected memory > 0 MB for a running container, got %v", mem)
 	}
 }
+
+// oomPtr returns a pointer to i for building catalog.ResourceLimits.OomScoreAdj
+// (a *int, so an absent value is distinguishable from an explicit 0) in tests.
+func oomPtr(i int) *int { return &i }
+
+// TestParseMemoryBytes pins the Docker-style binary-unit parsing used for the
+// docker.resources mem_limit/mem_reservation strings: k/m/g/t are 1024-based (so
+// "768m" is 768 MiB, not 768 MB), an optional trailing "b", surrounding
+// whitespace, mixed case and a fractional mantissa are accepted, and
+// empty/non-positive/garbage values are rejected so a bad service definition fails
+// fast instead of deploying an earner unbounded.
+func TestParseMemoryBytes(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    int64
+		wantErr bool
+	}{
+		{in: "768m", want: 768 * 1024 * 1024},     // mysterium
+		{in: "2g", want: 2 * 1024 * 1024 * 1024},  // storj
+		{in: "1536m", want: 1536 * 1024 * 1024},   // anyone-protocol
+		{in: "256m", want: 256 * 1024 * 1024},     // honeygain/earnapp/proxyrack
+		{in: "128m", want: 128 * 1024 * 1024},     // expendable earners
+		{in: "512k", want: 512 * 1024},            // kibibytes
+		{in: "1024", want: 1024},                  // bare byte count, no suffix
+		{in: "2gb", want: 2 * 1024 * 1024 * 1024}, // explicit trailing "b"
+		{in: "768M", want: 768 * 1024 * 1024},     // case-insensitive suffix
+		{in: " 256m ", want: 256 * 1024 * 1024},   // surrounding whitespace
+		{in: "1.5g", want: 1536 * 1024 * 1024},    // fractional mantissa
+		{in: "", wantErr: true},                   // empty
+		{in: "b", wantErr: true},                  // unit only, no number
+		{in: "m", wantErr: true},                  // unit only, no number
+		{in: "abc", wantErr: true},                // not a number
+		{in: "0m", wantErr: true},                 // non-positive
+		{in: "-5m", wantErr: true},                // negative
+	}
+	for _, tc := range cases {
+		got, err := parseMemoryBytes(tc.in)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("parseMemoryBytes(%q) = %d, want error", tc.in, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseMemoryBytes(%q) unexpected error: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseMemoryBytes(%q) = %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestApplyResourceLimitsSetsHostConfig verifies a protected service's
+// docker.resources block lands on the container HostConfig: the hard memory
+// ceiling is parsed to bytes, the negative OOM score is applied, and memory-swap
+// is deliberately left unset (0) so Docker derives it from Memory instead of
+// pinning swap.
+func TestApplyResourceLimitsSetsHostConfig(t *testing.T) {
+	hc := &container.HostConfig{}
+	res := catalog.ResourceLimits{MemLimit: "2g", OomScoreAdj: oomPtr(-100)}
+	if err := applyResourceLimits(hc, res); err != nil {
+		t.Fatalf("applyResourceLimits returned error: %v", err)
+	}
+	if want := int64(2 * 1024 * 1024 * 1024); hc.Memory != want {
+		t.Fatalf("Memory = %d, want %d", hc.Memory, want)
+	}
+	if hc.OomScoreAdj != -100 {
+		t.Fatalf("OomScoreAdj = %d, want -100", hc.OomScoreAdj)
+	}
+	if hc.MemorySwap != 0 {
+		t.Fatalf("MemorySwap = %d, want 0 (must be left unset)", hc.MemorySwap)
+	}
+	if hc.MemoryReservation != 0 {
+		t.Fatalf("MemoryReservation = %d, want 0 (not specified)", hc.MemoryReservation)
+	}
+}
+
+// TestApplyResourceLimitsSetsReservation covers the optional soft limit: when
+// mem_reservation is present it is parsed and set alongside the hard mem_limit.
+func TestApplyResourceLimitsSetsReservation(t *testing.T) {
+	hc := &container.HostConfig{}
+	res := catalog.ResourceLimits{MemLimit: "768m", MemReservation: "256m", OomScoreAdj: oomPtr(200)}
+	if err := applyResourceLimits(hc, res); err != nil {
+		t.Fatalf("applyResourceLimits returned error: %v", err)
+	}
+	if want := int64(768 * 1024 * 1024); hc.Memory != want {
+		t.Fatalf("Memory = %d, want %d", hc.Memory, want)
+	}
+	if want := int64(256 * 1024 * 1024); hc.MemoryReservation != want {
+		t.Fatalf("MemoryReservation = %d, want %d", hc.MemoryReservation, want)
+	}
+	if hc.OomScoreAdj != 200 {
+		t.Fatalf("OomScoreAdj = %d, want 200", hc.OomScoreAdj)
+	}
+}
+
+// TestApplyResourceLimitsAbsentLeavesDefaults verifies an empty docker.resources
+// block touches nothing: memory stays unlimited (0) and OomScoreAdj stays at the
+// daemon default (0). A nil OomScoreAdj must be left alone rather than written as
+// an explicit 0.
+func TestApplyResourceLimitsAbsentLeavesDefaults(t *testing.T) {
+	hc := &container.HostConfig{}
+	if err := applyResourceLimits(hc, catalog.ResourceLimits{}); err != nil {
+		t.Fatalf("applyResourceLimits returned error: %v", err)
+	}
+	if hc.Memory != 0 || hc.MemoryReservation != 0 || hc.MemorySwap != 0 || hc.OomScoreAdj != 0 {
+		t.Fatalf("expected all limits unset, got Memory=%d MemoryReservation=%d MemorySwap=%d OomScoreAdj=%d",
+			hc.Memory, hc.MemoryReservation, hc.MemorySwap, hc.OomScoreAdj)
+	}
+}
+
+// TestApplyResourceLimitsRejectsBadValue makes a malformed size fail the deploy
+// (rather than silently running the earner unbounded) and leaves HostConfig
+// unmodified.
+func TestApplyResourceLimitsRejectsBadValue(t *testing.T) {
+	for _, res := range []catalog.ResourceLimits{
+		{MemLimit: "notasize"},
+		{MemReservation: "12x"},
+	} {
+		hc := &container.HostConfig{}
+		if err := applyResourceLimits(hc, res); err == nil {
+			t.Errorf("applyResourceLimits(%+v) = nil error, want error", res)
+		}
+		if hc.Memory != 0 || hc.MemoryReservation != 0 {
+			t.Errorf("HostConfig mutated on error: %+v", hc)
+		}
+	}
+}

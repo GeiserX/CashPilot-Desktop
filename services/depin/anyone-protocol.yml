@@ -26,6 +26,9 @@ docker:
     - "anon-run:/run/anon"
   command: ""
   network_mode: ""
+  resources:
+    mem_limit: "1536m"
+    oom_score_adj: -100
   notes: >
     Requires an anonrc config file mounted at /etc/anon/anonrc with AgreeToTerms 1.
     The config dir must be writable (chown 100:101) for notices.log.
