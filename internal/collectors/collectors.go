@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -666,20 +667,120 @@ func (r *Registry) doJSONStatus(ctx context.Context, method, url string, body an
 	return status, nil
 }
 
+// Retry policy for the shared send path. Every collector funnels through doRaw ->
+// doWithRetry, so tuning these covers all of them at once. A scheduled cycle used
+// to make a SINGLE attempt: one transient blip (network reset, timeout) or a
+// provider rate-limit (429) failed the collector and persisted a spurious error
+// row until the next cycle.
+const (
+	// maxAttempts caps total tries (1 initial + up to maxAttempts-1 retries). Kept
+	// small so a stalled provider cannot hold a collect cycle open for long.
+	maxAttempts = 3
+	// maxRetryWait bounds any single backoff wait — including a Retry-After the
+	// server asks for — so a hostile or oversized header cannot hang a cycle.
+	maxRetryWait = 30 * time.Second
+	// maxResponseBytes caps how much of any response body is read (success path) or
+	// drained (between retries) so an unbounded body cannot OOM the app.
+	maxResponseBytes = 8 << 20 // 8 MiB
+)
+
+// retryBaseWait is the exponential backoff base: attempt 1 waits ~base, attempt 2
+// ~2*base, and so on (plus jitter). It is a var rather than a const only so tests
+// can shrink it to exercise the retry paths without real-time sleeps; production
+// never reassigns it.
+var retryBaseWait = 500 * time.Millisecond
+
 func (r *Registry) doRaw(ctx context.Context, method, url string, body any, headers map[string]string, cookies []*http.Cookie) ([]byte, int, http.Header, error) {
-	var reader *bytes.Reader
+	// Buffer the request body ONCE. doWithRetry may send the request several times
+	// and a *bytes.Reader is consumed by the first Do, so each attempt needs a fresh
+	// reader over these same bytes.
+	var payload []byte
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return nil, 0, nil, err
 		}
-		reader = bytes.NewReader(raw)
-	} else {
-		reader = bytes.NewReader(nil)
+		payload = raw
 	}
-	req, err := http.NewRequestWithContext(ctx, method, url, reader)
+	resp, err := r.doWithRetry(ctx, method, url, payload, headers, cookies)
 	if err != nil {
 		return nil, 0, nil, err
+	}
+	defer resp.Body.Close()
+	// Cap the read at 8 MiB so a hostile or misconfigured endpoint returning a
+	// huge (or unbounded) body cannot OOM the app — mirrors the fleet server's
+	// http.MaxBytesReader defense on inbound requests.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return nil, resp.StatusCode, resp.Header, err
+	}
+	return raw, resp.StatusCode, resp.Header, nil
+}
+
+// doWithRetry builds the request and calls r.http.Do, retrying only TRANSIENT
+// failures with exponential backoff + jitter. Transient means a transport error
+// (err != nil from Do — network reset, timeout, DNS) OR an HTTP status of 429 or
+// >= 500. Every other status is returned immediately, live and unread: a 401/403/
+// 404 is a real auth/logic error, so retrying it only wastes time and hammers the
+// provider. On a 429 (or any retryable response carrying a Retry-After header) the
+// server's requested delay is honored instead of the exponential value; both are
+// capped at maxRetryWait. Each backoff races ctx.Done so the scheduler's shutdown
+// cancel returns promptly and we never sleep past it. On success the returned
+// *http.Response has an OPEN body the caller must close (identical to a single Do);
+// bodies of retried responses are drained and closed here so connections are reused.
+func (r *Registry) doWithRetry(ctx context.Context, method, url string, payload []byte, headers map[string]string, cookies []*http.Cookie) (*http.Response, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := buildRequest(ctx, method, url, payload, headers, cookies)
+		if err != nil {
+			return nil, err // a bad method/URL is not transient — fail fast
+		}
+
+		wait := backoffFor(attempt)
+		resp, err := r.http.Do(req)
+		switch {
+		case err != nil:
+			// Transport-level failure (includes ctx cancel, surfaced as a *url.Error).
+			lastErr = err
+		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+			// Rate-limited or a server-side error: retry. Capture Retry-After before
+			// draining, then drain (bounded) + close so the connection is reused.
+			lastErr = fmt.Errorf("%s returned HTTP %d", url, resp.StatusCode)
+			if after, ok := retryAfter(resp.Header); ok {
+				wait = after
+			}
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBytes))
+			resp.Body.Close()
+		default:
+			// 2xx/3xx or a non-retryable 4xx: hand the live response back untouched so
+			// the caller reads its body exactly as a single Do would — the success
+			// path is byte-for-byte identical to the pre-retry code.
+			return resp, nil
+		}
+
+		if attempt == maxAttempts {
+			break
+		}
+		if wait > maxRetryWait {
+			wait = maxRetryWait
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
+	return nil, lastErr
+}
+
+// buildRequest constructs the *http.Request for one attempt with a fresh body
+// reader over payload (nil payload -> empty body), then applies the standard
+// headers, caller headers, and cookies. Split out of doWithRetry so every attempt
+// builds an identical request without duplicating the setup.
+func buildRequest(ctx context.Context, method, url string, payload []byte, headers map[string]string, cookies []*http.Cookie) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
 	}
 	req.Header.Set("User-Agent", "CashPilot Desktop")
 	req.Header.Set("Content-Type", "application/json")
@@ -689,19 +790,54 @@ func (r *Registry) doRaw(ctx context.Context, method, url string, body any, head
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
 	}
-	resp, err := r.http.Do(req)
-	if err != nil {
-		return nil, 0, nil, err
+	return req, nil
+}
+
+// backoffFor returns the exponential wait for a 1-based attempt (base, 2*base,
+// 4*base, ...) plus up to one base of jitter to keep many collectors from retrying
+// in lockstep after a shared outage. The per-wait cap is applied by the caller.
+func backoffFor(attempt int) time.Duration {
+	base := retryBaseWait << (attempt - 1) // base * 2^(attempt-1)
+	return base + jitterUpTo(retryBaseWait)
+}
+
+// jitterUpTo returns a random duration in [0, limit) using crypto/rand (the app's
+// existing RNG). Jitter is best-effort smoothing, so a rand read failure just
+// yields 0 rather than an error.
+func jitterUpTo(limit time.Duration) time.Duration {
+	if limit <= 0 {
+		return 0
 	}
-	defer resp.Body.Close()
-	// Cap the read at 8 MiB so a hostile or misconfigured endpoint returning a
-	// huge (or unbounded) body cannot OOM the app — mirrors the fleet server's
-	// http.MaxBytesReader defense on inbound requests.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, resp.StatusCode, resp.Header, err
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return 0
 	}
-	return raw, resp.StatusCode, resp.Header, nil
+	return time.Duration(binary.BigEndian.Uint64(b[:]) % uint64(limit))
+}
+
+// retryAfter parses a Retry-After response header (RFC 7231): either delta-seconds
+// ("120") or an HTTP-date ("Wed, 21 Oct 2026 07:28:00 GMT"). It returns the wait
+// and ok=true when the header is present and parseable; a past date clamps to 0.
+// The caller still applies maxRetryWait, so a huge far-future date cannot hang us.
+// A missing/blank/garbage header returns ok=false -> caller uses exponential backoff.
+func retryAfter(header http.Header) (time.Duration, bool) {
+	value := strings.TrimSpace(header.Get("Retry-After"))
+	if value == "" {
+		return 0, false
+	}
+	if secs, err := strconv.Atoi(value); err == nil {
+		if secs < 0 {
+			return 0, false
+		}
+		return time.Duration(secs) * time.Second, true
+	}
+	if when, err := http.ParseTime(value); err == nil {
+		if d := time.Until(when); d > 0 {
+			return d, true
+		}
+		return 0, true
+	}
+	return 0, false
 }
 
 // urlSecretRe matches a sensitive query parameter and its value inside any URL that
