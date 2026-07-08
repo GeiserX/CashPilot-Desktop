@@ -297,6 +297,39 @@ func (s *Store) ListDailyBalances(daysBack int) []DailyBalance {
 	return out
 }
 
+// PurgeOldData deletes earnings and runtime_events rows older than the cutoff,
+// but NEVER the most-recent earnings row per platform (so ListLatestEarnings and
+// the dashboard breakdown keep working for a service that hasn't updated in a
+// long time). Returns the number of rows deleted. A retentionDays <= 0 is a no-op
+// (retention disabled).
+func (s *Store) PurgeOldData(retentionDays int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	// created_at is stored as RFC3339Nano (see SaveEarnings); format the cutoff the
+	// same way so the string comparison below is apples-to-apples.
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays).Format(time.RFC3339Nano)
+
+	// Keep the most-recent row per platform regardless of age: a service that has
+	// not reported in longer than the retention window must still contribute its
+	// last-known balance to ListLatestEarnings and the dashboard breakdown.
+	earningsRes, err := s.db.Exec(`
+		DELETE FROM earnings
+		WHERE created_at < ? AND id NOT IN (SELECT MAX(id) FROM earnings GROUP BY platform)
+	`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	deleted, _ := earningsRes.RowsAffected()
+
+	eventsRes, err := s.db.Exec(`DELETE FROM runtime_events WHERE created_at < ?`, cutoff)
+	if err != nil {
+		return deleted, err
+	}
+	events, _ := eventsRes.RowsAffected()
+	return deleted + events, nil
+}
+
 func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
 	if device.Kind == "" {
 		device.Kind = "worker"

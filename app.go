@@ -938,6 +938,29 @@ func (a *App) collectAll(ctx context.Context) {
 	if collected > 0 {
 		a.emitEvent("earnings:changed", collected)
 	}
+
+	// Bound local database growth: drop earnings/runtime_events rows older than the
+	// retention window (keeping the latest earnings row per platform). a.store is
+	// non-nil here (guarded at function entry). Runs every cycle — the DELETE is
+	// cheap and idempotent — so no extra timer is needed. A purge failure must not
+	// abort the cycle: log it and carry on, the next cycle simply retries.
+	if _, err := a.store.PurgeOldData(a.retentionDays()); err != nil {
+		a.emitError("store", err)
+	}
+}
+
+// retentionDays is the configured data-retention window in days, applying the
+// 400-day default for a non-positive setting. collectAll purges earnings and
+// runtime_events rows older than this each cycle so the local database does not
+// grow without bound.
+func (a *App) retentionDays() int {
+	days := 400
+	if a.cfg != nil {
+		if d := a.cfg.Config().RetentionDays; d > 0 {
+			days = d
+		}
+	}
+	return days
 }
 
 // collectInterval is the configured collection cadence as a duration, applying the

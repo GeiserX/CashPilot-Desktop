@@ -549,3 +549,161 @@ func TestListDailyBalancesTieBreakByID(t *testing.T) {
 		t.Fatalf("intra-day tie-break did not pick the higher-id row: got balance=%v, want 9.0", got[0].Balance)
 	}
 }
+
+// TestPurgeOldData pins the retention purge: with a 400-day window it deletes
+// earnings and runtime_events rows older than the cutoff, KEEPS the most-recent
+// earnings row per platform even when that row is itself older than the cutoff
+// (so a long-stale service still shows its last balance), KEEPS rows newer than
+// the cutoff (even non-latest ones), returns the total number of rows deleted, is
+// idempotent, and does nothing when retention is disabled (retentionDays <= 0).
+func TestPurgeOldData(t *testing.T) {
+	s := openTestStore(t)
+
+	// Timestamps relative to now so the test is stable regardless of the calendar
+	// date it runs on; all seeds are days apart, well clear of any intra-second
+	// RFC3339Nano ordering subtlety.
+	ts := func(daysAgo int) string {
+		return time.Now().UTC().AddDate(0, 0, -daysAgo).Format(time.RFC3339Nano)
+	}
+
+	// "grows" is an active platform; its latest row (ts(5), highest id) is recent.
+	// "stale" has not reported in a long time: its latest row (ts(500), highest id)
+	// is OLDER than the 400-day cutoff and must survive via the keep-latest clause.
+	// Insertion order fixes the AUTOINCREMENT ids, so the last insert per platform
+	// is that platform's latest (MAX(id)).
+	seed := []EarningsRecord{
+		{Platform: "grows", Balance: 1.0, Currency: "USD", CreatedAt: ts(500)}, // old, not latest -> DELETE
+		{Platform: "grows", Balance: 2.0, Currency: "USD", CreatedAt: ts(450)}, // old, not latest -> DELETE
+		{Platform: "grows", Balance: 2.5, Currency: "USD", CreatedAt: ts(20)},  // newer than cutoff, not latest -> KEEP
+		{Platform: "grows", Balance: 3.0, Currency: "USD", CreatedAt: ts(5)},   // newest -> latest -> KEEP
+		{Platform: "stale", Balance: 10.0, Currency: "USD", CreatedAt: ts(600)}, // old, not latest -> DELETE
+		{Platform: "stale", Balance: 20.0, Currency: "USD", CreatedAt: ts(500)}, // old, but latest -> KEEP
+	}
+	for _, r := range seed {
+		if _, err := s.SaveEarnings(r); err != nil {
+			t.Fatalf("SaveEarnings(%+v) error: %v", r, err)
+		}
+	}
+
+	// runtime_events: one clearly-old row inserted directly (RecordEvent always
+	// stamps datetime('now'), so an old event can't be produced through it), plus a
+	// fresh RecordEvent row that must survive.
+	if _, err := s.db.Exec(
+		`INSERT INTO runtime_events(slug, event, detail, created_at) VALUES(?, ?, ?, ?)`,
+		"grows", "old-event", "", "2020-01-01 00:00:00",
+	); err != nil {
+		t.Fatalf("insert old runtime_event error: %v", err)
+	}
+	s.RecordEvent("grows", "recent-event", "detail")
+
+	countRows := func(table string) int {
+		t.Helper()
+		var n int
+		// table is a test-local literal, never external input.
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&n); err != nil {
+			t.Fatalf("count %s error: %v", table, err)
+		}
+		return n
+	}
+
+	// Preconditions: everything seeded is present.
+	if got := countRows("earnings"); got != 6 {
+		t.Fatalf("expected 6 seeded earnings rows, got %d", got)
+	}
+	if got := countRows("runtime_events"); got != 2 {
+		t.Fatalf("expected 2 seeded runtime_events rows, got %d", got)
+	}
+
+	// Retention disabled: a non-positive window deletes nothing and returns 0.
+	for _, disabled := range []int{0, -1} {
+		n, err := s.PurgeOldData(disabled)
+		if err != nil {
+			t.Fatalf("PurgeOldData(%d) error: %v", disabled, err)
+		}
+		if n != 0 {
+			t.Fatalf("PurgeOldData(%d) = %d, want 0 (retention disabled)", disabled, n)
+		}
+	}
+	if countRows("earnings") != 6 || countRows("runtime_events") != 2 {
+		t.Fatalf("a disabled purge must not delete anything: earnings=%d events=%d",
+			countRows("earnings"), countRows("runtime_events"))
+	}
+
+	// Real purge: 3 old earnings (grows ts500, grows ts450, stale ts600) + 1 old
+	// event = 4 rows deleted.
+	deleted, err := s.PurgeOldData(400)
+	if err != nil {
+		t.Fatalf("PurgeOldData(400) error: %v", err)
+	}
+	if deleted != 4 {
+		t.Fatalf("PurgeOldData(400) = %d, want 4 (3 earnings + 1 event)", deleted)
+	}
+
+	// 3 earnings survive: grows ts20 (2.5), grows ts5 (3.0), stale ts500 (20.0).
+	if got := countRows("earnings"); got != 3 {
+		t.Fatalf("expected 3 surviving earnings rows, got %d", got)
+	}
+	if got := countRows("runtime_events"); got != 1 {
+		t.Fatalf("expected 1 surviving runtime_event, got %d", got)
+	}
+
+	// The exact surviving balances prove: a row newer than the cutoff survives even
+	// when it is NOT the latest (grows 2.5), and the latest row survives even though
+	// it is older than the cutoff (stale 20.0).
+	survived := map[float64]bool{}
+	rows, err := s.db.Query(`SELECT balance FROM earnings`)
+	if err != nil {
+		t.Fatalf("query surviving balances error: %v", err)
+	}
+	for rows.Next() {
+		var b float64
+		if err := rows.Scan(&b); err != nil {
+			rows.Close()
+			t.Fatalf("scan balance error: %v", err)
+		}
+		survived[b] = true
+	}
+	rows.Close()
+	for _, want := range []float64{2.5, 3.0, 20.0} {
+		if !survived[want] {
+			t.Fatalf("expected balance %v to survive the purge, survivors=%v", want, survived)
+		}
+	}
+	for _, gone := range []float64{1.0, 2.0, 10.0} {
+		if survived[gone] {
+			t.Fatalf("expected balance %v to be purged, survivors=%v", gone, survived)
+		}
+	}
+
+	// The surviving runtime_event is the recent one, not the 2020 row.
+	var lastEvent string
+	if err := s.db.QueryRow(`SELECT event FROM runtime_events`).Scan(&lastEvent); err != nil {
+		t.Fatalf("query surviving event error: %v", err)
+	}
+	if lastEvent != "recent-event" {
+		t.Fatalf("expected the recent runtime_event to survive, got %q", lastEvent)
+	}
+
+	// Both platforms still have a latest balance for the dashboard: grows -> 3.0
+	// (recent), stale -> 20.0 (old but preserved).
+	latest := map[string]float64{}
+	for _, rec := range s.ListLatestEarnings() {
+		latest[rec.Platform] = rec.Balance
+	}
+	if latest["grows"] != 3.0 {
+		t.Fatalf("grows latest balance = %v, want 3.0", latest["grows"])
+	}
+	if latest["stale"] != 20.0 {
+		t.Fatalf("stale latest balance = %v, want 20.0 (old latest row preserved)", latest["stale"])
+	}
+
+	// Idempotent: a second purge finds nothing new to delete (the only rows still
+	// older than the cutoff are the per-platform latest rows, which are protected).
+	deleted, err = s.PurgeOldData(400)
+	if err != nil {
+		t.Fatalf("second PurgeOldData(400) error: %v", err)
+	}
+	if deleted != 0 {
+		t.Fatalf("second PurgeOldData(400) = %d, want 0 (idempotent)", deleted)
+	}
+}
