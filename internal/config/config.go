@@ -26,6 +26,7 @@ type AppConfig struct {
 	AutoUpdate             bool   `json:"autoUpdate"`
 	HostnamePrefix         string `json:"hostnamePrefix"`
 	CollectIntervalMinutes int    `json:"collectIntervalMinutes"`
+	RetentionDays          int    `json:"retentionDays"`
 	Timezone               string `json:"timezone"`
 	FleetAPIKey            string `json:"fleetApiKey"`
 	FleetBindAddress       string `json:"fleetBindAddress"`
@@ -55,6 +56,9 @@ func applyDefaults(cfg AppConfig) AppConfig {
 	}
 	if cfg.CollectIntervalMinutes <= 0 {
 		cfg.CollectIntervalMinutes = 60
+	}
+	if cfg.RetentionDays <= 0 {
+		cfg.RetentionDays = 400
 	}
 	if cfg.Timezone == "" {
 		cfg.Timezone = "UTC"

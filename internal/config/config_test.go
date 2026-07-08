@@ -33,12 +33,16 @@ func TestNewManagerAppliesDefaults(t *testing.T) {
 		AutoUpdate:             true,
 		HostnamePrefix:         "cashpilot",
 		CollectIntervalMinutes: 60,
+		RetentionDays:          400,
 		Timezone:               "UTC",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
 	}
 	if cfg != want {
 		t.Fatalf("unexpected default config:\n got %+v\nwant %+v", cfg, want)
+	}
+	if cfg.RetentionDays != 400 {
+		t.Fatalf("expected RetentionDays to default to 400, got %d", cfg.RetentionDays)
 	}
 	if m.AppDir() == "" || m.DataDir() == "" {
 		t.Fatal("expected AppDir and DataDir to be set")
@@ -53,6 +57,7 @@ func TestSaveCoercesEmptyAndInvalidValues(t *testing.T) {
 		RuntimeProvider:        "existing-docker",
 		HostnamePrefix:         "cashpilot",
 		CollectIntervalMinutes: 60,
+		RetentionDays:          400,
 		Timezone:               "UTC",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
@@ -69,8 +74,8 @@ func TestSaveCoercesEmptyAndInvalidValues(t *testing.T) {
 			want: defaults,
 		},
 		{
-			name: "non-positive interval and port coerce to defaults",
-			in:   AppConfig{CollectIntervalMinutes: -5, FleetPort: 0},
+			name: "non-positive interval, retention and port coerce to defaults",
+			in:   AppConfig{CollectIntervalMinutes: -5, RetentionDays: -3, FleetPort: 0},
 			want: defaults,
 		},
 		{
@@ -102,6 +107,7 @@ func TestSavePreservesValidValues(t *testing.T) {
 		AutoUpdate:             true,
 		HostnamePrefix:         "myrig",
 		CollectIntervalMinutes: 15,
+		RetentionDays:          180,
 		Timezone:               "Europe/Madrid",
 		FleetAPIKey:            "token-123",
 		FleetBindAddress:       "127.0.0.1",
