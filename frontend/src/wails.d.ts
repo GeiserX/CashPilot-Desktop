@@ -6,6 +6,9 @@ declare module "../wailsjs/go/main/App" {
   export function AddFleetDevice(values: Record<string, string>): Promise<FleetState>;
   export function RemoveFleetDevice(id: number): Promise<FleetState>;
   export function CompleteOnboarding(): Promise<void>;
+  export function InstallBackgroundHelper(): Promise<void>;
+  export function RemoveBackgroundHelper(): Promise<void>;
+  export function BackgroundHelperStatus(): Promise<BackgroundStatus>;
   export function CheckRuntime(): Promise<RuntimeStatus>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
@@ -149,6 +152,16 @@ export interface SettingsState {
   environment: EnvSetting[];
   collectors: CollectorSetting[];
   config: AppConfig;
+}
+
+// BackgroundStatus mirrors the Go bgservice.Status returned by
+// BackgroundHelperStatus: whether the OS login agent is registered
+// (installed) and whether the service manager reports the helper alive
+// (running). label is the agent's service identifier.
+export interface BackgroundStatus {
+  installed: boolean;
+  running: boolean;
+  label: string;
 }
 
 export interface FleetDevice {

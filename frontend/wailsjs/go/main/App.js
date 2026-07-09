@@ -6,6 +6,10 @@ export function AddFleetDevice(arg1) {
   return window['go']['main']['App']['AddFleetDevice'](arg1);
 }
 
+export function BackgroundHelperStatus() {
+  return window['go']['main']['App']['BackgroundHelperStatus']();
+}
+
 export function CheckRuntime() {
   return window['go']['main']['App']['CheckRuntime']();
 }
@@ -30,6 +34,10 @@ export function GetCredentials(arg1) {
   return window['go']['main']['App']['GetCredentials'](arg1);
 }
 
+export function GetEarningsSummary() {
+  return window['go']['main']['App']['GetEarningsSummary']();
+}
+
 export function GetFleetState() {
   return window['go']['main']['App']['GetFleetState']();
 }
@@ -50,6 +58,10 @@ export function GetSettingsState() {
   return window['go']['main']['App']['GetSettingsState']();
 }
 
+export function InstallBackgroundHelper() {
+  return window['go']['main']['App']['InstallBackgroundHelper']();
+}
+
 export function ListServices() {
   return window['go']['main']['App']['ListServices']();
 }
@@ -60,6 +72,10 @@ export function ManagedRuntimePlan() {
 
 export function RefreshDeployments() {
   return window['go']['main']['App']['RefreshDeployments']();
+}
+
+export function RemoveBackgroundHelper() {
+  return window['go']['main']['App']['RemoveBackgroundHelper']();
 }
 
 export function RemoveFleetDevice(arg1) {
