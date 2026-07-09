@@ -134,7 +134,7 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) validFleetBearer(r *http.Request) bool {
-	key := a.cfg.Config().FleetAPIKey
+	key := a.fleetKey
 	if key == "" {
 		return false
 	}

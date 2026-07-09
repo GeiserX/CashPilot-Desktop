@@ -35,6 +35,11 @@ type App struct {
 	exchange   *exchange.Service
 	trayIcon   []byte
 	fleetAPI   *fleetAPIServer
+	// fleetKey is the fleet bearer token held in memory for the per-request auth
+	// check. It is loaded once at Startup by ensureFleetAPIKey from the OS keychain
+	// (0600 file fallback) so the token is never persisted in config.json and the
+	// keychain is not hit on every heartbeat.
+	fleetKey string
 
 	// Background collection scheduler. collecting is a single-flight guard so
 	// overlapping collectAll runs (the ticker, a post-deploy kick, a future manual
@@ -547,7 +552,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_HOSTNAME_PREFIX", Label: "Hostname Prefix", Value: cfg.HostnamePrefix, Source: "Config", Help: "Containers are named <prefix>-<service> where supported."},
 		{Key: "CASHPILOT_COLLECT_INTERVAL", Label: "Collect Interval (min)", Value: strconv.Itoa(cfg.CollectIntervalMinutes), Source: "Config", Help: "Minutes between future automatic earnings collection runs."},
 		{Key: "CASHPILOT_DISPLAY_CURRENCY", Label: "Display Currency", Value: cfg.DisplayCurrency, Source: "Config", Help: "Currency used in the topbar and dashboard summaries."},
-		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: cfg.FleetAPIKey, Source: "Config", Secret: true, Help: "Bearer token used by external workers and mobile clients."},
+		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: a.fleetKey, Source: "Config", Secret: true, Help: "Bearer token used by external workers and mobile clients."},
 		{Key: "CASHPILOT_UI_URL", Label: "Desktop API URL", Value: a.fleetUIURL(), Source: "Runtime", ReadOnly: true, Help: "URL that external workers should use for CASHPILOT_UI_URL."},
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
@@ -670,10 +675,10 @@ func (a *App) GetFleetState() (FleetState, error) {
 		Devices:       devices,
 		UIURL:         uiURL,
 		LocalAPIURL:   localAPIURL,
-		APIKey:        cfg.FleetAPIKey,
+		APIKey:        a.fleetKey,
 		APIListening:  a.fleetAPI != nil,
-		WorkerSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nCASHPILOT_WORKER_NAME=%s-worker\nCASHPILOT_WORKER_URL=http://<worker-lan-ip>:8081", uiURL, cfg.FleetAPIKey, cfg.HostnamePrefix),
-		MobileSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nDevice type: mobile", uiURL, cfg.FleetAPIKey),
+		WorkerSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nCASHPILOT_WORKER_NAME=%s-worker\nCASHPILOT_WORKER_URL=http://<worker-lan-ip>:8081", uiURL, a.fleetKey, cfg.HostnamePrefix),
+		MobileSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nDevice type: mobile", uiURL, a.fleetKey),
 	}, nil
 }
 
@@ -1166,17 +1171,43 @@ func hostnameOrDefault(value string) string {
 	return value
 }
 
+// ensureFleetAPIKey loads the fleet bearer token into memory at startup, keeping it
+// out of config.json. It prefers the OS keychain (with a 0600 file fallback) via
+// config.FleetKey/SetFleetKey. A legacy plaintext token still in config.json is
+// migrated into that store so already-configured workers and mobile clients keep
+// authenticating, then blanked from config.json. A brand-new install generates a
+// fresh 32-byte token.
 func (a *App) ensureFleetAPIKey() error {
-	cfg := a.cfg.Config()
-	if cfg.FleetAPIKey != "" {
-		return nil
-	}
-	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	appDir := a.cfg.AppDir()
+	key, err := config.FleetKey(appDir)
+	if err != nil {
 		return err
 	}
-	cfg.FleetAPIKey = base64.RawURLEncoding.EncodeToString(raw)
-	return a.cfg.Save(cfg)
+	if key == "" {
+		if legacy := a.cfg.Config().FleetAPIKey; legacy != "" {
+			// Preserve the existing plaintext token — workers already hold this value.
+			key = legacy
+		} else {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				return err
+			}
+			key = base64.RawURLEncoding.EncodeToString(raw)
+		}
+		if err := config.SetFleetKey(appDir, key); err != nil {
+			return err
+		}
+	}
+	// Strip any plaintext token still carried in config.json (the omitempty tag drops
+	// the now-empty field on the next write).
+	if cfg := a.cfg.Config(); cfg.FleetAPIKey != "" {
+		cfg.FleetAPIKey = ""
+		if err := a.cfg.Save(cfg); err != nil {
+			return err
+		}
+	}
+	a.fleetKey = key
+	return nil
 }
 
 func supportedCurrencies() []string {

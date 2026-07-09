@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	appID          = "com.cashpilot.desktop"
-	keyringService = "CashPilot Desktop"
-	keyringUser    = "credential-master-key"
+	appID            = "com.cashpilot.desktop"
+	keyringService   = "CashPilot Desktop"
+	keyringUser      = "credential-master-key"
+	keyringUserFleet = "fleet-api-key"
 )
 
 type AppConfig struct {
@@ -28,9 +29,14 @@ type AppConfig struct {
 	CollectIntervalMinutes int    `json:"collectIntervalMinutes"`
 	RetentionDays          int    `json:"retentionDays"`
 	Timezone               string `json:"timezone"`
-	FleetAPIKey            string `json:"fleetApiKey"`
-	FleetBindAddress       string `json:"fleetBindAddress"`
-	FleetPort              int    `json:"fleetPort"`
+	// FleetAPIKey is the legacy plaintext location for the fleet bearer token. It is
+	// no longer persisted here — the token lives in the OS keychain with a 0600 file
+	// fallback via FleetKey/SetFleetKey. The field is retained with omitempty only so
+	// an older config.json still unmarshals and ensureFleetAPIKey can migrate its
+	// value into the keychain and then blank it from disk.
+	FleetAPIKey      string `json:"fleetApiKey,omitempty"`
+	FleetBindAddress string `json:"fleetBindAddress"`
+	FleetPort        int    `json:"fleetPort"`
 	// MetricsEnabled turns on the opt-in Prometheus /metrics endpoint on the fleet
 	// server. It defaults to false (disabled) — the bool zero value, so applyDefaults
 	// needs no change. Enabling it exposes earnings, health and fleet stats on the
@@ -196,6 +202,39 @@ func MasterKey(appDir string) ([]byte, error) {
 		}
 	}
 	return key, nil
+}
+
+// FleetKey returns the stored fleet bearer token, mirroring MasterKey's
+// keychain-preferred / file-fallback storage. It tries the OS keychain first, then a
+// 0600 <appDir>/.fleet_api_key file (migrating that file's value into the keychain
+// when found). An empty string with a nil error means "not stored yet" so the caller
+// can generate a fresh token or migrate a legacy config.json value and persist it via
+// SetFleetKey.
+func FleetKey(appDir string) (string, error) {
+	value, err := keyring.Get(keyringService, keyringUserFleet)
+	if err == nil && value != "" {
+		return value, nil
+	}
+	keyPath := filepath.Join(appDir, ".fleet_api_key")
+	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
+		value = string(raw)
+		_ = keyring.Set(keyringService, keyringUserFleet, value)
+		return value, nil
+	}
+	return "", nil
+}
+
+// SetFleetKey persists the fleet bearer token keychain-first, falling back to a 0600
+// <appDir>/.fleet_api_key file when the keychain is unavailable (headless Linux / CI),
+// exactly like MasterKey's storage tail.
+func SetFleetKey(appDir, value string) error {
+	if err := keyring.Set(keyringService, keyringUserFleet, value); err != nil {
+		keyPath := filepath.Join(appDir, ".fleet_api_key")
+		if err := os.WriteFile(keyPath, []byte(value), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func appDataDir() (string, error) {
