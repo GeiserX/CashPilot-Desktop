@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -176,6 +177,15 @@ func (m *Manager) load() error {
 	return nil
 }
 
+// refuseKeyRegen reports whether MasterKey/FleetKey must NOT mint a replacement key.
+// A non-"not found" keychain error on a platform whose keychain is always present
+// (macOS, Windows) means the key likely exists but is locked or access was denied —
+// minting would silently overwrite it. On such platforms we surface the error instead.
+func refuseKeyRegen(err error, goos string) bool {
+	return err != nil && !errors.Is(err, keyring.ErrNotFound) &&
+		(goos == "darwin" || goos == "windows")
+}
+
 func MasterKey(appDir string) ([]byte, error) {
 	encoded, err := keyring.Get(keyringService, keyringUser)
 	if err == nil && encoded != "" {
@@ -189,6 +199,10 @@ func MasterKey(appDir string) ([]byte, error) {
 			_ = keyring.Set(keyringService, keyringUser, string(raw))
 			return decoded, nil
 		}
+	}
+
+	if refuseKeyRegen(err, runtime.GOOS) {
+		return nil, fmt.Errorf("credential master key is present but unreadable (keychain locked or access denied); refusing to regenerate to avoid destroying saved credentials: %w", err)
 	}
 
 	key := make([]byte, 32)
@@ -220,6 +234,10 @@ func FleetKey(appDir string) (string, error) {
 		value = string(raw)
 		_ = keyring.Set(keyringService, keyringUserFleet, value)
 		return value, nil
+	}
+
+	if refuseKeyRegen(err, runtime.GOOS) {
+		return "", fmt.Errorf("fleet key is present but unreadable (keychain locked or access denied): %w", err)
 	}
 	return "", nil
 }

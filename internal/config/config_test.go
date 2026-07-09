@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -339,6 +341,22 @@ func TestMasterKeyFileFallbackWhenKeyringUnavailable(t *testing.T) {
 	defer keyring.MockInit()
 
 	dir := t.TempDir()
+
+	// On platforms whose keychain is always present (macOS, Windows), a non-ErrNotFound
+	// keyring error means "locked or access denied", so MasterKey now refuses to mint a
+	// replacement rather than silently overwriting an existing key. The mint+file
+	// fallback asserted below only applies where the Secret Service can be genuinely
+	// absent (Linux/CI, the authoritative gate this fallback path targets).
+	if refuseKeyRegen(errors.New("no keyring"), runtime.GOOS) {
+		if _, err := MasterKey(dir); err == nil {
+			t.Fatal("expected MasterKey to refuse regeneration when the keychain is locked/denied")
+		}
+		if _, statErr := os.Stat(filepath.Join(dir, ".credential_key")); !os.IsNotExist(statErr) {
+			t.Fatal("expected no fallback key file to be written when regeneration is refused")
+		}
+		return
+	}
+
 	key1, err := MasterKey(dir)
 	if err != nil {
 		t.Fatalf("MasterKey error: %v", err)
@@ -426,5 +444,69 @@ func TestFleetKeyFileFallbackWhenKeyringUnavailable(t *testing.T) {
 	}
 	if got != "fleet-secret-token" {
 		t.Fatalf("expected the file-backed fleet token to round-trip, got %q", got)
+	}
+}
+
+// TestRefuseKeyRegen unit-tests the pure platform gate that guards MasterKey/FleetKey
+// from silently overwriting a key that exists but is momentarily unreadable. Because it
+// takes goos as a parameter, the whole darwin/windows/linux matrix is exercised on any
+// runner (including CI's Linux host) with no real keychain.
+func TestRefuseKeyRegen(t *testing.T) {
+	generic := errors.New("keychain locked")
+	cases := []struct {
+		name string
+		err  error
+		goos string
+		want bool
+	}{
+		{"not found on darwin does not refuse", keyring.ErrNotFound, "darwin", false},
+		{"not found on windows does not refuse", keyring.ErrNotFound, "windows", false},
+		{"not found on linux does not refuse", keyring.ErrNotFound, "linux", false},
+		{"generic error on darwin refuses", generic, "darwin", true},
+		{"generic error on windows refuses", generic, "windows", true},
+		{"generic error on linux does not refuse", generic, "linux", false},
+		{"wrapped not found on darwin does not refuse", fmt.Errorf("get: %w", keyring.ErrNotFound), "darwin", false},
+		{"nil error never refuses", nil, "darwin", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := refuseKeyRegen(tc.err, tc.goos); got != tc.want {
+				t.Fatalf("refuseKeyRegen(%v, %q) = %v, want %v", tc.err, tc.goos, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMasterKeyReturnsStoredFileKeyDespiteKeyringError proves the 0600 file fallback
+// still shields the user on ANY platform: even when the keychain returns a
+// non-ErrNotFound error (locked/denied) — the case the refuse-to-regen guard targets —
+// a valid .credential_key file is read and returned verbatim, and no new key is minted.
+func TestMasterKeyReturnsStoredFileKeyDespiteKeyringError(t *testing.T) {
+	keyring.MockInitWithError(errors.New("keychain locked"))
+	defer keyring.MockInit()
+
+	dir := t.TempDir()
+	want := bytes.Repeat([]byte{0x42}, 32)
+	encoded := base64.StdEncoding.EncodeToString(want)
+	keyPath := filepath.Join(dir, ".credential_key")
+	if err := os.WriteFile(keyPath, []byte(encoded), 0o600); err != nil {
+		t.Fatalf("write fallback key file: %v", err)
+	}
+
+	got, err := MasterKey(dir)
+	if err != nil {
+		t.Fatalf("MasterKey error: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("expected MasterKey to return the existing file key, not a freshly minted one")
+	}
+
+	// The file must be untouched — a mint would have rewritten it with a new key.
+	after, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read fallback key file: %v", err)
+	}
+	if string(after) != encoded {
+		t.Fatal("expected the fallback key file to be left untouched")
 	}
 }
