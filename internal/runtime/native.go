@@ -54,6 +54,12 @@ const (
 	// defaultNativeStopTimeout is how long Stop waits after a graceful SIGTERM before
 	// escalating to SIGKILL.
 	defaultNativeStopTimeout = 15 * time.Second
+
+	// defaultNativeCPUStatInterval is the window over which a native process's CPU% is
+	// sampled (gopsutil Percent takes two samples this far apart → current load, not the
+	// lifetime average CPUPercent gives). Shorter than the Docker path's 1s because List
+	// samples processes sequentially, so this bounds the latency it adds per earner.
+	defaultNativeCPUStatInterval = 200 * time.Millisecond
 )
 
 // errStopRequested is returned by startOnce when a Stop raced the (re)launch, so the
@@ -95,9 +101,14 @@ type NativeProcessProvider struct {
 	maxRestarts int
 	stopTimeout time.Duration
 
-	// statFn samples a pid's CPU%/memory and liveness; defaults to gopsutil, a seam
+	// statFn samples a pid's CPU%/memory and liveness; defaults to gopsutilStats, a seam
 	// for tests. logCap bounds each log generation.
 	statFn func(pid int) (cpuPercent, memoryMB float64, alive bool)
+
+	// cpuStatInterval is the two-sample window gopsutilStats uses for CPU%. A field (not a
+	// const) so tests can shrink it — List samples sequentially, so a real window would
+	// otherwise slow the suite. Defaults to defaultNativeCPUStatInterval.
+	cpuStatInterval time.Duration
 
 	// identityFn samples a live pid's identity — its executable path and creation time
 	// (ms since epoch) — so a pid persisted in state.json can be confirmed as still
@@ -131,23 +142,27 @@ type NativeProcessProvider struct {
 // production defaults.
 func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 	base := filepath.Join(appDir, "native")
-	return &NativeProcessProvider{
-		baseDir:     base,
-		statePath:   filepath.Join(base, "state.json"),
-		httpClient:  &http.Client{Timeout: 10 * time.Minute, CheckRedirect: httpsOnlyRedirect},
-		goos:        goruntime.GOOS,
-		goarch:      goruntime.GOARCH,
-		backoffMin:  1 * time.Second,
-		backoffMax:  1 * time.Minute,
-		maxRestarts: 0,
-		stopTimeout: defaultNativeStopTimeout,
-		statFn:      gopsutilStats,
-		identityFn:  gopsutilIdentity,
-		logCap:      nativeLogCap,
-		maxDownload: maxDownloadBytes,
-		maxExtract:  maxExtractedBytes,
-		procs:       make(map[string]*managedProcess),
+	p := &NativeProcessProvider{
+		baseDir:         base,
+		statePath:       filepath.Join(base, "state.json"),
+		httpClient:      &http.Client{Timeout: 10 * time.Minute, CheckRedirect: httpsOnlyRedirect},
+		goos:            goruntime.GOOS,
+		goarch:          goruntime.GOARCH,
+		backoffMin:      1 * time.Second,
+		backoffMax:      1 * time.Minute,
+		maxRestarts:     0,
+		stopTimeout:     defaultNativeStopTimeout,
+		cpuStatInterval: defaultNativeCPUStatInterval,
+		identityFn:      gopsutilIdentity,
+		logCap:          nativeLogCap,
+		maxDownload:     maxDownloadBytes,
+		maxExtract:      maxExtractedBytes,
+		procs:           make(map[string]*managedProcess),
 	}
+	// statFn is a bound method so it can read p.cpuStatInterval; still a field so tests can
+	// swap in a stub sampler.
+	p.statFn = p.gopsutilStats
+	return p
 }
 
 // SetEventRecorder wires a lifecycle-event sink (typically store.RecordEvent) so the
@@ -672,7 +687,11 @@ func buildNativeEnv(svc catalog.Service, overrides map[string]string) map[string
 	return env
 }
 
-func gopsutilStats(pid int) (float64, float64, bool) {
+// gopsutilStats is the production statFn: it samples a live pid's current CPU%, resident
+// memory and liveness. CPU comes from gopsutil Percent(interval), which takes two samples
+// cpuStatInterval apart and reports current load (% of one core) — NOT CPUPercent(), which
+// returns a lifetime average since process start and so misreports a busy earner's load.
+func (p *NativeProcessProvider) gopsutilStats(pid int) (float64, float64, bool) {
 	proc, err := process.NewProcess(int32(pid))
 	if err != nil {
 		return 0, 0, false
@@ -682,7 +701,7 @@ func gopsutilStats(pid int) (float64, float64, bool) {
 		return 0, 0, false
 	}
 	cpu := 0.0
-	if c, err := proc.CPUPercent(); err == nil {
+	if c, err := proc.Percent(p.cpuStatInterval); err == nil {
 		cpu = c
 	}
 	mem := 0.0
