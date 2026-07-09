@@ -105,6 +105,13 @@ type NativeProcessProvider struct {
 	// to after ours exited. Defaults to gopsutil; a seam for tests.
 	identityFn func(pid int) (exePath string, createTimeMs int64, ok bool)
 
+	// onEvent, when set, records a supervisor lifecycle event (slug, event, detail). It is
+	// wired to store.RecordEvent so a native earner's AUTONOMOUS crash ("process_error") and
+	// respawn ("restarted") feed the same HealthScores the Docker path does — otherwise a
+	// crash-looping native earner would silently show 0 restarts / 0 crashes. nil = no-op.
+	// Set once via SetEventRecorder before the first Deploy; read only from supervise goroutines.
+	onEvent func(slug, event, detail string)
+
 	logCap int64
 
 	// maxDownload bounds a single artifact download and maxExtract bounds one archive's
@@ -141,6 +148,35 @@ func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 		maxExtract:  maxExtractedBytes,
 		procs:       make(map[string]*managedProcess),
 	}
+}
+
+// SetEventRecorder wires a lifecycle-event sink (typically store.RecordEvent) so the
+// supervisor's autonomous crashes and respawns are recorded into the same event stream
+// HealthScores aggregates. Call once at wiring time, before the first Deploy — it is read
+// (without locking) only from supervise goroutines, which are created later by Deploy.
+func (p *NativeProcessProvider) SetEventRecorder(fn func(slug, event, detail string)) {
+	p.onEvent = fn
+}
+
+// emit records a supervisor lifecycle event if a recorder is wired (no-op otherwise).
+func (p *NativeProcessProvider) emit(slug, event, detail string) {
+	if p.onEvent != nil {
+		p.onEvent(slug, event, detail)
+	}
+}
+
+// exitDetail describes how a supervised process exited, for the event detail. A non-nil
+// wait error carries the exit status (or signal); nil means a clean exit(0) — unusual for
+// an earner, which is meant to run indefinitely, so it is still treated as a crash.
+func exitDetail(waitErr error) string {
+	if waitErr == nil {
+		return "exited cleanly (status 0)"
+	}
+	var ee *exec.ExitError
+	if errors.As(waitErr, &ee) {
+		return "exited: " + ee.String()
+	}
+	return "exited: " + waitErr.Error()
 }
 
 // managedProcess is a native child process the provider owns and supervises within
@@ -437,14 +473,23 @@ func (p *NativeProcessProvider) supervise(mp *managedProcess) {
 	for {
 		cmd := mp.getCmd()
 		runStart := time.Now()
+		var waitErr error
 		if cmd != nil {
-			_ = cmd.Wait()
+			waitErr = cmd.Wait()
 		}
 		if mp.isStopping() {
 			return
 		}
+		if cmd != nil {
+			// A process we own exited without a deliberate Stop → an unexpected exit
+			// (crash). Recorded with an "_error" suffix so HealthScores counts it as a
+			// crash, giving native earners the same crash accounting as the Docker path.
+			p.emit(mp.slug, "process_error", exitDetail(waitErr))
+		}
 		restarts++
 		if p.maxRestarts > 0 && restarts > p.maxRestarts {
+			// The supervisor is giving up — the earner is now down until user action.
+			p.emit(mp.slug, "restart_error", fmt.Sprintf("gave up after %d restarts", p.maxRestarts))
 			return
 		}
 		if cmd != nil && time.Since(runStart) >= p.backoffMax {
@@ -470,6 +515,10 @@ func (p *NativeProcessProvider) supervise(mp *managedProcess) {
 			continue
 		}
 		p.updatePID(mp)
+		// The earner is running again after an unexpected exit — a native respawn,
+		// recorded as "restarted" (the same event Manager.Restart uses) so it lands in
+		// the restart tally that feeds HealthScores and the health badge.
+		p.emit(mp.slug, "restarted", "native supervisor respawn")
 	}
 }
 

@@ -45,6 +45,12 @@ func runNativeStub() {
 	}
 	// Emit a known line so a test can assert stdout is captured into the log.
 	os.Stdout.WriteString("cashpilot-native-stub alive pid=" + strconv.Itoa(os.Getpid()) + "\n")
+	// Non-zero exit mode: exit with a specific code so a test can exercise the
+	// *exec.ExitError branch of exitDetail (crash-detail formatting).
+	if code := os.Getenv("CASHPILOT_STUB_EXIT_CODE"); code != "" {
+		n, _ := strconv.Atoi(code)
+		os.Exit(n)
+	}
 	// Crash-loop mode: append this run to a shared file and exit immediately so the
 	// supervisor treats every launch as a fast crash (used to prove the bounded-restart
 	// cap without waiting on real backoff).
@@ -996,6 +1002,85 @@ func TestNativeSupervisorStopsAfterMaxRestarts(t *testing.T) {
 	}
 	if got := len(strings.Fields(strings.TrimSpace(string(data)))); got != 3 {
 		t.Fatalf("stub ran %d times, want 3 (initial launch + maxRestarts=2)", got)
+	}
+}
+
+// TestNativeSupervisorRecordsCrashAndRestartEvents proves the supervisor feeds a native
+// earner's AUTONOMOUS crashes and respawns into the event recorder (wired to
+// store.RecordEvent in production) so HealthScores counts them — otherwise a crash-looping
+// native earner silently shows 0 restarts / 0 crashes. A stub that exits immediately with
+// maxRestarts=2 exits 3 times (3 crashes), is respawned twice, then the supervisor gives up.
+func TestNativeSupervisorRecordsCrashAndRestartEvents(t *testing.T) {
+	p := newTestNativeProvider(t)
+	p.maxRestarts = 2
+	p.backoffMin = 5 * time.Millisecond
+	p.backoffMax = 10 * time.Millisecond
+
+	var mu sync.Mutex
+	counts := map[string]int{}
+	p.SetEventRecorder(func(slug, event, detail string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if slug != "flap" {
+			t.Errorf("event for unexpected slug %q", slug)
+		}
+		counts[event]++
+	})
+
+	art := stubBinaryBytes(t)
+	url := serveArtifact(t, p, art)
+	runs := filepath.Join(t.TempDir(), "runs")
+	svc := nativeService("flap", url, sha256hex(art), "none")
+	env := map[string]string{"CASHPILOT_NATIVE_STUB": "1", "CASHPILOT_STUB_EXIT": "1", "CASHPILOT_STUB_RUNS": runs}
+
+	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "flap", Service: svc, Env: env}, nil); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "flap") })
+
+	p.mu.Lock()
+	mp := p.procs["flap"]
+	p.mu.Unlock()
+	if mp == nil {
+		t.Fatal("no managed process recorded")
+	}
+	select {
+	case <-mp.doneCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervisor did not stop after maxRestarts")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if counts["process_error"] != 3 {
+		t.Errorf("process_error (crash) events = %d, want 3", counts["process_error"])
+	}
+	if counts["restarted"] != 2 {
+		t.Errorf("restarted events = %d, want 2", counts["restarted"])
+	}
+	if counts["restart_error"] != 1 {
+		t.Errorf("restart_error (gave-up) events = %d, want 1", counts["restart_error"])
+	}
+}
+
+// TestExitDetail covers the crash-detail helper across its three branches: a clean exit,
+// a generic (non-exit) error, and a real *exec.ExitError carrying a non-zero status.
+func TestExitDetail(t *testing.T) {
+	if got := exitDetail(nil); got != "exited cleanly (status 0)" {
+		t.Errorf("exitDetail(nil) = %q", got)
+	}
+	if got := exitDetail(errors.New("boom")); got != "exited: boom" {
+		t.Errorf("exitDetail(generic) = %q", got)
+	}
+	binPath := filepath.Join(t.TempDir(), stubBinName())
+	if err := os.WriteFile(binPath, stubBinaryBytes(t), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binPath)
+	cmd.Env = append(os.Environ(), "CASHPILOT_NATIVE_STUB=1", "CASHPILOT_STUB_EXIT_CODE=3")
+	waitErr := cmd.Run()
+	if got := exitDetail(waitErr); !strings.Contains(got, "exit status 3") {
+		t.Errorf("exitDetail(exit-3) = %q, want contains 'exit status 3'", got)
 	}
 }
 
