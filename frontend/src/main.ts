@@ -60,6 +60,9 @@ let eventRefreshInFlight = false;
 function wireBackendEvents() {
   EventsOn("earnings:changed", () => void onBackendEvent());
   EventsOn("deployment:changed", () => void onBackendEvent());
+  // Background/startup failures the Go side reports via app:error had no listener,
+  // so ~every background error was silently dropped. Surface them to the user.
+  EventsOn("app:error", (payload) => showErrorToast(payload));
 }
 
 async function onBackendEvent() {
@@ -547,9 +550,13 @@ async function saveSettingsFromForm() {
   document.querySelectorAll<HTMLInputElement>("[data-setting]").forEach((input) => {
     if (!input.readOnly) values[input.dataset.setting || ""] = input.value;
   });
-  await SaveSettings(values);
-  state = await GetAppState();
-  render();
+  try {
+    await SaveSettings(values);
+    state = await GetAppState();
+    render();
+  } catch (error) {
+    showErrorToast({scope: "settings", error: String(error)});
+  }
 }
 
 function envInputName(key: string) {
@@ -666,8 +673,12 @@ async function addFleetDevice() {
     endpoint: valueOf("#fleet-endpoint"),
     services: valueOf("#fleet-services"),
   };
-  await AddFleetDevice(values);
-  render();
+  try {
+    await AddFleetDevice(values);
+    render();
+  } catch (error) {
+    showErrorToast({scope: "fleet", error: String(error)});
+  }
 }
 
 async function removeFleetDevice(id: number) {
@@ -1183,27 +1194,31 @@ function readWizardForm(slug: string): Record<string, string> {
 async function runWizardAction(slug: string, action: string) {
   const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
   const values = readWizardForm(slug);
-  if (action === "save") {
-    await SaveCredentials(slug, values);
-    if (output) output.textContent = "Credentials saved.";
-    return;
-  }
-  if (action === "deploy") {
-    if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
+  try {
+    if (action === "save") {
+      await SaveCredentials(slug, values);
+      if (output) output.textContent = "Credentials saved.";
       return;
     }
-    if (output) output.textContent = "Deploying...";
-    await SaveCredentials(slug, values);
-    await DeployService(slug, values);
-    state = await GetAppState();
-    if (output) output.textContent = "Deployed.";
-    return;
-  }
-  if (action === "collect") {
-    await SaveCredentials(slug, values);
-    const record = await CollectService(slug);
-    if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
-    state = await GetAppState();
+    if (action === "deploy") {
+      if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
+        return;
+      }
+      if (output) output.textContent = "Deploying...";
+      await SaveCredentials(slug, values);
+      await DeployService(slug, values);
+      state = await GetAppState();
+      if (output) output.textContent = "Deployed.";
+      return;
+    }
+    if (action === "collect") {
+      await SaveCredentials(slug, values);
+      const record = await CollectService(slug);
+      if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
+      state = await GetAppState();
+    }
+  } catch (error) {
+    if (output) output.textContent = String(error);
   }
 }
 
@@ -1302,6 +1317,31 @@ async function refreshState() {
 function setOutput(value: string) {
   const out = document.querySelector<HTMLPreElement>("#service-output");
   if (out) out.textContent = value;
+}
+
+// showErrorToast surfaces a backend app:error (a background or startup failure that
+// arrives outside a normal state render, so it cannot flow through the notification
+// bell, which is rebuilt from GetAppState). It mirrors the bell's look — an escaped
+// scope title plus message — as a non-intrusive, auto-dismissing toast. The message
+// is escapeHtml'd before the innerHTML sink. It is also reused by the frontend action
+// handlers to report a rejected bound call on views without an output pre.
+function showErrorToast(payload: {scope?: string; error?: string} | string) {
+  const scope = typeof payload === "object" && payload ? payload.scope ?? "" : "";
+  const message = typeof payload === "object" && payload ? payload.error ?? "" : String(payload);
+  if (!message) return;
+  let stack = document.querySelector<HTMLDivElement>("#toast-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.id = "toast-stack";
+    stack.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:9999;display:grid;gap:8px;width:320px;max-width:calc(100vw - 32px);";
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement("div");
+  toast.className = "notification-item error";
+  toast.style.cssText = "border-left-color:var(--error);background:var(--bg-secondary);box-shadow:0 18px 60px rgba(0,0,0,0.45);";
+  toast.innerHTML = `<span>${escapeHtml(scope ? `${scope} error` : "Error")}</span><small>${escapeHtml(message)}</small>`;
+  stack.appendChild(toast);
+  setTimeout(() => toast.remove(), 8000);
 }
 
 function renderError(error: unknown) {

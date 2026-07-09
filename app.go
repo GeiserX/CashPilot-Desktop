@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"os"
 	stdruntime "runtime"
 	"sort"
@@ -111,9 +112,12 @@ func (a *App) Startup(ctx context.Context) {
 		}
 	}()
 
+	// A fleet-token problem must NOT disable core earnings collection: surface it and
+	// continue so the scheduler and retention purge below still start. startFleetAPI
+	// fails closed while fleetKey is empty (validFleetBearer rejects every request),
+	// so continuing here never leaves the worker API open.
 	if err := a.ensureFleetAPIKey(); err != nil {
 		a.emitError("fleet-api", err)
-		return
 	}
 	if err := a.startFleetAPI(); err != nil {
 		a.emitError("fleet-api", err)
@@ -588,6 +592,8 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	}
 	cfg := a.cfg.Config()
 	previousInterval := cfg.CollectIntervalMinutes
+	previousFleetPort := cfg.FleetPort
+	previousFleetBind := cfg.FleetBindAddress
 	if value := strings.TrimSpace(values["displayCurrency"]); value != "" {
 		upper := strings.ToUpper(value)
 		if !isSupportedCurrency(upper) {
@@ -602,6 +608,12 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		cfg.Timezone = value
 	}
 	if value := strings.TrimSpace(values["fleetBindAddress"]); value != "" {
+		// Only a parseable IP or "localhost" is a valid bind host (an empty value
+		// keeps the loopback default via config.Normalize). A bad value stored verbatim
+		// would silently brick the fleet listener on the next launch, so reject it here.
+		if value != "localhost" && net.ParseIP(value) == nil {
+			return SettingsState{}, fmt.Errorf("invalid fleet bind address %q", value)
+		}
 		cfg.FleetBindAddress = value
 	}
 	if value := strings.TrimSpace(values["collectIntervalMinutes"]); value != "" {
@@ -625,6 +637,13 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// takes effect immediately instead of waiting for the next app launch.
 	if cfg.CollectIntervalMinutes != previousInterval && a.ctx != nil {
 		a.runScheduler(a.ctx, a.collectInterval())
+	}
+	// The fleet listener binds its port/address once at Startup; changing them here
+	// does not rebind the already-running server (a live restart is deferred). Surface
+	// a notice so the UI does not keep advertising a now-dead port to the user until
+	// the app is restarted.
+	if cfg.FleetPort != previousFleetPort || cfg.FleetBindAddress != previousFleetBind {
+		a.emitError("fleet-api", fmt.Errorf("Fleet API port/bind change takes effect after restarting the app."))
 	}
 	return a.GetSettingsState()
 }
