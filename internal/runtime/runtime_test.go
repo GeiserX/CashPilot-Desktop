@@ -557,6 +557,29 @@ func TestStatsForContainersMapsFieldsAndSamplesConcurrently(t *testing.T) {
 	}
 }
 
+// TestDockerClientHostSeam pins dockerClient's optional-host seam: with no host it
+// builds the env/default client exactly as before, and an explicit host is applied
+// to the resulting client (no daemon connection is made). This is the seam a future
+// bundled-runtime provider uses to target a specific socket instead of the ambient
+// Docker context.
+func TestDockerClientHostSeam(t *testing.T) {
+	def, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient() error: %v", err)
+	}
+	def.Close()
+
+	const host = "tcp://127.0.0.1:2375"
+	cli, err := dockerClient(host)
+	if err != nil {
+		t.Fatalf("dockerClient(host) error: %v", err)
+	}
+	defer cli.Close()
+	if cli.DaemonHost() != host {
+		t.Fatalf("expected host override %q, got %q", host, cli.DaemonHost())
+	}
+}
+
 // dialTestDocker returns a Docker client pointed at a live daemon, or skips the
 // test. It first tries dockerClient() (the same env/default-socket path the app
 // uses) and, if that cannot be pinged, falls back to the endpoint the docker CLI's

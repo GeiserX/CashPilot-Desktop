@@ -314,3 +314,143 @@ func TestLifecycleOperationsPropagateErrors(t *testing.T) {
 		t.Fatal("expected a Remove error")
 	}
 }
+
+// TestResolveProviderFallsBackAndResolves pins the registry: an empty or unknown
+// kind resolves to the default provider (existing-docker), while a registered kind
+// resolves to its own provider. This is the seam a future native runtime plugs into.
+func TestResolveProviderFallsBackAndResolves(t *testing.T) {
+	st := newTestStore(t)
+	docker := &fakeProvider{}
+	m := NewManager(docker, newTestCatalog(t), st)
+
+	if p, kind := m.resolveProvider(""); p != docker || kind != "existing-docker" {
+		t.Fatalf("empty kind should resolve to the default provider/kind, got kind=%q", kind)
+	}
+	if p, kind := m.resolveProvider("native-process"); p != docker || kind != "existing-docker" {
+		t.Fatalf("unknown kind should fall back to the default, got kind=%q", kind)
+	}
+	if p, kind := m.resolveProvider("existing-docker"); p != docker || kind != "existing-docker" {
+		t.Fatalf("existing-docker should resolve to the docker provider, got kind=%q", kind)
+	}
+
+	native := &fakeProvider{}
+	m.providers["native-process"] = native
+	if p, kind := m.resolveProvider("native-process"); p != native || kind != "native-process" {
+		t.Fatalf("registered kind should resolve to its own provider, got kind=%q", kind)
+	}
+}
+
+// TestDeployRecordsResolvedRuntimeKind is the behavior-preservation regression for
+// the deploy record: a Docker service is still persisted with Runtime
+// "existing-docker" — now derived from the resolved kind rather than a literal.
+func TestDeployRecordsResolvedRuntimeKind(t *testing.T) {
+	st := newTestStore(t)
+	fake := &fakeProvider{deployResult: runtime.ContainerInfo{
+		ContainerID: "cid-1",
+		Name:        "cashpilot-example",
+		Image:       "example/image:1.0.0",
+		Status:      "running",
+	}}
+	m := NewManager(fake, newTestCatalog(t), st)
+
+	dep, err := m.Deploy(context.Background(), "example", map[string]string{"TOKEN": "abc"})
+	if err != nil {
+		t.Fatalf("Deploy error: %v", err)
+	}
+	if dep.Runtime != "existing-docker" {
+		t.Fatalf("expected resolved runtime kind 'existing-docker', got %q", dep.Runtime)
+	}
+	if stored, ok, _ := st.GetDeployment("example"); !ok || stored.Runtime != "existing-docker" {
+		t.Fatalf("expected stored runtime 'existing-docker', got ok=%v runtime=%q", ok, stored.Runtime)
+	}
+}
+
+// TestListReturnsSingleProviderUnchanged pins that with only Docker registered the
+// union List is exactly the Docker provider's list — identical to the old single
+// m.runtime.List call.
+func TestListReturnsSingleProviderUnchanged(t *testing.T) {
+	st := newTestStore(t)
+	want := []runtime.ContainerInfo{
+		{Slug: "storj", ContainerID: "c1", Status: "running", Image: "i1"},
+		{Slug: "mysterium", ContainerID: "c2", Status: "running", Image: "i2"},
+	}
+	m := NewManager(&fakeProvider{listResult: want}, newTestCatalog(t), st)
+
+	got, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	if len(got) != 2 || got[0].Slug != "storj" || got[1].Slug != "mysterium" {
+		t.Fatalf("expected the docker provider's list unchanged, got %+v", got)
+	}
+}
+
+// TestListUnionsAcrossProviders proves List unions every registered provider's
+// units once a second runtime kind is present.
+func TestListUnionsAcrossProviders(t *testing.T) {
+	st := newTestStore(t)
+	docker := &fakeProvider{listResult: []runtime.ContainerInfo{{Slug: "storj"}}}
+	native := &fakeProvider{listResult: []runtime.ContainerInfo{{Slug: "earnapp"}}}
+	m := NewManager(docker, newTestCatalog(t), st)
+	m.providers["native-process"] = native
+
+	got, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("List error: %v", err)
+	}
+	slugs := map[string]bool{}
+	for _, c := range got {
+		slugs[c.Slug] = true
+	}
+	if !slugs["storj"] || !slugs["earnapp"] {
+		t.Fatalf("expected the union of both providers, got %v", slugs)
+	}
+}
+
+// TestListNonFatalWhenOneProviderFails pins that a single failing provider does not
+// blank the healthy ones: the union still returns the working provider's units.
+func TestListNonFatalWhenOneProviderFails(t *testing.T) {
+	st := newTestStore(t)
+	docker := &fakeProvider{listResult: []runtime.ContainerInfo{{Slug: "storj"}}}
+	broken := &fakeProvider{listErr: errors.New("native runtime down")}
+	m := NewManager(docker, newTestCatalog(t), st)
+	m.providers["native-process"] = broken
+
+	got, err := m.List(context.Background())
+	if err != nil {
+		t.Fatalf("a single failing provider must be non-fatal, got err: %v", err)
+	}
+	if len(got) != 1 || got[0].Slug != "storj" {
+		t.Fatalf("expected only the healthy provider's units, got %+v", got)
+	}
+}
+
+// TestListErrorsWhenAllProvidersFail pins that when NO provider lists successfully
+// the error surfaces — preserving the old single-provider failure behavior.
+func TestListErrorsWhenAllProvidersFail(t *testing.T) {
+	st := newTestStore(t)
+	m := NewManager(&fakeProvider{listErr: errors.New("docker down")}, newTestCatalog(t), st)
+	if _, err := m.List(context.Background()); err == nil {
+		t.Fatal("expected an error when the only provider fails")
+	}
+}
+
+// TestRefreshRecordsResolvedRuntimeKindPerProvider proves Refresh stamps each unit
+// with the runtime that actually owns it, not a hardcoded literal.
+func TestRefreshRecordsResolvedRuntimeKindPerProvider(t *testing.T) {
+	st := newTestStore(t)
+	docker := &fakeProvider{listResult: []runtime.ContainerInfo{{Slug: "storj", ContainerID: "d1", Status: "running", Image: "i"}}}
+	native := &fakeProvider{listResult: []runtime.ContainerInfo{{Slug: "earnapp", ContainerID: "n1", Status: "running", Image: "i"}}}
+	m := NewManager(docker, newTestCatalog(t), st)
+	m.providers["native-process"] = native
+
+	if _, err := m.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh error: %v", err)
+	}
+	if dep, ok, _ := st.GetDeployment("storj"); !ok || dep.Runtime != "existing-docker" {
+		t.Fatalf("expected storj recorded under existing-docker, got ok=%v runtime=%q", ok, dep.Runtime)
+	}
+	if dep, ok, _ := st.GetDeployment("earnapp"); !ok || dep.Runtime != "native-process" {
+		t.Fatalf("expected earnapp recorded under native-process, got ok=%v runtime=%q", ok, dep.Runtime)
+	}
+}

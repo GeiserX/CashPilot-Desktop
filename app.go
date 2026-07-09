@@ -1019,19 +1019,21 @@ func (a *App) collectAll(ctx context.Context) {
 // otherwise. These rows feed store.HealthScores' uptime% and are pruned by
 // PurgeOldData with the other runtime_events. It runs inside collectAll (under the
 // single-flight guard) rather than on its own timer, so it needs no extra ticker.
-// It never aborts the cycle: a runtime that cannot be listed (Docker offline) is
-// surfaced via emitError and sampling is skipped for this tick. The nil guards
-// mirror collectAll's, so the scheduler tests — which inject no runtime — are a
-// no-op here.
+// It never aborts the cycle: if every runtime provider fails to list (all offline)
+// the error is surfaced via emitError and sampling is skipped for this tick. The
+// nil guards mirror collectAll's, so the scheduler tests — which inject no services
+// manager — are a no-op here.
 func (a *App) sampleHealth(ctx context.Context) {
-	if a.store == nil || a.runtime == nil {
+	if a.store == nil || a.services == nil {
 		return
 	}
 	deployments := a.store.ListDeployments()
 	if len(deployments) == 0 {
 		return
 	}
-	containers, err := a.runtime.List(ctx)
+	// List unions every registered runtime provider; with only Docker registered
+	// this is Docker's managed-container list (or its error) exactly as before.
+	containers, err := a.services.List(ctx)
 	if err != nil {
 		a.emitError("health", err)
 		return

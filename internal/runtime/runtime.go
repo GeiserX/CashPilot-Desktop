@@ -472,8 +472,18 @@ func memoryMB(mem container.MemoryStats) float64 {
 	return float64(usage) / 1024 / 1024
 }
 
-func dockerClient() (*client.Client, error) {
-	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+// dockerClient builds a Docker API client. With no host argument (or an empty one)
+// it reads the connection from the environment via client.FromEnv — the default
+// Docker context / DOCKER_HOST — exactly as before. A non-empty host is a seam for
+// a future bundled-runtime provider that must talk to a specific socket/endpoint
+// instead of the ambient context; no current caller passes one, so today's behavior
+// is unchanged.
+func dockerClient(host ...string) (*client.Client, error) {
+	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	if len(host) > 0 && host[0] != "" {
+		opts = append(opts, client.WithHost(host[0]))
+	}
+	return client.NewClientWithOpts(opts...)
 }
 
 // maxPullLogLine caps a single progress line at 1 MiB. bufio.Scanner's default max
