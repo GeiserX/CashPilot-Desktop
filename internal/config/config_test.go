@@ -112,7 +112,6 @@ func TestSavePreservesValidValues(t *testing.T) {
 		CollectIntervalMinutes: 15,
 		RetentionDays:          180,
 		Timezone:               "Europe/Madrid",
-		FleetAPIKey:            "token-123",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              9000,
 		WorkerURLPolicy:        "strict",
@@ -137,7 +136,6 @@ func TestConfigPersistsAcrossManagers(t *testing.T) {
 	saved := m1.Config()
 	saved.DisplayCurrency = "GBP"
 	saved.FleetPort = 9100
-	saved.FleetAPIKey = "persisted-key"
 	if err := m1.Save(saved); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
@@ -149,7 +147,10 @@ func TestConfigPersistsAcrossManagers(t *testing.T) {
 		t.Fatalf("NewManager(m2) error: %v", err)
 	}
 	got := m2.Config()
-	if got.DisplayCurrency != "GBP" || got.FleetPort != 9100 || got.FleetAPIKey != "persisted-key" {
+	// The fleet bearer token is no longer a config.json field — it lives in the OS
+	// keychain (0600 file fallback) via FleetKey/SetFleetKey — so it must round-trip
+	// empty here regardless of the other persisted values.
+	if got.DisplayCurrency != "GBP" || got.FleetPort != 9100 || got.FleetAPIKey != "" {
 		t.Fatalf("config did not persist across managers: %+v", got)
 	}
 }
@@ -368,5 +369,62 @@ func TestMasterKeyFileFallbackWhenKeyringUnavailable(t *testing.T) {
 	}
 	if !bytes.Equal(key1, key2) {
 		t.Fatal("expected the file-backed key to be byte-identical across calls")
+	}
+}
+
+// TestFleetKeyRoundTripsThroughKeyring pins the keychain-backed fleet-token store:
+// an unstored token reads as empty with a nil error (so the caller can generate or
+// migrate one), and SetFleetKey then FleetKey returns the same value.
+func TestFleetKeyRoundTripsThroughKeyring(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	got, err := FleetKey(dir)
+	if err != nil {
+		t.Fatalf("FleetKey (empty) error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected an unstored fleet token to read as empty, got %q", got)
+	}
+
+	if err := SetFleetKey(dir, "fleet-secret-token"); err != nil {
+		t.Fatalf("SetFleetKey error: %v", err)
+	}
+	got, err = FleetKey(dir)
+	if err != nil {
+		t.Fatalf("FleetKey error: %v", err)
+	}
+	if got != "fleet-secret-token" {
+		t.Fatalf("expected the stored fleet token, got %q", got)
+	}
+}
+
+// TestFleetKeyFileFallbackWhenKeyringUnavailable pins the file-backed fallback used
+// by headless Linux / CI: with no keyring, SetFleetKey writes a 0600
+// <appDir>/.fleet_api_key file and FleetKey reads the token back.
+func TestFleetKeyFileFallbackWhenKeyringUnavailable(t *testing.T) {
+	keyring.MockInitWithError(errors.New("no keyring"))
+	defer keyring.MockInit()
+
+	dir := t.TempDir()
+	if err := SetFleetKey(dir, "fleet-secret-token"); err != nil {
+		t.Fatalf("SetFleetKey error: %v", err)
+	}
+
+	keyPath := filepath.Join(dir, ".fleet_api_key")
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("expected the fallback token file %q to exist: %v", keyPath, err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("expected the fallback token file to be 0600, got %o", perm)
+	}
+
+	got, err := FleetKey(dir)
+	if err != nil {
+		t.Fatalf("FleetKey error: %v", err)
+	}
+	if got != "fleet-secret-token" {
+		t.Fatalf("expected the file-backed fleet token to round-trip, got %q", got)
 	}
 }

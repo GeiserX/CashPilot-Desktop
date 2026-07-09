@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +35,6 @@ func newFleetTestApp(t *testing.T, apiKey string) *App {
 		t.Fatalf("config.NewManager error: %v", err)
 	}
 	c := cfg.Config()
-	c.FleetAPIKey = apiKey
 	c.FleetBindAddress = "127.0.0.1"
 	if err := cfg.Save(c); err != nil {
 		t.Fatalf("config.Save error: %v", err)
@@ -44,7 +44,9 @@ func newFleetTestApp(t *testing.T, apiKey string) *App {
 		t.Fatalf("store.Open error: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return &App{cfg: cfg, store: st}
+	// The fleet bearer token now lives in memory (loaded by ensureFleetAPIKey from the
+	// keychain/file store), not in config.json, so inject it directly for the handlers.
+	return &App{cfg: cfg, store: st, fleetKey: apiKey}
 }
 
 func TestHandleFleetHealth(t *testing.T) {
@@ -252,6 +254,94 @@ func TestValidFleetBearer(t *testing.T) {
 	req2.Header.Set("Authorization", "Bearer nope")
 	if app.validFleetBearer(req2) {
 		t.Fatal("expected the wrong bearer token to be rejected")
+	}
+}
+
+// TestEnsureFleetAPIKeyMigratesLegacyPlaintext pins the storage-hardening migration:
+// a legacy plaintext fleetApiKey found in config.json is preserved (moved into the
+// keychain/file store so already-configured workers keep authenticating), stripped
+// from config.json on disk, and reused on the next startup instead of regenerated.
+// TestMain mocks the keyring, so keyring.MockInit resets it to a clean in-memory store.
+func TestEnsureFleetAPIKeyMigratesLegacyPlaintext(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatalf("config.NewManager error: %v", err)
+	}
+	c := cfg.Config()
+	c.FleetAPIKey = "legacy-worker-token"
+	if err := cfg.Save(c); err != nil {
+		t.Fatalf("config.Save error: %v", err)
+	}
+
+	app := &App{cfg: cfg}
+	if err := app.ensureFleetAPIKey(); err != nil {
+		t.Fatalf("ensureFleetAPIKey error: %v", err)
+	}
+
+	// The existing token is preserved in memory for the per-request bearer check.
+	if app.fleetKey != "legacy-worker-token" {
+		t.Fatalf("expected the legacy token to be preserved, got %q", app.fleetKey)
+	}
+	// It is no longer carried in the in-memory config...
+	if got := cfg.Config().FleetAPIKey; got != "" {
+		t.Fatalf("expected FleetAPIKey blanked in the in-memory config, got %q", got)
+	}
+	// ...nor on disk in config.json (omitempty drops the blanked field entirely).
+	raw, err := os.ReadFile(filepath.Join(cfg.AppDir(), "config.json"))
+	if err != nil {
+		t.Fatalf("read config.json: %v", err)
+	}
+	if strings.Contains(string(raw), "legacy-worker-token") || strings.Contains(string(raw), "fleetApiKey") {
+		t.Fatalf("expected config.json to no longer carry the fleet token, got %s", raw)
+	}
+	// The migrated token is retrievable from the hardened store.
+	stored, err := config.FleetKey(cfg.AppDir())
+	if err != nil {
+		t.Fatalf("config.FleetKey error: %v", err)
+	}
+	if stored != "legacy-worker-token" {
+		t.Fatalf("expected the store to hold the migrated token, got %q", stored)
+	}
+
+	// A second startup reuses the stored token instead of regenerating it.
+	app2 := &App{cfg: cfg}
+	if err := app2.ensureFleetAPIKey(); err != nil {
+		t.Fatalf("ensureFleetAPIKey (reload) error: %v", err)
+	}
+	if app2.fleetKey != "legacy-worker-token" {
+		t.Fatalf("expected the stored token to be reused on the next startup, got %q", app2.fleetKey)
+	}
+}
+
+// TestEnsureFleetAPIKeyGeneratesWhenAbsent pins that a fresh install with no legacy
+// token gets a generated bearer token stored in the hardened store, and that the
+// generated token never touches config.json.
+func TestEnsureFleetAPIKeyGeneratesWhenAbsent(t *testing.T) {
+	keyring.MockInit()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatalf("config.NewManager error: %v", err)
+	}
+
+	app := &App{cfg: cfg}
+	if err := app.ensureFleetAPIKey(); err != nil {
+		t.Fatalf("ensureFleetAPIKey error: %v", err)
+	}
+	if app.fleetKey == "" {
+		t.Fatal("expected a generated fleet token, got empty")
+	}
+	if got := cfg.Config().FleetAPIKey; got != "" {
+		t.Fatalf("expected the generated token to never touch config.json, got %q", got)
+	}
+	stored, err := config.FleetKey(cfg.AppDir())
+	if err != nil {
+		t.Fatalf("config.FleetKey error: %v", err)
+	}
+	if stored != app.fleetKey {
+		t.Fatalf("expected the store to hold the generated token %q, got %q", app.fleetKey, stored)
 	}
 }
 
