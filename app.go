@@ -67,27 +67,54 @@ func NewApp() *App {
 	return &App{}
 }
 
+// Startup is the Wails OnStartup hook. It brings the app's core engine up via
+// startCore — the shared init that both the GUI and the headless --daemon role use.
+// The engine init has nothing UI-specific in it (the window/tray/webview setup lives in
+// DomReady), so the two roles share one definition of "bring the app up". A fatal core
+// failure (config/store/catalog) was already surfaced as an app:error event inside
+// startCore and leaves a.ready() failing for every binding, so — exactly as before —
+// there is nothing further for the GUI hook to do with the returned error.
 func (a *App) Startup(ctx context.Context) {
+	_ = a.startCore(ctx)
+}
+
+// startCore initialises everything the app needs in BOTH roles: config, the local
+// store, the embedded catalog, the Docker and native runtime providers (registering the
+// native-process supervisor), the collectors, the periodic exchange-rate refresh, the
+// loopback fleet API, and the background collection scheduler. It is deliberately free
+// of any Wails/UI dependency — the window, tray and webview are set up separately in
+// DomReady — so the --daemon path can call it to run the same engine headless.
+//
+// It returns an error only on a fatal init failure (config/store/catalog); a fleet
+// key/listener failure is non-fatal and merely surfaced, matching the original Startup.
+// The Wails path ignores the return (the failure is already an app:error event and
+// a.ready() reports it); the daemon path logs it and exits.
+//
+// ctx is stored as a.ctx and drives the exchange refresh, the scheduler and event
+// emission: the Wails app context under the GUI, a signal-cancelled context under the
+// daemon. Under the daemon that context carries no "events" value, so emitEvent /
+// emitError safely no-op (no window/tray code is ever reached).
+func (a *App) startCore(ctx context.Context) error {
 	a.ctx = ctx
 
 	cfg, err := config.NewManager()
 	if err != nil {
 		a.emitError("config", err)
-		return
+		return err
 	}
 	a.cfg = cfg
 
 	st, err := store.Open(cfg.DataDir())
 	if err != nil {
 		a.emitError("store", err)
-		return
+		return err
 	}
 	a.store = st
 
 	cat, err := catalog.LoadEmbedded(serviceFiles)
 	if err != nil {
 		a.emitError("catalog", err)
-		return
+		return err
 	}
 	a.catalog = cat
 
@@ -130,6 +157,7 @@ func (a *App) Startup(ctx context.Context) {
 	// balances refresh on a timer without the user clicking Collect. This never
 	// blocks Startup — startScheduler only launches a goroutine.
 	a.startScheduler(ctx)
+	return nil
 }
 
 func (a *App) DomReady(ctx context.Context) {

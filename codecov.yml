@@ -34,5 +34,6 @@ ignore:
   - "**/testdata/**"
   - "main.go"          # Wails bootstrap glue
   - "app.go"           # Wails-bound API surface (thin glue over internal/*)
+  - "daemon.go"        # --daemon headless bootstrap (counterpart of main.go; smoke-tested, not unit-tested)
   - "tray_darwin.go"   # cgo / AppKit platform glue
   - "tray_other.go"    # non-darwin tray stub
