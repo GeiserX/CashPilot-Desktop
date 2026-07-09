@@ -26,11 +26,21 @@ export interface AppState {
   runtime: RuntimeStatus;
   services: Service[];
   deployments: Deployment[] | null;
+  health: Record<string, HealthScore> | null;
   earnings: EarningsRecord[] | null;
   guides: InstallGuide[];
   notifications: NotificationItem[];
   currencies: string[];
   summary: EarningsSummary;
+}
+
+export interface HealthScore {
+  score: number;
+  uptimePercent: number;
+  samples: number;
+  restarts: number;
+  crashes: number;
+  stops: number;
 }
 
 export interface EarningsSummary {
