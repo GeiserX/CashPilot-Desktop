@@ -188,6 +188,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		progress("Starting " + name)
 	}
 	if err := cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		// The container was created (it carries LabelManaged, holds the name, and
+		// shows in List()) but never started. Best-effort remove it so a failed
+		// deploy does not orphan a managed cashpilot-<slug> container in "created"
+		// state. Use a fresh context so a cancelled deploy ctx still cleans up.
+		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
 		return ContainerInfo{}, err
 	}
 
@@ -251,6 +256,14 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string) error {
 	return nil
 }
 
+// maxLogBytes caps how much of a container's log stream Logs reads into memory.
+// ContainerLogs' Tail bounds the NUMBER of lines but not their length, so a
+// container emitting one enormous line with no newline would otherwise be pulled
+// in full by io.ReadAll. 8 MiB mirrors the collectors' response cap and is far more
+// than a Tail of normal logs needs; the read is simply truncated (not an error) and
+// stripDockerLogHeaders tolerates a partial trailing frame.
+const maxLogBytes = 8 << 20
+
 func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (string, error) {
 	cli, err := dockerClient()
 	if err != nil {
@@ -270,7 +283,10 @@ func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (stri
 		return "", err
 	}
 	defer reader.Close()
-	raw, err := io.ReadAll(reader)
+	// Bound the read so a single huge line (Tail caps the line COUNT, not the line
+	// LENGTH) cannot load an unbounded amount into memory — mirrors the pull path's
+	// maxPullLogLine hardening and the collectors' io.LimitReader response cap.
+	raw, err := io.ReadAll(io.LimitReader(reader, maxLogBytes))
 	if err != nil {
 		return "", err
 	}

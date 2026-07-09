@@ -314,6 +314,77 @@ func TestFleetDeviceUpdateExisting(t *testing.T) {
 	}
 }
 
+// TestUpsertFleetDeviceNoIDUpsertsByKindName pins the follow-up fix to
+// UpsertFleetDevice's no-id branch: with the UNIQUE(kind, name) index in place, a
+// second manual-add (ID == 0) for the same (kind, name) must upsert onto the
+// existing row — no error, no duplicate row — refreshing its mutable fields and
+// returning the SAME id. A different kind or a different name is a distinct device.
+func TestUpsertFleetDeviceNoIDUpsertsByKindName(t *testing.T) {
+	s := openTestStore(t)
+
+	first, err := s.UpsertFleetDevice(FleetDevice{
+		Name:     "worker-1",
+		Endpoint: "http://192.168.1.5:8081",
+		Status:   "offline",
+		Services: []string{"storj"},
+	})
+	if err != nil {
+		t.Fatalf("first UpsertFleetDevice error: %v", err)
+	}
+	if first.ID <= 0 {
+		t.Fatalf("expected an assigned device ID, got %d", first.ID)
+	}
+
+	// Second call: same (kind, name) defaults ("worker"/"worker-1"), ID left at zero
+	// (a fresh manual-add value, as App.AddFleetDevice always sends), but different
+	// field values. Must upsert onto the same row, not error and not duplicate.
+	second, err := s.UpsertFleetDevice(FleetDevice{
+		Name:     "worker-1",
+		Endpoint: "http://10.0.0.9:8081",
+		Status:   "online",
+		Services: []string{"storj", "mysterium"},
+	})
+	if err != nil {
+		t.Fatalf("second UpsertFleetDevice (same kind,name) error: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected the same ID on a (kind,name) upsert, got %d want %d", second.ID, first.ID)
+	}
+
+	devices := s.ListFleetDevices()
+	if len(devices) != 1 {
+		t.Fatalf("expected exactly 1 row after the repeat no-id upsert, got %d: %+v", len(devices), devices)
+	}
+	if devices[0].Endpoint != "http://10.0.0.9:8081" || devices[0].Status != "online" {
+		t.Fatalf("expected the second call's fields to win, got %+v", devices[0])
+	}
+	if !reflect.DeepEqual(devices[0].Services, []string{"storj", "mysterium"}) {
+		t.Fatalf("expected updated services, got %v", devices[0].Services)
+	}
+
+	// A different NAME is a distinct device.
+	other, err := s.UpsertFleetDevice(FleetDevice{Name: "worker-2"})
+	if err != nil {
+		t.Fatalf("UpsertFleetDevice(worker-2) error: %v", err)
+	}
+	if other.ID == first.ID {
+		t.Fatal("a different name must be a distinct device")
+	}
+
+	// The same NAME under a different KIND is also a distinct device.
+	mobile, err := s.UpsertFleetDevice(FleetDevice{Name: "worker-1", Kind: "mobile"})
+	if err != nil {
+		t.Fatalf("UpsertFleetDevice(mobile/worker-1) error: %v", err)
+	}
+	if mobile.ID == first.ID {
+		t.Fatal("a different kind with the same name must be a distinct device")
+	}
+
+	if got := len(s.ListFleetDevices()); got != 3 {
+		t.Fatalf("expected 3 distinct devices (worker/worker-1, worker/worker-2, mobile/worker-1), got %d", got)
+	}
+}
+
 func TestFleetHeartbeatInsertsThenUpdatesByKindAndName(t *testing.T) {
 	s := openTestStore(t)
 
@@ -368,6 +439,118 @@ func TestFleetHeartbeatRequiresName(t *testing.T) {
 	s := openTestStore(t)
 	if _, err := s.UpsertFleetHeartbeat(FleetDevice{Name: ""}); err == nil {
 		t.Fatal("expected an error when the heartbeat has no name")
+	}
+}
+
+// TestFleetHeartbeatUpsertOneRowPerKindName pins the M3 rewrite: repeated heartbeats
+// for the same (kind, name) resolve to exactly ONE row reflecting the latest
+// heartbeat (no duplicate devices), while the SAME name under a DIFFERENT kind is a
+// distinct device — uniqueness is on the composite (kind, name), not name alone.
+func TestFleetHeartbeatUpsertOneRowPerKindName(t *testing.T) {
+	s := openTestStore(t)
+
+	first, err := s.UpsertFleetHeartbeat(FleetDevice{Name: "node-x", Kind: "worker", Endpoint: "ep1", Services: []string{"a"}, LastSeen: "2026-01-01T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	second, err := s.UpsertFleetHeartbeat(FleetDevice{Name: "node-x", Kind: "worker", Endpoint: "ep2", Services: []string{"a", "b"}, LastSeen: "2026-02-02T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("a repeat (kind,name) heartbeat must reuse row %d, got %d", first.ID, second.ID)
+	}
+
+	// The same NAME under a different KIND is a separate device (composite key).
+	mobile, err := s.UpsertFleetHeartbeat(FleetDevice{Name: "node-x", Kind: "mobile", LastSeen: "2026-01-01T00:00:00Z"})
+	if err != nil {
+		t.Fatalf("mobile upsert: %v", err)
+	}
+	if mobile.ID == first.ID {
+		t.Fatal("a different kind with the same name must be a distinct device")
+	}
+
+	byKey := map[string]FleetDevice{}
+	for _, d := range s.ListFleetDevices() {
+		byKey[d.Kind+"/"+d.Name] = d
+	}
+	if len(byKey) != 2 {
+		t.Fatalf("expected exactly 2 devices (worker/node-x + mobile/node-x), got %d: %+v", len(byKey), byKey)
+	}
+	w := byKey["worker/node-x"]
+	if w.Endpoint != "ep2" || w.LastSeen != "2026-02-02T00:00:00Z" || !reflect.DeepEqual(w.Services, []string{"a", "b"}) {
+		t.Fatalf("worker/node-x did not reflect the latest heartbeat: %+v", w)
+	}
+}
+
+// TestFleetDedupeMigrationCollapsesDuplicates pins the M3 forward-only migration. A
+// fleet_devices table that already holds duplicate (kind, name) rows — the shape the
+// old racy SELECT-then-INSERT UpsertFleetHeartbeat could produce — must be collapsed
+// to a single row per (kind, name), keeping the most-recently-seen one (greatest
+// last_seen), and the UNIQUE(kind, name) index must be (re)built so no further
+// duplicate can be inserted. The dedupe+index migration is also idempotent.
+func TestFleetDedupeMigrationCollapsesDuplicates(t *testing.T) {
+	s := openTestStore(t)
+
+	countFleet := func() int {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM fleet_devices`).Scan(&n); err != nil {
+			t.Fatalf("count fleet_devices: %v", err)
+		}
+		return n
+	}
+
+	// Drop the unique index so the pre-migration duplicate shape can be seeded, then
+	// insert three (worker, node-a) rows differing only in last_seen and endpoint. The
+	// 03:00 row is the most-recently-seen and must be the sole survivor.
+	if _, err := s.db.Exec(`DROP INDEX IF EXISTS idx_fleet_devices_kind_name`); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	dups := []struct{ lastSeen, endpoint string }{
+		{"2026-01-02T01:00:00Z", "ep-old"},
+		{"2026-01-02T03:00:00Z", "ep-newest"},
+		{"2026-01-02T02:00:00Z", "ep-mid"},
+	}
+	for _, d := range dups {
+		if _, err := s.db.Exec(`
+			INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
+			VALUES('node-a', 'worker', ?, '', '', 'online', '[]', ?, datetime('now'), datetime('now'))
+		`, d.endpoint, d.lastSeen); err != nil {
+			t.Fatalf("seed duplicate: %v", err)
+		}
+	}
+	if n := countFleet(); n != 3 {
+		t.Fatalf("expected 3 seeded duplicates, got %d", n)
+	}
+
+	// Re-run the migration: it dedupes, then rebuilds the unique index.
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate (dedupe) error: %v", err)
+	}
+
+	devices := s.ListFleetDevices()
+	if len(devices) != 1 {
+		t.Fatalf("expected 1 row after dedupe, got %d: %+v", len(devices), devices)
+	}
+	if devices[0].LastSeen != "2026-01-02T03:00:00Z" || devices[0].Endpoint != "ep-newest" {
+		t.Fatalf("dedupe kept the wrong row: %+v (want the greatest last_seen, 'ep-newest')", devices[0])
+	}
+
+	// The unique index is back: a raw duplicate INSERT must now fail.
+	if _, err := s.db.Exec(`
+		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
+		VALUES('node-a', 'worker', 'dup', '', '', 'online', '[]', '2026-01-02T09:00:00Z', datetime('now'), datetime('now'))
+	`); err == nil {
+		t.Fatal("expected a UNIQUE(kind, name) violation inserting a duplicate, got nil")
+	}
+
+	// Idempotent: re-running the migration removes nothing and keeps the index.
+	if err := s.migrate(); err != nil {
+		t.Fatalf("second migrate error: %v", err)
+	}
+	if n := countFleet(); n != 1 {
+		t.Fatalf("second migrate must be a no-op, got %d rows", n)
 	}
 }
 
@@ -866,6 +1049,54 @@ func TestPurgeOldData(t *testing.T) {
 	}
 	if deleted != 0 {
 		t.Fatalf("second PurgeOldData(400) = %d, want 0 (idempotent)", deleted)
+	}
+}
+
+// TestPurgeOldDataEventsUseDatetimeFormat pins the L2 fix: runtime_events.created_at
+// is stored as datetime('now') ("YYYY-MM-DD HH:MM:SS"), NOT the RFC3339Nano earnings
+// uses, so the events purge must compare it with SQLite datetime() semantics. A row
+// at the very end (23:59:59) of the cutoff DAY is inside the retention window and must
+// survive; the old RFC3339Nano string cutoff ("…T…Z") sorted every same-day row below
+// it (a space sorts under 'T') and purged it up to a day early. An ancient row is
+// always purged, proving the events purge still works.
+func TestPurgeOldDataEventsUseDatetimeFormat(t *testing.T) {
+	s := openTestStore(t)
+
+	// Computed via SQLite's own clock so it shares the purge's notion of "now":
+	// 23:59:59 on the day the 30-day cutoff falls on. 23:59:59 is the latest instant
+	// of that day, so it is always >= the cutoff's wall-clock time -> retained.
+	if _, err := s.db.Exec(`INSERT INTO runtime_events(slug, event, detail, created_at)
+		VALUES('svc', 'edge-in-window', '', strftime('%Y-%m-%d 23:59:59', 'now', '-30 days'))`); err != nil {
+		t.Fatalf("insert edge event: %v", err)
+	}
+	// A genuinely ancient event that must always be purged.
+	if _, err := s.db.Exec(`INSERT INTO runtime_events(slug, event, detail, created_at)
+		VALUES('svc', 'ancient', '', '2000-01-01 00:00:00')`); err != nil {
+		t.Fatalf("insert ancient event: %v", err)
+	}
+
+	if _, err := s.PurgeOldData(30); err != nil {
+		t.Fatalf("PurgeOldData(30): %v", err)
+	}
+
+	var survivors []string
+	rows, err := s.db.Query(`SELECT event FROM runtime_events ORDER BY event`)
+	if err != nil {
+		t.Fatalf("query events: %v", err)
+	}
+	for rows.Next() {
+		var e string
+		if err := rows.Scan(&e); err != nil {
+			rows.Close()
+			t.Fatalf("scan: %v", err)
+		}
+		survivors = append(survivors, e)
+	}
+	rows.Close()
+
+	// The same-day in-window edge row survives (the fix); the ancient row is purged.
+	if len(survivors) != 1 || survivors[0] != "edge-in-window" {
+		t.Fatalf("events after purge = %v, want [edge-in-window] (same-day in-window row kept, ancient purged)", survivors)
 	}
 }
 

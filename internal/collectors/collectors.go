@@ -345,6 +345,14 @@ func (r *Registry) collectGrass(ctx context.Context, credentials map[string]stri
 	if status == http.StatusTooManyRequests {
 		return Result{}, fmt.Errorf("Grass API rate limited")
 	}
+	// Any other non-2xx (a 400/404/422, or the endpoint changing shape) must be an
+	// error, not a silent success: doJSONStatus leaves the out-struct zero-valued on
+	// a non-2xx, so without this the collector would book Balance:0 with no Error and
+	// overwrite the real balance. Every other collector routes non-2xx through
+	// doJSON, which converts it to an error; do the same here.
+	if status < 200 || status >= 300 {
+		return Result{}, fmt.Errorf("grass: unexpected status %d", status)
+	}
 	if user.Result.Data.TotalPoints > 0 {
 		return Result{Platform: "grass", Balance: round(user.Result.Data.TotalPoints, 4), Currency: "GRASS"}, nil
 	}
@@ -363,6 +371,11 @@ func (r *Registry) collectGrass(ctx context.Context, credentials map[string]stri
 	}
 	if status == http.StatusTooManyRequests {
 		return Result{}, fmt.Errorf("Grass API rate limited")
+	}
+	// As with retrieveUser above: a non-2xx here leaves active zero-valued, so treat
+	// it as an error rather than booking a spurious Balance:0.
+	if status < 200 || status >= 300 {
+		return Result{}, fmt.Errorf("grass: unexpected status %d", status)
 	}
 	total := 0.0
 	for _, device := range active.Result.Data {
@@ -929,6 +942,14 @@ func retryAfter(header http.Header) (time.Duration, bool) {
 	if secs, err := strconv.Atoi(value); err == nil {
 		if secs < 0 {
 			return 0, false
+		}
+		// Clamp before multiplying: time.Duration(secs) * time.Second overflows int64
+		// for a very large secs and wraps NEGATIVE, and since the caller only clamps
+		// the UPPER bound (maxRetryWait) a negative wait would slip through and fire
+		// immediately, defeating the cap. Anything at or beyond maxRetryWait is just
+		// maxRetryWait, so cap secs there and never multiply an overflowing value.
+		if secs >= int(maxRetryWait/time.Second) {
+			return maxRetryWait, true
 		}
 		return time.Duration(secs) * time.Second, true
 	}

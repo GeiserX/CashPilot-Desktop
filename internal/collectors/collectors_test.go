@@ -197,6 +197,40 @@ func TestCollectRepocketRedactsFirebaseKey(t *testing.T) {
 	}
 }
 
+// TestCollectGrassNon2xxIsError pins the M1 fix: a non-2xx that collectGrass does
+// not already special-case (401/403/429) must surface as an ERROR, never a silent
+// Result{Balance:0} "success" that overwrites the real balance. doJSONStatus leaves
+// the decode target zero-valued on a non-2xx, so without the guard a 404/400 would
+// fall through to Balance:0 with no Error. Both Grass endpoints are covered.
+func TestCollectGrassNon2xxIsError(t *testing.T) {
+	t.Run("retrieveUser 404 errors", func(t *testing.T) {
+		rt := roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader(`{"message":"not found"}`)), Header: make(http.Header)}, nil
+		})
+		r := &Registry{http: &http.Client{Transport: rt}}
+		res, err := r.collectGrass(context.Background(), map[string]string{"GRASS_ACCESS_TOKEN": "tok"})
+		if err == nil {
+			t.Fatalf("expected an error for a 404 from retrieveUser, got Result %+v (a silent Balance:0 would overwrite the real balance)", res)
+		}
+	})
+
+	t.Run("activeDevices 400 errors after zero-point retrieveUser", func(t *testing.T) {
+		rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			// retrieveUser: valid 200 but zero points -> the collector falls through
+			// to the activeDevices estimate path.
+			if strings.Contains(req.URL.Path, "retrieveUser") {
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"result":{"data":{"totalPoints":0}}}`)), Header: make(http.Header)}, nil
+			}
+			return &http.Response{StatusCode: 400, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+		})
+		r := &Registry{http: &http.Client{Transport: rt}}
+		res, err := r.collectGrass(context.Background(), map[string]string{"GRASS_ACCESS_TOKEN": "tok"})
+		if err == nil {
+			t.Fatalf("expected an error for a 400 from activeDevices, got Result %+v", res)
+		}
+	})
+}
+
 func TestStorjPayoutUSD(t *testing.T) {
 	balance := storjPayoutUSD(map[string]any{
 		"currentMonth": map[string]any{

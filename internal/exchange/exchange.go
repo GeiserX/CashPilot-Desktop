@@ -271,10 +271,13 @@ func (s *Service) Convertible(currency string) bool {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if _, ok := s.fiat[currency]; ok {
+	// Require a positive rate, exactly as ToUSD/FromUSD do: a currency present in the
+	// cache with a zero (or negative) rate is not actually convertible — it would
+	// "convert" to 0 — so it must not report Convertible.
+	if rate, ok := s.fiat[currency]; ok && rate > 0 {
 		return true
 	}
-	if _, ok := s.cryptoUSD[currency]; ok {
+	if rate, ok := s.cryptoUSD[currency]; ok && rate > 0 {
 		return true
 	}
 	return false
