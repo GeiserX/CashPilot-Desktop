@@ -1,3 +1,24 @@
+export namespace bgservice {
+	
+	export class Status {
+	    installed: boolean;
+	    running: boolean;
+	    label: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.installed = source["installed"];
+	        this.running = source["running"];
+	        this.label = source["label"];
+	    }
+	}
+
+}
+
 export namespace catalog {
 	
 	export class Cashout {
@@ -34,6 +55,22 @@ export namespace catalog {
 	        this.notes = source["notes"];
 	    }
 	}
+	export class ResourceLimits {
+	    memLimit: string;
+	    memReservation: string;
+	    oomScoreAdj?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ResourceLimits(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.memLimit = source["memLimit"];
+	        this.memReservation = source["memReservation"];
+	        this.oomScoreAdj = source["oomScoreAdj"];
+	    }
+	}
 	export class EnvVar {
 	    key: string;
 	    label: string;
@@ -67,6 +104,7 @@ export namespace catalog {
 	    capAdd: string[];
 	    privileged: boolean;
 	    stopTimeout: number;
+	    resources: ResourceLimits;
 	    setup: string;
 	    notes: string;
 	
@@ -86,6 +124,7 @@ export namespace catalog {
 	        this.capAdd = source["capAdd"];
 	        this.privileged = source["privileged"];
 	        this.stopTimeout = source["stopTimeout"];
+	        this.resources = this.convertValues(source["resources"], ResourceLimits);
 	        this.setup = source["setup"];
 	        this.notes = source["notes"];
 	    }
@@ -129,6 +168,62 @@ export namespace catalog {
 	    }
 	}
 	
+	export class NativeBinary {
+	    os: string;
+	    arch: string;
+	    url: string;
+	    sha256: string;
+	    archive: string;
+	    bin: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeBinary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.os = source["os"];
+	        this.arch = source["arch"];
+	        this.url = source["url"];
+	        this.sha256 = source["sha256"];
+	        this.archive = source["archive"];
+	        this.bin = source["bin"];
+	    }
+	}
+	export class NativeConfig {
+	    binaries: NativeBinary[];
+	    command: string;
+	    env: EnvVar[];
+	
+	    static createFrom(source: any = {}) {
+	        return new NativeConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.binaries = this.convertValues(source["binaries"], NativeBinary);
+	        this.command = source["command"];
+	        this.env = this.convertValues(source["env"], EnvVar);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Payment {
 	    methods: string[];
 	    minimumPayout: string;
@@ -185,6 +280,7 @@ export namespace catalog {
 	        this.note = source["note"];
 	    }
 	}
+	
 	export class Service {
 	    name: string;
 	    slug: string;
@@ -195,6 +291,7 @@ export namespace catalog {
 	    shortDescription: string;
 	    referral: Referral;
 	    docker: DockerConfig;
+	    native: NativeConfig;
 	    requirements: Requirements;
 	    payment: Payment;
 	    earnings: EarningsEstimate;
@@ -219,6 +316,7 @@ export namespace catalog {
 	        this.shortDescription = source["shortDescription"];
 	        this.referral = this.convertValues(source["referral"], Referral);
 	        this.docker = this.convertValues(source["docker"], DockerConfig);
+	        this.native = this.convertValues(source["native"], NativeConfig);
 	        this.requirements = this.convertValues(source["requirements"], Requirements);
 	        this.payment = this.convertValues(source["payment"], Payment);
 	        this.earnings = this.convertValues(source["earnings"], EarningsEstimate);
@@ -259,10 +357,15 @@ export namespace config {
 	    autoUpdate: boolean;
 	    hostnamePrefix: string;
 	    collectIntervalMinutes: number;
+	    retentionDays: number;
 	    timezone: string;
-	    fleetApiKey: string;
+	    fleetApiKey?: string;
 	    fleetBindAddress: string;
 	    fleetPort: number;
+	    metricsEnabled: boolean;
+	    workerUrlPolicy: string;
+	    workerAllowedHosts: string[];
+	    workerAllowMetadata: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -276,10 +379,15 @@ export namespace config {
 	        this.autoUpdate = source["autoUpdate"];
 	        this.hostnamePrefix = source["hostnamePrefix"];
 	        this.collectIntervalMinutes = source["collectIntervalMinutes"];
+	        this.retentionDays = source["retentionDays"];
 	        this.timezone = source["timezone"];
 	        this.fleetApiKey = source["fleetApiKey"];
 	        this.fleetBindAddress = source["fleetBindAddress"];
 	        this.fleetPort = source["fleetPort"];
+	        this.metricsEnabled = source["metricsEnabled"];
+	        this.workerUrlPolicy = source["workerUrlPolicy"];
+	        this.workerAllowedHosts = source["workerAllowedHosts"];
+	        this.workerAllowMetadata = source["workerAllowMetadata"];
 	    }
 	}
 
@@ -287,6 +395,158 @@ export namespace config {
 
 export namespace main {
 	
+	export class DailyPoint {
+	    day: string;
+	    amount: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DailyPoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.day = source["day"];
+	        this.amount = source["amount"];
+	    }
+	}
+	export class PointsBalance {
+	    platform: string;
+	    name: string;
+	    balance: number;
+	    currency: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PointsBalance(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.platform = source["platform"];
+	        this.name = source["name"];
+	        this.balance = source["balance"];
+	        this.currency = source["currency"];
+	    }
+	}
+	export class CashoutProgress {
+	    minAmount: number;
+	    currency: string;
+	    percent: number;
+	    eligible: boolean;
+	    comparable: boolean;
+	    method: string;
+	    dashboardUrl: string;
+	    notes: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CashoutProgress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.minAmount = source["minAmount"];
+	        this.currency = source["currency"];
+	        this.percent = source["percent"];
+	        this.eligible = source["eligible"];
+	        this.comparable = source["comparable"];
+	        this.method = source["method"];
+	        this.dashboardUrl = source["dashboardUrl"];
+	        this.notes = source["notes"];
+	    }
+	}
+	export class ServiceEarning {
+	    platform: string;
+	    name: string;
+	    balance: number;
+	    currency: string;
+	    balanceDisplay: number;
+	    convertible: boolean;
+	    error: string;
+	    cashout: CashoutProgress;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServiceEarning(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.platform = source["platform"];
+	        this.name = source["name"];
+	        this.balance = source["balance"];
+	        this.currency = source["currency"];
+	        this.balanceDisplay = source["balanceDisplay"];
+	        this.convertible = source["convertible"];
+	        this.error = source["error"];
+	        this.cashout = this.convertValues(source["cashout"], CashoutProgress);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EarningsSummary {
+	    displayCurrency: string;
+	    total: number;
+	    today: number;
+	    month: number;
+	    todayChange: number;
+	    monthChange: number;
+	    breakdown: ServiceEarning[];
+	    points: PointsBalance[];
+	    daily: DailyPoint[];
+	    ratesStale: boolean;
+	    ratesUpdated: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EarningsSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.displayCurrency = source["displayCurrency"];
+	        this.total = source["total"];
+	        this.today = source["today"];
+	        this.month = source["month"];
+	        this.todayChange = source["todayChange"];
+	        this.monthChange = source["monthChange"];
+	        this.breakdown = this.convertValues(source["breakdown"], ServiceEarning);
+	        this.points = this.convertValues(source["points"], PointsBalance);
+	        this.daily = this.convertValues(source["daily"], DailyPoint);
+	        this.ratesStale = source["ratesStale"];
+	        this.ratesUpdated = source["ratesUpdated"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Notification {
 	    level: string;
 	    title: string;
@@ -312,6 +572,9 @@ export namespace main {
 	    guides: runtime.InstallGuide[];
 	    notifications: Notification[];
 	    currencies: string[];
+	    summary: EarningsSummary;
+	    health: Record<string, store.HealthScore>;
+	    serviceDetails: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -327,6 +590,9 @@ export namespace main {
 	        this.guides = this.convertValues(source["guides"], runtime.InstallGuide);
 	        this.notifications = this.convertValues(source["notifications"], Notification);
 	        this.currencies = source["currencies"];
+	        this.summary = this.convertValues(source["summary"], EarningsSummary);
+	        this.health = this.convertValues(source["health"], store.HealthScore, true);
+	        this.serviceDetails = source["serviceDetails"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -347,6 +613,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 	export class CollectorSetting {
 	    slug: string;
 	    name: string;
@@ -365,6 +632,8 @@ export namespace main {
 	        this.collector = source["collector"];
 	    }
 	}
+	
+	
 	export class EnvSetting {
 	    key: string;
 	    label: string;
@@ -439,6 +708,8 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	
 	
 	export class SettingsState {
 	    environment: EnvSetting[];
@@ -523,6 +794,7 @@ export namespace runtime {
 	}
 	export class Status {
 	    available: boolean;
+	    nativeAvailable: boolean;
 	    kind: string;
 	    message: string;
 	    version: string;
@@ -536,6 +808,7 @@ export namespace runtime {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.available = source["available"];
+	        this.nativeAvailable = source["nativeAvailable"];
 	        this.kind = source["kind"];
 	        this.message = source["message"];
 	        this.version = source["version"];
@@ -626,6 +899,28 @@ export namespace store {
 	        this.services = source["services"];
 	        this.lastSeen = source["lastSeen"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class HealthScore {
+	    score: number;
+	    uptimePercent: number;
+	    samples: number;
+	    restarts: number;
+	    crashes: number;
+	    stops: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthScore(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.score = source["score"];
+	        this.uptimePercent = source["uptimePercent"];
+	        this.samples = source["samples"];
+	        this.restarts = source["restarts"];
+	        this.crashes = source["crashes"];
+	        this.stops = source["stops"];
 	    }
 	}
 

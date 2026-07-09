@@ -8,6 +8,9 @@ import {
 } from "../wailsjs/runtime/runtime";
 import {
   AddFleetDevice,
+  BackgroundHelperStatus,
+  InstallBackgroundHelper,
+  RemoveBackgroundHelper,
   CheckRuntime,
   CollectService,
   CompleteOnboarding,
@@ -26,7 +29,7 @@ import {
   StartService,
   StopService,
 } from "../wailsjs/go/main/App";
-import type { AppState, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, MystNode, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, MystNode, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -493,6 +496,16 @@ function renderCatalogCard(service: Service, deployments: Deployment[]) {
 async function renderSettings(current: AppState) {
   const settings = await GetSettingsState();
   const total = totalBalance(current);
+  // Background-helper state is derived live from the OS (not a stored preference):
+  // installed = a login agent is registered, running = the service manager reports it
+  // alive. Reject only if the app isn't ready yet, in which case the toggle is disabled.
+  let background: BackgroundStatus | null = null;
+  let backgroundError = "";
+  try {
+    background = await BackgroundHelperStatus();
+  } catch (error) {
+    backgroundError = String(error);
+  }
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -524,6 +537,8 @@ async function renderSettings(current: AppState) {
               ${settings.collectors.map(renderCollectorSetting).join("")}
             </div>
           </section>
+
+          ${renderBackgroundCard(background, backgroundError)}
         </main>
       </div>
     </div>
@@ -532,6 +547,7 @@ async function renderSettings(current: AppState) {
   wireShellNav();
   maybeResetScroll();
   document.querySelector("#save-settings")?.addEventListener("click", () => void saveSettingsFromForm());
+  document.querySelector<HTMLInputElement>("#bg-helper-toggle")?.addEventListener("change", (event) => void toggleBackgroundHelper(event));
   document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.service));
   });
@@ -572,6 +588,76 @@ async function saveSettingsFromForm() {
     render();
   } catch (error) {
     showErrorToast({scope: "settings", error: String(error)});
+  }
+}
+
+// renderBackgroundCard renders the "Background Earning" settings card. The toggle
+// reflects the live OS state (background.installed); when the status call rejected
+// (app not ready), the toggle is disabled and the reason is shown.
+function renderBackgroundCard(background: BackgroundStatus | null, backgroundError: string) {
+  const unavailable = background === null;
+  const on = Boolean(background?.installed);
+  const running = Boolean(background?.running);
+  let title: string;
+  let detail: string;
+  if (unavailable) {
+    title = "Background earning unavailable";
+    detail = backgroundError || "The background helper can't be reached right now.";
+  } else if (on && running) {
+    title = "Earning in the background";
+    detail = "CashPilot keeps your earners running after you close the window, and starts them automatically when you sign in.";
+  } else if (on) {
+    title = "Starting in the background…";
+    detail = "The helper is registered with your operating system and will start momentarily.";
+  } else {
+    title = "Off — earners stop when you quit";
+    detail = "Turn on to keep earning after you close CashPilot. Registers a per-user helper the OS keeps alive and restarts — no admin required.";
+  }
+  const statusClass = unavailable ? "is-unavailable" : on && running ? "is-on" : "";
+  return `
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <span class="card-title">Background Earning</span>
+          <p class="muted compact-copy">Keep earning when CashPilot is closed. Your operating system keeps a per-user helper running and restarts it automatically — no admin rights, no separate service to manage.</p>
+        </div>
+      </div>
+      <div class="bg-toggle-row">
+        <label class="switch" title="Keep earning in the background">
+          <input type="checkbox" id="bg-helper-toggle" role="switch" ${on ? "checked" : ""} ${unavailable ? "disabled" : ""} aria-label="Keep earning in the background" />
+          <span class="switch-track"><span class="switch-thumb"></span></span>
+        </label>
+        <div class="bg-toggle-status ${statusClass}">
+          <strong>${escapeHtml(title)}</strong>
+          <small>${escapeHtml(detail)}</small>
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+// toggleBackgroundHelper installs or removes the OS login agent when the switch is
+// flipped, then re-renders Settings so the card reflects the true OS state. On failure
+// the switch is reverted and the error surfaced.
+async function toggleBackgroundHelper(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const enable = input.checked;
+  input.disabled = true;
+  try {
+    if (enable) {
+      await InstallBackgroundHelper();
+      showInfoToast({scope: "background", message: "Earning will continue after you close CashPilot."});
+    } else {
+      await RemoveBackgroundHelper();
+      showInfoToast({scope: "background", message: "Background earning turned off."});
+    }
+    // Re-render the active (Settings) view so the card reflects fresh OS state;
+    // render() null-guards module state, then re-invokes renderSettings.
+    render();
+  } catch (error) {
+    input.checked = !enable;
+    input.disabled = false;
+    showErrorToast({scope: "background", error: String(error)});
   }
 }
 
