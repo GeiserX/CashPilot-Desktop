@@ -37,3 +37,4 @@ ignore:
   - "daemon.go"        # --daemon headless bootstrap (counterpart of main.go; smoke-tested, not unit-tested)
   - "tray_darwin.go"   # cgo / AppKit platform glue
   - "tray_other.go"    # non-darwin tray stub
+  - "internal/bgservice/agent_*.go"  # OS service-manager shell-out glue (launchctl/systemctl/schtasks); needs a real service manager to exercise, pure logic lives in render.go/parse.go (100% covered)
