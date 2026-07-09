@@ -32,6 +32,24 @@ export interface AppState {
   notifications: NotificationItem[];
   currencies: string[];
   summary: EarningsSummary;
+  serviceDetails: Record<string, string> | null;
+}
+
+// MystNode mirrors the Go mystNode struct: one Mysterium node's per-node
+// earnings, flattened from the MystNodes cloud API. The backend marshals an
+// array of these to JSON and stashes it in serviceDetails under the "mysterium"
+// slug, alongside the flat total-earnings balance.
+export interface MystNode {
+  identity: string;
+  name: string;
+  localIp: string;
+  country: string;
+  version: string;
+  online: boolean;
+  earnings30dMyst: number;
+  lifetimeMyst: number;
+  lifetimeSettledMyst: number;
+  lifetimeUnsettledMyst: number;
 }
 
 export interface HealthScore {
