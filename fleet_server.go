@@ -40,10 +40,7 @@ type workerSystemInfo struct {
 
 func (a *App) startFleetAPI() error {
 	cfg := a.cfg.Config()
-	mux := http.NewServeMux()
-	// SECURITY-REVIEW: This desktop-local HTTP API accepts LAN worker/mobile input and is protected by a generated bearer token.
-	mux.HandleFunc("/api/health", a.handleFleetHealth)
-	mux.HandleFunc("/api/workers/heartbeat", a.handleWorkerHeartbeat)
+	mux := a.fleetMux(cfg.MetricsEnabled)
 
 	addr := fmt.Sprintf("%s:%d", cfg.FleetBindAddress, cfg.FleetPort)
 	server := &http.Server{
@@ -65,6 +62,22 @@ func (a *App) startFleetAPI() error {
 		}
 	}()
 	return nil
+}
+
+// fleetMux builds the fleet HTTP router. The Prometheus /metrics endpoint is
+// OPT-IN: it is registered only when metricsEnabled is true, so with the default
+// (disabled) the route does not exist and a scrape gets a 404 rather than the
+// endpoint exposing earnings/health/fleet data. Extracted from startFleetAPI so
+// the registration gate can be exercised in tests without binding a socket.
+func (a *App) fleetMux(metricsEnabled bool) *http.ServeMux {
+	mux := http.NewServeMux()
+	// SECURITY-REVIEW: This desktop-local HTTP API accepts LAN worker/mobile input and is protected by a generated bearer token.
+	mux.HandleFunc("/api/health", a.handleFleetHealth)
+	mux.HandleFunc("/api/workers/heartbeat", a.handleWorkerHeartbeat)
+	if metricsEnabled {
+		mux.HandleFunc("/metrics", a.handleMetrics)
+	}
+	return mux
 }
 
 func (s *fleetAPIServer) Close() error {

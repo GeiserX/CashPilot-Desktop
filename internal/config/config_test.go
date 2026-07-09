@@ -148,6 +148,40 @@ func TestConfigPersistsAcrossManagers(t *testing.T) {
 	}
 }
 
+// TestMetricsEnabledOptInDefault pins the Prometheus metrics flag as opt-in: it
+// defaults to false (disabled) on a fresh config, survives a Save (is not coerced
+// off), and persists across a reload — so enabling the /metrics endpoint is a
+// deliberate, durable choice rather than the default.
+func TestMetricsEnabledOptInDefault(t *testing.T) {
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager error: %v", err)
+	}
+	if m.Config().MetricsEnabled {
+		t.Fatal("expected MetricsEnabled to default to false (opt-in)")
+	}
+
+	cfg := m.Config()
+	cfg.MetricsEnabled = true
+	if err := m.Save(cfg); err != nil {
+		t.Fatalf("Save error: %v", err)
+	}
+	if !m.Config().MetricsEnabled {
+		t.Fatal("expected MetricsEnabled=true to be preserved by Save, not coerced off")
+	}
+
+	// A fresh Manager over the same directory reloads the persisted flag.
+	m2, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager(reload) error: %v", err)
+	}
+	if !m2.Config().MetricsEnabled {
+		t.Fatal("expected MetricsEnabled=true to persist across a reload")
+	}
+}
+
 func TestMasterKeyGeneratesAndReuses(t *testing.T) {
 	keyring.MockInit()
 	dir := t.TempDir()
