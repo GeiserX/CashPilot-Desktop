@@ -378,6 +378,12 @@ func (s *Store) HealthScores(days int) map[string]HealthScore {
 		}
 		out[slug] = hs
 	}
+	if err := rows.Err(); err != nil {
+		// A mid-iteration error means the result may be partial. Health is
+		// informational, so return what scored cleanly rather than failing the
+		// whole read (matches the best-effort intent of the other list methods).
+		return out
+	}
 	return out
 }
 
