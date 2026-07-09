@@ -168,6 +168,13 @@ func (s *Store) ListCredentialSlugs() []string {
 			out = append(out, slug)
 		}
 	}
+	// A mid-iteration rows error means the read was truncated. Fail closed (return
+	// nil, as the query-error path does) rather than a partial slice that looks
+	// complete: this list feeds collectAll, so a silent truncation would skip
+	// services. Mirrors HealthScores' rows.Err() handling.
+	if err := rows.Err(); err != nil {
+		return nil
+	}
 	return out
 }
 
@@ -216,6 +223,11 @@ func (s *Store) ListServiceDetails() map[string]string {
 		if err := rows.Scan(&slug, &detail); err == nil {
 			out[slug] = detail
 		}
+	}
+	// A truncated read must not masquerade as a complete detail set; on a rows error
+	// return the (best-effort) map gathered so far, matching HealthScores.
+	if err := rows.Err(); err != nil {
+		return out
 	}
 	return out
 }
@@ -278,6 +290,11 @@ func (s *Store) ListDeployments() []Deployment {
 			out = append(out, dep)
 		}
 	}
+	// Fail closed on a truncated read rather than returning a partial list. Mirrors
+	// HealthScores' rows.Err() handling.
+	if err := rows.Err(); err != nil {
+		return nil
+	}
 	return out
 }
 
@@ -324,6 +341,11 @@ func (s *Store) ListLatestEarnings() []EarningsRecord {
 			out = append(out, record)
 		}
 	}
+	// Fail closed on a truncated read rather than returning a partial list that would
+	// show wrong dashboard totals. Mirrors HealthScores' rows.Err() handling.
+	if err := rows.Err(); err != nil {
+		return nil
+	}
 	return out
 }
 
@@ -358,6 +380,11 @@ func (s *Store) ListDailyBalances(daysBack int) []DailyBalance {
 		if err := rows.Scan(&record.Platform, &record.Currency, &record.Day, &record.Balance); err == nil {
 			out = append(out, record)
 		}
+	}
+	// Fail closed on a truncated read rather than returning a partial series. Mirrors
+	// HealthScores' rows.Err() handling.
+	if err := rows.Err(); err != nil {
+		return nil
 	}
 	return out
 }
@@ -478,7 +505,15 @@ func (s *Store) PurgeOldData(retentionDays int) (int64, error) {
 	}
 	deleted, _ := earningsRes.RowsAffected()
 
-	eventsRes, err := s.db.Exec(`DELETE FROM runtime_events WHERE created_at < ?`, cutoff)
+	// runtime_events.created_at is written as datetime('now') ("YYYY-MM-DD HH:MM:SS",
+	// UTC) — NOT the RFC3339Nano the earnings cutoff above uses — so its cutoff must be
+	// computed with SQLite datetime() in that same format (mirroring HealthScores).
+	// Comparing it against the RFC3339Nano `cutoff` mis-sorts same-day rows (a space
+	// sorts below the 'T' separator), purging up to ~a day of in-window events early.
+	eventsRes, err := s.db.Exec(
+		`DELETE FROM runtime_events WHERE created_at < datetime('now', ?)`,
+		fmt.Sprintf("-%d days", retentionDays),
+	)
 	if err != nil {
 		return deleted, err
 	}
@@ -505,14 +540,28 @@ func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
 		`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen, device.ID)
 		return device, err
 	}
-	result, err := s.db.Exec(`
+	// ON CONFLICT(kind, name) mirrors UpsertFleetHeartbeat: with the UNIQUE(kind, name)
+	// index, a plain INSERT here would throw a raw "UNIQUE constraint failed" when the
+	// manual-add path (App.AddFleetDevice) is given a (kind, name) that already
+	// exists. Upserting instead keeps this no-id branch idempotent and consistent
+	// with the heartbeat path — refreshing the mutable fields onto the existing row
+	// rather than erroring or duplicating.
+	err = s.db.QueryRow(`
 		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen)
+		ON CONFLICT(kind, name) DO UPDATE SET
+			endpoint=excluded.endpoint,
+			os=excluded.os,
+			arch=excluded.arch,
+			status=excluded.status,
+			services=excluded.services,
+			last_seen=excluded.last_seen,
+			updated_at=datetime('now')
+		RETURNING id
+	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen).Scan(&device.ID)
 	if err != nil {
 		return FleetDevice{}, err
 	}
-	device.ID, _ = result.LastInsertId()
 	return device, nil
 }
 
@@ -533,21 +582,29 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 	if err != nil {
 		return FleetDevice{}, err
 	}
-	var id int64
-	err = s.db.QueryRow(`SELECT id FROM fleet_devices WHERE kind = ? AND name = ?`, device.Kind, device.Name).Scan(&id)
-	if err == nil {
-		device.ID = id
-		_, err = s.db.Exec(`
-			UPDATE fleet_devices
-			SET endpoint = ?, os = ?, arch = ?, status = ?, services = ?, last_seen = ?, updated_at = datetime('now')
-			WHERE id = ?
-		`, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen, id)
-		return device, err
-	}
-	if err != sql.ErrNoRows {
+	// Single atomic upsert keyed by the UNIQUE(kind, name) index. The old
+	// SELECT-then-INSERT raced: two concurrent first-contact heartbeats for the same
+	// (kind, name) both missed the SELECT and both INSERTed, producing duplicate
+	// devices. ON CONFLICT(kind, name) preserves the existing row's id and created_at
+	// and refreshes only the mutable fields — exactly what the prior UPDATE branch did
+	// — while RETURNING id yields the row id for both the insert and the update path.
+	err = s.db.QueryRow(`
+		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		ON CONFLICT(kind, name) DO UPDATE SET
+			endpoint=excluded.endpoint,
+			os=excluded.os,
+			arch=excluded.arch,
+			status=excluded.status,
+			services=excluded.services,
+			last_seen=excluded.last_seen,
+			updated_at=datetime('now')
+		RETURNING id
+	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen).Scan(&device.ID)
+	if err != nil {
 		return FleetDevice{}, err
 	}
-	return s.UpsertFleetDevice(device)
+	return device, nil
 }
 
 func (s *Store) ListFleetDevices() []FleetDevice {
@@ -567,6 +624,11 @@ func (s *Store) ListFleetDevices() []FleetDevice {
 			_ = json.Unmarshal([]byte(servicesRaw), &device.Services)
 			out = append(out, device)
 		}
+	}
+	// Fail closed on a truncated read rather than returning a partial device list.
+	// Mirrors HealthScores' rows.Err() handling.
+	if err := rows.Err(); err != nil {
+		return nil
 	}
 	return out
 }
@@ -700,6 +762,22 @@ func (s *Store) migrate() error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
+		-- Forward-only, idempotent: collapse any pre-existing duplicate (kind, name)
+		-- fleet_devices rows (which the old racy SELECT-then-INSERT UpsertFleetHeartbeat
+		-- could produce) down to the single most-recently-seen row BEFORE adding the
+		-- unique index — adding it to a table that already holds duplicates would fail.
+		-- "Most-recently-seen" is the greatest last_seen (tie-broken by the highest id,
+		-- the last row written), so the row heartbeats have been refreshing survives.
+		DELETE FROM fleet_devices
+		WHERE id NOT IN (
+			SELECT id FROM (
+				SELECT id, ROW_NUMBER() OVER (
+					PARTITION BY kind, name ORDER BY last_seen DESC, id DESC
+				) AS rn
+				FROM fleet_devices
+			) WHERE rn = 1
+		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_devices_kind_name ON fleet_devices(kind, name);
 	`)
 	return err
 }

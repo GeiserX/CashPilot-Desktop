@@ -240,6 +240,13 @@ func TestRetryAfterParsing(t *testing.T) {
 		{"negative delta not honored", withHeader("-1"), 0, false},
 		{"garbage not honored", withHeader("soon"), 0, false},
 		{"missing header not honored", make(http.Header), 0, false},
+		// L1: a value at/above the cap clamps to maxRetryWait, and a huge value must
+		// NOT overflow time.Duration(secs)*time.Second into a negative wait (which,
+		// being < maxRetryWait, would slip past the caller's upper cap and fire
+		// immediately, defeating the Retry-After the server asked for).
+		{"at cap clamps to maxRetryWait", withHeader("30"), maxRetryWait, true},
+		{"above cap clamps to maxRetryWait", withHeader("120"), maxRetryWait, true},
+		{"huge delta clamps without int64 overflow", withHeader("99999999999999"), maxRetryWait, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

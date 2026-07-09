@@ -298,6 +298,39 @@ func TestIsPoints(t *testing.T) {
 	}
 }
 
+// TestConvertibleRequiresPositiveRate pins the L5 fix: a currency present in the
+// cache with a non-positive rate is NOT convertible (it would "convert" to 0), so
+// Convertible must apply the same rate>0 guard ToUSD/FromUSD enforce — otherwise it
+// labels a zero-priced token convertible while the conversion yields 0.
+func TestConvertibleRequiresPositiveRate(t *testing.T) {
+	svc := NewService(WithCryptoIDs(map[string]string{"MYST": "mysterium"}))
+	// Inject rates directly (single goroutine, no concurrent access): a crypto token
+	// and a fiat currency both PRESENT but priced at 0, plus one healthy fiat.
+	svc.mu.Lock()
+	svc.cryptoUSD = map[string]float64{"MYST": 0}
+	svc.fiat = map[string]float64{"USD": 1.0, "ZWL": 0, "EUR": 0.9}
+	svc.mu.Unlock()
+
+	// USD is intrinsic and a healthy positive fiat rate is convertible.
+	if !svc.Convertible("USD") || !svc.Convertible("EUR") {
+		t.Fatal("Convertible(USD)/Convertible(EUR) = false, want true")
+	}
+	// Present-but-zero rates must NOT be convertible (the bug returned true here), and
+	// this must agree with ToUSD, which already guards rate>0.
+	for _, c := range []string{"MYST", "ZWL"} {
+		if svc.Convertible(c) {
+			t.Fatalf("Convertible(%q) = true, want false (a zero rate is not usable)", c)
+		}
+		if _, ok := svc.ToUSD(1, c); ok {
+			t.Fatalf("ToUSD(1, %q) ok = true, want false (must agree with Convertible)", c)
+		}
+	}
+	// An unknown currency remains non-convertible.
+	if svc.Convertible("DOGE") {
+		t.Fatal("Convertible(DOGE) = true, want false")
+	}
+}
+
 // assertCachePreserved checks the last-good rates survived a failed refresh.
 func assertCachePreserved(t *testing.T, svc *Service) {
 	t.Helper()
