@@ -215,6 +215,18 @@ func TestRefreshReturnsRuntimeError(t *testing.T) {
 	}
 }
 
+func TestHasNativeRuntime(t *testing.T) {
+	st := newTestStore(t)
+	m := NewManager(&fakeProvider{}, newTestCatalog(t), st)
+	if m.HasNativeRuntime() {
+		t.Fatal("expected HasNativeRuntime false before a native provider is registered")
+	}
+	m.Register(runtime.NativeRuntimeKind, &fakeProvider{})
+	if !m.HasNativeRuntime() {
+		t.Fatal("expected HasNativeRuntime true after registering the native provider")
+	}
+}
+
 func TestDeployValidationErrors(t *testing.T) {
 	st := newTestStore(t)
 	m := NewManager(&fakeProvider{}, newTestCatalog(t), st)

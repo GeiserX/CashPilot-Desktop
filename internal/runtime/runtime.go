@@ -42,12 +42,18 @@ type Provider interface {
 }
 
 type Status struct {
-	Available bool              `json:"available"`
-	Kind      string            `json:"kind"`
-	Message   string            `json:"message"`
-	Version   string            `json:"version"`
-	Context   string            `json:"context"`
-	Tools     map[string]string `json:"tools"`
+	Available bool `json:"available"`
+	// NativeAvailable reports whether the always-on native process runtime is
+	// registered (and therefore available: it has no external dependency, no daemon
+	// or socket to reach). It is an ADDITIVE signal set by the app layer from the
+	// services manager — Available keeps its Docker-only meaning, which other code
+	// still reads — so onboarding can proceed on Docker OR native.
+	NativeAvailable bool              `json:"nativeAvailable"`
+	Kind            string            `json:"kind"`
+	Message         string            `json:"message"`
+	Version         string            `json:"version"`
+	Context         string            `json:"context"`
+	Tools           map[string]string `json:"tools"`
 }
 
 type InstallGuide struct {

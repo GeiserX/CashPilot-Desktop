@@ -57,6 +57,16 @@ func (m *Manager) Register(kind string, provider runtime.Provider) {
 	m.providers[kind] = provider
 }
 
+// HasNativeRuntime reports whether a provider is registered under the native
+// runtime kind. Native execution has no external dependency (no daemon or socket
+// to reach), so a registered native provider is by construction available — the app
+// surfaces this alongside Docker's Status so onboarding can proceed on either
+// signal. It reflects registration only; it never probes a running process.
+func (m *Manager) HasNativeRuntime() bool {
+	_, ok := m.providers[nativeRuntimeKind]
+	return ok
+}
+
 // kindForService picks the runtime kind a service should deploy onto. A service that
 // declares a native binary for THIS host (GOOS/GOARCH) is preferred onto the native
 // runtime when that provider is registered; every other service — image-only, or with

@@ -113,6 +113,21 @@ function renderOnboarding(current: AppState) {
     return;
   }
   const runtime = current.runtime;
+  // Onboarding proceeds on EITHER runtime: Docker (runs every service) OR the
+  // always-on native runtime (runs services that ship a native app, no Docker
+  // needed). Native-only is a READY state, not a warning — only "neither" warns.
+  const dockerReady = runtime.available;
+  const runtimeReady = runtime.available || runtime.nativeAvailable;
+  const runtimeTitle = dockerReady
+    ? "Runtime ready"
+    : runtime.nativeAvailable
+      ? "Native mode ready — no Docker needed"
+      : "Runtime setup needed";
+  // Docker/neither show the backend's (Docker-centric) message, escaped; native-only
+  // shows honest static copy instead of the alarming "choose a runtime" Docker text.
+  const runtimeBody = !dockerReady && runtime.nativeAvailable
+    ? "You can run services that ship a native app right away. A few container-only services would additionally need Docker."
+    : escapeHtml(runtime.message);
   root.innerHTML = `
     ${titlebar()}
     ${synthwaveBackground()}
@@ -121,13 +136,13 @@ function renderOnboarding(current: AppState) {
         <p class="eyebrow">CashPilot Desktop</p>
         <h1>Put your idle machine to work</h1>
         <p class="subtitle">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
-        <div class="runtime-card ${runtime.available ? "ok" : "warn"}">
-          <strong>${runtime.available ? "Runtime ready" : "Runtime setup needed"}</strong>
-          <span>${escapeHtml(runtime.message)}</span>
+        <div class="runtime-card ${runtimeReady ? "ok" : "warn"}">
+          <strong>${runtimeTitle}</strong>
+          <span>${runtimeBody}</span>
           ${runtime.context ? `<small>Docker context: ${escapeHtml(runtime.context)}</small>` : ""}
         </div>
         <div class="actions">
-          <button class="primary" id="continue-btn" ${runtime.available ? "" : "disabled"}>Open Dashboard</button>
+          <button class="primary" id="continue-btn" ${runtimeReady ? "" : "disabled"}>Open Dashboard</button>
           <button class="secondary" id="refresh-runtime">Check Again</button>
         </div>
         <div id="install-guides" class="guide-grid"></div>
@@ -345,8 +360,8 @@ function topbar(title: string, totalBalance: number, current: AppState) {
         <span class="topbar-title">${escapeHtml(title)}</span>
       </div>
       <div class="topbar-right">
-        <span class="runtime-dot ${current.runtime.available ? "ok" : "warn"}"></span>
-        <span class="topbar-runtime">${current.runtime.available ? "Runtime ready" : "Runtime offline"}</span>
+        <span class="runtime-dot ${current.runtime.available || current.runtime.nativeAvailable ? "ok" : "warn"}"></span>
+        <span class="topbar-runtime">${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
         <span class="topbar-earnings">${formatBalance(totalBalance, current.config.displayCurrency || "USD")}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
