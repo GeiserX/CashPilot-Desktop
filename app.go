@@ -643,7 +643,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// a notice so the UI does not keep advertising a now-dead port to the user until
 	// the app is restarted.
 	if cfg.FleetPort != previousFleetPort || cfg.FleetBindAddress != previousFleetBind {
-		a.emitError("fleet-api", fmt.Errorf("Fleet API port/bind change takes effect after restarting the app."))
+		a.emitNotice("fleet-api", "Fleet API port/bind change takes effect after restarting the app.")
 	}
 	return a.GetSettingsState()
 }
@@ -1258,6 +1258,17 @@ func (a *App) emitError(scope string, err error) {
 	a.emitEvent("app:error", map[string]string{
 		"scope": scope,
 		"error": err.Error(),
+	})
+}
+
+// emitNotice emits an informational "app:notice" event. Unlike emitError this is NOT a
+// failure — the frontend renders it as a neutral advisory toast, so a successful action
+// (e.g. a settings save that needs a restart to fully take effect) is not surfaced as
+// an error.
+func (a *App) emitNotice(scope, message string) {
+	a.emitEvent("app:notice", map[string]string{
+		"scope":   scope,
+		"message": message,
 	})
 }
 

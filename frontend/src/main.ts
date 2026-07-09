@@ -63,6 +63,7 @@ function wireBackendEvents() {
   // Background/startup failures the Go side reports via app:error had no listener,
   // so ~every background error was silently dropped. Surface them to the user.
   EventsOn("app:error", (payload) => showErrorToast(payload));
+  EventsOn("app:notice", (payload) => showInfoToast(payload));
 }
 
 async function onBackendEvent() {
@@ -1319,15 +1320,11 @@ function setOutput(value: string) {
   if (out) out.textContent = value;
 }
 
-// showErrorToast surfaces a backend app:error (a background or startup failure that
-// arrives outside a normal state render, so it cannot flow through the notification
-// bell, which is rebuilt from GetAppState). It mirrors the bell's look — an escaped
-// scope title plus message — as a non-intrusive, auto-dismissing toast. The message
-// is escapeHtml'd before the innerHTML sink. It is also reused by the frontend action
-// handlers to report a rejected bound call on views without an output pre.
-function showErrorToast(payload: {scope?: string; error?: string} | string) {
-  const scope = typeof payload === "object" && payload ? payload.scope ?? "" : "";
-  const message = typeof payload === "object" && payload ? payload.error ?? "" : String(payload);
+// showToast renders a non-intrusive, auto-dismissing toast into the bottom-right stack.
+// Backend app:error / app:notice events arrive outside a normal state render, so they
+// cannot flow through the notification bell (which is rebuilt from GetAppState); this
+// is their surface. title + message are escapeHtml'd before the innerHTML sink.
+function showToast(className: string, borderVar: string, title: string, message: string) {
   if (!message) return;
   let stack = document.querySelector<HTMLDivElement>("#toast-stack");
   if (!stack) {
@@ -1337,11 +1334,29 @@ function showErrorToast(payload: {scope?: string; error?: string} | string) {
     document.body.appendChild(stack);
   }
   const toast = document.createElement("div");
-  toast.className = "notification-item error";
-  toast.style.cssText = "border-left-color:var(--error);background:var(--bg-secondary);box-shadow:0 18px 60px rgba(0,0,0,0.45);";
-  toast.innerHTML = `<span>${escapeHtml(scope ? `${scope} error` : "Error")}</span><small>${escapeHtml(message)}</small>`;
+  toast.className = className;
+  toast.style.cssText = `border-left-color:var(${borderVar});background:var(--bg-secondary);box-shadow:0 18px 60px rgba(0,0,0,0.45);`;
+  toast.innerHTML = `<span>${escapeHtml(title)}</span><small>${escapeHtml(message)}</small>`;
   stack.appendChild(toast);
   setTimeout(() => toast.remove(), 8000);
+}
+
+// showErrorToast surfaces a backend app:error (a background or startup failure that
+// arrives outside a normal state render). It is also reused by the frontend action
+// handlers to report a rejected bound call on views without an output pre.
+function showErrorToast(payload: {scope?: string; error?: string} | string) {
+  const scope = typeof payload === "object" && payload ? payload.scope ?? "" : "";
+  const message = typeof payload === "object" && payload ? payload.error ?? "" : String(payload);
+  showToast("notification-item error", "--error", scope ? `${scope} error` : "Error", message);
+}
+
+// showInfoToast surfaces a backend app:notice — an informational advisory (e.g. a
+// "restart required" heads-up) styled distinctly from an error so a successful action
+// is not reported as a failure.
+function showInfoToast(payload: {scope?: string; message?: string} | string) {
+  const scope = typeof payload === "object" && payload ? payload.scope ?? "" : "";
+  const message = typeof payload === "object" && payload ? payload.message ?? "" : String(payload);
+  showToast("notification-item", "--warning", scope ? `${scope} notice` : "Notice", message);
 }
 
 function renderError(error: unknown) {
