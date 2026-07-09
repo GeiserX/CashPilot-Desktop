@@ -31,6 +31,12 @@ type AppConfig struct {
 	FleetAPIKey            string `json:"fleetApiKey"`
 	FleetBindAddress       string `json:"fleetBindAddress"`
 	FleetPort              int    `json:"fleetPort"`
+	// MetricsEnabled turns on the opt-in Prometheus /metrics endpoint on the fleet
+	// server. It defaults to false (disabled) — the bool zero value, so applyDefaults
+	// needs no change. Enabling it exposes earnings, health and fleet stats on the
+	// fleet bind address (loopback by default) with no authentication, matching the
+	// Prometheus scraping convention.
+	MetricsEnabled bool `json:"metricsEnabled"`
 }
 
 type Manager struct {
