@@ -176,6 +176,72 @@ func TestListCredentialSlugs(t *testing.T) {
 	}
 }
 
+// TestServiceDetails pins the generic per-service detail store used to stash a
+// collector's JSON side-document (e.g. MystNodes per-node earnings) keyed by slug:
+// an absent slug reads back "" with no error, an empty store lists nothing, a save
+// round-trips the blob verbatim, a second save upserts (overwrites) rather than
+// duplicating, and ListServiceDetails returns every slug's blob keyed by slug.
+func TestServiceDetails(t *testing.T) {
+	s := openTestStore(t)
+
+	// Absent slug -> "" and no error (not a failure state).
+	got, err := s.GetServiceDetail("mysterium")
+	if err != nil {
+		t.Fatalf("GetServiceDetail(absent) error: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("expected empty detail for an absent slug, got %q", got)
+	}
+
+	// An empty store lists nothing (non-nil, rangeable map).
+	if m := s.ListServiceDetails(); len(m) != 0 {
+		t.Fatalf("expected no service details on an empty store, got %v", m)
+	}
+
+	// Save then get round-trips the JSON blob byte-for-byte.
+	first := `[{"identity":"0xabc","online":true,"earnings30dMyst":0.75}]`
+	if err := s.SaveServiceDetail("mysterium", first); err != nil {
+		t.Fatalf("SaveServiceDetail error: %v", err)
+	}
+	got, err = s.GetServiceDetail("mysterium")
+	if err != nil {
+		t.Fatalf("GetServiceDetail error: %v", err)
+	}
+	if got != first {
+		t.Fatalf("detail did not round-trip: got %q want %q", got, first)
+	}
+
+	// Saving the same slug again upserts (ON CONFLICT) and overwrites the prior blob.
+	second := `[{"identity":"0xdef","online":false,"earnings30dMyst":0}]`
+	if err := s.SaveServiceDetail("mysterium", second); err != nil {
+		t.Fatalf("SaveServiceDetail overwrite error: %v", err)
+	}
+	got, err = s.GetServiceDetail("mysterium")
+	if err != nil {
+		t.Fatalf("GetServiceDetail after overwrite error: %v", err)
+	}
+	if got != second {
+		t.Fatalf("expected overwritten detail %q, got %q", second, got)
+	}
+
+	// A second slug coexists; ListServiceDetails returns both, keyed by slug, with no
+	// duplicate for the upserted "mysterium".
+	storjBlob := `{"nodeId":"abc"}`
+	if err := s.SaveServiceDetail("storj", storjBlob); err != nil {
+		t.Fatalf("SaveServiceDetail(storj) error: %v", err)
+	}
+	all := s.ListServiceDetails()
+	if len(all) != 2 {
+		t.Fatalf("expected 2 detail rows, got %d: %v", len(all), all)
+	}
+	if all["mysterium"] != second {
+		t.Fatalf("ListServiceDetails[mysterium] = %q, want %q (latest upserted blob)", all["mysterium"], second)
+	}
+	if all["storj"] != storjBlob {
+		t.Fatalf("ListServiceDetails[storj] = %q, want %q", all["storj"], storjBlob)
+	}
+}
+
 func TestFleetDeviceInsertListAndDelete(t *testing.T) {
 	s := openTestStore(t)
 

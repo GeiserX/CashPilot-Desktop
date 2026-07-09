@@ -154,6 +154,10 @@ type AppState struct {
 	Currencies    []string                     `json:"currencies"`
 	Summary       EarningsSummary              `json:"summary"`
 	Health        map[string]store.HealthScore `json:"health"`
+	// ServiceDetails carries each collector's optional per-service JSON detail blob
+	// keyed by slug (e.g. the MystNodes per-node earnings breakdown). The frontend
+	// parses the raw JSON per service; the backend stores and forwards it opaquely.
+	ServiceDetails map[string]string `json:"serviceDetails"`
 }
 
 type Notification struct {
@@ -277,16 +281,17 @@ func (a *App) GetAppState() (AppState, error) {
 	}
 	runtimeStatus := a.runtime.Status(a.ctx)
 	return AppState{
-		Config:        a.cfg.Config(),
-		Runtime:       runtimeStatus,
-		Services:      a.catalog.ListVisible(),
-		Deployments:   a.store.ListDeployments(),
-		Earnings:      a.store.ListLatestEarnings(),
-		Guides:        runtime.InstallGuides(),
-		Notifications: a.notifications(runtimeStatus),
-		Currencies:    supportedCurrencies(),
-		Summary:       a.computeEarningsSummary(),
-		Health:        a.store.HealthScores(7),
+		Config:         a.cfg.Config(),
+		Runtime:        runtimeStatus,
+		Services:       a.catalog.ListVisible(),
+		Deployments:    a.store.ListDeployments(),
+		Earnings:       a.store.ListLatestEarnings(),
+		Guides:         runtime.InstallGuides(),
+		Notifications:  a.notifications(runtimeStatus),
+		Currencies:     supportedCurrencies(),
+		Summary:        a.computeEarningsSummary(),
+		Health:         a.store.HealthScores(7),
+		ServiceDetails: a.store.ListServiceDetails(),
 	}, nil
 }
 
