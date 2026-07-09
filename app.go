@@ -144,15 +144,16 @@ func (a *App) Shutdown(_ context.Context) {
 }
 
 type AppState struct {
-	Config        config.AppConfig       `json:"config"`
-	Runtime       runtime.Status         `json:"runtime"`
-	Services      []catalog.Service      `json:"services"`
-	Deployments   []store.Deployment     `json:"deployments"`
-	Earnings      []store.EarningsRecord `json:"earnings"`
-	Guides        []runtime.InstallGuide `json:"guides"`
-	Notifications []Notification         `json:"notifications"`
-	Currencies    []string               `json:"currencies"`
-	Summary       EarningsSummary        `json:"summary"`
+	Config        config.AppConfig             `json:"config"`
+	Runtime       runtime.Status               `json:"runtime"`
+	Services      []catalog.Service            `json:"services"`
+	Deployments   []store.Deployment           `json:"deployments"`
+	Earnings      []store.EarningsRecord       `json:"earnings"`
+	Guides        []runtime.InstallGuide       `json:"guides"`
+	Notifications []Notification               `json:"notifications"`
+	Currencies    []string                     `json:"currencies"`
+	Summary       EarningsSummary              `json:"summary"`
+	Health        map[string]store.HealthScore `json:"health"`
 }
 
 type Notification struct {
@@ -274,6 +275,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Notifications: a.notifications(runtimeStatus),
 		Currencies:    supportedCurrencies(),
 		Summary:       a.computeEarningsSummary(),
+		Health:        a.store.HealthScores(7),
 	}, nil
 }
 
@@ -939,6 +941,12 @@ func (a *App) collectAll(ctx context.Context) {
 		a.emitEvent("earnings:changed", collected)
 	}
 
+	// Sample each deployed service's up/down state so the health score's uptime%
+	// has data to work with. This piggybacks on the collection tick under the same
+	// single-flight guard, recording one health_up/health_down runtime_event per
+	// deployed service; PurgeOldData (below) prunes them with the rest.
+	a.sampleHealth(ctx)
+
 	// Bound local database growth: drop earnings/runtime_events rows older than the
 	// retention window (keeping the latest earnings row per platform). a.store is
 	// non-nil here (guarded at function entry). Runs every cycle — the DELETE is
@@ -946,6 +954,43 @@ func (a *App) collectAll(ctx context.Context) {
 	// abort the cycle: log it and carry on, the next cycle simply retries.
 	if _, err := a.store.PurgeOldData(a.retentionDays()); err != nil {
 		a.emitError("store", err)
+	}
+}
+
+// sampleHealth records one uptime datapoint per deployed service: a health_up
+// event when the service's managed container is currently running, health_down
+// otherwise. These rows feed store.HealthScores' uptime% and are pruned by
+// PurgeOldData with the other runtime_events. It runs inside collectAll (under the
+// single-flight guard) rather than on its own timer, so it needs no extra ticker.
+// It never aborts the cycle: a runtime that cannot be listed (Docker offline) is
+// surfaced via emitError and sampling is skipped for this tick. The nil guards
+// mirror collectAll's, so the scheduler tests — which inject no runtime — are a
+// no-op here.
+func (a *App) sampleHealth(ctx context.Context) {
+	if a.store == nil || a.runtime == nil {
+		return
+	}
+	deployments := a.store.ListDeployments()
+	if len(deployments) == 0 {
+		return
+	}
+	containers, err := a.runtime.List(ctx)
+	if err != nil {
+		a.emitError("health", err)
+		return
+	}
+	running := make(map[string]bool, len(containers))
+	for _, c := range containers {
+		if c.Slug != "" && c.Status == "running" {
+			running[c.Slug] = true
+		}
+	}
+	for _, dep := range deployments {
+		if running[dep.Slug] {
+			a.store.RecordEvent(dep.Slug, "health_up", "")
+		} else {
+			a.store.RecordEvent(dep.Slug, "health_down", "")
+		}
 	}
 }
 

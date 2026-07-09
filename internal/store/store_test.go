@@ -572,10 +572,10 @@ func TestPurgeOldData(t *testing.T) {
 	// Insertion order fixes the AUTOINCREMENT ids, so the last insert per platform
 	// is that platform's latest (MAX(id)).
 	seed := []EarningsRecord{
-		{Platform: "grows", Balance: 1.0, Currency: "USD", CreatedAt: ts(500)}, // old, not latest -> DELETE
-		{Platform: "grows", Balance: 2.0, Currency: "USD", CreatedAt: ts(450)}, // old, not latest -> DELETE
-		{Platform: "grows", Balance: 2.5, Currency: "USD", CreatedAt: ts(20)},  // newer than cutoff, not latest -> KEEP
-		{Platform: "grows", Balance: 3.0, Currency: "USD", CreatedAt: ts(5)},   // newest -> latest -> KEEP
+		{Platform: "grows", Balance: 1.0, Currency: "USD", CreatedAt: ts(500)},  // old, not latest -> DELETE
+		{Platform: "grows", Balance: 2.0, Currency: "USD", CreatedAt: ts(450)},  // old, not latest -> DELETE
+		{Platform: "grows", Balance: 2.5, Currency: "USD", CreatedAt: ts(20)},   // newer than cutoff, not latest -> KEEP
+		{Platform: "grows", Balance: 3.0, Currency: "USD", CreatedAt: ts(5)},    // newest -> latest -> KEEP
 		{Platform: "stale", Balance: 10.0, Currency: "USD", CreatedAt: ts(600)}, // old, not latest -> DELETE
 		{Platform: "stale", Balance: 20.0, Currency: "USD", CreatedAt: ts(500)}, // old, but latest -> KEEP
 	}
@@ -705,5 +705,141 @@ func TestPurgeOldData(t *testing.T) {
 	}
 	if deleted != 0 {
 		t.Fatalf("second PurgeOldData(400) = %d, want 0 (idempotent)", deleted)
+	}
+}
+
+// TestHealthScores pins the health-score + uptime% aggregation over runtime_events.
+// runtime_events.created_at is written like datetime('now') ("YYYY-MM-DD HH:MM:SS",
+// UTC), so events are inserted directly with explicit timestamps in that format
+// (RecordEvent only ever stamps "now", and it differs from the RFC3339Nano earnings
+// uses). It checks: uptime% from health_up/health_down counts; the restart/crash/
+// stop penalties (a crash counted from BOTH a *_error event and missing_from_runtime);
+// the 40/60 event-score/uptime blend; a service with events but ZERO uptime samples
+// scoring its event-score (not 0); out-of-window events excluded; and a service with
+// no in-window events being absent from the map.
+func TestHealthScores(t *testing.T) {
+	s := openTestStore(t)
+
+	// Build timestamps in the datetime('now') format the window comparison uses.
+	// Inside-window events sit at 1-3 days ago; out-of-window ones at 30-60 days,
+	// both comfortably clear of the 7-day cutoff so the test never flakes at the
+	// boundary.
+	ts := func(daysAgo int) string {
+		return time.Now().UTC().AddDate(0, 0, -daysAgo).Format("2006-01-02 15:04:05")
+	}
+	ev := func(slug, event string, daysAgo int) {
+		t.Helper()
+		if _, err := s.db.Exec(
+			`INSERT INTO runtime_events(slug, event, detail, created_at) VALUES(?, ?, '', ?)`,
+			slug, event, ts(daysAgo),
+		); err != nil {
+			t.Fatalf("insert runtime_event(%s, %s) error: %v", slug, event, err)
+		}
+	}
+
+	// "blend": one of every penalty (a crash from BOTH a *_error event and
+	// missing_from_runtime) plus uptime samples, all inside the 7-day window.
+	//   eventScore = 100 - 5*1(restart) - 20*2(crash) - 2*1(stop) = 53
+	//   uptime%    = 3 up / 4 samples * 100 = 75.0
+	//   score      = round(0.4*53 + 0.6*75) = round(66.2) = 66
+	ev("blend", "restarted", 1)
+	ev("blend", "start_error", 1)
+	ev("blend", "missing_from_runtime", 2)
+	ev("blend", "stopped", 2)
+	ev("blend", "health_up", 1)
+	ev("blend", "health_up", 1)
+	ev("blend", "health_up", 2)
+	ev("blend", "health_down", 2)
+
+	// "windowed": only the in-window rows count; the 30-days-ago rows are excluded.
+	//   in-window: 1 restart, 2 up -> eventScore=95, uptime=100, score=round(98)=98
+	ev("windowed", "restarted", 1)
+	ev("windowed", "health_up", 2)
+	ev("windowed", "health_up", 3)
+	ev("windowed", "restarted", 30)   // excluded
+	ev("windowed", "restarted", 30)   // excluded
+	ev("windowed", "health_down", 30) // excluded
+
+	// "nosample": lifecycle events but NO uptime samples yet. The score must be the
+	// event-score (93), NOT blended down to 0 for lack of sampling data.
+	//   eventScore = 100 - 5*1 - 2*1 = 93
+	ev("nosample", "restarted", 1)
+	ev("nosample", "stopped", 3)
+
+	// "perfect": only uptime, all up, no penalties -> 100 with 100% uptime.
+	ev("perfect", "health_up", 1)
+	ev("perfect", "health_up", 1)
+	ev("perfect", "health_up", 2)
+	ev("perfect", "health_up", 3)
+
+	// "expired": ONLY out-of-window events -> must be absent from the result.
+	ev("expired", "restarted", 30)
+	ev("expired", "health_up", 60)
+
+	got := s.HealthScores(7)
+
+	// Only slugs with at least one in-window event appear: blend, windowed,
+	// nosample, perfect. "expired" (out-of-window only) and "absent" (never seen)
+	// must not appear.
+	if len(got) != 4 {
+		t.Fatalf("expected 4 scored slugs, got %d: %+v", len(got), got)
+	}
+	if _, ok := got["expired"]; ok {
+		t.Fatalf("a slug with only out-of-window events must be absent: %+v", got["expired"])
+	}
+	if _, ok := got["absent"]; ok {
+		t.Fatal("a slug with no events must be absent from the map")
+	}
+
+	blend, ok := got["blend"]
+	if !ok {
+		t.Fatal("expected 'blend' to be scored")
+	}
+	if blend.Restarts != 1 || blend.Crashes != 2 || blend.Stops != 1 {
+		t.Fatalf("blend penalties: got restarts=%d crashes=%d stops=%d, want 1/2/1",
+			blend.Restarts, blend.Crashes, blend.Stops)
+	}
+	if blend.Samples != 4 {
+		t.Fatalf("blend samples: got %d, want 4", blend.Samples)
+	}
+	if blend.UptimePercent != 75.0 {
+		t.Fatalf("blend uptime%%: got %v, want 75.0", blend.UptimePercent)
+	}
+	if blend.Score != 66 {
+		t.Fatalf("blend score: got %d, want 66 (round(0.4*53 + 0.6*75))", blend.Score)
+	}
+
+	// windowed proves the out-of-window rows are excluded: counting them would give
+	// restarts=3 and samples=3, a very different score.
+	win := got["windowed"]
+	if win.Restarts != 1 || win.Samples != 2 || win.UptimePercent != 100.0 {
+		t.Fatalf("windowed excluded-window mismatch: got restarts=%d samples=%d uptime=%v, want 1/2/100.0",
+			win.Restarts, win.Samples, win.UptimePercent)
+	}
+	if win.Score != 98 {
+		t.Fatalf("windowed score: got %d, want 98 (round(0.4*95 + 0.6*100))", win.Score)
+	}
+
+	// nosample: zero uptime samples -> the event-score is used verbatim (not 0).
+	ns := got["nosample"]
+	if ns.Samples != 0 {
+		t.Fatalf("nosample samples: got %d, want 0", ns.Samples)
+	}
+	if ns.UptimePercent != 0 {
+		t.Fatalf("nosample uptime%%: got %v, want 0", ns.UptimePercent)
+	}
+	if ns.Score != 93 {
+		t.Fatalf("nosample score: got %d, want 93 (event-score, NOT blended to 0)", ns.Score)
+	}
+	if ns.Restarts != 1 || ns.Stops != 1 || ns.Crashes != 0 {
+		t.Fatalf("nosample penalties: got restarts=%d stops=%d crashes=%d, want 1/1/0",
+			ns.Restarts, ns.Stops, ns.Crashes)
+	}
+
+	// perfect: all up, no penalties -> 100 with 100% uptime.
+	pf := got["perfect"]
+	if pf.Score != 100 || pf.UptimePercent != 100.0 || pf.Samples != 4 {
+		t.Fatalf("perfect: got score=%d uptime=%v samples=%d, want 100/100.0/4",
+			pf.Score, pf.UptimePercent, pf.Samples)
 	}
 }

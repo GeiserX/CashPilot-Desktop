@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -48,6 +49,21 @@ type DailyBalance struct {
 	Currency string
 	Day      string // "YYYY-MM-DD" (UTC)
 	Balance  float64
+}
+
+// HealthScore is one service's rolling health over the query window: a 0-100
+// Score, the uptime percentage it was blended from, and the raw event counts the
+// score penalises. Samples is the number of health_up/health_down datapoints in
+// the window; a service with lifecycle events but no samples yet (uptime sampling
+// has not run) reports Samples==0 and a Score equal to its event-score, so it is
+// not dragged to 0 merely for lacking sampling data.
+type HealthScore struct {
+	Score         int     `json:"score"`
+	UptimePercent float64 `json:"uptimePercent"`
+	Samples       int     `json:"samples"`
+	Restarts      int     `json:"restarts"`
+	Crashes       int     `json:"crashes"`
+	Stops         int     `json:"stops"`
 }
 
 type FleetDevice struct {
@@ -297,6 +313,97 @@ func (s *Store) ListDailyBalances(daysBack int) []DailyBalance {
 	return out
 }
 
+// HealthScores computes a 0-100 health score per service from the runtime_events
+// written over the last `days` days, keyed by slug. It adapts the production
+// CashPilot health formula to the Desktop's event vocabulary:
+//
+//   - event-score: start at 100, then -5 per restart (a "restarted" event), -20
+//     per crash (any "*_error" or "missing_from_runtime"), -2 per stop (a
+//     "stopped" event); floored at 0 (and capped at 100, a no-op while subtracting).
+//   - uptime%: health_up / (health_up + health_down) * 100 over the window, from
+//     the per-cycle up/down sampling. Zero samples -> 0.
+//   - final score: once there is at least one uptime sample, blend 40% event-score
+//     with 60% uptime% (full-precision uptime, as the original does); with NO
+//     samples yet the score is the event-score alone, so a service is not punished
+//     to 0 merely because sampling has not produced data.
+//
+// runtime_events.created_at is written as datetime('now') ("YYYY-MM-DD HH:MM:SS",
+// UTC), so the window is compared against datetime('now', '-N days') in that same
+// format — NOT the RFC3339Nano earnings uses. Only slugs with at least one event
+// in the window appear in the returned map.
+func (s *Store) HealthScores(days int) map[string]HealthScore {
+	rows, err := s.db.Query(`
+		SELECT
+			slug,
+			SUM(CASE WHEN event = 'restarted' THEN 1 ELSE 0 END) AS restarts,
+			SUM(CASE WHEN event LIKE '%\_error' ESCAPE '\' OR event = 'missing_from_runtime' THEN 1 ELSE 0 END) AS crashes,
+			SUM(CASE WHEN event = 'stopped' THEN 1 ELSE 0 END) AS stops,
+			SUM(CASE WHEN event = 'health_up' THEN 1 ELSE 0 END) AS ups,
+			SUM(CASE WHEN event = 'health_down' THEN 1 ELSE 0 END) AS downs
+		FROM runtime_events
+		WHERE created_at >= datetime('now', ?)
+		GROUP BY slug
+	`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	out := make(map[string]HealthScore)
+	for rows.Next() {
+		var (
+			slug                     string
+			restarts, crashes, stops int
+			ups, downs               int
+		)
+		if err := rows.Scan(&slug, &restarts, &crashes, &stops, &ups, &downs); err != nil {
+			continue
+		}
+		samples := ups + downs
+
+		// event-score: 100 minus the weighted penalties, floored at 0.
+		hs := HealthScore{
+			Score:    clampScore(100 - 5*restarts - 20*crashes - 2*stops),
+			Samples:  samples,
+			Restarts: restarts,
+			Crashes:  crashes,
+			Stops:    stops,
+		}
+		if samples > 0 {
+			uptime := float64(ups) / float64(samples) * 100
+			hs.UptimePercent = round1(uptime)
+			// Blend only once uptime data exists: 40% event-score, 60% uptime%
+			// (full-precision uptime, mirroring the original).
+			hs.Score = clampScore(int(math.Round(0.4*float64(hs.Score) + 0.6*uptime)))
+		}
+		out[slug] = hs
+	}
+	if err := rows.Err(); err != nil {
+		// A mid-iteration error means the result may be partial. Health is
+		// informational, so return what scored cleanly rather than failing the
+		// whole read (matches the best-effort intent of the other list methods).
+		return out
+	}
+	return out
+}
+
+// clampScore bounds a health score to the 0-100 range.
+func clampScore(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
+// round1 rounds a percentage to one decimal place for display. The blended score
+// deliberately uses the full-precision percentage, not this rounded value.
+func round1(v float64) float64 {
+	return math.Round(v*10) / 10
+}
+
 // PurgeOldData deletes earnings and runtime_events rows older than the cutoff,
 // but NEVER the most-recent earnings row per platform (so ListLatestEarnings and
 // the dashboard breakdown keep working for a service that hasn't updated in a
@@ -469,6 +576,7 @@ func (s *Store) migrate() error {
 			detail TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		);
+		CREATE INDEX IF NOT EXISTS idx_runtime_events_slug_created ON runtime_events(slug, created_at);
 		CREATE TABLE IF NOT EXISTS fleet_devices (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
