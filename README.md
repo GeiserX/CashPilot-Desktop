@@ -63,7 +63,19 @@ Download the latest release for your platform:
 
 ## Supported Services
 
+> Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
+
 CashPilot bundles a catalog of 49 passive-income services across multiple categories. A representative selection is shown below.
+
+### Before you start: how bandwidth-sharing works
+
+Most services in this catalog are **bandwidth-sharing** apps (sometimes called proxyware). When you run one, it routes other people's internet traffic out through your home IP address and pays you a share of the fee. That traffic is usually ordinary web browsing -- but you don't choose it or see it, so it's worth understanding the trade before you opt in:
+
+- **Your connection carries the traffic.** Requests from these networks look like they come from your IP, so only run this if you're comfortable with that.
+- **Check your ISP's terms first.** Some ISP contracts prohibit reselling or sharing your connection, which can make bandwidth-sharing a terms-of-service problem even where it is otherwise legal. Read your own agreement before signing up.
+- **It's all opt-in.** Start with the services you understand and add others only as you're comfortable.
+
+Not every service resells your IP. **Compute and storage** providers -- Storj (spare disk space) and GPU services like Vast.ai and Salad (spare compute) -- pay for hardware resources, not for routing traffic through your connection. The catalog is a mix, so pick what suits you.
 
 ### Docker-Deployable Services
 
@@ -90,7 +102,7 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 
 > \* Storj nodes on the same /24 subnet share data allocation, reducing per-node earnings.
 >
-> \*\* Traffmonetizer ToS requires residential IP, but VPS nodes are accepted in practice.
+> \*\* Traffmonetizer's Terms of Service require a residential IP; running it on a VPS may not comply with those terms, so check before you deploy.
 
 ### Browser Extension / Desktop Only
 
@@ -207,7 +219,13 @@ Yes. CashPilot Desktop manages Docker containers for you, but Docker (or Podman)
 
 **How much can I earn?**
 
-Earnings vary widely based on location, ISP, number of devices, and which services you run. The dashboard tracks your actual earnings over time so you can optimize your setup.
+Honestly, this is beer money, not a salary. Earnings vary widely based on location, ISP, number of devices, and which services you run, but as a rough guide:
+
+- A **single home connection** running a stack of bandwidth apps typically earns around **$5-25/month**.
+- A **well-equipped household** that also shares spare storage or GPU time might reach **$30-75/month**.
+- **Hundreds a month** is possible, but it takes a real fleet of machines, capable GPUs, or speculative token rewards -- not a single home connection.
+
+Two things keep expectations realistic. Stacking many bandwidth apps on one connection hits **diminishing returns**, because they compete to sell the same idle bandwidth. And **DePIN token rewards are speculative** -- their value can drop sharply, so treat crypto payouts as a bet rather than a guarantee. The steadier earners are bandwidth, storage, and GPU compute. The dashboard tracks your actual earnings over time so you can see what works for your setup.
 
 **Is it safe?**
 
