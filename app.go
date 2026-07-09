@@ -292,6 +292,10 @@ func (a *App) GetAppState() (AppState, error) {
 		return AppState{}, err
 	}
 	runtimeStatus := a.runtime.Status(a.ctx)
+	// Surface the always-on native runtime alongside Docker's status so the frontend
+	// can proceed (and message honestly) on Docker OR native. Available keeps its
+	// Docker-only meaning; this is purely additive.
+	runtimeStatus.NativeAvailable = a.services.HasNativeRuntime()
 	return AppState{
 		Config:         a.cfg.Config(),
 		Runtime:        runtimeStatus,
@@ -759,7 +763,12 @@ func (a *App) CheckRuntime() (runtime.Status, error) {
 	if err := a.ready(); err != nil {
 		return runtime.Status{}, err
 	}
-	return a.runtime.Status(a.ctx), nil
+	status := a.runtime.Status(a.ctx)
+	// Report native availability alongside Docker so onboarding's "Check Again" can
+	// unblock on the always-on native runtime, not only on Docker. Additive only —
+	// Available still reflects Docker.
+	status.NativeAvailable = a.services.HasNativeRuntime()
+	return status, nil
 }
 
 func (a *App) GetRuntimeGuides() []runtime.InstallGuide {
@@ -1154,7 +1163,10 @@ func (a *App) ManagedRuntimePlan() runtime.ManagedRuntimePlan {
 
 func (a *App) notifications(status runtime.Status) []Notification {
 	var items []Notification
-	if !status.Available {
+	// Only warn that the runtime is offline when NEITHER Docker nor the always-on
+	// native runtime can run anything. With native available the app works without
+	// Docker, so a "Runtime offline" alert there would be dishonest and alarming.
+	if !status.Available && !status.NativeAvailable {
 		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
 	}
 	for _, record := range a.store.ListLatestEarnings() {

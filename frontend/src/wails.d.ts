@@ -180,6 +180,7 @@ export interface FleetState {
 
 export interface RuntimeStatus {
   available: boolean;
+  nativeAvailable: boolean;
   kind: string;
   message: string;
   version: string;
