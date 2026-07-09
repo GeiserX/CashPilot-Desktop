@@ -98,7 +98,21 @@ type NativeProcessProvider struct {
 	// statFn samples a pid's CPU%/memory and liveness; defaults to gopsutil, a seam
 	// for tests. logCap bounds each log generation.
 	statFn func(pid int) (cpuPercent, memoryMB float64, alive bool)
+
+	// identityFn samples a live pid's identity — its executable path and creation time
+	// (ms since epoch) — so a pid persisted in state.json can be confirmed as still
+	// OUR process rather than an unrelated same-UID process the OS reassigned the pid
+	// to after ours exited. Defaults to gopsutil; a seam for tests.
+	identityFn func(pid int) (exePath string, createTimeMs int64, ok bool)
+
 	logCap int64
+
+	// maxDownload bounds a single artifact download and maxExtract bounds one archive's
+	// total extracted bytes. They default to maxDownloadBytes/maxExtractedBytes and are
+	// fields (not consts) so tests can exercise the caps without multi-hundred-MB
+	// fixtures.
+	maxDownload int64
+	maxExtract  int64
 
 	mu    sync.Mutex // guards procs
 	procs map[string]*managedProcess
@@ -113,7 +127,7 @@ func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 	return &NativeProcessProvider{
 		baseDir:     base,
 		statePath:   filepath.Join(base, "state.json"),
-		httpClient:  &http.Client{Timeout: 10 * time.Minute},
+		httpClient:  &http.Client{Timeout: 10 * time.Minute, CheckRedirect: httpsOnlyRedirect},
 		goos:        goruntime.GOOS,
 		goarch:      goruntime.GOARCH,
 		backoffMin:  1 * time.Second,
@@ -121,7 +135,10 @@ func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 		maxRestarts: 0,
 		stopTimeout: defaultNativeStopTimeout,
 		statFn:      gopsutilStats,
+		identityFn:  gopsutilIdentity,
 		logCap:      nativeLogCap,
+		maxDownload: maxDownloadBytes,
+		maxExtract:  maxExtractedBytes,
 		procs:       make(map[string]*managedProcess),
 	}
 }
@@ -253,10 +270,10 @@ func (p *NativeProcessProvider) Start(ctx context.Context, slug string) error {
 	if e.BinPath == "" || !fileExists(e.BinPath) {
 		return fmt.Errorf("native binary for %q is missing; redeploy it", slug)
 	}
-	if e.PID > 0 {
-		if _, _, alive := p.statFn(e.PID); alive {
-			return nil
-		}
+	// Already running as a live orphan we still recognise (identity match) -> no-op. A
+	// recycled pid fails the identity check and falls through to a fresh launch.
+	if p.entryIsOurs(e) {
+		return nil
 	}
 	_, err := p.launchProcess(slug, e.BinPath, e.Args, e.Env, catalog.ResourceLimits{}, registryDesc{URL: e.URL, SHA256: e.SHA256, Archive: e.Archive})
 	return err
@@ -274,7 +291,10 @@ func (p *NativeProcessProvider) Stop(ctx context.Context, slug string) error {
 	if !ok {
 		return fmt.Errorf("native service %q is not running", slug)
 	}
-	if e.PID > 0 {
+	// Only signal a recorded pid when the live process still matches the identity we
+	// persisted for it. If it doesn't (a recycled pid) we skip the signal — never
+	// touching an unrelated same-UID process — and just mark the stale entry stopped.
+	if e.PID > 0 && p.entryIsOurs(e) {
 		p.signalPID(e.PID, false)
 	}
 	return p.mutateRegistry(func(reg *nativeRegistry) { markStopped(reg, slug) })
@@ -320,9 +340,12 @@ func (p *NativeProcessProvider) List(ctx context.Context) ([]ContainerInfo, erro
 	for _, slug := range slugs {
 		e := reg.Entries[slug]
 		var cpu, mem float64
-		alive := false
-		if e.PID > 0 {
-			cpu, mem, alive = p.statFn(e.PID)
+		// A recorded pid counts as running only when the live process still matches the
+		// identity we persisted for it — a recycled pid (reassigned to an unrelated
+		// process after ours exited) is reported stopped, never as our service.
+		alive := p.entryIsOurs(e)
+		if alive {
+			cpu, mem, _ = p.statFn(e.PID)
 		}
 		status := "stopped"
 		if alive {
@@ -477,7 +500,9 @@ func (p *NativeProcessProvider) stopInternal(slug string, force bool) {
 	if p.stopManaged(slug) {
 		return
 	}
-	if e, ok := p.readRegistry().Entries[slug]; ok && e.PID > 0 {
+	// Signal a recorded orphan pid only when it still matches our persisted identity;
+	// a recycled pid is left untouched (see Stop).
+	if e, ok := p.readRegistry().Entries[slug]; ok && e.PID > 0 && p.entryIsOurs(e) {
 		p.signalPID(e.PID, force)
 	}
 }
@@ -490,6 +515,41 @@ func (p *NativeProcessProvider) procAlive(mp *managedProcess) bool {
 	}
 	_, _, alive := p.statFn(cmd.Process.Pid)
 	return alive
+}
+
+// entryIsOurs reports whether the pid recorded for a registry entry still belongs to
+// the process we launched, guarding against pid reuse: after our process exits the OS
+// can reassign its pid number to an unrelated (same-UID) process, and acting on that
+// pid — reporting it "running", or signalling it on Stop/Remove — would touch a
+// stranger. An entry that carries a recorded identity (exe path + creation time) must
+// match the live process exactly. An entry with no recorded identity (a legacy
+// registry written before identity was persisted, or a test-seeded orphan) falls back
+// to bare liveness so upgrading the app does not strand an existing deployment.
+func (p *NativeProcessProvider) entryIsOurs(e *nativeRegistryEntry) bool {
+	if e == nil || e.PID <= 0 {
+		return false
+	}
+	if e.ExePath == "" && e.CreateTime == 0 {
+		_, _, alive := p.statFn(e.PID)
+		return alive
+	}
+	exe, ct, ok := p.identityFn(e.PID)
+	return ok && exe == e.ExePath && ct == e.CreateTime
+}
+
+// processIdentity captures the identity (executable path + creation time in ms) of a
+// pid we just launched so a later run can tell our process from a recycled pid. Best
+// effort: zero values on a failed sample, in which case entryIsOurs falls back to bare
+// liveness for that entry.
+func (p *NativeProcessProvider) processIdentity(pid int) (string, int64) {
+	if pid <= 0 {
+		return "", 0
+	}
+	exe, ct, ok := p.identityFn(pid)
+	if !ok {
+		return "", 0
+	}
+	return exe, ct
 }
 
 // signalPID stops a process by pid (an orphan from a previous session we don't own as
@@ -583,6 +643,25 @@ func gopsutilStats(pid int) (float64, float64, bool) {
 	return cpu, mem, true
 }
 
+// gopsutilIdentity is the production identityFn: it reads a live pid's executable path
+// and creation time (ms since epoch). ok is false if the process is gone or either
+// attribute cannot be read, so a caller fails closed (treats the pid as not ours).
+func gopsutilIdentity(pid int) (string, int64, bool) {
+	proc, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return "", 0, false
+	}
+	exe, err := proc.Exe()
+	if err != nil {
+		return "", 0, false
+	}
+	ct, err := proc.CreateTime()
+	if err != nil {
+		return "", 0, false
+	}
+	return exe, ct, true
+}
+
 func fileExists(path string) bool {
 	st, err := os.Stat(path)
 	return err == nil && !st.IsDir()
@@ -601,7 +680,20 @@ func (p *NativeProcessProvider) ensureBinary(ctx context.Context, slugDir string
 	if err := os.MkdirAll(slugDir, 0o700); err != nil {
 		return "", err
 	}
-	targetBin := filepath.Join(slugDir, filepath.FromSlash(bin.Bin))
+	// Containment: bin.Bin names the executable inside slugDir (for archive "none" it is
+	// written raw, straight to targetBin, so it is NOT covered by the archive-extraction
+	// path guard). Reject anything that is not a slug-dir-local relative path — an
+	// absolute path or a "../" escape — so a hostile catalog entry cannot write (and then
+	// chmod+exec) a file outside the per-service directory. This matches the rigor of the
+	// archive path's sanitizeExtractPath guard for the raw path.
+	rel := filepath.FromSlash(bin.Bin)
+	if bin.Bin == "" || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("refusing native binary path %q: it must stay within the service directory", bin.Bin)
+	}
+	targetBin := filepath.Join(slugDir, rel)
+	if targetBin != slugDir && !strings.HasPrefix(targetBin, slugDir+string(os.PathSeparator)) {
+		return "", fmt.Errorf("refusing native binary path %q: it escapes the service directory", bin.Bin)
+	}
 	markerPath := filepath.Join(slugDir, ".verified-sha256")
 
 	if isHexSHA256(bin.SHA256) && fileExists(targetBin) {
@@ -621,7 +713,7 @@ func (p *NativeProcessProvider) ensureBinary(ctx context.Context, slugDir string
 	if progress != nil {
 		progress("Verified SHA-256; extracting")
 	}
-	if err := extractArtifact(bin.Archive, data, slugDir, targetBin); err != nil {
+	if err := extractArtifact(bin.Archive, data, slugDir, targetBin, p.maxExtract); err != nil {
 		return "", err
 	}
 	if !fileExists(targetBin) {
@@ -658,12 +750,12 @@ func (p *NativeProcessProvider) download(ctx context.Context, url, expectedSHA s
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("downloading %q: HTTP %d", url, resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, p.maxDownload+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(data)) > maxDownloadBytes {
-		return nil, fmt.Errorf("native binary %q exceeds the %d-byte download cap", url, maxDownloadBytes)
+	if int64(len(data)) > p.maxDownload {
+		return nil, fmt.Errorf("native binary %q exceeds the %d-byte download cap", url, p.maxDownload)
 	}
 	sum := sha256.Sum256(data)
 	got := hex.EncodeToString(sum[:])
@@ -675,6 +767,22 @@ func (p *NativeProcessProvider) download(ctx context.Context, url, expectedSHA s
 
 func isHTTPS(url string) bool {
 	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(url)), "https://")
+}
+
+// httpsOnlyRedirect is the download client's redirect policy. Without it Go would
+// transparently follow a redirect from the pinned HTTPS URL to an http:// (or
+// cross-host plaintext) location — the SHA-256 pin still guarantees integrity, but the
+// request would be sent in the clear. This refuses any non-HTTPS hop (closing that
+// downgrade gap, consistent with the HTTPS-only guard the initial request enforces) and
+// caps the redirect chain so a redirect loop cannot spin forever.
+func httpsOnlyRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return fmt.Errorf("stopped after %d redirects", len(via))
+	}
+	if !isHTTPS(req.URL.String()) {
+		return fmt.Errorf("refusing non-HTTPS redirect to %q", req.URL.String())
+	}
+	return nil
 }
 
 // isHexSHA256 reports whether s is a 64-character hex string — a real SHA-256. This is
@@ -693,7 +801,7 @@ func isHexSHA256(s string) bool {
 // "none"/"" means the bytes ARE the raw binary (written to targetBin); tar.gz and zip
 // are extracted with a path-traversal guard (symlinks and non-regular entries skipped)
 // and a total-size cap.
-func extractArtifact(archive string, data []byte, destDir, targetBin string) error {
+func extractArtifact(archive string, data []byte, destDir, targetBin string, maxExtract int64) error {
 	switch strings.ToLower(strings.TrimSpace(archive)) {
 	case "", "none", "raw", "binary":
 		if err := os.MkdirAll(filepath.Dir(targetBin), 0o700); err != nil {
@@ -701,22 +809,22 @@ func extractArtifact(archive string, data []byte, destDir, targetBin string) err
 		}
 		return os.WriteFile(targetBin, data, 0o700)
 	case "tar.gz", "tgz", "targz":
-		return extractTarGz(data, destDir)
+		return extractTarGz(data, destDir, maxExtract)
 	case "zip":
-		return extractZip(data, destDir)
+		return extractZip(data, destDir, maxExtract)
 	default:
 		return fmt.Errorf("unsupported native archive format %q", archive)
 	}
 }
 
-func extractTarGz(data []byte, destDir string) error {
+func extractTarGz(data []byte, destDir string, maxExtract int64) error {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
-	remaining := int64(maxExtractedBytes)
+	remaining := maxExtract
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -739,7 +847,7 @@ func extractTarGz(data []byte, destDir string) error {
 			if hdr.FileInfo().Mode()&0o111 != 0 {
 				mode = 0o700
 			}
-			if err := writeExtractedFile(target, tr, mode, &remaining); err != nil {
+			if err := writeExtractedFile(target, tr, mode, &remaining, maxExtract); err != nil {
 				return err
 			}
 		default:
@@ -749,12 +857,12 @@ func extractTarGz(data []byte, destDir string) error {
 	return nil
 }
 
-func extractZip(data []byte, destDir string) error {
+func extractZip(data []byte, destDir string, maxExtract int64) error {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return err
 	}
-	remaining := int64(maxExtractedBytes)
+	remaining := maxExtract
 	for _, f := range zr.File {
 		target, ok := sanitizeExtractPath(destDir, f.Name)
 		if !ok {
@@ -777,7 +885,7 @@ func extractZip(data []byte, destDir string) error {
 		if f.Mode()&0o111 != 0 {
 			mode = 0o700
 		}
-		err = writeExtractedFile(target, rc, mode, &remaining)
+		err = writeExtractedFile(target, rc, mode, &remaining, maxExtract)
 		rc.Close()
 		if err != nil {
 			return err
@@ -788,9 +896,9 @@ func extractZip(data []byte, destDir string) error {
 
 // writeExtractedFile copies one archive entry to disk, decrementing a shared byte
 // budget and failing if the archive would inflate past maxExtractedBytes.
-func writeExtractedFile(target string, src io.Reader, mode os.FileMode, remaining *int64) error {
+func writeExtractedFile(target string, src io.Reader, mode os.FileMode, remaining *int64, maxExtract int64) error {
 	if *remaining <= 0 {
-		return fmt.Errorf("archive exceeds the %d-byte extraction cap", int64(maxExtractedBytes))
+		return fmt.Errorf("archive exceeds the %d-byte extraction cap", maxExtract)
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
@@ -806,7 +914,7 @@ func writeExtractedFile(target string, src io.Reader, mode os.FileMode, remainin
 		return err
 	}
 	if *remaining < 0 {
-		return fmt.Errorf("archive exceeds the %d-byte extraction cap", int64(maxExtractedBytes))
+		return fmt.Errorf("archive exceeds the %d-byte extraction cap", maxExtract)
 	}
 	return closeErr
 }
@@ -957,16 +1065,23 @@ type nativeRegistry struct {
 // registry file is written 0600 inside the 0700 <appDir>/native dir (matching the
 // existing 0600 credential-key file fallback in internal/config).
 type nativeRegistryEntry struct {
-	Slug      string   `json:"slug"`
-	PID       int      `json:"pid"`
-	BinPath   string   `json:"binPath"`
-	Args      []string `json:"args,omitempty"`
-	Env       []string `json:"env,omitempty"`
-	URL       string   `json:"url"`
-	SHA256    string   `json:"sha256"`
-	Archive   string   `json:"archive"`
-	StartedAt string   `json:"startedAt"`
-	Desired   string   `json:"desired"` // "running" | "stopped"
+	Slug    string   `json:"slug"`
+	PID     int      `json:"pid"`
+	BinPath string   `json:"binPath"`
+	Args    []string `json:"args,omitempty"`
+	Env     []string `json:"env,omitempty"`
+	URL     string   `json:"url"`
+	SHA256  string   `json:"sha256"`
+	Archive string   `json:"archive"`
+	// ExePath and CreateTime pin the IDENTITY of the running process (the live exe path
+	// and its creation time in ms since epoch, as gopsutil reports them at launch), so
+	// that after an app restart a persisted pid can be confirmed as still ours rather
+	// than a recycled pid the OS handed to an unrelated process. omitempty keeps a
+	// legacy registry (no identity) readable — entryIsOurs then falls back to liveness.
+	ExePath    string `json:"exePath,omitempty"`
+	CreateTime int64  `json:"createTime,omitempty"`
+	StartedAt  string `json:"startedAt"`
+	Desired    string `json:"desired"` // "running" | "stopped"
 }
 
 func markStopped(reg *nativeRegistry, slug string) {
@@ -1024,31 +1139,40 @@ func (p *NativeProcessProvider) persistRunning(mp *managedProcess, desc registry
 	if cmd := mp.getCmd(); cmd != nil && cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
+	exePath, createTime := p.processIdentity(pid)
 	return p.mutateRegistry(func(reg *nativeRegistry) {
 		reg.Entries[mp.slug] = &nativeRegistryEntry{
-			Slug:      mp.slug,
-			PID:       pid,
-			BinPath:   mp.binPath,
-			Args:      mp.args,
-			Env:       mp.env,
-			URL:       desc.URL,
-			SHA256:    desc.SHA256,
-			Archive:   desc.Archive,
-			StartedAt: time.Now().UTC().Format(time.RFC3339),
-			Desired:   "running",
+			Slug:       mp.slug,
+			PID:        pid,
+			BinPath:    mp.binPath,
+			Args:       mp.args,
+			Env:        mp.env,
+			URL:        desc.URL,
+			SHA256:     desc.SHA256,
+			Archive:    desc.Archive,
+			ExePath:    exePath,
+			CreateTime: createTime,
+			StartedAt:  time.Now().UTC().Format(time.RFC3339),
+			Desired:    "running",
 		}
 	})
 }
 
-// updatePID records a respawn's new pid (and restart time) into the registry.
+// updatePID records a respawn's new pid, identity, and restart time into the registry.
+// The identity must be refreshed alongside the pid: a respawn is a brand-new process
+// with its own exe path and creation time, so keeping the prior identity would make the
+// running service fail its own identity check.
 func (p *NativeProcessProvider) updatePID(mp *managedProcess) {
 	pid := 0
 	if cmd := mp.getCmd(); cmd != nil && cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
+	exePath, createTime := p.processIdentity(pid)
 	_ = p.mutateRegistry(func(reg *nativeRegistry) {
 		if e, ok := reg.Entries[mp.slug]; ok {
 			e.PID = pid
+			e.ExePath = exePath
+			e.CreateTime = createTime
 			e.StartedAt = time.Now().UTC().Format(time.RFC3339)
 			e.Desired = "running"
 		}
