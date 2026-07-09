@@ -510,3 +510,41 @@ func TestMasterKeyReturnsStoredFileKeyDespiteKeyringError(t *testing.T) {
 		t.Fatal("expected the fallback key file to be left untouched")
 	}
 }
+
+func TestMasterKeyRefusesRegenWhenKeychainLockedOnDarwin(t *testing.T) {
+	keyring.MockInitWithError(errors.New("keychain locked"))
+	defer keyring.MockInit()
+	old := runtimeGOOS
+	runtimeGOOS = "darwin"
+	defer func() { runtimeGOOS = old }()
+
+	dir := t.TempDir() // no .credential_key file — without the guard this would mint a new key
+
+	if _, err := MasterKey(dir); err == nil {
+		t.Fatal("expected MasterKey to refuse regeneration (return an error) when the keychain is locked, got nil")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".credential_key")); !os.IsNotExist(err) {
+		t.Fatal("expected no key file to be written when regeneration is refused")
+	}
+}
+
+func TestFleetKeyRefusesRegenWhenKeychainLockedOnDarwin(t *testing.T) {
+	keyring.MockInitWithError(errors.New("keychain locked"))
+	defer keyring.MockInit()
+	old := runtimeGOOS
+	runtimeGOOS = "darwin"
+	defer func() { runtimeGOOS = old }()
+
+	dir := t.TempDir() // no .fleet_api_key file
+
+	got, err := FleetKey(dir)
+	if err == nil {
+		t.Fatal("expected FleetKey to refuse regeneration (return an error) when the keychain is locked, got nil")
+	}
+	if got != "" {
+		t.Fatalf("expected an empty key on refusal, got %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".fleet_api_key")); !os.IsNotExist(err) {
+		t.Fatal("expected no fleet key file to be written when regeneration is refused")
+	}
+}

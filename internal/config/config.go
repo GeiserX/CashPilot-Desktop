@@ -177,6 +177,10 @@ func (m *Manager) load() error {
 	return nil
 }
 
+// runtimeGOOS is a seam over runtime.GOOS so the platform-gated key-regeneration
+// guard below can be exercised from tests on any CI runner.
+var runtimeGOOS = runtime.GOOS
+
 // refuseKeyRegen reports whether MasterKey/FleetKey must NOT mint a replacement key.
 // A non-"not found" keychain error on a platform whose keychain is always present
 // (macOS, Windows) means the key likely exists but is locked or access was denied —
@@ -201,7 +205,7 @@ func MasterKey(appDir string) ([]byte, error) {
 		}
 	}
 
-	if refuseKeyRegen(err, runtime.GOOS) {
+	if refuseKeyRegen(err, runtimeGOOS) {
 		return nil, fmt.Errorf("credential master key is present but unreadable (keychain locked or access denied); refusing to regenerate to avoid destroying saved credentials: %w", err)
 	}
 
@@ -236,7 +240,7 @@ func FleetKey(appDir string) (string, error) {
 		return value, nil
 	}
 
-	if refuseKeyRegen(err, runtime.GOOS) {
+	if refuseKeyRegen(err, runtimeGOOS) {
 		return "", fmt.Errorf("fleet key is present but unreadable (keychain locked or access denied): %w", err)
 	}
 	return "", nil
