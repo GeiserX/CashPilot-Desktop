@@ -26,6 +26,7 @@ type Service struct {
 	ShortDescription string            `json:"shortDescription" yaml:"short_description"`
 	Referral         Referral          `json:"referral" yaml:"referral"`
 	Docker           DockerConfig      `json:"docker" yaml:"docker"`
+	Native           NativeConfig      `json:"native" yaml:"native"`
 	Requirements     Requirements      `json:"requirements" yaml:"requirements"`
 	Payment          Payment           `json:"payment" yaml:"payment"`
 	Earnings         EarningsEstimate  `json:"earnings" yaml:"earnings"`
@@ -67,6 +68,37 @@ type ResourceLimits struct {
 	MemLimit       string `json:"memLimit" yaml:"mem_limit"`
 	MemReservation string `json:"memReservation" yaml:"mem_reservation"`
 	OomScoreAdj    *int   `json:"oomScoreAdj" yaml:"oom_score_adj"`
+}
+
+// NativeConfig is the optional native: block from a service YAML. It declares how a
+// service can be run as a supervised native child process (no container): a per
+// OS/arch pinned binary download plus a launch-argument template. It is additive and
+// parallel to DockerConfig — a service may declare docker:, native:, or both. The
+// NativeProcessProvider (internal/runtime) downloads+verifies+extracts the matching
+// Binary and launches it with argv built from Command via the same shell-safe
+// tokenizeCommand/substitute path Docker uses, reusing the existing EnvVar type for
+// Env so the schema stays consistent.
+type NativeConfig struct {
+	Binaries []NativeBinary `json:"binaries" yaml:"binaries"`
+	Command  string         `json:"command" yaml:"command"`
+	Env      []EnvVar       `json:"env" yaml:"env"`
+}
+
+// NativeBinary is one downloadable, SHA-256-pinned native executable for a specific
+// OS/arch. OS matches Go's runtime.GOOS (darwin|linux|windows) and Arch matches
+// runtime.GOARCH (amd64|arm64). URL must be HTTPS and SHA256 is the hex digest of the
+// downloaded artifact (the archive or the raw binary) — the NativeProcessProvider
+// verifies it and refuses to execute anything that fails or lacks verification.
+// Archive is how the artifact is packaged: "tar.gz", "zip", or "none" (a raw binary).
+// Bin is the path to the executable inside the extracted archive (e.g. "myst" or
+// "myst.exe"); for archive "none" it is the on-disk name to give the raw binary.
+type NativeBinary struct {
+	OS      string `json:"os" yaml:"os"`
+	Arch    string `json:"arch" yaml:"arch"`
+	URL     string `json:"url" yaml:"url"`
+	SHA256  string `json:"sha256" yaml:"sha256"`
+	Archive string `json:"archive" yaml:"archive"`
+	Bin     string `json:"bin" yaml:"bin"`
 }
 
 type EnvVar struct {
@@ -117,6 +149,27 @@ type CollectorMetadata struct {
 	Notes string `json:"notes" yaml:"notes"`
 }
 
+// HasNative reports whether the service declares at least one native binary, i.e. it
+// can be run as a supervised native child process (by the NativeProcessProvider)
+// instead of, or in addition to, a Docker container. It is the native counterpart of
+// the "has a Docker image" check that drives ManualOnly and runtime routing.
+func (s Service) HasNative() bool {
+	return len(s.Native.Binaries) > 0
+}
+
+// NativeBinaryFor returns the native binary declared for the given GOOS/GOARCH (as in
+// Go's runtime.GOOS/GOARCH), and whether one exists. It is used both by the runtime
+// provider (to pick the artifact to download) and by routing (to prefer native only
+// when this host actually has a native binary available).
+func (s Service) NativeBinaryFor(goos, goarch string) (NativeBinary, bool) {
+	for _, b := range s.Native.Binaries {
+		if b.OS == goos && b.Arch == goarch {
+			return b, true
+		}
+	}
+	return NativeBinary{}, false
+}
+
 func Load() (*Catalog, error) {
 	root, err := locateServicesDir()
 	if err != nil {
@@ -142,7 +195,11 @@ func Load() (*Catalog, error) {
 			return nil
 		}
 		svc.SourcePath = path
-		svc.ManualOnly = svc.Docker.Image == ""
+		// A service is tracked manually (no local lifecycle) only when it has neither a
+		// Docker image nor a native binary. Having a native: block makes it deployable
+		// via the NativeProcessProvider even with no image, so native-only services are
+		// not manual-only. Docker-backed services (image set) are unaffected.
+		svc.ManualOnly = svc.Docker.Image == "" && !svc.HasNative()
 		services = append(services, svc)
 		return nil
 	})
@@ -227,7 +284,11 @@ func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
 			return nil
 		}
 		svc.SourcePath = path
-		svc.ManualOnly = svc.Docker.Image == ""
+		// A service is tracked manually (no local lifecycle) only when it has neither a
+		// Docker image nor a native binary. Having a native: block makes it deployable
+		// via the NativeProcessProvider even with no image, so native-only services are
+		// not manual-only. Docker-backed services (image set) are unaffected.
+		svc.ManualOnly = svc.Docker.Image == "" && !svc.HasNative()
 		services = append(services, svc)
 		return nil
 	})

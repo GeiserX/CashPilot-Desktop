@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	goruntime "runtime"
 	"sort"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -18,6 +19,11 @@ import (
 // unchanged while giving the app a registry that can hold more than one runtime
 // (e.g. a future native process runtime) later.
 const defaultRuntimeKind = "existing-docker"
+
+// nativeRuntimeKind is the registry key the NativeProcessProvider registers under. A
+// service that declares a native binary for THIS host is routed here (see
+// kindForService); image-only services stay on the Docker default.
+const nativeRuntimeKind = runtime.NativeRuntimeKind
 
 // Manager owns the runtime provider registry and reconciles it against the store.
 // providers is keyed by runtime kind; defaultKind is the kind used when a
@@ -41,6 +47,30 @@ func NewManager(provider runtime.Provider, cat *catalog.Catalog, st *store.Store
 		catalog:     cat,
 		store:       st,
 	}
+}
+
+// Register adds a provider under the given runtime kind. It is the registration point
+// the app uses to plug in additional runtimes (e.g. the native process runtime) after
+// construction. Call it during Startup before the manager is shared with background
+// reconciliation goroutines; it is not synchronized against a running Refresh.
+func (m *Manager) Register(kind string, provider runtime.Provider) {
+	m.providers[kind] = provider
+}
+
+// kindForService picks the runtime kind a service should deploy onto. A service that
+// declares a native binary for THIS host (GOOS/GOARCH) is preferred onto the native
+// runtime when that provider is registered; every other service — image-only, or with
+// no native binary for this platform — resolves to the default Docker runtime. This is
+// the minimal, documented native-vs-docker selection for Phase 2: it never routes an
+// image service away from Docker, and it is a no-op when the native provider is absent
+// (e.g. single-runtime tests), so Docker routing is unchanged there.
+func (m *Manager) kindForService(svc catalog.Service) string {
+	if _, ok := m.providers[nativeRuntimeKind]; ok {
+		if _, has := svc.NativeBinaryFor(goruntime.GOOS, goruntime.GOARCH); has {
+			return nativeRuntimeKind
+		}
+	}
+	return ""
 }
 
 // resolveProvider returns the provider registered for kind together with the kind
@@ -82,13 +112,13 @@ func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[strin
 		return store.Deployment{}, err
 	}
 
-	// A future phase will pick the kind from the service/config; today every
-	// service deploys to the default runtime. Resolve it and record whatever kind
-	// actually served the deploy, so the persisted Runtime is derived rather than a
-	// hardcoded literal (still "existing-docker" while Docker is the only runtime).
-	provider, runtimeKind := m.resolveProvider("")
+	// Route the service to its runtime: native when it declares a native binary for
+	// this host and the native provider is registered, else the default Docker
+	// runtime. Record whatever kind actually served the deploy so the persisted
+	// Runtime is derived rather than a hardcoded literal.
+	provider, runtimeKind := m.resolveProvider(m.kindForService(svc))
 
-	m.store.RecordEvent(slug, "pull_start", svc.Docker.Image)
+	m.store.RecordEvent(slug, "pull_start", deploySource(svc, runtimeKind))
 	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
 	})
@@ -266,14 +296,30 @@ func (m *Manager) Refresh(ctx context.Context) ([]store.Deployment, error) {
 	return m.store.ListDeployments(), nil
 }
 
+// deploySource returns the human-facing source recorded in the pull_start event: the
+// pinned native binary URL when deploying natively, otherwise the Docker image.
+func deploySource(svc catalog.Service, runtimeKind string) string {
+	if runtimeKind == nativeRuntimeKind {
+		if bin, ok := svc.NativeBinaryFor(goruntime.GOOS, goruntime.GOARCH); ok {
+			return bin.URL
+		}
+	}
+	return svc.Docker.Image
+}
+
+// validateRequired checks that every required credential is supplied, across both the
+// Docker and native env declarations, so a native-only service's required fields are
+// enforced too. A required key missing from either declaration (with no default) fails.
 func validateRequired(svc catalog.Service, credentials map[string]string) error {
-	for _, item := range svc.Docker.Env {
-		if item.Required && credentials[item.Key] == "" && item.Default == "" {
-			label := item.Label
-			if label == "" {
-				label = item.Key
+	for _, list := range [][]catalog.EnvVar{svc.Docker.Env, svc.Native.Env} {
+		for _, item := range list {
+			if item.Required && credentials[item.Key] == "" && item.Default == "" {
+				label := item.Label
+				if label == "" {
+					label = item.Key
+				}
+				return fmt.Errorf("missing required field: %s", label)
 			}
-			return fmt.Errorf("missing required field: %s", label)
 		}
 	}
 	return nil
