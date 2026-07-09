@@ -99,3 +99,65 @@ docker:
 		t.Fatalf("expected empty resources for a service without the block, got %+v", pr)
 	}
 }
+
+// TestLoadEmbeddedParsesNativeBlock verifies the optional native: block parses, that a
+// native-only service (no Docker image) is NOT manual-only, that HasNative reports it,
+// and that NativeBinaryFor selects by OS/arch.
+func TestLoadEmbeddedParsesNativeBlock(t *testing.T) {
+	fsys := fstest.MapFS{
+		"services/bandwidth/nativeonly.yml": {
+			Data: []byte(`
+name: Native Only
+slug: native-only
+category: bandwidth
+status: active
+native:
+  binaries:
+    - os: linux
+      arch: amd64
+      url: "https://example.com/tool_linux_amd64.tar.gz"
+      sha256: "abc123"
+      archive: tar.gz
+      bin: "tool"
+    - os: darwin
+      arch: arm64
+      url: "https://example.com/tool_darwin_arm64.tar.gz"
+      sha256: "def456"
+      archive: tar.gz
+      bin: "tool"
+  command: "--flag ${TOKEN} run"
+  env:
+    - key: TOKEN
+      required: true
+`),
+		},
+	}
+
+	cat, err := LoadEmbedded(fsys)
+	if err != nil {
+		t.Fatalf("LoadEmbedded returned error: %v", err)
+	}
+	svc, ok := cat.Get("native-only")
+	if !ok {
+		t.Fatal("expected native-only service")
+	}
+	if !svc.HasNative() {
+		t.Fatal("HasNative should be true for a service with a native block")
+	}
+	if svc.ManualOnly {
+		t.Fatal("a native-capable service must not be manual-only")
+	}
+	if len(svc.Native.Binaries) != 2 {
+		t.Fatalf("expected 2 native binaries, got %d", len(svc.Native.Binaries))
+	}
+	if svc.Native.Command != "--flag ${TOKEN} run" {
+		t.Fatalf("unexpected native command: %q", svc.Native.Command)
+	}
+	bin, ok := svc.NativeBinaryFor("darwin", "arm64")
+	if !ok || bin.URL != "https://example.com/tool_darwin_arm64.tar.gz" {
+		t.Fatalf("NativeBinaryFor(darwin,arm64) = %+v ok=%v", bin, ok)
+	}
+	if _, ok := svc.NativeBinaryFor("windows", "amd64"); ok {
+		t.Fatal("NativeBinaryFor should report no binary for an undeclared os/arch")
+	}
+}

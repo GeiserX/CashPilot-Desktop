@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -83,6 +85,36 @@ func newTestCatalog(t *testing.T) *catalog.Catalog {
 	fsys := fstest.MapFS{
 		"services/bandwidth/example.yml": {Data: []byte(exampleServiceYAML)},
 		"services/manual/manual.yml":     {Data: []byte(manualServiceYAML)},
+	}
+	cat, err := catalog.LoadEmbedded(fsys)
+	if err != nil {
+		t.Fatalf("LoadEmbedded error: %v", err)
+	}
+	return cat
+}
+
+// newNativeTestCatalog builds a catalog with an image-only service and a native-only
+// service whose binary matches the current host, so native-vs-docker routing can be
+// exercised deterministically on any CI arch.
+func newNativeTestCatalog(t *testing.T) *catalog.Catalog {
+	t.Helper()
+	nativeYAML := fmt.Sprintf(`name: Native Example
+slug: native-example
+category: bandwidth
+status: active
+native:
+  binaries:
+    - os: %s
+      arch: %s
+      url: "https://example.test/native-example"
+      sha256: "%s"
+      archive: none
+      bin: "nativestub"
+  command: ""
+`, goruntime.GOOS, goruntime.GOARCH, strings.Repeat("0", 64))
+	fsys := fstest.MapFS{
+		"services/bandwidth/example.yml": {Data: []byte(exampleServiceYAML)},
+		"services/bandwidth/native.yml":  {Data: []byte(nativeYAML)},
 	}
 	cat, err := catalog.LoadEmbedded(fsys)
 	if err != nil {
@@ -337,6 +369,66 @@ func TestResolveProviderFallsBackAndResolves(t *testing.T) {
 	m.providers["native-process"] = native
 	if p, kind := m.resolveProvider("native-process"); p != native || kind != "native-process" {
 		t.Fatalf("registered kind should resolve to its own provider, got kind=%q", kind)
+	}
+}
+
+// TestKindForServiceRoutesNativeWhenAvailable pins the native-vs-docker selection: a
+// service with a native binary for this host routes native only once the native
+// provider is registered; an image-only service always stays on the Docker default.
+func TestKindForServiceRoutesNativeWhenAvailable(t *testing.T) {
+	st := newTestStore(t)
+	m := NewManager(&fakeProvider{}, newNativeTestCatalog(t), st)
+
+	nativeSvc, ok := m.catalog.Get("native-example")
+	if !ok {
+		t.Fatal("native-example missing from catalog")
+	}
+	imageSvc, ok := m.catalog.Get("example")
+	if !ok {
+		t.Fatal("example missing from catalog")
+	}
+
+	// No native provider registered yet: everything resolves to the default kind.
+	if k := m.kindForService(nativeSvc); k != "" {
+		t.Fatalf("with no native provider, want default kind, got %q", k)
+	}
+
+	m.Register(nativeRuntimeKind, &fakeProvider{})
+	if k := m.kindForService(nativeSvc); k != nativeRuntimeKind {
+		t.Fatalf("native-capable service should route to %q, got %q", nativeRuntimeKind, k)
+	}
+	if k := m.kindForService(imageSvc); k != "" {
+		t.Fatalf("image-only service must stay on Docker (default), got %q", k)
+	}
+}
+
+// TestDeployRoutesNativeServiceToNativeProvider proves a native-capable service is
+// deployed by the native provider and its Runtime persisted as "native", while Docker
+// routing for image services is untouched.
+func TestDeployRoutesNativeServiceToNativeProvider(t *testing.T) {
+	st := newTestStore(t)
+	docker := &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "docker-cid", Status: "running"}}
+	native := &fakeProvider{deployResult: runtime.ContainerInfo{
+		ContainerID: "12345",
+		Name:        "cashpilot-native-example",
+		Image:       "https://example.test/native-example",
+		Status:      "running",
+	}}
+	m := NewManager(docker, newNativeTestCatalog(t), st)
+	m.Register(nativeRuntimeKind, native)
+
+	dep, err := m.Deploy(context.Background(), "native-example", nil)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if dep.Runtime != nativeRuntimeKind {
+		t.Fatalf("deploy Runtime = %q, want %q", dep.Runtime, nativeRuntimeKind)
+	}
+	if dep.ContainerID != "12345" {
+		t.Fatalf("expected the native provider to serve the deploy, got ContainerID %q", dep.ContainerID)
+	}
+	if stored, ok, _ := st.GetDeployment("native-example"); !ok || stored.Runtime != nativeRuntimeKind {
+		t.Fatalf("stored runtime = %q ok=%v, want %q", stored.Runtime, ok, nativeRuntimeKind)
 	}
 }
 

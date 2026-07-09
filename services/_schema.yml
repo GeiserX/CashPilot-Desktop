@@ -39,6 +39,22 @@
 #                           container, positive makes the kernel kill it first under memory pressure)
 #   setup: "" (optional, one-time setup instructions/commands to run before first deploy)
 
+# native:  (optional, additive — how to run this service as a supervised NATIVE child
+#           process with no container runtime. A service may declare docker:, native:,
+#           or both; native is preferred on hosts that have a matching binary.)
+#   binaries:  (one pinned download per OS/arch)
+#     - os: darwin        # darwin | linux | windows (matches Go's runtime.GOOS)
+#       arch: arm64       # amd64 | arm64 (matches Go's runtime.GOARCH)
+#       url: "https://.../myst_darwin_arm64.tar.gz"  # MUST be HTTPS
+#       sha256: "<64-hex>"  # SHA-256 of the downloaded artifact; MANDATORY. The
+#                           # downloader fails closed on mismatch or a missing/invalid
+#                           # value (a placeholder like "TODO-verify" never executes).
+#       archive: tar.gz   # tar.gz | zip | none  (none = the url IS the raw binary)
+#       bin: "myst"       # path to the executable inside the archive (e.g. "myst.exe")
+#   command: ""  (arg template for the binary; tokenized then ${VAR}-substituted with
+#                 env, argv-only/no-shell — same safe path as docker.command)
+#   env: []  (same shape as docker.env; resolved + passed to the process environment)
+
 # requirements:
 #   residential_ip: true/false
 #   vps_ip: true/false  (default: opposite of residential_ip)

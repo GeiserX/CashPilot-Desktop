@@ -31,6 +31,7 @@ type App struct {
 	catalog    *catalog.Catalog
 	store      *store.Store
 	runtime    runtime.Provider
+	native     runtime.Provider
 	services   *services.Manager
 	collectors collectorRegistry
 	exchange   *exchange.Service
@@ -91,7 +92,9 @@ func (a *App) Startup(ctx context.Context) {
 	a.catalog = cat
 
 	a.runtime = runtime.NewDockerProvider()
+	a.native = runtime.NewNativeProcessProvider(cfg.AppDir())
 	a.services = services.NewManager(a.runtime, a.catalog, a.store)
+	a.services.Register(runtime.NativeRuntimeKind, a.native)
 	a.collectors = collectors.NewRegistry(a.store)
 
 	// Exchange rates power the earnings summary. Kick a best-effort initial fetch

@@ -30,6 +30,41 @@ docker:
     mem_limit: "768m"
     oom_score_adj: -100
 
+# Native (no-Docker) execution: run the official Mysterium headless node binary as a
+# supervised child process. Pinned to release 1.38.5; sha256 is the SHA-256 of each
+# published release artifact. There is no linux/arm64 tarball upstream (only .deb), so
+# arm64 Linux hosts fall back to the docker: image above. The launch args mirror the
+# docker command (loopback UI + Tequila API on :4449, terms accepted) so the earnings
+# collector at http://localhost:4449/tequilapi still works unchanged.
+native:
+  binaries:
+    - os: darwin
+      arch: amd64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_darwin_amd64.tar.gz"
+      sha256: "979d37b9d29d2a078fab1afeeb2adb22b8a7d1cba0df6b655a23da7938bb632d"
+      archive: tar.gz
+      bin: "myst"
+    - os: darwin
+      arch: arm64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_darwin_arm64.tar.gz"
+      sha256: "f8f96ec89f91d19c4e70cd8d7a4009f7a8422f818a50c2ba26b851fa39d0a3cd"
+      archive: tar.gz
+      bin: "myst"
+    - os: linux
+      arch: amd64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_linux_amd64.tar.gz"
+      sha256: "79b0aa1ca846cfa02ff8a814828a18d9fba739698295054e13cafb6a74907554"
+      archive: tar.gz
+      bin: "myst"
+    - os: windows
+      arch: amd64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_windows_amd64.zip"
+      sha256: "3ebecba44637462351ebf8fe62794db83088345fb5f8dd75a455bea0f762fc44"
+      archive: zip
+      bin: "myst.exe"
+  command: "--ui.address=127.0.0.1 --tequilapi.address=127.0.0.1 service --agreed-terms-and-conditions"
+  env: []
+
 requirements:
   residential_ip: false
   devices_per_ip: 0
