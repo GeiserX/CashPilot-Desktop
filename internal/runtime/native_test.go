@@ -63,6 +63,16 @@ func runNativeStub() {
 		}
 		os.Exit(0)
 	}
+	// Busy mode: burn CPU on one core so a test can prove Percent() reports real current
+	// load (not the ~0 a just-launched process's lifetime average shows). Async-preemptible
+	// (Go 1.14+) and still terminated via the supervisor's SIGTERM/SIGKILL stop path.
+	if os.Getenv("CASHPILOT_STUB_SPIN") == "1" {
+		x := 0
+		for {
+			x++
+			_ = x
+		}
+	}
 	// Stay alive until the supervisor signals/kills us (default SIGTERM disposition
 	// terminates the process on Unix; Windows relies on Kill after the grace period).
 	select {}
@@ -118,6 +128,7 @@ func newTestNativeProvider(t *testing.T) *NativeProcessProvider {
 	p.backoffMax = 40 * time.Millisecond
 	p.maxRestarts = 20
 	p.stopTimeout = 3 * time.Second
+	p.cpuStatInterval = 1 * time.Millisecond // keep List's CPU sampling near-instant in tests
 	return p
 }
 
@@ -1081,6 +1092,36 @@ func TestExitDetail(t *testing.T) {
 	waitErr := cmd.Run()
 	if got := exitDetail(waitErr); !strings.Contains(got, "exit status 3") {
 		t.Errorf("exitDetail(exit-3) = %q, want contains 'exit status 3'", got)
+	}
+}
+
+// TestNativeStatsReportsLiveCPU proves the two-sample CPU fix: a busy native process is
+// reported with CPU% > 0. The old single-shot CPUPercent() returned a lifetime average
+// that reads ~0 right after launch, so this both covers the sampling path and guards the
+// regression. A real sampling window is used (the test helper otherwise sets ~0).
+func TestNativeStatsReportsLiveCPU(t *testing.T) {
+	p := newTestNativeProvider(t)
+	p.cpuStatInterval = 100 * time.Millisecond // a window wide enough to measure load
+	art := stubBinaryBytes(t)
+	url := serveArtifact(t, p, art)
+	svc := nativeService("spin", url, sha256hex(art), "none")
+	env := map[string]string{"CASHPILOT_NATIVE_STUB": "1", "CASHPILOT_STUB_SPIN": "1"}
+
+	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "spin", Service: svc, Env: env}, nil); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "spin") })
+
+	var cpu float64
+	if !waitFor(t, 8*time.Second, func() bool {
+		ci, ok := listEntry(t, p, "spin")
+		if ok && ci.Status == "running" && ci.CPUPercent > 0 {
+			cpu = ci.CPUPercent
+			return true
+		}
+		return false
+	}) {
+		t.Fatalf("busy native process never reported CPU%% > 0 (last %.2f)", cpu)
 	}
 }
 
