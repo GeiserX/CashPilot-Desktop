@@ -26,7 +26,7 @@ import {
   StartService,
   StopService,
 } from "../wailsjs/go/main/App";
-import type { AppState, DailyPoint, Deployment, FleetState, InstallGuide, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
+import type { AppState, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -237,7 +237,7 @@ function renderDashboard(current: AppState) {
             </div>
           </div>
           <div class="services-table-wrap">
-            ${renderServicesTable(services, deployments, earnings)}
+            ${renderServicesTable(services, deployments, earnings, current.health)}
           </div>
         </section>
         <pre id="service-output" class="output dashboard-output"></pre>
@@ -793,7 +793,25 @@ function renderEarningBreakdown(item: ServiceEarning, displayCurrency: string) {
   `;
 }
 
-function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[]) {
+// renderHealthBadge renders a compact, color-coded pill for a deployed service's
+// rolling health: the 0-100 score plus uptime%. Colour tracks the score — green
+// >= 80, amber 50-79, red < 50 — reusing the theme's own status variables. A
+// service with no health entry yet (nothing scored) renders nothing rather than a
+// misleading 0/NaN badge. The title surfaces the raw lifecycle counts behind it.
+function renderHealthBadge(health: HealthScore | undefined): string {
+  if (!health) return "";
+  const score = Math.round(health.score);
+  const uptime = Math.round(health.uptimePercent);
+  const tone = score >= 80
+    ? "color: var(--success); background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.32);"
+    : score >= 50
+      ? "color: var(--warning); background: rgba(245, 158, 11, 0.14); border-color: rgba(245, 158, 11, 0.32);"
+      : "color: var(--error); background: rgba(248, 113, 113, 0.14); border-color: rgba(248, 113, 113, 0.32);";
+  const title = `Health ${score}/100 · ${uptime}% uptime · ${health.restarts} restarts · ${health.crashes} crashes · ${health.stops} stops`;
+  return `<span class="badge" style="margin-left: 6px; text-transform: none; ${tone}" title="${escapeHtml(title)}">${score} · ${uptime}% up</span>`;
+}
+
+function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null) {
   if (deployments.length === 0) {
     return `
       <div class="empty-state">
@@ -826,7 +844,7 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
                 <strong>${escapeHtml(service?.name || deployment.slug)}</strong>
                 <small>${escapeHtml(deployment.image)}</small>
               </td>
-              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span></td>
+              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}</td>
               <td>${earning && !earning.error ? formatBalance(earning.balance, earning.currency) : "<span class=\"muted\">--</span>"}</td>
               <td>${deployment.cpuPercent.toFixed(1)}%</td>
               <td>${deployment.memoryMb.toFixed(0)} MB</td>
