@@ -37,6 +37,23 @@ type AppConfig struct {
 	// fleet bind address (loopback by default) with no authentication, matching the
 	// Prometheus scraping convention.
 	MetricsEnabled bool `json:"metricsEnabled"`
+	// WorkerURLPolicy selects how the SSRF worker-URL validator (internal/fleetnet)
+	// classifies a remote worker endpoint before the desktop makes an authenticated
+	// request to it. One of "strict" (only WorkerAllowedHosts), "private" (RFC1918 +
+	// Tailscale CGNAT 100.64.0.0/10 + IPv6 ULA fc00::/7 + the allowlist — the sensible
+	// homelab default), or "public" (any non-loopback/link-local/metadata/unspecified
+	// address). Defaults to "private" via applyDefaults.
+	WorkerURLPolicy string `json:"workerUrlPolicy"`
+	// WorkerAllowedHosts is an explicit allowlist of worker hosts/IPs. It is the sole
+	// allow-source in "strict" mode and is always honored in the other modes. Entries
+	// may be an exact hostname, a "*.suffix" DNS suffix (e.g. Tailscale MagicDNS
+	// "*.mango-alpha.ts.net"), a CIDR, or a literal IP. Defaults to empty (nil).
+	WorkerAllowedHosts []string `json:"workerAllowedHosts"`
+	// WorkerAllowMetadata, when false (the default, the bool zero value), makes the
+	// cloud instance-metadata endpoints (169.254.169.254, fd00:ec2::254,
+	// metadata.google.internal) ALWAYS blocked regardless of policy or allowlist.
+	// Setting it true is the only way to reach a metadata address and should be rare.
+	WorkerAllowMetadata bool `json:"workerAllowMetadata"`
 }
 
 type Manager struct {
@@ -74,6 +91,9 @@ func applyDefaults(cfg AppConfig) AppConfig {
 	}
 	if cfg.FleetPort <= 0 {
 		cfg.FleetPort = 8085
+	}
+	if cfg.WorkerURLPolicy == "" {
+		cfg.WorkerURLPolicy = "private"
 	}
 	return cfg
 }
