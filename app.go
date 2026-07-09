@@ -260,6 +260,17 @@ type FleetState struct {
 	MobileSnippet string              `json:"mobileSnippet"`
 }
 
+// Fleet device lifecycle tunables, matching production CashPilot. A worker/mobile that
+// stops sending heartbeats is flipped offline once it has been silent longer than
+// fleetOfflineAfter (the ~3-missed-heartbeat grace), and a device offline longer than
+// fleetReapAfter is removed entirely. collectAll's background sweep applies both to the
+// DB; GetFleetState additionally uses fleetOfflineAfter to show a silent device as
+// offline immediately, without waiting for the next tick.
+const (
+	fleetOfflineAfter = 180 * time.Second
+	fleetReapAfter    = 1 * time.Hour
+)
+
 func (a *App) GetAppState() (AppState, error) {
 	if err := a.ready(); err != nil {
 		return AppState{}, err
@@ -628,13 +639,18 @@ func (a *App) GetFleetState() (FleetState, error) {
 	}
 	devices = append([]store.FleetDevice{local}, devices...)
 	workers, mobiles, online := 0, 0, 0
-	for _, device := range devices {
-		if device.Kind == "mobile" {
+	for i := range devices {
+		// Reflect the offline grace on the read path so opening the Fleet view is
+		// accurate between scheduler ticks: a device silent longer than
+		// fleetOfflineAfter shows offline immediately. This adjusts only the returned
+		// value — the actual DB flip and reap happen in collectAll's background sweep.
+		devices[i].Status = store.EffectiveFleetStatus(devices[i].Status, devices[i].LastSeen, fleetOfflineAfter)
+		if devices[i].Kind == "mobile" {
 			mobiles++
 		} else {
 			workers++
 		}
-		if device.Status == "online" {
+		if devices[i].Status == "online" {
 			online++
 		}
 	}
@@ -954,6 +970,18 @@ func (a *App) collectAll(ctx context.Context) {
 	// abort the cycle: log it and carry on, the next cycle simply retries.
 	if _, err := a.store.PurgeOldData(a.retentionDays()); err != nil {
 		a.emitError("store", err)
+	}
+
+	// Age silent fleet devices out of the online set and reap long-dead ones so
+	// GetFleetState stops reporting a device online forever: a worker/mobile that has
+	// missed heartbeats past fleetOfflineAfter is flipped offline, and one offline past
+	// fleetReapAfter is deleted. a.store is non-nil here (guarded at entry) but keep the
+	// nil-guard defensively; a sweep failure must not abort the cycle — log it and
+	// continue, the next cycle simply retries.
+	if a.store != nil {
+		if _, _, err := a.store.SweepStaleFleetDevices(fleetOfflineAfter, fleetReapAfter); err != nil {
+			a.emitError("fleet", err)
+		}
 	}
 }
 

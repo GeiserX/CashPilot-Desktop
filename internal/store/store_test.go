@@ -305,6 +305,101 @@ func TestFleetHeartbeatRequiresName(t *testing.T) {
 	}
 }
 
+// TestSweepStaleFleetDevices pins the fleet device lifecycle: a device silent longer
+// than offlineAfter is flipped online->offline (counted as offlined), a device already
+// offline and silent longer than reapAfter is deleted (counted as reaped), a fresh
+// device stays online, and a device offline but NOT yet past the reap window survives
+// untouched. It also proves ListFleetDevices reflects the post-sweep state and that a
+// second sweep is a no-op.
+func TestSweepStaleFleetDevices(t *testing.T) {
+	s := openTestStore(t)
+
+	now := time.Now().UTC()
+	rfc := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339) }
+
+	// fresh: online, last seen now -> must stay online.
+	if _, err := s.UpsertFleetHeartbeat(FleetDevice{Name: "fresh", LastSeen: rfc(0)}); err != nil {
+		t.Fatalf("seed fresh error: %v", err)
+	}
+	// stale-online: online but silent ~5 min -> must flip to offline (offlined).
+	if _, err := s.UpsertFleetHeartbeat(FleetDevice{Name: "stale-online", LastSeen: rfc(-5 * time.Minute)}); err != nil {
+		t.Fatalf("seed stale-online error: %v", err)
+	}
+	// recent-offline: already offline but silent only ~5 min -> survives (not past reap).
+	if _, err := s.UpsertFleetDevice(FleetDevice{Name: "recent-offline", Status: "offline", LastSeen: rfc(-5 * time.Minute)}); err != nil {
+		t.Fatalf("seed recent-offline error: %v", err)
+	}
+	// long-dead: offline and silent ~2 h -> must be reaped.
+	if _, err := s.UpsertFleetDevice(FleetDevice{Name: "long-dead", Status: "offline", LastSeen: rfc(-2 * time.Hour)}); err != nil {
+		t.Fatalf("seed long-dead error: %v", err)
+	}
+
+	offlined, reaped, err := s.SweepStaleFleetDevices(180*time.Second, time.Hour)
+	if err != nil {
+		t.Fatalf("SweepStaleFleetDevices error: %v", err)
+	}
+	if offlined != 1 {
+		t.Fatalf("offlined = %d, want 1 (only stale-online flips)", offlined)
+	}
+	if reaped != 1 {
+		t.Fatalf("reaped = %d, want 1 (only long-dead is deleted)", reaped)
+	}
+
+	byName := map[string]FleetDevice{}
+	for _, d := range s.ListFleetDevices() {
+		byName[d.Name] = d
+	}
+	if len(byName) != 3 {
+		t.Fatalf("expected 3 devices after sweep, got %d: %+v", len(byName), byName)
+	}
+	if d, ok := byName["long-dead"]; ok {
+		t.Fatalf("long-dead should have been reaped, still present: %+v", d)
+	}
+	if d, ok := byName["fresh"]; !ok || d.Status != "online" {
+		t.Fatalf("fresh should remain online, got %+v (present=%v)", d, ok)
+	}
+	if d, ok := byName["stale-online"]; !ok || d.Status != "offline" {
+		t.Fatalf("stale-online should be flipped offline, got %+v (present=%v)", d, ok)
+	}
+	if d, ok := byName["recent-offline"]; !ok || d.Status != "offline" {
+		t.Fatalf("recent-offline should survive as offline, got %+v (present=%v)", d, ok)
+	}
+
+	// Idempotent: nothing new to age out on a second sweep.
+	offlined, reaped, err = s.SweepStaleFleetDevices(180*time.Second, time.Hour)
+	if err != nil {
+		t.Fatalf("second SweepStaleFleetDevices error: %v", err)
+	}
+	if offlined != 0 || reaped != 0 {
+		t.Fatalf("second sweep should be a no-op, got offlined=%d reaped=%d", offlined, reaped)
+	}
+}
+
+// TestEffectiveFleetStatus pins the read-path display helper GetFleetState uses so the
+// Fleet view is accurate between background sweeps: a fresh online device stays online,
+// an online device silent past the threshold shows offline, an unparseable/empty
+// last_seen leaves the status unchanged, and a non-online status is returned verbatim.
+func TestEffectiveFleetStatus(t *testing.T) {
+	now := time.Now().UTC()
+	const threshold = 180 * time.Second
+
+	if got := EffectiveFleetStatus("online", now.Format(time.RFC3339), threshold); got != "online" {
+		t.Fatalf("fresh online: got %q, want online", got)
+	}
+	if got := EffectiveFleetStatus("online", now.Add(-5*time.Minute).Format(time.RFC3339), threshold); got != "offline" {
+		t.Fatalf("stale online: got %q, want offline", got)
+	}
+	if got := EffectiveFleetStatus("online", "not connected yet", threshold); got != "online" {
+		t.Fatalf("unparseable last_seen: got %q, want unchanged online", got)
+	}
+	if got := EffectiveFleetStatus("online", "", threshold); got != "online" {
+		t.Fatalf("empty last_seen: got %q, want unchanged online", got)
+	}
+	if got := EffectiveFleetStatus("offline", now.Format(time.RFC3339), threshold); got != "offline" {
+		t.Fatalf("already offline: got %q, want offline", got)
+	}
+}
+
 func TestDeploymentRoundTrip(t *testing.T) {
 	s := openTestStore(t)
 

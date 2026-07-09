@@ -527,6 +527,62 @@ func (s *Store) DeleteFleetDevice(id int64) error {
 	return err
 }
 
+// SweepStaleFleetDevices ages fleet devices out of the online set as heartbeats stop
+// arriving, mirroring production CashPilot's device lifecycle: a device whose last_seen
+// is older than offlineAfter is flipped to "offline" (the ~180s / 3-missed-heartbeat
+// grace), and one already "offline" whose last_seen is older than reapAfter is deleted
+// (the ~1h reap). It returns how many rows were offlined and how many were reaped.
+//
+// last_seen is written by UpsertFleetHeartbeat / fleet_server as an RFC3339 timestamp
+// WITHOUT a fractional part, so it is fixed-length and UTC; formatting the cutoffs the
+// same way makes the lexicographic string comparison a correct chronological order. A
+// non-timestamp placeholder such as AddFleetDevice's "not connected yet" sorts above
+// any real cutoff, so a never-connected device is never swept.
+func (s *Store) SweepStaleFleetDevices(offlineAfter, reapAfter time.Duration) (offlined int64, reaped int64, err error) {
+	now := time.Now().UTC()
+	offlineCutoff := now.Add(-offlineAfter).Format(time.RFC3339)
+	reapCutoff := now.Add(-reapAfter).Format(time.RFC3339)
+
+	offRes, err := s.db.Exec(`
+		UPDATE fleet_devices SET status = 'offline', updated_at = datetime('now')
+		WHERE status != 'offline' AND last_seen < ?
+	`, offlineCutoff)
+	if err != nil {
+		return 0, 0, err
+	}
+	offlined, _ = offRes.RowsAffected()
+
+	reapRes, err := s.db.Exec(`
+		DELETE FROM fleet_devices WHERE status = 'offline' AND last_seen < ?
+	`, reapCutoff)
+	if err != nil {
+		return offlined, 0, err
+	}
+	reaped, _ = reapRes.RowsAffected()
+	return offlined, reaped, nil
+}
+
+// EffectiveFleetStatus returns the status a fleet device should DISPLAY given how long
+// ago it last checked in. It is the read-path sibling of SweepStaleFleetDevices' SQL:
+// an "online" device whose lastSeen is older than threshold is shown as "offline"
+// immediately, so the Fleet view is accurate between scheduler ticks without the read
+// path ever mutating storage. lastSeen is parsed as RFC3339 (the format the heartbeat
+// writes); a value that does not parse (e.g. AddFleetDevice's "not connected yet", or
+// an empty last_seen) leaves the status unchanged, as does any non-"online" status.
+func EffectiveFleetStatus(status, lastSeen string, threshold time.Duration) string {
+	if status != "online" {
+		return status
+	}
+	seen, err := time.Parse(time.RFC3339, lastSeen)
+	if err != nil {
+		return status
+	}
+	if time.Since(seen) > threshold {
+		return "offline"
+	}
+	return status
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
