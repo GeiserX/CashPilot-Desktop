@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	stdruntime "runtime"
 	"sort"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/bgservice"
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
@@ -1328,4 +1330,56 @@ func (a *App) emitEvent(name string, data ...interface{}) {
 		return
 	}
 	wailsruntime.EventsEmit(a.ctx, name, data...)
+}
+
+// --- Background helper (OS login-agent) registration -------------------------------
+//
+// These bind the internal/bgservice login-agent to the frontend so a later "Keep earning
+// in the background" toggle (Phase B2) can register THIS executable with the current
+// user's OS service manager to run its headless --daemon supervisor at login, restarting
+// on crash and surviving the GUI being closed — Docker-parity native supervision with no
+// admin (docs/NATIVE-SUPERVISION.md, Phase B). Installation is always explicit/
+// user-initiated; nothing here runs on startup.
+
+// InstallBackgroundHelper registers the running CashPilot binary as a per-user OS login
+// agent that runs it with --daemon (macOS LaunchAgent / Linux systemd --user unit /
+// Windows Scheduled Task).
+func (a *App) InstallBackgroundHelper() error {
+	agent, err := a.backgroundAgent()
+	if err != nil {
+		return err
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+	return agent.Install(exe, []string{"--daemon"})
+}
+
+// RemoveBackgroundHelper unregisters the login agent and removes its backing file.
+func (a *App) RemoveBackgroundHelper() error {
+	agent, err := a.backgroundAgent()
+	if err != nil {
+		return err
+	}
+	return agent.Uninstall()
+}
+
+// BackgroundHelperStatus reports whether the login agent is installed and running.
+func (a *App) BackgroundHelperStatus() (bgservice.Status, error) {
+	agent, err := a.backgroundAgent()
+	if err != nil {
+		return bgservice.Status{}, err
+	}
+	return agent.Status()
+}
+
+// backgroundAgent builds the per-OS login agent, pointing the helper's captured
+// stdout/stderr (used by the macOS plist) at a "logs" dir under the app data dir.
+func (a *App) backgroundAgent() (bgservice.Agent, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	logDir := filepath.Join(a.cfg.AppDir(), "logs")
+	return bgservice.New(bgservice.DefaultLabel, logDir), nil
 }
