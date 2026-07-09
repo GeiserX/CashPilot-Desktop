@@ -121,7 +121,13 @@ func (a *App) startCore(ctx context.Context) error {
 	a.catalog = cat
 
 	a.runtime = runtime.NewDockerProvider()
-	a.native = runtime.NewNativeProcessProvider(cfg.AppDir())
+	native := runtime.NewNativeProcessProvider(cfg.AppDir())
+	// Feed the native supervisor's autonomous crashes/respawns into the same runtime_events
+	// stream HealthScores aggregates, so native earners get the crash/restart accounting the
+	// Docker path already has. Set on the concrete provider before it is stored behind the
+	// Provider interface, and before any Deploy (no supervise goroutine exists yet).
+	native.SetEventRecorder(a.store.RecordEvent)
+	a.native = native
 	a.services = services.NewManager(a.runtime, a.catalog, a.store)
 	a.services.Register(runtime.NativeRuntimeKind, a.native)
 	a.collectors = collectors.NewRegistry(a.store)
