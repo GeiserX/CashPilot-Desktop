@@ -171,6 +171,55 @@ func (s *Store) ListCredentialSlugs() []string {
 	return out
 }
 
+// SaveServiceDetail upserts a per-service JSON detail blob keyed by slug. It is a
+// generic sidecar to the flat earnings row: any collector can stash a JSON document
+// (e.g. the MystNodes per-node earnings breakdown) alongside its balance without
+// widening the earnings schema. The blob is stored verbatim — the collector owns its
+// shape and the frontend parses it — so this method never inspects detailJSON.
+func (s *Store) SaveServiceDetail(slug, detailJSON string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO service_details(slug, detail, updated_at)
+		VALUES(?, ?, datetime('now'))
+		ON CONFLICT(slug) DO UPDATE SET detail=excluded.detail, updated_at=excluded.updated_at
+	`, slug, detailJSON)
+	return err
+}
+
+// GetServiceDetail returns the stored JSON detail blob for a slug, or "" (and no
+// error) when the slug has no detail row yet — an absent detail is a normal state,
+// not a failure, mirroring GetCredentials' empty-map-on-ErrNoRows contract.
+func (s *Store) GetServiceDetail(slug string) (string, error) {
+	var detail string
+	err := s.db.QueryRow(`SELECT detail FROM service_details WHERE slug = ?`, slug).Scan(&detail)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return detail, nil
+}
+
+// ListServiceDetails returns every stored per-service detail blob keyed by slug, so
+// GetAppState can hand the frontend all detail documents in one read. A query or scan
+// error yields an empty (non-nil) map rather than failing, matching the best-effort
+// intent of the other list methods; callers can always range over the result safely.
+func (s *Store) ListServiceDetails() map[string]string {
+	out := make(map[string]string)
+	rows, err := s.db.Query(`SELECT slug, detail FROM service_details ORDER BY slug`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug, detail string
+		if err := rows.Scan(&slug, &detail); err == nil {
+			out[slug] = detail
+		}
+	}
+	return out
+}
+
 func (s *Store) UpsertDeployment(dep Deployment) error {
 	now := time.Now().UTC()
 	if dep.CreatedAt == "" {
@@ -603,6 +652,11 @@ func (s *Store) migrate() error {
 		CREATE TABLE IF NOT EXISTS credentials (
 			slug TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS service_details (
+			slug TEXT PRIMARY KEY,
+			detail TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS deployments (

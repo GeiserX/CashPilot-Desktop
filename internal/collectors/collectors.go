@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
@@ -420,13 +421,113 @@ func (r *Registry) collectMystNodes(ctx context.Context, credentials map[string]
 	if login.AccessToken == "" {
 		return Result{}, fmt.Errorf("MystNodes login did not return an access token")
 	}
+	authHeaders := map[string]string{"Authorization": "Bearer " + login.AccessToken}
 	var earnings struct {
 		EarningsTotal float64 `json:"earningsTotal"`
 	}
-	if err := r.doJSON(ctx, "GET", "https://my.mystnodes.com/api/v2/node/total-earnings", nil, map[string]string{"Authorization": "Bearer " + login.AccessToken}, &earnings); err != nil {
+	if err := r.doJSON(ctx, "GET", "https://my.mystnodes.com/api/v2/node/total-earnings", nil, authHeaders, &earnings); err != nil {
 		return Result{}, err
 	}
+
+	// The per-node breakdown is a best-effort BONUS on top of the flat total-earnings
+	// balance: the operator runs Myst on several servers, so a per-node view is
+	// genuinely useful, but a failure here must NEVER fail the whole collect — the
+	// total Result below is the contract. It reuses the SAME bearer token (and the
+	// shared doJSON retry/backoff path); log and swallow any error (fetch, decode, or
+	// a nil store) so the total still returns.
+	if err := r.collectMystPerNode(ctx, authHeaders); err != nil {
+		log.Printf("mysterium per-node earnings unavailable (total earnings still collected): %v", err)
+	}
+
 	return Result{Platform: "mysterium", Balance: round(earnings.EarningsTotal, 4), Currency: "MYST"}, nil
+}
+
+// mystNode is one Mysterium node's per-node earnings, flattened from the MystNodes
+// cloud API's GET /api/v2/node list into the shape the dashboard renders. The
+// operator runs Myst on several servers, so this per-node breakdown is stashed —
+// marshaled to JSON — in the generic service_details store under the "mysterium"
+// slug, alongside (not replacing) the flat total-earnings balance.
+type mystNode struct {
+	Identity              string  `json:"identity"`
+	Name                  string  `json:"name"`
+	LocalIP               string  `json:"localIp"`
+	Country               string  `json:"country"`
+	Version               string  `json:"version"`
+	Online                bool    `json:"online"`
+	Earnings30dMYST       float64 `json:"earnings30dMyst"`
+	LifetimeMYST          float64 `json:"lifetimeMyst"`
+	LifetimeSettledMYST   float64 `json:"lifetimeSettledMyst"`
+	LifetimeUnsettledMYST float64 `json:"lifetimeUnsettledMyst"`
+}
+
+// collectMystPerNode fetches the per-node earnings breakdown with an already-obtained
+// bearer token and persists it as a JSON blob in the generic service_details store
+// under the "mysterium" slug. It mirrors the production collector's per-node fetch:
+// GET /api/v2/node?page=1&itemsPerPage=100, then per node maps identity, name, localIp,
+// nodeStatus.online, country.code, version, the 30-day earnings (sum of
+// earnings[].etherAmount), and the lifetimeEarnings split. It funnels through the shared
+// doJSON path, so it inherits the same retry/backoff as every other collector.
+//
+// It is deliberately best-effort: the caller (collectMystNodes) swallows the returned
+// error and still returns the flat total-earnings Result, so a missing store, a failed
+// fetch, or a decode error degrades to "no per-node detail this cycle" rather than
+// failing the whole collect. The error is returned only so the caller can log it (and
+// tests can assert on it).
+func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[string]string) error {
+	if r.store == nil {
+		return fmt.Errorf("no store configured for per-node persistence")
+	}
+	var resp struct {
+		Nodes []struct {
+			Identity   string `json:"identity"`
+			Name       string `json:"name"`
+			LocalIP    string `json:"localIp"`
+			Version    string `json:"version"`
+			NodeStatus struct {
+				Online bool `json:"online"`
+			} `json:"nodeStatus"`
+			Country struct {
+				Code string `json:"code"`
+			} `json:"country"`
+			Earnings []struct {
+				EtherAmount float64 `json:"etherAmount"`
+			} `json:"earnings"`
+			LifetimeEarnings struct {
+				TotalEther     float64 `json:"totalEther"`
+				SettledEther   float64 `json:"settledEther"`
+				UnsettledEther float64 `json:"unsettledEther"`
+			} `json:"lifetimeEarnings"`
+		} `json:"nodes"`
+	}
+	if err := r.doJSON(ctx, "GET", "https://my.mystnodes.com/api/v2/node?page=1&itemsPerPage=100", nil, authHeaders, &resp); err != nil {
+		return err
+	}
+	nodes := make([]mystNode, 0, len(resp.Nodes))
+	for _, n := range resp.Nodes {
+		// 30-day earnings is the sum of etherAmount across every service type the node
+		// earned from in the window (mirrors the production collector).
+		var earnings30d float64
+		for _, e := range n.Earnings {
+			earnings30d += e.EtherAmount
+		}
+		nodes = append(nodes, mystNode{
+			Identity:              n.Identity,
+			Name:                  n.Name,
+			LocalIP:               n.LocalIP,
+			Country:               n.Country.Code,
+			Version:               n.Version,
+			Online:                n.NodeStatus.Online,
+			Earnings30dMYST:       round(earnings30d, 6),
+			LifetimeMYST:          round(n.LifetimeEarnings.TotalEther, 6),
+			LifetimeSettledMYST:   round(n.LifetimeEarnings.SettledEther, 6),
+			LifetimeUnsettledMYST: round(n.LifetimeEarnings.UnsettledEther, 6),
+		})
+	}
+	detail, err := json.Marshal(nodes)
+	if err != nil {
+		return err
+	}
+	return r.store.SaveServiceDetail("mysterium", string(detail))
 }
 
 func (r *Registry) collectPacketStream(ctx context.Context, credentials map[string]string) (Result, error) {
