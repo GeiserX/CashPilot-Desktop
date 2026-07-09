@@ -52,6 +52,7 @@ func TestHandleMetrics(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	w := httptest.NewRecorder()
 	app.handleMetrics(w, req)
 
@@ -113,6 +114,7 @@ func TestHandleMetricsRejectsNonGet(t *testing.T) {
 func TestHandleMetricsNilStore(t *testing.T) {
 	app := &App{}
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	w := httptest.NewRecorder()
 	app.handleMetrics(w, req) // must not panic
 
@@ -120,6 +122,25 @@ func TestHandleMetricsNilStore(t *testing.T) {
 		t.Fatalf("expected 200 with a nil store, got %d", w.Code)
 	}
 	mustContain(t, w.Body.String(), "cashpilot_up 1")
+}
+
+// TestHandleMetricsRejectsNonLoopback pins that the unauthenticated /metrics
+// endpoint is loopback-only: a LAN client (non-loopback RemoteAddr) gets 403 even
+// when the fleet API is bound to a non-loopback address, so earnings/health/fleet
+// data is never exposed to the network.
+func TestHandleMetricsRejectsNonLoopback(t *testing.T) {
+	app := &App{}
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	req.RemoteAddr = "192.168.1.50:54321"
+	w := httptest.NewRecorder()
+	app.handleMetrics(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for a non-loopback /metrics scrape, got %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "cashpilot_up") {
+		t.Fatalf("metrics must not be served to a non-loopback client:\n%s", w.Body.String())
+	}
 }
 
 // TestFleetMuxGatesMetricsEndpoint pins the opt-in registration: the /metrics
@@ -140,7 +161,9 @@ func TestFleetMuxGatesMetricsEndpoint(t *testing.T) {
 	// Enabled: the route exists and serves the exposition format.
 	muxOn := app.fleetMux(true)
 	recOn := httptest.NewRecorder()
-	muxOn.ServeHTTP(recOn, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	reqOn := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	reqOn.RemoteAddr = "127.0.0.1:12345"
+	muxOn.ServeHTTP(recOn, reqOn)
 	if recOn.Code != http.StatusOK {
 		t.Fatalf("expected 200 for /metrics when metrics are enabled, got %d", recOn.Code)
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -15,18 +16,37 @@ import (
 // handleMetrics serves the opt-in Prometheus /metrics endpoint. It is registered
 // on the fleet mux only when MetricsEnabled is set (see fleetMux), so when the
 // feature is off the route does not exist (404). It is deliberately
-// UNAUTHENTICATED, per the Prometheus scraping convention: the endpoint is opt-in
-// and, like the rest of the fleet API, binds to loopback by default, so it is the
-// user's own data on their own machine. It never panics — every data source is
-// nil-guarded and the handler emits whatever it can.
+// UNAUTHENTICATED, per the Prometheus scraping convention, so it is restricted to
+// LOOPBACK callers regardless of the fleet bind address: the rest of the fleet API
+// is token-gated, but this endpoint is not, so a MetricsEnabled + FleetBindAddress
+// 0.0.0.0 configuration must not let a LAN client read earnings/health/fleet data.
+// It never panics — every data source is nil-guarded and the handler emits whatever
+// it can.
 func (a *App) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if !requestFromLoopback(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "metrics are available on loopback only"})
+		return
+	}
 	// Prometheus text exposition format, version 0.0.4.
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	_, _ = io.WriteString(w, a.renderMetrics())
+}
+
+// requestFromLoopback reports whether an HTTP request originated from the local
+// machine (127.0.0.0/8 or ::1). It keeps the unauthenticated /metrics endpoint
+// loopback-only even when the fleet API binds to a LAN address. A RemoteAddr that
+// does not parse fails closed (treated as non-loopback).
+func requestFromLoopback(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // renderMetrics builds the full Prometheus text exposition. It is split from the
