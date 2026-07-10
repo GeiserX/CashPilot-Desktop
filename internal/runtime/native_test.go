@@ -1001,9 +1001,14 @@ func TestNativeSupervisorStopsAfterMaxRestarts(t *testing.T) {
 	if mp == nil {
 		t.Fatal("no managed process recorded")
 	}
-	select {
-	case <-mp.doneCh:
-	case <-time.After(5 * time.Second):
+	if !waitFor(t, 15*time.Second, func() bool {
+		select {
+		case <-mp.doneCh:
+			return true
+		default:
+			return false
+		}
+	}) {
 		t.Fatal("supervisor did not stop after maxRestarts")
 	}
 

@@ -22,7 +22,7 @@ func applyNativeResourceLimits(cmd *exec.Cmd, res catalog.ResourceLimits) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	if maxBytes, ok := parseMemBytes(res.MemLimit); ok {
+	if maxBytes, err := parseMemoryBytes(res.MemLimit); err == nil && maxBytes > 0 {
 		_ = assignProcessMemoryLimit(cmd.Process.Pid, maxBytes)
 	}
 }

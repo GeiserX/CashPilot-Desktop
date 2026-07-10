@@ -70,7 +70,12 @@ func (a *App) renderMetrics() string {
 	// delta math is never duplicated. Values are in the configured display currency
 	// (USD by default); computeEarningsSummary is internally nil-guarded and returns
 	// an empty (all-zero) summary when its dependencies are not wired.
-	summary := a.computeEarningsSummary()
+	var summary EarningsSummary
+	if a.store != nil {
+		summary = a.computeEarningsSummary(a.store.ListLatestEarnings())
+	} else {
+		summary = a.computeEarningsSummary(nil)
+	}
 	mw.family("cashpilot_earnings_usd_total", "Total earnings across all platforms, in the display currency (USD by default).")
 	mw.sample("cashpilot_earnings_usd_total", summary.Total)
 	mw.family("cashpilot_earnings_usd_today", "Earnings accrued today, in the display currency (USD by default).")

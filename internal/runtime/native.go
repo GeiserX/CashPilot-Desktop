@@ -1227,7 +1227,7 @@ func (p *NativeProcessProvider) updatePID(mp *managedProcess) {
 		pid = cmd.Process.Pid
 	}
 	exePath, createTime := p.processIdentity(pid)
-	_ = p.mutateRegistry(func(reg *nativeRegistry) {
+	if err := p.mutateRegistry(func(reg *nativeRegistry) {
 		if e, ok := reg.Entries[mp.slug]; ok {
 			e.PID = pid
 			e.ExePath = exePath
@@ -1235,5 +1235,9 @@ func (p *NativeProcessProvider) updatePID(mp *managedProcess) {
 			e.StartedAt = time.Now().UTC().Format(time.RFC3339)
 			e.Desired = "running"
 		}
-	})
+	}); err != nil {
+		// Non-fatal: the process IS running. Note it in the service's own log so the
+		// respawn still succeeds; List will re-derive liveness from the pid next tick.
+		fmt.Fprintf(mp.log, "cashpilot: warning: could not persist native registry: %v\n", err)
+	}
 }

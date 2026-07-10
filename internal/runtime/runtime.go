@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os/exec"
 	goruntime "runtime"
 	"strconv"
@@ -642,7 +643,14 @@ func applyResourceLimits(hostConfig *container.HostConfig, res catalog.ResourceL
 // trailing "b", e.g. "768m" or "2gb") multiplies by 1024, 1024^2, 1024^3 or
 // 1024^4. So "768m" is 768*1024*1024 = 805306368 bytes and "2g" is 2147483648. A
 // fractional mantissa ("1.5g") is allowed and truncated toward zero. It returns an
-// error for an empty string, a non-positive value, or an unparseable number.
+// error for an empty string, a non-positive value, an unparseable number, or a
+// value that would overflow a 64-bit byte count.
+//
+// This is the single canonical size parser for catalog.ResourceLimits.MemLimit /
+// MemReservation, shared by both the Docker path (this file's
+// applyResourceLimits, which fails fast on error) and the native process path
+// (resource_limits_linux.go / resource_limits_windows.go, which treat an error as
+// "skip the cap" and keep the earner running best-effort).
 func parseMemoryBytes(s string) (int64, error) {
 	raw := strings.ToLower(strings.TrimSpace(s))
 	if raw == "" {
@@ -674,7 +682,14 @@ func parseMemoryBytes(s string) (int64, error) {
 	if value <= 0 {
 		return 0, fmt.Errorf("%q must be a positive size", s)
 	}
-	return int64(value * float64(multiplier)), nil
+	// Guard against overflowing a 64-bit byte count before the float->int64
+	// conversion, which would otherwise silently produce an unspecified/wrapped
+	// result for very large mantissas or unit multipliers (e.g. "1e300t").
+	bytes := value * float64(multiplier)
+	if bytes > math.MaxInt64 {
+		return 0, fmt.Errorf("%q overflows a 64-bit byte count", s)
+	}
+	return int64(bytes), nil
 }
 
 func managedContainerVolumes(ctx context.Context, cli *client.Client, name string) ([]string, error) {

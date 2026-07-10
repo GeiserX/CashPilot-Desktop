@@ -23,10 +23,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.26.x'
+          go-version: '1.26.5'
           cache: true
 
       - uses: actions/setup-node@v6
@@ -58,7 +60,7 @@ jobs:
         run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean
 
       - name: Sign Windows binaries
-        if: runner.os == 'Windows' && env.WINDOWS_SIGN_CERT != ''
+        if: runner.os == 'Windows' && secrets.WINDOWS_SIGN_CERT != ''
         env:
           WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
           WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
@@ -110,6 +112,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@v8
         with:

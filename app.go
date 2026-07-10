@@ -332,16 +332,21 @@ func (a *App) GetAppState() (AppState, error) {
 	// can proceed (and message honestly) on Docker OR native. Available keeps its
 	// Docker-only meaning; this is purely additive.
 	runtimeStatus.NativeAvailable = a.services.HasNativeRuntime()
+	// Fetch these once and thread them into the helpers below instead of letting
+	// each helper re-run its own full-table scan (they were each queried up to 3x
+	// per GetAppState call before this).
+	deployments := a.store.ListDeployments()
+	earnings := a.store.ListLatestEarnings()
 	return AppState{
 		Config:         a.cfg.Config(),
 		Runtime:        runtimeStatus,
 		Services:       a.catalog.ListVisible(),
-		Deployments:    a.store.ListDeployments(),
-		Earnings:       a.store.ListLatestEarnings(),
+		Deployments:    deployments,
+		Earnings:       earnings,
 		Guides:         runtime.InstallGuides(),
-		Notifications:  a.notifications(runtimeStatus),
+		Notifications:  a.notifications(runtimeStatus, earnings, deployments),
 		Currencies:     supportedCurrencies(),
-		Summary:        a.computeEarningsSummary(),
+		Summary:        a.computeEarningsSummary(earnings),
 		Health:         a.store.HealthScores(7),
 		ServiceDetails: a.store.ListServiceDetails(),
 	}, nil
@@ -353,7 +358,7 @@ func (a *App) GetEarningsSummary() (EarningsSummary, error) {
 	if err := a.ready(); err != nil {
 		return EarningsSummary{}, err
 	}
-	return a.computeEarningsSummary(), nil
+	return a.computeEarningsSummary(a.store.ListLatestEarnings()), nil
 }
 
 // computeEarningsSummary converts the per-service CUMULATIVE daily balances into
@@ -362,7 +367,7 @@ func (a *App) GetEarningsSummary() (EarningsSummary, error) {
 // points (e.g. GRASS) are surfaced separately and never summed. It is
 // stale-graceful: missing rates simply drop a service from the total and set
 // RatesStale, rather than erroring.
-func (a *App) computeEarningsSummary() EarningsSummary {
+func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSummary {
 	disp := "USD"
 	if a.cfg != nil {
 		if c := a.cfg.Config().DisplayCurrency; c != "" {
@@ -537,7 +542,7 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 
 	// Breakdown = every service's latest record, INCLUDING error rows so the UI
 	// keeps a "needs attention" chip.
-	for _, rec := range a.store.ListLatestEarnings() {
+	for _, rec := range earnings {
 		se := ServiceEarning{
 			Platform: rec.Platform,
 			Name:     rec.Platform,
@@ -1197,7 +1202,7 @@ func (a *App) ManagedRuntimePlan() runtime.ManagedRuntimePlan {
 	return runtime.ManagedRuntimeRoadmap()
 }
 
-func (a *App) notifications(status runtime.Status) []Notification {
+func (a *App) notifications(status runtime.Status, earnings []store.EarningsRecord, deployments []store.Deployment) []Notification {
 	var items []Notification
 	// Only warn that the runtime is offline when NEITHER Docker nor the always-on
 	// native runtime can run anything. With native available the app works without
@@ -1205,12 +1210,12 @@ func (a *App) notifications(status runtime.Status) []Notification {
 	if !status.Available && !status.NativeAvailable {
 		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
 	}
-	for _, record := range a.store.ListLatestEarnings() {
+	for _, record := range earnings {
 		if record.Error != "" {
 			items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
 		}
 	}
-	if len(a.store.ListDeployments()) == 0 {
+	if len(deployments) == 0 {
 		items = append(items, Notification{Level: "info", Title: "No services deployed", Message: "Use the setup wizard or register a mobile device to start tracking earnings."})
 	}
 	return items

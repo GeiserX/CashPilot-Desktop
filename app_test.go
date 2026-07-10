@@ -95,7 +95,7 @@ func TestComputeEarningsSummary(t *testing.T) {
 	}
 
 	app := &App{cfg: cfg, store: st, catalog: cat, exchange: svc, ctx: context.Background()}
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 
 	// Total = honeygain latest (2.00 USD) + mysterium latest (8 MYST * 0.25 = 2.00 USD).
 	// GRASS is excluded (non-convertible) and the error row has no successful daily
@@ -266,7 +266,7 @@ func TestEarningsSummaryFirstObservationContributesZero(t *testing.T) {
 	now := time.Now().UTC()
 	seedEarnings(t, st, store.EarningsRecord{Platform: "honeygain", Balance: 50.0, Currency: "USD", CreatedAt: atUTC(now, 10)})
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Total, 50.0) {
 		t.Fatalf("Total = %v, want 50.00 (latest cumulative still shows in Total)", sum.Total)
 	}
@@ -296,7 +296,7 @@ func TestEarningsSummaryCarryForwardAcrossGap(t *testing.T) {
 		store.EarningsRecord{Platform: "honeygain", Balance: 5.0, Currency: "USD", CreatedAt: atUTC(now, 10)},
 	)
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Today, 2.0) {
 		t.Fatalf("Today = %v, want 2.00 (5.00 today minus 3.00 carried across the gap)", sum.Today)
 	}
@@ -328,7 +328,7 @@ func TestEarningsSummaryMonthWindow(t *testing.T) {
 		store.EarningsRecord{Platform: "honeygain", Balance: 8.0, Currency: "USD", CreatedAt: atUTC(now, 8)},
 	)
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Month, 5.0) {
 		t.Fatalf("Month = %v, want 5.00 (8.00 today minus 3.00 at the month baseline)", sum.Month)
 	}
@@ -359,7 +359,7 @@ func TestEarningsSummaryPointsClassificationDuringOutage(t *testing.T) {
 		store.EarningsRecord{Platform: "mysterium", Balance: 8.0, Currency: "MYST", CreatedAt: atUTC(now, 10)},
 	)
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Total, 0) {
 		t.Fatalf("Total = %v, want 0 (MYST is unpriced during the outage -> excluded)", sum.Total)
 	}
