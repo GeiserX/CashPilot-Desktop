@@ -468,10 +468,13 @@ func (p *NativeProcessProvider) startOnce(mp *managedProcess) error {
 	cmd.Env = append(os.Environ(), mp.env...)
 	cmd.Stdout = mp.log
 	cmd.Stderr = mp.log
-	applyNativeResourceLimits(cmd, mp.res)
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	// Resource limits that need the pid (Linux oom_score_adj / cgroup, Windows Job Object)
+	// are applied post-Start and best-effort — a limit failure must never kill an earner
+	// that is already running.
+	applyNativeResourceLimits(cmd, mp.res)
 	mp.cmd = cmd
 	return nil
 }
@@ -654,18 +657,6 @@ func gracefulKill(cmd *exec.Cmd, timeout time.Duration, done <-chan struct{}) {
 	case <-time.After(timeout):
 		_ = cmd.Process.Kill()
 	}
-}
-
-// applyNativeResourceLimits is the best-effort-v1 resource-limit hook. Cross-OS
-// process resource capping (cgroups v2 on Linux, Job Objects on Windows,
-// taskpolicy/setrlimit on macOS) is deliberately out of scope for the MVP: unlike a
-// container, a native process has no single portable limit knob. It is wired here so a
-// later phase can implement per-OS caps without touching the launch path.
-//
-// TODO(native-limits): apply res.MemLimit / OOM-priority equivalents per OS.
-func applyNativeResourceLimits(cmd *exec.Cmd, res catalog.ResourceLimits) {
-	_ = cmd
-	_ = res
 }
 
 // buildNativeEnv resolves a native service's environment from its native.env defaults
