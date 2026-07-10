@@ -95,3 +95,59 @@ func TestApplyNativeResourceLimitsNoOomScoreAdj(t *testing.T) {
 		t.Fatalf("nil OomScoreAdj changed oom_score_adj from %q to %q, want untouched", b, a)
 	}
 }
+
+func TestParseCgroupV2Path(t *testing.T) {
+	// A hybrid /proc/<pid>/cgroup: v1 controller lines plus the v2 unified "0::" line.
+	const content = "12:pids:/user.slice\n0::/user.slice/user-1000.slice/session-3.scope\n"
+	got, err := parseCgroupV2Path(content)
+	if err != nil {
+		t.Fatalf("parseCgroupV2Path: %v", err)
+	}
+	if want := "/user.slice/user-1000.slice/session-3.scope"; got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+	// cgroup v1-only content has no "0::" line → error (caller then applies no cap).
+	if _, err := parseCgroupV2Path("11:memory:/foo\n10:cpu:/bar\n"); err == nil {
+		t.Fatal("expected error for cgroup v1-only content")
+	}
+}
+
+func TestCgroupMemoryMaxAt(t *testing.T) {
+	parent := t.TempDir()
+	pid := os.Getpid()
+	const max = int64(768) << 20
+	if err := cgroupMemoryMaxAt(parent, pid, max); err != nil {
+		t.Fatalf("cgroupMemoryMaxAt: %v", err)
+	}
+	child := filepath.Join(parent, "cashpilot-"+strconv.Itoa(pid))
+	assertFileContent(t, filepath.Join(child, "memory.max"), strconv.FormatInt(max, 10))
+	assertFileContent(t, filepath.Join(child, "cgroup.procs"), strconv.Itoa(pid))
+	assertFileContent(t, filepath.Join(parent, "cgroup.subtree_control"), "+memory")
+}
+
+func TestApplyCgroupMemoryMaxDegradesGracefully(t *testing.T) {
+	// Point the mount at a regular file (not a directory) so the cgroup writes cannot
+	// succeed: applyCgroupMemoryMax must return an error rather than panic, and its caller
+	// (applyNativeResourceLimits) ignores it so the earner runs uncapped.
+	orig := cgroupV2Mount
+	t.Cleanup(func() { cgroupV2Mount = orig })
+	bad := filepath.Join(t.TempDir(), "not-a-cgroup-mount")
+	if err := os.WriteFile(bad, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cgroupV2Mount = bad
+	if err := applyCgroupMemoryMax(os.Getpid(), 1<<20); err == nil {
+		t.Fatal("expected applyCgroupMemoryMax to fail on an unwritable mount")
+	}
+}
+
+func assertFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if got := strings.TrimSpace(string(b)); got != want {
+		t.Fatalf("%s = %q, want %q", path, got, want)
+	}
+}
