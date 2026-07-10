@@ -574,11 +574,15 @@ func TestCollectAllCollectsCredentialOnlyServicesAndDedups(t *testing.T) {
 	}
 }
 
-// TestCollectAllSingleFlight pins the single-flight guard: many concurrent
-// collectAll calls never overlap, so at most one Collect is ever in flight.
+// TestCollectAllSingleFlight pins the single-flight guard: of many concurrent
+// collectAll calls, only ONE runs its body (the rest bail on the a.collecting CAS), so
+// each service is collected exactly once total — overlap is rejected, not stacked.
+// (Within that one run the services now collect CONCURRENTLY, bounded by
+// collectConcurrency, so max-concurrent-collects may exceed 1 — that is expected and is
+// a separate property, asserted only to be within the bound.)
 func TestCollectAllSingleFlight(t *testing.T) {
 	fake := newFakeCollector([]string{"svc-a", "svc-b", "svc-c"}, nil)
-	fake.hold = 2 * time.Millisecond // hold each collect so an overlap would be observable
+	fake.hold = 2 * time.Millisecond // hold each collect so overlapping runs would be observable
 	app, _, cancel := newSchedulerTestApp(t, fake, "svc-a", "svc-b", "svc-c")
 	defer cancel()
 
@@ -592,7 +596,14 @@ func TestCollectAllSingleFlight(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := fake.maxSeen.Load(); got != 1 {
-		t.Fatalf("single-flight violated: max concurrent collects = %d, want 1", got)
+	// Single-flight: exactly one collectAll body ran, so the 3 services were collected
+	// once each (3 total), not 8×3. A broken guard would collect them many more times.
+	c := fake.counts()
+	if total := c["svc-a"] + c["svc-b"] + c["svc-c"]; total != 3 {
+		t.Fatalf("single-flight violated: total collects across 8 concurrent runs = %d, want 3 (one run × 3 services)", total)
+	}
+	// The one run's internal parallelism stays within the configured bound.
+	if got := fake.maxSeen.Load(); int(got) > collectConcurrency {
+		t.Fatalf("bounded concurrency violated: max concurrent collects = %d, want <= %d", got, collectConcurrency)
 	}
 }

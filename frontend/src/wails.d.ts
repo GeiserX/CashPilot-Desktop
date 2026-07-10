@@ -14,12 +14,15 @@ declare module "../wailsjs/go/main/App" {
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
   export function DeployService(slug: string, values: Record<string, string>): Promise<Deployment>;
+  export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
   export function RestartService(slug: string): Promise<void>;
   export function RemoveService(slug: string): Promise<void>;
   export function GetLogs(slug: string, lines: number): Promise<string>;
   export function RefreshDeployments(): Promise<Deployment[]>;
   export function CollectService(slug: string): Promise<EarningsRecord>;
+  export function ListServices(): Promise<Service[]>;
+  export function GetService(slug: string): Promise<Service>;
   export function ManagedRuntimePlan(): Promise<ManagedRuntimePlan>;
   export function GetEarningsSummary(): Promise<EarningsSummary>;
 }

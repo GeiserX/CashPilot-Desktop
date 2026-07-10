@@ -321,6 +321,13 @@ type FleetState struct {
 const (
 	fleetOfflineAfter = 180 * time.Second
 	fleetReapAfter    = 1 * time.Hour
+
+	// collectConcurrency bounds how many services collectAll collects at once. Each
+	// Collect is a real network round trip (up to ~90s worst case on a stalled
+	// provider), so running the batch through a small worker pool turns the cycle's
+	// cost from the SUM of per-service latencies into roughly the MAX, without
+	// unbounded fan-out against provider APIs or the (SetMaxOpenConns(1)) store.
+	collectConcurrency = 6
 )
 
 func (a *App) GetAppState() (AppState, error) {
@@ -984,8 +991,14 @@ func (a *App) collectOne(ctx context.Context, slug string) {
 // participate in the scheduled cycle instead of only collecting on a manual click.
 // A failing collector never aborts the batch — its error is already persisted as an
 // EarningsRecord (surfaced by notifications()); a store/transport error is logged
-// via emitError and the loop continues to the next service. A single-flight guard
-// (a.collecting) means overlapping triggers — the ticker, a post-deploy kick, a
+// via emitError and the batch continues with the other services. Services are
+// collected concurrently through a bounded worker pool (collectConcurrency) instead
+// of one at a time, so the cycle's wall-clock cost is roughly the slowest single
+// collector rather than the sum of all of them; a.emitError/emitEvent are safe to
+// call from multiple goroutines (they only touch the set-once a.ctx and the
+// thread-safe wailsruntime.EventsEmit) and the store serializes concurrent writes
+// itself (SetMaxOpenConns(1)), so no extra locking is needed here. A single-flight
+// guard (a.collecting) means overlapping triggers — the ticker, a post-deploy kick, a
 // manual refresh — never stack; a run already in progress is skipped rather than
 // queued. One earnings:changed event is emitted after the batch so the dashboard
 // refreshes once per cycle.
@@ -1019,24 +1032,47 @@ func (a *App) collectAll(ctx context.Context) {
 		add(slug)
 	}
 
-	collected := 0
+	// Collect the batch through a bounded worker pool: sem caps how many Collect
+	// calls run at once (collectConcurrency) so a large slug set can't fan out
+	// unbounded HTTP requests, and wg is waited on below so every launched goroutine
+	// has fully finished — success or error — before the post-loop steps (sampleHealth,
+	// PurgeOldData, SweepStaleFleetDevices) run. collected is an atomic counter since
+	// it is incremented from every worker goroutine.
+	var collected atomic.Int32
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, collectConcurrency)
+	aborted := false
 	for _, slug := range slugs {
 		if ctx.Err() != nil {
-			return
+			// Mirror the previous behavior: a cancelled ctx abandons the rest of the
+			// batch (including the post-loop steps) rather than starting more work,
+			// but goroutines already launched are still waited on below so none leak.
+			aborted = true
+			break
 		}
-		creds, err := a.store.GetCredentials(slug)
-		if err != nil {
-			a.emitError("collector", err)
-			continue
-		}
-		if _, err := a.collectors.Collect(ctx, slug, creds); err != nil {
-			a.emitError("collector", err)
-			continue
-		}
-		collected++
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(slug string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			creds, err := a.store.GetCredentials(slug)
+			if err != nil {
+				a.emitError("collector", err)
+				return
+			}
+			if _, err := a.collectors.Collect(ctx, slug, creds); err != nil {
+				a.emitError("collector", err)
+				return
+			}
+			collected.Add(1)
+		}(slug)
 	}
-	if collected > 0 {
-		a.emitEvent("earnings:changed", collected)
+	wg.Wait()
+	if aborted {
+		return
+	}
+	if collected.Load() > 0 {
+		a.emitEvent("earnings:changed", int(collected.Load()))
 	}
 
 	// Sample each deployed service's up/down state so the health score's uptime%
