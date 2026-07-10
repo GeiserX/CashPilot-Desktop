@@ -62,7 +62,9 @@ func TestApplyNativeResourceLimitsOomScoreAdj(t *testing.T) {
 }
 
 // TestApplyNativeResourceLimitsNoOomScoreAdj proves a nil OomScoreAdj is a no-op: the
-// child's oom_score_adj stays at its inherited default (0), not silently rewritten.
+// child's oom_score_adj is left at whatever it inherited, not rewritten. (The inherited
+// value is NOT assumed to be 0 — CI runners often start with a non-zero oom_score_adj that
+// the child inherits; the invariant under test is "unchanged", not a specific number.)
 func TestApplyNativeResourceLimitsNoOomScoreAdj(t *testing.T) {
 	binPath := filepath.Join(t.TempDir(), stubBinName())
 	if err := os.WriteFile(binPath, stubBinaryBytes(t), 0o700); err != nil {
@@ -77,13 +79,19 @@ func TestApplyNativeResourceLimitsNoOomScoreAdj(t *testing.T) {
 	go func() { _ = cmd.Wait(); close(done) }()
 	t.Cleanup(func() { _ = cmd.Process.Kill(); <-done })
 
+	path := "/proc/" + strconv.Itoa(cmd.Process.Pid) + "/oom_score_adj"
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read oom_score_adj (before): %v", err)
+	}
+
 	applyNativeResourceLimits(cmd, catalog.ResourceLimits{}) // no OomScoreAdj
 
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(cmd.Process.Pid) + "/oom_score_adj")
+	after, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read oom_score_adj: %v", err)
+		t.Fatalf("read oom_score_adj (after): %v", err)
 	}
-	if got := strings.TrimSpace(string(raw)); got != "0" {
-		t.Fatalf("oom_score_adj = %q, want 0 (untouched)", got)
+	if b, a := strings.TrimSpace(string(before)), strings.TrimSpace(string(after)); a != b {
+		t.Fatalf("nil OomScoreAdj changed oom_score_adj from %q to %q, want untouched", b, a)
 	}
 }
