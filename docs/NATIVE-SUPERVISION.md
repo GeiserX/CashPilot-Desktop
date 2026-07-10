@@ -105,8 +105,9 @@ bounded rotating logs, a health-score model). The service manager supplies the r
 
 ## Resource limits — the real gap, and it's OS-divergent (be honest)
 
-Phase 2's `applyNativeResourceLimits` is a documented no-op. There is **no portable limit knob** (that's the
-point of a container). Ranked by feasibility:
+Phase 2's `applyNativeResourceLimits` *was* a documented no-op — now implemented per-OS (see **Phase D —
+SHIPPED status** below). There is **no portable limit knob** (that's the point of a container). Ranked by
+feasibility:
 
 | | Linux | Windows | macOS |
 |---|---|---|---|
@@ -122,6 +123,26 @@ yields **free per-earner network bytes**); on **Windows** by owning a **Job Obje
 helper* must own it, not the GUI, or the earner dies on app-close); on **macOS** best-effort priority only. Wire
 from the existing `catalog.ResourceLimits` (add a CPU field alongside `MemLimit`/`MemReservation`/`OomScoreAdj`;
 reuse `parseMemoryBytes`).
+
+### Phase D — SHIPPED status (#87 D0/D1, #88 D2, + D3/D4)
+
+The hook is no longer a no-op. `applyNativeResourceLimits` now runs **post-`Start`** (it needs the pid) and is
+**best-effort** — a limit we cannot set never takes down an already-running earner — split into per-OS
+build-tagged files (`resource_limits_{linux,windows,darwin,other}.go`):
+
+| Limit | Linux | Windows | macOS |
+|---|---|---|---|
+| **OOM priority** | ✅ `/proc/<pid>/oom_score_adj` from `OomScoreAdj` — **CI-verified** on the Linux runner | — (no Windows equivalent) | — |
+| **Hard memory cap** | ✅ cgroup v2 `memory.max` from `MemLimit` — write-logic **CI-tested** (temp-dir), real kernel enforcement only where a **delegated cgroup v2 subtree** exists (a normal systemd user session; *not* the GitHub Linux runner) | ✅ Job Object `ProcessMemoryLimit` from `MemLimit` — **compile-verified** (`GOOS=windows go build`); runtime enforcement is Windows-only, not CI-runtime-tested | ❌ deliberate **no-op** — no unprivileged hard RSS cap (`RLIMIT_AS` bounds virtual space, not RSS, and breaks the Go runtime) |
+| **Hard CPU cap** | ⬜ not yet — needs a CPU field added to `catalog.ResourceLimits` (only `MemLimit`/`MemReservation`/`OomScoreAdj` exist today) | ⬜ not yet | ❌ |
+
+**Design choice (Linux):** a **direct child-cgroup write** (`<current cgroup>/cashpilot-<pid>` → set `memory.max` →
+move the pid) rather than `systemd-run --user --scope`, so the tracked pid stays the **earner binary itself**
+(preserving the PID-identity supervision from Phase 2) — wrapping in `systemd-run` would make the supervised pid the
+scope wrapper. **`parseMemBytes`** (shared, fully unit-tested) converts Docker-style sizes (`768m`/`2g`) for both the
+Linux and Windows caps. **Honest boundary:** the *logic* (parsing, path building, graceful degradation) is CI-tested;
+the *real* cgroup/Job-Object enforcement is only exercised on a delegated-cgroup Linux host / a Windows host, so it is
+not CI-runtime-verified here. All paths are fail-safe (any error → uncapped, never a crash).
 
 ---
 
@@ -159,8 +180,11 @@ the OS.
   earners so the OS launch isn't Gatekeeper/SmartScreen-blocked.
 - **Phase C — tracking surface.** Relocate status/stats/logs reads to go through the helper's API; fix two-sample
   CPU; add uptime/restart-count/last-exit + a crash-loop badge; feed the existing health score.
-- **Phase D — resource limits.** Linux cgroup scope (`MemoryMax`/`CPUQuota` + IP-accounting) + Windows Job Object
-  (helper-owned) + macOS best-effort, from `catalog.ResourceLimits`. Honest per-OS labelling in the UI.
+- **Phase D — resource limits.** ✅ **Shipped (memory + OOM):** Linux `oom_score_adj` + cgroup v2 `memory.max`,
+  Windows Job Object `ProcessMemoryLimit`, macOS best-effort no-op — all from `catalog.ResourceLimits`, best-effort
+  post-Start (see **Phase D — SHIPPED status** above). ⬜ **Remaining:** a hard **CPU** cap (needs a CPU field added
+  to `catalog.ResourceLimits`); per-earner network/bandwidth accounting; runtime enforcement tests on a
+  delegated-cgroup Linux host + a Windows host (CI here is Linux-only).
 - **Phase E — signing** (gated on the maintainer's go/no-go): sign+notarize the (dual-role) binary; this is what
   makes the background earner launch at all on macOS/Windows.
 - **Cross-cutting:** clean one-click uninstall (unregister the single helper, stop all earners first); the
