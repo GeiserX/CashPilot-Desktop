@@ -321,6 +321,13 @@ type FleetState struct {
 const (
 	fleetOfflineAfter = 180 * time.Second
 	fleetReapAfter    = 1 * time.Hour
+
+	// collectConcurrency bounds how many services collectAll collects at once. Each
+	// Collect is a real network round trip (up to ~90s worst case on a stalled
+	// provider), so running the batch through a small worker pool turns the cycle's
+	// cost from the SUM of per-service latencies into roughly the MAX, without
+	// unbounded fan-out against provider APIs or the (SetMaxOpenConns(1)) store.
+	collectConcurrency = 6
 )
 
 func (a *App) GetAppState() (AppState, error) {
@@ -332,16 +339,21 @@ func (a *App) GetAppState() (AppState, error) {
 	// can proceed (and message honestly) on Docker OR native. Available keeps its
 	// Docker-only meaning; this is purely additive.
 	runtimeStatus.NativeAvailable = a.services.HasNativeRuntime()
+	// Fetch these once and thread them into the helpers below instead of letting
+	// each helper re-run its own full-table scan (they were each queried up to 3x
+	// per GetAppState call before this).
+	deployments := a.store.ListDeployments()
+	earnings := a.store.ListLatestEarnings()
 	return AppState{
 		Config:         a.cfg.Config(),
 		Runtime:        runtimeStatus,
 		Services:       a.catalog.ListVisible(),
-		Deployments:    a.store.ListDeployments(),
-		Earnings:       a.store.ListLatestEarnings(),
+		Deployments:    deployments,
+		Earnings:       earnings,
 		Guides:         runtime.InstallGuides(),
-		Notifications:  a.notifications(runtimeStatus),
+		Notifications:  a.notifications(runtimeStatus, earnings, deployments),
 		Currencies:     supportedCurrencies(),
-		Summary:        a.computeEarningsSummary(),
+		Summary:        a.computeEarningsSummary(earnings),
 		Health:         a.store.HealthScores(7),
 		ServiceDetails: a.store.ListServiceDetails(),
 	}, nil
@@ -353,7 +365,7 @@ func (a *App) GetEarningsSummary() (EarningsSummary, error) {
 	if err := a.ready(); err != nil {
 		return EarningsSummary{}, err
 	}
-	return a.computeEarningsSummary(), nil
+	return a.computeEarningsSummary(a.store.ListLatestEarnings()), nil
 }
 
 // computeEarningsSummary converts the per-service CUMULATIVE daily balances into
@@ -362,7 +374,7 @@ func (a *App) GetEarningsSummary() (EarningsSummary, error) {
 // points (e.g. GRASS) are surfaced separately and never summed. It is
 // stale-graceful: missing rates simply drop a service from the total and set
 // RatesStale, rather than erroring.
-func (a *App) computeEarningsSummary() EarningsSummary {
+func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSummary {
 	disp := "USD"
 	if a.cfg != nil {
 		if c := a.cfg.Config().DisplayCurrency; c != "" {
@@ -537,7 +549,7 @@ func (a *App) computeEarningsSummary() EarningsSummary {
 
 	// Breakdown = every service's latest record, INCLUDING error rows so the UI
 	// keeps a "needs attention" chip.
-	for _, rec := range a.store.ListLatestEarnings() {
+	for _, rec := range earnings {
 		se := ServiceEarning{
 			Platform: rec.Platform,
 			Name:     rec.Platform,
@@ -601,7 +613,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_DISPLAY_CURRENCY", Label: "Display Currency", Value: cfg.DisplayCurrency, Source: "Config", Help: "Currency used in the topbar and dashboard summaries."},
 		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: a.fleetKey, Source: "Config", Secret: true, Help: "Bearer token used by external workers and mobile clients."},
 		{Key: "CASHPILOT_UI_URL", Label: "Desktop API URL", Value: a.fleetUIURL(), Source: "Runtime", ReadOnly: true, Help: "URL that external workers should use for CASHPILOT_UI_URL."},
-		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network."},
+		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
@@ -979,8 +991,14 @@ func (a *App) collectOne(ctx context.Context, slug string) {
 // participate in the scheduled cycle instead of only collecting on a manual click.
 // A failing collector never aborts the batch — its error is already persisted as an
 // EarningsRecord (surfaced by notifications()); a store/transport error is logged
-// via emitError and the loop continues to the next service. A single-flight guard
-// (a.collecting) means overlapping triggers — the ticker, a post-deploy kick, a
+// via emitError and the batch continues with the other services. Services are
+// collected concurrently through a bounded worker pool (collectConcurrency) instead
+// of one at a time, so the cycle's wall-clock cost is roughly the slowest single
+// collector rather than the sum of all of them; a.emitError/emitEvent are safe to
+// call from multiple goroutines (they only touch the set-once a.ctx and the
+// thread-safe wailsruntime.EventsEmit) and the store serializes concurrent writes
+// itself (SetMaxOpenConns(1)), so no extra locking is needed here. A single-flight
+// guard (a.collecting) means overlapping triggers — the ticker, a post-deploy kick, a
 // manual refresh — never stack; a run already in progress is skipped rather than
 // queued. One earnings:changed event is emitted after the batch so the dashboard
 // refreshes once per cycle.
@@ -1014,24 +1032,47 @@ func (a *App) collectAll(ctx context.Context) {
 		add(slug)
 	}
 
-	collected := 0
+	// Collect the batch through a bounded worker pool: sem caps how many Collect
+	// calls run at once (collectConcurrency) so a large slug set can't fan out
+	// unbounded HTTP requests, and wg is waited on below so every launched goroutine
+	// has fully finished — success or error — before the post-loop steps (sampleHealth,
+	// PurgeOldData, SweepStaleFleetDevices) run. collected is an atomic counter since
+	// it is incremented from every worker goroutine.
+	var collected atomic.Int32
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, collectConcurrency)
+	aborted := false
 	for _, slug := range slugs {
 		if ctx.Err() != nil {
-			return
+			// Mirror the previous behavior: a cancelled ctx abandons the rest of the
+			// batch (including the post-loop steps) rather than starting more work,
+			// but goroutines already launched are still waited on below so none leak.
+			aborted = true
+			break
 		}
-		creds, err := a.store.GetCredentials(slug)
-		if err != nil {
-			a.emitError("collector", err)
-			continue
-		}
-		if _, err := a.collectors.Collect(ctx, slug, creds); err != nil {
-			a.emitError("collector", err)
-			continue
-		}
-		collected++
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(slug string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			creds, err := a.store.GetCredentials(slug)
+			if err != nil {
+				a.emitError("collector", err)
+				return
+			}
+			if _, err := a.collectors.Collect(ctx, slug, creds); err != nil {
+				a.emitError("collector", err)
+				return
+			}
+			collected.Add(1)
+		}(slug)
 	}
-	if collected > 0 {
-		a.emitEvent("earnings:changed", collected)
+	wg.Wait()
+	if aborted {
+		return
+	}
+	if collected.Load() > 0 {
+		a.emitEvent("earnings:changed", int(collected.Load()))
 	}
 
 	// Sample each deployed service's up/down state so the health score's uptime%
@@ -1197,7 +1238,7 @@ func (a *App) ManagedRuntimePlan() runtime.ManagedRuntimePlan {
 	return runtime.ManagedRuntimeRoadmap()
 }
 
-func (a *App) notifications(status runtime.Status) []Notification {
+func (a *App) notifications(status runtime.Status, earnings []store.EarningsRecord, deployments []store.Deployment) []Notification {
 	var items []Notification
 	// Only warn that the runtime is offline when NEITHER Docker nor the always-on
 	// native runtime can run anything. With native available the app works without
@@ -1205,12 +1246,12 @@ func (a *App) notifications(status runtime.Status) []Notification {
 	if !status.Available && !status.NativeAvailable {
 		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
 	}
-	for _, record := range a.store.ListLatestEarnings() {
+	for _, record := range earnings {
 		if record.Error != "" {
 			items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
 		}
 	}
-	if len(a.store.ListDeployments()) == 0 {
+	if len(deployments) == 0 {
 		items = append(items, Notification{Level: "info", Title: "No services deployed", Message: "Use the setup wizard or register a mobile device to start tracking earnings."})
 	}
 	return items

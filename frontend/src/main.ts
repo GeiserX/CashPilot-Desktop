@@ -486,7 +486,7 @@ function renderCatalogCard(service: Service, deployments: Deployment[]) {
       </div>
       <p>${escapeHtml(service.shortDescription || service.description)}</p>
       <div class="card-actions">
-        ${service.manualOnly && signupUrl ? `<button class="primary compact-btn" data-url="${escapeHtml(signupUrl)}">Visit</button>` : `<button class="primary compact-btn" data-service="${service.slug}">${deployed ? "Manage" : "Deploy"}</button>`}
+        ${service.manualOnly && signupUrl ? `<button class="primary compact-btn" data-url="${escapeHtml(signupUrl)}">Visit</button>` : `<button class="primary compact-btn" data-service="${escapeHtml(service.slug)}">${deployed ? "Manage" : "Deploy"}</button>`}
         ${signupUrl ? `<button class="secondary compact-btn" data-url="${escapeHtml(signupUrl)}">Sign Up</button>` : ""}
       </div>
     </article>
@@ -494,7 +494,13 @@ function renderCatalogCard(service: Service, deployments: Deployment[]) {
 }
 
 async function renderSettings(current: AppState) {
-  const settings = await GetSettingsState();
+  let settings: SettingsState;
+  try {
+    settings = await GetSettingsState();
+  } catch (error) {
+    showErrorToast({scope: "settings", error: String(error)});
+    return;
+  }
   const total = totalBalance(current);
   // Background-helper state is derived live from the OS (not a stored preference):
   // installed = a login agent is registered, running = the service manager reports it
@@ -674,7 +680,13 @@ function envInputName(key: string) {
 }
 
 async function renderFleet(current: AppState) {
-  const fleet = await GetFleetState();
+  let fleet: FleetState;
+  try {
+    fleet = await GetFleetState();
+  } catch (error) {
+    showErrorToast({scope: "fleet", error: String(error)});
+    return;
+  }
   const total = totalBalance(current);
   root.innerHTML = `
     ${titlebar()}
@@ -744,8 +756,12 @@ async function renderFleet(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(button.dataset.copy || "");
-      button.textContent = "Copied";
+      try {
+        await navigator.clipboard.writeText(button.dataset.copy || "");
+        button.textContent = "Copied";
+      } catch (error) {
+        showErrorToast({scope: "clipboard", error: String(error)});
+      }
     });
   });
 }
@@ -785,8 +801,12 @@ async function addFleetDevice() {
 
 async function removeFleetDevice(id: number) {
   if (!confirm("Remove this fleet device from CashPilot Desktop?")) return;
-  await RemoveFleetDevice(id);
-  render();
+  try {
+    await RemoveFleetDevice(id);
+    render();
+  } catch (error) {
+    showErrorToast({scope: "fleet", error: String(error)});
+  }
 }
 
 function totalBalance(current: AppState) {
@@ -1011,12 +1031,12 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
               <td>${deployment.memoryMb.toFixed(0)} MB</td>
               <td>
                 <div class="table-actions">
-                  <button class="secondary compact-btn" data-row-action="collect" data-slug="${deployment.slug}">Collect</button>
-                  <button class="secondary compact-btn" data-row-action="logs" data-slug="${deployment.slug}">Logs</button>
+                  <button class="secondary compact-btn" data-row-action="collect" data-slug="${escapeHtml(deployment.slug)}">Collect</button>
+                  <button class="secondary compact-btn" data-row-action="logs" data-slug="${escapeHtml(deployment.slug)}">Logs</button>
                   ${deployment.status === "running"
-                    ? `<button class="secondary compact-btn" data-row-action="stop" data-slug="${deployment.slug}">Stop</button>`
-                    : `<button class="secondary compact-btn" data-row-action="start" data-slug="${deployment.slug}">Start</button>`}
-                  <button class="danger compact-btn" data-row-action="remove" data-slug="${deployment.slug}">Remove</button>
+                    ? `<button class="secondary compact-btn" data-row-action="stop" data-slug="${escapeHtml(deployment.slug)}">Stop</button>`
+                    : `<button class="secondary compact-btn" data-row-action="start" data-slug="${escapeHtml(deployment.slug)}">Start</button>`}
+                  <button class="danger compact-btn" data-row-action="remove" data-slug="${escapeHtml(deployment.slug)}">Remove</button>
                 </div>
               </td>
             </tr>
@@ -1188,7 +1208,7 @@ function renderWizardServices(services: Service[]) {
     <p class="muted">Choose providers to set up. Earnings vary by location, hardware, uptime, and demand, so CashPilot does not promise a fixed amount.</p>
     <div class="wizard-service-grid">
       ${services.map((service) => `
-        <button class="wizard-service ${wizardSelected.includes(service.slug) ? "selected" : ""}" data-wizard-service="${service.slug}">
+        <button class="wizard-service ${wizardSelected.includes(service.slug) ? "selected" : ""}" data-wizard-service="${escapeHtml(service.slug)}">
           <div class="service-icon">${escapeHtml(service.name[0] || "?")}</div>
           <div>
             <strong>${escapeHtml(service.name)}</strong>
@@ -1219,7 +1239,7 @@ function renderWizardServiceSetup(service: Service) {
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = getServiceFields(service);
   return `
-    <article class="wizard-setup-card" data-form-slug="${service.slug}">
+    <article class="wizard-setup-card" data-form-slug="${escapeHtml(service.slug)}">
       <div class="split">
         <div>
           <h3>${escapeHtml(service.name)}</h3>
@@ -1242,11 +1262,11 @@ function renderWizardServiceSetup(service: Service) {
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
       <div class="actions left">
-        <button class="secondary" data-wizard-action="save" data-slug="${service.slug}">Save Credentials</button>
-        <button class="primary" data-wizard-action="deploy" data-slug="${service.slug}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
-        <button class="secondary" data-wizard-action="collect" data-slug="${service.slug}">Collect Earnings</button>
+        <button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>
+        <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
+        <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">Collect Earnings</button>
       </div>
-      <pre class="output wizard-output" data-output-slug="${service.slug}"></pre>
+      <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
     </article>
   `;
 }
@@ -1288,7 +1308,12 @@ function getServiceFields(service: Service): ServiceField[] {
 }
 
 async function hydrateWizardForm(service: Service) {
-  const creds = await GetCredentials(service.slug);
+  let creds: Record<string, string> = {};
+  try {
+    creds = await GetCredentials(service.slug);
+  } catch (error) {
+    showErrorToast({scope: "credentials", error: String(error)});
+  }
   document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${service.slug}"] [data-wizard-env]`).forEach((input) => {
     const key = input.dataset.wizardEnv || "";
     if (creds[key]) input.value = creds[key];

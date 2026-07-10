@@ -79,7 +79,7 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 	if fn, ok := collectorDispatch[slug]; ok {
 		result, err = fn(r, ctx, credentials)
 	} else {
-		err = fmt.Errorf("collector for %s is not ported yet", slug)
+		err = fmt.Errorf("Collector for %s is not ported yet", slug)
 	}
 	if err != nil {
 		result = Result{Platform: slug, Balance: 0, Currency: "USD", Error: err.Error()}
@@ -214,7 +214,7 @@ func (r *Registry) collectBytelixir(ctx context.Context, credentials map[string]
 		} `json:"data"`
 	}
 	if err := r.doJSONWithCookies(ctx, "GET", "https://dash.bytelixir.com/api/v1/user", nil, map[string]string{"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}, cookies, &api); err != nil {
-		return Result{}, fmt.Errorf("could not parse Bytelixir dashboard balance: %w", err)
+		return Result{}, fmt.Errorf("Could not parse Bytelixir dashboard balance: %w", err)
 	}
 	balance, _ := strconv.ParseFloat(api.Data.Balance, 64)
 	return Result{Platform: "bytelixir", Balance: round(balance, 4), Currency: "USD", Error: "Withdrawable balance only; dashboard scrape did not expose total earned"}, nil
@@ -351,7 +351,7 @@ func (r *Registry) collectGrass(ctx context.Context, credentials map[string]stri
 	// overwrite the real balance. Every other collector routes non-2xx through
 	// doJSON, which converts it to an error; do the same here.
 	if status < 200 || status >= 300 {
-		return Result{}, fmt.Errorf("grass: unexpected status %d", status)
+		return Result{}, fmt.Errorf("Grass returned unexpected status %d", status)
 	}
 	if user.Result.Data.TotalPoints > 0 {
 		return Result{Platform: "grass", Balance: round(user.Result.Data.TotalPoints, 4), Currency: "GRASS"}, nil
@@ -375,7 +375,7 @@ func (r *Registry) collectGrass(ctx context.Context, credentials map[string]stri
 	// As with retrieveUser above: a non-2xx here leaves active zero-valued, so treat
 	// it as an error rather than booking a spurious Balance:0.
 	if status < 200 || status >= 300 {
-		return Result{}, fmt.Errorf("grass: unexpected status %d", status)
+		return Result{}, fmt.Errorf("Grass returned unexpected status %d", status)
 	}
 	total := 0.0
 	for _, device := range active.Result.Data {
@@ -488,7 +488,7 @@ type mystNode struct {
 // tests can assert on it).
 func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[string]string) error {
 	if r.store == nil {
-		return fmt.Errorf("no store configured for per-node persistence")
+		return fmt.Errorf("No store configured for per-node persistence")
 	}
 	var resp struct {
 		Nodes []struct {
@@ -557,7 +557,7 @@ func (r *Registry) collectPacketStream(ctx context.Context, credentials map[stri
 	}
 	balance, ok := parsePacketStreamBalance(string(body))
 	if !ok {
-		return Result{}, fmt.Errorf("could not parse PacketStream balance from dashboard")
+		return Result{}, fmt.Errorf("Could not parse PacketStream balance from dashboard")
 	}
 	return Result{Platform: "packetstream", Balance: round(balance, 4), Currency: "USD"}, nil
 }

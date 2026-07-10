@@ -95,7 +95,7 @@ func TestComputeEarningsSummary(t *testing.T) {
 	}
 
 	app := &App{cfg: cfg, store: st, catalog: cat, exchange: svc, ctx: context.Background()}
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 
 	// Total = honeygain latest (2.00 USD) + mysterium latest (8 MYST * 0.25 = 2.00 USD).
 	// GRASS is excluded (non-convertible) and the error row has no successful daily
@@ -266,7 +266,7 @@ func TestEarningsSummaryFirstObservationContributesZero(t *testing.T) {
 	now := time.Now().UTC()
 	seedEarnings(t, st, store.EarningsRecord{Platform: "honeygain", Balance: 50.0, Currency: "USD", CreatedAt: atUTC(now, 10)})
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Total, 50.0) {
 		t.Fatalf("Total = %v, want 50.00 (latest cumulative still shows in Total)", sum.Total)
 	}
@@ -296,7 +296,7 @@ func TestEarningsSummaryCarryForwardAcrossGap(t *testing.T) {
 		store.EarningsRecord{Platform: "honeygain", Balance: 5.0, Currency: "USD", CreatedAt: atUTC(now, 10)},
 	)
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Today, 2.0) {
 		t.Fatalf("Today = %v, want 2.00 (5.00 today minus 3.00 carried across the gap)", sum.Today)
 	}
@@ -328,7 +328,7 @@ func TestEarningsSummaryMonthWindow(t *testing.T) {
 		store.EarningsRecord{Platform: "honeygain", Balance: 8.0, Currency: "USD", CreatedAt: atUTC(now, 8)},
 	)
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Month, 5.0) {
 		t.Fatalf("Month = %v, want 5.00 (8.00 today minus 3.00 at the month baseline)", sum.Month)
 	}
@@ -359,7 +359,7 @@ func TestEarningsSummaryPointsClassificationDuringOutage(t *testing.T) {
 		store.EarningsRecord{Platform: "mysterium", Balance: 8.0, Currency: "MYST", CreatedAt: atUTC(now, 10)},
 	)
 
-	sum := app.computeEarningsSummary()
+	sum := app.computeEarningsSummary(app.store.ListLatestEarnings())
 	if !approxEq(sum.Total, 0) {
 		t.Fatalf("Total = %v, want 0 (MYST is unpriced during the outage -> excluded)", sum.Total)
 	}
@@ -574,11 +574,15 @@ func TestCollectAllCollectsCredentialOnlyServicesAndDedups(t *testing.T) {
 	}
 }
 
-// TestCollectAllSingleFlight pins the single-flight guard: many concurrent
-// collectAll calls never overlap, so at most one Collect is ever in flight.
+// TestCollectAllSingleFlight pins the single-flight guard: of many concurrent
+// collectAll calls, only ONE runs its body (the rest bail on the a.collecting CAS), so
+// each service is collected exactly once total — overlap is rejected, not stacked.
+// (Within that one run the services now collect CONCURRENTLY, bounded by
+// collectConcurrency, so max-concurrent-collects may exceed 1 — that is expected and is
+// a separate property, asserted only to be within the bound.)
 func TestCollectAllSingleFlight(t *testing.T) {
 	fake := newFakeCollector([]string{"svc-a", "svc-b", "svc-c"}, nil)
-	fake.hold = 2 * time.Millisecond // hold each collect so an overlap would be observable
+	fake.hold = 2 * time.Millisecond // hold each collect so overlapping runs would be observable
 	app, _, cancel := newSchedulerTestApp(t, fake, "svc-a", "svc-b", "svc-c")
 	defer cancel()
 
@@ -592,7 +596,14 @@ func TestCollectAllSingleFlight(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := fake.maxSeen.Load(); got != 1 {
-		t.Fatalf("single-flight violated: max concurrent collects = %d, want 1", got)
+	// Single-flight: exactly one collectAll body ran, so the 3 services were collected
+	// once each (3 total), not 8×3. A broken guard would collect them many more times.
+	c := fake.counts()
+	if total := c["svc-a"] + c["svc-b"] + c["svc-c"]; total != 3 {
+		t.Fatalf("single-flight violated: total collects across 8 concurrent runs = %d, want 3 (one run × 3 services)", total)
+	}
+	// The one run's internal parallelism stays within the configured bound.
+	if got := fake.maxSeen.Load(); int(got) > collectConcurrency {
+		t.Fatalf("bounded concurrency violated: max concurrent collects = %d, want <= %d", got, collectConcurrency)
 	}
 }

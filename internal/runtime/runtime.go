@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os/exec"
+	"regexp"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -642,7 +644,14 @@ func applyResourceLimits(hostConfig *container.HostConfig, res catalog.ResourceL
 // trailing "b", e.g. "768m" or "2gb") multiplies by 1024, 1024^2, 1024^3 or
 // 1024^4. So "768m" is 768*1024*1024 = 805306368 bytes and "2g" is 2147483648. A
 // fractional mantissa ("1.5g") is allowed and truncated toward zero. It returns an
-// error for an empty string, a non-positive value, or an unparseable number.
+// error for an empty string, a non-positive value, an unparseable number, or a
+// value that would overflow a 64-bit byte count.
+//
+// This is the single canonical size parser for catalog.ResourceLimits.MemLimit /
+// MemReservation, shared by both the Docker path (this file's
+// applyResourceLimits, which fails fast on error) and the native process path
+// (resource_limits_linux.go / resource_limits_windows.go, which treat an error as
+// "skip the cap" and keep the earner running best-effort).
 func parseMemoryBytes(s string) (int64, error) {
 	raw := strings.ToLower(strings.TrimSpace(s))
 	if raw == "" {
@@ -674,7 +683,14 @@ func parseMemoryBytes(s string) (int64, error) {
 	if value <= 0 {
 		return 0, fmt.Errorf("%q must be a positive size", s)
 	}
-	return int64(value * float64(multiplier)), nil
+	// Guard against overflowing a 64-bit byte count before the float->int64
+	// conversion, which would otherwise silently produce an unspecified/wrapped
+	// result for very large mantissas or unit multipliers (e.g. "1e300t").
+	bytes := value * float64(multiplier)
+	if bytes > math.MaxInt64 {
+		return 0, fmt.Errorf("%q overflows a 64-bit byte count", s)
+	}
+	return int64(bytes), nil
 }
 
 func managedContainerVolumes(ctx context.Context, cli *client.Client, name string) ([]string, error) {
@@ -698,12 +714,27 @@ func isNamedVolume(source string) bool {
 	return source != "" && !strings.HasPrefix(source, "/") && !strings.HasPrefix(source, ".") && !strings.HasPrefix(source, "~")
 }
 
+// substituteVarPattern matches a single ${VAR} placeholder. Compiled once at package
+// scope (rather than per substitute call) since it never changes between calls.
+var substituteVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// substitute expands every ${VAR} placeholder in value using env, in a single pass
+// over the ORIGINAL string. This is deliberate: env is a map, so ranging over it
+// iterates in random order, and repeatedly doing strings.ReplaceAll over an
+// accumulating result would let a substituted value that itself contains a literal
+// "${OTHER}" get re-expanded on a later iteration — a correctness bug whose outcome
+// depended on map iteration order. A single regexp pass expands each placeholder
+// exactly once from the original text, so a replacement value is never re-scanned.
+// A placeholder naming a var not present in env is left unchanged (matches prior
+// ReplaceAll behavior, which only ever touched placeholders for keys present in env).
 func substitute(value string, env map[string]string) string {
-	out := value
-	for key, val := range env {
-		out = strings.ReplaceAll(out, "${"+key+"}", val)
-	}
-	return out
+	return substituteVarPattern.ReplaceAllStringFunc(value, func(match string) string {
+		name := match[2 : len(match)-1] // strip "${" and "}"
+		if val, ok := env[name]; ok {
+			return val
+		}
+		return match
+	})
 }
 
 // buildCommandArgs turns a maintainer command template into the argv slice passed to

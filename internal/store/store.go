@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -299,7 +300,9 @@ func (s *Store) ListDeployments() []Deployment {
 }
 
 func (s *Store) RecordEvent(slug, event, detail string) {
-	_, _ = s.db.Exec(`INSERT INTO runtime_events(slug, event, detail, created_at) VALUES(?, ?, ?, datetime('now'))`, slug, event, detail)
+	if _, err := s.db.Exec(`INSERT INTO runtime_events(slug, event, detail, created_at) VALUES(?, ?, ?, datetime('now'))`, slug, event, detail); err != nil {
+		log.Printf("store: record event %s/%s: %v", slug, event, err)
+	}
 }
 
 func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
@@ -621,6 +624,7 @@ func (s *Store) ListFleetDevices() []FleetDevice {
 		var device FleetDevice
 		var servicesRaw string
 		if err := rows.Scan(&device.ID, &device.Name, &device.Kind, &device.Endpoint, &device.OS, &device.Arch, &device.Status, &servicesRaw, &device.LastSeen, &device.CreatedAt); err == nil {
+			// best-effort: a corrupt services blob just yields no badges
 			_ = json.Unmarshal([]byte(servicesRaw), &device.Services)
 			out = append(out, device)
 		}
@@ -741,6 +745,7 @@ func (s *Store) migrate() error {
 			error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		);
+		CREATE INDEX IF NOT EXISTS idx_earnings_platform_created ON earnings(platform, created_at);
 		CREATE TABLE IF NOT EXISTS runtime_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			slug TEXT NOT NULL,

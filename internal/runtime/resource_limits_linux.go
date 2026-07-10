@@ -34,7 +34,7 @@ func applyNativeResourceLimits(cmd *exec.Cmd, res catalog.ResourceLimits) {
 	if res.OomScoreAdj != nil {
 		_ = writeOomScoreAdj(pid, *res.OomScoreAdj)
 	}
-	if maxBytes, ok := parseMemBytes(res.MemLimit); ok {
+	if maxBytes, err := parseMemoryBytes(res.MemLimit); err == nil && maxBytes > 0 {
 		_ = applyCgroupMemoryMax(pid, maxBytes)
 	}
 }

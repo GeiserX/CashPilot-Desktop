@@ -376,9 +376,22 @@ func (p *NativeProcessProvider) Logs(ctx context.Context, slug string, lines int
 	return readLogTail(filepath.Join(p.baseDir, slug, "log"), lines)
 }
 
+// listStatSemaphoreCap bounds how many statFn samples List runs concurrently. Each
+// sample blocks for cpuStatInterval (default 200ms), so an unbounded per-entry
+// goroutine fan-out is fine at earner-catalog scale, but this cap keeps a very large
+// deployment from spawning hundreds of simultaneous gopsutil/proc samples at once.
+const listStatSemaphoreCap = 8
+
 // List reports every registry entry as a ContainerInfo, checking each recorded pid's
 // liveness (and best-effort CPU/memory) via gopsutil. A process that isn't reachable
 // reports zeros and status "stopped"; it never panics on a dead/reused pid.
+//
+// Alive entries are sampled CONCURRENTLY (mirroring DockerProvider.statsForContainers):
+// each goroutine owns its own out[i] slot, so no locking/shared map is needed, and a
+// buffered semaphore bounds how many statFn calls run at once. A serial loop would
+// make this O(N * cpuStatInterval); with the fan-out the added latency stays ~one
+// interval regardless of N. Stopped entries are written synchronously (no sampling
+// needed), and the result stays sorted by slug just like the previous serial loop.
 func (p *NativeProcessProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	reg := p.readRegistry()
 	slugs := make([]string, 0, len(reg.Entries))
@@ -387,31 +400,42 @@ func (p *NativeProcessProvider) List(ctx context.Context) ([]ContainerInfo, erro
 	}
 	sort.Strings(slugs)
 
-	out := make([]ContainerInfo, 0, len(slugs))
-	for _, slug := range slugs {
+	out := make([]ContainerInfo, len(slugs))
+	sem := make(chan struct{}, listStatSemaphoreCap)
+	var wg sync.WaitGroup
+	for i, slug := range slugs {
 		e := reg.Entries[slug]
-		var cpu, mem float64
 		// A recorded pid counts as running only when the live process still matches the
 		// identity we persisted for it — a recycled pid (reassigned to an unrelated
 		// process after ours exited) is reported stopped, never as our service.
 		alive := p.entryIsOurs(e)
-		if alive {
-			cpu, mem, _ = p.statFn(e.PID)
-		}
 		status := "stopped"
 		if alive {
 			status = "running"
 		}
-		out = append(out, ContainerInfo{
+		info := ContainerInfo{
 			Slug:        e.Slug,
 			ContainerID: strconv.Itoa(e.PID),
 			Name:        containerName(e.Slug),
 			Image:       e.URL,
 			Status:      status,
-			CPUPercent:  cpu,
-			MemoryMB:    mem,
-		})
+		}
+		if !alive {
+			out[i] = info
+			continue
+		}
+		wg.Add(1)
+		go func(i, pid int, info ContainerInfo) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			cpu, mem, _ := p.statFn(pid)
+			info.CPUPercent = cpu
+			info.MemoryMB = mem
+			out[i] = info
+		}(i, e.PID, info)
 	}
+	wg.Wait()
 	return out, nil
 }
 
@@ -1227,7 +1251,7 @@ func (p *NativeProcessProvider) updatePID(mp *managedProcess) {
 		pid = cmd.Process.Pid
 	}
 	exePath, createTime := p.processIdentity(pid)
-	_ = p.mutateRegistry(func(reg *nativeRegistry) {
+	if err := p.mutateRegistry(func(reg *nativeRegistry) {
 		if e, ok := reg.Entries[mp.slug]; ok {
 			e.PID = pid
 			e.ExePath = exePath
@@ -1235,5 +1259,9 @@ func (p *NativeProcessProvider) updatePID(mp *managedProcess) {
 			e.StartedAt = time.Now().UTC().Format(time.RFC3339)
 			e.Desired = "running"
 		}
-	})
+	}); err != nil {
+		// Non-fatal: the process IS running. Note it in the service's own log so the
+		// respawn still succeeds; List will re-derive liveness from the pid next tick.
+		fmt.Fprintf(mp.log, "cashpilot: warning: could not persist native registry: %v\n", err)
+	}
 }
