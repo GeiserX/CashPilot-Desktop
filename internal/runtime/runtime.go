@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"regexp"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -713,12 +714,27 @@ func isNamedVolume(source string) bool {
 	return source != "" && !strings.HasPrefix(source, "/") && !strings.HasPrefix(source, ".") && !strings.HasPrefix(source, "~")
 }
 
+// substituteVarPattern matches a single ${VAR} placeholder. Compiled once at package
+// scope (rather than per substitute call) since it never changes between calls.
+var substituteVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+
+// substitute expands every ${VAR} placeholder in value using env, in a single pass
+// over the ORIGINAL string. This is deliberate: env is a map, so ranging over it
+// iterates in random order, and repeatedly doing strings.ReplaceAll over an
+// accumulating result would let a substituted value that itself contains a literal
+// "${OTHER}" get re-expanded on a later iteration — a correctness bug whose outcome
+// depended on map iteration order. A single regexp pass expands each placeholder
+// exactly once from the original text, so a replacement value is never re-scanned.
+// A placeholder naming a var not present in env is left unchanged (matches prior
+// ReplaceAll behavior, which only ever touched placeholders for keys present in env).
 func substitute(value string, env map[string]string) string {
-	out := value
-	for key, val := range env {
-		out = strings.ReplaceAll(out, "${"+key+"}", val)
-	}
-	return out
+	return substituteVarPattern.ReplaceAllStringFunc(value, func(match string) string {
+		name := match[2 : len(match)-1] // strip "${" and "}"
+		if val, ok := env[name]; ok {
+			return val
+		}
+		return match
+	})
 }
 
 // buildCommandArgs turns a maintainer command template into the argv slice passed to

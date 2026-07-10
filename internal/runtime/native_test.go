@@ -1060,9 +1060,16 @@ func TestNativeSupervisorRecordsCrashAndRestartEvents(t *testing.T) {
 	if mp == nil {
 		t.Fatal("no managed process recorded")
 	}
-	select {
-	case <-mp.doneCh:
-	case <-time.After(5 * time.Second):
+	// Generous bounded poll (not a tight 5s deadline): 3 real fork/exec restarts under
+	// -race routinely eat ~4s, so a fixed 5s ceiling flaked under sibling-test contention.
+	if !waitFor(t, 15*time.Second, func() bool {
+		select {
+		case <-mp.doneCh:
+			return true
+		default:
+			return false
+		}
+	}) {
 		t.Fatal("supervisor did not stop after maxRestarts")
 	}
 
