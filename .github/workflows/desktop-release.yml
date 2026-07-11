@@ -60,11 +60,17 @@ jobs:
         run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean
 
       - name: Sign Windows binaries
-        if: runner.os == 'Windows' && secrets.WINDOWS_SIGN_CERT != ''
+        if: runner.os == 'Windows'
         env:
           WINDOWS_SIGN_CERT: ${{ secrets.WINDOWS_SIGN_CERT }}
           WINDOWS_SIGN_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGN_CERT_PASSWORD }}
         run: |
+          # `secrets` is not allowed in a step `if:` (it makes GitHub reject the whole
+          # workflow at startup), so gate on the secret here in the run body instead.
+          if ([string]::IsNullOrEmpty($env:WINDOWS_SIGN_CERT)) {
+            Write-Host "WINDOWS_SIGN_CERT not configured — skipping code signing"
+            exit 0
+          }
           $cert = [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT)
           [System.IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
           Get-ChildItem -Recurse "build\bin" -Include "*.exe" | ForEach-Object {
