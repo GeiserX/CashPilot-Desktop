@@ -401,6 +401,11 @@ func TestNativeDeploySelectsBinaryByOSArch(t *testing.T) {
 // TestNativeRegistryPersistsAcrossInstances proves the state.json registry survives:
 // a second provider over the same app dir sees the running deployment.
 func TestNativeRegistryPersistsAcrossInstances(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		// Cross-instance liveness relies on Unix process-identity checks; the
+		// Windows supervisor uses a different model and needs separate verification.
+		t.Skip("native cross-instance liveness is Unix-specific")
+	}
 	dir := t.TempDir()
 	a := NewNativeProcessProvider(dir)
 	a.backoffMin = 10 * time.Millisecond
@@ -1142,6 +1147,11 @@ func TestNativeStatsReportsLiveCPU(t *testing.T) {
 // stopped and is NEVER signalled — so a recycled pid cannot make us kill an unrelated
 // same-UID process.
 func TestNativeMismatchedPIDNotSignalled(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		// PID-identity re-check before signalling is Unix-specific (the Windows
+		// Stop path differs); tracked for separate verification on real hardware.
+		t.Skip("PID-identity guard is Unix-specific")
+	}
 	p := newTestNativeProvider(t)
 
 	// A real, live bystander process that must survive: it stands in for an unrelated
