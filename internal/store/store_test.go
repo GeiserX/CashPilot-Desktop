@@ -1302,3 +1302,56 @@ func TestSetFleetDeviceKeyMissingRowErrors(t *testing.T) {
 		t.Fatal("ConfirmFleetDeviceKey must error when the device row does not exist")
 	}
 }
+
+func TestIsSafeSQLIdentifier(t *testing.T) {
+	for _, s := range []string{"fleet_devices", "a", "A1", "_x", "x_9"} {
+		if !isSafeSQLIdentifier(s) {
+			t.Errorf("%q should be a safe identifier", s)
+		}
+	}
+	for _, s := range []string{"", "1abc", "a b", "a;b", "a-b", "t)", "t;DROP"} {
+		if isSafeSQLIdentifier(s) {
+			t.Errorf("%q should be rejected", s)
+		}
+	}
+}
+
+// TestFleetKeyColumnsMigrateOnExistingTable exercises the ALTER backfill path — the
+// real upgrade path for existing installs, which the fresh-DB CREATE TABLE otherwise
+// masks. It drops the new columns to simulate the pre-PR schema, seeds a device, and
+// asserts migrate() re-adds the columns, preserves the row, backfills defaults, and
+// is idempotent.
+func TestFleetKeyColumnsMigrateOnExistingTable(t *testing.T) {
+	s := openTestStore(t)
+	for _, c := range []string{"api_key_hash", "key_confirmed"} {
+		if _, err := s.db.Exec("ALTER TABLE fleet_devices DROP COLUMN " + c); err != nil {
+			t.Fatalf("drop column %s (simulate pre-migration schema): %v", c, err)
+		}
+	}
+	if has, _ := s.columnExists("fleet_devices", "api_key_hash"); has {
+		t.Fatal("api_key_hash should be absent after the simulated downgrade")
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO fleet_devices(name,kind,endpoint,os,arch,status,services,last_seen,created_at,updated_at)
+		 VALUES('phone','mobile','','','','online','[]','', datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatalf("seed old-shape row: %v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate (backfill): %v", err)
+	}
+	has1, _ := s.columnExists("fleet_devices", "api_key_hash")
+	has2, _ := s.columnExists("fleet_devices", "key_confirmed")
+	if !has1 || !has2 {
+		t.Fatalf("columns missing after migrate: api_key_hash=%v key_confirmed=%v", has1, has2)
+	}
+	hash, confirmed, err := s.FleetDeviceKeyState("mobile", "phone")
+	if err != nil || hash != "" || confirmed {
+		t.Fatalf("backfill: want row preserved as unenrolled ''/false, got %q/%v (err %v)", hash, confirmed, err)
+	}
+	// Idempotent.
+	if err := s.migrate(); err != nil {
+		t.Fatalf("second migrate must be a no-op, got %v", err)
+	}
+}

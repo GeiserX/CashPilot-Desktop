@@ -881,9 +881,30 @@ func (s *Store) migrate() error {
 	return nil
 }
 
-// columnExists reports whether table has a column of the given name. The table
-// name is a trusted constant (PRAGMA does not accept bound parameters).
+// isSafeSQLIdentifier allows only ^[A-Za-z_][A-Za-z0-9_]*$ — a plain SQL identifier
+// safe to interpolate where bound parameters are not accepted (e.g. PRAGMA).
+func isSafeSQLIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r == '_', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// columnExists reports whether table has a column of the given name. Callers pass
+// a trusted constant table name; PRAGMA cannot use bound parameters, so the name is
+// interpolated — the identifier guard keeps a future untrusted caller from injecting.
 func (s *Store) columnExists(table, column string) (bool, error) {
+	if !isSafeSQLIdentifier(table) {
+		return false, fmt.Errorf("columnExists: unsafe table identifier %q", table)
+	}
 	rows, err := s.db.Query("PRAGMA table_info(" + table + ")")
 	if err != nil {
 		return false, err

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -520,5 +521,100 @@ func TestStartFleetAPIBindsAndCloses(t *testing.T) {
 	if resp, err := client.Get("http://" + addr + "/api/health"); err == nil {
 		_ = resp.Body.Close()
 		t.Fatal("expected the follow-up request to fail after Close")
+	}
+}
+
+// TestHandleWorkerHeartbeatReissuesUntilConfirmed pins the reissue transition
+// through the real handler+store: an unconfirmed device that comes back on the
+// shared key is rotated to a fresh key, the old key goes stale, and confirming with
+// the new key finalizes — all on a single device row.
+func TestHandleWorkerHeartbeatReissuesUntilConfirmed(t *testing.T) {
+	app := newFleetTestApp(t, "shared")
+	post := func(token string) (int, map[string]any) {
+		req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat",
+			strings.NewReader(`{"name":"phone","system_info":{"os":"android"}}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		app.handleWorkerHeartbeat(w, req)
+		var body map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return w.Code, body
+	}
+
+	code, body := post("shared")
+	if code != http.StatusOK {
+		t.Fatalf("enroll: got %d", code)
+	}
+	key1, _ := body["worker_key"].(string)
+	if key1 == "" {
+		t.Fatal("enroll must return a worker_key")
+	}
+
+	// Unconfirmed device returns on the shared key -> a FRESH, different key.
+	code, body = post("shared")
+	if code != http.StatusOK {
+		t.Fatalf("reissue: got %d", code)
+	}
+	key2, _ := body["worker_key"].(string)
+	if key2 == "" || key2 == key1 {
+		t.Fatalf("reissue must rotate to a fresh key (key1=%q key2=%q)", key1, key2)
+	}
+
+	// The rotated-away key1 is now stale.
+	if code, _ := post(key1); code != http.StatusUnauthorized {
+		t.Fatalf("stale key1 must be 401, got %d", code)
+	}
+	// key2 works and confirms.
+	if code, _ := post(key2); code != http.StatusOK {
+		t.Fatalf("key2 must be accepted, got %d", code)
+	}
+	if devs := app.store.ListFleetDevices(); len(devs) != 1 {
+		t.Fatalf("expected exactly 1 device row, got %d", len(devs))
+	}
+}
+
+// TestHandleWorkerHeartbeatConcurrentEnroll drives concurrent first-contact
+// heartbeats for one identity under -race; the fleetMu-serialized sequence must
+// leave exactly one row in a consistent unconfirmed-with-key state (no duplicate
+// rows, no corruption).
+func TestHandleWorkerHeartbeatConcurrentEnroll(t *testing.T) {
+	app := newFleetTestApp(t, "shared")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat",
+				strings.NewReader(`{"name":"phone","system_info":{"os":"android"}}`))
+			req.Header.Set("Authorization", "Bearer shared")
+			w := httptest.NewRecorder()
+			app.handleWorkerHeartbeat(w, req)
+		}()
+	}
+	wg.Wait()
+
+	if devs := app.store.ListFleetDevices(); len(devs) != 1 {
+		t.Fatalf("concurrent enroll must not duplicate rows, got %d", len(devs))
+	}
+	hash, confirmed, err := app.store.FleetDeviceKeyState("mobile", "phone")
+	if err != nil || hash == "" || confirmed {
+		t.Fatalf("want a stored unconfirmed key, got hash=%q confirmed=%v (err %v)", hash, confirmed, err)
+	}
+}
+
+func TestFleetRateLimiter(t *testing.T) {
+	l := newFleetRateLimiter(2, time.Minute)
+	now := time.Now()
+	if !l.allow("1.2.3.4", now) || !l.allow("1.2.3.4", now) {
+		t.Fatal("first two hits must be allowed")
+	}
+	if l.allow("1.2.3.4", now) {
+		t.Fatal("third hit within the window must be blocked")
+	}
+	if !l.allow("5.6.7.8", now) {
+		t.Fatal("a different IP has its own budget")
+	}
+	if !l.allow("1.2.3.4", now.Add(2*time.Minute)) {
+		t.Fatal("hits must be allowed again after the window elapses")
 	}
 }

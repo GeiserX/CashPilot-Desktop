@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -40,8 +41,62 @@ type workerSystemInfo struct {
 	Hostname string `json:"hostname"`
 }
 
+// fleetRateLimiter is a small per-IP sliding-window limiter for the heartbeat
+// endpoint. It is intentionally minimal (no external dep): each IP's recent hit
+// timestamps are pruned on access, and the whole map is swept when it grows large
+// so a flood of spoofed source IPs can't grow it without bound.
+type fleetRateLimiter struct {
+	mu     sync.Mutex
+	hits   map[string][]time.Time
+	limit  int
+	window time.Duration
+}
+
+func newFleetRateLimiter(limit int, window time.Duration) *fleetRateLimiter {
+	return &fleetRateLimiter{hits: make(map[string][]time.Time), limit: limit, window: window}
+}
+
+// allow records a hit for ip and reports whether it stays within limit per window.
+func (l *fleetRateLimiter) allow(ip string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := now.Add(-l.window)
+	if len(l.hits) > 1024 {
+		for k, ts := range l.hits {
+			live := ts[:0]
+			for _, t := range ts {
+				if t.After(cutoff) {
+					live = append(live, t)
+				}
+			}
+			if len(live) == 0 {
+				delete(l.hits, k)
+			} else {
+				l.hits[k] = live
+			}
+		}
+	}
+	kept := l.hits[ip][:0]
+	for _, t := range l.hits[ip] {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= l.limit {
+		l.hits[ip] = kept
+		return false
+	}
+	l.hits[ip] = append(kept, now)
+	return true
+}
+
 func (a *App) startFleetAPI() error {
 	cfg := a.cfg.Config()
+	if a.fleetLimiter == nil {
+		// ~60 heartbeats/min per IP: far above a real device's 1-2/min, but caps
+		// floods and online guessing.
+		a.fleetLimiter = newFleetRateLimiter(60, time.Minute)
+	}
 	mux := a.fleetMux(cfg.MetricsEnabled)
 
 	addr := fmt.Sprintf("%s:%d", cfg.FleetBindAddress, cfg.FleetPort)
@@ -101,6 +156,16 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	if a.fleetLimiter != nil {
+		ip := r.RemoteAddr
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			ip = host
+		}
+		if !a.fleetLimiter.allow(ip, time.Now()) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+			return
+		}
+	}
 	if a.fleetKey == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "fleet key not configured"})
 		return
@@ -119,6 +184,14 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := heartbeatKind(body)
+
+	// Serialize the read(FleetDeviceKeyState) -> classify -> upsert -> set/confirm
+	// sequence: it is not one DB transaction, so without this lock two concurrent or
+	// retried heartbeats for the same device could both enroll and race the key write
+	// (leaving a client holding a key the DB discarded), and the reap/delete paths
+	// (which take the same lock) could blank a confirmed device's key mid-sequence.
+	a.fleetMu.Lock()
+	defer a.fleetMu.Unlock()
 
 	// Per-worker fleet keys: classify this heartbeat from the device's stored key
 	// state and the presented token BEFORE recording it (the classification needs
@@ -196,8 +269,11 @@ func classifyFleetAuth(storedHash string, confirmed bool, presentedToken, shared
 		subtle.ConstantTimeCompare([]byte(store.HashFleetKey(presentedToken)), []byte(storedHash)) == 1 {
 		return fleetAuthOK
 	}
+	// Compare hashes (fixed 64-hex length) rather than the raw tokens so the check is
+	// constant-time regardless of the presented token's length (ConstantTimeCompare
+	// returns early on a length mismatch, which would otherwise leak the token length).
 	sharedValid := presentedToken != "" && sharedKey != "" &&
-		subtle.ConstantTimeCompare([]byte(presentedToken), []byte(sharedKey)) == 1
+		subtle.ConstantTimeCompare([]byte(store.HashFleetKey(presentedToken)), []byte(store.HashFleetKey(sharedKey))) == 1
 	if storedHash == "" {
 		if sharedValid {
 			return fleetAuthIssue
