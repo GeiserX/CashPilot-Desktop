@@ -228,6 +228,12 @@ func newFleetKey() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// heartbeatKind derives the device kind ("mobile"/"worker") from the reported OS
+// and name. NOTE: the per-worker key is keyed by (kind, name); a device that
+// changes its reported OS/name therefore becomes a *different* identity and
+// re-enrolls from the shared bootstrap key. That is a graceful re-enrollment, not
+// a privilege escalation (an attacker gains nothing they didn't already have with
+// the shared token), but it can cause spurious re-enrollment for a renamed device.
 func heartbeatKind(body workerHeartbeat) string {
 	osValue := strings.ToLower(body.SystemInfo.OS)
 	nameValue := strings.ToLower(body.Name)

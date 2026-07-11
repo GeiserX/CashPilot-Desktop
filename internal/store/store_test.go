@@ -1292,3 +1292,13 @@ func TestFleetDeviceKeyLifecycle(t *testing.T) {
 		t.Fatalf("missing device: want \"\"/nil, got %q (%v)", hash, err)
 	}
 }
+
+func TestSetFleetDeviceKeyMissingRowErrors(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.SetFleetDeviceKey("android", "ghost", HashFleetKey("k")); err == nil {
+		t.Fatal("SetFleetDeviceKey must error when the device row does not exist")
+	}
+	if err := s.ConfirmFleetDeviceKey("android", "ghost"); err == nil {
+		t.Fatal("ConfirmFleetDeviceKey must error when the device row does not exist")
+	}
+}

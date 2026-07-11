@@ -641,23 +641,45 @@ func (s *Store) FleetDeviceKeyState(kind, name string) (hash string, confirmed b
 }
 
 // SetFleetDeviceKey stores a device's per-worker key hash and marks it
-// unconfirmed (the device confirms by authenticating with the key later).
+// unconfirmed (the device confirms by authenticating with the key later). It
+// errors if the device row does not exist, so a caller never hands a client a key
+// that was not actually persisted (which would lock that client out).
 func (s *Store) SetFleetDeviceKey(kind, name, hash string) error {
-	_, err := s.db.Exec(
+	res, err := s.db.Exec(
 		`UPDATE fleet_devices SET api_key_hash = ?, key_confirmed = 0, updated_at = datetime('now') WHERE kind = ? AND name = ?`,
 		hash, kind, name,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("set worker key: no fleet_devices row for (%q, %q)", kind, name)
+	}
+	return nil
 }
 
 // ConfirmFleetDeviceKey marks a device's key confirmed — it has authenticated
 // with its own key, so the shared bootstrap key is refused for it from now on.
 func (s *Store) ConfirmFleetDeviceKey(kind, name string) error {
-	_, err := s.db.Exec(
+	res, err := s.db.Exec(
 		`UPDATE fleet_devices SET key_confirmed = 1, updated_at = datetime('now') WHERE kind = ? AND name = ?`,
 		kind, name,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("confirm worker key: no fleet_devices row for (%q, %q)", kind, name)
+	}
+	return nil
 }
 
 func (s *Store) ListFleetDevices() []FleetDevice {
