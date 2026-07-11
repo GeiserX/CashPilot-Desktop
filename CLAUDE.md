@@ -27,7 +27,7 @@ go test ./...      # run Go tests
 - `services/` — service catalog definitions (passive income providers)
 - `frontend/` — vanilla TypeScript SPA (communicates via Wails bindings)
 - `internal/exchange/` — FX rates (crypto + fiat → display currency) powering the earnings summary
-- `fleet_server.go` — token-authenticated worker/mobile heartbeat API (loopback by default)
+- `fleet_server.go` — worker/mobile heartbeat API (loopback by default). Uses **per-worker fleet keys**: the shared token bootstraps enrollment, then each device gets its own key (issued once as `worker_key`, re-delivered until confirmed) and the shared token is refused for a confirmed device.
 
 ## Key Rules
 

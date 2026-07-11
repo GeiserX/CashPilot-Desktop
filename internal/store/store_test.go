@@ -1235,3 +1235,130 @@ func TestHealthScores(t *testing.T) {
 			pf.Score, pf.UptimePercent, pf.Samples)
 	}
 }
+
+func TestHashFleetKeyStable(t *testing.T) {
+	a := HashFleetKey("abc")
+	if a != HashFleetKey("abc") {
+		t.Fatal("HashFleetKey must be deterministic")
+	}
+	if len(a) != 64 { // sha256 hex
+		t.Fatalf("want 64-char hex digest, got %d", len(a))
+	}
+	if a == HashFleetKey("different") {
+		t.Fatal("different inputs must hash differently")
+	}
+}
+
+func TestFleetDeviceKeyLifecycle(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.UpsertFleetHeartbeat(FleetDevice{Name: "phone", Kind: "android", Status: "online"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Unenrolled: no key, unconfirmed.
+	hash, confirmed, err := s.FleetDeviceKeyState("android", "phone")
+	if err != nil || hash != "" || confirmed {
+		t.Fatalf("unenrolled: want \"\"/false, got %q/%v (err %v)", hash, confirmed, err)
+	}
+
+	// Set a key -> stored, unconfirmed.
+	h1 := HashFleetKey("k1")
+	if err := s.SetFleetDeviceKey("android", "phone", h1); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if hash, confirmed, _ = s.FleetDeviceKeyState("android", "phone"); hash != h1 || confirmed {
+		t.Fatalf("after set: want %q/false, got %q/%v", h1, hash, confirmed)
+	}
+
+	// Confirm.
+	if err := s.ConfirmFleetDeviceKey("android", "phone"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, confirmed, _ = s.FleetDeviceKeyState("android", "phone"); !confirmed {
+		t.Fatal("after confirm: want confirmed=true")
+	}
+
+	// Re-setting a key rotates it and resets confirmed.
+	h2 := HashFleetKey("k2")
+	if err := s.SetFleetDeviceKey("android", "phone", h2); err != nil {
+		t.Fatalf("re-set: %v", err)
+	}
+	if hash, confirmed, _ = s.FleetDeviceKeyState("android", "phone"); hash != h2 || confirmed {
+		t.Fatalf("after re-set: want %q/false, got %q/%v", h2, hash, confirmed)
+	}
+
+	// Missing device -> empty state, no error.
+	if hash, _, err = s.FleetDeviceKeyState("android", "ghost"); err != nil || hash != "" {
+		t.Fatalf("missing device: want \"\"/nil, got %q (%v)", hash, err)
+	}
+}
+
+func TestSetFleetDeviceKeyMissingRowErrors(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.SetFleetDeviceKey("android", "ghost", HashFleetKey("k")); err == nil {
+		t.Fatal("SetFleetDeviceKey must error when the device row does not exist")
+	}
+	if err := s.ConfirmFleetDeviceKey("android", "ghost"); err == nil {
+		t.Fatal("ConfirmFleetDeviceKey must error when the device row does not exist")
+	}
+}
+
+func TestIsSafeSQLIdentifier(t *testing.T) {
+	for _, s := range []string{"fleet_devices", "a", "A1", "_x", "x_9"} {
+		if !isSafeSQLIdentifier(s) {
+			t.Errorf("%q should be a safe identifier", s)
+		}
+	}
+	for _, s := range []string{"", "1abc", "a b", "a;b", "a-b", "t)", "t;DROP"} {
+		if isSafeSQLIdentifier(s) {
+			t.Errorf("%q should be rejected", s)
+		}
+	}
+}
+
+// TestFleetKeyColumnsMigrateOnExistingTable exercises the ALTER backfill path — the
+// real upgrade path for existing installs, which the fresh-DB CREATE TABLE otherwise
+// masks. It drops the new columns to simulate the pre-PR schema, seeds a device, and
+// asserts migrate() re-adds the columns, preserves the row, backfills defaults, and
+// is idempotent.
+func TestFleetKeyColumnsMigrateOnExistingTable(t *testing.T) {
+	s := openTestStore(t)
+	for _, c := range []string{"api_key_hash", "key_confirmed"} {
+		if _, err := s.db.Exec("ALTER TABLE fleet_devices DROP COLUMN " + c); err != nil {
+			t.Fatalf("drop column %s (simulate pre-migration schema): %v", c, err)
+		}
+	}
+	if has, _ := s.columnExists("fleet_devices", "api_key_hash"); has {
+		t.Fatal("api_key_hash should be absent after the simulated downgrade")
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO fleet_devices(name,kind,endpoint,os,arch,status,services,last_seen,created_at,updated_at)
+		 VALUES('phone','mobile','','','','online','[]','', datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatalf("seed old-shape row: %v", err)
+	}
+
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate (backfill): %v", err)
+	}
+	has1, _ := s.columnExists("fleet_devices", "api_key_hash")
+	has2, _ := s.columnExists("fleet_devices", "key_confirmed")
+	if !has1 || !has2 {
+		t.Fatalf("columns missing after migrate: api_key_hash=%v key_confirmed=%v", has1, has2)
+	}
+	hash, confirmed, err := s.FleetDeviceKeyState("mobile", "phone")
+	if err != nil || hash != "" || confirmed {
+		t.Fatalf("backfill: want row preserved as unenrolled ''/false, got %q/%v (err %v)", hash, confirmed, err)
+	}
+	// Idempotent.
+	if err := s.migrate(); err != nil {
+		t.Fatalf("second migrate must be a no-op, got %v", err)
+	}
+}
+
+func TestColumnExistsRejectsUnsafeIdentifier(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.columnExists("fleet_devices; DROP TABLE x", "a"); err == nil {
+		t.Fatal("columnExists must reject an unsafe table identifier")
+	}
+}

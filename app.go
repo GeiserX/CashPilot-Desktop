@@ -54,6 +54,18 @@ type App struct {
 	schedMu     sync.Mutex
 	schedCancel context.CancelFunc
 	schedDone   chan struct{}
+	// fleetMu serializes the per-worker-key state machine. handleWorkerHeartbeat's
+	// read(FleetDeviceKeyState) -> classify -> upsert -> set/confirm sequence is not
+	// a single DB transaction (each call is its own statement), so without this lock
+	// two concurrent/retried heartbeats for one device could both enroll and race
+	// the key write (last-writer-wins -> a client holds a key the DB discarded), and
+	// a reap/delete landing mid-sequence could blank a confirmed device's key. Reap
+	// and manual delete take the same lock so they cannot interleave with a heartbeat.
+	fleetMu sync.Mutex
+	// fleetLimiter throttles the heartbeat/enrollment endpoint per client IP as
+	// defense-in-depth against floods, mass enrollment (DB growth), and racing the
+	// enrollment window. Initialised in startFleetAPI.
+	fleetLimiter *fleetRateLimiter
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
@@ -151,9 +163,9 @@ func (a *App) startCore(ctx context.Context) error {
 	}()
 
 	// A fleet-token problem must NOT disable core earnings collection: surface it and
-	// continue so the scheduler and retention purge below still start. startFleetAPI
-	// fails closed while fleetKey is empty (validFleetBearer rejects every request),
-	// so continuing here never leaves the worker API open.
+	// continue so the scheduler and retention purge below still start. The fleet
+	// heartbeat handler fails closed while fleetKey is empty (it returns 503 and
+	// persists nothing), so continuing here never leaves the worker API open.
 	if err := a.ensureFleetAPIKey(); err != nil {
 		a.emitError("fleet-api", err)
 	}
@@ -792,7 +804,10 @@ func (a *App) RemoveFleetDevice(id int64) (FleetState, error) {
 	if id <= 0 {
 		return FleetState{}, fmt.Errorf("the local desktop device cannot be removed")
 	}
-	if err := a.store.DeleteFleetDevice(id); err != nil {
+	a.fleetMu.Lock()
+	err := a.store.DeleteFleetDevice(id)
+	a.fleetMu.Unlock()
+	if err != nil {
 		return FleetState{}, err
 	}
 	return a.GetFleetState()
@@ -1097,7 +1112,10 @@ func (a *App) collectAll(ctx context.Context) {
 	// nil-guard defensively; a sweep failure must not abort the cycle — log it and
 	// continue, the next cycle simply retries.
 	if a.store != nil {
-		if _, _, err := a.store.SweepStaleFleetDevices(fleetOfflineAfter, fleetReapAfter); err != nil {
+		a.fleetMu.Lock()
+		_, _, err := a.store.SweepStaleFleetDevices(fleetOfflineAfter, fleetReapAfter)
+		a.fleetMu.Unlock()
+		if err != nil {
 			a.emitError("fleet", err)
 		}
 	}
