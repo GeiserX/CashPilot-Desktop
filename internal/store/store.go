@@ -4,8 +4,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -610,6 +612,54 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 	return device, nil
 }
 
+// --- Per-worker fleet keys ---
+
+// HashFleetKey returns the SHA-256 hex digest of a per-worker fleet key. The
+// desktop fleet server only verifies inbound heartbeats and issues keys (it never
+// calls out to devices), so a one-way hash is sufficient storage at rest.
+func HashFleetKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+// FleetDeviceKeyState returns the stored per-worker key hash and confirmed flag
+// for the device identified by (kind, name). hash is "" when the device has no
+// key yet (unenrolled).
+func (s *Store) FleetDeviceKeyState(kind, name string) (hash string, confirmed bool, err error) {
+	var confirmedInt int
+	err = s.db.QueryRow(
+		`SELECT api_key_hash, key_confirmed FROM fleet_devices WHERE kind = ? AND name = ?`,
+		kind, name,
+	).Scan(&hash, &confirmedInt)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return hash, confirmedInt != 0, nil
+}
+
+// SetFleetDeviceKey stores a device's per-worker key hash and marks it
+// unconfirmed (the device confirms by authenticating with the key later).
+func (s *Store) SetFleetDeviceKey(kind, name, hash string) error {
+	_, err := s.db.Exec(
+		`UPDATE fleet_devices SET api_key_hash = ?, key_confirmed = 0, updated_at = datetime('now') WHERE kind = ? AND name = ?`,
+		hash, kind, name,
+	)
+	return err
+}
+
+// ConfirmFleetDeviceKey marks a device's key confirmed — it has authenticated
+// with its own key, so the shared bootstrap key is refused for it from now on.
+func (s *Store) ConfirmFleetDeviceKey(kind, name string) error {
+	_, err := s.db.Exec(
+		`UPDATE fleet_devices SET key_confirmed = 1, updated_at = datetime('now') WHERE kind = ? AND name = ?`,
+		kind, name,
+	)
+	return err
+}
+
 func (s *Store) ListFleetDevices() []FleetDevice {
 	rows, err := s.db.Query(`
 		SELECT id, name, kind, endpoint, os, arch, status, services, last_seen, created_at
@@ -764,6 +814,8 @@ func (s *Store) migrate() error {
 			status TEXT NOT NULL DEFAULT 'offline',
 			services TEXT NOT NULL DEFAULT '[]',
 			last_seen TEXT NOT NULL DEFAULT '',
+			api_key_hash TEXT NOT NULL DEFAULT '',
+			key_confirmed INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
@@ -784,7 +836,49 @@ func (s *Store) migrate() error {
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_fleet_devices_kind_name ON fleet_devices(kind, name);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Forward-only column additions for existing fleet_devices tables (per-worker
+	// fleet keys). SQLite has no "ADD COLUMN IF NOT EXISTS", so guard each ALTER;
+	// a fresh DB already has the columns from CREATE TABLE above, so this is a no-op.
+	for _, col := range []struct{ name, ddl string }{
+		{"api_key_hash", "ALTER TABLE fleet_devices ADD COLUMN api_key_hash TEXT NOT NULL DEFAULT ''"},
+		{"key_confirmed", "ALTER TABLE fleet_devices ADD COLUMN key_confirmed INTEGER NOT NULL DEFAULT 0"},
+	} {
+		has, err := s.columnExists("fleet_devices", col.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := s.db.Exec(col.ddl); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// columnExists reports whether table has a column of the given name. The table
+// name is a trusted constant (PRAGMA does not accept bound parameters).
+func (s *Store) columnExists(table, column string) (bool, error) {
+	rows, err := s.db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (s *Store) encrypt(raw []byte) (string, error) {

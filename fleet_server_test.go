@@ -182,8 +182,8 @@ func TestHandleWorkerHeartbeatRejectsOversizedBody(t *testing.T) {
 }
 
 // TestHandleWorkerHeartbeatEmptyKeyRejects pins that an App with no configured
-// fleet API key rejects every heartbeat: validFleetBearer returns false when the
-// key is empty, so even a "Bearer " header gets a 401.
+// fleet API key rejects every heartbeat with 503 (the server is not configured to
+// authenticate anyone), persisting nothing.
 func TestHandleWorkerHeartbeatEmptyKeyRejects(t *testing.T) {
 	app := newFleetTestApp(t, "")
 	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{"name":"worker-7"}`))
@@ -192,8 +192,8 @@ func TestHandleWorkerHeartbeatEmptyKeyRejects(t *testing.T) {
 
 	app.handleWorkerHeartbeat(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401 when no API key is configured, got %d", w.Code)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when no API key is configured, got %d", w.Code)
 	}
 	if devices := app.store.ListFleetDevices(); len(devices) != 0 {
 		t.Fatalf("expected no device persisted for an unauthorized request, got %d", len(devices))
@@ -241,19 +241,92 @@ func TestHandleWorkerHeartbeatRequiresNameOrClientID(t *testing.T) {
 	}
 }
 
-func TestValidFleetBearer(t *testing.T) {
-	app := newFleetTestApp(t, "abc123")
+func TestBearerToken(t *testing.T) {
+	cases := []struct{ header, want string }{
+		{"Bearer abc", "abc"},
+		{"Bearer ", ""},
+		{"bearer abc", ""}, // prefix is case-sensitive
+		{"Basic xyz", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/x", nil)
+		if tc.header != "" {
+			req.Header.Set("Authorization", tc.header)
+		}
+		if got := bearerToken(req); got != tc.want {
+			t.Errorf("bearerToken(%q) = %q, want %q", tc.header, got, tc.want)
+		}
+	}
+}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", nil)
-	req.Header.Set("Authorization", "Bearer abc123")
-	if !app.validFleetBearer(req) {
-		t.Fatal("expected the valid bearer token to be accepted")
+func TestClassifyFleetAuth(t *testing.T) {
+	const shared = "shared-key"
+	ownHash := store.HashFleetKey("own-key")
+	cases := []struct {
+		name       string
+		storedHash string
+		confirmed  bool
+		token      string
+		want       fleetAuthAction
+	}{
+		{"unenrolled + shared -> enroll", "", false, shared, fleetAuthIssue},
+		{"unenrolled + wrong -> reject", "", false, "nope", fleetAuthReject},
+		{"unenrolled + empty -> reject", "", false, "", fleetAuthReject},
+		{"own key -> ok", ownHash, false, "own-key", fleetAuthOK},
+		{"own key while confirmed -> ok", ownHash, true, "own-key", fleetAuthOK},
+		{"unconfirmed + shared -> reissue", ownHash, false, shared, fleetAuthIssue},
+		{"confirmed + shared -> reject", ownHash, true, shared, fleetAuthReject},
+		{"enrolled + wrong token -> reject", ownHash, false, "wrong", fleetAuthReject},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyFleetAuth(tc.storedHash, tc.confirmed, tc.token, shared); got != tc.want {
+				t.Errorf("classifyFleetAuth = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerHeartbeatEnrollConfirmReject exercises the full cutover through
+// the HTTP handler: a device enrolls on the shared key, adopts its own key, and is
+// then rejected when it falls back to the shared key.
+func TestHandleWorkerHeartbeatEnrollConfirmReject(t *testing.T) {
+	app := newFleetTestApp(t, "shared")
+	post := func(token string) (int, map[string]any) {
+		req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat",
+			strings.NewReader(`{"name":"phone","system_info":{"os":"android"}}`))
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		app.handleWorkerHeartbeat(w, req)
+		var body map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return w.Code, body
 	}
 
-	req2 := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", nil)
-	req2.Header.Set("Authorization", "Bearer nope")
-	if app.validFleetBearer(req2) {
-		t.Fatal("expected the wrong bearer token to be rejected")
+	// 1) Enroll on the shared key -> issued a worker_key.
+	code, body := post("shared")
+	if code != http.StatusOK {
+		t.Fatalf("enroll: got %d (%v)", code, body)
+	}
+	key, _ := body["worker_key"].(string)
+	if key == "" {
+		t.Fatal("enroll must return a worker_key")
+	}
+
+	// 2) Authenticate with the OWN key -> ok, confirmed, no new key issued.
+	code, body = post(key)
+	if code != http.StatusOK {
+		t.Fatalf("own-key heartbeat: got %d", code)
+	}
+	if _, ok := body["worker_key"]; ok {
+		t.Fatalf("confirmed heartbeat must not re-issue a key, got %v", body["worker_key"])
+	}
+
+	// 3) The shared key is now rejected for the confirmed device.
+	code, _ = post("shared")
+	if code != http.StatusUnauthorized {
+		t.Fatalf("confirmed device on shared key must be 401, got %d", code)
 	}
 }
 

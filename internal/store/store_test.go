@@ -1235,3 +1235,60 @@ func TestHealthScores(t *testing.T) {
 			pf.Score, pf.UptimePercent, pf.Samples)
 	}
 }
+
+func TestHashFleetKeyStable(t *testing.T) {
+	a := HashFleetKey("abc")
+	if a != HashFleetKey("abc") {
+		t.Fatal("HashFleetKey must be deterministic")
+	}
+	if len(a) != 64 { // sha256 hex
+		t.Fatalf("want 64-char hex digest, got %d", len(a))
+	}
+	if a == HashFleetKey("different") {
+		t.Fatal("different inputs must hash differently")
+	}
+}
+
+func TestFleetDeviceKeyLifecycle(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.UpsertFleetHeartbeat(FleetDevice{Name: "phone", Kind: "android", Status: "online"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	// Unenrolled: no key, unconfirmed.
+	hash, confirmed, err := s.FleetDeviceKeyState("android", "phone")
+	if err != nil || hash != "" || confirmed {
+		t.Fatalf("unenrolled: want \"\"/false, got %q/%v (err %v)", hash, confirmed, err)
+	}
+
+	// Set a key -> stored, unconfirmed.
+	h1 := HashFleetKey("k1")
+	if err := s.SetFleetDeviceKey("android", "phone", h1); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if hash, confirmed, _ = s.FleetDeviceKeyState("android", "phone"); hash != h1 || confirmed {
+		t.Fatalf("after set: want %q/false, got %q/%v", h1, hash, confirmed)
+	}
+
+	// Confirm.
+	if err := s.ConfirmFleetDeviceKey("android", "phone"); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if _, confirmed, _ = s.FleetDeviceKeyState("android", "phone"); !confirmed {
+		t.Fatal("after confirm: want confirmed=true")
+	}
+
+	// Re-setting a key rotates it and resets confirmed.
+	h2 := HashFleetKey("k2")
+	if err := s.SetFleetDeviceKey("android", "phone", h2); err != nil {
+		t.Fatalf("re-set: %v", err)
+	}
+	if hash, confirmed, _ = s.FleetDeviceKeyState("android", "phone"); hash != h2 || confirmed {
+		t.Fatalf("after re-set: want %q/false, got %q/%v", h2, hash, confirmed)
+	}
+
+	// Missing device -> empty state, no error.
+	if hash, _, err = s.FleetDeviceKeyState("android", "ghost"); err != nil || hash != "" {
+		t.Fatalf("missing device: want \"\"/nil, got %q (%v)", hash, err)
+	}
+}

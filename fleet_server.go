@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -99,8 +101,8 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if !a.validFleetBearer(r) {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid API key"})
+	if a.fleetKey == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "fleet key not configured"})
 		return
 	}
 	var body workerHeartbeat
@@ -111,13 +113,31 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(body.Name) == "" {
 		body.Name = body.ClientID
 	}
-	if strings.TrimSpace(body.Name) == "" {
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker name or client_id is required"})
 		return
 	}
+	kind := heartbeatKind(body)
+
+	// Per-worker fleet keys: classify this heartbeat from the device's stored key
+	// state and the presented token BEFORE recording it (the classification needs
+	// the device identity from the body).
+	storedHash, confirmed, err := a.store.FleetDeviceKeyState(kind, name)
+	if err != nil {
+		a.emitError("fleet-heartbeat", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record heartbeat"})
+		return
+	}
+	action := classifyFleetAuth(storedHash, confirmed, bearerToken(r), a.fleetKey)
+	if action == fleetAuthReject {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid API key"})
+		return
+	}
+
 	device, err := a.store.UpsertFleetHeartbeat(store.FleetDevice{
-		Name:     strings.TrimSpace(body.Name),
-		Kind:     heartbeatKind(body),
+		Name:     name,
+		Kind:     kind,
 		Endpoint: strings.TrimSpace(body.URL),
 		OS:       body.SystemInfo.OS,
 		Arch:     body.SystemInfo.Arch,
@@ -130,17 +150,82 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record heartbeat"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "worker_id": device.ID})
+
+	resp := map[string]any{"status": "ok", "worker_id": device.ID}
+	switch action {
+	case fleetAuthIssue:
+		// Enroll (or reissue a fresh key for an unconfirmed device that came back
+		// on the shared key): mint a key, store its hash, and hand it back once.
+		key, err := newFleetKey()
+		if err == nil {
+			err = a.store.SetFleetDeviceKey(kind, name, store.HashFleetKey(key))
+		}
+		if err != nil {
+			a.emitError("fleet-heartbeat", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not issue worker key"})
+			return
+		}
+		resp["worker_key"] = key
+	case fleetAuthOK:
+		// The device authenticated with its own key — finalize the cutover so the
+		// shared bootstrap key is refused for it from now on.
+		if err := a.store.ConfirmFleetDeviceKey(kind, name); err != nil {
+			a.emitError("fleet-heartbeat", err)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
-func (a *App) validFleetBearer(r *http.Request) bool {
-	key := a.fleetKey
-	if key == "" {
-		return false
+// fleetAuthAction is how a heartbeat should be treated under the per-worker-key protocol.
+type fleetAuthAction int
+
+const (
+	fleetAuthReject fleetAuthAction = iota
+	fleetAuthIssue                  // enroll, or reissue a fresh key to an unconfirmed device
+	fleetAuthOK                     // authenticated with its own key -> confirm
+)
+
+// classifyFleetAuth decides how to treat a heartbeat from the device's stored
+// per-worker key hash + confirmed flag and the presented bearer token:
+//   - the token hashes to the stored key -> OK (confirm)
+//   - no key yet + the shared bootstrap key -> Issue (enroll)
+//   - an UNCONFIRMED key + the shared key -> Issue (reissue a fresh key)
+//   - otherwise (a confirmed device on the shared key, or any wrong token) -> Reject
+func classifyFleetAuth(storedHash string, confirmed bool, presentedToken, sharedKey string) fleetAuthAction {
+	if presentedToken != "" && storedHash != "" &&
+		subtle.ConstantTimeCompare([]byte(store.HashFleetKey(presentedToken)), []byte(storedHash)) == 1 {
+		return fleetAuthOK
 	}
-	expected := "Bearer " + key
-	got := r.Header.Get("Authorization")
-	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
+	sharedValid := presentedToken != "" && sharedKey != "" &&
+		subtle.ConstantTimeCompare([]byte(presentedToken), []byte(sharedKey)) == 1
+	if storedHash == "" {
+		if sharedValid {
+			return fleetAuthIssue
+		}
+		return fleetAuthReject
+	}
+	if !confirmed && sharedValid {
+		return fleetAuthIssue
+	}
+	return fleetAuthReject
+}
+
+// bearerToken extracts the token from an "Authorization: Bearer <token>" header.
+func bearerToken(r *http.Request) string {
+	h := r.Header.Get("Authorization")
+	if strings.HasPrefix(h, "Bearer ") {
+		return strings.TrimPrefix(h, "Bearer ")
+	}
+	return ""
+}
+
+// newFleetKey returns a fresh high-entropy per-worker fleet key.
+func newFleetKey() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func heartbeatKind(body workerHeartbeat) string {
