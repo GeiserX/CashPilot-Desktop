@@ -434,7 +434,9 @@ func TestFleetKeyFileFallbackWhenKeyringUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected the fallback token file %q to exist: %v", keyPath, err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	// Windows has no Unix permission bits (Go reports 0666 for a writable file),
+	// so the 0600 guarantee is asserted only off Windows.
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
 		t.Fatalf("expected the fallback token file to be 0600, got %o", perm)
 	}
 
