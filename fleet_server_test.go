@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -616,5 +617,37 @@ func TestFleetRateLimiter(t *testing.T) {
 	}
 	if !l.allow("1.2.3.4", now.Add(2*time.Minute)) {
 		t.Fatal("hits must be allowed again after the window elapses")
+	}
+}
+
+func TestHandleWorkerHeartbeatRateLimited(t *testing.T) {
+	app := newFleetTestApp(t, "shared")
+	app.fleetLimiter = newFleetRateLimiter(1, time.Minute)
+	post := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat",
+			strings.NewReader(`{"name":"phone","system_info":{"os":"android"}}`))
+		req.Header.Set("Authorization", "Bearer shared")
+		req.RemoteAddr = "10.0.0.1:5000"
+		w := httptest.NewRecorder()
+		app.handleWorkerHeartbeat(w, req)
+		return w.Code
+	}
+	if code := post(); code != http.StatusOK {
+		t.Fatalf("first heartbeat: got %d", code)
+	}
+	if code := post(); code != http.StatusTooManyRequests {
+		t.Fatalf("second heartbeat over the limit must be 429, got %d", code)
+	}
+}
+
+func TestFleetRateLimiterSweepsExpiredIPs(t *testing.T) {
+	l := newFleetRateLimiter(5, time.Minute)
+	old := time.Now().Add(-2 * time.Minute)
+	// >1024 distinct, already-expired IPs trigger the whole-map sweep.
+	for i := 0; i < 1100; i++ {
+		l.allow(fmt.Sprintf("10.%d.%d.1", i/256, i%256), old)
+	}
+	if !l.allow("fresh-ip", time.Now()) {
+		t.Fatal("a fresh IP must be allowed after the expired-entry sweep")
 	}
 }

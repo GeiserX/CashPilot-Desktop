@@ -1355,3 +1355,10 @@ func TestFleetKeyColumnsMigrateOnExistingTable(t *testing.T) {
 		t.Fatalf("second migrate must be a no-op, got %v", err)
 	}
 }
+
+func TestColumnExistsRejectsUnsafeIdentifier(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.columnExists("fleet_devices; DROP TABLE x", "a"); err == nil {
+		t.Fatal("columnExists must reject an unsafe table identifier")
+	}
+}
