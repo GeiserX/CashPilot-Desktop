@@ -89,8 +89,9 @@ Of the 16 core earners studied — **~12 have official native binaries (≥ Wind
   headless-browser path is justified — heavy; the Wails WebView can't load Chrome extensions, so it's not a
   free win. Defer.
 - **Catalog corrections needed** (stale data): Gradient `status: active → dead`; Salad `platforms` add
-  `macos`/`linux` (graduated from beta); PacketStream add `macos`; ProxyBase image ref
-  (`ghcr.io/proxybase-org-company/peer-cli`). Peer2Profit already `dead`.
+  `macos`/`linux` (graduated from beta); PacketStream add `macos`. Peer2Profit already `dead`.
+  ProxyBase image ref: **done** in v0.10.1 — migrated to the digest-pinned `ghcr.io/proxybaseorg/peer-cli`
+  (note: the org is `proxybaseorg`; the older `proxybase-org-company` org no longer exists).
 - **Business-model note:** Honeygain/Bright Data run official partner-SDK programs that *pay* to bundle their
   client — but they require exclusivity ("no competing tech") that conflicts with the aggregator model.
   **Stay on the current model** (run the *retail* client with the *user's own* account credentials) — it's a
