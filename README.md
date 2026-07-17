@@ -92,7 +92,7 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 | [MystNodes](https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE) | ✅ | ✅ | Unlimited | Unlimited | Crypto (MYST) |
 | [PacketStream](https://packetstream.io/?psr=7xgZ) | ✅ | ❌ | Unlimited | 1 | PayPal |
 | [Presearch](https://presearch.com/signup?rid=4872322) | ✅ | ✅ | Unlimited | 1 | Crypto (PRE) |
-| [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO) | ✅ | ❌ | Unlimited | 1 | Crypto |
+| [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | 1 | Crypto |
 | [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ) | ✅ | ✅ | Unlimited | 1 | Crypto, PayPal |
 | [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | 1 | PayPal, Crypto |
 | [Repocket](https://repocket.com/) | ✅ | ❌ | 5 | 2 | PayPal, Crypto |

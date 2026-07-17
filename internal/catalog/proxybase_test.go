@@ -28,8 +28,15 @@ func TestProxyBaseContainerContract(t *testing.T) {
 	if !strings.HasPrefix(svc.Docker.Image, "ghcr.io/proxybaseorg/peer-cli@sha256:") {
 		t.Errorf("ProxyBase must use the digest-pinned GHCR peer-cli image, got %q", svc.Docker.Image)
 	}
-	if strings.Contains(svc.Docker.Image, "proxybase/proxybase") {
-		t.Errorf("ProxyBase must not use the retired Docker Hub image, got %q", svc.Docker.Image)
+
+	arm64 := false
+	for _, p := range svc.Docker.Platforms {
+		if p == "linux/arm64" {
+			arm64 = true
+		}
+	}
+	if !arm64 {
+		t.Errorf("ProxyBase must keep linux/arm64 (multi-arch image; Raspberry Pi support), got %v", svc.Docker.Platforms)
 	}
 
 	byKey := map[string]EnvVar{}
@@ -46,8 +53,24 @@ func TestProxyBaseContainerContract(t *testing.T) {
 	if !byKey["ID"].Required {
 		t.Error("ID (Access Token) must be required")
 	}
+	if !byKey["ID"].Secret {
+		t.Error("ID (Access Token) must be marked secret (masked in the UI)")
+	}
 	if !byKey["NAME"].Required {
 		t.Error("NAME (Device Name) must be required")
+	}
+
+	// Referral revenue guard: the signup URL must keep the referral code.
+	if svc.Referral.SignupURL != "https://peer.proxybase.org?referral=nXzS3c6iTO" {
+		t.Errorf("signup_url must keep the referral code, got %q", svc.Referral.SignupURL)
+	}
+
+	// Datacenter/VPS IPs are accepted (per the ProxyBase team); drives the UI badge.
+	if svc.Requirements.ResidentialIP {
+		t.Error("ProxyBase no longer requires a residential IP")
+	}
+	if !svc.Requirements.VPSIP {
+		t.Error("ProxyBase must mark VPS/datacenter IPs as supported")
 	}
 
 	// Domain migrated proxybase.io -> proxybase.org across every user-facing URL.
