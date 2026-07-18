@@ -7,14 +7,17 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -605,5 +608,57 @@ func TestCollectAllSingleFlight(t *testing.T) {
 	// The one run's internal parallelism stays within the configured bound.
 	if got := fake.maxSeen.Load(); int(got) > collectConcurrency {
 		t.Fatalf("bounded concurrency violated: max concurrent collects = %d, want <= %d", got, collectConcurrency)
+	}
+}
+
+// outdatedTestCatalog builds a one-service catalog whose current image is a
+// specific digest-pinned reference, so image-drift can be asserted deterministically.
+func outdatedTestCatalog(t *testing.T) *catalog.Catalog {
+	t.Helper()
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{
+		"services/bandwidth/example.yml": {Data: []byte(
+			"name: Example\nslug: example\ncategory: bandwidth\nstatus: active\ndocker:\n  image: ghcr.io/org/new-cli@sha256:new\n")},
+	})
+	if err != nil {
+		t.Fatalf("catalog.LoadEmbedded error: %v", err)
+	}
+	return cat
+}
+
+// TestOutdatedServices verifies that a deployment whose image drifted from the
+// catalog is flagged, an in-catalog match is not, and an unknown slug is ignored.
+func TestOutdatedServices(t *testing.T) {
+	app := &App{catalog: outdatedTestCatalog(t)}
+
+	drifted := []store.Deployment{
+		{Slug: "example", Image: "old/legacy@sha256:old"}, // provider changed the repo -> outdated
+		{Slug: "unknown", Image: "whatever:1.0"},          // not in the catalog -> ignored
+	}
+	got := app.outdatedServices(drifted)
+	if len(got) != 1 || got[0] != "example" {
+		t.Fatalf("outdatedServices(drifted) = %v, want [example]", got)
+	}
+
+	matching := []store.Deployment{{Slug: "example", Image: "ghcr.io/org/new-cli@sha256:new"}}
+	if got := app.outdatedServices(matching); len(got) != 0 {
+		t.Fatalf("outdatedServices(matching) = %v, want empty", got)
+	}
+}
+
+// TestNotificationsFlagsOutdated verifies drift surfaces as an actionable warning.
+func TestNotificationsFlagsOutdated(t *testing.T) {
+	app := &App{catalog: outdatedTestCatalog(t)}
+	deps := []store.Deployment{{Slug: "example", Image: "old/legacy@sha256:old"}}
+	// Runtime available so the offline warning does not appear and only drift is under test.
+	items := app.notifications(runtime.Status{Available: true}, nil, deps)
+
+	found := false
+	for _, it := range items {
+		if it.Level == "warning" && strings.Contains(it.Title, "update available") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notifications() did not include an 'update available' warning: %+v", items)
 	}
 }

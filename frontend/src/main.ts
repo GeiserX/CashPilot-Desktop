@@ -259,7 +259,7 @@ function renderDashboard(current: AppState) {
             </div>
           </div>
           <div class="services-table-wrap">
-            ${renderServicesTable(services, deployments, earnings, current.health, current.serviceDetails)}
+            ${renderServicesTable(services, deployments, earnings, current.health, current.serviceDetails, current.outdatedServices)}
           </div>
         </section>
         <pre id="service-output" class="output dashboard-output"></pre>
@@ -438,7 +438,7 @@ function renderCatalog(current: AppState) {
               ${categories.map((category) => `<button class="filter-tab ${catalogFilter === category ? "active" : ""}" data-filter="${category}">${escapeHtml(capitalize(category))}</button>`).join("")}
             </div>
             <div class="catalog-grid">
-              ${services.map((service) => renderCatalogCard(service, current.deployments || [])).join("")}
+              ${services.map((service) => renderCatalogCard(service, current.deployments || [], current.outdatedServices)).join("")}
             </div>
           </section>
         </main>
@@ -469,8 +469,9 @@ function renderCatalog(current: AppState) {
   });
 }
 
-function renderCatalogCard(service: Service, deployments: Deployment[]) {
+function renderCatalogCard(service: Service, deployments: Deployment[], outdated: string[] | null) {
   const deployed = deployments.some((deployment) => deployment.slug === service.slug);
+  const isOutdated = deployed && (outdated || []).includes(service.slug);
   const signupUrl = service.referral?.signupUrl || service.website;
   return `
     <article class="catalog-card">
@@ -481,6 +482,7 @@ function renderCatalogCard(service: Service, deployments: Deployment[]) {
           <div class="badge-row">
             <span class="badge">${escapeHtml(service.category)}</span>
             <span class="badge ${deployed ? "success" : ""}">${deployed ? "Deployed" : service.manualOnly ? "Manual" : "Available"}</span>
+            ${isOutdated ? `<span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}
           </div>
         </div>
       </div>
@@ -991,7 +993,7 @@ function renderMystNodes(json: string | undefined): string {
   `;
 }
 
-function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null) {
+function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null, outdated: string[] | null) {
   if (deployments.length === 0) {
     return `
       <div class="empty-state">
@@ -1002,6 +1004,7 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
     `;
   }
   const earningBySlug = new Map(earnings.map((record) => [record.platform, record]));
+  const outdatedSet = new Set(outdated || []);
   return `
     <table class="services-table">
       <thead>
@@ -1025,7 +1028,7 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
                 <strong>${escapeHtml(service?.name || deployment.slug)}</strong>
                 <small>${escapeHtml(deployment.image)}</small>
               </td>
-              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}</td>
+              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
               <td>${earning && !earning.error ? formatBalance(earning.balance, earning.currency) : "<span class=\"muted\">--</span>"}</td>
               <td>${deployment.cpuPercent.toFixed(1)}%</td>
               <td>${deployment.memoryMb.toFixed(0)} MB</td>

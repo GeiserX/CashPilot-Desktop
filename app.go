@@ -204,16 +204,21 @@ func (a *App) Shutdown(_ context.Context) {
 }
 
 type AppState struct {
-	Config        config.AppConfig             `json:"config"`
-	Runtime       runtime.Status               `json:"runtime"`
-	Services      []catalog.Service            `json:"services"`
-	Deployments   []store.Deployment           `json:"deployments"`
-	Earnings      []store.EarningsRecord       `json:"earnings"`
-	Guides        []runtime.InstallGuide       `json:"guides"`
-	Notifications []Notification               `json:"notifications"`
-	Currencies    []string                     `json:"currencies"`
-	Summary       EarningsSummary              `json:"summary"`
-	Health        map[string]store.HealthScore `json:"health"`
+	Config      config.AppConfig   `json:"config"`
+	Runtime     runtime.Status     `json:"runtime"`
+	Services    []catalog.Service  `json:"services"`
+	Deployments []store.Deployment `json:"deployments"`
+	// OutdatedServices lists the slugs of deployed services whose running image no
+	// longer matches the catalog's current image (the provider changed or re-pinned
+	// it): deployed and often still "running", but likely earning nothing until
+	// re-deployed. The frontend badges these; notifications() also alerts on them.
+	OutdatedServices []string                     `json:"outdatedServices"`
+	Earnings         []store.EarningsRecord       `json:"earnings"`
+	Guides           []runtime.InstallGuide       `json:"guides"`
+	Notifications    []Notification               `json:"notifications"`
+	Currencies       []string                     `json:"currencies"`
+	Summary          EarningsSummary              `json:"summary"`
+	Health           map[string]store.HealthScore `json:"health"`
 	// ServiceDetails carries each collector's optional per-service JSON detail blob
 	// keyed by slug (e.g. the MystNodes per-node earnings breakdown). The frontend
 	// parses the raw JSON per service; the backend stores and forwards it opaquely.
@@ -357,17 +362,18 @@ func (a *App) GetAppState() (AppState, error) {
 	deployments := a.store.ListDeployments()
 	earnings := a.store.ListLatestEarnings()
 	return AppState{
-		Config:         a.cfg.Config(),
-		Runtime:        runtimeStatus,
-		Services:       a.catalog.ListVisible(),
-		Deployments:    deployments,
-		Earnings:       earnings,
-		Guides:         runtime.InstallGuides(),
-		Notifications:  a.notifications(runtimeStatus, earnings, deployments),
-		Currencies:     supportedCurrencies(),
-		Summary:        a.computeEarningsSummary(earnings),
-		Health:         a.store.HealthScores(7),
-		ServiceDetails: a.store.ListServiceDetails(),
+		Config:           a.cfg.Config(),
+		Runtime:          runtimeStatus,
+		Services:         a.catalog.ListVisible(),
+		Deployments:      deployments,
+		OutdatedServices: a.outdatedServices(deployments),
+		Earnings:         earnings,
+		Guides:           runtime.InstallGuides(),
+		Notifications:    a.notifications(runtimeStatus, earnings, deployments),
+		Currencies:       supportedCurrencies(),
+		Summary:          a.computeEarningsSummary(earnings),
+		Health:           a.store.HealthScores(7),
+		ServiceDetails:   a.store.ListServiceDetails(),
 	}, nil
 }
 
@@ -1264,6 +1270,20 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 	if !status.Available && !status.NativeAvailable {
 		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
 	}
+	// A container whose image no longer matches the catalog often keeps running (so it
+	// looks healthy) while the retired provider client earns nothing — surface it so the
+	// user re-deploys instead of trusting the green status.
+	for _, slug := range a.outdatedServices(deployments) {
+		name := slug
+		if svc, ok := a.catalog.Get(slug); ok {
+			name = svc.Name
+		}
+		items = append(items, Notification{
+			Level:   "warning",
+			Title:   name + " update available",
+			Message: "The provider changed this service's image. Re-deploy it from the catalog so it keeps earning.",
+		})
+	}
 	for _, record := range earnings {
 		if record.Error != "" {
 			items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
@@ -1273,6 +1293,28 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 		items = append(items, Notification{Level: "info", Title: "No services deployed", Message: "Use the setup wizard or register a mobile device to start tracking earnings."})
 	}
 	return items
+}
+
+// outdatedServices returns the slugs of deployed services whose running image no
+// longer matches the catalog's current image for that service. Such a container
+// usually still runs — and so looks healthy — while earning nothing, so the UI
+// flags it for re-deploy. Services absent from the catalog, or with an empty image
+// on either side, are conservatively not flagged (see catalog.ImageOutdated).
+func (a *App) outdatedServices(deployments []store.Deployment) []string {
+	if a.catalog == nil {
+		return nil
+	}
+	var out []string
+	for _, dep := range deployments {
+		svc, ok := a.catalog.Get(dep.Slug)
+		if !ok {
+			continue
+		}
+		if catalog.ImageOutdated(dep.Image, svc.Docker.Image) {
+			out = append(out, dep.Slug)
+		}
+	}
+	return out
 }
 
 func deploymentSlugs(deployments []store.Deployment) []string {
