@@ -32,6 +32,9 @@ export interface AppState {
   runtime: RuntimeStatus;
   services: Service[];
   deployments: Deployment[] | null;
+  // Slugs of deployed services whose running image no longer matches the catalog
+  // (provider changed/re-pinned it): deployed but likely earning nothing.
+  outdatedServices: string[] | null;
   health: Record<string, HealthScore> | null;
   earnings: EarningsRecord[] | null;
   guides: InstallGuide[];

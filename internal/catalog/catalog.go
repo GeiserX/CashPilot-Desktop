@@ -249,6 +249,39 @@ func (c *Catalog) Get(slug string) (Service, bool) {
 	return svc, ok
 }
 
+// splitImage splits a Docker image reference into repository, tag, and digest.
+// A ':' is a tag only when it comes after the last '/'; before it, it is a
+// registry port (e.g. localhost:5000/img).
+func splitImage(ref string) (repo, tag, digest string) {
+	if i := strings.Index(ref, "@"); i >= 0 {
+		ref, digest = ref[:i], ref[i+1:]
+	}
+	repo = ref
+	if lastColon := strings.LastIndex(ref, ":"); lastColon > strings.LastIndex(ref, "/") {
+		repo, tag = ref[:lastColon], ref[lastColon+1:]
+	}
+	return repo, tag, digest
+}
+
+// ImageOutdated reports whether a running container's image no longer matches the
+// catalog entry it was deployed from. It is true when the provider changed the
+// image path (the ProxyBase migration) or the catalog re-pinned to a new digest,
+// so the UI can prompt a re-deploy instead of showing a healthy-looking container
+// that is silently running a retired image and earning nothing. Deliberately
+// conservative: unknown/empty images and a pure tag-vs-digest difference of the
+// same repository are NOT flagged.
+func ImageOutdated(deployed, catalogImage string) bool {
+	if deployed == "" || catalogImage == "" {
+		return false
+	}
+	dRepo, _, dDigest := splitImage(deployed)
+	cRepo, _, cDigest := splitImage(catalogImage)
+	if dRepo != cRepo {
+		return true
+	}
+	return cDigest != "" && dDigest != "" && cDigest != dDigest
+}
+
 func locateServicesDir() (string, error) {
 	candidates := []string{
 		filepath.Join("services"),

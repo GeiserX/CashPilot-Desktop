@@ -161,3 +161,38 @@ native:
 		t.Fatal("NativeBinaryFor should report no binary for an undeclared os/arch")
 	}
 }
+
+func TestSplitImage(t *testing.T) {
+	cases := []struct{ ref, repo, tag, digest string }{
+		{"ghcr.io/proxybaseorg/peer-cli@sha256:abc", "ghcr.io/proxybaseorg/peer-cli", "", "sha256:abc"},
+		{"proxybase/proxybase:latest", "proxybase/proxybase", "latest", ""},
+		{"repo", "repo", "", ""},
+		{"localhost:5000/img:1.0", "localhost:5000/img", "1.0", ""},
+	}
+	for _, c := range cases {
+		repo, tag, digest := splitImage(c.ref)
+		if repo != c.repo || tag != c.tag || digest != c.digest {
+			t.Errorf("splitImage(%q) = (%q,%q,%q), want (%q,%q,%q)", c.ref, repo, tag, digest, c.repo, c.tag, c.digest)
+		}
+	}
+}
+
+func TestImageOutdated(t *testing.T) {
+	cases := []struct {
+		name, deployed, catalog string
+		want                    bool
+	}{
+		{"provider migrated the image path", "proxybase/proxybase@sha256:old", "ghcr.io/proxybaseorg/peer-cli@sha256:new", true},
+		{"catalog re-pinned to a new digest", "repo@sha256:aaa", "repo@sha256:bbb", true},
+		{"identical image", "repo@sha256:aaa", "repo@sha256:aaa", false},
+		{"empty deployed image", "", "repo@sha256:x", false},
+		{"empty catalog image", "repo:1.0", "", false},
+		{"tag vs digest, same repo (unresolvable)", "repo:1.0", "repo@sha256:x", false},
+		{"tag-only difference, same repo", "repo:1.0", "repo:2.0", false},
+	}
+	for _, c := range cases {
+		if got := ImageOutdated(c.deployed, c.catalog); got != c.want {
+			t.Errorf("%s: ImageOutdated(%q, %q) = %v, want %v", c.name, c.deployed, c.catalog, got, c.want)
+		}
+	}
+}
