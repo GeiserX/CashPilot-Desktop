@@ -1,0 +1,97 @@
+name: Auto Tag
+
+# Conventional-commit auto-release on push to main (mirrors the CashPilot web repo).
+# Computes the next semver from the commits since the last tag, creates + pushes the
+# tag, then CALLS desktop-release.yml as a reusable workflow to build and publish.
+#
+# The reusable-call is deliberate: a tag pushed with the default GITHUB_TOKEN does NOT
+# trigger another workflow (GitHub's loop-prevention), so relying on desktop-release.yml's
+# own `push: tags` trigger here would silently never build. Calling it directly (like the
+# web repo calls build.yml) sidesteps that. A human pushing a tag by hand still triggers
+# desktop-release.yml through its tag trigger, unchanged.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.go'
+      - 'internal/**'
+      - 'frontend/**'
+      - 'services/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'wails.json'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Serialize so two quick merges can't race on creating the same next tag.
+  group: auto-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Bump version and tag
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    outputs:
+      new_tag: ${{ steps.version.outputs.new_tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        run: |
+          LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            LATEST="v0.0.0"
+          fi
+
+          VERSION="${LATEST#v}"
+          MAJOR=$(echo "$VERSION" | cut -d. -f1)
+          MINOR=$(echo "$VERSION" | cut -d. -f2)
+          PATCH=$(echo "$VERSION" | cut -d. -f3)
+
+          # Bump from conventional-commit markers in the commits since the last tag:
+          # a "BREAKING CHANGE" footer or a "type!:" subject -> major; a "feat:" -> minor;
+          # otherwise patch. Fully automated — no manual tags.
+          if [ "$LATEST" = "v0.0.0" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${LATEST}..HEAD"
+          fi
+          LOG=$(git log --format='%s%n%b' "$RANGE")
+          if echo "$LOG" | grep -qE '^BREAKING CHANGE:|^[a-z]+(\([^)]*\))?!:'; then
+            MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+            LEVEL="major"
+          elif echo "$LOG" | grep -qE '^feat(\([^)]*\))?:'; then
+            MINOR=$((MINOR + 1)); PATCH=0
+            LEVEL="minor"
+          else
+            PATCH=$((PATCH + 1))
+            LEVEL="patch"
+          fi
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "Bumping $LATEST -> $NEW_TAG ($LEVEL)"
+
+      - name: Create and push tag
+        if: steps.version.outputs.new_tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.new_tag }}" -m "Release ${{ steps.version.outputs.new_tag }}"
+          git push origin "${{ steps.version.outputs.new_tag }}"
+
+  release:
+    needs: tag
+    if: needs.tag.outputs.new_tag
+    uses: ./.github/workflows/desktop-release.yml
+    with:
+      version: ${{ needs.tag.outputs.new_tag }}
+    secrets: inherit

@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version tag to build and release (e.g. v1.2.3)'
+        type: string
+        required: true
 
 permissions:
   contents: write
@@ -47,6 +53,22 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      # Stamp the release version from the tag so the built artifact always matches it.
+      # wails.json's productVersion previously drifted (nothing read or synced it); the
+      # tag is now the single source of truth and is injected here at build time.
+      - name: Set release version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version || github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Building version $VERSION"
+          tmp=$(mktemp)
+          jq --arg v "$VERSION" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
+          for f in package.json frontend/package.json; do
+            tmp=$(mktemp)
+            jq --arg v "$VERSION" '.version = $v' "$f" > "$tmp" && mv "$tmp" "$f"
+          done
 
       - name: Test
         run: go test ./...
@@ -128,6 +150,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ inputs.version || github.ref_name }}
           files: artifacts/desktop-*/*
           generate_release_notes: true
         env:
