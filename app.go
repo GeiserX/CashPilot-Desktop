@@ -223,6 +223,10 @@ type AppState struct {
 	// keyed by slug (e.g. the MystNodes per-node earnings breakdown). The frontend
 	// parses the raw JSON per service; the backend stores and forwards it opaquely.
 	ServiceDetails map[string]string `json:"serviceDetails"`
+	// Hostname is this machine's name, so a deploy form can render a {hostname}-defaulted
+	// field with the real value the deploy path will substitute (instead of the literal
+	// "cashpilot-{hostname}" the raw catalog default would otherwise show and submit).
+	Hostname string `json:"hostname"`
 }
 
 type Notification struct {
@@ -374,6 +378,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Summary:          a.computeEarningsSummary(earnings),
 		Health:           a.store.HealthScores(7),
 		ServiceDetails:   a.store.ListServiceDetails(),
+		Hostname:         runtime.DeviceHostname(),
 	}, nil
 }
 
@@ -652,7 +657,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		collectors = append(collectors, CollectorSetting{
 			Slug:       svc.Slug,
 			Name:       svc.Name,
-			Configured: len(creds) > 0,
+			Configured: a.credsConfigured(svc.Slug, creds),
 			Collector:  svc.Collector.Type,
 		})
 	}
@@ -880,14 +885,27 @@ func (a *App) DeployService(slug string, values map[string]string) (store.Deploy
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, err
 	}
+	// The credentials this deploy will use: the submitted values (which replace the
+	// stored blob) when provided, else whatever is already stored.
+	creds := values
+	if len(creds) == 0 {
+		stored, err := a.store.GetCredentials(slug)
+		if err != nil {
+			return store.Deployment{}, err
+		}
+		creds = stored
+	}
+	// Validate BEFORE persisting, so a rejected deploy never leaves invalid/blank creds
+	// lingering — they could never deploy, yet they would linger and light the
+	// "Configured" badge for a service that cannot actually start.
+	if err := a.services.ValidateCredentials(slug, creds); err != nil {
+		a.emitError("deploy", err)
+		return store.Deployment{}, err
+	}
 	if len(values) > 0 {
 		if err := a.store.SaveCredentials(slug, values); err != nil {
 			return store.Deployment{}, err
 		}
-	}
-	creds, err := a.store.GetCredentials(slug)
-	if err != nil {
-		return store.Deployment{}, err
 	}
 	deployment, err := a.services.Deploy(a.ctx, slug, creds)
 	if err != nil {
@@ -1342,6 +1360,21 @@ func hostnameOrDefault(value string) string {
 		return "This Mac"
 	}
 	return value
+}
+
+// credsConfigured reports whether a service should show as "Configured" in Settings:
+// it must have stored credentials AND those credentials must satisfy the catalog's
+// current required fields. Keying off required fields (not merely len(creds) > 0) stops
+// an orphaned pre-migration blob — non-empty but missing the current keys — from
+// falsely reading as configured when a deploy would in fact fail until re-entry.
+func (a *App) credsConfigured(slug string, creds map[string]string) bool {
+	if len(creds) == 0 {
+		return false
+	}
+	if a.services == nil {
+		return true
+	}
+	return a.services.RequiredCredentialsMet(slug, creds)
 }
 
 // ensureFleetAPIKey loads the fleet bearer token into memory at startup, keeping it

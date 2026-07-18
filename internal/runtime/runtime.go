@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"os/exec"
 	"regexp"
 	goruntime "runtime"
@@ -543,18 +544,39 @@ func containerName(slug string) string {
 	return "cashpilot-" + slug
 }
 
+// DeviceHostname returns this machine's hostname for {hostname} expansion, falling
+// back to "desktop" when the OS can't report one. Exported so the app layer can offer
+// the same value as the form default the deploy path will substitute.
+func DeviceHostname() string {
+	if h, err := os.Hostname(); err == nil && h != "" {
+		return h
+	}
+	return "desktop"
+}
+
 func buildEnv(svc catalog.Service, overrides map[string]string) map[string]string {
 	env := make(map[string]string)
+	declared := make(map[string]bool, len(svc.Docker.Env))
 	for _, item := range svc.Docker.Env {
+		declared[item.Key] = true
 		if item.Default != "" {
-			env[item.Key] = strings.ReplaceAll(item.Default, "{hostname}", "desktop")
+			env[item.Key] = item.Default
 		}
 	}
+	// Only catalog-declared keys reach the container: an orphaned stored credential
+	// (e.g. a pre-migration USER_ID/DEVICE_NAME left in the blob) must not leak into
+	// the environment of a service whose schema no longer includes it.
 	for key, value := range overrides {
-		env[key] = value
+		if declared[key] {
+			env[key] = value
+		}
 	}
+	// Expand {hostname} on BOTH defaults and overrides to the real hostname: an unedited
+	// form submits the raw "cashpilot-{hostname}" default back as an override, which the
+	// old default-only substitution left as a literal container name.
+	hostname := DeviceHostname()
 	for key, value := range env {
-		env[key] = substitute(value, env)
+		env[key] = substitute(strings.ReplaceAll(value, "{hostname}", hostname), env)
 	}
 	return env
 }

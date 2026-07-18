@@ -334,3 +334,30 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 	}
 	return nil
 }
+
+// ValidateCredentials reports whether the given credentials would let the service
+// deploy — mirroring Deploy's pre-checks (known, deployable, required fields present) —
+// so a caller can validate BEFORE persisting anything.
+func (m *Manager) ValidateCredentials(slug string, credentials map[string]string) error {
+	svc, ok := m.catalog.Get(slug)
+	if !ok {
+		return fmt.Errorf("unknown service: %s", slug)
+	}
+	if svc.ManualOnly {
+		return fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+	}
+	return validateRequired(svc, credentials)
+}
+
+// RequiredCredentialsMet reports whether every required field for the service is present
+// in the given credentials. Unlike ValidateCredentials it does not reject a manually
+// tracked service, so the settings "Configured" badge can reflect whether the stored
+// blob actually satisfies the current schema — not merely that it is non-empty, which an
+// orphaned pre-migration blob (wrong keys) would also be.
+func (m *Manager) RequiredCredentialsMet(slug string, credentials map[string]string) bool {
+	svc, ok := m.catalog.Get(slug)
+	if !ok {
+		return false
+	}
+	return validateRequired(svc, credentials) == nil
+}
