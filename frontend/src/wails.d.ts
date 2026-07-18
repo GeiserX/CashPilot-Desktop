@@ -42,6 +42,9 @@ export interface AppState {
   currencies: string[];
   summary: EarningsSummary;
   serviceDetails: Record<string, string> | null;
+  // This machine's hostname, so a {hostname}-defaulted deploy field renders the real
+  // value the deploy path will substitute rather than the literal "{hostname}".
+  hostname: string;
 }
 
 // MystNode mirrors the Go mystNode struct: one Mysterium node's per-node

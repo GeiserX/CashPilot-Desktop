@@ -558,3 +558,36 @@ func TestRefreshRecordsResolvedRuntimeKindPerProvider(t *testing.T) {
 		t.Fatalf("expected earnapp recorded under native-process, got ok=%v runtime=%q", ok, dep.Runtime)
 	}
 }
+
+// TestValidateCredentials covers the deploy pre-validation used to validate BEFORE
+// persisting (CashPilot-Desktop-ada): it mirrors Deploy's known/deployable/required gates.
+func TestValidateCredentials(t *testing.T) {
+	m := NewManager(&fakeProvider{}, newTestCatalog(t), newTestStore(t))
+	if err := m.ValidateCredentials("does-not-exist", nil); err == nil || !strings.Contains(err.Error(), "unknown service") {
+		t.Fatalf("unknown service: got %v", err)
+	}
+	if err := m.ValidateCredentials("manual-svc", nil); err == nil || !strings.Contains(err.Error(), "tracked manually") {
+		t.Fatalf("manual only: got %v", err)
+	}
+	if err := m.ValidateCredentials("example", nil); err == nil || !strings.Contains(err.Error(), "missing required field") {
+		t.Fatalf("missing required: got %v", err)
+	}
+	if err := m.ValidateCredentials("example", map[string]string{"TOKEN": "x"}); err != nil {
+		t.Fatalf("valid creds should pass, got %v", err)
+	}
+}
+
+// TestRequiredCredentialsMet covers the "Configured" badge check: true only when the
+// current required fields are present, so an orphaned blob (wrong keys) reads false.
+func TestRequiredCredentialsMet(t *testing.T) {
+	m := NewManager(&fakeProvider{}, newTestCatalog(t), newTestStore(t))
+	if m.RequiredCredentialsMet("does-not-exist", nil) {
+		t.Fatal("unknown service must not be met")
+	}
+	if m.RequiredCredentialsMet("example", map[string]string{"ORPHAN": "old"}) {
+		t.Fatal("an orphaned blob missing the required TOKEN must not read as met")
+	}
+	if !m.RequiredCredentialsMet("example", map[string]string{"TOKEN": "x"}) {
+		t.Fatal("the required TOKEN present must read as met")
+	}
+}

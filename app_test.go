@@ -18,6 +18,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -660,5 +661,52 @@ func TestNotificationsFlagsOutdated(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("notifications() did not include an 'update available' warning: %+v", items)
+	}
+}
+
+// TestDeployServiceValidatesBeforePersist covers CashPilot-Desktop-ada fix 1: a deploy
+// whose credentials fail validation must be rejected WITHOUT persisting the invalid blob
+// (the pre-fix flow saved first, leaving lingering creds that lit the "Configured" badge
+// for a service that could never actually deploy).
+func TestDeployServiceValidatesBeforePersist(t *testing.T) {
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatalf("config.NewManager error: %v", err)
+	}
+	st, err := store.Open(cfg.DataDir())
+	if err != nil {
+		t.Fatalf("store.Open error: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{
+		"services/bandwidth/req.yml": {Data: []byte(
+			"name: Req\nslug: req\ncategory: bandwidth\nstatus: active\ndocker:\n  image: req/image:1.0.0\n  env:\n    - key: TOKEN\n      label: Token\n      required: true\n")},
+	})
+	if err != nil {
+		t.Fatalf("catalog.LoadEmbedded error: %v", err)
+	}
+
+	provider := runtime.NewDockerProvider()
+	app := &App{
+		cfg:      cfg,
+		store:    st,
+		catalog:  cat,
+		runtime:  provider,
+		services: services.NewManager(provider, cat, st),
+		ctx:      context.Background(),
+	}
+
+	// Non-empty but invalid (missing the required TOKEN): the runtime is never reached.
+	if _, err := app.DeployService("req", map[string]string{"WRONG": "x"}); err == nil {
+		t.Fatal("expected a validation error for the missing required field")
+	}
+	got, err := st.GetCredentials("req")
+	if err != nil {
+		t.Fatalf("GetCredentials error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a rejected deploy must not persist creds, got %v", got)
 	}
 }

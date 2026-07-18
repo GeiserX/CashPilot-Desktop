@@ -690,14 +690,17 @@ func buildNativeEnv(svc catalog.Service, overrides map[string]string) map[string
 	env := make(map[string]string)
 	for _, item := range svc.Native.Env {
 		if item.Default != "" {
-			env[item.Key] = strings.ReplaceAll(item.Default, "{hostname}", "desktop")
+			env[item.Key] = item.Default
 		}
 	}
 	for key, value := range overrides {
 		env[key] = value
 	}
+	// Expand {hostname} to the real hostname on both defaults and overrides (an unedited
+	// form resubmits the raw default), matching the Docker buildEnv path.
+	hostname := DeviceHostname()
 	for key, value := range env {
-		env[key] = substitute(value, env)
+		env[key] = substitute(strings.ReplaceAll(value, "{hostname}", hostname), env)
 	}
 	return env
 }

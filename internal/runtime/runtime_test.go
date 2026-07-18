@@ -705,34 +705,34 @@ func TestParseMemoryBytes(t *testing.T) {
 		want    int64
 		wantErr bool
 	}{
-		{in: "768m", want: 768 * 1024 * 1024},        // mysterium
-		{in: "2g", want: 2 * 1024 * 1024 * 1024},     // storj
-		{in: "1536m", want: 1536 * 1024 * 1024},      // anyone-protocol
-		{in: "256m", want: 256 * 1024 * 1024},        // honeygain/earnapp/proxyrack
-		{in: "128m", want: 128 * 1024 * 1024},        // expendable earners
-		{in: "512k", want: 512 * 1024},               // kibibytes
-		{in: "1024", want: 1024},                     // bare byte count, no suffix
-		{in: "1024b", want: 1024},                    // bare byte count, explicit trailing "b"
-		{in: "2gb", want: 2 * 1024 * 1024 * 1024},    // explicit trailing "b"
-		{in: "1gb", want: 1024 * 1024 * 1024},        // explicit trailing "b"
-		{in: "512mb", want: 512 * 1024 * 1024},       // explicit trailing "b"
-		{in: "4kb", want: 4 * 1024},                  // explicit trailing "b"
-		{in: "1t", want: 1024 * 1024 * 1024 * 1024},  // tebibytes
-		{in: "1tb", want: 1024 * 1024 * 1024 * 1024}, // tebibytes, explicit trailing "b"
-		{in: "768M", want: 768 * 1024 * 1024},        // case-insensitive suffix
-		{in: " 256m ", want: 256 * 1024 * 1024},      // surrounding whitespace
-		{in: "1.5g", want: 1536 * 1024 * 1024},       // fractional mantissa
-		{in: "", wantErr: true},                      // empty
-		{in: "   ", wantErr: true},                   // whitespace only
-		{in: "b", wantErr: true},                      // unit only, no number
-		{in: "m", wantErr: true},                      // unit only, no number
-		{in: "abc", wantErr: true},                    // not a number
-		{in: "12x", wantErr: true},                    // trailing character isn't a known unit
-		{in: "g2", wantErr: true},                     // unit-like character isn't trailing
-		{in: "0", wantErr: true},                      // non-positive
-		{in: "0m", wantErr: true},                      // non-positive
-		{in: "0g", wantErr: true},                      // non-positive
-		{in: "-5m", wantErr: true},                     // negative
+		{in: "768m", want: 768 * 1024 * 1024},            // mysterium
+		{in: "2g", want: 2 * 1024 * 1024 * 1024},         // storj
+		{in: "1536m", want: 1536 * 1024 * 1024},          // anyone-protocol
+		{in: "256m", want: 256 * 1024 * 1024},            // honeygain/earnapp/proxyrack
+		{in: "128m", want: 128 * 1024 * 1024},            // expendable earners
+		{in: "512k", want: 512 * 1024},                   // kibibytes
+		{in: "1024", want: 1024},                         // bare byte count, no suffix
+		{in: "1024b", want: 1024},                        // bare byte count, explicit trailing "b"
+		{in: "2gb", want: 2 * 1024 * 1024 * 1024},        // explicit trailing "b"
+		{in: "1gb", want: 1024 * 1024 * 1024},            // explicit trailing "b"
+		{in: "512mb", want: 512 * 1024 * 1024},           // explicit trailing "b"
+		{in: "4kb", want: 4 * 1024},                      // explicit trailing "b"
+		{in: "1t", want: 1024 * 1024 * 1024 * 1024},      // tebibytes
+		{in: "1tb", want: 1024 * 1024 * 1024 * 1024},     // tebibytes, explicit trailing "b"
+		{in: "768M", want: 768 * 1024 * 1024},            // case-insensitive suffix
+		{in: " 256m ", want: 256 * 1024 * 1024},          // surrounding whitespace
+		{in: "1.5g", want: 1536 * 1024 * 1024},           // fractional mantissa
+		{in: "", wantErr: true},                          // empty
+		{in: "   ", wantErr: true},                       // whitespace only
+		{in: "b", wantErr: true},                         // unit only, no number
+		{in: "m", wantErr: true},                         // unit only, no number
+		{in: "abc", wantErr: true},                       // not a number
+		{in: "12x", wantErr: true},                       // trailing character isn't a known unit
+		{in: "g2", wantErr: true},                        // unit-like character isn't trailing
+		{in: "0", wantErr: true},                         // non-positive
+		{in: "0m", wantErr: true},                        // non-positive
+		{in: "0g", wantErr: true},                        // non-positive
+		{in: "-5m", wantErr: true},                       // negative
 		{in: "100000000000000000000000t", wantErr: true}, // overflows a 64-bit byte count
 	}
 	for _, tc := range cases {
@@ -827,5 +827,24 @@ func TestApplyResourceLimitsRejectsBadValue(t *testing.T) {
 		if hc.Memory != 0 || hc.MemoryReservation != 0 {
 			t.Errorf("HostConfig mutated on error: %+v", hc)
 		}
+	}
+}
+
+// TestBuildEnvFiltersUndeclaredAndSubstitutesHostname covers CashPilot-Desktop-ada:
+// an orphaned (non-catalog) override key is dropped, and {hostname} is expanded to the
+// real host on BOTH defaults and overrides (an unedited form resubmits the raw default).
+func TestBuildEnvFiltersUndeclaredAndSubstitutesHostname(t *testing.T) {
+	svc := catalog.Service{Docker: catalog.DockerConfig{Env: []catalog.EnvVar{
+		{Key: "DEVICE_ID", Default: "cashpilot-{hostname}"},
+	}}}
+	env := buildEnv(svc, map[string]string{"ORPHAN": "leak", "DEVICE_ID": "cashpilot-{hostname}"})
+	if _, ok := env["ORPHAN"]; ok {
+		t.Fatalf("undeclared override leaked into env: %q", env["ORPHAN"])
+	}
+	if strings.Contains(env["DEVICE_ID"], "{hostname}") {
+		t.Fatalf("{hostname} left unexpanded in an override: %q", env["DEVICE_ID"])
+	}
+	if want := "cashpilot-" + DeviceHostname(); env["DEVICE_ID"] != want {
+		t.Fatalf("DEVICE_ID = %q, want %q", env["DEVICE_ID"], want)
 	}
 }
