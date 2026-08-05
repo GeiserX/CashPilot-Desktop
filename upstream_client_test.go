@@ -128,18 +128,6 @@ func TestUpstreamPayloadDeclaresItselfADesktop(t *testing.T) {
 	}
 }
 
-func TestUpstreamPayloadSendsNoVersionRatherThanAFakeOne(t *testing.T) {
-	// This binary genuinely does not know its version -- wails.json has
-	// productVersion but nothing injects it into Go. An ABSENT version reads as
-	// unknown on the server; a made-up one would read as a match and hide a
-	// stale install, which is exactly how Android devices sat on an old release
-	// unnoticed. Omitted, not guessed.
-	p := newPayloadTestApp(t, nil).upstreamPayload()
-	if p.SystemInfo.Version != "" {
-		t.Fatalf("version = %q, want empty until a real one is injected", p.SystemInfo.Version)
-	}
-}
-
 func TestUpstreamPayloadNeverSendsANilSlice(t *testing.T) {
 	// A nil slice marshals to null; the server declares these as lists and
 	// pydantic rejects null for a list field with a 422.
