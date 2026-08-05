@@ -180,15 +180,12 @@ func (a *App) upstreamPayload() upstream.Payload {
 			Arch:       stdruntime.GOARCH,
 			Hostname:   host,
 			DeviceType: "desktop",
-			// Version is deliberately LEFT EMPTY, and that is the honest answer:
-			// this binary does not know its own version. wails.json carries
-			// productVersion but nothing injects it into Go (no ldflags -X, no
-			// version var), so there is nothing truthful to send. The field is
-			// omitempty, so the server records it as UNKNOWN rather than as a
-			// match -- which is its own documented rule. Filed as a bead: until a
-			// version is injected, a paired Desktop shows no version on the fleet
-			// page, and that is exactly how Android devices sat on a stale release
-			// unnoticed for weeks.
+			// Injected at link time from the release tag; empty on an unstamped
+			// local build. The field is omitempty, so empty is sent as ABSENT and
+			// the server records UNKNOWN rather than a match -- never a guess,
+			// because a wrong version hides exactly the stale install this is
+			// meant to reveal.
+			Version: AppVersion(),
 		},
 	}
 }

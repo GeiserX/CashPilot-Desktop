@@ -63,6 +63,12 @@ jobs:
           VERSION="${{ inputs.version || github.ref_name }}"
           VERSION="${VERSION#v}"
           echo "Building version $VERSION"
+          # Also hand it to the Go linker. wails.json's productVersion is read by
+          # the installer, NOT by the running binary -- so without this the app
+          # cannot report its own version and a paired Desktop shows as "unknown"
+          # on the fleet page forever, which is how a stale install stays
+          # invisible. Same single source of truth: the tag.
+          echo "CASHPILOT_LDFLAGS=-X main.appVersion=$VERSION" >> "$GITHUB_ENV"
           tmp=$(mktemp)
           jq --arg v "$VERSION" '.info.productVersion = $v' wails.json > "$tmp" && mv "$tmp" wails.json
           for f in package.json frontend/package.json; do
@@ -75,11 +81,11 @@ jobs:
 
       - name: Build Wails app (Linux)
         if: runner.os == 'Linux'
-        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -tags webkit2_41
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -tags webkit2_41 -ldflags "$CASHPILOT_LDFLAGS"
 
       - name: Build Wails app
         if: runner.os != 'Linux'
-        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -ldflags "$CASHPILOT_LDFLAGS"
 
       - name: Sign Windows binaries
         if: runner.os == 'Windows'
