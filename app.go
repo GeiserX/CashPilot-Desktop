@@ -45,6 +45,11 @@ type App struct {
 	// keychain is not hit on every heartbeat.
 	fleetKey string
 
+	// upstream is the optional pairing loop that reports this Desktop to a
+	// CashPilot server as a worker. Zero value means not paired, which is the
+	// default -- Desktop is standalone unless a UpstreamURL is configured.
+	upstream upstreamState
+
 	// Background collection scheduler. collecting is a single-flight guard so
 	// overlapping collectAll runs (the ticker, a post-deploy kick, a future manual
 	// refresh) never stack. schedCancel/schedDone are the running loop's stop
@@ -177,6 +182,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// balances refresh on a timer without the user clicking Collect. This never
 	// blocks Startup — startScheduler only launches a goroutine.
 	a.startScheduler(ctx)
+	// Optional, and a no-op unless the user paired this Desktop with a
+	// CashPilot server. Standalone is the default and unaffected.
+	a.startUpstream(ctx)
 	return nil
 }
 
@@ -195,6 +203,7 @@ func (a *App) Shutdown(_ context.Context) {
 	// Stop the collection loop before closing the store so no in-flight collect
 	// writes to a database that is about to close.
 	a.stopScheduler()
+	a.stopUpstream()
 	if a.fleetAPI != nil {
 		_ = a.fleetAPI.Close()
 	}
