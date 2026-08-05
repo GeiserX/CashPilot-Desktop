@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -649,5 +651,108 @@ func TestFleetRateLimiterSweepsExpiredIPs(t *testing.T) {
 	}
 	if !l.allow("fresh-ip", time.Now()) {
 		t.Fatal("a fresh IP must be allowed after the expired-entry sweep")
+	}
+}
+
+// --- hub and spoke -----------------------------------------------------------
+//
+// CashPilot (the server) is the hub; Desktop and Android are spokes. Spokes do
+// not talk to each other. Nothing structurally prevented it before: Desktop's
+// outbound client posts to /api/workers/heartbeat, which is the exact path this
+// server handles, so pointing one Desktop at another chained two hubs.
+
+func postHeartbeat(t *testing.T, app *App, body map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", bytes.NewReader(raw))
+	req.Header.Set("Authorization", "Bearer fleet-key")
+	w := httptest.NewRecorder()
+	app.handleWorkerHeartbeat(w, req)
+	return w
+}
+
+func TestAnotherDesktopIsRefused(t *testing.T) {
+	app := newFleetTestApp(t, "fleet-key")
+	w := postHeartbeat(t, app, map[string]any{
+		"name":        "someone-elses-desktop",
+		"client_id":   "desktop-b",
+		"system_info": map[string]any{"device_type": "desktop", "os": "darwin"},
+	})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; a Desktop enrolled as a worker of another Desktop", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "hub") {
+		t.Errorf("the refusal does not explain the model: %s", w.Body.String())
+	}
+}
+
+func TestARefusedDesktopIsNotEnrolled(t *testing.T) {
+	// A 403 is worthless if the row was written or a key issued on the way out.
+	app := newFleetTestApp(t, "fleet-key")
+	postHeartbeat(t, app, map[string]any{
+		"name":        "desktop-b",
+		"client_id":   "desktop-b",
+		"system_info": map[string]any{"device_type": "desktop"},
+	})
+	for _, d := range app.store.ListFleetDevices() {
+		if d.Name == "desktop-b" {
+			t.Fatal("the refused Desktop was recorded as a fleet device anyway")
+		}
+	}
+}
+
+func TestAndroidAndDockerSpokesAreStillAccepted(t *testing.T) {
+	// The rule must refuse ONLY Desktop. An absent device_type is a plain Docker
+	// worker and predates the field entirely -- treating missing as "desktop"
+	// would lock out every legitimate spoke, which is the absent-is-not-a-value
+	// mistake this project keeps having to undo.
+	for _, tc := range []struct {
+		name string
+		info map[string]any
+	}{
+		{"android", map[string]any{"device_type": "android"}},
+		{"docker worker, no device_type", map[string]any{"os": "linux"}},
+		{"empty device_type", map[string]any{"device_type": ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newFleetTestApp(t, "fleet-key")
+			w := postHeartbeat(t, app, map[string]any{
+				"name": "spoke-" + tc.name, "client_id": "spoke", "system_info": tc.info,
+			})
+			if w.Code == http.StatusForbidden {
+				t.Fatalf("a legitimate spoke was refused: %s", w.Body.String())
+			}
+		})
+	}
+}
+
+func TestTheRefusalIsCaseInsensitive(t *testing.T) {
+	// A client spelling it "Desktop" must not slip through.
+	if !rejectDesktopSpoke(workerSystemInfo{DeviceType: "Desktop"}) {
+		t.Error("capitalised Desktop was accepted")
+	}
+	if !rejectDesktopSpoke(workerSystemInfo{DeviceType: "  desktop  "}) {
+		t.Error("padded device_type was accepted")
+	}
+	if rejectDesktopSpoke(workerSystemInfo{DeviceType: ""}) {
+		t.Error("an absent device_type must be accepted")
+	}
+}
+
+func TestWhatThisAppSendsIsWhatTheHandlerRefuses(t *testing.T) {
+	// Pins the two sides together. If internal/upstream ever changes the string
+	// it sends, this rule silently stops matching and the topology reopens.
+	if !rejectDesktopSpoke(workerSystemInfo{DeviceType: upstream.Payload{}.SystemInfo.DeviceType}) {
+		// The zero value is empty, so assert against the real constant instead.
+		if deviceTypeDesktop != "desktop" {
+			t.Fatalf("deviceTypeDesktop = %q", deviceTypeDesktop)
+		}
+	}
+	app := newPayloadTestApp(t, nil)
+	if got := app.upstreamPayload().SystemInfo.DeviceType; !rejectDesktopSpoke(workerSystemInfo{DeviceType: got}) {
+		t.Fatalf("this app sends device_type=%q, which the handler would NOT refuse", got)
 	}
 }

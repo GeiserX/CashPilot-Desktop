@@ -39,6 +39,33 @@ type workerSystemInfo struct {
 	OS       string `json:"os"`
 	Arch     string `json:"arch"`
 	Hostname string `json:"hostname"`
+	// DeviceType is what the client calls itself: "android", "desktop", or
+	// empty for a plain Docker worker. Read here ONLY to refuse a Desktop, see
+	// rejectDesktopSpoke. Empty must stay acceptable -- older workers and the
+	// Android client omit it, and treating absent as "desktop" would lock out
+	// every legitimate spoke.
+	DeviceType string `json:"device_type"`
+}
+
+// deviceTypeDesktop is what internal/upstream sends when this app reports to a
+// CashPilot server. Seeing it INBOUND means another Desktop is trying to pair
+// with this one.
+const deviceTypeDesktop = "desktop"
+
+// rejectDesktopSpoke reports whether this heartbeat is another Desktop.
+//
+// CashPilot is a hub-and-spoke system: the CashPilot SERVER is the hub, and
+// Desktop and Android are spokes. Spokes do not talk to each other. Nothing
+// structurally prevented it -- Desktop's outbound client posts to
+// /api/workers/heartbeat, which is the very path this server handles -- so
+// pointing one Desktop at another would have chained two hubs, each believing
+// it owned the fleet.
+//
+// Enforced on the RECEIVING side deliberately. Merely declining to send would
+// leave a modified or future client able to opt in, and only the receiver can
+// actually refuse.
+func rejectDesktopSpoke(info workerSystemInfo) bool {
+	return strings.EqualFold(strings.TrimSpace(info.DeviceType), deviceTypeDesktop)
 }
 
 // fleetRateLimiter is a small per-IP sliding-window limiter for the heartbeat
@@ -183,6 +210,19 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker name or client_id is required"})
 		return
 	}
+	// Refuse another Desktop before doing anything else with it -- no enrolment,
+	// no key issued, no row written. The message explains the model rather than
+	// returning a bare 400: someone who tries this has misunderstood the
+	// topology, and a sentence is cheaper than them debugging it.
+	if rejectDesktopSpoke(body.SystemInfo) {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "CashPilot Desktop cannot pair with another Desktop. " +
+				"Desktop and mobile are spokes of a CashPilot server, which is the hub; " +
+				"point this device at your CashPilot server instead.",
+		})
+		return
+	}
+
 	kind := heartbeatKind(body)
 
 	// Serialize the read(FleetDeviceKeyState) -> classify -> upsert -> set/confirm
