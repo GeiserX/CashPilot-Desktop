@@ -189,3 +189,18 @@ func (a *App) upstreamPayload() upstream.Payload {
 		},
 	}
 }
+
+// upstreamEnrolmentKey returns the stored pairing key for the settings form.
+//
+// A read error yields "" rather than propagating: GetSettingsState builds the
+// whole environment list, and failing it entirely would make the settings screen
+// unopenable because ONE optional field could not be read. The pairing loop
+// treats the same error as a hard stop, which is where it matters -- there, a
+// locked keychain must not be mistaken for "no key" and trigger a re-enrolment.
+func (a *App) upstreamEnrolmentKey() string {
+	key, err := config.UpstreamEnrolmentKey(a.cfg.AppDir())
+	if err != nil {
+		return ""
+	}
+	return key
+}

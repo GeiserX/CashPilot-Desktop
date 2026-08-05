@@ -1,11 +1,16 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	stdruntime "runtime"
 	"strings"
 	"testing"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 )
@@ -30,7 +35,19 @@ func newPayloadTestApp(t *testing.T, deployments []store.Deployment) *App {
 			t.Fatalf("UpsertDeployment(%+v): %v", d, err)
 		}
 	}
-	return &App{cfg: cfg, store: st}
+	// GetSettingsState/SaveSettings go through a.ready(), which requires the
+	// whole graph -- cfg, catalog, store, runtime and services. Built here so
+	// these tests drive the REAL settings path rather than a narrower helper
+	// carved out to make them easy, which would leave the path users actually
+	// hit untested.
+	cat, err := catalog.LoadEmbedded(serviceFiles)
+	if err != nil {
+		t.Fatalf("catalog.LoadEmbedded error: %v", err)
+	}
+	rt := runtime.NewDockerProvider()
+	app := &App{cfg: cfg, store: st, catalog: cat, runtime: rt}
+	app.services = services.NewManager(rt, cat, st)
+	return app
 }
 
 // The payload is the whole contract with the CashPilot server, and getting a
@@ -165,5 +182,145 @@ func TestAuthTokenAndKeyRulesAreTheSharedOnes(t *testing.T) {
 	}
 	if upstream.KeyToPersist("same", "same") != "" {
 		t.Error("an unchanged key must not be rewritten")
+	}
+}
+
+// --- pairing via the settings form -------------------------------------------
+
+func TestPairingSettingsAreExposedToTheForm(t *testing.T) {
+	// Pairing shipped with no way to configure it: the config field and keychain
+	// storage existed, the loop ran, and nothing rendered an input. Working code
+	// nobody can reach is the same defect as code nobody wired up.
+	app := newPayloadTestApp(t, nil)
+	state, err := app.GetSettingsState()
+	if err != nil {
+		t.Fatalf("GetSettingsState: %v", err)
+	}
+	keys := map[string]EnvSetting{}
+	for _, e := range state.Environment {
+		keys[e.Key] = e
+	}
+	url, ok := keys["CASHPILOT_UPSTREAM_URL"]
+	if !ok {
+		t.Fatal("no pairing URL field; the feature is unreachable from the UI")
+	}
+	if url.ReadOnly {
+		t.Error("the pairing URL is read-only, so it cannot be set")
+	}
+	key, ok := keys["CASHPILOT_UPSTREAM_KEY"]
+	if !ok {
+		t.Fatal("no pairing key field")
+	}
+	if !key.Secret {
+		t.Error("the pairing key is a bearer token and must be marked Secret")
+	}
+}
+
+func TestTheFormExplainsThatStandaloneIsTheDefault(t *testing.T) {
+	// A blank field with no explanation reads as "unconfigured", i.e. broken.
+	// It is the supported default and loses nothing, and the help text has to
+	// say so or users will pair just to make the warning go away.
+	app := newPayloadTestApp(t, nil)
+	state, _ := app.GetSettingsState()
+	for _, e := range state.Environment {
+		if e.Key == "CASHPILOT_UPSTREAM_URL" {
+			if !strings.Contains(strings.ToLower(e.Help), "standalone") {
+				t.Errorf("help does not mention standalone: %q", e.Help)
+			}
+			if !strings.Contains(strings.ToLower(e.Help), "empty") {
+				t.Errorf("help does not say an empty value is valid: %q", e.Help)
+			}
+			return
+		}
+	}
+	t.Fatal("field not found")
+}
+
+func TestSavingAPairingURLPersistsIt(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://cashpilot.example:8080/"}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	// The trailing slash is trimmed at the boundary so the client does not build
+	// //api/workers/heartbeat, which some proxies treat as a different path.
+	if got := app.cfg.Config().UpstreamURL; got != "http://cashpilot.example:8080" {
+		t.Fatalf("UpstreamURL = %q", got)
+	}
+}
+
+func TestClearingTheURLUnpairs(t *testing.T) {
+	// Empty is MEANINGFUL here, unlike every other settings field: it is how a
+	// user goes back to standalone. Keying this on non-emptiness -- the pattern
+	// the surrounding fields use -- would make unpairing impossible.
+	app := newPayloadTestApp(t, nil)
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://a.example"}); err != nil {
+		t.Fatalf("pair: %v", err)
+	}
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": ""}); err != nil {
+		t.Fatalf("unpair: %v", err)
+	}
+	if got := app.cfg.Config().UpstreamURL; got != "" {
+		t.Fatalf("still paired with %q", got)
+	}
+}
+
+func TestRepointingToAnotherServerDiscardsTheOldWorkerKey(t *testing.T) {
+	// The per-worker key belongs to the server that issued it. Presenting it to
+	// a DIFFERENT server fails authentication with no obvious cause, and keeping
+	// it is a live secret for a machine the user has stopped talking to.
+	app := newPayloadTestApp(t, nil)
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://first.example"}); err != nil {
+		t.Fatalf("pair: %v", err)
+	}
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "issued-by-first"); err != nil {
+		t.Fatalf("seed key: %v", err)
+	}
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://second.example"}); err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	got, err := config.UpstreamWorkerKey(app.cfg.AppDir())
+	if err != nil {
+		t.Fatalf("read key: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("the previous server's key survived a repoint: %q", got)
+	}
+}
+
+func TestSavingTheSameURLKeepsTheWorkerKey(t *testing.T) {
+	// The flip side: an unrelated settings save must not silently re-enrol this
+	// machine by throwing away a key it is already authenticating with.
+	app := newPayloadTestApp(t, nil)
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://same.example"}); err != nil {
+		t.Fatalf("pair: %v", err)
+	}
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "keep-me"); err != nil {
+		t.Fatalf("seed key: %v", err)
+	}
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://same.example"}); err != nil {
+		t.Fatalf("resave: %v", err)
+	}
+	got, _ := config.UpstreamWorkerKey(app.cfg.AppDir())
+	if got != "keep-me" {
+		t.Fatalf("worker key was discarded on an unrelated save: %q", got)
+	}
+}
+
+func TestSavingThePairingKeyStoresItOutsideConfigJson(t *testing.T) {
+	// It is a bearer token; config.json is not where it belongs.
+	app := newPayloadTestApp(t, nil)
+	if _, err := app.SaveSettings(map[string]string{"upstreamKey": "shared-enrolment-token"}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	got, err := config.UpstreamEnrolmentKey(app.cfg.AppDir())
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != "shared-enrolment-token" {
+		t.Fatalf("enrolment key = %q", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(app.cfg.AppDir(), "config.json"))
+	if err == nil && strings.Contains(string(raw), "shared-enrolment-token") {
+		t.Error("the pairing token was written into config.json")
 	}
 }
