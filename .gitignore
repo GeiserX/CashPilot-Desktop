@@ -16,3 +16,13 @@ build/*
 .DS_Store
 .omc/
 pnpm-lock.yaml
+
+# Local agent working dirs. This repository is PUBLIC, and these hold local
+# agent state -- task tracker, session notes, tool config -- that is useful on
+# one machine and has no business being published. `.beads/` was protected
+# only by .git/info/exclude, which is local to a single clone and is not
+# itself tracked, so a fresh checkout had no protection. (.omc/ already above.)
+.agents/
+.beads/
+.claude/
+.codex/
