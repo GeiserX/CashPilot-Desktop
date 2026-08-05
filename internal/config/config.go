@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/zalando/go-keyring"
@@ -19,6 +20,13 @@ const (
 	keyringService   = "CashPilot Desktop"
 	keyringUser      = "credential-master-key"
 	keyringUserFleet = "fleet-api-key"
+	// Two DISTINCT upstream secrets. The enrolment key is the shared token the
+	// user pastes in once; the worker key is what the server mints for this
+	// machine and is the only credential valid after enrolment. Storing them
+	// under one name would make the shared key unrecoverable after the first
+	// heartbeat overwrote it, and re-pairing would then be impossible.
+	keyringUserUpstreamEnrol  = "upstream-enrolment-key"
+	keyringUserUpstreamWorker = "upstream-worker-key"
 )
 
 type AppConfig struct {
@@ -61,7 +69,23 @@ type AppConfig struct {
 	// metadata.google.internal) ALWAYS blocked regardless of policy or allowlist.
 	// Setting it true is the only way to reach a metadata address and should be rare.
 	WorkerAllowMetadata bool `json:"workerAllowMetadata"`
+	// UpstreamURL optionally pairs this Desktop with a CashPilot server, which it
+	// then reports to as a worker. EMPTY IS THE DEFAULT AND MEANS STANDALONE:
+	// Desktop keeps working exactly as before and nothing is sent anywhere.
+	//
+	// The credentials are deliberately NOT here — they live in the OS keychain
+	// (0600 file fallback) via UpstreamEnrolmentKey/UpstreamWorkerKey, the same
+	// way the fleet token does, so config.json never carries a bearer token.
+	UpstreamURL string `json:"upstreamUrl,omitempty"`
+	// UpstreamIntervalMinutes is how often to heartbeat when paired. Zero means
+	// use the default; see DefaultUpstreamIntervalMinutes.
+	UpstreamIntervalMinutes int `json:"upstreamIntervalMinutes,omitempty"`
 }
+
+// DefaultUpstreamIntervalMinutes matches what a CashPilot worker sends, so a
+// paired Desktop does not look stale next to the Docker workers on the same
+// fleet page — the server marks a worker unreachable on heartbeat age.
+const DefaultUpstreamIntervalMinutes = 1
 
 type Manager struct {
 	appDir  string
@@ -253,6 +277,62 @@ func SetFleetKey(appDir, value string) error {
 	if err := keyring.Set(keyringService, keyringUserFleet, value); err != nil {
 		keyPath := filepath.Join(appDir, ".fleet_api_key")
 		if err := os.WriteFile(keyPath, []byte(value), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpstreamEnrolmentKey returns the shared CashPilot token used to enrol this
+// machine, or "" when not stored. Same keychain-first, 0600-file-fallback
+// storage as FleetKey.
+func UpstreamEnrolmentKey(appDir string) (string, error) {
+	return readSecret(appDir, keyringUserUpstreamEnrol, ".upstream_enrolment_key")
+}
+
+// SetUpstreamEnrolmentKey persists the shared enrolment token.
+func SetUpstreamEnrolmentKey(appDir, value string) error {
+	return writeSecret(appDir, keyringUserUpstreamEnrol, ".upstream_enrolment_key", value)
+}
+
+// UpstreamWorkerKey returns the per-worker key the server issued to this
+// machine, or "" before enrolment completes.
+func UpstreamWorkerKey(appDir string) (string, error) {
+	return readSecret(appDir, keyringUserUpstreamWorker, ".upstream_worker_key")
+}
+
+// SetUpstreamWorkerKey persists the per-worker key issued by the server.
+func SetUpstreamWorkerKey(appDir, value string) error {
+	return writeSecret(appDir, keyringUserUpstreamWorker, ".upstream_worker_key", value)
+}
+
+// readSecret is the shared body of the keychain-first readers.
+//
+// A missing secret is ("", nil) — "not stored yet" — so a caller can tell it
+// apart from a keychain that is present but LOCKED, which returns an error. The
+// difference matters: treating a locked keychain as "not stored" would silently
+// re-enrol the machine and orphan its existing worker identity.
+func readSecret(appDir, keyringUser, fileName string) (string, error) {
+	value, err := keyring.Get(keyringService, keyringUser)
+	if err == nil && value != "" {
+		return value, nil
+	}
+	keyPath := filepath.Join(appDir, fileName)
+	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
+		value = strings.TrimSpace(string(raw))
+		_ = keyring.Set(keyringService, keyringUser, value)
+		return value, nil
+	}
+	if refuseKeyRegen(err, runtimeGOOS) {
+		return "", fmt.Errorf("%s is present but unreadable (keychain locked or access denied): %w", keyringUser, err)
+	}
+	return "", nil
+}
+
+// writeSecret is the shared body of the keychain-first writers.
+func writeSecret(appDir, keyringUser, fileName, value string) error {
+	if err := keyring.Set(keyringService, keyringUser, value); err != nil {
+		if err := os.WriteFile(filepath.Join(appDir, fileName), []byte(value), 0o600); err != nil {
 			return err
 		}
 	}
