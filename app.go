@@ -648,6 +648,8 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
+		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Optional. Leave EMPTY to stay standalone, which is the default and loses nothing. Set to a CashPilot server's URL and this machine reports to it as a worker, so its services appear on that fleet. Earnings are unaffected: the server collects those centrally and this only reports what is running."},
+		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
 		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime Provider", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "Current Docker-compatible runtime integration."},
 	}
@@ -694,6 +696,35 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	if value := strings.TrimSpace(values["timezone"]); value != "" {
 		cfg.Timezone = value
 	}
+	// Pairing. Unlike every other field here, an EMPTY value is meaningful: it
+	// means "unpair", and standalone is the supported default -- so this is
+	// keyed on presence, not on non-emptiness.
+	if value, present := values["upstreamUrl"]; present {
+		next := strings.TrimRight(strings.TrimSpace(value), "/")
+		if next != cfg.UpstreamURL {
+			// Repointing at a DIFFERENT server must discard the per-worker key
+			// the previous one issued. It is that server's credential and means
+			// nothing to the new one; presenting it would fail authentication
+			// with no obvious cause, and keeping it around is a stale secret for
+			// a machine the user has stopped talking to.
+			if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
+				return SettingsState{}, fmt.Errorf("clearing the previous worker key: %w", err)
+			}
+			a.upstream.mu.Lock()
+			a.upstream.workerKey = ""
+			a.upstream.mu.Unlock()
+		}
+		cfg.UpstreamURL = next
+	}
+	if value, present := values["upstreamKey"]; present {
+		// Stored verbatim, including empty -- clearing the field is how a user
+		// unpairs the credential. Like the existing fleet key, the real value
+		// round-trips to the form (rendered type="password"); this file does not
+		// invent a mask-and-detect scheme that no other secret here uses.
+		if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), strings.TrimSpace(value)); err != nil {
+			return SettingsState{}, fmt.Errorf("storing the pairing key: %w", err)
+		}
+	}
 	if value := strings.TrimSpace(values["fleetBindAddress"]); value != "" {
 		// Only a parseable IP or "localhost" is a valid bind host (an empty value
 		// keeps the loopback default via config.Normalize). A bad value stored verbatim
@@ -731,6 +762,13 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// the app is restarted.
 	if cfg.FleetPort != previousFleetPort || cfg.FleetBindAddress != previousFleetBind {
 		a.emitNotice("fleet-api", "Fleet API port/bind change takes effect after restarting the app.")
+	}
+	// Pairing DOES take effect immediately, unlike the fleet listener above --
+	// startUpstream stops any previous loop first, so this cannot leave two loops
+	// reporting under one identity. It is also the no-op path when the URL is
+	// empty, which is how "unpair" takes effect without a restart.
+	if a.ctx != nil {
+		a.startUpstream(a.ctx)
 	}
 	return a.GetSettingsState()
 }
