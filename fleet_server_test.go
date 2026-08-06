@@ -39,6 +39,12 @@ func newFleetTestApp(t *testing.T, apiKey string) *App {
 		t.Fatalf("config.NewManager error: %v", err)
 	}
 	c := cfg.Config()
+	// These tests exercise the heartbeat HANDLER, which now requires the hub
+	// capability to be switched on. Enabled EXPLICITLY rather than relying on a
+	// default, so the gate's default can never be silently depended upon -- and
+	// so a future flip of that default cannot quietly turn this whole file green
+	// for the wrong reason. TestTheHubIsOffByDefault below owns the default.
+	c.FleetServerEnabled = true
 	c.FleetBindAddress = "127.0.0.1"
 	if err := cfg.Save(c); err != nil {
 		t.Fatalf("config.Save error: %v", err)
@@ -754,5 +760,98 @@ func TestWhatThisAppSendsIsWhatTheHandlerRefuses(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
 	if got := app.upstreamPayload().SystemInfo.DeviceType; !rejectDesktopSpoke(workerSystemInfo{DeviceType: got}) {
 		t.Fatalf("this app sends device_type=%q, which the handler would NOT refuse", got)
+	}
+}
+
+// --- the hub is opt-in ------------------------------------------------------
+//
+// CashPilot is hub-and-spoke: the CashPilot SERVER is the hub, Desktop and
+// Android are spokes. startFleetAPI ran unconditionally, so any worker or phone
+// could enrol into a Desktop and create a second, competing source of truth for
+// a fleet. The capability still works; it is simply off unless asked for.
+
+func newSpokeOnlyApp(t *testing.T) *App {
+	t.Helper()
+	app := newFleetTestApp(t, "fleet-key")
+	c := app.cfg.Config()
+	c.FleetServerEnabled = false
+	if err := app.cfg.Save(c); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	return app
+}
+
+func TestTheHubIsOffByDefault(t *testing.T) {
+	// The default is the whole point, and it is the bool zero value, so every
+	// existing install becomes a pure spoke on upgrade with no action needed.
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatalf("config.NewManager: %v", err)
+	}
+	if cfg.Config().FleetServerEnabled {
+		t.Fatal("a fresh install accepts workers; Desktop must be a spoke unless asked otherwise")
+	}
+}
+
+func TestAHeartbeatIsRefusedWhenTheHubIsOff(t *testing.T) {
+	app := newSpokeOnlyApp(t)
+	w := postHeartbeat(t, app, map[string]any{
+		"name": "some-worker", "client_id": "w1",
+		"system_info": map[string]any{"os": "linux"},
+	})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; a worker enrolled into a spoke", w.Code)
+	}
+}
+
+func TestTheRefusalExplainsTheModelAndTheWayOut(t *testing.T) {
+	// Silently dropping heartbeats would leave someone with a device that just
+	// goes quiet. The message has to say what to do instead.
+	body := postHeartbeat(t, newSpokeOnlyApp(t), map[string]any{
+		"name": "w", "client_id": "w", "system_info": map[string]any{},
+	}).Body.String()
+	if !strings.Contains(body, "hub") {
+		t.Errorf("does not explain the topology: %s", body)
+	}
+	if !strings.Contains(strings.ToLower(body), "settings") {
+		t.Errorf("does not say how to enable it: %s", body)
+	}
+}
+
+func TestARefusedWorkerIsNotEnrolled(t *testing.T) {
+	// A 403 is worthless if a row was written or a key issued on the way out.
+	app := newSpokeOnlyApp(t)
+	postHeartbeat(t, app, map[string]any{
+		"name": "ghost", "client_id": "ghost", "system_info": map[string]any{},
+	})
+	for _, d := range app.store.ListFleetDevices() {
+		if d.Name == "ghost" {
+			t.Fatal("a worker refused by the gate was still recorded as a fleet device")
+		}
+	}
+}
+
+func TestEnablingTheHubRestoresIt(t *testing.T) {
+	// The gate must be a gate, not a removal: someone who wants hub mode gets it.
+	app := newFleetTestApp(t, "fleet-key") // harness enables it
+	w := postHeartbeat(t, app, map[string]any{
+		"name": "worker", "client_id": "w1", "system_info": map[string]any{"os": "linux"},
+	})
+	if w.Code == http.StatusForbidden {
+		t.Fatalf("hub mode is on but the heartbeat was refused: %s", w.Body.String())
+	}
+}
+
+func TestTheGateIsCheckedBeforeTheDesktopRefusal(t *testing.T) {
+	// Ordering matters for the message a user sees: with the hub OFF, another
+	// Desktop should be told the hub is off (the actionable fact) rather than
+	// the desktop-to-desktop rule, which it would also violate.
+	body := postHeartbeat(t, newSpokeOnlyApp(t), map[string]any{
+		"name": "other-desktop", "client_id": "d2",
+		"system_info": map[string]any{"device_type": "desktop"},
+	}).Body.String()
+	if !strings.Contains(strings.ToLower(body), "settings") {
+		t.Errorf("the hub-off message should win when the hub is off: %s", body)
 	}
 }

@@ -645,6 +645,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_DISPLAY_CURRENCY", Label: "Display Currency", Value: cfg.DisplayCurrency, Source: "Config", Help: "Currency used in the topbar and dashboard summaries."},
 		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: a.fleetKey, Source: "Config", Secret: true, Help: "Bearer token used by external workers and mobile clients."},
 		{Key: "CASHPILOT_UI_URL", Label: "Desktop API URL", Value: a.fleetUIURL(), Source: "Runtime", ReadOnly: true, Help: "URL that external workers should use for CASHPILOT_UI_URL."},
+		{Key: "CASHPILOT_FLEET_SERVER", Label: "Accept workers (hub mode)", Value: strconv.FormatBool(cfg.FleetServerEnabled), Source: "Config", Help: "OFF by default, and that is the intended shape: CashPilot Desktop is a SPOKE. The CashPilot server is the hub. Turning this on lets other workers and phones report to THIS machine, which makes it a second source of truth for a fleet -- only do that if you are deliberately running Desktop as a hub instead of a CashPilot server."},
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
@@ -724,6 +725,11 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), strings.TrimSpace(value)); err != nil {
 			return SettingsState{}, fmt.Errorf("storing the pairing key: %w", err)
 		}
+	}
+	if value, present := values["fleetServerEnabled"]; present {
+		// Presence-keyed, not non-emptiness: "false" is a meaningful value and
+		// turning the hub back OFF must be possible.
+		cfg.FleetServerEnabled = strings.EqualFold(strings.TrimSpace(value), "true")
 	}
 	if value := strings.TrimSpace(values["fleetBindAddress"]); value != "" {
 		// Only a parseable IP or "localhost" is a valid bind host (an empty value

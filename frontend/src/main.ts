@@ -676,6 +676,7 @@ function envInputName(key: string) {
     CASHPILOT_DISPLAY_CURRENCY: "displayCurrency",
     CASHPILOT_FLEET_BIND: "fleetBindAddress",
     CASHPILOT_FLEET_PORT: "fleetPort",
+    CASHPILOT_FLEET_SERVER: "fleetServerEnabled",
     CASHPILOT_UPSTREAM_URL: "upstreamUrl",
     CASHPILOT_UPSTREAM_KEY: "upstreamKey",
     TZ: "timezone",

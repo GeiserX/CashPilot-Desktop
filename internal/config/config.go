@@ -69,6 +69,18 @@ type AppConfig struct {
 	// metadata.google.internal) ALWAYS blocked regardless of policy or allowlist.
 	// Setting it true is the only way to reach a metadata address and should be rare.
 	WorkerAllowMetadata bool `json:"workerAllowMetadata"`
+	// FleetServerEnabled turns this Desktop into a HUB that accepts worker and
+	// mobile heartbeats. It defaults to FALSE, which is the bool zero value, so
+	// every existing install becomes a pure spoke on upgrade.
+	//
+	// CashPilot is hub-and-spoke: the CashPilot SERVER is the hub, and Desktop
+	// and Android are spokes. Spokes do not collect from each other. Nothing
+	// enforced that -- startFleetAPI ran unconditionally, so any worker or phone
+	// could enrol into a Desktop and create a second, competing source of truth.
+	//
+	// Kept as a gate rather than deleted because the capability works and
+	// someone may want it later; off is the right default until they ask.
+	FleetServerEnabled bool `json:"fleetServerEnabled"`
 	// UpstreamURL optionally pairs this Desktop with a CashPilot server, which it
 	// then reports to as a worker. EMPTY IS THE DEFAULT AND MEANS STANDALONE:
 	// Desktop keeps working exactly as before and nothing is sent anywhere.
