@@ -113,9 +113,9 @@ Two things follow that are worth stating before anyone designs it:
 ## The recommendation
 
 Two options were on the table: **Desktop spawns a VM per service**, or **document
-"run Desktop itself inside a VM."** They differ by roughly two orders of
-magnitude in cost, so it is worth saying plainly that the measurements point at
-neither.
+"run Desktop itself inside a VM."** One is a new subsystem to build, ship and
+support on three platforms; the other is a documentation page. Nothing measured
+here supports either, and that is worth saying plainly.
 
 **Do not build a VM orchestrator. On macOS and Windows, the boundary already
 exists — the work is making it visible.**
