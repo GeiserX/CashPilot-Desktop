@@ -26,3 +26,6 @@ pnpm-lock.yaml
 .beads/
 .claude/
 .codex/
+
+# Compiled output for the browser-free render harness (frontend/scripts/*.mjs).
+/frontend/.harness-build/

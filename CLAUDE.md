@@ -44,6 +44,31 @@ go test -race -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out
 ```
 
+### Frontend
+
+`frontend/src/render/` holds the PURE render functions — no DOM, no globals, no
+import-time side effects — so a Node harness can import them. Everything else
+still lives in `main.ts`, which grabs `#app` at module scope and therefore cannot
+be imported by anything.
+
+```bash
+cd frontend && npm test        # compiles src/render/ and runs scripts/*_check.mjs
+```
+
+The harness drives the real functions against constructed state and asserts on
+the HTML they return. **Never assert on the source text** — this repo and its
+sibling have both been bitten by tests that matched their own prose, where a
+check that a file *contains* a guard passed against a build where the guard was
+unreachable.
+
+The rule these exist for: a platform with **no reading** renders as an em dash,
+never `0.00`. Showing zero reports a loss that did not happen, most convincingly
+to the user whose collector is broken.
+
+CI runs typecheck → render checks → `vite build` on every PR. Before this, the
+frontend was only built during a release, so a broken one reached main and was
+found at tag time.
+
 ## Build & Release
 
 Tag releases (`v*`) build Linux/macOS/Windows on free GitHub-hosted runners

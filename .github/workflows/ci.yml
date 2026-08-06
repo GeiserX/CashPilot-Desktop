@@ -38,6 +38,42 @@ jobs:
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  frontend:
+    name: frontend (typecheck + render checks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+
+      # The frontend was built ONLY during a release, so a broken one reached
+      # main and was found at tag time. Same shape as the docs site building only
+      # on deploy: the gate ran after the decision it was meant to inform.
+      - name: Typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit -p tsconfig.json
+
+      # Browser-free checks on the real render functions. They exist for one
+      # rule above all: a platform with NO reading must render as an em dash,
+      # never 0.00 -- showing zero reports a loss that did not happen, most
+      # convincingly to the user whose collector is broken.
+      - name: Render checks
+        working-directory: frontend
+        run: npm test
+
+      - name: Build
+        working-directory: frontend
+        run: npx vite build
+
   # Advisory dependency vulnerability scan (govulncheck). Non-blocking on purpose:
   # the only current findings are upstream-unfixed github.com/docker/docker daemon
   # CVEs (Fixed in: N/A) that a Docker *client* app cannot resolve by bumping the
