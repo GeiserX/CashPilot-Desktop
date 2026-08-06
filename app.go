@@ -232,6 +232,11 @@ type AppState struct {
 	// keyed by slug (e.g. the MystNodes per-node earnings breakdown). The frontend
 	// parses the raw JSON per service; the backend stores and forwards it opaquely.
 	ServiceDetails map[string]string `json:"serviceDetails"`
+	// Fleet is the server's account-level view of the platforms this machine
+	// runs, present ONLY while paired and only once the server has reported.
+	// Nil means show the local numbers alone -- which is standalone, and is also
+	// the state a machine returns to after unlinking.
+	Fleet *FleetView `json:"fleet"`
 	// Hostname is this machine's name, so a deploy form can render a {hostname}-defaulted
 	// field with the real value the deploy path will substitute (instead of the literal
 	// "cashpilot-{hostname}" the raw catalog default would otherwise show and submit).
@@ -387,6 +392,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Summary:          a.computeEarningsSummary(earnings),
 		Health:           a.store.HealthScores(7),
 		ServiceDetails:   a.store.ListServiceDetails(),
+		Fleet:            a.fleetView(),
 		Hostname:         runtime.DeviceHostname(),
 	}, nil
 }

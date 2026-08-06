@@ -42,9 +42,44 @@ export interface AppState {
   currencies: string[];
   summary: EarningsSummary;
   serviceDetails: Record<string, string> | null;
+  // The paired server's ACCOUNT-LEVEL figures for the platforms this machine
+  // runs. null means show the local numbers alone: not paired, or paired but the
+  // server has not reported yet -- and it is what a machine returns to after
+  // unlinking, because its own rows were copied upstream, never moved.
+  fleet: FleetView | null;
   // This machine's hostname, so a {hostname}-defaulted deploy field renders the real
   // value the deploy path will substitute rather than the literal "{hostname}".
   hostname: string;
+}
+
+// FleetView mirrors the Go FleetView: what the paired CashPilot server reports
+// about the platforms this machine runs.
+//
+// Every money field is `number | null` because null means UNKNOWN, not zero. A
+// platform with no reading has never been collected for -- usually a missing
+// collector or credentials nobody entered -- and rendering it as 0.00 reports a
+// loss that did not happen.
+export interface FleetView {
+  serverUrl: string;
+  // RFC3339. Shown rather than implying the figure is live: the heartbeat is on
+  // a timer, so the number may be an hour old.
+  reportedAt: string;
+  windowDays: number;
+  currency: string;
+  platforms: FleetViewPlatform[] | null;
+  // null when NOTHING is known. The server sums only what it has readings for.
+  totalUsd: number | null;
+  // Platforms this machine runs that the server has no figure for at all. These
+  // are the reason a total is lower than the user expects, so they are shown.
+  withoutReadings: string[] | null;
+}
+
+export interface FleetViewPlatform {
+  slug: string;
+  usd: number | null;
+  // More than one worker on the fleet runs this platform, which is exactly when
+  // "this machine earned it" stops being true.
+  shared: boolean;
 }
 
 // MystNode mirrors the Go mystNode struct: one Mysterium node's per-node
