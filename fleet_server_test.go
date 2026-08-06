@@ -838,8 +838,12 @@ func TestEnablingTheHubRestoresIt(t *testing.T) {
 	w := postHeartbeat(t, app, map[string]any{
 		"name": "worker", "client_id": "w1", "system_info": map[string]any{"os": "linux"},
 	})
-	if w.Code == http.StatusForbidden {
-		t.Fatalf("hub mode is on but the heartbeat was refused: %s", w.Body.String())
+	// Requires 200, not merely "not 403". The first version passed for 400, 401
+	// and 500 alike, so it proved the gate was not refusing rather than that hub
+	// mode WORKS -- a check that passes for the wrong reason.
+	// (CodeRabbit, PR #113.)
+	if w.Code != http.StatusOK {
+		t.Fatalf("hub mode is on but the heartbeat did not succeed: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -853,5 +857,23 @@ func TestTheGateIsCheckedBeforeTheDesktopRefusal(t *testing.T) {
 	}).Body.String()
 	if !strings.Contains(strings.ToLower(body), "settings") {
 		t.Errorf("the hub-off message should win when the hub is off: %s", body)
+	}
+}
+
+func TestTheHubRefusalWinsOverAMissingFleetKey(t *testing.T) {
+	// A fresh install has no fleet key. Before the gate was lifted above that
+	// check, such a machine answered 503 "fleet key not configured" -- true, but
+	// not the reason, and not actionable. A disabled endpoint must answer the
+	// same way regardless of the rest of the fleet config.
+	app := newSpokeOnlyApp(t)
+	app.fleetKey = ""
+	w := postHeartbeat(t, app, map[string]any{
+		"name": "w", "client_id": "w", "system_info": map[string]any{},
+	})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; got the key error instead of the hub reason: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(strings.ToLower(w.Body.String()), "settings") {
+		t.Errorf("the refusal lost its explanation: %s", w.Body.String())
 	}
 }

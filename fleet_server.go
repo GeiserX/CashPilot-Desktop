@@ -183,6 +183,32 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
+	// FIRST, ahead of the rate limiter and the fleet-key check. With the hub
+	// off AND no fleet key configured -- which is a fresh install, the most
+	// common case there is -- the key check returned 503 "fleet key not
+	// configured" and the caller never learned the real reason. A disabled
+	// endpoint must give the same answer regardless of how the rest of the
+	// fleet config happens to be set. (CodeRabbit, PR #113.)
+	//
+	// The hub capability is OFF unless the user turned it on. Checked here rather
+	// than by not registering the route, because /metrics lives on the same mux
+	// and is a separate opt-in that must keep working -- and because a device
+	// already pointed at this Desktop deserves to be told why it stopped being
+	// accepted instead of watching its heartbeats vanish.
+	//
+	// Desktop is a SPOKE. CashPilot the server is the hub. Accepting heartbeats
+	// here makes this machine a second source of truth for a fleet, which is the
+	// shape this product does not want.
+	if !a.cfg.Config().FleetServerEnabled {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "This CashPilot Desktop does not accept workers. Desktop and mobile are " +
+				"spokes of a CashPilot server, which is the hub -- point this device at your " +
+				"CashPilot server instead. If you really want this Desktop to act as a hub, " +
+				"enable it in Settings.",
+		})
+		return
+	}
+
 	if a.fleetLimiter != nil {
 		ip := r.RemoteAddr
 		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
@@ -210,25 +236,6 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "worker name or client_id is required"})
 		return
 	}
-	// The hub capability is OFF unless the user turned it on. Checked here rather
-	// than by not registering the route, because /metrics lives on the same mux
-	// and is a separate opt-in that must keep working -- and because a device
-	// already pointed at this Desktop deserves to be told why it stopped being
-	// accepted instead of watching its heartbeats vanish.
-	//
-	// Desktop is a SPOKE. CashPilot the server is the hub. Accepting heartbeats
-	// here makes this machine a second source of truth for a fleet, which is the
-	// shape this product does not want.
-	if !a.cfg.Config().FleetServerEnabled {
-		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "This CashPilot Desktop does not accept workers. Desktop and mobile are " +
-				"spokes of a CashPilot server, which is the hub -- point this device at your " +
-				"CashPilot server instead. If you really want this Desktop to act as a hub, " +
-				"enable it in Settings.",
-		})
-		return
-	}
-
 	// Refuse another Desktop before doing anything else with it -- no enrolment,
 	// no key issued, no row written. The message explains the model rather than
 	// returning a bare 400: someone who tries this has misunderstood the
