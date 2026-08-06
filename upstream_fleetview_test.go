@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
@@ -224,6 +225,81 @@ func TestUnlinkingReturnsToTheLocalPictureAlone(t *testing.T) {
 	app.upstream.mu.Unlock()
 	if cached != nil {
 		t.Fatal("the server's figures outlived the pairing in memory")
+	}
+}
+
+func TestAHeartbeatLandingDuringUnlinkDoesNotSurviveIt(t *testing.T) {
+	// The ordering inside stopUpstream, and it is not a theoretical race.
+	//
+	// stopUpstream used to clear the cache and THEN cancel the loop. A heartbeat
+	// already returned from the server -- merely not yet holding the mutex --
+	// would write the OLD server's figures after the clear. Re-pair to a
+	// DIFFERENT server and fleetView presents those figures under the new
+	// server's URL, which is worse than showing nothing: the label makes the
+	// wrong number look authoritative. (CodeRabbit, PR #116.)
+	//
+	// Driven deterministically rather than by racing goroutines and hoping: the
+	// stand-in loop writes figures only once it observes the cancel, so the
+	// write is GUARANTEED to land in the window the old code left open. A test
+	// that merely raced would pass on the broken code most of the time.
+	app := newPayloadTestApp(t, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-ctx.Done() // stopUpstream has cancelled; the old code has already cleared
+		total := 99.0
+		app.upstream.mu.Lock()
+		app.upstream.fleetEarnings = &upstream.FleetEarnings{
+			WindowDays: 30,
+			Currency:   "USD",
+			Platforms:  []upstream.FleetPlatform{{Slug: "grass", USD: &total}},
+			TotalUSD:   &total,
+		}
+		app.upstream.fleetEarningsAt = time.Now().UTC()
+		app.upstream.mu.Unlock()
+	}()
+
+	app.upstream.mu.Lock()
+	app.upstream.cancel, app.upstream.done = cancel, done
+	app.upstream.mu.Unlock()
+
+	app.stopUpstream()
+
+	app.upstream.mu.Lock()
+	cached, at := app.upstream.fleetEarnings, app.upstream.fleetEarningsAt
+	app.upstream.mu.Unlock()
+	if cached != nil {
+		t.Fatalf("a heartbeat that landed during unlink outlived it: %+v", cached)
+	}
+	if !at.IsZero() {
+		t.Fatalf("the timestamp outlived the unlink: %v", at)
+	}
+}
+
+func TestStopUpstreamStillClearsWhenNoLoopIsRunning(t *testing.T) {
+	// The other branch. Moving the clear after the cancel makes it easy to leave
+	// it behind an `if cancel != nil` early return, which would silently stop
+	// clearing in the commonest case of all -- a Desktop that was never paired,
+	// or one being stopped twice.
+	app := newPayloadTestApp(t, nil)
+	total := 4.0
+	app.upstream.mu.Lock()
+	app.upstream.fleetEarnings = &upstream.FleetEarnings{TotalUSD: &total}
+	app.upstream.historyUnsupported = true
+	app.upstream.mu.Unlock()
+
+	app.stopUpstream() // no cancel, no done
+
+	app.upstream.mu.Lock()
+	cached, unsupported := app.upstream.fleetEarnings, app.upstream.historyUnsupported
+	app.upstream.mu.Unlock()
+	if cached != nil {
+		t.Fatalf("stopUpstream left figures behind when no loop was running: %+v", cached)
+	}
+	if unsupported {
+		t.Fatal("stopUpstream did not re-arm the import when no loop was running")
 	}
 }
 

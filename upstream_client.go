@@ -129,6 +129,23 @@ func (a *App) stopUpstream() {
 	a.upstream.mu.Lock()
 	cancel, done := a.upstream.cancel, a.upstream.done
 	a.upstream.cancel, a.upstream.done = nil, nil
+	a.upstream.mu.Unlock()
+
+	// STOP THE LOOP BEFORE DROPPING WHAT IT CACHES. Clearing first leaves a
+	// window in which an in-flight heartbeat -- already returned from the
+	// server, merely not yet holding the mutex -- writes the OLD server's
+	// figures after the clear. Re-pair to a different server and fleetView would
+	// then present those figures under the NEW server's URL, which is worse than
+	// showing nothing: the label makes the wrong number look authoritative.
+	// (CodeRabbit, PR #116.)
+	if cancel != nil {
+		cancel()
+		if done != nil {
+			<-done
+		}
+	}
+
+	a.upstream.mu.Lock()
 	// Re-arm the earnings import. startUpstream calls this first, so every
 	// restart -- and every unpair -- gives an upgraded server another chance,
 	// which is exactly where a user who just upgraded theirs would expect it.
@@ -141,13 +158,6 @@ func (a *App) stopUpstream() {
 	// unpair case.
 	a.upstream.fleetEarnings, a.upstream.fleetEarningsAt = nil, time.Time{}
 	a.upstream.mu.Unlock()
-	if cancel == nil {
-		return
-	}
-	cancel()
-	if done != nil {
-		<-done
-	}
 }
 
 // sendUpstream posts one heartbeat and persists a newly issued worker key.
