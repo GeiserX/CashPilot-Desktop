@@ -223,9 +223,12 @@ func (a *App) pushHistoryOnce(ctx context.Context, client *upstream.Client, serv
 	// Recorded even when there was nothing to send. A Desktop paired before it
 	// ever collected anything has no history to hand over, and re-asking every
 	// minute forever would be the same wasted work as re-sending one.
-	next := cfg
-	next.UpstreamHistoryPushedTo = target
-	if err := a.cfg.Save(next); err != nil {
+	//
+	// Update, not Save: the import above is network work that can take seconds,
+	// and Save writes the WHOLE config -- so saving the snapshot read at the top
+	// of this function would silently discard anything the user changed on the
+	// settings screen while the upload was in flight. (CodeRabbit, PR #115.)
+	if err := a.cfg.Update(func(c *config.AppConfig) { c.UpstreamHistoryPushedTo = target }); err != nil {
 		log.Printf("upstream: pushed %d earnings reading(s) but could not record it, so it will be re-sent: %v", imported, err)
 		return
 	}

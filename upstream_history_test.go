@@ -332,6 +332,39 @@ func TestAConfirmedWorkerImportsOnItsNextHeartbeat(t *testing.T) {
 	}
 }
 
+func TestASettingsChangeDuringTheUploadIsNotClobbered(t *testing.T) {
+	// pushHistoryOnce reads the config, then uploads over the network, then
+	// records where it sent the history. Saving the WHOLE config it read at the
+	// start would silently discard anything the user changed on the settings
+	// screen while the upload was in flight -- and the upload is the slowest
+	// thing this app does unprompted. (CodeRabbit, PR #115.)
+	app := newPayloadTestApp(t, nil)
+	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
+
+	// The change lands mid-upload: the stub server makes it from inside the
+	// request handler, which is exactly the window that was open.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next := app.cfg.Config()
+		next.DisplayCurrency = "EUR"
+		if err := app.cfg.Save(next); err != nil {
+			t.Errorf("the concurrent settings save failed: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(upstream.ImportResponse{Status: "ok", Imported: 1})
+	}))
+	defer srv.Close()
+
+	client := &upstream.Client{HTTP: srv.Client(), Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}}
+	app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key")
+
+	got := app.cfg.Config()
+	if got.DisplayCurrency != "EUR" {
+		t.Fatalf("the user's settings change was discarded: DisplayCurrency = %q", got.DisplayCurrency)
+	}
+	if got.UpstreamHistoryPushedTo == "" {
+		t.Fatal("the hand-over was not recorded")
+	}
+}
+
 func TestAServerTooOldToImportIsAskedOnce(t *testing.T) {
 	// A CashPilot older than v1.16.0 has no such endpoint and answers 404 for as
 	// long as it runs. Retrying once a minute would fill the log with an error
