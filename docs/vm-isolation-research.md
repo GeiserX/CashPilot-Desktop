@@ -110,6 +110,81 @@ Two things follow that are worth stating before anyone designs it:
   and network. It does not unlock any earning that was unavailable before, and
   it should not be sold as if it does.
 
+## The recommendation
+
+Two options were on the table: **Desktop spawns a VM per service**, or **document
+"run Desktop itself inside a VM."** They differ by roughly two orders of
+magnitude in cost, so it is worth saying plainly that the measurements point at
+neither.
+
+**Do not build a VM orchestrator. On macOS and Windows, the boundary already
+exists — the work is making it visible.**
+
+### Why
+
+Docker Desktop does not run containers on the host. It runs them inside a Linux
+VM: a LinuxKit guest under Virtualization.framework on macOS, and a WSL2 guest on
+Windows. The section above already records the Windows half of this, and notes
+that Salad ships its own WSL2 distribution.
+
+So on the two platforms where anyone actually runs CashPilot Desktop, **every
+third-party earning binary is already inside a virtual machine.** A second VM
+layer would be rebuilding, at considerable cost, a boundary the platform hands
+you for free.
+
+That reframes the whole feature. The gap is not isolation. The gap is that
+**nothing tells the user which boundary they are behind**, and the answer differs
+per platform in a way nobody could reasonably guess:
+
+| Platform | What actually contains the binaries | Shares the user's kernel? |
+|---|---|---|
+| macOS + Docker Desktop | a LinuxKit VM | no |
+| macOS + Colima / Lima | a Lima VM | no |
+| Windows + Docker Desktop | a WSL2 VM | no |
+| Windows + Salad | its own WSL2 distribution | no |
+| **Linux + Docker/Podman** | **namespaces and cgroups only** | **yes** |
+
+Linux is the one row that is different, and it is different in the direction
+that matters: a container escape there lands on the user's own kernel.
+
+### So what to build, in order
+
+1. **Say which boundary is in force.** The runtime detection already knows which
+   provider is in use (`internal/runtime`, which distinguishes
+   docker-desktop-macos, docker-desktop-windows, colima and the rest). Turning
+   that into an honest sentence on the dashboard — "your services run inside a
+   Linux VM" versus "your services share this machine's kernel" — is a small
+   change on top of code that already exists, and it is the entire remaining
+   value on macOS and Windows.
+
+2. **On Linux, document the VM option rather than automating it.** This is the
+   only platform where a VM adds a boundary that is not already there. But it is
+   also where CashPilot most often runs on a server that does nothing else, which
+   is the "calculated risk" this page opens by acknowledging. A page describing
+   how to run the whole stack inside a VM — and being honest that it costs
+   nothing in GPU earnings, per the measurements above — serves the users who
+   want it without committing the project to a hypervisor abstraction.
+
+3. **Only then, if anyone asks for it, automate.** And when they do, it is a
+   Linux-only feature, which is a far smaller thing than the cross-platform VM
+   manager the bead originally imagined.
+
+### What this avoids
+
+Per-platform hypervisor backends, guest image lifecycle and updates, VM
+networking that has to preserve each service's egress IP (which providers cap
+per IP — see `CashPilot-5qc`), GPU passthrough plumbing, and a UI for all of it.
+That is the two-orders-of-magnitude option, and it would buy almost nothing on
+the two platforms where Desktop is actually used.
+
+### The one claim here that was not measured in this session
+
+That Docker Desktop on **macOS** runs containers in a LinuxKit VM. It is its
+documented architecture and it matches the Windows behaviour measured above, but
+unlike everything else on this page it was not verified on the hardware. Confirm
+with `docker info` on a Mac running Docker Desktop before this reasoning is relied
+on — it should report a Linux kernel, not Darwin, which settles it in one line.
+
 ## Reproducing this
 
 The Metal probe and benchmark are small enough to re-run whenever the host OS,
