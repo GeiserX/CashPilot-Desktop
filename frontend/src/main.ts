@@ -30,9 +30,11 @@ import {
   StopService,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderHealthBadge } from "./render/health";
+import { renderMystNodes } from "./render/myst";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
-import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, MystNode, PointsBalance, Service, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -904,71 +906,6 @@ function renderPointsSection(points: PointsBalance[]) {
   `;
 }
 
-// renderHealthBadge renders a compact, color-coded pill for a deployed service's
-// rolling health: the 0-100 score plus uptime%. Colour tracks the score — green
-// >= 80, amber 50-79, red < 50 — reusing the theme's own status variables. A
-// service with no health entry yet (nothing scored) renders nothing rather than a
-// misleading 0/NaN badge. The title surfaces the raw lifecycle counts behind it.
-function renderHealthBadge(health: HealthScore | undefined): string {
-  if (!health) return "";
-  const score = Math.round(health.score);
-  const uptime = Math.round(health.uptimePercent);
-  const crashes = health.crashes;
-  // "Unstable" surfaces the crash accounting the native supervisor now records (Phase C1):
-  // a service that has crashed repeatedly in the health window. It reads off the same 7-day
-  // aggregate the score does, so it flags sustained crashing rather than an instantaneous
-  // loop — hence the honest "unstable" label. Unstable always shows the error tone.
-  const unstable = crashes >= 3;
-  const tone = unstable || score < 50
-    ? "color: var(--error); background: rgba(248, 113, 113, 0.14); border-color: rgba(248, 113, 113, 0.32);"
-    : score < 80
-      ? "color: var(--warning); background: rgba(245, 158, 11, 0.14); border-color: rgba(245, 158, 11, 0.32);"
-      : "color: var(--success); background: rgba(34, 197, 94, 0.12); border-color: rgba(34, 197, 94, 0.32);";
-  const title = `Health ${score}/100 · ${uptime}% uptime · ${health.restarts} restarts · ${crashes} crashes · ${health.stops} stops`;
-  // Surface crashes in the visible pill (previously only in the tooltip) so a crash-looping
-  // earner is legible at a glance, not just via hover.
-  const crashNote = crashes > 0 ? ` · ${crashes} crash${crashes === 1 ? "" : "es"}` : "";
-  const label = unstable ? `unstable · ${uptime}% up${crashNote}` : `${score} · ${uptime}% up${crashNote}`;
-  return `<span class="badge" style="margin-left: 6px; text-transform: none; ${tone}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
-}
-
-// renderMystNodes turns the Mysterium per-node earnings blob — a JSON array of
-// MystNode the backend stashes under serviceDetails["mysterium"] — into a
-// compact per-node list: each node's name (or a shortened identity), an
-// online/offline dot in the theme's success/muted colours, and its 30-day and
-// lifetime MYST. It returns "" when the blob is missing, unparseable, or not a
-// non-empty array, so a Mysterium row with no per-node detail renders nothing
-// extra rather than an empty header or a NaN.
-function renderMystNodes(json: string | undefined): string {
-  if (!json) return "";
-  let nodes: MystNode[];
-  try {
-    const parsed: unknown = JSON.parse(json);
-    if (!Array.isArray(parsed) || parsed.length === 0) return "";
-    nodes = parsed as MystNode[];
-  } catch {
-    return "";
-  }
-  const items = nodes.map((node) => {
-    const label = (node.name || "").trim() || shortenIdentity(node.identity);
-    const dotColor = node.online ? "var(--success)" : "var(--text-muted)";
-    const dot = `<span title="${node.online ? "online" : "offline"}" style="display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${dotColor};"></span>`;
-    return `
-      <div style="display:flex;align-items:center;gap:0.6rem;font-size:0.82rem;padding:0.15rem 0;">
-        <span style="display:flex;align-items:center;gap:0.4rem;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary);">${dot}${escapeHtml(label)}</span>
-        <span style="flex:0 0 auto;color:var(--text-muted);" title="Last 30 days">${escapeHtml(formatMyst(node.earnings30dMyst))} · 30d</span>
-        <span style="flex:0 0 auto;color:var(--text-secondary);" title="Lifetime">${escapeHtml(formatMyst(node.lifetimeMyst))} lifetime</span>
-      </div>
-    `;
-  }).join("");
-  return `
-    <div style="display:flex;flex-direction:column;gap:0.1rem;">
-      <span style="font-size:0.72rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.2rem;">Per-node earnings</span>
-      ${items}
-    </div>
-  `;
-}
-
 function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null, outdated: string[] | null) {
   if (deployments.length === 0) {
     return `
@@ -1505,24 +1442,6 @@ function wireChrome() {
 
 function capitalize(value: string) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
-}
-
-// formatMyst renders a MYST amount to a few decimals. MYST is a reward token,
-// not an ISO currency, so Intl currency formatting can't be used; non-finite
-// values degrade to 0 rather than showing NaN.
-function formatMyst(value: number) {
-  const amount = Number.isFinite(value) ? value : 0;
-  return `${amount.toFixed(4)} MYST`;
-}
-
-// shortenIdentity collapses a long Mysterium identity (a 0x… hash) to
-// "first6…last4" so an unnamed node still shows something readable. Short or
-// empty identities are returned as-is (or a neutral placeholder).
-function shortenIdentity(identity: string) {
-  const id = (identity || "").trim();
-  if (!id) return "unknown node";
-  if (id.length <= 12) return id;
-  return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
 function stripHtml(value: string) {
