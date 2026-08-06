@@ -30,8 +30,9 @@ import {
   StopService,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
-import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, MystNode, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, MystNode, PointsBalance, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -900,38 +901,6 @@ function renderPointsSection(points: PointsBalance[]) {
         `).join("")}
       </div>
     </section>
-  `;
-}
-
-function renderEarningBreakdown(item: ServiceEarning, displayCurrency: string) {
-  const native = `${item.balance.toFixed(2)} ${item.currency}`;
-  // When a service is convertible but its display balance is 0 the live rate is
-  // missing, so show the native `balance currency` instead of a misleading
-  // display-currency 0.
-  const primary = item.error
-    ? "Needs attention"
-    : item.convertible && item.balanceDisplay !== 0
-      ? formatBalance(item.balanceDisplay, displayCurrency)
-      : formatBalance(item.balance, item.currency);
-  const cashout = item.cashout;
-  const showBar = !item.error && cashout.comparable && cashout.minAmount > 0;
-  const pct = Math.max(0, Math.min(100, cashout.percent || 0));
-  const sub = item.error
-    ? escapeHtml(item.error)
-    : item.convertible
-      ? `${escapeHtml(native)}${cashout.eligible ? " · ready to cash out" : ""}`
-      : `${escapeHtml(item.currency)} · not converted`;
-  return `
-    <div class="earning-chip ${item.error ? "error" : ""}" title="${escapeHtml(native)}">
-      <span>${escapeHtml(item.name || item.platform)}</span>
-      <strong>${escapeHtml(primary)}</strong>
-      <small>${sub}</small>
-      ${showBar ? `
-        <div class="payout-progress" title="${pct.toFixed(0)}% of ${escapeHtml(formatBalance(cashout.minAmount, cashout.currency))} minimum">
-          <div class="payout-progress-bar" style="width: ${pct.toFixed(1)}%"></div>
-        </div>
-      ` : ""}
-    </div>
   `;
 }
 
