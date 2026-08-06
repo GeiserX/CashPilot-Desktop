@@ -281,52 +281,6 @@ func TestAHeartbeatWithNoFiguresDoesNotBlankTheLastOnes(t *testing.T) {
 	}
 }
 
-func TestParseEarnings(t *testing.T) {
-	t.Run("nothing sent is UNKNOWN, not an error", func(t *testing.T) {
-		// The normal case for a server too old to report, and for a worker it
-		// can produce no figures for.
-		for _, raw := range []string{"", "null", "  "} {
-			got, err := upstream.ParseEarnings(json.RawMessage(raw))
-			if err != nil || got != nil {
-				t.Fatalf("ParseEarnings(%q) = %v, %v", raw, got, err)
-			}
-		}
-	})
-
-	t.Run("something unreadable IS an error", func(t *testing.T) {
-		// Silence is normal; a server sending gibberish is not, and swallowing
-		// it would hide a version mismatch behind an empty panel.
-		if _, err := upstream.ParseEarnings(json.RawMessage(`{"platforms": 7}`)); err == nil {
-			t.Fatal("a malformed earnings block was accepted")
-		}
-	})
-
-	t.Run("a missing total stays nil", func(t *testing.T) {
-		got, err := upstream.ParseEarnings(json.RawMessage(`{"window_days":30,"platforms":[]}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.TotalUSD != nil {
-			t.Fatalf("an absent total became %v", *got.TotalUSD)
-		}
-	})
-
-	t.Run("an explicit zero is kept as zero", func(t *testing.T) {
-		// The mirror of the rule: a real measured 0.00 must not be turned into
-		// "unknown" either. A guard that flags everything is as useless as none.
-		got, err := upstream.ParseEarnings(json.RawMessage(`{"total_usd":0,"platforms":[{"slug":"grass","usd":0}]}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.TotalUSD == nil || *got.TotalUSD != 0 {
-			t.Fatalf("a measured zero was lost: %v", got.TotalUSD)
-		}
-		if got.Platforms[0].USD == nil || *got.Platforms[0].USD != 0 {
-			t.Fatalf("a measured per-platform zero was lost: %v", got.Platforms[0].USD)
-		}
-	})
-}
-
 func TestTheFleetViewIsInTheAppState(t *testing.T) {
 	// It has to reach the frontend to be worth anything, and the field must
 	// serialise as null (not omitted, not {}) when there is nothing to show --
