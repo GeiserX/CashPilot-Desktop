@@ -92,6 +92,19 @@ type AppConfig struct {
 	// UpstreamIntervalMinutes is how often to heartbeat when paired. Zero means
 	// use the default; see DefaultUpstreamIntervalMinutes.
 	UpstreamIntervalMinutes int `json:"upstreamIntervalMinutes,omitempty"`
+	// UpstreamHistoryPushedTo is the server URL this Desktop has already handed
+	// its pre-pairing earnings history to, or empty for none.
+	//
+	// The import itself is idempotent — the server keys a reading on (platform,
+	// source, date) and updates rather than appends — so re-sending would be
+	// harmless but wasteful: it is up to 400 days of readings on every
+	// heartbeat, which is every minute by default.
+	//
+	// Storing the URL rather than a bare boolean is what makes re-pairing work:
+	// pointing Desktop at a DIFFERENT server no longer matches, so that server
+	// gets the history too. It is also why this is not a secret and belongs in
+	// config.json — it records where data was sent, not how to authenticate.
+	UpstreamHistoryPushedTo string `json:"upstreamHistoryPushedTo,omitempty"`
 }
 
 // DefaultUpstreamIntervalMinutes matches what a CashPilot worker sends, so a
@@ -179,6 +192,43 @@ func (m *Manager) DataDir() string {
 
 func (m *Manager) Save(cfg AppConfig) error {
 	cfg = applyDefaults(cfg)
+	if err := m.persist(cfg); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.cfg = cfg
+	m.mu.Unlock()
+	return nil
+}
+
+// Update applies mutate to the current config and persists the result as ONE
+// read-modify-write.
+//
+// Save takes a whole AppConfig, so a caller that reads the config, does slow
+// work, and then saves silently discards everything the user changed meanwhile.
+// The pairing loop has exactly that shape — it reads the config, uploads up to
+// 400 days of earnings over the network, then records where it sent them — and
+// it runs while the settings screen is open. Holding the lock across the whole
+// read-modify-write closes the window instead of narrowing it.
+//
+// Use this for any single field written by background work. Save stays the
+// right call for the settings form, which legitimately writes the whole object.
+func (m *Manager) Update(mutate func(cfg *AppConfig)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	next := m.cfg
+	mutate(&next)
+	next = applyDefaults(next)
+	if err := m.persist(next); err != nil {
+		return err
+	}
+	m.cfg = next
+	return nil
+}
+
+// persist writes the config to disk. Takes no lock, so it is safe to call with
+// m.mu already held.
+func (m *Manager) persist(cfg AppConfig) error {
 	if err := os.MkdirAll(m.appDir, 0o700); err != nil {
 		return err
 	}
@@ -186,13 +236,7 @@ func (m *Manager) Save(cfg AppConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.path, raw, 0o600); err != nil {
-		return err
-	}
-	m.mu.Lock()
-	m.cfg = cfg
-	m.mu.Unlock()
-	return nil
+	return os.WriteFile(m.path, raw, 0o600)
 }
 
 // load runs once during NewManager (single-threaded, before the Manager is

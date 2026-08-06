@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pairing hands the server the history collected before it.** A Desktop that ran standalone for months and was then paired used to appear on the fleet page starting from the day of pairing — every earlier day it had recorded was simply absent from the total, with no way to get it there. The first time a CashPilot server confirms this worker, Desktop now uploads its recorded daily balances to `POST /api/workers/earnings-import` (requires CashPilot v1.16.0 or newer).
+
+  It is a **copy, not a migration**: the local rows are read and left exactly where they are, so unlinking leaves this machine still showing precisely what it earned on its own. The server files the readings under this client's own source rather than merging them into its own series, because earnings are clamped deltas between consecutive balance readings — interleaving two samplers of one provider account makes every apparent drop clamp to zero and understates the total. Separate series are differenced separately and then summed.
+
+  Sent once per server, recorded in `upstreamHistoryPushedTo`; pairing with a different server hands it the history too. A failed or partial upload is retried on the next heartbeat rather than recorded as done, and the import is idempotent so a retry costs nothing. The upload waits until this worker is fully enrolled — a client still presenting the shared enrollment key is refused by the server, since every worker holds that key and it cannot prove who is writing. Historical readings carry no exchange rate: Desktop does not record what a currency was worth on a past day, and stamping today's rate onto a year-old reading would misprice it confidently.
+
 ## [0.10.1] - 2026-07-17
 
 ### Fixed

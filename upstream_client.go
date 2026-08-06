@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	stdruntime "runtime"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 )
 
@@ -23,11 +25,17 @@ import (
 // direction, and it is entirely opt-in: an empty UpstreamURL means standalone,
 // which stays the default and loses nothing.
 //
-// It reports what this machine is RUNNING. It does not send earnings, and does
-// not touch Desktop's local earnings history: the server collects earnings
-// centrally from provider accounts and returns them in the heartbeat response.
-// What should happen to Desktop's existing local history when a user pairs is a
-// genuinely open question and is deliberately not answered here.
+// Two directions of traffic, and they are not the same thing. Every heartbeat
+// reports what this machine is RUNNING. Once — the first time the server
+// confirms this worker — it also hands over the earnings history this Desktop
+// collected BEFORE it was paired, so the fleet view does not begin on the day
+// of pairing with every earlier day missing from the total.
+//
+// The push is a copy, never a migration: the local rows are read and left
+// exactly where they are. That is what lets an unlinked Desktop go on showing
+// precisely what it earned on its own, and it is why re-pairing is safe.
+// Ongoing collection is still the server's job — it collects centrally from
+// provider accounts and returns the result in the heartbeat response.
 
 // upstreamState is the pairing loop's stop handle plus the cached credential.
 type upstreamState struct {
@@ -35,6 +43,13 @@ type upstreamState struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	workerKey string
+	// historyUnsupported records that this server answered 404 to an earnings
+	// import, i.e. it predates the endpoint. In MEMORY rather than in config on
+	// purpose: it must stop the retry now, but an upgraded server has to be
+	// tried again, and restarting Desktop or re-saving settings is the natural
+	// point to find out. Persisting it would make one old server a permanent
+	// verdict.
+	historyUnsupported bool
 }
 
 // startUpstream begins heartbeating when paired, and is a no-op when not.
@@ -106,6 +121,10 @@ func (a *App) stopUpstream() {
 	a.upstream.mu.Lock()
 	cancel, done := a.upstream.cancel, a.upstream.done
 	a.upstream.cancel, a.upstream.done = nil, nil
+	// Re-arm the earnings import. startUpstream calls this first, so every
+	// restart -- and every unpair -- gives an upgraded server another chance,
+	// which is exactly where a user who just upgraded theirs would expect it.
+	a.upstream.historyUnsupported = false
 	a.upstream.mu.Unlock()
 	if cancel == nil {
 		return
@@ -144,6 +163,114 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		a.upstream.mu.Unlock()
 		log.Printf("upstream: enrolled with %s and stored this machine's own key", serverURL)
 	}
+
+	// Only once we are CONFIRMED: the server refuses an import from a worker
+	// still presenting the shared enrolment key, so attempting it mid-enrolment
+	// would just log a 403 every minute.
+	if upstream.Confirmed(workerKey, resp.WorkerKey) {
+		a.pushHistoryOnce(ctx, client, serverURL, workerKey)
+	}
+}
+
+// pushHistoryOnce hands the server the earnings this Desktop recorded before it
+// was paired, the first time it is confirmed with that server.
+//
+// Nothing is deleted or moved: the local rows are read, not migrated. That is
+// what lets an unlinked Desktop still show exactly what it earned on its own,
+// and it is why re-pairing to the same server is safe.
+func (a *App) pushHistoryOnce(ctx context.Context, client *upstream.Client, serverURL, workerKey string) {
+	target := strings.TrimRight(strings.TrimSpace(serverURL), "/")
+	cfg := a.cfg.Config()
+	if strings.TrimRight(strings.TrimSpace(cfg.UpstreamHistoryPushedTo), "/") == target {
+		return
+	}
+	a.upstream.mu.Lock()
+	unsupported := a.upstream.historyUnsupported
+	a.upstream.mu.Unlock()
+	if unsupported {
+		return
+	}
+
+	readings := historyReadings(a.store.ListDailyBalances(upstreamHistoryDays))
+	clientID := a.upstreamPayload().ClientID
+	imported, skipped := 0, 0
+	for _, batch := range upstream.ChunkReadings(readings, upstream.ImportChunk) {
+		resp, err := client.Import(ctx, target, workerKey, upstream.ImportPayload{ClientID: clientID, Readings: batch})
+		if err != nil {
+			// A server without the endpoint is not a transient failure, and it
+			// is not the marker's business either -- recording the marker would
+			// mean an upgraded server never receives the history. Stop asking
+			// for this run instead; a restart or a settings save tries again.
+			if errors.Is(err, upstream.ErrImportUnsupported) {
+				a.upstream.mu.Lock()
+				a.upstream.historyUnsupported = true
+				a.upstream.mu.Unlock()
+				log.Printf("upstream: %s is too old to accept this machine's earnings history (needs CashPilot v1.16.0 or newer); not retrying until restart", target)
+				return
+			}
+			// Do NOT record the marker: a partial push must be retried on the
+			// next heartbeat, and the import is idempotent so re-sending the
+			// batches that did land costs nothing but a round trip.
+			if ctx.Err() == nil {
+				log.Printf("upstream: could not hand %s this machine's earnings history: %v", target, err)
+			}
+			return
+		}
+		imported += resp.Imported
+		skipped += len(resp.Skipped)
+	}
+
+	// Recorded even when there was nothing to send. A Desktop paired before it
+	// ever collected anything has no history to hand over, and re-asking every
+	// minute forever would be the same wasted work as re-sending one.
+	//
+	// Update, not Save: the import above is network work that can take seconds,
+	// and Save writes the WHOLE config -- so saving the snapshot read at the top
+	// of this function would silently discard anything the user changed on the
+	// settings screen while the upload was in flight. (CodeRabbit, PR #115.)
+	if err := a.cfg.Update(func(c *config.AppConfig) { c.UpstreamHistoryPushedTo = target }); err != nil {
+		log.Printf("upstream: pushed %d earnings reading(s) but could not record it, so it will be re-sent: %v", imported, err)
+		return
+	}
+	if len(readings) == 0 {
+		return
+	}
+	if skipped > 0 {
+		// Surfaced rather than swallowed: a skip means the server's catalog does
+		// not know that slug, so those days are absent from the fleet total and
+		// a silent drop would look identical to a complete import.
+		log.Printf("upstream: handed %s %d earnings reading(s); %d were not recognised and were skipped", target, imported, skipped)
+		return
+	}
+	log.Printf("upstream: handed %s this machine's earnings history (%d reading(s))", target, imported)
+}
+
+// upstreamHistoryDays matches the server's own retention window, so nothing is
+// sent that the server would purge on its next daily pass anyway.
+const upstreamHistoryDays = 400
+
+// historyReadings converts the local daily balances into the server's shape.
+//
+// The FX rate is deliberately left ABSENT rather than filled from today's
+// rates: Desktop does not record what a currency was worth on a past day, and
+// stamping a historical reading with the current rate would misprice it
+// confidently. Absent means unknown, which is the truth.
+func historyReadings(balances []store.DailyBalance) []upstream.ImportReading {
+	out := make([]upstream.ImportReading, 0, len(balances))
+	for _, b := range balances {
+		slug := strings.TrimSpace(b.Platform)
+		day := strings.TrimSpace(b.Day)
+		if slug == "" || day == "" {
+			continue
+		}
+		out = append(out, upstream.ImportReading{
+			Slug:     slug,
+			Balance:  b.Balance,
+			Date:     day,
+			Currency: strings.TrimSpace(b.Currency),
+		})
+	}
+	return out
 }
 
 // upstreamPayload describes what this machine is running, in the server's shape.
