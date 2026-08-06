@@ -90,6 +90,59 @@ type Response struct {
 	Earnings  json.RawMessage `json:"earnings,omitempty"`
 }
 
+// FleetEarnings is what the server reports back about the platforms THIS
+// machine is running, across the whole account.
+//
+// THE HONESTY CONSTRAINT, which is the server's and is inherited here:
+// earnings are collected per PLATFORM, from the provider's account. They are
+// not, and cannot be, attributed to a device — if two machines both run Grass,
+// the provider reports one balance and nothing can split it. So this never
+// means "this device earned X". It means "the platforms this device runs earned
+// X on your account", and Shared marks each platform where that distinction
+// actually bites.
+//
+// Every money field is a POINTER because absent means UNKNOWN. A platform with
+// no reading has never been collected for — most often no collector exists, or
+// its credentials were never entered — and rendering that as 0.00 would report
+// a loss that did not happen.
+type FleetEarnings struct {
+	WindowDays int             `json:"window_days"`
+	Currency   string          `json:"currency"`
+	Platforms  []FleetPlatform `json:"platforms"`
+	// TotalUSD sums only what is KNOWN. The server omits it entirely when no
+	// platform has a reading, because a total that treats unknown as zero is the
+	// same lie in aggregate.
+	TotalUSD                 *float64 `json:"total_usd"`
+	PlatformsWithoutReadings []string `json:"platforms_without_readings"`
+}
+
+// FleetPlatform is one platform's account-level figure.
+type FleetPlatform struct {
+	Slug string   `json:"slug"`
+	USD  *float64 `json:"usd"`
+	// Shared is true when more than one worker on the fleet runs this platform,
+	// which is exactly when "this machine earned it" stops being true.
+	Shared bool `json:"shared_with_other_workers"`
+}
+
+// ParseEarnings decodes the earnings block a heartbeat response may carry.
+//
+// Returns nil, nil when the server sent nothing. That is the normal case for an
+// older server, and for a worker the server can produce no figures for; it is
+// UNKNOWN, and a caller must render it as such rather than as zero. A malformed
+// block is an error, not silence — a server sending something unreadable is
+// worth surfacing, whereas silence is not.
+func ParseEarnings(raw json.RawMessage) (*FleetEarnings, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		return nil, nil
+	}
+	var out FleetEarnings
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("upstream: decoding the earnings the server reported: %w", err)
+	}
+	return &out, nil
+}
+
 // ErrNotPaired is returned when no upstream server is configured. It is a
 // normal state, not a failure: standalone is the default.
 var ErrNotPaired = errors.New("upstream: not paired with a CashPilot server")

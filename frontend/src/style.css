@@ -984,6 +984,30 @@ code {
   background: rgba(24, 16, 40, 0.7);
 }
 
+/* The account-wide figures from a paired CashPilot server. Deliberately tinted
+   apart from the local numbers above it: they are a claim about the ACCOUNT, not
+   about this machine, and the two must not read as one continuous total. */
+.earning-chip.shared {
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(12, 22, 34, 0.7);
+}
+
+.fleet-total {
+  display: grid;
+  gap: 0.15rem;
+  justify-items: end;
+  text-align: right;
+}
+
+.fleet-total strong {
+  color: #f4f4f5;
+  font-size: 1.35rem;
+}
+
+.fleet-total small {
+  color: #a1a1aa;
+}
+
 .payout-progress {
   margin-top: 0.4rem;
   height: 6px;

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A paired Desktop shows the account-wide picture, and an unlinked one goes back to its own.** While paired, the dashboard gains an "Across your CashPilot account" panel with what the platforms this machine runs earned on your provider accounts over the server's reporting window, straight from the heartbeat response. Unlink and it disappears, leaving exactly the local numbers as before — which works because pairing COPIES this machine's history upstream rather than moving it.
+
+  Two things it is careful about. A platform the server has no reading for renders as **—**, never `0.00`: no reading usually means a collector that does not exist yet or credentials nobody entered, and showing zero would report a loss that did not happen. And a platform running on more than one machine is marked **shared**, because earnings are collected per platform from the provider — if two machines run the same service the provider reports one balance and nothing can split it, so the figure is the account's rather than this machine's.
+
 - **Pairing hands the server the history collected before it.** A Desktop that ran standalone for months and was then paired used to appear on the fleet page starting from the day of pairing — every earlier day it had recorded was simply absent from the total, with no way to get it there. The first time a CashPilot server confirms this worker, Desktop now uploads its recorded daily balances to `POST /api/workers/earnings-import` (requires CashPilot v1.16.0 or newer).
 
   It is a **copy, not a migration**: the local rows are read and left exactly where they are, so unlinking leaves this machine still showing precisely what it earned on its own. The server files the readings under this client's own source rather than merging them into its own series, because earnings are clamped deltas between consecutive balance readings — interleaving two samplers of one provider account makes every apparent drop clamp to zero and understates the total. Separate series are differenced separately and then summed.

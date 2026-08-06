@@ -29,7 +29,7 @@ import {
   StartService,
   StopService,
 } from "../wailsjs/go/main/App";
-import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, MystNode, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, FleetView, HealthScore, InstallGuide, MystNode, PointsBalance, Service, ServiceEarning, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -249,6 +249,8 @@ function renderDashboard(current: AppState) {
         </section>
 
         ${points.length ? renderPointsSection(points) : ""}
+
+        ${current.fleet ? renderFleetSection(current.fleet) : ""}
 
         <section class="card dashboard-panel">
           <div class="card-header">
@@ -875,6 +877,75 @@ function changeCaption(pct: number, suffix: string) {
   if (!pct || !Number.isFinite(pct)) return `No change ${suffix}`;
   const arrow = pct > 0 ? "▲" : "▼";
   return `${arrow} ${Math.abs(pct).toFixed(1)}% ${suffix}`;
+}
+
+// The account-level picture, shown only while paired with a CashPilot server.
+//
+// It sits BELOW the local numbers rather than replacing them, and it is labelled
+// as the account's rather than this machine's, because those are different
+// claims. Earnings are collected per PLATFORM from the provider; if two machines
+// run the same service the provider reports one balance and nothing can split
+// it. Saying "this machine earned X" would be false in exactly the case a fleet
+// user is in.
+function renderFleetSection(fleet: FleetView) {
+  const platforms = fleet.platforms || [];
+  const withoutReadings = fleet.withoutReadings || [];
+  const shared = platforms.filter((p) => p.shared).length;
+  // null is UNKNOWN, and it renders as a dash. `?? 0` here would report a loss
+  // that did not happen -- most convincingly to the user whose collector is
+  // broken, who is precisely the person who must not be told everything is fine.
+  const money = (usd: number | null) =>
+    usd === null || usd === undefined ? "&mdash;" : escapeHtml(formatBalance(usd, fleet.currency || "USD"));
+
+  return `
+    <section class="card fleet-panel">
+      <div class="card-header">
+        <div>
+          <span class="card-title">Across your CashPilot account</span>
+          <p class="muted compact-copy">
+            What the platforms this machine runs earned on your account over the last
+            ${escapeHtml(String(fleet.windowDays || 30))} days, reported by
+            <code>${escapeHtml(fleet.serverUrl)}</code>${fleet.reportedAt ? ` &middot; ${escapeHtml(relativeTime(fleet.reportedAt))}` : ""}.
+            ${shared ? `${shared} of these run on more than one machine, so the figure is the account's, not this machine's.` : ""}
+          </p>
+        </div>
+        <div class="fleet-total">
+          <strong>${money(fleet.totalUsd)}</strong>
+          <small>${fleet.totalUsd === null ? "nothing collected yet" : "known platforms only"}</small>
+        </div>
+      </div>
+      <div class="earnings-breakdown">
+        ${platforms.length
+          ? platforms.map((p) => `
+            <div class="earning-chip${p.shared ? " shared" : ""}">
+              <span>${escapeHtml(p.slug)}</span>
+              <strong>${money(p.usd)}</strong>
+              ${p.shared ? `<small title="More than one machine on your fleet runs this, so the provider reports one balance for all of them.">shared</small>` : ""}
+            </div>
+          `).join("")
+          : `<p class="muted">This server has no figures for the platforms on this machine yet.</p>`}
+      </div>
+      ${withoutReadings.length
+        ? `<p class="muted compact-copy">No reading at all for ${escapeHtml(withoutReadings.join(", "))} &mdash; usually a collector that does not exist yet, or credentials never entered. They are missing from the total rather than counted as zero.</p>`
+        : ""}
+    </section>
+  `;
+}
+
+// relativeTime turns an RFC3339 stamp into "just now" / "12 minutes ago". An
+// unparseable value yields "" so the caller simply omits the phrase rather than
+// rendering "Invalid Date".
+function relativeTime(iso: string): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
 function renderPointsSection(points: PointsBalance[]) {

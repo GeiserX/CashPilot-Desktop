@@ -43,6 +43,14 @@ type upstreamState struct {
 	cancel    context.CancelFunc
 	done      chan struct{}
 	workerKey string
+	// fleetEarnings is the last figures the server reported for the platforms
+	// this machine runs, or nil for UNKNOWN. Held in memory rather than stored:
+	// it is the server's view, not ours, and a figure that outlived the pairing
+	// would be a stale claim about an account we no longer talk to.
+	fleetEarnings *upstream.FleetEarnings
+	// fleetEarningsAt is when that arrived, so the UI can say how fresh it is
+	// instead of implying it is live.
+	fleetEarningsAt time.Time
 	// historyUnsupported records that this server answered 404 to an earnings
 	// import, i.e. it predates the endpoint. In MEMORY rather than in config on
 	// purpose: it must stop the retry now, but an upgraded server has to be
@@ -121,18 +129,35 @@ func (a *App) stopUpstream() {
 	a.upstream.mu.Lock()
 	cancel, done := a.upstream.cancel, a.upstream.done
 	a.upstream.cancel, a.upstream.done = nil, nil
+	a.upstream.mu.Unlock()
+
+	// STOP THE LOOP BEFORE DROPPING WHAT IT CACHES. Clearing first leaves a
+	// window in which an in-flight heartbeat -- already returned from the
+	// server, merely not yet holding the mutex -- writes the OLD server's
+	// figures after the clear. Re-pair to a different server and fleetView would
+	// then present those figures under the NEW server's URL, which is worse than
+	// showing nothing: the label makes the wrong number look authoritative.
+	// (CodeRabbit, PR #116.)
+	if cancel != nil {
+		cancel()
+		if done != nil {
+			<-done
+		}
+	}
+
+	a.upstream.mu.Lock()
 	// Re-arm the earnings import. startUpstream calls this first, so every
 	// restart -- and every unpair -- gives an upgraded server another chance,
 	// which is exactly where a user who just upgraded theirs would expect it.
 	a.upstream.historyUnsupported = false
+	// Drop the server's figures. Unpairing must return this machine to showing
+	// only what it earned on its own, and leaving the fleet-wide number on
+	// screen after the link is gone would be a claim about an account we no
+	// longer talk to. Cleared here rather than in startUpstream because
+	// startUpstream returns early when standalone -- which is precisely the
+	// unpair case.
+	a.upstream.fleetEarnings, a.upstream.fleetEarningsAt = nil, time.Time{}
 	a.upstream.mu.Unlock()
-	if cancel == nil {
-		return
-	}
-	cancel()
-	if done != nil {
-		<-done
-	}
 }
 
 // sendUpstream posts one heartbeat and persists a newly issued worker key.
@@ -162,6 +187,18 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		a.upstream.workerKey = next
 		a.upstream.mu.Unlock()
 		log.Printf("upstream: enrolled with %s and stored this machine's own key", serverURL)
+	}
+
+	// Whatever the server reported about the platforms this machine runs. An
+	// absent block leaves the previous figures alone rather than blanking them:
+	// one heartbeat that could not produce figures does not mean the account
+	// earned nothing.
+	if fleet, err := upstream.ParseEarnings(resp.Earnings); err != nil {
+		log.Printf("upstream: %v", err)
+	} else if fleet != nil {
+		a.upstream.mu.Lock()
+		a.upstream.fleetEarnings, a.upstream.fleetEarningsAt = fleet, time.Now().UTC()
+		a.upstream.mu.Unlock()
 	}
 
 	// Only once we are CONFIRMED: the server refuses an import from a worker
@@ -330,4 +367,77 @@ func (a *App) upstreamEnrolmentKey() string {
 		return ""
 	}
 	return key
+}
+
+// FleetView is what the dashboard shows while this Desktop is paired: the
+// server's account-level figures for the platforms this machine runs.
+//
+// Nil means show the local numbers alone. That covers standalone (the default),
+// a pairing whose server has not reported yet, and — importantly — the moment
+// after unlinking, which is the behaviour that makes the whole design coherent:
+// a machine that stops being paired goes back to showing exactly what it earned
+// by itself, because its own rows were never moved.
+type FleetView struct {
+	ServerURL string `json:"serverUrl"`
+	// ReportedAt is when the server last said this, in RFC3339. The UI shows it
+	// rather than implying the figure is live: the heartbeat is on a timer, and
+	// a number with no age reads as current when it may be an hour old.
+	ReportedAt string `json:"reportedAt"`
+	// WindowDays is the period the figures cover, straight from the server, so
+	// the UI never has to guess whether it is showing 7 days or 30.
+	WindowDays int                 `json:"windowDays"`
+	Currency   string              `json:"currency"`
+	Platforms  []FleetViewPlatform `json:"platforms"`
+	// TotalUSD is nil when NOTHING is known. The server sums only platforms it
+	// has readings for, and omits the total entirely when there are none —
+	// rendering that as 0.00 would report a loss that did not happen.
+	TotalUSD *float64 `json:"totalUsd"`
+	// WithoutReadings names the platforms this machine runs that the server has
+	// no figure for at all. Surfaced rather than hidden: those are usually a
+	// missing collector or credentials nobody entered, and they are the reason
+	// the total is lower than the user expects.
+	WithoutReadings []string `json:"withoutReadings"`
+}
+
+// FleetViewPlatform is one platform's account-level figure.
+type FleetViewPlatform struct {
+	Slug string   `json:"slug"`
+	USD  *float64 `json:"usd"`
+	// Shared marks a platform more than one worker on the fleet runs. That is
+	// exactly when "this machine earned it" stops being true, and the UI has to
+	// say so rather than let the number imply otherwise.
+	Shared bool `json:"shared"`
+}
+
+// fleetView returns the server's figures, or nil when there is nothing to show.
+func (a *App) fleetView() *FleetView {
+	serverURL := strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/")
+	if serverURL == "" {
+		return nil // standalone -- the default, and the state after unlinking
+	}
+	a.upstream.mu.Lock()
+	fleet, at := a.upstream.fleetEarnings, a.upstream.fleetEarningsAt
+	a.upstream.mu.Unlock()
+	if fleet == nil {
+		// Paired, but the server has not reported. UNKNOWN, not zero.
+		return nil
+	}
+
+	platforms := make([]FleetViewPlatform, 0, len(fleet.Platforms))
+	for _, p := range fleet.Platforms {
+		platforms = append(platforms, FleetViewPlatform{Slug: p.Slug, USD: p.USD, Shared: p.Shared})
+	}
+	currency := strings.TrimSpace(fleet.Currency)
+	if currency == "" {
+		currency = "USD"
+	}
+	return &FleetView{
+		ServerURL:       serverURL,
+		ReportedAt:      at.Format(time.RFC3339),
+		WindowDays:      fleet.WindowDays,
+		Currency:        currency,
+		Platforms:       platforms,
+		TotalUSD:        fleet.TotalUSD,
+		WithoutReadings: fleet.PlatformsWithoutReadings,
+	}
 }
