@@ -92,6 +92,19 @@ type AppConfig struct {
 	// UpstreamIntervalMinutes is how often to heartbeat when paired. Zero means
 	// use the default; see DefaultUpstreamIntervalMinutes.
 	UpstreamIntervalMinutes int `json:"upstreamIntervalMinutes,omitempty"`
+	// UpstreamHistoryPushedTo is the server URL this Desktop has already handed
+	// its pre-pairing earnings history to, or empty for none.
+	//
+	// The import itself is idempotent — the server keys a reading on (platform,
+	// source, date) and updates rather than appends — so re-sending would be
+	// harmless but wasteful: it is up to 400 days of readings on every
+	// heartbeat, which is every minute by default.
+	//
+	// Storing the URL rather than a bare boolean is what makes re-pairing work:
+	// pointing Desktop at a DIFFERENT server no longer matches, so that server
+	// gets the history too. It is also why this is not a secret and belongs in
+	// config.json — it records where data was sent, not how to authenticate.
+	UpstreamHistoryPushedTo string `json:"upstreamHistoryPushedTo,omitempty"`
 }
 
 // DefaultUpstreamIntervalMinutes matches what a CashPilot worker sends, so a

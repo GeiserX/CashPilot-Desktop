@@ -16,13 +16,13 @@
 // Standalone stays the default and loses nothing — an empty URL means not
 // paired, and nothing here runs.
 //
-// # WHAT THIS DELIBERATELY DOES NOT DO
+// # WHAT A HEARTBEAT DOES NOT CARRY
 //
-// It does not touch earnings. The server collects them centrally from provider
-// accounts and returns them in the heartbeat RESPONSE; a worker only reports
-// what it is running. So pairing does not migrate, delete or duplicate
-// Desktop's local earnings history — that question is genuinely open (see the
-// pairing-history bead) and this package is careful not to pre-empt it.
+// Ongoing earnings. The server collects those centrally from provider accounts
+// and returns them in the heartbeat RESPONSE; a worker only reports what it is
+// running. The history a Desktop collected BEFORE it was paired is a separate,
+// one-time hand-over — see import.go, which copies it and leaves the local rows
+// untouched.
 package upstream
 
 import (
@@ -143,7 +143,14 @@ type Client struct {
 // server that accepts connections and never answers would otherwise pile up
 // goroutines for the lifetime of the process.
 func New(policy fleetnet.Policy) *Client {
-	return &Client{HTTP: &http.Client{Timeout: 30 * time.Second}, Policy: policy}
+	return &Client{HTTP: defaultHTTPClient(), Policy: policy}
+}
+
+// defaultHTTPClient is the transport used when none was injected. Shared by
+// every call so a zero-valued Client cannot end up with one timeout on the
+// heartbeat and none on the import.
+func defaultHTTPClient() *http.Client {
+	return &http.Client{Timeout: 30 * time.Second}
 }
 
 // Send posts one heartbeat and returns the server's response.
@@ -177,7 +184,7 @@ func (c *Client) Send(ctx context.Context, serverURL, token string, p Payload) (
 
 	client := c.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+		client = defaultHTTPClient()
 	}
 	resp, err := client.Do(req)
 	if err != nil {
