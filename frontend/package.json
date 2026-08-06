@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "harness:build": "tsc -p tsconfig.harness.json",
+    "test": "npm run harness:build && node scripts/fleet_render_check.mjs"
   },
   "dependencies": {},
   "devDependencies": {

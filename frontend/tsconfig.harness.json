@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": ".harness-build",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "declaration": false,
+    "sourceMap": false,
+    "rootDir": "src",
+    "allowImportingTsExtensions": false
+  },
+  "include": [
+    "src/render/**/*.ts",
+    "src/wails.d.ts"
+  ]
+}
