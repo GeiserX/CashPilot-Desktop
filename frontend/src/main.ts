@@ -363,6 +363,11 @@ function navButton(view: View, label: string, active: string) {
 }
 
 function topbar(title: string, current: AppState) {
+  // The total was computed IN summary.displayCurrency, so it must be labelled
+  // with that -- not with the configured preference, which can differ (the
+  // summary is a snapshot and the setting can change under it). Falling back to
+  // config only when the summary has no currency of its own.
+  const disp = current.summary?.displayCurrency || current.config.displayCurrency || "USD";
   const notifications = current.notifications || [];
   return `
     <header class="topbar">
@@ -372,7 +377,7 @@ function topbar(title: string, current: AppState) {
       <div class="topbar-right">
         <span class="runtime-dot ${current.runtime.available || current.runtime.nativeAvailable ? "ok" : "warn"}"></span>
         <span class="topbar-runtime">${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
-        <span class="topbar-earnings">${totalText(current.summary, current.config.displayCurrency || "USD")}</span>
+        <span class="topbar-earnings">${totalText(current.summary, disp)}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
         </select>

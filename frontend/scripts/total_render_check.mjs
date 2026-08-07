@@ -85,6 +85,36 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// A flag saying "known" is not enough -- there must actually be a total.
+// formatBalance coerces a non-finite value to 0, so these would each render a
+// confident zero and reintroduce the very bug this module removes.
+// ---------------------------------------------------------------------------
+check(
+  "totalKnown:true with NO total renders the em dash, not a zero",
+  totalText({ totalKnown: true }, "USD") === UNKNOWN_TOTAL,
+  `got: ${JSON.stringify(totalText({ totalKnown: true }, "USD"))}`
+);
+check(
+  "totalKnown:true with NaN renders the em dash",
+  totalText({ totalKnown: true, total: NaN }, "USD") === UNKNOWN_TOTAL,
+  `got: ${JSON.stringify(totalText({ totalKnown: true, total: NaN }, "USD"))}`
+);
+check(
+  "totalKnown:true with Infinity renders the em dash",
+  totalText({ totalKnown: true, total: Infinity }, "USD") === UNKNOWN_TOTAL,
+  `got: ${JSON.stringify(totalText({ totalKnown: true, total: Infinity }, "USD"))}`
+);
+check(
+  "totalKnown:true with a STRING total renders the em dash",
+  totalText({ totalKnown: true, total: "250" }, "USD") === UNKNOWN_TOTAL,
+  `got: ${JSON.stringify(totalText({ totalKnown: true, total: "250" }, "USD"))}`
+);
+check(
+  "but a real 0 is finite and still renders as a number",
+  totalText({ totalKnown: true, total: 0 }, "USD") !== UNKNOWN_TOTAL
+);
+
+// ---------------------------------------------------------------------------
 // A known total is formatted normally.
 // ---------------------------------------------------------------------------
 const priced = { total: 250, totalKnown: true, ratesStale: false };

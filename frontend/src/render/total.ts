@@ -30,7 +30,16 @@ export interface TotalSummaryLike {
 export const UNKNOWN_TOTAL = "—";
 
 export function totalIsKnown(summary: TotalSummaryLike | null | undefined): boolean {
-  return summary?.totalKnown === true;
+  // The flag alone is not enough. `formatBalance` coerces a non-finite value to
+  // 0, so a summary claiming `totalKnown: true` while carrying an absent or NaN
+  // total would render a confident zero -- reintroducing, through the back door,
+  // precisely the bug this module exists to remove. A known total must also be
+  // a total.
+  return (
+    summary?.totalKnown === true &&
+    typeof summary.total === "number" &&
+    Number.isFinite(summary.total)
+  );
 }
 
 /**

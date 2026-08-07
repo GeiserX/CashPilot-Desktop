@@ -256,7 +256,7 @@ type EarningsSummary struct {
 	DisplayCurrency string  `json:"displayCurrency"`
 	Total           float64 `json:"total"`
 	// TotalKnown is false when Total is 0 only because nothing could be priced.
-	// Absent is not zero: the UI must render "--", never a fabricated 0.
+	// Absent is not zero: the UI must render an em dash, never a fabricated 0.
 	TotalKnown   bool             `json:"totalKnown"`
 	Today        float64          `json:"today"`
 	Month        float64          `json:"month"`

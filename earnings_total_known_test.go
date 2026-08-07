@@ -128,6 +128,22 @@ func TestTotalKnownSeparatesUnpriceableFromZero(t *testing.T) {
 			wantTotalGT: -1,
 		},
 		{
+			// A zero that was actually PRICED. Distinct from the case above:
+			// that one is known via `unpriced == 0` and never converts
+			// anything, so without this the `priced > 0` half of the rule is
+			// only ever exercised by non-zero totals.
+			name:      "a priced balance that is genuinely zero",
+			display:   "USD",
+			fiatRates: `{"EUR":0.9}`,
+			seed: []store.EarningsRecord{
+				{Platform: "honeygain", Balance: 0, Currency: "USD", CreatedAt: daysAgoTS(1, 10)},
+				{Platform: "honeygain", Balance: 0, Currency: "USD", CreatedAt: daysAgoTS(0, 10)},
+			},
+			wantKnown:   true,
+			wantStale:   false,
+			wantTotalGT: -1,
+		},
+		{
 			// A partial sum stays KNOWN and is flagged stale. An understated
 			// real figure is still a measurement, and blanking it would throw
 			// away the priced services to describe the unpriced one.
