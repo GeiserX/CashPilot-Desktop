@@ -253,17 +253,20 @@ type Notification struct {
 // Balances stored per service are CUMULATIVE lifetime totals; the summary turns
 // them into a single display-currency total plus per-day accrual figures.
 type EarningsSummary struct {
-	DisplayCurrency string           `json:"displayCurrency"`
-	Total           float64          `json:"total"`
-	Today           float64          `json:"today"`
-	Month           float64          `json:"month"`
-	TodayChange     float64          `json:"todayChange"`
-	MonthChange     float64          `json:"monthChange"`
-	Breakdown       []ServiceEarning `json:"breakdown"`
-	Points          []PointsBalance  `json:"points"`
-	Daily           []DailyPoint     `json:"daily"`
-	RatesStale      bool             `json:"ratesStale"`
-	RatesUpdated    string           `json:"ratesUpdated"`
+	DisplayCurrency string  `json:"displayCurrency"`
+	Total           float64 `json:"total"`
+	// TotalKnown is false when Total is 0 only because nothing could be priced.
+	// Absent is not zero: the UI must render an em dash, never a fabricated 0.
+	TotalKnown   bool             `json:"totalKnown"`
+	Today        float64          `json:"today"`
+	Month        float64          `json:"month"`
+	TodayChange  float64          `json:"todayChange"`
+	MonthChange  float64          `json:"monthChange"`
+	Breakdown    []ServiceEarning `json:"breakdown"`
+	Points       []PointsBalance  `json:"points"`
+	Daily        []DailyPoint     `json:"daily"`
+	RatesStale   bool             `json:"ratesStale"`
+	RatesUpdated string           `json:"ratesUpdated"`
 }
 
 // ServiceEarning is one service's latest balance, both native and converted to
@@ -524,6 +527,9 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// rate outage or a zero rate) is dropped from BOTH and flags the rates stale,
 	// so it is never mislabeled as a reward point.
 	var total float64
+	// priced / unpriced separate "nothing to add up" from "nothing could be
+	// converted" -- see the TotalKnown assignment below.
+	priced, unpriced := 0, 0
 	latestDay := ""
 	for plat, days := range daysByPlat {
 		if len(days) == 0 {
@@ -546,11 +552,26 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		}
 		if conv, ok := a.exchange.ToDisplay(bal, cur, disp); ok {
 			total += conv
+			priced++
 			continue
 		}
+		unpriced++
 		summary.RatesStale = true
 	}
 	summary.Total = total
+	// A total of 0 means two completely different things and the UI cannot tell
+	// them apart from the number alone: a user who has genuinely earned nothing,
+	// and a user whose balances could not be priced at all. The second is an
+	// UNKNOWN total, not a zero one -- and it is not exotic, because ToDisplay
+	// routes through USD, so one missing DISPLAY-currency rate makes every
+	// platform unpriceable at once. Reporting 0 there tells a user with real
+	// money that they have none.
+	//
+	// Known when something was actually priced, or when there was nothing to
+	// price in the first place (a new install really is at zero). A partial sum
+	// stays known and is flagged stale, because an understated real figure is
+	// still a measurement.
+	summary.TotalKnown = priced > 0 || unpriced == 0
 
 	today := dayStr(0)
 	if latestDay == "" {

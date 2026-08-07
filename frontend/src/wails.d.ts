@@ -111,6 +111,13 @@ export interface HealthScore {
 export interface EarningsSummary {
   displayCurrency: string;
   total: number;
+  /**
+   * False when `total` is 0 only because nothing could be priced. A total of 0
+   * is a real measurement for a user who has earned nothing and a fabrication
+   * for a user whose display currency has no rate -- branch on this, never on
+   * the number. See render/total.ts.
+   */
+  totalKnown: boolean;
   today: number;
   month: number;
   todayChange: number;
