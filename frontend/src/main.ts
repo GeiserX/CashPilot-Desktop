@@ -34,6 +34,7 @@ import { renderHealthBadge } from "./render/health";
 import { renderMystNodes } from "./render/myst";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
+import { totalText, totalCaption } from "./render/total";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
@@ -218,7 +219,6 @@ function renderDashboard(current: AppState) {
   const summary = current.summary;
   const disp = summary?.displayCurrency || current.config.displayCurrency || "USD";
   const runningCount = deployments.filter((dep) => dep.status === "running").length;
-  const total = summary?.total ?? 0;
   const daily = summary?.daily || [];
   const breakdown = summary?.breakdown || [];
   const points = summary?.points || [];
@@ -228,10 +228,10 @@ function renderDashboard(current: AppState) {
     <div class="app-layout">
       ${appSidebar("dashboard")}
       <div class="main-content">
-        ${topbar("Dashboard", total, current)}
+        ${topbar("Dashboard", current)}
         <main class="page-content">
         <section class="stats-grid">
-          ${metricCard("Total Balance", formatBalance(total, disp), summary?.ratesStale ? "Rates may be stale" : "Across convertible services")}
+          ${metricCard("Total Balance", totalText(summary, disp), totalCaption(summary))}
           ${metricCard("Today", formatBalance(summary?.today ?? 0, disp), changeCaption(summary?.todayChange ?? 0, "vs yesterday"))}
           ${metricCard("This Month", formatBalance(summary?.month ?? 0, disp), summary?.monthChange ? changeCaption(summary.monthChange, "vs last month") : "So far this month")}
           ${metricCard("Active Services", `${runningCount}`, "Containers currently running")}
@@ -362,7 +362,7 @@ function navButton(view: View, label: string, active: string) {
   return `<button class="sidebar-link ${active === view ? "active" : ""}" data-view="${view}">${escapeHtml(label)}</button>`;
 }
 
-function topbar(title: string, totalBalance: number, current: AppState) {
+function topbar(title: string, current: AppState) {
   const notifications = current.notifications || [];
   return `
     <header class="topbar">
@@ -372,7 +372,7 @@ function topbar(title: string, totalBalance: number, current: AppState) {
       <div class="topbar-right">
         <span class="runtime-dot ${current.runtime.available || current.runtime.nativeAvailable ? "ok" : "warn"}"></span>
         <span class="topbar-runtime">${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
-        <span class="topbar-earnings">${formatBalance(totalBalance, current.config.displayCurrency || "USD")}</span>
+        <span class="topbar-earnings">${totalText(current.summary, current.config.displayCurrency || "USD")}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
         </select>
@@ -422,7 +422,6 @@ function wireShellNav() {
 }
 
 function renderCatalog(current: AppState) {
-  const total = totalBalance(current);
   const services = (current.services || []).filter((service) => {
     const matchesCategory = catalogFilter === "all" || service.category === catalogFilter;
     const haystack = `${service.name} ${service.shortDescription} ${service.description}`.toLowerCase();
@@ -434,7 +433,7 @@ function renderCatalog(current: AppState) {
     <div class="app-layout">
       ${appSidebar("catalog")}
       <div class="main-content">
-        ${topbar("Service Catalog", total, current)}
+        ${topbar("Service Catalog", current)}
         <main class="page-content">
           <section class="card">
             <div class="card-header">
@@ -510,7 +509,6 @@ async function renderSettings(current: AppState) {
     showErrorToast({scope: "settings", error: String(error)});
     return;
   }
-  const total = totalBalance(current);
   // Background-helper state is derived live from the OS (not a stored preference):
   // installed = a login agent is registered, running = the service manager reports it
   // alive. Reject only if the app isn't ready yet, in which case the toggle is disabled.
@@ -526,7 +524,7 @@ async function renderSettings(current: AppState) {
     <div class="app-layout">
       ${appSidebar("settings")}
       <div class="main-content">
-        ${topbar("Settings", total, current)}
+        ${topbar("Settings", current)}
         <main class="page-content">
           <section class="card">
             <div class="card-header">
@@ -699,13 +697,12 @@ async function renderFleet(current: AppState) {
     showErrorToast({scope: "fleet", error: String(error)});
     return;
   }
-  const total = totalBalance(current);
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
       ${appSidebar("fleet")}
       <div class="main-content">
-        ${topbar("Fleet Management", total, current)}
+        ${topbar("Fleet Management", current)}
         <main class="page-content">
           <section class="stats-grid">
             ${metricCard("Workers", `${fleet.workers}`, "Desktop and server workers")}
@@ -819,10 +816,6 @@ async function removeFleetDevice(id: number) {
   } catch (error) {
     showErrorToast({scope: "fleet", error: String(error)});
   }
-}
-
-function totalBalance(current: AppState) {
-  return current.summary?.total ?? 0;
 }
 
 function valueOf(selector: string) {
@@ -996,7 +989,7 @@ function renderSetupWizard(current: AppState) {
     <div class="app-layout">
       ${appSidebar("wizard")}
       <div class="main-content">
-        ${topbar("Setup Wizard", totalBalance(current), current)}
+        ${topbar("Setup Wizard", current)}
       <main class="page-content setup-content">
         <div class="split">
           <div>

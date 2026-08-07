@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "harness:build": "tsc -p tsconfig.harness.json",
-    "test": "npm run harness:build && node scripts/fleet_render_check.mjs && node scripts/earnings_render_check.mjs && node scripts/status_render_check.mjs"
+    "test": "npm run harness:build && node scripts/fleet_render_check.mjs && node scripts/earnings_render_check.mjs && node scripts/status_render_check.mjs && node scripts/total_render_check.mjs"
   },
   "dependencies": {},
   "devDependencies": {
