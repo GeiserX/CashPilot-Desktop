@@ -33,7 +33,7 @@ docker:
       label: "External address"
       required: true
       secret: false
-      description: "Your public IP or DDNS hostname with port (e.g. 84.54.27.229:28967). Port 28967 must be forwarded (TCP+UDP)"
+      description: "DDNS hostname with port (e.g. mynode.ddns.net:28967) -- strongly preferred over a literal IP, which strands the node the day your ISP silently re-provisions it. Port 28967 must be forwarded (TCP+UDP)"
     - key: STORAGE
       label: "Storage allocation"
       required: true
@@ -60,6 +60,13 @@ docker:
   resources:
     mem_limit: "2g"
     oom_score_adj: -100
+    # Defensive weight for a service the network dials back into: a node that
+    # is merely slow to answer satellite dial-backs reads as offline, and
+    # sustained offline leads to suspension. Only arbitrates CPU against other
+    # containers under contention (free while idle); 4096, not 2048, because
+    # older runc maps shares under ~2600 BELOW the unset cgroup-v2 default.
+    # Mirrors the web catalog's storj entry.
+    cpu_shares: 4096
   setup: >
     Before first run, initialize the storage node config:
     docker run --rm -e SETUP="true"

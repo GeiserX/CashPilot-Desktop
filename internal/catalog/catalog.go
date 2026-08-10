@@ -68,6 +68,12 @@ type ResourceLimits struct {
 	MemLimit       string `json:"memLimit" yaml:"mem_limit"`
 	MemReservation string `json:"memReservation" yaml:"mem_reservation"`
 	OomScoreAdj    *int   `json:"oomScoreAdj" yaml:"oom_score_adj"`
+	// CPUShares is a relative CPU weight (Docker's API default is 1024) that only
+	// arbitrates between containers while the host is contended — it never caps
+	// an idle container. A plain int64 is right here, unlike OomScoreAdj's
+	// pointer: Docker already reads 0 as "use the default", so the zero value IS
+	// absent and needs no separate representation.
+	CPUShares int64 `json:"cpuShares" yaml:"cpu_shares"`
 }
 
 // NativeConfig is the optional native: block from a service YAML. It declares how a

@@ -657,6 +657,17 @@ func applyResourceLimits(hostConfig *container.HostConfig, res catalog.ResourceL
 	if res.OomScoreAdj != nil {
 		hostConfig.OomScoreAdj = *res.OomScoreAdj
 	}
+	if res.CPUShares != 0 {
+		// 2..262144 is the kernel's cpu.shares range (MIN_SHARES..MAX_SHARES);
+		// daemons vary at the edges (modern ones clamp rather than error), so a
+		// value outside it never does what the catalog author meant and fails
+		// fast here instead of being silently clamped at create time. Same
+		// guard as the web worker's _validate_resources.
+		if res.CPUShares < 2 || res.CPUShares > 262144 {
+			return fmt.Errorf("invalid cpu_shares %d: must be between 2 and 262144", res.CPUShares)
+		}
+		hostConfig.CPUShares = res.CPUShares
+	}
 	return nil
 }
 
