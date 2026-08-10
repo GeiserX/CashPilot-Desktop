@@ -848,3 +848,49 @@ func TestBuildEnvFiltersUndeclaredAndSubstitutesHostname(t *testing.T) {
 		t.Fatalf("DEVICE_ID = %q, want %q", env["DEVICE_ID"], want)
 	}
 }
+
+// TestApplyResourceLimitsSetsCPUShares verifies the relative CPU weight lands on
+// the HostConfig, and that the zero value (absent from YAML) touches nothing —
+// Docker reads 0 as "use the default", so absence needs no pointer.
+func TestApplyResourceLimitsSetsCPUShares(t *testing.T) {
+	hc := &container.HostConfig{}
+	if err := applyResourceLimits(hc, catalog.ResourceLimits{CPUShares: 4096}); err != nil {
+		t.Fatalf("applyResourceLimits returned error: %v", err)
+	}
+	if hc.CPUShares != 4096 {
+		t.Fatalf("CPUShares = %d, want 4096", hc.CPUShares)
+	}
+
+	hc = &container.HostConfig{}
+	if err := applyResourceLimits(hc, catalog.ResourceLimits{MemLimit: "256m"}); err != nil {
+		t.Fatalf("applyResourceLimits returned error: %v", err)
+	}
+	if hc.CPUShares != 0 {
+		t.Fatalf("CPUShares = %d, want 0 (absent must stay absent)", hc.CPUShares)
+	}
+}
+
+// TestApplyResourceLimitsRejectsOutOfRangeCPUShares pins the kernel range
+// (2..262144): a value outside it never does what the catalog author meant, and
+// failing fast at deploy beats being silently clamped at create time. 1 and 0
+// below, 262145 above; 2 and 262144 are the accepted edges.
+func TestApplyResourceLimitsRejectsOutOfRangeCPUShares(t *testing.T) {
+	for _, bad := range []int64{1, -1, 262145} {
+		hc := &container.HostConfig{}
+		if err := applyResourceLimits(hc, catalog.ResourceLimits{CPUShares: bad}); err == nil {
+			t.Fatalf("cpu_shares=%d was accepted; want an error", bad)
+		}
+		if hc.CPUShares != 0 {
+			t.Fatalf("cpu_shares=%d partially applied: HostConfig.CPUShares = %d", bad, hc.CPUShares)
+		}
+	}
+	for _, edge := range []int64{2, 262144} {
+		hc := &container.HostConfig{}
+		if err := applyResourceLimits(hc, catalog.ResourceLimits{CPUShares: edge}); err != nil {
+			t.Fatalf("cpu_shares=%d rejected: %v", edge, err)
+		}
+		if hc.CPUShares != edge {
+			t.Fatalf("CPUShares = %d, want %d", hc.CPUShares, edge)
+		}
+	}
+}

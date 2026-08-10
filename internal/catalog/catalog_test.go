@@ -57,6 +57,7 @@ docker:
     mem_limit: "256m"
     mem_reservation: "128m"
     oom_score_adj: -100
+    cpu_shares: 4096
 `),
 		},
 		"services/bandwidth/plain.yml": {
@@ -90,12 +91,15 @@ docker:
 	if res.OomScoreAdj == nil || *res.OomScoreAdj != -100 {
 		t.Fatalf("OomScoreAdj = %v, want -100", res.OomScoreAdj)
 	}
+	if res.CPUShares != 4096 {
+		t.Fatalf("CPUShares = %d, want 4096", res.CPUShares)
+	}
 
 	plain, ok := cat.Get("plain")
 	if !ok {
 		t.Fatal("expected plain service")
 	}
-	if pr := plain.Docker.Resources; pr.MemLimit != "" || pr.MemReservation != "" || pr.OomScoreAdj != nil {
+	if pr := plain.Docker.Resources; pr.MemLimit != "" || pr.MemReservation != "" || pr.OomScoreAdj != nil || pr.CPUShares != 0 {
 		t.Fatalf("expected empty resources for a service without the block, got %+v", pr)
 	}
 }
