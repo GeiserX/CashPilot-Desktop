@@ -983,6 +983,21 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 		t.Fatalf("Status.Version should be %q, got %q", "<api> / <server>", st.Version)
 	}
 
+	const probeImage = "busybox:1.37.0" // pinned tag, never :latest
+
+	// Pull before deploying so a daemon that cannot run this image skips the test
+	// instead of failing it. The release workflow runs go test on windows-latest,
+	// where Docker is up but serving Windows containers.
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	err = pullImage(ctx, cli, probeImage, nil)
+	cli.Close()
+	if err != nil {
+		t.Skipf("could not pull %s: %v", probeImage, err)
+	}
+
 	slug := fmt.Sprintf("lifecycle%d", time.Now().UnixNano())
 	volume := slug + "-data"
 	spec := DeploySpec{
@@ -990,7 +1005,7 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 		Service: catalog.Service{
 			Name: "lifecycle probe",
 			Docker: catalog.DockerConfig{
-				Image: "busybox:1.37.0", // pinned tag, never :latest
+				Image: probeImage,
 				// PID 1 ignores signals it has no handler for, so a bare sleep would
 				// sit through Stop's SIGTERM and cost the full 20s timeout twice.
 				// The trap gives the shell a handler, so Stop and Restart return at once.
@@ -1054,7 +1069,7 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 
 	// managedContainerVolumes reads the inspect response, and Remove deletes the
 	// named volume it reports.
-	cli, err := dockerClient()
+	cli, err = dockerClient()
 	if err != nil {
 		t.Fatalf("dockerClient: %v", err)
 	}
