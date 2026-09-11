@@ -7,11 +7,13 @@ present in the dependency tree. The job is a hard gate: a finding our code can r
 
 ## Go standard library
 
-The release and CI workflows build with the **latest Go 1.26.x** patch (`go-version: '1.26'` /
-`'1.26.x'`), which pulls in each Go security release automatically. Recent stdlib advisories
-(`GO-2026-5856` crypto/tls, `GO-2026-5039` net/textproto, `GO-2026-5037` crypto/x509) are fixed in
-go1.26.4 / go1.26.5, so the CI runners and the shipped binaries are already patched. If you build locally
-with an **older** toolchain you may see these — update your Go toolchain (`go1.26.5` or newer).
+The release and CI workflows ask for `go-version: '1.26'`, so `setup-go` resolves the latest 1.26.x patch
+and each Go security release arrives without a workflow edit. Keep it that way. Pinning an exact patch
+looks tidy and then quietly rots: the workflows sat on `'1.26.5'` while go1.26.6 fixed five advisories our
+code actually calls (`GO-2026-6218` net/url, `GO-2026-6090` crypto/tls, `GO-2026-6089` and `GO-2026-5026`
+net/http, `GO-2026-5972` encoding/asn1), which shipped in release binaries until the gate caught it.
+
+If you build locally with an older toolchain you will see those findings. Update your Go toolchain.
 
 ## The Docker SDK: `github.com/moby/moby/client`, not `github.com/docker/docker`
 
