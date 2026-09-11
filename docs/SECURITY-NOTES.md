@@ -51,9 +51,10 @@ stats all follow that shape. Three other differences bite when you port code, al
 
 - Filters are `client.Filters`, built with `make(client.Filters).Add("label", ...)`. There is no `filters`
   package any more. The wire format is unchanged.
-- Ports are `network.Port` values parsed by `network.ParsePort`, not raw `nat.Port` strings. A malformed
-  port mapping used to reach the daemon before failing, so `buildPorts` now rejects it up front and returns
-  an error.
+- Ports are `network.Port` values parsed by `network.ParsePort`, not raw `nat.Port` strings, so
+  `buildPorts` rejects a bad mapping up front instead of handing it to the daemon. It also rejects anything
+  that is not exactly `host:container`. Those used to be skipped, which started the container with no port
+  published and looked like a clean deploy.
 - API-version negotiation is on by default and runs lazily on the first versioned request.
   `WithAPIVersionNegotiation()` still exists, but it is a deprecated no-op.
 

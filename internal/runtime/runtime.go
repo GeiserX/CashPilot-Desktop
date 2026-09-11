@@ -596,9 +596,13 @@ func buildPorts(raw []string) (network.PortSet, network.PortMap, error) {
 	ports := network.PortSet{}
 	bindings := network.PortMap{}
 	for _, mapping := range raw {
+		// The schema is ports: ["host:container"], so anything else is a typo in a
+		// service definition. Skipping it used to publish no port and start the
+		// container anyway, which looks like a working deploy until someone tries
+		// to reach the service.
 		parts := strings.Split(mapping, ":")
 		if len(parts) != 2 {
-			continue
+			return nil, nil, fmt.Errorf("invalid port mapping %q: want \"host:container\"", mapping)
 		}
 		host := parts[0]
 		containerPort := parts[1]

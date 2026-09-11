@@ -904,11 +904,10 @@ func TestApplyResourceLimitsRejectsOutOfRangeCPUShares(t *testing.T) {
 // an error path: moby's network.Port is a parsed value, where the old nat.Port was
 // a raw string that got handed to the daemon and failed at container-create time.
 func TestBuildPortsParsesAndRejects(t *testing.T) {
-	ports, bindings, err := buildPorts([]string{"4449:4449", "8080:9090/udp", "garbage", "1:2:3"})
+	ports, bindings, err := buildPorts([]string{"4449:4449", "8080:9090/udp"})
 	if err != nil {
 		t.Fatalf("buildPorts: %v", err)
 	}
-	// "garbage" has no colon and "1:2:3" has two, so both are skipped, not errors.
 	if len(ports) != 2 || len(bindings) != 2 {
 		t.Fatalf("expected 2 ports and 2 bindings, got %d and %d", len(ports), len(bindings))
 	}
@@ -930,8 +929,12 @@ func TestBuildPortsParsesAndRejects(t *testing.T) {
 		t.Fatalf("expected host 8080 bound to 9090/udp, got %v", got)
 	}
 
-	if _, _, err := buildPorts([]string{"8080:notaport"}); err == nil {
-		t.Fatal("expected an error for a non-numeric container port")
+	// A typo must fail the deploy, not quietly publish nothing. Before, anything
+	// without exactly one colon was skipped and the container started portless.
+	for _, bad := range []string{"8080:notaport", "8080", "127.0.0.1:8080:9090", ""} {
+		if _, _, err := buildPorts([]string{bad}); err == nil {
+			t.Fatalf("expected an error for the port mapping %q", bad)
+		}
 	}
 }
 
