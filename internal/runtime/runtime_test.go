@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/client"
 )
 
 // TestStreamPullProgressHandlesLongLine pins the bufio.Scanner buffer raise: a
@@ -350,7 +350,7 @@ type fakeStatsClient struct {
 	calls int
 }
 
-func (f *fakeStatsClient) ContainerStatsOneShot(_ context.Context, _ string) (container.StatsResponseReader, error) {
+func (f *fakeStatsClient) ContainerStats(_ context.Context, _ string, _ client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var s fakeStat
@@ -362,9 +362,9 @@ func (f *fakeStatsClient) ContainerStatsOneShot(_ context.Context, _ string) (co
 	}
 	f.calls++
 	if s.err != nil {
-		return container.StatsResponseReader{}, s.err
+		return client.ContainerStatsResult{}, s.err
 	}
-	return container.StatsResponseReader{Body: io.NopCloser(strings.NewReader(s.body))}, nil
+	return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader(s.body))}, nil
 }
 
 // TestSampleFromResponseExtractsCountersAndMemory covers the pure field extraction,
@@ -588,7 +588,7 @@ func TestDockerClientHostSeam(t *testing.T) {
 func dialTestDocker(t *testing.T) *client.Client {
 	t.Helper()
 	if cli, err := dockerClient(); err == nil {
-		if _, perr := cli.Ping(context.Background()); perr == nil {
+		if _, perr := cli.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true}); perr == nil {
 			return cli
 		}
 		cli.Close()
@@ -601,11 +601,11 @@ func dialTestDocker(t *testing.T) *client.Client {
 	if host == "" {
 		t.Skip("docker not available (empty context endpoint)")
 	}
-	cli, err := client.NewClientWithOpts(client.WithHost(host), client.WithAPIVersionNegotiation())
+	cli, err := client.NewClientWithOpts(client.WithHost(host))
 	if err != nil {
 		t.Skipf("docker not available (client init failed): %v", err)
 	}
-	if _, err := cli.Ping(context.Background()); err != nil {
+	if _, err := cli.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
 		cli.Close()
 		t.Skipf("docker daemon not reachable at %s: %v", host, err)
 	}
@@ -633,20 +633,24 @@ func TestDockerStatsIntegrationReportsLiveCPU(t *testing.T) {
 	}
 
 	name := fmt.Sprintf("cashpilot-cputest-%d", time.Now().UnixNano())
-	created, err := cli.ContainerCreate(ctx, &container.Config{
-		Image: img,
-		Cmd:   []string{"sh", "-c", "while true; do :; done"},
-	}, &container.HostConfig{}, nil, nil, name)
+	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
+			Image: img,
+			Cmd:   []string{"sh", "-c", "while true; do :; done"},
+		},
+		HostConfig: &container.HostConfig{},
+		Name:       name,
+	})
 	if err != nil {
 		t.Fatalf("create throwaway container %s: %v", name, err)
 	}
 	// ALWAYS clean up our own container, even on failure. Use a fresh context so
 	// removal still runs if ctx has been cancelled.
 	defer func() {
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	}()
 
-	if err := cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		t.Fatalf("start throwaway container %s: %v", name, err)
 	}
 
