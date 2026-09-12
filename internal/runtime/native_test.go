@@ -264,11 +264,19 @@ func TestNativeDeployTarGzExecAndStop(t *testing.T) {
 		t.Fatal("stub marker never written (binary did not execute)")
 	}
 
-	logs, err := p.Logs(context.Background(), "stubsvc", 100)
-	if err != nil {
-		t.Fatalf("Logs: %v", err)
-	}
-	if !strings.Contains(logs, "cashpilot-native-stub alive") {
+	// The stub writes its marker file and its stdout line as two separate events,
+	// so the marker appearing above does not mean the log has been captured yet.
+	// Reading once here failed the macOS release build for v0.17.4 on an empty
+	// log. Every other assertion in this file waits; this one now does too.
+	var logs string
+	if !waitFor(t, 5*time.Second, func() bool {
+		out, err := p.Logs(context.Background(), "stubsvc", 100)
+		if err != nil {
+			return false
+		}
+		logs = out
+		return strings.Contains(out, "cashpilot-native-stub alive")
+	}) {
 		t.Fatalf("captured logs missing stub output: %q", logs)
 	}
 
