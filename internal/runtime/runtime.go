@@ -18,12 +18,10 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 const (
@@ -104,7 +102,7 @@ func (p *DockerProvider) Status(ctx context.Context) Status {
 	}
 	defer cli.Close()
 
-	ping, err := cli.Ping(ctx)
+	ping, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 	if err != nil {
 		return Status{
 			Available: false,
@@ -113,7 +111,7 @@ func (p *DockerProvider) Status(ctx context.Context) Status {
 			Tools:     tools,
 		}
 	}
-	version, _ := cli.ServerVersion(ctx)
+	version, _ := cli.ServerVersion(ctx, client.ServerVersionOptions{})
 	return Status{
 		Available: true,
 		Kind:      "existing-docker",
@@ -137,7 +135,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 
 	name := containerName(spec.Slug)
-	_ = cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: true, RemoveVolumes: false})
+	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: false})
 
 	if progress != nil {
 		progress("Pulling " + svc.Docker.Image)
@@ -189,19 +187,23 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if progress != nil {
 		progress("Creating " + name)
 	}
-	created, err := cli.ContainerCreate(ctx, config, hostConfig, nil, nil, name)
+	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     config,
+		HostConfig: hostConfig,
+		Name:       name,
+	})
 	if err != nil {
 		return ContainerInfo{}, err
 	}
 	if progress != nil {
 		progress("Starting " + name)
 	}
-	if err := cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		// The container was created (it carries LabelManaged, holds the name, and
 		// shows in List()) but never started. Best-effort remove it so a failed
 		// deploy does not orphan a managed cashpilot-<slug> container in "created"
 		// state. Use a fresh context so a cancelled deploy ctx still cleans up.
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 		return ContainerInfo{}, err
 	}
 
@@ -221,7 +223,8 @@ func (p *DockerProvider) Stop(ctx context.Context, slug string) error {
 	}
 	defer cli.Close()
 	timeout := 20
-	return cli.ContainerStop(ctx, containerName(slug), container.StopOptions{Timeout: &timeout})
+	_, err = cli.ContainerStop(ctx, containerName(slug), client.ContainerStopOptions{Timeout: &timeout})
+	return err
 }
 
 func (p *DockerProvider) Start(ctx context.Context, slug string) error {
@@ -230,7 +233,8 @@ func (p *DockerProvider) Start(ctx context.Context, slug string) error {
 		return err
 	}
 	defer cli.Close()
-	return cli.ContainerStart(ctx, containerName(slug), container.StartOptions{})
+	_, err = cli.ContainerStart(ctx, containerName(slug), client.ContainerStartOptions{})
+	return err
 }
 
 func (p *DockerProvider) Restart(ctx context.Context, slug string) error {
@@ -240,7 +244,8 @@ func (p *DockerProvider) Restart(ctx context.Context, slug string) error {
 	}
 	defer cli.Close()
 	timeout := 20
-	return cli.ContainerRestart(ctx, containerName(slug), container.StopOptions{Timeout: &timeout})
+	_, err = cli.ContainerRestart(ctx, containerName(slug), client.ContainerRestartOptions{Timeout: &timeout})
+	return err
 }
 
 func (p *DockerProvider) Remove(ctx context.Context, slug string) error {
@@ -254,11 +259,11 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string) error {
 	if err != nil {
 		return err
 	}
-	if err := cli.ContainerRemove(ctx, name, container.RemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+	if _, err := cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
 		return err
 	}
 	for _, volumeName := range volumes {
-		if err := cli.VolumeRemove(ctx, volumeName, true); err != nil {
+		if _, err := cli.VolumeRemove(ctx, volumeName, client.VolumeRemoveOptions{Force: true}); err != nil {
 			return fmt.Errorf("container removed, but volume %s could not be deleted: %w", volumeName, err)
 		}
 	}
@@ -282,7 +287,7 @@ func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (stri
 	if lines <= 0 {
 		lines = 200
 	}
-	reader, err := cli.ContainerLogs(ctx, containerName(slug), container.LogsOptions{
+	reader, err := cli.ContainerLogs(ctx, containerName(slug), client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       fmt.Sprintf("%d", lines),
@@ -308,16 +313,14 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 		return nil, err
 	}
 	defer cli.Close()
-	containers, err := cli.ContainerList(ctx, container.ListOptions{
-		All: true,
-		Filters: filters.NewArgs(
-			filters.Arg("label", LabelManaged+"=true"),
-		),
+	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true"),
 	})
 	if err != nil {
 		return nil, err
 	}
-	return p.statsForContainers(ctx, cli, containers), nil
+	return p.statsForContainers(ctx, cli, list.Items), nil
 }
 
 // statsForContainers builds the ContainerInfo list, sampling every container's CPU
@@ -354,9 +357,11 @@ func toContainerInfo(c container.Summary, cpu, mem float64) ContainerInfo {
 		ContainerID: c.ID,
 		Name:        name,
 		Image:       c.Image,
-		Status:      c.State,
-		CPUPercent:  cpu,
-		MemoryMB:    mem,
+		// container.Summary.State is a defined string type (container.ContainerState)
+		// in the moby API module; ContainerInfo.Status stays a plain string.
+		Status:     string(c.State),
+		CPUPercent: cpu,
+		MemoryMB:   mem,
 	}
 }
 
@@ -379,7 +384,7 @@ type containerSample struct {
 // Narrowing it to an interface lets stats(), sampleStats() and statsForContainers()
 // be unit-tested with a fake that returns canned stats, with no Docker daemon.
 type statsClient interface {
-	ContainerStatsOneShot(ctx context.Context, containerID string) (container.StatsResponseReader, error)
+	ContainerStats(ctx context.Context, containerID string, options client.ContainerStatsOptions) (client.ContainerStatsResult, error)
 }
 
 // stats returns the container's current CPU percentage and memory in MB. It reads
@@ -407,10 +412,12 @@ func (p *DockerProvider) stats(ctx context.Context, cli statsClient, containerID
 	return combineSamples(a, b)
 }
 
-// sampleStats reads one ContainerStatsOneShot sample and extracts its counters via
-// sampleFromResponse. ok is false if the sample cannot be read or decoded.
+// sampleStats reads one one-shot stats sample and extracts its counters via
+// sampleFromResponse. ok is false if the sample cannot be read or decoded. The
+// zero ContainerStatsOptions is a one-shot read (Stream false, no previous
+// sample), which is what the old ContainerStatsOneShot call did.
 func sampleStats(ctx context.Context, cli statsClient, containerID string) (containerSample, bool) {
-	reader, err := cli.ContainerStatsOneShot(ctx, containerID)
+	reader, err := cli.ContainerStats(ctx, containerID, client.ContainerStatsOptions{})
 	if err != nil {
 		return containerSample{}, false
 	}
@@ -487,8 +494,12 @@ func memoryMB(mem container.MemoryStats) float64 {
 // a future bundled-runtime provider that must talk to a specific socket/endpoint
 // instead of the ambient context; no current caller passes one, so today's behavior
 // is unchanged.
+//
+// There is no WithAPIVersionNegotiation option any more: the moby client negotiates
+// the API version by default, lazily on the first versioned request, so the old
+// explicit option is a deprecated no-op.
 func dockerClient(host ...string) (*client.Client, error) {
-	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
+	opts := []client.Opt{client.FromEnv}
 	if len(host) > 0 && host[0] != "" {
 		opts = append(opts, client.WithHost(host[0]))
 	}
@@ -502,7 +513,7 @@ func dockerClient(host ...string) (*client.Client, error) {
 const maxPullLogLine = 1 << 20
 
 func pullImage(ctx context.Context, cli *client.Client, imageName string, progress func(string)) error {
-	reader, err := cli.ImagePull(ctx, imageName, image.PullOptions{})
+	reader, err := cli.ImagePull(ctx, imageName, client.ImagePullOptions{})
 	if err != nil {
 		return err
 	}
@@ -581,22 +592,32 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 	return env
 }
 
-func buildPorts(raw []string) (nat.PortSet, nat.PortMap, error) {
-	ports := nat.PortSet{}
-	bindings := nat.PortMap{}
+func buildPorts(raw []string) (network.PortSet, network.PortMap, error) {
+	ports := network.PortSet{}
+	bindings := network.PortMap{}
 	for _, mapping := range raw {
+		// The schema is ports: ["host:container"], so anything else is a typo in a
+		// service definition. Skipping it used to publish no port and start the
+		// container anyway, which looks like a working deploy until someone tries
+		// to reach the service.
 		parts := strings.Split(mapping, ":")
 		if len(parts) != 2 {
-			continue
+			return nil, nil, fmt.Errorf("invalid port mapping %q: want \"host:container\"", mapping)
 		}
 		host := parts[0]
 		containerPort := parts[1]
 		if !strings.Contains(containerPort, "/") {
 			containerPort += "/tcp"
 		}
-		port := nat.Port(containerPort)
+		// network.Port is a parsed value type (the old nat.Port was a raw string),
+		// so a malformed "host:container" entry now surfaces as an error here
+		// instead of being handed to the daemon and failing the create.
+		port, err := network.ParsePort(containerPort)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid port mapping %q: %w", mapping, err)
+		}
 		ports[port] = struct{}{}
-		bindings[port] = []nat.PortBinding{{HostPort: host}}
+		bindings[port] = []network.PortBinding{{HostPort: host}}
 	}
 	return ports, bindings, nil
 }
@@ -727,15 +748,16 @@ func parseMemoryBytes(s string) (int64, error) {
 }
 
 func managedContainerVolumes(ctx context.Context, cli *client.Client, name string) ([]string, error) {
-	inspect, err := cli.ContainerInspect(ctx, name)
+	inspect, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
-	if inspect.Config == nil || inspect.Config.Labels[LabelManaged] != "true" {
+	ctr := inspect.Container
+	if ctr.Config == nil || ctr.Config.Labels[LabelManaged] != "true" {
 		return nil, fmt.Errorf("%s is not managed by CashPilot", name)
 	}
-	volumes := make([]string, 0, len(inspect.Mounts))
-	for _, mnt := range inspect.Mounts {
+	volumes := make([]string, 0, len(ctr.Mounts))
+	for _, mnt := range ctr.Mounts {
 		if mnt.Type == mount.TypeVolume && mnt.Name != "" {
 			volumes = append(volumes, mnt.Name)
 		}

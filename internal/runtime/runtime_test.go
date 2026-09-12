@@ -16,9 +16,10 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // TestStreamPullProgressHandlesLongLine pins the bufio.Scanner buffer raise: a
@@ -350,7 +351,7 @@ type fakeStatsClient struct {
 	calls int
 }
 
-func (f *fakeStatsClient) ContainerStatsOneShot(_ context.Context, _ string) (container.StatsResponseReader, error) {
+func (f *fakeStatsClient) ContainerStats(_ context.Context, _ string, _ client.ContainerStatsOptions) (client.ContainerStatsResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var s fakeStat
@@ -362,9 +363,9 @@ func (f *fakeStatsClient) ContainerStatsOneShot(_ context.Context, _ string) (co
 	}
 	f.calls++
 	if s.err != nil {
-		return container.StatsResponseReader{}, s.err
+		return client.ContainerStatsResult{}, s.err
 	}
-	return container.StatsResponseReader{Body: io.NopCloser(strings.NewReader(s.body))}, nil
+	return client.ContainerStatsResult{Body: io.NopCloser(strings.NewReader(s.body))}, nil
 }
 
 // TestSampleFromResponseExtractsCountersAndMemory covers the pure field extraction,
@@ -588,7 +589,7 @@ func TestDockerClientHostSeam(t *testing.T) {
 func dialTestDocker(t *testing.T) *client.Client {
 	t.Helper()
 	if cli, err := dockerClient(); err == nil {
-		if _, perr := cli.Ping(context.Background()); perr == nil {
+		if _, perr := cli.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true}); perr == nil {
 			return cli
 		}
 		cli.Close()
@@ -601,11 +602,11 @@ func dialTestDocker(t *testing.T) *client.Client {
 	if host == "" {
 		t.Skip("docker not available (empty context endpoint)")
 	}
-	cli, err := client.NewClientWithOpts(client.WithHost(host), client.WithAPIVersionNegotiation())
+	cli, err := client.NewClientWithOpts(client.WithHost(host))
 	if err != nil {
 		t.Skipf("docker not available (client init failed): %v", err)
 	}
-	if _, err := cli.Ping(context.Background()); err != nil {
+	if _, err := cli.Ping(context.Background(), client.PingOptions{NegotiateAPIVersion: true}); err != nil {
 		cli.Close()
 		t.Skipf("docker daemon not reachable at %s: %v", host, err)
 	}
@@ -633,20 +634,24 @@ func TestDockerStatsIntegrationReportsLiveCPU(t *testing.T) {
 	}
 
 	name := fmt.Sprintf("cashpilot-cputest-%d", time.Now().UnixNano())
-	created, err := cli.ContainerCreate(ctx, &container.Config{
-		Image: img,
-		Cmd:   []string{"sh", "-c", "while true; do :; done"},
-	}, &container.HostConfig{}, nil, nil, name)
+	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config: &container.Config{
+			Image: img,
+			Cmd:   []string{"sh", "-c", "while true; do :; done"},
+		},
+		HostConfig: &container.HostConfig{},
+		Name:       name,
+	})
 	if err != nil {
 		t.Fatalf("create throwaway container %s: %v", name, err)
 	}
 	// ALWAYS clean up our own container, even on failure. Use a fresh context so
 	// removal still runs if ctx has been cancelled.
 	defer func() {
-		_ = cli.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 	}()
 
-	if err := cli.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		t.Fatalf("start throwaway container %s: %v", name, err)
 	}
 
@@ -893,4 +898,209 @@ func TestApplyResourceLimitsRejectsOutOfRangeCPUShares(t *testing.T) {
 			t.Fatalf("CPUShares = %d, want %d", hc.CPUShares, edge)
 		}
 	}
+}
+
+// TestBuildPortsParsesAndRejects covers buildPorts, which had no test and now has
+// an error path: moby's network.Port is a parsed value, where the old nat.Port was
+// a raw string that got handed to the daemon and failed at container-create time.
+func TestBuildPortsParsesAndRejects(t *testing.T) {
+	ports, bindings, err := buildPorts([]string{"4449:4449", "8080:9090/udp"})
+	if err != nil {
+		t.Fatalf("buildPorts: %v", err)
+	}
+	if len(ports) != 2 || len(bindings) != 2 {
+		t.Fatalf("expected 2 ports and 2 bindings, got %d and %d", len(ports), len(bindings))
+	}
+	tcp, err := network.ParsePort("4449/tcp")
+	if err != nil {
+		t.Fatalf("ParsePort: %v", err)
+	}
+	if _, ok := ports[tcp]; !ok {
+		t.Fatalf("4449 did not default to tcp; got %v", ports)
+	}
+	if got := bindings[tcp]; len(got) != 1 || got[0].HostPort != "4449" {
+		t.Fatalf("unexpected host binding for 4449/tcp: %v", got)
+	}
+	udp, err := network.ParsePort("9090/udp")
+	if err != nil {
+		t.Fatalf("ParsePort: %v", err)
+	}
+	if got := bindings[udp]; len(got) != 1 || got[0].HostPort != "8080" {
+		t.Fatalf("expected host 8080 bound to 9090/udp, got %v", got)
+	}
+
+	// A typo must fail the deploy, not quietly publish nothing. Before, anything
+	// without exactly one colon was skipped and the container started portless.
+	for _, bad := range []string{"8080:notaport", "8080", "127.0.0.1:8080:9090", ""} {
+		if _, _, err := buildPorts([]string{bad}); err == nil {
+			t.Fatalf("expected an error for the port mapping %q", bad)
+		}
+	}
+}
+
+// useAmbientDocker points the env-based client at a reachable daemon, or skips.
+// DockerProvider always builds its client from the environment, so when the default
+// socket is not wired to the running daemon (Colima, Rancher, a rootless socket)
+// the test has to adopt the endpoint the docker CLI's current context resolves to.
+func useAmbientDocker(t *testing.T) {
+	t.Helper()
+	p := &DockerProvider{}
+	if p.Status(context.Background()).Available {
+		return
+	}
+	out, err := exec.Command("docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}").Output()
+	if err != nil {
+		t.Skipf("docker not available (context inspect failed): %v", err)
+	}
+	host := strings.TrimSpace(string(out))
+	if host == "" {
+		t.Skip("docker not available (empty context endpoint)")
+	}
+	t.Setenv("DOCKER_HOST", host)
+	if st := p.Status(context.Background()); !st.Available {
+		t.Skipf("docker daemon not reachable at %s: %s", host, st.Message)
+	}
+}
+
+// TestDockerProviderLifecycleIntegration drives the whole provider against a live
+// daemon: deploy, list, logs, stop/start/restart, then remove. Every one of those
+// calls goes through the Docker SDK, so a compile-clean but semantically wrong
+// option struct (a filter that matches nothing, a stats read that never one-shots,
+// an inspect that reads the wrong field) shows up here and nowhere else.
+//
+// It never touches a pre-existing container: the slug is unique per run and the
+// deferred cleanup removes only what this test created.
+func TestDockerProviderLifecycleIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping docker integration test in -short mode")
+	}
+	useAmbientDocker(t)
+
+	p := &DockerProvider{}
+	ctx := context.Background()
+
+	if st := p.Status(ctx); st.Version == "" || !strings.Contains(st.Version, " / ") {
+		t.Fatalf("Status.Version should be %q, got %q", "<api> / <server>", st.Version)
+	}
+
+	const probeImage = "busybox:1.37.0" // pinned tag, never :latest
+
+	// Pull before deploying so a daemon that cannot run this image skips the test
+	// instead of failing it. The release workflow runs go test on windows-latest,
+	// where Docker is up but serving Windows containers.
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	err = pullImage(ctx, cli, probeImage, nil)
+	cli.Close()
+	if err != nil {
+		t.Skipf("could not pull %s: %v", probeImage, err)
+	}
+
+	slug := fmt.Sprintf("lifecycle%d", time.Now().UnixNano())
+	volume := slug + "-data"
+	spec := DeploySpec{
+		Slug: slug,
+		Service: catalog.Service{
+			Name: "lifecycle probe",
+			Docker: catalog.DockerConfig{
+				Image: probeImage,
+				// PID 1 ignores signals it has no handler for, so a bare sleep would
+				// sit through Stop's SIGTERM and cost the full 20s timeout twice.
+				// The trap gives the shell a handler, so Stop and Restart return at once.
+				Command: "sh -c 'trap exit TERM; echo " + logMarker + "; sleep 3600 & wait'",
+				Volumes: []string{volume + ":/data"},
+			},
+		},
+	}
+	defer func() {
+		// Best effort: the happy path already removed it.
+		_ = p.Remove(context.Background(), slug)
+	}()
+
+	var progress []string
+	info, err := p.Deploy(ctx, spec, func(line string) { progress = append(progress, line) })
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if info.Name != containerName(slug) || info.ContainerID == "" {
+		t.Fatalf("Deploy returned %+v", info)
+	}
+	if len(progress) == 0 {
+		t.Fatal("Deploy reported no progress lines, so the image-pull stream was not decoded")
+	}
+
+	// List has to find it through the managed-label filter.
+	var found *ContainerInfo
+	for _, c := range mustList(t, p, ctx) {
+		if c.Slug == slug {
+			found = &c
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("List did not return the container just deployed")
+	}
+	if found.Status != "running" {
+		t.Fatalf("expected the container to be running, got %q", found.Status)
+	}
+	if found.MemoryMB <= 0 {
+		t.Fatalf("expected a memory reading, got %v MB", found.MemoryMB)
+	}
+
+	logs, err := p.Logs(ctx, slug, 50)
+	if err != nil {
+		t.Fatalf("Logs: %v", err)
+	}
+	if !strings.Contains(logs, logMarker) {
+		t.Fatalf("Logs did not return the container's output, got %q", logs)
+	}
+
+	if err := p.Stop(ctx, slug); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := p.Start(ctx, slug); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := p.Restart(ctx, slug); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+
+	// managedContainerVolumes reads the inspect response, and Remove deletes the
+	// named volume it reports.
+	cli, err = dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	volumes, err := managedContainerVolumes(ctx, cli, containerName(slug))
+	cli.Close()
+	if err != nil {
+		t.Fatalf("managedContainerVolumes: %v", err)
+	}
+	if len(volumes) != 1 || volumes[0] != volume {
+		t.Fatalf("expected the named volume %q, got %v", volume, volumes)
+	}
+
+	if err := p.Remove(ctx, slug); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	for _, c := range mustList(t, p, ctx) {
+		if c.Slug == slug {
+			t.Fatal("the container is still listed after Remove")
+		}
+	}
+}
+
+// logMarker is the line the lifecycle probe echoes, so the Logs assertion cannot
+// pass on some unrelated container output.
+const logMarker = "cashpilot-lifecycle-probe-ready"
+
+func mustList(t *testing.T, p *DockerProvider, ctx context.Context) []ContainerInfo {
+	t.Helper()
+	out, err := p.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	return out
 }
