@@ -7,11 +7,16 @@ present in the dependency tree. The job is a hard gate: a finding our code can r
 
 ## Go standard library
 
-The release and CI workflows ask for `go-version: '1.26'`, so `setup-go` resolves the latest 1.26.x patch
-and each Go security release arrives without a workflow edit. Keep it that way. Pinning an exact patch
-looks tidy and then quietly rots: the workflows sat on `'1.26.5'` while go1.26.6 fixed five advisories our
+The release and CI workflows pin an exact toolchain, `go-version: '1.26.8'`, so a release built today and one
+rebuilt next month use the same compiler and standard library. The cost of an exact pin is that Go security
+releases do not arrive on their own: the workflows sat on `'1.26.5'` while go1.26.6 fixed five advisories our
 code actually calls (`GO-2026-6218` net/url, `GO-2026-6090` crypto/tls, `GO-2026-6089` and `GO-2026-5026`
-net/http, `GO-2026-5972` encoding/asn1), which shipped in release binaries until the gate caught it.
+net/http, `GO-2026-5972` encoding/asn1), and those shipped in release binaries until the gate caught it.
+
+The `govulncheck` gate is what keeps the pin honest. It runs against the pinned toolchain, so a stdlib advisory
+our code can reach fails CI on the next pull request. When it does, or when a Go security release ships, bump
+the pin in all three places (`ci.yml` twice, `desktop-release.yml` once) to the latest 1.26.x and let the gate
+confirm it.
 
 If you build locally with an older toolchain you will see those findings. Update your Go toolchain.
 
