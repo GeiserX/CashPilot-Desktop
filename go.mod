@@ -1,6 +1,6 @@
 module github.com/GeiserX/CashPilot-Desktop
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/moby/moby/api v1.56.0
@@ -8,7 +8,7 @@ require (
 	github.com/shirou/gopsutil/v4 v4.26.7
 	github.com/wailsapp/wails/v2 v2.14.0
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/sys v0.47.0
+	golang.org/x/sys v0.48.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.56.0
 )
