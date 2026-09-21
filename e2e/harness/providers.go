@@ -32,6 +32,7 @@ const (
 	honeygainToken = "fake-honeygain-token"
 	pawnsToken     = "fake-pawns-token"
 	mystToken      = "fake-myst-token"
+	repocketToken  = "fake-repocket-id-token"
 )
 
 // NewProviders starts the fake platform and rate server on a loopback TCP port
@@ -43,6 +44,7 @@ func NewProviders() *Providers {
 			"iproyal":        8.75,
 			"traffmonetizer": 7.25,
 			"mysterium":      40.00, // MYST, not dollars
+			"repocket":       3.40,
 		},
 		cryptoUSD: map[string]float64{"mysterium": 0.25},
 		fiat:      map[string]float64{"EUR": 0.90},
@@ -147,6 +149,10 @@ func (p *Providers) handle(w http.ResponseWriter, r *http.Request) {
 		p.traffmonetizer(w, r)
 	case "my.mystnodes.com":
 		p.mysterium(w, r)
+	case "identitytoolkit.googleapis.com":
+		p.firebaseSignIn(w, r)
+	case "api.repocket.com":
+		p.repocket(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "fake provider: no host " + r.Host})
 	}
@@ -236,6 +242,48 @@ func (p *Providers) mysterium(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no mystnodes route " + r.URL.Path})
 	}
+}
+
+// firebaseSignIn stands in for the Google sign-in Repocket logs in through. It is
+// the one platform in this harness whose secret travels in the URL query
+// (?key=<firebase key>), which is what makes it the right place to check that a
+// failure is recorded without the secret in it.
+func (p *Providers) firebaseSignIn(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/v1/accounts:signInWithPassword" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no identitytoolkit route " + r.URL.Path})
+		return
+	}
+	if r.URL.Query().Get("key") == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "API key not valid"}})
+		return
+	}
+	p.mu.Lock()
+	failing := p.failing["repocket"]
+	p.mu.Unlock()
+	if failing {
+		// Google answers a rejected sign-in with 400, which the app does not retry —
+		// so the error it records is the one built from this request's URL.
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"message": "INVALID_PASSWORD"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"idToken": repocketToken})
+}
+
+func (p *Providers) repocket(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/api/reports/current" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no repocket route " + r.URL.Path})
+		return
+	}
+	if r.Header.Get("Auth-Token") != repocketToken {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "missing token"})
+		return
+	}
+	amount, ok := p.balance("repocket")
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "repocket is down"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"centsCredited": amount * 100})
 }
 
 func (p *Providers) coingecko(w http.ResponseWriter, r *http.Request) {

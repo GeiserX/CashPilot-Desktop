@@ -82,11 +82,26 @@ type FleetDevice struct {
 	CreatedAt string   `json:"createdAt"`
 }
 
+// busyTimeoutDSN is appended to the database path so every connection the pool
+// opens waits for a lock instead of failing on it. Two processes share one data
+// directory more often than it looks — the window and the background daemon, a
+// second launch from the installer, a synced folder opened on two machines — and
+// SQLite lets only one of them write at a time. Without this the loser of the race
+// is told "database is locked" straight away and its row is simply dropped, so
+// collected earnings quietly go missing. Five seconds is the wait the web app
+// uses; a write here takes about a millisecond, so the wait is never reached in
+// practice and a caller still gets a real error if something is truly stuck.
+//
+// It goes in the connection string rather than in a PRAGMA statement because the
+// pool may replace a broken connection at any time, and the replacement has to
+// come back with the timeout already on it.
+const busyTimeoutDSN = "?_pragma=busy_timeout(5000)"
+
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "cashpilot-desktop.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "cashpilot-desktop.db")+busyTimeoutDSN)
 	if err != nil {
 		return nil, err
 	}

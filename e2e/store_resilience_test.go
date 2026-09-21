@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -121,11 +122,17 @@ func TestStateSurvivesARestart(t *testing.T) {
 	}
 }
 
-// TestTwoWritersDoNotCorruptTheDatabase covers the shape a user creates without
-// meaning to: the app already running and a second copy started (the daemon
-// role, a second launch from the installer, a synced folder opened twice). They
-// share one SQLite file. Neither may end up with a broken database.
-func TestTwoWritersDoNotCorruptTheDatabase(t *testing.T) {
+// TestTwoWritersDoNotLoseRows covers the shape a user creates without meaning to:
+// the app already running and a second copy started (the background daemon, a
+// second launch from the installer, a synced folder opened twice). They share one
+// SQLite file, and SQLite lets only one of them write at a time.
+//
+// The two writers run at the same time on purpose. Taking turns proves nothing:
+// the lock is only contended when both are inside it, and that is exactly when
+// the app used to throw rows away — the loser got "database is locked" back and
+// the collected balance was gone, with nothing on screen to say so. So the bar
+// here is every write landing, not merely the file surviving.
+func TestTwoWritersDoNotLoseRows(t *testing.T) {
 	dir := t.TempDir()
 
 	one, err := store.Open(dir)
@@ -140,21 +147,55 @@ func TestTwoWritersDoNotCorruptTheDatabase(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = two.Close() })
 
-	for i := 0; i < 20; i++ {
-		if _, err := one.SaveEarnings(store.EarningsRecord{Platform: "honeygain", Balance: float64(i), Currency: "USD"}); err != nil {
-			t.Fatalf("writer one failed on row %d: %v", i, err)
+	const rowsEach = 200
+
+	var mu sync.Mutex
+	var failures []error
+	// start releases both writers together, so they overlap instead of one
+	// finishing while the other is still warming up.
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	write := func(s *store.Store, platform string) {
+		defer wg.Done()
+		<-start
+		for i := 0; i < rowsEach; i++ {
+			if _, err := s.SaveEarnings(store.EarningsRecord{Platform: platform, Balance: float64(i), Currency: "USD"}); err != nil {
+				mu.Lock()
+				failures = append(failures, err)
+				mu.Unlock()
+			}
 		}
-		if _, err := two.SaveEarnings(store.EarningsRecord{Platform: "iproyal", Balance: float64(i), Currency: "USD"}); err != nil {
-			t.Fatalf("writer two failed on row %d: %v", i, err)
-		}
+	}
+	wg.Add(2)
+	go write(one, "honeygain")
+	go write(two, "iproyal")
+	close(start)
+	wg.Wait()
+
+	if len(failures) > 0 {
+		t.Errorf("%d of %d writes were lost to the other writer; first: %v", len(failures), 2*rowsEach, failures[0])
 	}
 
-	platforms := map[string]bool{}
-	for _, row := range two.ListLatestEarnings() {
-		platforms[row.Platform] = true
+	// And the last thing each writer stored is what a fresh reader sees, so a
+	// write that reported success cannot have been rolled back underneath.
+	third, err := store.Open(dir)
+	if err != nil {
+		t.Fatalf("reopening the store: %v", err)
 	}
-	if !platforms["honeygain"] || !platforms["iproyal"] {
-		t.Errorf("a writer's rows are missing: %v", platforms)
+	t.Cleanup(func() { _ = third.Close() })
+	latest := map[string]float64{}
+	for _, row := range third.ListLatestEarnings() {
+		latest[row.Platform] = row.Balance
+	}
+	for _, platform := range []string{"honeygain", "iproyal"} {
+		got, ok := latest[platform]
+		if !ok {
+			t.Errorf("%s wrote %d rows and none of them are in the database", platform, rowsEach)
+			continue
+		}
+		if !approx(got, float64(rowsEach-1)) {
+			t.Errorf("%s shows %v, want its last written balance %v", platform, got, float64(rowsEach-1))
+		}
 	}
 }
 

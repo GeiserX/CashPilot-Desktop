@@ -106,12 +106,33 @@ func TestEarnerLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("a named volume is created with the container", func(t *testing.T) {
+	t.Run("a named volume is created and mounted where the earner writes", func(t *testing.T) {
+		earnapp, ok := e.Catalog.Get("earnapp")
+		if !ok || len(earnapp.Docker.Volumes) == 0 {
+			t.Fatal("earnapp declares no volume, so this test would assert nothing")
+		}
+		// The catalog says "<volume name>:<path inside the container>". Both halves
+		// have to reach the runtime: the name is the volume that has to survive a
+		// redeploy, and the path is where the earner keeps the node identity. A
+		// deploy that creates the volume but mounts it somewhere else looks fine
+		// and loses the identity on every restart.
+		wantName, wantPath, found := strings.Cut(earnapp.Docker.Volumes[0], ":")
+		if !found {
+			t.Fatalf("the catalog entry %q has no container path", earnapp.Docker.Volumes[0])
+		}
+
 		if _, err := e.Manager.Deploy(ctx, "earnapp", earnappCreds); err != nil {
 			t.Fatalf("Deploy earnapp: %v", err)
 		}
-		if !contains(e.Docker.Volumes(), "earnapp-data") {
+		if !contains(e.Docker.Volumes(), wantName) {
 			t.Errorf("the declared named volume was not created: %v", e.Docker.Volumes())
+		}
+		container, ok := e.Docker.Container("cashpilot-earnapp")
+		if !ok {
+			t.Fatal("the daemon has no cashpilot-earnapp container")
+		}
+		if len(container.Mounts) != 1 || container.Mounts[0].Source != wantName || container.Mounts[0].Target != wantPath {
+			t.Errorf("the container mounts %+v, want %s at %s", container.Mounts, wantName, wantPath)
 		}
 	})
 
@@ -180,32 +201,58 @@ func TestEarnerLifecycle(t *testing.T) {
 			t.Errorf("the replacement container is %q, want running", after.State)
 		}
 		// The earner's data volume must survive a redeploy: it holds the node
-		// identity, and losing it means re-registering the device.
+		// identity, and losing it means re-registering the device. Checking the
+		// volume is still there is not enough on its own — a daemon only takes
+		// unnamed volumes when a container is deleted "with volumes", so a
+		// redeploy could start asking for that and this one would still look
+		// fine. So the request itself is checked: replacing the container must
+		// not ask for its volumes to go with it.
 		if !contains(e.Docker.Volumes(), "earnapp-data") {
 			t.Errorf("the redeploy destroyed the data volume: %v", e.Docker.Volumes())
+		}
+		deleted := ""
+		for _, call := range e.Docker.CallsWithQuery() {
+			if strings.HasPrefix(call, "DELETE /containers/cashpilot-earnapp") {
+				deleted = call
+			}
+		}
+		if deleted == "" {
+			t.Fatalf("the redeploy never deleted the old container: %v", e.Docker.CallsWithQuery())
+		}
+		if strings.Contains(deleted, "v=1") {
+			t.Errorf("the redeploy asked the daemon to delete the container's volumes too: %q", deleted)
 		}
 		if row, _ := e.deployment("earnapp"); row.ContainerID != after.ID {
 			t.Errorf("the row still points at the old container: %q vs %q", row.ContainerID, after.ID)
 		}
 	})
 
-	t.Run("remove takes the container, the volume and the row", func(t *testing.T) {
+	t.Run("remove takes the container and the row, and leaves the other earner alone", func(t *testing.T) {
 		if err := e.Manager.Remove(ctx, "earnapp"); err != nil {
 			t.Fatalf("Remove: %v", err)
 		}
 		if _, ok := e.Docker.Container("cashpilot-earnapp"); ok {
 			t.Error("the container is still there after Remove")
 		}
-		if contains(e.Docker.Volumes(), "earnapp-data") {
-			t.Errorf("the data volume outlived an explicit Remove: %v", e.Docker.Volumes())
-		}
 		if _, ok := e.deployment("earnapp"); ok {
 			t.Error("the deployment row outlived Remove")
 		}
-		// The other earner is untouched.
+		// The other earner is untouched: removing one service must not take the
+		// rest of the dashboard with it.
 		if _, ok := e.Docker.Container("cashpilot-honeygain"); !ok {
 			t.Error("removing earnapp also removed honeygain")
 		}
+		if _, ok := e.deployment("honeygain"); !ok {
+			t.Error("removing earnapp also deleted honeygain's row")
+		}
+		// Whether Remove should also delete the earner's data volume is an open
+		// question, not a settled rule, so nothing is asserted about it here.
+		// Today it always deletes; the web app keeps the volume unless the user
+		// asks, and refuses outright for the ones holding a node identity. Pinning
+		// today's answer in this test would make the safer behaviour look like a
+		// regression when it lands. The fake records the volume deletes
+		// (CallsWithQuery) and reports each mount's real path, so whichever rule
+		// wins can be asserted here without changing the harness.
 	})
 }
 

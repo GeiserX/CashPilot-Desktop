@@ -91,12 +91,16 @@ func TestEarningsReachTheStore(t *testing.T) {
 	}
 }
 
-// TestABrokenPlatformIsRecordedWithoutLeakingTheCredentials pins what happens on
-// the bad day: the platform is down, so the reading fails. The failure has to be
-// recorded (the user needs to know the number is not fresh) and the record must
-// not carry the password that was used to get it, because it is displayed in the
-// app and sits in the database in the clear.
-func TestABrokenPlatformIsRecordedWithoutLeakingTheCredentials(t *testing.T) {
+// TestABrokenPlatformIsRecordedAsAFailure pins what happens on the bad day: the
+// platform is down, so the reading fails. The failure has to be recorded and
+// reach the store, because the user needs to know the number on screen is not
+// fresh — a silent failure leaves yesterday's balance looking like today's.
+//
+// The password check below is a floor, not the proof that secrets are scrubbed:
+// honeygain sends its password in the request body, so the error it fails with
+// never had the password in it to begin with. The test that can actually catch a
+// leak is TestAFailureNeverStoresASecretFromTheRequestURL.
+func TestABrokenPlatformIsRecordedAsAFailure(t *testing.T) {
 	e := newEnv(t)
 	ctx := e.ctx()
 
@@ -137,6 +141,61 @@ func TestABrokenPlatformIsRecordedWithoutLeakingTheCredentials(t *testing.T) {
 	e.Providers.SetBalance("honeygain", 5)
 	recovered, err := e.Collector.Collect(ctx, "honeygain", honeygainCreds)
 	if err != nil || recovered.Error != "" || !approx(recovered.Balance, 5) {
+		t.Fatalf("the collector did not recover: %+v (err=%v)", recovered, err)
+	}
+}
+
+// TestAFailureNeverStoresASecretFromTheRequestURL is the sharper half of the rule
+// above. Most platforms take their secret in a header or a request body, so a
+// failure message never had it to begin with. Repocket is the one that does not:
+// it signs in through Google, and the key is part of the address the app calls.
+// When that call is refused, the app builds its error out of that address — so
+// without scrubbing, the key lands in the database and on screen, where a support
+// screenshot or an exported log carries it straight out of the machine.
+func TestAFailureNeverStoresASecretFromTheRequestURL(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+
+	const firebaseKey = "AIzaSy-not-a-real-firebase-key"
+	t.Setenv("CASHPILOT_REPOCKET_FIREBASE_KEY", firebaseKey)
+	repocketCreds := map[string]string{
+		"REPOCKET_EMAIL":    "someone@example.test",
+		"REPOCKET_PASSWORD": "not-a-real-password",
+	}
+
+	e.Providers.SetFailing("repocket", true)
+	record, err := e.Collector.Collect(ctx, "repocket", repocketCreds)
+	if err != nil {
+		t.Fatalf("Collect returned a hard error instead of recording the failure: %v", err)
+	}
+	if record.Error == "" {
+		t.Fatal("a refused sign-in was recorded as a success")
+	}
+	if strings.Contains(record.Error, firebaseKey) {
+		t.Errorf("the recorded failure carries the sign-in key: %q", record.Error)
+	}
+
+	stored := ""
+	for _, row := range e.Store.ListLatestEarnings() {
+		if row.Platform == "repocket" {
+			stored = row.Error
+		}
+	}
+	if stored == "" {
+		t.Fatal("the failure never reached the store")
+	}
+	if strings.Contains(stored, firebaseKey) {
+		t.Errorf("the key is sitting in the database: %q", stored)
+	}
+
+	// Positive control: with the sign-in accepted the same call succeeds, so the
+	// assertions above cannot be passing against a collector that never ran. This
+	// is also what proves the failing run really reached the sign-in URL: the key
+	// is what the fake requires to answer at all.
+	e.Providers.SetFailing("repocket", false)
+	e.Providers.SetBalance("repocket", 3.40)
+	recovered, err := e.Collector.Collect(ctx, "repocket", repocketCreds)
+	if err != nil || recovered.Error != "" || !approx(recovered.Balance, 3.40) {
 		t.Fatalf("the collector did not recover: %+v (err=%v)", recovered, err)
 	}
 }

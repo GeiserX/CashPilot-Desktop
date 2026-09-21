@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Earnings went missing whenever two copies of the app were running.** The window and the background daemon share one database file, and only one of them may write at a time. The other used to be told "database is locked" and simply gave up, so a collected balance was thrown away with nothing on screen to say so — the dashboard kept showing the older number as if it were current. A write now waits for its turn instead of failing, and a test runs both copies at once and fails if a single row is lost.
+
 - **The service catalog was months out of date, and some of it was earning nothing.** Desktop shipped its own hand-edited copy of the catalog with no way back to the CashPilot web repository it came from, so corrections made there never arrived. What that cost, concretely:
 
   **Mysterium was deployed without SETUID, SETGID or `/dev/net/tun`.** The node configures its interface and firewall through `sudo`, which switches uid and gid on the way (`setresuid`, `setgroups`), so it needs both capabilities wherever they are not granted by default; the entry now asks for them. It also needs a TUN device for wireguard, and Desktop was never mapping one: the catalog declared `docker.devices`, the loader parsed it and the runtime built its container without it. The device is now mapped, against a fixed allow-list that a catalog entry cannot widen on its own — anything outside it fails the deploy instead of producing a container that cannot work. Both failures used to earn nothing while showing green: the node registers, appears in discovery, and carries no traffic.

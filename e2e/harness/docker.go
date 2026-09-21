@@ -19,18 +19,39 @@ import (
 	"sync"
 )
 
+// Mount is one named volume attached to a container: the volume's name on the
+// host and the path it appears at inside the container. Both halves are kept
+// because both matter — the name is what an explicit volume delete addresses,
+// and the path is how you tell an earner's identity data apart from a scratch
+// directory, which is the difference between a safe delete and a device that has
+// to be registered again.
+type Mount struct {
+	Source string
+	Target string
+}
+
 // Container is one container the fake daemon is holding, as the tests want to
 // read it: the state a user would see plus the pieces a deploy is supposed to
 // carry across (image, labels, environment, command, named volumes).
 type Container struct {
-	ID      string
-	Name    string
-	Image   string
-	State   string
-	Labels  map[string]string
-	Env     []string
-	Cmd     []string
-	Volumes []string
+	ID     string
+	Name   string
+	Image  string
+	State  string
+	Labels map[string]string
+	Env    []string
+	Cmd    []string
+	Mounts []Mount
+}
+
+// VolumeNames lists the names of the container's named volumes, in the order the
+// deploy asked for them.
+func (c Container) VolumeNames() []string {
+	out := make([]string, 0, len(c.Mounts))
+	for _, m := range c.Mounts {
+		out = append(out, m.Source)
+	}
+	return out
 }
 
 // Docker is a fake Docker Engine API with state. It answers the endpoints the app
@@ -46,6 +67,7 @@ type Docker struct {
 	volumes    map[string]bool
 	images     []string
 	calls      []string
+	callsFull  []string
 	logs       string
 	pullError  string
 	down       bool
@@ -117,11 +139,22 @@ func (d *Docker) Calls() []string {
 	return append([]string(nil), d.calls...)
 }
 
+// CallsWithQuery is Calls with the query string kept, as "METHOD /path?query".
+// The query is where the Engine API carries the options that change what a call
+// destroys — removing a container with v=1 takes its anonymous volumes with it,
+// v=0 leaves them — so a test about what survived needs to see it.
+func (d *Docker) CallsWithQuery() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.callsFull...)
+}
+
 // ResetCalls clears the recorded calls so a test can assert on one phase alone.
 func (d *Docker) ResetCalls() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.calls = nil
+	d.callsFull = nil
 }
 
 // Container returns the container with this name (or id).
@@ -180,8 +213,13 @@ func (d *Docker) find(nameOrID string) *Container {
 	return nil
 }
 
-func (d *Docker) record(call string) {
+func (d *Docker) record(call, query string) {
 	d.calls = append(d.calls, call)
+	full := call
+	if query != "" {
+		full += "?" + query
+	}
+	d.callsFull = append(d.callsFull, full)
 	if d.downAfter != "" && call == d.downAfter {
 		// This request is already being served; the next one finds no daemon.
 		d.downAfter = ""
@@ -221,7 +259,7 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Ostype", "linux")
 
 	d.mu.Lock()
-	d.record(r.Method + " " + path)
+	d.record(r.Method+" "+path, r.URL.RawQuery)
 	d.mu.Unlock()
 
 	switch {
@@ -319,7 +357,7 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, m := range body.HostConfig.Mounts {
 		if m.Type == "volume" && m.Source != "" {
-			c.Volumes = append(c.Volumes, m.Source)
+			c.Mounts = append(c.Mounts, Mount{Source: m.Source, Target: m.Target})
 			// The daemon creates a named volume on first use.
 			d.volumes[m.Source] = true
 		}
@@ -403,9 +441,9 @@ func (d *Docker) inspect(w http.ResponseWriter, id string) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
 		return
 	}
-	mounts := make([]map[string]any, 0, len(c.Volumes))
-	for _, v := range c.Volumes {
-		mounts = append(mounts, map[string]any{"Type": "volume", "Name": v, "Destination": "/data", "RW": true})
+	mounts := make([]map[string]any, 0, len(c.Mounts))
+	for _, m := range c.Mounts {
+		mounts = append(mounts, map[string]any{"Type": "volume", "Name": m.Source, "Destination": m.Target, "RW": true})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"Id":     c.ID,

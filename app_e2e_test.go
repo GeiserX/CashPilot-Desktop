@@ -187,6 +187,15 @@ func TestTheAppRunsAnEarnerEndToEnd(t *testing.T) {
 	if container, _ := app.Docker.Container("cashpilot-honeygain"); container.State != "exited" {
 		t.Errorf("the container is %q after Stop", container.State)
 	}
+	if err := app.StartService("honeygain"); err != nil {
+		t.Fatalf("StartService: %v", err)
+	}
+	if container, _ := app.Docker.Container("cashpilot-honeygain"); container.State != "running" {
+		t.Errorf("the container is %q after Start", container.State)
+	}
+	if row, ok, err := app.store.GetDeployment("honeygain"); err != nil || !ok || row.Status != "running" {
+		t.Errorf("the dashboard row says %+v after Start (ok=%v err=%v)", row, ok, err)
+	}
 	if err := app.RestartService("honeygain"); err != nil {
 		t.Fatalf("RestartService: %v", err)
 	}
