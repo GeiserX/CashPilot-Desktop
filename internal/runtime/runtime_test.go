@@ -1074,6 +1074,19 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 		t.Fatalf("Restart: %v", err)
 	}
 
+	// A redeploy keeps the data where it already is. A spec naming a different volume
+	// is the exact shape of the bug this closes: seen live on the web side, a redeploy
+	// moved a Mysterium node off its own directory onto the catalog's volume and it
+	// came back as a different node, with no reputation and its earnings stranded.
+	moved := spec
+	moved.Service.Docker.Volumes = []string{volume + "-elsewhere:/data"}
+	if _, err := p.Deploy(ctx, moved, nil); err != nil {
+		t.Fatalf("Deploy (redeploy onto another volume): %v", err)
+	}
+	if source := liveMountSource(t, ctx, containerName(slug), "/data"); source != volume {
+		t.Fatalf("the redeploy moved the service's data: /data is now %q, want %q", source, volume)
+	}
+
 	// PlanRemoval reads the inspect response, and Remove deletes the named volume it
 	// reports — but only when asked to.
 	plan, err := p.PlanRemoval(ctx, slug, map[string]string{})
@@ -1173,6 +1186,31 @@ func assertHardened(t *testing.T, ctx context.Context, name string) {
 	}
 }
 
+// liveMountSource asks the daemon what a running container actually has mounted at a
+// container path — the named volume, or the host folder for a bind.
+func liveMountSource(t *testing.T, ctx context.Context, name, target string) string {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	mounts, err := managedContainerMounts(ctx, cli, name)
+	if err != nil {
+		t.Fatalf("managedContainerMounts: %v", err)
+	}
+	for _, m := range mounts {
+		if m.Destination != target {
+			continue
+		}
+		if m.Type == mount.TypeVolume {
+			return m.Name
+		}
+		return m.Source
+	}
+	return ""
+}
+
 // volumeExists asks the daemon whether a named volume is still there.
 func volumeExists(t *testing.T, ctx context.Context, name string) bool {
 	t.Helper()
@@ -1183,6 +1221,93 @@ func volumeExists(t *testing.T, ctx context.Context, name string) bool {
 	defer cli.Close()
 	_, err = cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
 	return err == nil
+}
+
+// THE RULE: the per-architecture image the catalog declares is the one that gets
+// pulled, created and recorded.
+//
+// traffmonetizer/cli_v2 publishes its two real ARM builds as separate tags and labels
+// every one of them linux/amd64, so Docker cannot pick them from the manifest. The
+// override existed in the catalog, the Go structs parsed it, and the deploy path used
+// docker.image regardless — a Raspberry Pi got an x86-64 binary that dies with "exec
+// format error", after a deploy that looked like it worked.
+//
+// The entry here names an image that CANNOT be pulled and overrides it for every
+// architecture family. If the override is ignored the pull fails, so this cannot pass
+// on a build that dropped it.
+func TestDeployUsesThePerArchImageIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping docker integration test in -short mode")
+	}
+	useAmbientDocker(t)
+
+	p := &DockerProvider{}
+	ctx := context.Background()
+
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	facts := daemonFacts(ctx, cli)
+	const probeImage = "busybox:1.37.0" // pinned tag, never :latest
+	err = pullImage(ctx, cli, probeImage, nil)
+	cli.Close()
+	if err != nil {
+		t.Skipf("could not pull %s: %v", probeImage, err)
+	}
+	if ArchFamily(facts.Architecture) == "" {
+		t.Skipf("the daemon reports %q, which is not one of the three families this maps", facts.Architecture)
+	}
+
+	slug := fmt.Sprintf("archpick%d", time.Now().UnixNano())
+	spec := DeploySpec{
+		Slug: slug,
+		Service: catalog.Service{
+			Name: "per-arch probe",
+			Docker: catalog.DockerConfig{
+				Image: "cashpilot.invalid/no-such-image:0",
+				ImageByArch: map[string]string{
+					"amd64": probeImage,
+					"arm64": probeImage,
+					"arm":   probeImage,
+				},
+				Command: "sh -c 'trap exit TERM; sleep 3600 & wait'",
+			},
+		},
+	}
+	defer func() { _ = p.Remove(context.Background(), slug, RemoveOptions{}) }()
+
+	info, err := p.Deploy(ctx, spec, nil)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	// The deployment record has to carry the image that actually runs, or the app's
+	// "your image is out of date" check compares against something that was never
+	// deployed.
+	if info.Image != probeImage {
+		t.Fatalf("the deployment records image %q, want the per-architecture %q", info.Image, probeImage)
+	}
+	if running := liveImage(t, ctx, containerName(slug)); running != probeImage {
+		t.Fatalf("the container runs %q, want the per-architecture %q", running, probeImage)
+	}
+}
+
+// liveImage asks the daemon which image a container was created from.
+func liveImage(t *testing.T, ctx context.Context, name string) string {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	result, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("ContainerInspect: %v", err)
+	}
+	if result.Container.Config == nil {
+		t.Fatal("the daemon returned no Config")
+	}
+	return result.Container.Config.Image
 }
 
 // logMarker is the line the lifecycle probe echoes, so the Logs assertion cannot
