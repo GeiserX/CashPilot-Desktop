@@ -1,0 +1,78 @@
+name: Catalog drift
+
+# services/ is a vendored copy of the CashPilot web catalog. This job says when the
+# two have parted.
+#
+# It deliberately does NOT run on pull_request. A change in the web repository is not
+# a reason to block an unrelated Desktop PR, and a gate that fails for something the
+# author did not touch gets ignored, which is worse than no gate. Weekly, plus on
+# demand, is often enough: the catalog moves in days, not minutes.
+#
+# No token is needed. codeload serves public repository tarballs anonymously, so this
+# works on a fork and on a public repo's ubuntu-latest runner.
+
+on:
+  schedule:
+    # Mondays, 06:15 UTC.
+    - cron: '15 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or commit SHA of GeiserX/CashPilot to compare against'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: services/ vs GeiserX/CashPilot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.8'
+          cache: true
+
+      # The ref goes through the environment rather than straight into the run
+      # script, so a dispatch input cannot become shell.
+      #
+      # catalogsync answers with three different exit codes, and they mean different
+      # things: 0 agreed, 1 really drifted, 2 the comparison never happened (codeload
+      # down, a ref that does not exist, an overlay that will not parse). Announcing a
+      # network error as "the catalog changed" sends someone to diff files nobody
+      # touched, so the drift message is printed for exit 1 and nothing else.
+      - name: Compare the vendored catalog with the web catalog
+        env:
+          CATALOG_REF: ${{ inputs.ref || 'main' }}
+        run: |
+          set +e
+          go run ./cmd/catalogsync -check -ref "$CATALOG_REF"
+          code=$?
+          set -e
+          case "$code" in
+            0)
+              exit 0
+              ;;
+            1)
+              echo "::error::services/ no longer matches the CashPilot web catalog."
+              echo "Run 'make catalog-sync' locally, review the diff, and commit it."
+              echo "If a difference is deliberate, declare it in catalog-overlay/ rather"
+              echo "than editing services/ by hand. See catalog-overlay/README.md."
+              exit 1
+              ;;
+            *)
+              echo "::error::catalogsync could not compare the catalogs (exit $code)."
+              echo "This is a fetch, overlay or IO failure, NOT catalog drift: the"
+              echo "comparison never ran. The output above says which. Re-run the job."
+              exit "$code"
+              ;;
+          esac

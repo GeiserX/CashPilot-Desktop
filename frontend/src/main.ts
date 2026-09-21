@@ -34,6 +34,7 @@ import { renderHealthBadge } from "./render/health";
 import { renderMystNodes } from "./render/myst";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
+import { serviceFormFields } from "./render/fields";
 import { totalText, totalCaption } from "./render/total";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
 
@@ -1151,7 +1152,7 @@ function renderWizardSetup(services: Service[]) {
 function renderWizardServiceSetup(service: Service) {
   const signupUrl = service.referral?.signupUrl || service.website;
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
-  const fields = getServiceFields(service);
+  const fields = serviceFormFields(service, state?.collectorFields);
   return `
     <article class="wizard-setup-card" data-form-slug="${escapeHtml(service.slug)}">
       <div class="split">
@@ -1201,24 +1202,6 @@ function closeWizard() {
   activeView = "dashboard";
   wizardStep = 1;
   render();
-}
-
-type ServiceField = CollectorField & {default?: string};
-
-function getServiceFields(service: Service): ServiceField[] {
-  const env = (service.docker.env || []).map((item) => ({
-    key: item.key,
-    label: item.label || item.key,
-    description: stripHtml(item.description || item.key),
-    secret: item.secret,
-    required: item.required,
-    default: item.default,
-  }));
-  const envKeys = new Set(env.map((item) => item.key));
-  return [
-    ...env,
-    ...getCollectorFields(service.slug).filter((item) => !envKeys.has(item.key)),
-  ];
 }
 
 async function hydrateWizardForm(service: Service) {
@@ -1308,56 +1291,6 @@ async function runServiceAction(slug: string, action: string) {
   }
 }
 
-type CollectorField = {
-  key: string;
-  label: string;
-  description: string;
-  secret?: boolean;
-  required?: boolean;
-};
-
-function getCollectorFields(slug: string): CollectorField[] {
-  const fields: Record<string, CollectorField[]> = {
-    "anyone-protocol": [
-      {key: "ANYONE_FINGERPRINTS", label: "Relay fingerprints", description: "Comma-separated relay fingerprints", required: true},
-    ],
-    bitping: [
-      {key: "BITPING_EMAIL", label: "Bitping email", description: "Email used for app.bitping.com", required: true},
-      {key: "BITPING_PASSWORD", label: "Bitping password", description: "Password used for app.bitping.com", secret: true, required: true},
-    ],
-    bytelixir: [
-      {key: "BYTELIXIR_SESSION", label: "Bytelixir session", description: "bytelixir_session browser cookie", secret: true, required: true},
-      {key: "BYTELIXIR_REMEMBER_WEB", label: "Remember cookie", description: "Optional remember_web cookie", secret: true},
-      {key: "BYTELIXIR_XSRF_TOKEN", label: "XSRF token", description: "Optional XSRF-TOKEN cookie", secret: true},
-    ],
-    earnapp: [
-      {key: "EARNAPP_OAUTH_TOKEN", label: "OAuth refresh token", description: "oauth-refresh-token browser cookie", secret: true, required: true},
-      {key: "EARNAPP_BRD_SESS_ID", label: "Bright Data session", description: "Optional brd_sess_id cookie", secret: true},
-    ],
-    earnfm: [
-      {key: "EARNFM_EMAIL", label: "Earn.fm email", description: "Email used for app.earn.fm", required: true},
-      {key: "EARNFM_PASSWORD", label: "Earn.fm password", description: "Password used for app.earn.fm", secret: true, required: true},
-    ],
-    grass: [
-      {key: "GRASS_ACCESS_TOKEN", label: "Grass access token", description: "accessToken from app.grass.io local storage", secret: true, required: true},
-    ],
-    mysterium: [
-      {key: "MYSTNODES_EMAIL", label: "MystNodes email", description: "Email used for my.mystnodes.com", required: true},
-      {key: "MYSTNODES_PASSWORD", label: "MystNodes password", description: "Password used for my.mystnodes.com", secret: true, required: true},
-    ],
-    packetstream: [
-      {key: "PACKETSTREAM_AUTH_TOKEN", label: "PacketStream auth cookie", description: "auth cookie from app.packetstream.io", secret: true, required: true},
-    ],
-    salad: [
-      {key: "SALAD_AUTH_COOKIE", label: "Salad auth cookie", description: "auth cookie from salad.com", secret: true, required: true},
-    ],
-    storj: [
-      {key: "STORJ_API_URL", label: "Storj API URL", description: "Local node dashboard URL, default http://localhost:14002"},
-    ],
-  };
-  return fields[slug] || [];
-}
-
 async function refreshState() {
   if (!state) return;
   const [runtime, deployments] = await Promise.all([CheckRuntime(), RefreshDeployments().catch(() => state?.deployments || [])]);
@@ -1440,10 +1373,6 @@ function wireChrome() {
 
 function capitalize(value: string) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
-}
-
-function stripHtml(value: string) {
-  return value.replace(/<[^>]+>/g, "");
 }
 
 function synthwaveBackground() {

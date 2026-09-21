@@ -13,6 +13,7 @@ short_description: DePIN bandwidth sharing for AI data - earns GRASS tokens
 
 referral:
   signup_url: "https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE"
+  code: "kn8FNEPnUr2tMqE"
 
 docker:
   image: ""
@@ -50,7 +51,10 @@ earnings:
 cashout:
   method: redirect
   dashboard_url: "https://app.grass.io/dashboard"
-  min_amount: 0
+  # Undocumented: the provider does not publish a minimum. NOT 0 —
+  # 0 means 'no minimum, cash out anything', which would tell the
+  # user they can withdraw now and disables payout detection.
+  min_amount: null
   currency: GRASS
   notes: "GRASS token airdrop-based. Claim from dashboard when eligible."
 
@@ -59,3 +63,8 @@ platforms: [browser-extension, windows, macos, android, ios]
 collector:
   type: api
   notes: "Dashboard API at app.grass.io. Auth via session token. Points visible in dashboard."
+  credential_hint: "Log in at <a href='https://app.getgrass.io' target='_blank'>app.getgrass.io</a>, press F12 → Application → Local Storage, copy the <b>accessToken</b> value."
+
+payout:
+  model: internal
+  notes: "Accrues POINTS; GRASS is claimed from the Grass dashboard during periodic airdrops."

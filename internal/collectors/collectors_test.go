@@ -400,7 +400,6 @@ func TestCatalogCollectorParity(t *testing.T) {
 		"helium":    true,
 		"nodepay":   true,
 		"nosana":    true,
-		"presearch": true,
 		"proxylite": true,
 		"teneo":     true,
 		"titan":     true,

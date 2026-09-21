@@ -50,6 +50,11 @@ export interface AppState {
   // This machine's hostname, so a {hostname}-defaulted deploy field renders the real
   // value the deploy path will substitute rather than the literal "{hostname}".
   hostname: string;
+  // Per slug, the credential inputs the earnings collector needs that the container's
+  // docker.env does not already ask for. The backend owns this list (internal/collectors)
+  // so a web-catalog rename of a service's env keys cannot leave the wizard with no
+  // field for the credentials its collector reads.
+  collectorFields: Record<string, CollectorField[]> | null;
 }
 
 // FleetView mirrors the Go FleetView: what the paired CashPilot server reports
@@ -270,37 +275,87 @@ export interface Service {
   website: string;
   description: string;
   shortDescription: string;
-  referral: { signupUrl: string };
+  // program is three-valued: true/false are verified answers, null means nobody has
+  // checked whether the provider runs a referral programme.
+  referral: {
+    signupUrl: string;
+    code: string;
+    program: boolean | null;
+    bonus: { referrer: string; referee: string };
+  };
   docker: DockerConfig;
   requirements: {
     residentialIp: boolean;
     vpsIp: boolean;
     devicesPerAccount: number;
-    devicesPerIp: number;
+    // null means nobody has documented a per-IP limit, which is not the same as 0
+    // ("the provider imposes none"). Rendering null as 0 would tell the user a second
+    // instance is allowed when nobody has checked.
+    devicesPerIp: number | null;
+    containerProhibited: boolean;
     minBandwidth: string;
     gpu: boolean;
     minStorage: string;
     note: string;
+    noteColumn: string;
   };
-  payment: { methods: string[]; minimumPayout: string; currency: string; frequency: string };
+  payment: {
+    methods: string[];
+    cryptoToken: string;
+    minimumPayout: string;
+    currency: string;
+    frequency: string;
+  };
   earnings: { monthlyLow: number; monthlyHigh: number; currency: string; per: string; notes: string };
   cashout: { method: string; dashboardUrl: string; minAmount: number; currency: string; notes: string };
   platforms: string[];
-  collector: { type: string; notes: string };
+  collector: { type: string; notes: string; credentialHint: string; perNodeEarnings: boolean };
+  payout: {
+    model: string;
+    chain: string;
+    addressEnv: string;
+    addressSource: string;
+    notes: string;
+  };
+  disclosure: {
+    sells: string;
+    thirdPartyTraffic: string;
+    dataCollected: string;
+    ispRisk: string;
+    accountRules: string;
+  };
+  resurrectionChecked: string;
   manualOnly: boolean;
 }
 
 export interface DockerConfig {
   image: string;
+  imageByArch: Record<string, string> | null;
+  platforms: string[] | null;
   env: EnvVar[];
   ports: string[] | null;
   volumes: string[] | null;
+  criticalVolumes: { target: string; holds: string }[] | null;
   command: string;
   networkMode: string;
   capAdd: string[] | null;
+  devices: string[] | null;
+  healthSignals: { pattern: string; means: string; state: string }[] | null;
+  advertisedAddressEnv: string;
   privileged: boolean;
+  stopTimeout: number;
   setup: string;
   notes: string;
+}
+
+// CollectorField is one credential input the earnings collector needs that the
+// container's docker.env does not already ask for. Mirrors collectors.Field.
+export interface CollectorField {
+  key: string;
+  label: string;
+  description: string;
+  secret?: boolean;
+  required?: boolean;
 }
 
 export interface EnvVar {

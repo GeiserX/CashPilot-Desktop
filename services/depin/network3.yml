@@ -45,7 +45,10 @@ earnings:
 cashout:
   method: manual
   dashboard_url: "https://account.network3.ai"
-  min_amount: 0
+  # Undocumented: the provider does not publish a minimum. NOT 0 —
+  # 0 means 'no minimum, cash out anything', which would tell the
+  # user they can withdraw now and disables payout detection.
+  min_amount: null
   currency: N3
   notes: "Site up but no SSL, no updates in months. Avoid for now."
 
@@ -54,3 +57,7 @@ platforms: [windows, macos, linux]
 collector:
   type: manual
   notes: "Site unreachable due to expired certificate. No collection possible."
+
+payout:
+  model: unknown
+  notes: "Not yet determined. Flagged rather than shown blank -- see CashPilot-luj."

@@ -65,7 +65,7 @@ Download the latest release for your platform:
 
 > Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
 
-CashPilot bundles a catalog of 49 passive-income services across multiple categories. A representative selection is shown below.
+CashPilot bundles a catalog of 39 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
 
 ### Before you start: how bandwidth-sharing works
 
@@ -83,26 +83,35 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 
 | Service | Residential IP | VPS IP | Devices / Acct | Devices / IP | Payout |
 |---------|:-:|:-:|:-:|:-:|--------|
-| [Anyone Protocol](https://anyone.io) | ✅ | ✅ | Unlimited | 1 | Crypto (ANYONE) |
-| [Bitping](https://app.bitping.com) | ✅ | ✅ | Unlimited | 1 | Crypto (SOL) |
+| [Anyone Protocol](https://anyone.io) | ✅ | ✅ | Unlimited | Undocumented | Crypto (ANYONE) |
+| [Bitping](https://app.bitping.com) | ✅ | ✅ | Unlimited | Undocumented | Crypto (SOL) |
 | [Earn.fm](https://earn.fm/ref/GEISYB91) | ✅ | ✅ | Unlimited | 1 | Crypto |
-| [EarnApp](https://earnapp.com/i/TSMD9wSm) | ✅ | ❌ | 15 | 1 | PayPal, Gift Cards, Wise |
+| [EarnApp](https://earnapp.com/i/TSMD9wSm) | ✅ | ❌ | 15 | Undocumented \* | PayPal, Gift Cards, Wise |
 | [Honeygain](https://dashboard.honeygain.com/ref/SERGIB4014) | ✅ | ❌ | 10 | 1 | PayPal, Crypto |
 | [IPRoyal Pawns](https://pawns.app?r=19266874) | ✅ | ❌ | Unlimited | 1 | PayPal, Crypto, Bank Transfer |
 | [MystNodes](https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE) | ✅ | ✅ | Unlimited | Unlimited | Crypto (MYST) |
-| [PacketStream](https://packetstream.io/?psr=7xgZ) | ✅ | ❌ | Unlimited | 1 | PayPal |
-| [Presearch](https://presearch.com/signup?rid=4872322) | ✅ | ✅ | Unlimited | 1 | Crypto (PRE) |
-| [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | 1 | Crypto |
-| [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ) | ✅ | ✅ | Unlimited | 1 | Crypto, PayPal |
-| [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | 1 | PayPal, Crypto |
-| [Repocket](https://repocket.com/) | ✅ | ❌ | 5 | 2 | PayPal, Crypto |
-| [Storj](https://www.storj.io/node) | ✅ | ✅ | Unlimited | 1 \* | Crypto (STORJ) |
-| [Traffmonetizer](https://traffmonetizer.com/?aff=2111758) | ✅ | ✅ \*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
-| [URnetwork](https://ur.io/?referral_code=1Q3G19) | ✅ | ✅ | Unlimited | 1 | Crypto |
+| [PacketStream](https://packetstream.io/?psr=7xgZ) | ✅ | ❌ | Unlimited | Undocumented | PayPal |
+| [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
+| [ProxyBase Markets](https://proxybase.xyz?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto (USDC) |
+| [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ) | ✅ | ✅ | Unlimited | Undocumented | Crypto, PayPal |
+| [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Crypto |
+| [Repocket](https://repocket.com/) | ✅ | ❌ | 5 | Undocumented | PayPal, Crypto |
+| [Storj](https://storj.dev/node/get-started/setup) | ✅ | ✅ | Unlimited | Undocumented \*\* | Crypto (STORJ) |
+| [Traffmonetizer](https://traffmonetizer.com/?aff=2111758) | ✅ | ✅ \*\*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
+| [URnetwork](https://ur.io/?referral_code=1Q3G19) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
 
-> \* Storj nodes on the same /24 subnet share data allocation, reducing per-node earnings.
+> **Undocumented** means the provider publishes no per-IP device limit, not that
+> there is none. Check the provider's terms before running a second instance behind
+> one address. **Unlimited** is a limit the provider states it does not impose.
 >
-> \*\* Traffmonetizer's Terms of Service require a residential IP; running it on a VPS may not comply with those terms, so check before you deploy.
+> \* EarnApp's own terms forbid running its software in containers, on virtual machines
+> and on servers, which is exactly how CashPilot deploys it. The stated penalty is a
+> terminated account with any pending payment cancelled. It is listed so the choice is
+> yours, not hidden.
+>
+> \*\* Storj nodes on the same /24 subnet share data allocation, reducing per-node earnings.
+>
+> \*\*\* Traffmonetizer's Terms of Service require a residential IP; running it on a VPS may not comply with those terms, so check before you deploy.
 
 ### Browser Extension / Desktop Only
 
@@ -110,6 +119,7 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 
 | Service | Residential IP | VPS IP | Devices / Acct | Devices / IP | Payout | Status |
 |---------|:-:|:-:|:-:|:-:|--------|--------|
+| [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3) | ✅ | ❌ | Unlimited | Undocumented | PayPal | Active |
 | [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
 | [Dawn Internet](https://dawninternet.com/?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
 | [Deeper Network](https://deeper.network) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |

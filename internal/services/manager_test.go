@@ -26,6 +26,9 @@ func TestMain(m *testing.M) {
 // fakeProvider is a controllable runtime.Provider used to drive Manager logic
 // without a real container runtime.
 type fakeProvider struct {
+	// deployCalls counts the Deploy calls that actually reached the provider, so a
+	// test can prove the manager refused BEFORE pulling an image.
+	deployCalls  int
 	listResult   []runtime.ContainerInfo
 	listErr      error
 	deployResult runtime.ContainerInfo
@@ -41,6 +44,7 @@ type fakeProvider struct {
 func (f *fakeProvider) Status(context.Context) runtime.Status { return runtime.Status{} }
 
 func (f *fakeProvider) Deploy(_ context.Context, _ runtime.DeploySpec, progress func(string)) (runtime.ContainerInfo, error) {
+	f.deployCalls++
 	if progress != nil {
 		progress("pulling")
 	}
@@ -121,6 +125,89 @@ native:
 		t.Fatalf("LoadEmbedded error: %v", err)
 	}
 	return cat
+}
+
+// retiredServicesYAML is one entry per lifecycle state that retires a service. All
+// three are deployable-looking: an image, no required credentials, nothing else in
+// the way except the status.
+func retiredServiceYAML(slug, status string) string {
+	return fmt.Sprintf(`name: Retired %s
+slug: %s
+category: bandwidth
+status: %s
+docker:
+  image: retired/image:1.0.0
+`, slug, slug, status)
+}
+
+func newRetiredTestCatalog(t *testing.T) *catalog.Catalog {
+	t.Helper()
+	fsys := fstest.MapFS{
+		"services/bandwidth/example.yml": {Data: []byte(exampleServiceYAML)},
+		"services/bandwidth/dead.yml":    {Data: []byte(retiredServiceYAML("gone-dead", "dead"))},
+		"services/bandwidth/dropped.yml": {Data: []byte(retiredServiceYAML("gone-dropped", "dropped"))},
+		"services/bandwidth/broken.yml":  {Data: []byte(retiredServiceYAML("gone-broken", "Broken"))},
+	}
+	cat, err := catalog.LoadEmbedded(fsys)
+	if err != nil {
+		t.Fatalf("LoadEmbedded error: %v", err)
+	}
+	return cat
+}
+
+// THE RULE: a service the catalog retired cannot be deployed.
+//
+// Retired (dead, dropped, broken) is the same rule that hides the card, and it means
+// the programme is gone or the client no longer earns. The UI only offers visible
+// services, so reaching Deploy with a retired slug takes a stale selection or a direct
+// binding call — and nothing on that path used to look at status at all. The refusal
+// has to land BEFORE the provider is asked to pull, which is why the provider's call
+// count is what this asserts on rather than the error alone.
+//
+// It is also what makes a retired entry's unpinned, floating image harmless: the
+// catalog stops pinning digests for images nobody will pull, and this keeps that true.
+func TestDeployRefusesRetiredServices(t *testing.T) {
+	for _, slug := range []string{"gone-dead", "gone-dropped", "gone-broken"} {
+		t.Run(slug, func(t *testing.T) {
+			st := newTestStore(t)
+			fake := &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "cid", Status: "running"}}
+			m := NewManager(fake, newRetiredTestCatalog(t), st)
+
+			_, err := m.Deploy(context.Background(), slug, map[string]string{})
+			if err == nil {
+				t.Fatalf("%s deployed even though the catalog retired it", slug)
+			}
+			if !strings.Contains(err.Error(), "retired") {
+				t.Fatalf("expected a retired-status refusal, got %q", err.Error())
+			}
+			if fake.deployCalls != 0 {
+				t.Fatalf("the runtime was asked to deploy %s %d time(s) before the refusal", slug, fake.deployCalls)
+			}
+			if _, ok, _ := st.GetDeployment(slug); ok {
+				t.Fatalf("a deployment row was written for retired %s", slug)
+			}
+			if err := m.ValidateCredentials(slug, map[string]string{}); err == nil || !strings.Contains(err.Error(), "retired") {
+				t.Fatalf("ValidateCredentials accepted retired %s: %v", slug, err)
+			}
+		})
+	}
+}
+
+// The guard must not catch anything else: an active service still deploys.
+func TestDeployStillAcceptsActiveServices(t *testing.T) {
+	st := newTestStore(t)
+	fake := &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "cid", Status: "running"}}
+	m := NewManager(fake, newRetiredTestCatalog(t), st)
+
+	if _, err := m.Deploy(context.Background(), "example", map[string]string{"TOKEN": "abc"}); err != nil {
+		t.Fatalf("active service refused: %v", err)
+	}
+	if fake.deployCalls != 1 {
+		t.Fatalf("expected one provider deploy, got %d", fake.deployCalls)
+	}
+	if err := m.ValidateCredentials("example", map[string]string{"TOKEN": "abc"}); err != nil {
+		t.Fatalf("ValidateCredentials refused an active service: %v", err)
+	}
 }
 
 func newTestStore(t *testing.T) *store.Store {

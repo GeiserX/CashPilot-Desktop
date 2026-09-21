@@ -198,11 +198,34 @@ Loads every `services/**/*.yml` into `[]catalog.Service`
 handed in from `main.go`; it falls back to an on-disk `Load` (used by `go test`
 and dev when the embed is empty). Files beginning with `_` (e.g. `_schema.yml`)
 and files missing `slug`/`name` are skipped. Two derived fields matter:
-`SourcePath` and `ManualOnly` — a service is **manual-only** when its
-`docker.image` is empty (`svc.Docker.Image == ""`), meaning it is tracked but
-never containerized. `ListVisible` hides `dead`/`broken` services; `Get` resolves
-a slug. The catalog currently holds 49 service definitions across four categories
-(`bandwidth`, `depin`, `storage`, `compute`).
+`SourcePath` and `ManualOnly` — a service is **manual-only** when it has neither a
+`docker.image` nor a `native:` block, meaning it is tracked but never deployed
+locally. `ListVisible` hides retired services (`catalog.IsRetired`:
+`dead`/`broken`/`dropped`); `Get` resolves a slug. The catalog currently holds 50
+service definitions across four categories (`bandwidth`, `depin`, `storage`,
+`compute`).
+
+`Service` mirrors the web catalog's schema field for field, including fields no
+Desktop code acts on yet (`docker.image_by_arch`, `critical_volumes`, `devices`,
+`health_signals`, `advertised_address_env`, `referral.code`, `payout`,
+`disclosure`, `requirements.container_prohibited`). Parsing them now is what lets
+a later slice use them without another round of catalog surgery. Two are pointers
+on purpose, because absent and zero are told to the user as different things:
+`Requirements.DevicesPerIP` (`nil` = nobody documented a per-IP limit, `0` = the
+provider imposes none) and `Referral.Program` (`nil` = unchecked, not a verified
+"no").
+
+### `services/` and `catalog-overlay/` — where the catalog comes from
+
+`services/` is a **vendored copy** of the CashPilot web catalog, not a Desktop
+source file. `cmd/catalogsync` fetches `GeiserX/CashPilot@main` (or a local
+checkout with `-src`), copies each file byte for byte, applies the Desktop-only
+deltas declared in `catalog-overlay/`, and deletes anything upstream dropped.
+`internal/catalogsync` holds the two overlay operations — a digest-pin rewrite of
+the single `docker.image` line (located by parsing the YAML, not by matching
+text) and a verbatim append of a Desktop-only block — plus the guards that stop
+a pin surviving an upstream image move or re-tag. `.github/workflows/catalog-drift.yml`
+runs the check weekly and on demand, deliberately not on pull requests.
 
 **Image-pin enforcement (fail-closed test).** `image_pin_test.go` loads the real
 on-disk catalog and fails if any *live* service ships a `docker.image` that is not

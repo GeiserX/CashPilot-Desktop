@@ -134,16 +134,14 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		return ContainerInfo{}, fmt.Errorf("%s has no Docker image", svc.Name)
 	}
 
-	name := containerName(spec.Slug)
-	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: false})
-
-	if progress != nil {
-		progress("Pulling " + svc.Docker.Image)
-	}
-	if err := pullImage(ctx, cli, svc.Docker.Image, progress); err != nil {
-		return ContainerInfo{}, err
-	}
-
+	// Everything that can fail on the catalog entry alone is built and checked
+	// BEFORE the running container is removed. A redeploy removes the existing
+	// cashpilot-<slug> container, so a port string, a blocked device or a malformed
+	// mem_limit discovered after that point would leave the user with no container
+	// at all: an entry-level mistake would take down an earner that was working a
+	// second earlier, and the deploy that replaced it never existed. The pull is on
+	// this side of the line for the same reason — a registry outage or a typo'd
+	// image must not cost the running container either.
 	env := buildEnv(svc, spec.Env)
 	ports, bindings, err := buildPorts(svc.Docker.Ports)
 	if err != nil {
@@ -167,22 +165,21 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		config.Cmd = buildCommandArgs(svc.Docker.Command, env)
 	}
 
-	hostConfig := &container.HostConfig{
-		PortBindings: bindings,
-		Mounts:       mounts,
-		RestartPolicy: container.RestartPolicy{
-			Name: "unless-stopped",
-		},
-		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
-		CapAdd:      svc.Docker.CapAdd,
-		Privileged:  svc.Docker.Privileged,
-	}
-	if svc.Docker.NetworkMode == "" {
-		hostConfig.NetworkMode = "bridge"
-	}
-	if err := applyResourceLimits(hostConfig, svc.Docker.Resources); err != nil {
+	hostConfig, err := buildHostConfig(svc, bindings, mounts)
+	if err != nil {
 		return ContainerInfo{}, err
 	}
+
+	if progress != nil {
+		progress("Pulling " + svc.Docker.Image)
+	}
+	if err := pullImage(ctx, cli, svc.Docker.Image, progress); err != nil {
+		return ContainerInfo{}, err
+	}
+
+	// Past this point the deploy is destructive: the existing container goes.
+	name := containerName(spec.Slug)
+	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: false})
 
 	if progress != nil {
 		progress("Creating " + name)
@@ -649,6 +646,102 @@ func buildMounts(raw []string, env map[string]string) []mount.Mount {
 		mounts = append(mounts, mnt)
 	}
 	return mounts
+}
+
+// buildHostConfig assembles everything the catalog entry asks the container runtime
+// for: published ports, mounts, restart policy, network mode, capabilities, host
+// devices and resource limits.
+//
+// It is a function rather than a literal inside Deploy so it can be tested without a
+// Docker daemon. That matters because the failure it guards against is invisible from
+// the outside: a field the catalog declares and the runtime forgets to pass produces a
+// container that starts, stays "running" and earns nothing. Mysterium's /dev/net/tun
+// was exactly that — declared in the entry, parsed by the loader, never mapped.
+func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mount.Mount) (*container.HostConfig, error) {
+	hostConfig := &container.HostConfig{
+		PortBindings: bindings,
+		Mounts:       mounts,
+		RestartPolicy: container.RestartPolicy{
+			Name: "unless-stopped",
+		},
+		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
+		CapAdd:      svc.Docker.CapAdd,
+		Privileged:  svc.Docker.Privileged,
+	}
+	if svc.Docker.NetworkMode == "" {
+		hostConfig.NetworkMode = "bridge"
+	}
+	if err := applyResourceLimits(hostConfig, svc.Docker.Resources); err != nil {
+		return nil, err
+	}
+	devices, err := buildDevices(svc.Docker.Devices)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", svc.Name, err)
+	}
+	hostConfig.Resources.Devices = devices
+	return hostConfig, nil
+}
+
+// allowedDevices is the hard ceiling on host devices a service may be given. A
+// device is a direct line to the kernel, so widening this is a deliberate change
+// here, never something a catalog entry can do on its own — the same ceiling the
+// CashPilot worker enforces (app/worker_api.py `_ALLOWED_DEVICES`).
+//
+// /dev/net/tun is on it because Mysterium genuinely cannot carry wireguard traffic
+// without it: deployed without the device the node starts, registers, appears in
+// discovery and earns nothing, which is the failure this exists to close.
+var allowedDevices = map[string]bool{"/dev/net/tun": true}
+
+// buildDevices maps a service's declared docker.devices onto the container, and
+// refuses anything outside the ceiling or any entry that names no host device.
+//
+// Refusing is deliberate: dropping an unknown device silently would deploy a
+// container that looks healthy and cannot do the job it was deployed for, which is
+// the exact shape of bug this whole path is about. A device entry may carry Docker's
+// "host:container:perms" form; the host path is what is checked.
+func buildDevices(declared []string) ([]container.DeviceMapping, error) {
+	devices := make([]container.DeviceMapping, 0, len(declared))
+	var blocked []string
+	for _, raw := range declared {
+		entry := strings.TrimSpace(raw)
+		if entry == "" {
+			continue
+		}
+		parts := strings.Split(entry, ":")
+		host := strings.TrimRight(strings.TrimSpace(parts[0]), "/")
+		if host == "" {
+			// ":/dev/net/tun" declares a container path and no host path. Skipping it
+			// deploys a container missing a device its entry asked for, which is the
+			// failure this whole path exists to prevent, so it is refused the same way
+			// a device outside the ceiling is. A wholly blank entry is still skipped
+			// above: that is a stray list item, not a half-written mapping.
+			return nil, fmt.Errorf("device %q declares no host path", entry)
+		}
+		if !allowedDevices[host] {
+			blocked = append(blocked, host)
+			continue
+		}
+		inContainer := host
+		if len(parts) > 1 && strings.TrimSpace(parts[1]) != "" {
+			inContainer = strings.TrimSpace(parts[1])
+		}
+		perms := "rwm"
+		if len(parts) > 2 && strings.TrimSpace(parts[2]) != "" {
+			perms = strings.TrimSpace(parts[2])
+		}
+		devices = append(devices, container.DeviceMapping{
+			PathOnHost:        host,
+			PathInContainer:   inContainer,
+			CgroupPermissions: perms,
+		})
+	}
+	if len(blocked) > 0 {
+		return nil, fmt.Errorf("blocked devices: %s", strings.Join(blocked, ", "))
+	}
+	if len(devices) == 0 {
+		return nil, nil
+	}
+	return devices, nil
 }
 
 // applyResourceLimits sets the optional memory and OOM-priority knobs from a

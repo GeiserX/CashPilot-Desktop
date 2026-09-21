@@ -5,20 +5,59 @@
 # name: Human-readable service name
 # slug: URL/container-safe identifier (lowercase, hyphens)
 # category: bandwidth | depin | storage | compute
-# status: active | beta | broken | dead
+# status: active | beta | broken | dead | dropped
+# resurrection_checked: "YYYY-MM-DD"   # (dead entries only) the site still answers, but a human
+#   confirmed on this date that the programme is gone. The weekly liveness check stops
+#   reporting a possible resurrection for a year from that date, then asks again.
+#   - dropped: evaluated then removed; hidden from catalog (alongside broken/dead)
 # website: Main URL
 # description: One paragraph description
 # short_description: One line (for tables)
 
 # referral:
 #   signup_url: Full signup URL with referral code already embedded
-#   bonus:
-#     referrer: What the referrer gets
-#     referee: What the new user gets
+#   code: The referral code itself, ALWAYS QUOTED -- unquoted, "0071234" parses
+#         as an octal int and "no"/"yes"/"on" as booleans (YAML 1.1).
+#         scripts/referral_check.py proves it stays anchored in signup_url
+#         (query value, bare query key, or path segment), so a domain
+#         migration cannot silently strip the attribution.
+#   program: Whether the PROVIDER runs a referral program. Three-valued, and
+#            absent is not "no":
+#              true    verified to run one (true + no code = actionable gap)
+#              false   verified NOT to run one (a bare signup_url is correct)
+#              absent  nobody has checked yet (reported, never failed)
+#   bonus: (optional) what each side gets, shown on the service detail page:
+#     referrer: "20% of referral traffic earnings"
+#     referee: "$1 welcome bonus"
 
 # docker:
 #   image: Docker Hub image
-#   platforms: [linux/amd64, linux/arm64]
+#   image_by_arch: (optional) image per architecture family, for images whose ARM builds
+#     Docker cannot select itself (separate tags, all labelled linux/amd64). Keys are
+#     amd64, arm64 or arm; the deploy picks by the worker's reported architecture and
+#     falls back to `image`.
+#     arm64: traffmonetizer/cli_v2:arm64v8
+#     arm: traffmonetizer/cli_v2:arm32v7
+#   platforms: [linux/amd64, linux/arm64]   # what the registry PUBLISHES for this image, nothing
+#     more: the preflight warns an ARM worker off an entry that lacks its family, and the
+#     weekly liveness check compares this list with the manifest. Families: linux/amd64,
+#     linux/arm64 (Pi 4/5 64-bit, Apple Silicon), linux/arm/v7 or v6 or v5 (32-bit Pi).
+#   resources: (optional, durable Docker resource limits applied at container create)
+#     mem_limit: "768m"        # hard memory ceiling (str: <number><b|k|m|g>, e.g. "512m", "2g")
+#     mem_reservation: "512m"  # (optional) soft memory reservation, same format as mem_limit
+#     oom_score_adj: -100      # kernel OOM-killer bias, int -1000..1000 (lower = sacrificed last)
+#     cpu_shares: 4096         # relative CPU weight, int 2..262144 (Docker's API default is 1024).
+#                              # Only arbitrates while CPU is contended, so it does NOT cap the
+#                              # container on an idle box. Raise it for earners that must answer
+#                              # inbound connections on time (a storage node the network dials
+#                              # back into), which are reported "offline" if they are merely slow.
+#                              # It arbitrates CPU between CONTAINERS only: it buys nothing
+#                              # against host-process load, I/O-wait, or an unreachable address.
+#                              # On cgroup v2 the value maps onto cpu.weight (unset default 100):
+#                              # runc >= 1.2 maps 1024->100, 4096->303; OLDER runc maps linearly,
+#                              # where anything under ~2600 lands BELOW the unset default -- 2048
+#                              # would give the "protected" service LESS weight than its
+#                              # neighbours. Use 4096 or more, which clears 100 on both mappings.
 #   env:
 #     - key: ENV_VAR_NAME
 #       label: "Human label"
@@ -28,38 +67,90 @@
 #       default: "" (optional)
 #   ports: ["port:port"]
 #   volumes: ["host:container"]
+#   critical_volumes:          (optional) mounts holding state that CANNOT be recovered
+#     - target: "/container/path"   must match the container-side path in `volumes`
+#       holds: "what is lost, in one or two sentences shown to the operator"
+#     Declaring a mount here makes the worker REFUSE to delete that volume unless
+#     the caller passes an explicit override (owner role required).
+#     NOTE: redeploy protection — refusing a redeploy that would drop or retype a
+#     critical mount — is NOT implemented yet; only the delete guard is.
+#     Use it only for genuinely irreplaceable state — node identities,
+#     keystores, generated wallets — not for caches or re-downloadable data.
 #   command: "" (optional override)
 #   network_mode: "" (optional, e.g. "host")
 #   cap_add: [] (optional)
+#   health_signals: [] (optional) log patterns that say whether the service is EARNING,
+#     which container health cannot see. The only signal available for the services with
+#     no collector.
+#       - pattern: "login failed"       regex, matched case-insensitively against logs
+#         means:   "The service rejected the stored credentials."   shown to the user
+#         state:   failing              failing (default) | idle
+#     Only add a pattern you have actually seen in that service's logs. A guessed regex
+#     that never matches is dead weight; one that matches the wrong line tells the user
+#     something false.
+#   advertised_address_env: ADDRESS  (optional) the env var holding the address
+#     the NETWORK dials this service back at ("host:port" or "host"). The
+#     worker copies that ONE variable's value into heartbeat container entries
+#     as advertised_address — never any other env, which may hold credentials —
+#     so the UI can compare it against the machine's current egress IP and mark
+#     the service failing when the network is dialling an address this machine
+#     no longer has (the classic silent-ISP-re-provision failure). Only declare
+#     it for services that are genuinely dialled back into; for outbound-only
+#     services the comparison would be meaningless.
+#   devices: [] (optional) host devices to map in, e.g. ["/dev/net/tun"]
+#     Only devices on the worker's allow-list may be requested, and only by the
+#     service whose own YAML declares them. A device is a direct line to the
+#     kernel, so the catalog cannot widen that ceiling on its own.
+#   privileged: false (optional, security-sensitive — grants the container full host device access)
 #   stop_timeout: 30 (optional, seconds to wait before SIGKILL on stop — default 30)
-#   resources:  (optional, per-container limits applied at creation on HostConfig)
-#     mem_limit: "768m"  (hard memory ceiling; Docker size string like "256m"/"2g". Omit = unlimited)
-#     mem_reservation: "256m"  (optional soft memory limit; Docker size string)
-#     oom_score_adj: -100  (optional OOM-killer priority, -1000..1000; negative protects the
-#                           container, positive makes the kernel kill it first under memory pressure)
 #   setup: "" (optional, one-time setup instructions/commands to run before first deploy)
 
-# native:  (optional, additive — how to run this service as a supervised NATIVE child
-#           process with no container runtime. A service may declare docker:, native:,
-#           or both; native is preferred on hosts that have a matching binary.)
-#   binaries:  (one pinned download per OS/arch)
-#     - os: darwin        # darwin | linux | windows (matches Go's runtime.GOOS)
-#       arch: arm64       # amd64 | arm64 (matches Go's runtime.GOARCH)
-#       url: "https://.../myst_darwin_arm64.tar.gz"  # MUST be HTTPS
-#       sha256: "<64-hex>"  # SHA-256 of the downloaded artifact; MANDATORY. The
-#                           # downloader fails closed on mismatch or a missing/invalid
-#                           # value (a placeholder like "TODO-verify" never executes).
-#       archive: tar.gz   # tar.gz | zip | none  (none = the url IS the raw binary)
-#       bin: "myst"       # path to the executable inside the archive (e.g. "myst.exe")
-#   command: ""  (arg template for the binary; tokenized then ${VAR}-substituted with
-#                 env, argv-only/no-shell — same safe path as docker.command)
-#   env: []  (same shape as docker.env; resolved + passed to the process environment)
+# disclosure: (optional but strongly encouraged) what this service does with the
+#   user's machine. "Is this malware?" is a fair question about closed-source
+#   containers that route traffic through someone's home connection, and an
+#   earnings range does not answer it.
+#     sells:                what is actually sold (bandwidth / disk / compute / attention)
+#     third_party_traffic:  do strangers route traffic through the user's IP? The value
+#                           must OPEN with a standalone yes / no / unknown followed by
+#                           punctuation, so it can be read programmatically:
+#                             third_party_traffic: >-
+#                               Yes. Buyers route their traffic through your connection.
+#                           Use a >- block (as above) or quote the string. A BARE `yes`/`no`
+#                           is parsed by YAML as a boolean, not text.
+#                           "No longer - they route traffic now" does NOT parse as a verdict
+#                           and is reported as undocumented, which is deliberate: a phrase
+#                           beginning with "no" that means "yes" is the worst possible
+#                           silent answer, so anything ambiguous falls back to unknown.
+#     data_collected:       what identifying data leaves the machine
+#     isp_risk:             what this could mean for their ISP contract, in plain words
+#     account_rules:        account and multi-account rules
+#   Write it honestly, including where the answer is unflattering. "unknown - the
+#   provider does not say" is a legitimate and useful entry. Do NOT guess: an absent
+#   block is reported as undocumented, which is safer than a confident wrong answer.
 
 # requirements:
 #   residential_ip: true/false
 #   vps_ip: true/false  (default: opposite of residential_ip)
 #   devices_per_account: 0  (0 = unlimited)
 #   devices_per_ip: 1  (0 = unlimited)
+#
+#   devices_per_ip drives the egress-conflict warning (app/egress.py), so the
+#   distinction between OMITTING it and setting it to 0 is load-bearing:
+#     - omitted -> "nobody has documented this", and the user is told to check
+#       the provider's terms before running a second instance behind one IP;
+#     - 0       -> a verified statement that the provider imposes no per-IP
+#       limit. The "check the terms" warning is then replaced by a milder note
+#       that two instances still share one connection, so the pair earns roughly
+#       what one does. It is downgraded, NOT silenced -- shared bandwidth is a
+#       real effect regardless of what the provider permits.
+#   Only write 0 when the provider actually says so. Writing it to quieten a
+#   warning turns a cautious message into a wrong one.
+#   container_prohibited: true/false  (default false)
+#     Set ONLY when the provider explicitly forbids containers/VMs/servers for
+#     its own software. This is the strongest verdict the preflight can give:
+#     the outcome is a terminated account with the pending balance cancelled,
+#     and CashPilot deploying the service as a container IS the violation.
+#     Requires a first-party source; never infer it from a residential-IP rule.
 #   note: ""  (footnote text for special cases in README table)
 #   note_column: ""  (which column footnote applies to: vps_ip, devices_per_ip)
 #   min_bandwidth: ""
@@ -81,17 +172,96 @@
 #   notes: ""
 
 # cashout:
-#   method: redirect | api | manual
+#   method: redirect | api | manual | auto
 #     - redirect: user clicks through to service dashboard to request payout
 #     - api: CashPilot can trigger payout via API (rare)
 #     - manual: instructions only (e.g. crypto claim, no dashboard)
+#     - auto: payouts happen automatically; no user action needed
 #   dashboard_url: "https://service.com/dashboard/earnings"
 #   min_amount: 20 (numeric, derived from payment.minimum_payout)
 #   currency: USD
 #   notes: "Additional cashout instructions or caveats"
 
+# payout:
+#   WHERE THE MONEY ACTUALLY GOES. `cashout` says how to WITHDRAW; this says
+#   where the funds live and whether there is an address at all (CashPilot-luj).
+#
+#   model: external | internal | minted | unknown        (REQUIRED)
+#     - external: the USER supplies an address they already own. CashPilot never
+#         holds a key. There IS an address to show.
+#     - internal: the service keeps an off-chain balance and pays out on
+#         request. There is NO address to register, and no chain to watch, until
+#         the user withdraws. Showing a blank address field here would read as
+#         "you forgot to configure this" when nothing is configurable — which is
+#         exactly why the model is a first-class field rather than an empty slot.
+#     - minted:   the container generates its own wallet on first run and
+#         accrues to it. The user has typically never seen the address, let
+#         alone backed up the seed.
+#     - unknown:  not yet determined. A DELIBERATE value, not a placeholder: the
+#         registry must flag what it does not know rather than render a blank
+#         that reads as "nothing to see here".
+#
+#   chain: ethereum | polygon | solana | none | ...
+#     `none` means NO on-chain surface exists at all, ever — Salad pays PayPal
+#     and gift cards only. Tier 2 (on-chain reconciliation) must skip these
+#     rather than fail to find an address for them.
+#     Omit entirely when the chain is chosen per-withdrawal and there is no
+#     persistent on-chain identity (Traffmonetizer picks Arbitrum/Tron/Solana/TON
+#     at withdrawal time).
+#
+#   address_env: WALLET
+#     `external` only, and only when the address is carried by an env var on the
+#     container — so the registry can read it from the deployed spec instead of
+#     asking the user to retype it.
+#
+#   address_source: env | manual | app
+#     Where the address is actually set. `manual` covers post-deploy
+#     configuration (Mysterium's beneficiary via TequilAPI, Anyone's anonrc);
+#     `app` covers a wallet linked inside the provider's own site.
+#
+#   notes: "Caveats worth showing the user."
+#     e.g. URnetwork forfeits payout after 30 days with no wallet linked.
+#
+#   NO PRIVATE KEYS. This block is a registry of PUBLIC addresses and payout
+#   mechanics, and nothing else. That is precisely why it comes first: it
+#   delivers most of the "where is my money" answer at zero custody risk.
+
 # platforms: [windows, macos, linux, android, ios, docker, browser_extension]
 
 # collector:
-#   type: api | scrape | manual
-#   notes: "Implementation hints for the earnings collector"
+#   type: api | scrape | manual | auto
+#     - auto: earnings accrue/settle automatically; no active collection needed
+#   notes: "Implementation hints for the earnings collector" (for developers)
+#   per_node_earnings: true|false
+#     The collector can break earnings down per node/machine, not just an
+#     account total. Declared here rather than branched on in app/ so adding a
+#     second such service is one line of YAML, not an edit to a route handler.
+#   credential_hint: |
+#     Where the USER finds the credential in the provider's own UI, shown next
+#     to the input in Settings. A different audience from `notes`: this is the
+#     sentence someone reads while looking at a provider dashboard they have
+#     never seen before. Limited HTML (<a>, <b>) is allowed and is escaped-safe
+#     because the UI inserts it as markup deliberately. Optional; omit it when
+#     the credential is just the account email and password.
+
+# --- Desktop-only (catalog-overlay/append/_schema.yml) -----------------------
+# Everything above comes from the web catalog's schema. The block below documents
+# the one field only Desktop understands.
+
+# native:  (optional, additive — how to run this service as a supervised NATIVE child
+#           process with no container runtime. A service may declare docker:, native:,
+#           or both; native is preferred on hosts that have a matching binary.)
+#          Desktop-only: the web app deploys through Docker on a worker and has no
+#          supervised-process runtime, so it ignores this block.
+#   binaries:  (one pinned download per OS/arch)
+#     - os: darwin        # darwin | linux | windows (matches Go's runtime.GOOS)
+#       arch: arm64       # amd64 | arm64 (matches Go's runtime.GOARCH)
+#       url: "https://.../myst_darwin_arm64.tar.gz"  # MUST be HTTPS
+#       sha256: "<64-hex>"  # SHA-256 of the downloaded artifact; MANDATORY. The
+#                           # downloader fails closed on mismatch or a missing/invalid
+#                           # value (a placeholder like "TODO-verify" never executes).
+#       archive: tar.gz   # tar.gz | zip | none  (none = the url IS the raw binary)
+#       bin: "myst"       # path to the executable inside the archive (e.g. "myst.exe")
+#   command: ""  (arg template for the binary; tokenized then ${VAR}-substituted with
+#                 env, argv-only/no-shell — same safe path as docker.command)
+#   env: []  (same shape as docker.env; resolved + passed to the process environment)

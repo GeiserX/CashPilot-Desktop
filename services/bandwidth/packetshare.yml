@@ -14,7 +14,7 @@ referral:
   signup_url: "https://www.packetshare.io/register.html"
 
 docker:
-  image: "packetshare/packetshare@sha256:52ddf3c71ce4eda7b49f700565b071a71731a57d2d67d3d2b4a446ea11f68235"
+  image: packetshare/packetshare
   platforms: [linux/amd64]
   env:
     - key: PACKETSHARE_EMAIL
@@ -62,3 +62,7 @@ platforms: [docker, windows, macos, linux]
 collector:
   type: manual
   notes: "No known public API for earnings. Check dashboard manually."
+
+payout:
+  model: unknown
+  notes: "Not yet determined. Flagged rather than shown blank -- see CashPilot-luj."

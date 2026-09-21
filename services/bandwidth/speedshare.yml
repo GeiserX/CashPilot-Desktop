@@ -2,6 +2,8 @@ name: SpeedShare
 slug: speedshare
 category: bandwidth
 status: dead
+# Marketing page still up; programme confirmed dead (Discord, March 2026).
+resurrection_checked: "2026-09-21"
 website: https://speedshare.app
 description: >
   SpeedShare lets you earn by sharing your unused internet bandwidth. Residential
@@ -14,8 +16,8 @@ referral:
   signup_url: "https://speedshare.app"
 
 docker:
-  image: "mrcolorrain/speedshare@sha256:168373ac4f80c261927b90f4c5b2ede25f6e6cc7f76e028eaaa756977809c03b"
-  platforms: [linux/amd64]
+  image: mrcolorrain/speedshare
+  platforms: [linux/amd64, linux/arm64]
   env:
     - key: CODE
       label: "Authorization Code"
@@ -64,3 +66,7 @@ platforms: [docker, windows, macos, linux]
 collector:
   type: manual
   notes: "No official API. Community Docker image. Manual earnings tracking via dashboard."
+
+payout:
+  model: unknown
+  notes: "Not yet determined. Flagged rather than shown blank -- see CashPilot-luj."

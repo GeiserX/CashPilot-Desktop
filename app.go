@@ -241,6 +241,13 @@ type AppState struct {
 	// field with the real value the deploy path will substitute (instead of the literal
 	// "cashpilot-{hostname}" the raw catalog default would otherwise show and submit).
 	Hostname string `json:"hostname"`
+	// CollectorFields carries, per slug, the credential inputs the earnings collector
+	// needs that the container's docker.env does not already ask for (a browser cookie,
+	// or an account password where the container authenticates with an API key). The
+	// wizard form is docker.env plus these, and the backend owns the list because the
+	// frontend's own copy of it went stale the moment a web-catalog rename moved a
+	// service's env keys away from what its collector reads.
+	CollectorFields map[string][]collectors.Field `json:"collectorFields"`
 }
 
 type Notification struct {
@@ -397,6 +404,7 @@ func (a *App) GetAppState() (AppState, error) {
 		ServiceDetails:   a.store.ListServiceDetails(),
 		Fleet:            a.fleetView(),
 		Hostname:         runtime.DeviceHostname(),
+		CollectorFields:  collectors.AllFields(),
 	}, nil
 }
 
