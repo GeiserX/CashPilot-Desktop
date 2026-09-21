@@ -99,7 +99,8 @@ func TestCleanLogsAreNotCheckedNotGreen(t *testing.T) {
 func TestRealBitpingHasNoSignalsSoNothingIsJudged(t *testing.T) {
 	svc := realService(t, "bitping")
 	if len(svc.Docker.HealthSignals) != 0 {
-		t.Skip("bitping now declares signals; this case needs a service that declares none")
+		t.Fatal("bitping now declares log signals, so it is no longer the 'declares none' case " +
+			"this test needs: point it at one of the many services that still declare none")
 	}
 
 	alarming := "ERROR No active session\nERROR login failed\nERROR sudo: PERM_SUDOERS\n"

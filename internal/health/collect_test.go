@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -102,17 +103,24 @@ func TestCollectStillJudgesARestartLoopWithoutReadingLogs(t *testing.T) {
 }
 
 // TestALogReadFailureIsNotAVerdict: a container runtime that will not answer must
-// cost a missing verdict, never a fabricated one.
+// cost a missing verdict, never a fabricated one — and the user must be told which
+// of the two happened. An empty log tail is both "the read failed" and "the service
+// is quiet", and only one of those is theirs to fix.
 func TestALogReadFailureIsNotAVerdict(t *testing.T) {
-	logs := &fakeLogs{fail: true}
-	got := Collect(context.Background(), logs, fakeCatalog{"demo": withSignals(loginFailed)},
-		[]Deployed{{Slug: "demo", ContainerState: "running"}})
+	cat := fakeCatalog{"demo": withSignals(loginFailed)}
+	deployed := []Deployed{{Slug: "demo", ContainerState: "running"}}
 
-	if got["demo"].State != StateNotChecked {
-		t.Fatalf("a failed read supports no finding; got %q", got["demo"].State)
+	failed := Collect(context.Background(), &fakeLogs{fail: true}, cat, deployed)["demo"]
+	quiet := Collect(context.Background(), &fakeLogs{out: "all fine\n"}, cat, deployed)["demo"]
+
+	if failed.State != StateNotChecked {
+		t.Fatalf("a failed read supports no finding; got %q", failed.State)
 	}
-	if len(got["demo"].Reasons) == 0 {
-		t.Error("and it must say why it has nothing to report")
+	if len(failed.Reasons) == 0 {
+		t.Fatal("and it must say why it has nothing to report")
+	}
+	if strings.Join(failed.Reasons, " ") == strings.Join(quiet.Reasons, " ") {
+		t.Errorf("a runtime that would not answer must not read like logs we read and found nothing in: %v", failed.Reasons)
 	}
 }
 
