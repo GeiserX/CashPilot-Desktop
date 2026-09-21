@@ -20,6 +20,7 @@
 import {
   UNKNOWN,
   composeExportControl,
+  composeSelectionExport,
   credentialHint,
   disclosureFacts,
   minimumIn,
@@ -227,6 +228,27 @@ check(
 check(
   "a manually tracked service offers no compose export, because there is no container to export",
   composeExportControl({...honeygain, manualOnly: true}) === "",
+);
+
+const selection = composeSelectionExport([honeygain, traffmonetizer, {...honeygain, slug: "manual-one", manualOnly: true}]);
+
+check(
+  "exporting a selection names every container service in it",
+  selection.includes("honeygain") && selection.includes("traffmonetizer"),
+  selection,
+);
+
+check(
+  "a manually tracked service is left out of the selection, because there is no container to export",
+  !selection.includes("manual-one"),
+  selection,
+);
+
+check("the button says how many services the file will hold", selection.includes("Export all 2"), selection);
+
+check(
+  "a page with nothing exportable shows no export control",
+  composeSelectionExport([{...honeygain, manualOnly: true}]) === "",
 );
 
 console.log(`${checks - failures}/${checks} checks passed`);

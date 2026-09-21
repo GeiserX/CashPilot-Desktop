@@ -174,6 +174,33 @@ export function serviceFacts(service: Service, balance?: Balance | null): string
 }
 
 /**
+ * The same export for everything on the page at once: one compose file holding
+ * every service being set up, which is how a whole box gets stood up in one go.
+ * Nothing selected means nothing to export, so the control stays away.
+ */
+export function composeSelectionExport(services: Service[]): string {
+  const exportable = services.filter((service) => !service.manualOnly);
+  if (exportable.length === 0) return "";
+  return `
+    <div class="compose-export">
+      <label class="compose-arch">
+        <span>Compose file for</span>
+        <select data-compose-arch="selection">
+          <option value="">This machine</option>
+          <option value="amd64">x86-64 (amd64)</option>
+          <option value="arm64">64-bit ARM (Raspberry Pi 4/5, Apple silicon)</option>
+          <option value="arm">32-bit ARM (Raspberry Pi 2/3)</option>
+        </select>
+      </label>
+      <button class="secondary" data-compose-export-selection="${exportable.map((service) => escapeHtml(service.slug)).join(" ")}">
+        Export all ${exportable.length} as one compose file
+      </button>
+      <pre class="output compose-output" data-output-slug="compose-selection"></pre>
+    </div>
+  `;
+}
+
+/**
  * The compose export control: pick the machine the file is for, then save it.
  *
  * The architecture choice is here because the file is often written FOR another box

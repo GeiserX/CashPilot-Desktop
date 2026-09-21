@@ -36,7 +36,7 @@ import { renderMystNodes } from "./render/myst";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { serviceFormFields } from "./render/fields";
-import { composeExportControl, credentialHint, serviceFacts, signupButton } from "./render/details";
+import { composeExportControl, composeSelectionExport, credentialHint, serviceFacts, signupButton } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
 
@@ -1075,7 +1075,14 @@ function renderSetupWizard(current: AppState) {
     button.addEventListener("click", () => {
       const slug = button.dataset.composeExport || "";
       const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="${slug}"]`)?.value || "";
-      void exportCompose(slug, arch);
+      void exportCompose([slug], arch, slug);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-compose-export-selection]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slugs = (button.dataset.composeExportSelection || "").split(" ").filter(Boolean);
+      const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="selection"]`)?.value || "";
+      void exportCompose(slugs, arch, "compose-selection");
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
@@ -1152,6 +1159,7 @@ function renderWizardSetup(services: Service[]) {
   return `
     <h2>Configure and deploy</h2>
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
+    ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
       ${services.map(renderWizardServiceSetup).join("")}
     </div>
@@ -1272,10 +1280,10 @@ async function runWizardAction(slug: string, action: string) {
 // Save a compose file for one service. The backend generates it, asks where to put
 // it, and answers with the path — or with "" when the save dialog was dismissed,
 // which is not an error and must not read like one.
-async function exportCompose(slug: string, arch: string) {
-  const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
+async function exportCompose(slugs: string[], arch: string, outputSlug: string) {
+  const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${outputSlug}"]`);
   try {
-    const path = await ExportCompose([slug], arch);
+    const path = await ExportCompose(slugs, arch);
     if (output) output.textContent = path ? `Saved ${path}` : "";
   } catch (error) {
     if (output) output.textContent = String(error);
