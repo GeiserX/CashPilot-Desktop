@@ -16,7 +16,7 @@ referral:
   program: false
 
 docker:
-  image: "ghcr.io/anyone-protocol/ator-protocol@sha256:62af1d6e0245667765f217bcce90d31c82fe687203abc66af7cf117e12581265"
+  image: "ghcr.io/anyone-protocol/ator-protocol:latest@sha256:62af1d6e0245667765f217bcce90d31c82fe687203abc66af7cf117e12581265"
   tag: latest
   platforms: [linux/amd64, linux/arm64]
   resources:

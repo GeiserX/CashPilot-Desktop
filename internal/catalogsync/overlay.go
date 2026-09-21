@@ -92,7 +92,7 @@ func LoadOverlay(dir string) (*Overlay, error) {
 		if err != nil {
 			return err
 		}
-		ov.Appends[filepath.ToSlash(rel)] = body
+		ov.Appends[filepath.ToSlash(rel)] = NormaliseEOL(body)
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
@@ -137,6 +137,12 @@ func Apply(upstream map[string][]byte, overlay *Overlay) (map[string][]byte, err
 			Status string `yaml:"status"`
 			Docker struct {
 				Image string `yaml:"image"`
+				// Tag is the legacy key one entry (anyone-protocol) still carries
+				// beside an untagged image. It is upstream's tag for that image, so
+				// the pin guard has to see it: without it, upstream re-tagging the
+				// client would leave Desktop pinned to the old generation's digest
+				// with nothing to say so.
+				Tag string `yaml:"tag"`
 			} `yaml:"docker"`
 		}
 		if err := yaml.Unmarshal(body, &svc); err != nil {
@@ -161,7 +167,7 @@ func Apply(upstream map[string][]byte, overlay *Overlay) (map[string][]byte, err
 		case pinned && !needsPin:
 			problems = append(problems, fmt.Sprintf("%s: pinned in the overlay but the web entry needs no pin (status %q, image %q); drop the pin", svc.Slug, svc.Status, upstreamImage))
 		case pinned:
-			if err := pinMatchesUpstream(pin.Image, upstreamImage); err != nil {
+			if err := pinMatchesUpstream(pin.Image, upstreamReference(upstreamImage, svc.Docker.Tag)); err != nil {
 				problems = append(problems, fmt.Sprintf("%s: %v", svc.Slug, err))
 				break
 			}
@@ -220,15 +226,32 @@ type Drift struct {
 	Kind DriftKind
 }
 
+// NormaliseEOL rewrites CRLF line endings to LF.
+//
+// The catalog is compared byte for byte, and on Windows Git for Windows checks every
+// file out through core.autocrlf=true by default: the working tree holds CRLF, the
+// repository holds LF. Comparing raw bytes there reports the entire catalog as
+// drifted — every file, on a checkout nobody has touched — which is a gate that can
+// only cry wolf. .gitattributes pins these paths to LF so a fresh clone is clean;
+// this keeps an already-CRLF working tree from lying too, and keeps the bytes written
+// back out as LF.
+func NormaliseEOL(body []byte) []byte {
+	if !bytes.Contains(body, []byte("\r\n")) {
+		return body
+	}
+	return bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n"))
+}
+
 // Diff reports every file in which have (the vendored tree) differs from want (the
-// web catalog with the declared overlay applied), sorted by path.
+// web catalog with the declared overlay applied), sorted by path. Line endings are
+// normalised on both sides: a CRLF working tree is a checkout artefact, not drift.
 func Diff(want, have map[string][]byte) []Drift {
 	var out []Drift
 	for _, rel := range sortedKeys(want) {
 		switch existing, ok := have[rel]; {
 		case !ok:
 			out = append(out, Drift{Path: rel, Kind: DriftMissing})
-		case !bytes.Equal(existing, want[rel]):
+		case !bytes.Equal(NormaliseEOL(existing), NormaliseEOL(want[rel])):
 			out = append(out, Drift{Path: rel, Kind: DriftChanged})
 		}
 	}
@@ -253,6 +276,25 @@ func splitImageRef(ref string) (repo, tag, digest string) {
 		repo, tag = ref[:lastColon], ref[lastColon+1:]
 	}
 	return repo, tag, digest
+}
+
+// upstreamReference folds the legacy docker.tag key into the image reference: when
+// the image string carries no tag of its own, docker.tag is the tag it means. Both
+// halves have to be compared, because a pin that matches the repository while
+// upstream quietly moved the tag is a pin holding Desktop on the previous build.
+func upstreamReference(image, tag string) string {
+	image = strings.TrimSpace(image)
+	tag = strings.TrimSpace(tag)
+	if image == "" || tag == "" {
+		return image
+	}
+	if _, existing, _ := splitImageRef(image); existing != "" {
+		return image
+	}
+	if i := strings.Index(image, "@"); i >= 0 {
+		return image[:i] + ":" + tag + image[i:]
+	}
+	return image + ":" + tag
 }
 
 // pinMatchesUpstream checks that a declared pin pins the image the web catalog

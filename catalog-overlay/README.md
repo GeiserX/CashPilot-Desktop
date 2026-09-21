@@ -49,6 +49,14 @@ the YAML rather than by matching text. It fails when:
 - a live web entry carries a floating image and no pin is declared here;
 - a pin exists for a slug that is gone, retired, or already pinned upstream.
 
+One entry keeps its tag somewhere else: `anyone-protocol` carries an untagged
+`docker.image` plus the legacy `docker.tag: latest` key. The guard reads that key as
+the entry's tag, so its pin names the tag too
+(`ghcr.io/anyone-protocol/ator-protocol:latest@sha256:...`). That is the one place a
+`:latest` appears in a live image string, and it is still pinned by digest — the tag
+is there so an upstream re-tag stops the sync instead of leaving Desktop on the
+previous generation's build while the entry claims otherwise.
+
 ### `append/**` — Desktop-only blocks
 
 A file here is appended verbatim to the vendored file of the same relative path,

@@ -1,0 +1,17 @@
+# The vendored catalog and its overlay are compared byte for byte against the
+# CashPilot web repository. Git for Windows checks files out with CRLF by default
+# (core.autocrlf=true), which made `make catalog-check` report all 51 files as
+# drifted on a clone nobody had touched. These paths stay LF in the working tree on
+# every platform.
+services/** text eol=lf
+catalog-overlay/** text eol=lf
+
+# Same reasoning for everything the toolchain reads back and compares, and for the
+# scripts a shell has to run.
+*.go text eol=lf
+*.ts text eol=lf
+*.mjs text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+Makefile text eol=lf

@@ -1,6 +1,7 @@
 package catalogsync
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,5 +275,92 @@ func TestLoadOverlayOnAMissingDirectory(t *testing.T) {
 	}
 	if len(ov.ImagePins) != 0 || len(ov.Appends) != 0 {
 		t.Errorf("empty overlay = %+v", ov)
+	}
+}
+
+// THE RULE: a CRLF working tree is a checkout artefact, never drift.
+//
+// Git for Windows checks every file out through core.autocrlf=true by default, so the
+// working tree holds CRLF while the repository holds LF. A byte-for-byte comparison
+// there reported the whole catalog as drifted, and a CRLF overlay file appended CRLF
+// into an LF document, which made the result differ from the vendored copy no matter
+// how many times the sync ran. .gitattributes pins these paths to LF for a fresh
+// clone; this is what keeps an already-CRLF tree honest.
+func TestCRLFIsNotDrift(t *testing.T) {
+	lf := []byte(liveEntry)
+	crlf := []byte(strings.ReplaceAll(liveEntry, "\n", "\r\n"))
+
+	if drift := Diff(map[string][]byte{"a.yml": lf}, map[string][]byte{"a.yml": crlf}); len(drift) != 0 {
+		t.Errorf("a CRLF copy of the same file was reported as drift: %+v", drift)
+	}
+	changed := append(append([]byte{}, crlf...), []byte("notes: edited\r\n")...)
+	if drift := Diff(map[string][]byte{"a.yml": lf}, map[string][]byte{"a.yml": changed}); len(drift) != 1 {
+		t.Errorf("real drift through a CRLF file was missed: %+v", drift)
+	}
+}
+
+// An overlay file checked out with CRLF must append the same bytes as the LF original,
+// or every sync produces a file that -check then rejects.
+func TestOverlayAppendsAreLineEndingAgnostic(t *testing.T) {
+	upstream := map[string][]byte{"bandwidth/example.yml": []byte(liveEntry)}
+	extra := "native:\n  command: \"run\"\n"
+
+	lfOut, err := applyWith(t, upstream, examplePin, map[string]string{"bandwidth/example.yml": extra})
+	if err != nil {
+		t.Fatalf("Apply (LF overlay): %v", err)
+	}
+	crlfOut, err := applyWith(t, upstream, examplePin, map[string]string{
+		"bandwidth/example.yml": strings.ReplaceAll(extra, "\n", "\r\n"),
+	})
+	if err != nil {
+		t.Fatalf("Apply (CRLF overlay): %v", err)
+	}
+	if !bytes.Equal(lfOut["bandwidth/example.yml"], crlfOut["bandwidth/example.yml"]) {
+		t.Errorf("a CRLF overlay file produced different bytes:\nLF:   %q\nCRLF: %q",
+			lfOut["bandwidth/example.yml"], crlfOut["bandwidth/example.yml"])
+	}
+}
+
+// THE RULE: the pin has to name the tag upstream actually uses, wherever upstream
+// keeps it.
+//
+// A pin holds Desktop on one immutable build. When upstream re-tags a client (a new
+// generation, a rename), the pinned digest is the previous generation, and it keeps
+// running and looking healthy. The guard catches that by comparing the tag — but one
+// entry (anyone-protocol) carries its tag in the legacy `docker.tag` key beside an
+// untagged image, and a guard that reads only the image string sees no tag on either
+// side and waves it through.
+func TestPinGuardReadsTheLegacyDockerTagKey(t *testing.T) {
+	entry := func(tag string) []byte {
+		return []byte(`name: Legacy
+slug: example
+category: depin
+status: active
+docker:
+  image: "ghcr.io/example/thing"
+  tag: ` + tag + `
+`)
+	}
+	pin := func(image string) string {
+		return "pins:\n  example:\n    image: \"" + image + "\"\n    why: \"test\"\n"
+	}
+
+	upstream := map[string][]byte{"depin/example.yml": entry("latest")}
+
+	out, err := applyWith(t, upstream, pin("ghcr.io/example/thing:latest@sha256:aaaa"), nil)
+	if err != nil {
+		t.Fatalf("a pin naming the entry's own tag was rejected: %v", err)
+	}
+	if !strings.Contains(string(out["depin/example.yml"]), `image: "ghcr.io/example/thing:latest@sha256:aaaa"`) {
+		t.Errorf("pin not applied:\n%s", out["depin/example.yml"])
+	}
+
+	if _, err := applyWith(t, map[string][]byte{"depin/example.yml": entry("g5-latest")},
+		pin("ghcr.io/example/thing:latest@sha256:aaaa"), nil); err == nil {
+		t.Error("upstream re-tagged the image and the stale pin was accepted; Desktop would keep running the old build")
+	}
+
+	if _, err := applyWith(t, upstream, pin("ghcr.io/example/thing@sha256:aaaa"), nil); err == nil {
+		t.Error("a pin that names no tag was accepted against an entry that has one, so a re-tag would go unnoticed")
 	}
 }
