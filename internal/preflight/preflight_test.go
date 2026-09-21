@@ -153,9 +153,10 @@ func TestAssessRealCatalogEntries(t *testing.T) {
 // The worst verdict has to be the first thing read. A user who stops after one
 // sentence must have read the decisive one.
 func TestWorstFindingIsShownFirst(t *testing.T) {
-	// EarnApp on 32-bit ARM: it forbids containers (earns nothing) AND needs a home
-	// connection (check this). Both are real findings on the real entry.
-	report := Assess(Input{Service: service(t, "earnapp"), DaemonArch: "armv7l"})
+	// PacketShare on 64-bit ARM: it needs a home connection (check this) and it
+	// publishes no build for this CPU (earns nothing). The second is found later than
+	// the first, so an unsorted list would open with the milder one.
+	report := Assess(Input{Service: service(t, "packetshare"), DaemonArch: "arm64"})
 	if len(report.Findings) < 2 {
 		t.Fatalf("expected at least two findings, got %+v", report.Findings)
 	}
