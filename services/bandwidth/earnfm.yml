@@ -11,10 +11,14 @@ short_description: Bandwidth sharing - email/password auth, lightweight client
 
 referral:
   signup_url: "https://earn.fm/ref/GEISYB91"
+  code: "GEISYB91"
 
 docker:
   image: "earnfm/earnfm-client@sha256:96169b3cd1b5cf2fce74b24b72949037d9539eeceb70ecdbe6d8081839a5db32"
-  platforms: [linux/amd64, linux/arm64]
+  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
+  resources:
+    mem_limit: "128m"
+    oom_score_adj: 200
   env:
     - key: EARNFM_TOKEN
       label: "API Key"
@@ -26,13 +30,11 @@ docker:
   command: ""
   network_mode: ""
   privileged: false
-  resources:
-    mem_limit: "128m"
-    oom_score_adj: 200
 
 requirements:
   residential_ip: true
   vps_ip: true
+  devices_per_ip: 1
   min_bandwidth: ""
   gpu: false
   min_storage: ""
@@ -61,3 +63,8 @@ platforms: [docker, linux]
 collector:
   type: api
   notes: "Supabase email/password auth. Docker client uses separate EARNFM_TOKEN (UUID) for bandwidth sharing only."
+  credential_hint: "Use your Earn.fm account email and password (same as <a href='https://app.earn.fm' target='_blank'>app.earn.fm</a> login)."
+
+payout:
+  model: internal
+  notes: "Balance held by Earn.fm; withdrawn on request."

@@ -6,64 +6,59 @@ website: https://mystnodes.com
 description: >
   MystNodes (Mysterium Network) is a decentralized VPN and proxy network built on
   blockchain technology. You earn MYST tokens by running a node that provides VPN,
-  proxy, and data scraping services to users. Requires NET_ADMIN capability and
+  proxy, and data scraping services to users. Requires NET_ADMIN, SETUID and SETGID capabilities and
   host networking for full functionality. Includes a built-in web UI for node
   management. Works on both residential and VPS connections.
 short_description: Decentralized VPN node - blockchain-based, works on VPS
 
 referral:
   signup_url: "https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE"
+  code: "do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE"
 
 docker:
   image: "mysteriumnetwork/myst@sha256:1b68b8336112567a2b4596eccebd53cb704bfa37630dd3e2aef63d8a0eca2b2a"
-  platforms: [linux/amd64, linux/arm64]
+  platforms: [linux/amd64, linux/arm64, linux/arm/v7]
+  resources:
+    mem_limit: "768m"
+    oom_score_adj: -100
   env: []
   ports:
     - "4449:4449"
   volumes:
     - "mysterium-data:/var/lib/mysterium-node"
-  command: "--ui.address=127.0.0.1 --tequilapi.address=127.0.0.1 service --agreed-terms-and-conditions"
+  critical_volumes:
+    - target: "/var/lib/mysterium-node"
+      holds: >-
+        Node identity keystore. Destroying it creates a brand-new identity: the
+        node loses its reputation and any earnings still held against the old one.
+  command: "--ui.address=0.0.0.0 --tequilapi.address=0.0.0.0 service --agreed-terms-and-conditions"
   network_mode: "host"
-  cap_add: [NET_ADMIN]
+  # SETUID and SETGID are for sudo. The node runs as root and still configures
+  # its interface and firewall through `sudo ip ...` / `sudo iptables ...`, and
+  # sudo switches uid and gid on the way (setresuid, setgroups). Every container
+  # is deployed with cap_drop ALL, so without these two that call fails with
+  # "sudo: PERM_SUDOERS: setresuid(-1, 1, -1): Operation not permitted", every
+  # session dies at setup, and the node keeps registering and looking healthy.
+  # no-new-privileges stays on: the node is already root, so it blocks nothing here.
+  cap_add: [NET_ADMIN, SETUID, SETGID]
+  # Wireguard/dvpn need a TUN device. Without it the node starts, registers and
+  # advertises itself to the network but carries no traffic - it looks healthy
+  # and earns nothing. See docs/guides/mysterium.md.
+  devices:
+    - "/dev/net/tun"
   privileged: false
-  resources:
-    mem_limit: "768m"
-    oom_score_adj: -100
-
-# Native (no-Docker) execution: run the official Mysterium headless node binary as a
-# supervised child process. Pinned to release 1.38.5; sha256 is the SHA-256 of each
-# published release artifact. There is no linux/arm64 tarball upstream (only .deb), so
-# arm64 Linux hosts fall back to the docker: image above. The launch args mirror the
-# docker command (loopback UI + Tequila API on :4449, terms accepted) so the earnings
-# collector at http://localhost:4449/tequilapi still works unchanged.
-native:
-  binaries:
-    - os: darwin
-      arch: amd64
-      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_darwin_amd64.tar.gz"
-      sha256: "979d37b9d29d2a078fab1afeeb2adb22b8a7d1cba0df6b655a23da7938bb632d"
-      archive: tar.gz
-      bin: "myst"
-    - os: darwin
-      arch: arm64
-      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_darwin_arm64.tar.gz"
-      sha256: "f8f96ec89f91d19c4e70cd8d7a4009f7a8422f818a50c2ba26b851fa39d0a3cd"
-      archive: tar.gz
-      bin: "myst"
-    - os: linux
-      arch: amd64
-      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_linux_amd64.tar.gz"
-      sha256: "79b0aa1ca846cfa02ff8a814828a18d9fba739698295054e13cafb6a74907554"
-      archive: tar.gz
-      bin: "myst"
-    - os: windows
-      arch: amd64
-      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_windows_amd64.zip"
-      sha256: "3ebecba44637462351ebf8fe62794db83088345fb5f8dd75a455bea0f762fc44"
-      archive: zip
-      bin: "myst.exe"
-  command: "--ui.address=127.0.0.1 --tequilapi.address=127.0.0.1 service --agreed-terms-and-conditions"
-  env: []
+  health_signals:
+    # Seen live (Sep 2026) on three nodes at once: the container was healthy,
+    # the node was listed in discovery, and no session ever completed.
+    - pattern: "sudo: PERM_SUDOERS"
+      means: >-
+        The node cannot run sudo inside its container, so it cannot configure
+        its VPN interface or firewall and every session fails at setup: it looks
+        online and earns nothing. The container was created without the SETUID
+        and SETGID capabilities. Update CashPilot and the worker running this
+        node, then redeploy Mysterium from the dashboard; the node identity
+        lives in its data volume and is kept.
+      state: failing
 
 requirements:
   residential_ip: false
@@ -97,3 +92,78 @@ platforms: [docker, windows, macos, linux, android, browser-extension]
 collector:
   type: api
   notes: "Tequila API at http://localhost:4449/tequilapi/settlement/total-fees. Returns MYST in wei (10^18). No auth needed."
+  # MystNodes reports earnings per registered node, not just an
+  # account total, so the UI can break the figure down by machine.
+  per_node_earnings: true
+  credential_hint: "Use your MystNodes account email and password (same as <a href='https://my.mystnodes.com' target='_blank'>my.mystnodes.com</a>)."
+
+# What this service does with the user's machine (CashPilot-66x).
+# Written to be read by someone deciding whether to trust it.
+disclosure:
+  sells: >-
+    Bandwidth. Your connection is used as an exit node for the Mysterium
+    network, which sells VPN, proxy AND data-scraping services. Scraping
+    traffic leaving a residential IP is the use most likely to draw complaints,
+    and you cannot choose which of the three your node carries.
+  third_party_traffic: >-
+    Yes. Strangers route their traffic through your IP address — that is the
+    product.
+  data_collected: >-
+    Node identity (a blockchain address), your IP, and coarse location
+    (country/city/ISP), which the node publishes to the network so buyers can
+    select it.
+  isp_risk: >-
+    Real and worth understanding. Traffic from other people leaves your
+    connection attributed to you, so anything they do appears to originate
+    from your line. Many consumer ISP contracts prohibit this. Check yours
+    before running it.
+  account_rules: >-
+    Unlimited devices per account and per IP.
+
+payout:
+  model: external
+  chain: polygon
+  address_source: manual
+  notes: "The beneficiary wallet is set AFTER deploy, via TequilAPI or the node WebUI -- not by an env var, so it cannot be read from the container spec."
+
+# --- Desktop-only (catalog-overlay/append/bandwidth/mysterium.yml) -----------
+# Native (no-Docker) execution: run the official Mysterium headless node binary as a
+# supervised child process. Pinned to release 1.38.5; sha256 is the SHA-256 of each
+# published release artifact. There is no linux/arm64 tarball upstream (only .deb), so
+# arm64 Linux hosts fall back to the docker: image above.
+#
+# The launch args deliberately do NOT mirror docker.command any more. The container
+# binds its UI and Tequila API to 0.0.0.0 because it runs inside a container with
+# host networking on a worker box; a native process binds them to 127.0.0.1 because
+# it runs directly on the user's own machine, where 0.0.0.0 would publish an
+# unauthenticated node admin API to the local network. Port 4449 and the accepted
+# terms are unchanged, so the earnings collector at
+# http://localhost:4449/tequilapi still works.
+native:
+  binaries:
+    - os: darwin
+      arch: amd64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_darwin_amd64.tar.gz"
+      sha256: "979d37b9d29d2a078fab1afeeb2adb22b8a7d1cba0df6b655a23da7938bb632d"
+      archive: tar.gz
+      bin: "myst"
+    - os: darwin
+      arch: arm64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_darwin_arm64.tar.gz"
+      sha256: "f8f96ec89f91d19c4e70cd8d7a4009f7a8422f818a50c2ba26b851fa39d0a3cd"
+      archive: tar.gz
+      bin: "myst"
+    - os: linux
+      arch: amd64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_linux_amd64.tar.gz"
+      sha256: "79b0aa1ca846cfa02ff8a814828a18d9fba739698295054e13cafb6a74907554"
+      archive: tar.gz
+      bin: "myst"
+    - os: windows
+      arch: amd64
+      url: "https://github.com/mysteriumnetwork/node/releases/download/1.38.5/myst_windows_amd64.zip"
+      sha256: "3ebecba44637462351ebf8fe62794db83088345fb5f8dd75a455bea0f762fc44"
+      archive: zip
+      bin: "myst.exe"
+  command: "--ui.address=127.0.0.1 --tequilapi.address=127.0.0.1 service --agreed-terms-and-conditions"
+  env: []

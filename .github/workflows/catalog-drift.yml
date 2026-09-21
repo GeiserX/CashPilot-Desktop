@@ -1,0 +1,54 @@
+name: Catalog drift
+
+# services/ is a vendored copy of the CashPilot web catalog. This job says when the
+# two have parted.
+#
+# It deliberately does NOT run on pull_request. A change in the web repository is not
+# a reason to block an unrelated Desktop PR, and a gate that fails for something the
+# author did not touch gets ignored, which is worse than no gate. Weekly, plus on
+# demand, is often enough: the catalog moves in days, not minutes.
+#
+# No token is needed. codeload serves public repository tarballs anonymously, so this
+# works on a fork and on a public repo's ubuntu-latest runner.
+
+on:
+  schedule:
+    # Mondays, 06:15 UTC.
+    - cron: '15 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ref of GeiserX/CashPilot to compare against'
+        required: false
+        default: 'main'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: services/ vs GeiserX/CashPilot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.8'
+          cache: true
+
+      - name: Compare the vendored catalog with the web catalog
+        run: go run ./cmd/catalogsync -check -ref "${{ inputs.ref || 'main' }}"
+
+      - name: Explain a failure
+        if: failure()
+        run: |
+          echo "::error::services/ no longer matches the CashPilot web catalog."
+          echo "Run 'make catalog-sync' locally, review the diff, and commit it."
+          echo "If a difference is deliberate, declare it in catalog-overlay/ rather"
+          echo "than editing services/ by hand. See catalog-overlay/README.md."

@@ -12,6 +12,7 @@ short_description: DePIN wireless network - browser extension and hardware box
 
 referral:
   signup_url: "https://dawninternet.com/?code=2QLQV97F"
+  code: "2QLQV97F"
 
 docker:
   image: ""
@@ -44,7 +45,10 @@ earnings:
 cashout:
   method: manual
   dashboard_url: "https://dashboard.dawninternet.com"
-  min_amount: 0
+  # Undocumented: the provider does not publish a minimum. NOT 0 —
+  # 0 means 'no minimum, cash out anything', which would tell the
+  # user they can withdraw now and disables payout detection.
+  min_amount: null
   currency: DAWN
   notes: "Extension works but half-baked. Black Box hardware announced. Check future."
 
@@ -53,3 +57,7 @@ platforms: [browser-extension]
 collector:
   type: scrape
   notes: "Points visible in extension popup and web dashboard. No public API documented."
+
+payout:
+  model: unknown
+  notes: "Not yet determined. Flagged rather than shown blank -- see CashPilot-luj."

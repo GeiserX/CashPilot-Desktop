@@ -33,28 +33,136 @@ type Service struct {
 	Cashout          Cashout           `json:"cashout" yaml:"cashout"`
 	Platforms        []string          `json:"platforms" yaml:"platforms"`
 	Collector        CollectorMetadata `json:"collector" yaml:"collector"`
-	SourcePath       string            `json:"sourcePath" yaml:"-"`
-	ManualOnly       bool              `json:"manualOnly" yaml:"-"`
+	Payout           Payout            `json:"payout" yaml:"payout"`
+	Disclosure       Disclosure        `json:"disclosure" yaml:"disclosure"`
+	// ResurrectionChecked is the date ("YYYY-MM-DD") on which a human confirmed a
+	// dead entry's programme really is gone even though its site still answers. It is
+	// carried so the reason a dead service stays dead travels with the entry instead
+	// of living only in the web repository's history.
+	ResurrectionChecked string `json:"resurrectionChecked" yaml:"resurrection_checked"`
+	SourcePath          string `json:"sourcePath" yaml:"-"`
+	ManualOnly          bool   `json:"manualOnly" yaml:"-"`
 }
 
 type Referral struct {
 	SignupURL string `json:"signupUrl" yaml:"signup_url"`
+	// Code is the referral code itself, kept alongside the URL so a domain migration
+	// that drops the code from signup_url is detectable rather than silent. Referral
+	// attribution is revenue: losing it loses money, and it fails invisibly.
+	Code string `json:"code" yaml:"code"`
+	// Program is three-valued on purpose and absent is NOT false: true means the
+	// provider was verified to run a referral programme (true with no Code is an
+	// actionable gap), false means it was verified not to, nil means nobody has
+	// checked. Collapsing nil into false would turn "unknown" into "nothing to do".
+	Program *bool         `json:"program" yaml:"program"`
+	Bonus   ReferralBonus `json:"bonus" yaml:"bonus"`
+}
+
+// ReferralBonus is what each side gets for a referral, shown on the service detail
+// page.
+type ReferralBonus struct {
+	Referrer string `json:"referrer" yaml:"referrer"`
+	Referee  string `json:"referee" yaml:"referee"`
+}
+
+// Payout is where the money actually lives, which is a different question from
+// Cashout's "how do I withdraw it". Model is the load-bearing field: "internal"
+// means there is no address to show and no chain to watch, which is not the same
+// as an address nobody has filled in yet.
+type Payout struct {
+	// Model is one of external, internal, minted, unknown. "unknown" is a deliberate
+	// value, not a placeholder.
+	Model string `json:"model" yaml:"model"`
+	// Chain is the settlement chain, or "none" when no on-chain surface exists at
+	// all. Absent means the chain is chosen per withdrawal and there is no
+	// persistent on-chain identity.
+	Chain string `json:"chain" yaml:"chain"`
+	// AddressEnv is the container env var carrying the user's payout address, for
+	// external models where the address can be read back from the deployed spec.
+	AddressEnv string `json:"addressEnv" yaml:"address_env"`
+	// AddressSource is env, manual (set after deploy, e.g. Mysterium's beneficiary
+	// via TequilAPI) or app (linked inside the provider's own site).
+	AddressSource string `json:"addressSource" yaml:"address_source"`
+	Notes         string `json:"notes" yaml:"notes"`
+}
+
+// Disclosure is what a service does with the user's machine, in plain words. An
+// absent block means nobody has documented it, which the UI must be able to say
+// rather than render as a reassuring blank.
+type Disclosure struct {
+	Sells string `json:"sells" yaml:"sells"`
+	// ThirdPartyTraffic opens with a standalone yes/no/unknown followed by
+	// punctuation so it can be read programmatically as well as by a person.
+	ThirdPartyTraffic string `json:"thirdPartyTraffic" yaml:"third_party_traffic"`
+	DataCollected     string `json:"dataCollected" yaml:"data_collected"`
+	ISPRisk           string `json:"ispRisk" yaml:"isp_risk"`
+	AccountRules      string `json:"accountRules" yaml:"account_rules"`
 }
 
 type DockerConfig struct {
-	Image       string         `json:"image" yaml:"image"`
-	Platforms   []string       `json:"platforms" yaml:"platforms"`
-	Env         []EnvVar       `json:"env" yaml:"env"`
-	Ports       []string       `json:"ports" yaml:"ports"`
-	Volumes     []string       `json:"volumes" yaml:"volumes"`
-	Command     string         `json:"command" yaml:"command"`
-	NetworkMode string         `json:"networkMode" yaml:"network_mode"`
-	CapAdd      []string       `json:"capAdd" yaml:"cap_add"`
-	Privileged  bool           `json:"privileged" yaml:"privileged"`
-	StopTimeout int            `json:"stopTimeout" yaml:"stop_timeout"`
-	Resources   ResourceLimits `json:"resources" yaml:"resources"`
-	Setup       string         `json:"setup" yaml:"setup"`
-	Notes       string         `json:"notes" yaml:"notes"`
+	Image string `json:"image" yaml:"image"`
+	// Tag is a legacy field a single catalog entry still carries alongside Image. It
+	// is parsed so the field round-trips, and deliberately not used: Image already
+	// carries the reference Desktop deploys, digest and all.
+	Tag string `json:"tag" yaml:"tag"`
+	// ImageByArch overrides Image per architecture family (keys: amd64, arm64, arm).
+	// It exists for images whose ARM builds Docker cannot select itself because every
+	// tag is labelled linux/amd64 in the registry, so the right build is chosen by
+	// tag rather than by manifest. Falls back to Image when the host's family is
+	// absent.
+	ImageByArch map[string]string `json:"imageByArch" yaml:"image_by_arch"`
+	// Platforms is what the registry PUBLISHES for this image, nothing more. An ARM
+	// host deploying an entry that lacks its family gets a container that dies with
+	// "exec format error", so this list is a real check and not a badge.
+	Platforms []string `json:"platforms" yaml:"platforms"`
+	Env       []EnvVar `json:"env" yaml:"env"`
+	Ports     []string `json:"ports" yaml:"ports"`
+	Volumes   []string `json:"volumes" yaml:"volumes"`
+	// CriticalVolumes marks the mounts whose loss is unrecoverable — node
+	// identities, keystores, generated wallets — so deleting one has to be an
+	// explicit act rather than a side effect of tidying up.
+	CriticalVolumes []CriticalVolume `json:"criticalVolumes" yaml:"critical_volumes"`
+	Command         string           `json:"command" yaml:"command"`
+	NetworkMode     string           `json:"networkMode" yaml:"network_mode"`
+	// CapAdd are the Linux capabilities the container needs on top of a cap_drop ALL
+	// baseline. Getting this wrong does not crash the container: Mysterium without
+	// SETUID and SETGID registers, looks healthy, and fails every session at setup.
+	CapAdd []string `json:"capAdd" yaml:"cap_add"`
+	// Devices are host devices to map in ("/dev/net/tun"). A device is a direct line
+	// to the kernel, so only devices the runtime allow-lists may be requested, and
+	// only by the service whose own entry declares them.
+	Devices []string `json:"devices" yaml:"devices"`
+	// HealthSignals are log patterns that say whether the service is EARNING, which
+	// container health cannot see. For services with no collector it is the only
+	// signal there is.
+	HealthSignals []HealthSignal `json:"healthSignals" yaml:"health_signals"`
+	// AdvertisedAddressEnv names the ONE env var holding the address the network
+	// dials this service back at, so it can be compared against the machine's
+	// current egress address. Only that variable is ever copied out; the rest may
+	// hold credentials.
+	AdvertisedAddressEnv string         `json:"advertisedAddressEnv" yaml:"advertised_address_env"`
+	Privileged           bool           `json:"privileged" yaml:"privileged"`
+	StopTimeout          int            `json:"stopTimeout" yaml:"stop_timeout"`
+	Resources            ResourceLimits `json:"resources" yaml:"resources"`
+	Setup                string         `json:"setup" yaml:"setup"`
+	Notes                string         `json:"notes" yaml:"notes"`
+}
+
+// CriticalVolume is one mount holding state that cannot be recovered if it is
+// destroyed. Target must match the container-side path in Volumes; Holds is what is
+// lost, written to be shown to the operator being asked to confirm.
+type CriticalVolume struct {
+	Target string `json:"target" yaml:"target"`
+	Holds  string `json:"holds" yaml:"holds"`
+}
+
+// HealthSignal is one log pattern that reveals whether a service is earning. Pattern
+// is a regex matched case-insensitively against container logs, Means is the
+// explanation shown to the user, and State is "failing" (the default) or "idle".
+type HealthSignal struct {
+	Pattern string `json:"pattern" yaml:"pattern"`
+	Means   string `json:"means" yaml:"means"`
+	State   string `json:"state" yaml:"state"`
 }
 
 // ResourceLimits is the optional docker.resources block from a service YAML. Its
@@ -117,21 +225,38 @@ type EnvVar struct {
 }
 
 type Requirements struct {
-	ResidentialIP     bool   `json:"residentialIp" yaml:"residential_ip"`
-	VPSIP             bool   `json:"vpsIp" yaml:"vps_ip"`
-	DevicesPerAccount int    `json:"devicesPerAccount" yaml:"devices_per_account"`
-	DevicesPerIP      int    `json:"devicesPerIp" yaml:"devices_per_ip"`
-	MinBandwidth      string `json:"minBandwidth" yaml:"min_bandwidth"`
-	GPU               bool   `json:"gpu" yaml:"gpu"`
-	MinStorage        string `json:"minStorage" yaml:"min_storage"`
-	Note              string `json:"note" yaml:"note"`
+	ResidentialIP     bool `json:"residentialIp" yaml:"residential_ip"`
+	VPSIP             bool `json:"vpsIp" yaml:"vps_ip"`
+	DevicesPerAccount int  `json:"devicesPerAccount" yaml:"devices_per_account"`
+	// DevicesPerIP is a pointer because omitted and 0 mean different things and the
+	// difference is what the user is told. Omitted means nobody has documented a
+	// per-IP limit, so a second instance behind one address needs checking against
+	// the provider's terms. 0 is a verified statement that there is no limit, which
+	// downgrades that warning to "the pair shares one connection, so it earns about
+	// what one does". Reading an omitted value as 0 turns a cautious message into a
+	// wrong one.
+	DevicesPerIP *int   `json:"devicesPerIp" yaml:"devices_per_ip"`
+	MinBandwidth string `json:"minBandwidth" yaml:"min_bandwidth"`
+	GPU          bool   `json:"gpu" yaml:"gpu"`
+	MinStorage   string `json:"minStorage" yaml:"min_storage"`
+	// ContainerProhibited is set only when the provider explicitly forbids running
+	// its software in containers, VMs or on servers. It is the strongest verdict in
+	// the catalog: the stated penalty is a terminated account with the pending
+	// balance cancelled, and deploying it as a container IS the violation.
+	ContainerProhibited bool   `json:"containerProhibited" yaml:"container_prohibited"`
+	Note                string `json:"note" yaml:"note"`
+	// NoteColumn says which column Note is a footnote for (vps_ip, devices_per_ip).
+	NoteColumn string `json:"noteColumn" yaml:"note_column"`
 }
 
 type Payment struct {
-	Methods       []string `json:"methods" yaml:"methods"`
-	MinimumPayout string   `json:"minimumPayout" yaml:"minimum_payout"`
-	Currency      string   `json:"currency" yaml:"currency"`
-	Frequency     string   `json:"frequency" yaml:"frequency"`
+	Methods []string `json:"methods" yaml:"methods"`
+	// CryptoToken is the specific token when it differs from Currency ("SOL",
+	// "USDT").
+	CryptoToken   string `json:"cryptoToken" yaml:"crypto_token"`
+	MinimumPayout string `json:"minimumPayout" yaml:"minimum_payout"`
+	Currency      string `json:"currency" yaml:"currency"`
+	Frequency     string `json:"frequency" yaml:"frequency"`
 }
 
 type EarningsEstimate struct {
@@ -151,8 +276,17 @@ type Cashout struct {
 }
 
 type CollectorMetadata struct {
-	Type  string `json:"type" yaml:"type"`
+	Type string `json:"type" yaml:"type"`
+	// Notes are implementation hints for whoever writes the collector.
 	Notes string `json:"notes" yaml:"notes"`
+	// CredentialHint is written for the USER, not the developer: the sentence
+	// someone reads while looking at a provider dashboard they have never seen
+	// before. It allows limited HTML (<a>, <b>) because the UI inserts it as markup
+	// deliberately.
+	CredentialHint string `json:"credentialHint" yaml:"credential_hint"`
+	// PerNodeEarnings says the collector can break earnings down per node rather
+	// than reporting only an account total.
+	PerNodeEarnings bool `json:"perNodeEarnings" yaml:"per_node_earnings"`
 }
 
 // HasNative reports whether the service declares at least one native binary, i.e. it
@@ -239,10 +373,21 @@ func (c *Catalog) List() []Service {
 	return out
 }
 
+// retiredStatuses are the lifecycle states that hide a service from the UI. "dropped"
+// means evaluated and then removed — a deliberate decision, not a failure — and it is
+// hidden for the same reason dead and broken are: offering it invites someone to sign
+// up for a programme that will not pay them.
+var retiredStatuses = map[string]bool{"dead": true, "broken": true, "dropped": true}
+
+// IsRetired reports whether a status hides the service from the UI.
+func IsRetired(status string) bool {
+	return retiredStatuses[strings.ToLower(strings.TrimSpace(status))]
+}
+
 func (c *Catalog) ListVisible() []Service {
 	out := make([]Service, 0, len(c.services))
 	for _, svc := range c.services {
-		if svc.Status == "dead" || svc.Status == "broken" {
+		if IsRetired(svc.Status) {
 			continue
 		}
 		out = append(out, svc)

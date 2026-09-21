@@ -12,6 +12,7 @@ short_description: DePIN browser extension - 2000 pts per referral
 
 referral:
   signup_url: "https://dashboard.teneo.pro/?code=CAqef"
+  code: "CAqef"
 
 docker:
   image: ""
@@ -44,7 +45,10 @@ earnings:
 cashout:
   method: redirect
   dashboard_url: "https://dashboard.teneo.pro"
-  min_amount: 0
+  # Undocumented: the provider does not publish a minimum. NOT 0 —
+  # 0 means 'no minimum, cash out anything', which would tell the
+  # user they can withdraw now and disables payout detection.
+  min_amount: null
   currency: TENEO
   notes: "Points convert to tokens. Claim from dashboard."
 
@@ -53,3 +57,7 @@ platforms: [browser-extension]
 collector:
   type: scrape
   notes: "Points visible in dashboard.teneo.pro. Websocket-based connection tracking."
+
+payout:
+  model: unknown
+  notes: "Not yet determined. Flagged rather than shown blank -- see CashPilot-luj."

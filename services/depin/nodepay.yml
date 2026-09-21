@@ -12,6 +12,7 @@ short_description: DePIN bandwidth sharing for AI - browser extension
 
 referral:
   signup_url: "https://app.nodepay.ai/register?ref=0wzzyznen64j9zx"
+  code: "0wzzyznen64j9zx"
 
 docker:
   image: ""
@@ -44,7 +45,10 @@ earnings:
 cashout:
   method: redirect
   dashboard_url: "https://app.nodepay.ai/dashboard"
-  min_amount: 0
+  # Undocumented: the provider does not publish a minimum. NOT 0 —
+  # 0 means 'no minimum, cash out anything', which would tell the
+  # user they can withdraw now and disables payout detection.
+  min_amount: null
   currency: NC
   notes: "Points-based system. Token conversion TBD."
 
@@ -53,3 +57,7 @@ platforms: [browser-extension]
 collector:
   type: scrape
   notes: "Behind Cloudflare. API access may require browser session cookies. Dashboard at app.nodepay.ai."
+
+payout:
+  model: unknown
+  notes: "Not yet determined. Flagged rather than shown blank -- see CashPilot-luj."

@@ -52,22 +52,43 @@ npm --prefix frontend run build          # tsc typecheck + Vite production build
 | `internal/runtime` | Docker/Podman container abstraction |
 | `internal/services` | Deployment lifecycle orchestration |
 | `fleet_server.go` | Loopback worker/mobile heartbeat API |
-| `services/` | The service catalog (one YAML per provider) |
+| `services/` | The service catalog, vendored from the CashPilot web repository |
+| `catalog-overlay/` | The Desktop-only deltas applied on top of the vendored catalog |
+| `internal/catalogsync`, `cmd/catalogsync` | The sync and the drift check |
 | `frontend/src/main.ts` | The whole vanilla-TS SPA |
 
 ## How to make common changes
 
 ### Add or update a service in the catalog
 
-1. Add `services/<category>/<slug>.yml` (categories: `bandwidth`, `depin`, `storage`,
-   `compute`). Copy an existing entry for the shape; `services/_schema.yml` documents
-   the fields.
-2. **Pin the container image to an immutable digest** — `image: repo/name:tag@sha256:…`,
-   never a bare tag and never `:latest`. This is enforced by a fail-closed test
-   (`internal/catalog/image_pin_test.go`); an unpinned live image fails CI. Services
-   with no `docker.image` are treated as *manual-only* (tracked, never containerized).
-3. If the service exposes an API/dashboard you can read a balance from, add a collector
-   (below) so its earnings refresh automatically.
+**`services/` is not edited here.** It is a vendored copy of
+[the CashPilot web catalog](https://github.com/GeiserX/CashPilot/tree/main/services),
+which is where a provider is added, retired, or corrected. Desktop copies it:
+
+```bash
+make catalog-sync                        # fetch GeiserX/CashPilot@main and rewrite services/
+make catalog-check                       # report drift, change nothing
+make catalog-sync SRC=../CashPilot       # use a local checkout instead of fetching
+```
+
+Review the resulting diff and commit it. A hand edit to `services/` is reverted by the
+next sync and reported by the weekly drift workflow, so make the change upstream.
+
+Everything Desktop keeps that the web catalog does not is declared in
+`catalog-overlay/`, and `catalog-overlay/README.md` lists every current delta. Two
+apply today: the **immutable image digest pins** (`image: repo/name:tag@sha256:…`,
+never a bare tag and never `:latest` — enforced by a fail-closed test,
+`internal/catalog/image_pin_test.go`), and the **`native:` block**, which only Desktop
+can run. Services with no `docker.image` and no `native:` block are treated as
+*manual-only* (tracked, never containerized).
+
+To re-pin after an upstream image change, put the new digest in
+`catalog-overlay/image-pins.yml`. The sync refuses to run when a pin names a different
+repository or tag from the web entry, which is what stops Desktop quietly deploying a
+retired image that looks healthy and earns nothing.
+
+If the service exposes an API or dashboard you can read a balance from, add a collector
+(below) so its earnings refresh automatically.
 
 ### Add an earnings collector
 

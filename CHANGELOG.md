@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The service catalog was months out of date, and some of it was earning nothing.** Desktop shipped its own hand-edited copy of the catalog with no way back to the CashPilot web repository it came from, so corrections made there never arrived. What that cost, concretely:
+
+  **Mysterium was deployed without SETUID, SETGID or `/dev/net/tun`.** Every container runs with `cap_drop: ALL`, and the node configures its interface and firewall through `sudo`, which switches uid and gid on the way. Without those two capabilities the call fails with `sudo: PERM_SUDOERS: setresuid(...): Operation not permitted`, every session dies at setup — and the node still registers, still appears in discovery, and still looks healthy. Without the TUN device it advertises itself to the network and carries no traffic. Both failures earn nothing while showing green.
+
+  **Bitping was deployed with no credentials.** Its `BITPING_EMAIL` and `BITPING_PASSWORD` were dropped from an earlier catalog rewrite while the image kept reading them, so the container sat at "No active session" indefinitely. It also now requests `NET_RAW`, which `cap_drop: ALL` removes and its network probes need.
+
+  **Presearch was offered as an active service.** The programme is gone; the entry is `dead` and it no longer appears, along with its signup link.
+
+  **Repocket's container used the wrong environment contract** (`REPOCKET_EMAIL`/`REPOCKET_PASSWORD` rather than `RP_EMAIL`/`RP_API_KEY`, which is an API key from the dashboard, not the account password).
+
+  **Ten entries listed the wrong architectures.** Nine were narrower than the registry actually publishes (EarnApp, Earn.fm, Honeygain, IPRoyal Pawns, Mysterium, PacketStream, Storj, Traffmonetizer and SpeedShare all gained 32-bit ARM or armv5); ProxyLite was wider, claiming an arm64 build that is not published. Traffmonetizer also gains the per-architecture image overrides for its two real ARM builds — Docker Hub labels every tag of that image `linux/amd64`, so Docker cannot pick them itself.
+
+  **ProxyBase Markets is new**, and Storj now declares a 300-second stop timeout — a node SIGKILLed after the default 30 seconds loses in-flight pieces and audit score.
+
 ### Added
+
+- **`services/` is now vendored from the web catalog, with a weekly drift check.** `make catalog-sync` fetches `GeiserX/CashPilot@main`, copies each entry byte for byte, and deletes anything upstream retired. The differences Desktop keeps are declared in `catalog-overlay/` and nowhere else: the immutable image digest pins, and the `native:` block that lets Desktop run a service as a supervised process with no container runtime. The sync refuses to run when a pin names a different repository or tag from the web entry, which is what stops a provider's image move leaving Desktop on a retired build that looks healthy and earns nothing.
+
+  A scheduled weekly workflow runs the same check and fails loudly when the two have parted. It deliberately does not run on pull requests: a change in the web repository is not a reason to block an unrelated Desktop PR.
+
+- **The catalog loader now reads the whole web schema.** Capabilities, host devices, per-architecture images, critical volumes, health signals, the advertised-address variable, stop timeouts, referral codes, payout and disclosure blocks, credential hints, and the preflight fields (`container_prohibited`, per-IP limits) all parse. Nothing new acts on them yet; this is what lets the next slice use them without another round of catalog surgery.
+
+  Two of them are deliberately nullable, because absent and zero are different answers: a per-IP device limit of `null` means nobody has documented one and a second instance needs checking against the provider's terms, while `0` means the provider states it imposes none. `referral.program` is the same shape — `null` is "unchecked", not a verified "no".
 
 - **A paired Desktop shows the account-wide picture, and an unlinked one goes back to its own.** While paired, the dashboard gains an "Across your CashPilot account" panel with what the platforms this machine runs earned on your provider accounts over the server's reporting window, straight from the heartbeat response. Unlink and it disappears, leaving exactly the local numbers as before — which works because pairing COPIES this machine's history upstream rather than moving it.
 
@@ -18,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   It is a **copy, not a migration**: the local rows are read and left exactly where they are, so unlinking leaves this machine still showing precisely what it earned on its own. The server files the readings under this client's own source rather than merging them into its own series, because earnings are clamped deltas between consecutive balance readings — interleaving two samplers of one provider account makes every apparent drop clamp to zero and understates the total. Separate series are differenced separately and then summed.
 
   Sent once per server, recorded in `upstreamHistoryPushedTo`; pairing with a different server hands it the history too. A failed or partial upload is retried on the next heartbeat rather than recorded as done, and the import is idempotent so a retry costs nothing. The upload waits until this worker is fully enrolled — a client still presenting the shared enrollment key is refused by the server, since every worker holds that key and it cannot prove who is writing. Historical readings carry no exchange rate: Desktop does not record what a currency was worth on a past day, and stamping today's rate onto a year-old reading would misprice it confidently.
+
+### Changed
+
+- **`dropped` services are hidden alongside `dead` and `broken`.** A service that was evaluated and then removed is not on offer, for the same reason a dead one is not: listing it invites a signup that will never pay.
 
 ## [0.10.1] - 2026-07-17
 

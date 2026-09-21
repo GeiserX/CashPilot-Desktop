@@ -1,0 +1,73 @@
+# Desktop-only image pins.
+#
+# The web catalog names the image; this file names the exact build of it Desktop
+# ships. Desktop's rule is that every live service pins an immutable @sha256:
+# digest (internal/catalog's TestServiceImagesArePinned enforces it), while the web
+# catalog mostly carries floating references, so the digest is ours to keep.
+#
+# Keyed by service slug. `image` must be the web entry's repository AND tag with a
+# digest appended; cmd/catalogsync refuses to sync when it is not, so an upstream
+# image move or tag change (proxybase -> ghcr peer-cli, urnetwork -> g4-latest)
+# stops the sync instead of quietly holding Desktop on the retired build.
+#
+# A pin is needed only where the web entry is live and carries no digest of its
+# own: proxybase and proxybase-xyz pin themselves upstream, and dead/broken/dropped
+# entries are exempt because they are never deployed. The sync also fails when a
+# live floating image has no pin here, so the rule cannot be dropped by omission.
+#
+# To re-pin after an upstream change, resolve the new digest from the registry:
+#
+#   docker buildx imagetools inspect <repo>:<tag> --format '{{.Manifest.Digest}}'
+#
+# Take the manifest-LIST digest (what that command prints), not a per-platform one:
+# a single-platform digest would pull the wrong build on every other architecture.
+
+pins:
+  anyone-protocol:
+    image: "ghcr.io/anyone-protocol/ator-protocol@sha256:62af1d6e0245667765f217bcce90d31c82fe687203abc66af7cf117e12581265"
+    why: "Relay image; upstream ships a floating tag."
+  bitping:
+    image: "bitping/bitpingd@sha256:6f923c4f5e0fe7fa188f621f3dde0cf62e5d3a28848c08f3f84f1a3d8d875dd9"
+    why: "Upstream ships no tag at all on this entry."
+  earnapp:
+    image: "fazalfarhan01/earnapp:lite@sha256:0dbce82a18aaee0b0252d07d70d27d0e9e31a8e85f3fc2713d4f097f48e29b7b"
+    why: "The web entry pins the lite tag; the digest fixes which lite build."
+  earnfm:
+    image: "earnfm/earnfm-client@sha256:96169b3cd1b5cf2fce74b24b72949037d9539eeceb70ecdbe6d8081839a5db32"
+    why: "Upstream ships no tag at all on this entry."
+  honeygain:
+    image: "honeygain/honeygain@sha256:159d120caac9f482074d3e8d82d4cc247cd07e65af37bcc8e6b89c60674d5ed4"
+    why: "Upstream ships no tag at all on this entry."
+  iproyal:
+    image: "iproyal/pawns-cli@sha256:b8bd21d755a7bd33cdde59da31f9b39d13e67fc67d00cb5f895d1c606eb5a95d"
+    why: "Upstream ships no tag at all on this entry."
+  mysterium:
+    image: "mysteriumnetwork/myst@sha256:1b68b8336112567a2b4596eccebd53cb704bfa37630dd3e2aef63d8a0eca2b2a"
+    why: "Upstream ships no tag at all on this entry."
+  packetstream:
+    image: "packetstream/psclient@sha256:e5015592031fb6f3876582117f47995ecec8157a639e9fc3fcfe4af28b2c497a"
+    why: "Upstream ships no tag at all on this entry."
+  proxylite:
+    image: "proxylite/proxyservice@sha256:e6da7e1793a0777b2c4aea2fe69ed7d7aa664777857271b19dc3d72405b86133"
+    why: "Upstream ships no tag at all on this entry."
+  proxyrack:
+    image: "proxyrack/pop@sha256:7de6719f37b31d5dd354f8cdd3ae601b4ed401832d0935ff460f968e0b6731bc"
+    why: "Upstream ships no tag at all on this entry."
+  repocket:
+    image: "repocket/repocket@sha256:5888d756de7e0e74b95b5eb08bb93f4240a0ce840c910a7e528d1143ad0c502b"
+    why: "Upstream ships no tag at all on this entry."
+  storj:
+    image: "storjlabs/storagenode@sha256:21ca0ac819d1d66240830d28097eeb693923e51383aa3bb07bf823f9fad1f6e9"
+    why: "Upstream ships no tag at all on this entry."
+  traffmonetizer:
+    image: "traffmonetizer/cli_v2@sha256:6dbf8e75cc93e25131e2e701b1d478b3ccbf89212636b08d629621c270f0c966"
+    why: >-
+      Pins the amd64/default reference only. docker.image_by_arch still names the
+      two ARM tags as floating tags, because Docker Hub labels every tag of this
+      image linux/amd64 and the ARM builds are selected by tag, not by manifest.
+  urnetwork:
+    image: "bringyour/community-provider:g4-latest@sha256:ce51efac7cd44233e2856344a683e977abb90c10952da37230313cccfa077086"
+    why: >-
+      The web entry moved to the g4-latest tag. Confirmed against the registry on
+      2026-09-21: g4-latest resolves to this manifest list (linux/amd64 and
+      linux/arm64), the same digest the old untagged pin already held.

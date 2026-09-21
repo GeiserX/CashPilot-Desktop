@@ -13,6 +13,7 @@ short_description: GPU marketplace - set your own prices, RTX 3090 ~$0.20-0.40/h
 
 referral:
   signup_url: "https://cloud.vast.ai/?ref_id=452772"
+  code: "452772"
 
 docker:
   image: ""
@@ -59,3 +60,7 @@ platforms: [linux]
 collector:
   type: api
   notes: "REST API at https://console.vast.ai/api/v0/. API key auth. Endpoints for machine stats and earnings."
+
+payout:
+  model: unknown
+  notes: "Not yet determined. Flagged rather than shown blank -- see CashPilot-luj."

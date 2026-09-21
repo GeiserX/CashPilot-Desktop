@@ -17,7 +17,19 @@ referral:
 
 docker:
   image: "storjlabs/storagenode@sha256:21ca0ac819d1d66240830d28097eeb693923e51383aa3bb07bf823f9fad1f6e9"
-  platforms: [linux/amd64, linux/arm64]
+  platforms: [linux/amd64, linux/arm64, linux/arm/v5]
+  resources:
+    mem_limit: "2g"
+    oom_score_adj: -100
+    # Defensive weight for a service the network dials back into: satellites
+    # mark the node offline when their dial times out, so a node that is merely
+    # slow to answer reads as down, and sustained "offline" leads to suspension.
+    # This only arbitrates CPU against other containers under contention (free
+    # while the host is idle) -- it does NOT fix I/O-wait on the storage path or
+    # a wrong/stale ADDRESS, which are the more common causes of offline mail.
+    # 4096 (not 2048) because older runc maps shares under ~2600 BELOW the
+    # unset default weight -- see cpu_shares in _schema.yml.
+    cpu_shares: 4096
   env:
     - key: WALLET
       label: "Wallet address"
@@ -54,19 +66,40 @@ docker:
   volumes:
     - "${IDENTITY_DIR}:/app/identity"
     - "${STORAGE_DIR}:/app/config"
+  critical_volumes:
+    - target: "/app/identity"
+      holds: >-
+        Node identity. Its ID is proof-of-work bound and takes hours to
+        regenerate, and it cannot be recreated from a backup of anything else.
+        Losing it forfeits the held payout balance.
+    - target: "/app/config"
+      holds: >-
+        Stored customer data and the node's held amount. Losing it disqualifies
+        the node and forfeits the held balance.
   command: "--operator.wallet-features=zksync-era"
   network_mode: ""
+  # Satellites dial the node at exactly this env var's value, so the worker
+  # reports it and the UI cross-checks it against the machine's current
+  # egress IP — the check that catches a stale advertised IP the day it goes
+  # stale instead of days later via provider email.
+  advertised_address_env: ADDRESS
+  health_signals:
+    # Seen live (Aug 2026): ~40x/hour for days while the container looked
+    # perfectly healthy -- the node advertised a stale IP after an ISP
+    # re-provision, and every satellite dial-back timed out. The line is the
+    # node relaying the satellite's own error, so it names the MECHANISM
+    # (the network cannot dial the node back), not one cause: a refused
+    # connection or an unresolvable hostname produces the same match.
+    - pattern: "ping satellite.*failed to dial storage node"
+      means: >-
+        The Storj network cannot dial your node back at its advertised
+        ADDRESS, so satellites count it offline: new data stops arriving,
+        egress income stalls, and sustained offline time leads to suspension.
+        Check that ADDRESS matches your CURRENT public IP (use a DDNS
+        hostname, not a literal IP, so an ISP re-provision cannot strand the
+        node) and that port 28967 TCP+UDP is forwarded to this machine.
+      state: failing
   stop_timeout: 300
-  resources:
-    mem_limit: "2g"
-    oom_score_adj: -100
-    # Defensive weight for a service the network dials back into: a node that
-    # is merely slow to answer satellite dial-backs reads as offline, and
-    # sustained offline leads to suspension. Only arbitrates CPU against other
-    # containers under contention (free while idle); 4096, not 2048, because
-    # older runc maps shares under ~2600 BELOW the unset cgroup-v2 default.
-    # Mirrors the web catalog's storj entry.
-    cpu_shares: 4096
   setup: >
     Before first run, initialize the storage node config:
     docker run --rm -e SETUP="true"
@@ -106,7 +139,7 @@ cashout:
   method: redirect
   dashboard_url: "http://localhost:14002"
   min_amount: 4.0
-  currency: STORJ
+  currency: USD
   notes: "Payouts sent monthly in STORJ tokens to configured wallet address. Dashboard at port 14002."
 
 platforms: [docker, windows, linux]
@@ -114,3 +147,32 @@ platforms: [docker, windows, linux]
 collector:
   type: api
   notes: "Local dashboard at port 14002. API at /api/sno for node stats, earnings, bandwidth. No auth needed on local interface."
+
+# What this service does with the user's machine (CashPilot-66x).
+# Written to be read by someone deciding whether to trust it.
+disclosure:
+  sells: >-
+    Disk space and the bandwidth to serve it.
+  third_party_traffic: >-
+    No. You store encrypted, erasure-coded fragments of customer data. Other
+    people do not route their own traffic through your IP.
+  data_collected: >-
+    Node identity, your wallet address, the email address the node requires for
+    operator notifications, and your IP and port, which must be reachable for
+    the node to serve data.
+  isp_risk: >-
+    Mainly a data-cap question rather than a liability one: a node serves and
+    ingests customer data continuously, which is real sustained traffic on your
+    line. Unlike a proxy or a relay, though, it is not anonymised third-party
+    traffic attributed to you as its origin, so it does not attract the abuse
+    complaints those do.
+  account_rules: >-
+    Unlimited nodes, but nodes on the same /24 subnet share allocation, so
+    several on one connection earn less each.
+
+payout:
+  model: external
+  chain: ethereum
+  address_env: WALLET
+  address_source: env
+  notes: "Paid monthly in STORJ (ERC-20) to the address in WALLET."

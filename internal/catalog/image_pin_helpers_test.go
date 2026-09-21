@@ -5,18 +5,13 @@ import (
 	"strings"
 )
 
-// pinExemptStatuses are the service lifecycle states that release a service from the
-// immutable-digest-pin requirement: retired services whose upstream images may no
-// longer resolve and which are never deployed.
-var pinExemptStatuses = map[string]bool{
-	"dead":    true,
-	"dropped": true,
-	"broken":  true,
-}
-
 // isPinExempt reports whether a service's status exempts it from the digest-pin rule.
+// A retired service (dead/dropped/broken) is exempt: it is never deployed and its
+// upstream image may no longer resolve. The rule is IsRetired rather than a second
+// copy of the same three statuses, so a new lifecycle state cannot be hidden from the
+// UI while still being required to pin an image nobody will ever pull.
 func isPinExempt(status string) bool {
-	return pinExemptStatuses[strings.ToLower(strings.TrimSpace(status))]
+	return IsRetired(status)
 }
 
 // unpinnedImages returns a human-readable entry ("slug (status): \"image\"") for every
