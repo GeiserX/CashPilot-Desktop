@@ -15,7 +15,7 @@
 //     that depend on those are reported as unverified preconditions in the user's
 //     own words, never as a pass, and everything unknown is listed by name.
 //
-// Two things are deliberately NOT a straight copy of the web module, because on a
+// Three things are deliberately NOT a straight copy of the web module, because on a
 // desktop they would be wrong:
 //
 //   - The web module warns when the SAME service is already deployed on the same
@@ -29,6 +29,13 @@
 //     so the same conflict is reported as something to check, conditional on the
 //     machines sharing one connection. A warning we cannot stand behind is stated
 //     as a question, never as a verdict.
+//   - The web module swaps in the per-architecture image on deploy (arch.image_for),
+//     so an entry with image_by_arch really does run everywhere it declares. Desktop
+//     deploys docker.image and nothing else, so on a CPU that has an override the
+//     image the user actually gets is the x86-64 one. This module reports what is
+//     deployed today, not what the catalog could offer: counting the override as a
+//     pass would promise a build nobody will ever pull. When the deploy path learns
+//     to pick the override, this finding goes away with it.
 package preflight
 
 import (
@@ -168,7 +175,8 @@ func Assess(in Input) Report {
 	if strings.TrimSpace(svc.Docker.Image) != "" {
 		supported, known := supports(svc.Docker, in.DaemonArch)
 		archChecked = known
-		if known && !supported {
+		switch {
+		case known && !supported:
 			findings = append(findings, Finding{
 				Verdict: EarnsNothing,
 				Message: fmt.Sprintf("This machine is %s (%s) and %s publishes no build for it, only %s. "+
@@ -179,11 +187,25 @@ func Assess(in Input) Report {
 					Label(Family(in.DaemonArch)), strings.TrimSpace(in.DaemonArch), name,
 					describeBuilds(svc.Docker)),
 			})
+		// The provider does publish a build for this CPU, but as a separate image that
+		// Desktop's deploy does not reach for. Reporting the build as a pass would be a
+		// promise about an image the user will never get.
+		case known && overrideImage(svc.Docker, in.DaemonArch) != "":
+			findings = append(findings, Finding{
+				Verdict: EarnsNothing,
+				Message: fmt.Sprintf("This machine is %s (%s). %s does publish a build for it, but as a "+
+					"separate image, and CashPilot deploys the x86-64 one. The container will not "+
+					"start: it dies with \"exec format error\". The one exception is a runtime that "+
+					"runs foreign images under emulation (Docker Desktop with Rosetta, or "+
+					"binfmt/qemu), which CashPilot cannot check.",
+					Label(Family(in.DaemonArch)), strings.TrimSpace(in.DaemonArch), name),
+			})
 		}
 	}
 
-	peers := peersRunning(in.Fleet, svc.Slug)
-	findings = append(findings, fleetFindings(svc, peers)...)
+	peers, peerCount := peersRunning(in.Fleet, svc.Slug)
+	fleet, sharedLineLoss := fleetFindings(svc, peers, peerCount)
+	findings = append(findings, fleet...)
 
 	// Worst verdict first, keeping the order above within one verdict. The decisive
 	// sentence has to be the first one read.
@@ -218,7 +240,7 @@ func Assess(in Input) Report {
 		Slug:        svc.Slug,
 		Name:        name,
 		Verdict:     verdict,
-		Summary:     summary(verdict, svc),
+		Summary:     summary(verdict, svc, sharedLineLoss),
 		Findings:    findings,
 		NotChecked:  notChecked,
 		MachineArch: strings.TrimSpace(in.DaemonArch),
@@ -234,9 +256,13 @@ func Assess(in Input) Report {
 // here is conditional on that and carries the "check this" verdict. A warning
 // nobody can act on, fired at users who are fine, is how a safety feature gets
 // ignored.
-func fleetFindings(svc catalog.Service, peers []string) []Finding {
+// The second return value is true when the finding describes a LOSS rather than a
+// question: the deploy earns nothing if the machines turn out to share one
+// connection. The summary needs that, because "should work, as long as the points
+// below are true" contradicts a point that says the opposite.
+func fleetFindings(svc catalog.Service, peers []string, peerCount int) ([]Finding, bool) {
 	if len(peers) == 0 {
-		return nil
+		return nil, false
 	}
 	name := serviceName(svc)
 	where := strings.Join(peers, ", ")
@@ -252,7 +278,7 @@ func fleetFindings(svc catalog.Service, peers []string) []Finding {
 				"service allows on one internet connection, so if those machines share yours, "+
 				"CashPilot cannot tell you whether a second one earns or is wasted. Check the "+
 				"provider's terms first.", name, where),
-		}}
+		}}, false
 	case *limit == 1:
 		return []Finding{{
 			Verdict: CheckYourself,
@@ -260,7 +286,7 @@ func fleetFindings(svc catalog.Service, peers []string) []Finding {
 				"connection. If those machines share this connection, the provider sees one device "+
 				"either way: the second normally earns nothing, and some providers cancel the "+
 				"balance of accounts that do this.", name, where),
-		}}
+		}}, true
 	case *limit == 0:
 		return []Finding{{
 			Verdict: CheckYourself,
@@ -268,35 +294,45 @@ func fleetFindings(svc catalog.Service, peers []string) []Finding {
 				"connection, but if those machines share yours the instances still share one line, "+
 				"so expect the pair to earn roughly what one already does rather than double.",
 				name, where),
-		}}
+		}}, false
 	default:
-		instances := len(peers) + 1
+		// Count the MACHINES, not the names shown in the sentence. Two machines can
+		// answer to one name (the default is the hostname), and merging them here would
+		// under-warn in exactly the case this check exists for.
+		instances := peerCount + 1
 		if instances <= *limit {
-			return nil
+			return nil, false
 		}
 		return []Finding{{
 			Verdict: CheckYourself,
 			Message: fmt.Sprintf("%s already runs on %s. It allows %d devices per internet connection "+
 				"and this would be number %d, so if those machines share this connection the extra "+
 				"one earns nothing.", name, where, *limit, instances),
-		}}
+		}}, true
 	}
 }
 
 // peersRunning names the other machines already running this service, sorted and
-// without duplicates so the message reads the same on every render.
-func peersRunning(fleet []Device, slug string) []string {
+// without duplicates so the message reads the same on every render, and separately
+// counts how many machines that is.
+//
+// The two numbers differ, and both are needed. Names are deduplicated for DISPLAY:
+// a device name defaults to the hostname, and two Raspberry Pis called "raspberrypi"
+// in one house are ordinary, so naming it twice reads as a bug. The COUNT must not
+// be deduplicated: those are two real machines, and merging them would under-warn.
+func peersRunning(fleet []Device, slug string) (names []string, count int) {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
-		return nil
+		return nil, 0
 	}
 	seen := map[string]bool{}
-	names := make([]string, 0, len(fleet))
+	names = make([]string, 0, len(fleet))
 	for _, device := range fleet {
 		for _, running := range device.Services {
 			if strings.TrimSpace(running) != slug {
 				continue
 			}
+			count++
 			label := strings.TrimSpace(device.Name)
 			if label == "" {
 				label = "an unnamed machine"
@@ -309,10 +345,13 @@ func peersRunning(fleet []Device, slug string) []string {
 		}
 	}
 	sort.Strings(names)
-	return names
+	return names, count
 }
 
-func summary(verdict string, svc catalog.Service) string {
+// sharedLineLoss is true when a finding says this deploy earns nothing if the other
+// machines share this connection. It changes the summary, because a summary reading
+// "should work" over a point that describes a loss is the wrong sentence to stop at.
+func summary(verdict string, svc catalog.Service, sharedLineLoss bool) string {
 	name := serviceName(svc)
 	if svc.Requirements.ContainerProhibited {
 		// "will earn nothing" is the right severity but the wrong words: the outcome
@@ -326,6 +365,10 @@ func summary(verdict string, svc catalog.Service) string {
 	case Reduced:
 		return fmt.Sprintf("%s will probably earn less here than the catalog range suggests.", name)
 	case CheckYourself:
+		if sharedLineLoss {
+			return fmt.Sprintf("%s may earn nothing here: another of your machines already runs it, "+
+				"and this provider counts devices per internet connection, not per machine.", name)
+		}
 		return fmt.Sprintf("%s should work, as long as the points below are true of your setup.", name)
 	}
 	return fmt.Sprintf("Nothing stands out — %s should work normally here.", name)

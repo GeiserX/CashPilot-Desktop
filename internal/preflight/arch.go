@@ -206,3 +206,19 @@ func supports(docker catalog.DockerConfig, machine string) (supported bool, know
 	}
 	return false, true
 }
+
+// overrideImage is the separate image a catalog entry names for this machine's CPU
+// family, empty when it names none.
+//
+// An entry carries image_by_arch only when the container runtime cannot pick the
+// right build from the default image by itself — traffmonetizer/cli_v2 labels every
+// tag x86-64, including its two real ARM ones. So a non-empty answer here means the
+// default image is NOT the build that runs on this machine, and whoever deploys the
+// default image on that CPU gets a container that cannot start.
+func overrideImage(docker catalog.DockerConfig, machine string) string {
+	family := Family(machine)
+	if family == "" {
+		return ""
+	}
+	return strings.TrimSpace(docker.ImageByArch[family])
+}
