@@ -5,6 +5,7 @@ import {bgservice} from '../models';
 import {runtime} from '../models';
 import {store} from '../models';
 import {catalog} from '../models';
+import {preflight} from '../models';
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
 
@@ -39,6 +40,8 @@ export function InstallBackgroundHelper():Promise<void>;
 export function ListServices():Promise<Array<catalog.Service>>;
 
 export function ManagedRuntimePlan():Promise<runtime.ManagedRuntimePlan>;
+
+export function PreflightService(arg1:string):Promise<preflight.Report>;
 
 export function RefreshDeployments():Promise<Array<store.Deployment>>;
 
