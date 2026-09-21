@@ -267,6 +267,12 @@ func TestExportCarriesTheSameHardeningTheAppDeploysWith(t *testing.T) {
 		t.Errorf("stop_grace_period = %v; a node killed early loses in-flight work", block["stop_grace_period"])
 	}
 
+	// Docker refuses a container that asks for both a hostname and the host's own
+	// network, so a file carrying both never starts at all.
+	if _, ok := block["hostname"]; ok {
+		t.Errorf("hostname = %v was written alongside network_mode: host, which Docker refuses", block["hostname"])
+	}
+
 	volumes := mapOf(t, file, "volumes")
 	if _, ok := volumes["mysterium-data"]; !ok {
 		t.Errorf("top-level volumes = %v, want mysterium-data declared or Compose refuses to start", keysOf(volumes))

@@ -156,7 +156,7 @@ type emptyBlock struct{}
 type composeService struct {
 	Image         string            `yaml:"image"`
 	ContainerName string            `yaml:"container_name"`
-	Hostname      string            `yaml:"hostname"`
+	Hostname      string            `yaml:"hostname,omitempty"`
 	Restart       string            `yaml:"restart"`
 	Labels        map[string]string `yaml:"labels"`
 	Logging       *loggingBlock     `yaml:"logging"`
@@ -214,7 +214,7 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 	block := &composeService{
 		Image:         image,
 		ContainerName: containerPrefix + svc.Slug,
-		Hostname:      containerPrefix + svc.Slug,
+		Hostname:      hostnameFor(svc),
 		Restart:       "unless-stopped",
 		Labels: map[string]string{
 			labelManaged:    "true",
@@ -335,6 +335,18 @@ func interpolate(value string, env map[string]string) string {
 // otherwise change (or vanish) when the exported file runs.
 func escapeValue(value string) string {
 	return strings.ReplaceAll(value, "$", "$$")
+}
+
+// hostnameFor names the container on the network, except when it shares the host's
+// network. Docker refuses to create a container with both ("conflicting options:
+// hostname and the network mode"), so writing one for Mysterium — the entry that
+// uses host networking — would produce a file that fails at `docker compose up`
+// rather than one that runs.
+func hostnameFor(svc catalog.Service) string {
+	if strings.EqualFold(strings.TrimSpace(svc.Docker.NetworkMode), "host") {
+		return ""
+	}
+	return containerPrefix + svc.Slug
 }
 
 func ports(declared []string) []quoted {
