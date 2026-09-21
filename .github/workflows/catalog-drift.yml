@@ -42,8 +42,12 @@ jobs:
           go-version: '1.26.8'
           cache: true
 
+      # The ref goes through the environment rather than straight into the run
+      # script, so a dispatch input cannot become shell.
       - name: Compare the vendored catalog with the web catalog
-        run: go run ./cmd/catalogsync -check -ref "${{ inputs.ref || 'main' }}"
+        env:
+          CATALOG_REF: ${{ inputs.ref || 'main' }}
+        run: go run ./cmd/catalogsync -check -ref "$CATALOG_REF"
 
       - name: Explain a failure
         if: failure()
