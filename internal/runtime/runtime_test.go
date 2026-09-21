@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"reflect"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1016,7 +1017,7 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 	}
 	defer func() {
 		// Best effort: the happy path already removed it.
-		_ = p.Remove(context.Background(), slug)
+		_ = p.Remove(context.Background(), slug, RemoveOptions{DeleteData: true, AllowCritical: true})
 	}()
 
 	var progress []string
@@ -1030,6 +1031,12 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 	if len(progress) == 0 {
 		t.Fatal("Deploy reported no progress lines, so the image-pull stream was not decoded")
 	}
+
+	// The hardening has to survive the round trip to the daemon. buildHostConfig can
+	// be unit-tested, but only the daemon can say it ACCEPTED the options and applied
+	// them — a runtime that quietly dropped cap_drop would pass every unit test and
+	// still run these third-party images with the full default capability set.
+	assertHardened(t, ctx, containerName(slug))
 
 	// List has to find it through the managed-label filter.
 	var found *ContainerInfo
@@ -1067,29 +1074,115 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 		t.Fatalf("Restart: %v", err)
 	}
 
-	// managedContainerVolumes reads the inspect response, and Remove deletes the
-	// named volume it reports.
-	cli, err = dockerClient()
+	// PlanRemoval reads the inspect response, and Remove deletes the named volume it
+	// reports — but only when asked to.
+	plan, err := p.PlanRemoval(ctx, slug, map[string]string{})
 	if err != nil {
-		t.Fatalf("dockerClient: %v", err)
+		t.Fatalf("PlanRemoval: %v", err)
 	}
-	volumes, err := managedContainerVolumes(ctx, cli, containerName(slug))
-	cli.Close()
-	if err != nil {
-		t.Fatalf("managedContainerVolumes: %v", err)
+	if len(plan.Volumes) != 1 || plan.Volumes[0].Source != volume {
+		t.Fatalf("expected the named volume %q in the plan, got %+v", volume, plan.Volumes)
 	}
-	if len(volumes) != 1 || volumes[0] != volume {
-		t.Fatalf("expected the named volume %q, got %v", volume, volumes)
+	if plan.Volumes[0].Critical {
+		t.Fatal("a volume the catalog does not mark critical was reported as critical")
 	}
 
-	if err := p.Remove(ctx, slug); err != nil {
-		t.Fatalf("Remove: %v", err)
+	// A default Remove keeps the data: the volume has to survive it, because that is
+	// the whole point — a user tidying up a service must not lose a node identity.
+	if err := p.Remove(ctx, slug, RemoveOptions{Critical: map[string]string{}}); err != nil {
+		t.Fatalf("Remove (keep data): %v", err)
+	}
+	if !volumeExists(t, ctx, volume) {
+		t.Fatal("Remove deleted the named volume even though DeleteData was false")
+	}
+
+	// Redeploy onto the surviving volume, then prove the two guards on deleting it.
+	if _, err := p.Deploy(ctx, spec, nil); err != nil {
+		t.Fatalf("Deploy (second): %v", err)
+	}
+
+	// Marked critical, no explicit yes: refused, and nothing removed.
+	critical := map[string]string{"/data": "the probe's irreplaceable state"}
+	err = p.Remove(ctx, slug, RemoveOptions{DeleteData: true, Critical: critical})
+	if err == nil {
+		t.Fatal("Remove deleted a volume the catalog marks unrecoverable without an explicit yes")
+	}
+	if !strings.Contains(err.Error(), volume) {
+		t.Fatalf("the refusal should name the volume that would be lost, got %q", err)
+	}
+	if !volumeExists(t, ctx, volume) {
+		t.Fatal("the refused Remove deleted the volume anyway")
+	}
+	var stillThere bool
+	for _, c := range mustList(t, p, ctx) {
+		if c.Slug == slug {
+			stillThere = true
+		}
+	}
+	if !stillThere {
+		t.Fatal("the refused Remove removed the container, so the refusal came too late")
+	}
+
+	// With the explicit yes, the container and the volume both go.
+	if err := p.Remove(ctx, slug, RemoveOptions{DeleteData: true, Critical: critical, AllowCritical: true}); err != nil {
+		t.Fatalf("Remove (delete data): %v", err)
+	}
+	if volumeExists(t, ctx, volume) {
+		t.Fatal("the named volume survived a Remove that was explicitly told to delete it")
 	}
 	for _, c := range mustList(t, p, ctx) {
 		if c.Slug == slug {
 			t.Fatal("the container is still listed after Remove")
 		}
 	}
+}
+
+// assertHardened reads the container back off the live daemon and checks the policy
+// actually landed: all capabilities dropped, no-new-privileges set, a PID ceiling, and
+// the catalog's stop timeout recorded on the container so Stop can find it later.
+func assertHardened(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	result, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("ContainerInspect: %v", err)
+	}
+	hostConfig := result.Container.HostConfig
+	if hostConfig == nil {
+		t.Fatal("the daemon returned no HostConfig")
+	}
+	if !slices.Contains(hostConfig.CapDrop, "ALL") {
+		t.Fatalf("the live container did not drop its capabilities: CapDrop=%v", hostConfig.CapDrop)
+	}
+	if !slices.Contains(hostConfig.SecurityOpt, "no-new-privileges:true") {
+		t.Fatalf("the live container has SecurityOpt=%v, want no-new-privileges", hostConfig.SecurityOpt)
+	}
+	if hostConfig.PidsLimit == nil || *hostConfig.PidsLimit != defaultPidsLimit {
+		t.Fatalf("the live container has PidsLimit=%v, want %d", hostConfig.PidsLimit, defaultPidsLimit)
+	}
+	if hostConfig.Privileged {
+		t.Fatal("the live container is privileged")
+	}
+	cfg := result.Container.Config
+	if cfg == nil || cfg.StopTimeout == nil || *cfg.StopTimeout != defaultStopTimeout {
+		t.Fatalf("the live container did not record its stop timeout: %v", cfg)
+	}
+}
+
+// volumeExists asks the daemon whether a named volume is still there.
+func volumeExists(t *testing.T, ctx context.Context, name string) bool {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	_, err = cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	return err == nil
 }
 
 // logMarker is the line the lifecycle probe echoes, so the Logs assertion cannot

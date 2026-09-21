@@ -70,6 +70,10 @@ export function ManagedRuntimePlan() {
   return window['go']['main']['App']['ManagedRuntimePlan']();
 }
 
+export function PlanServiceRemoval(arg1) {
+  return window['go']['main']['App']['PlanServiceRemoval'](arg1);
+}
+
 export function RefreshDeployments() {
   return window['go']['main']['App']['RefreshDeployments']();
 }
@@ -82,8 +86,8 @@ export function RemoveFleetDevice(arg1) {
   return window['go']['main']['App']['RemoveFleetDevice'](arg1);
 }
 
-export function RemoveService(arg1) {
-  return window['go']['main']['App']['RemoveService'](arg1);
+export function RemoveService(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RemoveService'](arg1, arg2, arg3);
 }
 
 export function RestartService(arg1) {

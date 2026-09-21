@@ -37,6 +37,14 @@ type fakeProvider struct {
 	stopErr      error
 	restartErr   error
 	removeErr    error
+	// removeOpts records the RemoveOptions each Remove was called with, so a test can
+	// prove the manager passed the catalog's critical list and the caller's choice
+	// rather than a default.
+	removeOpts []runtime.RemoveOptions
+	// planCritical records the critical map each PlanRemoval was called with, so a
+	// test can tell "the catalog said none" (empty) from "no catalog entry" (nil).
+	planCritical []map[string]string
+	planErr      error
 	logsResult   string
 	logsErr      error
 }
@@ -54,7 +62,15 @@ func (f *fakeProvider) Deploy(_ context.Context, _ runtime.DeploySpec, progress 
 func (f *fakeProvider) Start(context.Context, string) error   { return f.startErr }
 func (f *fakeProvider) Stop(context.Context, string) error    { return f.stopErr }
 func (f *fakeProvider) Restart(context.Context, string) error { return f.restartErr }
-func (f *fakeProvider) Remove(context.Context, string) error  { return f.removeErr }
+func (f *fakeProvider) Remove(_ context.Context, _ string, opts runtime.RemoveOptions) error {
+	f.removeOpts = append(f.removeOpts, opts)
+	return f.removeErr
+}
+
+func (f *fakeProvider) PlanRemoval(_ context.Context, slug string, critical map[string]string) (runtime.RemovalPlan, error) {
+	f.planCritical = append(f.planCritical, critical)
+	return runtime.RemovalPlan{Slug: slug, CatalogKnown: critical != nil}, f.planErr
+}
 
 func (f *fakeProvider) Logs(context.Context, string, int) (string, error) {
 	return f.logsResult, f.logsErr
@@ -414,7 +430,7 @@ func TestLifecycleOperationsUpdateStore(t *testing.T) {
 		t.Fatalf("expected delegated logs, got %q", logs)
 	}
 
-	if err := m.Remove(ctx, "example"); err != nil {
+	if err := m.Remove(ctx, "example", false, false); err != nil {
 		t.Fatalf("Remove error: %v", err)
 	}
 	if _, ok, _ := st.GetDeployment("example"); ok {
@@ -441,7 +457,7 @@ func TestLifecycleOperationsPropagateErrors(t *testing.T) {
 	if err := m.Restart(ctx, "s"); err == nil {
 		t.Fatal("expected a Restart error")
 	}
-	if err := m.Remove(ctx, "s"); err == nil {
+	if err := m.Remove(ctx, "s", false, false); err == nil {
 		t.Fatal("expected a Remove error")
 	}
 }

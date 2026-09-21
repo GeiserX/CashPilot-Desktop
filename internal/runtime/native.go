@@ -359,9 +359,19 @@ func (p *NativeProcessProvider) Restart(ctx context.Context, slug string) error 
 	return p.Start(ctx, slug)
 }
 
+// PlanRemoval reports what removing a native service would delete. A native service
+// keeps only its downloaded binary and its logs in the per-slug directory, both of
+// which are re-created on the next deploy, so there is nothing here that a user could
+// lose: the plan is empty and Remove has nothing to ask about.
+func (p *NativeProcessProvider) PlanRemoval(ctx context.Context, slug string, critical map[string]string) (RemovalPlan, error) {
+	return RemovalPlan{Slug: slug, Name: slug, CatalogKnown: critical != nil}, nil
+}
+
 // Remove stops the service, deletes its per-slug directory (binary + logs), and drops
-// its registry entry — the native analogue of removing a container and its volumes.
-func (p *NativeProcessProvider) Remove(ctx context.Context, slug string) error {
+// its registry entry — the native analogue of removing a container. opts is accepted
+// for the Provider contract and not read: the directory holds only the binary and the
+// logs, which the next deploy re-creates.
+func (p *NativeProcessProvider) Remove(ctx context.Context, slug string, opts RemoveOptions) error {
 	p.stopInternal(slug, true)
 	if err := os.RemoveAll(filepath.Join(p.baseDir, slug)); err != nil {
 		return err

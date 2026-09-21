@@ -302,7 +302,7 @@ func TestNativeDeployRawBinary(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "rawsvc", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "rawsvc") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "rawsvc", RemoveOptions{}) })
 
 	if !waitFor(t, 5*time.Second, func() bool {
 		ci, ok := listEntry(t, p, "rawsvc")
@@ -323,7 +323,7 @@ func TestNativeDeployZipArchive(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "zipsvc", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "zipsvc") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "zipsvc", RemoveOptions{}) })
 
 	if !waitFor(t, 5*time.Second, func() bool {
 		ci, ok := listEntry(t, p, "zipsvc")
@@ -397,7 +397,7 @@ func TestNativeDeploySelectsBinaryByOSArch(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "sel", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy with matching arch: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "sel") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "sel", RemoveOptions{}) })
 	if !waitFor(t, 5*time.Second, func() bool {
 		ci, ok := listEntry(t, p, "sel")
 		return ok && ci.Status == "running"
@@ -428,7 +428,7 @@ func TestNativeRegistryPersistsAcrossInstances(t *testing.T) {
 	if _, err := a.Deploy(context.Background(), DeploySpec{Slug: "persist", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = a.Remove(context.Background(), "persist") })
+	t.Cleanup(func() { _ = a.Remove(context.Background(), "persist", RemoveOptions{}) })
 	if !waitFor(t, 5*time.Second, func() bool {
 		ci, ok := listEntry(t, a, "persist")
 		return ok && ci.Status == "running"
@@ -461,7 +461,7 @@ func TestNativeSupervisorRespawnsKilledStub(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "resp", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "resp") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "resp", RemoveOptions{}) })
 
 	var pid1 int
 	if !waitFor(t, 5*time.Second, func() bool {
@@ -947,7 +947,7 @@ func TestNativeStopUnknownAndAlreadyStopped(t *testing.T) {
 // TestNativeRemoveUnknownIsNoError proves Remove of an unknown slug is a clean no-op.
 func TestNativeRemoveUnknownIsNoError(t *testing.T) {
 	p := newTestNativeProvider(t)
-	if err := p.Remove(context.Background(), "ghost"); err != nil {
+	if err := p.Remove(context.Background(), "ghost", RemoveOptions{}); err != nil {
 		t.Fatalf("Remove unknown: %v", err)
 	}
 }
@@ -1006,7 +1006,7 @@ func TestNativeSupervisorStopsAfterMaxRestarts(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "flap", Service: svc, Env: env}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "flap") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "flap", RemoveOptions{}) })
 
 	p.mu.Lock()
 	mp := p.procs["flap"]
@@ -1065,7 +1065,7 @@ func TestNativeSupervisorRecordsCrashAndRestartEvents(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "flap", Service: svc, Env: env}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "flap") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "flap", RemoveOptions{}) })
 
 	p.mu.Lock()
 	mp := p.procs["flap"]
@@ -1135,7 +1135,7 @@ func TestNativeStatsReportsLiveCPU(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "spin", Service: svc, Env: env}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "spin") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "spin", RemoveOptions{}) })
 
 	var cpu float64
 	if !waitFor(t, 8*time.Second, func() bool {
@@ -1285,7 +1285,7 @@ func TestNativeStartNoopWhenManagedChildAlive(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "noop", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "noop") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "noop", RemoveOptions{}) })
 	var pid1 string
 	if !waitFor(t, 5*time.Second, func() bool {
 		ci, ok := listEntry(t, p, "noop")
@@ -1316,7 +1316,7 @@ func TestNativeRestartStopsThenStarts(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "rst", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
-	t.Cleanup(func() { _ = p.Remove(context.Background(), "rst") })
+	t.Cleanup(func() { _ = p.Remove(context.Background(), "rst", RemoveOptions{}) })
 	if !waitFor(t, 5*time.Second, func() bool {
 		ci, ok := listEntry(t, p, "rst")
 		return ok && ci.Status == "running"
@@ -1361,7 +1361,7 @@ func TestNativeRemoveForceKillsOrphan(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Remove(context.Background(), "orphrm"); err != nil {
+	if err := p.Remove(context.Background(), "orphrm", RemoveOptions{}); err != nil {
 		t.Fatalf("Remove orphan: %v", err)
 	}
 	if !waitFor(t, 5*time.Second, func() bool { _, _, alive := p.statFn(pid); return !alive }) {

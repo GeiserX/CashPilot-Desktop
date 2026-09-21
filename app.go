@@ -1047,11 +1047,25 @@ func (a *App) RestartService(slug string) error {
 	return nil
 }
 
-func (a *App) RemoveService(slug string) error {
+// PlanServiceRemoval reports what removing a service would delete, so the app can ask
+// a question that names the data rather than one that hides it behind "and its
+// volumes".
+func (a *App) PlanServiceRemoval(slug string) (runtime.RemovalPlan, error) {
+	if err := a.ready(); err != nil {
+		return runtime.RemovalPlan{}, err
+	}
+	return a.services.PlanRemoval(a.ctx, slug)
+}
+
+// RemoveService removes the service's container. deleteData decides whether the data
+// it stored is destroyed with it, and allowCritical is the separate yes required for
+// data that cannot be recovered — a node identity, a keystore. Both default to false
+// at the call site, so the ordinary remove never destroys anything irreversible.
+func (a *App) RemoveService(slug string, deleteData, allowCritical bool) error {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	if err := a.services.Remove(a.ctx, slug); err != nil {
+	if err := a.services.Remove(a.ctx, slug, deleteData, allowCritical); err != nil {
 		a.emitError("remove", err)
 		return err
 	}

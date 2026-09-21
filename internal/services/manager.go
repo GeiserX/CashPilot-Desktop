@@ -214,15 +214,45 @@ func (m *Manager) Restart(ctx context.Context, slug string) error {
 	return nil
 }
 
-func (m *Manager) Remove(ctx context.Context, slug string) error {
-	if err := m.providerForSlug(slug).Remove(ctx, slug); err != nil {
+// criticalTargets is what the catalog says about this service's unrecoverable data.
+// nil means the service is no longer in the catalog, so nothing can be said — which
+// the runtime treats as "assume every volume matters" rather than as permission.
+func (m *Manager) criticalTargets(slug string) map[string]string {
+	svc, ok := m.catalog.Get(slug)
+	if !ok {
+		return nil
+	}
+	return runtime.CriticalTargets(svc)
+}
+
+// PlanRemoval reports what removing a service would delete, so the confirmation the
+// user is shown can name the data instead of saying "and its volumes".
+func (m *Manager) PlanRemoval(ctx context.Context, slug string) (runtime.RemovalPlan, error) {
+	return m.providerForSlug(slug).PlanRemoval(ctx, slug, m.criticalTargets(slug))
+}
+
+// Remove removes the service. deleteData decides whether the data it stored goes with
+// it; allowCritical is the separate yes needed for the volumes whose loss cannot be
+// undone. Both default to false, so the ordinary "remove this service" leaves every
+// node identity and keystore on disk for a later redeploy to pick up.
+func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCritical bool) error {
+	opts := runtime.RemoveOptions{
+		DeleteData:    deleteData,
+		AllowCritical: allowCritical,
+		Critical:      m.criticalTargets(slug),
+	}
+	if err := m.providerForSlug(slug).Remove(ctx, slug, opts); err != nil {
 		m.store.RecordEvent(slug, "remove_error", err.Error())
 		return err
 	}
 	if err := m.store.DeleteDeployment(slug); err != nil {
 		return err
 	}
-	m.store.RecordEvent(slug, "removed", "")
+	detail := "container removed, stored data kept"
+	if deleteData {
+		detail = "container and stored data removed"
+	}
+	m.store.RecordEvent(slug, "removed", detail)
 	return nil
 }
 
