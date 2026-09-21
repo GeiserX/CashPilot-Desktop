@@ -218,22 +218,40 @@ func TestAValueTheFileCarriesCanBeChangedWithoutEditingTheFile(t *testing.T) {
 	}
 }
 
-// A value nobody set is not announced as changeable, or the header lists variables
-// that are not in the file.
+// A value nobody set is not announced as changeable, and the machine-name warning
+// only appears where a value really carries this machine's name. A header that
+// warns about every export is a header people stop reading.
 func TestTheHeaderOnlyListsValuesTheFileActuallyCarries(t *testing.T) {
-	svc := catalog.Service{
+	bare := catalog.Service{
 		Name: "Bare", Slug: "bare", Status: "active",
 		Docker: catalog.DockerConfig{
 			Image: "example/bare:1.0",
 			Env:   []catalog.EnvVar{{Key: "TOKEN", Required: true, Secret: true}},
 		},
 	}
-	text := generate(t, fakeCatalog{"bare": svc}, []string{"bare"}, Options{Hostname: "mac-mini"})
+	text := generate(t, fakeCatalog{"bare": bare}, []string{"bare"}, Options{Hostname: "mac-mini"})
 	if strings.Contains(text, "already have a value") {
 		t.Errorf("the header offers values to change when the file carries none:\n%s", text)
 	}
 	if strings.Contains(text, "another machine") {
 		t.Errorf("the header warns about a device name no entry declares:\n%s", text)
+	}
+
+	// A default that is not a machine name — EarnApp's terms opt-in is the real one
+	// — is listed as changeable without the warning attached to it.
+	optIn := catalog.Service{
+		Name: "OptIn", Slug: "optin", Status: "active",
+		Docker: catalog.DockerConfig{
+			Image: "example/optin:1.0",
+			Env:   []catalog.EnvVar{{Key: "EARNAPP_TERM", Default: "yes"}},
+		},
+	}
+	text = generate(t, fakeCatalog{"optin": optIn}, []string{"optin"}, Options{Hostname: "mac-mini"})
+	if !strings.Contains(text, "EARNAPP_TERM=yes") {
+		t.Errorf("the header does not list the value the file carries:\n%s", text)
+	}
+	if strings.Contains(text, "another machine") {
+		t.Errorf("the header warns about this machine's name for a value that does not contain it:\n%s", text)
 	}
 }
 
