@@ -65,7 +65,7 @@ Download the latest release for your platform:
 
 > Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
 
-CashPilot bundles a catalog of 50 passive-income services across multiple categories. A representative selection is shown below.
+CashPilot bundles a catalog of 39 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
 
 ### Before you start: how bandwidth-sharing works
 
@@ -119,6 +119,7 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 
 | Service | Residential IP | VPS IP | Devices / Acct | Devices / IP | Payout | Status |
 |---------|:-:|:-:|:-:|:-:|--------|--------|
+| [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3) | ✅ | ❌ | Unlimited | Undocumented | PayPal | Active |
 | [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
 | [Dawn Internet](https://dawninternet.com/?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
 | [Deeper Network](https://deeper.network) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |
