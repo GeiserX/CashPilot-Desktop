@@ -50,6 +50,11 @@ export interface AppState {
   // This machine's hostname, so a {hostname}-defaulted deploy field renders the real
   // value the deploy path will substitute rather than the literal "{hostname}".
   hostname: string;
+  // Per slug, the credential inputs the earnings collector needs that the container's
+  // docker.env does not already ask for. The backend owns this list (internal/collectors)
+  // so a web-catalog rename of a service's env keys cannot leave the wizard with no
+  // field for the credentials its collector reads.
+  collectorFields: Record<string, CollectorField[]> | null;
 }
 
 // FleetView mirrors the Go FleetView: what the paired CashPilot server reports
@@ -341,6 +346,16 @@ export interface DockerConfig {
   stopTimeout: number;
   setup: string;
   notes: string;
+}
+
+// CollectorField is one credential input the earnings collector needs that the
+// container's docker.env does not already ask for. Mirrors collectors.Field.
+export interface CollectorField {
+  key: string;
+  label: string;
+  description: string;
+  secret?: boolean;
+  required?: boolean;
 }
 
 export interface EnvVar {
