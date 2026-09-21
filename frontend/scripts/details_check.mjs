@@ -76,6 +76,30 @@ check(
   button,
 );
 
+// Codes sit in two different places across the catalog — a path segment
+// (/ref/CODE) and a query value (?aff=CODE) — and a URL that is "tidied up" loses
+// only the second kind. Both shapes are checked, or a stripped query string looks
+// fine against a path-segment fixture.
+const traffmonetizer = {
+  ...honeygain,
+  slug: "traffmonetizer",
+  name: "Traffmonetizer",
+  website: "https://traffmonetizer.com",
+  referral: {signupUrl: "https://traffmonetizer.com/?aff=2111758", code: "2111758"},
+};
+
+check(
+  "THE RULE, for a code that lives in the query string: the URL reaches the button whole",
+  signupButton(traffmonetizer).includes(`data-url="${traffmonetizer.referral.signupUrl}"`),
+  signupButton(traffmonetizer),
+);
+
+check(
+  "a code in the query string is not lost to a canonicalised link",
+  signupButton(traffmonetizer).includes("aff=2111758"),
+  signupButton(traffmonetizer),
+);
+
 check(
   "a service with no referral link falls back to the provider's own site",
   signupButton({...honeygain, referral: {signupUrl: "", code: ""}}).includes(`data-url="${honeygain.website}"`),
