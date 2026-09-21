@@ -110,6 +110,24 @@ func (m *Manager) providerForSlug(slug string) runtime.Provider {
 	return provider
 }
 
+// refuseRetired rejects a service the catalog has retired (dead, dropped or broken).
+//
+// Retired is the same rule that hides a service from the UI, and the reason is the
+// same one: the programme is gone, or the client no longer works, so deploying it
+// burns a container and a signup on something that cannot pay. The card is hidden, so
+// the only way here is a stale slug — a saved wizard selection, a direct binding call
+// — and until now nothing on the deploy path looked at status at all.
+//
+// It is also what makes a retired entry's floating image harmless: the catalog stops
+// pinning a digest for an image nobody will ever pull, and this is the check that
+// keeps "nobody will ever pull it" true.
+func refuseRetired(svc catalog.Service) error {
+	if !catalog.IsRetired(svc.Status) {
+		return nil
+	}
+	return fmt.Errorf("%s is retired (status %q) and can no longer be deployed", svc.Name, svc.Status)
+}
+
 func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[string]string) (store.Deployment, error) {
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
@@ -117,6 +135,9 @@ func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[strin
 	}
 	if svc.ManualOnly {
 		return store.Deployment{}, fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+	}
+	if err := refuseRetired(svc); err != nil {
+		return store.Deployment{}, err
 	}
 	if err := validateRequired(svc, credentials); err != nil {
 		return store.Deployment{}, err
@@ -345,6 +366,9 @@ func (m *Manager) ValidateCredentials(slug string, credentials map[string]string
 	}
 	if svc.ManualOnly {
 		return fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+	}
+	if err := refuseRetired(svc); err != nil {
+		return err
 	}
 	return validateRequired(svc, credentials)
 }
