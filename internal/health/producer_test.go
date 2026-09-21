@@ -388,3 +388,38 @@ func TestFoldedCatalogTextFitsOneLine(t *testing.T) {
 		t.Errorf("folding must not lose words, got %q", reasonText(got))
 	}
 }
+
+// TestTheReasonsAreWrittenForTheUserNotTheCatalog. Almost every running row shows one
+// of these, because almost no service has a known failure to look for. "This service
+// declares no log signals" described the catalog file: `declares` is what a YAML entry
+// does, `signals` is the name of a field in it, and neither is anything the person
+// reading the tooltip can see or act on.
+func TestTheReasonsAreWrittenForTheUserNotTheCatalog(t *testing.T) {
+	running := func(in Input) Report {
+		in.Slug, in.ContainerState = "demo", "running"
+		return Assess(in)
+	}
+	shown := []Report{
+		running(Input{}),             // no known failure to look for
+		running(Input{Native: true}), // not in a container
+		running(Input{Signals: []catalog.HealthSignal{{Pattern: "x"}}}), // logs unreadable
+		running(Input{Signals: []catalog.HealthSignal{{Pattern: "x"}}, Logs: "quiet\n", LogsRead: true}),
+		Assess(Input{Slug: "demo", ContainerState: "exited"}),
+		Assess(Input{Slug: "demo"}),
+	}
+	// Words that only mean something to someone reading the service catalog.
+	jargon := []string{"signal", "declare", "catalog", "regex", "pattern", "slug", "runtime"}
+
+	for _, report := range shown {
+		text := strings.ToLower(reasonText(report))
+		if strings.TrimSpace(text) == "" {
+			t.Errorf("%q leaves the user nothing to read", report.State)
+			continue
+		}
+		for _, word := range jargon {
+			if strings.Contains(text, word) {
+				t.Errorf("%q is the catalog's vocabulary, not the user's: %s", word, reasonText(report))
+			}
+		}
+	}
+}

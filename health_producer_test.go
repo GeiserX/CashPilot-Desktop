@@ -102,13 +102,23 @@ func TestAStoppedServiceIsNotAccusedOfNotEarning(t *testing.T) {
 // act on.
 func TestANativeServiceIsNotJudgedByContainerSignals(t *testing.T) {
 	app := producerApp(t)
+	running := func(kind string) health.Report {
+		return app.producerStates([]store.Deployment{{Slug: "mysterium", Status: "running", Runtime: kind}})["mysterium"]
+	}
 
-	native := app.producerStates([]store.Deployment{{Slug: "mysterium", Status: "running", Runtime: "native"}})["mysterium"]
+	native, inContainer := running("native"), running("docker")
+
 	if native.State != health.StateNotChecked {
 		t.Fatalf("a native process cannot be judged by container signals; got %s", verdictText(native))
 	}
-	if strings.TrimSpace(strings.Join(native.Reasons, "")) == "" {
-		t.Error("and it must say why it has nothing to report")
+	// The verdict must reach the user as the reason it really is. Which runtime is
+	// running this service is the one thing this wiring has to carry across, so the
+	// two answers cannot be allowed to read the same.
+	if verdictText(native) == verdictText(inContainer) {
+		t.Errorf("the runtime must reach the verdict; a native process and a container both said %s", verdictText(native))
+	}
+	if strings.Contains(strings.Join(native.Reasons, " "), "logs") {
+		t.Errorf("and it must not claim to have looked at logs it never read: %s", verdictText(native))
 	}
 }
 
