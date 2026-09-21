@@ -3,7 +3,6 @@ package catalog
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -182,14 +181,18 @@ func TestReferralCodesParse(t *testing.T) {
 		t.Error("storj declares no referral.program; it must stay nil (unchecked), not become false")
 	}
 
-	// Every code that is declared must still be present in the URL that carries it.
-	// This is the failure the field exists to catch.
+	// Every code that is declared must still be ANCHORED in the URL that carries it:
+	// a query value, a bare query key or a whole path segment, the placements
+	// services/_schema.yml documents. A substring test would pass on a coincidence
+	// ("grass" inside app.grass.io) and so would report a link as attributed after a
+	// migration had dropped the code — the exact failure this field exists to catch.
 	for _, svc := range cat.List() {
 		if svc.Referral.Code == "" {
 			continue
 		}
-		if !strings.Contains(svc.Referral.SignupURL, svc.Referral.Code) {
-			t.Errorf("%s: referral.code %q is not anchored in signup_url %q", svc.Slug, svc.Referral.Code, svc.Referral.SignupURL)
+		if !CodeAttributesURL(svc.Referral.Code, svc.Referral.SignupURL) {
+			t.Errorf("%s: referral.code %q is not anchored in signup_url %q; a provider reading that URL sees no attribution",
+				svc.Slug, svc.Referral.Code, svc.Referral.SignupURL)
 		}
 	}
 }

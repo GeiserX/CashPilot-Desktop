@@ -57,7 +57,7 @@ func TestReadmeReferralLinksCarryTheirCode(t *testing.T) {
 	for _, svc := range repoCatalog(t).ListVisible() {
 		code := strings.TrimSpace(svc.Referral.Code)
 		url := strings.TrimSpace(svc.Referral.SignupURL)
-		if code == "" || url == "" || !strings.Contains(url, code) {
+		if code == "" || url == "" || !catalog.CodeAttributesURL(code, url) {
 			continue
 		}
 		for _, link := range regexp.MustCompile(`https?://[^\s)|]+`).FindAllString(readme, -1) {

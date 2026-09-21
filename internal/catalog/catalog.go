@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,6 +57,47 @@ type Referral struct {
 	// checked. Collapsing nil into false would turn "unknown" into "nothing to do".
 	Program *bool         `json:"program" yaml:"program"`
 	Bonus   ReferralBonus `json:"bonus" yaml:"bonus"`
+}
+
+// CodeAttributesURL reports whether a referral code is ANCHORED in a signup URL,
+// which is a different question from whether the string appears in it. The code
+// "grass" is a substring of "https://app.grass.io/register": that is a hostname
+// coincidence, not attribution, and a check that accepts it would report a link as
+// carrying a code that the provider will never read.
+//
+// A code counts only where a provider actually reads one, which is the placement the
+// catalog schema documents: a query-parameter value (?ref=CODE), a bare query key
+// (?CODE, spide's shape), or a whole path segment (/i/CODE, as earnapp, honeygain
+// and uprock use). Anything else is a URL that has quietly lost its attribution.
+//
+// This is the Go half of scripts/referral_check.py in the web repository; the two
+// have to agree, because a domain migration that drops the code is caught by
+// whichever of them runs first.
+func CodeAttributesURL(code, signupURL string) bool {
+	code = strings.TrimSpace(code)
+	signupURL = strings.TrimSpace(signupURL)
+	if code == "" || signupURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(signupURL)
+	if err != nil {
+		return false
+	}
+	for key, values := range parsed.Query() {
+		for _, value := range values {
+			if code == value || (value == "" && code == key) {
+				return true
+			}
+		}
+	}
+	// The escaped path, so a segment is compared as it is written in the URL rather
+	// than as a decoded form nobody sends.
+	for _, segment := range strings.Split(parsed.EscapedPath(), "/") {
+		if segment == code {
+			return true
+		}
+	}
+	return false
 }
 
 // ReferralBonus is what each side gets for a referral, shown on the service detail
