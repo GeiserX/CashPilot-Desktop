@@ -6,7 +6,7 @@ require (
 	github.com/moby/moby/api v1.56.0
 	github.com/moby/moby/client v0.6.0
 	github.com/shirou/gopsutil/v4 v4.26.7
-	github.com/wailsapp/wails/v2 v2.14.0
+	github.com/wailsapp/wails/v2 v2.16.0
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
