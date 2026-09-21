@@ -414,6 +414,36 @@ func splitImage(ref string) (repo, tag, digest string) {
 	return repo, tag, digest
 }
 
+// HasDigestPin reports whether an image reference pins an immutable digest.
+//
+// It is deliberately stricter than "contains @sha256:". A reference like
+// "repo@sha256:aaaa" contains that substring, is not a digest anything can resolve,
+// and would satisfy a substring check while pinning nothing at all — the pin rule
+// would report a service as pinned that is still floating. A sha256 digest is
+// exactly 64 lowercase hex characters, and the registry API rejects anything else,
+// so a reference that fails this check would fail at pull time too.
+//
+// Lowercase is required rather than folded: the OCI digest grammar defines the hex
+// as lowercase, and an uppercase digest is a typed-by-hand pin that will not match
+// the registry's own.
+//
+// One rule, one place: the catalog's pin gate and the catalog-overlay pin checks
+// both call this, so tightening it cannot tighten only one of them.
+func HasDigestPin(image string) bool {
+	_, _, digest := splitImage(strings.TrimSpace(image))
+	const prefix = "sha256:"
+	hex, ok := strings.CutPrefix(digest, prefix)
+	if !ok || len(hex) != 64 {
+		return false
+	}
+	for _, r := range hex {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // ImageOutdated reports whether a running container's image no longer matches the
 // catalog entry it was deployed from. It is true when the provider changed the
 // image path (the ProxyBase migration) or the catalog re-pinned to a new digest,

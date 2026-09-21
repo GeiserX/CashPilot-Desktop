@@ -157,8 +157,11 @@ func Apply(upstream map[string][]byte, overlay *Overlay) (map[string][]byte, err
 		// The pin requirement is catalog.IsRetired, the same rule the UI uses to hide
 		// a service, so a status that stops a service being deployable cannot also
 		// demand a digest for an image nobody will ever pull.
+		// catalog.HasDigestPin, not a "@sha256:" substring: "repo@sha256:aaaa" reads
+		// as pinned to a substring check and resolves to nothing, so the entry would
+		// be waved through as already pinned while still floating.
 		needsPin := upstreamImage != "" &&
-			!strings.Contains(upstreamImage, "@sha256:") &&
+			!catalog.HasDigestPin(upstreamImage) &&
 			!catalog.IsRetired(svc.Status)
 
 		switch {
@@ -307,6 +310,13 @@ func pinMatchesUpstream(pinned, upstream string) error {
 	uRepo, uTag, _ := splitImageRef(upstream)
 	if pDigest == "" {
 		return fmt.Errorf("overlay pin %q carries no @sha256: digest", pinned)
+	}
+	// A digest that is not well-formed pins nothing: no registry will resolve it, so
+	// the deploy fails at pull time with the overlay still claiming the service is
+	// pinned. Catching it here is the difference between a sync that fails and an
+	// earner that will not start.
+	if !catalog.HasDigestPin(pinned) {
+		return fmt.Errorf("overlay pin %q carries the malformed digest %q; a sha256 digest is 64 lowercase hex characters", pinned, pDigest)
 	}
 	if pRepo != uRepo || pTag != uTag {
 		return fmt.Errorf("overlay pins %q but the web entry now uses %q; re-resolve the digest for the new reference and update catalog-overlay/image-pins.yml", pinned, upstream)

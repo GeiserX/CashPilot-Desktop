@@ -60,7 +60,7 @@ func applyWith(t *testing.T, upstream map[string][]byte, pins string, appends ma
 
 const examplePin = `pins:
   example:
-    image: "example/thing@sha256:aaaa"
+    image: "example/thing@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     why: "test"
 `
 
@@ -87,7 +87,7 @@ func TestApplyPinsOnlyTheImageLine(t *testing.T) {
 	for i := range wantLines {
 		if wantLines[i] != gotLines[i] {
 			changed++
-			if gotLines[i] != `  image: "example/thing@sha256:aaaa"` {
+			if gotLines[i] != `  image: "example/thing@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"` {
 				t.Errorf("line %d changed to %q, which is not the pin", i+1, gotLines[i])
 			}
 		}
@@ -165,7 +165,7 @@ func TestApplyRejectsAStalePin(t *testing.T) {
 	t.Run("service gone", func(t *testing.T) {
 		upstream := map[string][]byte{"bandwidth/other.yml": []byte(strings.NewReplacer(
 			"slug: example", "slug: other",
-			"image: example/thing", "image: other/thing@sha256:bbbb",
+			"image: example/thing", "image: other/thing@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		).Replace(liveEntry))}
 		if _, err := applyWith(t, upstream, examplePin, nil); err == nil {
 			t.Fatal("Apply accepted a pin for a slug upstream no longer ships")
@@ -174,7 +174,7 @@ func TestApplyRejectsAStalePin(t *testing.T) {
 
 	t.Run("upstream pins it itself", func(t *testing.T) {
 		upstream := map[string][]byte{"bandwidth/example.yml": []byte(strings.Replace(
-			liveEntry, "image: example/thing", "image: example/thing@sha256:cccc", 1))}
+			liveEntry, "image: example/thing", "image: example/thing@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", 1))}
 		if _, err := applyWith(t, upstream, examplePin, nil); err == nil {
 			t.Fatal("Apply accepted a pin for an entry upstream already pins")
 		}
@@ -195,7 +195,7 @@ func TestApplyAppendsDesktopOnlyBlocks(t *testing.T) {
 	if !strings.HasSuffix(got, "\n\n"+extra) {
 		t.Errorf("appended block missing or misplaced:\n%s", got)
 	}
-	if !strings.Contains(got, `image: "example/thing@sha256:aaaa"`) {
+	if !strings.Contains(got, `image: "example/thing@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`) {
 		t.Error("the pin must still be applied to a file that also carries an append")
 	}
 }
@@ -347,20 +347,64 @@ docker:
 
 	upstream := map[string][]byte{"depin/example.yml": entry("latest")}
 
-	out, err := applyWith(t, upstream, pin("ghcr.io/example/thing:latest@sha256:aaaa"), nil)
+	out, err := applyWith(t, upstream, pin("ghcr.io/example/thing:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil)
 	if err != nil {
 		t.Fatalf("a pin naming the entry's own tag was rejected: %v", err)
 	}
-	if !strings.Contains(string(out["depin/example.yml"]), `image: "ghcr.io/example/thing:latest@sha256:aaaa"`) {
+	if !strings.Contains(string(out["depin/example.yml"]), `image: "ghcr.io/example/thing:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"`) {
 		t.Errorf("pin not applied:\n%s", out["depin/example.yml"])
 	}
 
 	if _, err := applyWith(t, map[string][]byte{"depin/example.yml": entry("g5-latest")},
-		pin("ghcr.io/example/thing:latest@sha256:aaaa"), nil); err == nil {
+		pin("ghcr.io/example/thing:latest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil); err == nil {
 		t.Error("upstream re-tagged the image and the stale pin was accepted; Desktop would keep running the old build")
 	}
 
-	if _, err := applyWith(t, upstream, pin("ghcr.io/example/thing@sha256:aaaa"), nil); err == nil {
+	if _, err := applyWith(t, upstream, pin("ghcr.io/example/thing@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), nil); err == nil {
 		t.Error("a pin that names no tag was accepted against an entry that has one, so a re-tag would go unnoticed")
 	}
+}
+
+// THE RULE: a digest that cannot resolve is not a pin, on either side of the sync.
+//
+// Both pin checks used to be substring tests for "@sha256:". A pin of
+// "example/thing@sha256:aaaa" satisfied that and pins nothing: the sync would land a
+// vendored entry claiming an immutable image, and the deploy would fail at pull time
+// with the overlay still reporting the service as pinned. The same substring test on
+// the upstream side made a malformed digest arriving from the web catalog read as
+// "upstream already pins this", so the entry needed no pin and quietly stayed
+// floating. Both are now refused.
+func TestApplyRefusesADigestThatCannotResolve(t *testing.T) {
+	t.Run("the overlay pin is malformed", func(t *testing.T) {
+		upstream := map[string][]byte{"bandwidth/example.yml": []byte(liveEntry)}
+		pins := "pins:\n  example:\n    image: \"example/thing@sha256:aaaa\"\n    why: \"test\"\n"
+
+		_, err := applyWith(t, upstream, pins, nil)
+		if err == nil {
+			t.Fatal("Apply accepted a pin whose digest is four characters long; it pins nothing")
+		}
+		if !strings.Contains(err.Error(), "64 lowercase hex") {
+			t.Errorf("the refusal does not say what a digest has to look like: %v", err)
+		}
+	})
+
+	t.Run("upstream's own digest is malformed", func(t *testing.T) {
+		body := strings.Replace(liveEntry, "image: example/thing", "image: example/thing@sha256:aaaa", 1)
+		upstream := map[string][]byte{"bandwidth/example.yml": []byte(body)}
+
+		_, err := applyWith(t, upstream, "", nil)
+		if err == nil {
+			t.Fatal("a live entry whose digest cannot resolve was treated as already pinned")
+		}
+		if !strings.Contains(err.Error(), "example") {
+			t.Errorf("the refusal does not name the service: %v", err)
+		}
+	})
+
+	t.Run("a real digest is still accepted", func(t *testing.T) {
+		upstream := map[string][]byte{"bandwidth/example.yml": []byte(liveEntry)}
+		if _, err := applyWith(t, upstream, examplePin, nil); err != nil {
+			t.Fatalf("a well-formed pin was refused: %v", err)
+		}
+	})
 }
