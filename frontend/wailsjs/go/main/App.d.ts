@@ -18,6 +18,8 @@ export function CompleteOnboarding():Promise<void>;
 
 export function DeployService(arg1:string,arg2:Record<string, string>):Promise<store.Deployment>;
 
+export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
+
 export function GetAppState():Promise<main.AppState>;
 
 export function GetCredentials(arg1:string):Promise<Record<string, string>>;
