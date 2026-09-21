@@ -22,8 +22,8 @@ func (stubProvider) Deploy(context.Context, runtime.DeploySpec, func(string)) (r
 	return runtime.ContainerInfo{}, nil
 }
 func (stubProvider) Start(context.Context, string) error                         { return nil }
-func (stubProvider) Stop(context.Context, string) error                          { return nil }
-func (stubProvider) Restart(context.Context, string) error                       { return nil }
+func (stubProvider) Stop(context.Context, string, int) error                     { return nil }
+func (stubProvider) Restart(context.Context, string, int) error                  { return nil }
 func (stubProvider) Remove(context.Context, string, runtime.RemoveOptions) error { return nil }
 func (stubProvider) PlanRemoval(context.Context, string, map[string]string) (runtime.RemovalPlan, error) {
 	return runtime.RemovalPlan{}, nil

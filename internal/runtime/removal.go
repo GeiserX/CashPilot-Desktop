@@ -41,6 +41,13 @@ type RemoveOptions struct {
 	// Critical. Without it a delete that would touch one is refused and names it, so
 	// the dangerous act cannot happen as a side effect of the ordinary one.
 	AllowCritical bool
+
+	// StopTimeout is the grace period, in seconds, the service's catalog entry asks
+	// for. Remove stops the container before deleting it, and data that is being kept
+	// has to be left consistent, so a storage node that asks for 300 seconds gets
+	// them here too. 0 means the caller had no entry to read, and the runtime falls
+	// back to what the container itself says.
+	StopTimeout int
 }
 
 // DataMount is one place a deployed service keeps data on this machine.

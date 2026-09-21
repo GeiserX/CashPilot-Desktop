@@ -11,7 +11,7 @@
 //
 //   node scripts/removal_check.mjs      # against ./.harness-build
 
-import { deletableVolumes, deleteDataConfirmText, planHasCritical, removeConfirmText } from "../.harness-build/render/removal.js";
+import { deletableVolumes, deleteDataConfirmText, planHasCritical, removalChoice, removeConfirmText } from "../.harness-build/render/removal.js";
 
 let failures = 0;
 let checks = 0;
@@ -108,6 +108,47 @@ check("an empty plan is not critical", !planHasCritical(plan()));
 
 check("null volumes read as none", deletableVolumes(plan()).length === 0);
 check("null binds do not throw", removeConfirmText("EarnFM", plan({volumes: [scratch]})).length > 0);
+
+// --- Keeping the data must not be a dead end -----------------------------------------
+
+// A user who keeps the data has no button anywhere in the app to delete it later: the
+// plan and the delete both start from the live container, and it is gone. So the first
+// question has to say how it IS done, or the answer is a silent trap.
+check(
+  "the remove question says how to delete the kept data later",
+  /set the service up again and remove it with its data/i.test(firstQuestion),
+  firstQuestion,
+);
+check(
+  "a service with nothing stored is not told about deleting data later",
+  !/set the service up again/i.test(bare),
+  bare,
+);
+
+// --- The two answers, turned into what the backend may do ----------------------------
+
+// THE RULE: the extra yes the runtime demands before destroying unrecoverable data is
+// only ever given when the user said yes to the question that named that data.
+
+check(
+  "keeping the data gives no permission at all",
+  removalChoice(withData, false).deleteData === false && removalChoice(withData, false).allowCritical === false,
+);
+check(
+  "deleting unrecoverable data carries the extra yes",
+  removalChoice(withData, true).deleteData === true && removalChoice(withData, true).allowCritical === true,
+);
+// A plan with nothing irreplaceable in it must NOT hand over the critical permission:
+// it is the flag that turns off the runtime's last guard, and a delete that never
+// needed it would be carrying an unlocked door around.
+check(
+  "an ordinary volume does not unlock the critical guard",
+  removalChoice(plan({volumes: [scratch]}), true).allowCritical === false,
+);
+check(
+  "a plan with no volumes at all does not unlock it either",
+  removalChoice(plan(), true).allowCritical === false,
+);
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} removal checks FAILED`);

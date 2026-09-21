@@ -1010,7 +1010,14 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 				// PID 1 ignores signals it has no handler for, so a bare sleep would
 				// sit through Stop's SIGTERM and cost the full 20s timeout twice.
 				// The trap gives the shell a handler, so Stop and Restart return at once.
-				Command: "sh -c 'trap exit TERM; echo " + logMarker + "; sleep 3600 & wait'",
+				//
+				// It also leaves proof. The handler writes a file into the service's
+				// own volume, and the next start says out loud whether it found one.
+				// Only a container that was asked to stop can run its handler; a
+				// SIGKILL leaves nothing. That is the only way to tell, from outside,
+				// that a redeploy or a remove really stopped the old container before
+				// replacing it — which is what a Storj node needs to flush.
+				Command: "sh -c '" + probeScript + "'",
 				Volumes: []string{volume + ":/data"},
 			},
 		},
@@ -1064,14 +1071,31 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 		t.Fatalf("Logs did not return the container's output, got %q", logs)
 	}
 
-	if err := p.Stop(ctx, slug); err != nil {
+	// A fresh volume: nothing stopped it before, so the first start finds no marker.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 1); verdicts[0] != killedMarker {
+		t.Fatalf("a first start on an empty volume reported %q", verdicts[0])
+	}
+
+	if err := p.Stop(ctx, slug, 0); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	if err := p.Start(ctx, slug); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := p.Restart(ctx, slug); err != nil {
+	// Two starts now, and the second one has to have seen the handler's file: Stop is
+	// a graceful stop, not a kill.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 2); verdicts[1] != gracefulMarker {
+		t.Fatalf("Stop killed the container instead of asking it to stop: the next start reported %q", verdicts[1])
+	}
+
+	if err := p.Restart(ctx, slug, 0); err != nil {
 		t.Fatalf("Restart: %v", err)
+	}
+	// Three starts, the third after a Restart. Waiting for it also guarantees the
+	// container has consumed its marker file before the redeploy below, so the next
+	// assertion can only be satisfied by a marker THAT redeploy caused.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 3); verdicts[2] != gracefulMarker {
+		t.Fatalf("Restart killed the container instead of asking it to stop: the next start reported %q", verdicts[2])
 	}
 
 	// A redeploy keeps the data where it already is. A spec naming a different volume
@@ -1085,6 +1109,12 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 	}
 	if source := liveMountSource(t, ctx, containerName(slug), "/data"); source != volume {
 		t.Fatalf("the redeploy moved the service's data: /data is now %q, want %q", source, volume)
+	}
+	// The replacement is a brand-new container, so its log holds exactly one verdict,
+	// about the container it replaced. A redeploy that force-removed the old one
+	// instead of stopping it first leaves no marker for this to find.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 1); verdicts[0] != gracefulMarker {
+		t.Fatalf("the redeploy killed the running container instead of stopping it: the replacement reported %q", verdicts[0])
 	}
 
 	// PlanRemoval reads the inspect response, and Remove deletes the named volume it
@@ -1112,6 +1142,12 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 	// Redeploy onto the surviving volume, then prove the two guards on deleting it.
 	if _, err := p.Deploy(ctx, spec, nil); err != nil {
 		t.Fatalf("Deploy (second): %v", err)
+	}
+	// Keeping the data is only worth anything if the data is consistent, so the
+	// Remove above had to stop the container before deleting it. Same proof: this
+	// container is new, and the marker it finds can only have come from that stop.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 1); verdicts[0] != gracefulMarker {
+		t.Fatalf("Remove killed the container mid-write instead of stopping it: the next deploy reported %q", verdicts[0])
 	}
 
 	// Marked critical, no explicit yes: refused, and nothing removed.
@@ -1308,6 +1344,62 @@ func liveImage(t *testing.T, ctx context.Context, name string) string {
 		t.Fatal("the daemon returned no Config")
 	}
 	return result.Container.Config.Image
+}
+
+// gracefulMarker and killedMarker are the two things the lifecycle probe can say when
+// it starts: it found the file its own TERM handler writes, or it did not.
+//
+// A container only runs its handler when something asked it to stop. A forced removal
+// is SIGKILL, and a killed process writes nothing. So a start that reports
+// gracefulMarker is proof that whatever ended the PREVIOUS container asked first —
+// which is the difference between a Storj node that flushed and one that comes back
+// into an unclean-shutdown recovery.
+const (
+	gracefulMarker = "previous-stop-was-graceful"
+	killedMarker   = "previous-stop-left-nothing"
+	markerFile     = "/data/stopped-cleanly"
+)
+
+// probeScript is the lifecycle probe's shell: report and clear the marker, announce
+// itself, then sit in a sleep that a TERM handler can interrupt. It is inside single
+// quotes in the catalog entry, so the double quotes around the trap body survive
+// tokenizeCommand as one argument.
+const probeScript = "trap \"touch " + markerFile + "; exit 0\" TERM; " +
+	"if [ -f " + markerFile + " ]; then echo " + gracefulMarker + "; rm -f " + markerFile + "; " +
+	"else echo " + killedMarker + "; fi; " +
+	"echo " + logMarker + "; sleep 3600 & wait"
+
+// waitForStartupVerdicts reads the container's log until it holds want verdict lines,
+// and returns them in order. Logs are not flushed the instant a container starts, so
+// this polls rather than reading once.
+func waitForStartupVerdicts(t *testing.T, p *DockerProvider, ctx context.Context, slug string, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var verdicts []string
+	for {
+		logs, err := p.Logs(ctx, slug, 200)
+		if err != nil {
+			t.Fatalf("Logs: %v", err)
+		}
+		verdicts = verdicts[:0]
+		// Contains, not equality: a non-TTY container's log stream is multiplexed and
+		//each frame carries an 8-byte header, so the marker is never the whole line.
+		for _, line := range strings.Split(logs, "\n") {
+			switch {
+			case strings.Contains(line, gracefulMarker):
+				verdicts = append(verdicts, gracefulMarker)
+			case strings.Contains(line, killedMarker):
+				verdicts = append(verdicts, killedMarker)
+			}
+		}
+		if len(verdicts) >= want {
+			return verdicts
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited for %d startup verdicts from %s, saw %v", want, slug, verdicts)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // logMarker is the line the lifecycle probe echoes, so the Logs assertion cannot

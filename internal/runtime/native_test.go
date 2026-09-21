@@ -280,7 +280,7 @@ func TestNativeDeployTarGzExecAndStop(t *testing.T) {
 		t.Fatalf("captured logs missing stub output: %q", logs)
 	}
 
-	if err := p.Stop(context.Background(), "stubsvc"); err != nil {
+	if err := p.Stop(context.Background(), "stubsvc", 0); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	if !waitFor(t, 5*time.Second, func() bool {
@@ -523,7 +523,7 @@ func TestNativeStopSignalsOrphanFromRegistry(t *testing.T) {
 	if ci, ok := listEntry(t, p, "orphan"); !ok || ci.Status != "running" {
 		t.Fatalf("orphan not reported running: ok=%v", ok)
 	}
-	if err := p.Stop(context.Background(), "orphan"); err != nil {
+	if err := p.Stop(context.Background(), "orphan", 0); err != nil {
 		t.Fatalf("Stop orphan: %v", err)
 	}
 	if !waitFor(t, 5*time.Second, func() bool {
@@ -931,7 +931,7 @@ func TestNativeListToleratesCorruptRegistry(t *testing.T) {
 // and of an already-stopped entry (no-op success, never signals).
 func TestNativeStopUnknownAndAlreadyStopped(t *testing.T) {
 	p := newTestNativeProvider(t)
-	if err := p.Stop(context.Background(), "nope"); err == nil || !strings.Contains(err.Error(), "not running") {
+	if err := p.Stop(context.Background(), "nope", 0); err == nil || !strings.Contains(err.Error(), "not running") {
 		t.Fatalf("Stop unknown: got %v", err)
 	}
 	if err := p.mutateRegistry(func(reg *nativeRegistry) {
@@ -939,7 +939,7 @@ func TestNativeStopUnknownAndAlreadyStopped(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Stop(context.Background(), "done"); err != nil {
+	if err := p.Stop(context.Background(), "done", 0); err != nil {
 		t.Fatalf("Stop already-stopped: %v", err)
 	}
 }
@@ -1192,7 +1192,7 @@ func TestNativeMismatchedPIDNotSignalled(t *testing.T) {
 	if ci, _ := listEntry(t, p, "reused"); ci.Status != "stopped" {
 		t.Fatalf("mismatched pid reported %q, want stopped", ci.Status)
 	}
-	if err := p.Stop(context.Background(), "reused"); err != nil {
+	if err := p.Stop(context.Background(), "reused", 0); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -1323,7 +1323,7 @@ func TestNativeRestartStopsThenStarts(t *testing.T) {
 	}) {
 		t.Fatal("not running before restart")
 	}
-	if err := p.Restart(context.Background(), "rst"); err != nil {
+	if err := p.Restart(context.Background(), "rst", 0); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
 	if !waitFor(t, 5*time.Second, func() bool {

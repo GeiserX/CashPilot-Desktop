@@ -35,8 +35,14 @@ type Provider interface {
 	Status(ctx context.Context) Status
 	Deploy(ctx context.Context, spec DeploySpec, progress func(string)) (ContainerInfo, error)
 	Start(ctx context.Context, slug string) error
-	Stop(ctx context.Context, slug string) error
-	Restart(ctx context.Context, slug string) error
+	// Stop and Restart take the grace period the service's catalog entry asks for,
+	// in seconds. 0 means the caller had no entry to read (a service the catalog has
+	// dropped), and the provider falls back to what the running unit itself says.
+	// The value has to be passed in because only the caller holds the catalog, and
+	// reading it off the container instead would pin every service already deployed
+	// to the number its entry carried on the day it was created.
+	Stop(ctx context.Context, slug string, stopTimeoutSeconds int) error
+	Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error
 	// Remove removes the running unit. It destroys stored data only when
 	// RemoveOptions says so; see RemoveOptions for why the default is to keep it.
 	Remove(ctx context.Context, slug string, opts RemoveOptions) error
@@ -163,7 +169,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	mounts := buildMounts(svc.Docker.Volumes, env)
 
-	stopTimeout := stopTimeoutSeconds(svc)
+	stopTimeout := StopTimeoutSeconds(svc)
 	config := &container.Config{
 		Image:        image,
 		Env:          envSlice(env),
@@ -261,14 +267,14 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}, nil
 }
 
-func (p *DockerProvider) Stop(ctx context.Context, slug string) error {
+func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSeconds int) error {
 	cli, err := dockerClient()
 	if err != nil {
 		return err
 	}
 	defer cli.Close()
 	name := containerName(slug)
-	timeout := stopTimeoutForContainer(ctx, cli, name)
+	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	_, err = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
 	return err
 }
@@ -283,14 +289,14 @@ func (p *DockerProvider) Start(ctx context.Context, slug string) error {
 	return err
 }
 
-func (p *DockerProvider) Restart(ctx context.Context, slug string) error {
+func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error {
 	cli, err := dockerClient()
 	if err != nil {
 		return err
 	}
 	defer cli.Close()
 	name := containerName(slug)
-	timeout := stopTimeoutForContainer(ctx, cli, name)
+	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	_, err = cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
 	return err
 }
@@ -335,7 +341,7 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 	// Stop it cleanly first, with its own grace period. Data that is being kept has
 	// to be left consistent, and a SIGKILL mid-write is how a keystore or a node
 	// database ends up half written.
-	timeout := stopTimeoutForContainer(ctx, cli, name)
+	timeout := stopTimeoutForContainer(ctx, cli, name, opts.StopTimeout)
 	_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
 
 	// RemoveVolumes only ever deletes ANONYMOUS volumes, never the named ones below.

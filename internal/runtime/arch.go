@@ -143,6 +143,37 @@ func RunsOn(build, target ArchTarget) bool {
 	return build.Variant <= target.Variant
 }
 
+// ImageResolver is a provider that can say, before a deploy runs, which image it would
+// actually pull on this machine. It is optional: a provider that does not implement it
+// simply has the catalog's default image recorded, which is what every provider did
+// before this existed.
+//
+// It exists because the answer depends on the DAEMON's architecture, which only the
+// provider can ask for, while the caller that records the deploy history holds the
+// catalog. Returning "" means "cannot say", and the caller keeps its own answer.
+type ImageResolver interface {
+	ResolveImage(ctx context.Context, svc catalog.Service) string
+}
+
+// ResolveImage reports the image a deploy of svc would pull right now, resolved against
+// the daemon's architecture exactly as Deploy resolves it.
+//
+// An entry with no per-architecture override needs no daemon at all, which is nearly
+// every entry, so this costs a round trip only where the answer can actually differ.
+// A daemon that cannot be reached yields the catalog's default rather than an error:
+// this only labels a history entry, and it must never be the reason a deploy fails.
+func (p *DockerProvider) ResolveImage(ctx context.Context, svc catalog.Service) string {
+	if len(svc.Docker.ImageByArch) == 0 {
+		return svc.Docker.Image
+	}
+	cli, err := dockerClient()
+	if err != nil {
+		return svc.Docker.Image
+	}
+	defer cli.Close()
+	return ImageForArch(svc.Docker, daemonFacts(ctx, cli).Architecture)
+}
+
 // ImageForArch is the image a machine of this architecture should pull.
 //
 // Docker picks the right build out of a multi-arch manifest by itself, so almost every

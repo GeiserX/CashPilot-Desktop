@@ -37,6 +37,11 @@ type fakeProvider struct {
 	stopErr      error
 	restartErr   error
 	removeErr    error
+	// stopTimeouts and restartTimeouts record the grace period, in seconds, each
+	// Stop and Restart was handed, so a test can prove the catalog's own number
+	// reached the provider instead of a default.
+	stopTimeouts    []int
+	restartTimeouts []int
 	// removeOpts records the RemoveOptions each Remove was called with, so a test can
 	// prove the manager passed the catalog's critical list and the caller's choice
 	// rather than a default.
@@ -59,9 +64,17 @@ func (f *fakeProvider) Deploy(_ context.Context, _ runtime.DeploySpec, progress 
 	return f.deployResult, f.deployErr
 }
 
-func (f *fakeProvider) Start(context.Context, string) error   { return f.startErr }
-func (f *fakeProvider) Stop(context.Context, string) error    { return f.stopErr }
-func (f *fakeProvider) Restart(context.Context, string) error { return f.restartErr }
+func (f *fakeProvider) Start(context.Context, string) error { return f.startErr }
+
+func (f *fakeProvider) Stop(_ context.Context, _ string, stopTimeoutSeconds int) error {
+	f.stopTimeouts = append(f.stopTimeouts, stopTimeoutSeconds)
+	return f.stopErr
+}
+
+func (f *fakeProvider) Restart(_ context.Context, _ string, stopTimeoutSeconds int) error {
+	f.restartTimeouts = append(f.restartTimeouts, stopTimeoutSeconds)
+	return f.restartErr
+}
 func (f *fakeProvider) Remove(_ context.Context, _ string, opts runtime.RemoveOptions) error {
 	f.removeOpts = append(f.removeOpts, opts)
 	return f.removeErr

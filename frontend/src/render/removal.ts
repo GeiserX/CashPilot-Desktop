@@ -48,6 +48,9 @@ export function removeConfirmText(serviceName: string, plan: RemovalPlan): strin
     return lines.join("\n");
   }
   lines.push("This stops and deletes its container. Its saved data stays on this computer, so you can set the service up again later.");
+  if (volumes.length > 0) {
+    lines.push("", "You will be asked next whether to delete that data too. If you keep it, the only way to delete it later is to set the service up again and remove it with its data.");
+  }
   if (binds.length > 0) {
     lines.push("", "These folders are never touched:");
     for (const bind of binds) lines.push(`  ${bind.source}`);
@@ -79,4 +82,23 @@ export function deleteDataConfirmText(serviceName: string, plan: RemovalPlan): s
   }
   lines.push("", "Choose Cancel to keep it.");
   return lines.join("\n");
+}
+
+/** How far the user agreed to go. */
+export type RemovalChoice = { deleteData: boolean; allowCritical: boolean };
+
+/**
+ * The two answers, turned into what the backend is allowed to do.
+ *
+ * Deleting data the catalog marks unrecoverable takes an extra yes that the runtime
+ * checks for separately, and that yes is what the second question already asked for:
+ * it names every volume and quotes what each one holds, so a user who says yes to it
+ * has been told exactly what is lost. A third dialog on top would add no information,
+ * and a dialog that adds no information is one people learn to click through.
+ *
+ * Saying no to the second question withdraws the permission entirely, which is why
+ * allowCritical can never be true on its own.
+ */
+export function removalChoice(plan: RemovalPlan, deleteData: boolean): RemovalChoice {
+  return {deleteData, allowCritical: deleteData && planHasCritical(plan)};
 }

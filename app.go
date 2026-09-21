@@ -1069,7 +1069,10 @@ func (a *App) RemoveService(slug string, deleteData, allowCritical bool) error {
 		a.emitError("remove", err)
 		return err
 	}
-	wailsruntime.EventsEmit(a.ctx, "deployment:changed", slug)
+	// emitEvent, not EventsEmit: the raw call log.Fatalf's the whole process when the
+	// context carries no Wails event manager, which is every test. The only
+	// irreversible path in the app was untestable end to end because of it.
+	a.emitEvent("deployment:changed", slug)
 	return nil
 }
 

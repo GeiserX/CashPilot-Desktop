@@ -37,7 +37,7 @@ import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { serviceFormFields } from "./render/fields";
 import { totalText, totalCaption } from "./render/total";
-import { deleteDataConfirmText, planHasCritical, removeConfirmText } from "./render/removal";
+import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
@@ -1258,10 +1258,6 @@ async function runWizardAction(slug: string, action: string) {
   }
 }
 
-// RemovalChoice is how far the user agreed to go. null (from askAboutRemoval) means
-// they backed out.
-type RemovalChoice = { deleteData: boolean; allowCritical: boolean };
-
 // askAboutRemoval puts the two questions to the user: remove the service, and then
 // separately, delete the data it saved. The second one names each volume and what it
 // holds, because the data behind them - a node identity, a keystore - has no backup
@@ -1280,8 +1276,7 @@ async function askAboutRemoval(slug: string, serviceName: string): Promise<Remov
   if (!confirm(removeConfirmText(serviceName, plan))) return null;
   const dataQuestion = deleteDataConfirmText(serviceName, plan);
   if (!dataQuestion) return {deleteData: false, allowCritical: false};
-  const deleteData = confirm(dataQuestion);
-  return {deleteData, allowCritical: deleteData && planHasCritical(plan)};
+  return removalChoice(plan, confirm(dataQuestion));
 }
 
 async function runServiceAction(slug: string, action: string) {
@@ -1312,7 +1307,14 @@ async function runServiceAction(slug: string, action: string) {
     }
     if (action === "remove" && removal) {
       await RemoveService(slug, removal.deleteData, removal.allowCritical);
-      setOutput(removal.deleteData ? `${slug} and its saved data removed.` : `${slug} removed. Its saved data is still on this computer.`);
+      // Refresh first, then write the message. The generic "complete" line below used
+      // to land on top of this one, so the user never got to read which of the two
+      // removals actually happened - the one fact they need after an irreversible act.
+      await refreshState();
+      setOutput(removal.deleteData
+        ? `${slug} and its saved data removed.`
+        : `${slug} removed. Its saved data is still on this computer. To delete it later, set ${slug} up again and remove it with its data.`);
+      return;
     }
     await refreshState();
     setOutput(`${slug} ${action} complete.`);

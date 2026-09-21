@@ -18,15 +18,15 @@ import (
 // for it with an unclean-shutdown recovery.
 func TestStopTimeoutComesFromTheCatalog(t *testing.T) {
 	storj := catalog.Service{Docker: catalog.DockerConfig{StopTimeout: 300}}
-	if got := stopTimeoutSeconds(storj); got != 300 {
-		t.Fatalf("stopTimeoutSeconds(storj) = %d, want 300", got)
+	if got := StopTimeoutSeconds(storj); got != 300 {
+		t.Fatalf("StopTimeoutSeconds(storj) = %d, want 300", got)
 	}
 	// An entry that says nothing gets the default, which matches the web worker.
-	if got := stopTimeoutSeconds(catalog.Service{}); got != defaultStopTimeout {
-		t.Fatalf("stopTimeoutSeconds(silent) = %d, want %d", got, defaultStopTimeout)
+	if got := StopTimeoutSeconds(catalog.Service{}); got != defaultStopTimeout {
+		t.Fatalf("StopTimeoutSeconds(silent) = %d, want %d", got, defaultStopTimeout)
 	}
 	// A nonsense value is not a grace period.
-	if got := stopTimeoutSeconds(catalog.Service{Docker: catalog.DockerConfig{StopTimeout: -5}}); got != defaultStopTimeout {
+	if got := StopTimeoutSeconds(catalog.Service{Docker: catalog.DockerConfig{StopTimeout: -5}}); got != defaultStopTimeout {
 		t.Fatalf("a negative stop_timeout produced %d", got)
 	}
 }
@@ -46,26 +46,48 @@ func (f fakeInspectClient) ContainerInspect(context.Context, string, client.Cont
 
 func intPtr(v int) *int { return &v }
 
-// Stop and Restart read the grace period back off the container, so it works for a
-// container this app deployed AND for one deployed before the value was recorded.
-func TestStopTimeoutForContainerReadsItBackOffTheContainer(t *testing.T) {
-	cli := fakeInspectClient{response: container.InspectResponse{
+// THE RULE: the grace period a stop uses is the one the CATALOG asks for today, not
+// the one the container happened to be built with.
+//
+// A Storj node deployed before this branch carries no stop timeout of its own. If the
+// fallback were the shared 30 seconds, every stop, restart and remove of that node
+// would SIGKILL it 270 seconds early — and the only way to get the 300 it asks for
+// would be to redeploy it first, which is the one thing a user stopping a node is not
+// doing.
+func TestStopTimeoutForContainerPrefersTheCatalogThenTheContainer(t *testing.T) {
+	// A container that predates the feature: nothing recorded on it, and the catalog
+	// is the only thing that can say 300.
+	bare := fakeInspectClient{response: container.InspectResponse{Config: &container.Config{}}}
+	if got := stopTimeoutForContainer(context.Background(), bare, "storj", 300); got != 300 {
+		t.Fatalf("an existing container got %d seconds, want the catalog's 300", got)
+	}
+
+	// The catalog still wins when the container carries an older, smaller number: an
+	// entry raised to 300 has to reach the node already running.
+	stale := fakeInspectClient{response: container.InspectResponse{
+		Config: &container.Config{StopTimeout: intPtr(30)},
+	}}
+	if got := stopTimeoutForContainer(context.Background(), stale, "storj", 300); got != 300 {
+		t.Fatalf("the catalog's 300 lost to the container's recorded 30 (got %d)", got)
+	}
+
+	// No catalog entry (the service was dropped): the container's own value is the
+	// next best answer, and it beats the daemon's 10-second default.
+	own := fakeInspectClient{response: container.InspectResponse{
 		Config: &container.Config{StopTimeout: intPtr(300)},
 	}}
-	if got := stopTimeoutForContainer(context.Background(), cli, "cashpilot-storj"); got != 300 {
+	if got := stopTimeoutForContainer(context.Background(), own, "cashpilot-storj", 0); got != 300 {
 		t.Fatalf("stopTimeoutForContainer = %d, want the container's own 300", got)
 	}
 
-	// A container from before this existed carries nothing, and must not fall to the
-	// daemon's 10-second default by accident.
-	bare := fakeInspectClient{response: container.InspectResponse{Config: &container.Config{}}}
-	if got := stopTimeoutForContainer(context.Background(), bare, "old"); got != defaultStopTimeout {
+	// Neither source can say anything: the shared default, never zero.
+	if got := stopTimeoutForContainer(context.Background(), bare, "old", 0); got != defaultStopTimeout {
 		t.Fatalf("an unset stop timeout produced %d, want %d", got, defaultStopTimeout)
 	}
 
 	// An unreachable daemon still has to produce a usable number.
 	down := fakeInspectClient{err: errors.New("no such container")}
-	if got := stopTimeoutForContainer(context.Background(), down, "gone"); got != defaultStopTimeout {
+	if got := stopTimeoutForContainer(context.Background(), down, "gone", 0); got != defaultStopTimeout {
 		t.Fatalf("a failed inspect produced %d, want %d", got, defaultStopTimeout)
 	}
 }
@@ -201,5 +223,62 @@ func TestKeepLiveMountsNormalisesTargets(t *testing.T) {
 	got, _ := keepLiveMounts(spec, []string{"svc-data:/data/"}, map[string]string{}, live)
 	if got[0].Source != "/elsewhere" {
 		t.Fatalf("a trailing slash lost the match: %+v", got[0])
+	}
+}
+
+// THE RULE: a redeploy reuses the path the user typed, never the daemon's translation
+// of it.
+//
+// Docker Desktop and Podman Desktop run the daemon in a Linux VM, and inspect's
+// Mounts[].Source answers with the path as that VM sees it: /Users/sergio/storj comes
+// back as /host_mnt/Users/sergio/storj on macOS, and C:\storj as
+// /run/desktop/mnt/host/c/storj on Windows. Handing that back to a create either shows
+// the user a path they never typed or is refused outright ("mounts denied") — and by
+// then the old container has already been stopped and removed, so a Storj node is left
+// down with no container at all. HostConfig records what was actually asked for.
+//
+// On a plain Linux daemon the two are the same string, which is why this cannot be
+// caught by the integration test that runs here.
+func TestKeepLiveMountsUsesTheRequestedPathNotTheVMPath(t *testing.T) {
+	const typed = "/Users/sergio/storj"
+	spec := []mount.Mount{{Type: mount.TypeBind, Source: typed, Target: "/app/identity"}}
+	declared := []string{"${IDENTITY_DIR}:/app/identity"}
+	live := container.InspectResponse{
+		Config: &container.Config{Env: []string{"IDENTITY_DIR=" + typed}},
+		// What Docker Desktop reports back.
+		Mounts: []container.MountPoint{{
+			Type: mount.TypeBind, Source: "/host_mnt/Users/sergio/storj", Destination: "/app/identity", RW: true,
+		}},
+		// What the container was actually created with.
+		HostConfig: &container.HostConfig{
+			Mounts: []mount.Mount{{Type: mount.TypeBind, Source: typed, Target: "/app/identity"}},
+		},
+	}
+
+	got, kept := keepLiveMounts(spec, declared, map[string]string{"IDENTITY_DIR": typed}, live)
+	if got[0].Source != typed {
+		t.Fatalf("the redeploy would mount %q, the path inside the daemon's VM, not %q", got[0].Source, typed)
+	}
+	// Nothing moved, so nothing should be announced as kept somewhere else.
+	if len(kept) != 0 {
+		t.Fatalf("an unchanged mount was reported as moved: %+v", kept)
+	}
+}
+
+// A mount the create did not ask for by name — someone ran "docker run -v" by hand —
+// has nothing in HostConfig.Mounts to read, and still has to keep its data where it is.
+func TestKeepLiveMountsFallsBackToTheReportedSource(t *testing.T) {
+	spec := []mount.Mount{{Type: mount.TypeVolume, Source: "svc-data", Target: "/data"}}
+	live := container.InspectResponse{
+		Config: &container.Config{},
+		Mounts: []container.MountPoint{{
+			Type: mount.TypeBind, Source: "/home/sergio/by-hand", Destination: "/data", RW: true,
+		}},
+		HostConfig: &container.HostConfig{},
+	}
+
+	got, _ := keepLiveMounts(spec, []string{"svc-data:/data"}, map[string]string{}, live)
+	if got[0].Source != "/home/sergio/by-hand" {
+		t.Fatalf("a hand-made mount was moved onto the catalog's volume: %+v", got[0])
 	}
 }

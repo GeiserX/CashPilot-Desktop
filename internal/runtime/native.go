@@ -281,7 +281,7 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 
 	// Replace any prior instance (a managed child from this session or an orphan pid
 	// from a previous one) before starting the new one, so redeploy never doubles up.
-	p.stopInternal(spec.Slug, false)
+	p.stopInternal(spec.Slug, false, p.graceFor(StopTimeoutSeconds(spec.Service)))
 
 	if progress != nil {
 		progress("Starting native process")
@@ -333,8 +333,8 @@ func (p *NativeProcessProvider) Start(ctx context.Context, slug string) error {
 // Stop stops the service: a managed child is signalled gracefully then killed after
 // the grace period; an orphan pid recorded by a previous session is signalled by pid.
 // It marks the registry entry as desired=stopped so List reports it stopped.
-func (p *NativeProcessProvider) Stop(ctx context.Context, slug string) error {
-	if p.stopManaged(slug) {
+func (p *NativeProcessProvider) Stop(ctx context.Context, slug string, stopTimeoutSeconds int) error {
+	if p.stopManaged(slug, p.graceFor(stopTimeoutSeconds)) {
 		return p.mutateRegistry(func(reg *nativeRegistry) { markStopped(reg, slug) })
 	}
 	reg := p.readRegistry()
@@ -352,8 +352,8 @@ func (p *NativeProcessProvider) Stop(ctx context.Context, slug string) error {
 }
 
 // Restart stops then starts the service.
-func (p *NativeProcessProvider) Restart(ctx context.Context, slug string) error {
-	if err := p.Stop(ctx, slug); err != nil {
+func (p *NativeProcessProvider) Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error {
+	if err := p.Stop(ctx, slug, stopTimeoutSeconds); err != nil {
 		return err
 	}
 	return p.Start(ctx, slug)
@@ -368,11 +368,11 @@ func (p *NativeProcessProvider) PlanRemoval(ctx context.Context, slug string, cr
 }
 
 // Remove stops the service, deletes its per-slug directory (binary + logs), and drops
-// its registry entry — the native analogue of removing a container. opts is accepted
-// for the Provider contract and not read: the directory holds only the binary and the
-// logs, which the next deploy re-creates.
+// its registry entry — the native analogue of removing a container. Only
+// opts.StopTimeout is read: the directory holds nothing but the binary and the logs,
+// which the next deploy re-creates, so there is no stored data to decide about.
 func (p *NativeProcessProvider) Remove(ctx context.Context, slug string, opts RemoveOptions) error {
-	p.stopInternal(slug, true)
+	p.stopInternal(slug, true, p.graceFor(opts.StopTimeout))
 	if err := os.RemoveAll(filepath.Join(p.baseDir, slug)); err != nil {
 		return err
 	}
@@ -574,10 +574,20 @@ func (p *NativeProcessProvider) supervise(mp *managedProcess) {
 	}
 }
 
+// graceFor is how long a native child gets between SIGTERM and SIGKILL: the grace
+// period the service's own catalog entry asks for, or this provider's default when the
+// entry is silent or could not be read (seconds <= 0).
+func (p *NativeProcessProvider) graceFor(seconds int) time.Duration {
+	if seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return p.stopTimeout
+}
+
 // stopManaged stops and reaps a managed child owned by this session, returning true if
 // one existed. It waits for the supervisor to exit (so no respawn survives) and closes
 // the log. Returns false when there is no in-memory child for the slug (orphan case).
-func (p *NativeProcessProvider) stopManaged(slug string) bool {
+func (p *NativeProcessProvider) stopManaged(slug string, grace time.Duration) bool {
 	p.mu.Lock()
 	mp := p.procs[slug]
 	if mp != nil {
@@ -588,7 +598,7 @@ func (p *NativeProcessProvider) stopManaged(slug string) bool {
 		return false
 	}
 	mp.requestStop()
-	gracefulKill(mp.beginStop(), p.stopTimeout, mp.doneCh)
+	gracefulKill(mp.beginStop(), grace, mp.doneCh)
 	<-mp.doneCh
 	_ = mp.log.Close()
 	return true
@@ -597,8 +607,8 @@ func (p *NativeProcessProvider) stopManaged(slug string) bool {
 // stopInternal is the idempotent stop used by Deploy (before a redeploy) and Remove.
 // It stops a managed child if present, otherwise signals a recorded orphan pid. force
 // escalates straight to kill (used by Remove).
-func (p *NativeProcessProvider) stopInternal(slug string, force bool) {
-	if p.stopManaged(slug) {
+func (p *NativeProcessProvider) stopInternal(slug string, force bool, grace time.Duration) {
+	if p.stopManaged(slug, grace) {
 		return
 	}
 	// Signal a recorded orphan pid only when it still matches our persisted identity;
