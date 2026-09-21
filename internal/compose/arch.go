@@ -55,3 +55,19 @@ func imageFor(docker catalog.DockerConfig, family string) string {
 	}
 	return strings.TrimSpace(docker.Image)
 }
+
+// HostFamily is the family of the machine this copy of CashPilot is running on, or
+// "" when it is an architecture no catalog image publishes a separate build for.
+//
+// It takes runtime.GOARCH rather than reading it so the mapping is testable on any
+// machine. The three names Go uses for the families the catalog knows are the same
+// three the catalog uses, and everything else (386, riscv64, ppc64le, s390x) has no
+// per-architecture build in any entry, so "" — let the manifest decide — is the
+// honest answer for it rather than a guess.
+func HostFamily(goarch string) string {
+	family := strings.ToLower(strings.TrimSpace(goarch))
+	if families[family] {
+		return family
+	}
+	return ""
+}

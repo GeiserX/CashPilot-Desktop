@@ -12,10 +12,12 @@
 // It must not be weaker than a CashPilot deploy. A file that drops the memory
 // ceiling, the capability set or the TUN device produces a container that looks
 // identical and is either less protected or silently unable to earn, which is the
-// worst kind of difference: invisible. So the export writes the same hardening the
-// app applies at deploy time — every capability dropped, only the ones the entry
-// declares added back, no new privileges, a PID ceiling, the declared resource
-// limits, and the declared stop grace period.
+// worst kind of difference: invisible. So the export writes the hardening the web
+// CashPilot worker deploys with (app/orchestrator.py) — every capability dropped,
+// only the ones the entry declares added back, no new privileges, a PID ceiling, the
+// declared resource limits, and the declared stop grace period. That is a real,
+// running configuration for these images rather than an invention here; Desktop's
+// own deploy path is the weaker one today, and it is the one that has to catch up.
 //
 // And it must not contain a single credential. Everything the user has to supply is
 // written as a ${VAR} placeholder, never a value, so the file is safe to keep in a
@@ -105,6 +107,7 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 
 	out := composeFile{Services: map[string]*composeService{}}
 	var placeholders []string
+	var settings []setting
 	seen := map[string]bool{}
 	for _, slug := range slugs {
 		slug = strings.TrimSpace(slug)
@@ -119,12 +122,13 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 		if catalog.IsRetired(svc.Status) {
 			return "", fmt.Errorf("%s is no longer available (%s), so there is nothing to export", svc.Name, svc.Status)
 		}
-		block, keys, err := serviceBlock(svc, family, opts.Hostname)
+		block, keys, changeable, err := serviceBlock(svc, family, opts.Hostname)
 		if err != nil {
 			return "", err
 		}
 		out.Services[containerPrefix+slug] = block
 		placeholders = append(placeholders, keys...)
+		settings = append(settings, changeable...)
 	}
 	if len(out.Services) == 0 {
 		return "", fmt.Errorf("choose at least one service to export")
@@ -138,7 +142,7 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return header(placeholders) + body, nil
+	return header(placeholders, settings) + body, nil
 }
 
 // composeFile and composeService are the file's shape. They are structs rather than
@@ -192,12 +196,13 @@ type loggingBlock struct {
 	Options map[string]string `yaml:"options"`
 }
 
-// serviceBlock builds one service's compose block and returns the placeholder keys
-// the user has to fill in for it.
-func serviceBlock(svc catalog.Service, family, hostname string) (*composeService, []string, error) {
+// serviceBlock builds one service's compose block and returns the keys the user has
+// to fill in for it, and the ones it already carries a value for that they may want
+// to change.
+func serviceBlock(svc catalog.Service, family, hostname string) (*composeService, []string, []setting, error) {
 	image := imageFor(svc.Docker, family)
 	if image == "" {
-		return nil, nil, fmt.Errorf("%s has no container image to export; it is set up outside CashPilot", svc.Name)
+		return nil, nil, nil, fmt.Errorf("%s has no container image to export; it is set up outside CashPilot", svc.Name)
 	}
 
 	category := svc.Category
@@ -205,10 +210,10 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 		category = defaultCategory
 	}
 
-	env, placeholders := environment(svc.Docker.Env, hostname)
+	env, placeholders, settings := environment(svc.Docker.Env, hostname)
 	devices, err := devicesFor(svc)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	block := &composeService{
@@ -232,7 +237,8 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 		Devices:     devices,
 		NetworkMode: svc.Docker.NetworkMode,
 		// Every capability dropped, then only the ones this entry declares added
-		// back, and no path to new privileges. Same set the app's own deploy uses.
+		// back, and no path to new privileges. Same set the web CashPilot worker
+		// runs these images under.
 		CapDrop:     []string{"ALL"},
 		CapAdd:      append([]string(nil), svc.Docker.CapAdd...),
 		SecurityOpt: []string{"no-new-privileges:true"},
@@ -255,20 +261,44 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 	if svc.Docker.StopTimeout > 0 {
 		block.StopGrace = fmt.Sprintf("%ds", svc.Docker.StopTimeout)
 	}
-	return block, placeholders, nil
+	return block, placeholders, settings, nil
+}
+
+// setting is a value the exported file already carries and the user may want to
+// change: a device name, a disk allocation, an opt-in flag. It is listed in the
+// header with the value it was given, so changing it is one line in the .env file
+// rather than an edit to the YAML.
+type setting struct {
+	Key   string
+	Value string
+	// FromMachine records that the value contains the name of the machine the file
+	// was exported FROM. Two machines running one provider under one device name
+	// register as a single device, and a provider that keys on the device id then
+	// pays for one of them, so the header says so where it happens.
+	FromMachine bool
 }
 
 // environment builds the environment block, and returns the keys the user still has
-// to supply.
+// to supply plus the ones that already carry a value they can change.
 //
 // A value the user owns — a password, a token, an account email — is NEVER written.
 // It becomes ${KEY}, which Compose fills from a .env file at run time, so the
-// exported file carries no secret and can be shared as-is. A catalog default (a
-// device name, an opt-in flag) is written literally, because it is not the user's to
-// keep private and a file that asks for it is a file nobody can run unedited.
-func environment(vars []catalog.EnvVar, hostname string) (map[string]string, []string) {
+// exported file carries no secret and can be shared as-is.
+//
+// A catalog default (a device name, a disk allocation, an opt-in flag) is not the
+// user's to keep private, and a file that asks for it is a file nobody can run
+// unedited — so it is written as ${KEY:-default}: the default is what the container
+// gets, and the same .env file that holds the credentials overrides it. That matters
+// most for the device name, which carries the exporting machine's name and has to be
+// changed when the file is run somewhere else.
+//
+// A default that itself contains a dollar sign is written literally instead, escaped
+// as it always was: nesting it inside ${KEY:-...} would hand Compose an expression
+// whose meaning depends on how it parses the inner text.
+func environment(vars []catalog.EnvVar, hostname string) (map[string]string, []string, []setting) {
 	env := map[string]string{}
 	var placeholders []string
+	var settings []setting
 	for _, item := range vars {
 		key := strings.TrimSpace(item.Key)
 		if key == "" {
@@ -277,16 +307,26 @@ func environment(vars []catalog.EnvVar, hostname string) (map[string]string, []s
 		def := strings.TrimSpace(item.Default)
 		switch {
 		case def != "" && !item.Secret:
-			env[key] = escapeValue(substituteHostname(def, hostname))
+			value := substituteHostname(def, hostname)
+			if strings.Contains(value, "$") {
+				env[key] = escapeValue(value)
+				continue
+			}
+			env[key] = "${" + key + ":-" + value + "}"
+			settings = append(settings, setting{
+				Key:         key,
+				Value:       value,
+				FromMachine: hostname != "" && strings.Contains(def, "{hostname}"),
+			})
 		case item.Required || item.Secret:
 			env[key] = "${" + key + "}"
 			placeholders = append(placeholders, key)
 		}
 	}
 	if len(env) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return env, placeholders
+	return env, placeholders, settings
 }
 
 // interpolate prepares a catalog string (a command line, a volume's host path) for
@@ -432,10 +472,10 @@ func marshal(file composeFile) (string, error) {
 }
 
 // header is what the user reads before the YAML: what this file is, what they have
-// to fill in, and how to run it. The placeholder list is the load-bearing part —
-// without it a Compose run substitutes empty strings and the container starts,
-// authenticates against nothing and earns nothing.
-func header(placeholders []string) string {
+// to fill in, what they can change, and how to run it. The placeholder list is the
+// load-bearing part — without it a Compose run substitutes empty strings and the
+// container starts, authenticates against nothing and earns nothing.
+func header(placeholders []string, settings []setting) string {
 	var out strings.Builder
 	out.WriteString("# Generated by CashPilot Desktop\n")
 	out.WriteString("# https://github.com/GeiserX/CashPilot-Desktop\n")
@@ -447,11 +487,43 @@ func header(placeholders []string) string {
 		}
 		out.WriteString("#\n")
 	}
+	if changeable := uniqueSettings(settings); len(changeable) > 0 {
+		out.WriteString("# These already have a value. Put any of them in the same .env file to\n")
+		out.WriteString("# change it:\n")
+		named := false
+		for _, item := range changeable {
+			out.WriteString("#   " + item.Key + "=" + item.Value + "\n")
+			named = named || item.FromMachine
+		}
+		if named {
+			out.WriteString("#\n")
+			out.WriteString("# The device names above are this computer's name. Running this file on\n")
+			out.WriteString("# another machine without changing them puts both machines under one\n")
+			out.WriteString("# device, and some providers then pay for only one of them.\n")
+		}
+		out.WriteString("#\n")
+	}
 	out.WriteString("# Start it with: docker compose up -d\n")
 	out.WriteString("#\n")
 	out.WriteString("# The cashpilot labels are kept so CashPilot can still find and watch\n")
 	out.WriteString("# these containers, even though it did not start them.\n\n")
 	return out.String()
+}
+
+// uniqueSettings drops the duplicates a multi-service export produces and orders the
+// list by key, so the same selection always writes the same header.
+func uniqueSettings(values []setting) []setting {
+	seen := map[string]bool{}
+	out := make([]setting, 0, len(values))
+	for _, item := range values {
+		if item.Key == "" || seen[item.Key] {
+			continue
+		}
+		seen[item.Key] = true
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 func uniqueSorted(values []string) []string {

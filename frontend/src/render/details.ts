@@ -204,9 +204,9 @@ export function composeSelectionExport(services: Service[]): string {
  * The compose export control: pick the machine the file is for, then save it.
  *
  * The architecture choice is here because the file is often written FOR another box
- * — a Raspberry Pi, a NAS, a server — and two catalog images publish ARM builds
- * Docker cannot pick from the manifest. "This machine" leaves the choice to whatever
- * runs the file, which is right for everything else.
+ * — a Raspberry Pi, a NAS, a server — and one catalog image (Traffmonetizer)
+ * publishes ARM builds Docker cannot pick from the manifest. "This machine" is the
+ * architecture this copy of CashPilot runs on, which the backend fills in.
  */
 export function composeExportControl(service: Service): string {
   if (service.manualOnly) return "";

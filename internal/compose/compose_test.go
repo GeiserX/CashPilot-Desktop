@@ -169,25 +169,123 @@ func TestCredentialsAreWrittenAsPlaceholdersNeverValues(t *testing.T) {
 }
 
 // A catalog default is not the user's secret, and a file that asks for it is a file
-// nobody can run unedited. It is written out — including into the command, where a
-// live ${VAR} would expand to an empty string because Compose reads .env there, not
-// the service's own environment block.
+// nobody can run unedited. It is written out with its value — including into the
+// command, where a bare ${VAR} would expand to an empty string because Compose reads
+// .env there, not the service's own environment block — and in the form that lets
+// the .env file override it.
 func TestCatalogDefaultsAreWrittenOutAndReachTheCommand(t *testing.T) {
 	block := serviceBlockOf(t,
 		parse(t, generate(t, fakeCatalog{"honeygain": honeygain()}, []string{"honeygain"}, Options{Hostname: "mac-mini"})),
 		"cashpilot-honeygain")
 
 	env := mapOf(t, block, "environment")
-	if env["HONEYGAIN_DEVICE_NAME"] != "cashpilot-mac-mini" {
-		t.Errorf("device name = %v, want the machine name filled in", env["HONEYGAIN_DEVICE_NAME"])
+	if env["HONEYGAIN_DEVICE_NAME"] != "${HONEYGAIN_DEVICE_NAME:-cashpilot-mac-mini}" {
+		t.Errorf("device name = %v, want the machine name as an overridable default", env["HONEYGAIN_DEVICE_NAME"])
 	}
 
 	command, _ := block["command"].(string)
-	if !strings.Contains(command, "-device cashpilot-mac-mini") {
-		t.Errorf("command = %q, want the device name spelled out", command)
+	if !strings.Contains(command, "-device ${HONEYGAIN_DEVICE_NAME:-cashpilot-mac-mini}") {
+		t.Errorf("command = %q, want the device name the environment block carries", command)
 	}
 	if !strings.Contains(command, "-email ${HONEYGAIN_EMAIL}") || !strings.Contains(command, "-pass ${HONEYGAIN_PASSWORD}") {
 		t.Errorf("command = %q, want the credentials left as placeholders the .env fills", command)
+	}
+}
+
+// A value the file already carries can be changed in the same .env file as the
+// credentials, and the header says which ones and what they are set to.
+//
+// The device name is why this matters. It carries the name of the machine the file
+// was exported FROM, so a file run on a second box registers both boxes under one
+// device name and one device id — and a provider that keys on the device id then
+// pays for one of the two. Nothing can guess the other machine's name, so the file
+// says where the name came from and takes one .env line to change.
+func TestAValueTheFileCarriesCanBeChangedWithoutEditingTheFile(t *testing.T) {
+	text := generate(t, fakeCatalog{"honeygain": honeygain()}, []string{"honeygain"}, Options{Hostname: "mac-mini"})
+
+	if !strings.Contains(text, "HONEYGAIN_DEVICE_NAME=cashpilot-mac-mini") {
+		t.Errorf("the header does not list the device name as a value to change:\n%s", text)
+	}
+	if !strings.Contains(text, "another machine") {
+		t.Errorf("the header does not say the device name came from this machine:\n%s", text)
+	}
+
+	// And a run with that variable set gets the user's name, not this machine's:
+	// ${KEY:-default} is the only form Compose fills from .env AND falls back for.
+	block := serviceBlockOf(t, parse(t, text), "cashpilot-honeygain")
+	if got := mapOf(t, block, "environment")["HONEYGAIN_DEVICE_NAME"]; !strings.HasPrefix(got.(string), "${HONEYGAIN_DEVICE_NAME:-") {
+		t.Errorf("device name = %v, which a .env entry cannot override", got)
+	}
+}
+
+// A value nobody set is not announced as changeable, or the header lists variables
+// that are not in the file.
+func TestTheHeaderOnlyListsValuesTheFileActuallyCarries(t *testing.T) {
+	svc := catalog.Service{
+		Name: "Bare", Slug: "bare", Status: "active",
+		Docker: catalog.DockerConfig{
+			Image: "example/bare:1.0",
+			Env:   []catalog.EnvVar{{Key: "TOKEN", Required: true, Secret: true}},
+		},
+	}
+	text := generate(t, fakeCatalog{"bare": svc}, []string{"bare"}, Options{Hostname: "mac-mini"})
+	if strings.Contains(text, "already have a value") {
+		t.Errorf("the header offers values to change when the file carries none:\n%s", text)
+	}
+	if strings.Contains(text, "another machine") {
+		t.Errorf("the header warns about a device name no entry declares:\n%s", text)
+	}
+}
+
+// A secret is never written, whatever the catalog says its default is.
+//
+// The rule that keeps the file shareable is "nothing the user owns", not "nothing
+// with an empty default": a catalog that ever ships a secret WITH a default — a
+// sample token, a shared bootstrap key — must still export a placeholder, or a file
+// that looks safe carries a working credential into a repository or a ticket.
+func TestASecretIsNeverWrittenEvenWhenTheCatalogGivesItADefault(t *testing.T) {
+	svc := catalog.Service{
+		Name: "Seedy", Slug: "seedy", Status: "active",
+		Docker: catalog.DockerConfig{
+			Image:   "example/seedy:1.0",
+			Env:     []catalog.EnvVar{{Key: "TOKEN", Label: "Token", Secret: true, Default: "sample-token-from-the-catalog"}},
+			Command: "--token ${TOKEN}",
+		},
+	}
+	text := generate(t, fakeCatalog{"seedy": svc}, []string{"seedy"}, Options{Hostname: "mac-mini"})
+	if strings.Contains(text, "sample-token-from-the-catalog") {
+		t.Fatalf("the secret's default was written into the file:\n%s", text)
+	}
+
+	block := serviceBlockOf(t, parse(t, text), "cashpilot-seedy")
+	if got := mapOf(t, block, "environment")["TOKEN"]; got != "${TOKEN}" {
+		t.Errorf("environment[TOKEN] = %v, want the ${TOKEN} placeholder", got)
+	}
+	if got, _ := block["command"].(string); got != "--token ${TOKEN}" {
+		t.Errorf("command = %q, want the placeholder the .env fills", got)
+	}
+	if !strings.Contains(text, "TOKEN=") {
+		t.Errorf("the header does not ask for the token, so the container would start with none:\n%s", text)
+	}
+}
+
+// "This machine" has to mean this machine. Go's name for each architecture family is
+// the catalog's name for it, and an architecture no entry publishes a separate build
+// for resolves to nothing — the image manifest decides — rather than to a guess.
+func TestHostFamilyNamesTheFamilyThisBuildRunsOn(t *testing.T) {
+	for _, tc := range []struct{ goarch, want string }{
+		{"amd64", "amd64"},
+		{"arm64", "arm64"},
+		{"arm", "arm"},
+		{" ARM64 ", "arm64"},
+		{"386", ""},
+		{"riscv64", ""},
+		{"ppc64le", ""},
+		{"", ""},
+	} {
+		if got := HostFamily(tc.goarch); got != tc.want {
+			t.Errorf("HostFamily(%q) = %q, want %q", tc.goarch, got, tc.want)
+		}
 	}
 }
 
@@ -225,8 +323,11 @@ func TestADollarSignInADefaultSurvives(t *testing.T) {
 	}
 }
 
-// THE RULE: the exported file is no weaker than a CashPilot deploy.
-func TestExportCarriesTheSameHardeningTheAppDeploysWith(t *testing.T) {
+// THE RULE: the exported file is no weaker than a CashPilot deploy. The set is the
+// web CashPilot worker's (app/orchestrator.py), which is where these images already
+// run under a dropped capability set; Desktop's own deploy path does not apply it
+// yet, so the export is the stronger of the two rather than a copy of the weaker.
+func TestExportCarriesTheHardeningTheWebWorkerDeploysWith(t *testing.T) {
 	mysterium := catalog.Service{
 		Name: "MystNodes", Slug: "mysterium", Category: "bandwidth", Status: "active",
 		Docker: catalog.DockerConfig{
@@ -454,5 +555,63 @@ func TestEveryShippingServiceExports(t *testing.T) {
 	// assertion above ran on nothing.
 	if exported < 12 {
 		t.Fatalf("only %d services exported; the catalog did not load, so this check proves nothing", exported)
+	}
+}
+
+// Every image the export can write is pinned to an immutable digest, except the two
+// ARM tags this repository knows are still floating.
+//
+// Desktop's rule is that a live entry names a digest, and internal/catalog enforces
+// it — but only for docker.image. The export is the one place that writes the
+// per-architecture overrides, and catalog-overlay has no lever for those, so
+// Traffmonetizer's ARM builds go out as moving tags: the build that was checked is
+// not necessarily the build a Raspberry Pi pulls next month.
+//
+// The exemption is two named references rather than a rule about ARM, so a new
+// unpinned override fails here, and so does leaving these in the list once the
+// overlay can pin them.
+func TestEveryExportedImageIsPinnedExceptTheKnownFloatingTags(t *testing.T) {
+	knownFloating := map[string]bool{
+		"traffmonetizer/cli_v2:arm64v8": true,
+		"traffmonetizer/cli_v2:arm32v7": true,
+	}
+	cat, err := catalog.LoadEmbedded(os.DirFS("../.."))
+	if err != nil {
+		t.Fatalf("load catalog: %v", err)
+	}
+
+	seen := map[string]bool{}
+	checked := 0
+	for _, svc := range cat.ListVisible() {
+		if svc.Docker.Image == "" {
+			continue
+		}
+		for _, arch := range []string{"", "amd64", "arm64", "arm"} {
+			text, err := Generate(cat, []string{svc.Slug}, Options{Arch: arch, Hostname: "mac-mini"})
+			if err != nil {
+				t.Errorf("%s (%s): %v", svc.Slug, arch, err)
+				continue
+			}
+			image, _ := serviceBlockOf(t, parse(t, text), "cashpilot-"+svc.Slug)["image"].(string)
+			checked++
+			if catalog.HasDigestPin(image) {
+				continue
+			}
+			if knownFloating[image] {
+				seen[image] = true
+				continue
+			}
+			t.Errorf("%s on %q exports the floating image %q; pin it or the file runs a build nobody checked", svc.Slug, arch, image)
+		}
+	}
+	for image := range knownFloating {
+		if !seen[image] {
+			t.Errorf("%q is no longer exported unpinned; drop it from the list so the gate stays honest", image)
+		}
+	}
+	// Four architectures over sixteen container entries. Far below that means the
+	// catalog did not load and every assertion above ran on nothing.
+	if checked < 48 {
+		t.Fatalf("only %d images checked; the catalog did not load, so this check proves nothing", checked)
 	}
 }
