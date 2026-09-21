@@ -2,13 +2,12 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"path/filepath"
-	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/health"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -16,7 +15,7 @@ import (
 // producerApp is an App with a real store and the shipped catalog, which is all
 // producerStates touches. keyring.MockInit is installed by TestMain in
 // fleet_server_test.go, so the store's key stays in memory.
-func producerApp(t *testing.T) (*App, string) {
+func producerApp(t *testing.T) *App {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", dir)
@@ -33,87 +32,89 @@ func producerApp(t *testing.T) (*App, string) {
 	if err != nil {
 		t.Fatalf("catalog.LoadEmbedded error: %v", err)
 	}
-	return &App{cfg: cfg, store: st, catalog: cat, ctx: context.Background()}, cfg.DataDir()
+	return &App{cfg: cfg, store: st, catalog: cat, ctx: context.Background()}
 }
 
-// recordCrashes writes the unexpected-exit events HealthScores counts as crashes.
-func recordCrashes(app *App, slug string, n int) {
-	for i := 0; i < n; i++ {
-		app.store.RecordEvent(slug, "process_error", "exit status 1")
-	}
+func verdictText(r health.Report) string {
+	return string(r.State) + ": " + strings.Join(r.Reasons, " | ")
 }
 
-// backdateEvents moves every recorded event into the past, which is the only way to
-// test the window: the store always stamps an event with the time it was written.
-func backdateEvents(t *testing.T, dataDir string, days int) {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "cashpilot-desktop.db"))
-	if err != nil {
-		t.Fatalf("open the store file: %v", err)
-	}
-	defer db.Close()
-	res, err := db.Exec(`UPDATE runtime_events SET created_at = datetime('now', ?)`, "-"+strconv.Itoa(days)+" days")
-	if err != nil {
-		t.Fatalf("backdate events: %v", err)
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		t.Fatal("no events were backdated, so this test would prove nothing")
-	}
+// failedActionEvents are every event name production writes that store.HealthScores
+// counts as a "crash" (it counts '%_error' and 'missing_from_runtime'). Every one of
+// them is a user action that failed or a record being tidied up — Desktop writes no
+// event at all when a container exits on its own. They are listed here so that a new
+// one cannot quietly start driving an earning verdict.
+var failedActionEvents = []string{
+	"deploy_error", "stop_error", "start_error", "restart_error", "remove_error",
+	"missing_from_runtime",
 }
 
-// TestARunningServiceThatKeepsCrashingIsReportedAsNotEarning walks the whole wiring:
-// a deployment the runtime calls "running", crashes recorded in the store, and a
-// verdict that contradicts the green status pill.
-func TestARunningServiceThatKeepsCrashingIsReportedAsNotEarning(t *testing.T) {
-	app, _ := producerApp(t)
-	recordCrashes(app, "bitping", 3)
+// TestAFailedClickIsNotARestartLoop is the case that put a red "not earning" badge on
+// a healthy service: the container runtime is off, the user clicks Deploy three
+// times, then starts Docker and the deploy works. Nothing about those three failures
+// says the container is looping, and the badge would have stayed up for a day.
+func TestAFailedClickIsNotARestartLoop(t *testing.T) {
+	for _, event := range failedActionEvents {
+		t.Run(event, func(t *testing.T) {
+			app := producerApp(t)
+			for i := 0; i < 5; i++ {
+				app.store.RecordEvent("bitping", event, "Cannot connect to the Docker daemon")
+			}
 
-	got := app.producerStates([]store.Deployment{{Slug: "bitping", Status: "running"}})
+			got := app.producerStates([]store.Deployment{{Slug: "bitping", Status: "running", Runtime: "docker"}})
 
-	verdict, ok := got["bitping"]
-	if !ok {
-		t.Fatal("a deployed service must get a verdict")
-	}
-	if !verdict.State.NotEarning() {
-		t.Fatalf("a service crashing repeatedly today is not earning; got %q %v", verdict.State, verdict.Reasons)
+			if got["bitping"].State.NotEarning() {
+				t.Fatalf("a failed user action is not a container exit; got %s", verdictText(got["bitping"]))
+			}
+		})
 	}
 }
 
-// TestCrashesFromDaysAgoAreNotTodaysRestartLoop. The health score reads a rolling
-// week, which is right for a reputation and wrong for "is it looping now": a service
-// that crashed three times last week and has run since would otherwise wear a red
-// "not earning" badge for the rest of the week.
-func TestCrashesFromDaysAgoAreNotTodaysRestartLoop(t *testing.T) {
-	app, dataDir := producerApp(t)
-	recordCrashes(app, "bitping", 5)
-	backdateEvents(t, dataDir, 3)
+// TestARestartingServiceIsReportedAsNotEarning is the positive control for the test
+// above: the restart-loop signal that IS real must still reach the dashboard, or
+// every check here would pass on a verdict that never says anything.
+func TestARestartingServiceIsReportedAsNotEarning(t *testing.T) {
+	app := producerApp(t)
 
-	got := app.producerStates([]store.Deployment{{Slug: "bitping", Status: "running"}})
+	got := app.producerStates([]store.Deployment{{Slug: "bitping", Status: "restarting", Runtime: "docker"}})
 
-	if got["bitping"].State.NotEarning() {
-		t.Fatalf("crashes from three days ago are not a loop today; got %q %v",
-			got["bitping"].State, got["bitping"].Reasons)
+	if !got["bitping"].State.NotEarning() {
+		t.Fatalf("a container the runtime keeps restarting is not earning; got %s", verdictText(got["bitping"]))
 	}
 }
 
 // TestAStoppedServiceIsNotAccusedOfNotEarning: the status pill already says it is
 // stopped, and there is nothing to judge about a container that is not running.
 func TestAStoppedServiceIsNotAccusedOfNotEarning(t *testing.T) {
-	app, _ := producerApp(t)
-	recordCrashes(app, "bitping", 5)
+	app := producerApp(t)
 
-	got := app.producerStates([]store.Deployment{{Slug: "bitping", Status: "exited"}})
+	got := app.producerStates([]store.Deployment{{Slug: "bitping", Status: "exited", Runtime: "docker"}})
 
 	if got["bitping"].State.NotEarning() {
-		t.Fatalf("a stopped service earns nothing by definition; got %q %v",
-			got["bitping"].State, got["bitping"].Reasons)
+		t.Fatalf("a stopped service earns nothing by definition; got %s", verdictText(got["bitping"]))
 	}
 }
 
-// TestNoDeploymentsMeansNoVerdicts, so the dashboard has nothing to render and the
-// store is not queried for a window nobody will read.
+// TestANativeServiceIsNotJudgedByContainerSignals. Mysterium is the one catalogued
+// service Desktop can run as a plain process, and its declared signal explains itself
+// as a container that was built without two capabilities, ending "redeploy Mysterium
+// from the dashboard". Told to a user with no container, that is advice they cannot
+// act on.
+func TestANativeServiceIsNotJudgedByContainerSignals(t *testing.T) {
+	app := producerApp(t)
+
+	native := app.producerStates([]store.Deployment{{Slug: "mysterium", Status: "running", Runtime: "native"}})["mysterium"]
+	if native.State != health.StateNotChecked {
+		t.Fatalf("a native process cannot be judged by container signals; got %s", verdictText(native))
+	}
+	if strings.TrimSpace(strings.Join(native.Reasons, "")) == "" {
+		t.Error("and it must say why it has nothing to report")
+	}
+}
+
+// TestNoDeploymentsMeansNoVerdicts, so the dashboard has nothing to render.
 func TestNoDeploymentsMeansNoVerdicts(t *testing.T) {
-	app, _ := producerApp(t)
+	app := producerApp(t)
 	if got := app.producerStates(nil); got != nil {
 		t.Fatalf("no deployments means no verdicts; got %v", got)
 	}

@@ -5,29 +5,29 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
-// producerCrashWindowDays is the window the restart-loop signal counts unexpected
-// exits over. One day, not the seven the health score uses: the score is a rolling
-// reputation, this is "is it looping right now", and a service that crashed three
-// times last Tuesday and has run since is not looping today.
-const producerCrashWindowDays = 1
-
 // producerStates gathers the per-service "is it actually earning?" verdicts that
 // container state cannot give (see internal/health). It is the wiring only: every
 // judgement lives in that package, and every log read is bounded there.
+//
+// Note what is deliberately NOT wired in: store.HealthScores' crash count. That
+// counts rows matching '%_error', and every such row production writes is a user
+// action that failed — deploy_error, stop_error, start_error, restart_error,
+// remove_error (internal/services/manager.go). Three failed Deploy clicks while the
+// container runtime was off would have put a red "it keeps stopping unexpectedly"
+// badge on a service that is up and earning, for the rest of the day. Desktop
+// records no event at all for a container that exits on its own, so that half of the
+// restart-loop signal had no real input; the runtime's own "restarting" state, which
+// internal/health reads from the deployment status, is the one that works.
 func (a *App) producerStates(deployments []store.Deployment) map[string]health.Report {
 	if len(deployments) == 0 {
 		return nil
-	}
-	var crashes map[string]store.HealthScore
-	if a.store != nil {
-		crashes = a.store.HealthScores(producerCrashWindowDays)
 	}
 	deployed := make([]health.Deployed, 0, len(deployments))
 	for _, dep := range deployments {
 		deployed = append(deployed, health.Deployed{
 			Slug:           dep.Slug,
 			ContainerState: dep.Status,
-			RecentCrashes:  crashes[dep.Slug].Crashes,
+			Runtime:        dep.Runtime,
 		})
 	}
 	// a.services is nil in the scheduler tests, and a.catalog before startup finishes;

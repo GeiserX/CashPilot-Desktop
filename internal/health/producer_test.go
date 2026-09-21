@@ -143,19 +143,90 @@ func TestRestartLoopIsNotEarningEvenWithNoSignals(t *testing.T) {
 	}
 }
 
-// TestRepeatedCrashesTodayAreARestartLoop, and its boundary: one bad night is an
-// incident, not a loop. Flagging every service that ever crashed would make the badge
-// noise the user learns to ignore.
-func TestRepeatedCrashesTodayAreARestartLoop(t *testing.T) {
-	looping := Assess(Input{Slug: "storj", ContainerState: "running", RecentCrashes: restartLoopCrashes})
-	if looping.State != StateFailing {
-		t.Errorf("%d unexpected exits today is a loop; got %q", restartLoopCrashes, looping.State)
+// storjLog is a log tail around the real failure the catalog's storj signal was
+// written for: the node is up and the container is healthy, but every satellite that
+// tries to dial it back at its advertised address times out.
+const storjLog = `
+2026-08-14T09:12:40Z INFO piecestore download started
+2026-08-14T09:13:02Z ERROR contact:service ping satellite failed {"Satellite ID": "12EayRS2V1k", "error": "check-in ratelimit: failed to dial storage node (ID: 1MzVZ) at address 81.44.12.7:28967: rpc: dial tcp 81.44.12.7:28967: i/o timeout"}
+2026-08-14T09:14:02Z ERROR contact:service ping satellite failed {"Satellite ID": "12L9ZFwhzVp", "error": "failed to dial storage node (ID: 1MzVZ) at address 81.44.12.7:28967"}
+`
+
+// TestRealStorjSignalMakesARunningNodeNotEarning. This is the only shipped pattern
+// with a regex metacharacter in it, so it is the one whose behaviour is least
+// obviously the same in Go as in the Python the catalog was written against.
+func TestRealStorjSignalMakesARunningNodeNotEarning(t *testing.T) {
+	svc := realService(t, "storj")
+	if len(svc.Docker.HealthSignals) == 0 {
+		t.Fatal("the shipped storj entry declares no health signals, so this test would prove nothing")
 	}
 
-	occasional := Assess(Input{Slug: "storj", ContainerState: "running", RecentCrashes: restartLoopCrashes - 1})
-	if occasional.State.NotEarning() {
-		t.Errorf("%d exits is an incident, not a loop; got %q (%s)",
-			restartLoopCrashes-1, occasional.State, reasonText(occasional))
+	got := Assess(Input{
+		Slug:           "storj",
+		ContainerState: "running",
+		Signals:        svc.Docker.HealthSignals,
+		Logs:           storjLog,
+		LogsRead:       true,
+	})
+
+	if got.State != StateFailing {
+		t.Fatalf("a node no satellite can dial back is not earning; got %q (%s)", got.State, reasonText(got))
+	}
+	want := collapseSpace(svc.Docker.HealthSignals[0].Means)
+	if !strings.Contains(reasonText(got), want) {
+		t.Errorf("the verdict must explain it in the catalog's own words.\n got: %s\nwant: %s", reasonText(got), want)
+	}
+}
+
+// TestStorjNoiseDoesNotMatchTheDialFailure is the control. The pattern spans two
+// phrases with `.*` between them, which matches anything on one line -- including,
+// if it were written loosely, an ordinary successful ping and an unrelated dial
+// error from somewhere else in the log.
+func TestStorjNoiseDoesNotMatchTheDialFailure(t *testing.T) {
+	svc := realService(t, "storj")
+	quiet := "2026-08-14T09:12:40Z INFO contact:service ping satellite success\n" +
+		"2026-08-14T09:12:55Z INFO piecestore upload started\n"
+
+	got := Assess(Input{
+		Slug:           "storj",
+		ContainerState: "running",
+		Signals:        svc.Docker.HealthSignals,
+		Logs:           quiet,
+		LogsRead:       true,
+	})
+
+	if got.State.NotEarning() {
+		t.Fatalf("a successful ping is not a dial failure; got %q (%s)", got.State, reasonText(got))
+	}
+}
+
+// TestANativeProcessIsNotJudgedByContainerSignals. The catalog's signals live under a
+// service's docker: stanza and explain themselves as a container -- mysterium's ends
+// "redeploy Mysterium from the dashboard", which is not something the user of a
+// supervised process can do. Mysterium is the one service Desktop runs either way.
+func TestANativeProcessIsNotJudgedByContainerSignals(t *testing.T) {
+	svc := realService(t, "mysterium")
+	in := Input{
+		Slug:           "mysterium",
+		ContainerState: "running",
+		Signals:        svc.Docker.HealthSignals,
+		Logs:           mysteriumLog,
+		LogsRead:       true,
+	}
+
+	inContainer := Assess(in)
+	in.Native = true
+	natively := Assess(in)
+
+	if inContainer.State != StateFailing {
+		t.Fatalf("CONTROL: the same logs in a container must still be a finding; got %q", inContainer.State)
+	}
+	if natively.State != StateNotChecked {
+		t.Fatalf("a container's explanation must not be told to someone with no container; got %q (%s)",
+			natively.State, reasonText(natively))
+	}
+	if strings.Contains(reasonText(natively), "container was created") {
+		t.Errorf("and the container-specific advice must not leak through: %s", reasonText(natively))
 	}
 }
 

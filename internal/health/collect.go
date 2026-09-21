@@ -19,13 +19,18 @@ type ServiceLookup interface {
 	Get(slug string) (catalog.Service, bool)
 }
 
+// NativeRuntime is the runtime kind for a service supervised as a process on the
+// user's own machine (internal/runtime.NativeRuntimeKind). It is repeated here rather
+// than imported so this package stays a leaf with no runtime dependency.
+const NativeRuntime = "native"
+
 // Deployed is one deployed service as the caller sees it, before any judgement.
 type Deployed struct {
 	Slug string
 	// ContainerState is the runtime's word for it; empty means it could not be asked.
 	ContainerState string
-	// RecentCrashes must come from a SHORT window — see Input.RecentCrashes.
-	RecentCrashes int
+	// Runtime is which backend is running it: "docker", "podman" or NativeRuntime.
+	Runtime string
 }
 
 // logLines is how much log tail to match against. Enough to catch a signal that
@@ -43,7 +48,9 @@ const logTimeout = 3 * time.Second
 // Logs are read ONLY for a service whose catalog entry declares signals to match them
 // against, and only while its container is up — reading a log tail nobody has a
 // pattern for would be a container-runtime round trip per service per refresh, spent
-// to learn nothing.
+// to learn nothing. A natively supervised process is skipped for a second reason: the
+// catalog's signals sit under its docker: stanza and explain themselves in terms of a
+// container, so matching them there produces advice the user cannot act on.
 func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deployed []Deployed) map[string]Report {
 	if len(deployed) == 0 {
 		return nil
@@ -56,9 +63,9 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 		in := Input{
 			Slug:           dep.Slug,
 			ContainerState: dep.ContainerState,
-			RecentCrashes:  dep.RecentCrashes,
+			Native:         dep.Runtime == NativeRuntime,
 		}
-		if services != nil {
+		if services != nil && !in.Native {
 			if svc, ok := services.Get(dep.Slug); ok {
 				in.Signals = svc.Docker.HealthSignals
 			}

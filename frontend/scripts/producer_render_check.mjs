@@ -45,7 +45,7 @@ const idle = { slug: "demo", state: "idle", reasons: ["Nobody is buying right no
 const notChecked = {
   slug: "bitping",
   state: "not-checked",
-  reasons: ["This service declares no log signals, so its logs cannot tell us whether it is earning."],
+  reasons: ["CashPilot cannot yet tell from this service's own messages whether it is earning."],
 };
 
 // ---------------------------------------------------------------------------
@@ -73,7 +73,7 @@ check("an unchecked service still shows a badge -- silence would read as fine", 
 check("it says it was not checked", /not checked/.test(label(unknown)), label(unknown));
 check("it does not accuse the service of anything", !/not earning/.test(label(unknown)), label(unknown));
 check("and it is not green", !unknown.includes("--success"), unknown);
-check("it explains why it could not tell", tooltip(unknown).includes("no log signals"), tooltip(unknown));
+check("it explains why it could not tell", tooltip(unknown).includes("cannot yet tell"), tooltip(unknown));
 
 // A state this frontend has never heard of is the same situation: we cannot read
 // the answer, so we must not pretend we can.

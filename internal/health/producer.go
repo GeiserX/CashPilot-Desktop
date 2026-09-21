@@ -17,9 +17,12 @@
 //     (docker.health_signals). Service-specific knowledge lives in the catalog, never
 //     here, and for the catalogued services with no earnings collector this is the
 //     only signal there is.
-//   - Restart loops — a container the runtime keeps restarting, or one that has
-//     exited unexpectedly several times in the last day, spends most of its life
-//     starting up rather than working.
+//   - Restart loops — a container the runtime itself reports as "restarting" spends
+//     most of its life starting up rather than working. This is the runtime's own
+//     observation, not a tally kept here: Desktop records an event for a user action
+//     that failed, never for a container that exited on its own, so counting those
+//     events would accuse a healthy service of looping because the user clicked
+//     Deploy three times while the container runtime was off.
 //
 // What is NOT here matters just as much. There is no "producing" verdict: nothing
 // Desktop can see from a container proves money moved, and a green "earning" badge
@@ -67,11 +70,6 @@ const (
 	containerRestarting = "restarting"
 )
 
-// restartLoopCrashes is how many unexpected exits in the caller's recent window count
-// as a loop. One crash is an incident; three is a pattern, and a service that has to
-// be restarted three times a day is not working for most of that day.
-const restartLoopCrashes = 3
-
 // maxLogChars caps how much of the log tail a pattern is matched against. Go's regexp
 // runs in time linear in the input, so a hostile catalog pattern cannot hang the app,
 // but there is no reason to scan a megabyte of history to answer "what is it doing
@@ -96,6 +94,12 @@ type Input struct {
 	// is down when we simply could not look sends them to restart something that is
 	// probably up.
 	ContainerState string
+	// Native says this service runs as a supervised process on the user's own
+	// machine rather than in a container. The catalog's signals live under its
+	// docker: stanza and their explanations are written about a container -- the
+	// mysterium one tells the user to redeploy a container that, here, does not
+	// exist -- so they are not matched against a native process's logs.
+	Native bool
 	// Signals are the log patterns this service's catalog entry declares. None is the
 	// normal case: most services declare none, and that makes them not-checked rather
 	// than fine.
@@ -105,11 +109,6 @@ type Input struct {
 	// and only one of those is worth telling the user about.
 	Logs     string
 	LogsRead bool
-	// RecentCrashes is the number of unexpected exits in a SHORT window — Desktop
-	// passes the last day. A week-long count would be wrong here: a service that
-	// crashed three times last Tuesday and has run since is not looping today, and
-	// flagging it as not earning all week is a false accusation.
-	RecentCrashes int
 }
 
 // Hit is one declared signal that was found in the logs.
@@ -194,18 +193,17 @@ func Assess(in Input) Report {
 		reasons = append(reasons, reason)
 	}
 
-	// A container the runtime is restarting right now, and one that keeps exiting
-	// unexpectedly, are the same finding seen from two places: it is starting up far
-	// more than it is working. Either is enough on its own.
+	// A container the runtime is restarting right now is starting up far more than it
+	// is working, whatever its logs say.
 	if in.ContainerState == containerRestarting {
 		add(StateFailing, "It keeps restarting, so it never runs long enough to earn.")
-	} else if in.RecentCrashes >= restartLoopCrashes {
-		add(StateFailing, "It has stopped unexpectedly several times today, so it is restarting more than it is working.")
 	}
 
 	switch {
+	case in.Native:
+		add(StateNotChecked, "This service runs directly on your computer rather than in a container, and these checks only work on a container.")
 	case len(in.Signals) == 0:
-		add(StateNotChecked, "This service declares no log signals, so its logs cannot tell us whether it is earning.")
+		add(StateNotChecked, "CashPilot cannot yet tell from this service's own messages whether it is earning.")
 	case !in.LogsRead:
 		add(StateNotChecked, "We could not read its logs, so nothing in them is judged.")
 	default:
