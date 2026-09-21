@@ -134,16 +134,14 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		return ContainerInfo{}, fmt.Errorf("%s has no Docker image", svc.Name)
 	}
 
-	name := containerName(spec.Slug)
-	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: false})
-
-	if progress != nil {
-		progress("Pulling " + svc.Docker.Image)
-	}
-	if err := pullImage(ctx, cli, svc.Docker.Image, progress); err != nil {
-		return ContainerInfo{}, err
-	}
-
+	// Everything that can fail on the catalog entry alone is built and checked
+	// BEFORE the running container is removed. A redeploy removes the existing
+	// cashpilot-<slug> container, so a port string, a blocked device or a malformed
+	// mem_limit discovered after that point would leave the user with no container
+	// at all: an entry-level mistake would take down an earner that was working a
+	// second earlier, and the deploy that replaced it never existed. The pull is on
+	// this side of the line for the same reason — a registry outage or a typo'd
+	// image must not cost the running container either.
 	env := buildEnv(svc, spec.Env)
 	ports, bindings, err := buildPorts(svc.Docker.Ports)
 	if err != nil {
@@ -171,6 +169,17 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if err != nil {
 		return ContainerInfo{}, err
 	}
+
+	if progress != nil {
+		progress("Pulling " + svc.Docker.Image)
+	}
+	if err := pullImage(ctx, cli, svc.Docker.Image, progress); err != nil {
+		return ContainerInfo{}, err
+	}
+
+	// Past this point the deploy is destructive: the existing container goes.
+	name := containerName(spec.Slug)
+	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: false})
 
 	if progress != nil {
 		progress("Creating " + name)
@@ -684,7 +693,7 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 var allowedDevices = map[string]bool{"/dev/net/tun": true}
 
 // buildDevices maps a service's declared docker.devices onto the container, and
-// refuses anything outside the ceiling.
+// refuses anything outside the ceiling or any entry that names no host device.
 //
 // Refusing is deliberate: dropping an unknown device silently would deploy a
 // container that looks healthy and cannot do the job it was deployed for, which is
@@ -701,7 +710,12 @@ func buildDevices(declared []string) ([]container.DeviceMapping, error) {
 		parts := strings.Split(entry, ":")
 		host := strings.TrimRight(strings.TrimSpace(parts[0]), "/")
 		if host == "" {
-			continue
+			// ":/dev/net/tun" declares a container path and no host path. Skipping it
+			// deploys a container missing a device its entry asked for, which is the
+			// failure this whole path exists to prevent, so it is refused the same way
+			// a device outside the ceiling is. A wholly blank entry is still skipped
+			// above: that is a stray list item, not a half-written mapping.
+			return nil, fmt.Errorf("device %q declares no host path", entry)
 		}
 		if !allowedDevices[host] {
 			blocked = append(blocked, host)

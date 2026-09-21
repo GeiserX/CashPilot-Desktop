@@ -84,6 +84,28 @@ func TestADeviceOutsideTheCeilingIsRefused(t *testing.T) {
 	}
 }
 
+// A declaration with no host path is a half-written mapping, not a device.
+// ":/dev/net/tun" names where the device should appear inside the container and
+// never says which host device to map, and it used to be skipped: the deploy
+// succeeded and the container came up without the device its entry asked for. That
+// is the Mysterium failure exactly — healthy in every view, carrying no traffic —
+// reached from the other direction, so it is refused like a blocked device.
+func TestADeviceWithNoHostPathIsRefused(t *testing.T) {
+	for _, entry := range []string{":/dev/net/tun", ":/dev/net/tun:rwm", "/:/dev/net/tun"} {
+		svc := catalog.Service{Name: "Halfwritten"}
+		svc.Docker.Devices = []string{entry}
+
+		hostConfig, err := buildHostConfig(svc, nil, nil)
+		if err == nil {
+			t.Errorf("the device declaration %q was accepted and mapped %+v", entry, hostConfig.Resources.Devices)
+			continue
+		}
+		if !strings.Contains(err.Error(), entry) {
+			t.Errorf("the refusal of %q does not name the declaration: %v", entry, err)
+		}
+	}
+}
+
 // Docker's host:container:perms form, and the empty case.
 func TestDeviceMappingForms(t *testing.T) {
 	devices, err := buildDevices([]string{" /dev/net/tun:/dev/net/tun:rw ", "", "/dev/net/tun/"})
