@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   It is no weaker than a CashPilot deploy — it carries the hardening the CashPilot server's worker runs these images under, which is every capability dropped and only the declared ones added back, no new privileges, a PID ceiling, the declared memory ceilings, the declared devices and stop grace period. It keeps the `cashpilot.*` labels too, so CashPilot still finds and watches those containers even though it did not start them.
 
+  Choosing a CPU the image has no build for is refused, with the builds it does publish named, rather than written into a file that dies with "exec format error" on the machine it was made for. The wizard's preflight answers that question, so the export and the deploy step agree.
+
   One gap it does not paper over: Traffmonetizer's two ARM builds are exported as moving tags. Every other image in the catalog is pinned to an exact build, and those two cannot be until the catalog overlay can pin a per-architecture image.
 
 - **The card now says what the catalog already knew.** Where a provider hides its token, the minimum before you can cash out and the unit it is counted in, how and how often you get paid, and what the service does with your connection and your account. A value nobody has documented shows as an em dash rather than a zero, because "no minimum documented" and "the minimum is zero" are different facts and one of them says you can cash out today. A balance is never counted down against a minimum in another unit either: Storj reports dollars while its minimum is in STORJ, and the two are not the same number.

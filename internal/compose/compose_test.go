@@ -444,6 +444,7 @@ func TestArchitectureChoosesTheBuildThatCanRun(t *testing.T) {
 		Docker: catalog.DockerConfig{
 			Image:       "traffmonetizer/cli_v2@sha256:6dbf",
 			ImageByArch: map[string]string{"arm64": "traffmonetizer/cli_v2:arm64v8", "arm": "traffmonetizer/cli_v2:arm32v7"},
+			Platforms:   []string{"linux/amd64"},
 		},
 	}
 	services := fakeCatalog{"traffmonetizer": traffmonetizer}
@@ -601,6 +602,11 @@ func TestEveryExportedImageIsPinnedExceptTheKnownFloatingTags(t *testing.T) {
 		for _, arch := range []string{"", "amd64", "arm64", "arm"} {
 			text, err := Generate(cat, []string{svc.Slug}, Options{Arch: arch, Hostname: "mac-mini"})
 			if err != nil {
+				// An entry with no build for this CPU is refused on purpose, and
+				// that refusal is the honest answer, not a floating image.
+				if strings.Contains(err.Error(), "has no build for") {
+					continue
+				}
 				t.Errorf("%s (%s): %v", svc.Slug, arch, err)
 				continue
 			}
@@ -625,5 +631,37 @@ func TestEveryExportedImageIsPinnedExceptTheKnownFloatingTags(t *testing.T) {
 	// catalog did not load and every assertion above ran on nothing.
 	if checked < 48 {
 		t.Fatalf("only %d images checked; the catalog did not load, so this check proves nothing", checked)
+	}
+}
+
+// TestTheExportRefusesAnArchitectureTheImageCannotRunOn: an image that publishes
+// only x86-64 builds must not be written into a file for an ARM machine. Docker
+// would pull it, start it and report "exec format error" on the one box the file
+// was made for. An image_by_arch override is a build for that family and passes;
+// an entry that declares no platforms is not refused, because nothing is known.
+func TestTheExportRefusesAnArchitectureTheImageCannotRunOn(t *testing.T) {
+	amd64Only := catalog.Service{Name: "Proxylite", Slug: "proxylite", Status: "active", Docker: catalog.DockerConfig{
+		Image: "proxylite/proxyservice@sha256:1234", Platforms: []string{"linux/amd64"},
+	}}
+	withOverride := amd64Only
+	withOverride.Docker.ImageByArch = map[string]string{"arm64": "proxylite/proxyservice:arm64"}
+	services := fakeCatalog{"proxylite": amd64Only, "override": withOverride, "honeygain": honeygain()}
+
+	if _, err := Generate(services, []string{"proxylite"}, Options{Arch: "arm64", Hostname: "pi"}); err == nil {
+		t.Fatal("an x86-64-only image was exported for a 64-bit ARM machine")
+	} else if !strings.Contains(err.Error(), "no build for 64-bit ARM") || !strings.Contains(err.Error(), "x86-64") {
+		t.Fatalf("the refusal must name the missing build and the ones that exist; got %q", err)
+	}
+	if _, err := Generate(services, []string{"proxylite"}, Options{Arch: "amd64", Hostname: "pi"}); err != nil {
+		t.Fatalf("the architecture it does publish was refused: %v", err)
+	}
+	if _, err := Generate(services, []string{"proxylite"}, Options{Arch: "", Hostname: "pi"}); err != nil {
+		t.Fatalf("no chosen architecture must not be refused: %v", err)
+	}
+	if _, err := Generate(services, []string{"override"}, Options{Arch: "arm64", Hostname: "pi"}); err != nil {
+		t.Fatalf("an image_by_arch build for that family was refused: %v", err)
+	}
+	if _, err := Generate(services, []string{"honeygain"}, Options{Arch: "arm64", Hostname: "pi"}); err != nil {
+		t.Fatalf("an entry that declares no platforms must not be refused: %v", err)
 	}
 }

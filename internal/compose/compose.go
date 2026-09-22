@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"gopkg.in/yaml.v3"
 )
@@ -196,6 +197,17 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 	image := imageFor(svc.Docker, family)
 	if image == "" {
 		return nil, nil, nil, fmt.Errorf("%s has no container image to export; it is set up outside CashPilot", svc.Name)
+	}
+	// A file for a CPU the image has no build for looks runnable and dies with
+	// "exec format error" on the machine it was made for. The wizard's preflight
+	// already knows which entries publish which builds, so the export asks it and
+	// refuses, rather than falling back to the default image and hoping. An entry
+	// that declares no platforms at all is not refused: nothing is known, and the
+	// preflight reports that as "not checked" for the same reason.
+	if family != "" {
+		if supported, known := preflight.Supports(svc.Docker, family); known && !supported {
+			return nil, nil, nil, fmt.Errorf("%s has no build for %s; it publishes %s", svc.Name, preflight.Label(family), preflight.Builds(svc.Docker))
+		}
 	}
 
 	category := svc.Category
