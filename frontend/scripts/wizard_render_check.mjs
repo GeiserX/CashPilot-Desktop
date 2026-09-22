@@ -286,11 +286,12 @@ const hostile = renderWizardServiceSetup(
     name: '<img src=x onerror=alert(1)>',
     slug: 'a" onmouseover="alert(1)',
     shortDescription: "<script>alert(1)</script>",
-    docker: { env: [envVar("K", { label: "<b>K</b>" })] },
+    docker: { env: [envVar('K" onfocus="alert(1)', { label: "<b>K</b>" })] },
   }),
   null,
   "macmini",
 );
+check("a hostile key cannot break out of its data-wizard-env attribute", !hostile.includes('onfocus="alert'), hostile);
 check("a hostile service name is escaped, never executed", !hostile.includes("<img"), hostile);
 check("a hostile description is escaped too", !hostile.includes("<script"), hostile);
 check("a hostile label is escaped", !hostile.includes("<b>"), hostile);

@@ -59,7 +59,7 @@ export function renderWizardServiceSetup(
         ${fields.map((item) => `
           <label>
             <span>${escapeHtml(item.label)}${item.required ? " *" : ""}</span>
-            <input data-wizard-env="${item.key}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(item.description)}" value="${escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
+            <input data-wizard-env="${escapeHtml(item.key)}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(item.description)}" value="${escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
