@@ -15,6 +15,7 @@ import {
   CollectService,
   CompleteOnboarding,
   DeployService,
+  ExportCompose,
   GetAppState,
   GetCredentials,
   GetFleetState,
@@ -38,6 +39,7 @@ import { renderPreflight } from "./render/preflight";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
+import { composeSelectionExport } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
@@ -1073,6 +1075,20 @@ function renderSetupWizard(current: AppState) {
       void runWizardAction(slug, action);
     });
   });
+  document.querySelectorAll<HTMLButtonElement>("[data-compose-export]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.composeExport || "";
+      const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="${slug}"]`)?.value || "";
+      void exportCompose([slug], arch, slug);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-compose-export-selection]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slugs = (button.dataset.composeExportSelection || "").split(" ").filter(Boolean);
+      const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="selection"]`)?.value || "";
+      void exportCompose(slugs, arch, "compose-selection");
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
     button.addEventListener("click", () => {
       const url = button.dataset.url;
@@ -1148,8 +1164,9 @@ function renderWizardSetup(services: Service[]) {
   return `
     <h2>Configure and deploy</h2>
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
+    ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname)).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown)).join("")}
     </div>
   `;
 }
@@ -1234,6 +1251,19 @@ async function runWizardAction(slug: string, action: string) {
       if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
       state = await GetAppState();
     }
+  } catch (error) {
+    if (output) output.textContent = String(error);
+  }
+}
+
+// Save a compose file for one service. The backend generates it, asks where to put
+// it, and answers with the path — or with "" when the save dialog was dismissed,
+// which is not an error and must not read like one.
+async function exportCompose(slugs: string[], arch: string, outputSlug: string) {
+  const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${outputSlug}"]`);
+  try {
+    const path = await ExportCompose(slugs, arch);
+    if (output) output.textContent = path ? `Saved ${path}` : "";
   } catch (error) {
     if (output) output.textContent = String(error);
   }

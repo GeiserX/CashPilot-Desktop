@@ -26,6 +26,10 @@ export function DeployService(arg1, arg2) {
   return window['go']['main']['App']['DeployService'](arg1, arg2);
 }
 
+export function ExportCompose(arg1, arg2) {
+  return window['go']['main']['App']['ExportCompose'](arg1, arg2);
+}
+
 export function GetAppState() {
   return window['go']['main']['App']['GetAppState']();
 }

@@ -13,12 +13,14 @@
 //   - an unexpanded "{hostname}" default ships the literal token to the provider as
 //     the device name.
 //
-// Pure: takes the service plus the two pieces of app state the card reads (the
-// backend's collector-field map and this machine's hostname) and returns HTML.
+// Pure: takes the service plus the pieces of app state the card reads (the
+// backend's collector-field map, this machine's hostname and the earnings
+// breakdown the facts strip shows a balance from) and returns HTML.
 
-import type { CollectorField, Service } from "../wails";
+import type { CollectorField, Service, ServiceEarning } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { serviceFormFields } from "./fields.js";
+import { composeExportControl, credentialHint, serviceFacts, signupButton } from "./details.js";
 
 /**
  * Render the setup card for one service.
@@ -31,10 +33,12 @@ export function renderWizardServiceSetup(
   service: Service,
   collectorFields: Record<string, CollectorField[]> | null | undefined,
   hostname: string | null | undefined,
+  breakdown?: ServiceEarning[] | null,
 ): string {
-  const signupUrl = service.referral?.signupUrl || service.website;
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = serviceFormFields(service, collectorFields);
+  const earning = breakdown?.find((item) => item.platform === service.slug);
+  const balance = earning && !earning.error ? {amount: earning.balance, currency: earning.currency} : null;
   return `
     <article class="wizard-setup-card" data-form-slug="${escapeHtml(service.slug)}">
       <div class="split">
@@ -45,11 +49,12 @@ export function renderWizardServiceSetup(
         <span class="pill">${service.manualOnly ? "manual" : "docker"}</span>
       </div>
       <div class="signup-strip">
-        ${signupUrl ? `<button class="primary" data-url="${escapeHtml(signupUrl)}">Create account</button>` : ""}
+        ${signupButton(service)}
         ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
         <button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>
       </div>
       ${service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
+      ${credentialHint(service)}
       <div class="credential-grid">
         ${fields.map((item) => `
           <label>
@@ -64,6 +69,8 @@ export function renderWizardServiceSetup(
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
         <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">Collect Earnings</button>
       </div>
+      ${composeExportControl(service)}
+      ${serviceFacts(service, balance)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
     </article>
   `;
