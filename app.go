@@ -22,6 +22,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/compose"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
+	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -973,6 +974,31 @@ func (a *App) GetCredentials(slug string) (map[string]string, error) {
 		return nil, err
 	}
 	return a.store.GetCredentials(slug)
+}
+
+// PreflightService reports what could stop a service earning on THIS machine,
+// before the user deploys it: a provider that forbids containers, an image with no
+// build for this CPU, a service already running on another machine in the fleet,
+// and the requirements nobody can verify from here. It never blocks a deploy — the
+// report is shown in the wizard and the Deploy button stays live either way.
+func (a *App) PreflightService(slug string) (preflight.Report, error) {
+	if err := a.ready(); err != nil {
+		return preflight.Report{}, err
+	}
+	svc, ok := a.catalog.Get(slug)
+	if !ok {
+		return preflight.Report{}, fmt.Errorf("unknown service: %s", slug)
+	}
+	devices := a.store.ListFleetDevices()
+	fleet := make([]preflight.Device, 0, len(devices))
+	for _, device := range devices {
+		fleet = append(fleet, preflight.Device{Name: device.Name, Services: device.Services})
+	}
+	return preflight.Assess(preflight.Input{
+		Service:    svc,
+		Fleet:      fleet,
+		DaemonArch: preflight.DaemonArch(a.ctx),
+	}), nil
 }
 
 func (a *App) DeployService(slug string, values map[string]string) (store.Deployment, error) {

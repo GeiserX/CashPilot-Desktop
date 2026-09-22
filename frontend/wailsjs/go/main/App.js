@@ -74,6 +74,10 @@ export function ManagedRuntimePlan() {
   return window['go']['main']['App']['ManagedRuntimePlan']();
 }
 
+export function PreflightService(arg1) {
+  return window['go']['main']['App']['PreflightService'](arg1);
+}
+
 export function PlanServiceRemoval(arg1) {
   return window['go']['main']['App']['PlanServiceRemoval'](arg1);
 }

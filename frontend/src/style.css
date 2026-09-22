@@ -1524,6 +1524,47 @@ input:focus {
   border-top: 1px solid rgba(63, 63, 70, 0.5);
 }
 
+/* The pre-deploy reality check, above the Deploy button in the wizard. Tone comes
+   from the verdict and is set inline by render/preflight.ts, so only layout lives
+   here. */
+.preflight {
+  padding: 0.9rem 1rem;
+  border-radius: 10px;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.preflight-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.preflight-summary {
+  margin: 0;
+  color: #e4e4e7;
+}
+
+.preflight-findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.preflight-findings li {
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  color: #d4d4d8;
+  background: rgba(9, 9, 15, 0.35);
+}
+
+.preflight-unchecked {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
 @media (max-width: 900px) {
   .shell,
   .grid.two,
