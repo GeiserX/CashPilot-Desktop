@@ -120,11 +120,32 @@ const writeRetryPause = 50 * time.Millisecond
 // execWrite runs a statement that takes the write lock, retrying while SQLite
 // reports the database busy. See busyTimeoutDSN for why the retry lives here.
 func (s *Store) execWrite(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := retryBusy(func() error {
+		var err error
+		res, err = s.db.Exec(query, args...)
+		return err
+	})
+	return res, err
+}
+
+// scanWrite is execWrite for a statement that both writes and returns a row
+// (INSERT ... RETURNING). It scans into dest under the same retry, so a fresh
+// fleet device cannot be lost to a busy lock any more than an earnings row can.
+func (s *Store) scanWrite(query string, args []any, dest ...any) error {
+	return retryBusy(func() error {
+		return s.db.QueryRow(query, args...).Scan(dest...)
+	})
+}
+
+// retryBusy runs op until it returns anything other than SQLITE_BUSY or the
+// retry budget is spent, pausing a random slice of writeRetryPause in between.
+func retryBusy(op func() error) error {
 	deadline := time.Now().Add(writeRetryBudget)
 	for {
-		res, err := s.db.Exec(query, args...)
+		err := op()
 		if !isBusy(err) || time.Now().After(deadline) {
-			return res, err
+			return err
 		}
 		time.Sleep(time.Duration(mrand.Int64N(int64(writeRetryPause))))
 	}
@@ -609,7 +630,7 @@ func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
 	// exists. Upserting instead keeps this no-id branch idempotent and consistent
 	// with the heartbeat path — refreshing the mutable fields onto the existing row
 	// rather than erroring or duplicating.
-	err = s.db.QueryRow(`
+	err = s.scanWrite(`
 		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(kind, name) DO UPDATE SET
@@ -621,7 +642,7 @@ func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
 			last_seen=excluded.last_seen,
 			updated_at=datetime('now')
 		RETURNING id
-	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen).Scan(&device.ID)
+	`, []any{device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen}, &device.ID)
 	if err != nil {
 		return FleetDevice{}, err
 	}
@@ -651,7 +672,7 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 	// devices. ON CONFLICT(kind, name) preserves the existing row's id and created_at
 	// and refreshes only the mutable fields — exactly what the prior UPDATE branch did
 	// — while RETURNING id yields the row id for both the insert and the update path.
-	err = s.db.QueryRow(`
+	err = s.scanWrite(`
 		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(kind, name) DO UPDATE SET
@@ -663,7 +684,7 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 			last_seen=excluded.last_seen,
 			updated_at=datetime('now')
 		RETURNING id
-	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen).Scan(&device.ID)
+	`, []any{device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen}, &device.ID)
 	if err != nil {
 		return FleetDevice{}, err
 	}

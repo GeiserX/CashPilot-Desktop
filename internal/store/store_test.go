@@ -1406,6 +1406,9 @@ func TestWriteWaitsOutAPeerHoldingTheLock(t *testing.T) {
 		}
 		close(released)
 	}()
+	// Registered after the goroutine starts so that a Fatalf below still waits for
+	// the COMMIT before the connection is closed underneath it.
+	t.Cleanup(func() { <-released })
 
 	start := time.Now()
 	if _, err := s.SaveEarnings(EarningsRecord{Platform: "honeygain", Balance: 1.5, Currency: "USD"}); err != nil {
@@ -1426,3 +1429,53 @@ func TestWriteWaitsOutAPeerHoldingTheLock(t *testing.T) {
 }
 
 func approxEqual(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
+
+// TestFleetDeviceInsertWaitsOutAPeerHoldingTheLock is the RETURNING-statement
+// twin of the earnings test above: a new fleet device is inserted through
+// QueryRow rather than Exec, and it has to wait for the lock the same way.
+func TestFleetDeviceInsertWaitsOutAPeerHoldingTheLock(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	peer, err := sql.Open("sqlite", filepath.Join(dir, "cashpilot-desktop.db"))
+	if err != nil {
+		t.Fatalf("opening the peer connection: %v", err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	ctx := context.Background()
+	conn, err := peer.Conn(ctx)
+	if err != nil {
+		t.Fatalf("taking a dedicated peer connection: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		t.Fatalf("the peer could not take the write lock: %v", err)
+	}
+
+	const hold = 1500 * time.Millisecond
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(hold)
+		if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+			t.Errorf("the peer could not release the write lock: %v", err)
+		}
+		close(released)
+	}()
+	t.Cleanup(func() { <-released })
+
+	start := time.Now()
+	saved, err := s.UpsertFleetDevice(FleetDevice{Name: "pi-4", Kind: "worker"})
+	if err != nil {
+		t.Fatalf("the insert was refused instead of waiting for the peer: %v", err)
+	}
+	if waited := time.Since(start); waited < hold-300*time.Millisecond {
+		t.Fatalf("the insert landed after %v, before the peer released the lock it held for %v", waited, hold)
+	}
+	if saved.ID == 0 {
+		t.Fatal("the insert returned no id")
+	}
+}
