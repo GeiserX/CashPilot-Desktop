@@ -241,3 +241,41 @@ func TestCollectIgnoresAnUnlabelledContainer(t *testing.T) {
 		t.Fatal("an unlabelled container must not get a verdict")
 	}
 }
+
+// slowLogs answers every read after a fixed delay, whatever the deadline says, the
+// way a container runtime that is slow rather than dead behaves.
+type slowLogs struct{ delay time.Duration }
+
+func (s slowLogs) Logs(context.Context, string, int) (string, error) {
+	time.Sleep(s.delay)
+	return "", nil
+}
+
+// TestTheWholeCollectionIsBoundedNotEachRead: bounding each read is not enough
+// on its own. Eight deployed services on a slow runtime read one after another
+// would hold a dashboard refresh for eight times the delay; read together they
+// hold it for one.
+func TestTheWholeCollectionIsBoundedNotEachRead(t *testing.T) {
+	const delay = 100 * time.Millisecond
+	const n = 8
+	services := fakeCatalog{}
+	deployed := make([]Deployed, 0, n)
+	for i := 0; i < n; i++ {
+		slug := "svc" + string(rune('a'+i))
+		services[slug] = withSignals(loginFailed)
+		deployed = append(deployed, Deployed{Slug: slug, ContainerState: "running"})
+	}
+
+	start := time.Now()
+	got := Collect(context.Background(), slowLogs{delay: delay}, services, deployed)
+	took := time.Since(start)
+
+	if len(got) != n {
+		t.Fatalf("got %d reports, want %d", len(got), n)
+	}
+	// Serial reads take n*delay; concurrent ones take about one delay. Half way
+	// between the two leaves room for a slow CI box without letting serial pass.
+	if limit := delay * n / 2; took > limit {
+		t.Fatalf("collecting %d services took %s; the reads ran one after another (limit %s)", n, took, limit)
+	}
+}

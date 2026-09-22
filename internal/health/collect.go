@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -51,11 +52,15 @@ const logTimeout = 3 * time.Second
 // to learn nothing. A natively supervised process is skipped for a second reason: the
 // catalog's signals sit under its docker: stanza and explain themselves in terms of a
 // container, so matching them there produces advice the user cannot act on.
+//
+// The log reads run at the same time, each under its own logTimeout, so the whole
+// collection costs one timeout at most rather than one per service: ten deployed
+// services on a wedged runtime used to hold a dashboard refresh for thirty seconds.
 func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deployed []Deployed) map[string]Report {
 	if len(deployed) == 0 {
 		return nil
 	}
-	out := make(map[string]Report, len(deployed))
+	inputs := make([]Input, 0, len(deployed))
 	for _, dep := range deployed {
 		if dep.Slug == "" {
 			continue
@@ -70,10 +75,26 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 				in.Signals = svc.Docker.HealthSignals
 			}
 		}
-		if len(in.Signals) > 0 && logs != nil && isUp(dep.ContainerState) {
-			in.Logs, in.LogsRead = readLogs(ctx, logs, dep.Slug)
+		inputs = append(inputs, in)
+	}
+
+	var wg sync.WaitGroup
+	for i := range inputs {
+		in := &inputs[i]
+		if len(in.Signals) == 0 || logs == nil || !isUp(in.ContainerState) {
+			continue
 		}
-		out[dep.Slug] = Assess(in)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			in.Logs, in.LogsRead = readLogs(ctx, logs, in.Slug)
+		}()
+	}
+	wg.Wait()
+
+	out := make(map[string]Report, len(inputs))
+	for _, in := range inputs {
+		out[in.Slug] = Assess(in)
 	}
 	return out
 }
