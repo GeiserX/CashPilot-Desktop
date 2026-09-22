@@ -16,8 +16,10 @@
 // CashPilot worker deploys with (app/orchestrator.py) — every capability dropped,
 // only the ones the entry declares added back, no new privileges, a PID ceiling, the
 // declared resource limits, and the declared stop grace period. That is a real,
-// running configuration for these images rather than an invention here; Desktop's
-// own deploy path is the weaker one today, and it is the one that has to catch up.
+// running configuration for these images rather than an invention here, and it is
+// the same set Desktop's own deploy path applies (internal/runtime/hardening.go),
+// so a container started from the file is exactly as protected as one started
+// from the dashboard.
 //
 // And it must not contain a single credential. Everything the user has to supply is
 // written as a ${VAR} placeholder, never a value, so the file is safe to keep in a
