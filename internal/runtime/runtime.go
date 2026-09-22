@@ -1187,7 +1187,7 @@ func InstallGuides() []InstallGuide {
 func (g InstallGuide) Supports(osName string) bool {
 	for _, platform := range g.Platforms {
 		if platform == osName {
-			return allowedDevices[host]
+			return true
 		}
 	}
 	return false
