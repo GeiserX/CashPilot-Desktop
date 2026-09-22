@@ -17,7 +17,8 @@ declare module "../wailsjs/go/main/App" {
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
   export function RestartService(slug: string): Promise<void>;
-  export function RemoveService(slug: string): Promise<void>;
+  export function RemoveService(slug: string, deleteData: boolean, allowCritical: boolean): Promise<void>;
+  export function PlanServiceRemoval(slug: string): Promise<RemovalPlan>;
   export function GetLogs(slug: string, lines: number): Promise<string>;
   export function RefreshDeployments(): Promise<Deployment[]>;
   export function CollectService(slug: string): Promise<EarningsRecord>;
@@ -391,4 +392,25 @@ export interface ManagedRuntimePlan {
   phases: string[];
   risks: string[];
   providers: string[];
+}
+
+// DataMount is one place a deployed service keeps data on this machine.
+export interface DataMount {
+  target: string;
+  source: string;
+  // Named Docker volumes are the only kind removal can delete; a bind mount is a
+  // folder the user owns and is always left alone.
+  volume: boolean;
+  critical: boolean;
+  holds: string;
+}
+
+// RemovalPlan is what removing a service would delete, read off the live container so
+// the question the user answers names the real data.
+export interface RemovalPlan {
+  slug: string;
+  name: string;
+  volumes: DataMount[] | null;
+  binds: DataMount[] | null;
+  catalogKnown: boolean;
 }
