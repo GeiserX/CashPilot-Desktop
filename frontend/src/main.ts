@@ -15,6 +15,7 @@ import {
   CollectService,
   CompleteOnboarding,
   DeployService,
+  ExportCompose,
   GetAppState,
   GetCredentials,
   GetFleetState,
@@ -38,6 +39,7 @@ import { renderPreflight } from "./render/preflight";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { serviceFormFields } from "./render/fields";
+import { composeExportControl, composeSelectionExport, credentialHint, serviceFacts, signupButton } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
@@ -1073,6 +1075,20 @@ function renderSetupWizard(current: AppState) {
       void runWizardAction(slug, action);
     });
   });
+  document.querySelectorAll<HTMLButtonElement>("[data-compose-export]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slug = button.dataset.composeExport || "";
+      const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="${slug}"]`)?.value || "";
+      void exportCompose([slug], arch, slug);
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-compose-export-selection]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const slugs = (button.dataset.composeExportSelection || "").split(" ").filter(Boolean);
+      const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="selection"]`)?.value || "";
+      void exportCompose(slugs, arch, "compose-selection");
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
     button.addEventListener("click", () => {
       const url = button.dataset.url;
@@ -1148,6 +1164,7 @@ function renderWizardSetup(services: Service[]) {
   return `
     <h2>Configure and deploy</h2>
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
+    ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
       ${services.map(renderWizardServiceSetup).join("")}
     </div>
@@ -1155,9 +1172,10 @@ function renderWizardSetup(services: Service[]) {
 }
 
 function renderWizardServiceSetup(service: Service) {
-  const signupUrl = service.referral?.signupUrl || service.website;
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = serviceFormFields(service, state?.collectorFields);
+  const earning = state?.summary?.breakdown?.find((item) => item.platform === service.slug);
+  const balance = earning && !earning.error ? {amount: earning.balance, currency: earning.currency} : null;
   return `
     <article class="wizard-setup-card" data-form-slug="${escapeHtml(service.slug)}">
       <div class="split">
@@ -1168,11 +1186,12 @@ function renderWizardServiceSetup(service: Service) {
         <span class="pill">${service.manualOnly ? "manual" : "docker"}</span>
       </div>
       <div class="signup-strip">
-        ${signupUrl ? `<button class="primary" data-url="${escapeHtml(signupUrl)}">Create account</button>` : ""}
+        ${signupButton(service)}
         ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
         <button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>
       </div>
       ${service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
+      ${credentialHint(service)}
       <div class="credential-grid">
         ${fields.map((item) => `
           <label>
@@ -1187,6 +1206,8 @@ function renderWizardServiceSetup(service: Service) {
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
         <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">Collect Earnings</button>
       </div>
+      ${composeExportControl(service)}
+      ${serviceFacts(service, balance)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
     </article>
   `;
@@ -1272,6 +1293,19 @@ async function runWizardAction(slug: string, action: string) {
       if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
       state = await GetAppState();
     }
+  } catch (error) {
+    if (output) output.textContent = String(error);
+  }
+}
+
+// Save a compose file for one service. The backend generates it, asks where to put
+// it, and answers with the path — or with "" when the save dialog was dismissed,
+// which is not an error and must not read like one.
+async function exportCompose(slugs: string[], arch: string, outputSlug: string) {
+  const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${outputSlug}"]`);
+  try {
+    const path = await ExportCompose(slugs, arch);
+    if (output) output.textContent = path ? `Saved ${path}` : "";
   } catch (error) {
     if (output) output.textContent = String(error);
   }

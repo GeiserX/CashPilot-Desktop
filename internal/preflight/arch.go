@@ -172,6 +172,18 @@ func describeBuilds(docker catalog.DockerConfig) string {
 	return strings.Join(names, ", ")
 }
 
+// Supports is supports for callers outside this package. The compose export asks
+// it before writing a file for a chosen architecture, so the same rule that
+// warns in the wizard refuses an export that could not run: one answer, not two.
+func Supports(docker catalog.DockerConfig, machine string) (supported bool, known bool) {
+	return supports(docker, machine)
+}
+
+// Builds is describeBuilds for callers outside this package.
+func Builds(docker catalog.DockerConfig) string {
+	return describeBuilds(docker)
+}
+
 // supports answers whether a catalog entry has a build that runs on this machine.
 //
 // known is false when it cannot be told: no reported architecture, an architecture

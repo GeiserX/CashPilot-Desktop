@@ -787,6 +787,13 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 // discovery and earns nothing, which is the failure this exists to close.
 var allowedDevices = map[string]bool{"/dev/net/tun": true}
 
+// AllowedDevice reports whether a host device is inside the ceiling. The compose
+// export checks against this same list, so a file CashPilot writes can never map
+// a device the app itself would refuse to deploy.
+func AllowedDevice(host string) bool {
+	return allowedDevices[host]
+}
+
 // buildDevices maps a service's declared docker.devices onto the container, and
 // refuses anything outside the ceiling or any entry that names no host device.
 //

@@ -1587,3 +1587,71 @@ input:focus {
     height: auto;
   }
 }
+
+/* Provider facts under a service's setup card: what it pays, how, and what it does
+   with the machine. Two columns on a wide card, one on a narrow one. */
+.service-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.detail-block {
+  padding: 0.9rem 1rem;
+  background: rgba(24, 20, 40, 0.5);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.detail-title {
+  display: block;
+  margin-bottom: 0.6rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.detail-facts {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.detail-fact {
+  display: grid;
+  grid-template-columns: minmax(120px, 40%) 1fr;
+  gap: 0.6rem;
+  font-size: 0.86rem;
+}
+
+.detail-fact dt {
+  color: var(--text-muted);
+}
+
+.detail-fact dd {
+  margin: 0;
+  color: #e4e4e7;
+}
+
+.compose-export {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+
+.compose-arch {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.compose-arch select {
+  padding: 0.45rem 0.6rem;
+  color: #e4e4e7;
+  background: rgba(10, 8, 20, 0.82);
+  border: 1px solid rgba(63, 63, 70, 0.72);
+  border-radius: 8px;
+}
