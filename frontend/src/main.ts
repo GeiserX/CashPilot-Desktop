@@ -32,7 +32,7 @@ import {
   StopService,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
-import { renderHealthBadge } from "./render/health";
+import { renderHealthBadge, renderProducerBadge } from "./render/health";
 import { renderMystNodes } from "./render/myst";
 import { renderPreflight } from "./render/preflight";
 import { renderEarningBreakdown } from "./render/earnings";
@@ -40,7 +40,7 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { serviceFormFields } from "./render/fields";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
-import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -271,7 +271,7 @@ function renderDashboard(current: AppState) {
             </div>
           </div>
           <div class="services-table-wrap">
-            ${renderServicesTable(services, deployments, earnings, current.health, current.serviceDetails, current.outdatedServices)}
+            ${renderServicesTable(services, deployments, earnings, current.health, current.serviceDetails, current.outdatedServices, current.producerStates)}
           </div>
         </section>
         <pre id="service-output" class="output dashboard-output"></pre>
@@ -909,7 +909,7 @@ function renderPointsSection(points: PointsBalance[]) {
   `;
 }
 
-function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null, outdated: string[] | null) {
+function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null, outdated: string[] | null, producerStates: Record<string, ProducerReport> | null = null) {
   if (deployments.length === 0) {
     return `
       <div class="empty-state">
@@ -944,7 +944,7 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
                 <strong>${escapeHtml(service?.name || deployment.slug)}</strong>
                 <small>${escapeHtml(deployment.image)}</small>
               </td>
-              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
+              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${renderProducerBadge(producerStates?.[deployment.slug], deployment.status)}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
               <td>${earning && !earning.error ? formatBalance(earning.balance, earning.currency) : "<span class=\"muted\">--</span>"}</td>
               <td>${deployment.cpuPercent.toFixed(1)}%</td>
               <td>${deployment.memoryMb.toFixed(0)} MB</td>
