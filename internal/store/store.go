@@ -9,16 +9,18 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math"
+	mrand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 type Store struct {
@@ -82,11 +84,88 @@ type FleetDevice struct {
 	CreatedAt string   `json:"createdAt"`
 }
 
+// Two processes share one data directory more often than it looks — the window
+// and the background daemon, a second launch from the installer, a synced folder
+// opened on two machines — and SQLite lets only one of them write at a time. The
+// loser of that race used to be told "database is locked" straight away and its
+// row was simply dropped, so collected earnings quietly went missing.
+//
+// SQLite's own busy handler is a fixed backoff: it polls at 1, 2, 5 … 100 ms and
+// then every 100 ms until the timeout, with no jitter and no queue. A peer that
+// writes back to back on a slow disk holds the lock for most of every 100 ms, so
+// a waiter on that fixed cadence can wake each time inside the holder's window
+// and never get in, however long the timeout. That is what the Windows CI runner
+// did: 400 writes took 41 s and two of them timed out behind the other writer.
+//
+// So the driver's wait is kept short (busyTimeoutDSN) and the store retries the
+// whole statement itself with a random pause between attempts (execWrite). Every
+// attempt restarts SQLite's dense early polls at a new phase, which is what
+// breaks the lock-step; the total wait stays bounded by writeRetryBudget so a
+// truly stuck database still surfaces as an error instead of a hang.
+//
+// The timeout goes in the connection string rather than in a PRAGMA statement
+// because the pool may replace a broken connection at any time, and the
+// replacement has to come back with the timeout already on it.
+const busyTimeoutDSN = "?_pragma=busy_timeout(250)"
+
+// writeRetryBudget bounds how long execWrite keeps retrying a busy database. A
+// write takes about a millisecond, so this is never reached unless another copy
+// of the app is holding the lock for a very long time (a migration, a vacuum, a
+// hung process), and then the caller gets the real error back.
+const writeRetryBudget = 30 * time.Second
+
+// writeRetryPause is the longest random pause between two attempts.
+const writeRetryPause = 50 * time.Millisecond
+
+// execWrite runs a statement that takes the write lock, retrying while SQLite
+// reports the database busy. See busyTimeoutDSN for why the retry lives here.
+func (s *Store) execWrite(query string, args ...any) (sql.Result, error) {
+	var res sql.Result
+	err := retryBusy(func() error {
+		var err error
+		res, err = s.db.Exec(query, args...)
+		return err
+	})
+	return res, err
+}
+
+// scanWrite is execWrite for a statement that both writes and returns a row
+// (INSERT ... RETURNING). It scans into dest under the same retry, so a fresh
+// fleet device cannot be lost to a busy lock any more than an earnings row can.
+func (s *Store) scanWrite(query string, args []any, dest ...any) error {
+	return retryBusy(func() error {
+		return s.db.QueryRow(query, args...).Scan(dest...)
+	})
+}
+
+// retryBusy runs op until it returns anything other than SQLITE_BUSY or the
+// retry budget is spent, pausing a random slice of writeRetryPause in between.
+func retryBusy(op func() error) error {
+	deadline := time.Now().Add(writeRetryBudget)
+	for {
+		err := op()
+		if !isBusy(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(time.Duration(mrand.Int64N(int64(writeRetryPause))))
+	}
+}
+
+// isBusy reports whether err is SQLite's "database is locked" (SQLITE_BUSY),
+// the one error that means "try again", as opposed to a constraint or I/O error.
+func isBusy(err error) bool {
+	var se *sqlite.Error
+	return errors.As(err, &se) && se.Code()&0xff == sqliteBusy
+}
+
+// sqliteBusy is SQLITE_BUSY, primary result code 5.
+const sqliteBusy = 5
+
 func Open(dataDir string) (*Store, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "cashpilot-desktop.db"))
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "cashpilot-desktop.db")+busyTimeoutDSN)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +205,7 @@ func (s *Store) SaveCredentials(slug string, values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`
+	_, err = s.execWrite(`
 		INSERT INTO credentials(slug, value, updated_at)
 		VALUES(?, ?, datetime('now'))
 		ON CONFLICT(slug) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
@@ -187,7 +266,7 @@ func (s *Store) ListCredentialSlugs() []string {
 // widening the earnings schema. The blob is stored verbatim — the collector owns its
 // shape and the frontend parses it — so this method never inspects detailJSON.
 func (s *Store) SaveServiceDetail(slug, detailJSON string) error {
-	_, err := s.db.Exec(`
+	_, err := s.execWrite(`
 		INSERT INTO service_details(slug, detail, updated_at)
 		VALUES(?, ?, datetime('now'))
 		ON CONFLICT(slug) DO UPDATE SET detail=excluded.detail, updated_at=excluded.updated_at
@@ -241,7 +320,7 @@ func (s *Store) UpsertDeployment(dep Deployment) error {
 		dep.CreatedAt = now.Format(time.RFC3339Nano)
 	}
 	dep.UpdatedAt = now.Format(time.RFC3339Nano)
-	_, err := s.db.Exec(`
+	_, err := s.execWrite(`
 		INSERT INTO deployments(slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, created_at, updated_at)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(slug) DO UPDATE SET
@@ -258,7 +337,7 @@ func (s *Store) UpsertDeployment(dep Deployment) error {
 }
 
 func (s *Store) DeleteDeployment(slug string) error {
-	_, err := s.db.Exec(`DELETE FROM deployments WHERE slug = ?`, slug)
+	_, err := s.execWrite(`DELETE FROM deployments WHERE slug = ?`, slug)
 	return err
 }
 
@@ -302,7 +381,7 @@ func (s *Store) ListDeployments() []Deployment {
 }
 
 func (s *Store) RecordEvent(slug, event, detail string) {
-	if _, err := s.db.Exec(`INSERT INTO runtime_events(slug, event, detail, created_at) VALUES(?, ?, ?, datetime('now'))`, slug, event, detail); err != nil {
+	if _, err := s.execWrite(`INSERT INTO runtime_events(slug, event, detail, created_at) VALUES(?, ?, ?, datetime('now'))`, slug, event, detail); err != nil {
 		log.Printf("store: record event %s/%s: %v", slug, event, err)
 	}
 }
@@ -311,7 +390,7 @@ func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
 	if record.CreatedAt == "" {
 		record.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.Exec(`
+	_, err := s.execWrite(`
 		INSERT INTO earnings(platform, balance, currency, error, created_at)
 		VALUES(?, ?, ?, ?, ?)
 	`, record.Platform, record.Balance, record.Currency, record.Error, record.CreatedAt)
@@ -501,7 +580,7 @@ func (s *Store) PurgeOldData(retentionDays int) (int64, error) {
 	// Keep the most-recent row per platform regardless of age: a service that has
 	// not reported in longer than the retention window must still contribute its
 	// last-known balance to ListLatestEarnings and the dashboard breakdown.
-	earningsRes, err := s.db.Exec(`
+	earningsRes, err := s.execWrite(`
 		DELETE FROM earnings
 		WHERE created_at < ? AND id NOT IN (SELECT MAX(id) FROM earnings GROUP BY platform)
 	`, cutoff)
@@ -515,7 +594,7 @@ func (s *Store) PurgeOldData(retentionDays int) (int64, error) {
 	// computed with SQLite datetime() in that same format (mirroring HealthScores).
 	// Comparing it against the RFC3339Nano `cutoff` mis-sorts same-day rows (a space
 	// sorts below the 'T' separator), purging up to ~a day of in-window events early.
-	eventsRes, err := s.db.Exec(
+	eventsRes, err := s.execWrite(
 		`DELETE FROM runtime_events WHERE created_at < datetime('now', ?)`,
 		fmt.Sprintf("-%d days", retentionDays),
 	)
@@ -538,7 +617,7 @@ func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
 		return FleetDevice{}, err
 	}
 	if device.ID > 0 {
-		_, err = s.db.Exec(`
+		_, err = s.execWrite(`
 			UPDATE fleet_devices
 			SET name = ?, kind = ?, endpoint = ?, os = ?, arch = ?, status = ?, services = ?, last_seen = ?, updated_at = datetime('now')
 			WHERE id = ?
@@ -551,7 +630,7 @@ func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
 	// exists. Upserting instead keeps this no-id branch idempotent and consistent
 	// with the heartbeat path — refreshing the mutable fields onto the existing row
 	// rather than erroring or duplicating.
-	err = s.db.QueryRow(`
+	err = s.scanWrite(`
 		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(kind, name) DO UPDATE SET
@@ -563,7 +642,7 @@ func (s *Store) UpsertFleetDevice(device FleetDevice) (FleetDevice, error) {
 			last_seen=excluded.last_seen,
 			updated_at=datetime('now')
 		RETURNING id
-	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen).Scan(&device.ID)
+	`, []any{device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen}, &device.ID)
 	if err != nil {
 		return FleetDevice{}, err
 	}
@@ -593,7 +672,7 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 	// devices. ON CONFLICT(kind, name) preserves the existing row's id and created_at
 	// and refreshes only the mutable fields — exactly what the prior UPDATE branch did
 	// — while RETURNING id yields the row id for both the insert and the update path.
-	err = s.db.QueryRow(`
+	err = s.scanWrite(`
 		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
 		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(kind, name) DO UPDATE SET
@@ -605,7 +684,7 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 			last_seen=excluded.last_seen,
 			updated_at=datetime('now')
 		RETURNING id
-	`, device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen).Scan(&device.ID)
+	`, []any{device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen}, &device.ID)
 	if err != nil {
 		return FleetDevice{}, err
 	}
@@ -645,7 +724,7 @@ func (s *Store) FleetDeviceKeyState(kind, name string) (hash string, confirmed b
 // errors if the device row does not exist, so a caller never hands a client a key
 // that was not actually persisted (which would lock that client out).
 func (s *Store) SetFleetDeviceKey(kind, name, hash string) error {
-	res, err := s.db.Exec(
+	res, err := s.execWrite(
 		`UPDATE fleet_devices SET api_key_hash = ?, key_confirmed = 0, updated_at = datetime('now') WHERE kind = ? AND name = ?`,
 		hash, kind, name,
 	)
@@ -665,7 +744,7 @@ func (s *Store) SetFleetDeviceKey(kind, name, hash string) error {
 // ConfirmFleetDeviceKey marks a device's key confirmed — it has authenticated
 // with its own key, so the shared bootstrap key is refused for it from now on.
 func (s *Store) ConfirmFleetDeviceKey(kind, name string) error {
-	res, err := s.db.Exec(
+	res, err := s.execWrite(
 		`UPDATE fleet_devices SET key_confirmed = 1, updated_at = datetime('now') WHERE kind = ? AND name = ?`,
 		kind, name,
 	)
@@ -710,7 +789,7 @@ func (s *Store) ListFleetDevices() []FleetDevice {
 }
 
 func (s *Store) DeleteFleetDevice(id int64) error {
-	_, err := s.db.Exec(`DELETE FROM fleet_devices WHERE id = ?`, id)
+	_, err := s.execWrite(`DELETE FROM fleet_devices WHERE id = ?`, id)
 	return err
 }
 
@@ -730,7 +809,7 @@ func (s *Store) SweepStaleFleetDevices(offlineAfter, reapAfter time.Duration) (o
 	offlineCutoff := now.Add(-offlineAfter).Format(time.RFC3339)
 	reapCutoff := now.Add(-reapAfter).Format(time.RFC3339)
 
-	offRes, err := s.db.Exec(`
+	offRes, err := s.execWrite(`
 		UPDATE fleet_devices SET status = 'offline', updated_at = datetime('now')
 		WHERE status != 'offline' AND last_seen < ?
 	`, offlineCutoff)
@@ -739,7 +818,7 @@ func (s *Store) SweepStaleFleetDevices(offlineAfter, reapAfter time.Duration) (o
 	}
 	offlined, _ = offRes.RowsAffected()
 
-	reapRes, err := s.db.Exec(`
+	reapRes, err := s.execWrite(`
 		DELETE FROM fleet_devices WHERE status = 'offline' AND last_seen < ?
 	`, reapCutoff)
 	if err != nil {
@@ -784,7 +863,7 @@ func scanDeployment(row scanner) (Deployment, error) {
 }
 
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
+	_, err := s.execWrite(`
 		PRAGMA journal_mode=WAL;
 		PRAGMA foreign_keys=ON;
 		CREATE TABLE IF NOT EXISTS credentials (
@@ -873,7 +952,7 @@ func (s *Store) migrate() error {
 			return err
 		}
 		if !has {
-			if _, err := s.db.Exec(col.ddl); err != nil {
+			if _, err := s.execWrite(col.ddl); err != nil {
 				return err
 			}
 		}

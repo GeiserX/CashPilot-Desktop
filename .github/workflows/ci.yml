@@ -13,9 +13,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The app ships on linux, macOS and windows, so it is built and tested on all
+  # three. It used to be linux only, which meant every platform-shaped mistake —
+  # a path joined with a slash, a socket only unix has, a file permission windows
+  # ignores — was found by a user on the platform we do not develop on, after the
+  # release. The end-to-end tests in e2e/ are the ones that make this matrix worth
+  # paying for: they drive the real app against a fake Docker daemon and fake
+  # earning platforms over loopback TCP, so each runner exercises deploy, collect,
+  # convert and the worker API without a container runtime or an account.
   test:
-    name: build + test (linux)
-    runs-on: ubuntu-latest
+    name: build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            race: true
+            coverage: true
+          - os: macos-latest
+            race: true
+            coverage: false
+          # The race detector needs a working C toolchain, which the windows
+          # runner does not guarantee. Windows still builds, vets and runs the
+          # whole suite; only the race instrumentation is left to the other two.
+          - os: windows-latest
+            race: false
+            coverage: false
     steps:
       - uses: actions/checkout@v7
         with:
@@ -24,13 +48,39 @@ jobs:
         with:
           go-version: '1.26.8'
           cache: true
+
       - name: Build
         run: go build ./...
+
       - name: Vet
         run: go vet ./...
+
+      # Formatting is a property of the source, not of the platform, so it is
+      # checked once rather than three times.
+      - name: Formatting
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Test (race + coverage)
+        if: matrix.coverage
         run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
+
+      - name: Test (race)
+        if: matrix.race && !matrix.coverage
+        run: go test -race ./...
+
+      - name: Test
+        if: '!matrix.race'
+        run: go test ./...
+
       - name: Upload coverage to Codecov
+        if: matrix.coverage
         uses: codecov/codecov-action@v7
         with:
           files: coverage.out
