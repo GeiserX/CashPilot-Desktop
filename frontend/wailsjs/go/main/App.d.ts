@@ -42,6 +42,7 @@ export function ListServices():Promise<Array<catalog.Service>>;
 export function ManagedRuntimePlan():Promise<runtime.ManagedRuntimePlan>;
 
 export function PreflightService(arg1:string):Promise<preflight.Report>;
+export function PlanServiceRemoval(arg1:string):Promise<runtime.RemovalPlan>;
 
 export function RefreshDeployments():Promise<Array<store.Deployment>>;
 
@@ -49,7 +50,7 @@ export function RemoveBackgroundHelper():Promise<void>;
 
 export function RemoveFleetDevice(arg1:number):Promise<main.FleetState>;
 
-export function RemoveService(arg1:string):Promise<void>;
+export function RemoveService(arg1:string,arg2:boolean,arg3:boolean):Promise<void>;
 
 export function RestartService(arg1:string):Promise<void>;
 

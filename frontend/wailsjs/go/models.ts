@@ -813,6 +813,26 @@ export namespace preflight {
 
 export namespace runtime {
 	
+	export class DataMount {
+	    target: string;
+	    source: string;
+	    volume: boolean;
+	    critical: boolean;
+	    holds: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DataMount(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.source = source["source"];
+	        this.volume = source["volume"];
+	        this.critical = source["critical"];
+	        this.holds = source["holds"];
+	    }
+	}
 	export class InstallGuide {
 	    id: string;
 	    name: string;
@@ -854,6 +874,44 @@ export namespace runtime {
 	        this.risks = source["risks"];
 	        this.providers = source["providers"];
 	    }
+	}
+	export class RemovalPlan {
+	    slug: string;
+	    name: string;
+	    volumes: DataMount[];
+	    binds: DataMount[];
+	    catalogKnown: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RemovalPlan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.volumes = this.convertValues(source["volumes"], DataMount);
+	        this.binds = this.convertValues(source["binds"], DataMount);
+	        this.catalogKnown = source["catalogKnown"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class Status {
 	    available: boolean;

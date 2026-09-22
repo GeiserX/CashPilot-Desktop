@@ -149,7 +149,7 @@ func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[strin
 	// Runtime is derived rather than a hardcoded literal.
 	provider, runtimeKind := m.resolveProvider(m.kindForService(svc))
 
-	m.store.RecordEvent(slug, "pull_start", deploySource(svc, runtimeKind))
+	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
 	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
 	})
@@ -176,7 +176,7 @@ func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[strin
 }
 
 func (m *Manager) Stop(ctx context.Context, slug string) error {
-	if err := m.providerForSlug(slug).Stop(ctx, slug); err != nil {
+	if err := m.providerForSlug(slug).Stop(ctx, slug, m.stopTimeout(slug)); err != nil {
 		m.store.RecordEvent(slug, "stop_error", err.Error())
 		return err
 	}
@@ -202,7 +202,7 @@ func (m *Manager) Start(ctx context.Context, slug string) error {
 }
 
 func (m *Manager) Restart(ctx context.Context, slug string) error {
-	if err := m.providerForSlug(slug).Restart(ctx, slug); err != nil {
+	if err := m.providerForSlug(slug).Restart(ctx, slug, m.stopTimeout(slug)); err != nil {
 		m.store.RecordEvent(slug, "restart_error", err.Error())
 		return err
 	}
@@ -214,15 +214,63 @@ func (m *Manager) Restart(ctx context.Context, slug string) error {
 	return nil
 }
 
-func (m *Manager) Remove(ctx context.Context, slug string) error {
-	if err := m.providerForSlug(slug).Remove(ctx, slug); err != nil {
+// stopTimeout is the grace period this service's catalog entry asks for, in seconds,
+// or 0 when the service has left the catalog and nothing can say.
+//
+// The catalog is read on EVERY stop, restart and remove, not just on deploy, for the
+// same reason the web worker does it: the entry is the current answer. Storj asks for
+// 300 seconds because a storage node has to flush before it goes, and a node deployed
+// last month, before that number existed or when it was lower, has to get those 300
+// seconds too. Reading only what the container was built with would have left every
+// already-running node on the old value until somebody redeployed it.
+func (m *Manager) stopTimeout(slug string) int {
+	svc, ok := m.catalog.Get(slug)
+	if !ok {
+		return 0
+	}
+	return runtime.StopTimeoutSeconds(svc)
+}
+
+// criticalTargets is what the catalog says about this service's unrecoverable data.
+// nil means the service is no longer in the catalog, so nothing can be said — which
+// the runtime treats as "assume every volume matters" rather than as permission.
+func (m *Manager) criticalTargets(slug string) map[string]string {
+	svc, ok := m.catalog.Get(slug)
+	if !ok {
+		return nil
+	}
+	return runtime.CriticalTargets(svc)
+}
+
+// PlanRemoval reports what removing a service would delete, so the confirmation the
+// user is shown can name the data instead of saying "and its volumes".
+func (m *Manager) PlanRemoval(ctx context.Context, slug string) (runtime.RemovalPlan, error) {
+	return m.providerForSlug(slug).PlanRemoval(ctx, slug, m.criticalTargets(slug))
+}
+
+// Remove removes the service. deleteData decides whether the data it stored goes with
+// it; allowCritical is the separate yes needed for the volumes whose loss cannot be
+// undone. Both default to false, so the ordinary "remove this service" leaves every
+// node identity and keystore on disk for a later redeploy to pick up.
+func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCritical bool) error {
+	opts := runtime.RemoveOptions{
+		DeleteData:    deleteData,
+		AllowCritical: allowCritical,
+		Critical:      m.criticalTargets(slug),
+		StopTimeout:   m.stopTimeout(slug),
+	}
+	if err := m.providerForSlug(slug).Remove(ctx, slug, opts); err != nil {
 		m.store.RecordEvent(slug, "remove_error", err.Error())
 		return err
 	}
 	if err := m.store.DeleteDeployment(slug); err != nil {
 		return err
 	}
-	m.store.RecordEvent(slug, "removed", "")
+	detail := "container removed, stored data kept"
+	if deleteData {
+		detail = "container and stored data removed"
+	}
+	m.store.RecordEvent(slug, "removed", detail)
 	return nil
 }
 
@@ -328,11 +376,26 @@ func (m *Manager) Refresh(ctx context.Context) ([]store.Deployment, error) {
 }
 
 // deploySource returns the human-facing source recorded in the pull_start event: the
-// pinned native binary URL when deploying natively, otherwise the Docker image.
-func deploySource(svc catalog.Service, runtimeKind string) string {
+// pinned native binary URL when deploying natively, otherwise the Docker image that is
+// really about to be pulled.
+//
+// "Really" is the point. A catalog entry can name a different image per architecture —
+// traffmonetizer publishes its ARM builds as separate tags — so on an ARM machine the
+// pull is for cli_v2:arm64v8 while docker.image still reads cli_v2@sha256:... Recording
+// the entry's default made the history say a deploy pulled something it never pulled,
+// which is exactly the line somebody reads when an image turns out to be the problem.
+// Only the provider can resolve it, because the architecture that decides is the
+// DAEMON's, not this process's.
+func deploySource(ctx context.Context, provider runtime.Provider, svc catalog.Service, runtimeKind string) string {
 	if runtimeKind == nativeRuntimeKind {
 		if bin, ok := svc.NativeBinaryFor(goruntime.GOOS, goruntime.GOARCH); ok {
 			return bin.URL
+		}
+		return svc.Docker.Image
+	}
+	if resolver, ok := provider.(runtime.ImageResolver); ok {
+		if image := resolver.ResolveImage(ctx, svc); image != "" {
+			return image
 		}
 	}
 	return svc.Docker.Image
