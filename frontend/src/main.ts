@@ -38,8 +38,8 @@ import { renderMystNodes } from "./render/myst";
 import { renderPreflight } from "./render/preflight";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
-import { serviceFormFields } from "./render/fields";
-import { composeExportControl, composeSelectionExport, credentialHint, serviceFacts, signupButton } from "./render/details";
+import { renderWizardServiceSetup } from "./render/wizard";
+import { composeSelectionExport } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
@@ -1166,50 +1166,8 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map(renderWizardServiceSetup).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown)).join("")}
     </div>
-  `;
-}
-
-function renderWizardServiceSetup(service: Service) {
-  const dashboardUrl = service.cashout?.dashboardUrl || service.website;
-  const fields = serviceFormFields(service, state?.collectorFields);
-  const earning = state?.summary?.breakdown?.find((item) => item.platform === service.slug);
-  const balance = earning && !earning.error ? {amount: earning.balance, currency: earning.currency} : null;
-  return `
-    <article class="wizard-setup-card" data-form-slug="${escapeHtml(service.slug)}">
-      <div class="split">
-        <div>
-          <h3>${escapeHtml(service.name)}</h3>
-          <p class="muted">${escapeHtml(service.shortDescription || service.description)}</p>
-        </div>
-        <span class="pill">${service.manualOnly ? "manual" : "docker"}</span>
-      </div>
-      <div class="signup-strip">
-        ${signupButton(service)}
-        ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
-        <button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>
-      </div>
-      ${service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
-      ${credentialHint(service)}
-      <div class="credential-grid">
-        ${fields.map((item) => `
-          <label>
-            <span>${escapeHtml(item.label)}${item.required ? " *" : ""}</span>
-            <input data-wizard-env="${item.key}" type="${item.secret ? "password" : "text"}" placeholder="${escapeHtml(item.description)}" value="${escapeHtml((item.default || "").replaceAll("{hostname}", state?.hostname || "desktop"))}" />
-          </label>
-        `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
-      </div>
-      <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
-      <div class="actions left">
-        <button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>
-        <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
-        <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">Collect Earnings</button>
-      </div>
-      ${composeExportControl(service)}
-      ${serviceFacts(service, balance)}
-      <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
-    </article>
   `;
 }
 
