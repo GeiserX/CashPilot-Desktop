@@ -19,6 +19,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/bgservice"
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
+	"github.com/GeiserX/CashPilot-Desktop/internal/compose"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
 	"github.com/GeiserX/CashPilot-Desktop/internal/health"
@@ -41,6 +42,11 @@ type App struct {
 	exchange   *exchange.Service
 	trayIcon   []byte
 	fleetAPI   *fleetAPIServer
+	// saveDialog asks the user where to write a file and returns the chosen path,
+	// or "" when they dismissed the dialog. Zero value means the real Wails dialog;
+	// it is a field so the export path can be driven in a test, which has no window
+	// for a native dialog to open in.
+	saveDialog func(wailsruntime.SaveDialogOptions) (string, error)
 	// fleetKey is the fleet bearer token held in memory for the per-request auth
 	// check. It is loaded once at Startup by ensureFleetAPIKey from the OS keychain
 	// (0600 file fallback) so the token is never persisted in config.json and the
@@ -1662,4 +1668,63 @@ func (a *App) backgroundAgent() (bgservice.Agent, error) {
 	}
 	logDir := filepath.Join(a.cfg.AppDir(), "logs")
 	return bgservice.New(bgservice.DefaultLabel, logDir), nil
+}
+
+// ExportCompose writes a docker-compose.yml for the chosen services and asks the
+// user where to save it. It returns the path written, or "" when the save dialog
+// was dismissed.
+//
+// The point of the file is that the machine keeps earning without CashPilot: it can
+// be run by Docker, Podman, Portainer or a box's own GitOps, and because it carries
+// the same cashpilot.* labels the app writes, CashPilot still finds and watches
+// those containers afterwards. It contains no credentials — every value the user
+// owns is a ${VAR} placeholder Compose fills from a .env file at run time — so the
+// file is safe to keep in a repository or send to another machine.
+//
+// arch is "amd64", "arm64" or "arm" and names the machine the file is FOR, which is
+// not always this one. It matters for the entries whose ARM builds Docker cannot
+// select from the manifest. Empty means this machine, and is resolved here to the
+// family this copy of CashPilot was built for: the frontend offers "This machine",
+// and leaving it to the image manifest would hand an Apple silicon Mac or a
+// Raspberry Pi the x86-64 build of those entries, which cannot start.
+func (a *App) ExportCompose(slugs []string, arch string) (string, error) {
+	if err := a.ready(); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(arch) == "" {
+		arch = compose.HostFamily(stdruntime.GOARCH)
+	}
+	body, err := compose.Generate(a.catalog, slugs, compose.Options{
+		Arch:     arch,
+		Hostname: runtime.DeviceHostname(),
+	})
+	if err != nil {
+		return "", err
+	}
+	path, err := a.askWhereToSave(wailsruntime.SaveDialogOptions{
+		Title:                "Save compose file",
+		DefaultFilename:      "docker-compose.yml",
+		CanCreateDirectories: true,
+		Filters: []wailsruntime.FileFilter{
+			{DisplayName: "Compose files (*.yml, *.yaml)", Pattern: "*.yml;*.yaml"},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		return "", fmt.Errorf("could not save the compose file: %w", err)
+	}
+	return path, nil
+}
+
+// askWhereToSave opens the save dialog, or the stand-in a test installed.
+func (a *App) askWhereToSave(opts wailsruntime.SaveDialogOptions) (string, error) {
+	if a.saveDialog != nil {
+		return a.saveDialog(opts)
+	}
+	return wailsruntime.SaveFileDialog(a.ctx, opts)
 }
