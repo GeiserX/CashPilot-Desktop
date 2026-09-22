@@ -13,6 +13,7 @@ declare module "../wailsjs/go/main/App" {
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
+  export function PreflightService(slug: string): Promise<PreflightReport>;
   export function DeployService(slug: string, values: Record<string, string>): Promise<Deployment>;
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
@@ -366,6 +367,28 @@ export interface EnvVar {
   secret: boolean;
   description: string;
   default: string;
+}
+
+// PreflightFinding is one thing that could stop a service earning on this machine,
+// in the words the user reads. Mirrors preflight.Finding.
+export interface PreflightFinding {
+  verdict: string;
+  message: string;
+}
+
+// PreflightReport is what CashPilot knows before a deploy runs. blocking is always
+// false: the report informs the decision, it never takes it. notChecked names what
+// nobody looked at, so a clean report is not mistaken for a guarantee. Mirrors
+// preflight.Report.
+export interface PreflightReport {
+  slug: string;
+  name: string;
+  verdict: string;
+  summary: string;
+  findings: PreflightFinding[] | null;
+  notChecked: string[] | null;
+  machineArch: string;
+  blocking: boolean;
 }
 
 export interface Deployment {

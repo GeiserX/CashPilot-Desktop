@@ -21,6 +21,7 @@ import {
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
+  PreflightService,
   PlanServiceRemoval,
   RemoveFleetDevice,
   RefreshDeployments,
@@ -33,6 +34,7 @@ import {
 import { renderFleetSection } from "./render/fleet";
 import { renderHealthBadge } from "./render/health";
 import { renderMystNodes } from "./render/myst";
+import { renderPreflight } from "./render/preflight";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { serviceFormFields } from "./render/fields";
@@ -1078,6 +1080,7 @@ function renderSetupWizard(current: AppState) {
     });
   });
   selectedServices.forEach((service) => void hydrateWizardForm(service));
+  selectedServices.forEach((service) => void hydrateWizardPreflight(service));
 }
 
 function renderWizardProgress() {
@@ -1178,6 +1181,7 @@ function renderWizardServiceSetup(service: Service) {
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
+      <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
         <button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
@@ -1217,6 +1221,21 @@ async function hydrateWizardForm(service: Service) {
     const key = input.dataset.wizardEnv || "";
     if (creds[key]) input.value = creds[key];
   });
+}
+
+// The pre-deploy check, filled in beside the Deploy button once the backend has
+// answered. It runs after the card is on screen because it talks to the container
+// runtime, and a slow or unreachable runtime must not hold up the wizard. A failed
+// check leaves the slot empty: a panel that cannot say anything must say nothing,
+// never a reassuring blank.
+async function hydrateWizardPreflight(service: Service) {
+  const slot = document.querySelector<HTMLDivElement>(`[data-preflight-slug="${service.slug}"]`);
+  if (!slot) return;
+  try {
+    slot.innerHTML = renderPreflight(await PreflightService(service.slug));
+  } catch {
+    slot.innerHTML = "";
+  }
 }
 
 function readWizardForm(slug: string): Record<string, string> {
