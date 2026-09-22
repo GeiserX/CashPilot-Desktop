@@ -35,9 +35,22 @@ type Provider interface {
 	Status(ctx context.Context) Status
 	Deploy(ctx context.Context, spec DeploySpec, progress func(string)) (ContainerInfo, error)
 	Start(ctx context.Context, slug string) error
-	Stop(ctx context.Context, slug string) error
-	Restart(ctx context.Context, slug string) error
-	Remove(ctx context.Context, slug string) error
+	// Stop and Restart take the grace period the service's catalog entry asks for,
+	// in seconds. 0 means the caller had no entry to read (a service the catalog has
+	// dropped), and the provider falls back to what the running unit itself says.
+	// The value has to be passed in because only the caller holds the catalog, and
+	// reading it off the container instead would pin every service already deployed
+	// to the number its entry carried on the day it was created.
+	Stop(ctx context.Context, slug string, stopTimeoutSeconds int) error
+	Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error
+	// Remove removes the running unit. It destroys stored data only when
+	// RemoveOptions says so; see RemoveOptions for why the default is to keep it.
+	Remove(ctx context.Context, slug string, opts RemoveOptions) error
+	// PlanRemoval reports what removing this service would delete, so the question
+	// put to the user names the actual data. critical maps container paths the
+	// catalog marks unrecoverable to what is lost; nil means no catalog entry could
+	// be consulted, which counts as "assume all of it matters".
+	PlanRemoval(ctx context.Context, slug string, critical map[string]string) (RemovalPlan, error)
 	Logs(ctx context.Context, slug string, lines int) (string, error)
 	List(ctx context.Context) ([]ContainerInfo, error)
 }
@@ -142,6 +155,13 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// second earlier, and the deploy that replaced it never existed. The pull is on
 	// this side of the line for the same reason — a registry outage or a typo'd
 	// image must not cost the running container either.
+	// Which CPU the containers run on is the DAEMON's answer, not this process's.
+	// On Docker Desktop and Podman Desktop the app is a macOS or Windows binary while
+	// the containers run in a Linux VM, and it is that VM's architecture an image
+	// manifest is matched against — so runtime.GOARCH would be the wrong question.
+	facts := daemonFacts(ctx, cli)
+	image := ImageForArch(svc.Docker, facts.Architecture)
+
 	env := buildEnv(svc, spec.Env)
 	ports, bindings, err := buildPorts(svc.Docker.Ports)
 	if err != nil {
@@ -149,10 +169,14 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	mounts := buildMounts(svc.Docker.Volumes, env)
 
+	stopTimeout := StopTimeoutSeconds(svc)
 	config := &container.Config{
-		Image:        svc.Docker.Image,
+		Image:        image,
 		Env:          envSlice(env),
 		ExposedPorts: ports,
+		// The grace period travels with the container, so stopping it later does not
+		// need the catalog to find it again.
+		StopTimeout: &stopTimeout,
 		Labels: map[string]string{
 			LabelManaged: "true",
 			LabelService: spec.Slug,
@@ -165,20 +189,50 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		config.Cmd = buildCommandArgs(svc.Docker.Command, env)
 	}
 
-	hostConfig, err := buildHostConfig(svc, bindings, mounts)
+	hostConfig, err := buildHostConfig(svc, bindings, mounts, facts.OSType)
 	if err != nil {
 		return ContainerInfo{}, err
 	}
 
-	if progress != nil {
-		progress("Pulling " + svc.Docker.Image)
+	// An entry that publishes no build for this machine still deploys: the user is
+	// told plainly and the pull decides. Refusing here would block a machine whose
+	// entry merely has an out-of-date platform list.
+	if runs, known := HasBuildFor(svc.Docker, facts.Architecture); known && !runs && progress != nil {
+		progress(fmt.Sprintf("%s does not publish a %s build, so it may not start on this machine.", svc.Name, ArchLabel(ArchFamily(facts.Architecture))))
 	}
-	if err := pullImage(ctx, cli, svc.Docker.Image, progress); err != nil {
+
+	if progress != nil {
+		progress("Pulling " + image)
+	}
+	if err := pullImage(ctx, cli, image, progress); err != nil {
 		return ContainerInfo{}, err
 	}
 
 	// Past this point the deploy is destructive: the existing container goes.
 	name := containerName(spec.Slug)
+	// Where the running container keeps its data beats where the catalog thinks it
+	// is: a replacement that mounts the spec's volume over a node whose identity
+	// lives elsewhere comes back as a different node. Read it BEFORE the removal,
+	// which is the only moment the fact still exists.
+	if live, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); err == nil {
+		var kept []KeptMount
+		mounts, kept = keepLiveMounts(mounts, svc.Docker.Volumes, env, live.Container)
+		hostConfig.Mounts = mounts
+		for _, k := range kept {
+			if progress != nil {
+				progress(fmt.Sprintf("Keeping %s at %s, where its data already is (the catalog asked for %s).", k.Kept, k.Target, k.Requested))
+			}
+		}
+		// Stop it the way Stop does, with its own grace period, before removing it.
+		// A forced removal is SIGKILL: a storage node gets no chance to flush (Storj
+		// asks for 300 seconds for exactly that) and pays for it with an unclean
+		// shutdown. A stop that fails is not a reason to abandon the deploy — the
+		// forced removal below is what ran before this existed.
+		if progress != nil {
+			progress(fmt.Sprintf("Stopping %s (up to %ds to shut down cleanly)", name, stopTimeout))
+		}
+		_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &stopTimeout})
+	}
 	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: false})
 
 	if progress != nil {
@@ -208,19 +262,20 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		Slug:        spec.Slug,
 		ContainerID: created.ID,
 		Name:        name,
-		Image:       svc.Docker.Image,
+		Image:       image,
 		Status:      "running",
 	}, nil
 }
 
-func (p *DockerProvider) Stop(ctx context.Context, slug string) error {
+func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSeconds int) error {
 	cli, err := dockerClient()
 	if err != nil {
 		return err
 	}
 	defer cli.Close()
-	timeout := 20
-	_, err = cli.ContainerStop(ctx, containerName(slug), client.ContainerStopOptions{Timeout: &timeout})
+	name := containerName(slug)
+	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
+	_, err = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
 	return err
 }
 
@@ -234,34 +289,73 @@ func (p *DockerProvider) Start(ctx context.Context, slug string) error {
 	return err
 }
 
-func (p *DockerProvider) Restart(ctx context.Context, slug string) error {
-	cli, err := dockerClient()
-	if err != nil {
-		return err
-	}
-	defer cli.Close()
-	timeout := 20
-	_, err = cli.ContainerRestart(ctx, containerName(slug), client.ContainerRestartOptions{Timeout: &timeout})
-	return err
-}
-
-func (p *DockerProvider) Remove(ctx context.Context, slug string) error {
+func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error {
 	cli, err := dockerClient()
 	if err != nil {
 		return err
 	}
 	defer cli.Close()
 	name := containerName(slug)
-	volumes, err := managedContainerVolumes(ctx, cli, name)
+	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
+	_, err = cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
+	return err
+}
+
+// PlanRemoval reports what removing this service would delete.
+func (p *DockerProvider) PlanRemoval(ctx context.Context, slug string, critical map[string]string) (RemovalPlan, error) {
+	cli, err := dockerClient()
+	if err != nil {
+		return RemovalPlan{}, err
+	}
+	defer cli.Close()
+	name := containerName(slug)
+	mounts, err := managedContainerMounts(ctx, cli, name)
+	if err != nil {
+		return RemovalPlan{}, err
+	}
+	return planFromMounts(slug, name, mounts, critical), nil
+}
+
+// Remove removes the service's container. The data it kept survives unless opts asks
+// for it to go, and the volumes the catalog marks unrecoverable need the separate yes
+// in opts.AllowCritical on top of that — see RemoveOptions.
+func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOptions) error {
+	cli, err := dockerClient()
 	if err != nil {
 		return err
 	}
-	if _, err := cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true}); err != nil {
+	defer cli.Close()
+	name := containerName(slug)
+	mounts, err := managedContainerMounts(ctx, cli, name)
+	if err != nil {
 		return err
 	}
-	for _, volumeName := range volumes {
-		if _, err := cli.VolumeRemove(ctx, volumeName, client.VolumeRemoveOptions{Force: true}); err != nil {
-			return fmt.Errorf("container removed, but volume %s could not be deleted: %w", volumeName, err)
+	plan := planFromMounts(slug, name, mounts, opts.Critical)
+
+	// Refuse BEFORE anything is removed. Refusing afterwards would already have
+	// destroyed the container this data belongs to.
+	if blocked := blockedCriticalVolumes(plan, opts); len(blocked) > 0 {
+		return criticalRefusal(slug, blocked)
+	}
+
+	// Stop it cleanly first, with its own grace period. Data that is being kept has
+	// to be left consistent, and a SIGKILL mid-write is how a keystore or a node
+	// database ends up half written.
+	timeout := stopTimeoutForContainer(ctx, cli, name, opts.StopTimeout)
+	_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
+
+	// RemoveVolumes only ever deletes ANONYMOUS volumes, never the named ones below.
+	// It is tied to the same choice: an anonymous volume is still the service's data,
+	// and nothing can say it is not the one thing that mattered.
+	if _, err := cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: opts.DeleteData}); err != nil {
+		return err
+	}
+	if !opts.DeleteData {
+		return nil
+	}
+	for _, volume := range plan.Volumes {
+		if _, err := cli.VolumeRemove(ctx, volume.Source, client.VolumeRemoveOptions{Force: true}); err != nil {
+			return fmt.Errorf("container removed, but volume %s could not be deleted: %w", volume.Source, err)
 		}
 	}
 	return nil
@@ -657,7 +751,9 @@ func buildMounts(raw []string, env map[string]string) []mount.Mount {
 // the outside: a field the catalog declares and the runtime forgets to pass produces a
 // container that starts, stays "running" and earns nothing. Mysterium's /dev/net/tun
 // was exactly that — declared in the entry, parsed by the loader, never mapped.
-func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mount.Mount) (*container.HostConfig, error) {
+// osType is the DAEMON's operating system, which decides whether the Linux-only parts
+// of the hardening can be sent at all (see applyHardening).
+func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mount.Mount, osType string) (*container.HostConfig, error) {
 	hostConfig := &container.HostConfig{
 		PortBindings: bindings,
 		Mounts:       mounts,
@@ -665,9 +761,8 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 			Name: "unless-stopped",
 		},
 		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
-		CapAdd:      svc.Docker.CapAdd,
-		Privileged:  svc.Docker.Privileged,
 	}
+	applyHardening(hostConfig, svc, osType)
 	if svc.Docker.NetworkMode == "" {
 		hostConfig.NetworkMode = "bridge"
 	}
@@ -840,7 +935,11 @@ func parseMemoryBytes(s string) (int64, error) {
 	return int64(bytes), nil
 }
 
-func managedContainerVolumes(ctx context.Context, cli *client.Client, name string) ([]string, error) {
+// managedContainerMounts returns everything a CashPilot-managed container has mounted,
+// refusing a container this app did not create. It is the raw fact the removal plan and
+// the removal itself are both built from, so the question the user answers and the
+// action taken cannot describe different things.
+func managedContainerMounts(ctx context.Context, cli inspectClient, name string) ([]container.MountPoint, error) {
 	inspect, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
@@ -849,13 +948,7 @@ func managedContainerVolumes(ctx context.Context, cli *client.Client, name strin
 	if ctr.Config == nil || ctr.Config.Labels[LabelManaged] != "true" {
 		return nil, fmt.Errorf("%s is not managed by CashPilot", name)
 	}
-	volumes := make([]string, 0, len(ctr.Mounts))
-	for _, mnt := range ctr.Mounts {
-		if mnt.Type == mount.TypeVolume && mnt.Name != "" {
-			volumes = append(volumes, mnt.Name)
-		}
-	}
-	return volumes, nil
+	return ctr.Mounts, nil
 }
 
 func isNamedVolume(source string) bool {

@@ -202,7 +202,7 @@ func TestTheAppRunsAnEarnerEndToEnd(t *testing.T) {
 	if container, _ := app.Docker.Container("cashpilot-honeygain"); container.State != "running" {
 		t.Errorf("the container is %q after Restart", container.State)
 	}
-	if err := app.RemoveService("honeygain"); err != nil {
+	if err := app.RemoveService("honeygain", false, false); err != nil {
 		t.Fatalf("RemoveService: %v", err)
 	}
 	if _, ok := app.Docker.Container("cashpilot-honeygain"); ok {

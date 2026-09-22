@@ -228,7 +228,7 @@ func TestEarnerLifecycle(t *testing.T) {
 	})
 
 	t.Run("remove takes the container and the row, and leaves the other earner alone", func(t *testing.T) {
-		if err := e.Manager.Remove(ctx, "earnapp"); err != nil {
+		if err := e.Manager.Remove(ctx, "earnapp", false, false); err != nil {
 			t.Fatalf("Remove: %v", err)
 		}
 		if _, ok := e.Docker.Container("cashpilot-earnapp"); ok {
