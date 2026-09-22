@@ -20,7 +20,7 @@ func TestDeclaredDevicesReachTheContainer(t *testing.T) {
 	svc := catalog.Service{Name: "Mysterium"}
 	svc.Docker.Devices = []string{"/dev/net/tun"}
 
-	hostConfig, err := buildHostConfig(svc, nil, nil)
+	hostConfig, err := buildHostConfig(svc, nil, nil, "linux")
 	if err != nil {
 		t.Fatalf("buildHostConfig: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestTheCatalogsMysteriumEntryGetsItsTunDevice(t *testing.T) {
 	if !ok {
 		t.Fatal("the catalog has no mysterium entry")
 	}
-	hostConfig, err := buildHostConfig(svc, nil, nil)
+	hostConfig, err := buildHostConfig(svc, nil, nil, "linux")
 	if err != nil {
 		t.Fatalf("buildHostConfig(mysterium): %v", err)
 	}
@@ -72,7 +72,7 @@ func TestADeviceOutsideTheCeilingIsRefused(t *testing.T) {
 	svc := catalog.Service{Name: "Greedy"}
 	svc.Docker.Devices = []string{"/dev/net/tun", "/dev/mem"}
 
-	hostConfig, err := buildHostConfig(svc, nil, nil)
+	hostConfig, err := buildHostConfig(svc, nil, nil, "linux")
 	if err == nil {
 		t.Fatalf("a container asking for /dev/mem was accepted: %+v", hostConfig.Resources.Devices)
 	}
@@ -95,7 +95,7 @@ func TestADeviceWithNoHostPathIsRefused(t *testing.T) {
 		svc := catalog.Service{Name: "Halfwritten"}
 		svc.Docker.Devices = []string{entry}
 
-		hostConfig, err := buildHostConfig(svc, nil, nil)
+		hostConfig, err := buildHostConfig(svc, nil, nil, "linux")
 		if err == nil {
 			t.Errorf("the device declaration %q was accepted and mapped %+v", entry, hostConfig.Resources.Devices)
 			continue

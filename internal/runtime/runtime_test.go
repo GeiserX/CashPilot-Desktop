@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"reflect"
 	goruntime "runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1009,14 +1010,21 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 				// PID 1 ignores signals it has no handler for, so a bare sleep would
 				// sit through Stop's SIGTERM and cost the full 20s timeout twice.
 				// The trap gives the shell a handler, so Stop and Restart return at once.
-				Command: "sh -c 'trap exit TERM; echo " + logMarker + "; sleep 3600 & wait'",
+				//
+				// It also leaves proof. The handler writes a file into the service's
+				// own volume, and the next start says out loud whether it found one.
+				// Only a container that was asked to stop can run its handler; a
+				// SIGKILL leaves nothing. That is the only way to tell, from outside,
+				// that a redeploy or a remove really stopped the old container before
+				// replacing it — which is what a Storj node needs to flush.
+				Command: "sh -c '" + probeScript + "'",
 				Volumes: []string{volume + ":/data"},
 			},
 		},
 	}
 	defer func() {
 		// Best effort: the happy path already removed it.
-		_ = p.Remove(context.Background(), slug)
+		_ = p.Remove(context.Background(), slug, RemoveOptions{DeleteData: true, AllowCritical: true})
 	}()
 
 	var progress []string
@@ -1030,6 +1038,12 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 	if len(progress) == 0 {
 		t.Fatal("Deploy reported no progress lines, so the image-pull stream was not decoded")
 	}
+
+	// The hardening has to survive the round trip to the daemon. buildHostConfig can
+	// be unit-tested, but only the daemon can say it ACCEPTED the options and applied
+	// them — a runtime that quietly dropped cap_drop would pass every unit test and
+	// still run these third-party images with the full default capability set.
+	assertHardened(t, ctx, containerName(slug))
 
 	// List has to find it through the managed-label filter.
 	var found *ContainerInfo
@@ -1057,38 +1071,334 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 		t.Fatalf("Logs did not return the container's output, got %q", logs)
 	}
 
-	if err := p.Stop(ctx, slug); err != nil {
+	// A fresh volume: nothing stopped it before, so the first start finds no marker.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 1); verdicts[0] != killedMarker {
+		t.Fatalf("a first start on an empty volume reported %q", verdicts[0])
+	}
+
+	if err := p.Stop(ctx, slug, 0); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
 	if err := p.Start(ctx, slug); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	if err := p.Restart(ctx, slug); err != nil {
+	// Two starts now, and the second one has to have seen the handler's file: Stop is
+	// a graceful stop, not a kill.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 2); verdicts[1] != gracefulMarker {
+		t.Fatalf("Stop killed the container instead of asking it to stop: the next start reported %q", verdicts[1])
+	}
+
+	if err := p.Restart(ctx, slug, 0); err != nil {
 		t.Fatalf("Restart: %v", err)
 	}
-
-	// managedContainerVolumes reads the inspect response, and Remove deletes the
-	// named volume it reports.
-	cli, err = dockerClient()
-	if err != nil {
-		t.Fatalf("dockerClient: %v", err)
-	}
-	volumes, err := managedContainerVolumes(ctx, cli, containerName(slug))
-	cli.Close()
-	if err != nil {
-		t.Fatalf("managedContainerVolumes: %v", err)
-	}
-	if len(volumes) != 1 || volumes[0] != volume {
-		t.Fatalf("expected the named volume %q, got %v", volume, volumes)
+	// Three starts, the third after a Restart. Waiting for it also guarantees the
+	// container has consumed its marker file before the redeploy below, so the next
+	// assertion can only be satisfied by a marker THAT redeploy caused.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 3); verdicts[2] != gracefulMarker {
+		t.Fatalf("Restart killed the container instead of asking it to stop: the next start reported %q", verdicts[2])
 	}
 
-	if err := p.Remove(ctx, slug); err != nil {
-		t.Fatalf("Remove: %v", err)
+	// A redeploy keeps the data where it already is. A spec naming a different volume
+	// is the exact shape of the bug this closes: seen live on the web side, a redeploy
+	// moved a Mysterium node off its own directory onto the catalog's volume and it
+	// came back as a different node, with no reputation and its earnings stranded.
+	moved := spec
+	moved.Service.Docker.Volumes = []string{volume + "-elsewhere:/data"}
+	if _, err := p.Deploy(ctx, moved, nil); err != nil {
+		t.Fatalf("Deploy (redeploy onto another volume): %v", err)
+	}
+	if source := liveMountSource(t, ctx, containerName(slug), "/data"); source != volume {
+		t.Fatalf("the redeploy moved the service's data: /data is now %q, want %q", source, volume)
+	}
+	// The replacement is a brand-new container, so its log holds exactly one verdict,
+	// about the container it replaced. A redeploy that force-removed the old one
+	// instead of stopping it first leaves no marker for this to find.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 1); verdicts[0] != gracefulMarker {
+		t.Fatalf("the redeploy killed the running container instead of stopping it: the replacement reported %q", verdicts[0])
+	}
+
+	// PlanRemoval reads the inspect response, and Remove deletes the named volume it
+	// reports — but only when asked to.
+	plan, err := p.PlanRemoval(ctx, slug, map[string]string{})
+	if err != nil {
+		t.Fatalf("PlanRemoval: %v", err)
+	}
+	if len(plan.Volumes) != 1 || plan.Volumes[0].Source != volume {
+		t.Fatalf("expected the named volume %q in the plan, got %+v", volume, plan.Volumes)
+	}
+	if plan.Volumes[0].Critical {
+		t.Fatal("a volume the catalog does not mark critical was reported as critical")
+	}
+
+	// A default Remove keeps the data: the volume has to survive it, because that is
+	// the whole point — a user tidying up a service must not lose a node identity.
+	if err := p.Remove(ctx, slug, RemoveOptions{Critical: map[string]string{}}); err != nil {
+		t.Fatalf("Remove (keep data): %v", err)
+	}
+	if !volumeExists(t, ctx, volume) {
+		t.Fatal("Remove deleted the named volume even though DeleteData was false")
+	}
+
+	// Redeploy onto the surviving volume, then prove the two guards on deleting it.
+	if _, err := p.Deploy(ctx, spec, nil); err != nil {
+		t.Fatalf("Deploy (second): %v", err)
+	}
+	// Keeping the data is only worth anything if the data is consistent, so the
+	// Remove above had to stop the container before deleting it. Same proof: this
+	// container is new, and the marker it finds can only have come from that stop.
+	if verdicts := waitForStartupVerdicts(t, p, ctx, slug, 1); verdicts[0] != gracefulMarker {
+		t.Fatalf("Remove killed the container mid-write instead of stopping it: the next deploy reported %q", verdicts[0])
+	}
+
+	// Marked critical, no explicit yes: refused, and nothing removed.
+	critical := map[string]string{"/data": "the probe's irreplaceable state"}
+	err = p.Remove(ctx, slug, RemoveOptions{DeleteData: true, Critical: critical})
+	if err == nil {
+		t.Fatal("Remove deleted a volume the catalog marks unrecoverable without an explicit yes")
+	}
+	if !strings.Contains(err.Error(), volume) {
+		t.Fatalf("the refusal should name the volume that would be lost, got %q", err)
+	}
+	if !volumeExists(t, ctx, volume) {
+		t.Fatal("the refused Remove deleted the volume anyway")
+	}
+	var stillThere bool
+	for _, c := range mustList(t, p, ctx) {
+		if c.Slug == slug {
+			stillThere = true
+		}
+	}
+	if !stillThere {
+		t.Fatal("the refused Remove removed the container, so the refusal came too late")
+	}
+
+	// With the explicit yes, the container and the volume both go.
+	if err := p.Remove(ctx, slug, RemoveOptions{DeleteData: true, Critical: critical, AllowCritical: true}); err != nil {
+		t.Fatalf("Remove (delete data): %v", err)
+	}
+	if volumeExists(t, ctx, volume) {
+		t.Fatal("the named volume survived a Remove that was explicitly told to delete it")
 	}
 	for _, c := range mustList(t, p, ctx) {
 		if c.Slug == slug {
 			t.Fatal("the container is still listed after Remove")
 		}
+	}
+}
+
+// assertHardened reads the container back off the live daemon and checks the policy
+// actually landed: all capabilities dropped, no-new-privileges set, a PID ceiling, and
+// the catalog's stop timeout recorded on the container so Stop can find it later.
+func assertHardened(t *testing.T, ctx context.Context, name string) {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	result, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("ContainerInspect: %v", err)
+	}
+	hostConfig := result.Container.HostConfig
+	if hostConfig == nil {
+		t.Fatal("the daemon returned no HostConfig")
+	}
+	if !slices.Contains(hostConfig.CapDrop, "ALL") {
+		t.Fatalf("the live container did not drop its capabilities: CapDrop=%v", hostConfig.CapDrop)
+	}
+	if !slices.Contains(hostConfig.SecurityOpt, "no-new-privileges:true") {
+		t.Fatalf("the live container has SecurityOpt=%v, want no-new-privileges", hostConfig.SecurityOpt)
+	}
+	if hostConfig.PidsLimit == nil || *hostConfig.PidsLimit != defaultPidsLimit {
+		t.Fatalf("the live container has PidsLimit=%v, want %d", hostConfig.PidsLimit, defaultPidsLimit)
+	}
+	if hostConfig.Privileged {
+		t.Fatal("the live container is privileged")
+	}
+	cfg := result.Container.Config
+	if cfg == nil || cfg.StopTimeout == nil || *cfg.StopTimeout != defaultStopTimeout {
+		t.Fatalf("the live container did not record its stop timeout: %v", cfg)
+	}
+}
+
+// liveMountSource asks the daemon what a running container actually has mounted at a
+// container path — the named volume, or the host folder for a bind.
+func liveMountSource(t *testing.T, ctx context.Context, name, target string) string {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	mounts, err := managedContainerMounts(ctx, cli, name)
+	if err != nil {
+		t.Fatalf("managedContainerMounts: %v", err)
+	}
+	for _, m := range mounts {
+		if m.Destination != target {
+			continue
+		}
+		if m.Type == mount.TypeVolume {
+			return m.Name
+		}
+		return m.Source
+	}
+	return ""
+}
+
+// volumeExists asks the daemon whether a named volume is still there.
+func volumeExists(t *testing.T, ctx context.Context, name string) bool {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	_, err = cli.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	return err == nil
+}
+
+// THE RULE: the per-architecture image the catalog declares is the one that gets
+// pulled, created and recorded.
+//
+// traffmonetizer/cli_v2 publishes its two real ARM builds as separate tags and labels
+// every one of them linux/amd64, so Docker cannot pick them from the manifest. The
+// override existed in the catalog, the Go structs parsed it, and the deploy path used
+// docker.image regardless — a Raspberry Pi got an x86-64 binary that dies with "exec
+// format error", after a deploy that looked like it worked.
+//
+// The entry here names an image that CANNOT be pulled and overrides it for every
+// architecture family. If the override is ignored the pull fails, so this cannot pass
+// on a build that dropped it.
+func TestDeployUsesThePerArchImageIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping docker integration test in -short mode")
+	}
+	useAmbientDocker(t)
+
+	p := &DockerProvider{}
+	ctx := context.Background()
+
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	facts := daemonFacts(ctx, cli)
+	const probeImage = "busybox:1.37.0" // pinned tag, never :latest
+	err = pullImage(ctx, cli, probeImage, nil)
+	cli.Close()
+	if err != nil {
+		t.Skipf("could not pull %s: %v", probeImage, err)
+	}
+	if ArchFamily(facts.Architecture) == "" {
+		t.Skipf("the daemon reports %q, which is not one of the three families this maps", facts.Architecture)
+	}
+
+	slug := fmt.Sprintf("archpick%d", time.Now().UnixNano())
+	spec := DeploySpec{
+		Slug: slug,
+		Service: catalog.Service{
+			Name: "per-arch probe",
+			Docker: catalog.DockerConfig{
+				Image: "cashpilot.invalid/no-such-image:0",
+				ImageByArch: map[string]string{
+					"amd64": probeImage,
+					"arm64": probeImage,
+					"arm":   probeImage,
+				},
+				Command: "sh -c 'trap exit TERM; sleep 3600 & wait'",
+			},
+		},
+	}
+	defer func() { _ = p.Remove(context.Background(), slug, RemoveOptions{}) }()
+
+	info, err := p.Deploy(ctx, spec, nil)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	// The deployment record has to carry the image that actually runs, or the app's
+	// "your image is out of date" check compares against something that was never
+	// deployed.
+	if info.Image != probeImage {
+		t.Fatalf("the deployment records image %q, want the per-architecture %q", info.Image, probeImage)
+	}
+	if running := liveImage(t, ctx, containerName(slug)); running != probeImage {
+		t.Fatalf("the container runs %q, want the per-architecture %q", running, probeImage)
+	}
+}
+
+// liveImage asks the daemon which image a container was created from.
+func liveImage(t *testing.T, ctx context.Context, name string) string {
+	t.Helper()
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatalf("dockerClient: %v", err)
+	}
+	defer cli.Close()
+	result, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		t.Fatalf("ContainerInspect: %v", err)
+	}
+	if result.Container.Config == nil {
+		t.Fatal("the daemon returned no Config")
+	}
+	return result.Container.Config.Image
+}
+
+// gracefulMarker and killedMarker are the two things the lifecycle probe can say when
+// it starts: it found the file its own TERM handler writes, or it did not.
+//
+// A container only runs its handler when something asked it to stop. A forced removal
+// is SIGKILL, and a killed process writes nothing. So a start that reports
+// gracefulMarker is proof that whatever ended the PREVIOUS container asked first —
+// which is the difference between a Storj node that flushed and one that comes back
+// into an unclean-shutdown recovery.
+const (
+	gracefulMarker = "previous-stop-was-graceful"
+	killedMarker   = "previous-stop-left-nothing"
+	markerFile     = "/data/stopped-cleanly"
+)
+
+// probeScript is the lifecycle probe's shell: report and clear the marker, announce
+// itself, then sit in a sleep that a TERM handler can interrupt. It is inside single
+// quotes in the catalog entry, so the double quotes around the trap body survive
+// tokenizeCommand as one argument.
+const probeScript = "trap \"touch " + markerFile + "; exit 0\" TERM; " +
+	"if [ -f " + markerFile + " ]; then echo " + gracefulMarker + "; rm -f " + markerFile + "; " +
+	"else echo " + killedMarker + "; fi; " +
+	"echo " + logMarker + "; sleep 3600 & wait"
+
+// waitForStartupVerdicts reads the container's log until it holds want verdict lines,
+// and returns them in order. Logs are not flushed the instant a container starts, so
+// this polls rather than reading once.
+func waitForStartupVerdicts(t *testing.T, p *DockerProvider, ctx context.Context, slug string, want int) []string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var verdicts []string
+	for {
+		logs, err := p.Logs(ctx, slug, 200)
+		if err != nil {
+			t.Fatalf("Logs: %v", err)
+		}
+		verdicts = verdicts[:0]
+		// Contains, not equality: a non-TTY container's log stream is multiplexed and
+		//each frame carries an 8-byte header, so the marker is never the whole line.
+		for _, line := range strings.Split(logs, "\n") {
+			switch {
+			case strings.Contains(line, gracefulMarker):
+				verdicts = append(verdicts, gracefulMarker)
+			case strings.Contains(line, killedMarker):
+				verdicts = append(verdicts, killedMarker)
+			}
+		}
+		if len(verdicts) >= want {
+			return verdicts
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited for %d startup verdicts from %s, saw %v", want, slug, verdicts)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 }
 

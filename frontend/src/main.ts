@@ -21,6 +21,7 @@ import {
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
+  PlanServiceRemoval,
   RemoveFleetDevice,
   RefreshDeployments,
   RemoveService,
@@ -36,6 +37,7 @@ import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { serviceFormFields } from "./render/fields";
 import { totalText, totalCaption } from "./render/total";
+import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
@@ -1256,11 +1258,34 @@ async function runWizardAction(slug: string, action: string) {
   }
 }
 
+// askAboutRemoval puts the two questions to the user: remove the service, and then
+// separately, delete the data it saved. The second one names each volume and what it
+// holds, because the data behind them - a node identity, a keystore - has no backup
+// anywhere and cannot be recreated.
+//
+// When the plan cannot be read (the container is already gone, or the daemon is down)
+// the removal still goes ahead, but only ever as the safe kind: nothing can say what
+// the data is, so nothing is deleted.
+async function askAboutRemoval(slug: string, serviceName: string): Promise<RemovalChoice | null> {
+  let plan;
+  try {
+    plan = await PlanServiceRemoval(slug);
+  } catch {
+    return confirm(`Remove ${serviceName}? This deletes its container and keeps any data it saved.`) ? {deleteData: false, allowCritical: false} : null;
+  }
+  if (!confirm(removeConfirmText(serviceName, plan))) return null;
+  const dataQuestion = deleteDataConfirmText(serviceName, plan);
+  if (!dataQuestion) return {deleteData: false, allowCritical: false};
+  return removalChoice(plan, confirm(dataQuestion));
+}
+
 async function runServiceAction(slug: string, action: string) {
   selectedService = state?.services.find((svc) => svc.slug === slug) || null;
   try {
-    if (action === "remove" && !confirm(`Remove ${selectedService?.name || slug}? This deletes the managed container and its Docker volumes. Host bind-mount folders are left untouched.`)) {
-      return;
+    let removal: RemovalChoice | null = null;
+    if (action === "remove") {
+      removal = await askAboutRemoval(slug, selectedService?.name || slug);
+      if (!removal) return;
     }
     if (action === "collect") {
       const record = await CollectService(slug);
@@ -1280,9 +1305,16 @@ async function runServiceAction(slug: string, action: string) {
       await StartService(slug);
       setOutput(`${slug} started.`);
     }
-    if (action === "remove") {
-      await RemoveService(slug);
-      setOutput(`${slug} removed.`);
+    if (action === "remove" && removal) {
+      await RemoveService(slug, removal.deleteData, removal.allowCritical);
+      // Refresh first, then write the message. The generic "complete" line below used
+      // to land on top of this one, so the user never got to read which of the two
+      // removals actually happened - the one fact they need after an irreversible act.
+      await refreshState();
+      setOutput(removal.deleteData
+        ? `${slug} and its saved data removed.`
+        : `${slug} removed. Its saved data is still on this computer. To delete it later, set ${slug} up again and remove it with its data.`);
+      return;
     }
     await refreshState();
     setOutput(`${slug} ${action} complete.`);
