@@ -22,6 +22,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/compose"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
+	"github.com/GeiserX/CashPilot-Desktop/internal/health"
 	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
@@ -235,6 +236,11 @@ type AppState struct {
 	Currencies       []string                     `json:"currencies"`
 	Summary          EarningsSummary              `json:"summary"`
 	Health           map[string]store.HealthScore `json:"health"`
+	// ProducerStates is the separate "is it actually earning?" verdict per deployed
+	// slug (see internal/health). Health above is the container's reputation, which is
+	// computed from starts and crashes and so scores a service that has earned nothing
+	// for a month at full marks. A service missing from this map has no verdict at all.
+	ProducerStates map[string]health.Report `json:"producerStates"`
 	// ServiceDetails carries each collector's optional per-service JSON detail blob
 	// keyed by slug (e.g. the MystNodes per-node earnings breakdown). The frontend
 	// parses the raw JSON per service; the backend stores and forwards it opaquely.
@@ -408,6 +414,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Currencies:       supportedCurrencies(),
 		Summary:          a.computeEarningsSummary(earnings),
 		Health:           a.store.HealthScores(7),
+		ProducerStates:   a.producerStates(deployments),
 		ServiceDetails:   a.store.ListServiceDetails(),
 		Fleet:            a.fleetView(),
 		Hostname:         runtime.DeviceHostname(),
