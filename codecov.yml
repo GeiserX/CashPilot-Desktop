@@ -32,6 +32,10 @@ ignore:
   - "vendor/**"
   - "**/*_test.go"
   - "**/testdata/**"
+  # End-to-end scaffolding: the fake Docker daemon and fake earning platforms the
+  # tests drive. Test code that happens not to live in a _test.go file, because the
+  # tests import it as a package — excluded for the same reason testdata is.
+  - "e2e/**"
   - "main.go"          # Wails bootstrap glue
   - "app.go"           # Wails-bound API surface (thin glue over internal/*)
   - "daemon.go"        # --daemon headless bootstrap (counterpart of main.go; smoke-tested, not unit-tested)
