@@ -33,11 +33,31 @@ type Result struct {
 	Error    string
 }
 
-func NewRegistry(st *store.Store) *Registry {
-	return &Registry{
+// Option customises a Registry at construction time.
+type Option func(*Registry)
+
+// WithHTTPClient replaces the HTTP client every collector sends its requests
+// through. The collectors' provider URLs are fixed (they are the platforms' real
+// endpoints), so this is the one seam an end-to-end test needs to point them at a
+// stand-in server instead of the internet. A nil client is ignored, leaving the
+// 30s-timeout default in place, so production wiring is unchanged.
+func WithHTTPClient(c *http.Client) Option {
+	return func(r *Registry) {
+		if c != nil {
+			r.http = c
+		}
+	}
+}
+
+func NewRegistry(st *store.Store, opts ...Option) *Registry {
+	r := &Registry{
 		store: st,
 		http:  &http.Client{Timeout: 30 * time.Second},
 	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
 // collectorFunc runs one service's collector against the given credentials.

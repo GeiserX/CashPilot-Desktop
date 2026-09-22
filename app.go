@@ -1007,7 +1007,7 @@ func (a *App) DeployService(slug string, values map[string]string) (store.Deploy
 		a.emitError("deploy", err)
 		return store.Deployment{}, err
 	}
-	wailsruntime.EventsEmit(a.ctx, "deployment:changed", deployment)
+	a.emitEvent("deployment:changed", deployment)
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
 	// services with a native collector are worth kicking; the rest would merely
@@ -1026,7 +1026,7 @@ func (a *App) StopService(slug string) error {
 		a.emitError("stop", err)
 		return err
 	}
-	wailsruntime.EventsEmit(a.ctx, "deployment:changed", slug)
+	a.emitEvent("deployment:changed", slug)
 	return nil
 }
 
@@ -1038,7 +1038,7 @@ func (a *App) StartService(slug string) error {
 		a.emitError("start", err)
 		return err
 	}
-	wailsruntime.EventsEmit(a.ctx, "deployment:changed", slug)
+	a.emitEvent("deployment:changed", slug)
 	return nil
 }
 
@@ -1050,7 +1050,7 @@ func (a *App) RestartService(slug string) error {
 		a.emitError("restart", err)
 		return err
 	}
-	wailsruntime.EventsEmit(a.ctx, "deployment:changed", slug)
+	a.emitEvent("deployment:changed", slug)
 	return nil
 }
 
@@ -1110,7 +1110,7 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 		a.emitError("collector", err)
 		return store.EarningsRecord{}, err
 	}
-	wailsruntime.EventsEmit(a.ctx, "earnings:changed", record)
+	a.emitEvent("earnings:changed", record)
 	return record, nil
 }
 
@@ -1571,10 +1571,12 @@ func (a *App) emitNotice(scope, message string) {
 	})
 }
 
-// emitEvent emits a Wails event, but only when a.ctx is a real Wails runtime
-// context. Wails' EventsEmit fatally exits the process (log.Fatalf inside
-// getEvents) if the context has no internal "events" value — the case under tests
-// that inject a plain context.Background(). Guarding on that value lets background
+// emitEvent sends an event to the frontend, and is the only way the app may do so.
+// Wails' EventsEmit fatally exits the process (log.Fatalf inside getEvents) when the
+// context has no internal "events" value, so a binding that emitted directly would
+// kill the process the moment it ran outside the GUI — under the headless daemon
+// role, or in any test that drives that binding. Guarding on that value here makes
+// the absence of a frontend simply nothing to emit to, and lets background
 // collection and its event emission be exercised in tests while behaving normally
 // at runtime, where the OnStartup context always carries "events".
 func (a *App) emitEvent(name string, data ...interface{}) {
