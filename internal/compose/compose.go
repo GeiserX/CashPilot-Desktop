@@ -37,6 +37,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,16 +60,6 @@ const (
 	// same fallback the web exporter uses.
 	defaultCategory = "bandwidth"
 )
-
-// allowedDevices is the ceiling on host devices an exported file may map in, the
-// same one internal/runtime enforces when the app deploys a container itself. A
-// device is a direct line to the kernel, so widening it is a deliberate change here,
-// never something a catalog entry can do on its own.
-//
-// /dev/net/tun is on it because Mysterium cannot carry wireguard traffic without it:
-// exported without the device the node starts, registers, appears in discovery and
-// earns nothing.
-var allowedDevices = map[string]bool{"/dev/net/tun": true}
 
 // Source is the slice of the catalog the exporter needs. Taking an interface keeps
 // the generator testable against hand-built entries with no services/ directory on
@@ -399,7 +390,9 @@ func substituteHostname(value, hostname string) string {
 	return strings.ReplaceAll(value, "{hostname}", hostname)
 }
 
-// devicesFor returns the host devices to map, refusing anything outside the ceiling.
+// devicesFor returns the host devices to map, refusing anything outside the ceiling
+// internal/runtime enforces on a deploy: one list, so the file and the dashboard
+// can never disagree about what a service may touch.
 //
 // Refusing rather than dropping is deliberate and matches the deploy path: a file
 // quietly missing a device its entry asked for produces a container that looks
@@ -416,7 +409,7 @@ func devicesFor(svc catalog.Service) ([]string, error) {
 		if host == "" {
 			return nil, fmt.Errorf("%s declares the device %q with no host path", svc.Name, entry)
 		}
-		if !allowedDevices[host] {
+		if !runtime.AllowedDevice(host) {
 			blocked = append(blocked, host)
 			continue
 		}
