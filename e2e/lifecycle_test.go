@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -228,6 +229,7 @@ func TestEarnerLifecycle(t *testing.T) {
 	})
 
 	t.Run("remove takes the container and the row, and leaves the other earner alone", func(t *testing.T) {
+		e.Docker.ResetCalls()
 		if err := e.Manager.Remove(ctx, "earnapp", false, false); err != nil {
 			t.Fatalf("Remove: %v", err)
 		}
@@ -245,14 +247,33 @@ func TestEarnerLifecycle(t *testing.T) {
 		if _, ok := e.deployment("honeygain"); !ok {
 			t.Error("removing earnapp also deleted honeygain's row")
 		}
-		// Whether Remove should also delete the earner's data volume is an open
-		// question, not a settled rule, so nothing is asserted about it here.
-		// Today it always deletes; the web app keeps the volume unless the user
-		// asks, and refuses outright for the ones holding a node identity. Pinning
-		// today's answer in this test would make the safer behaviour look like a
-		// regression when it lands. The fake records the volume deletes
-		// (CallsWithQuery) and reports each mount's real path, so whichever rule
-		// wins can be asserted here without changing the harness.
+		// The data stays. A plain "remove this service" is the ordinary act, and
+		// the volume it leaves behind is what a later redeploy picks back up, so
+		// the daemon must not be asked to delete it. Both halves are checked: that
+		// the volume survived, and that no delete was attempted — a volume also
+		// survives a delete that FAILED, which looks identical from here and
+		// behaves nothing like this against a real daemon.
+		if deletedVolumes := volumeDeletes(e.Docker.CallsWithQuery()); len(deletedVolumes) != 0 {
+			t.Errorf("the default Remove deleted volumes %v; calls: %v", deletedVolumes, e.Docker.CallsWithQuery())
+		}
+		if !contains(e.Docker.Volumes(), "earnapp-data") {
+			t.Errorf("the default Remove destroyed the data volume: %v", e.Docker.Volumes())
+		}
+		// And the container delete must not carry the daemon's own "take the
+		// volumes with it" flag, which destroys anonymous volumes with no volume
+		// delete of its own to show for it.
+		deleted := ""
+		for _, call := range e.Docker.CallsWithQuery() {
+			if strings.HasPrefix(call, "DELETE /containers/cashpilot-earnapp") {
+				deleted = call
+			}
+		}
+		if deleted == "" {
+			t.Fatalf("Remove never deleted the container: %v", e.Docker.CallsWithQuery())
+		}
+		if strings.Contains(deleted, "v=1") {
+			t.Errorf("the default Remove asked the daemon to take the volumes too: %q", deleted)
+		}
 	})
 }
 
@@ -295,6 +316,184 @@ func TestARedeployThatCannotSucceedKeepsTheEarnerRunning(t *testing.T) {
 	if replaced, _ := e.Docker.Container("cashpilot-honeygain"); replaced.ID == before.ID {
 		t.Error("the recovered deploy did not actually replace the container")
 	}
+}
+
+// TestDeletingTheDataIsASeparateChoiceFromRemovingTheService is the other half of
+// the rule the default remove pins: when the user DOES ask for the data, the
+// volume really goes — and only the volumes of the service that was asked about.
+// A guard that kept data by refusing to delete anything at all would pass the
+// default-remove checks and lose the user nothing but the feature.
+func TestDeletingTheDataIsASeparateChoiceFromRemovingTheService(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+
+	// Two earners that both keep a named volume, so "exactly its volumes" is a
+	// claim with something to be wrong about.
+	if _, err := e.Manager.Deploy(ctx, "earnapp", earnappCreds); err != nil {
+		t.Fatalf("deploy earnapp: %v", err)
+	}
+	if _, err := e.Manager.Deploy(ctx, "mysterium", nil); err != nil {
+		t.Fatalf("deploy mysterium: %v", err)
+	}
+	if !contains(e.Docker.Volumes(), "earnapp-data") || !contains(e.Docker.Volumes(), "mysterium-data") {
+		t.Fatalf("the deploys created no data volumes to delete: %v", e.Docker.Volumes())
+	}
+
+	e.Docker.ResetCalls()
+	if err := e.Manager.Remove(ctx, "earnapp", true, false); err != nil {
+		t.Fatalf("Remove(deleteData): %v", err)
+	}
+
+	if got, want := volumeDeletes(e.Docker.CallsWithQuery()), []string{"earnapp-data"}; !slices.Equal(got, want) {
+		t.Errorf("volume deletes = %v, want %v; calls: %v", got, want, e.Docker.CallsWithQuery())
+	}
+	if contains(e.Docker.Volumes(), "earnapp-data") {
+		t.Errorf("the volume survived the delete the user asked for: %v", e.Docker.Volumes())
+	}
+	if !contains(e.Docker.Volumes(), "mysterium-data") {
+		t.Errorf("deleting earnapp's data took the other earner's node identity: %v", e.Docker.Volumes())
+	}
+	if _, ok := e.Docker.Container("cashpilot-earnapp"); ok {
+		t.Error("the container is still there after Remove")
+	}
+	if _, ok := e.deployment("earnapp"); ok {
+		t.Error("the deployment row outlived Remove")
+	}
+	if _, ok := e.Docker.Container("cashpilot-mysterium"); !ok {
+		t.Error("removing earnapp also removed the other earner")
+	}
+}
+
+// TestRemoveRefusesToDestroyANodeIdentityWithoutASecondYes is the guard that
+// exists because the loss is permanent: a Mysterium keystore has no server-side
+// copy, so "delete the data too" on its own must not be enough to destroy it. The
+// refusal has to happen BEFORE anything is removed — a refusal that arrives after
+// the container is gone has already taken the thing the data belonged to.
+func TestRemoveRefusesToDestroyANodeIdentityWithoutASecondYes(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+
+	if _, err := e.Manager.Deploy(ctx, "mysterium", nil); err != nil {
+		t.Fatalf("deploy mysterium: %v", err)
+	}
+	plan, err := e.Manager.PlanRemoval(ctx, "mysterium")
+	if err != nil {
+		t.Fatalf("PlanRemoval: %v", err)
+	}
+	if len(plan.Volumes) != 1 || !plan.Volumes[0].Critical {
+		t.Fatalf("the catalog's critical volume is not in the plan: %+v", plan.Volumes)
+	}
+
+	e.Docker.ResetCalls()
+	err = e.Manager.Remove(ctx, "mysterium", true, false)
+	if err == nil {
+		t.Fatal("deleting a node identity went through on one yes")
+	}
+	// The message has to be enough to decide with on its own: the volume and what
+	// is lost, not a bare refusal that sends the user looking elsewhere.
+	if !strings.Contains(err.Error(), "mysterium-data") || !strings.Contains(err.Error(), plan.Volumes[0].Holds) {
+		t.Errorf("the refusal does not say what was protected: %v", err)
+	}
+	if deleted := volumeDeletes(e.Docker.CallsWithQuery()); len(deleted) != 0 {
+		t.Errorf("the refused Remove still deleted volumes %v", deleted)
+	}
+	if !contains(e.Docker.Volumes(), "mysterium-data") {
+		t.Errorf("the refused Remove destroyed the node identity: %v", e.Docker.Volumes())
+	}
+	// Nothing at all happened: the container is still there, still running, and the
+	// row still describes it, so the user can retry or change their mind.
+	container, ok := e.Docker.Container("cashpilot-mysterium")
+	if !ok {
+		t.Fatal("the refused Remove took the container anyway")
+	}
+	if container.State != "running" {
+		t.Errorf("the refused Remove left the container %q, want running", container.State)
+	}
+	if _, ok := e.deployment("mysterium"); !ok {
+		t.Error("the refused Remove deleted the deployment row")
+	}
+
+	// Positive control: the same call with the second, explicit yes goes through,
+	// so the refusal above cannot be a Remove that stopped working.
+	e.Docker.ResetCalls()
+	if err := e.Manager.Remove(ctx, "mysterium", true, true); err != nil {
+		t.Fatalf("Remove(deleteData, allowCritical): %v", err)
+	}
+	if got, want := volumeDeletes(e.Docker.CallsWithQuery()), []string{"mysterium-data"}; !slices.Equal(got, want) {
+		t.Errorf("volume deletes = %v, want %v", got, want)
+	}
+	if contains(e.Docker.Volumes(), "mysterium-data") {
+		t.Errorf("the explicit delete left the volume behind: %v", e.Docker.Volumes())
+	}
+	if _, ok := e.Docker.Container("cashpilot-mysterium"); ok {
+		t.Error("the container survived the explicit remove")
+	}
+	if _, ok := e.deployment("mysterium"); ok {
+		t.Error("the deployment row survived the explicit remove")
+	}
+}
+
+// TestPlanRemovalNamesTheDataAndMarksWhatCannotBeGotBack covers the question the
+// user is actually asked. The confirmation is built from this plan, so if it did
+// not name the volume or did not mark the irreplaceable one, the user would be
+// agreeing to "and its Docker volumes" — the wording that lost people their nodes.
+func TestPlanRemovalNamesTheDataAndMarksWhatCannotBeGotBack(t *testing.T) {
+	e := newEnv(t)
+	ctx := e.ctx()
+
+	if _, err := e.Manager.Deploy(ctx, "earnapp", earnappCreds); err != nil {
+		t.Fatalf("deploy earnapp: %v", err)
+	}
+	if _, err := e.Manager.Deploy(ctx, "mysterium", nil); err != nil {
+		t.Fatalf("deploy mysterium: %v", err)
+	}
+
+	ordinary, err := e.Manager.PlanRemoval(ctx, "earnapp")
+	if err != nil {
+		t.Fatalf("PlanRemoval(earnapp): %v", err)
+	}
+	if ordinary.Name != "cashpilot-earnapp" || !ordinary.CatalogKnown {
+		t.Errorf("plan = %+v, want the live container and a catalog that was read", ordinary)
+	}
+	if len(ordinary.Volumes) != 1 || ordinary.Volumes[0].Source != "earnapp-data" || !ordinary.Volumes[0].Volume {
+		t.Fatalf("the plan does not name the live named volume: %+v", ordinary.Volumes)
+	}
+	if ordinary.Volumes[0].Target != "/etc/earnapp" {
+		t.Errorf("the plan reports the volume at %q, want the container path it is mounted at", ordinary.Volumes[0].Target)
+	}
+	if ordinary.HasCritical() {
+		t.Errorf("an ordinary earner's data was marked irreplaceable: %+v", ordinary.Volumes)
+	}
+
+	identity, err := e.Manager.PlanRemoval(ctx, "mysterium")
+	if err != nil {
+		t.Fatalf("PlanRemoval(mysterium): %v", err)
+	}
+	if len(identity.Volumes) != 1 || identity.Volumes[0].Source != "mysterium-data" {
+		t.Fatalf("the plan does not name the node's volume: %+v", identity.Volumes)
+	}
+	if !identity.Volumes[0].Critical || !identity.HasCritical() {
+		t.Errorf("the node identity volume was not marked irreplaceable: %+v", identity.Volumes)
+	}
+	if identity.Volumes[0].Holds == "" {
+		t.Error("the plan marks the volume irreplaceable without saying what is lost")
+	}
+}
+
+// volumeDeletes lists the volumes the daemon was asked to delete, in order, from
+// the recorded calls. What survived is only half the story: a volume also survives
+// a delete that failed, so the tests check the request that was made as well.
+func volumeDeletes(calls []string) []string {
+	var deleted []string
+	for _, call := range calls {
+		rest, ok := strings.CutPrefix(call, "DELETE /volumes/")
+		if !ok {
+			continue
+		}
+		name, _, _ := strings.Cut(rest, "?")
+		deleted = append(deleted, name)
+	}
+	return deleted
 }
 
 // hasCallMatching reports whether any recorded call starts with prefix and ends
