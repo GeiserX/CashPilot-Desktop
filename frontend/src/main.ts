@@ -21,6 +21,7 @@ import {
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
+  PreflightService,
   PlanServiceRemoval,
   RemoveFleetDevice,
   RefreshDeployments,
@@ -31,14 +32,15 @@ import {
   StopService,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
-import { renderHealthBadge } from "./render/health";
+import { renderHealthBadge, renderProducerBadge } from "./render/health";
 import { renderMystNodes } from "./render/myst";
+import { renderPreflight } from "./render/preflight";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { serviceFormFields } from "./render/fields";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
-import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -269,7 +271,7 @@ function renderDashboard(current: AppState) {
             </div>
           </div>
           <div class="services-table-wrap">
-            ${renderServicesTable(services, deployments, earnings, current.health, current.serviceDetails, current.outdatedServices)}
+            ${renderServicesTable(services, deployments, earnings, current.health, current.serviceDetails, current.outdatedServices, current.producerStates)}
           </div>
         </section>
         <pre id="service-output" class="output dashboard-output"></pre>
@@ -907,7 +909,7 @@ function renderPointsSection(points: PointsBalance[]) {
   `;
 }
 
-function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null, outdated: string[] | null) {
+function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null, outdated: string[] | null, producerStates: Record<string, ProducerReport> | null = null) {
   if (deployments.length === 0) {
     return `
       <div class="empty-state">
@@ -942,7 +944,7 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
                 <strong>${escapeHtml(service?.name || deployment.slug)}</strong>
                 <small>${escapeHtml(deployment.image)}</small>
               </td>
-              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
+              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${renderProducerBadge(producerStates?.[deployment.slug], deployment.status)}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
               <td>${earning && !earning.error ? formatBalance(earning.balance, earning.currency) : "<span class=\"muted\">--</span>"}</td>
               <td>${deployment.cpuPercent.toFixed(1)}%</td>
               <td>${deployment.memoryMb.toFixed(0)} MB</td>
@@ -1078,6 +1080,7 @@ function renderSetupWizard(current: AppState) {
     });
   });
   selectedServices.forEach((service) => void hydrateWizardForm(service));
+  selectedServices.forEach((service) => void hydrateWizardPreflight(service));
 }
 
 function renderWizardProgress() {
@@ -1178,6 +1181,7 @@ function renderWizardServiceSetup(service: Service) {
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
+      <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
         <button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
@@ -1217,6 +1221,21 @@ async function hydrateWizardForm(service: Service) {
     const key = input.dataset.wizardEnv || "";
     if (creds[key]) input.value = creds[key];
   });
+}
+
+// The pre-deploy check, filled in beside the Deploy button once the backend has
+// answered. It runs after the card is on screen because it talks to the container
+// runtime, and a slow or unreachable runtime must not hold up the wizard. A failed
+// check leaves the slot empty: a panel that cannot say anything must say nothing,
+// never a reassuring blank.
+async function hydrateWizardPreflight(service: Service) {
+  const slot = document.querySelector<HTMLDivElement>(`[data-preflight-slug="${service.slug}"]`);
+  if (!slot) return;
+  try {
+    slot.innerHTML = renderPreflight(await PreflightService(service.slug));
+  } catch {
+    slot.innerHTML = "";
+  }
 }
 
 function readWizardForm(slug: string): Record<string, string> {

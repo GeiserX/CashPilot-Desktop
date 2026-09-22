@@ -9,7 +9,7 @@
 //
 // Pure: takes a HealthScore or undefined, returns an HTML string.
 
-import type { HealthScore } from "../wails";
+import type { HealthScore, ProducerReport } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 // renderHealthBadge renders a compact, color-coded pill for a deployed service's
@@ -37,5 +37,57 @@ export function renderHealthBadge(health: HealthScore | undefined): string {
   // earner is legible at a glance, not just via hover.
   const crashNote = crashes > 0 ? ` · ${crashes} crash${crashes === 1 ? "" : "es"}` : "";
   const label = unstable ? `unstable · ${uptime}% up${crashNote}` : `${score} · ${uptime}% up${crashNote}`;
+  return `<span class="badge" style="margin-left: 6px; text-transform: none; ${tone}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+}
+
+// ---------------------------------------------------------------------------
+// The producer badge: is it actually EARNING, as distinct from merely running?
+// ---------------------------------------------------------------------------
+//
+// The status pill one column over is the container's state, and a container that
+// has produced nothing for a month is still "running" in green. That is the most
+// common complaint in this whole product category, and the pill is structurally
+// incapable of showing it. So this is a second, separate badge, fed by
+// internal/health.
+//
+// It carries the same rule as the health pill above, turned the other way round:
+// NOT CHECKED IS NOT THE SAME CLAIM AS CHECKED AND FINE. There is no green
+// "earning" badge, because nothing Desktop can see from a container proves money
+// moved. A verdict we could not reach says so, quietly, instead of leaving the
+// row reading as if all is well.
+
+// renderProducerBadge renders the earning verdict for one deployed service.
+//
+// A service that is not up gets nothing: the status pill already says it is
+// stopped, and "not earning" underneath it would be a second copy of the same
+// news. A service with no verdict at all (an older backend, or a refresh that
+// raced startup) also gets nothing — an empty badge would be an invented claim.
+export function renderProducerBadge(
+  report: ProducerReport | undefined,
+  containerState: string
+): string {
+  if (!report) return "";
+  if (containerState !== "running" && containerState !== "restarting") return "";
+
+  const reasons = (report.reasons || []).filter((r) => !!r);
+  const title = reasons.join(" ");
+  if (report.state === "failing" || report.state === "idle") {
+    // Amber for idle, red for a concrete failure: one is nobody buying, the
+    // other is something the user can go and fix.
+    const tone = report.state === "failing"
+      ? "color: var(--error); background: rgba(248, 113, 113, 0.14); border-color: rgba(248, 113, 113, 0.32);"
+      : "color: var(--warning); background: rgba(245, 158, 11, 0.14); border-color: rgba(245, 158, 11, 0.32);";
+    return badge(tone, "not earning", title || "This service is running but not earning.");
+  }
+  // Anything else, including a state this frontend does not know, is "we did not
+  // check" -- the honest reading of an answer we cannot interpret.
+  return badge(
+    "color: var(--text-muted); background: rgba(148, 163, 184, 0.12); border-color: rgba(148, 163, 184, 0.28);",
+    "earning not checked",
+    title || "CashPilot cannot tell whether this service is earning."
+  );
+}
+
+function badge(tone: string, label: string, title: string): string {
   return `<span class="badge" style="margin-left: 6px; text-transform: none; ${tone}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
 }

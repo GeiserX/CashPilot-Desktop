@@ -13,6 +13,7 @@ declare module "../wailsjs/go/main/App" {
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
+  export function PreflightService(slug: string): Promise<PreflightReport>;
   export function DeployService(slug: string, values: Record<string, string>): Promise<Deployment>;
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
@@ -37,6 +38,11 @@ export interface AppState {
   // (provider changed/re-pinned it): deployed but likely earning nothing.
   outdatedServices: string[] | null;
   health: Record<string, HealthScore> | null;
+  // The separate "is it actually earning?" verdict per deployed slug. `health`
+  // above is the container's reputation, which scores a service that has earned
+  // nothing for a month at full marks. A slug missing from this map has no
+  // verdict -- which is not the same claim as a verdict of "fine".
+  producerStates: Record<string, ProducerReport> | null;
   earnings: EarningsRecord[] | null;
   guides: InstallGuide[];
   notifications: NotificationItem[];
@@ -103,6 +109,19 @@ export interface MystNode {
   lifetimeMyst: number;
   lifetimeSettledMyst: number;
   lifetimeUnsettledMyst: number;
+}
+
+/**
+ * One service's earning verdict, from internal/health. `state` is "failing",
+ * "idle" or "not-checked"; there is deliberately no "earning" state, because
+ * nothing Desktop can see from a container proves that money moved. `reasons` is
+ * what the user is shown, and it is filled in for "not-checked" too -- "why don't
+ * you know?" is the first question a bare "not checked" provokes.
+ */
+export interface ProducerReport {
+  slug: string;
+  state: string;
+  reasons: string[] | null;
 }
 
 export interface HealthScore {
@@ -366,6 +385,28 @@ export interface EnvVar {
   secret: boolean;
   description: string;
   default: string;
+}
+
+// PreflightFinding is one thing that could stop a service earning on this machine,
+// in the words the user reads. Mirrors preflight.Finding.
+export interface PreflightFinding {
+  verdict: string;
+  message: string;
+}
+
+// PreflightReport is what CashPilot knows before a deploy runs. blocking is always
+// false: the report informs the decision, it never takes it. notChecked names what
+// nobody looked at, so a clean report is not mistaken for a guarantee. Mirrors
+// preflight.Report.
+export interface PreflightReport {
+  slug: string;
+  name: string;
+  verdict: string;
+  summary: string;
+  findings: PreflightFinding[] | null;
+  notChecked: string[] | null;
+  machineArch: string;
+  blocking: boolean;
 }
 
 export interface Deployment {
