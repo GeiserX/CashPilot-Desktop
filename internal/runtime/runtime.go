@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"regexp"
 	goruntime "runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -187,6 +188,9 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	if svc.Docker.Command != "" {
 		config.Cmd = buildCommandArgs(svc.Docker.Command, env)
+	}
+	if len(svc.Docker.Entrypoint) > 0 {
+		config.Entrypoint = slices.Clone(svc.Docker.Entrypoint)
 	}
 
 	hostConfig, err := buildHostConfig(svc, bindings, mounts, facts.OSType)

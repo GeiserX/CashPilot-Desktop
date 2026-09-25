@@ -707,3 +707,49 @@ func TestRequiredCredentialsMet(t *testing.T) {
 		t.Fatal("the required TOKEN present must read as met")
 	}
 }
+
+// A value the catalog constrains with a pattern must match all of it before it is
+// deployed, saved or counted as configured. Mysterium's UI_ADDRESS is the live case:
+// the value lands on the node's command line, where "127.0.0.1, 10.0.0.1" becomes a
+// stray argument and the node refuses to start.
+func TestAPatternedValueMustMatchWhollyBeforeDeploy(t *testing.T) {
+	const patternedYAML = `name: Patterned
+slug: patterned
+category: bandwidth
+status: active
+docker:
+  image: example/patterned:1.0.0
+  env:
+    - key: UI_ADDRESS
+      label: WebUI address
+      default: "127.0.0.1"
+      pattern: '(?:localhost|\d{1,3}(?:\.\d{1,3}){3})(?:,(?:localhost|\d{1,3}(?:\.\d{1,3}){3}))*'
+`
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{"services/bandwidth/patterned.yml": {Data: []byte(patternedYAML)}})
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	fake := &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "cid", Status: "running"}}
+	m := NewManager(fake, cat, newTestStore(t))
+
+	for _, bad := range []string{"127.0.0.1, 10.0.0.1", "127.0.0.1 --evil", "x127.0.0.1"} {
+		if err := m.ValidateCredentials("patterned", map[string]string{"UI_ADDRESS": bad}); err == nil ||
+			!strings.Contains(err.Error(), "WebUI address") {
+			t.Errorf("ValidateCredentials accepted %q: %v", bad, err)
+		}
+		if m.RequiredCredentialsMet("patterned", map[string]string{"UI_ADDRESS": bad}) {
+			t.Errorf("%q counted as configured", bad)
+		}
+		if _, err := m.Deploy(context.Background(), "patterned", map[string]string{"UI_ADDRESS": bad}); err == nil {
+			t.Errorf("Deploy accepted %q", bad)
+		}
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("a refused value still reached the runtime %d times", fake.deployCalls)
+	}
+	for _, good := range []string{"", "127.0.0.1", "127.0.0.1,172.18.0.1", "localhost"} {
+		if err := m.ValidateCredentials("patterned", map[string]string{"UI_ADDRESS": good}); err != nil {
+			t.Errorf("ValidateCredentials refused %q: %v", good, err)
+		}
+	}
+}
