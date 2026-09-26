@@ -753,3 +753,28 @@ docker:
 		}
 	}
 }
+
+// A pattern Go cannot compile refuses the value rather than letting it through
+// unchecked: the field exists because the wrong value stops the service.
+func TestAPatternThatDoesNotCompileRefusesTheValue(t *testing.T) {
+	const brokenYAML = `name: Broken
+slug: broken
+category: bandwidth
+status: active
+docker:
+  image: example/broken:1.0.0
+  env:
+    - key: ADDR
+      label: Address
+      pattern: '(unclosed'
+`
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{"services/bandwidth/broken.yml": {Data: []byte(brokenYAML)}})
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	m := NewManager(&fakeProvider{}, cat, newTestStore(t))
+	if err := m.ValidateCredentials("broken", map[string]string{"ADDR": "127.0.0.1"}); err == nil ||
+		!strings.Contains(err.Error(), "Address") {
+		t.Fatalf("a value checked against an uncompilable pattern was accepted: %v", err)
+	}
+}

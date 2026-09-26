@@ -165,3 +165,21 @@ func TestBuildHostConfigRefusesDevicesOutsideTheAllowList(t *testing.T) {
 		t.Fatal("a device outside the allow-list was accepted")
 	}
 }
+
+// A catalog entrypoint reaches the container config as a copy; an entry without one
+// keeps the image's own (nil, not an empty list, which Docker would read as "none").
+func TestEntrypointForComesFromTheCatalog(t *testing.T) {
+	wrapper := []string{"/bin/sh", "-c", "exec /entrypoint \"$@\"", "--"}
+	svc := catalog.Service{Docker: catalog.DockerConfig{Image: "storjlabs/storagenode", Entrypoint: wrapper}}
+	got := entrypointFor(svc)
+	if !slices.Equal(got, wrapper) {
+		t.Fatalf("entrypointFor = %v, want %v", got, wrapper)
+	}
+	got[0] = "/changed"
+	if svc.Docker.Entrypoint[0] != "/bin/sh" {
+		t.Fatal("the container config aliases the catalog's slice")
+	}
+	if got := entrypointFor(catalog.Service{Docker: catalog.DockerConfig{Image: "x"}}); got != nil {
+		t.Fatalf("an entry without an entrypoint got %v, want nil", got)
+	}
+}
