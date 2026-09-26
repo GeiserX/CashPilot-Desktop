@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	goruntime "runtime"
 	"sort"
 
@@ -407,12 +408,22 @@ func deploySource(ctx context.Context, provider runtime.Provider, svc catalog.Se
 func validateRequired(svc catalog.Service, credentials map[string]string) error {
 	for _, list := range [][]catalog.EnvVar{svc.Docker.Env, svc.Native.Env} {
 		for _, item := range list {
-			if item.Required && credentials[item.Key] == "" && item.Default == "" {
-				label := item.Label
-				if label == "" {
-					label = item.Key
-				}
+			label := item.Label
+			if label == "" {
+				label = item.Key
+			}
+			value := credentials[item.Key]
+			if item.Required && value == "" && item.Default == "" {
 				return fmt.Errorf("missing required field: %s", label)
+			}
+			// A value the catalog constrains must match all of the pattern before it
+			// is deployed or saved. Only what the user supplied is checked; an empty
+			// value falls back to the default, which the catalog itself vouches for.
+			if item.Pattern != "" && value != "" {
+				re, err := regexp.Compile(`^(?:` + item.Pattern + `)$`)
+				if err != nil || !re.MatchString(value) {
+					return fmt.Errorf("invalid value for field: %s", label)
+				}
 			}
 		}
 	}

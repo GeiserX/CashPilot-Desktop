@@ -165,7 +165,11 @@ type DockerConfig struct {
 	// explicit act rather than a side effect of tidying up.
 	CriticalVolumes []CriticalVolume `json:"criticalVolumes" yaml:"critical_volumes"`
 	Command         string           `json:"command" yaml:"command"`
-	NetworkMode     string           `json:"networkMode" yaml:"network_mode"`
+	// Entrypoint replaces the image's ENTRYPOINT when set. Storj uses it to give its
+	// node a real stop grace: the image's supervisord otherwise kills the node 10
+	// seconds after any stop, however long Docker is willing to wait.
+	Entrypoint  []string `json:"entrypoint" yaml:"entrypoint"`
+	NetworkMode string   `json:"networkMode" yaml:"network_mode"`
 	// CapAdd are the Linux capabilities the container needs on top of a cap_drop ALL
 	// baseline. Getting this wrong does not crash the container: Mysterium without
 	// SETUID and SETGID registers, looks healthy, and fails every session at setup.
@@ -264,6 +268,10 @@ type EnvVar struct {
 	Secret      bool   `json:"secret" yaml:"secret"`
 	Description string `json:"description" yaml:"description"`
 	Default     string `json:"default" yaml:"default"`
+	// Pattern, when set, is a regular expression the WHOLE value must match. It
+	// exists for values that land on a command line, where "127.0.0.1, 10.0.0.1"
+	// becomes a stray argument and the service refuses to start.
+	Pattern string `json:"pattern,omitempty" yaml:"pattern"`
 }
 
 type Requirements struct {

@@ -167,6 +167,7 @@ type composeService struct {
 	CapAdd        []string          `yaml:"cap_add,omitempty"`
 	SecurityOpt   []string          `yaml:"security_opt,omitempty"`
 	PidsLimit     int               `yaml:"pids_limit,omitempty"`
+	Entrypoint    []string          `yaml:"entrypoint,omitempty"`
 	Command       string            `yaml:"command,omitempty"`
 	StopGrace     string            `yaml:"stop_grace_period,omitempty"`
 	MemLimit      string            `yaml:"mem_limit,omitempty"`
@@ -257,15 +258,21 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 	for _, volume := range svc.Docker.Volumes {
 		block.Volumes = append(block.Volumes, interpolate(volume, env))
 	}
+	// Every $ in an entrypoint is escaped, not only ${KEY}: a shell wrapper uses bare
+	// $F and $@, and Compose would fill those from the host's environment (empty),
+	// silently breaking the script. Nothing in an entrypoint is meant for Compose.
+	for _, part := range svc.Docker.Entrypoint {
+		block.Entrypoint = append(block.Entrypoint, escapeValue(part))
+	}
 	if svc.Docker.Command != "" {
 		block.Command = interpolate(svc.Docker.Command, env)
 	}
 	// A container SIGKILLed before it has finished writing loses work — Storj drops
 	// in-flight pieces and audit score — so the entry's own stop timeout travels
 	// with the file instead of leaving it on Docker's 10-second default.
-	if svc.Docker.StopTimeout > 0 {
-		block.StopGrace = fmt.Sprintf("%ds", svc.Docker.StopTimeout)
-	}
+	// An entry that declares none gets what the runtime gives it (30 s), not
+	// Docker's 10: an exported container must not stop faster than a deployed one.
+	block.StopGrace = fmt.Sprintf("%ds", runtime.StopTimeoutSeconds(svc))
 	return block, placeholders, settings, nil
 }
 

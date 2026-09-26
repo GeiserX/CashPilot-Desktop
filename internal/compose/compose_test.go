@@ -415,10 +415,16 @@ func TestAnEntryWithoutLimitsGetsNoLimitKeys(t *testing.T) {
 	block := serviceBlockOf(t,
 		parse(t, generate(t, fakeCatalog{"honeygain": honeygain()}, []string{"honeygain"}, Options{})),
 		"cashpilot-honeygain")
-	for _, key := range []string{"mem_reservation", "cpu_shares", "stop_grace_period", "devices", "cap_add", "ports", "volumes"} {
+	for _, key := range []string{"mem_reservation", "cpu_shares", "devices", "cap_add", "ports", "volumes"} {
 		if _, ok := block[key]; ok {
 			t.Errorf("%s was written for an entry that declares none: %v", key, block[key])
 		}
+	}
+	// The stop grace is the exception: an entry that declares none is still stopped
+	// with the runtime's 30 seconds, and leaving the key out would give the exported
+	// container Docker's 10 instead.
+	if block["stop_grace_period"] != "30s" {
+		t.Errorf("stop_grace_period = %v, want the runtime's default 30s", block["stop_grace_period"])
 	}
 	if _, ok := block["oom_score_adj"]; !ok {
 		t.Error("oom_score_adj was dropped, but this entry declares one")
@@ -663,5 +669,26 @@ func TestTheExportRefusesAnArchitectureTheImageCannotRunOn(t *testing.T) {
 	}
 	if _, err := Generate(services, []string{"honeygain"}, Options{Arch: "arm64", Hostname: "pi"}); err != nil {
 		t.Fatalf("an entry that declares no platforms must not be refused: %v", err)
+	}
+}
+
+// An entrypoint wrapper travels with the file, with every $ escaped. A shell wrapper
+// uses bare $F and $@, and Compose would fill those from the host's environment
+// (empty) and break the script; $$ is Compose's literal dollar.
+func TestAnEntrypointIsExportedWithEveryDollarEscaped(t *testing.T) {
+	svc := catalog.Service{
+		Name: "Wrapped", Slug: "wrapped", Status: "active",
+		Docker: catalog.DockerConfig{
+			Image:      "example/wrapped:1.0",
+			Entrypoint: []string{"/bin/sh", "-c", `F=/etc/x.conf; [ -f "$F" ] && touch "$F"; exec /entrypoint "$@"`, "--"},
+		},
+	}
+	block := serviceBlockOf(t, parse(t, generate(t, fakeCatalog{"wrapped": svc}, []string{"wrapped"}, Options{})), "cashpilot-wrapped")
+	got := listOf(t, block, "entrypoint")
+	if len(got) != 4 || got[0] != "/bin/sh" || got[3] != "--" {
+		t.Fatalf("entrypoint = %v, want the catalog's four parts", got)
+	}
+	if want := `F=/etc/x.conf; [ -f "$$F" ] && touch "$$F"; exec /entrypoint "$$@"`; got[2] != want {
+		t.Errorf("script = %q\nwant      %q", got[2], want)
 	}
 }

@@ -41,7 +41,11 @@ type Container struct {
 	Labels map[string]string
 	Env    []string
 	Cmd    []string
-	Mounts []Mount
+	// Entrypoint and StopTimeout are what the deploy asked Docker for; nil means
+	// it asked for neither (the image's entrypoint, the daemon's 10 seconds).
+	Entrypoint  []string
+	StopTimeout *int
+	Mounts      []Mount
 }
 
 // VolumeNames lists the names of the container's named volumes, in the order the
@@ -319,11 +323,13 @@ func (d *Docker) pull(w http.ResponseWriter, r *http.Request) {
 
 func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Image      string            `json:"Image"`
-		Env        []string          `json:"Env"`
-		Cmd        []string          `json:"Cmd"`
-		Labels     map[string]string `json:"Labels"`
-		HostConfig struct {
+		Image       string            `json:"Image"`
+		Env         []string          `json:"Env"`
+		Cmd         []string          `json:"Cmd"`
+		Entrypoint  []string          `json:"Entrypoint"`
+		StopTimeout *int              `json:"StopTimeout"`
+		Labels      map[string]string `json:"Labels"`
+		HostConfig  struct {
 			Mounts []struct {
 				Type   string `json:"Type"`
 				Source string `json:"Source"`
@@ -347,13 +353,15 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 	}
 	d.nextID++
 	c := &Container{
-		ID:     fmt.Sprintf("ctr%09d", d.nextID),
-		Name:   name,
-		Image:  body.Image,
-		State:  "created",
-		Labels: body.Labels,
-		Env:    body.Env,
-		Cmd:    body.Cmd,
+		ID:          fmt.Sprintf("ctr%09d", d.nextID),
+		Name:        name,
+		Image:       body.Image,
+		State:       "created",
+		Labels:      body.Labels,
+		Env:         body.Env,
+		Cmd:         body.Cmd,
+		Entrypoint:  body.Entrypoint,
+		StopTimeout: body.StopTimeout,
 	}
 	for _, m := range body.HostConfig.Mounts {
 		if m.Type == "volume" && m.Source != "" {

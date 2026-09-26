@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"regexp"
 	goruntime "runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -188,6 +189,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if svc.Docker.Command != "" {
 		config.Cmd = buildCommandArgs(svc.Docker.Command, env)
 	}
+	config.Entrypoint = entrypointFor(svc)
 
 	hostConfig, err := buildHostConfig(svc, bindings, mounts, facts.OSType)
 	if err != nil {
@@ -983,6 +985,15 @@ func substitute(value string, env map[string]string) string {
 		}
 		return match
 	})
+}
+
+// entrypointFor is the entrypoint override the catalog declares for svc, or nil to
+// keep the image's own. A copy, so the container config never aliases the catalog.
+func entrypointFor(svc catalog.Service) []string {
+	if len(svc.Docker.Entrypoint) == 0 {
+		return nil
+	}
+	return slices.Clone(svc.Docker.Entrypoint)
 }
 
 // buildCommandArgs turns a maintainer command template into the argv slice passed to

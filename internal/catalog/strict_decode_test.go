@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -57,5 +58,35 @@ func TestEveryVendoredKeyIsReadByTheLoader(t *testing.T) {
 	// A zero-file walk would pass this test while checking nothing.
 	if checked < 20 {
 		t.Fatalf("strict-decoded only %d catalog files; the catalog did not load", checked)
+	}
+}
+
+// Every pattern the web catalog declares must compile under Go's regexp engine too,
+// and accept the variable's own default. The web app checks patterns with Python's
+// re; a construct RE2 lacks would make Desktop refuse every value for that field.
+func TestEveryVendoredPatternCompilesAndAcceptsItsDefault(t *testing.T) {
+	cat, err := LoadEmbedded(os.DirFS(filepath.Join("..", "..")))
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	var checked int
+	for _, svc := range cat.List() {
+		for _, item := range svc.Docker.Env {
+			if item.Pattern == "" {
+				continue
+			}
+			checked++
+			re, err := regexp.Compile(`^(?:` + item.Pattern + `)$`)
+			if err != nil {
+				t.Errorf("%s %s: pattern does not compile in Go: %v", svc.Slug, item.Key, err)
+				continue
+			}
+			if item.Default != "" && !re.MatchString(item.Default) {
+				t.Errorf("%s %s: pattern refuses its own default %q", svc.Slug, item.Key, item.Default)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no vendored entry declares a pattern; this test would pass by checking nothing")
 	}
 }
