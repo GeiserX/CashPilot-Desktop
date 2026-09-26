@@ -692,3 +692,33 @@ func TestAnEntrypointIsExportedWithEveryDollarEscaped(t *testing.T) {
 		t.Errorf("script = %q\nwant      %q", got[2], want)
 	}
 }
+
+// A host path the user still has to fill in is a required variable, so an unset one
+// is refused naming the setting instead of becoming the mount ":/app/identity".
+func TestAnUnfilledHostPathIsARequiredVariable(t *testing.T) {
+	svc := catalog.Service{
+		Name: "Node", Slug: "node", Status: "active",
+		Docker: catalog.DockerConfig{
+			Image: "example/node:1.0",
+			Env: []catalog.EnvVar{
+				{Key: "IDENTITY_DIR", Label: "Identity directory", Required: true},
+				{Key: "DATA_DIR", Label: "Data", Default: "/srv/data"},
+			},
+			Volumes: []string{"${IDENTITY_DIR}:/app/identity", "${DATA_DIR}:/app/data"},
+		},
+	}
+	block := serviceBlockOf(t, parse(t, generate(t, fakeCatalog{"node": svc}, []string{"node"}, Options{})), "cashpilot-node")
+	volumes := listOf(t, block, "volumes")
+	if len(volumes) != 2 {
+		t.Fatalf("volumes = %v, want two", volumes)
+	}
+	if !strings.HasPrefix(volumes[0], "${IDENTITY_DIR:?") || !strings.HasSuffix(volumes[0], "}:/app/identity") {
+		t.Errorf("an unfilled path = %q, want ${IDENTITY_DIR:?...}:/app/identity", volumes[0])
+	}
+	if volumes[1] != "${DATA_DIR:-/srv/data}:/app/data" {
+		t.Errorf("a path with a default = %q, want it left as ${DATA_DIR:-/srv/data}", volumes[1])
+	}
+	if env, _ := block["environment"].(map[string]any); env["IDENTITY_DIR"] != "${IDENTITY_DIR}" {
+		t.Errorf("the environment block changed too: %v", env["IDENTITY_DIR"])
+	}
+}
