@@ -255,8 +255,20 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 		OomScoreAdj: svc.Docker.Resources.OomScoreAdj,
 	}
 
+	// A host path the user still has to supply is written as ${KEY:?...}, not the
+	// bare ${KEY} the environment block uses. Unset, a bare ${KEY} becomes an empty
+	// string and Compose refuses the file with "empty section between colons",
+	// which names neither the setting nor the fix; the :? form refuses it naming
+	// both.
+	volumeEnv := make(map[string]string, len(env))
+	for key, value := range env {
+		volumeEnv[key] = value
+	}
+	for _, key := range placeholders {
+		volumeEnv[key] = "${" + key + ":?set " + key + " to a host directory in the .env file beside this one}"
+	}
 	for _, volume := range svc.Docker.Volumes {
-		block.Volumes = append(block.Volumes, interpolate(volume, env))
+		block.Volumes = append(block.Volumes, interpolate(volume, volumeEnv))
 	}
 	// Every $ in an entrypoint is escaped, not only ${KEY}: a shell wrapper uses bare
 	// $F and $@, and Compose would fill those from the host's environment (empty),
