@@ -9,18 +9,11 @@
   <a href="https://github.com/GeiserX/CashPilot-Desktop/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/CashPilot-Desktop?style=flat-square" alt="License"></a>
 </p>
 
----
+CashPilot Desktop is a local-first desktop app for macOS, Windows and Linux that deploys and monitors passive-income and DePIN services. It packs CashPilot into one installer with a system tray and a setup wizard, so you don't run a Docker container and open a browser. It runs either as the full CashPilot dashboard or as a Worker Node that joins an existing CashPilot instance.
 
-## What is CashPilot Desktop?
-
-CashPilot Desktop is a local-first, cross-platform desktop application for deploying and monitoring passive-income and DePIN services. Instead of running CashPilot as a Docker container and accessing it via browser, CashPilot Desktop bundles everything into a single installable app with system tray integration and a guided setup wizard.
-
-It can run in two modes:
-
-- **CashPilot mode** -- Full dashboard with service management, earnings tracking, container deployment, and fleet orchestration
-- **Worker Node mode** -- Lightweight agent that connects to an existing CashPilot instance to run services on this machine
-
-Built with [Wails](https://wails.io) (Go + vanilla TypeScript) for a lightweight, cross-platform experience with native performance.
+<p align="center">
+  <img src="docs/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
+</p>
 
 ## Features
 
@@ -28,232 +21,38 @@ Built with [Wails](https://wails.io) (Go + vanilla TypeScript) for a lightweight
 - **System tray (macOS)** -- Runs quietly in the background with quick-access status and earnings summary; menu-bar icon is macOS-only today (Windows/Linux planned)
 - **Real-time monitoring** -- Live earnings, service health, container stats, and node uptime
 - **Multi-node fleet** -- Aggregate view across your entire CashPilot fleet from a single window
-- **Auto-updater** -- Planned (not yet implemented)
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
 - **Secure** -- Credentials encrypted at rest with AES-256-GCM; master key in the OS keychain. Signed/notarized installers are planned.
+- **Auto-updater** -- Planned (not yet implemented)
 
-## Installation
+## Quick start
 
-Download the latest release for your platform:
+1. Download the installer for your platform from the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest). Docker or Podman must be installed; the wizard helps if it is missing.
+2. Launch the app and pick a mode: CashPilot (full dashboard) or Worker Node (enter your CashPilot address and fleet key).
+3. Browse the service catalog, deploy containers, and watch earnings from the dashboard or the tray.
 
-| Platform | Format | Download | Notes |
-|----------|--------|----------|-------|
-| macOS (Apple Silicon) | `.dmg` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Unsigned (right-click → Open to bypass Gatekeeper) |
-| Windows (x64) | `.exe` (NSIS) | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Unsigned unless a signing cert is configured in CI |
-| Linux (Debian/Ubuntu) | `.deb` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Raw binary (.deb packaging planned) |
+Platform notes, system requirements and the full walkthrough are in [docs/installation.md](docs/installation.md).
 
-### System Requirements
+## Supported services
 
-| Requirement | Minimum |
-|-------------|---------|
-| **Docker** | Docker Desktop (macOS/Windows) or Docker Engine / Podman (Linux) |
-| **RAM** | 4 GB (8 GB recommended for multiple services) |
-| **Disk** | 2 GB free (more for service containers) |
-| **Network** | Residential IP recommended for most services |
+CashPilot bundles a catalog of 39 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). Some links below are affiliate/referral links -- see the [disclosure](docs/services.md#disclosure). Read [how bandwidth-sharing works](docs/services.md#before-you-start-how-bandwidth-sharing-works) before you opt in; per-service limits, payouts and caveats are in [docs/services.md](docs/services.md).
 
-## Quick Start
+- **Docker-deployable:** [Anyone Protocol](https://anyone.io), [Bitping](https://app.bitping.com), [Earn.fm](https://earn.fm/ref/GEISYB91), [EarnApp](https://earnapp.com/i/TSMD9wSm), [Honeygain](https://dashboard.honeygain.com/ref/SERGIB4014), [IPRoyal Pawns](https://pawns.app?r=19266874), [MystNodes](https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE), [PacketStream](https://packetstream.io/?psr=7xgZ), [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO), [ProxyBase Markets](https://proxybase.xyz?referral=nXzS3c6iTO), [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ), [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn), [Repocket](https://repocket.com/), [Storj](https://storj.dev/node/get-started/setup), [Traffmonetizer](https://traffmonetizer.com/?aff=2111758), [URnetwork](https://ur.io/?referral_code=1Q3G19)
+- **Browser extension / desktop only:** [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3), [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ), [Dawn Internet](https://dawninternet.com/?code=2QLQV97F), [Deeper Network](https://deeper.network), [Ebesucher](https://www.ebesucher.com/?ref=geiserx), [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7), [Grass](https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE), [Helium](https://helium.com), [Nodepay](https://app.nodepay.ai/register?ref=0wzzyznen64j9zx), [Nodle](https://nodle.com), [PassiveApp](https://passiveapp.com/i/bqpC4M), [Sentinel dVPN](https://sentinel.co), [Spide](https://spide.network/register.html?f3bc51), [Teneo Protocol](https://dashboard.teneo.pro/?code=CAqef), [Theta Edge Node](https://thetatoken.org), [Titan Network](https://edge.titannet.info/signup?inviteCode=2GKKJ495), [Uprock](https://link.uprock.com/i/33e8492e)
+- **GPU compute:** [Flux](https://runonflux.io), [Golem Network](https://golem.network), [io.net](https://io.net), [Nosana](https://nosana.io), [Salad](https://salad.io), [Vast.ai](https://cloud.vast.ai/?ref_id=452772)
 
-1. **Download and install** CashPilot Desktop for your platform
-2. **Launch the app** -- the setup wizard detects Docker/Podman and guides you through installation if needed
-3. **Choose your mode** -- CashPilot (full dashboard) or Worker Node (connect to existing instance)
-4. **If Worker Node** -- enter your CashPilot instance address and fleet key
-5. **Start earning** -- browse the service catalog, deploy containers, and monitor earnings from the system tray
+## Documentation
 
-## Supported Services
+- [Installation](docs/installation.md): modes, downloads, system requirements, quick start, Desktop vs Web
+- [Supported services](docs/services.md): bandwidth-sharing explained, per-service limits and payouts, disclosure
+- [Screenshots](docs/SCREENSHOTS.md): a tour of every screen
+- [FAQ](docs/faq.md): earnings, safety, Docker, crashes, several machines
+- [Development](docs/development.md): prerequisites, dev workflow, build, tests, architecture overview
+- [Architecture](docs/ARCHITECTURE.md): the full design, grounded in the code
 
-> Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
-
-CashPilot bundles a catalog of 39 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
-
-### Before you start: how bandwidth-sharing works
-
-Most services in this catalog are **bandwidth-sharing** apps (sometimes called proxyware). When you run one, it routes other people's internet traffic out through your home IP address and pays you a share of the fee. That traffic is usually ordinary web browsing -- but you don't choose it or see it, so it's worth understanding the trade before you opt in:
-
-- **Your connection carries the traffic.** Requests from these networks look like they come from your IP, so only run this if you're comfortable with that.
-- **Check your ISP's terms first.** Some ISP contracts prohibit reselling or sharing your connection, which can make bandwidth-sharing a terms-of-service problem even where it is otherwise legal. Read your own agreement before signing up.
-- **It's all opt-in.** Start with the services you understand and add others only as you're comfortable.
-
-Not every service resells your IP. **Compute and storage** providers -- Storj (spare disk space) and GPU services like Vast.ai and Salad (spare compute) -- pay for hardware resources, not for routing traffic through your connection. The catalog is a mix, so pick what suits you.
-
-### Docker-Deployable Services
-
-Services CashPilot can deploy and manage automatically via Docker containers.
-
-| Service | Residential IP | VPS IP | Devices / Acct | Devices / IP | Payout |
-|---------|:-:|:-:|:-:|:-:|--------|
-| [Anyone Protocol](https://anyone.io) | ✅ | ✅ | Unlimited | Undocumented | Crypto (ANYONE) |
-| [Bitping](https://app.bitping.com) | ✅ | ✅ | Unlimited | Undocumented | Crypto (SOL) |
-| [Earn.fm](https://earn.fm/ref/GEISYB91) | ✅ | ✅ | Unlimited | 1 | Crypto |
-| [EarnApp](https://earnapp.com/i/TSMD9wSm) | ✅ | ❌ | 15 | Undocumented \* | PayPal, Gift Cards, Wise |
-| [Honeygain](https://dashboard.honeygain.com/ref/SERGIB4014) | ✅ | ❌ | 10 | 1 | PayPal, Crypto |
-| [IPRoyal Pawns](https://pawns.app?r=19266874) | ✅ | ❌ | Unlimited | 1 | PayPal, Crypto, Bank Transfer |
-| [MystNodes](https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE) | ✅ | ✅ | Unlimited | Unlimited | Crypto (MYST) |
-| [PacketStream](https://packetstream.io/?psr=7xgZ) | ✅ | ❌ | Unlimited | Undocumented | PayPal |
-| [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
-| [ProxyBase Markets](https://proxybase.xyz?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto (USDC) |
-| [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ) | ✅ | ✅ | Unlimited | Undocumented | Crypto, PayPal |
-| [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Crypto |
-| [Repocket](https://repocket.com/) | ✅ | ❌ | 5 | Undocumented | PayPal, Crypto |
-| [Storj](https://storj.dev/node/get-started/setup) | ✅ | ✅ | Unlimited | Undocumented \*\* | Crypto (STORJ) |
-| [Traffmonetizer](https://traffmonetizer.com/?aff=2111758) | ✅ | ✅ \*\*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
-| [URnetwork](https://ur.io/?referral_code=1Q3G19) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
-
-> **Undocumented** means the provider publishes no per-IP device limit, not that
-> there is none. Check the provider's terms before running a second instance behind
-> one address. **Unlimited** is a limit the provider states it does not impose.
->
-> \* EarnApp's own terms forbid running its software in containers, on virtual machines
-> and on servers, which is exactly how CashPilot deploys it. The stated penalty is a
-> terminated account with any pending payment cancelled. It is listed so the choice is
-> yours, not hidden.
->
-> \*\* Storj nodes on the same /24 subnet share data allocation, reducing per-node earnings.
->
-> \*\*\* Traffmonetizer's Terms of Service require a residential IP; running it on a VPS may not comply with those terms, so check before you deploy.
-
-### Browser Extension / Desktop Only
-
-These services have no Docker image. CashPilot lists them in the catalog with signup links and earning estimates.
-
-| Service | Residential IP | VPS IP | Devices / Acct | Devices / IP | Payout | Status |
-|---------|:-:|:-:|:-:|:-:|--------|--------|
-| [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3) | ✅ | ❌ | Unlimited | Undocumented | PayPal | Active |
-| [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
-| [Dawn Internet](https://dawninternet.com/?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
-| [Deeper Network](https://deeper.network) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |
-| [Ebesucher](https://www.ebesucher.com/?ref=geiserx) | ✅ | ✅ | Unlimited | 1 | PayPal | Active |
-| [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) | Active |
-| [Grass](https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE) | ✅ | ❌ | Unlimited | 1 | Crypto (GRASS) | Active |
-| [Helium](https://helium.com) | ✅ | ❌ | Unlimited | 1 | Crypto (HNT) | Active |
-| [Nodepay](https://app.nodepay.ai/register?ref=0wzzyznen64j9zx) | ✅ | ❌ | Unlimited | 1 | Crypto (NC) | Active |
-| [Nodle](https://nodle.com) | ✅ | ✅ | Unlimited | 1 | Crypto (NODL) | Active |
-| [PassiveApp](https://passiveapp.com/i/bqpC4M) | ✅ | ❌ | Unlimited | 1 | Crypto, PayPal | Active |
-| [Sentinel dVPN](https://sentinel.co) | ✅ | ✅ | Unlimited | 1 | Crypto (DVPN) | Active |
-| [Spide](https://spide.network/register.html?f3bc51) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
-| [Teneo Protocol](https://dashboard.teneo.pro/?code=CAqef) | ✅ | ❌ | Unlimited | 1 | Crypto (TENEO) | Active |
-| [Theta Edge Node](https://thetatoken.org) | ✅ | ✅ | Unlimited | 1 | Crypto (TFUEL) | Active |
-| [Titan Network](https://edge.titannet.info/signup?inviteCode=2GKKJ495) | ✅ | ❌ | Unlimited | 1 | Crypto (TNT) | Active |
-| [Uprock](https://link.uprock.com/i/33e8492e) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
-
-### GPU Compute
-
-GPU-intensive computing services. Requires compatible hardware.
-
-| Service | Residential IP | GPU Required | Min Storage | Payout | Status |
-|---------|:-:|:-:|:-:|--------|--------|
-| [Flux](https://runonflux.io) | ✅ | ❌ | 220GB | Crypto (FLUX) | Active |
-| [Golem Network](https://golem.network) | ✅ | ❌ | 20GB | Crypto (GLM) | Active |
-| [io.net](https://io.net) | ✅ | ✅ | N/A | Crypto (IO) | Active |
-| [Nosana](https://nosana.io) | ✅ | ✅ | 50GB | Crypto (NOS) | Active |
-| [Salad](https://salad.io) | ✅ | ✅ | N/A | PayPal, Gift Cards | Active |
-| [Vast.ai](https://cloud.vast.ai/?ref_id=452772) | ✅ | ✅ | 100GB | Crypto, Bank Transfer | Active |
-
-> **Note:** Earnings vary widely by location, hardware, and demand.
-
-## CashPilot Desktop vs Web
-
-| Feature | Desktop App | Web (Docker) |
-|---------|:-----------:|:------------:|
-| Installation | One-click installer | `docker compose up -d` |
-| Docker management | Built-in (auto-detects, guides install) | Requires Docker pre-installed |
-| System tray integration | macOS only | No |
-| Auto-updates | Planned | Manual image pull |
-| Background operation | Native OS service | Container must stay running |
-| Fleet management | **Yes** | **Yes** |
-| Earnings dashboard | **Yes** | **Yes** |
-| Target audience | End users, non-technical | Self-hosters, sysadmins |
-| Resource usage | ~80 MB RAM | ~80 MB RAM (container only) |
-
-## Architecture
-
-```
-CashPilot Desktop (Wails 2.x)
-├── Go Backend (app.go, internal/)
-│   ├── Container runtime    — Docker/Podman detection, deploy/stop/restart
-│   ├── Earnings collectors  — Polls service APIs for earnings
-│   ├── internal/exchange    — FX rates (crypto + fiat → display currency)
-│   ├── Fleet management     — Multi-node coordination via HTTP
-│   ├── fleet_server.go      — Token-auth worker/mobile heartbeat API
-│   └── SQLite database      — Config, credentials (OS keychain), earnings history
-├── Frontend (vanilla TypeScript + Vite)
-│   ├── Dashboard            — Real-time earnings and service status
-│   ├── Setup wizard         — Onboarding flow with runtime detection
-│   ├── Service catalog      — Browse and deploy services
-│   ├── Settings             — Display currency and preferences
-│   └── Fleet                — Connected worker/node status
-└── Wails Runtime            — Window management, system tray, native bindings
-```
-
-The Go backend handles all business logic, container orchestration, and data collection. The TypeScript frontend communicates via Wails bindings (direct Go function calls, no HTTP). State is persisted in a local SQLite database, with credentials encrypted at rest (AES-256-GCM) under a master key held in the OS keychain.
-
-## Development
-
-### Prerequisites
-
-- [Go](https://go.dev/) 1.26.x
-- [Node.js](https://nodejs.org/) 26+
-- [Wails CLI](https://wails.io/docs/gettingstarted/installation) v2
-
-### Dev Workflow
-
-```bash
-wails dev              # Hot-reload dev mode (Go + TypeScript)
-go test -race ./...    # Run Go tests
-```
-
-### Build from Source
-
-```bash
-git clone https://github.com/GeiserX/CashPilot-Desktop.git
-cd CashPilot-Desktop
-wails build
-```
-
-### Running Tests
-
-```bash
-make test
-```
-
-## FAQ
-
-**How is this different from the CashPilot Docker container?**
-
-It's the same passive-income management system, but packaged as a desktop app instead of a Docker container. You get system tray integration, auto-updates, a guided Docker installation wizard, and a native window -- no need to manage Docker yourself or access a web UI via browser.
-
-**Do I still need Docker installed?**
-
-Yes. CashPilot Desktop manages Docker containers for you, but Docker (or Podman) must be installed. The setup wizard detects if a compatible runtime is missing and guides you through installing Docker Desktop (macOS/Windows) or Docker Engine (Linux).
-
-**How much can I earn?**
-
-Honestly, this is beer money, not a salary. Earnings vary widely based on location, ISP, number of devices, and which services you run, but as a rough guide:
-
-- A **single home connection** running a stack of bandwidth apps typically earns around **$5-25/month**.
-- A **well-equipped household** that also shares spare storage or GPU time might reach **$30-75/month**.
-- **Hundreds a month** is possible, but it takes a real fleet of machines, capable GPUs, or speculative token rewards -- not a single home connection.
-
-Two things keep expectations realistic. Stacking many bandwidth apps on one connection hits **diminishing returns**, because they compete to sell the same idle bandwidth. And **DePIN token rewards are speculative** -- their value can drop sharply, so treat crypto payouts as a bet rather than a guarantee. The steadier earners are bandwidth, storage, and GPU compute. The dashboard tracks your actual earnings over time so you can see what works for your setup.
-
-**Is it safe?**
-
-All service containers run isolated via Docker. Credentials are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service). The app communicates only with localhost and the services you choose to deploy. No telemetry, no analytics, no data leaves your machine unless a service requires it.
-
-**What happens if the app crashes?**
-
-Docker containers continue running independently -- they don't stop when CashPilot Desktop is closed. Reopening the app reconnects to your running containers and resumes monitoring.
-
-**Can I run CashPilot Desktop on multiple machines?**
-
-Yes. Use **Worker Node** mode on additional machines -- they connect to your main CashPilot instance (either Desktop or Docker) and appear in the fleet dashboard. Each worker runs its own set of services and reports status back.
-
-## Disclosure
-
-> This project's service catalog may contain affiliate/referral links. If you sign up through them, the project maintainer may earn a small commission at no extra cost to you. This helps support development.
-
-## Ecosystem
+## Related projects
 
 | Project | Type | Description |
 |---------|------|-------------|
