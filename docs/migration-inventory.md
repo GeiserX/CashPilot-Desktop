@@ -2,7 +2,7 @@
 
 ## Keep
 
-- `docs/banner.svg` and `docs/mockups/onboarding-reference.svg`: visual identity and onboarding direction.
+- `docs/images/banner.svg` and `docs/mockups/onboarding-reference.svg`: visual identity and onboarding direction.
 - `.github` issue/PR templates, funding metadata, dependabot settings.
 - `LICENSE`.
 - Service catalog semantics from `CashPilot/services`, initially vendored as a subset under `services/`.
