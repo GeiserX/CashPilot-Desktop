@@ -2,6 +2,7 @@
   "name": "cashpilot-desktop",
   "version": "0.10.1",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "dev": "wails dev",
     "build": "wails build",

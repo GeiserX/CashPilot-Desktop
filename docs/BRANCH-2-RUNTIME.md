@@ -5,7 +5,7 @@
 > **`CashPilot` (web) stays the homelabber tool**; the desktop app is the native, complementary product.
 > This doc synthesizes a four-researcher study (native-client landscape, runtime-bundling options,
 > signing/AV/notarization, and how it maps onto the existing `internal/runtime` code). Companion:
-> [`managed-runtime.md`](./managed-runtime.md) (the earlier VM-first sketch, now scoped as a *later, lazy*
+> [`managed-runtime.md`](./design/managed-runtime.md) (the earlier VM-first sketch, now scoped as a *later, lazy*
 > tier), [`MARKET-FIT.md`](./MARKET-FIT.md).
 
 ## TL;DR — the decision

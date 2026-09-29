@@ -1,4 +1,4 @@
-# Installation
+# Getting started
 
 CashPilot Desktop is a local-first, cross-platform desktop application for deploying and monitoring passive-income and DePIN services. Instead of running CashPilot as a Docker container and accessing it via browser, CashPilot Desktop bundles everything into a single installable app with system tray integration and a guided setup wizard.
 
@@ -13,11 +13,11 @@ Built with [Wails](https://wails.io) (Go + vanilla TypeScript) for a lightweight
 
 Download the latest release for your platform:
 
-| Platform | Format | Download | Notes |
-|----------|--------|----------|-------|
-| macOS (Apple Silicon) | `.dmg` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Unsigned (right-click → Open to bypass Gatekeeper) |
-| Windows (x64) | `.exe` (NSIS) | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Unsigned unless a signing cert is configured in CI |
-| Linux (Debian/Ubuntu) | `.deb` | [Download](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | Raw binary (.deb packaging planned) |
+| Platform | File on the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | How to open it |
+|----------|------|-------|
+| macOS (Apple Silicon) | `CashPilot-Desktop-darwin-arm64.zip` | Unzip it, then right-click `CashPilot Desktop.app` and choose Open (the app is unsigned, so Gatekeeper blocks a plain double-click the first time) |
+| Windows (x64) | `CashPilot-Desktop-windows-amd64.exe` | The app itself, not an installer; run it. It is unsigned unless a signing certificate is configured in CI, so SmartScreen may warn |
+| Linux (x64) | `CashPilot-Desktop-linux-amd64.tar.gz` | Extract it and run `CashPilot Desktop`; it needs GTK 3 and WebKitGTK 4.1 |
 
 ## System requirements
 
@@ -30,7 +30,7 @@ Download the latest release for your platform:
 
 ## Quick start
 
-1. **Download and install** CashPilot Desktop for your platform
+1. **Download and open** CashPilot Desktop for your platform (table above)
 2. **Launch the app** -- the setup wizard detects Docker/Podman and guides you through installation if needed
 3. **Choose your mode** -- CashPilot (full dashboard) or Worker Node (connect to existing instance)
 4. **If Worker Node** -- enter your CashPilot instance address and fleet key
@@ -40,7 +40,7 @@ Download the latest release for your platform:
 
 | Feature | Desktop App | Web (Docker) |
 |---------|:-----------:|:------------:|
-| Installation | One-click installer | `docker compose up -d` |
+| Installation | Download and open the app | `docker compose up -d` |
 | Docker management | Built-in (auto-detects, guides install) | Requires Docker pre-installed |
 | System tray integration | macOS only | No |
 | Auto-updates | Planned | Manual image pull |

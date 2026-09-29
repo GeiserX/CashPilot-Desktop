@@ -4,15 +4,16 @@
 
 <p align="center">
   <a href="https://github.com/GeiserX/CashPilot-Desktop/releases/latest"><img src="https://img.shields.io/github/v/release/GeiserX/CashPilot-Desktop?style=flat-square&logo=github" alt="Release"></a>
+  <a href="https://github.com/GeiserX/CashPilot-Desktop/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/GeiserX/CashPilot-Desktop/ci.yml?style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://github.com/GeiserX/CashPilot-Desktop/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/CashPilot-Desktop?style=flat-square" alt="License"></a>
   <a href="https://github.com/GeiserX/CashPilot-Desktop/releases"><img src="https://img.shields.io/github/downloads/GeiserX/CashPilot-Desktop/total?style=flat-square&logo=github" alt="Downloads"></a>
   <a href="https://github.com/GeiserX/CashPilot-Desktop/stargazers"><img src="https://img.shields.io/github/stars/GeiserX/CashPilot-Desktop?style=flat-square&logo=github" alt="Stars"></a>
-  <a href="https://github.com/GeiserX/CashPilot-Desktop/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/CashPilot-Desktop?style=flat-square" alt="License"></a>
 </p>
 
-CashPilot Desktop is a local-first desktop app for macOS, Windows and Linux that deploys and monitors passive-income and DePIN services. It packs CashPilot into one installer with a system tray and a setup wizard, so you don't run a Docker container and open a browser. It runs either as the full CashPilot dashboard or as a Worker Node that joins an existing CashPilot instance.
+CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Windows and Linux that deploys and monitors passive-income and DePIN services. It packs CashPilot into one app with a system tray and a setup wizard, so you open an app instead of running the CashPilot container and a browser; the earning services themselves still run in Docker or Podman. It runs either as the full CashPilot dashboard or as a Worker Node that joins an existing CashPilot instance.
 
 <p align="center">
-  <img src="docs/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
+  <img src="docs/images/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
 </p>
 
 ## Features
@@ -25,15 +26,14 @@ CashPilot Desktop is a local-first desktop app for macOS, Windows and Linux that
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
 - **Secure** -- Credentials encrypted at rest with AES-256-GCM; master key in the OS keychain. Signed/notarized installers are planned.
-- **Auto-updater** -- Planned (not yet implemented)
 
 ## Quick start
 
-1. Download the installer for your platform from the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest). Docker or Podman must be installed; the wizard helps if it is missing.
+1. Download the app for your platform from the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest). Docker or Podman must be installed; the wizard helps if it is missing.
 2. Launch the app and pick a mode: CashPilot (full dashboard) or Worker Node (enter your CashPilot address and fleet key).
 3. Browse the service catalog, deploy containers, and watch earnings from the dashboard or the tray.
 
-Platform notes, system requirements and the full walkthrough are in [docs/installation.md](docs/installation.md).
+Platform notes, system requirements and the full walkthrough are in [Getting started](docs/getting-started.md).
 
 ## Supported services
 
@@ -45,12 +45,13 @@ CashPilot bundles a catalog of 39 active passive-income services across multiple
 
 ## Documentation
 
-- [Installation](docs/installation.md): modes, downloads, system requirements, quick start, Desktop vs Web
+- [Getting started](docs/getting-started.md): modes, downloads, system requirements, Desktop vs Web
+- [Configuration](docs/configuration.md): every setting and its default, Worker Node pairing, where secrets live
+- [Usage](docs/usage.md): a tour of every screen
 - [Supported services](docs/services.md): bandwidth-sharing explained, per-service limits and payouts, disclosure
-- [Screenshots](docs/SCREENSHOTS.md): a tour of every screen
+- [How it works](docs/how-it-works.md): the full design, grounded in the code
 - [FAQ](docs/faq.md): earnings, safety, Docker, crashes, several machines
-- [Development](docs/development.md): prerequisites, dev workflow, build, tests, architecture overview
-- [Architecture](docs/ARCHITECTURE.md): the full design, grounded in the code
+- [Development](docs/development.md): prerequisites, dev workflow, build, tests
 
 ## Related projects
 
@@ -60,8 +61,7 @@ CashPilot bundles a catalog of 39 active passive-income services across multiple
 | [CashPilot-android](https://github.com/GeiserX/CashPilot-android) | Android Agent | Monitoring agent for passive income apps on Android |
 | [cashpilot-mcp](https://github.com/GeiserX/cashpilot-mcp) | MCP Server | Monitor earnings from AI assistants via Model Context Protocol |
 | [cashpilot-ha](https://github.com/GeiserX/cashpilot-ha) | Home Assistant | Earnings and service status sensors for your smart home |
-| [n8n-nodes-cashpilot](https://github.com/GeiserX/n8n-nodes-cashpilot) | n8n Node | Automate earnings workflows in n8n |
 
 ## License
 
-[GPL-3.0](LICENSE) -- Sergio Fernandez, 2026
+[GPL-3.0-or-later](LICENSE). Sergio Fernandez, 2026.

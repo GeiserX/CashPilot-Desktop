@@ -2,7 +2,7 @@
 
 > Status: **design** (drives the implementation PRs; no code yet).
 > Grounded in the code as it stands on branch `chore/v0.9.0`. Symbol references use `path/file.go:Symbol` and `path/file.py:line`.
-> Companion docs: [`docs/ARCHITECTURE.md`](ARCHITECTURE.md), [`ROADMAP.md`](../ROADMAP.md) (Milestone 3), [`docs/desktop-master-plan.md`](desktop-master-plan.md) (Phase 7).
+> Companion docs: [`docs/how-it-works.md`](how-it-works.md), [`ROADMAP.md`](../ROADMAP.md) (Milestone 3), [`docs/design/desktop-master-plan.md`](design/desktop-master-plan.md) (Phase 7).
 
 ---
 
@@ -12,11 +12,11 @@ CashPilot Desktop is a Wails + Go GUI that manages **only its own local Docker s
 
 The production original — CashPilot (Python/FastAPI, `/Users/sergio/repos/personal/CashPilot`) — already solves this: a **UI** container proxies deploy/stop/restart/remove/logs commands to per-server **worker** containers over an authenticated, SSRF-guarded channel, and each worker runs a hardened deploy-spec validator before touching Docker. This document ports that capability to the Desktop, reusing the Desktop's existing catalog, runtime, and bearer-token plumbing, and adapting the security-critical parts **verbatim**.
 
-This is [`ROADMAP.md`](../ROADMAP.md) **Milestone 3 → "Remote deploy from master to this Desktop node"** and [`docs/desktop-master-plan.md`](desktop-master-plan.md) **Phase 7 → "the desktop can deploy to a connected worker."**
+This is [`ROADMAP.md`](../ROADMAP.md) **Milestone 3 → "Remote deploy from master to this Desktop node"** and [`docs/design/desktop-master-plan.md`](design/desktop-master-plan.md) **Phase 7 → "the desktop can deploy to a connected worker."**
 
 ### A tension to reconcile up front
 
-`docs/desktop-master-plan.md:94` lists *"Multi-user auth, RBAC, sessions, **SSRF worker policy**, fleet-key"* under **"Drop — server-only (single local user)."** That call was correct **for a heartbeat-receive-only desktop**: with no outbound requests, there is no SSRF surface, and with one in-process local operator there are no browser sessions to gate.
+`docs/design/desktop-master-plan.md:94` lists *"Multi-user auth, RBAC, sessions, **SSRF worker policy**, fleet-key"* under **"Drop — server-only (single local user)."** That call was correct **for a heartbeat-receive-only desktop**: with no outbound requests, there is no SSRF surface, and with one in-process local operator there are no browser sessions to gate.
 
 The moment we add the **outbound command channel** that the same plan schedules in Phase 7 (`desktop-master-plan.md:113`), **the SSRF surface reappears** — the desktop now makes HTTP requests to a worker `url` that the worker itself reported in a heartbeat (attacker-influenceable) or that the operator typed. So this design keeps the "drop" for the parts that are genuinely server-only (multi-user **RBAC**/sessions — `deps.py:38-57`) and **re-introduces the SSRF worker-URL policy and the deploy-spec validator**, because they guard the outbound capability specifically, not the multi-user web UI. This is not a contradiction of the plan; it is the plan's Phase 7 done safely.
 
@@ -501,7 +501,7 @@ Small, independently-shippable, independently-testable PRs. Each lands green on 
 | Claim | Evidence |
 |---|---|
 | Desktop manages only the local socket; lifecycle is local | `app.go:774-856` (`DeployService`…`GetLogs`), `internal/services/manager.go:22-163` |
-| Fleet server is receive-only (heartbeat) | `fleet_server.go:72-134`; `docs/ARCHITECTURE.md:175-192` |
+| Fleet server is receive-only (heartbeat) | `fleet_server.go:72-134`; `docs/how-it-works.md:175-192` |
 | Constant-time bearer already present (reused by worker mode) | `fleet_server.go:136-144` |
 | Master generates + surfaces the fleet key | `app.go:1169-1180`; `FleetState`/`WorkerSnippet` `app.go:253-265`, `627-677` |
 | Local deploy is digest-pinned + argv-hardened + resource-limited | `runtime.go:118-201`, `677-755` (CWE-78 fix), `586-646`; images `@sha256`-pinned by `image_pin_test.go` |
@@ -513,4 +513,4 @@ Small, independently-shippable, independently-testable PRs. Each lands green on 
 | Original UI→worker proxy + verified-URL gates | `CashPilot/app/main.py:921-993`, `1705-1740` |
 | Original single shared key both directions | `CashPilot/app/fleet_key.py:22-73`; `CashPilot/CLAUDE.md` (Auth & Credential Flow) |
 | RBAC the Desktop legitimately drops (multi-user web) | `CashPilot/app/deps.py:38-57` |
-| The "drop SSRF" call was for receive-only; Phase 7 re-introduces the surface | `docs/desktop-master-plan.md:94`, `113`; `ROADMAP.md:34-39` |
+| The "drop SSRF" call was for receive-only; Phase 7 re-introduces the surface | `docs/design/desktop-master-plan.md:94`, `113`; `ROADMAP.md:34-39` |
