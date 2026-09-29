@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="CashPilot Desktop" width="100%">
+  <img src="docs/images/banner.svg" alt="CashPilot Desktop" width="100%">
 </p>
 
 <p align="center">
