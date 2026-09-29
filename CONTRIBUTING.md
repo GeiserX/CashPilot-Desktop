@@ -5,7 +5,7 @@ desktop app ([Wails](https://wails.io) + Go + vanilla TypeScript) for deploying 
 monitoring passive-income and DePIN services. This guide gets you from a clone to a
 merged pull request.
 
-For a map of how the app is put together, read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+For a map of how the app is put together, read [`docs/how-it-works.md`](docs/how-it-works.md)
 first — it explains the backend packages, the collector dispatch pattern, the data
 model, and the earnings/FX pipeline.
 

@@ -29,7 +29,7 @@ make test
 
 ## Architecture overview
 
-The full design, grounded in the code, is in [ARCHITECTURE.md](ARCHITECTURE.md).
+The full design, grounded in the code, is in [How it works](how-it-works.md).
 
 ```
 CashPilot Desktop (Wails 2.x)

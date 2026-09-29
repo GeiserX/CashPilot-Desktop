@@ -1,4 +1,4 @@
-# CashPilot Desktop — Architecture
+# How it works
 
 This document describes how CashPilot Desktop is put together, grounded in the
 code as it stands (`v0.6.0`). It is meant to get a new contributor productive:
