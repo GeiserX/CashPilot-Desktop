@@ -33,7 +33,8 @@ pnpm-lock.yaml
 .beads/*.db
 .beads/.beads-credential-key
 .beads/.local_version
-.claude/
+.claude/*
+!.claude/settings.json
 .codex/
 
 # Compiled output for the browser-free render harness (frontend/scripts/*.mjs).
