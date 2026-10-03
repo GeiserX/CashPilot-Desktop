@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "CashPilot_Desktop",
+  "project_id": "0a446820-9c24-45fd-9456-400d9cbe9ac8"
+}
