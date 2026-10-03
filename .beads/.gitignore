@@ -22,6 +22,7 @@ push-state.json
 # Tracker data lives in the Dolt remote (sync.remote), never in git
 issues.jsonl
 interactions.jsonl
+events.jsonl
 
 # Credential key (encryption key for federation peer auth — never commit)
 .beads-credential-key

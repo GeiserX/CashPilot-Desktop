@@ -26,6 +26,7 @@ pnpm-lock.yaml
 # (sync.remote in .beads/config.yaml) and never enters this repository.
 .beads/issues.jsonl
 .beads/interactions.jsonl
+.beads/events.jsonl
 .beads/dolt/
 .beads/embeddeddolt/
 .beads/backup/
