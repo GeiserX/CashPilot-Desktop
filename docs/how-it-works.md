@@ -488,7 +488,8 @@ sequenceDiagram
 
 **Current limitations (honest):** macOS builds are signed with a Developer ID
 certificate and notarized, starting with the first release after v0.20.5 (older
-ones are unsigned and need right-click → Open). Windows binaries are signed only
+ones are unsigned: open the app once, then allow it under System Settings →
+Privacy & Security → Open Anyway). Windows binaries are signed only
 if a `WINDOWS_SIGN_CERT` secret is present in CI, and Linux builds are unsigned. The auto-updater is likewise
 planned only.
 
