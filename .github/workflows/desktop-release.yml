@@ -87,6 +87,50 @@ jobs:
         if: runner.os != 'Linux'
         run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -ldflags "$CASHPILOT_LDFLAGS"
 
+      # Sign with the Developer ID certificate under the hardened runtime, notarize and
+      # staple, so Gatekeeper opens the app instead of calling it damaged. A missing
+      # secret fails the job: a macOS release must never go out unsigned without anyone
+      # noticing. `stapler` and `spctl` are the real gate, since they fail when Apple
+      # did not issue a notarization ticket.
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for v in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!v}" ] || { echo "::error::secret $v is not set; refusing to ship an unsigned macOS build"; exit 1; }
+          done
+          app="$(find build/bin -maxdepth 1 -name '*.app' | head -1)"
+          test -n "$app" || { echo "no .app bundle found in build/bin"; ls -la build/bin; exit 1; }
+
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_pass="$(openssl rand -hex 16)"
+          security create-keychain -p "$keychain_pass" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_pass" "$keychain"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_pass" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain"
+
+          codesign --force --options runtime --timestamp --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$app"
+          codesign --verify --strict --verbose=2 "$app"
+
+          ditto -c -k --keepParent "$app" "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+
+          security delete-keychain "$keychain"
+
       - name: Sign Windows binaries
         if: runner.os == 'Windows'
         env:
