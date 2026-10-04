@@ -486,10 +486,11 @@ sequenceDiagram
   interpolated values pass through `escapeHtml`, and currency codes are stripped
   to `[A-Z0-9]` before hitting unescaped balance sinks (`main.ts:formatBalance`).
 
-**Current limitations (honest):** installers are **unsigned** today — macOS
-builds are not codesigned/notarized (right-click → Open to bypass Gatekeeper),
-and Windows binaries are signed only if a `WINDOWS_SIGN_CERT` secret is present in
-CI. Signing/notarization is planned, not shipped. The auto-updater is likewise
+**Current limitations (honest):** macOS builds are signed with a Developer ID
+certificate and notarized, starting with the first release after v0.20.5 (older
+ones are unsigned: open the app once, then allow it under System Settings →
+Privacy & Security → Open Anyway). Windows binaries are signed only
+if a `WINDOWS_SIGN_CERT` secret is present in CI, and Linux builds are unsigned. The auto-updater is likewise
 planned only.
 
 ---
@@ -513,8 +514,9 @@ the parity and image-pin gates run.
 on the **free GitHub-hosted runners** — `macos-latest` (darwin-arm64),
 `ubuntu-latest` (linux-amd64), `windows-latest` (windows-amd64) — via
 `wails build`, then a `publish` job attaches the artifacts to a GitHub Release.
-Windows binaries are signed only when `WINDOWS_SIGN_CERT` is configured;
-otherwise **all installers ship unsigned**.
+The macOS job signs the `.app` under the hardened runtime, notarizes it and staples
+the ticket, and fails if a signing secret is missing. Windows binaries are signed only
+when `WINDOWS_SIGN_CERT` is configured; Linux builds are unsigned.
 
 ---
 

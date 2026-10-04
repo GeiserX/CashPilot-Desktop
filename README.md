@@ -25,7 +25,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
-- **Secure** -- Credentials encrypted at rest with AES-256-GCM; master key in the OS keychain. Signed/notarized installers are planned.
+- **Secure** -- Credentials encrypted at rest with AES-256-GCM; master key in the OS keychain. From the first release after v0.20.5 the macOS build is signed with a Developer ID certificate and notarized by Apple; Windows signing is planned.
 
 ## Quick start
 
