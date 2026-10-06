@@ -90,8 +90,9 @@ jobs:
       # A compare step that never wrote its code (checkout or setup-go failed) counts
       # as a failure to compare. Only runs against the web catalog's main touch it: a
       # dispatch against another ref is an experiment, not the state of the catalog.
+      # A cancelled run says nothing about the catalog, so it leaves the issue alone.
       - name: Keep the standing drift issue in step
-        if: always() && (github.event_name == 'schedule' || inputs.ref == 'main')
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || inputs.ref == 'main') }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
