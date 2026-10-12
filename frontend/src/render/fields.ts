@@ -44,6 +44,7 @@ export function serviceFormFields(
     secret: item.secret,
     required: item.required,
     default: item.default,
+    pattern: item.pattern,
   }));
   const envKeys = new Set(env.map((item) => item.key));
   const collector = (collectorFields || {})[service.slug] || [];

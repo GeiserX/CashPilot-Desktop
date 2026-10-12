@@ -376,6 +376,8 @@ export interface CollectorField {
   description: string;
   secret?: boolean;
   required?: boolean;
+  /** A regular expression the whole value must match (catalog docker.env pattern). */
+  pattern?: string;
 }
 
 export interface EnvVar {
@@ -385,6 +387,7 @@ export interface EnvVar {
   secret: boolean;
   description: string;
   default: string;
+  pattern?: string;
 }
 
 // PreflightFinding is one thing that could stop a service earning on this machine,

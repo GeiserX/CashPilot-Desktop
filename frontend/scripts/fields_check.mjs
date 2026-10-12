@@ -125,5 +125,15 @@ check(
 
 check("stripHtml leaves plain text alone", stripHtml("no markup here") === "no markup here");
 
+// A catalog pattern must survive into the field, or the wizard cannot render it.
+check(
+  "a docker.env pattern reaches the rendered field",
+  serviceFormFields(service("s", [envVar("K", { pattern: "[a-f0-9-]+" })]), {})[0].pattern === "[a-f0-9-]+",
+);
+check(
+  "a field without a pattern carries none",
+  serviceFormFields(service("s", [envVar("K")]), {})[0].pattern === undefined,
+);
+
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);
