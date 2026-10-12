@@ -48,6 +48,8 @@ function inputs(html) {
       type: attr("type"),
       value: attr("value"),
       placeholder: attr("placeholder"),
+      pattern: attr("pattern"),
+      autocomplete: attr("autocomplete"),
     };
   });
 }
@@ -121,6 +123,7 @@ const repocket = service({
         label: "API Key",
         secret: true,
         description: 'Your Repocket API key — log in at <a href="https://app.repocket.com/b">app.repocket.com</a> and copy it',
+        pattern: "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
       }),
     ],
   },
@@ -313,6 +316,26 @@ const manual = renderWizardServiceSetup(
 );
 check("a manual-only service still renders its collector input", inputs(manual)[0]?.env === "PAWNS_EMAIL", manual);
 check("its Deploy button is disabled", manual.includes('data-wizard-action="deploy" data-slug="pawns" disabled'), manual);
+
+// ---------------------------------------------------------------------------
+// RULE 6: a catalog pattern reaches the input, so the browser can point at a
+// value of the wrong shape (a password pasted where a UUID API key belongs)
+// before anything is saved. The backend check stays the gate.
+// ---------------------------------------------------------------------------
+const field = (html, key) => inputs(html).find((input) => input.env === key);
+check(
+  "RULE 6: a docker.env field with a pattern renders it on the input",
+  field(rp, "RP_API_KEY")?.pattern === "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+  field(rp, "RP_API_KEY")?.tag,
+);
+check("RULE 6: a field without a pattern renders none", field(rp, "RP_EMAIL")?.pattern === undefined, field(rp, "RP_EMAIL")?.tag);
+check("RULE 6: nor does a collector field", field(rp, "REPOCKET_PASSWORD")?.pattern === undefined, field(rp, "REPOCKET_PASSWORD")?.tag);
+check(
+  "RULE 6: a secret asks the browser for a new value, never a saved password",
+  field(rp, "RP_API_KEY")?.autocomplete === "new-password" && field(hg, "HONEYGAIN_PASSWORD")?.autocomplete === "new-password",
+  rp,
+);
+check("RULE 6: a non-secret field carries no autocomplete hint", field(rp, "RP_EMAIL")?.autocomplete === undefined, field(rp, "RP_EMAIL")?.tag);
 
 // Nothing to ask for must say so rather than render an empty grid.
 const none = renderWizardServiceSetup(service({ slug: "quiet", docker: { env: [] } }), {}, "macmini");

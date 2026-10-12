@@ -56,6 +56,9 @@ pins:
   repocket:
     image: "repocket/repocket@sha256:5888d756de7e0e74b95b5eb08bb93f4240a0ce840c910a7e528d1143ad0c502b"
     why: "Upstream ships no tag at all on this entry."
+  sia-hostd:
+    image: "ghcr.io/siafoundation/hostd@sha256:2f27742e103cf79cf1bc818820af936fb342ee435e7bd5ee4f0193f7cd03e2cd"
+    why: "Upstream ships no tag at all on this entry."
   storj:
     image: "storjlabs/storagenode@sha256:21ca0ac819d1d66240830d28097eeb693923e51383aa3bb07bf823f9fad1f6e9"
     why: "Upstream ships no tag at all on this entry."

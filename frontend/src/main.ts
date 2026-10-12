@@ -1229,8 +1229,25 @@ function readWizardForm(slug: string): Record<string, string> {
   return values;
 }
 
+// A typed value the catalog constrains (the input carries its pattern) is checked
+// in the browser first, so a password pasted where a UUID API key belongs is
+// pointed at in the form instead of coming back as a backend error after a save.
+// The backend check stays authoritative: this is the early warning, not the gate.
+function firstInvalidWizardInput(slug: string): HTMLInputElement | null {
+  for (const input of document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env]`)) {
+    if (input.pattern && input.value.trim() && !input.checkValidity()) return input;
+  }
+  return null;
+}
+
 async function runWizardAction(slug: string, action: string) {
   const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
+  const invalid = firstInvalidWizardInput(slug);
+  if (invalid && (action === "save" || action === "deploy")) {
+    invalid.reportValidity();
+    if (output) output.textContent = `${invalid.dataset.wizardEnv} does not have the shape this provider expects.`;
+    return;
+  }
   const values = readWizardForm(slug);
   try {
     if (action === "save") {
