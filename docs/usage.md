@@ -21,9 +21,9 @@ Linux, and Windows.
 ## Dashboard
 
 The home view: total balance, today's and this month's earnings, and active
-service count across the top; a daily-earnings chart with a balance card per
-service; and your deployed services with their status, uptime, balance, CPU and
-memory.
+service count across the top; a daily-earnings chart with the latest collected
+balance for each platform; and your deployed services with their status, uptime,
+balance, CPU and memory.
 
 ![Dashboard](images/screenshots/02-dashboard.png)
 
