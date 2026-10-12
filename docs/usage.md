@@ -1,11 +1,12 @@
 # Usage
 
-A visual tour of the app (**v0.8.0**), captured from the running desktop build. No
-service credentials are configured in these shots, so every screen shows the
-clean first-run / empty state. Where a screen displayed a locally-generated API
-token, a LAN IP, or a home path, those values are masked (`<API_KEY>`,
-`192.168.x.x`, `/Users/you/`) — the loopback `127.0.0.1` is kept so the fleet/API
-addresses stay accurate.
+A visual tour of the app (**v0.20.9**), captured from the running desktop build.
+The shots use sample data: five services running on the local Docker runtime, about
+six weeks of made-up earnings history, and three example fleet devices. None of the
+balances, credentials or devices are real. Where a screen displayed a
+locally-generated API token, a LAN IP, a hostname or a home path, those values are
+masked (`<API_KEY>`, `192.168.x.x`, `my-mac`, `/Users/you/`). The loopback
+`127.0.0.1` is kept so the fleet/API addresses stay accurate.
 
 ## Onboarding
 
@@ -20,8 +21,9 @@ Linux, and Windows.
 ## Dashboard
 
 The home view: total balance, today's and this month's earnings, and active
-service count across the top; a daily-earnings chart; and your deployed services.
-Everything reads `$0.00` here because no collectors have run yet.
+service count across the top; a daily-earnings chart with a balance card per
+service; and your deployed services with their status, uptime, balance, CPU and
+memory.
 
 ![Dashboard](images/screenshots/02-dashboard.png)
 
