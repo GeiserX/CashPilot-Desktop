@@ -37,6 +37,16 @@ go test ./...      # run Go tests
 - SQLite migrations are forward-only (no down migrations)
 - Frontend Wails bindings auto-generated — do not edit `frontend/wailsjs/` manually
 
+## The web repository leads, and this one follows
+
+`services/` is vendored from [GeiserX/CashPilot](https://github.com/GeiserX/CashPilot) (`make catalog-sync SRC=../CashPilot`; the Desktop-only deltas live in `catalog-overlay/`). The deploy form (`frontend/src/render/fields.ts`), the deploy validation (`validateRequired` in `internal/services/manager.go`) and the catalog's facts are re-implemented here. So a web PR that touches `services/`, the deploy route in `app/main.py`, the env fields in `app/static/js/app.js` or a guide has a counterpart here, and whoever merges the web PR owns it in the same session:
+
+1. `make catalog-check SRC=../CashPilot`. If a new live image has no pin, resolve its digest into `catalog-overlay/image-pins.yml` first. Then `make catalog-sync SRC=../CashPilot`, review the diff, commit it.
+2. Port a behaviour change to `internal/services` and `frontend/src/render`, with its test.
+3. Close the standing "Catalog drift" issue once the check passes.
+
+The weekly `catalog-drift.yml` run is the backstop, not the plan: it sees the catalog and never a behaviour change.
+
 ## Testing
 
 ```bash
