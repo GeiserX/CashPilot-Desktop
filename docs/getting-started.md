@@ -15,7 +15,7 @@ Download the latest release for your platform:
 
 | Platform | File on the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | How to open it |
 |----------|------|-------|
-| macOS (Apple Silicon) | `CashPilot-Desktop-darwin-arm64.zip` | Unzip it, then right-click `CashPilot Desktop.app` and choose Open (the app is unsigned, so Gatekeeper blocks a plain double-click the first time) |
+| macOS (Apple Silicon) | `CashPilot-Desktop-darwin-arm64.zip` | Unzip it and double-click `cashpilot-desktop.app`. It is signed and notarized, so Gatekeeper lets it open; macOS only asks once to confirm an app downloaded from the internet |
 | Windows (x64) | `CashPilot-Desktop-windows-amd64.exe` | The app itself, not an installer; run it. It is unsigned unless a signing certificate is configured in CI, so SmartScreen may warn |
 | Linux (x64) | `CashPilot-Desktop-linux-amd64.tar.gz` | Extract it and run `CashPilot Desktop`; it needs GTK 3 and WebKitGTK 4.1 |
 
