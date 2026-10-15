@@ -18,10 +18,14 @@ type Catalog struct {
 }
 
 type Service struct {
-	Name             string            `json:"name" yaml:"name"`
-	Slug             string            `json:"slug" yaml:"slug"`
-	Category         string            `json:"category" yaml:"category"`
-	Status           string            `json:"status" yaml:"status"`
+	Name     string `json:"name" yaml:"name"`
+	Slug     string `json:"slug" yaml:"slug"`
+	Category string `json:"category" yaml:"category"`
+	Status   string `json:"status" yaml:"status"`
+	// Priority orders the catalog: entries with one come first, lowest number first,
+	// before the usual category-then-name order; 0 means none. The web catalog sets it
+	// on the services that pay the project best, so a reorder is a number change there.
+	Priority         int               `json:"priority" yaml:"priority"`
 	Website          string            `json:"website" yaml:"website"`
 	Description      string            `json:"description" yaml:"description"`
 	ShortDescription string            `json:"shortDescription" yaml:"short_description"`
@@ -396,12 +400,7 @@ func Load() (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(services, func(i, j int) bool {
-		if services[i].Category == services[j].Category {
-			return services[i].Name < services[j].Name
-		}
-		return services[i].Category < services[j].Category
-	})
+	sort.SliceStable(services, func(i, j int) bool { return catalogLess(services[i], services[j]) })
 	bySlug := make(map[string]Service, len(services))
 	for _, svc := range services {
 		bySlug[svc.Slug] = svc
@@ -560,15 +559,27 @@ func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
 }
 
 func newCatalog(services []Service) *Catalog {
-	sort.Slice(services, func(i, j int) bool {
-		if services[i].Category == services[j].Category {
-			return services[i].Name < services[j].Name
-		}
-		return services[i].Category < services[j].Category
-	})
+	sort.SliceStable(services, func(i, j int) bool { return catalogLess(services[i], services[j]) })
 	bySlug := make(map[string]Service, len(services))
 	for _, svc := range services {
 		bySlug[svc.Slug] = svc
 	}
 	return &Catalog{services: services, bySlug: bySlug}
+}
+
+// catalogLess is the one catalog order: prioritised entries first (lowest number first),
+// then category, then name. Kept in one place so the on-disk loader and newCatalog cannot
+// drift apart.
+func catalogLess(a, b Service) bool {
+	ap, bp := a.Priority > 0, b.Priority > 0
+	if ap != bp {
+		return ap
+	}
+	if ap && a.Priority != b.Priority {
+		return a.Priority < b.Priority
+	}
+	if a.Category != b.Category {
+		return a.Category < b.Category
+	}
+	return a.Name < b.Name
 }

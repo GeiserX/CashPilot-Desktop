@@ -2,8 +2,10 @@ package catalog
 
 import (
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
+
+	"path/filepath"
 )
 
 // realCatalog loads the catalog actually shipped in services/, so these tests fail
@@ -275,5 +277,49 @@ func TestResurrectionCheckedParses(t *testing.T) {
 	}
 	if presearch.ResurrectionChecked == "" {
 		t.Error("presearch is dead with a live site; it must carry the date that was confirmed")
+	}
+}
+
+// TestPriorityLeadsTheCatalog: the web catalog marks the services that pay the project
+// best with `priority`, and every list here must lead with them in that order, the rest
+// keeping category-then-name. Honeygain carries priority 1 on the real catalog.
+func TestPriorityLeadsTheCatalog(t *testing.T) {
+	cat := realCatalog(t)
+	visible := cat.ListVisible()
+	if len(visible) == 0 || visible[0].Slug != "honeygain" || visible[0].Priority != 1 {
+		t.Fatalf("expected honeygain with priority 1 first, got %q (priority %d)", visible[0].Slug, visible[0].Priority)
+	}
+	seenUnprioritised := false
+	last := 0
+	for _, svc := range visible {
+		if svc.Priority > 0 {
+			if seenUnprioritised {
+				t.Errorf("%s (priority %d) sorts after an entry with no priority", svc.Slug, svc.Priority)
+			}
+			if svc.Priority < last {
+				t.Errorf("%s (priority %d) sorts after priority %d", svc.Slug, svc.Priority, last)
+			}
+			last = svc.Priority
+			continue
+		}
+		seenUnprioritised = true
+	}
+
+	// A synthetic catalog proves the rule without the real data: no priority keeps the old order.
+	plain := newCatalog([]Service{{Slug: "b", Name: "B", Category: "depin"}, {Slug: "a", Name: "A", Category: "depin"}, {Slug: "z", Name: "Z", Category: "bandwidth"}})
+	got := []string{}
+	for _, svc := range plain.List() {
+		got = append(got, svc.Slug)
+	}
+	if want := "z,a,b"; strings.Join(got, ",") != want {
+		t.Errorf("plain order = %s, want %s", strings.Join(got, ","), want)
+	}
+	ranked := newCatalog([]Service{{Slug: "b", Name: "B", Category: "depin", Priority: 2}, {Slug: "a", Name: "A", Category: "depin"}, {Slug: "z", Name: "Z", Category: "bandwidth", Priority: 1}})
+	got = got[:0]
+	for _, svc := range ranked.List() {
+		got = append(got, svc.Slug)
+	}
+	if want := "z,b,a"; strings.Join(got, ",") != want {
+		t.Errorf("ranked order = %s, want %s", strings.Join(got, ","), want)
 	}
 }
