@@ -12,8 +12,12 @@ description: >
 short_description: Bandwidth sharing - max 5 devices, API key auth
 
 referral:
-  signup_url: "https://repocket.com/"
+  signup_url: "https://link.repocket.com/b1zM"
+  code: "b1zM"
   program: true
+  bonus:
+    referrer: "$2 once the referee has earned $7, then 5% of their earnings for life"
+    referee: "$2 wallet bonus on sign-up"
 
 docker:
   image: "repocket/repocket@sha256:5888d756de7e0e74b95b5eb08bb93f4240a0ce840c910a7e528d1143ad0c502b"
