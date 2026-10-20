@@ -2,6 +2,8 @@ module github.com/GeiserX/CashPilot-Desktop
 
 go 1.26.0
 
+toolchain go1.26.10
+
 require (
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
