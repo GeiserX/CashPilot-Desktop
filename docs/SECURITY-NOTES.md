@@ -7,7 +7,7 @@ present in the dependency tree. The job is a hard gate: a finding our code can r
 
 ## Go standard library
 
-The release and CI workflows pin an exact toolchain, `go-version: '1.26.9'`, so a release built today and one
+The release and CI workflows pin an exact toolchain, `go-version: '1.26.10'`, so a release built today and one
 rebuilt next month use the same compiler and standard library. The cost of an exact pin is that Go security
 releases do not arrive on their own: the workflows sat on `'1.26.5'` while go1.26.6 fixed five advisories our
 code actually calls (`GO-2026-6218` net/url, `GO-2026-6090` crypto/tls, `GO-2026-6089` and `GO-2026-5026`
