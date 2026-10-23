@@ -21,6 +21,7 @@ import type { CollectorField, Service, ServiceEarning } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
+import { imageChoiceSection } from "./image.js";
 
 /**
  * Render the setup card for one service.
@@ -28,12 +29,16 @@ import { composeExportControl, credentialHint, referralNote, serviceFacts, signu
  * `hostname` is this machine's name, substituted into a `{hostname}` catalog default
  * so the field shows the value the deploy path will actually send. It falls back to
  * "desktop", which is what the backend substitutes when it does not know either.
+ *
+ * `customImage` is the image this service's deployment records instead of the
+ * catalog's, which the Advanced section's Image box starts with.
  */
 export function renderWizardServiceSetup(
   service: Service,
   collectorFields: Record<string, CollectorField[]> | null | undefined,
   hostname: string | null | undefined,
   breakdown?: ServiceEarning[] | null,
+  customImage?: string | null,
 ): string {
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = serviceFormFields(service, collectorFields);
@@ -64,6 +69,7 @@ export function renderWizardServiceSetup(
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
+      ${imageChoiceSection(service, customImage)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
         <button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>

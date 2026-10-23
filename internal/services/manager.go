@@ -7,6 +7,7 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -129,7 +130,55 @@ func refuseRetired(svc catalog.Service) error {
 	return fmt.Errorf("%s is retired (status %q) and can no longer be deployed", svc.Name, svc.Status)
 }
 
+// Deploy deploys slug from the image its deployment already uses: the catalog's, or
+// the one the user chose on an earlier deploy. It is DeployImage with the image left
+// out, which is what every caller that never shows an Image box should mean.
 func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[string]string) (store.Deployment, error) {
+	return m.DeployImage(ctx, slug, credentials, nil)
+}
+
+// imageRef is a plain image reference: repository[:tag][@sha256:digest], with an
+// optional registry host (and port) in front. No scheme, no spaces, nothing Docker
+// would read as an option. The web app refuses the same shapes.
+var imageRef = regexp.MustCompile(`^` +
+	`(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?/)?` +
+	`[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*` +
+	`(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*` +
+	`(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?` +
+	`(?:@sha256:[a-f0-9]{64})?` +
+	`$`)
+
+// ValidateImage refuses a typed image that is not an image reference. "" is valid:
+// it means the catalog image.
+func ValidateImage(image string) error {
+	image = strings.TrimSpace(image)
+	if image != "" && (len(image) > 255 || !imageRef.MatchString(image)) {
+		return errors.New("image is not a valid image reference (repository[:tag][@digest])")
+	}
+	return nil
+}
+
+// customImage is the image this deploy runs instead of the catalog's, or "" for the
+// catalog's. A typed image wins; nil (the box left out) keeps the recorded choice.
+func customImage(requested *string, recorded string) (string, error) {
+	if requested == nil {
+		return recorded, nil
+	}
+	if err := ValidateImage(*requested); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(*requested), nil
+}
+
+// DeployImage deploys slug, running image instead of the catalog's when one is given.
+// nil keeps the image the deployment already records, "" goes back to the catalog,
+// and anything else must pass ValidateImage before the runtime is touched. The choice
+// is recorded with the deployment, so every later redeploy keeps it until cleared.
+//
+// Only the image changes. Capabilities, devices, ports, the entrypoint and the stop
+// timeout still come from the catalog entry, so a different image gains nothing the
+// service does not already have.
+func (m *Manager) DeployImage(ctx context.Context, slug string, credentials map[string]string, image *string) (store.Deployment, error) {
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
 		return store.Deployment{}, fmt.Errorf("unknown service: %s", slug)
@@ -143,12 +192,29 @@ func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[strin
 	if err := validateRequired(svc, credentials); err != nil {
 		return store.Deployment{}, err
 	}
+	recorded := ""
+	if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
+		recorded = dep.CustomImage
+	}
+	custom, err := customImage(image, recorded)
+	if err != nil {
+		return store.Deployment{}, err
+	}
 
 	// Route the service to its runtime: native when it declares a native binary for
 	// this host and the native provider is registered, else the default Docker
 	// runtime. Record whatever kind actually served the deploy so the persisted
 	// Runtime is derived rather than a hardcoded literal.
-	provider, runtimeKind := m.resolveProvider(m.kindForService(svc))
+	kind := m.kindForService(svc)
+	if custom != "" {
+		// The chosen image replaces the catalog's and every per-architecture
+		// override with it: it is the user's answer for this machine. An image only
+		// runs on Docker, so it also keeps the service off the native runtime.
+		svc.Docker.Image = custom
+		svc.Docker.ImageByArch = nil
+		kind = ""
+	}
+	provider, runtimeKind := m.resolveProvider(kind)
 
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
 	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials}, func(message string) {
@@ -172,6 +238,10 @@ func (m *Manager) Deploy(ctx context.Context, slug string, credentials map[strin
 	if err := m.store.UpsertDeployment(deployment); err != nil {
 		return store.Deployment{}, err
 	}
+	if err := m.store.SetCustomImage(slug, custom); err != nil {
+		return store.Deployment{}, err
+	}
+	deployment.CustomImage = custom
 	m.store.RecordEvent(slug, "deployed", info.ContainerID)
 	return deployment, nil
 }

@@ -39,6 +39,7 @@ import { renderPreflight } from "./render/preflight";
 import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
+import { customImageBadge, imageChoice } from "./render/image";
 import { composeSelectionExport } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -493,7 +494,8 @@ function renderCatalog(current: AppState) {
 }
 
 function renderCatalogCard(service: Service, deployments: Deployment[], outdated: string[] | null) {
-  const deployed = deployments.some((deployment) => deployment.slug === service.slug);
+  const deployment = deployments.find((item) => item.slug === service.slug);
+  const deployed = Boolean(deployment);
   const isOutdated = deployed && (outdated || []).includes(service.slug);
   const signupUrl = service.referral?.signupUrl || service.website;
   return `
@@ -505,6 +507,7 @@ function renderCatalogCard(service: Service, deployments: Deployment[], outdated
           <div class="badge-row">
             <span class="badge">${escapeHtml(service.category)}</span>
             <span class="badge ${deployed ? "success" : ""}">${deployed ? "Deployed" : service.manualOnly ? "Manual" : "Available"}</span>
+            ${customImageBadge(deployment?.customImage)}
             ${isOutdated ? `<span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}
           </div>
         </div>
@@ -951,7 +954,7 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
                 <strong>${escapeHtml(service?.name || deployment.slug)}</strong>
                 <small>${escapeHtml(deployment.image)}</small>
               </td>
-              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${renderProducerBadge(producerStates?.[deployment.slug], deployment.status)}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
+              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${renderProducerBadge(producerStates?.[deployment.slug], deployment.status)}${customImageBadge(deployment.customImage)}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
               <td>${earning && !earning.error ? formatBalance(earning.balance, earning.currency) : "<span class=\"muted\">--</span>"}</td>
               <td>${deployment.cpuPercent.toFixed(1)}%</td>
               <td>${deployment.memoryMb.toFixed(0)} MB</td>
@@ -1171,7 +1174,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown)).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage)).join("")}
     </div>
   `;
 }
@@ -1186,6 +1189,17 @@ function renderWizardSummary(services: Service[]) {
       </div>
     </div>
   `;
+}
+
+function deploymentOf(slug: string): Deployment | undefined {
+  return state?.deployments?.find((deployment) => deployment.slug === slug);
+}
+
+// The Image box's answer for a deploy: null keeps the recorded image (also when the
+// card has no box at all), "" goes back to the catalog's.
+function readWizardImage(slug: string): string | null {
+  const input = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
+  return input ? imageChoice(input.value, input.dataset.initial || "") : null;
 }
 
 function closeWizard() {
@@ -1262,8 +1276,14 @@ async function runWizardAction(slug: string, action: string) {
       }
       if (output) output.textContent = "Deploying...";
       await SaveCredentials(slug, values);
-      await DeployService(slug, values);
+      const deployment = await DeployService(slug, values, readWizardImage(slug));
       state = await GetAppState();
+      // The box now holds what runs, so a second Deploy without an edit keeps it.
+      const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
+      if (imageInput) {
+        imageInput.value = deployment.customImage || "";
+        imageInput.dataset.initial = deployment.customImage || "";
+      }
       if (output) output.textContent = "Deployed.";
       return;
     }

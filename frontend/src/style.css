@@ -1349,6 +1349,17 @@ input:focus {
   box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.12);
 }
 
+.image-choice {
+  margin: 0 0 1rem;
+}
+
+.image-choice summary {
+  cursor: pointer;
+  color: #a1a1aa;
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+}
+
 .tip {
   padding: 0.9rem 1rem;
   border-left: 3px solid #8b5cf6;

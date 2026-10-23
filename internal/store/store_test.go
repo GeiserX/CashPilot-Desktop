@@ -1357,6 +1357,45 @@ func TestFleetKeyColumnsMigrateOnExistingTable(t *testing.T) {
 	}
 }
 
+// TestCustomImageColumnMigratesAndSurvivesUpsert covers the upgrade path for an
+// install whose deployments table predates the chosen image, and the rule that only
+// SetCustomImage writes it: the refresh's UpsertDeployment must not clear a choice.
+func TestCustomImageColumnMigratesAndSurvivesUpsert(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.db.Exec("ALTER TABLE deployments DROP COLUMN custom_image"); err != nil {
+		t.Fatalf("drop column (simulate pre-migration schema): %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO deployments(slug,container_id,name,image,status,runtime,created_at,updated_at)
+		 VALUES('honeygain','c1','cashpilot-honeygain','honeygain/honeygain','running','existing-docker', datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatalf("seed old-shape row: %v", err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate (backfill): %v", err)
+	}
+	dep, ok, err := s.GetDeployment("honeygain")
+	if err != nil || !ok || dep.CustomImage != "" {
+		t.Fatalf("backfill: want the row kept on the catalog image, got %+v ok=%v err=%v", dep, ok, err)
+	}
+
+	if err := s.SetCustomImage("honeygain", "honeygain/honeygain:0.8.1"); err != nil {
+		t.Fatalf("SetCustomImage: %v", err)
+	}
+	if err := s.UpsertDeployment(Deployment{Slug: "honeygain", ContainerID: "c2", Name: "n", Image: "honeygain/honeygain:0.8.1", Status: "running", Runtime: "existing-docker"}); err != nil {
+		t.Fatalf("UpsertDeployment: %v", err)
+	}
+	if dep, _, _ := s.GetDeployment("honeygain"); dep.CustomImage != "honeygain/honeygain:0.8.1" || dep.ContainerID != "c2" {
+		t.Fatalf("after upsert: %+v, want the choice kept and the row refreshed", dep)
+	}
+	if err := s.SetCustomImage("honeygain", ""); err != nil {
+		t.Fatalf("SetCustomImage clear: %v", err)
+	}
+	if dep := s.ListDeployments(); len(dep) != 1 || dep[0].CustomImage != "" {
+		t.Fatalf("after clear: %+v", dep)
+	}
+}
+
 func TestColumnExistsRejectsUnsafeIdentifier(t *testing.T) {
 	s := openTestStore(t)
 	if _, err := s.columnExists("fleet_devices; DROP TABLE x", "a"); err == nil {
