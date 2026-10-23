@@ -155,24 +155,11 @@ export function signupButton(service: Service, label = "Create account"): string
  * Next to the button, before the click, smaller than the text around it: the reader
  * should not have to find a README section to learn the maintainer may earn from it.
  * Only where the catalog has a referral code, since a bare signup URL is not a
- * referral link. The provider's own site, when it differs, is the way around it.
- * The web app renders the same note (app.js referralNote).
+ * referral link. The web app renders the same note (app.js referralNote).
  */
 export function referralNote(service: Service): string {
-  const signup = (service.referral?.signupUrl || "").trim();
-  if (!service.referral?.code || !signup) return "";
-  const website = (service.website || "").trim();
-  let direct = "";
-  if (website && website !== signup) {
-    let host = website;
-    try {
-      host = new URL(website).host.replace(/^www\./, "");
-    } catch {
-      // keep the raw URL
-    }
-    direct = ` To sign up without it, go to <a data-url="${escapeHtml(website)}">${escapeHtml(host)}</a>.`;
-  }
-  return `<p class="referral-note">Referral link: the CashPilot maintainer may earn a commission, at no cost to you.${direct}</p>`;
+  if (!service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
+  return `<p class="referral-note">Referral link: the CashPilot maintainer may earn a commission from it.</p>`;
 }
 
 /** One block of label/value rows. */

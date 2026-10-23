@@ -257,16 +257,12 @@ check(
 
 const note = referralNote(honeygain);
 check("a referral link gets the note", note.includes("Referral link:"), note);
-check("the note offers the provider's own site", note.includes(`data-url="${honeygain.website}"`), note);
+check("the note offers no other link", !note.includes("data-url") && !note.includes("href"), note);
 check(
   "a bare signup URL with no code gets no note",
   referralNote({...honeygain, referral: {signupUrl: "https://example.com/signup", code: ""}}) === "",
 );
 check("a service with no referral block gets no note", referralNote({...honeygain, referral: undefined}) === "");
-check(
-  "no site link when the website is the signup URL",
-  !referralNote({...honeygain, website: honeygain.referral.signupUrl}).includes("sign up without it"),
-);
 
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

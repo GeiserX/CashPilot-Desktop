@@ -192,12 +192,6 @@ h3 {
   line-height: 1.5;
 }
 
-.referral-note a {
-  color: inherit;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
 .subtitle,
 .muted {
   color: #a1a1aa;
