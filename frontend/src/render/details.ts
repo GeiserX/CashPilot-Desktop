@@ -149,6 +149,19 @@ export function signupButton(service: Service, label = "Create account"): string
   return `<button class="primary" data-url="${escapeHtml(url)}">${escapeHtml(label)}</button>`;
 }
 
+/**
+ * The line under a signup button that says it is a referral link.
+ *
+ * Next to the button, before the click, smaller than the text around it: the reader
+ * should not have to find a README section to learn the maintainer may earn from it.
+ * Only where the catalog has a referral code, since a bare signup URL is not a
+ * referral link. The web app renders the same note (app.js referralNote).
+ */
+export function referralNote(service: Service): string {
+  if (!service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
+  return `<p class="referral-note">Referral link: the CashPilot maintainer may earn a commission from it.</p>`;
+}
+
 /** One block of label/value rows. */
 function factList(title: string, facts: Fact[]): string {
   return `

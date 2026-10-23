@@ -462,6 +462,7 @@ function renderCatalog(current: AppState) {
             <div class="catalog-grid">
               ${services.map((service) => renderCatalogCard(service, current.deployments || [], current.outdatedServices)).join("")}
             </div>
+            <p class="referral-note">Sign Up and Visit links to providers with a referral programme are referral links: the CashPilot maintainer may earn a commission from them.</p>
           </section>
         </main>
       </div>

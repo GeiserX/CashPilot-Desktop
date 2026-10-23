@@ -25,6 +25,7 @@ import {
   disclosureFacts,
   minimumIn,
   payoutFacts,
+  referralNote,
   signupButton,
 } from "../.harness-build/render/details.js";
 
@@ -250,6 +251,18 @@ check(
   "a page with nothing exportable shows no export control",
   composeSelectionExport([{...honeygain, manualOnly: true}]) === "",
 );
+
+// ---------------------------------------------------------------------------
+// The referral note: next to the signup button, only for a real referral link.
+
+const note = referralNote(honeygain);
+check("a referral link gets the note", note.includes("Referral link:"), note);
+check("the note offers no other link", !note.includes("data-url") && !note.includes("href"), note);
+check(
+  "a bare signup URL with no code gets no note",
+  referralNote({...honeygain, referral: {signupUrl: "https://example.com/signup", code: ""}}) === "",
+);
+check("a service with no referral block gets no note", referralNote({...honeygain, referral: undefined}) === "");
 
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

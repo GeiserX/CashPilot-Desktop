@@ -184,6 +184,14 @@ h3 {
   line-height: 0.95;
 }
 
+/* Smaller and muted, but next to the link it describes, never only in a footer. */
+.referral-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.75rem;
+  color: #71717a;
+  line-height: 1.5;
+}
+
 .subtitle,
 .muted {
   color: #a1a1aa;
