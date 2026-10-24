@@ -8,6 +8,7 @@ import (
 	goruntime "runtime"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -36,6 +37,12 @@ type Manager struct {
 	defaultKind string
 	catalog     *catalog.Catalog
 	store       *store.Store
+
+	// copies holds, per slug, the units of copies 2..N as the last Refresh (or a
+	// deploy since) saw them. The store keeps one row per service, the first copy's,
+	// so this is where the dashboard reads the others from.
+	mu     sync.Mutex
+	copies map[string][]runtime.ContainerInfo
 }
 
 // NewManager builds a Manager whose registry holds the given provider under
@@ -179,6 +186,22 @@ func customImage(requested *string, recorded string) (string, error) {
 // timeout still come from the catalog entry, so a different image gains nothing the
 // service does not already have.
 func (m *Manager) DeployImage(ctx context.Context, slug string, credentials map[string]string, image *string) (store.Deployment, error) {
+	return m.DeployWith(ctx, slug, credentials, DeployOptions{Image: image})
+}
+
+// DeployOptions are the deploy form's choices beyond the credentials. A nil field
+// means the box was left alone, and the deployment keeps what it already records.
+type DeployOptions struct {
+	// Image: see DeployImage.
+	Image *string
+	// Instances is how many copies of the service to run; see ScalingLimit.
+	Instances *int
+}
+
+// DeployWith deploys slug with the given options. The first copy is deployed exactly
+// as a single-copy service always was; copies 2..N follow it, and copies above N that
+// are still running are removed, highest first.
+func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, error) {
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
 		return store.Deployment{}, fmt.Errorf("unknown service: %s", slug)
@@ -192,13 +215,24 @@ func (m *Manager) DeployImage(ctx context.Context, slug string, credentials map[
 	if err := validateRequired(svc, credentials); err != nil {
 		return store.Deployment{}, err
 	}
-	recorded := ""
+	recorded, recordedCopies := "", 1
 	if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
 		recorded = dep.CustomImage
+		recordedCopies = max(dep.Instances, 1)
 	}
-	custom, err := customImage(image, recorded)
+	custom, err := customImage(opts.Image, recorded)
 	if err != nil {
 		return store.Deployment{}, err
+	}
+	instances := recordedCopies
+	if opts.Instances != nil {
+		instances = *opts.Instances
+	}
+	if instances < 1 || instances > MaxInstances {
+		return store.Deployment{}, fmt.Errorf("instances must be between 1 and %d", MaxInstances)
+	}
+	if limit := m.ScalingLimit(svc); instances > limit.Max {
+		return store.Deployment{}, errors.New(limit.Reason)
 	}
 
 	// Route the service to its runtime: native when it declares a native binary for
@@ -215,6 +249,18 @@ func (m *Manager) DeployImage(ctx context.Context, slug string, credentials map[
 		kind = ""
 	}
 	provider, runtimeKind := m.resolveProvider(kind)
+	// Copies are read only when copies are involved, so a plain deploy asks the
+	// runtime nothing it did not ask before.
+	copier, _ := provider.(runtime.CopyProvider)
+	if instances > 1 && copier == nil {
+		return store.Deployment{}, fmt.Errorf("%s cannot run more than once on the %s runtime", svc.Name, runtimeKind)
+	}
+	var running []int
+	if copier != nil && (opts.Instances != nil || recordedCopies > 1) {
+		if running, err = copier.Copies(ctx, slug); err != nil {
+			return store.Deployment{}, err
+		}
+	}
 
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
 	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials}, func(message string) {
@@ -242,7 +288,37 @@ func (m *Manager) DeployImage(ctx context.Context, slug string, credentials map[
 		return store.Deployment{}, err
 	}
 	deployment.CustomImage = custom
+	// The count is recorded before the extra copies start: if one fails, the next
+	// redeploy still knows how many this machine should run and tries again.
+	if err := m.store.SetInstances(slug, instances); err != nil {
+		return store.Deployment{}, err
+	}
+	deployment.Instances = instances
 	m.store.RecordEvent(slug, "deployed", info.ContainerID)
+
+	var copies []runtime.ContainerInfo
+	for n := 2; n <= instances; n++ {
+		copyInfo, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Instance: n}, func(message string) {
+			m.store.RecordEvent(slug, "runtime_progress", message)
+		})
+		if err != nil {
+			m.store.RecordEvent(slug, "deploy_error", fmt.Sprintf("copy %d: %v", n, err))
+			m.setCopies(slug, copies)
+			return store.Deployment{}, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
+		}
+		copies = append(copies, copyInfo)
+	}
+	for i := len(running) - 1; i >= 0; i-- {
+		if n := running[i]; n > instances {
+			if err := copier.RemoveCopy(ctx, slug, n, m.stopTimeout(slug)); err != nil {
+				m.store.RecordEvent(slug, "remove_error", fmt.Sprintf("copy %d: %v", n, err))
+				m.setCopies(slug, copies)
+				return store.Deployment{}, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
+			}
+			m.store.RecordEvent(slug, "removed", fmt.Sprintf("copy %d", n))
+		}
+	}
+	m.setCopies(slug, copies)
 	return deployment, nil
 }
 
@@ -330,10 +406,27 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 		Critical:      m.criticalTargets(slug),
 		StopTimeout:   m.stopTimeout(slug),
 	}
-	if err := m.providerForSlug(slug).Remove(ctx, slug, opts); err != nil {
+	provider := m.providerForSlug(slug)
+	if err := provider.Remove(ctx, slug, opts); err != nil {
 		m.store.RecordEvent(slug, "remove_error", err.Error())
 		return err
 	}
+	// Then every other copy, or they would keep running unmanaged once the
+	// deployment row is gone. Copies have no volumes, so nothing else goes with them.
+	if copier, ok := provider.(runtime.CopyProvider); ok {
+		copies, err := copier.Copies(ctx, slug)
+		if err != nil {
+			m.store.RecordEvent(slug, "remove_error", err.Error())
+			return err
+		}
+		for _, n := range copies {
+			if err := copier.RemoveCopy(ctx, slug, n, opts.StopTimeout); err != nil {
+				m.store.RecordEvent(slug, "remove_error", fmt.Sprintf("copy %d: %v", n, err))
+				return err
+			}
+		}
+	}
+	m.setCopies(slug, nil)
 	if err := m.store.DeleteDeployment(slug); err != nil {
 		return err
 	}
@@ -412,9 +505,15 @@ func (m *Manager) Refresh(ctx context.Context) ([]store.Deployment, error) {
 
 	total := 0
 	active := make(map[string]bool)
+	copies := make(map[string][]runtime.ContainerInfo)
 	for _, listing := range listings {
 		for _, info := range listing.infos {
 			total++
+			// Copies 2..N share their service's slug; the row is the first copy's.
+			if info.Instance > 1 {
+				copies[info.Slug] = append(copies[info.Slug], info)
+				continue
+			}
 			dep := store.Deployment{
 				Slug:        info.Slug,
 				ContainerID: info.ContainerID,
@@ -435,6 +534,12 @@ func (m *Manager) Refresh(ctx context.Context) ([]store.Deployment, error) {
 	// returned containers. An empty (but error-free) result usually means a
 	// different runtime/context is active, not that every managed container
 	// vanished — deleting on that would wipe the dashboard and reset CreatedAt.
+	for slug := range copies {
+		sort.Slice(copies[slug], func(i, j int) bool { return copies[slug][i].Instance < copies[slug][j].Instance })
+	}
+	m.mu.Lock()
+	m.copies = copies
+	m.mu.Unlock()
 	if total > 0 {
 		for _, dep := range m.store.ListDeployments() {
 			if !active[dep.Slug] {

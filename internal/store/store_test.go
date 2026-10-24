@@ -1396,6 +1396,38 @@ func TestCustomImageColumnMigratesAndSurvivesUpsert(t *testing.T) {
 	}
 }
 
+// TestInstancesColumnMigratesAndSurvivesUpsert covers the upgrade path for an install
+// whose deployments table predates copies (every row reads as one copy), and the rule
+// that only SetInstances writes the count: the refresh's UpsertDeployment must not
+// reset it, or a redeploy after the next refresh would quietly drop the extra copies.
+func TestInstancesColumnMigratesAndSurvivesUpsert(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.db.Exec("ALTER TABLE deployments DROP COLUMN instances"); err != nil {
+		t.Fatalf("drop column (simulate pre-migration schema): %v", err)
+	}
+	if _, err := s.db.Exec(
+		`INSERT INTO deployments(slug,container_id,name,image,status,runtime,created_at,updated_at)
+		 VALUES('earnfm','c1','cashpilot-earnfm','earnfm/client','running','existing-docker', datetime('now'), datetime('now'))`,
+	); err != nil {
+		t.Fatalf("seed old-shape row: %v", err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate (backfill): %v", err)
+	}
+	if dep, ok, err := s.GetDeployment("earnfm"); err != nil || !ok || dep.Instances != 1 {
+		t.Fatalf("backfill: want the row kept as one copy, got %+v ok=%v err=%v", dep, ok, err)
+	}
+	if err := s.SetInstances("earnfm", 4); err != nil {
+		t.Fatalf("SetInstances: %v", err)
+	}
+	if err := s.UpsertDeployment(Deployment{Slug: "earnfm", ContainerID: "c2", Name: "n", Image: "earnfm/client", Status: "running", Runtime: "existing-docker"}); err != nil {
+		t.Fatalf("UpsertDeployment: %v", err)
+	}
+	if dep := s.ListDeployments(); len(dep) != 1 || dep[0].Instances != 4 || dep[0].ContainerID != "c2" {
+		t.Fatalf("after upsert: %+v, want the count kept and the row refreshed", dep)
+	}
+}
+
 func TestColumnExistsRejectsUnsafeIdentifier(t *testing.T) {
 	s := openTestStore(t)
 	if _, err := s.columnExists("fleet_devices; DROP TABLE x", "a"); err == nil {

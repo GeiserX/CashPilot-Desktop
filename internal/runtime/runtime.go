@@ -85,6 +85,9 @@ type DeploySpec struct {
 	Slug    string
 	Service catalog.Service
 	Env     map[string]string
+	// Instance is which copy of the service this is. 0 and 1 both mean the first,
+	// which keeps the name and labels it always had; see LabelInstance.
+	Instance int
 }
 
 type ContainerInfo struct {
@@ -95,6 +98,9 @@ type ContainerInfo struct {
 	Status      string  `json:"status"`
 	CPUPercent  float64 `json:"cpuPercent"`
 	MemoryMB    float64 `json:"memoryMb"`
+	// Instance is which copy of its service this unit is: 1 for the first (and for
+	// every unit of a runtime that has no copies), N for cashpilot-<slug>-N.
+	Instance int `json:"instance"`
 }
 
 type DockerProvider struct{}
@@ -147,6 +153,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if svc.Docker.Image == "" {
 		return ContainerInfo{}, fmt.Errorf("%s has no Docker image", svc.Name)
 	}
+	// Two copies would share the same host directories and fight over the same host
+	// ports. The manager refuses this first; this is the backstop.
+	if spec.Instance > 1 && (len(svc.Docker.Volumes) > 0 || len(svc.Docker.Ports) > 0) {
+		return ContainerInfo{}, fmt.Errorf("%s has volumes or published ports, so it runs once", svc.Name)
+	}
 
 	// Everything that can fail on the catalog entry alone is built and checked
 	// BEFORE the running container is removed. A redeploy removes the existing
@@ -163,7 +174,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	facts := daemonFacts(ctx, cli)
 	image := ImageForArch(svc.Docker, facts.Architecture)
 
-	env := buildEnv(svc, spec.Env)
+	env := copyEnv(svc, buildEnv(svc, spec.Env), spec.Instance)
 	ports, bindings, err := buildPorts(svc.Docker.Ports)
 	if err != nil {
 		return ContainerInfo{}, err
@@ -171,6 +182,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	mounts := buildMounts(svc.Docker.Volumes, env)
 
 	stopTimeout := StopTimeoutSeconds(svc)
+	name := copyName(spec.Slug, spec.Instance)
 	config := &container.Config{
 		Image:        image,
 		Env:          envSlice(env),
@@ -178,13 +190,8 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		// The grace period travels with the container, so stopping it later does not
 		// need the catalog to find it again.
 		StopTimeout: &stopTimeout,
-		Labels: map[string]string{
-			LabelManaged: "true",
-			LabelService: spec.Slug,
-			LabelVersion: "1",
-			LabelRuntime: "existing-docker",
-		},
-		Hostname: fmt.Sprintf("cashpilot-%s", spec.Slug),
+		Labels:      containerLabels(spec.Slug, spec.Instance),
+		Hostname:    name,
 	}
 	if svc.Docker.Command != "" {
 		config.Cmd = buildCommandArgs(svc.Docker.Command, env)
@@ -211,7 +218,6 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 
 	// Past this point the deploy is destructive: the existing container goes.
-	name := containerName(spec.Slug)
 	// Where the running container keeps its data beats where the catalog thinks it
 	// is: a replacement that mounts the spec's volume over a node whose identity
 	// lives elsewhere comes back as a different node. Read it BEFORE the removal,
@@ -266,6 +272,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		Name:        name,
 		Image:       image,
 		Status:      "running",
+		Instance:    max(spec.Instance, 1),
 	}, nil
 }
 
@@ -455,6 +462,7 @@ func toContainerInfo(c container.Summary, cpu, mem float64) ContainerInfo {
 		Status:     string(c.State),
 		CPUPercent: cpu,
 		MemoryMB:   mem,
+		Instance:   instanceOf(c.Labels),
 	}
 }
 
@@ -642,6 +650,21 @@ func streamPullProgress(reader io.Reader, progress func(string)) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// containerLabels are the labels a managed container is created with. Copy 1 gets
+// exactly what every container had before copies existed; copy N adds LabelInstance.
+func containerLabels(slug string, instance int) map[string]string {
+	labels := map[string]string{
+		LabelManaged: "true",
+		LabelService: slug,
+		LabelVersion: "1",
+		LabelRuntime: "existing-docker",
+	}
+	if instance > 1 {
+		labels[LabelInstance] = strconv.Itoa(instance)
+	}
+	return labels
 }
 
 func containerName(slug string) string {

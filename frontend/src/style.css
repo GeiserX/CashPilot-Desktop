@@ -1349,8 +1349,13 @@ input:focus {
   box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.12);
 }
 
-.image-choice {
+.image-choice,
+.instances-choice {
   margin: 0 0 1rem;
+}
+
+.instances-choice input {
+  max-width: 6rem;
 }
 
 .image-choice summary {

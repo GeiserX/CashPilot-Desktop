@@ -716,7 +716,7 @@ func TestDeployServiceValidatesBeforePersist(t *testing.T) {
 	}
 
 	// Non-empty but invalid (missing the required TOKEN): the runtime is never reached.
-	if _, err := app.DeployService("req", map[string]string{"WRONG": "x"}, nil); err == nil {
+	if _, err := app.DeployService("req", map[string]string{"WRONG": "x"}, nil, nil); err == nil {
 		t.Fatal("expected a validation error for the missing required field")
 	}
 	got, err := st.GetCredentials("req")

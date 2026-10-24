@@ -261,6 +261,12 @@ type AppState struct {
 	// frontend's own copy of it went stale the moment a web-catalog rename moved a
 	// service's env keys away from what its collector reads.
 	CollectorFields map[string][]collectors.Field `json:"collectorFields"`
+	// Scaling is, per slug, how many copies of the service this machine may run and
+	// why not more: the deploy form's Instances box.
+	Scaling map[string]services.ScalingLimit `json:"scaling"`
+	// Copies is, per slug, copies 2..N of a service that runs more than once. Copy 1
+	// is the service's entry in Deployments.
+	Copies map[string][]runtime.ContainerInfo `json:"copies"`
 }
 
 type Notification struct {
@@ -402,10 +408,11 @@ func (a *App) GetAppState() (AppState, error) {
 	// per GetAppState call before this).
 	deployments := a.store.ListDeployments()
 	earnings := a.store.ListLatestEarnings()
+	visible := a.catalog.ListVisible()
 	return AppState{
 		Config:           a.cfg.Config(),
 		Runtime:          runtimeStatus,
-		Services:         a.catalog.ListVisible(),
+		Services:         visible,
 		Deployments:      deployments,
 		OutdatedServices: a.outdatedServices(deployments),
 		Earnings:         earnings,
@@ -419,6 +426,8 @@ func (a *App) GetAppState() (AppState, error) {
 		Fleet:            a.fleetView(),
 		Hostname:         runtime.DeviceHostname(),
 		CollectorFields:  collectors.AllFields(),
+		Scaling:          a.services.ScalingLimits(visible),
+		Copies:           a.services.Copies(),
 	}, nil
 }
 
@@ -1010,8 +1019,9 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 
 // DeployService deploys slug with the submitted credentials. image is the Image box:
 // nil (left alone) keeps the image the deployment already uses, "" goes back to the
-// catalog's, anything else is the image to run instead.
-func (a *App) DeployService(slug string, values map[string]string, image *string) (store.Deployment, error) {
+// catalog's, anything else is the image to run instead. instances is the Instances
+// box: nil keeps the number of copies the deployment already runs (1 for a new one).
+func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, err
 	}
@@ -1043,7 +1053,7 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 			return store.Deployment{}, err
 		}
 	}
-	deployment, err := a.services.DeployImage(a.ctx, slug, creds, image)
+	deployment, err := a.services.DeployWith(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances})
 	if err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, err
@@ -1122,6 +1132,39 @@ func (a *App) RemoveService(slug string, deleteData, allowCritical bool) error {
 	// irreversible path in the app was untestable end to end because of it.
 	a.emitEvent("deployment:changed", slug)
 	return nil
+}
+
+// StopServiceCopy, StartServiceCopy and GetCopyLogs act on copy n (2 and up) of a
+// service that runs more than once. Copy 1 is the service: StopService and the rest.
+func (a *App) StopServiceCopy(slug string, n int) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	if err := a.services.StopCopy(a.ctx, slug, n); err != nil {
+		a.emitError("stop", err)
+		return err
+	}
+	a.emitEvent("deployment:changed", slug)
+	return nil
+}
+
+func (a *App) StartServiceCopy(slug string, n int) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	if err := a.services.StartCopy(a.ctx, slug, n); err != nil {
+		a.emitError("start", err)
+		return err
+	}
+	a.emitEvent("deployment:changed", slug)
+	return nil
+}
+
+func (a *App) GetCopyLogs(slug string, n, lines int) (string, error) {
+	if err := a.ready(); err != nil {
+		return "", err
+	}
+	return a.services.LogsCopy(a.ctx, slug, n, lines)
 }
 
 func (a *App) GetLogs(slug string, lines int) (string, error) {
@@ -1324,7 +1367,9 @@ func (a *App) sampleHealth(ctx context.Context) {
 	}
 	running := make(map[string]bool, len(containers))
 	for _, c := range containers {
-		if c.Slug != "" && c.Status == "running" {
+		// The first copy is the service's uptime; a running copy 2 does not make a
+		// stopped copy 1 healthy.
+		if c.Slug != "" && c.Status == "running" && c.Instance <= 1 {
 			running[c.Slug] = true
 		}
 	}
