@@ -42,8 +42,12 @@ type Deployment struct {
 	// SetCustomImage); UpsertDeployment leaves it alone, so the runtime refresh that
 	// rewrites every row on a timer cannot drop the choice.
 	CustomImage string `json:"customImage"`
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
+	// Instances is how many copies of the service the user asked this machine to
+	// run (1 for most). Like CustomImage, only a deploy writes it (SetInstances), so
+	// the refresh cannot reset it, and a redeploy that does not ask keeps it.
+	Instances int    `json:"instances"`
+	CreatedAt string `json:"createdAt"`
+	UpdatedAt string `json:"updatedAt"`
 }
 
 type EarningsRecord struct {
@@ -349,6 +353,13 @@ func (s *Store) SetCustomImage(slug, image string) error {
 	return err
 }
 
+// SetInstances records how many copies of slug a deploy started, so the next
+// redeploy that does not say starts the same number.
+func (s *Store) SetInstances(slug string, n int) error {
+	_, err := s.execWrite(`UPDATE deployments SET instances = ? WHERE slug = ?`, n, slug)
+	return err
+}
+
 func (s *Store) DeleteDeployment(slug string) error {
 	_, err := s.execWrite(`DELETE FROM deployments WHERE slug = ?`, slug)
 	return err
@@ -356,7 +367,7 @@ func (s *Store) DeleteDeployment(slug string) error {
 
 func (s *Store) GetDeployment(slug string) (Deployment, bool, error) {
 	row := s.db.QueryRow(`
-		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, created_at, updated_at
+		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, instances, created_at, updated_at
 		FROM deployments WHERE slug = ?
 	`, slug)
 	dep, err := scanDeployment(row)
@@ -371,7 +382,7 @@ func (s *Store) GetDeployment(slug string) (Deployment, bool, error) {
 
 func (s *Store) ListDeployments() []Deployment {
 	rows, err := s.db.Query(`
-		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, created_at, updated_at
+		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, instances, created_at, updated_at
 		FROM deployments ORDER BY slug
 	`)
 	if err != nil {
@@ -868,7 +879,7 @@ type scanner interface {
 
 func scanDeployment(row scanner) (Deployment, error) {
 	var dep Deployment
-	err := row.Scan(&dep.Slug, &dep.ContainerID, &dep.Name, &dep.Image, &dep.Status, &dep.Runtime, &dep.CPUPercent, &dep.MemoryMB, &dep.CustomImage, &dep.CreatedAt, &dep.UpdatedAt)
+	err := row.Scan(&dep.Slug, &dep.ContainerID, &dep.Name, &dep.Image, &dep.Status, &dep.Runtime, &dep.CPUPercent, &dep.MemoryMB, &dep.CustomImage, &dep.Instances, &dep.CreatedAt, &dep.UpdatedAt)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -899,6 +910,7 @@ func (s *Store) migrate() error {
 			cpu_percent REAL NOT NULL DEFAULT 0,
 			memory_mb REAL NOT NULL DEFAULT 0,
 			custom_image TEXT NOT NULL DEFAULT '',
+			instances INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
@@ -955,12 +967,13 @@ func (s *Store) migrate() error {
 		return err
 	}
 	// Forward-only column additions for existing tables (per-worker fleet keys, the
-	// chosen image). SQLite has no "ADD COLUMN IF NOT EXISTS", so guard each ALTER;
+	// chosen image, the number of copies). SQLite has no "ADD COLUMN IF NOT EXISTS", so guard each ALTER;
 	// a fresh DB already has the columns from CREATE TABLE above, so this is a no-op.
 	for _, col := range []struct{ table, name, ddl string }{
 		{"fleet_devices", "api_key_hash", "ALTER TABLE fleet_devices ADD COLUMN api_key_hash TEXT NOT NULL DEFAULT ''"},
 		{"fleet_devices", "key_confirmed", "ALTER TABLE fleet_devices ADD COLUMN key_confirmed INTEGER NOT NULL DEFAULT 0"},
 		{"deployments", "custom_image", "ALTER TABLE deployments ADD COLUMN custom_image TEXT NOT NULL DEFAULT ''"},
+		{"deployments", "instances", "ALTER TABLE deployments ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"},
 	} {
 		has, err := s.columnExists(col.table, col.name)
 		if err != nil {

@@ -952,6 +952,7 @@ export namespace store {
 	    cpuPercent: number;
 	    memoryMb: number;
 	    customImage: string;
+	    instances: number;
 	    createdAt: string;
 	    updatedAt: string;
 	
@@ -970,6 +971,7 @@ export namespace store {
 	        this.cpuPercent = source["cpuPercent"];
 	        this.memoryMb = source["memoryMb"];
 	        this.customImage = source["customImage"];
+	        this.instances = source["instances"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }

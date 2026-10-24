@@ -17,11 +17,13 @@ export function CollectService(arg1:string):Promise<store.EarningsRecord>;
 
 export function CompleteOnboarding():Promise<void>;
 
-export function DeployService(arg1:string,arg2:Record<string, string>,arg3:string):Promise<store.Deployment>;
+export function DeployService(arg1:string,arg2:Record<string, string>,arg3:string,arg4:number):Promise<store.Deployment>;
 
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
 
 export function GetAppState():Promise<main.AppState>;
+
+export function GetCopyLogs(arg1:string,arg2:number,arg3:number):Promise<string>;
 
 export function GetCredentials(arg1:string):Promise<Record<string, string>>;
 
@@ -62,4 +64,8 @@ export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsS
 
 export function StartService(arg1:string):Promise<void>;
 
+export function StartServiceCopy(arg1:string,arg2:number):Promise<void>;
+
 export function StopService(arg1:string):Promise<void>;
+
+export function StopServiceCopy(arg1:string,arg2:number):Promise<void>;

@@ -17,6 +17,7 @@ import {
   DeployService,
   ExportCompose,
   GetAppState,
+  GetCopyLogs,
   GetCredentials,
   GetFleetState,
   GetLogs,
@@ -30,7 +31,9 @@ import {
   SaveSettings,
   SaveCredentials,
   StartService,
+  StartServiceCopy,
   StopService,
+  StopServiceCopy,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { renderHealthBadge, renderProducerBadge } from "./render/health";
@@ -40,6 +43,7 @@ import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { customImageBadge, imageChoice } from "./render/image";
+import { copyRows, firstCopyLabel, instancesChoice } from "./render/instances";
 import { composeSelectionExport } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -294,7 +298,8 @@ function renderDashboard(current: AppState) {
     button.addEventListener("click", () => {
       const slug = button.dataset.slug || "";
       const action = button.dataset.rowAction || "";
-      void runServiceAction(slug, action);
+      const copy = Number(button.dataset.copy || "1");
+      void (copy > 1 ? runCopyAction(slug, copy, action) : runServiceAction(slug, action));
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
@@ -948,10 +953,11 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
           const service = services.find((svc) => svc.slug === deployment.slug);
           const earning = earningBySlug.get(deployment.slug);
           const nodeDetail = deployment.slug === "mysterium" ? renderMystNodes(serviceDetails?.["mysterium"]) : "";
+          const copies = state?.copies?.[deployment.slug];
           return `
             <tr>
               <td>
-                <strong>${escapeHtml(service?.name || deployment.slug)}</strong>
+                <strong>${escapeHtml(service?.name || deployment.slug)}${firstCopyLabel(copies)}</strong>
                 <small>${escapeHtml(deployment.image)}</small>
               </td>
               <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${renderProducerBadge(producerStates?.[deployment.slug], deployment.status)}${customImageBadge(deployment.customImage)}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
@@ -969,6 +975,7 @@ function renderServicesTable(services: Service[], deployments: Deployment[], ear
                 </div>
               </td>
             </tr>
+            ${copyRows(service?.name || deployment.slug, copies)}
             ${nodeDetail ? `<tr><td colspan="6" style="padding-top:0.3rem;padding-left:0.8rem;">${nodeDetail}</td></tr>` : ""}
           `;
         }).join("")}
@@ -1174,7 +1181,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage)).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances)).join("")}
     </div>
   `;
 }
@@ -1200,6 +1207,13 @@ function deploymentOf(slug: string): Deployment | undefined {
 function readWizardImage(slug: string): string | null {
   const input = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
   return input ? imageChoice(input.value, input.dataset.initial || "") : null;
+}
+
+// The Instances box's answer for a deploy: null keeps the recorded count (also when
+// the card has no box, or the box is locked).
+function readWizardInstances(slug: string): number | null {
+  const input = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
+  return input ? instancesChoice(input.value, input.dataset.initial || "", input.disabled) : null;
 }
 
 function closeWizard() {
@@ -1276,13 +1290,18 @@ async function runWizardAction(slug: string, action: string) {
       }
       if (output) output.textContent = "Deploying...";
       await SaveCredentials(slug, values);
-      const deployment = await DeployService(slug, values, readWizardImage(slug));
+      const deployment = await DeployService(slug, values, readWizardImage(slug), readWizardInstances(slug));
       state = await GetAppState();
       // The box now holds what runs, so a second Deploy without an edit keeps it.
       const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
       if (imageInput) {
         imageInput.value = deployment.customImage || "";
         imageInput.dataset.initial = deployment.customImage || "";
+      }
+      const instancesInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
+      if (instancesInput) {
+        instancesInput.value = String(deployment.instances || 1);
+        instancesInput.dataset.initial = String(deployment.instances || 1);
       }
       if (output) output.textContent = "Deployed.";
       return;
@@ -1371,6 +1390,23 @@ async function runServiceAction(slug: string, action: string) {
     }
     await refreshState();
     setOutput(`${slug} ${action} complete.`);
+  } catch (error) {
+    setOutput(String(error));
+  }
+}
+
+// Logs, Stop and Start on copy n (2 and up) of a service. Copy 1 is the service and
+// goes through runServiceAction.
+async function runCopyAction(slug: string, n: number, action: string) {
+  try {
+    if (action === "logs") {
+      setOutput(await GetCopyLogs(slug, n, 200));
+      return;
+    }
+    if (action === "stop") await StopServiceCopy(slug, n);
+    if (action === "start") await StartServiceCopy(slug, n);
+    await refreshState();
+    setOutput(`${slug} #${n} ${action === "stop" ? "stopped" : "started"}.`);
   } catch (error) {
     setOutput(String(error));
   }

@@ -15,14 +15,19 @@ declare module "../wailsjs/go/main/App" {
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
   export function PreflightService(slug: string): Promise<PreflightReport>;
   // image: null keeps the image the deployment already uses, "" goes back to the
-  // catalog's, anything else runs that image instead.
-  export function DeployService(slug: string, values: Record<string, string>, image: string | null): Promise<Deployment>;
+  // catalog's, anything else runs that image instead. instances: null keeps the number
+  // of copies the deployment already runs (1 for a new one).
+  export function DeployService(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
   export function RestartService(slug: string): Promise<void>;
   export function RemoveService(slug: string, deleteData: boolean, allowCritical: boolean): Promise<void>;
   export function PlanServiceRemoval(slug: string): Promise<RemovalPlan>;
   export function GetLogs(slug: string, lines: number): Promise<string>;
+  // Copy n (2 and up) of a service that runs more than once; copy 1 is the service.
+  export function StopServiceCopy(slug: string, n: number): Promise<void>;
+  export function StartServiceCopy(slug: string, n: number): Promise<void>;
+  export function GetCopyLogs(slug: string, n: number, lines: number): Promise<string>;
   export function RefreshDeployments(): Promise<Deployment[]>;
   export function CollectService(slug: string): Promise<EarningsRecord>;
   export function ListServices(): Promise<Service[]>;
@@ -64,6 +69,30 @@ export interface AppState {
   // so a web-catalog rename of a service's env keys cannot leave the wizard with no
   // field for the credentials its collector reads.
   collectorFields: Record<string, CollectorField[]> | null;
+  // Per slug, how many copies this machine may run and why not more (the deploy
+  // form's Instances box). A slug missing here gets no box.
+  scaling: Record<string, ScalingLimit> | null;
+  // Per slug, copies 2..N of a service that runs more than once. Copy 1 is its
+  // entry in deployments.
+  copies: Record<string, ServiceCopy[]> | null;
+}
+
+// ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.
+export interface ScalingLimit {
+  max: number;
+  reason: string;
+}
+
+// ServiceCopy mirrors runtime.ContainerInfo for one extra copy.
+export interface ServiceCopy {
+  slug: string;
+  containerId: string;
+  name: string;
+  image: string;
+  status: string;
+  cpuPercent: number;
+  memoryMb: number;
+  instance: number;
 }
 
 // FleetView mirrors the Go FleetView: what the paired CashPilot server reports
@@ -425,6 +454,8 @@ export interface Deployment {
   memoryMb: number;
   // The image the user chose instead of the catalog's; "" when it follows the catalog.
   customImage: string;
+  // How many copies of the service this machine runs; this entry is the first.
+  instances: number;
 }
 
 export interface EarningsRecord {

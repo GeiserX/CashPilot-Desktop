@@ -17,11 +17,12 @@
 // backend's collector-field map, this machine's hostname and the earnings
 // breakdown the facts strip shows a balance from) and returns HTML.
 
-import type { CollectorField, Service, ServiceEarning } from "../wails";
+import type { CollectorField, ScalingLimit, Service, ServiceEarning } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
 import { imageChoiceSection } from "./image.js";
+import { instancesSection } from "./instances.js";
 
 /**
  * Render the setup card for one service.
@@ -32,6 +33,9 @@ import { imageChoiceSection } from "./image.js";
  *
  * `customImage` is the image this service's deployment records instead of the
  * catalog's, which the Advanced section's Image box starts with.
+ *
+ * `scaling` is how many copies this machine may run (the Instances box; absent, no
+ * box) and `instances` how many the deployment runs now.
  */
 export function renderWizardServiceSetup(
   service: Service,
@@ -39,6 +43,8 @@ export function renderWizardServiceSetup(
   hostname: string | null | undefined,
   breakdown?: ServiceEarning[] | null,
   customImage?: string | null,
+  scaling?: ScalingLimit | null,
+  instances?: number | null,
 ): string {
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = serviceFormFields(service, collectorFields);
@@ -69,6 +75,7 @@ export function renderWizardServiceSetup(
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
+      ${instancesSection(service, scaling, instances)}
       ${imageChoiceSection(service, customImage)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">

@@ -59,6 +59,30 @@ the provider does not publish.
 - The dashboard and the catalog mark such a deployment **custom image** and judge
   "update available" against the image you chose, not the catalog's.
 
+### Running a service more than once
+
+Set **Instances** on the service's card and deploy. Each extra copy is its own
+container (`cashpilot-<service>-2`, `-3`, ...) and registers with the provider as its
+own device: every device name the catalog derives from this computer's name gets
+`-2`, `-3` added.
+
+- Providers count devices per public IP, and copies on one machine share its
+  connection. Extra copies add devices, not bandwidth, so they only help where the
+  provider pays per device and allows several per IP. Where a provider allows one
+  device per IP the box is locked at 1, with the reason under it; run the service on
+  machines on other connections instead.
+- A service that keeps data in a host directory or publishes a host port runs once,
+  because its copies would share the directory and fight over the port. So does a
+  service that runs here as a program rather than a container.
+- The count is saved with the deployment and kept by every redeploy. Lowering it
+  removes the highest copies first; removing the service removes all of them. If a
+  provider later stops allowing several copies, the next redeploy runs what is
+  allowed and removes the rest.
+- Each copy has its own row on the dashboard (`#2`, `#3`, ...) with its own Logs and
+  Stop or Start. The balance stays on the service's first row, since the copies earn
+  into one account.
+- At most 10 copies.
+
 ## Settings
 
 Configure the display currency, collection interval, data retention, and per-service

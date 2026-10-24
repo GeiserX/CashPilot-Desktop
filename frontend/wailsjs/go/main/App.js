@@ -22,8 +22,8 @@ export function CompleteOnboarding() {
   return window['go']['main']['App']['CompleteOnboarding']();
 }
 
-export function DeployService(arg1, arg2, arg3) {
-  return window['go']['main']['App']['DeployService'](arg1, arg2, arg3);
+export function DeployService(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DeployService'](arg1, arg2, arg3, arg4);
 }
 
 export function ExportCompose(arg1, arg2) {
@@ -32,6 +32,10 @@ export function ExportCompose(arg1, arg2) {
 
 export function GetAppState() {
   return window['go']['main']['App']['GetAppState']();
+}
+
+export function GetCopyLogs(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetCopyLogs'](arg1, arg2, arg3);
 }
 
 export function GetCredentials(arg1) {
@@ -114,6 +118,14 @@ export function StartService(arg1) {
   return window['go']['main']['App']['StartService'](arg1);
 }
 
+export function StartServiceCopy(arg1, arg2) {
+  return window['go']['main']['App']['StartServiceCopy'](arg1, arg2);
+}
+
 export function StopService(arg1) {
   return window['go']['main']['App']['StopService'](arg1);
+}
+
+export function StopServiceCopy(arg1, arg2) {
+  return window['go']['main']['App']['StopServiceCopy'](arg1, arg2);
 }
