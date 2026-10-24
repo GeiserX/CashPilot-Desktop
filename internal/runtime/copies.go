@@ -100,7 +100,9 @@ func (p *DockerProvider) Copies(ctx context.Context, slug string) ([]int, error)
 	}
 	var copies []int
 	for _, c := range list.Items {
-		if n := instanceOf(c.Labels); n > 1 {
+		// The daemon filtered by label already; checked again so a runtime that
+		// ignores a filter cannot hand back another service's copies.
+		if n := instanceOf(c.Labels); n > 1 && c.Labels[LabelService] == slug {
 			copies = append(copies, n)
 		}
 	}

@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,12 +15,17 @@ import (
 )
 
 // copyFake is a fakeProvider that can also run copies 2..N, keeping the set of copies
-// that exist the way Docker would.
+// that exist the way Docker would, and recording what was done to them.
 type copyFake struct {
 	*fakeProvider
 	running map[int]bool
 	// removed records the copy numbers RemoveCopy took, in order.
 	removed []int
+	// calls records every copy action and the first copy's Remove, in order.
+	calls []string
+	// copyDeployErr fails the deploy of every copy above 1; copiesErr fails Copies;
+	// copyErr fails Stop/Start/Logs/RemoveCopy.
+	copyDeployErr, copiesErr, copyErr error
 }
 
 func newCopyFake() *copyFake {
@@ -29,6 +36,10 @@ func newCopyFake() *copyFake {
 }
 
 func (f *copyFake) Deploy(ctx context.Context, spec runtime.DeploySpec, progress func(string)) (runtime.ContainerInfo, error) {
+	if spec.Instance > 1 && f.copyDeployErr != nil {
+		f.deploySpecs = append(f.deploySpecs, spec)
+		return runtime.ContainerInfo{}, f.copyDeployErr
+	}
 	info, err := f.fakeProvider.Deploy(ctx, spec, progress)
 	if err == nil && spec.Instance > 1 {
 		f.running[spec.Instance] = true
@@ -38,6 +49,9 @@ func (f *copyFake) Deploy(ctx context.Context, spec runtime.DeploySpec, progress
 }
 
 func (f *copyFake) Copies(context.Context, string) ([]int, error) {
+	if f.copiesErr != nil {
+		return nil, f.copiesErr
+	}
 	var out []int
 	for n := range f.running {
 		out = append(out, n)
@@ -46,14 +60,34 @@ func (f *copyFake) Copies(context.Context, string) ([]int, error) {
 	return out, nil
 }
 
-func (f *copyFake) StopCopy(context.Context, string, int, int) error           { return nil }
-func (f *copyFake) StartCopy(context.Context, string, int) error               { return nil }
-func (f *copyFake) LogsCopy(context.Context, string, int, int) (string, error) { return "", nil }
+func (f *copyFake) StopCopy(_ context.Context, _ string, n, _ int) error {
+	f.calls = append(f.calls, "stop "+strconv.Itoa(n))
+	return f.copyErr
+}
+
+func (f *copyFake) StartCopy(_ context.Context, _ string, n int) error {
+	f.calls = append(f.calls, "start "+strconv.Itoa(n))
+	return f.copyErr
+}
+
+func (f *copyFake) LogsCopy(_ context.Context, _ string, n, _ int) (string, error) {
+	f.calls = append(f.calls, "logs "+strconv.Itoa(n))
+	return "logs of copy " + strconv.Itoa(n), f.copyErr
+}
 
 func (f *copyFake) RemoveCopy(_ context.Context, _ string, n, _ int) error {
+	f.calls = append(f.calls, "remove "+strconv.Itoa(n))
+	if f.copyErr != nil {
+		return f.copyErr
+	}
 	delete(f.running, n)
 	f.removed = append(f.removed, n)
 	return nil
+}
+
+func (f *copyFake) Remove(ctx context.Context, slug string, opts runtime.RemoveOptions) error {
+	f.calls = append(f.calls, "remove 1")
+	return f.fakeProvider.Remove(ctx, slug, opts)
 }
 
 // One entry per reason the Instances box can be locked, and two that scale.
@@ -295,5 +329,165 @@ func TestRefreshKeepsCopiesOutOfTheRow(t *testing.T) {
 	copies := m.Copies()["scalable"]
 	if len(copies) != 2 || copies[0].ContainerID != "second" || copies[1].ContainerID != "third" {
 		t.Fatalf("Copies() = %+v, want copies 2 and 3 in order", copies)
+	}
+}
+
+// A recorded count the catalog no longer allows (the provider started allowing one
+// device per IP) does not block a plain redeploy: the redeploy runs what is allowed
+// and removes the excess. An explicit count above the limit is still refused.
+func TestDeployWithClampsARecordedCountTheLimitNoLongerAllows(t *testing.T) {
+	st := newTestStore(t)
+	fake := newCopyFake()
+	ctx := context.Background()
+	if _, err := NewManager(fake, newScalingCatalog(t), st).DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(3)}); err != nil {
+		t.Fatalf("DeployWith(3) error: %v", err)
+	}
+
+	tightened, err := catalog.LoadEmbedded(fstest.MapFS{
+		"services/bandwidth/scalable.yml": {Data: []byte(strings.Replace(scalingCatalogYAML, "devices_per_ip: 0", "devices_per_ip: 1", 1))},
+	})
+	if err != nil {
+		t.Fatalf("LoadEmbedded error: %v", err)
+	}
+	m := NewManager(fake, tightened, st)
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(3)}); err == nil || !strings.Contains(err.Error(), "one device per IP") {
+		t.Fatalf("an explicit 3 above the limit = %v, want the reason", err)
+	}
+	dep, err := m.Deploy(ctx, "scalable", nil)
+	if err != nil {
+		t.Fatalf("a plain redeploy over the tightened limit failed: %v", err)
+	}
+	if dep.Instances != 1 || !slices.Equal(fake.removed, []int{3, 2}) {
+		t.Fatalf("plain redeploy ran %d copies and removed %v, want 1 and [3 2]", dep.Instances, fake.removed)
+	}
+	if stored, _, _ := st.GetDeployment("scalable"); stored.Instances != 1 {
+		t.Fatalf("stored Instances = %d, want 1", stored.Instances)
+	}
+}
+
+// Remove takes the copies first. A copy that will not go leaves the first copy and
+// its row in place, so the service is still on the dashboard and a retry finishes.
+func TestRemoveTakesCopiesFirstAndCanBeRetried(t *testing.T) {
+	st := newTestStore(t)
+	fake := newCopyFake()
+	m := NewManager(fake, newScalingCatalog(t), st)
+	ctx := context.Background()
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(3)}); err != nil {
+		t.Fatalf("DeployWith error: %v", err)
+	}
+
+	fake.copyErr = errors.New("daemon hiccup")
+	if err := m.Remove(ctx, "scalable", false, false); err == nil {
+		t.Fatal("Remove succeeded although a copy could not be removed")
+	}
+	if slices.Contains(fake.calls, "remove 1") {
+		t.Fatalf("the first copy was removed before its copies: %v", fake.calls)
+	}
+	if _, ok, _ := st.GetDeployment("scalable"); !ok {
+		t.Fatal("the deployment row went although a copy is still running")
+	}
+
+	fake.copyErr = nil
+	fake.calls = nil
+	if err := m.Remove(ctx, "scalable", false, false); err != nil {
+		t.Fatalf("retried Remove error: %v", err)
+	}
+	if !slices.Equal(fake.calls, []string{"remove 2", "remove 3", "remove 1"}) {
+		t.Fatalf("Remove order = %v, want the copies, then the first", fake.calls)
+	}
+
+	fake.copiesErr = errors.New("cannot list")
+	if err := m.Remove(ctx, "scalable", false, false); err == nil {
+		t.Fatal("Remove succeeded although the copies could not be listed")
+	}
+}
+
+// Stop, Start and Logs of a copy reach that copy, and a number that cannot be a copy
+// is refused before the runtime is asked.
+func TestCopyActionsReachTheCopy(t *testing.T) {
+	st := newTestStore(t)
+	fake := newCopyFake()
+	m := NewManager(fake, newScalingCatalog(t), st)
+	ctx := context.Background()
+
+	if err := m.StopCopy(ctx, "scalable", 2); err != nil {
+		t.Fatalf("StopCopy error: %v", err)
+	}
+	if err := m.StartCopy(ctx, "scalable", 3); err != nil {
+		t.Fatalf("StartCopy error: %v", err)
+	}
+	if logs, err := m.LogsCopy(ctx, "scalable", 4, 10); err != nil || logs != "logs of copy 4" {
+		t.Fatalf("LogsCopy = %q, %v", logs, err)
+	}
+	if !slices.Equal(fake.calls, []string{"stop 2", "start 3", "logs 4"}) {
+		t.Fatalf("copy calls = %v", fake.calls)
+	}
+	for _, n := range []int{1, 0, MaxInstances + 1} {
+		if err := m.StopCopy(ctx, "scalable", n); err == nil {
+			t.Errorf("StopCopy(%d) was accepted", n)
+		}
+		if err := m.StartCopy(ctx, "scalable", n); err == nil {
+			t.Errorf("StartCopy(%d) was accepted", n)
+		}
+		if _, err := m.LogsCopy(ctx, "scalable", n, 10); err == nil {
+			t.Errorf("LogsCopy(%d) was accepted", n)
+		}
+	}
+	if len(fake.calls) != 3 {
+		t.Fatalf("refused copy numbers still reached the runtime: %v", fake.calls)
+	}
+
+	fake.copyErr = errors.New("gone")
+	if err := m.StopCopy(ctx, "scalable", 2); err == nil {
+		t.Error("StopCopy hid the runtime's error")
+	}
+	if err := m.StartCopy(ctx, "scalable", 2); err == nil {
+		t.Error("StartCopy hid the runtime's error")
+	}
+
+	plain := NewManager(&fakeProvider{}, newScalingCatalog(t), newTestStore(t))
+	if err := plain.StopCopy(ctx, "scalable", 2); err == nil {
+		t.Error("a runtime without copies accepted StopCopy")
+	}
+}
+
+// A copy that fails to deploy, or a copy that fails to go when scaling down, fails
+// the deploy with the copy named, after the count is recorded so a redeploy retries.
+func TestDeployWithReportsAFailedCopy(t *testing.T) {
+	st := newTestStore(t)
+	fake := newCopyFake()
+	m := NewManager(fake, newScalingCatalog(t), st)
+	ctx := context.Background()
+
+	fake.copyDeployErr = errors.New("pull failed")
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(2)}); err == nil || !strings.Contains(err.Error(), "copy 2") {
+		t.Fatalf("a failed copy deploy = %v, want an error naming copy 2", err)
+	}
+	if stored, _, _ := st.GetDeployment("scalable"); stored.Instances != 2 {
+		t.Fatalf("stored Instances = %d, want 2 so a redeploy retries", stored.Instances)
+	}
+
+	fake.copyDeployErr = nil
+	if _, err := m.Deploy(ctx, "scalable", nil); err != nil {
+		t.Fatalf("retry error: %v", err)
+	}
+	fake.copyErr = errors.New("stuck")
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(1)}); err == nil || !strings.Contains(err.Error(), "copy 2") {
+		t.Fatalf("a failed scale-down = %v, want an error naming copy 2", err)
+	}
+
+	fake.copiesErr = errors.New("cannot list")
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(1)}); err == nil {
+		t.Fatal("a deploy that could not read the running copies went ahead")
+	}
+}
+
+// The deploy form gets one answer per service.
+func TestScalingLimitsCoversEveryService(t *testing.T) {
+	cat := newScalingCatalog(t)
+	m := NewManager(newCopyFake(), cat, newTestStore(t))
+	limits := m.ScalingLimits(cat.ListVisible())
+	if len(limits) != 5 || limits["scalable"].Max != MaxInstances || limits["port"].Max != 1 {
+		t.Fatalf("ScalingLimits = %+v", limits)
 	}
 }

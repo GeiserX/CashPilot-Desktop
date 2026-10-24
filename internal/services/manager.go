@@ -232,7 +232,14 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		return store.Deployment{}, fmt.Errorf("instances must be between 1 and %d", MaxInstances)
 	}
 	if limit := m.ScalingLimit(svc); instances > limit.Max {
-		return store.Deployment{}, errors.New(limit.Reason)
+		if opts.Instances != nil {
+			return store.Deployment{}, errors.New(limit.Reason)
+		}
+		// The recorded count is no longer allowed (the catalog changed since). A
+		// redeploy that did not ask for a count runs what is allowed, and the
+		// scale-down below removes the excess, instead of refusing a deploy the
+		// locked box gives the user no way to fix.
+		instances = limit.Max
 	}
 
 	// Route the service to its runtime: native when it declares a native binary for
@@ -407,12 +414,11 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 		StopTimeout:   m.stopTimeout(slug),
 	}
 	provider := m.providerForSlug(slug)
-	if err := provider.Remove(ctx, slug, opts); err != nil {
-		m.store.RecordEvent(slug, "remove_error", err.Error())
-		return err
-	}
-	// Then every other copy, or they would keep running unmanaged once the
-	// deployment row is gone. Copies have no volumes, so nothing else goes with them.
+	// Copies 2..N first, then the service itself. A copy that fails to go leaves the
+	// first copy and the deployment row in place, so the service stays on the
+	// dashboard and Remove can be retried; the other order would leave running
+	// copies with no row to show them under. Copies have no volumes, so the
+	// critical-data refusal below can never be what stops the first copy after them.
 	if copier, ok := provider.(runtime.CopyProvider); ok {
 		copies, err := copier.Copies(ctx, slug)
 		if err != nil {
@@ -425,6 +431,10 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 				return err
 			}
 		}
+	}
+	if err := provider.Remove(ctx, slug, opts); err != nil {
+		m.store.RecordEvent(slug, "remove_error", err.Error())
+		return err
 	}
 	m.setCopies(slug, nil)
 	if err := m.store.DeleteDeployment(slug); err != nil {

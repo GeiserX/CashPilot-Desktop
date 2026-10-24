@@ -75,7 +75,9 @@ own device: every device name the catalog derives from this computer's name gets
   because its copies would share the directory and fight over the port. So does a
   service that runs here as a program rather than a container.
 - The count is saved with the deployment and kept by every redeploy. Lowering it
-  removes the highest copies first; removing the service removes all of them.
+  removes the highest copies first; removing the service removes all of them. If a
+  provider later stops allowing several copies, the next redeploy runs what is
+  allowed and removes the rest.
 - Each copy has its own row on the dashboard (`#2`, `#3`, ...) with its own Logs and
   Stop or Start. The balance stays on the service's first row, since the copies earn
   into one account.
