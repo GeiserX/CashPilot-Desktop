@@ -111,7 +111,7 @@ func TestTheAppRunsAnEarnerEndToEnd(t *testing.T) {
 		"HONEYGAIN_EMAIL":    "someone@example.test",
 		"HONEYGAIN_PASSWORD": "not-a-real-password",
 	}
-	deployment, err := app.DeployService("honeygain", creds)
+	deployment, err := app.DeployService("honeygain", creds, nil)
 	if err != nil {
 		t.Fatalf("DeployService: %v", err)
 	}
@@ -219,10 +219,10 @@ func TestTheAppRunsAnEarnerEndToEnd(t *testing.T) {
 func TestTheAppRefusesAServiceItCannotRun(t *testing.T) {
 	app := newAppUnderTest(t)
 
-	if _, err := app.DeployService("honeygain", map[string]string{"HONEYGAIN_EMAIL": "someone@example.test"}); err == nil {
+	if _, err := app.DeployService("honeygain", map[string]string{"HONEYGAIN_EMAIL": "someone@example.test"}, nil); err == nil {
 		t.Error("a deploy with no password was accepted")
 	}
-	if _, err := app.DeployService("no-such-service", map[string]string{"X": "y"}); err == nil {
+	if _, err := app.DeployService("no-such-service", map[string]string{"X": "y"}, nil); err == nil {
 		t.Error("a deploy of an unknown service was accepted")
 	}
 	if calls := app.Docker.Calls(); len(calls) > 0 {

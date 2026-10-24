@@ -1008,7 +1008,10 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 	}), nil
 }
 
-func (a *App) DeployService(slug string, values map[string]string) (store.Deployment, error) {
+// DeployService deploys slug with the submitted credentials. image is the Image box:
+// nil (left alone) keeps the image the deployment already uses, "" goes back to the
+// catalog's, anything else is the image to run instead.
+func (a *App) DeployService(slug string, values map[string]string, image *string) (store.Deployment, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, err
 	}
@@ -1029,12 +1032,18 @@ func (a *App) DeployService(slug string, values map[string]string) (store.Deploy
 		a.emitError("deploy", err)
 		return store.Deployment{}, err
 	}
+	if image != nil {
+		if err := services.ValidateImage(*image); err != nil {
+			a.emitError("deploy", err)
+			return store.Deployment{}, err
+		}
+	}
 	if len(values) > 0 {
 		if err := a.store.SaveCredentials(slug, values); err != nil {
 			return store.Deployment{}, err
 		}
 	}
-	deployment, err := a.services.Deploy(a.ctx, slug, creds)
+	deployment, err := a.services.DeployImage(a.ctx, slug, creds, image)
 	if err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, err
@@ -1472,7 +1481,12 @@ func (a *App) outdatedServices(deployments []store.Deployment) []string {
 		if !ok {
 			continue
 		}
-		if catalog.ImageOutdated(dep.Image, svc.Docker.Image) {
+		// Against the image it was deployed from: a chosen image is not drift.
+		want := svc.Docker.Image
+		if dep.CustomImage != "" {
+			want = dep.CustomImage
+		}
+		if catalog.ImageOutdated(dep.Image, want) {
 			out = append(out, dep.Slug)
 		}
 	}

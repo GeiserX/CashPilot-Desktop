@@ -37,8 +37,13 @@ type Deployment struct {
 	Runtime     string  `json:"runtime"`
 	CPUPercent  float64 `json:"cpuPercent"`
 	MemoryMB    float64 `json:"memoryMb"`
-	CreatedAt   string  `json:"createdAt"`
-	UpdatedAt   string  `json:"updatedAt"`
+	// CustomImage is the image the user chose to run instead of the catalog's, or ""
+	// when the deployment follows the catalog. Only a deploy writes it (see
+	// SetCustomImage); UpsertDeployment leaves it alone, so the runtime refresh that
+	// rewrites every row on a timer cannot drop the choice.
+	CustomImage string `json:"customImage"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
 }
 
 type EarningsRecord struct {
@@ -336,6 +341,14 @@ func (s *Store) UpsertDeployment(dep Deployment) error {
 	return err
 }
 
+// SetCustomImage records the image a deploy of slug used instead of the catalog's,
+// or clears it with "". It is kept with the deployment row, so the next redeploy
+// finds it there, and removing the service forgets it with the rest of the row.
+func (s *Store) SetCustomImage(slug, image string) error {
+	_, err := s.execWrite(`UPDATE deployments SET custom_image = ? WHERE slug = ?`, image, slug)
+	return err
+}
+
 func (s *Store) DeleteDeployment(slug string) error {
 	_, err := s.execWrite(`DELETE FROM deployments WHERE slug = ?`, slug)
 	return err
@@ -343,7 +356,7 @@ func (s *Store) DeleteDeployment(slug string) error {
 
 func (s *Store) GetDeployment(slug string) (Deployment, bool, error) {
 	row := s.db.QueryRow(`
-		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, created_at, updated_at
+		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, created_at, updated_at
 		FROM deployments WHERE slug = ?
 	`, slug)
 	dep, err := scanDeployment(row)
@@ -358,7 +371,7 @@ func (s *Store) GetDeployment(slug string) (Deployment, bool, error) {
 
 func (s *Store) ListDeployments() []Deployment {
 	rows, err := s.db.Query(`
-		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, created_at, updated_at
+		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, created_at, updated_at
 		FROM deployments ORDER BY slug
 	`)
 	if err != nil {
@@ -855,7 +868,7 @@ type scanner interface {
 
 func scanDeployment(row scanner) (Deployment, error) {
 	var dep Deployment
-	err := row.Scan(&dep.Slug, &dep.ContainerID, &dep.Name, &dep.Image, &dep.Status, &dep.Runtime, &dep.CPUPercent, &dep.MemoryMB, &dep.CreatedAt, &dep.UpdatedAt)
+	err := row.Scan(&dep.Slug, &dep.ContainerID, &dep.Name, &dep.Image, &dep.Status, &dep.Runtime, &dep.CPUPercent, &dep.MemoryMB, &dep.CustomImage, &dep.CreatedAt, &dep.UpdatedAt)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -885,6 +898,7 @@ func (s *Store) migrate() error {
 			runtime TEXT NOT NULL,
 			cpu_percent REAL NOT NULL DEFAULT 0,
 			memory_mb REAL NOT NULL DEFAULT 0,
+			custom_image TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
@@ -940,14 +954,15 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
-	// Forward-only column additions for existing fleet_devices tables (per-worker
-	// fleet keys). SQLite has no "ADD COLUMN IF NOT EXISTS", so guard each ALTER;
+	// Forward-only column additions for existing tables (per-worker fleet keys, the
+	// chosen image). SQLite has no "ADD COLUMN IF NOT EXISTS", so guard each ALTER;
 	// a fresh DB already has the columns from CREATE TABLE above, so this is a no-op.
-	for _, col := range []struct{ name, ddl string }{
-		{"api_key_hash", "ALTER TABLE fleet_devices ADD COLUMN api_key_hash TEXT NOT NULL DEFAULT ''"},
-		{"key_confirmed", "ALTER TABLE fleet_devices ADD COLUMN key_confirmed INTEGER NOT NULL DEFAULT 0"},
+	for _, col := range []struct{ table, name, ddl string }{
+		{"fleet_devices", "api_key_hash", "ALTER TABLE fleet_devices ADD COLUMN api_key_hash TEXT NOT NULL DEFAULT ''"},
+		{"fleet_devices", "key_confirmed", "ALTER TABLE fleet_devices ADD COLUMN key_confirmed INTEGER NOT NULL DEFAULT 0"},
+		{"deployments", "custom_image", "ALTER TABLE deployments ADD COLUMN custom_image TEXT NOT NULL DEFAULT ''"},
 	} {
-		has, err := s.columnExists("fleet_devices", col.name)
+		has, err := s.columnExists(col.table, col.name)
 		if err != nil {
 			return err
 		}

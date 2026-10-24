@@ -22,8 +22,8 @@ export function CompleteOnboarding() {
   return window['go']['main']['App']['CompleteOnboarding']();
 }
 
-export function DeployService(arg1, arg2) {
-  return window['go']['main']['App']['DeployService'](arg1, arg2);
+export function DeployService(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DeployService'](arg1, arg2, arg3);
 }
 
 export function ExportCompose(arg1, arg2) {

@@ -52,12 +52,16 @@ type fakeProvider struct {
 	planErr      error
 	logsResult   string
 	logsErr      error
+	// deploySpecs records the spec each Deploy was handed, so a test can prove which
+	// image and which catalog grants reached the runtime.
+	deploySpecs []runtime.DeploySpec
 }
 
 func (f *fakeProvider) Status(context.Context) runtime.Status { return runtime.Status{} }
 
-func (f *fakeProvider) Deploy(_ context.Context, _ runtime.DeploySpec, progress func(string)) (runtime.ContainerInfo, error) {
+func (f *fakeProvider) Deploy(_ context.Context, spec runtime.DeploySpec, progress func(string)) (runtime.ContainerInfo, error) {
 	f.deployCalls++
+	f.deploySpecs = append(f.deploySpecs, spec)
 	if progress != nil {
 		progress("pulling")
 	}

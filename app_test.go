@@ -646,6 +646,23 @@ func TestOutdatedServices(t *testing.T) {
 	}
 }
 
+// TestOutdatedServicesJudgesAChosenImage verifies a deployment running an image the
+// user chose is compared against that image, not the catalog's: the choice is not
+// drift, but a container that no longer runs the chosen image is.
+func TestOutdatedServicesJudgesAChosenImage(t *testing.T) {
+	app := &App{catalog: outdatedTestCatalog(t)}
+
+	chosen := []store.Deployment{{Slug: "example", Image: "mirror.test/org/cli:2.0", CustomImage: "mirror.test/org/cli:2.0"}}
+	if got := app.outdatedServices(chosen); len(got) != 0 {
+		t.Fatalf("outdatedServices(chosen) = %v, want empty: the chosen image is running", got)
+	}
+
+	backOnCatalog := []store.Deployment{{Slug: "example", Image: "ghcr.io/org/new-cli@sha256:new", CustomImage: "mirror.test/org/cli:2.0"}}
+	if got := app.outdatedServices(backOnCatalog); len(got) != 1 || got[0] != "example" {
+		t.Fatalf("outdatedServices(backOnCatalog) = %v, want [example]: it is not running the chosen image", got)
+	}
+}
+
 // TestNotificationsFlagsOutdated verifies drift surfaces as an actionable warning.
 func TestNotificationsFlagsOutdated(t *testing.T) {
 	app := &App{catalog: outdatedTestCatalog(t)}
@@ -699,7 +716,7 @@ func TestDeployServiceValidatesBeforePersist(t *testing.T) {
 	}
 
 	// Non-empty but invalid (missing the required TOKEN): the runtime is never reached.
-	if _, err := app.DeployService("req", map[string]string{"WRONG": "x"}); err == nil {
+	if _, err := app.DeployService("req", map[string]string{"WRONG": "x"}, nil); err == nil {
 		t.Fatal("expected a validation error for the missing required field")
 	}
 	got, err := st.GetCredentials("req")

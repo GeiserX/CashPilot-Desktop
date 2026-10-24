@@ -14,7 +14,9 @@ declare module "../wailsjs/go/main/App" {
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
   export function PreflightService(slug: string): Promise<PreflightReport>;
-  export function DeployService(slug: string, values: Record<string, string>): Promise<Deployment>;
+  // image: null keeps the image the deployment already uses, "" goes back to the
+  // catalog's, anything else runs that image instead.
+  export function DeployService(slug: string, values: Record<string, string>, image: string | null): Promise<Deployment>;
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
   export function RestartService(slug: string): Promise<void>;
@@ -421,6 +423,8 @@ export interface Deployment {
   runtime: string;
   cpuPercent: number;
   memoryMb: number;
+  // The image the user chose instead of the catalog's; "" when it follows the catalog.
+  customImage: string;
 }
 
 export interface EarningsRecord {

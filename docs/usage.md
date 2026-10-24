@@ -42,6 +42,23 @@ so you don't have to hand-write container configs.
 
 ![Setup Wizard](images/screenshots/06-wizard.png)
 
+### A service's image
+
+Each service runs from the image its catalog entry names, pinned by digest. To run
+it from another one, expand **Advanced** on the service's card and type the image
+in the **Image** box: a registry mirror, or a community build for an architecture
+the provider does not publish.
+
+- Blank means the catalog image. Clearing the box and deploying goes back to it.
+- The choice is saved with the deployment, and every redeploy keeps it until you
+  clear the box. Removing the service forgets it.
+- Only the image changes. Capabilities, devices, ports, the entrypoint and the stop
+  timeout still come from the catalog entry, so a custom image gets nothing the
+  service does not already have. It does receive the service's credentials, so use
+  an image you trust.
+- The dashboard and the catalog mark such a deployment **custom image** and judge
+  "update available" against the image you chose, not the catalog's.
+
 ## Settings
 
 Configure the display currency, collection interval, data retention, and per-service

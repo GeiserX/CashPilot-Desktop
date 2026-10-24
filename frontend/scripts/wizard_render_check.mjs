@@ -37,9 +37,13 @@ function check(name, condition, detail = "") {
   console.error(`FAIL  ${name}${detail ? `\n      ${detail}` : ""}`);
 }
 
-/** Every <input> in the card, with the attributes the app depends on. */
+/**
+ * Every credential <input> in the card, with the attributes the app depends on. The
+ * Advanced section's Image box is not a credential and is checked on its own in
+ * scripts/image_check.mjs, including that it never carries data-wizard-env.
+ */
 function inputs(html) {
-  return [...html.matchAll(/<input\b[^>]*>/g)].map((match) => {
+  return [...html.matchAll(/<input\b[^>]*>/g)].filter((match) => !/\bdata-wizard-image=/.test(match[0])).map((match) => {
     const tag = match[0];
     const attr = (name) => (tag.match(new RegExp(`\\b${name}="([^"]*)"`)) || [])[1];
     return {

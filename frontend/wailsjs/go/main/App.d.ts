@@ -17,7 +17,7 @@ export function CollectService(arg1:string):Promise<store.EarningsRecord>;
 
 export function CompleteOnboarding():Promise<void>;
 
-export function DeployService(arg1:string,arg2:Record<string, string>):Promise<store.Deployment>;
+export function DeployService(arg1:string,arg2:Record<string, string>,arg3:string):Promise<store.Deployment>;
 
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
 
