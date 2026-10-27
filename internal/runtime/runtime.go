@@ -216,6 +216,14 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if err := pullImage(ctx, cli, image, progress); err != nil {
 		return ContainerInfo{}, err
 	}
+	// With the image here, what it would run as PID 1 is known. An image that
+	// cannot run under the hardening every deploy gets is refused now, on this
+	// side of the line, not left to restart forever with empty logs.
+	if inspected, err := cli.ImageInspect(ctx, image); err == nil && inspected.Config != nil {
+		if bootsSystemd(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd) {
+			return ContainerInfo{}, fmt.Errorf("%s boots systemd as its main process, which needs a privileged container with the host's cgroup tree. CashPilot never grants that, so the container would exit 255 and restart forever. Use the image's non-systemd tag (often ':lite') or the catalog image", image)
+		}
+	}
 
 	// Past this point the deploy is destructive: the existing container goes.
 	// Where the running container keeps its data beats where the catalog thinks it
@@ -1012,6 +1020,37 @@ func substitute(value string, env map[string]string) string {
 
 // entrypointFor is the entrypoint override the catalog declares for svc, or nil to
 // keep the image's own. A copy, so the container config never aliases the catalog.
+// systemdInits is what an image runs when its PID 1 is an init system. systemd
+// needs a privileged container with the host's cgroup tree; under the capability
+// drop in buildHostConfig it exits 255 at once, with nothing in the logs, and the
+// restart policy starts it again forever.
+var systemdInits = map[string]bool{
+	"/sbin/init":               true,
+	"/usr/sbin/init":           true,
+	"/lib/systemd/systemd":     true,
+	"/usr/lib/systemd/systemd": true,
+	"systemd":                  true,
+}
+
+// bootsSystemd reports whether a container built from the image would start
+// systemd as PID 1. The catalog's entrypoint, when it declares one, replaces the
+// image's; the catalog's command replaces the image's CMD but never its
+// ENTRYPOINT. Only the first word of what finally runs matters.
+func bootsSystemd(imageEntrypoint, imageCmd, entrypoint, cmd []string) bool {
+	var first string
+	switch {
+	case len(entrypoint) > 0:
+		first = entrypoint[0]
+	case len(imageEntrypoint) > 0:
+		first = imageEntrypoint[0]
+	case len(cmd) > 0:
+		first = cmd[0]
+	case len(imageCmd) > 0:
+		first = imageCmd[0]
+	}
+	return systemdInits[first]
+}
+
 func entrypointFor(svc catalog.Service) []string {
 	if len(svc.Docker.Entrypoint) == 0 {
 		return nil
