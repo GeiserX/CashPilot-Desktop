@@ -2,13 +2,13 @@ package runtime
 
 import "testing"
 
-// THE RULE: an image that boots systemd as PID 1 is refused before the running
+// THE RULE: an image that boots an init system (systemd, nearly always) as PID 1 is refused before the running
 // container is touched. Under the capability drop in buildHostConfig such an image
 // exits 255 at once, with nothing in the logs, and the restart policy loops it
 // forever; a user who typed a community image's full tag in the Image box saw
 // exactly that. Only the first word of what finally runs decides, and the catalog's
 // entrypoint replaces the image's while its command replaces only the image CMD.
-func TestBootsSystemd(t *testing.T) {
+func TestBootsInitSystem(t *testing.T) {
 	cases := []struct {
 		name                      string
 		imageEntrypoint, imageCmd []string
@@ -27,8 +27,8 @@ func TestBootsSystemd(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := bootsSystemd(tc.imageEntrypoint, tc.imageCmd, tc.entrypoint, tc.cmd); got != tc.want {
-				t.Fatalf("bootsSystemd = %v, want %v", got, tc.want)
+			if got := bootsInitSystem(tc.imageEntrypoint, tc.imageCmd, tc.entrypoint, tc.cmd); got != tc.want {
+				t.Fatalf("bootsInitSystem = %v, want %v", got, tc.want)
 			}
 		})
 	}

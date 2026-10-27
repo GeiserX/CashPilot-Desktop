@@ -20,6 +20,9 @@ type fakeDocker struct {
 	mu       sync.Mutex
 	calls    []string
 	pullFail bool
+	// initImage makes the pulled image report /sbin/init as its main process,
+	// the shape of a systemd image.
+	initImage bool
 }
 
 func (f *fakeDocker) record(call string) {
@@ -69,6 +72,15 @@ func (f *fakeDocker) start(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"status":"Pulled"}` + "\n"))
+		case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
+			f.record("GET /images/json")
+			cmd := []string{"entrypoint"}
+			if f.initImage {
+				cmd = []string{"/sbin/init"}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "sha256:image", "Config": map[string]any{"Cmd": cmd}})
 		case path == "/containers/create":
 			f.record("POST /containers/create")
 			w.Header().Set("Content-Type", "application/json")
@@ -120,10 +132,11 @@ func deploySpec(slug string) DeploySpec {
 // the deploy stopped early and not that the assertion cannot fire.
 func TestDeployLeavesTheRunningContainerAloneWhenItCannotSucceed(t *testing.T) {
 	cases := []struct {
-		name     string
-		mutate   func(*DeploySpec)
-		pullFail bool
-		wantErr  string
+		name      string
+		mutate    func(*DeploySpec)
+		pullFail  bool
+		wantErr   string
+		initImage bool
 	}{
 		{
 			name:    "device outside the ceiling",
@@ -151,11 +164,17 @@ func TestDeployLeavesTheRunningContainerAloneWhenItCannotSucceed(t *testing.T) {
 			pullFail: true,
 			wantErr:  "pull refused",
 		},
+		{
+			name:      "the image boots an init system",
+			mutate:    func(s *DeploySpec) {},
+			initImage: true,
+			wantErr:   "init system",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeDocker{pullFail: tc.pullFail}
+			fake := &fakeDocker{pullFail: tc.pullFail, initImage: tc.initImage}
 			fake.start(t)
 
 			spec := deploySpec("orderly")

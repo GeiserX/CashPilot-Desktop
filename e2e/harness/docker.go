@@ -275,6 +275,8 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 		})
 	case path == "/images/create":
 		d.pull(w, r)
+	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
+		d.image(w, strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json"))
 	case path == "/containers/create":
 		d.create(w, r)
 	case path == "/containers/json":
@@ -319,6 +321,18 @@ func (d *Docker) pull(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "Pulling from " + image})
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "Download complete", "id": "layer1"})
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "Status: Downloaded newer image for " + image})
+}
+
+// image answers an image inspect with a plain entrypoint as the main process:
+// Deploy reads it to refuse images that boot an init system, and the fake's
+// images never do. Any ref is answered, so a scenario that never pulled (a
+// daemon set down after the pull, a digest ref) still reaches the same steps a
+// real daemon would.
+func (d *Docker) image(w http.ResponseWriter, ref string) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"Id":     "sha256:" + ref,
+		"Config": map[string]any{"Entrypoint": []string{"entrypoint"}},
+	})
 }
 
 func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
