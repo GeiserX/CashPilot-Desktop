@@ -216,6 +216,21 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if err := pullImage(ctx, cli, image, progress); err != nil {
 		return ContainerInfo{}, err
 	}
+	// With the image here, what it would run as PID 1 is known. An image that
+	// cannot run under the hardening every deploy gets is refused now, on this
+	// side of the line, not left to restart forever with empty logs. A daemon
+	// that cannot describe the image it just pulled stops the deploy too: there
+	// is nothing to be sure of, and the running container keeps earning.
+	inspected, err := cli.ImageInspect(ctx, image)
+	if err != nil {
+		return ContainerInfo{}, fmt.Errorf("could not read what %s runs: %w", image, err)
+	}
+	if inspected.Config == nil {
+		return ContainerInfo{}, fmt.Errorf("could not read what %s runs: the daemon returned no image config", image)
+	}
+	if bootsInitSystem(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd) {
+		return ContainerInfo{}, fmt.Errorf("%s runs an init system as its main process (/sbin/init, usually systemd), which needs a privileged container with the host's cgroup tree. CashPilot never grants that, so the container would exit at once and restart forever. Use the image's non-init tag (often ':lite') or the catalog image", image)
+	}
 
 	// Past this point the deploy is destructive: the existing container goes.
 	// Where the running container keeps its data beats where the catalog thinks it
@@ -1012,6 +1027,39 @@ func substitute(value string, env map[string]string) string {
 
 // entrypointFor is the entrypoint override the catalog declares for svc, or nil to
 // keep the image's own. A copy, so the container config never aliases the catalog.
+// initSystems is the main process of an image built to boot like a machine.
+// Almost always systemd, which needs a privileged container with the host's
+// cgroup tree; under the capability drop in buildHostConfig it exits 255 at once,
+// with nothing in the logs, and the restart policy starts it again forever.
+// /sbin/init is BusyBox init on Alpine, which has no more business as PID 1 of an
+// earner, so the path is refused without naming the implementation.
+var initSystems = map[string]bool{
+	"/sbin/init":               true,
+	"/usr/sbin/init":           true,
+	"/lib/systemd/systemd":     true,
+	"/usr/lib/systemd/systemd": true,
+	"systemd":                  true,
+}
+
+// bootsInitSystem reports whether a container built from the image would start
+// an init system as PID 1. The catalog's entrypoint, when it declares one,
+// replaces the image's; the catalog's command replaces the image's CMD but never
+// its ENTRYPOINT. Only the first word of what finally runs matters.
+func bootsInitSystem(imageEntrypoint, imageCmd, entrypoint, cmd []string) bool {
+	var first string
+	switch {
+	case len(entrypoint) > 0:
+		first = entrypoint[0]
+	case len(imageEntrypoint) > 0:
+		first = imageEntrypoint[0]
+	case len(cmd) > 0:
+		first = cmd[0]
+	case len(imageCmd) > 0:
+		first = imageCmd[0]
+	}
+	return initSystems[first]
+}
+
 func entrypointFor(svc catalog.Service) []string {
 	if len(svc.Docker.Entrypoint) == 0 {
 		return nil
