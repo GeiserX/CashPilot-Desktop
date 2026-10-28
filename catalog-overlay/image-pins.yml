@@ -24,8 +24,8 @@
 
 pins:
   anyone-protocol:
-    image: "ghcr.io/anyone-protocol/ator-protocol:latest@sha256:62af1d6e0245667765f217bcce90d31c82fe687203abc66af7cf117e12581265"
-    why: "Relay image; upstream ships a floating tag. The tag lives in the entry's legacy docker.tag key rather than in the image string, and the pin names it so an upstream re-tag stops the sync."
+    image: "drumsergio/cashpilot-anyone:0.4.10.2-r1@sha256:b0753e3eb2d776853af814b11cc5f1a1f1f0a1c9d4e2f90312ba857c00137002"
+    why: "CashPilot's own relay image (the project's signed anon .deb, runs as anond with no added capabilities). The tag lives in the entry's legacy docker.tag key rather than in the image string, and the pin names it so an upstream re-tag stops the sync."
   bitping:
     image: "bitping/bitpingd@sha256:6f923c4f5e0fe7fa188f621f3dde0cf62e5d3a28848c08f3f84f1a3d8d875dd9"
     why: "Upstream ships no tag at all on this entry."
