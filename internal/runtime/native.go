@@ -129,7 +129,7 @@ type NativeProcessProvider struct {
 	// default to ensureFirewallBlock/removeFirewallBlock and are seams for tests, which
 	// must never run PowerShell or raise an admin prompt.
 	ensureFirewall func(slug, program string, nets []string) error
-	removeFirewall func(slug string) error
+	removeFirewall func(slug, program string) error
 
 	// maxDownload bounds a single artifact download and maxExtract bounds one archive's
 	// total extracted bytes. They default to maxDownloadBytes/maxExtractedBytes and are
@@ -291,7 +291,15 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 
 	// Replace any prior instance (a managed child from this session or an orphan pid
 	// from a previous one) before starting the new one, so redeploy never doubles up.
+	prev := p.readRegistry().Entries[spec.Slug]
 	p.stopInternal(spec.Slug, false, p.graceFor(StopTimeoutSeconds(spec.Service)))
+	// A rule the previous deploy made and this one no longer wants is deleted now:
+	// once the entry is overwritten, nothing would know it exists.
+	if prev != nil && len(prev.FirewallBlock) > 0 && (len(bin.FirewallBlock) == 0 || prev.BinPath != binPath) {
+		if err := p.removeFirewall(spec.Slug, prev.BinPath); err != nil {
+			return ContainerInfo{}, err
+		}
+	}
 
 	if progress != nil {
 		progress("Starting native process")
@@ -390,7 +398,7 @@ func (p *NativeProcessProvider) Remove(ctx context.Context, slug string, opts Re
 	// A firewall rule that could not be deleted keeps the registry entry, so the
 	// next Remove tries again instead of forgetting the rule exists.
 	if e != nil && len(e.FirewallBlock) > 0 {
-		if err := p.removeFirewall(slug); err != nil {
+		if err := p.removeFirewall(slug, e.BinPath); err != nil {
 			return err
 		}
 	}

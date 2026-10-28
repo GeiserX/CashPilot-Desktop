@@ -12,7 +12,7 @@ func ensureFirewallBlock(slug, program string, nets []string) error {
 }
 
 // removeFirewallBlock has nothing to remove outside Windows.
-func removeFirewallBlock(slug string) error {
-	_ = slug
+func removeFirewallBlock(slug, program string) error {
+	_, _ = slug, program
 	return nil
 }

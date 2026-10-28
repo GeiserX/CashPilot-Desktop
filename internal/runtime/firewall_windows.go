@@ -62,14 +62,14 @@ func ensureFirewallBlock(slug, program string, nets []string) error {
 	if err != nil {
 		return err
 	}
-	name := firewallRuleName(slug)
+	name := firewallRuleName(slug, program)
 	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
 	st, err := readFirewallRule(name)
 	if err != nil {
 		return fmt.Errorf("%s, and %v", what, err)
 	}
-	if st.FirewallOff {
-		return fmt.Errorf("%s, and Windows Firewall is off for the network this computer is on, so the rule would do nothing. Turn Windows Firewall on, or run %s in Docker", what, slug)
+	if why := st.notEnforced(); why != "" {
+		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
 	}
 	if st.matches(program, nets) {
 		return nil
@@ -84,12 +84,17 @@ func ensureFirewallBlock(slug, program string, nets []string) error {
 	if !st.matches(program, nets) {
 		return fmt.Errorf("%s, and the rule is still not in place after creating it", what)
 	}
+	// The firewall can be switched off while the admin prompt waits.
+	if why := st.notEnforced(); why != "" {
+		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
+	}
 	return nil
 }
 
-// removeFirewallBlock deletes the rule, asking for admin rights only when it exists.
-func removeFirewallBlock(slug string) error {
-	name := firewallRuleName(slug)
+// removeFirewallBlock deletes the rule for this program, asking for admin rights
+// only when it exists.
+func removeFirewallBlock(slug, program string) error {
+	name := firewallRuleName(slug, program)
 	st, err := readFirewallRule(name)
 	if err != nil {
 		return err

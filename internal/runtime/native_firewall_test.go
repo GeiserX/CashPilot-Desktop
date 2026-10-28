@@ -14,8 +14,8 @@ import (
 
 // firewallCalls records what the provider asked of the firewall seams.
 type firewallCalls struct {
-	ensured  [][]string // program followed by the networks, one per call
-	removed  []string
+	ensured  [][]string // slug, program, then the networks, one per call
+	removed  []string   // "slug program", one per call
 	ensureFn func() error
 	removeFn func() error
 }
@@ -28,8 +28,8 @@ func (f *firewallCalls) install(p *NativeProcessProvider) {
 		}
 		return nil
 	}
-	p.removeFirewall = func(slug string) error {
-		f.removed = append(f.removed, slug)
+	p.removeFirewall = func(slug, program string) error {
+		f.removed = append(f.removed, slug+" "+program)
 		if f.removeFn != nil {
 			return f.removeFn()
 		}
@@ -83,8 +83,8 @@ func TestNativeBinaryArgsComeFirstAndFirewallRuleFollowsTheService(t *testing.T)
 	if err := p.Remove(context.Background(), "fwsvc", RemoveOptions{}); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if !slices.Equal(fw.removed, []string{"fwsvc"}) {
-		t.Fatalf("firewall removals = %q, want [fwsvc]", fw.removed)
+	if !slices.Equal(fw.removed, []string{"fwsvc " + e.BinPath}) {
+		t.Fatalf("firewall removals = %q, want the rule for %s", fw.removed, e.BinPath)
 	}
 	if _, ok := p.readRegistry().Entries["fwsvc"]; ok {
 		t.Fatal("registry entry survived Remove")
@@ -211,7 +211,7 @@ func TestFirewallScriptsCarryOnlyCleanValues(t *testing.T) {
 	if err != nil || !slices.Equal(got, []string{"100.64.0.0/10"}) {
 		t.Fatalf("got %q err %v", got, err)
 	}
-	s := firewallCreateScript(firewallRuleName("mysterium"), `C:\Users\O'Brien\myst.exe`, got)
+	s := firewallCreateScript(firewallRuleName("mysterium", `C:\Users\O'Brien\myst.exe`), `C:\Users\O'Brien\myst.exe`, got)
 	if !strings.Contains(s, `-Program 'C:\Users\O''Brien\myst.exe'`) || !strings.Contains(s, `-RemoteAddress '100.64.0.0/10'`) {
 		t.Fatalf("create script quoting is wrong:\n%s", s)
 	}
@@ -240,13 +240,79 @@ func TestParseFirewallStateReadsTheCheckScriptsAnswer(t *testing.T) {
 }
 
 func TestFirewallCheckAndRemoveScriptsQuoteTheName(t *testing.T) {
-	name := firewallRuleName("it's")
+	name := firewallRuleName("it's", `C:\x\myst.exe`)
 	for _, s := range []string{firewallCheckScript(name), firewallRemoveScript(name)} {
-		if !strings.Contains(s, `'CashPilot: block it''s from private networks'`) {
+		if !strings.Contains(s, `'CashPilot: block it''s from private networks (`) {
 			t.Fatalf("name not quoted:\n%s", s)
 		}
 		if !strings.HasPrefix(s, "$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n") {
 			t.Fatalf("script must stop on error and keep progress off stderr:\n%s", s)
 		}
+	}
+}
+
+// Two Windows users who both deploy the same service must get two rules, or one
+// deploy would replace, and one remove would delete, the other user's block.
+func TestFirewallRuleNameIsPerInstallation(t *testing.T) {
+	a := firewallRuleName("mysterium", `C:\Users\ana\AppData\Roaming\CashPilot\native\mysterium\myst.exe`)
+	b := firewallRuleName("mysterium", `C:\Users\bob\AppData\Roaming\CashPilot\native\mysterium\myst.exe`)
+	if a == b {
+		t.Fatalf("both installations share the rule %q", a)
+	}
+	if again := firewallRuleName("mysterium", `c:\users\ANA\AppData\Roaming\CashPilot\native\mysterium\myst.exe`); again != a {
+		t.Fatalf("the same path in another case is a different rule: %q vs %q", again, a)
+	}
+}
+
+// A rule Windows would not apply must stop the launch, before and after creating it.
+func TestFirewallStateNotEnforced(t *testing.T) {
+	if why := (firewallState{}).notEnforced(); why != "" {
+		t.Fatalf("an enforced firewall reported %q", why)
+	}
+	if (firewallState{FirewallOff: true}).notEnforced() == "" {
+		t.Fatal("a firewall that is off must be reported")
+	}
+	if (firewallState{LocalIgnored: true}).notEnforced() == "" {
+		t.Fatal("group policy ignoring local rules must be reported")
+	}
+}
+
+// A redeploy whose binary no longer declares firewall_block deletes the rule the
+// previous deploy made, before the registry entry that remembers it is overwritten.
+func TestNativeRedeployWithoutFirewallBlockDeletesTheOldRule(t *testing.T) {
+	p := newTestNativeProvider(t)
+	var fw firewallCalls
+	fw.install(p)
+	art := tarGzArtifact(t, stubBinName(), stubBinaryBytes(t))
+	url := serveArtifact(t, p, art)
+	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
+	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
+	spec := DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}
+	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	binPath := p.readRegistry().Entries["fwsvc"].BinPath
+
+	// The same firewall_block again keeps the rule.
+	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+		t.Fatalf("redeploy: %v", err)
+	}
+	if len(fw.removed) != 0 {
+		t.Fatalf("a redeploy that keeps firewall_block removed %q", fw.removed)
+	}
+
+	spec.Service.Native.Binaries[0].FirewallBlock = nil
+	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+		t.Fatalf("redeploy without firewall_block: %v", err)
+	}
+	if !slices.Equal(fw.removed, []string{"fwsvc " + binPath}) {
+		t.Fatalf("firewall removals = %q, want the old rule for %s", fw.removed, binPath)
+	}
+	if got := p.readRegistry().Entries["fwsvc"].FirewallBlock; len(got) != 0 {
+		t.Fatalf("registry still records firewall_block %v", got)
+	}
+	_ = p.Remove(context.Background(), "fwsvc", RemoveOptions{})
+	if len(fw.removed) != 1 {
+		t.Fatalf("Remove asked to delete a rule that no longer exists: %q", fw.removed)
 	}
 }
