@@ -154,7 +154,7 @@ var (
 		"HONEYGAIN_EMAIL":    "someone@example.test",
 		"HONEYGAIN_PASSWORD": "not-a-real-password",
 	}
-	earnappCreds = map[string]string{"EARNAPP_UUID": "sdk-node-000000000000000000000000000000"}
+	earnappCreds = map[string]string{"EARNAPP_UUID": "sdk-node-00000000000000000000000000000000"}
 )
 
 // callIndex is the position of the first recorded call equal to want, or -1.
