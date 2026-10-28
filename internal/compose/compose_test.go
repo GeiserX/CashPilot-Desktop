@@ -237,17 +237,17 @@ func TestTheHeaderOnlyListsValuesTheFileActuallyCarries(t *testing.T) {
 		t.Errorf("the header warns about a device name no entry declares:\n%s", text)
 	}
 
-	// A default that is not a machine name — EarnApp's terms opt-in is the real one
+	// A default that is not a machine name — Storj's storage allocation is a real one
 	// — is listed as changeable without the warning attached to it.
 	optIn := catalog.Service{
 		Name: "OptIn", Slug: "optin", Status: "active",
 		Docker: catalog.DockerConfig{
 			Image: "example/optin:1.0",
-			Env:   []catalog.EnvVar{{Key: "EARNAPP_TERM", Default: "yes"}},
+			Env:   []catalog.EnvVar{{Key: "STORAGE", Default: "1TB"}},
 		},
 	}
 	text = generate(t, fakeCatalog{"optin": optIn}, []string{"optin"}, Options{Hostname: "mac-mini"})
-	if !strings.Contains(text, "EARNAPP_TERM=yes") {
+	if !strings.Contains(text, "STORAGE=1TB") {
 		t.Errorf("the header does not list the value the file carries:\n%s", text)
 	}
 	if strings.Contains(text, "another machine") {
