@@ -181,10 +181,12 @@ payout:
 # does depends on the OS (node source at the 1.38.5 tag):
 #   linux:   nat/service_iptables.go sends each range to 240.0.0.1 in the nat chain
 #            MYST, the same blackhole the container gets.
-#   darwin:  nat/service_pfctl.go writes a pf `no nat ... to { ranges }` rule, so
-#            customer traffic to them leaves un-NATed and gets no reply. It is
-#            weaker than a blackhole, but without the flag 100.64/10 and 169.254/16
-#            are NATed through to the destination.
+#   darwin:  nat/service_pfctl.go writes a pf `no nat ... to { ranges }` rule. It
+#            only skips NAT: customer traffic to these ranges leaves with the
+#            tunnel's own source address and nothing blocks it. Whether a reply
+#            comes back depends on the destination's return route. Weaker than a
+#            blackhole, but without the flag 100.64/10 and 169.254/16 are NATed
+#            through to the destination as the Mac itself.
 #   windows: NOT enforced. nat/service_ics.go (Internet Connection Sharing) never
 #            reads the list, and the WireGuard path on Windows is the userspace
 #            client, which does not read it either; only --userspace (netstack)
