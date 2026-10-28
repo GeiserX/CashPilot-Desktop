@@ -223,3 +223,30 @@ func TestPSEncodeIsUTF16LEBase64(t *testing.T) {
 		t.Fatalf("psEncode = %q", got)
 	}
 }
+
+func TestParseFirewallStateReadsTheCheckScriptsAnswer(t *testing.T) {
+	// The line firewallCheckScript printed on Windows 11 for the rule we create.
+	out := []byte(`{"firewallOff":false,"found":true,"program":"C:\\x\\myst.exe","remote":"100.64.0.0/255.192.0.0,169.254.0.0/255.255.0.0","direction":2,"action":0,"enabled":true,"profiles":2147483647}` + "\r\n")
+	st, err := parseFirewallState(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.matches(`C:\x\myst.exe`, []string{"100.64.0.0/10", "169.254.0.0/16"}) {
+		t.Fatalf("parsed %+v does not match", st)
+	}
+	if _, err := parseFirewallState([]byte("#< CLIXML\r\n<Objs/>")); err == nil {
+		t.Fatal("output that is not the JSON answer must be an error, never a missing rule")
+	}
+}
+
+func TestFirewallCheckAndRemoveScriptsQuoteTheName(t *testing.T) {
+	name := firewallRuleName("it's")
+	for _, s := range []string{firewallCheckScript(name), firewallRemoveScript(name)} {
+		if !strings.Contains(s, `'CashPilot: block it''s from private networks'`) {
+			t.Fatalf("name not quoted:\n%s", s)
+		}
+		if !strings.HasPrefix(s, "$ErrorActionPreference = 'Stop'\n$ProgressPreference = 'SilentlyContinue'\n") {
+			t.Fatalf("script must stop on error and keep progress off stderr:\n%s", s)
+		}
+	}
+}
