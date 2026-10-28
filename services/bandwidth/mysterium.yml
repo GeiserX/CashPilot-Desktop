@@ -187,11 +187,28 @@ payout:
 #            comes back depends on the destination's return route. Weaker than a
 #            blackhole, but without the flag 100.64/10 and 169.254/16 are NATed
 #            through to the destination as the Mac itself.
-#   windows: NOT enforced. nat/service_ics.go (Internet Connection Sharing) never
-#            reads the list, and the WireGuard path on Windows is the userspace
-#            client, which does not read it either; only --userspace (netstack)
-#            and OpenVPN do. The flag is accepted and harmless there, and is kept
-#            in the one shared command so the list is right if that changes.
+#   windows: the default node never reads it. nat/service_ics.go (Internet
+#            Connection Sharing) ignores the list, and without --userspace the
+#            node needs a TAP driver and admin rights that Desktop does not have:
+#            run as a standard user it logs "Failed to enable NAT forwarding".
+#            The windows binary therefore runs with --userspace, the netstack
+#            mode the node's own mobile and IoT builds use. It needs no admin and
+#            no driver, and its netstack drops any customer TCP or UDP flow to a
+#            protected range. It reads the list from the flag's compiled-in
+#            default, though, not from the command line
+#            (FlagFirewallProtectedNetworks.GetValue() in
+#            services/wireguard/endpoint/netstack-provider/netstack.go, still so
+#            on master), so it blocks 10/8, 172.16/12, 192.168/16 and 127/8 only.
+#            In this mode every customer connection is a socket myst.exe opens
+#            itself, so firewall_block closes the other two: Desktop keeps an
+#            outbound Windows Firewall rule that blocks myst.exe from
+#            100.64.0.0/10 and 169.254.0.0/16. Creating it needs one Windows
+#            admin prompt. The rule lasts while the service is deployed and is
+#            deleted when it is removed, and the node does not start without it.
+#            Costs: the netstack forwards TCP and UDP only, so a customer cannot
+#            ping through the node, and the relaying runs in the node process.
+#            On a machine whose only DNS server is Tailscale's 100.100.100.100,
+#            the node's own DNS proxy is blocked too.
 native:
   binaries:
     - os: darwin
@@ -218,5 +235,7 @@ native:
       sha256: "3ebecba44637462351ebf8fe62794db83088345fb5f8dd75a455bea0f762fc44"
       archive: zip
       bin: "myst.exe"
+      args: "--userspace"
+      firewall_block: ["100.64.0.0/10", "169.254.0.0/16"]
   command: "--ui.address=127.0.0.1 --tequilapi.address=127.0.0.1 --firewall.protected.networks=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,100.64.0.0/10,169.254.0.0/16 service --agreed-terms-and-conditions"
   env: []

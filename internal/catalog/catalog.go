@@ -268,13 +268,22 @@ type NativeConfig struct {
 // Archive is how the artifact is packaged: "tar.gz", "zip", or "none" (a raw binary).
 // Bin is the path to the executable inside the extracted archive (e.g. "myst" or
 // "myst.exe"); for archive "none" it is the on-disk name to give the raw binary.
+//
+// Args and FirewallBlock exist because the same program can need different handling
+// per OS. Args is tokenized like Command and placed BEFORE it, so a global flag that
+// only one OS needs still precedes the subcommand. FirewallBlock is Windows-only: the
+// provider keeps an outbound Windows Firewall rule that blocks this binary from these
+// networks for as long as the service is deployed, and refuses to start the binary
+// when the rule cannot be put in place.
 type NativeBinary struct {
-	OS      string `json:"os" yaml:"os"`
-	Arch    string `json:"arch" yaml:"arch"`
-	URL     string `json:"url" yaml:"url"`
-	SHA256  string `json:"sha256" yaml:"sha256"`
-	Archive string `json:"archive" yaml:"archive"`
-	Bin     string `json:"bin" yaml:"bin"`
+	OS            string   `json:"os" yaml:"os"`
+	Arch          string   `json:"arch" yaml:"arch"`
+	URL           string   `json:"url" yaml:"url"`
+	SHA256        string   `json:"sha256" yaml:"sha256"`
+	Archive       string   `json:"archive" yaml:"archive"`
+	Bin           string   `json:"bin" yaml:"bin"`
+	Args          string   `json:"args,omitempty" yaml:"args"`
+	FirewallBlock []string `json:"firewallBlock,omitempty" yaml:"firewall_block"`
 }
 
 type EnvVar struct {
