@@ -30,8 +30,8 @@ pins:
     image: "bitping/bitpingd@sha256:6f923c4f5e0fe7fa188f621f3dde0cf62e5d3a28848c08f3f84f1a3d8d875dd9"
     why: "Upstream ships no tag at all on this entry."
   earnapp:
-    image: "fazalfarhan01/earnapp:lite@sha256:0dbce82a18aaee0b0252d07d70d27d0e9e31a8e85f3fc2713d4f097f48e29b7b"
-    why: "The web entry pins the lite tag; the digest fixes which lite build."
+    image: "drumsergio/cashpilot-earnapp:1.665.73-r1@sha256:151dab799d2279a7fc47a4f2b27febd9d7487573f8793dc1c80ba7de57b08d5c"
+    why: "CashPilot's own image (no Bright Data code inside: it downloads the pinned EarnApp build from Bright Data's CDN at first start, checks its sha256 and runs lite mode). The digest is the multi-arch index for amd64, arm64 and arm/v7."
   earnfm:
     image: "earnfm/earnfm-client@sha256:96169b3cd1b5cf2fce74b24b72949037d9539eeceb70ecdbe6d8081839a5db32"
     why: "Upstream ships no tag at all on this entry."
