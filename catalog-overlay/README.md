@@ -52,10 +52,9 @@ the YAML rather than by matching text. It fails when:
 One entry keeps its tag somewhere else: `anyone-protocol` carries an untagged
 `docker.image` plus the legacy `docker.tag: latest` key. The guard reads that key as
 the entry's tag, so its pin names the tag too
-(`ghcr.io/anyone-protocol/ator-protocol:latest@sha256:...`). That is the one place a
-`:latest` appears in a live image string, and it is still pinned by digest — the tag
-is there so an upstream re-tag stops the sync instead of leaving Desktop on the
-previous generation's build while the entry claims otherwise.
+(`drumsergio/cashpilot-anyone:0.4.10.2-r1@sha256:...`). The tag is there so an
+upstream re-tag stops the sync instead of leaving Desktop on the previous build while
+the entry claims otherwise.
 
 ### `append/**` — Desktop-only blocks
 
@@ -67,7 +66,7 @@ the entry on its own, which is how a Desktop-only service would be carried.
 
 | Delta | Where | Why |
 | --- | --- | --- |
-| 14 image digest pins | `image-pins.yml` | Desktop's digest-pin rule; the web catalog ships floating references. |
+| 15 image digest pins | `image-pins.yml` | Desktop's digest-pin rule; the web catalog ships floating references. |
 | `native:` block on mysterium | `append/bandwidth/mysterium.yml` | Desktop can run a service as a supervised native process with no container runtime. The web app deploys through Docker on a worker and has no such runtime. |
 | `native:` schema documentation | `append/_schema.yml` | Documents the field above. |
 
