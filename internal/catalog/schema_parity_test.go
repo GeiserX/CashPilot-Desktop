@@ -125,6 +125,30 @@ func TestMysteriumCapabilitiesAndDeviceParse(t *testing.T) {
 	if !slices.Contains(strings.Fields(svc.Native.Command), protected) {
 		t.Errorf("mysterium native.command must carry %q like docker.command, got %q", protected, svc.Native.Command)
 	}
+
+	// Windows reads the flag nowhere the default node runs. With --userspace the
+	// netstack enforces a list, but it reads the flag's compiled-in default
+	// (FlagFirewallProtectedNetworks.GetValue() in netstack-provider/netstack.go at
+	// 1.38.5), never the command line. Every range of the protected list must
+	// therefore be covered either by that default or by the Windows Firewall rule.
+	win, ok := svc.NativeBinaryFor("windows", "amd64")
+	if !ok {
+		t.Fatal("mysterium must declare a windows/amd64 native binary")
+	}
+	if !slices.Contains(strings.Fields(win.Args), "--userspace") {
+		t.Errorf("mysterium windows binary must run with --userspace, args = %q", win.Args)
+	}
+	netstackDefault := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+	for _, cidr := range strings.Split(strings.TrimPrefix(protected, fw.Flag), ",") {
+		if !slices.Contains(netstackDefault, cidr) && !slices.Contains(win.FirewallBlock, cidr) {
+			t.Errorf("on windows nothing blocks %s: the netstack default does not hold it and firewall_block = %v", cidr, win.FirewallBlock)
+		}
+	}
+	for _, b := range svc.Native.Binaries {
+		if b.OS != "windows" && (b.Args != "" || len(b.FirewallBlock) > 0) {
+			t.Errorf("mysterium %s/%s must keep the shared launch, got args=%q firewall_block=%v", b.OS, b.Arch, b.Args, b.FirewallBlock)
+		}
+	}
 }
 
 // TestTraffmonetizerImageByArchParses guards the per-architecture image overrides.

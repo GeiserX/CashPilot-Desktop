@@ -16,6 +16,12 @@
 #                           # value (a placeholder like "TODO-verify" never executes).
 #       archive: tar.gz   # tar.gz | zip | none  (none = the url IS the raw binary)
 #       bin: "myst"       # path to the executable inside the archive (e.g. "myst.exe")
+#       args: ""          # optional; tokenized like command and placed BEFORE it,
+#                         # for a global flag only this OS needs (e.g. "--userspace")
+#       firewall_block: []  # optional, os: windows only; CIDRs an outbound Windows
+#                           # Firewall rule blocks this binary from. Desktop creates
+#                           # the rule (one admin prompt) before it starts the binary,
+#                           # refuses to start without it, and deletes it on remove.
 #   command: ""  (arg template for the binary; tokenized then ${VAR}-substituted with
 #                 env, argv-only/no-shell — same safe path as docker.command)
 #   env: []  (same shape as docker.env; resolved + passed to the process environment)

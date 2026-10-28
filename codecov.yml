@@ -42,3 +42,4 @@ ignore:
   - "tray_darwin.go"   # cgo / AppKit platform glue
   - "tray_other.go"    # non-darwin tray stub
   - "internal/bgservice/agent_*.go"  # OS service-manager shell-out glue (launchctl/systemctl/schtasks); needs a real service manager to exercise, pure logic lives in render.go/parse.go (100% covered)
+  - "internal/runtime/firewall_windows.go"  # PowerShell shell-out glue for the Windows Firewall; needs a real firewall and an admin prompt (TestFirewallBlockLive drives it by hand), pure logic lives in firewall.go
