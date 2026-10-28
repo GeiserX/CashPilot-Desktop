@@ -174,6 +174,11 @@ type DockerConfig struct {
 	// seconds after any stop, however long Docker is willing to wait.
 	Entrypoint  []string `json:"entrypoint" yaml:"entrypoint"`
 	NetworkMode string   `json:"networkMode" yaml:"network_mode"`
+	// NodeFirewall says where a node firewalls its own customers off private ranges
+	// (the flag in Command carrying the ranges, the nat chain, the blackhole address).
+	// The web worker reads it to check the node's isolation; Desktop parses it so the
+	// field round-trips and the strict-decode test passes, and does not act on it.
+	NodeFirewall NodeFirewall `json:"nodeFirewall" yaml:"node_firewall"`
 	// CapAdd are the Linux capabilities the container needs on top of a cap_drop ALL
 	// baseline. Getting this wrong does not crash the container: Mysterium without
 	// SETUID and SETGID registers, looks healthy, and fails every session at setup.
@@ -196,6 +201,13 @@ type DockerConfig struct {
 	Resources            ResourceLimits `json:"resources" yaml:"resources"`
 	Setup                string         `json:"setup" yaml:"setup"`
 	Notes                string         `json:"notes" yaml:"notes"`
+}
+
+// NodeFirewall is the optional docker.node_firewall block (see services/_schema.yml).
+type NodeFirewall struct {
+	Flag      string `json:"flag" yaml:"flag"`
+	Chain     string `json:"chain" yaml:"chain"`
+	Blackhole string `json:"blackhole" yaml:"blackhole"`
 }
 
 // CriticalVolume is one mount holding state that cannot be recovered if it is

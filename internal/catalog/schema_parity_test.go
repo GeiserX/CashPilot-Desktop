@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -102,6 +103,27 @@ func TestMysteriumCapabilitiesAndDeviceParse(t *testing.T) {
 	// Desktop-only: the native block must survive the catalog sync.
 	if !svc.HasNative() {
 		t.Error("mysterium must keep its Desktop-only native: block through the catalog sync")
+	}
+
+	// The node's default protected list leaves out 100.64.0.0/10 (Tailscale) and
+	// 169.254.0.0/16 (cloud metadata). docker.node_firewall names the flag carrying
+	// the full list; the native launch args must carry the same word, or the native
+	// node quietly runs on the default and a customer can reach the tailnet.
+	fw := svc.Docker.NodeFirewall
+	if fw.Flag == "" || fw.Chain == "" || fw.Blackhole == "" {
+		t.Fatalf("mysterium docker.node_firewall must parse, got %+v", fw)
+	}
+	protected := ""
+	for _, word := range strings.Fields(svc.Docker.Command) {
+		if strings.HasPrefix(word, fw.Flag) {
+			protected = word
+		}
+	}
+	if !strings.Contains(protected, "100.64.0.0/10") || !strings.Contains(protected, "169.254.0.0/16") {
+		t.Fatalf("mysterium docker.command must protect 100.64.0.0/10 and 169.254.0.0/16, got %q", protected)
+	}
+	if !slices.Contains(strings.Fields(svc.Native.Command), protected) {
+		t.Errorf("mysterium native.command must carry %q like docker.command, got %q", protected, svc.Native.Command)
 	}
 }
 

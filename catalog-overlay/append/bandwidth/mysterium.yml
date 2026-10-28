@@ -11,6 +11,23 @@
 # unauthenticated node admin API to the local network. Port 4449 and the accepted
 # terms are unchanged, so the earnings collector at
 # http://localhost:4449/tequilapi still works.
+#
+# --firewall.protected.networks DOES mirror docker.command: the node's default list
+# (10/8, 172.16/12, 192.168/16, 127/8) leaves out 100.64.0.0/10 (CGNAT and
+# Tailscale) and 169.254.0.0/16 (cloud metadata), so a VPN customer could reach the
+# user's tailnet. The flag is registered on every OS in node 1.38.5, but what it
+# does depends on the OS (node source at the 1.38.5 tag):
+#   linux:   nat/service_iptables.go sends each range to 240.0.0.1 in the nat chain
+#            MYST, the same blackhole the container gets.
+#   darwin:  nat/service_pfctl.go writes a pf `no nat ... to { ranges }` rule, so
+#            customer traffic to them leaves un-NATed and gets no reply. It is
+#            weaker than a blackhole, but without the flag 100.64/10 and 169.254/16
+#            are NATed through to the destination.
+#   windows: NOT enforced. nat/service_ics.go (Internet Connection Sharing) never
+#            reads the list, and the WireGuard path on Windows is the userspace
+#            client, which does not read it either; only --userspace (netstack)
+#            and OpenVPN do. The flag is accepted and harmless there, and is kept
+#            in the one shared command so the list is right if that changes.
 native:
   binaries:
     - os: darwin
@@ -37,5 +54,5 @@ native:
       sha256: "3ebecba44637462351ebf8fe62794db83088345fb5f8dd75a455bea0f762fc44"
       archive: zip
       bin: "myst.exe"
-  command: "--ui.address=127.0.0.1 --tequilapi.address=127.0.0.1 service --agreed-terms-and-conditions"
+  command: "--ui.address=127.0.0.1 --tequilapi.address=127.0.0.1 --firewall.protected.networks=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,100.64.0.0/10,169.254.0.0/16 service --agreed-terms-and-conditions"
   env: []
