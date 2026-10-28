@@ -50,7 +50,7 @@ the YAML rather than by matching text. It fails when:
 - a pin exists for a slug that is gone, retired, or already pinned upstream.
 
 One entry keeps its tag somewhere else: `anyone-protocol` carries an untagged
-`docker.image` plus the legacy `docker.tag: latest` key. The guard reads that key as
+`docker.image` in the web catalog plus the legacy `docker.tag: "0.4.10.2-r1"` key. The guard reads that key as
 the entry's tag, so its pin names the tag too
 (`drumsergio/cashpilot-anyone:0.4.10.2-r1@sha256:...`). The tag is there so an
 upstream re-tag stops the sync instead of leaving Desktop on the previous build while
