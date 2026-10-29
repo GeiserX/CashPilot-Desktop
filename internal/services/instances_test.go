@@ -506,6 +506,10 @@ func TestScalingLimitRunsOneCopyOfATypedDeviceID(t *testing.T) {
 	if got := m.ScalingLimit(svc); got.Max != 1 || got.Reason != "Typed knows each device by its Device UUID, which two copies would share." {
 		t.Fatalf("a typed device id = %+v, want one copy with the reason", got)
 	}
+	svc.Docker.Env[0].Label = ""
+	if got := m.ScalingLimit(svc); got.Max != 1 || got.Reason != "Typed knows each device by its UUID, which two copies would share." {
+		t.Fatalf("an unlabelled typed device id = %+v, want the env key in the reason", got)
+	}
 
 	real, err := catalog.LoadEmbedded(os.DirFS(filepath.Join("..", "..")))
 	if err != nil {
