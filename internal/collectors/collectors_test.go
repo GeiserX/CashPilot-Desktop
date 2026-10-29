@@ -32,8 +32,8 @@ func TestCollectAnyoneAlwaysEmitsTokenCurrency(t *testing.T) {
 	var hosts []string
 	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		hosts = append(hosts, req.URL.Host)
-		// AO dry-run reward: 1.5e18 base units == 1.5 ANYONE tokens.
-		body := `{"Messages":[{"Data":"1500000000000000000"}]}`
+		// rewards view: 1.5e18 base units == 1.5 ANYONE tokens.
+		body := `{"fingerprint":"fp1","reward":"1500000000000000000"}`
 		return &http.Response{
 			StatusCode: 200,
 			Body:       io.NopCloser(strings.NewReader(body)),
@@ -55,6 +55,65 @@ func TestCollectAnyoneAlwaysEmitsTokenCurrency(t *testing.T) {
 	for _, h := range hosts {
 		if strings.Contains(h, "coingecko") {
 			t.Fatalf("collector must no longer price via CoinGecko; it contacted %q", h)
+		}
+	}
+}
+
+// anyoneStub answers every request with one status and body, recording the URLs.
+func anyoneStub(status int, body string, urls *[]string) *Registry {
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		*urls = append(*urls, req.Method+" "+req.URL.String())
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader(body)),
+			Header:     make(http.Header),
+		}, nil
+	})
+	return &Registry{http: &http.Client{Transport: rt}}
+}
+
+// TestCollectAnyoneReadsTheRewardsView: the AO dry-run on cu.anyone.tech answers
+// 404 for everything; the reward lives in the relay-rewards `rewards` view.
+func TestCollectAnyoneReadsTheRewardsView(t *testing.T) {
+	var urls []string
+	r := anyoneStub(200, `{"fingerprint":"FP1","reward":"2000000000000000000"}`, &urls)
+	res, err := r.collectAnyone(context.Background(), map[string]string{"ANYONE_FINGERPRINTS": "FP1"})
+	if err != nil {
+		t.Fatalf("collectAnyone error: %v", err)
+	}
+	if res.Balance != 2 {
+		t.Fatalf("Balance = %v, want 2", res.Balance)
+	}
+	want := "GET " + anyoneRewardsURL + "?fingerprint=FP1"
+	if len(urls) != 1 || urls[0] != want {
+		t.Fatalf("requests = %v, want [%s]", urls, want)
+	}
+}
+
+func TestCollectAnyoneNeverRewardedIsZero(t *testing.T) {
+	var urls []string
+	r := anyoneStub(200, `{"fingerprint":"FP1"}`, &urls)
+	res, err := r.collectAnyone(context.Background(), map[string]string{"ANYONE_FINGERPRINTS": "FP1"})
+	if err != nil || res.Balance != 0 {
+		t.Fatalf("got %v, %v; want 0, nil (an omitted reward is a real zero)", res.Balance, err)
+	}
+}
+
+func TestCollectAnyoneFailuresAreErrorsNotZero(t *testing.T) {
+	cases := map[string]struct {
+		status int
+		body   string
+	}{
+		"stale process id": {404, "404 page not found"},
+		"another relay":    {200, `{"fingerprint":"FP2","reward":"9000000000000000000"}`},
+		"no echo":          {200, `{"reward":"1"}`},
+		"non-numeric":      {200, `{"fingerprint":"FP1","reward":"x"}`},
+	}
+	for name, c := range cases {
+		var urls []string
+		r := anyoneStub(c.status, c.body, &urls)
+		if _, err := r.collectAnyone(context.Background(), map[string]string{"ANYONE_FINGERPRINTS": "FP1"}); err == nil {
+			t.Errorf("%s: no error, want one", name)
 		}
 	}
 }
