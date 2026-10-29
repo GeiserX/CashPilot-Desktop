@@ -40,6 +40,9 @@ type Service struct {
 	Collector        CollectorMetadata `json:"collector" yaml:"collector"`
 	Payout           Payout            `json:"payout" yaml:"payout"`
 	Disclosure       Disclosure        `json:"disclosure" yaml:"disclosure"`
+	// DeviceLink is set for providers that pay a device only once the user adds its
+	// id to their account by hand (EarnApp, ProxyRack). Nil means nothing to link.
+	DeviceLink *DeviceLink `json:"deviceLink" yaml:"device_link"`
 	// ResurrectionChecked is the date ("YYYY-MM-DD") on which a human confirmed a
 	// dead entry's programme really is gone even though its site still answers. It is
 	// carried so the reason a dead service stays dead travels with the entry instead
@@ -130,6 +133,16 @@ type Payout struct {
 	// via TequilAPI) or app (linked inside the provider's own site).
 	AddressSource string `json:"addressSource" yaml:"address_source"`
 	Notes         string `json:"notes" yaml:"notes"`
+}
+
+// DeviceLink is the step after a deploy that makes a device earn for the user: the
+// env var holding the device id, where to claim it (${VAR} is filled from the
+// deployed env, URL-encoded) and what to do there. The web catalog's loader refuses
+// an IDEnv that is secret, so the id is safe to show.
+type DeviceLink struct {
+	IDEnv string `json:"idEnv" yaml:"id_env"`
+	URL   string `json:"url" yaml:"url"`
+	Steps string `json:"steps" yaml:"steps"`
 }
 
 // Disclosure is what a service does with the user's machine, in plain words. An

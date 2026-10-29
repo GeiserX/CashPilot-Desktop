@@ -20,7 +20,7 @@ docker:
   # CashPilot's own image (images/earnapp/). It carries no Bright Data code: the
   # pinned build is fetched at first start and checked against SHA256SUMS. The old
   # default, fazalfarhan01/earnapp:lite, froze the 2022 client 1.294.218.
-  image: "drumsergio/cashpilot-earnapp:1.665.73-r1@sha256:151dab799d2279a7fc47a4f2b27febd9d7487573f8793dc1c80ba7de57b08d5c"
+  image: "drumsergio/cashpilot-earnapp:1.665.73-r2@sha256:727d24733b404911431c04071a5e63c41e2f176b6edb63ee0cf8635d4843d564"
   platforms: [linux/amd64, linux/arm64, linux/arm/v7]
   resources:
     mem_limit: "256m"
@@ -40,6 +40,13 @@ docker:
   command: ""
   network_mode: ""
   privileged: false
+
+device_link:
+  id_env: EARNAPP_UUID
+  url: "https://earnapp.com/r/${EARNAPP_UUID}"
+  steps: >-
+    Open this link while signed in to EarnApp to add the node to your account.
+    Until you do, the node earns but nothing reaches your balance.
 
 requirements:
   residential_ip: true

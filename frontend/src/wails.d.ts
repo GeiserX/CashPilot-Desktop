@@ -375,6 +375,8 @@ export interface Service {
     ispRisk: string;
     accountRules: string;
   };
+  // Set for providers that pay a device only once its id is added to the account.
+  deviceLink: { idEnv: string; url: string; steps: string } | null;
   resurrectionChecked: string;
   manualOnly: boolean;
 }

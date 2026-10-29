@@ -22,6 +22,7 @@ import {
   composeExportControl,
   composeSelectionExport,
   credentialHint,
+  deviceLinkText,
   disclosureFacts,
   minimumIn,
   payoutFacts,
@@ -263,6 +264,26 @@ check(
   referralNote({...honeygain, referral: {signupUrl: "https://example.com/signup", code: ""}}) === "",
 );
 check("a service with no referral block gets no note", referralNote({...honeygain, referral: undefined}) === "");
+
+// ---------------------------------------------------------------------------
+// The device link: after a deploy, a provider that pays a device only once its id
+// is on the user's account says so, with the id and the link filled in.
+
+const earnapp = {
+  slug: "earnapp",
+  deviceLink: {idEnv: "EARNAPP_UUID", url: "https://earnapp.com/r/${EARNAPP_UUID}", steps: "Open this link while signed in."},
+};
+const uuid = "sdk-node-" + "a".repeat(32);
+const linkText = deviceLinkText(earnapp, {EARNAPP_UUID: ` ${uuid} `});
+check("a deploy that needs linking says so", linkText.startsWith("Link this device to your account"), linkText);
+check("it carries the id", linkText.split("\n").includes(uuid), linkText);
+check("and the link with the id in it", linkText.includes(`https://earnapp.com/r/${uuid}`), linkText);
+check(
+  "the id is URL-encoded into the link",
+  deviceLinkText({deviceLink: {...earnapp.deviceLink, url: "https://x.test/${EARNAPP_UUID}"}}, {EARNAPP_UUID: "a/b"}).includes("https://x.test/a%2Fb"),
+);
+check("no id typed, nothing to link", deviceLinkText(earnapp, {EARNAPP_UUID: ""}) === "");
+check("a service with no device link gets nothing", deviceLinkText(honeygain, {EARNAPP_UUID: uuid}) === "");
 
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);
