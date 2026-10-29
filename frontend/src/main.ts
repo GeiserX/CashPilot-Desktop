@@ -1303,7 +1303,7 @@ async function runWizardAction(slug: string, action: string) {
         instancesInput.value = String(deployment.instances || 1);
         instancesInput.dataset.initial = String(deployment.instances || 1);
       }
-      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values);
+      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "");
       if (output) output.textContent = link ? `Deployed.\n\n${link}` : "Deployed.";
       return;
     }
