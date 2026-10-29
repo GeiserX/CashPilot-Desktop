@@ -44,7 +44,7 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { customImageBadge, imageChoice } from "./render/image";
 import { copyRows, firstCopyLabel, instancesChoice } from "./render/instances";
-import { composeSelectionExport } from "./render/details";
+import { composeSelectionExport, deviceLinkText } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
@@ -1303,7 +1303,8 @@ async function runWizardAction(slug: string, action: string) {
         instancesInput.value = String(deployment.instances || 1);
         instancesInput.dataset.initial = String(deployment.instances || 1);
       }
-      if (output) output.textContent = "Deployed.";
+      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values);
+      if (output) output.textContent = link ? `Deployed.\n\n${link}` : "Deployed.";
       return;
     }
     if (action === "collect") {
