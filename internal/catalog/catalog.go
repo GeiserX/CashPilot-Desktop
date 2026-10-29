@@ -362,6 +362,11 @@ type CollectorMetadata struct {
 	// PerNodeEarnings says the collector can break earnings down per node rather
 	// than reporting only an account total.
 	PerNodeEarnings bool `json:"perNodeEarnings" yaml:"per_node_earnings"`
+	// QuietDays is how many days the balance can stand still while the service
+	// works normally (a vetting period, batched settlements). The web app's
+	// "gone quiet" heads-up waits at least this long. Desktop has no such
+	// heads-up yet; the field is read so the value is there when it does.
+	QuietDays int `json:"quietDays" yaml:"quiet_days"`
 }
 
 // HasNative reports whether the service declares at least one native binary, i.e. it

@@ -369,3 +369,15 @@ func TestPriorityLeadsTheCatalog(t *testing.T) {
 		t.Errorf("ranked order = %s, want %s", strings.Join(got, ","), want)
 	}
 }
+
+// TestBatchEarnersCarryTheirQuietDays guards the catalog's collector.quiet_days:
+// a service that earns in batches must say so, or a quiet balance between
+// batches reads as a service that stopped earning.
+func TestBatchEarnersCarryTheirQuietDays(t *testing.T) {
+	cat := realCatalog(t)
+	for _, slug := range []string{"storj", "mysterium", "anyone-protocol", "grass"} {
+		if got := mustGet(t, cat, slug).Collector.QuietDays; got < 7 {
+			t.Errorf("%s quiet_days = %d, want at least 7", slug, got)
+		}
+	}
+}
