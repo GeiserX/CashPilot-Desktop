@@ -75,6 +75,8 @@ export interface AppState {
   // Per slug, copies 2..N of a service that runs more than once. Copy 1 is its
   // entry in deployments.
   copies: Record<string, ServiceCopy[]> | null;
+  // Per slug, the device id the last deploy added to the user's account itself.
+  addedDevices: Record<string, string> | null;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.

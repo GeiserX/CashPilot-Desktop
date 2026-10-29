@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
@@ -63,6 +64,12 @@ type App struct {
 	// refresh) never stack. schedCancel/schedDone are the running loop's stop
 	// handle, guarded by schedMu because Startup, SaveSettings and Shutdown touch
 	// them from different goroutines.
+	// addedDevices is, per slug, the device id the last deploy added to the user's
+	// account through the provider's API, so the deploy output can say so instead of
+	// asking the user to do it. Guarded by addedMu.
+	addedMu      sync.Mutex
+	addedDevices map[string]string
+
 	collecting  atomic.Bool
 	schedMu     sync.Mutex
 	schedCancel context.CancelFunc
@@ -88,6 +95,14 @@ type App struct {
 type collectorRegistry interface {
 	Collect(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error)
 	Supports(slug string) bool
+}
+
+// deviceRegistry is the part of the collector registry that knows whether a deployed
+// device is on the user's account (collectors/devices.go). Optional, so test fakes of
+// collectorRegistry need not implement it.
+type deviceRegistry interface {
+	Unlinked(slug string) []string
+	RegisterDevice(ctx context.Context, slug string, credentials map[string]string) bool
 }
 
 func NewApp() *App {
@@ -267,6 +282,9 @@ type AppState struct {
 	// Copies is, per slug, copies 2..N of a service that runs more than once. Copy 1
 	// is the service's entry in Deployments.
 	Copies map[string][]runtime.ContainerInfo `json:"copies"`
+	// AddedDevices is, per slug, the device id the last deploy added to the user's
+	// account itself (ProxyRack with its API key saved), so no manual step is needed.
+	AddedDevices map[string]string `json:"addedDevices"`
 }
 
 type Notification struct {
@@ -428,7 +446,43 @@ func (a *App) GetAppState() (AppState, error) {
 		CollectorFields:  collectors.AllFields(),
 		Scaling:          a.services.ScalingLimits(visible),
 		Copies:           a.services.Copies(),
+		AddedDevices:     a.addedDeviceIDs(),
 	}, nil
+}
+
+func (a *App) addedDeviceIDs() map[string]string {
+	a.addedMu.Lock()
+	defer a.addedMu.Unlock()
+	out := make(map[string]string, len(a.addedDevices))
+	for slug, id := range a.addedDevices {
+		out[slug] = id
+	}
+	return out
+}
+
+// registerDevice adds a just-deployed device to the user's account where the
+// provider's API can (ProxyRack, with its API key among the credentials). It never
+// fails the deploy, which has already happened: anything short of "on the account"
+// leaves the manual step in the deploy output.
+func (a *App) registerDevice(slug string, creds map[string]string) {
+	devicesReg, ok := a.collectors.(deviceRegistry)
+	svc, inCatalog := a.catalog.Get(slug)
+	if !ok || !inCatalog || svc.DeviceLink == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 20*time.Second)
+	defer cancel()
+	added := devicesReg.RegisterDevice(ctx, slug, creds)
+	a.addedMu.Lock()
+	defer a.addedMu.Unlock()
+	if !added {
+		delete(a.addedDevices, slug)
+		return
+	}
+	if a.addedDevices == nil {
+		a.addedDevices = map[string]string{}
+	}
+	a.addedDevices[slug] = strings.TrimSpace(creds[svc.DeviceLink.IDEnv])
 }
 
 // GetEarningsSummary returns the converted, aggregated earnings summary on its
@@ -1059,6 +1113,7 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 		return store.Deployment{}, err
 	}
 	a.emitEvent("deployment:changed", deployment)
+	a.registerDevice(slug, creds)
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
 	// services with a native collector are worth kicking; the rest would merely
@@ -1505,8 +1560,41 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 			items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
 		}
 	}
+	items = append(items, a.unlinkedDeviceNotifications(deployments)...)
 	if len(deployments) == 0 {
 		items = append(items, Notification{Level: "info", Title: "No services deployed", Message: "Use the setup wizard or register a mobile device to start tracking earnings."})
+	}
+	return items
+}
+
+// unlinkedDeviceNotifications warns, per deployed service, about device ids the
+// provider itself says are not on the user's account (collectors/devices.go): such a
+// node runs and earns for nobody. Only that answer counts, never a quiet balance.
+func (a *App) unlinkedDeviceNotifications(deployments []store.Deployment) []Notification {
+	devicesReg, ok := a.collectors.(deviceRegistry)
+	if !ok || a.catalog == nil {
+		return nil
+	}
+	var items []Notification
+	for _, dep := range deployments {
+		ids := devicesReg.Unlinked(dep.Slug)
+		svc, inCatalog := a.catalog.Get(dep.Slug)
+		if len(ids) == 0 || !inCatalog || svc.DeviceLink == nil {
+			continue
+		}
+		var lines []string
+		for _, id := range ids {
+			line := id
+			if url := svc.DeviceLink.URL; url != "" {
+				line += " " + strings.ReplaceAll(url, "${"+svc.DeviceLink.IDEnv+"}", neturl.PathEscape(id))
+			}
+			lines = append(lines, line)
+		}
+		items = append(items, Notification{
+			Level:   "warning",
+			Title:   svc.Name + " device not on your account",
+			Message: "It earns for nobody until you add it. " + strings.TrimSpace(svc.DeviceLink.Steps) + " " + strings.Join(lines, "; "),
+		})
 	}
 	return items
 }

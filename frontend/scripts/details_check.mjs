@@ -283,6 +283,12 @@ check(
   deviceLinkText({deviceLink: {...earnapp.deviceLink, url: "https://x.test/${EARNAPP_UUID}"}}, {EARNAPP_UUID: "a/b"}).includes("https://x.test/a%2Fb"),
 );
 check("no id typed, nothing to link", deviceLinkText(earnapp, {EARNAPP_UUID: ""}) === "");
+const added = deviceLinkText(earnapp, {EARNAPP_UUID: uuid}, uuid);
+check("a device the deploy added asks for nothing", added.startsWith("Added to your account") && !added.includes("https://"), added);
+check(
+  "an added id that is not this one keeps the manual step",
+  deviceLinkText(earnapp, {EARNAPP_UUID: uuid}, "other").startsWith("Link this device"),
+);
 check("a service with no device link gets nothing", deviceLinkText(honeygain, {EARNAPP_UUID: uuid}) === "");
 
 console.log(`${checks - failures}/${checks} checks passed`);
