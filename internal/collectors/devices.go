@@ -18,10 +18,13 @@ import (
 
 // deviceState is the last finished answer per slug: the deployed ids the provider
 // says are not on the account. A slug is absent when the last finished check found
-// nothing missing, or when no check has finished yet.
+// nothing missing, or when no check has finished yet. current is the device id last
+// checked per slug: a new id drops the old answer, and an answer about an id that is
+// no longer current (a check that outlived a redeploy) is ignored.
 type deviceState struct {
 	mu       sync.Mutex
 	unlinked map[string][]string
+	current  map[string]string
 }
 
 // Unlinked returns the deployed device ids the provider last said are not on the
@@ -32,19 +35,36 @@ func (r *Registry) Unlinked(slug string) []string {
 	return append([]string(nil), r.devices.unlinked[slug]...)
 }
 
-// recordDeviceCheck stores a finished check. Callers skip it when the check did not
-// finish, which leaves the previous answer as it was.
-func (r *Registry) recordDeviceCheck(slug string, missing []string) {
+// noteDevice marks uuid as the device now deployed for slug, before it is checked.
+// A different id than last time drops the old answer, which was about another device.
+func (r *Registry) noteDevice(slug, uuid string) {
 	r.devices.mu.Lock()
 	defer r.devices.mu.Unlock()
-	if len(missing) == 0 {
+	if r.devices.current == nil {
+		r.devices.current = map[string]string{}
+	}
+	if r.devices.current[slug] != uuid {
+		delete(r.devices.unlinked, slug)
+	}
+	r.devices.current[slug] = uuid
+}
+
+// recordDeviceCheck stores a finished check of uuid. Callers skip it when the check
+// did not finish, which leaves the previous answer as it was.
+func (r *Registry) recordDeviceCheck(slug, uuid string, linked bool) {
+	r.devices.mu.Lock()
+	defer r.devices.mu.Unlock()
+	if r.devices.current[slug] != uuid {
+		return
+	}
+	if linked {
 		delete(r.devices.unlinked, slug)
 		return
 	}
 	if r.devices.unlinked == nil {
 		r.devices.unlinked = map[string][]string{}
 	}
-	r.devices.unlinked[slug] = missing
+	r.devices.unlinked[slug] = []string{uuid}
 }
 
 const (
@@ -60,19 +80,21 @@ func (r *Registry) checkEarnAppDevice(ctx context.Context, uuid string, headers 
 	if uuid == "" {
 		return
 	}
+	r.noteDevice("earnapp", uuid)
 	var list []struct {
 		UUID string `json:"uuid"`
 	}
-	if err := r.doJSONWithCookies(ctx, "GET", earnAppDevicesURL, nil, headers, cookies, &list); err != nil {
+	// A null body decodes to a nil list without an error; it is not an answer.
+	if err := r.doJSONWithCookies(ctx, "GET", earnAppDevicesURL, nil, headers, cookies, &list); err != nil || list == nil {
 		return
 	}
 	for _, device := range list {
 		if device.UUID == uuid {
-			r.recordDeviceCheck("earnapp", nil)
+			r.recordDeviceCheck("earnapp", uuid, true)
 			return
 		}
 	}
-	r.recordDeviceCheck("earnapp", []string{uuid})
+	r.recordDeviceCheck("earnapp", uuid, false)
 }
 
 // proxyRackStatus is what /device/status says about deviceID: "linked" for a 200
@@ -105,11 +127,12 @@ func (r *Registry) checkProxyRackDevice(ctx context.Context, apiKey, uuid string
 	if uuid == "" {
 		return
 	}
+	r.noteDevice("proxyrack", uuid)
 	switch r.proxyRackStatus(ctx, apiKey, uuid) {
 	case "linked":
-		r.recordDeviceCheck("proxyrack", nil)
+		r.recordDeviceCheck("proxyrack", uuid, true)
 	case "unlinked":
-		r.recordDeviceCheck("proxyrack", []string{uuid})
+		r.recordDeviceCheck("proxyrack", uuid, false)
 	}
 }
 
@@ -133,6 +156,7 @@ func (r *Registry) RegisterDevice(ctx context.Context, slug string, credentials 
 	if name == "" || strings.Contains(name, "${") {
 		name = "cashpilot-" + uuid[:min(8, len(uuid))]
 	}
+	r.noteDevice("proxyrack", uuid)
 	var added struct {
 		Status string `json:"status"`
 	}
@@ -142,7 +166,7 @@ func (r *Registry) RegisterDevice(ctx context.Context, slug string, credentials 
 		linked = r.proxyRackStatus(ctx, apiKey, uuid) == "linked"
 	}
 	if linked {
-		r.recordDeviceCheck("proxyrack", nil)
+		r.recordDeviceCheck("proxyrack", uuid, true)
 	}
 	return linked
 }

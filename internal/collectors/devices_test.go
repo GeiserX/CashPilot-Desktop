@@ -24,12 +24,17 @@ const (
 
 func collectEarnAppWith(t *testing.T, r *Registry, stub *stubTransport, devices stubResponse) Result {
 	t.Helper()
+	return collectEarnAppFor(t, r, stub, testEarnAppUUID, devices)
+}
+
+func collectEarnAppFor(t *testing.T, r *Registry, stub *stubTransport, uuid string, devices stubResponse) Result {
+	t.Helper()
 	stub.routes = map[string]stubResponse{
 		earnAppRotate:  {},
 		earnAppMoney:   {body: `{"balance":1.5}`},
 		earnAppDevices: devices,
 	}
-	result, err := r.collectEarnApp(context.Background(), map[string]string{"EARNAPP_OAUTH_TOKEN": "t", "EARNAPP_UUID": testEarnAppUUID})
+	result, err := r.collectEarnApp(context.Background(), map[string]string{"EARNAPP_OAUTH_TOKEN": "t", "EARNAPP_UUID": uuid})
 	if err != nil || result.Balance != 1.5 {
 		t.Fatalf("collectEarnApp = %+v, %v; the balance must not depend on the device check", result, err)
 	}
@@ -54,6 +59,37 @@ func TestEarnAppReportsAUUIDMissingFromTheAccount(t *testing.T) {
 	collectEarnAppWith(t, r, stub, stubResponse{body: `[{"uuid":"` + testEarnAppUUID + `","title":"box"}]`})
 	if got := r.Unlinked("earnapp"); got != nil {
 		t.Fatalf("a listed UUID is linked, Unlinked = %v", got)
+	}
+}
+
+func TestEarnAppNullDeviceListIsNotAnAnswer(t *testing.T) {
+	stub := &stubTransport{}
+	r := newTestRegistry(t, stub)
+	collectEarnAppWith(t, r, stub, stubResponse{body: `null`})
+	if got := r.Unlinked("earnapp"); got != nil {
+		t.Fatalf("a null device list proves nothing, Unlinked = %v", got)
+	}
+}
+
+func TestANewDeviceIDDropsTheOldAnswer(t *testing.T) {
+	const newUUID = "sdk-node-ffffffffffffffffffffffffffffffff"
+	stub := &stubTransport{}
+	r := newTestRegistry(t, stub)
+	collectEarnAppWith(t, r, stub, stubResponse{body: `[]`})
+	if got := r.Unlinked("earnapp"); !slices.Equal(got, []string{testEarnAppUUID}) {
+		t.Fatalf("Unlinked = %v, want the deployed UUID", got)
+	}
+
+	// Redeployed with a new UUID whose first check fails: the old device is gone.
+	collectEarnAppFor(t, r, stub, newUUID, stubResponse{status: 403, body: `{}`})
+	if got := r.Unlinked("earnapp"); got != nil {
+		t.Fatalf("after a redeploy Unlinked = %v, want the old UUID dropped", got)
+	}
+
+	// A check of the old UUID that finishes after the redeploy is ignored.
+	r.recordDeviceCheck("earnapp", testEarnAppUUID, false)
+	if got := r.Unlinked("earnapp"); got != nil {
+		t.Fatalf("a stale answer about the old UUID was stored, Unlinked = %v", got)
 	}
 }
 
