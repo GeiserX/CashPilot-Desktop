@@ -12,6 +12,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -116,6 +117,13 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 	return r.store.SaveEarnings(record)
 }
 
+// anyoneRewardsURL is the relay-rewards process on the live node, as published in
+// the runtime config of https://dashboard.anyone.io. Anyone spawns a new process on
+// every contract redeploy and the public edge routes only the current id, so a
+// stale id answers 404. Reference:
+// https://github.com/anyone-protocol/smart-contracts/blob/main/ao/docs/READING-THE-CONTRACTS.md
+const anyoneRewardsURL = "https://hb.anyone.tech/pb-19qeB0qlobop3QHOCiR_rQLUR7phal0avuJQJLSs~process@1.0/as/rewards"
+
 func (r *Registry) collectAnyone(ctx context.Context, credentials map[string]string) (Result, error) {
 	fingerprints := splitCSV(firstCredential(credentials, "ANYONE_FINGERPRINTS", "fingerprints"))
 	if len(fingerprints) == 0 {
@@ -123,39 +131,37 @@ func (r *Registry) collectAnyone(ctx context.Context, credentials map[string]str
 	}
 	totalTokens := 0.0
 	for _, fingerprint := range fingerprints {
-		payload := map[string]any{
-			"Id":     "1234",
-			"Target": "QZJTY63XZtHOHo_qPaEX7VdtemZh4rpj821xcanPGXA",
-			"Owner":  "1234",
-			"Anchor": "0",
-			"Tags": []map[string]string{
-				{"name": "Action", "value": "Get-Rewards"},
-				{"name": "Fingerprint", "value": fingerprint},
-				{"name": "Address", "value": "0x0000000000000000000000000000000000000000"},
-				{"name": "Data-Protocol", "value": "ao"},
-				{"name": "Type", "value": "Message"},
-				{"name": "Variant", "value": "ao.TN.1"},
-			},
-			"Data": "1234",
-		}
+		// The relay-rewards contract's `rewards` view on Anyone's HyperBEAM node
+		// (anyoneRewardsURL). The legacy AO dry-run on cu.anyone.tech answers 404
+		// for everything since the move to native contracts.
 		var resp struct {
-			Messages []struct {
-				Data string `json:"Data"`
-			} `json:"Messages"`
-			Error string `json:"error"`
+			Fingerprint string  `json:"fingerprint"`
+			Reward      *string `json:"reward"`
 		}
-		if err := r.doJSON(ctx, "POST", "https://cu.anyone.tech/dry-run?process-id=QZJTY63XZtHOHo_qPaEX7VdtemZh4rpj821xcanPGXA", payload, nil, &resp); err != nil {
-			return Result{}, err
-		}
-		if resp.Error != "" {
-			return Result{}, fmt.Errorf("Anyone AO error: %s", resp.Error)
-		}
-		if len(resp.Messages) == 0 || resp.Messages[0].Data == "" || resp.Messages[0].Data == "null" {
-			continue
-		}
-		raw, err := strconv.ParseFloat(resp.Messages[0].Data, 64)
+		status, err := r.doJSONStatus(ctx, "GET", anyoneRewardsURL+"?fingerprint="+url.QueryEscape(fingerprint), nil, nil, nil, &resp)
 		if err != nil {
 			return Result{}, err
+		}
+		if status == http.StatusNotFound {
+			// Not "no rewards": the view answers 200 for any fingerprint. A 404
+			// means the node no longer routes this process id.
+			return Result{}, fmt.Errorf("Anyone relay-rewards process not found (404): the process id is stale or the node is down; check relayRewardsHyperbeamProcessId on dashboard.anyone.io")
+		}
+		if status < 200 || status >= 300 {
+			return Result{}, fmt.Errorf("Anyone rewards view returned HTTP %d", status)
+		}
+		// The view echoes the requested fingerprint; anything else is not its
+		// answer for this relay.
+		if resp.Fingerprint != fingerprint {
+			return Result{}, fmt.Errorf("Anyone rewards response for %s does not echo that fingerprint; the contract shape may have changed", fingerprint)
+		}
+		// The contract omits `reward` for a relay it never paid: a real zero.
+		if resp.Reward == nil || *resp.Reward == "" {
+			continue
+		}
+		raw, err := strconv.ParseFloat(*resp.Reward, 64)
+		if err != nil {
+			return Result{}, fmt.Errorf("unexpected Anyone reward format %q", *resp.Reward)
 		}
 		totalTokens += raw / 1_000_000_000_000_000_000
 	}
