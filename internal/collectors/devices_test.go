@@ -130,6 +130,13 @@ func TestProxyRackReportsOnlyTheInvalidIDAnswer(t *testing.T) {
 	if got := fresh.Unlinked("proxyrack"); got != nil {
 		t.Fatalf("a rate limit alone must never report a device, Unlinked = %v", got)
 	}
+
+	// Only the exact documented message means "not on the account".
+	other := newTestRegistry(t, stub)
+	collectProxyRackWith(t, other, stub, stubResponse{status: 400, body: `{"status":"error","details":{"device_id":"The selected device id is invalid for this plan."}}`})
+	if got := other.Unlinked("proxyrack"); got != nil {
+		t.Fatalf("a different 400 message must never report a device, Unlinked = %v", got)
+	}
 }
 
 func TestRegisterDeviceAddsAProxyRackUUIDWithTheSavedKey(t *testing.T) {

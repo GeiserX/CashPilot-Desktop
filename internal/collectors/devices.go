@@ -71,7 +71,7 @@ const (
 	earnAppDevicesURL    = "https://earnapp.com/dashboard/api/devices?appid=earnapp&version=1.627.783"
 	proxyRackStatusURL   = "https://peer.proxyrack.com/api/device/status"
 	proxyRackAddURL      = "https://peer.proxyrack.com/api/device/add"
-	proxyRackInvalidText = "device id is invalid"
+	proxyRackInvalidText = "the selected device id is invalid."
 )
 
 // checkEarnAppDevice asks EarnApp's device list whether uuid is on the account. The
@@ -117,7 +117,7 @@ func (r *Registry) proxyRackStatus(ctx context.Context, apiKey, deviceID string)
 	switch {
 	case status == http.StatusOK && body.Status == "success":
 		return "linked"
-	case status == http.StatusBadRequest && strings.Contains(strings.ToLower(body.Details.DeviceID), proxyRackInvalidText):
+	case status == http.StatusBadRequest && strings.ToLower(strings.TrimSpace(body.Details.DeviceID)) == proxyRackInvalidText:
 		return "unlinked"
 	}
 	return ""
