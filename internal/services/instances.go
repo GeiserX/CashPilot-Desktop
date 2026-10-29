@@ -23,8 +23,9 @@ type ScalingLimit struct {
 // ScalingLimit decides the Instances box for svc. One copy where the provider allows
 // one device per IP (a second copy behind the same address earns nothing), where the
 // service has host volumes or published ports (copies would share the directories
-// and fight over the ports), and where it runs as a native program here, which this
-// app starts once. Otherwise MaxInstances. The reasons are the web app's wording.
+// and fight over the ports), where a typed device id (DeviceLink) names the device,
+// since every copy would carry the same one, and where it runs as a native program
+// here, which this app starts once. Otherwise MaxInstances. The reasons are the web app's wording.
 func (m *Manager) ScalingLimit(svc catalog.Service) ScalingLimit {
 	name := svc.Name
 	if name == "" {
@@ -38,6 +39,16 @@ func (m *Manager) ScalingLimit(svc catalog.Service) ScalingLimit {
 	}
 	if len(svc.Docker.Ports) > 0 {
 		return ScalingLimit{1, name + " publishes a port on the host, which two copies cannot share."}
+	}
+	if link := svc.DeviceLink; link != nil && link.IDEnv != "" {
+		// Copies get the same env, so they would all report one device id.
+		label := link.IDEnv
+		for _, item := range svc.Docker.Env {
+			if item.Key == link.IDEnv && item.Label != "" {
+				label = item.Label
+			}
+		}
+		return ScalingLimit{1, name + " knows each device by its " + label + ", which two copies would share."}
 	}
 	if m.kindForService(svc) == nativeRuntimeKind {
 		return ScalingLimit{1, name + " runs here as a program rather than a container, and CashPilot runs it once."}

@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -489,5 +491,35 @@ func TestScalingLimitsCoversEveryService(t *testing.T) {
 	limits := m.ScalingLimits(cat.ListVisible())
 	if len(limits) != 5 || limits["scalable"].Max != MaxInstances || limits["port"].Max != 1 {
 		t.Fatalf("ScalingLimits = %+v", limits)
+	}
+}
+
+// Copies get the same env, so a service whose device is named by a typed id would
+// run every copy as one device. The web app caps it the same way.
+func TestScalingLimitRunsOneCopyOfATypedDeviceID(t *testing.T) {
+	m := NewManager(newCopyFake(), newScalingCatalog(t), newTestStore(t))
+	svc := catalog.Service{
+		Name:       "Typed",
+		Docker:     catalog.DockerConfig{Env: []catalog.EnvVar{{Key: "UUID", Label: "Device UUID"}}},
+		DeviceLink: &catalog.DeviceLink{IDEnv: "UUID", Steps: "Add it."},
+	}
+	if got := m.ScalingLimit(svc); got.Max != 1 || got.Reason != "Typed knows each device by its Device UUID, which two copies would share." {
+		t.Fatalf("a typed device id = %+v, want one copy with the reason", got)
+	}
+	svc.Docker.Env[0].Label = ""
+	if got := m.ScalingLimit(svc); got.Max != 1 || got.Reason != "Typed knows each device by its UUID, which two copies would share." {
+		t.Fatalf("an unlabelled typed device id = %+v, want the env key in the reason", got)
+	}
+
+	real, err := catalog.LoadEmbedded(os.DirFS(filepath.Join("..", "..")))
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	proxyrack, ok := real.Get("proxyrack")
+	if !ok {
+		t.Fatal("proxyrack missing from the catalog")
+	}
+	if got := m.ScalingLimit(proxyrack); got.Max != 1 {
+		t.Fatalf("ProxyRack = %+v, want one copy per worker", got)
 	}
 }
