@@ -368,6 +368,7 @@ export interface Service {
     chain: string;
     addressEnv: string;
     addressSource: string;
+    addressRead?: { command: string[]; pattern: string };
     notes: string;
   };
   disclosure: {

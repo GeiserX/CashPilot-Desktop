@@ -132,7 +132,18 @@ type Payout struct {
 	// AddressSource is env, manual (set after deploy, e.g. Mysterium's beneficiary
 	// via TequilAPI) or app (linked inside the provider's own site).
 	AddressSource string `json:"addressSource" yaml:"address_source"`
-	Notes         string `json:"notes" yaml:"notes"`
+	// AddressRead says how the web worker reads a manual address back from the
+	// running container. Desktop has no payouts page and does not run it; it is
+	// declared so the vendored key is read rather than silently dropped.
+	AddressRead *AddressRead `json:"addressRead,omitempty" yaml:"address_read"`
+	Notes       string       `json:"notes" yaml:"notes"`
+}
+
+// AddressRead is a read-only command run inside the container and the pattern
+// whose first group is the address.
+type AddressRead struct {
+	Command []string `json:"command" yaml:"command"`
+	Pattern string   `json:"pattern" yaml:"pattern"`
 }
 
 // DeviceLink is the step after a deploy that makes a device earn for the user: the
