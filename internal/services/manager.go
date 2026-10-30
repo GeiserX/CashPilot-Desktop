@@ -7,6 +7,7 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -610,9 +611,25 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 					return fmt.Errorf("invalid value for field: %s", label)
 				}
 			}
+			if item.PortRange && value != "" && !isPortRange(value) {
+				return fmt.Errorf("invalid value for field: %s", label)
+			}
 		}
 	}
 	return nil
+}
+
+// isPortRange reports whether value is "start:end" in ASCII digits with
+// 1 <= start <= end <= 65535.
+func isPortRange(value string) bool {
+	start, end, ok := strings.Cut(value, ":")
+	if !ok {
+		return false
+	}
+	lo, err1 := strconv.Atoi(start)
+	hi, err2 := strconv.Atoi(end)
+	digits := func(s string) bool { return s != "" && strings.Trim(s, "0123456789") == "" }
+	return err1 == nil && err2 == nil && digits(start) && digits(end) && 1 <= lo && lo <= hi && hi <= 65535
 }
 
 // ValidateCredentials reports whether the given credentials would let the service

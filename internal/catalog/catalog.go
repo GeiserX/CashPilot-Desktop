@@ -310,6 +310,10 @@ type EnvVar struct {
 	// exists for values that land on a command line, where "127.0.0.1, 10.0.0.1"
 	// becomes a stray argument and the service refuses to start.
 	Pattern string `json:"pattern,omitempty" yaml:"pattern"`
+	// PortRange, when set, means the value is "start:end" with
+	// 1 <= start <= end <= 65535. A pattern checks the shape but not the order, and
+	// Mysterium refuses to start on a reversed --udp.ports.
+	PortRange bool `json:"portRange,omitempty" yaml:"port_range"`
 }
 
 type Requirements struct {

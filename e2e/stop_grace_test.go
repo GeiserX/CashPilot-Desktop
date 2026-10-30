@@ -79,4 +79,9 @@ func TestMysteriumsUIAddressFallsBackToItsDefault(t *testing.T) {
 	if slices.ContainsFunc(container.Cmd, func(arg string) bool { return arg == "--ui.address=" }) {
 		t.Errorf("the node was given an empty WebUI address: %v", container.Cmd)
 	}
+	// The guide says to forward UDP 56000-56100; without the flag the node picks
+	// from 10000:60000 and the forward is never used.
+	if !slices.Contains(container.Cmd, "--udp.ports=56000:56100") {
+		t.Errorf("command = %v, want --udp.ports=56000:56100 from the default", container.Cmd)
+	}
 }

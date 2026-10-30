@@ -758,6 +758,49 @@ docker:
 	}
 }
 
+// A port range must be in order and within 1..65535. Mysterium's UDP_PORTS is the
+// live case: the node refuses to start on a reversed --udp.ports, and a pattern can
+// only check the shape.
+func TestAPortRangeMustBeInOrderBeforeDeploy(t *testing.T) {
+	const rangedYAML = `name: Ranged
+slug: ranged
+category: bandwidth
+status: active
+docker:
+  image: example/ranged:1.0.0
+  env:
+    - key: UDP_PORTS
+      label: UDP port range
+      default: "56000:56100"
+      pattern: '[0-9]{4,5}:[0-9]{4,5}'
+      port_range: true
+`
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{"services/bandwidth/ranged.yml": {Data: []byte(rangedYAML)}})
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	fake := &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "cid", Status: "running"}}
+	m := NewManager(fake, cat, newTestStore(t))
+
+	for _, bad := range []string{"56100:56000", "56000:70000", "56000-56100", "56000"} {
+		if err := m.ValidateCredentials("ranged", map[string]string{"UDP_PORTS": bad}); err == nil ||
+			!strings.Contains(err.Error(), "UDP port range") {
+			t.Errorf("ValidateCredentials accepted %q: %v", bad, err)
+		}
+		if _, err := m.Deploy(context.Background(), "ranged", map[string]string{"UDP_PORTS": bad}); err == nil {
+			t.Errorf("Deploy accepted %q", bad)
+		}
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("a refused value still reached the runtime %d times", fake.deployCalls)
+	}
+	for _, good := range []string{"", "56000:56100", "41000:41000"} {
+		if err := m.ValidateCredentials("ranged", map[string]string{"UDP_PORTS": good}); err != nil {
+			t.Errorf("ValidateCredentials refused %q: %v", good, err)
+		}
+	}
+}
+
 // A pattern Go cannot compile refuses the value rather than letting it through
 // unchecked: the field exists because the wrong value stops the service.
 func TestAPatternThatDoesNotCompileRefusesTheValue(t *testing.T) {
