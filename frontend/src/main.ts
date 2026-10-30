@@ -36,18 +36,19 @@ import {
   StopServiceCopy,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
-import { renderHealthBadge, renderProducerBadge } from "./render/health";
-import { renderMystNodes } from "./render/myst";
+import { attentionItems, renderAttention } from "./render/attention";
+import { renderEarningsBars } from "./render/chart";
+import { renderServicesTable } from "./render/services";
+import { renderCatalogTable } from "./render/catalog";
 import { renderPreflight } from "./render/preflight";
-import { renderEarningBreakdown } from "./render/earnings";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
-import { customImageBadge, imageChoice } from "./render/image";
-import { copyRows, firstCopyLabel, instancesChoice } from "./render/instances";
+import { imageChoice } from "./render/image";
+import { instancesChoice } from "./render/instances";
 import { composeSelectionExport, deviceLinkText } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
-import type { AppState, BackgroundStatus, DailyPoint, Deployment, FleetState, HealthScore, InstallGuide, PointsBalance, ProducerReport, Service, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -61,6 +62,8 @@ let wizardSelected: string[] = [];
 let catalogFilter = "all";
 let catalogSearch = "";
 let resetScrollAfterRender = false;
+// The dashboard chart's window: the web console opens on 7 days.
+let chartDays = 7;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -151,24 +154,26 @@ function renderOnboarding(current: AppState) {
     : escapeHtml(runtime.message);
   root.innerHTML = `
     ${titlebar()}
-    ${synthwaveBackground()}
-    <main class="onboarding">
-      <section class="onboarding-card">
-        <p class="eyebrow">CashPilot Desktop</p>
-        <h1>Put your idle machine to work</h1>
-        <p class="subtitle">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
-        <div class="runtime-card ${runtimeReady ? "ok" : "warn"}">
-          <strong>${runtimeTitle}</strong>
-          <span>${runtimeBody}</span>
-          ${runtime.context ? `<small>Docker context: ${escapeHtml(runtime.context)}</small>` : ""}
-        </div>
-        <div class="actions">
-          <button class="primary" id="continue-btn" ${runtimeReady ? "" : "disabled"}>Open Dashboard</button>
-          <button class="secondary" id="refresh-runtime">Check Again</button>
-        </div>
-        <div id="install-guides" class="guide-grid"></div>
-      </section>
-    </main>
+    <div class="gate">
+      ${gateBar()}
+      <main class="gate-main">
+        <section class="gate-panel gate-panel-wide">
+          ${gateSteps(2)}
+          <h1 class="gate-title">Put your idle machine to work</h1>
+          <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
+          <div class="runtime-card ${runtimeReady ? "ok" : "warn"}">
+            <strong>${runtimeTitle}</strong>
+            <span>${runtimeBody}</span>
+            ${runtime.context ? `<small>Docker context: ${escapeHtml(runtime.context)}</small>` : ""}
+          </div>
+          <div class="gate-actions">
+            <button class="btn btn-primary btn-lg" id="continue-btn" ${runtimeReady ? "" : "disabled"}>Open the dashboard</button>
+            <button class="btn btn-ghost btn-lg" id="refresh-runtime">Check again</button>
+          </div>
+          <div id="install-guides" class="guide-grid"></div>
+        </section>
+      </main>
+    </div>
   `;
   wireChrome();
   document.querySelector("#continue-btn")?.addEventListener("click", async () => {
@@ -184,18 +189,33 @@ function renderOnboarding(current: AppState) {
   renderGuides(current.guides || []);
 }
 
+// First run: the same bar as the app, one column, one step at a time.
+function gateBar() {
+  return `<header class="gate-bar"><span class="topbar-brand">${officialLogoMark()}<span>CashPilot</span></span></header>`;
+}
+
+function gateSteps(active: 1 | 2) {
+  const step = (n: 1 | 2, label: string) =>
+    `<li class="gate-step ${n === active ? "active" : n < active ? "completed" : ""}"><span class="wizard-step-number">${n}</span>${label}</li>`;
+  return `<ol class="gate-steps" aria-label="Step ${active} of 2">${step(1, "Welcome")}${step(2, "Runtime")}</ol>`;
+}
+
 function renderWelcome() {
   root.innerHTML = `
     ${titlebar()}
-    ${synthwaveBackground()}
-    <main class="welcome-screen">
-      <section class="welcome-copy">
-        <p class="eyebrow">CashPilot Desktop</p>
-        <h1>Welcome to CashPilot</h1>
-        <p class="subtitle">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
-        <button class="primary" id="get-started">Get Started</button>
-      </section>
-    </main>
+    <div class="gate">
+      ${gateBar()}
+      <main class="gate-main">
+        <section class="gate-panel">
+          ${gateSteps(1)}
+          <h1 class="gate-title">Welcome to CashPilot</h1>
+          <p class="gate-lede">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
+          <div class="gate-actions">
+            <button class="btn btn-primary btn-lg" id="get-started">Get started</button>
+          </div>
+        </section>
+      </main>
+    </div>
   `;
   wireChrome();
   document.querySelector("#get-started")?.addEventListener("click", () => {
@@ -230,38 +250,84 @@ function renderDashboard(current: AppState) {
   const earnings = current.earnings || [];
   const summary = current.summary;
   const disp = summary?.displayCurrency || current.config.displayCurrency || "USD";
-  const runningCount = deployments.filter((dep) => dep.status === "running").length;
-  const daily = summary?.daily || [];
-  const breakdown = summary?.breakdown || [];
+  const copies = current.copies || {};
+  const containers = [...deployments, ...Object.values(copies).flat()];
+  const upCount = containers.filter((item) => item.status === "running").length;
   const points = summary?.points || [];
+  const attention = attentionItems({
+    runtime: current.runtime,
+    services,
+    deployments,
+    copies,
+    earnings,
+    outdated: current.outdatedServices,
+    health: current.health,
+  });
 
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
-      ${appSidebar("dashboard")}
       <div class="main-content">
-        ${topbar("Dashboard", current)}
+        ${topbar("dashboard", current)}
         <main class="page-content">
-        <section class="stats-grid">
-          ${metricCard("Total Balance", totalText(summary, disp), totalCaption(summary))}
-          ${metricCard("Today", formatBalance(summary?.today ?? 0, disp), changeCaption(summary?.todayChange ?? 0, "vs yesterday"))}
-          ${metricCard("This Month", formatBalance(summary?.month ?? 0, disp), summary?.monthChange ? changeCaption(summary.monthChange, "vs last month") : "So far this month")}
-          ${metricCard("Active Services", `${runningCount}`, "Containers currently running")}
+        ${pageHead("Dashboard", `
+          <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
+          <button class="btn btn-primary btn-sm" id="open-wizard">Add service</button>
+        `)}
+        <!-- The money first and largest; the container count sits at the far
+             end, smaller, because it answers a different question. -->
+        <section class="stats-grid money-strip" aria-label="Earnings">
+          <div class="stat-card stat-card-balance">
+            <div class="stat-label">Balance</div>
+            <div class="stat-value">${escapeHtml(totalText(summary, disp))}</div>
+            <div class="stat-note">${escapeHtml(totalCaption(summary))}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Today</div>
+            <div class="stat-value">${escapeHtml(formatBalance(summary?.today ?? 0, disp))}</div>
+            <div class="stat-change">${escapeHtml(changeCaption(summary?.todayChange ?? 0, "vs yesterday"))}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">This month</div>
+            <div class="stat-value">${escapeHtml(formatBalance(summary?.month ?? 0, disp))}</div>
+            <div class="stat-change">${escapeHtml(summary?.monthChange ? changeCaption(summary.monthChange, "vs last month") : "so far this month")}</div>
+          </div>
+          <div class="stat-card stat-card-ops">
+            <div class="stat-label">Containers up</div>
+            <div class="stat-value">${upCount}${containers.length !== upCount ? ` <span class="stat-qual">of ${containers.length}</span>` : ""}</div>
+          </div>
         </section>
 
-        <section class="card earnings-panel">
-          <div class="card-header">
-            <div>
-              <span class="card-title">Earnings</span>
-              <p class="muted compact-copy">Daily earnings in ${escapeHtml(disp)}.${summary?.ratesStale ? ` <span class="badge warn">rates stale</span>` : ""}</p>
-            </div>
+        ${renderAttention(attention, upCount, containers.length)}
+
+        <section class="earnings" aria-labelledby="earnings-title">
+          <div class="block-head">
+            <h2 class="block-title" id="earnings-title">Earned per day</h2>
             <div class="tab-strip">
-              <button class="tab-btn active">30 days</button>
+              ${[7, 30].map((days) => `<button class="tab-btn ${chartDays === days ? "active" : ""}" data-chart-days="${days}">${days} days</button>`).join("")}
             </div>
           </div>
-          ${renderEarningsChart(daily, disp)}
-          <div class="earnings-breakdown">
-            ${breakdown.length ? breakdown.map((item) => renderEarningBreakdown(item, disp)).join("") : `<p class="muted">No earnings yet. Deploy a service, add credentials, then collect earnings.</p>`}
+          ${renderEarningsBars(summary?.daily || [], disp, chartDays)}
+        </section>
+
+        <section class="services-block" aria-labelledby="services-title">
+          <div class="block-head">
+            <h2 class="block-title" id="services-title">Services</h2>
+            <span class="block-meta">Balances in ${escapeHtml(disp)}</span>
+          </div>
+          <div class="table-scroll">
+            ${renderServicesTable({
+              services,
+              deployments,
+              earnings,
+              breakdown: summary?.breakdown,
+              health: current.health,
+              serviceDetails: current.serviceDetails,
+              outdated: current.outdatedServices,
+              producerStates: current.producerStates,
+              copies,
+              displayCurrency: disp,
+            })}
           </div>
         </section>
 
@@ -269,20 +335,9 @@ function renderDashboard(current: AppState) {
 
         ${current.fleet ? renderFleetSection(current.fleet) : ""}
 
-        <section class="card dashboard-panel">
-          <div class="card-header">
-            <span class="card-title">Deployed Services</span>
-            <div class="header-actions">
-              <button class="secondary compact-btn" id="refresh">Refresh</button>
-              <button class="primary compact-btn" id="open-wizard">+ Add Service</button>
-            </div>
-          </div>
-          <div class="services-table-wrap">
-            ${renderServicesTable(services, deployments, earnings, current.health, current.serviceDetails, current.outdatedServices, current.producerStates)}
-          </div>
-        </section>
         <pre id="service-output" class="output dashboard-output"></pre>
         </main>
+        ${pageFoot()}
       </div>
     </div>
   `;
@@ -291,9 +346,17 @@ function renderDashboard(current: AppState) {
   maybeResetScroll();
 
   document.querySelector("#refresh")?.addEventListener("click", refreshState);
-  document.querySelector("#refresh-services")?.addEventListener("click", refreshState);
   document.querySelector("#open-wizard")?.addEventListener("click", openWizard);
   document.querySelector("#open-wizard-empty")?.addEventListener("click", openWizard);
+  document.querySelectorAll<HTMLButtonElement>("[data-chart-days]").forEach((button) => {
+    button.addEventListener("click", () => {
+      chartDays = Number(button.dataset.chartDays) || 30;
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-open-service]").forEach((button) => {
+    button.addEventListener("click", () => openWizard(button.dataset.openService || ""));
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const slug = button.dataset.slug || "";
@@ -302,46 +365,41 @@ function renderDashboard(current: AppState) {
       void (copy > 1 ? runCopyAction(slug, copy, action) : runServiceAction(slug, action));
     });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
-    });
-  });
 }
 
 function metricCard(label: string, value: string, caption: string) {
   return `
-    <article class="metric-card">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value)}</strong>
-      <small>${escapeHtml(caption)}</small>
-    </article>
+    <div class="stat-card">
+      <div class="stat-label">${escapeHtml(label)}</div>
+      <div class="stat-value">${escapeHtml(value)}</div>
+      <div class="stat-note">${escapeHtml(caption)}</div>
+    </div>
   `;
 }
 
-function appSidebar(active: View) {
+// One bar, no sidebar: brand, the views, then the money and the alerts. The page
+// title moves into the page itself (pageHead), like the web console.
+function navButton(view: View, label: string, active: View) {
+  return `<button class="sidebar-link ${active === view ? "active" : ""}" data-view="${view}"${active === view ? ' aria-current="page"' : ""}>${escapeHtml(label)}</button>`;
+}
+
+function pageHead(title: string, actions = "") {
   return `
-    <aside class="cp-sidebar">
-      <div class="sidebar-brand">
-        ${officialLogoMark()}
-        CashPilot
-      </div>
-      <nav class="sidebar-nav">
-        ${navButton("dashboard", "Dashboard", active)}
-        ${navButton("wizard", "Setup Wizard", active)}
-        ${navButton("catalog", "Service Catalog", active)}
-        ${navButton("settings", "Settings", active)}
-        ${navButton("fleet", "Fleet", active)}
-      </nav>
-      <div class="sidebar-footer">
-        <div class="footer-links">
-          <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop" title="GitHub">GitHub</button>
-          <button class="footer-link" data-url="https://github.com/sponsors/GeiserX" title="Sponsor">Sponsor</button>
-        </div>
-        <span>Desktop v${__APP_VERSION__}</span>
-      </div>
-    </aside>
+    <div class="page-head">
+      <h1 class="page-title">${escapeHtml(title)}</h1>
+      ${actions ? `<div class="page-actions">${actions}</div>` : ""}
+    </div>
+  `;
+}
+
+function pageFoot() {
+  return `
+    <footer class="page-foot">
+      <span>CashPilot Desktop v${__APP_VERSION__}</span>
+      <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop">Source</button>
+      <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop/issues">Report a problem</button>
+      <button class="footer-link" data-url="https://github.com/sponsors/GeiserX">Sponsor</button>
+    </footer>
   `;
 }
 
@@ -375,33 +433,38 @@ function officialLogoMark() {
   `;
 }
 
-function navButton(view: View, label: string, active: string) {
-  return `<button class="sidebar-link ${active === view ? "active" : ""}" data-view="${view}">${escapeHtml(label)}</button>`;
-}
 
-function topbar(title: string, current: AppState) {
+function topbar(active: View, current: AppState) {
   // The total was computed IN summary.displayCurrency, so it must be labelled
   // with that -- not with the configured preference, which can differ (the
   // summary is a snapshot and the setting can change under it). Falling back to
   // config only when the summary has no currency of its own.
   const disp = current.summary?.displayCurrency || current.config.displayCurrency || "USD";
   const notifications = current.notifications || [];
+  const runtimeOk = current.runtime.available || current.runtime.nativeAvailable;
   return `
     <header class="topbar">
-      <div class="topbar-left">
-        <span class="topbar-title">${escapeHtml(title)}</span>
+      <div class="topbar-brand">
+        ${officialLogoMark()}
+        <span>CashPilot</span>
       </div>
+      <nav class="topnav" aria-label="Main">
+        ${navButton("dashboard", "Dashboard", active)}
+        ${navButton("fleet", "Fleet", active)}
+        ${navButton("catalog", "Catalog", active)}
+        ${navButton("settings", "Settings", active)}
+        ${navButton("wizard", "Add services", active)}
+      </nav>
       <div class="topbar-right">
-        <span class="runtime-dot ${current.runtime.available || current.runtime.nativeAvailable ? "ok" : "warn"}"></span>
-        <span class="topbar-runtime">${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
-        <span class="topbar-earnings">${totalText(current.summary, disp)}</span>
+        <span class="topbar-runtime ${runtimeOk ? "" : "text-warn"}" title="${escapeHtml(current.runtime.message || "")}"><span class="runtime-dot ${runtimeOk ? "ok" : "warn"}"></span>${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
+        <span class="topbar-earnings" title="Total balance across every service">${escapeHtml(totalText(current.summary, disp))}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
         </select>
         <details class="notification-menu">
-          <summary aria-label="Notifications">Alerts <span class="notify-badge">${notifications.length}</span></summary>
+          <summary aria-label="Alerts">Alerts${notifications.length ? ` <span class="notify-badge">${notifications.length}</span>` : ""}</summary>
           <div class="notification-popover">
-            <strong>Notifications</strong>
+            <strong>Alerts</strong>
             ${notifications.length ? notifications.map((item) => `
               <div class="notification-item ${escapeHtml(item.level)}">
                 <span>${escapeHtml(item.title)}</span>
@@ -453,24 +516,24 @@ function renderCatalog(current: AppState) {
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
-      ${appSidebar("catalog")}
       <div class="main-content">
-        ${topbar("Service Catalog", current)}
+        ${topbar("catalog", current)}
         <main class="page-content">
-          <section class="card">
-            <div class="card-header">
-              <span class="card-title">Available Services</span>
-              <input class="catalog-search" id="catalog-search" type="search" placeholder="Search services..." value="${escapeHtml(catalogSearch)}" />
-            </div>
+          ${pageHead("Catalog")}
+          <div class="filter-bar">
             <div class="filter-tabs">
-              ${categories.map((category) => `<button class="filter-tab ${catalogFilter === category ? "active" : ""}" data-filter="${category}">${escapeHtml(capitalize(category))}</button>`).join("")}
+              ${categories.map((category) => `<button class="filter-tab ${catalogFilter === category ? "active" : ""}" data-filter="${category}">${escapeHtml(category === "depin" ? "DePIN" : capitalize(category))}</button>`).join("")}
             </div>
-            <div class="catalog-grid">
-              ${services.map((service) => renderCatalogCard(service, current.deployments || [], current.outdatedServices)).join("")}
+            <input class="catalog-search" id="catalog-search" type="search" placeholder="Search services" aria-label="Search services" value="${escapeHtml(catalogSearch)}" />
+          </div>
+          <section class="catalog-block">
+            <div class="table-scroll">
+              ${renderCatalogTable(services, current.deployments || [], current.outdatedServices)}
             </div>
-            <p class="referral-note">Sign Up and Visit links to providers with a referral programme are referral links: the CashPilot maintainer may earn a commission from them.</p>
+            <p class="referral-note">Visit and Sign up links to providers with a referral programme are referral links: the CashPilot maintainer may earn a commission from them.</p>
           </section>
         </main>
+        ${pageFoot()}
       </div>
     </div>
   `;
@@ -478,8 +541,15 @@ function renderCatalog(current: AppState) {
   wireShellNav();
   maybeResetScroll();
   document.querySelector<HTMLInputElement>("#catalog-search")?.addEventListener("input", (event) => {
-    catalogSearch = (event.target as HTMLInputElement).value;
+    const input = event.target as HTMLInputElement;
+    catalogSearch = input.value;
+    const caret = input.selectionStart ?? catalogSearch.length;
     render();
+    // render() replaces the page, input included: put the cursor back, or every
+    // keystroke after the first lands nowhere.
+    const next = document.querySelector<HTMLInputElement>("#catalog-search");
+    next?.focus();
+    next?.setSelectionRange(caret, caret);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-filter]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -496,34 +566,6 @@ function renderCatalog(current: AppState) {
       if (url) BrowserOpenURL(url);
     });
   });
-}
-
-function renderCatalogCard(service: Service, deployments: Deployment[], outdated: string[] | null) {
-  const deployment = deployments.find((item) => item.slug === service.slug);
-  const deployed = Boolean(deployment);
-  const isOutdated = deployed && (outdated || []).includes(service.slug);
-  const signupUrl = service.referral?.signupUrl || service.website;
-  return `
-    <article class="catalog-card">
-      <div class="service-card-header">
-        <div class="service-icon">${escapeHtml(service.name[0] || "?")}</div>
-        <div>
-          <strong>${escapeHtml(service.name)}</strong>
-          <div class="badge-row">
-            <span class="badge">${escapeHtml(service.category)}</span>
-            <span class="badge ${deployed ? "success" : ""}">${deployed ? "Deployed" : service.manualOnly ? "Manual" : "Available"}</span>
-            ${customImageBadge(deployment?.customImage)}
-            ${isOutdated ? `<span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}
-          </div>
-        </div>
-      </div>
-      <p>${escapeHtml(service.shortDescription || service.description)}</p>
-      <div class="card-actions">
-        ${service.manualOnly && signupUrl ? `<button class="primary compact-btn" data-url="${escapeHtml(signupUrl)}">Visit</button>` : `<button class="primary compact-btn" data-service="${escapeHtml(service.slug)}">${deployed ? "Manage" : "Deploy"}</button>`}
-        ${signupUrl ? `<button class="secondary compact-btn" data-url="${escapeHtml(signupUrl)}">Sign Up</button>` : ""}
-      </div>
-    </article>
-  `;
 }
 
 async function renderSettings(current: AppState) {
@@ -547,10 +589,10 @@ async function renderSettings(current: AppState) {
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
-      ${appSidebar("settings")}
       <div class="main-content">
-        ${topbar("Settings", current)}
+        ${topbar("settings", current)}
         <main class="page-content">
+          ${pageHead("Settings")}
           <section class="card">
             <div class="card-header">
               <div>
@@ -578,6 +620,7 @@ async function renderSettings(current: AppState) {
 
           ${renderBackgroundCard(background, backgroundError)}
         </main>
+        ${pageFoot()}
       </div>
     </div>
   `;
@@ -725,10 +768,10 @@ async function renderFleet(current: AppState) {
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
-      ${appSidebar("fleet")}
       <div class="main-content">
-        ${topbar("Fleet Management", current)}
+        ${topbar("fleet", current)}
         <main class="page-content">
+          ${pageHead("Fleet")}
           <section class="stats-grid">
             ${metricCard("Workers", `${fleet.workers}`, "Desktop and server workers")}
             ${metricCard("Mobiles", `${fleet.mobiles}`, "Registered mobile devices")}
@@ -778,6 +821,7 @@ async function renderFleet(current: AppState) {
             </div>
           </section>
         </main>
+        ${pageFoot()}
       </div>
     </div>
   `;
@@ -853,49 +897,6 @@ function maybeResetScroll() {
   requestAnimationFrame(() => window.scrollTo({top: 0, left: 0}));
 }
 
-function renderEarningsChart(points: DailyPoint[], displayCurrency: string) {
-  const data = (points || []).filter((point) => Number.isFinite(point.amount));
-  if (data.length === 0 || !data.some((point) => point.amount > 0)) {
-    return `
-      <div class="chart-empty">
-        <strong>No earnings collected yet</strong>
-        <span>Once collectors run, daily earnings in ${escapeHtml(displayCurrency)} appear here.</span>
-      </div>
-    `;
-  }
-  const width = 720;
-  const height = 240;
-  const max = Math.max(...data.map((point) => point.amount), 1);
-  const step = data.length > 1 ? width / (data.length - 1) : width;
-  const labelEvery = Math.max(1, Math.ceil(data.length / 6));
-  const coords = data.map((point, index) => {
-    const x = data.length > 1 ? index * step : width / 2;
-    const y = height - (point.amount / max) * 180 - 30;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(" ");
-  return `
-    <div class="chart-shell">
-      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Daily earnings chart">
-        <defs>
-          <linearGradient id="chart-fill" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#fb7185" stop-opacity="0.32"/>
-            <stop offset="100%" stop-color="#fb7185" stop-opacity="0"/>
-          </linearGradient>
-        </defs>
-        ${[40, 80, 120, 160, 200].map((y) => `<line x1="0" y1="${y}" x2="${width}" y2="${y}" />`).join("")}
-        <polyline points="${coords}" fill="none" stroke="#fb7185" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
-        <polygon points="0,${height} ${coords} ${width},${height}" fill="url(#chart-fill)"/>
-        ${data.map((point, index) => {
-          const x = data.length > 1 ? index * step : width / 2;
-          const y = height - (point.amount / max) * 180 - 30;
-          const label = index % labelEvery === 0 ? `<text x="${x.toFixed(1)}" y="232">${escapeHtml(point.day)}</text>` : "";
-          return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4"><title>${escapeHtml(point.day)}: ${escapeHtml(formatBalance(point.amount, displayCurrency))}</title></circle>${label}`;
-        }).join("")}
-      </svg>
-    </div>
-  `;
-}
-
 function changeCaption(pct: number, suffix: string) {
   if (!pct || !Number.isFinite(pct)) return `No change ${suffix}`;
   const arrow = pct > 0 ? "▲" : "▼";
@@ -921,66 +922,6 @@ function renderPointsSection(points: PointsBalance[]) {
         `).join("")}
       </div>
     </section>
-  `;
-}
-
-function renderServicesTable(services: Service[], deployments: Deployment[], earnings: {platform: string; balance: number; currency: string; error?: string}[], health: Record<string, HealthScore> | null, serviceDetails: Record<string, string> | null, outdated: string[] | null, producerStates: Record<string, ProducerReport> | null = null) {
-  if (deployments.length === 0) {
-    return `
-      <div class="empty-state">
-        <strong>No services deployed yet</strong>
-        <span>Use the setup wizard to choose a provider, create an account, enter credentials, and deploy.</span>
-        <button class="primary" id="open-wizard-empty">Setup Wizard</button>
-      </div>
-    `;
-  }
-  const earningBySlug = new Map(earnings.map((record) => [record.platform, record]));
-  const outdatedSet = new Set(outdated || []);
-  return `
-    <table class="services-table">
-      <thead>
-        <tr>
-          <th>Service</th>
-          <th>Status</th>
-          <th>Balance</th>
-          <th>CPU</th>
-          <th>Memory</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${deployments.map((deployment) => {
-          const service = services.find((svc) => svc.slug === deployment.slug);
-          const earning = earningBySlug.get(deployment.slug);
-          const nodeDetail = deployment.slug === "mysterium" ? renderMystNodes(serviceDetails?.["mysterium"]) : "";
-          const copies = state?.copies?.[deployment.slug];
-          return `
-            <tr>
-              <td>
-                <strong>${escapeHtml(service?.name || deployment.slug)}${firstCopyLabel(copies)}</strong>
-                <small>${escapeHtml(deployment.image)}</small>
-              </td>
-              <td><span class="status-pill ${deployment.status === "running" ? "ok" : "warn"}">${escapeHtml(deployment.status)}</span>${renderHealthBadge(health?.[deployment.slug])}${renderProducerBadge(producerStates?.[deployment.slug], deployment.status)}${customImageBadge(deployment.customImage)}${outdatedSet.has(deployment.slug) ? ` <span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : ""}</td>
-              <td>${earning && !earning.error ? formatBalance(earning.balance, earning.currency) : "<span class=\"muted\">--</span>"}</td>
-              <td>${deployment.cpuPercent.toFixed(1)}%</td>
-              <td>${deployment.memoryMb.toFixed(0)} MB</td>
-              <td>
-                <div class="table-actions">
-                  <button class="secondary compact-btn" data-row-action="collect" data-slug="${escapeHtml(deployment.slug)}">Collect</button>
-                  <button class="secondary compact-btn" data-row-action="logs" data-slug="${escapeHtml(deployment.slug)}">Logs</button>
-                  ${deployment.status === "running"
-                    ? `<button class="secondary compact-btn" data-row-action="stop" data-slug="${escapeHtml(deployment.slug)}">Stop</button>`
-                    : `<button class="secondary compact-btn" data-row-action="start" data-slug="${escapeHtml(deployment.slug)}">Start</button>`}
-                  <button class="danger compact-btn" data-row-action="remove" data-slug="${escapeHtml(deployment.slug)}">Remove</button>
-                </div>
-              </td>
-            </tr>
-            ${copyRows(service?.name || deployment.slug, copies)}
-            ${nodeDetail ? `<tr><td colspan="6" style="padding-top:0.3rem;padding-left:0.8rem;">${nodeDetail}</td></tr>` : ""}
-          `;
-        }).join("")}
-      </tbody>
-    </table>
   `;
 }
 
@@ -1014,18 +955,11 @@ function renderSetupWizard(current: AppState) {
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
-      ${appSidebar("wizard")}
       <div class="main-content">
-        ${topbar("Setup Wizard", current)}
+        ${topbar("wizard", current)}
       <main class="page-content setup-content">
-        <div class="split">
-          <div>
-            <p class="eyebrow">Setup Wizard</p>
-            <h1>Add earning services</h1>
-            <p class="muted">Choose what to share, sign up through CashPilot, then deploy or track each provider.</p>
-          </div>
-          <button class="secondary" id="close-wizard">Back to Dashboard</button>
-        </div>
+        ${pageHead("Add services", `<button class="btn btn-ghost btn-sm" id="close-wizard">Back to dashboard</button>`)}
+        <p class="page-lede">Choose what to share, sign up through CashPilot, then deploy or track each provider.</p>
         ${renderWizardProgress()}
         <section class="panel wizard-panel active">
           ${wizardStep === 1 ? renderWizardCategories(categories) : ""}
@@ -1038,6 +972,7 @@ function renderSetupWizard(current: AppState) {
           <button class="primary" id="wizard-next">${wizardStep === 4 ? "Go to Dashboard" : wizardStep === 3 ? "Summary" : "Next"}</button>
         </div>
       </main>
+        ${pageFoot()}
       </div>
     </div>
   `;
@@ -1495,62 +1430,6 @@ function wireChrome() {
 
 function capitalize(value: string) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : "";
-}
-
-function synthwaveBackground() {
-  return `
-    <svg class="synthwave-bg" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 800" preserveAspectRatio="xMidYMid slice">
-      <defs>
-        <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#06060f"/><stop offset="25%" stop-color="#0d0022"/><stop offset="40%" stop-color="#1a003a"/><stop offset="50%" stop-color="#2d0055"/><stop offset="100%" stop-color="#06060f"/>
-        </linearGradient>
-        <linearGradient id="sun" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#fde68a"/><stop offset="25%" stop-color="#fbbf24"/><stop offset="45%" stop-color="#fb923c"/><stop offset="65%" stop-color="#e11d48"/><stop offset="85%" stop-color="#9f1239"/><stop offset="100%" stop-color="#6d28d9"/>
-        </linearGradient>
-        <radialGradient id="halo" cx="50%" cy="50%">
-          <stop offset="35%" stop-color="#fb923c" stop-opacity="0.2"/>
-          <stop offset="65%" stop-color="#e11d48" stop-opacity="0.08"/>
-          <stop offset="100%" stop-color="transparent"/>
-        </radialGradient>
-        <linearGradient id="horizon" x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%" stop-color="#fb7185" stop-opacity="0.65"/>
-          <stop offset="38%" stop-color="#fb923c" stop-opacity="0.88"/>
-          <stop offset="50%" stop-color="#fb923c" stop-opacity="0.95"/>
-          <stop offset="62%" stop-color="#fb923c" stop-opacity="0.88"/>
-          <stop offset="100%" stop-color="#fb7185" stop-opacity="0.65"/>
-        </linearGradient>
-        <linearGradient id="reflect" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stop-color="#fb923c" stop-opacity="0.12"/>
-          <stop offset="100%" stop-color="transparent"/>
-        </linearGradient>
-        <filter id="star-glow"><feGaussianBlur stdDeviation="1.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-        <clipPath id="sun-clip"><circle cx="600" cy="280" r="130"/></clipPath>
-      </defs>
-      <rect width="1200" height="800" fill="url(#sky)"/>
-      <g fill="#fff" filter="url(#star-glow)">
-        ${[
-          [80,30,1.2,.8],[220,70,.7,.5],[370,20,1,.7],[520,55,.8,.4],[680,35,1.1,.6],[840,60,.6,.4],[980,25,1.2,.7],[1120,50,.9,.6],
-          [120,115,.7,.35],[310,125,.8,.3],[455,100,.6,.35],[760,112,.8,.32],[1030,118,.7,.3],[1160,100,.6,.35],
-          [55,175,.6,.25],[175,200,.9,.32],[1060,190,.7,.25]
-        ].map(([cx, cy, r, opacity]) => `<circle cx="${cx}" cy="${cy}" r="${r}" opacity="${opacity}"/>`).join("")}
-      </g>
-      <rect x="0" y="0" width="1200" height="2" fill="#fb7185" opacity="0.5"/>
-      <rect x="0" y="798" width="1200" height="2" fill="#22d3ee" opacity="0.3"/>
-      <rect x="0" y="277" width="1200" height="3" fill="url(#horizon)"/>
-      <rect x="0" y="276" width="1200" height="1" fill="#fde68a" opacity="0.26"/>
-      <circle cx="600" cy="280" r="200" fill="url(#halo)"/>
-      <circle cx="600" cy="280" r="130" fill="url(#sun)"/>
-      <g clip-path="url(#sun-clip)">
-        ${[280,290,302,316,333,354,380].map((y, i) => `<rect x="465" y="${y}" width="270" height="${[4,6,8,10,13,17,22][i]}" fill="#06060f"/>`).join("")}
-        <g transform="translate(600,235) rotate(27)">
-          <path d="M0,-30 L3,-6 L32,2.5 L3,5.5 L4.5,13 L0,9 L-4.5,13 L-3,5.5 L-32,2.5 L-3,-6 Z" fill="#06060f" opacity="0.7"/>
-        </g>
-      </g>
-      <ellipse cx="600" cy="320" rx="90" ry="25" fill="url(#reflect)"/>
-      <g stroke="#8b5cf6" opacity="0.4">${[320,365,420,485,560,650,750].map((y, i) => `<line x1="0" y1="${y}" x2="1200" y2="${y}" stroke-width="${i < 2 ? 0.7 : 0.5}"/>`).join("")}</g>
-      <g stroke="#fb7185" opacity="0.15">${[-50,150,300,450,600,750,900,1050,1250].map((x) => `<line x1="600" y1="282" x2="${x}" y2="800" stroke-width="0.6"/>`).join("")}</g>
-    </svg>
-  `;
 }
 
 void boot();

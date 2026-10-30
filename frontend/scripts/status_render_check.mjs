@@ -88,12 +88,12 @@ check(
 );
 
 // Colour must track the score, since that is the signal read at a glance.
-check("a low score uses the error tone", renderHealthBadge(health({ score: 20 })).includes("--error"), "");
-check("a middling score uses the warning tone", renderHealthBadge(health({ score: 65 })).includes("--warning"), "");
-check("a high score uses the success tone", scored.includes("--success"), scored);
+check("a low score uses the error tone", renderHealthBadge(health({ score: 20 })).includes("tone-fail"), "");
+check("a middling score uses the warning tone", renderHealthBadge(health({ score: 65 })).includes("tone-warn"), "");
+check("a high score uses the success tone", scored.includes("tone-ok"), scored);
 check(
   "an unstable service is red even with a high score -- crashes outrank the number",
-  renderHealthBadge(health({ score: 95, crashes: 5 })).includes("--error"),
+  renderHealthBadge(health({ score: 95, crashes: 5 })).includes("tone-fail"),
   ""
 );
 
