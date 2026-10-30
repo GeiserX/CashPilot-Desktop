@@ -37,11 +37,21 @@ func windowFilter(s catalog.HealthSignal) string {
 	return "(?i)" + strings.Join(parts, "|")
 }
 
-// WindowedHit is true when the window shows the pattern and never the unless
-// pattern. No line at all is no hit: a node nobody has used has nothing to judge.
+// WindowedHit is true when the pattern matches at least MinMatches lines of the
+// window and the unless pattern none. No line at all is no hit: a node nobody has
+// used has nothing to judge.
 func WindowedHit(lines string, s catalog.HealthSignal) bool {
 	pattern, err := regexp.Compile("(?i)" + s.Pattern)
-	if err != nil || s.Pattern == "" || lines == "" || !pattern.MatchString(lines) {
+	if err != nil || s.Pattern == "" || lines == "" {
+		return false
+	}
+	matched := 0
+	for _, line := range strings.Split(lines, "\n") {
+		if pattern.MatchString(line) {
+			matched++
+		}
+	}
+	if matched < max(1, s.MinMatches) {
 		return false
 	}
 	if s.Unless != "" {

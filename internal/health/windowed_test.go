@@ -16,6 +16,9 @@ const (
 	direct       = "2026-10-29T12:00:00Z DBG event={Identity:0xabc Method:manual Success:true}"
 )
 
+// failing is five failed direct attempts, the catalog's min_matches.
+var failing = strings.Repeat(failedDirect+"\n"+punched+"\n", 5)
+
 // fakeWindow is a runtime that can read a window of logs. It filters `window` with
 // the regex it is handed, as the Docker provider does.
 type fakeWindow struct {
@@ -77,7 +80,7 @@ func collect(t *testing.T, reader *fakeWindow, state string) Report {
 func TestOnlyFailedDirectConnectionsFlagTheNodeWithTheRuleToCreate(t *testing.T) {
 	freshWindows(t)
 	reader := &fakeWindow{vars: map[string]string{"UDP_PORTS": "56000:56100"}}
-	reader.set(strings.Join([]string{failedDirect, punched, failedDirect}, "\n"), false)
+	reader.set(failing, false)
 	got := collect(t, reader, "running")
 	if got.State != StateFailing {
 		t.Fatalf("state = %s, want failing: %s", got.State, reasonText(got))
@@ -95,11 +98,11 @@ func TestOnlyFailedDirectConnectionsFlagTheNodeWithTheRuleToCreate(t *testing.T)
 func TestItClearsOnceASessionConnectsDirectly(t *testing.T) {
 	now := freshWindows(t)
 	reader := &fakeWindow{}
-	reader.set(failedDirect, false)
+	reader.set(failing, false)
 	if got := collect(t, reader, "running"); got.State != StateFailing {
 		t.Fatalf("precondition: state = %s", got.State)
 	}
-	reader.set(failedDirect+"\n"+direct, false)
+	reader.set(failing+direct, false)
 	*now = now.Add(windowEvery)
 	if got := collect(t, reader, "running"); got.State == StateFailing {
 		t.Fatalf("still failing after a direct session: %s", reasonText(got))
@@ -118,7 +121,7 @@ func TestANodeWithNoSessionsIsNotFlagged(t *testing.T) {
 func TestAFailedReadKeepsTheVerdictAndAStoppedNodeDropsIt(t *testing.T) {
 	now := freshWindows(t)
 	reader := &fakeWindow{}
-	reader.set(failedDirect, false)
+	reader.set(failing, false)
 	collect(t, reader, "running")
 	reader.set("", true)
 	*now = now.Add(windowEvery)
@@ -145,5 +148,14 @@ func TestARuntimeThatCannotReadAWindowJudgesNothing(t *testing.T) {
 	got := Collect(context.Background(), logs, lookup, []Deployed{{Slug: "mysterium", ContainerState: "running"}})
 	if got["mysterium"].State == StateFailing {
 		t.Fatalf("flagged from a tail: %s", reasonText(got["mysterium"]))
+	}
+}
+
+func TestAFewFailedAttemptsAreNotYetAPattern(t *testing.T) {
+	freshWindows(t)
+	reader := &fakeWindow{}
+	reader.set(strings.Repeat(failedDirect+"\n", 4), false)
+	if got := collect(t, reader, "running"); got.State == StateFailing {
+		t.Fatalf("flagged on four attempts: %s", reasonText(got))
 	}
 }
