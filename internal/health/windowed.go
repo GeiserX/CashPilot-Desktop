@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"net"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -87,6 +88,11 @@ func fillVars(text string, vars map[string]string) string {
 // and VMs' 172.16.0.0/12, gives the generic text instead.
 var lanAddress = func() string {
 	const unknown = "this computer's LAN address"
+	// A remote Docker endpoint runs the node on another machine, whose address
+	// this computer cannot know.
+	if remoteDocker(os.Getenv("DOCKER_HOST")) {
+		return "the LAN address of the machine running Docker"
+	}
 	conn, err := net.Dial("udp", "192.0.2.1:9")
 	if err != nil {
 		return unknown
@@ -115,6 +121,11 @@ var lanAddress = func() string {
 		}
 	}
 	return unknown
+}
+
+// remoteDocker reports a DOCKER_HOST that is not a local socket or pipe.
+func remoteDocker(host string) bool {
+	return host != "" && !strings.HasPrefix(host, "unix://") && !strings.HasPrefix(host, "npipe://")
 }
 
 var dockerPools = &net.IPNet{IP: net.IPv4(172, 16, 0, 0), Mask: net.CIDRMask(12, 32)}

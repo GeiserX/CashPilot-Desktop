@@ -199,3 +199,21 @@ func TestABrokenSignalNeverFires(t *testing.T) {
 		}
 	}
 }
+
+func TestARemoteDockerHostIsNeverNamedAsThisComputer(t *testing.T) {
+	for host, remote := range map[string]bool{
+		"":                                     false,
+		"unix:///Users/me/.colima/docker.sock": false,
+		"npipe:////./pipe/docker_engine":       false,
+		"tcp://192.168.1.50:2375":              true,
+		"ssh://me@nas":                         true,
+	} {
+		if remoteDocker(host) != remote {
+			t.Errorf("remoteDocker(%q) = %v, want %v", host, !remote, remote)
+		}
+	}
+	t.Setenv("DOCKER_HOST", "ssh://me@nas")
+	if got := lanAddress(); got != "the LAN address of the machine running Docker" {
+		t.Fatalf("lanAddress with a remote DOCKER_HOST = %q", got)
+	}
+}
