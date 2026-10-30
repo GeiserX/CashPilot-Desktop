@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// Browser-free checks on the per-service earning chip. CashPilot-Desktop-tft.
+// Browser-free checks on a platform's balance and cash-out cells in the
+// dashboard's services table. CashPilot-Desktop-tft.
 //
 // THE RULE THIS GUARDS, and it is about money being misreported:
 //
 //   a figure is shown in the DISPLAY currency only when a live rate actually
-//   converted it. When the rate is missing, the chip must fall back to the
+//   converted it. When the rate is missing, the cell must fall back to the
 //   NATIVE balance and name that currency.
 //
 // `balanceDisplay === 0` on a convertible service means the rate was missing,
@@ -13,13 +14,16 @@
 // we merely could not convert it. That is the same class of lie as showing
 // 0.00 for a platform with no reading, one level down.
 //
-// It drives the REAL function and asserts on the HTML it returns. It
+// These cases guarded the per-service earning chip until the console layout
+// moved the balance and the cash-out bar into the table's columns.
+//
+// It drives the REAL functions and asserts on the HTML they return. It
 // deliberately does NOT assert on source text: this repository and its sibling
 // have both been bitten by tests that matched their own prose.
 //
 //   node scripts/earnings_render_check.mjs     # against ./.harness-build
 
-import { renderEarningBreakdown } from "../.harness-build/render/earnings.js";
+import { balanceCell, payoutCell } from "../.harness-build/render/services.js";
 
 let failures = 0;
 let checks = 0;
@@ -47,46 +51,38 @@ function earning(overrides = {}) {
       percent: 62.5,
       eligible: false,
       comparable: true,
-      method: "redirect",
-      dashboardUrl: "https://example.invalid",
+      method: "paypal",
+      dashboardUrl: "",
       notes: "",
     },
     ...overrides,
   };
 }
 
-/** Just the <strong> figure, which is what the user reads first. */
+/** The figure itself: the cell's text before its sub-line. */
 function primary(html) {
-  const m = html.match(/<strong>([\s\S]*?)<\/strong>/);
-  return m ? m[1].trim() : "";
+  return html.split("<div")[0].trim();
 }
+
+const cell = (item) => balanceCell(item, undefined, "EUR");
 
 // ---------------------------------------------------------------------------
 // THE RULE.
 // ---------------------------------------------------------------------------
-const converted = renderEarningBreakdown(earning(), "EUR");
-check("a converted balance shows the display currency", primary(converted).includes("11.4"), converted);
+const converted = cell(earning());
+check("a converted balance shows the display currency", primary(converted).includes("11.4") && primary(converted).includes("€"), converted);
+check("and the native amount stays under it, so the conversion is auditable", converted.includes("$12.50"), converted);
 
-const unconverted = renderEarningBreakdown(earning({ balanceDisplay: 0 }), "EUR");
-check(
-  "THE RULE: a missing rate shows the NATIVE balance, not a display-currency 0",
-  primary(unconverted).includes("12.50"),
-  `primary was: ${primary(unconverted)}`
-);
-// formatBalance renders an ISO code as its SYMBOL ($12.50), and a reward
-// ticker as "12.50 MYST". So "did it stay native?" is asked as "is the display
-// currency's symbol absent?", not by looking for the literal code.
+const unconverted = cell(earning({ balanceDisplay: 0 }));
+check("THE RULE: a missing rate shows the NATIVE balance, not a display-currency 0", primary(unconverted).includes("12.50"), `primary was: ${primary(unconverted)}`);
 check(
   "and it never renders as zero in the display currency",
-  !primary(unconverted).includes("\u20ac") && !/^0\.00|\u20ac0\.00/.test(primary(unconverted)),
+  !primary(unconverted).includes("€") && !/0\.00/.test(primary(unconverted)),
   `primary was: ${primary(unconverted)}`
 );
-// A reward token makes the fallback legible: the native CODE is printed, so
-// this case asserts the currency is named rather than merely not-euro.
-const tokenUnconverted = renderEarningBreakdown(
-  earning({ balance: 40, balanceDisplay: 0, currency: "MYST" }),
-  "EUR"
-);
+check("and it says no rate converted it", unconverted.includes("no rate"), unconverted);
+
+const tokenUnconverted = cell(earning({ balance: 40, balanceDisplay: 0, currency: "MYST" }));
 check(
   "a reward token falls back to its own ticker",
   primary(tokenUnconverted).includes("MYST") && primary(tokenUnconverted).includes("40.00"),
@@ -94,34 +90,28 @@ check(
 );
 
 // A service that genuinely holds nothing is a DIFFERENT case from a missing
-// rate, and it is allowed to say zero -- in its own currency.
-const genuinelyZero = renderEarningBreakdown(
-  earning({ balance: 0, balanceDisplay: 0, convertible: true }),
-  "EUR"
-);
+// rate, and it is allowed to say zero -- in its own currency, without a note.
+const genuinelyZero = cell(earning({ balance: 0, balanceDisplay: 0 }));
 check(
   "a real zero balance still reports zero, in the NATIVE currency",
-  /0\.00/.test(primary(genuinelyZero)) && !primary(genuinelyZero).includes("\u20ac"),
-  `primary was: ${primary(genuinelyZero)}`
+  /0\.00/.test(primary(genuinelyZero)) && !primary(genuinelyZero).includes("€") && !genuinelyZero.includes("no rate"),
+  genuinelyZero
 );
 
 // ---------------------------------------------------------------------------
-// The other two states stay distinct.
+// No reading.
 // ---------------------------------------------------------------------------
-const errored = renderEarningBreakdown(earning({ error: "credentials expired" }), "EUR");
-check("an errored service says so instead of showing a figure", primary(errored) === "Needs attention", errored);
-check("the error itself is the subtitle", errored.includes("credentials expired"), errored);
-check("an errored chip carries the error class", errored.includes('earning-chip error'), errored);
-check(
-  "an errored service shows NO progress bar -- a stale balance is not progress",
-  !errored.includes("payout-progress"),
-  errored
-);
+const errored = cell(earning({ error: "credentials expired" }));
+check("an errored balance is an em dash, never a figure", primary(errored).includes("&mdash;") && !/\d/.test(primary(errored).replace(/<[^>]*>/g, "")), errored);
+check("it says there is no reading, and why on hover", errored.includes("no reading") && errored.includes("credentials expired"), errored);
+const recordError = balanceCell(undefined, { balance: 9, currency: "USD", error: "timeout" }, "EUR");
+check("an error on the raw reading alone is also a dash", recordError.includes("&mdash;") && !recordError.includes("9.00"), recordError);
+check("no reading at all is a dash", balanceCell(undefined, undefined, "EUR").includes("&mdash;"));
 
-const notConvertible = renderEarningBreakdown(earning({ convertible: false }), "EUR");
+const notConvertible = cell(earning({ convertible: false }));
 check(
   "a non-convertible service shows its native figure, not a converted one",
-  primary(notConvertible).includes("12.50") && !primary(notConvertible).includes("\u20ac"),
+  primary(notConvertible).includes("12.50") && !primary(notConvertible).includes("€"),
   `primary was: ${primary(notConvertible)}`
 );
 check("and says it was not converted", notConvertible.includes("not converted"), notConvertible);
@@ -129,60 +119,39 @@ check("and says it was not converted", notConvertible.includes("not converted"),
 // ---------------------------------------------------------------------------
 // The cash-out bar.
 // ---------------------------------------------------------------------------
-check("a comparable threshold renders a bar", converted.includes("payout-progress-bar"), converted);
+check("a comparable threshold renders a bar", payoutCell(earning()).includes("payout-progress-bar"));
 check(
   "an INCOMPARABLE threshold renders none -- a bar implies a comparison we cannot make",
-  !renderEarningBreakdown(earning({ cashout: { ...earning().cashout, comparable: false } }), "EUR")
-    .includes("payout-progress"),
-  "incomparable still drew a bar"
+  !payoutCell(earning({ cashout: { ...earning().cashout, comparable: false } })).includes("payout-progress")
 );
 check(
   "a zero minimum renders none -- everything would read as 100%",
-  !renderEarningBreakdown(earning({ cashout: { ...earning().cashout, minAmount: 0 } }), "EUR")
-    .includes("payout-progress"),
-  "a zero minimum still drew a bar"
+  !payoutCell(earning({ cashout: { ...earning().cashout, minAmount: 0 } })).includes("payout-progress")
 );
-
-const over = renderEarningBreakdown(earning({ cashout: { ...earning().cashout, percent: 250 } }), "EUR");
-check("a percentage over 100 is clamped", /width:\s*100\.0%/.test(over), over);
-const under = renderEarningBreakdown(earning({ cashout: { ...earning().cashout, percent: -40 } }), "EUR");
-check("a negative percentage is clamped to zero", /width:\s*0\.0%/.test(under), under);
-
 check(
-  "an eligible balance says it is ready",
-  renderEarningBreakdown(earning({ cashout: { ...earning().cashout, eligible: true } }), "EUR")
-    .includes("ready to cash out"),
-  "eligible did not say so"
+  "an errored service shows NO progress bar -- a stale balance is not progress",
+  !payoutCell(earning({ error: "x" })).includes("payout-progress")
 );
+const over = payoutCell(earning({ cashout: { ...earning().cashout, percent: 250 } }));
+check("a percentage over 100 is clamped", /width:\s*100\.0%/.test(over), over);
+const under = payoutCell(earning({ cashout: { ...earning().cashout, percent: -40 } }));
+check("a negative percentage is clamped to zero", /width:\s*0\.0%/.test(under), under);
+check("an eligible balance says it is ready", payoutCell(earning({ cashout: { ...earning().cashout, eligible: true } })).includes("ready"));
 
 // ---------------------------------------------------------------------------
-// Escaping. name, currency and error all originate off-machine.
+// Escaping. currency and error originate off-machine.
 // ---------------------------------------------------------------------------
-const hostile = renderEarningBreakdown(
-  earning({ name: '<img src=x onerror=alert(1)>', error: "<script>alert(1)</script>" }),
-  "EUR"
-);
-check("a hostile name is escaped", !hostile.includes("<img src=x"), hostile.slice(0, 160));
-check("a hostile error is escaped", !hostile.includes("<script>"), hostile.slice(0, 160));
-check("the escaped form survives", hostile.includes("&lt;script&gt;"), hostile.slice(0, 160));
+const hostile = cell(earning({ error: "<script>alert(1)</script>" }));
+check("a hostile error is escaped", !hostile.includes("<script>") && hostile.includes("&lt;script&gt;"), hostile);
 
 // ---------------------------------------------------------------------------
 // Controls. A control that PASSES means the check above it proves nothing.
 // ---------------------------------------------------------------------------
-check(
-  "CONTROL: the renderer distinguishes converted from unconverted at all",
-  converted !== unconverted,
-  "both branches produced identical HTML"
-);
-check(
-  "CONTROL: a platform with no name falls back to its slug rather than rendering blank",
-  renderEarningBreakdown(earning({ name: "" }), "EUR").includes("honeygain"),
-  "an unnamed platform rendered nothing identifiable"
-);
+check("CONTROL: the renderer distinguishes converted from unconverted at all", converted !== unconverted, "both branches produced identical HTML");
 
 if (failures) {
-  console.error(`\n${failures} of ${checks} earning-chip checks failed`);
+  console.error(`\n${failures} of ${checks} balance-cell checks failed`);
   process.exit(1);
 }
 console.log(`${checks}/${checks} checks passed`);
-console.log("earning chip render check passed");
+console.log("balance cell render check passed");

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/zalando/go-keyring"
+	"regexp"
+	"time"
 )
 
 // TestMain mocks the keyring so store.Open (via config.MasterKey) stays fully
@@ -758,6 +761,49 @@ docker:
 	}
 }
 
+// A port range must be in order and within 1..65535. Mysterium's UDP_PORTS is the
+// live case: the node refuses to start on a reversed --udp.ports, and a pattern can
+// only check the shape.
+func TestAPortRangeMustBeInOrderBeforeDeploy(t *testing.T) {
+	const rangedYAML = `name: Ranged
+slug: ranged
+category: bandwidth
+status: active
+docker:
+  image: example/ranged:1.0.0
+  env:
+    - key: UDP_PORTS
+      label: UDP port range
+      default: "56000:56100"
+      pattern: '[0-9]{4,5}:[0-9]{4,5}'
+      port_range: true
+`
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{"services/bandwidth/ranged.yml": {Data: []byte(rangedYAML)}})
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	fake := &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "cid", Status: "running"}}
+	m := NewManager(fake, cat, newTestStore(t))
+
+	for _, bad := range []string{"56100:56000", "56000:70000", "56000-56100", "56000"} {
+		if err := m.ValidateCredentials("ranged", map[string]string{"UDP_PORTS": bad}); err == nil ||
+			!strings.Contains(err.Error(), "UDP port range") {
+			t.Errorf("ValidateCredentials accepted %q: %v", bad, err)
+		}
+		if _, err := m.Deploy(context.Background(), "ranged", map[string]string{"UDP_PORTS": bad}); err == nil {
+			t.Errorf("Deploy accepted %q", bad)
+		}
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("a refused value still reached the runtime %d times", fake.deployCalls)
+	}
+	for _, good := range []string{"", "56000:56100", "41000:41000"} {
+		if err := m.ValidateCredentials("ranged", map[string]string{"UDP_PORTS": good}); err != nil {
+			t.Errorf("ValidateCredentials refused %q: %v", good, err)
+		}
+	}
+}
+
 // A pattern Go cannot compile refuses the value rather than letting it through
 // unchecked: the field exists because the wrong value stops the service.
 func TestAPatternThatDoesNotCompileRefusesTheValue(t *testing.T) {
@@ -780,5 +826,41 @@ docker:
 	if err := m.ValidateCredentials("broken", map[string]string{"ADDR": "127.0.0.1"}); err == nil ||
 		!strings.Contains(err.Error(), "Address") {
 		t.Fatalf("a value checked against an uncompilable pattern was accepted: %v", err)
+	}
+}
+
+// A port_range default is never checked on deploy (only typed values are), so a
+// reversed default would match its pattern and reach the node's command line.
+func TestEveryVendoredPortRangeDefaultIsInOrder(t *testing.T) {
+	cat, err := catalog.LoadEmbedded(os.DirFS(filepath.Join("..", "..")))
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	var checked int
+	for _, svc := range cat.List() {
+		for _, item := range svc.Docker.Env {
+			if !item.PortRange {
+				continue
+			}
+			checked++
+			if item.Default != "" && !isPortRange(item.Default) {
+				t.Errorf("%s %s: default %q is not an in-order port range", svc.Slug, item.Key, item.Default)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no vendored entry declares port_range; this test would pass by checking nothing")
+	}
+	if isPortRange("56100:56000") {
+		t.Fatal("isPortRange accepts a reversed range, so the loop above proves nothing")
+	}
+}
+
+// A runtime that cannot read a window of logs (the native supervisor, a test fake)
+// answers with an error, so the health check judges nothing rather than guessing.
+func TestLogsMatchingRefusesARuntimeWithoutAWindow(t *testing.T) {
+	m := NewManager(&fakeProvider{}, newTestCatalog(t), newTestStore(t))
+	if _, err := m.LogsMatching(context.Background(), "example", time.Hour, regexp.MustCompile("x"), 10); err == nil {
+		t.Fatal("LogsMatching answered from a runtime that cannot read a window")
 	}
 }

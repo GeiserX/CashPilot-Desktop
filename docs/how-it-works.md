@@ -527,8 +527,13 @@ no React/Vue/Svelte, no charting library (`frontend/package.json` has zero runti
 dependencies). All views live in `frontend/src/main.ts` as functions that build
 HTML strings and assign them to `root.innerHTML`, then wire event listeners by
 `querySelectorAll`. Views: onboarding/welcome, dashboard, setup wizard, catalog,
-settings, fleet. The earnings chart is hand-rolled inline SVG
-(`main.ts:renderEarningsChart`); the synthwave background is inline SVG too.
+settings, fleet. The layout and colours follow the web app's operator console:
+one top bar, sections separated by hairlines, colour only for state. The
+dashboard's pieces are pure functions in `frontend/src/render/` (`attention.ts`,
+`chart.ts` for the hand-rolled SVG bar chart, `services.ts`, `catalog.ts`), tested
+by `npm test`. The fonts are bundled in `frontend/src/fonts/` (SIL Open Font
+License) so the app needs no network to render, and every font choice is a CSS
+variable (`--font-ui`, `--font-mono`, `--fs-*`) at the top of `style.css`.
 
 The frontend calls the Go backend through **auto-generated Wails bindings** in
 `frontend/wailsjs/`:

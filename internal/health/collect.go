@@ -78,9 +78,18 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 		inputs = append(inputs, in)
 	}
 
+	reader, canWindow := logs.(WindowReader)
 	var wg sync.WaitGroup
 	for i := range inputs {
 		in := &inputs[i]
+		windowed, _ := windowedOnly(in.Signals)
+		if len(windowed) > 0 {
+			if !isUp(in.ContainerState) {
+				windows.forget(in.Slug)
+			} else if canWindow {
+				in.WindowHits = windows.hits(reader, in.Slug, windowed)
+			}
+		}
 		if len(in.Signals) == 0 || logs == nil || !isUp(in.ContainerState) {
 			continue
 		}

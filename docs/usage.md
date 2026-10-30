@@ -1,8 +1,9 @@
 # Usage
 
-A visual tour of the app (**v0.20.9**), captured from the running desktop build.
-The shots use sample data: five services running on the local Docker runtime, about
-six weeks of made-up earnings history, and three example fleet devices. None of the
+A visual tour of the app's console layout, captured from the app's frontend with
+sample data: seven services on the local Docker runtime (one stopped, one with a
+collector that cannot log in), a month of made-up earnings history, and three
+example fleet devices. None of the
 balances, credentials or devices are real. Where a screen displayed a
 locally-generated API token, a LAN IP, a hostname or a home path, those values are
 masked (`<API_KEY>`, `192.168.x.x`, `my-mac`, `/Users/you/`). The loopback
@@ -20,27 +21,31 @@ Linux, and Windows.
 
 ## Dashboard
 
-The home view: total balance, today's and this month's earnings, and active
-service count across the top; a daily-earnings chart with the latest collected
-balance for each platform; and your deployed services with their status, uptime,
-balance, CPU and memory.
+The home view, in the order you need it. The balance, today's and this month's
+earnings come first, with the count of containers up at the far end. Next is
+**Needs attention**: every stopped container, unreadable balance or outdated image,
+each with the button that fixes it (Start, Fix credentials, Open). Then the earnings
+per day over 7 or 30 days, and the services table with status, health, balance, CPU,
+memory and how far each balance is from its cash-out minimum. A platform CashPilot
+reads a balance for but does not run on this machine keeps its row there too.
 
 ![Dashboard](images/screenshots/02-dashboard.png)
 
-## Service Catalog
+## Catalog
 
 Browse the built-in catalog of passive-income and DePIN providers (bandwidth,
-DePIN, storage, and compute), each with its earnings model, requirements, and a
-one-click path into the setup wizard.
+DePIN, storage, and compute) as one table: the services running here first, then the
+rest, each with where it runs, its estimated monthly earnings and a path into
+**Add services**.
 
-![Service Catalog](images/screenshots/03-catalog.png)
+![Catalog](images/screenshots/03-catalog.png)
 
-## Setup Wizard
+## Add services
 
 A guided flow — pick categories, choose providers, enter credentials, and deploy —
 so you don't have to hand-write container configs.
 
-![Setup Wizard](images/screenshots/06-wizard.png)
+![Add services](images/screenshots/06-wizard.png)
 
 ### A service's image
 
@@ -97,4 +102,4 @@ Run CashPilot across more than one machine: point workers or a mobile companion 
 the desktop's loopback API and they register automatically. Silent devices are
 flipped offline and long-dead ones are reaped, so the list stays honest.
 
-![Fleet Management](images/screenshots/05-fleet.png)
+![Fleet](images/screenshots/05-fleet.png)

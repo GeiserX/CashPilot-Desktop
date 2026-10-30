@@ -103,6 +103,7 @@ check("RULE 6: one row per copy, labelled #N", (rows.match(/<tr\b/g) || []).leng
 check("RULE 6: a running copy offers Stop for that copy", /data-row-action="stop" data-slug="earnfm" data-copy="2"/.test(rows), rows);
 check("RULE 6: a stopped copy offers Start for that copy", /data-row-action="start" data-slug="earnfm" data-copy="3"/.test(rows), rows);
 check("RULE 6: every copy has its own Logs", /data-row-action="logs" data-slug="earnfm" data-copy="2"/.test(rows) && /data-row-action="logs" data-slug="earnfm" data-copy="3"/.test(rows), rows);
+check("RULE 6: a stopped copy is drawn stopped, a restarting one in between", rows.includes("badge-stopped") && copyRows("EarnFM", [{ ...copies[0], status: "restarting" }]).includes("badge-unknown"), rows);
 check("RULE 6: no copy row offers Remove (lowering the count does that)", !rows.includes('data-row-action="remove"'), rows);
 check("RULE 6: the first row is #1 only beside copies", firstCopyLabel(copies) === " #1" && firstCopyLabel([]) === "" && firstCopyLabel(null) === "");
 check("RULE 6: no copies, no rows", copyRows("EarnFM", null) === "");
