@@ -238,6 +238,12 @@ type HealthSignal struct {
 	Pattern string `json:"pattern" yaml:"pattern"`
 	Means   string `json:"means" yaml:"means"`
 	State   string `json:"state" yaml:"state"`
+	// Unless cancels the signal when it also appears in the same logs: the problem
+	// is not there. WindowHours, when set, judges that many hours of logs instead
+	// of the tail (see health.windowed); Mysterium writes about 11,000 lines an
+	// hour, so the tail is a minute and cannot show that something never happened.
+	Unless      string  `json:"unless,omitempty" yaml:"unless"`
+	WindowHours float64 `json:"windowHours,omitempty" yaml:"window_hours"`
 }
 
 // ResourceLimits is the optional docker.resources block from a service YAML. Its

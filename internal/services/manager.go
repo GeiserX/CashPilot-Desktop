@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -451,6 +452,40 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 
 func (m *Manager) Logs(ctx context.Context, slug string, lines int) (string, error) {
 	return m.providerForSlug(slug).Logs(ctx, slug, lines)
+}
+
+// logsMatcher is a provider that can filter a window of logs (the Docker one).
+type logsMatcher interface {
+	LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error)
+}
+
+// LogsMatching returns the matching log lines of the last `since`, from a runtime
+// that can read a window; any other runtime answers with an error, so nothing is judged.
+func (m *Manager) LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+	provider, ok := m.providerForSlug(slug).(logsMatcher)
+	if !ok {
+		return "", fmt.Errorf("this runtime cannot read a window of logs")
+	}
+	return provider.LogsMatching(ctx, slug, since, match, lines)
+}
+
+// SignalVars is what a health signal's ${VAR} placeholders are filled from: the
+// catalog defaults, overlaid by the values saved for this service.
+func (m *Manager) SignalVars(slug string) map[string]string {
+	vars := map[string]string{}
+	if svc, ok := m.catalog.Get(slug); ok {
+		for _, item := range svc.Docker.Env {
+			vars[item.Key] = item.Default
+		}
+	}
+	if saved, err := m.store.GetCredentials(slug); err == nil {
+		for k, v := range saved {
+			if v != "" {
+				vars[k] = v
+			}
+		}
+	}
+	return vars
 }
 
 // providerListing pairs a runtime kind with the units its provider reported, so a

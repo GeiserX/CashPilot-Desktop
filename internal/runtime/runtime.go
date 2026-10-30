@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -420,6 +421,50 @@ func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (stri
 		return "", err
 	}
 	return stripDockerLogHeaders(raw), nil
+}
+
+// LogsMatching returns the newest `lines` log lines of the last `since` that match
+// `match`. The window is streamed and filtered here, so megabytes of a chatty
+// service's logs are never held at once.
+func (p *DockerProvider) LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+	cli, err := dockerClient()
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+	reader, err := cli.ContainerLogs(ctx, containerName(slug), client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Since:      strconv.FormatInt(time.Now().Add(-since).Unix(), 10),
+		Timestamps: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	pr, pw := io.Pipe()
+	go func() {
+		_, err := stdcopy.StdCopy(pw, pw, reader)
+		pw.CloseWithError(err)
+	}()
+	defer pr.Close()
+	return filterLines(pr, match, lines)
+}
+
+// filterLines keeps the newest `lines` lines of r that match.
+func filterLines(r io.Reader, match *regexp.Regexp, lines int) (string, error) {
+	var kept []string
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64<<10), 1<<20)
+	for scanner.Scan() {
+		if line := scanner.Text(); match.MatchString(line) {
+			kept = append(kept, line)
+			if len(kept) > lines {
+				kept = kept[1:]
+			}
+		}
+	}
+	return strings.Join(kept, "\n"), scanner.Err()
 }
 
 func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {

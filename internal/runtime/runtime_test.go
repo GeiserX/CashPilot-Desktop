@@ -9,6 +9,7 @@ import (
 	"math"
 	"os/exec"
 	"reflect"
+	"regexp"
 	goruntime "runtime"
 	"slices"
 	"strings"
@@ -1413,4 +1414,12 @@ func mustList(t *testing.T, p *DockerProvider, ctx context.Context) []ContainerI
 		t.Fatalf("List: %v", err)
 	}
 	return out
+}
+
+func TestFilterLinesKeepsTheNewestMatchesIncludingAnUnterminatedLast(t *testing.T) {
+	in := "a manual:false\nb hole\nc manual:false\nd manual:true"
+	got, err := filterLines(strings.NewReader(in), regexp.MustCompile("manual"), 2)
+	if err != nil || got != "c manual:false\nd manual:true" {
+		t.Fatalf("filterLines = %q, %v", got, err)
+	}
 }
