@@ -15,6 +15,8 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/zalando/go-keyring"
+	"regexp"
+	"time"
 )
 
 // TestMain mocks the keyring so store.Open (via config.MasterKey) stays fully
@@ -851,5 +853,14 @@ func TestEveryVendoredPortRangeDefaultIsInOrder(t *testing.T) {
 	}
 	if isPortRange("56100:56000") {
 		t.Fatal("isPortRange accepts a reversed range, so the loop above proves nothing")
+	}
+}
+
+// A runtime that cannot read a window of logs (the native supervisor, a test fake)
+// answers with an error, so the health check judges nothing rather than guessing.
+func TestLogsMatchingRefusesARuntimeWithoutAWindow(t *testing.T) {
+	m := NewManager(&fakeProvider{}, newTestCatalog(t), newTestStore(t))
+	if _, err := m.LogsMatching(context.Background(), "example", time.Hour, regexp.MustCompile("x"), 10); err == nil {
+		t.Fatal("LogsMatching answered from a runtime that cannot read a window")
 	}
 }

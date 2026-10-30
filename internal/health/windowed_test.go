@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 )
 
 const (
@@ -157,5 +159,43 @@ func TestAFewFailedAttemptsAreNotYetAPattern(t *testing.T) {
 	reader.set(strings.Repeat(failedDirect+"\n", 4), false)
 	if got := collect(t, reader, "running"); got.State == StateFailing {
 		t.Fatalf("flagged on four attempts: %s", reasonText(got))
+	}
+}
+
+func TestFillVarsKeepsAnUnknownPlaceholderAndNamesTheHost(t *testing.T) {
+	freshWindows(t)
+	got := fillVars("forward ${UDP_PORTS} to ${HOST_ADDRESS} (${NOPE})", map[string]string{"UDP_PORTS": "1:2"})
+	if got != "forward 1:2 to 192.168.1.20 (${NOPE})" {
+		t.Fatalf("fillVars = %q", got)
+	}
+}
+
+func TestTunnelInterfacesAreNeverTheLANAddress(t *testing.T) {
+	for _, name := range []string{"utun5", "tun0", "wg0", "tailscale0", "gpd0", "ppp0"} {
+		if !tunnelName(name) {
+			t.Errorf("%s not treated as a tunnel", name)
+		}
+	}
+	for _, name := range []string{"en0", "eth0", "wlan0", "Ethernet"} {
+		if tunnelName(name) {
+			t.Errorf("%s treated as a tunnel", name)
+		}
+	}
+	// Whatever this machine's network, the answer is an address or the generic text.
+	if got := lanAddress(); got == "" {
+		t.Fatal("lanAddress returned nothing")
+	}
+}
+
+func TestABrokenSignalNeverFires(t *testing.T) {
+	broken := []catalog.HealthSignal{
+		{Pattern: "(", WindowHours: 1},
+		{Pattern: "bad", Unless: "(", WindowHours: 1},
+		{Pattern: "", WindowHours: 1},
+	}
+	for _, s := range broken {
+		if WindowedHit("bad", s) {
+			t.Errorf("%+v fired", s)
+		}
 	}
 }
