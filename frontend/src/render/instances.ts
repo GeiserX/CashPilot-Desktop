@@ -11,6 +11,7 @@
 
 import type { ScalingLimit, Service, ServiceCopy } from "../wails";
 import { rowButton } from "./actions.js";
+import { containerState } from "./attention.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 /**
@@ -72,6 +73,8 @@ export function copyRows(serviceName: string, copies: ServiceCopy[] | null | und
   return (copies || []).map((copy) => {
     const n = copy.instance;
     const running = copy.status === "running";
+    const state = containerState(copy.status);
+    const cls = state === "ok" ? "running" : state === "fail" ? "stopped" : "unknown";
     // The balance is the service's, on its first row: a copy has no reading of its own.
     return `
       <tr class="copy-row instance-row">
@@ -79,7 +82,7 @@ export function copyRows(serviceName: string, copies: ServiceCopy[] | null | und
           <span class="svc-name">${escapeHtml(serviceName)} #${n}</span>
           <div class="cell-sub cell-mono">${escapeHtml(copy.name)}</div>
         </td>
-        <td><span class="badge badge-${running ? "running" : "stopped"}"><span class="status-dot ${running ? "running" : "stopped"}"></span>${escapeHtml(copy.status)}</span></td>
+        <td><span class="badge badge-${cls}"><span class="status-dot ${cls}"></span>${escapeHtml(copy.status)}</span></td>
         <td class="c-num"><span class="muted">&mdash;</span></td>
         <td class="c-num"><span class="muted" title="A copy's balance is the service's, on its first row">&mdash;</span></td>
         <td class="c-num">${copy.cpuPercent.toFixed(1)}%</td>

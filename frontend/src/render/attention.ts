@@ -14,7 +14,7 @@ import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in 
 export interface AttentionInput {
   runtime: { available: boolean; nativeAvailable: boolean; message: string };
   services: { slug: string; name: string }[];
-  deployments: { slug: string; name: string; status: string }[];
+  deployments: { slug: string; name: string; status: string; runtime?: string }[];
   copies?: Record<string, ServiceCopy[]> | null;
   earnings: { platform: string; error?: string }[];
   outdated?: string[] | null;
@@ -53,6 +53,16 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       why: `${escapeHtml(input.runtime.message || "Neither Docker nor the native runtime can run anything.")} Services cannot start until it is back.`,
       actions: "",
     });
+  } else if (!input.runtime.available && input.deployments.some((dep) => dep.runtime && dep.runtime !== "native")) {
+    // Native services still run, so this is not the whole app being down, but
+    // every container service is.
+    items.push({
+      level: "fail",
+      tag: "Offline",
+      what: "Container runtime",
+      why: `${escapeHtml(input.runtime.message || "Docker is not reachable.")} Container services cannot start until it is back; native ones keep running.`,
+      actions: "",
+    });
   }
 
   const down = (slug: string, name: string, status: string, copy: number) => {
@@ -69,9 +79,9 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
         <button class="btn btn-primary btn-sm" data-row-action="start" data-slug="${escapeHtml(slug)}"${copyAttr}>Start</button>`,
     });
   };
-  for (const dep of input.deployments) {
-    down(dep.slug, dep.name, dep.status, 1);
-    for (const copy of input.copies?.[dep.slug] || []) down(copy.slug, copy.name, copy.status, copy.instance);
+  for (const dep of input.deployments) down(dep.slug, dep.name, dep.status, 1);
+  for (const list of Object.values(input.copies || {})) {
+    for (const copy of list) down(copy.slug, copy.name, copy.status, copy.instance);
   }
 
   for (const dep of input.deployments) {
@@ -88,9 +98,13 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       tag: "No reading",
       what: nameOf(record.platform),
       why: `CashPilot could not read this balance: ${escapeHtml(record.error)}`,
-      actions: known(record.platform)
-        ? `<button class="btn btn-ghost btn-sm" data-open-service="${escapeHtml(record.platform)}">Fix credentials</button>`
-        : "",
+      // A timeout or a provider outage clears on a retry; a rejected login needs
+      // the credentials. The message cannot always tell which, so offer both.
+      actions: `<button class="btn btn-ghost btn-sm" data-row-action="collect" data-slug="${escapeHtml(record.platform)}">Retry</button>${
+        known(record.platform)
+          ? `\n        <button class="btn btn-ghost btn-sm" data-open-service="${escapeHtml(record.platform)}">Fix credentials</button>`
+          : ""
+      }`,
     });
   }
 

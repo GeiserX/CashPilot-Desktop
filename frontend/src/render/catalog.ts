@@ -1,4 +1,4 @@
-// The catalog as the web console draws it: one table, the services running here
+// The catalog as the web console draws it: one table, the services deployed here
 // first, then the rest, one line each with what it pays and where it runs.
 //
 // Sign up stays on every row that has a sign-up link: for providers with a
@@ -9,6 +9,7 @@
 import type { Deployment, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { customImageBadge } from "./image.js";
+import { containerState } from "./attention.js";
 
 /** "$0-5 / device" from the catalog's monthly estimate, or a dash when it has none. */
 export function estimateText(service: Service): string {
@@ -18,6 +19,13 @@ export function estimateText(service: Service): string {
   const range = `${e.monthlyLow || 0}-${e.monthlyHigh || 0}`;
   const money = cur === "USD" ? `$${range}` : `${range} ${cur}`;
   return e.per ? `${money} / ${e.per}` : money;
+}
+
+/** A deployed service's square: green only when it is actually running. */
+function statusDot(status: string): string {
+  const state = containerState(status);
+  const cls = state === "ok" ? "running" : state === "fail" ? "stopped" : "unknown";
+  return `<span class="status-dot ${cls}" title="Deployed here: ${escapeHtml(status || "unknown")}"></span> `;
 }
 
 const KIND: Record<string, string> = { bandwidth: "Bandwidth", depin: "DePIN", storage: "Storage", compute: "Compute" };
@@ -38,7 +46,7 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
   return `
     <tr>
       <td class="c-name">
-        <span class="svc-name">${deployed ? `<span class="status-dot running" title="Running here"></span> ` : ""}${escapeHtml(service.name)}</span>
+        <span class="svc-name">${deployment ? statusDot(deployment.status) : ""}${escapeHtml(service.name)}</span>
         <div class="cell-sub">${escapeHtml(service.shortDescription || service.description)}</div>
         ${tags ? `<div class="cell-tags">${tags}</div>` : ""}
       </td>
@@ -66,7 +74,7 @@ export function renderCatalogTable(services: Service[], deployments: Deployment[
         <tr><th>Service</th><th>Kind</th><th>Runs on</th><th class="c-num">Est. per month</th><th class="c-act"></th></tr>
       </thead>
       <tbody>
-        ${group("Running here", here)}
+        ${group("Deployed here", here)}
         ${group("Not running", rest)}
       </tbody>
     </table>

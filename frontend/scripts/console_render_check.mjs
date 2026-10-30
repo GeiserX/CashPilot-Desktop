@@ -69,6 +69,13 @@ check("RULE 1: repeated crashes are listed", tags.includes("Unstable"));
 const offline = attentionItems({ runtime: { available: false, nativeAvailable: false, message: "Docker is not running." }, services, deployments: [], earnings: [] });
 check("RULE 1: no runtime at all is a failure", offline.length === 1 && offline[0].level === "fail" && offline[0].why.includes("Docker is not running."), JSON.stringify(offline));
 check("RULE 1: native alone is not an outage", attentionItems({ runtime: { available: false, nativeAvailable: true, message: "" }, services, deployments: [], earnings: [] }).length === 0);
+const dockerDown = attentionItems({ runtime: { available: false, nativeAvailable: true, message: "Docker is not running." }, services, deployments: [{ ...dep("honeygain", "exited"), runtime: "docker" }], earnings: [] });
+check("RULE 1: Docker down with container services stored is an outage, even with native up", dockerDown.some((i) => i.tag === "Offline" && i.what === "Container runtime"), JSON.stringify(dockerDown));
+const nativeOnly = attentionItems({ runtime: { available: false, nativeAvailable: true, message: "" }, services, deployments: [{ ...dep("honeygain", "running"), runtime: "native" }], earnings: [] });
+check("RULE 1: a native-only install with Docker absent is not an outage", !nativeOnly.some((i) => i.tag === "Offline"), JSON.stringify(nativeOnly));
+const orphanCopy = attentionItems({ runtime: runtimeOk, services, deployments: [], copies: { iproyal: [{ slug: "iproyal", containerId: "c", name: "cashpilot-iproyal-2", image: "i", status: "exited", cpuPercent: 0, memoryMb: 0, instance: 2 }] }, earnings: [] });
+check("RULE 1: a stopped copy is listed even when its first copy is missing", orphanCopy.some((i) => i.tag === "Down" && i.where === "copy 2"), JSON.stringify(orphanCopy));
+check("RULE 1: an unreadable balance can be retried as well as fixed", noReading && /data-row-action="collect" data-slug="repocket"/.test(noReading.actions), noReading?.actions);
 const quiet = renderAttention([], 3, 3);
 check("RULE 1: an empty list says what it checked", quiet.includes("Nothing needs you. 3 of 3 containers up.") && !quiet.includes("attn-row"), quiet);
 const loud = renderAttention(items, 1, 3);
@@ -138,11 +145,14 @@ check("nothing deployed and nothing read is the empty state", empty.includes("No
 // ---------------------------------------------------------------------------
 const svc = (slug, o = {}) => ({ slug, name: slug, category: "bandwidth", shortDescription: `${slug} desc`, description: "", website: `https://${slug}.example`, referral: { signupUrl: `https://${slug}.example/ref/CODE` }, platforms: ["docker"], earnings: { monthlyLow: 0, monthlyHigh: 5, currency: "USD", per: "device", notes: "" }, manualOnly: false, ...o });
 const cat = renderCatalogTable([svc("alpha"), svc("beta"), svc("gamma", { manualOnly: true })], [dep("beta", "running")], []);
-check("RULE 4: the sign-up row carries the referral link", cat.includes('data-url="https://alpha.example/ref/CODE"'), cat);
-check("services running here are listed first", cat.indexOf("beta desc") < cat.indexOf("alpha desc") && cat.indexOf("Running here") < cat.indexOf("Not running"), "");
+const alphaRow = cat.split("</tr>").find((r) => r.includes("alpha desc")) || "";
+check("RULE 4: the sign-up row carries its own referral link", alphaRow.includes('data-url="https://alpha.example/ref/CODE"'), alphaRow);
+check("services running here are listed first", cat.indexOf("beta desc") < cat.indexOf("alpha desc") && cat.indexOf("Deployed here") < cat.indexOf("Not running"), "");
 check("a deployed service is managed, not deployed again", /data-service="beta">Manage</.test(cat), cat);
 check("a manual-only service is visited, never deployed", /data-url="https:\/\/gamma.example\/ref\/CODE">Visit</.test(cat) && !cat.includes('data-service="gamma"'), cat);
 check("the estimate reads like the web one", estimateText(svc("x")) === "$0-5 / device" && estimateText(svc("y", { earnings: { monthlyLow: 0, monthlyHigh: 0, currency: "USD", per: "" } })) === "—");
+const stoppedHere = renderCatalogTable([svc("delta")], [dep("delta", "exited")], []);
+check("a deployed but stopped service is not marked running", !stoppedHere.includes("status-dot running") && stoppedHere.includes("status-dot stopped"), stoppedHere);
 check("text from the catalog is escaped", !catalogRow(svc("<b>x</b>"), undefined, false).includes("<b>x</b>"));
 
 console.log(`${checks - failures}/${checks} console checks passed`);
