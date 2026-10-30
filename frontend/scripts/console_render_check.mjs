@@ -90,7 +90,9 @@ check("the 7-day window is the last seven days", chartWindow(days, 7).map((d) =>
 check("one bar per day in the window", (renderEarningsBars(days, "USD", 7).match(/<rect /g) || []).length === 7);
 check("the 30-day window draws thirty bars", (renderEarningsBars(days, "USD", 30).match(/<rect /g) || []).length === 30);
 const flat = renderEarningsBars(days.map((d) => ({ ...d, amount: 0 })), "USD", 7);
-check("no money in the window is 'nothing collected', not a row of empty bars", flat.includes("No earnings collected yet") && !flat.includes("<rect"), flat);
+check("no money in the window is one line, not a row of empty bars", flat.includes("No earnings in the last") && !flat.includes("<rect"), flat);
+const bars7 = renderEarningsBars([{ day: "Oct 29", amount: 0.75 }, { day: "Oct 30", amount: 0.5 }], "USD", 7);
+check("a screen reader gets each day's amount, not only the day count", /aria-label="[^"]*Oct 29 \$0\.75, Oct 30 \$0\.50/.test(bars7), bars7.match(/aria-label="[^"]*"/)?.[0]);
 check("the axis top is round and covers the data", niceMax(0.73) === 1 && niceMax(1.2) === 2 && niceMax(0) === 1 && niceMax(37) === 50);
 
 // ---------------------------------------------------------------------------

@@ -260,6 +260,9 @@ code { color: var(--text-primary); }
   width: 320px;
   display: grid; gap: 0;
   padding: 8px 0;
+  /* The top bar stays put, so a long list must scroll inside the popover. */
+  max-height: calc(100vh - var(--titlebar-height) - var(--topbar-height) - 24px);
+  overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
@@ -379,7 +382,7 @@ section { margin-bottom: 28px; }
 .attn-warn .attn-tag { color: var(--warning); }
 .attn-what { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attn-where { font-family: var(--font-mono); font-weight: 400; font-size: var(--fs-2); color: var(--text-secondary); margin-left: 6px; }
-.attn-why { color: var(--text-secondary); min-width: 0; }
+.attn-why { color: var(--text-secondary); min-width: 0; overflow-wrap: anywhere; }
 .attn-why code { font-size: var(--fs-2); color: var(--text-secondary); }
 .attn-actions { display: flex; gap: 6px; justify-content: flex-end; white-space: nowrap; }
 .attn-clear { display: flex; align-items: center; gap: 8px; padding: 8px 0; color: var(--text-secondary); }

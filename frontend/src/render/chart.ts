@@ -24,13 +24,14 @@ export function niceMax(max: number): number {
 
 export function renderEarningsBars(points: DailyPoint[] | null | undefined, displayCurrency: string, days: number): string {
   const data = chartWindow(points, days);
-  // No day with money in it is "nothing collected yet", not a flat line at
-  // zero: a row of empty bars would read as days that earned nothing.
+  // No day with money in it gets one line instead of a row of empty bars. The
+  // data cannot tell "collected, earned nothing" from "not collected", so the
+  // text says only what is true of both.
   if (data.length === 0 || !data.some((point) => point.amount > 0)) {
     return `
       <div class="chart-empty">
-        <strong>No earnings collected yet</strong>
-        <span>Once collectors run, daily earnings in ${escapeHtml(displayCurrency)} appear here.</span>
+        <strong>No earnings in the last ${days} days</strong>
+        <span>Daily earnings in ${escapeHtml(displayCurrency)} appear here once a collected balance grows.</span>
       </div>
     `;
   }
@@ -62,7 +63,7 @@ export function renderEarningsBars(points: DailyPoint[] | null | undefined, disp
   }).join("");
   return `
     <div class="chart-shell">
-      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="Earned per day, last ${data.length} days">
+      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(`Earned per day, last ${data.length} days: ${data.map((point) => `${point.day} ${formatBalance(point.amount, displayCurrency)}`).join(", ")}`)}">
         ${grid}
         ${bars}
       </svg>
