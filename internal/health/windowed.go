@@ -80,17 +80,53 @@ func fillVars(text string, vars map[string]string) string {
 	})
 }
 
-// lanAddress is the source address of this computer's default route. Dialling UDP
-// sends nothing; it only asks the kernel which address it would use.
+// lanAddress is the source address of this computer's default route, when it sits
+// on an ordinary LAN interface. Dialling UDP sends nothing; it only asks the kernel
+// which address it would use. Behind a VPN that address is the tunnel's, which no
+// home router can forward to, so a tunnel or point-to-point interface, or Docker's
+// and VMs' 172.16.0.0/12, gives the generic text instead.
 var lanAddress = func() string {
+	const unknown = "this computer's LAN address"
 	conn, err := net.Dial("udp", "192.0.2.1:9")
-	if err == nil {
-		defer conn.Close()
-		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && addr.IP.IsPrivate() {
-			return addr.IP.String()
+	if err != nil {
+		return unknown
+	}
+	defer conn.Close()
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || addr.IP.To4() == nil || !addr.IP.IsPrivate() || dockerPools.Contains(addr.IP) {
+		return unknown
+	}
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return unknown
+	}
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.Equal(addr.IP) {
+				if iface.Flags&net.FlagUp != 0 && iface.Flags&(net.FlagPointToPoint|net.FlagLoopback) == 0 && !tunnelName(iface.Name) {
+					return addr.IP.String()
+				}
+				return unknown
+			}
 		}
 	}
-	return "this computer's LAN address"
+	return unknown
+}
+
+var dockerPools = &net.IPNet{IP: net.IPv4(172, 16, 0, 0), Mask: net.CIDRMask(12, 32)}
+
+// tunnelName reports interface names VPN clients use.
+func tunnelName(name string) bool {
+	for _, prefix := range []string{"utun", "tun", "tap", "ppp", "wg", "tailscale", "gpd", "ipsec"} {
+		if strings.HasPrefix(strings.ToLower(name), prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type windowEntry struct {

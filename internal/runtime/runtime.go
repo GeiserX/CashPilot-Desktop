@@ -451,20 +451,38 @@ func (p *DockerProvider) LogsMatching(ctx context.Context, slug string, since ti
 	return filterLines(pr, match, lines)
 }
 
+// maxFilterLine is how much of one log line filterLines looks at. A longer line is
+// cut, not an error: one oversized record must not stop the window being judged.
+const maxFilterLine = 64 << 10
+
 // filterLines keeps the newest `lines` lines of r that match.
 func filterLines(r io.Reader, match *regexp.Regexp, lines int) (string, error) {
 	var kept []string
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64<<10), 1<<20)
-	for scanner.Scan() {
-		if line := scanner.Text(); match.MatchString(line) {
-			kept = append(kept, line)
+	reader := bufio.NewReaderSize(r, maxFilterLine)
+	var line []byte
+	for {
+		chunk, more, err := reader.ReadLine()
+		if room := maxFilterLine - len(line); room > 0 {
+			line = append(line, chunk[:min(len(chunk), room)]...)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return strings.Join(kept, "\n"), err
+		}
+		if more {
+			continue
+		}
+		if match.Match(line) {
+			kept = append(kept, string(line))
 			if len(kept) > lines {
 				kept = kept[1:]
 			}
 		}
+		line = line[:0]
 	}
-	return strings.Join(kept, "\n"), scanner.Err()
+	return strings.Join(kept, "\n"), nil
 }
 
 func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {

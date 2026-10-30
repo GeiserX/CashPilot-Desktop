@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"testing"
@@ -823,5 +824,32 @@ docker:
 	if err := m.ValidateCredentials("broken", map[string]string{"ADDR": "127.0.0.1"}); err == nil ||
 		!strings.Contains(err.Error(), "Address") {
 		t.Fatalf("a value checked against an uncompilable pattern was accepted: %v", err)
+	}
+}
+
+// A port_range default is never checked on deploy (only typed values are), so a
+// reversed default would match its pattern and reach the node's command line.
+func TestEveryVendoredPortRangeDefaultIsInOrder(t *testing.T) {
+	cat, err := catalog.LoadEmbedded(os.DirFS(filepath.Join("..", "..")))
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	var checked int
+	for _, svc := range cat.List() {
+		for _, item := range svc.Docker.Env {
+			if !item.PortRange {
+				continue
+			}
+			checked++
+			if item.Default != "" && !isPortRange(item.Default) {
+				t.Errorf("%s %s: default %q is not an in-order port range", svc.Slug, item.Key, item.Default)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no vendored entry declares port_range; this test would pass by checking nothing")
+	}
+	if isPortRange("56100:56000") {
+		t.Fatal("isPortRange accepts a reversed range, so the loop above proves nothing")
 	}
 }

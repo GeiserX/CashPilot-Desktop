@@ -1423,3 +1423,11 @@ func TestFilterLinesKeepsTheNewestMatchesIncludingAnUnterminatedLast(t *testing.
 		t.Fatalf("filterLines = %q, %v", got, err)
 	}
 }
+
+func TestFilterLinesSurvivesALineLongerThanItsBuffer(t *testing.T) {
+	in := "x manual:false\n" + strings.Repeat("y", 3<<20) + " manual:huge\nz manual:true\n"
+	got, err := filterLines(strings.NewReader(in), regexp.MustCompile("manual:(false|true)"), 10)
+	if err != nil || got != "x manual:false\nz manual:true" {
+		t.Fatalf("filterLines = %.80q, %v", got, err)
+	}
+}
