@@ -25,6 +25,8 @@ import (
 type Registry struct {
 	store *store.Store
 	http  *http.Client
+	// devices is the last finished device-on-account check per slug (devices.go).
+	devices deviceState
 }
 
 type Result struct {
@@ -281,6 +283,7 @@ func (r *Registry) collectEarnApp(ctx context.Context, credentials map[string]st
 	if money.Error != "" {
 		return Result{}, errors.New(money.Error)
 	}
+	r.checkEarnAppDevice(ctx, strings.TrimSpace(credentials["EARNAPP_UUID"]), headers, cookies)
 	return Result{Platform: "earnapp", Balance: round(money.Balance, 4), Currency: "USD"}, nil
 }
 
@@ -598,11 +601,11 @@ func (r *Registry) collectProxyRack(ctx context.Context, credentials map[string]
 			Balance string `json:"balance"`
 		} `json:"data"`
 	}
-	headers := map[string]string{"Api-Key": apiKey, "Accept": "application/json"}
-	if err := r.doJSON(ctx, "POST", "https://peer.proxyrack.com/api/balance", nil, headers, &resp); err != nil {
+	if err := r.doJSON(ctx, "POST", "https://peer.proxyrack.com/api/balance", nil, proxyRackHeaders(apiKey), &resp); err != nil {
 		return Result{}, err
 	}
 	balance, _ := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(resp.Data.Balance, "$")), 64)
+	r.checkProxyRackDevice(ctx, apiKey, strings.TrimSpace(credentials["UUID"]))
 	return Result{Platform: "proxyrack", Balance: round(balance, 4), Currency: "USD"}, nil
 }
 

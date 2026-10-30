@@ -165,13 +165,16 @@ export function referralNote(service: Service): string {
 /**
  * The step after a deploy for a provider that pays a device only once its id is on
  * the user's account (EarnApp, ProxyRack): an unlinked node runs and earns for
- * nobody. Plain text for the deploy output, "" when there is nothing to link. The
- * web app shows the same step (app.js _showDeviceLink).
+ * nobody. Plain text for the deploy output, "" when there is nothing to link, and a
+ * short "added" note when the deploy added the device itself (addedId). The web app
+ * shows the same step (app.js _showDeviceLink).
  */
-export function deviceLinkText(service: Service | undefined, values: Record<string, string>): string {
+export function deviceLinkText(service: Service | undefined, values: Record<string, string>, addedId = ""): string {
   const link = service?.deviceLink;
   const id = (values[link?.idEnv || ""] || "").trim();
   if (!link || !id) return "";
+  // The deploy added it through the provider's API (ProxyRack with its API key).
+  if (addedId === id) return ["Added to your account", id].join("\n");
   const url = (link.url || "").replace(/\$\{(\w+)\}/g, (_, key: string) => encodeURIComponent((values[key] || "").trim()));
   return ["Link this device to your account", link.steps.trim(), id, url].filter(Boolean).join("\n");
 }
