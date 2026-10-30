@@ -10,6 +10,7 @@
 // Pure: takes catalog data and recorded state, returns HTML strings or values.
 
 import type { ScalingLimit, Service, ServiceCopy } from "../wails";
+import { rowButton } from "./actions.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 /**
@@ -70,24 +71,24 @@ export function firstCopyLabel(copies: ServiceCopy[] | null | undefined): string
 export function copyRows(serviceName: string, copies: ServiceCopy[] | null | undefined): string {
   return (copies || []).map((copy) => {
     const n = copy.instance;
-    const slug = escapeHtml(copy.slug);
     const running = copy.status === "running";
+    // The balance is the service's, on its first row: a copy has no reading of its own.
     return `
-      <tr class="copy-row">
-        <td>
-          <strong>${escapeHtml(serviceName)} #${n}</strong>
-          <small>${escapeHtml(copy.name)}</small>
+      <tr class="copy-row instance-row">
+        <td class="c-name">
+          <span class="svc-name">${escapeHtml(serviceName)} #${n}</span>
+          <div class="cell-sub cell-mono">${escapeHtml(copy.name)}</div>
         </td>
-        <td><span class="status-pill ${running ? "ok" : "warn"}">${escapeHtml(copy.status)}</span></td>
-        <td><span class="muted">--</span></td>
-        <td>${copy.cpuPercent.toFixed(1)}%</td>
-        <td>${copy.memoryMb.toFixed(0)} MB</td>
-        <td>
-          <div class="table-actions">
-            <button class="secondary compact-btn" data-row-action="logs" data-slug="${slug}" data-copy="${n}">Logs</button>
-            ${running
-              ? `<button class="secondary compact-btn" data-row-action="stop" data-slug="${slug}" data-copy="${n}">Stop</button>`
-              : `<button class="secondary compact-btn" data-row-action="start" data-slug="${slug}" data-copy="${n}">Start</button>`}
+        <td><span class="badge badge-${running ? "running" : "stopped"}"><span class="status-dot ${running ? "running" : "stopped"}"></span>${escapeHtml(copy.status)}</span></td>
+        <td class="c-num"><span class="muted">&mdash;</span></td>
+        <td class="c-num"><span class="muted" title="A copy's balance is the service's, on its first row">&mdash;</span></td>
+        <td class="c-num">${copy.cpuPercent.toFixed(1)}%</td>
+        <td class="c-num">${copy.memoryMb.toFixed(0)} MB</td>
+        <td class="c-pay"></td>
+        <td class="c-act">
+          <div class="action-btns">
+            ${rowButton("logs", copy.slug, `Logs of copy ${n}`, n)}
+            ${running ? rowButton("stop", copy.slug, `Stop copy ${n}`, n) : rowButton("start", copy.slug, `Start copy ${n}`, n)}
           </div>
         </td>
       </tr>

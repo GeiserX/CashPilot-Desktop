@@ -55,13 +55,13 @@ const bad = renderProducerBadge(failing, "running");
 check("a running service with a failing verdict is badged", bad.includes("<span"), bad);
 check("and the badge says it is not earning", /not earning/.test(label(bad)), label(bad));
 check("and the reason is carried to the user", tooltip(bad).includes("cannot run sudo"), tooltip(bad));
-check("a failure uses the error tone", bad.includes("--error"), bad);
+check("a failure uses the error tone", bad.includes("tone-fail"), bad);
 
 const lazy = renderProducerBadge(idle, "running");
 check("an idle verdict is also 'not earning' -- that is what the user cares about", /not earning/.test(label(lazy)), label(lazy));
 check(
   "but idle is amber, not red: nobody buying is not something to go and fix",
-  lazy.includes("--warning") && !lazy.includes("--error"),
+  lazy.includes("tone-warn") && !lazy.includes("tone-fail"),
   lazy
 );
 
@@ -72,7 +72,7 @@ const unknown = renderProducerBadge(notChecked, "running");
 check("an unchecked service still shows a badge -- silence would read as fine", unknown.includes("<span"), unknown);
 check("it says it was not checked", /not checked/.test(label(unknown)), label(unknown));
 check("it does not accuse the service of anything", !/not earning/.test(label(unknown)), label(unknown));
-check("and it is not green", !unknown.includes("--success"), unknown);
+check("and it is not green", !unknown.includes("tone-ok"), unknown);
 check("it explains why it could not tell", tooltip(unknown).includes("cannot yet tell"), tooltip(unknown));
 
 // A state this frontend has never heard of is the same situation: we cannot read
