@@ -238,6 +238,14 @@ type HealthSignal struct {
 	Pattern string `json:"pattern" yaml:"pattern"`
 	Means   string `json:"means" yaml:"means"`
 	State   string `json:"state" yaml:"state"`
+	// Unless cancels the signal when it also appears in the same logs: the problem
+	// is not there. WindowHours, when set, judges that many hours of logs instead
+	// of the tail (see health.windowed); Mysterium writes about 11,000 lines an
+	// hour, so the tail is a minute and cannot show that something never happened.
+	Unless      string  `json:"unless,omitempty" yaml:"unless"`
+	WindowHours float64 `json:"windowHours,omitempty" yaml:"window_hours"`
+	// MinMatches is how many lines the pattern must match in the window (default 1).
+	MinMatches int `json:"minMatches,omitempty" yaml:"min_matches"`
 }
 
 // ResourceLimits is the optional docker.resources block from a service YAML. Its
@@ -310,6 +318,10 @@ type EnvVar struct {
 	// exists for values that land on a command line, where "127.0.0.1, 10.0.0.1"
 	// becomes a stray argument and the service refuses to start.
 	Pattern string `json:"pattern,omitempty" yaml:"pattern"`
+	// PortRange, when set, means the value is "start:end" with
+	// 1 <= start <= end <= 65535. A pattern checks the shape but not the order, and
+	// Mysterium refuses to start on a reversed --udp.ports.
+	PortRange bool `json:"portRange,omitempty" yaml:"port_range"`
 }
 
 type Requirements struct {

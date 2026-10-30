@@ -7,8 +7,10 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -452,6 +454,40 @@ func (m *Manager) Logs(ctx context.Context, slug string, lines int) (string, err
 	return m.providerForSlug(slug).Logs(ctx, slug, lines)
 }
 
+// logsMatcher is a provider that can filter a window of logs (the Docker one).
+type logsMatcher interface {
+	LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error)
+}
+
+// LogsMatching returns the matching log lines of the last `since`, from a runtime
+// that can read a window; any other runtime answers with an error, so nothing is judged.
+func (m *Manager) LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+	provider, ok := m.providerForSlug(slug).(logsMatcher)
+	if !ok {
+		return "", fmt.Errorf("this runtime cannot read a window of logs")
+	}
+	return provider.LogsMatching(ctx, slug, since, match, lines)
+}
+
+// SignalVars is what a health signal's ${VAR} placeholders are filled from: the
+// catalog defaults, overlaid by the values saved for this service.
+func (m *Manager) SignalVars(slug string) map[string]string {
+	vars := map[string]string{}
+	if svc, ok := m.catalog.Get(slug); ok {
+		for _, item := range svc.Docker.Env {
+			vars[item.Key] = item.Default
+		}
+	}
+	if saved, err := m.store.GetCredentials(slug); err == nil {
+		for k, v := range saved {
+			if v != "" {
+				vars[k] = v
+			}
+		}
+	}
+	return vars
+}
+
 // providerListing pairs a runtime kind with the units its provider reported, so a
 // caller (Refresh) can record each unit under the runtime that actually owns it.
 type providerListing struct {
@@ -610,9 +646,25 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 					return fmt.Errorf("invalid value for field: %s", label)
 				}
 			}
+			if item.PortRange && value != "" && !isPortRange(value) {
+				return fmt.Errorf("invalid value for field: %s", label)
+			}
 		}
 	}
 	return nil
+}
+
+// isPortRange reports whether value is "start:end" in ASCII digits with
+// 1 <= start <= end <= 65535.
+func isPortRange(value string) bool {
+	start, end, ok := strings.Cut(value, ":")
+	if !ok {
+		return false
+	}
+	lo, err1 := strconv.Atoi(start)
+	hi, err2 := strconv.Atoi(end)
+	digits := func(s string) bool { return s != "" && strings.Trim(s, "0123456789") == "" }
+	return err1 == nil && err2 == nil && digits(start) && digits(end) && 1 <= lo && lo <= hi && hi <= 65535
 }
 
 // ValidateCredentials reports whether the given credentials would let the service

@@ -109,6 +109,8 @@ type Input struct {
 	// and only one of those is worth telling the user about.
 	Logs     string
 	LogsRead bool
+	// WindowHits are the windowed signals that held at their last check.
+	WindowHits []Hit
 }
 
 // Hit is one declared signal that was found in the logs.
@@ -131,7 +133,9 @@ func MatchSignals(logs string, signals []catalog.HealthSignal) []Hit {
 	}
 	var hits []Hit
 	for _, signal := range signals {
-		if signal.Pattern == "" {
+		// A windowed signal is judged over hours of logs (windowed.go); on the
+		// tail, one failed attempt with its fix out of view says nothing.
+		if signal.Pattern == "" || IsWindowed(signal) {
 			continue
 		}
 		// (?i): the catalog's patterns are matched case-insensitively, as the web
@@ -206,8 +210,11 @@ func Assess(in Input) Report {
 		add(StateNotChecked, "CashPilot cannot yet tell from this service's own messages whether it is earning.")
 	case !in.LogsRead:
 		add(StateNotChecked, "We could not read its logs, so nothing in them is judged.")
+		for _, hit := range in.WindowHits {
+			add(hit.State, hit.Means)
+		}
 	default:
-		hits := MatchSignals(in.Logs, in.Signals)
+		hits := append(MatchSignals(in.Logs, in.Signals), in.WindowHits...)
 		for _, hit := range hits {
 			add(hit.State, hit.Means)
 		}

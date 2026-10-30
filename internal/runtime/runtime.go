@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -420,6 +421,68 @@ func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (stri
 		return "", err
 	}
 	return stripDockerLogHeaders(raw), nil
+}
+
+// LogsMatching returns the newest `lines` log lines of the last `since` that match
+// `match`. The window is streamed and filtered here, so megabytes of a chatty
+// service's logs are never held at once.
+func (p *DockerProvider) LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+	cli, err := dockerClient()
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+	reader, err := cli.ContainerLogs(ctx, containerName(slug), client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Since:      strconv.FormatInt(time.Now().Add(-since).Unix(), 10),
+		Timestamps: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	pr, pw := io.Pipe()
+	go func() {
+		_, err := stdcopy.StdCopy(pw, pw, reader)
+		pw.CloseWithError(err)
+	}()
+	defer pr.Close()
+	return filterLines(pr, match, lines)
+}
+
+// maxFilterLine is how much of one log line filterLines looks at. A longer line is
+// cut, not an error: one oversized record must not stop the window being judged.
+const maxFilterLine = 64 << 10
+
+// filterLines keeps the newest `lines` lines of r that match.
+func filterLines(r io.Reader, match *regexp.Regexp, lines int) (string, error) {
+	var kept []string
+	reader := bufio.NewReaderSize(r, maxFilterLine)
+	var line []byte
+	for {
+		chunk, more, err := reader.ReadLine()
+		if room := maxFilterLine - len(line); room > 0 {
+			line = append(line, chunk[:min(len(chunk), room)]...)
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return strings.Join(kept, "\n"), err
+		}
+		if more {
+			continue
+		}
+		if match.Match(line) {
+			kept = append(kept, string(line))
+			if len(kept) > lines {
+				kept = kept[1:]
+			}
+		}
+		line = line[:0]
+	}
+	return strings.Join(kept, "\n"), nil
 }
 
 func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {

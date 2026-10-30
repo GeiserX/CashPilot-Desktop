@@ -423,6 +423,8 @@ export interface EnvVar {
   description: string;
   default: string;
   pattern?: string;
+  /** "start:end" with 1 <= start <= end <= 65535, checked by the Go side. */
+  portRange?: boolean;
 }
 
 // PreflightFinding is one thing that could stop a service earning on this machine,
