@@ -541,8 +541,15 @@ function renderCatalog(current: AppState) {
   wireShellNav();
   maybeResetScroll();
   document.querySelector<HTMLInputElement>("#catalog-search")?.addEventListener("input", (event) => {
-    catalogSearch = (event.target as HTMLInputElement).value;
+    const input = event.target as HTMLInputElement;
+    catalogSearch = input.value;
+    const caret = input.selectionStart ?? catalogSearch.length;
     render();
+    // render() replaces the page, input included: put the cursor back, or every
+    // keystroke after the first lands nowhere.
+    const next = document.querySelector<HTMLInputElement>("#catalog-search");
+    next?.focus();
+    next?.setSelectionRange(caret, caret);
   });
   document.querySelectorAll<HTMLButtonElement>("[data-filter]").forEach((button) => {
     button.addEventListener("click", () => {
