@@ -36,9 +36,10 @@ export function renderEarningsBars(points: DailyPoint[] | null | undefined, disp
   }
   const width = 1200;
   const height = 220;
-  const left = 52;
-  const bottom = 24;
-  const top = 8;
+  // Room for an end-anchored y label as wide as "0.00 MYST" at the axis font size.
+  const left = 120;
+  const bottom = 30;
+  const top = 14;
   const plotW = width - left;
   const plotH = height - bottom - top;
   const max = niceMax(Math.max(...data.map((point) => point.amount)));
@@ -49,13 +50,13 @@ export function renderEarningsBars(points: DailyPoint[] | null | undefined, disp
   const grid = [0, 0.5, 1].map((f) => {
     const gy = y(max * f);
     return `<line class="chart-grid" x1="${left}" y1="${gy.toFixed(1)}" x2="${width}" y2="${gy.toFixed(1)}"/>
-      <text class="chart-axis" x="${left - 8}" y="${(gy + 4).toFixed(1)}" text-anchor="end">${escapeHtml(formatBalance(max * f, displayCurrency))}</text>`;
+      <text class="chart-axis" x="${left - 8}" y="${(gy + 6).toFixed(1)}" text-anchor="end">${escapeHtml(formatBalance(max * f, displayCurrency))}</text>`;
   }).join("");
   const bars = data.map((point, index) => {
     const x = left + index * slot + (slot - barW) / 2;
     const by = y(point.amount);
     const label = index % labelEvery === 0
-      ? `<text class="chart-axis" x="${(x + barW / 2).toFixed(1)}" y="${height - 6}" text-anchor="middle">${escapeHtml(point.day)}</text>`
+      ? `<text class="chart-axis" x="${(x + barW / 2).toFixed(1)}" y="${height - 8}" text-anchor="middle">${escapeHtml(point.day)}</text>`
       : "";
     return `<rect class="chart-bar" x="${x.toFixed(1)}" y="${by.toFixed(1)}" width="${barW.toFixed(1)}" height="${(top + plotH - by).toFixed(1)}"><title>${escapeHtml(point.day)}: ${escapeHtml(formatBalance(point.amount, displayCurrency))}</title></rect>${label}`;
   }).join("");

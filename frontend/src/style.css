@@ -402,7 +402,8 @@ section { margin-bottom: 28px; }
 .chart-grid { stroke: var(--border-color); stroke-width: 1; }
 .chart-bar { fill: var(--chart-bar); }
 .chart-bar:hover { fill: var(--text-secondary); }
-.chart-axis { fill: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+/* SVG units: the 1200-wide chart is drawn at ~850px in the narrowest window, so 17 lands near 12px. */
+.chart-axis { fill: var(--text-muted); font-family: var(--font-mono); font-size: 17px; }
 .chart-empty { display: grid; gap: 2px; padding: 16px 0; color: var(--text-muted); }
 .chart-empty strong { color: var(--text-primary); font-weight: 600; }
 
