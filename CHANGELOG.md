@@ -97,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The app now looks and reads like the web console.** One top bar replaces the sidebar, the synthwave theme gives way to graphite with hairlines, and colour marks state only. The dashboard opens on the balance, then a **Needs attention** list of stopped containers, unreadable balances and outdated images, each with the button that fixes it, then earnings per day (7 or 30 days, as bars) and the services table, which gains Health and Payout columns and keeps a row for every platform CashPilot reads, deployed here or not. The catalog is one table with the services running here first. Fonts (IBM Plex Sans Condensed and IBM Plex Mono) are bundled, so the app still renders offline.
+- **The app now looks and reads like the web console.** One top bar replaces the sidebar, the synthwave theme gives way to graphite with hairlines, and colour marks state only. The dashboard opens on the balance, then a **Needs attention** list of stopped containers, unreadable balances and outdated images, each with the button that fixes it, then earnings per day (7 or 30 days, as bars) and the services table, which gains Health and Payout columns and keeps a row for every platform CashPilot reads, deployed here or not. The catalog is one table with the services running here first. Fonts (IBM Plex Sans at a 16 px body, IBM Plex Mono for figures) are bundled, so the app still renders offline.
 - **`dropped` services are hidden alongside `dead` and `broken`.** A service that was evaluated and then removed is not on offer, for the same reason a dead one is not: listing it invites a signup that will never pay.
 
 ## [0.10.1] - 2026-07-17

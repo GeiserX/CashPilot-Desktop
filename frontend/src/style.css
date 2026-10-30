@@ -10,25 +10,25 @@
    Bundled, not fetched: the app works offline. Swapping the typeface is the
    four @font-face blocks below plus --font-ui / --font-mono. */
 @font-face {
-  font-family: "IBM Plex Sans Condensed";
+  font-family: "IBM Plex Sans";
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url("./fonts/ibm-plex-sans-condensed-latin-400-normal.woff2") format("woff2");
+  src: url("./fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Sans Condensed";
+  font-family: "IBM Plex Sans";
   font-style: normal;
   font-weight: 500;
   font-display: swap;
-  src: url("./fonts/ibm-plex-sans-condensed-latin-500-normal.woff2") format("woff2");
+  src: url("./fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
 }
 @font-face {
-  font-family: "IBM Plex Sans Condensed";
+  font-family: "IBM Plex Sans";
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url("./fonts/ibm-plex-sans-condensed-latin-600-normal.woff2") format("woff2");
+  src: url("./fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
 }
 @font-face {
   font-family: "IBM Plex Mono";
@@ -80,17 +80,17 @@
 
   --chart-bar: #59616b;
 
-  --font-ui: "IBM Plex Sans Condensed", "Roboto Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-ui: "IBM Plex Sans", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
   /* Type scale. Nothing is set under 12px; body text is 14px. */
-  --fs-1: 12px;   /* keys, counts, the smallest meta */
-  --fs-2: 13px;   /* labels, table heads, secondary lines */
-  --fs-3: 14px;   /* body, table cells, buttons */
-  --fs-4: 16px;   /* section titles */
-  --fs-5: 20px;   /* page titles */
-  --fs-figure: 24px;  /* today and this month */
-  --fs-money: 34px;   /* the balance */
+  --fs-1: 14px;   /* keys, counts, the smallest meta */
+  --fs-2: 15px;   /* labels, table heads, secondary lines */
+  --fs-3: 16px;   /* body, table cells, buttons */
+  --fs-4: 18px;   /* section titles */
+  --fs-5: 23px;   /* page titles */
+  --fs-figure: 27px;  /* today and this month */
+  --fs-money: 39px;   /* the balance */
 
   --titlebar-height: 32px;
   --topbar-height: 48px;
@@ -109,7 +109,7 @@ body {
   min-height: 100vh;
   font-family: var(--font-ui);
   font-size: var(--fs-3);
-  line-height: 1.45;
+  line-height: 1.4;
   background: var(--bg-primary);
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
