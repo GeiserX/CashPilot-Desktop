@@ -38,8 +38,8 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 )
 
-// State is a producer verdict. There are only three, and the missing fourth is the
-// point: "earning" is not among them because no signal here can prove it.
+// State is a producer verdict. "Earning" is not among them, and that is the point: no
+// signal here can prove it.
 type State string
 
 const (
@@ -51,18 +51,24 @@ const (
 	StateIdle State = "idle"
 	// StateFailing means a declared signal says it is broken, or it is restart-looping.
 	StateFailing State = "failing"
+	// StateAccountDisabled means the provider refuses to run the client: its last
+	// finished run printed an account_disabled signal. Restarting cannot help, and
+	// only the provider can turn the account back on.
+	StateAccountDisabled State = catalog.SignalAccountDisabled
 )
 
 // rank orders the verdicts worst-last, so combining signals keeps the most serious
 // one. Failing beats idle: a log line saying "login failed" is a concrete, actionable
 // diagnosis, whereas idleness is only an observation. Both beat not-checked, which is
 // the absence of a finding rather than a finding.
-var rank = map[State]int{StateNotChecked: 0, StateIdle: 1, StateFailing: 2}
+var rank = map[State]int{StateNotChecked: 0, StateIdle: 1, StateFailing: 2, StateAccountDisabled: 3}
 
 // NotEarning reports whether this verdict is a positive finding that the service is
 // running without earning. StateNotChecked is deliberately false: we did not find it
 // healthy, we found nothing.
-func (s State) NotEarning() bool { return s == StateIdle || s == StateFailing }
+func (s State) NotEarning() bool {
+	return s == StateIdle || s == StateFailing || s == StateAccountDisabled
+}
 
 // Container states, as both Docker and Podman report them.
 const (
@@ -111,6 +117,9 @@ type Input struct {
 	LogsRead bool
 	// WindowHits are the windowed signals that held at their last check.
 	WindowHits []Hit
+	// Refusal is the explanation of the account_disabled signal the last finished
+	// run printed, or "" when none did (see MatchRefusal).
+	Refusal string
 }
 
 // Hit is one declared signal that was found in the logs.
@@ -135,7 +144,10 @@ func MatchSignals(logs string, signals []catalog.HealthSignal) []Hit {
 	for _, signal := range signals {
 		// A windowed signal is judged over hours of logs (windowed.go); on the
 		// tail, one failed attempt with its fix out of view says nothing.
-		if signal.Pattern == "" || IsWindowed(signal) {
+		// An account_disabled signal is judged on the last finished run only
+		// (MatchRefusal): an old refusal still in a running container's log says
+		// nothing about now.
+		if signal.Pattern == "" || IsWindowed(signal) || isRefusal(signal) {
 			continue
 		}
 		// (?i): the catalog's patterns are matched case-insensitively, as the web
@@ -153,6 +165,45 @@ func MatchSignals(logs string, signals []catalog.HealthSignal) []Hit {
 	return hits
 }
 
+// refusalChars is how much of a finished run's log a refusal is looked for in. The
+// provider's refusal is the last thing the client prints before it exits.
+const refusalChars = 4096
+
+func isRefusal(s catalog.HealthSignal) bool { return s.State == catalog.SignalAccountDisabled }
+
+// declaresRefusal reports whether any signal is an account_disabled one, so a
+// healthy fleet costs no extra log read.
+func declaresRefusal(signals []catalog.HealthSignal) bool {
+	for _, s := range signals {
+		if isRefusal(s) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchRefusal returns the explanation of the first account_disabled signal found
+// at the end of a finished run's log, or "". The text is searched as a whole, never
+// line by line: pawns-cli prints "user is disabled" with no newline on every start.
+func MatchRefusal(logs string, signals []catalog.HealthSignal) string {
+	if logs == "" {
+		return ""
+	}
+	if len(logs) > refusalChars {
+		logs = logs[len(logs)-refusalChars:]
+	}
+	for _, s := range signals {
+		if !isRefusal(s) || s.Pattern == "" {
+			continue
+		}
+		re, err := regexp.Compile("(?i)" + s.Pattern)
+		if err == nil && re.MatchString(logs) {
+			return meansOrDefault(s.Means)
+		}
+	}
+	return ""
+}
+
 // meansOrDefault is the explanation shown to the user, falling back to something true
 // but vague when the catalog entry left it out. A matched pattern with no explanation
 // is still worth surfacing; silently dropping it would hide a real finding.
@@ -167,8 +218,9 @@ func meansOrDefault(means string) string {
 // in a multi-line means: into single spaces, so the text fits a one-line tooltip.
 func collapseSpace(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// signalState maps a catalog state word onto a verdict. The catalog allows "failing"
-// and "idle"; anything else (including empty) is read as failing, which is the
+// signalState maps a catalog state word onto a verdict. The loader keeps only
+// "failing", "idle" and "account_disabled", and the last never reaches here (it is
+// MatchRefusal's); anything else (including empty) is read as failing, which is the
 // schema's own default and the safer way to be wrong — under-reporting a real failure
 // is the mistake that costs money.
 func signalState(state string) State {
@@ -180,6 +232,11 @@ func signalState(state string) State {
 
 // Assess combines the available signals into one verdict for one service.
 func Assess(in Input) Report {
+	// The provider refused the client. Whether the container is now restarting,
+	// stopped or briefly up, that is the one cause, and it is not ours to fix.
+	if in.Refusal != "" {
+		return report(in.Slug, StateAccountDisabled, in.Refusal)
+	}
 	switch {
 	case in.ContainerState == "":
 		return report(in.Slug, StateNotChecked,

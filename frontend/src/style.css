@@ -223,6 +223,10 @@ code { color: var(--text-primary); }
 .sidebar-link:hover { color: var(--text-primary); background: var(--bg-hover); }
 .sidebar-link.active { color: var(--text-primary); border-bottom-color: var(--text-primary); font-weight: 600; }
 .topbar-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.topbar-add { flex-shrink: 0; gap: 2px; white-space: nowrap; }
+/* On the wizard itself: a ring, since the button is already filled. */
+.topbar-add.active { box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 0 3px var(--text-primary); }
+.topbar-add:focus-visible { outline-offset: 4px; }
 .topbar-runtime { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-2); color: var(--text-muted); white-space: nowrap; }
 .runtime-dot { display: inline-block; width: 8px; height: 8px; border-radius: 1px; background: var(--text-muted); flex-shrink: 0; }
 .runtime-dot.ok { background: var(--success); }
@@ -770,4 +774,6 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
   .attn-why, .attn-actions { grid-column: 1 / -1; }
   .attn-actions { justify-content: flex-start; }
   .money-strip .stat-card-ops { margin-left: 0; align-items: flex-start; text-align: left; }
+  /* "+" alone; the aria-label still says "Add service". */
+  .topbar-add .topbar-add-label { display: none; }
 }

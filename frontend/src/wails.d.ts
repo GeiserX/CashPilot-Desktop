@@ -36,6 +36,14 @@ declare module "../wailsjs/go/main/App" {
   export function GetEarningsSummary(): Promise<EarningsSummary>;
   // container "" is every container (the machine total).
   export function GetUsage(days: number, container: string): Promise<UsageView>;
+  // Mutes the "needs fixing" warning of slug until the catalog changes a field the
+  // check judges.
+  export function IgnoreDrift(slug: string): Promise<void>;
+  // The payout ledger: cash-outs the user records by hand. currency "" is the
+  // service's balance unit; date "" is today, otherwise YYYY-MM-DD.
+  export function ListPayouts(slug: string): Promise<Payout[]>;
+  export function RecordPayout(slug: string, amount: number, currency: string, method: string, date: string): Promise<Payout>;
+  export function RemovePayout(id: number): Promise<void>;
 }
 
 export interface AppState {
@@ -79,6 +87,10 @@ export interface AppState {
   copies: Record<string, ServiceCopy[]> | null;
   // Per slug, the device id the last deploy added to the user's account itself.
   addedDevices: Record<string, string> | null;
+  // Per slug, how its running container differs from what a redeploy would build
+  // from the current catalog, in plain words. Missing: matches, ignored, or the
+  // warnings are off.
+  drift: Record<string, string[]> | null;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.
@@ -187,6 +199,26 @@ export interface EarningsSummary {
   daily: DailyPoint[];
   ratesStale: boolean;
   ratesUpdated: string;
+  /**
+   * Recorded cash-outs in the display currency, and the balance total plus them.
+   * null when unknown (ledger unreadable, no rate, or total unknown), never 0.
+   * See allTimeNote in render/total.ts.
+   */
+  paidOut: number | null;
+  earnedAllTime: number | null;
+  unpricedPayouts: number;
+}
+
+/** A cash-out from the payout ledger. fxRateUsd null: no rate for that day. */
+export interface Payout {
+  id: number;
+  platform: string;
+  amount: number;
+  currency: string;
+  fxRateUsd: number | null;
+  method: string;
+  paidOn: string;
+  createdAt: string;
 }
 
 export interface ServiceEarning {
@@ -358,6 +390,8 @@ export interface Service {
   category: string;
   status: string;
   website: string;
+  // The provider's support page, offered when it has disabled the account. "" when none.
+  supportUrl: string;
   description: string;
   shortDescription: string;
   // program is three-valued: true/false are verified answers, null means nobody has
@@ -502,6 +536,8 @@ export interface EarningsRecord {
   balance: number;
   currency: string;
   error?: string;
+  // "unread": the login worked but no node could be read, so the credentials are fine.
+  errorKind?: string;
   createdAt: string;
 }
 

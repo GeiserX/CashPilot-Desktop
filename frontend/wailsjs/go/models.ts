@@ -1049,6 +1049,32 @@ export namespace store {
 	    }
 	}
 
+	export class Payout {
+	    id: number;
+	    platform: string;
+	    amount: number;
+	    currency: string;
+	    fxRateUsd?: number;
+	    method: string;
+	    paidOn: string;
+	    createdAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Payout(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.platform = source["platform"];
+	        this.amount = source["amount"];
+	        this.currency = source["currency"];
+	        this.fxRateUsd = source["fxRateUsd"];
+	        this.method = source["method"];
+	        this.paidOn = source["paidOn"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
 }
 
 export namespace usage {

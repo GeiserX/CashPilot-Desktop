@@ -15,6 +15,14 @@ type LogReader interface {
 	Logs(ctx context.Context, slug string, lines int) (string, error)
 }
 
+// RunLogReader reads the log of a service's last finished run only, or "" when it has
+// none worth judging (see runtime.DockerProvider.LastRunLogs). A refusal is judged
+// only through it: a plain tail can hold an earlier run's refusal after the account
+// came back, and calling that run disabled hides Start until the service is removed.
+type RunLogReader interface {
+	LastRunLogs(ctx context.Context, slug string, lines int) (string, error)
+}
+
 // ServiceLookup finds a catalog entry by slug: *catalog.Catalog, narrowed.
 type ServiceLookup interface {
 	Get(slug string) (catalog.Service, bool)
@@ -47,7 +55,9 @@ const logTimeout = 3 * time.Second
 // Collect returns the producer verdict for every deployed service, keyed by slug.
 //
 // Logs are read ONLY for a service whose catalog entry declares signals to match them
-// against, and only while its container is up — reading a log tail nobody has a
+// against, and only while its container is up, except the last run's log of a
+// container whose entry declares an account_disabled signal, read through a
+// RunLogReader — reading a log tail nobody has a
 // pattern for would be a container-runtime round trip per service per refresh, spent
 // to learn nothing. A natively supervised process is skipped for a second reason: the
 // catalog's signals sit under its docker: stanza and explain themselves in terms of a
@@ -79,6 +89,7 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 	}
 
 	reader, canWindow := logs.(WindowReader)
+	runs, canRun := logs.(RunLogReader)
 	var wg sync.WaitGroup
 	for i := range inputs {
 		in := &inputs[i]
@@ -90,13 +101,22 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 				in.WindowHits = windows.hits(reader, in.Slug, windowed)
 			}
 		}
+		if canRun && !in.Native && declaresRefusal(in.Signals) && mayBeRefused(in.ContainerState) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if out, ok := readLogs(ctx, runs.LastRunLogs, in.Slug, refusalLines); ok {
+					in.Refusal = MatchRefusal(out, in.Signals)
+				}
+			}()
+		}
 		if len(in.Signals) == 0 || logs == nil || !isUp(in.ContainerState) {
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			in.Logs, in.LogsRead = readLogs(ctx, logs, in.Slug)
+			in.Logs, in.LogsRead = readLogs(ctx, logs.Logs, in.Slug, logLines)
 		}()
 	}
 	wg.Wait()
@@ -108,6 +128,17 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 	return out
 }
 
+// refusalLines is how much of the last run's log is read to find a refusal: its last
+// words, which is where a client says the provider refused it.
+const refusalLines = 20
+
+// mayBeRefused reports whether the container is in a state the last-run read judges:
+// stopped, restarting, or running (the reader itself answers nothing for a copy up
+// long enough to count as accepted).
+func mayBeRefused(state string) bool {
+	return state == containerRunning || state == containerRestarting || state == "exited" || state == "dead"
+}
+
 // isUp reports whether the container is in a state whose logs are worth reading.
 func isUp(state string) bool {
 	return state == containerRunning || state == containerRestarting
@@ -116,7 +147,7 @@ func isUp(state string) bool {
 // readLogs returns the log tail and whether the read succeeded. A failure is reported
 // as "not read" rather than as empty logs, so the verdict can say we could not look
 // instead of implying we looked and found nothing.
-func readLogs(ctx context.Context, logs LogReader, slug string) (string, bool) {
+func readLogs(ctx context.Context, read func(context.Context, string, int) (string, error), slug string, lines int) (string, bool) {
 	if ctx == nil {
 		// The app's context is nil until Startup has run, and a dashboard refresh
 		// that raced it used to panic here rather than simply skip the log read.
@@ -124,7 +155,7 @@ func readLogs(ctx context.Context, logs LogReader, slug string) (string, bool) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, logTimeout)
 	defer cancel()
-	out, err := logs.Logs(ctx, slug, logLines)
+	out, err := read(ctx, slug, lines)
 	if err != nil {
 		return "", false
 	}
