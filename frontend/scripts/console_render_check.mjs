@@ -187,5 +187,12 @@ const stoppedTable = renderServicesTable({ services, deployments: [dep("iproyal"
 check("control: without the verdict the row and its copy still offer Start",
   /data-row-action="start" data-slug="iproyal" title/.test(stoppedTable) && /data-row-action="start" data-slug="iproyal" data-copy="2"/.test(stoppedTable), stoppedTable);
 
+// No node could be read: the login worked, so no credentials button.
+const unread = attentionItems({ runtime: runtimeOk, services, deployments: [], earnings: [{ platform: "mysterium", error: "No Mysterium node on this computer could be read.", errorKind: "unread" }] });
+check("an unread node says so and offers Retry, not Fix credentials",
+  unread.length === 1 && unread[0].tag === "No node read" && /data-row-action="collect"/.test(unread[0].actions) && !/data-open-service/.test(unread[0].actions), JSON.stringify(unread));
+const plainError = attentionItems({ runtime: runtimeOk, services, deployments: [], earnings: [{ platform: "mysterium", error: "401 Unauthorized" }] });
+check("control: an error of unknown kind still offers Fix credentials", plainError.length === 1 && /data-open-service="mysterium"/.test(plainError[0].actions), JSON.stringify(plainError));
+
 console.log(`${checks - failures}/${checks} console checks passed`);
 if (failures > 0) process.exit(1);

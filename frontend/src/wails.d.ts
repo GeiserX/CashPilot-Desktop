@@ -497,6 +497,8 @@ export interface EarningsRecord {
   balance: number;
   currency: string;
   error?: string;
+  // "unread": the login worked but no node could be read, so the credentials are fine.
+  errorKind?: string;
   createdAt: string;
 }
 
