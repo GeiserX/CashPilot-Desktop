@@ -115,6 +115,17 @@ const hostile = renderProducerBadge(
 check("a hostile reason cannot break out of the title attribute",
   !hostile.includes("<img src=x") && !hostile.includes('"><'), hostile);
 
+// ---------------------------------------------------------------------------
+// account_disabled: the provider refused the client. It is said in any container
+// state, because the container is usually stopped or looping by then.
+// ---------------------------------------------------------------------------
+const disabled = { slug: "iproyal", state: "account_disabled", reasons: ["IPRoyal Pawns has disabled this account."] };
+for (const st of ["exited", "restarting", "running"]) {
+  const html = renderProducerBadge(disabled, st);
+  check(`account_disabled shows as "account disabled" in red when ${st}`,
+    label(html) === "account disabled" && html.includes("tone-fail") && tooltip(html).includes("disabled this account"), html);
+}
+
 if (failures) {
   console.error(`\n${failures} of ${checks} producer-badge checks failed`);
   process.exit(1);

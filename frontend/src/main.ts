@@ -267,6 +267,7 @@ function renderDashboard(current: AppState) {
     earnings,
     outdated: current.outdatedServices,
     health: current.health,
+    producerStates: current.producerStates,
   });
 
   root.innerHTML = `
@@ -360,6 +361,12 @@ function renderDashboard(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-open-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.openService || ""));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {

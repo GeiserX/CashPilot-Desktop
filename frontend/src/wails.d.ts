@@ -351,6 +351,8 @@ export interface Service {
   category: string;
   status: string;
   website: string;
+  // The provider's support page, offered when it has disabled the account. "" when none.
+  supportUrl: string;
   description: string;
   shortDescription: string;
   // program is three-valued: true/false are verified answers, null means nobody has
