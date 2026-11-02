@@ -177,6 +177,7 @@ check("the card links the provider's support page and offers no Start",
   disabledItems[0].actions.includes('data-url="https://pawns.app/contact-us/"') && !/data-row-action="start"/.test(disabledItems[0].actions),
   disabledItems[0]?.actions);
 const noSupport = attentionItems(disabledInput("javascript:alert(1)"));
+check("the card says how to come back once the account is on again", /remove the service and deploy it again/.test(disabledItems[0].why), disabledItems[0]?.why);
 check("a support link that is not https:// is not offered", noSupport.length === 1 && noSupport[0].actions === "", noSupport[0]?.actions);
 const exitedCopy = { iproyal: [{ slug: "iproyal", containerId: "c", name: "cashpilot-iproyal-2", image: "i", status: "exited", cpuPercent: 0, memoryMb: 0, instance: 2 }] };
 const disabledTable = renderServicesTable({ services, deployments: [dep("iproyal", "exited")], copies: exitedCopy, earnings: [], producerStates: disabledInput("").producerStates, displayCurrency: "USD" });

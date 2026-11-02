@@ -83,7 +83,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       level: "fail",
       tag: "Account disabled",
       what: nameOf(slug),
-      why: `${name} turned this account off, so it earns nothing and no balance can be read. Restarting will not help: contact ${name} to get it back. CashPilot leaves its containers as they are.`,
+      why: `${name} turned this account off, so it earns nothing and no balance can be read. Restarting will not help: contact ${name} to get it back. CashPilot leaves its containers as they are. Once ${name} turns the account back on, remove the service and deploy it again.`,
       actions: support
         ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(support)}">Contact ${name}</button>`
         : "",
