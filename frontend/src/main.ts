@@ -19,14 +19,18 @@ import {
   GetAppState,
   GetCopyLogs,
   GetCredentials,
+  GetEarningsSummary,
   GetFleetState,
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
+  ListPayouts,
   PreflightService,
   PlanServiceRemoval,
   RemoveFleetDevice,
+  RecordPayout,
   RefreshDeployments,
+  RemovePayout,
   RemoveService,
   SaveSettings,
   SaveCredentials,
@@ -46,8 +50,8 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
-import { composeSelectionExport, deviceLinkText } from "./render/details";
-import { totalText, totalCaption } from "./render/total";
+import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
+import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
 
@@ -282,6 +286,7 @@ function renderDashboard(current: AppState) {
             <div class="stat-label">Balance</div>
             <div class="stat-value">${escapeHtml(totalText(summary, disp))}</div>
             <div class="stat-note">${escapeHtml(totalCaption(summary))}</div>
+            ${allTimeNote(summary, disp) ? `<div class="stat-note">${escapeHtml(allTimeNote(summary, disp))}</div>` : ""}
           </div>
           <div class="stat-card">
             <div class="stat-label">Today</div>
@@ -1044,6 +1049,55 @@ function renderSetupWizard(current: AppState) {
   });
   selectedServices.forEach((service) => void hydrateWizardForm(service));
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
+  selectedServices.forEach((service) => void hydratePayouts(service));
+}
+
+// The payout ledger under a service's card: load it, then wire its record form
+// and Remove buttons. A record or a removal refreshes the summary in place (not a
+// full render, which would drop credentials typed but not saved yet).
+async function hydratePayouts(service: Service) {
+  const box = document.querySelector<HTMLElement>(`[data-payouts-slug="${CSS.escape(service.slug)}"]`);
+  if (!box) return;
+  const payouts = await ListPayouts(service.slug).catch(() => null);
+  box.innerHTML = payoutLedger(service, payouts);
+  box.querySelector<HTMLButtonElement>("[data-record-payout]")?.addEventListener("click", () => void recordPayout(service, box));
+  box.querySelectorAll<HTMLButtonElement>("[data-remove-payout]").forEach((button) => {
+    button.addEventListener("click", () => void removePayout(service, Number(button.dataset.removePayout)));
+  });
+}
+
+async function recordPayout(service: Service, box: HTMLElement) {
+  const field = (name: string) => box.querySelector<HTMLInputElement>(`[data-payout-field="${name}"]`)?.value.trim() || "";
+  const amount = Number(field("amount"));
+  if (!(amount > 0)) {
+    showErrorToast({scope: "cash-out", error: "Enter the amount that was cashed out."});
+    return;
+  }
+  try {
+    const payout = await RecordPayout(service.slug, amount, field("currency"), field("method"), field("date"));
+    if (payout.fxRateUsd === null || payout.fxRateUsd === undefined) {
+      showInfoToast({scope: "cash-out", message: "Recorded. There is no exchange rate for that day, so it is left out of the total."});
+    }
+    await afterPayoutChange(service);
+  } catch (error) {
+    showErrorToast({scope: "cash-out", error: String(error)});
+  }
+}
+
+async function removePayout(service: Service, id: number) {
+  if (!confirm("Remove this cash-out? It will no longer count toward what you earned all time.")) return;
+  try {
+    await RemovePayout(id);
+    await afterPayoutChange(service);
+  } catch (error) {
+    showErrorToast({scope: "cash-out", error: String(error)});
+  }
+}
+
+async function afterPayoutChange(service: Service) {
+  await hydratePayouts(service);
+  const summary = await GetEarningsSummary().catch(() => null);
+  if (state && summary) state = {...state, summary};
 }
 
 function renderWizardProgress() {
