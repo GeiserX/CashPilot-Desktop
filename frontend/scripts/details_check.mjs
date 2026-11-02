@@ -26,6 +26,8 @@ import {
   disclosureFacts,
   minimumIn,
   payoutFacts,
+  payoutLedger,
+  serviceFacts,
   referralNote,
   signupButton,
 } from "../.harness-build/render/details.js";
@@ -290,6 +292,37 @@ check(
   deviceLinkText(earnapp, {EARNAPP_UUID: uuid}, "other").startsWith("Link this device"),
 );
 check("a service with no device link gets nothing", deviceLinkText(honeygain, {EARNAPP_UUID: uuid}) === "");
+
+// ---------------------------------------------------------------------------
+// The payout ledger: cash-outs recorded by hand, under the service's facts.
+// Port of GeiserX/CashPilot#487.
+
+const facts = serviceFacts(honeygain, null);
+check("the service facts hold a ledger slot for this service", facts.includes('data-payouts-slug="honeygain"'), facts);
+check("the first render adds no input to the setup card (its inputs are the credentials)", !facts.includes("<input"), facts);
+check("the slot says it is loading until the list arrives", payoutLedger(honeygain, undefined).includes("Loading cash-outs"));
+const unreadableLedger = payoutLedger(honeygain, null);
+check(
+  "a ledger that could not be read says so, and does not say none were recorded",
+  unreadableLedger.includes("could not be loaded") && !unreadableLedger.includes("None recorded"),
+  unreadableLedger,
+);
+check("the record form is there even when the list could not be read", unreadableLedger.includes('data-record-payout="honeygain"'));
+const emptyLedger = payoutLedger(honeygain, []);
+check("an empty ledger says none recorded and offers the form", emptyLedger.includes("None recorded") && emptyLedger.includes("Record a cash-out"), emptyLedger);
+for (const name of ["amount", "currency", "date", "method"]) {
+  check(`the form asks for the ${name}`, emptyLedger.includes(`data-payout-field="${name}"`));
+}
+check("the currency box suggests the service's unit", emptyLedger.includes('placeholder="USD"'), emptyLedger);
+const rows = payoutLedger(honeygain, [
+  {id: 7, platform: "honeygain", amount: 37.54, currency: "USD", fxRateUsd: 1, method: "PayPal", paidOn: "2026-01-15", createdAt: ""},
+  {id: 8, platform: "honeygain", amount: 500, currency: "MYST", fxRateUsd: null, method: "<b>x</b>", paidOn: "2025-12-01", createdAt: ""},
+]);
+check("each cash-out shows its day, amount, unit and method", rows.includes("2026-01-15") && rows.includes("37.54 USD · PayPal"), rows);
+check("each cash-out can be removed", rows.includes('data-remove-payout="7"') && rows.includes('data-remove-payout="8"'), rows);
+check("one with no rate says it is left out of the total", rows.includes("no rate for that day"), rows);
+check("a priced one does not", !rows.split("data-remove-payout=\"7\"")[0].split("2026-01-15")[1].includes("no rate"), rows);
+check("the method is escaped", !rows.includes("<b>x</b>") && rows.includes("&lt;b&gt;x&lt;/b&gt;"), rows);
 
 console.log(`${checks - failures}/${checks} checks passed`);
 if (failures > 0) process.exit(1);

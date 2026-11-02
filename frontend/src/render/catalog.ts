@@ -35,7 +35,7 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
   const signupUrl = service.referral?.signupUrl || service.website;
   const main = service.manualOnly
     ? signupUrl ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">Visit</button>` : ""
-    : `<button class="btn ${deployed ? "btn-ghost" : "btn-primary"} btn-sm" data-service="${escapeHtml(service.slug)}">${deployed ? "Manage" : "Deploy"}</button>`;
+    : `<button class="btn ${deployed ? "btn-ghost" : "btn-primary"} btn-sm" data-service="${escapeHtml(service.slug)}">${deployed ? "Manage" : "Add"}</button>`;
   const signup = signupUrl && !service.manualOnly
     ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">Sign up</button>`
     : "";

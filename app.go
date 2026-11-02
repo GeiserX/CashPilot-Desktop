@@ -311,6 +311,14 @@ type EarningsSummary struct {
 	Daily        []DailyPoint     `json:"daily"`
 	RatesStale   bool             `json:"ratesStale"`
 	RatesUpdated string           `json:"ratesUpdated"`
+	// PaidOut is every recorded cash-out in the display currency, each valued at
+	// the USD rate it landed at; EarnedAllTime is Total plus PaidOut. Total drops
+	// on every cash-out, so these say what the services made. Nil when unknown
+	// (the ledger could not be read, no display rate, or Total unknown), never 0.
+	// UnpricedPayouts counts cash-outs with no rate, left out of PaidOut.
+	PaidOut         *float64 `json:"paidOut"`
+	EarnedAllTime   *float64 `json:"earnedAllTime"`
+	UnpricedPayouts int      `json:"unpricedPayouts"`
 }
 
 // ServiceEarning is one service's latest balance, both native and converted to
@@ -657,6 +665,7 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// stays known and is flagged stale, because an understated real figure is
 	// still a measurement.
 	summary.TotalKnown = priced > 0 || unpriced == 0
+	a.addLifetime(&summary)
 
 	today := dayStr(0)
 	if latestDay == "" {

@@ -34,6 +34,11 @@ declare module "../wailsjs/go/main/App" {
   export function GetService(slug: string): Promise<Service>;
   export function ManagedRuntimePlan(): Promise<ManagedRuntimePlan>;
   export function GetEarningsSummary(): Promise<EarningsSummary>;
+  // The payout ledger: cash-outs the user records by hand. currency "" is the
+  // service's balance unit; date "" is today, otherwise YYYY-MM-DD.
+  export function ListPayouts(slug: string): Promise<Payout[]>;
+  export function RecordPayout(slug: string, amount: number, currency: string, method: string, date: string): Promise<Payout>;
+  export function RemovePayout(id: number): Promise<void>;
 }
 
 export interface AppState {
@@ -185,6 +190,26 @@ export interface EarningsSummary {
   daily: DailyPoint[];
   ratesStale: boolean;
   ratesUpdated: string;
+  /**
+   * Recorded cash-outs in the display currency, and the balance total plus them.
+   * null when unknown (ledger unreadable, no rate, or total unknown), never 0.
+   * See allTimeNote in render/total.ts.
+   */
+  paidOut: number | null;
+  earnedAllTime: number | null;
+  unpricedPayouts: number;
+}
+
+/** A cash-out from the payout ledger. fxRateUsd null: no rate for that day. */
+export interface Payout {
+  id: number;
+  platform: string;
+  amount: number;
+  currency: string;
+  fxRateUsd: number | null;
+  method: string;
+  paidOn: string;
+  createdAt: string;
 }
 
 export interface ServiceEarning {
