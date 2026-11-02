@@ -985,7 +985,8 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
-	return nil
+	_, err = s.execWrite(stateBackupsDDL)
+	return err
 }
 
 // isSafeSQLIdentifier allows only ^[A-Za-z_][A-Za-z0-9_]*$ — a plain SQL identifier

@@ -27,6 +27,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
+	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -285,6 +286,9 @@ type AppState struct {
 	// AddedDevices is, per slug, the device id the last deploy added to the user's
 	// account itself (ProxyRack with its API key saved), so no manual step is needed.
 	AddedDevices map[string]string `json:"addedDevices"`
+	// StateBackups lists the deployed services whose catalog entry marks state as
+	// irreplaceable, and whether the user has a backup of it.
+	StateBackups []statebackup.Row `json:"stateBackups"`
 }
 
 type Notification struct {
@@ -447,6 +451,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Scaling:          a.services.ScalingLimits(visible),
 		Copies:           a.services.Copies(),
 		AddedDevices:     a.addedDeviceIDs(),
+		StateBackups:     a.stateBackups(deployments),
 	}, nil
 }
 

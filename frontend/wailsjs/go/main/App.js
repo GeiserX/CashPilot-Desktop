@@ -22,12 +22,20 @@ export function CompleteOnboarding() {
   return window['go']['main']['App']['CompleteOnboarding']();
 }
 
+export function ConfirmStateBackup(arg1) {
+  return window['go']['main']['App']['ConfirmStateBackup'](arg1);
+}
+
 export function DeployService(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DeployService'](arg1, arg2, arg3, arg4);
 }
 
 export function ExportCompose(arg1, arg2) {
   return window['go']['main']['App']['ExportCompose'](arg1, arg2);
+}
+
+export function ExportStateBackup(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ExportStateBackup'](arg1, arg2, arg3, arg4);
 }
 
 export function GetAppState() {
@@ -128,4 +136,8 @@ export function StopService(arg1) {
 
 export function StopServiceCopy(arg1, arg2) {
   return window['go']['main']['App']['StopServiceCopy'](arg1, arg2);
+}
+
+export function UndoStateBackup(arg1) {
+  return window['go']['main']['App']['UndoStateBackup'](arg1);
 }

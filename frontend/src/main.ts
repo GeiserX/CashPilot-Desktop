@@ -14,8 +14,10 @@ import {
   CheckRuntime,
   CollectService,
   CompleteOnboarding,
+  ConfirmStateBackup,
   DeployService,
   ExportCompose,
+  ExportStateBackup,
   GetAppState,
   GetCopyLogs,
   GetCredentials,
@@ -34,9 +36,11 @@ import {
   StartServiceCopy,
   StopService,
   StopServiceCopy,
+  UndoStateBackup,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { attentionItems, renderAttention } from "./render/attention";
+import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderEarningsBars } from "./render/chart";
 import { renderServicesTable } from "./render/services";
 import { renderCatalogTable } from "./render/catalog";
@@ -300,6 +304,8 @@ function renderDashboard(current: AppState) {
 
         ${renderAttention(attention, upCount, containers.length)}
 
+        ${renderStateBackups(current.stateBackups)}
+
         <section class="earnings" aria-labelledby="earnings-title">
           <div class="block-head">
             <h2 class="block-title" id="earnings-title">Earned per day</h2>
@@ -364,6 +370,79 @@ function renderDashboard(current: AppState) {
       const copy = Number(button.dataset.copy || "1");
       void (copy > 1 ? runCopyAction(slug, copy, action) : runServiceAction(slug, action));
     });
+  });
+  wireStateBackups();
+}
+
+// The "Back these up" card: confirm, undo, and the export form under a row.
+function wireStateBackups() {
+  document.querySelectorAll<HTMLButtonElement>("[data-backup-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const slug = button.dataset.slug || "";
+      const action = button.dataset.backupAction;
+      if (action === "export") {
+        const row = button.closest<HTMLElement>("[data-backup-row]");
+        const next = row?.nextElementSibling;
+        if (next?.classList.contains("backup-form")) {
+          next.remove();
+          return;
+        }
+        row?.insertAdjacentHTML("afterend", backupExportForm(slug));
+        wireBackupForm(row?.nextElementSibling as HTMLFormElement);
+        return;
+      }
+      try {
+        await (action === "undo" ? UndoStateBackup(slug) : ConfirmStateBackup(slug));
+        await refreshState();
+      } catch (error) {
+        showErrorToast(String(error));
+      }
+    });
+  });
+}
+
+function wireBackupForm(form: HTMLFormElement | null) {
+  if (!form) return;
+  const secret = form.querySelector<HTMLInputElement>("input[name=secret]")!;
+  const repeat = form.querySelector<HTMLInputElement>("input[name=secret_repeat]")!;
+  secret.focus();
+  // A public key is pasted, not typed, so it has no repeat field.
+  form.addEventListener("change", (event) => {
+    const target = event.target as HTMLInputElement;
+    if (target.name !== "mode") return;
+    const passphrase = target.value === "passphrase";
+    repeat.hidden = !passphrase;
+    repeat.required = passphrase;
+    repeat.value = "";
+  });
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const recipient = form.querySelector<HTMLInputElement>("input[name=mode]:checked")?.value === "recipient";
+    // A typo here makes a file nobody can open, marked as a confirmed backup.
+    if (!recipient && secret.value !== repeat.value) {
+      showErrorToast("The two passphrases differ");
+      repeat.value = "";
+      return;
+    }
+    const value = secret.value;
+    const again = repeat.value;
+    secret.value = "";
+    repeat.value = "";
+    const button = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
+    button.disabled = true;
+    button.textContent = "Reading and encrypting\u2026";
+    try {
+      const path = await ExportStateBackup(form.dataset.slug || "", recipient ? "" : value, recipient ? "" : again, recipient ? value : "");
+      if (path) {
+        showInfoToast(`Backup saved: ${path}`);
+        await refreshState();
+        return;
+      }
+    } catch (error) {
+      showErrorToast(String(error));
+    }
+    button.disabled = false;
+    button.textContent = "Encrypt and save";
   });
 }
 

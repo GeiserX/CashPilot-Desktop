@@ -34,6 +34,11 @@ declare module "../wailsjs/go/main/App" {
   export function GetService(slug: string): Promise<Service>;
   export function ManagedRuntimePlan(): Promise<ManagedRuntimePlan>;
   export function GetEarningsSummary(): Promise<EarningsSummary>;
+  // Backups of irreplaceable state. ExportStateBackup takes either a passphrase (typed
+  // twice) or an X25519 public key, and returns the path saved, or "" when dismissed.
+  export function ConfirmStateBackup(slug: string): Promise<void>;
+  export function UndoStateBackup(slug: string): Promise<void>;
+  export function ExportStateBackup(slug: string, passphrase: string, passphraseRepeat: string, recipientPublicKey: string): Promise<string>;
 }
 
 export interface AppState {
@@ -77,6 +82,9 @@ export interface AppState {
   copies: Record<string, ServiceCopy[]> | null;
   // Per slug, the device id the last deploy added to the user's account itself.
   addedDevices: Record<string, string> | null;
+  // Deployed services whose catalog marks state irreplaceable, and whether the
+  // user has a backup of it (the amber card under Needs attention).
+  stateBackups: StateBackupRow[] | null;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.
@@ -489,6 +497,19 @@ export interface DataMount {
   volume: boolean;
   critical: boolean;
   holds: string;
+}
+
+// StateBackupRow is one deployed service with irreplaceable state. state is "none",
+// "confirmed", "changed" (the volume was recreated or moved since), "recheck"
+// (confirmed before the app could tell) or "expired" (over six months old).
+export interface StateBackupRow {
+  slug: string;
+  name: string;
+  volumes: { target: string; holds: string }[] | null;
+  state: "none" | "confirmed" | "changed" | "recheck" | "expired";
+  confirmedAt: string;
+  method: string;
+  tracksChanges: boolean;
 }
 
 // RemovalPlan is what removing a service would delete, read off the live container so
