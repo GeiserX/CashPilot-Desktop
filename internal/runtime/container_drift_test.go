@@ -297,3 +297,14 @@ func TestARequiredKeyWithNoDefaultIsNotOfferedAsRedeployable(t *testing.T) {
 		t.Fatalf("ShapeDrift = %q, want nothing: a redeploy cannot set BITPING_TOKEN", found)
 	}
 }
+
+// "Still has" reads only what Podman lists as added. With a custom
+// default_capabilities that leaves CHOWN out, CapDrop never names CHOWN, so a guess
+// from Podman's stock default set would wrongly say the container still holds it.
+func TestAPodmanDefaultCapabilityAbsentFromCapDropIsNotStillHeld(t *testing.T) {
+	shape := podmanShape(t, bitping("NET_RAW"), bitpingCreds, "NET_RAW")
+	shape.CapDrop = slices.DeleteFunc(shape.CapDrop, func(c string) bool { return c == "CHOWN" })
+	if found := ShapeDrift(bitping("NET_RAW"), shape, ""); len(found) != 0 {
+		t.Fatalf("ShapeDrift = %q, want nothing: CHOWN is in neither of Podman's lists", found)
+	}
+}
