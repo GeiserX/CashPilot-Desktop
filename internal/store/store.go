@@ -966,6 +966,9 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
+	if _, err := s.execWrite(payoutsSchema); err != nil {
+		return err
+	}
 	// Forward-only column additions for existing tables (per-worker fleet keys, the
 	// chosen image, the number of copies). SQLite has no "ADD COLUMN IF NOT EXISTS", so guard each ALTER;
 	// a fresh DB already has the columns from CREATE TABLE above, so this is a no-op.

@@ -65,3 +65,33 @@ export function totalCaption(summary: TotalSummaryLike | null | undefined): stri
   if (summary?.ratesStale) return "Rates may be stale";
   return "Across convertible services";
 }
+
+/**
+ * The line under the balance that survives a cash-out.
+ *
+ * The balance drops by every cash-out, so on its own it says what is waiting and
+ * never what the services made. Once a cash-out is recorded this says the rest:
+ * "Earned all time X (Y cashed out)". Empty when nothing was ever cashed out, or
+ * when the summary predates the ledger (absent is not zero). A ledger that could
+ * not be read says so instead of a figure, and an unknown balance total keeps the
+ * all-time figure an em dash.
+ */
+export interface LifetimeSummaryLike extends TotalSummaryLike {
+  paidOut?: number | null;
+  earnedAllTime?: number | null;
+  unpricedPayouts?: number;
+}
+
+export function allTimeNote(summary: LifetimeSummaryLike | null | undefined, displayCurrency: string): string {
+  if (!summary || !("paidOut" in summary)) return "";
+  const paid = summary.paidOut;
+  if (paid === null || paid === undefined || !Number.isFinite(paid)) {
+    return "Earned all time: cash-outs could not be read";
+  }
+  const unpriced = summary.unpricedPayouts || 0;
+  if (!(paid > 0) && unpriced === 0) return "";
+  const all = summary.earnedAllTime;
+  const allText = typeof all === "number" && Number.isFinite(all) ? formatBalance(all, displayCurrency) : UNKNOWN_TOTAL;
+  const unpricedText = unpriced > 0 ? `, plus ${unpriced} cash-out${unpriced === 1 ? "" : "s"} with no rate` : "";
+  return `Earned all time ${allText} (${formatBalance(paid, displayCurrency)} cashed out${unpricedText})`;
+}

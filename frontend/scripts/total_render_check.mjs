@@ -17,7 +17,7 @@
 //
 //   node scripts/total_render_check.mjs      # against ./.harness-build
 
-import { totalText, totalCaption, totalIsKnown, UNKNOWN_TOTAL } from "../.harness-build/render/total.js";
+import { allTimeNote, totalText, totalCaption, totalIsKnown, UNKNOWN_TOTAL } from "../.harness-build/render/total.js";
 
 let failures = 0;
 let checks = 0;
@@ -146,6 +146,44 @@ check(
   "a known, fresh total gets the plain caption",
   totalCaption(priced) === "Across convertible services",
   `got: ${JSON.stringify(totalCaption(priced))}`
+);
+
+// ---------------------------------------------------------------------------
+// Earned all time: the balance drops on every cash-out, so once one is recorded
+// the card says what the services made. Port of GeiserX/CashPilot#487.
+// ---------------------------------------------------------------------------
+const cashedOut = { total: 120, totalKnown: true, paidOut: 37.54, earnedAllTime: 157.54, unpricedPayouts: 0 };
+const cashedNote = allTimeNote(cashedOut, "USD");
+check(
+  "a recorded cash-out shows what was earned all time and what was cashed out",
+  cashedNote.startsWith("Earned all time") && cashedNote.includes("157.54") && cashedNote.includes("37.54") && cashedNote.includes("cashed out"),
+  `got: ${JSON.stringify(cashedNote)}`
+);
+check(
+  "nothing ever cashed out shows no line",
+  allTimeNote({ total: 120, totalKnown: true, paidOut: 0, earnedAllTime: 120, unpricedPayouts: 0 }, "USD") === ""
+);
+check(
+  "a summary from before the ledger (no paidOut field) shows no line, not a zero",
+  allTimeNote({ total: 120, totalKnown: true }, "USD") === "" && allTimeNote(null, "USD") === ""
+);
+const unreadable = allTimeNote({ total: 120, totalKnown: true, paidOut: null, earnedAllTime: null, unpricedPayouts: 0 }, "USD");
+check(
+  "a ledger that could not be read says so, never a zero",
+  unreadable === "Earned all time: cash-outs could not be read",
+  `got: ${JSON.stringify(unreadable)}`
+);
+const unknownTotal = allTimeNote({ total: 0, totalKnown: false, paidOut: 10, earnedAllTime: null, unpricedPayouts: 0 }, "USD");
+check(
+  "an unknown balance total keeps the all-time figure an em dash",
+  unknownTotal.startsWith(`Earned all time ${UNKNOWN_TOTAL} (`) && unknownTotal.includes("10.00 cashed out"),
+  `got: ${JSON.stringify(unknownTotal)}`
+);
+const onlyUnpriced = allTimeNote({ total: 5, totalKnown: true, paidOut: 0, earnedAllTime: 5, unpricedPayouts: 2 }, "USD");
+check(
+  "cash-outs with no rate are named, not silently dropped",
+  onlyUnpriced.includes("plus 2 cash-outs with no rate"),
+  `got: ${JSON.stringify(onlyUnpriced)}`
 );
 
 console.log(`${checks - failures}/${checks} total-render checks passed`);
