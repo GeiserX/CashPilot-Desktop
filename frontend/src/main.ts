@@ -40,6 +40,7 @@ import { attentionItems, renderAttention } from "./render/attention";
 import { renderEarningsBars } from "./render/chart";
 import { renderServicesTable } from "./render/services";
 import { renderCatalogTable } from "./render/catalog";
+import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
@@ -272,7 +273,6 @@ function renderDashboard(current: AppState) {
         <main class="page-content">
         ${pageHead("Dashboard", `
           <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
-          <button class="btn btn-primary btn-sm" id="open-wizard">Add service</button>
         `)}
         <!-- The money first and largest; the container count sits at the far
              end, smaller, because it answers a different question. -->
@@ -346,7 +346,6 @@ function renderDashboard(current: AppState) {
   maybeResetScroll();
 
   document.querySelector("#refresh")?.addEventListener("click", refreshState);
-  document.querySelector("#open-wizard")?.addEventListener("click", openWizard);
   document.querySelector("#open-wizard-empty")?.addEventListener("click", openWizard);
   document.querySelectorAll<HTMLButtonElement>("[data-chart-days]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -379,10 +378,6 @@ function metricCard(label: string, value: string, caption: string) {
 
 // One bar, no sidebar: brand, the views, then the money and the alerts. The page
 // title moves into the page itself (pageHead), like the web console.
-function navButton(view: View, label: string, active: View) {
-  return `<button class="sidebar-link ${active === view ? "active" : ""}" data-view="${view}"${active === view ? ' aria-current="page"' : ""}>${escapeHtml(label)}</button>`;
-}
-
 function pageHead(title: string, actions = "") {
   return `
     <div class="page-head">
@@ -448,14 +443,9 @@ function topbar(active: View, current: AppState) {
         ${officialLogoMark()}
         <span>CashPilot</span>
       </div>
-      <nav class="topnav" aria-label="Main">
-        ${navButton("dashboard", "Dashboard", active)}
-        ${navButton("fleet", "Fleet", active)}
-        ${navButton("catalog", "Catalog", active)}
-        ${navButton("settings", "Settings", active)}
-        ${navButton("wizard", "Add services", active)}
-      </nav>
+      ${renderTopnav(active)}
       <div class="topbar-right">
+        ${renderAddServiceButton(active)}
         <span class="topbar-runtime ${runtimeOk ? "" : "text-warn"}" title="${escapeHtml(current.runtime.message || "")}"><span class="runtime-dot ${runtimeOk ? "ok" : "warn"}"></span>${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
         <span class="topbar-earnings" title="Total balance across every service">${escapeHtml(totalText(current.summary, disp))}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
