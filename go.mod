@@ -7,7 +7,7 @@ toolchain go1.26.10
 require (
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.2
-	github.com/shirou/gopsutil/v4 v4.26.9
+	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/wailsapp/wails/v2 v2.17.0
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/sys v0.49.0
@@ -27,7 +27,7 @@ require (
 	github.com/docker/go-connections v0.8.2 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.1.0 // indirect
-	github.com/ebitengine/purego v0.11.1 // indirect
+	github.com/ebitengine/purego v0.11.2 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
