@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/noderead"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
@@ -452,6 +453,17 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 
 func (m *Manager) Logs(ctx context.Context, slug string, lines int) (string, error) {
 	return m.providerForSlug(slug).Logs(ctx, slug, lines)
+}
+
+// ExecRunning runs a catalog command in every running container of slug, through a
+// runtime that has containers to run it in (Docker); any other runtime answers with
+// an error, so nothing is read. It is noderead.Runner for the collectors.
+func (m *Manager) ExecRunning(ctx context.Context, slug string, cmd []string, timeout time.Duration) ([]noderead.Output, error) {
+	runner, ok := m.providerForSlug(slug).(noderead.Runner)
+	if !ok {
+		return nil, fmt.Errorf("this runtime cannot run a command inside %s", slug)
+	}
+	return runner.ExecRunning(ctx, slug, cmd, timeout)
 }
 
 // logsMatcher is a provider that can filter a window of logs (the Docker one).

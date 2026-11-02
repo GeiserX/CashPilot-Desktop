@@ -170,7 +170,7 @@ func (a *App) startCore(ctx context.Context) error {
 	a.native = native
 	a.services = services.NewManager(a.runtime, a.catalog, a.store)
 	a.services.Register(runtime.NativeRuntimeKind, a.native)
-	a.collectors = collectors.NewRegistry(a.store)
+	a.collectors = collectors.NewRegistry(a.store, collectors.WithNodeReader(a.readNodes))
 
 	// Exchange rates power the earnings summary. Kick a best-effort initial fetch
 	// and a periodic refresh; a failed fetch must never fail Startup (the summary
