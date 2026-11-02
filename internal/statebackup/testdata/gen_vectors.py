@@ -20,6 +20,9 @@ import json
 import sys
 import tarfile
 
+# Throwaway test key: private key = sha256 of this string (bundle_test.go does the same).
+KEY_SEED = "cashpilot-desktop throwaway state backup test key"
+
 
 def load(path):
     spec = importlib.util.spec_from_file_location("state_backup", path)
@@ -97,7 +100,10 @@ def main():
         ]
     )
     meta = {"slug": "mysterium", "worker": "vector-box", "targets": ["/app/identity", "/var/lib/mysterium-node"]}
-    private, public = sb.generate_recipient_keypair()
+    # The recipient key is derived from a fixed seed, never stored: the Go tests
+    # derive the same private key, so no key-shaped literal sits in the vectors.
+    private = hashlib.sha256(KEY_SEED.encode()).hexdigest()
+    public = sb.X25519PrivateKey.from_private_bytes(bytes.fromhex(private)).public_key().public_bytes_raw().hex()
     passphrase = "correct horse battery staple"
     by_pass = sb.seal(payload, passphrase=passphrase, metadata=meta)
     by_key = sb.seal(payload, recipient_public_key=public, metadata=meta)
@@ -105,7 +111,7 @@ def main():
         json.dumps(
             {
                 "passphrase": passphrase,
-                "private_key": private,
+                "private_key_seed": KEY_SEED,
                 "public_key": public,
                 "payload_sha256": hashlib.sha256(payload).hexdigest(),
                 "passphrase_bundle": base64.b64encode(by_pass).decode(),

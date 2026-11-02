@@ -22,7 +22,7 @@ import (
 // the web.
 type webVectors struct {
 	Passphrase       string                     `json:"passphrase"`
-	PrivateKey       string                     `json:"private_key"`
+	PrivateKeySeed   string                     `json:"private_key_seed"`
 	PublicKey        string                     `json:"public_key"`
 	PayloadSHA256    string                     `json:"payload_sha256"`
 	PassphraseBundle string                     `json:"passphrase_bundle"`
@@ -51,6 +51,13 @@ func loadVectors(t *testing.T) webVectors {
 	return v
 }
 
+// privateKey is the vectors' X25519 private key, sha256 of a fixed seed string
+// exactly as gen_vectors.py derives it, so no key literal is committed.
+func (v webVectors) privateKey() string {
+	s := sha256.Sum256([]byte(v.PrivateKeySeed))
+	return hex.EncodeToString(s[:])
+}
+
 func b64(t *testing.T, s string) []byte {
 	t.Helper()
 	b, err := base64.StdEncoding.DecodeString(s)
@@ -71,7 +78,7 @@ func TestOpensBundlesSealedByTheWebApp(t *testing.T) {
 		name, bundle, pass, key string
 	}{
 		{"passphrase", v.PassphraseBundle, v.Passphrase, ""},
-		{"recipient", v.RecipientBundle, "", v.PrivateKey},
+		{"recipient", v.RecipientBundle, "", v.privateKey()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bundle := b64(t, tc.bundle)
@@ -287,7 +294,7 @@ func TestWriteGoVector(t *testing.T) {
 	}
 	for suffix, doc := range map[string]map[string]string{
 		".pass.json": {"bundle": base64.StdEncoding.EncodeToString(byPass), "passphrase": v.Passphrase},
-		".key.json":  {"bundle": base64.StdEncoding.EncodeToString(byKey), "private_key": v.PrivateKey},
+		".key.json":  {"bundle": base64.StdEncoding.EncodeToString(byKey), "private_key": v.privateKey()},
 	} {
 		raw, _ := json.Marshal(doc)
 		if err := os.WriteFile(*goVector+suffix, raw, 0o600); err != nil {
