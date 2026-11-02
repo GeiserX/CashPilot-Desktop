@@ -465,9 +465,12 @@ func (p *NativeProcessProvider) List(ctx context.Context) ([]ContainerInfo, erro
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			cpu, mem, _ := p.statFn(pid)
+			cpu, mem, ok := p.statFn(pid)
 			info.CPUPercent = cpu
 			info.MemoryMB = mem
+			// A native program has no network counters of its own, so its
+			// NetRxBytes/NetTxBytes stay nil: its traffic is unknown.
+			info.CPUKnown, info.MemoryKnown = ok, ok
 			out[i] = info
 		}(i, e.PID, info)
 	}

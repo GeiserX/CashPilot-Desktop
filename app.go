@@ -88,6 +88,8 @@ type App struct {
 	// defense-in-depth against floods, mass enrollment (DB growth), and racing the
 	// enrollment window. Initialised in startFleetAPI.
 	fleetLimiter *fleetRateLimiter
+	// usageStop stops the usage sampler (usage_sampler.go) and waits for it.
+	usageStop func()
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
@@ -207,6 +209,8 @@ func (a *App) startCore(ctx context.Context) error {
 	// balances refresh on a timer without the user clicking Collect. This never
 	// blocks Startup — startScheduler only launches a goroutine.
 	a.startScheduler(ctx)
+	// CPU, memory and traffic per container for the usage graphs.
+	a.startUsageSampler(ctx)
 	// Optional, and a no-op unless the user paired this Desktop with a
 	// CashPilot server. Standalone is the default and unaffected.
 	a.startUpstream(ctx)
@@ -228,6 +232,7 @@ func (a *App) Shutdown(_ context.Context) {
 	// Stop the collection loop before closing the store so no in-flight collect
 	// writes to a database that is about to close.
 	a.stopScheduler()
+	a.stopUsageSampler()
 	a.stopUpstream()
 	if a.fleetAPI != nil {
 		_ = a.fleetAPI.Close()

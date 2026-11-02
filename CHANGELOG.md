@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard graphs what each container costs this machine over time.** Under "Earned per day" there are three small line charts: CPU (100% is one core), memory, and network down and up as a rate, on the same 7-day (hourly points) or 30-day (6-hour points) window, with a container picker whose default is all containers. Desktop reads every running unit every five minutes and keeps one row per container per hour for 35 days. An hour with no reading is a gap in the line, never 0. A host-network container has no traffic counters of its own, so its traffic stays unknown and a network total without it is shown with ≥.
+
 ### Fixed
 
 - **The Mysterium balance was a trailing 30-day sum, so it rose and fell as days left the window.** MystNodes' cloud `earningsTotal` is not a balance, and its per-node lifetime comes back as 0. Where the catalog declares `collector.node_read`, Desktop now reads each Mysterium node's own unsettled balance and lifetime from its TequilAPI and stores the unsettled total as the balance, each node once. A node in Docker is read by running the catalog's read-only command inside its container. A node Desktop runs natively is read over its local TequilAPI on 127.0.0.1:4050, and that text goes through the same regexes. The per-node view shows each node's own lifetime. When no node on this computer can be read, the dashboard says no node was read and offers Retry, not new credentials, and no 30-day figure is stored. A node on another machine is not read.

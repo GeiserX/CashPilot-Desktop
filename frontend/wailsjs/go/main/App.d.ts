@@ -6,6 +6,7 @@ import {runtime} from '../models';
 import {store} from '../models';
 import {catalog} from '../models';
 import {preflight} from '../models';
+import {usage} from '../models';
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
 
@@ -38,6 +39,8 @@ export function GetRuntimeGuides():Promise<Array<runtime.InstallGuide>>;
 export function GetService(arg1:string):Promise<catalog.Service>;
 
 export function GetSettingsState():Promise<main.SettingsState>;
+
+export function GetUsage(arg1:number,arg2:string):Promise<usage.View>;
 
 export function IgnoreDrift(arg1:string):Promise<void>;
 

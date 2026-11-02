@@ -34,6 +34,8 @@ declare module "../wailsjs/go/main/App" {
   export function GetService(slug: string): Promise<Service>;
   export function ManagedRuntimePlan(): Promise<ManagedRuntimePlan>;
   export function GetEarningsSummary(): Promise<EarningsSummary>;
+  // container "" is every container (the machine total).
+  export function GetUsage(days: number, container: string): Promise<UsageView>;
   // Mutes the "needs fixing" warning of slug until the catalog changes a field the
   // check judges.
   export function IgnoreDrift(slug: string): Promise<void>;
@@ -251,6 +253,36 @@ export interface PointsBalance {
 export interface DailyPoint {
   day: string;
   amount: number;
+}
+
+// One container in the usage graphs' picker: one with a reading in the window.
+// noCounters: its traffic is unknown (host network or a native program).
+export interface UsageContainer {
+  name: string;
+  slug: string;
+  service: string;
+  noCounters: boolean;
+}
+
+// The usage graphs (internal/usage.View). hours is the start of every point,
+// Unix seconds, oldest first; every series has one value per point, and null is
+// "no reading", drawn as a gap, never as 0. A *Partial flag marks a point whose
+// total leaves out a container it could not read: a minimum.
+export interface UsageView {
+  days: number;
+  step: number;
+  hours: number[];
+  containers: UsageContainer[] | null;
+  container: string;
+  cpuPercent: (number | null)[];
+  memoryMb: (number | null)[];
+  rxRate: (number | null)[];
+  txRate: (number | null)[];
+  rxBytes: (number | null)[];
+  txBytes: (number | null)[];
+  trafficPartial: boolean[];
+  cpuPartial: boolean[];
+  memoryPartial: boolean[];
 }
 
 export interface AppConfig {

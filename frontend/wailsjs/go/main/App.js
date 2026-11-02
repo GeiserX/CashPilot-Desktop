@@ -66,6 +66,10 @@ export function GetSettingsState() {
   return window['go']['main']['App']['GetSettingsState']();
 }
 
+export function GetUsage(arg1, arg2) {
+  return window['go']['main']['App']['GetUsage'](arg1, arg2);
+}
+
 export function IgnoreDrift(arg1) {
   return window['go']['main']['App']['IgnoreDrift'](arg1);
 }
