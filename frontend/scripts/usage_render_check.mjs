@@ -12,7 +12,7 @@
 //
 //   node scripts/usage_render_check.mjs     # against ./.harness-build
 
-import { linePath, renderUsagePanel } from "../.harness-build/render/usage.js";
+import { linePath, pointLabel, renderUsagePanel } from "../.harness-build/render/usage.js";
 
 let failures = 0;
 let checks = 0;
@@ -131,6 +131,21 @@ function chart(html, id) {
   const html = renderUsagePanel(view());
   check("no reading in the window renders the empty state", /No resource readings in the last 7 days/.test(html) && !/<svg/.test(html), html);
   check("not loaded yet renders no chart", !/<svg/.test(renderUsagePanel(null)));
+}
+
+// A point label shows the local time the hour starts, minutes included: in a
+// half-hour timezone (India, UTC+5:30) a UTC hour starts at :30 locally, and
+// printing ":00" names the wrong half hour.
+{
+  const saved = process.env.TZ;
+  process.env.TZ = "Asia/Kolkata";
+  const label = pointLabel(start);
+  check("a half-hour timezone labels the hour with its minutes", /\d\d:30$/.test(label), label);
+  process.env.TZ = "UTC";
+  const utc = pointLabel(start);
+  check("a whole-hour timezone still labels :00", /\d\d:00$/.test(utc), utc);
+  if (saved === undefined) delete process.env.TZ;
+  else process.env.TZ = saved;
 }
 
 console.log(`${checks - failures}/${checks} usage-render checks passed`);

@@ -47,7 +47,7 @@ export function formatRate(bytesPerSecond: number): string {
 export function pointLabel(unixSeconds: number): string {
   const d = new Date(unixSeconds * 1000);
   const month = d.toLocaleString("en-US", { month: "short" });
-  return `${month} ${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:00`;
+  return `${month} ${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 /**
