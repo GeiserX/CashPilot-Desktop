@@ -39,6 +39,16 @@ declare module "../wailsjs/go/main/App" {
   export function ConfirmStateBackup(slug: string): Promise<void>;
   export function UndoStateBackup(slug: string): Promise<void>;
   export function ExportStateBackup(slug: string, passphrase: string, passphraseRepeat: string, recipientPublicKey: string): Promise<string>;
+  // container "" is every container (the machine total).
+  export function GetUsage(days: number, container: string): Promise<UsageView>;
+  // Mutes the "needs fixing" warning of slug until the catalog changes a field the
+  // check judges.
+  export function IgnoreDrift(slug: string): Promise<void>;
+  // The payout ledger: cash-outs the user records by hand. currency "" is the
+  // service's balance unit; date "" is today, otherwise YYYY-MM-DD.
+  export function ListPayouts(slug: string): Promise<Payout[]>;
+  export function RecordPayout(slug: string, amount: number, currency: string, method: string, date: string): Promise<Payout>;
+  export function RemovePayout(id: number): Promise<void>;
 }
 
 export interface AppState {
@@ -85,6 +95,10 @@ export interface AppState {
   // Deployed services whose catalog marks state irreplaceable, and whether the
   // user has a backup of it (the amber card under Needs attention).
   stateBackups: StateBackupRow[] | null;
+  // Per slug, how its running container differs from what a redeploy would build
+  // from the current catalog, in plain words. Missing: matches, ignored, or the
+  // warnings are off.
+  drift: Record<string, string[]> | null;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.
@@ -193,6 +207,26 @@ export interface EarningsSummary {
   daily: DailyPoint[];
   ratesStale: boolean;
   ratesUpdated: string;
+  /**
+   * Recorded cash-outs in the display currency, and the balance total plus them.
+   * null when unknown (ledger unreadable, no rate, or total unknown), never 0.
+   * See allTimeNote in render/total.ts.
+   */
+  paidOut: number | null;
+  earnedAllTime: number | null;
+  unpricedPayouts: number;
+}
+
+/** A cash-out from the payout ledger. fxRateUsd null: no rate for that day. */
+export interface Payout {
+  id: number;
+  platform: string;
+  amount: number;
+  currency: string;
+  fxRateUsd: number | null;
+  method: string;
+  paidOn: string;
+  createdAt: string;
 }
 
 export interface ServiceEarning {
@@ -227,6 +261,36 @@ export interface PointsBalance {
 export interface DailyPoint {
   day: string;
   amount: number;
+}
+
+// One container in the usage graphs' picker: one with a reading in the window.
+// noCounters: its traffic is unknown (host network or a native program).
+export interface UsageContainer {
+  name: string;
+  slug: string;
+  service: string;
+  noCounters: boolean;
+}
+
+// The usage graphs (internal/usage.View). hours is the start of every point,
+// Unix seconds, oldest first; every series has one value per point, and null is
+// "no reading", drawn as a gap, never as 0. A *Partial flag marks a point whose
+// total leaves out a container it could not read: a minimum.
+export interface UsageView {
+  days: number;
+  step: number;
+  hours: number[];
+  containers: UsageContainer[] | null;
+  container: string;
+  cpuPercent: (number | null)[];
+  memoryMb: (number | null)[];
+  rxRate: (number | null)[];
+  txRate: (number | null)[];
+  rxBytes: (number | null)[];
+  txBytes: (number | null)[];
+  trafficPartial: boolean[];
+  cpuPartial: boolean[];
+  memoryPartial: boolean[];
 }
 
 export interface AppConfig {
@@ -334,6 +398,8 @@ export interface Service {
   category: string;
   status: string;
   website: string;
+  // The provider's support page, offered when it has disabled the account. "" when none.
+  supportUrl: string;
   description: string;
   shortDescription: string;
   // program is three-valued: true/false are verified answers, null means nobody has
@@ -478,6 +544,8 @@ export interface EarningsRecord {
   balance: number;
   currency: string;
   error?: string;
+  // "unread": the login worked but no node could be read, so the credentials are fine.
+  errorKind?: string;
   createdAt: string;
 }
 

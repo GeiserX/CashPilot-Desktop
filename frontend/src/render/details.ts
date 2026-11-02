@@ -25,7 +25,7 @@
 //
 // Pure: takes catalog data, returns HTML strings, touches no global.
 
-import type { Service } from "../wails";
+import type { Payout, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { stripHtml } from "./fields.js";
 
@@ -199,7 +199,58 @@ export function serviceFacts(service: Service, balance?: Balance | null): string
     <div class="service-details">
       ${factList("Getting paid", payoutFacts(service, balance))}
       ${factList("What it does with your machine", disclosureFacts(service))}
+      <div class="detail-block payout-ledger" data-payouts-slug="${escapeHtml(service.slug)}">${payoutLedger(service, undefined)}</div>
     </div>
+  `;
+}
+
+/**
+ * The cash-outs recorded for a service, and the form to record one.
+ *
+ * The balance total drops on every cash-out, so without these the dashboard says
+ * what is waiting and never what a service made. Desktop does not detect payouts,
+ * so every entry is one the user typed: a cash-out made before CashPilot was
+ * installed is exactly the one to enter. Port of GeiserX/CashPilot#487.
+ *
+ * `payouts` undefined is "still loading"; null is "could not be read", which is
+ * said out loud, because an empty list would invite the user to record again a
+ * cash-out that is already there. The form comes with the list, loaded or not
+ * (never in the first render, so the setup card's only inputs stay its own).
+ */
+export function payoutLedger(service: Service, payouts: Payout[] | null | undefined): string {
+  const slug = escapeHtml(service.slug);
+  let list: string;
+  if (payouts === undefined) {
+    return `<strong class="detail-title">Cashed out</strong><p class="muted">Loading cash-outs…</p>`;
+  }
+  if (payouts === null) {
+    list = `<p class="tip">Cash-outs could not be loaded.</p>`;
+  } else if (payouts.length === 0) {
+    list = `<p class="muted">None recorded.</p>`;
+  } else {
+    list = `<dl class="detail-facts">${payouts
+      .map((payout) => {
+        const what = `${trimNumber(payout.amount)} ${(payout.currency || "").toUpperCase()}${payout.method ? ` · ${payout.method}` : ""}`;
+        const unpriced = payout.fxRateUsd === null || payout.fxRateUsd === undefined ? " (no rate for that day, left out of the total)" : "";
+        return `<div class="detail-fact"><dt>${escapeHtml(payout.paidOn)}</dt><dd>${escapeHtml(what + unpriced)} <button class="secondary" data-remove-payout="${escapeHtml(String(payout.id))}" data-slug="${slug}">Remove</button></dd></div>`;
+      })
+      .join("")}</dl>`;
+  }
+  const unit = minimumUnit(service);
+  return `
+    <strong class="detail-title">Cashed out</strong>
+    ${list}
+    <details class="payout-record">
+      <summary>Record a cash-out</summary>
+      <div class="credential-grid">
+        <label><span>Amount *</span><input data-payout-field="amount" type="number" step="any" min="0" placeholder="e.g. 37.54" /></label>
+        <label><span>Currency</span><input data-payout-field="currency" type="text" maxlength="12" placeholder="${escapeHtml(unit || "same as the balance")}" /></label>
+        <label><span>Date</span><input data-payout-field="date" type="date" /></label>
+        <label><span>Method or note</span><input data-payout-field="method" type="text" maxlength="40" placeholder="e.g. PayPal" /></label>
+      </div>
+      <div class="actions left"><button class="primary" data-record-payout="${slug}">Save cash-out</button></div>
+      <small class="muted">For a cash-out CashPilot did not see, such as one made before it was installed. It counts toward what you earned all time.</small>
+    </details>
   `;
 }
 

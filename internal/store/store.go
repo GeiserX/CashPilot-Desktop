@@ -51,11 +51,15 @@ type Deployment struct {
 }
 
 type EarningsRecord struct {
-	Platform  string  `json:"platform"`
-	Balance   float64 `json:"balance"`
-	Currency  string  `json:"currency"`
-	Error     string  `json:"error,omitempty"`
-	CreatedAt string  `json:"createdAt"`
+	Platform string  `json:"platform"`
+	Balance  float64 `json:"balance"`
+	Currency string  `json:"currency"`
+	Error    string  `json:"error,omitempty"`
+	// ErrorKind says what kind of failure Error is, when the collector knows:
+	// "unread" means the login worked but no node could be read, so the
+	// credentials are not what is wrong. Empty for a failure of unknown kind.
+	ErrorKind string `json:"errorKind,omitempty"`
+	CreatedAt string `json:"createdAt"`
 }
 
 type DailyBalance struct {
@@ -415,9 +419,9 @@ func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
 		record.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	_, err := s.execWrite(`
-		INSERT INTO earnings(platform, balance, currency, error, created_at)
-		VALUES(?, ?, ?, ?, ?)
-	`, record.Platform, record.Balance, record.Currency, record.Error, record.CreatedAt)
+		INSERT INTO earnings(platform, balance, currency, error, error_kind, created_at)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, record.Platform, record.Balance, record.Currency, record.Error, record.ErrorKind, record.CreatedAt)
 	return record, err
 }
 
@@ -431,7 +435,7 @@ func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
 // shape ListDailyBalances already uses.
 func (s *Store) ListLatestEarnings() []EarningsRecord {
 	rows, err := s.db.Query(`
-		SELECT e.platform, e.balance, e.currency, e.error, e.created_at
+		SELECT e.platform, e.balance, e.currency, e.error, e.error_kind, e.created_at
 		FROM earnings e
 		INNER JOIN (
 			SELECT platform, MAX(id) AS mx FROM earnings GROUP BY platform
@@ -445,7 +449,7 @@ func (s *Store) ListLatestEarnings() []EarningsRecord {
 	var out []EarningsRecord
 	for rows.Next() {
 		var record EarningsRecord
-		if err := rows.Scan(&record.Platform, &record.Balance, &record.Currency, &record.Error, &record.CreatedAt); err == nil {
+		if err := rows.Scan(&record.Platform, &record.Balance, &record.Currency, &record.Error, &record.ErrorKind, &record.CreatedAt); err == nil {
 			out = append(out, record)
 		}
 	}
@@ -920,6 +924,7 @@ func (s *Store) migrate() error {
 			balance REAL NOT NULL,
 			currency TEXT NOT NULL,
 			error TEXT NOT NULL DEFAULT '',
+			error_kind TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_earnings_platform_created ON earnings(platform, created_at);
@@ -966,6 +971,9 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
+	if _, err := s.execWrite(payoutsSchema); err != nil {
+		return err
+	}
 	// Forward-only column additions for existing tables (per-worker fleet keys, the
 	// chosen image, the number of copies). SQLite has no "ADD COLUMN IF NOT EXISTS", so guard each ALTER;
 	// a fresh DB already has the columns from CREATE TABLE above, so this is a no-op.
@@ -974,6 +982,7 @@ func (s *Store) migrate() error {
 		{"fleet_devices", "key_confirmed", "ALTER TABLE fleet_devices ADD COLUMN key_confirmed INTEGER NOT NULL DEFAULT 0"},
 		{"deployments", "custom_image", "ALTER TABLE deployments ADD COLUMN custom_image TEXT NOT NULL DEFAULT ''"},
 		{"deployments", "instances", "ALTER TABLE deployments ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"},
+		{"earnings", "error_kind", "ALTER TABLE earnings ADD COLUMN error_kind TEXT NOT NULL DEFAULT ''"},
 	} {
 		has, err := s.columnExists(col.table, col.name)
 		if err != nil {
@@ -985,8 +994,10 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
-	_, err = s.execWrite(stateBackupsDDL)
-	return err
+	if _, err = s.execWrite(stateBackupsDDL); err != nil {
+		return err
+	}
+	return s.migrateUsage()
 }
 
 // isSafeSQLIdentifier allows only ^[A-Za-z_][A-Za-z0-9_]*$ — a plain SQL identifier

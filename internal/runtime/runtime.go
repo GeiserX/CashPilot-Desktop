@@ -102,6 +102,15 @@ type ContainerInfo struct {
 	// Instance is which copy of its service this unit is: 1 for the first (and for
 	// every unit of a runtime that has no copies), N for cashpilot-<slug>-N.
 	Instance int `json:"instance"`
+	// What the usage graphs (internal/usage) need beyond the two numbers above.
+	// CPUKnown and MemoryKnown say whether each was actually read: a failed stats
+	// read leaves 0 in the field, and 0 is not a reading. NetRxBytes and NetTxBytes
+	// are the cumulative network counters since the container started, nil when
+	// none exist (host networking, a native program): unknown, never 0.
+	CPUKnown    bool    `json:"-"`
+	MemoryKnown bool    `json:"-"`
+	NetRxBytes  *uint64 `json:"-"`
+	NetTxBytes  *uint64 `json:"-"`
 }
 
 type DockerProvider struct{}
@@ -515,8 +524,11 @@ func (p *DockerProvider) statsForContainers(ctx context.Context, cli statsClient
 		go func(i int) {
 			defer wg.Done()
 			c := containers[i]
-			cpu, mem := p.stats(ctx, cli, c.ID, c.State == "running")
-			out[i] = toContainerInfo(c, cpu, mem)
+			r := p.read(ctx, cli, c.ID, c.State == "running")
+			info := toContainerInfo(c, r.cpu, r.mem)
+			info.CPUKnown, info.MemoryKnown = r.cpuOK, r.memOK
+			info.NetRxBytes, info.NetTxBytes = r.rx, r.tx
+			out[i] = info
 		}(i)
 	}
 	wg.Wait()
@@ -557,6 +569,11 @@ type containerSample struct {
 	systemCPU  uint64  // CPUStats.SystemUsage
 	onlineCPUs float64 // CPUStats.OnlineCPUs, falling back to len(PercpuUsage)
 	memoryMB   float64 // docker-stats-style memory (Usage minus inactive_file)
+	// Network counters summed over every interface, cumulative since the container
+	// started. hasNet is false when the response has no networks at all, which is
+	// what Docker sends for a container on the host network.
+	netRx, netTx uint64
+	hasNet       bool
 }
 
 // statsClient is the small subset of *client.Client that the sampling code needs.
@@ -572,23 +589,55 @@ type statsClient interface {
 // average (see cpuSampleInterval). If ctx is cancelled during the wait it returns
 // 0 CPU with sample A's memory, which is still a valid reading.
 func (p *DockerProvider) stats(ctx context.Context, cli statsClient, containerID string, running bool) (float64, float64) {
+	r := p.read(ctx, cli, containerID, running)
+	return r.cpu, r.mem
+}
+
+// statsReading is what read gathers from a container's two stats samples: the
+// numbers stats returns, whether each was actually read, and the network counters
+// (nil when the container has none).
+type statsReading struct {
+	cpu, mem     float64
+	cpuOK, memOK bool
+	rx, tx       *uint64
+}
+
+// read is stats plus what the usage graphs need: which numbers were really read,
+// and the cumulative network counters, taken from the latest sample that has them.
+func (p *DockerProvider) read(ctx context.Context, cli statsClient, containerID string, running bool) statsReading {
 	if !running {
-		return 0, 0
+		return statsReading{}
 	}
 	a, ok := sampleStats(ctx, cli, containerID)
 	if !ok {
-		return 0, 0
+		return statsReading{}
 	}
+	r := statsReading{mem: a.memoryMB, memOK: true}
+	r.rx, r.tx = netCounters(a)
 	select {
 	case <-ctx.Done():
-		return 0, a.memoryMB
+		return r
 	case <-time.After(cpuSampleInterval):
 	}
 	b, ok := sampleStats(ctx, cli, containerID)
 	if !ok {
-		return 0, a.memoryMB
+		return r
 	}
-	return combineSamples(a, b)
+	r.cpu, r.mem = combineSamples(a, b)
+	r.cpuOK = true
+	if b.hasNet {
+		r.rx, r.tx = netCounters(b)
+	}
+	return r
+}
+
+// netCounters returns a sample's network counters, nil for both when it has none.
+func netCounters(s containerSample) (*uint64, *uint64) {
+	if !s.hasNet {
+		return nil, nil
+	}
+	rx, tx := s.netRx, s.netTx
+	return &rx, &tx
 }
 
 // sampleStats reads one one-shot stats sample and extracts its counters via
@@ -617,12 +666,18 @@ func sampleFromResponse(stats container.StatsResponse) containerSample {
 	if onlineCPUs == 0 {
 		onlineCPUs = float64(len(stats.CPUStats.CPUUsage.PercpuUsage))
 	}
-	return containerSample{
+	out := containerSample{
 		cpuTotal:   stats.CPUStats.CPUUsage.TotalUsage,
 		systemCPU:  stats.CPUStats.SystemUsage,
 		onlineCPUs: onlineCPUs,
 		memoryMB:   memoryMB(stats.MemoryStats),
 	}
+	for _, n := range stats.Networks {
+		out.hasNet = true
+		out.netRx += n.RxBytes
+		out.netTx += n.TxBytes
+	}
+	return out
 }
 
 // combineSamples derives the current CPU percentage and memory (MB) from two samples

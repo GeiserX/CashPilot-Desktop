@@ -21,14 +21,20 @@ import {
   GetAppState,
   GetCopyLogs,
   GetCredentials,
+  GetEarningsSummary,
   GetFleetState,
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
+  GetUsage,
+  IgnoreDrift,
+  ListPayouts,
   PreflightService,
   PlanServiceRemoval,
   RemoveFleetDevice,
+  RecordPayout,
   RefreshDeployments,
+  RemovePayout,
   RemoveService,
   SaveSettings,
   SaveCredentials,
@@ -42,17 +48,19 @@ import { renderFleetSection } from "./render/fleet";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderEarningsBars } from "./render/chart";
+import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
 import { renderCatalogTable } from "./render/catalog";
+import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
-import { composeSelectionExport, deviceLinkText } from "./render/details";
-import { totalText, totalCaption } from "./render/total";
+import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
+import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
-import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -68,6 +76,12 @@ let catalogSearch = "";
 let resetScrollAfterRender = false;
 // The dashboard chart's window: the web console opens on 7 days.
 let chartDays = 7;
+// The usage graphs under it share chartDays. usageContainer is the picked
+// container, "" for all of them; usageView is the last answer, kept so a
+// dashboard re-render does not blank the charts while the next one loads.
+let usageContainer = "";
+let usageView: UsageView | null = null;
+let usageRequest = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -248,6 +262,33 @@ function renderGuides(guides: InstallGuide[]) {
   });
 }
 
+// Fetch the usage graphs for the current window and container and redraw only
+// their panel, so a slow answer never re-renders the dashboard under the user.
+// A stale answer (the window or the pick changed meanwhile) is dropped.
+async function loadUsage() {
+  const request = ++usageRequest;
+  try {
+    const view = await GetUsage(chartDays, usageContainer);
+    if (request !== usageRequest) return;
+    usageView = view;
+    usageContainer = view.container;
+  } catch {
+    // The app is still starting or the store is busy: keep what is drawn.
+    return;
+  }
+  const panel = document.querySelector<HTMLDivElement>("#usage-panel");
+  if (!panel) return;
+  panel.innerHTML = renderUsagePanel(usageView);
+  wireUsagePanel();
+}
+
+function wireUsagePanel() {
+  document.querySelector<HTMLSelectElement>("#usage-container")?.addEventListener("change", (event) => {
+    usageContainer = (event.target as HTMLSelectElement).value;
+    void loadUsage();
+  });
+}
+
 function renderDashboard(current: AppState) {
   const services = current.services || [];
   const deployments = current.deployments || [];
@@ -266,6 +307,8 @@ function renderDashboard(current: AppState) {
     earnings,
     outdated: current.outdatedServices,
     health: current.health,
+    drift: current.drift,
+    producerStates: current.producerStates,
   });
 
   root.innerHTML = `
@@ -276,7 +319,6 @@ function renderDashboard(current: AppState) {
         <main class="page-content">
         ${pageHead("Dashboard", `
           <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
-          <button class="btn btn-primary btn-sm" id="open-wizard">Add service</button>
         `)}
         <!-- The money first and largest; the container count sits at the far
              end, smaller, because it answers a different question. -->
@@ -285,6 +327,7 @@ function renderDashboard(current: AppState) {
             <div class="stat-label">Balance</div>
             <div class="stat-value">${escapeHtml(totalText(summary, disp))}</div>
             <div class="stat-note">${escapeHtml(totalCaption(summary))}</div>
+            ${allTimeNote(summary, disp) ? `<div class="stat-note">${escapeHtml(allTimeNote(summary, disp))}</div>` : ""}
           </div>
           <div class="stat-card">
             <div class="stat-label">Today</div>
@@ -316,6 +359,14 @@ function renderDashboard(current: AppState) {
           ${renderEarningsBars(summary?.daily || [], disp, chartDays)}
         </section>
 
+        <section class="usage" aria-labelledby="usage-title">
+          <div class="block-head">
+            <h2 class="block-title" id="usage-title">Resource use</h2>
+            <span class="block-meta">This machine, last ${chartDays} days</span>
+          </div>
+          <div id="usage-panel">${renderUsagePanel(usageView && usageView.days === chartDays ? usageView : null)}</div>
+        </section>
+
         <section class="services-block" aria-labelledby="services-title">
           <div class="block-head">
             <h2 class="block-title" id="services-title">Services</h2>
@@ -330,6 +381,7 @@ function renderDashboard(current: AppState) {
               health: current.health,
               serviceDetails: current.serviceDetails,
               outdated: current.outdatedServices,
+              drift: current.drift,
               producerStates: current.producerStates,
               copies,
               displayCurrency: disp,
@@ -352,7 +404,6 @@ function renderDashboard(current: AppState) {
   maybeResetScroll();
 
   document.querySelector("#refresh")?.addEventListener("click", refreshState);
-  document.querySelector("#open-wizard")?.addEventListener("click", openWizard);
   document.querySelector("#open-wizard-empty")?.addEventListener("click", openWizard);
   document.querySelectorAll<HTMLButtonElement>("[data-chart-days]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -360,8 +411,19 @@ function renderDashboard(current: AppState) {
       render();
     });
   });
+  wireUsagePanel();
+  void loadUsage();
   document.querySelectorAll<HTMLButtonElement>("[data-open-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.openService || ""));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-drift-action]").forEach((button) => {
+    button.addEventListener("click", () => void runDriftAction(button.dataset.slug || "", button.dataset.driftAction || ""));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -458,10 +520,6 @@ function metricCard(label: string, value: string, caption: string) {
 
 // One bar, no sidebar: brand, the views, then the money and the alerts. The page
 // title moves into the page itself (pageHead), like the web console.
-function navButton(view: View, label: string, active: View) {
-  return `<button class="sidebar-link ${active === view ? "active" : ""}" data-view="${view}"${active === view ? ' aria-current="page"' : ""}>${escapeHtml(label)}</button>`;
-}
-
 function pageHead(title: string, actions = "") {
   return `
     <div class="page-head">
@@ -527,14 +585,9 @@ function topbar(active: View, current: AppState) {
         ${officialLogoMark()}
         <span>CashPilot</span>
       </div>
-      <nav class="topnav" aria-label="Main">
-        ${navButton("dashboard", "Dashboard", active)}
-        ${navButton("fleet", "Fleet", active)}
-        ${navButton("catalog", "Catalog", active)}
-        ${navButton("settings", "Settings", active)}
-        ${navButton("wizard", "Add services", active)}
-      </nav>
+      ${renderTopnav(active)}
       <div class="topbar-right">
+        ${renderAddServiceButton(active)}
         <span class="topbar-runtime ${runtimeOk ? "" : "text-warn"}" title="${escapeHtml(current.runtime.message || "")}"><span class="runtime-dot ${runtimeOk ? "ok" : "warn"}"></span>${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
         <span class="topbar-earnings" title="Total balance across every service">${escapeHtml(totalText(current.summary, disp))}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
@@ -829,6 +882,7 @@ function envInputName(key: string) {
     CASHPILOT_FLEET_BIND: "fleetBindAddress",
     CASHPILOT_FLEET_PORT: "fleetPort",
     CASHPILOT_FLEET_SERVER: "fleetServerEnabled",
+    CASHPILOT_DRIFT_WARNINGS: "driftWarnings",
     CASHPILOT_UPSTREAM_URL: "upstreamUrl",
     CASHPILOT_UPSTREAM_KEY: "upstreamKey",
     TZ: "timezone",
@@ -1126,6 +1180,55 @@ function renderSetupWizard(current: AppState) {
   });
   selectedServices.forEach((service) => void hydrateWizardForm(service));
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
+  selectedServices.forEach((service) => void hydratePayouts(service));
+}
+
+// The payout ledger under a service's card: load it, then wire its record form
+// and Remove buttons. A record or a removal refreshes the summary in place (not a
+// full render, which would drop credentials typed but not saved yet).
+async function hydratePayouts(service: Service) {
+  const box = document.querySelector<HTMLElement>(`[data-payouts-slug="${CSS.escape(service.slug)}"]`);
+  if (!box) return;
+  const payouts = await ListPayouts(service.slug).catch(() => null);
+  box.innerHTML = payoutLedger(service, payouts);
+  box.querySelector<HTMLButtonElement>("[data-record-payout]")?.addEventListener("click", () => void recordPayout(service, box));
+  box.querySelectorAll<HTMLButtonElement>("[data-remove-payout]").forEach((button) => {
+    button.addEventListener("click", () => void removePayout(service, Number(button.dataset.removePayout)));
+  });
+}
+
+async function recordPayout(service: Service, box: HTMLElement) {
+  const field = (name: string) => box.querySelector<HTMLInputElement>(`[data-payout-field="${name}"]`)?.value.trim() || "";
+  const amount = Number(field("amount"));
+  if (!(amount > 0)) {
+    showErrorToast({scope: "cash-out", error: "Enter the amount that was cashed out."});
+    return;
+  }
+  try {
+    const payout = await RecordPayout(service.slug, amount, field("currency"), field("method"), field("date"));
+    if (payout.fxRateUsd === null || payout.fxRateUsd === undefined) {
+      showInfoToast({scope: "cash-out", message: "Recorded. There is no exchange rate for that day, so it is left out of the total."});
+    }
+    await afterPayoutChange(service);
+  } catch (error) {
+    showErrorToast({scope: "cash-out", error: String(error)});
+  }
+}
+
+async function removePayout(service: Service, id: number) {
+  if (!confirm("Remove this cash-out? It will no longer count toward what you earned all time.")) return;
+  try {
+    await RemovePayout(id);
+    await afterPayoutChange(service);
+  } catch (error) {
+    showErrorToast({scope: "cash-out", error: String(error)});
+  }
+}
+
+async function afterPayoutChange(service: Service) {
+  await hydratePayouts(service);
+  const summary = await GetEarningsSummary().catch(() => null);
+  if (state && summary) state = {...state, summary};
 }
 
 function renderWizardProgress() {
@@ -1405,6 +1508,30 @@ async function runServiceAction(slug: string, action: string) {
     }
     await refreshState();
     setOutput(`${slug} ${action} complete.`);
+  } catch (error) {
+    setOutput(String(error));
+  }
+}
+
+// The two buttons on a "Needs fixing" row. Redeploy sends no credentials, no image and
+// no copy count, so the deploy keeps the saved credentials, the image in use and the
+// number of copies, and rebuilds the rest from the current catalog.
+async function runDriftAction(slug: string, action: string) {
+  const name = state?.services.find((svc) => svc.slug === slug)?.name || slug;
+  try {
+    if (action === "redeploy") {
+      if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) return;
+      setOutput(`Redeploying ${name}...`);
+      await DeployService(slug, {}, null, null);
+      await refreshState();
+      setOutput(`${name} redeployed.`);
+      return;
+    }
+    if (action === "ignore") {
+      await IgnoreDrift(slug);
+      await refreshState();
+      setOutput(`${name}: warning ignored until the catalog changes it again.`);
+    }
   } catch (error) {
     setOutput(String(error));
   }

@@ -223,6 +223,10 @@ code { color: var(--text-primary); }
 .sidebar-link:hover { color: var(--text-primary); background: var(--bg-hover); }
 .sidebar-link.active { color: var(--text-primary); border-bottom-color: var(--text-primary); font-weight: 600; }
 .topbar-right { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.topbar-add { flex-shrink: 0; gap: 2px; white-space: nowrap; }
+/* On the wizard itself: a ring, since the button is already filled. */
+.topbar-add.active { box-shadow: 0 0 0 2px var(--bg-secondary), 0 0 0 3px var(--text-primary); }
+.topbar-add:focus-visible { outline-offset: 4px; }
 .topbar-runtime { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-2); color: var(--text-muted); white-space: nowrap; }
 .runtime-dot { display: inline-block; width: 8px; height: 8px; border-radius: 1px; background: var(--text-muted); flex-shrink: 0; }
 .runtime-dot.ok { background: var(--success); }
@@ -420,6 +424,25 @@ section { margin-bottom: 28px; }
 .chart-axis { fill: var(--text-muted); font-family: var(--font-mono); font-size: 17px; }
 .chart-empty { display: grid; gap: 2px; padding: 16px 0; color: var(--text-muted); }
 .chart-empty strong { color: var(--text-primary); font-weight: 600; }
+/* Resource use: three small line charts under the earnings chart (render/usage.ts). */
+.usage-controls { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
+.usage-controls select { width: auto; }
+.usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.usage-chart { margin: 0; min-width: 0; }
+.usage-chart figcaption { display: flex; justify-content: space-between; gap: 8px; font-size: var(--fs-2); }
+.usage-title { color: var(--text-primary); font-weight: 600; }
+.usage-latest { color: var(--text-muted); font-family: var(--font-mono); }
+.usage-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.usage-axis { fill: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.usage-line { fill: none; stroke-width: 1.5; stroke-linejoin: round; }
+.usage-line-main { stroke: var(--text-secondary); fill: var(--text-secondary); }
+.usage-line-alt { stroke: var(--success); fill: var(--success); }
+path.usage-line-main, path.usage-line-alt { fill: none; }
+.usage-key.usage-line-main { color: var(--text-secondary); }
+.usage-key.usage-line-alt { color: var(--success); }
+.usage-hover { fill: transparent; }
+.usage-hover:hover { fill: var(--accent-soft); }
+.usage-note { margin: 8px 0 0; }
 
 /* ----- Data tables (services, catalog) ----- */
 .breakdown-table, .catalog-table { width: 100%; border-collapse: collapse; }
@@ -762,4 +785,6 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
   .attn-why, .attn-actions { grid-column: 1 / -1; }
   .attn-actions { justify-content: flex-start; }
   .money-strip .stat-card-ops { margin-left: 0; align-items: flex-start; text-align: left; }
+  /* "+" alone; the aria-label still says "Add service". */
+  .topbar-add .topbar-add-label { display: none; }
 }

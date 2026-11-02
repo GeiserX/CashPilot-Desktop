@@ -157,5 +157,42 @@ const stoppedHere = renderCatalogTable([svc("delta")], [dep("delta", "exited")],
 check("a deployed but stopped service is not marked running", !stoppedHere.includes("status-dot running") && stoppedHere.includes("status-dot stopped"), stoppedHere);
 check("text from the catalog is escaped", !catalogRow(svc("<b>x</b>"), undefined, false).includes("<b>x</b>"));
 
+// ---------------------------------------------------------------------------
+// The provider disabled the account: one card, no Start, no Fix credentials.
+// ---------------------------------------------------------------------------
+const disabledInput = (supportUrl) => ({
+  runtime: runtimeOk,
+  services: [{ slug: "iproyal", name: "IPRoyal Pawns", supportUrl }, ...services.slice(2)],
+  deployments: [dep("iproyal", "exited")],
+  copies: { iproyal: [{ slug: "iproyal", containerId: "c", name: "cashpilot-iproyal-2", image: "i", status: "restarting", cpuPercent: 0, memoryMb: 0, instance: 2 }] },
+  earnings: [{ platform: "iproyal", error: "429 Too Many Requests" }],
+  health: { iproyal: { score: 10, uptimePercent: 5, samples: 9, restarts: 0, crashes: 9, stops: 0 } },
+  producerStates: { iproyal: { slug: "iproyal", state: "account_disabled", reasons: ["IPRoyal Pawns has disabled this account."] } },
+});
+const disabledItems = attentionItems(disabledInput("https://pawns.app/contact-us/"));
+check("a disabled account is one Account disabled card and nothing else for that service",
+  disabledItems.length === 1 && disabledItems[0].tag === "Account disabled" && disabledItems[0].level === "fail",
+  JSON.stringify(disabledItems.map((i) => i.tag)));
+check("the card links the provider's support page and offers no Start",
+  disabledItems[0].actions.includes('data-url="https://pawns.app/contact-us/"') && !/data-row-action="start"/.test(disabledItems[0].actions),
+  disabledItems[0]?.actions);
+const noSupport = attentionItems(disabledInput("javascript:alert(1)"));
+check("the card says how to come back once the account is on again", /remove the service and deploy it again/.test(disabledItems[0].why), disabledItems[0]?.why);
+check("a support link that is not https:// is not offered", noSupport.length === 1 && noSupport[0].actions === "", noSupport[0]?.actions);
+const exitedCopy = { iproyal: [{ slug: "iproyal", containerId: "c", name: "cashpilot-iproyal-2", image: "i", status: "exited", cpuPercent: 0, memoryMb: 0, instance: 2 }] };
+const disabledTable = renderServicesTable({ services, deployments: [dep("iproyal", "exited")], copies: exitedCopy, earnings: [], producerStates: disabledInput("").producerStates, displayCurrency: "USD" });
+check("the services row offers no Start for a disabled account",
+  !/data-row-action="start"[^>]*data-slug="iproyal"|data-slug="iproyal"[^>]*data-row-action="start"/.test(disabledTable) && disabledTable.includes("account disabled"), disabledTable);
+const stoppedTable = renderServicesTable({ services, deployments: [dep("iproyal", "exited")], copies: exitedCopy, earnings: [], displayCurrency: "USD" });
+check("control: without the verdict the row and its copy still offer Start",
+  /data-row-action="start" data-slug="iproyal" title/.test(stoppedTable) && /data-row-action="start" data-slug="iproyal" data-copy="2"/.test(stoppedTable), stoppedTable);
+
+// No node could be read: the login worked, so no credentials button.
+const unread = attentionItems({ runtime: runtimeOk, services, deployments: [], earnings: [{ platform: "mysterium", error: "No Mysterium node on this computer could be read.", errorKind: "unread" }] });
+check("an unread node says so and offers Retry, not Fix credentials",
+  unread.length === 1 && unread[0].tag === "No node read" && /data-row-action="collect"/.test(unread[0].actions) && !/data-open-service/.test(unread[0].actions), JSON.stringify(unread));
+const plainError = attentionItems({ runtime: runtimeOk, services, deployments: [], earnings: [{ platform: "mysterium", error: "401 Unauthorized" }] });
+check("control: an error of unknown kind still offers Fix credentials", plainError.length === 1 && /data-open-service="mysterium"/.test(plainError[0].actions), JSON.stringify(plainError));
+
 console.log(`${checks - failures}/${checks} console checks passed`);
 if (failures > 0) process.exit(1);

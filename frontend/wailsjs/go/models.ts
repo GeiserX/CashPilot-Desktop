@@ -1049,5 +1049,110 @@ export namespace store {
 	    }
 	}
 
+	export class Payout {
+	    id: number;
+	    platform: string;
+	    amount: number;
+	    currency: string;
+	    fxRateUsd?: number;
+	    method: string;
+	    paidOn: string;
+	    createdAt: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Payout(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.platform = source["platform"];
+	        this.amount = source["amount"];
+	        this.currency = source["currency"];
+	        this.fxRateUsd = source["fxRateUsd"];
+	        this.method = source["method"];
+	        this.paidOn = source["paidOn"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+}
+
+export namespace usage {
+
+	export class Container {
+	    name: string;
+	    slug: string;
+	    service: string;
+	    noCounters: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new Container(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.slug = source["slug"];
+	        this.service = source["service"];
+	        this.noCounters = source["noCounters"];
+	    }
+	}
+	export class View {
+	    days: number;
+	    step: number;
+	    hours: number[];
+	    containers: Container[];
+	    container: string;
+	    cpuPercent: number[];
+	    memoryMb: number[];
+	    rxRate: number[];
+	    txRate: number[];
+	    rxBytes: number[];
+	    txBytes: number[];
+	    trafficPartial: boolean[];
+	    cpuPartial: boolean[];
+	    memoryPartial: boolean[];
+
+	    static createFrom(source: any = {}) {
+	        return new View(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.days = source["days"];
+	        this.step = source["step"];
+	        this.hours = source["hours"];
+	        this.containers = this.convertValues(source["containers"], Container);
+	        this.container = source["container"];
+	        this.cpuPercent = source["cpuPercent"];
+	        this.memoryMb = source["memoryMb"];
+	        this.rxRate = source["rxRate"];
+	        this.txRate = source["txRate"];
+	        this.rxBytes = source["rxBytes"];
+	        this.txBytes = source["txBytes"];
+	        this.trafficPartial = source["trafficPartial"];
+	        this.cpuPartial = source["cpuPartial"];
+	        this.memoryPartial = source["memoryPartial"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
 }
 

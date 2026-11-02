@@ -74,8 +74,20 @@ export function GetSettingsState() {
   return window['go']['main']['App']['GetSettingsState']();
 }
 
+export function GetUsage(arg1, arg2) {
+  return window['go']['main']['App']['GetUsage'](arg1, arg2);
+}
+
+export function IgnoreDrift(arg1) {
+  return window['go']['main']['App']['IgnoreDrift'](arg1);
+}
+
 export function InstallBackgroundHelper() {
   return window['go']['main']['App']['InstallBackgroundHelper']();
+}
+
+export function ListPayouts(arg1) {
+  return window['go']['main']['App']['ListPayouts'](arg1);
 }
 
 export function ListServices() {
@@ -94,6 +106,10 @@ export function PlanServiceRemoval(arg1) {
   return window['go']['main']['App']['PlanServiceRemoval'](arg1);
 }
 
+export function RecordPayout(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['RecordPayout'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function RefreshDeployments() {
   return window['go']['main']['App']['RefreshDeployments']();
 }
@@ -104,6 +120,10 @@ export function RemoveBackgroundHelper() {
 
 export function RemoveFleetDevice(arg1) {
   return window['go']['main']['App']['RemoveFleetDevice'](arg1);
+}
+
+export function RemovePayout(arg1) {
+  return window['go']['main']['App']['RemovePayout'](arg1);
 }
 
 export function RemoveService(arg1, arg2, arg3) {

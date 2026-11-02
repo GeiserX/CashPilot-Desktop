@@ -15,6 +15,8 @@
 #   their usual order (category, then name). Used to lead with the services that pay the project
 #   best, so a reorder is a number change, never a new page.
 # website: Main URL
+# support_url: (optional) https:// page where a user reaches the provider's support. Offered
+#   when the provider has disabled the account (a health_signals entry with state account_disabled).
 # description: One paragraph description
 # short_description: One line (for tables)
 
@@ -93,7 +95,15 @@
 #     no collector.
 #       - pattern: "login failed"       regex, matched case-insensitively against logs
 #         means:   "The service rejected the stored credentials."   shown to the user
-#         state:   failing              failing (default) | idle
+#         state:   failing              failing (default) | idle | account_disabled; any other
+#                                         value rejects the entry
+#                                         account_disabled: the PROVIDER refuses to run the
+#                                         client, so restarting cannot help. Unlike the others
+#                                         it is judged by the worker on the last finished run's
+#                                         log (a stopped copy, or one up for under two minutes),
+#                                         and the dashboard shows
+#                                         one "Account disabled" card for the service instead of
+#                                         a crash loop per box. Not with window_hours.
 #         unless:  ""                   (optional) regex whose presence in the same window
 #                                         cancels the signal: the problem is not there
 #         min_matches:  1                 (optional) with window_hours: lines the pattern must match
@@ -287,6 +297,20 @@
 #     this long, and a new deployment gets this long instead of 7 days before
 #     a balance that never grew is mentioned. Omit it for a service that earns
 #     a little every day; its own rhythm is learned from its history.
+#   node_read: (optional) how the worker reads a node's own earnings from inside
+#     its running container, for a provider whose account API cannot give a
+#     balance or a lifetime (app/node_read.py, issue #488):
+#       command:  ["sh", "-c", "..."]  run inside the container, read-only
+#       node:     regex, group 1 names the node
+#       balance:  regex, group 1 is the amount waiting to settle
+#       lifetime: regex, group 1 is everything the node ever earned
+#       settled_net, settled_fees: (optional, both or neither) regexes with one
+#                 group, every match summed: what the node's settlements paid
+#                 to the wallet and what the provider kept as fees, in any one
+#                 unit. Their ratio nets the settled amount counted as cashed out.
+#     The collector gets one reading per node; the balance is their unsettled
+#     total and earned figures follow the lifetime, so a settlement is never
+#     asked about as a payout.
 #   per_node_earnings: true|false
 #     The collector can break earnings down per node/machine, not just an
 #     account total. Declared here rather than branched on in app/ so adding a
