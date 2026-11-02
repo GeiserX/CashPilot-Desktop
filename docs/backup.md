@@ -43,10 +43,13 @@ app's backups.
 
 ## Restore a backup
 
-**1. Open the file** on a machine you trust (needs Go):
+**1. Open the file** on a machine you trust (needs Go and git). Run `cpbackup` from
+a checkout of the release that made the backup:
 
 ```bash
-go run github.com/GeiserX/CashPilot-Desktop/cmd/cpbackup@latest decrypt <file>.cpbackup --out restored
+git clone --branch <version> https://github.com/GeiserX/CashPilot-Desktop
+cd CashPilot-Desktop
+go run ./cmd/cpbackup decrypt <file>.cpbackup --out restored
 ```
 
 It asks for the passphrase or private key at the prompt, never on the command
@@ -78,5 +81,5 @@ CashPilot first, keeping its volumes, and move that volume's contents aside.
 **3. Deploy the service** from CashPilot. It finds the restored volume and starts
 with the old identity.
 
-To make a key pair for public-key mode, run `cpbackup keygen`. Keep the private key
+To make a key pair for public-key mode, run `go run ./cmd/cpbackup keygen` in that checkout. Keep the private key
 offline and give CashPilot only the public one.
