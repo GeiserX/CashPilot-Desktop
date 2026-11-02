@@ -8,19 +8,20 @@
 //
 // Pure: takes plain state, returns HTML.
 
-import type { HealthScore, ServiceCopy } from "../wails";
+import type { HealthScore, ProducerReport, ServiceCopy } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 export interface AttentionInput {
   runtime: { available: boolean; nativeAvailable: boolean; message: string };
-  services: { slug: string; name: string }[];
+  services: { slug: string; name: string; supportUrl?: string }[];
   deployments: { slug: string; name: string; status: string; runtime?: string }[];
   copies?: Record<string, ServiceCopy[]> | null;
-  earnings: { platform: string; error?: string }[];
+  earnings: { platform: string; error?: string; errorKind?: string }[];
   outdated?: string[] | null;
   health?: Record<string, HealthScore> | null;
   /** Per slug, how its container differs from what a redeploy would build. */
   drift?: Record<string, string[]> | null;
+  producerStates?: Record<string, ProducerReport> | null;
 }
 
 export interface AttentionItem {
@@ -67,7 +68,32 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     });
   }
 
+  // A provider that disabled the account is ONE cause for the stopped container, its
+  // copies, its crashes and the missing balance. Each of those rows would point at a
+  // fix that cannot work (Start, Fix credentials), so the service gets one card that
+  // names the cause and where to take it, and none of the others.
+  const disabled = new Set(
+    Object.values(input.producerStates || {})
+      .filter((r) => r && r.state === "account_disabled")
+      .map((r) => r.slug)
+  );
+  for (const slug of disabled) {
+    const svc = input.services.find((s) => s.slug === slug);
+    const name = escapeHtml(nameOf(slug));
+    const support = /^https:\/\//.test(svc?.supportUrl || "") ? svc!.supportUrl! : "";
+    items.push({
+      level: "fail",
+      tag: "Account disabled",
+      what: nameOf(slug),
+      why: `${name} turned this account off, so it earns nothing and no balance can be read. Restarting will not help: contact ${name} to get it back. CashPilot leaves its containers as they are. Once ${name} turns the account back on, remove the service and deploy it again.`,
+      actions: support
+        ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(support)}">Contact ${name}</button>`
+        : "",
+    });
+  }
+
   const down = (slug: string, name: string, status: string, copy: number) => {
+    if (disabled.has(slug)) return;
     const st = containerState(status);
     if (st === "ok") return;
     const copyAttr = copy > 1 ? ` data-copy="${copy}"` : "";
@@ -88,13 +114,25 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
 
   for (const dep of input.deployments) {
     const crashes = input.health?.[dep.slug]?.crashes ?? 0;
-    if (crashes >= 3) {
+    if (crashes >= 3 && !disabled.has(dep.slug)) {
       items.push({ level: "warn", tag: "Unstable", what: nameOf(dep.slug), why: `${crashes} crashes in the last 7 days`, actions: "" });
     }
   }
 
   for (const record of input.earnings) {
-    if (!record.error) continue;
+    if (!record.error || disabled.has(record.platform)) continue;
+    if (record.errorKind === "unread") {
+      // The login worked; nothing here could read the figure (no node of this
+      // service runs on this machine). New credentials would not help.
+      items.push({
+        level: "warn",
+        tag: "No node read",
+        what: nameOf(record.platform),
+        why: escapeHtml(record.error),
+        actions: `<button class="btn btn-ghost btn-sm" data-row-action="collect" data-slug="${escapeHtml(record.platform)}">Retry</button>`,
+      });
+      continue;
+    }
     items.push({
       level: "warn",
       tag: "No reading",

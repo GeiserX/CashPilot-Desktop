@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/noderead"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -27,6 +28,20 @@ type Registry struct {
 	http  *http.Client
 	// devices is the last finished device-on-account check per slug (devices.go).
 	devices deviceState
+	// readNodes reads each running node of a service from inside its container
+	// (internal/noderead). Nil, or noderead.ErrNotDeclared from it, means the
+	// collector keeps its account-API path.
+	readNodes NodeReadFunc
+}
+
+// NodeReadFunc returns one reading per running copy of slug, or
+// noderead.ErrNotDeclared when the catalog declares no collector.node_read for it.
+type NodeReadFunc func(ctx context.Context, slug string) ([]noderead.Reading, error)
+
+// WithNodeReader lets the collectors read a node's own figures from inside its
+// container, for the services whose catalog entry declares collector.node_read.
+func WithNodeReader(fn NodeReadFunc) Option {
+	return func(r *Registry) { r.readNodes = fn }
 }
 
 type Result struct {
@@ -35,6 +50,16 @@ type Result struct {
 	Currency string
 	Error    string
 }
+
+// KindUnread is the error kind of a collect whose login worked but whose figure
+// nothing could read (a Mysterium node that is not on this machine). Not a
+// credential problem, as the web's KIND_UNREAD.
+const KindUnread = "unread"
+
+// unreadError is a failure of kind KindUnread.
+type unreadError struct{ msg string }
+
+func (e unreadError) Error() string { return e.msg }
 
 // Option customises a Registry at construction time.
 type Option func(*Registry)
@@ -107,10 +132,16 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 	if err != nil {
 		result = Result{Platform: slug, Balance: 0, Currency: "USD", Error: err.Error()}
 	}
+	var unread unreadError
+	kind := ""
+	if errors.As(err, &unread) {
+		kind = KindUnread
+	}
 	record := store.EarningsRecord{
-		Platform: result.Platform,
-		Balance:  result.Balance,
-		Currency: result.Currency,
+		Platform:  result.Platform,
+		Balance:   result.Balance,
+		Currency:  result.Currency,
+		ErrorKind: kind,
 		// Redact any secret embedded in a URL query (e.g. the Repocket Firebase
 		// sign-in URL carries ?key=<FIREBASE_KEY>) before the error is persisted
 		// verbatim into earnings.error, where it would be readable in the dashboard/DB.
@@ -464,6 +495,12 @@ func (r *Registry) collectMystNodes(ctx context.Context, credentials map[string]
 		return Result{}, fmt.Errorf("MystNodes login did not return an access token")
 	}
 	authHeaders := map[string]string{"Authorization": "Bearer " + login.AccessToken}
+	if r.readNodes != nil {
+		readings, err := r.readNodes(ctx, "mysterium")
+		if !errors.Is(err, noderead.ErrNotDeclared) {
+			return r.mystFromNodes(ctx, authHeaders, readings, err)
+		}
+	}
 	var earnings struct {
 		EarningsTotal float64 `json:"earningsTotal"`
 	}
@@ -477,11 +514,53 @@ func (r *Registry) collectMystNodes(ctx context.Context, credentials map[string]
 	// total Result below is the contract. It reuses the SAME bearer token (and the
 	// shared doJSON retry/backoff path); log and swallow any error (fetch, decode, or
 	// a nil store) so the total still returns.
-	if err := r.collectMystPerNode(ctx, authHeaders); err != nil {
+	if err := r.collectMystPerNode(ctx, authHeaders, nil); err != nil {
 		log.Printf("mysterium per-node earnings unavailable (total earnings still collected): %v", err)
 	}
 
 	return Result{Platform: "mysterium", Balance: round(earnings.EarningsTotal, 4), Currency: "MYST"}, nil
+}
+
+// mystFromNodes is the Mysterium balance when the catalog declares node_read: the
+// unsettled MYST of every node read on this machine, each node once. The cloud's
+// earningsTotal is a trailing 30-day sum, so it is never stored as a balance, even
+// when no node could be read: a wrong figure that looks real is the bug this
+// replaces. The cloud login above still runs, so a wrong email or password fails
+// there, and it still serves the per-node breakdown.
+func (r *Registry) mystFromNodes(ctx context.Context, authHeaders map[string]string, readings []noderead.Reading, readErr error) (Result, error) {
+	seen := map[string]bool{}
+	var nodes []noderead.Reading
+	for _, n := range readings {
+		id := strings.ToLower(n.Node)
+		if !n.OK() || seen[id] {
+			continue
+		}
+		seen[id] = true
+		nodes = append(nodes, n)
+	}
+	if len(nodes) == 0 {
+		why := ""
+		if readErr != nil {
+			why = " (" + readErr.Error() + ")"
+		} else {
+			for _, n := range readings {
+				if n.Error != "" {
+					why = " (" + n.Error + ")"
+					break
+				}
+			}
+		}
+		return Result{}, unreadError{fmt.Sprintf("No Mysterium node on this computer could be read%s. "+
+			"CashPilot reads the balance from the node itself, so it has to run here; MystNodes' cloud total covers the last 30 days only, so it is not used", why)}
+	}
+	if err := r.collectMystPerNode(ctx, authHeaders, nodes); err != nil {
+		log.Printf("mysterium per-node earnings unavailable (node balances still collected): %v", err)
+	}
+	var balance float64
+	for _, n := range nodes {
+		balance += n.Balance
+	}
+	return Result{Platform: "mysterium", Balance: round(balance, 6), Currency: "MYST"}, nil
 }
 
 // mystNode is one Mysterium node's per-node earnings, flattened from the MystNodes
@@ -515,7 +594,10 @@ type mystNode struct {
 // fetch, or a decode error degrades to "no per-node detail this cycle" rather than
 // failing the whole collect. The error is returned only so the caller can log it (and
 // tests can assert on it).
-func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[string]string) error {
+//
+// read are the nodes' own figures, when the catalog declares node_read: they replace
+// the cloud's lifetime split, which comes back as 0, for the nodes they name.
+func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[string]string, read []noderead.Reading) error {
 	if r.store == nil {
 		return fmt.Errorf("No store configured for per-node persistence")
 	}
@@ -542,6 +624,13 @@ func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[strin
 		} `json:"nodes"`
 	}
 	if err := r.doJSON(ctx, "GET", "https://my.mystnodes.com/api/v2/node?page=1&itemsPerPage=100", nil, authHeaders, &resp); err != nil {
+		// The nodes read here are still this cycle's figures: keep them rather
+		// than leave the last cycle's detail in place.
+		if len(read) > 0 {
+			if detail, mErr := json.Marshal(withNodeReadings(nil, read)); mErr == nil {
+				_ = r.store.SaveServiceDetail("mysterium", string(detail))
+			}
+		}
 		return err
 	}
 	nodes := make([]mystNode, 0, len(resp.Nodes))
@@ -565,11 +654,39 @@ func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[strin
 			LifetimeUnsettledMYST: round(n.LifetimeEarnings.UnsettledEther, 6),
 		})
 	}
+	nodes = withNodeReadings(nodes, read)
 	detail, err := json.Marshal(nodes)
 	if err != nil {
 		return err
 	}
 	return r.store.SaveServiceDetail("mysterium", string(detail))
+}
+
+// withNodeReadings puts each node's own lifetime and unsettled figures over the
+// cloud's, by identity; a node read here that the cloud does not list is added.
+func withNodeReadings(nodes []mystNode, read []noderead.Reading) []mystNode {
+	for _, reading := range read {
+		lifetime, unsettled := round(reading.Lifetime, 6), round(reading.Balance, 6)
+		found := false
+		for i := range nodes {
+			if strings.EqualFold(nodes[i].Identity, reading.Node) {
+				nodes[i].LifetimeMYST = lifetime
+				nodes[i].LifetimeUnsettledMYST = unsettled
+				nodes[i].LifetimeSettledMYST = round(lifetime-unsettled, 6)
+				found = true
+			}
+		}
+		if !found {
+			nodes = append(nodes, mystNode{
+				Identity:              reading.Node,
+				Online:                true,
+				LifetimeMYST:          lifetime,
+				LifetimeUnsettledMYST: unsettled,
+				LifetimeSettledMYST:   round(lifetime-unsettled, 6),
+			})
+		}
+	}
+	return nodes
 }
 
 func (r *Registry) collectPacketStream(ctx context.Context, credentials map[string]string) (Result, error) {

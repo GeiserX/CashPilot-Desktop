@@ -63,6 +63,12 @@ export function renderProducerBadge(
   containerState: string
 ): string {
   if (!report) return "";
+  // The provider refused the client: true whether the container is now stopped or
+  // looping, and the one thing to know about it, so it shows in either state.
+  if (report.state === "account_disabled") {
+    const reasons = (report.reasons || []).filter((r) => !!r).join(" ");
+    return badge("tone-fail", "account disabled", reasons || "The provider has disabled this account.");
+  }
   if (containerState !== "running" && containerState !== "restarting") return "";
 
   const reasons = (report.reasons || []).filter((r) => !!r);

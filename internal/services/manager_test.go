@@ -405,10 +405,17 @@ func TestDeployPersistsDeployment(t *testing.T) {
 
 func TestDeployPropagatesRuntimeError(t *testing.T) {
 	st := newTestStore(t)
-	fake := &fakeProvider{deployErr: errors.New("pull failed")}
+	// The daemon's reason is what the user reads in the deploy wizard, so the
+	// manager must hand it on word for word, not a generic "deploy failed".
+	reason := "Bind for 0.0.0.0:28967 failed: port is already allocated"
+	fake := &fakeProvider{deployErr: errors.New(reason)}
 	m := NewManager(fake, newTestCatalog(t), st)
-	if _, err := m.Deploy(context.Background(), "example", map[string]string{"TOKEN": "abc"}); err == nil {
+	_, err := m.Deploy(context.Background(), "example", map[string]string{"TOKEN": "abc"})
+	if err == nil {
 		t.Fatal("expected an error when runtime Deploy fails")
+	}
+	if err.Error() != reason {
+		t.Fatalf("the deploy error reads %q, want the runtime's own %q", err, reason)
 	}
 }
 

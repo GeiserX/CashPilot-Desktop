@@ -43,6 +43,8 @@ export function IgnoreDrift(arg1:string):Promise<void>;
 
 export function InstallBackgroundHelper():Promise<void>;
 
+export function ListPayouts(arg1:string):Promise<Array<store.Payout>>;
+
 export function ListServices():Promise<Array<catalog.Service>>;
 
 export function ManagedRuntimePlan():Promise<runtime.ManagedRuntimePlan>;
@@ -50,11 +52,15 @@ export function ManagedRuntimePlan():Promise<runtime.ManagedRuntimePlan>;
 export function PreflightService(arg1:string):Promise<preflight.Report>;
 export function PlanServiceRemoval(arg1:string):Promise<runtime.RemovalPlan>;
 
+export function RecordPayout(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<store.Payout>;
+
 export function RefreshDeployments():Promise<Array<store.Deployment>>;
 
 export function RemoveBackgroundHelper():Promise<void>;
 
 export function RemoveFleetDevice(arg1:number):Promise<main.FleetState>;
+
+export function RemovePayout(arg1:number):Promise<void>;
 
 export function RemoveService(arg1:string,arg2:boolean,arg3:boolean):Promise<void>;
 
