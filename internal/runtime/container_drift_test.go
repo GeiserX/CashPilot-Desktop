@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -236,5 +237,63 @@ func TestOnlyContainersThisAppMadeAreRead(t *testing.T) {
 	}
 	if len(shapes) != 2 || shapes[0].Slug != "bitping" || shapes[0].Instance != 1 || shapes[1].Instance != 2 {
 		t.Fatalf("shapes = %+v, want bitping copies 1 and 2 only", shapes)
+	}
+}
+
+// podmanShape is a hardened container as Podman's inspect reports it, given the
+// capabilities it was created with (cap_drop ALL plus kept): CapDrop is Podman's
+// default set minus what it kept, CapAdd only what it kept beyond that set, both
+// with the CAP_ prefix (libpod container_inspect_linux.go).
+func podmanShape(t *testing.T, svc catalog.Service, creds map[string]string, kept ...string) ContainerShape {
+	t.Helper()
+	shape := deployedShape(t, svc, creds)
+	keptSet := toSet(kept)
+	var drop, add []string
+	for _, c := range podmanDefaultCaps {
+		if !keptSet[c] {
+			drop = append(drop, "CAP_"+c)
+		}
+	}
+	for _, c := range kept {
+		if !slices.Contains(podmanDefaultCaps, c) {
+			add = append(add, "CAP_"+c)
+		}
+	}
+	shape.CapDrop, shape.CapAdd = capNames(drop), capNames(add)
+	return shape
+}
+
+// Podman never reports cap_drop ALL, so the headline case must be read from its own
+// way of listing capabilities.
+func TestABitpingContainerMadeWithoutNetRawIsFlaggedOnPodman(t *testing.T) {
+	found := ShapeDrift(bitping("NET_RAW"), podmanShape(t, bitping(), bitpingCreds), "")
+	if len(found) != 1 || !strings.Contains(found[0], "missing NET_RAW") {
+		t.Fatalf("ShapeDrift = %q, want one finding naming the missing NET_RAW", found)
+	}
+	if found := ShapeDrift(bitping("NET_RAW"), podmanShape(t, bitping("NET_RAW"), bitpingCreds, "NET_RAW"), ""); len(found) != 0 {
+		t.Fatalf("a Bitping made with NET_RAW on Podman drifts: %q", found)
+	}
+}
+
+// Mysterium keeps SETUID and SETGID, which are in Podman's default set, so Podman
+// leaves them out of CapAdd. That is not "missing".
+func TestAKeptDefaultCapabilityOnPodmanIsNotMissing(t *testing.T) {
+	svc := catalog.Service{Docker: catalog.DockerConfig{Image: "demo/demo", CapAdd: []string{"NET_ADMIN", "SETUID", "SETGID"}}}
+	if found := ShapeDrift(svc, podmanShape(t, svc, nil, "NET_ADMIN", "SETUID", "SETGID"), ""); len(found) != 0 {
+		t.Fatalf("a Podman container with the catalog's capabilities drifts: %q", found)
+	}
+	old := podmanShape(t, svc, nil, "NET_ADMIN")
+	if found := strings.Join(ShapeDrift(svc, old, ""), " | "); !strings.Contains(found, "missing SETGID, SETUID") {
+		t.Fatalf("findings %q do not name the dropped SETGID, SETUID", found)
+	}
+}
+
+// A required key with no default is not in the stored settings either, so a redeploy
+// fails validation instead of setting it; it is not offered as drift.
+func TestARequiredKeyWithNoDefaultIsNotOfferedAsRedeployable(t *testing.T) {
+	now := bitping()
+	now.Docker.Env = append(now.Docker.Env, catalog.EnvVar{Key: "BITPING_TOKEN", Required: true})
+	if found := ShapeDrift(now, deployedShape(t, bitping(), bitpingCreds), ""); len(found) != 0 {
+		t.Fatalf("ShapeDrift = %q, want nothing: a redeploy cannot set BITPING_TOKEN", found)
 	}
 }

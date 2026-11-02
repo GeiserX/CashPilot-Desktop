@@ -163,11 +163,13 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	dc := svc.Docker
 	var found []string
 
-	// Capabilities. Judged only on a hardened container (cap_drop ALL): a Windows-mode
-	// daemon takes no capabilities at all, and a container made before the hardening
-	// holds Docker's default set, so naming a missing capability there would be wrong.
-	if slices.Contains(shape.CapDrop, "ALL") {
-		want, have := toSet(capNames(dc.CapAdd)), toSet(shape.CapAdd)
+	// Capabilities. Judged only on a hardened container, one that drops capabilities:
+	// a Windows-mode daemon takes no capabilities at all, and a container made before
+	// the hardening holds the runtime's default set with nothing dropped, so naming a
+	// missing capability there would be wrong. Desktop only ever drops ALL, so any
+	// drop list is its hardening.
+	if len(shape.CapDrop) > 0 {
+		want, have := toSet(capNames(dc.CapAdd)), heldCaps(shape)
 		if missing := minus(want, have); len(missing) > 0 {
 			pronoun := "it"
 			if len(missing) > 1 {
@@ -175,7 +177,9 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 			}
 			found = append(found, fmt.Sprintf("missing %s, which the catalog now grants; the container was made without %s", strings.Join(missing, ", "), pronoun))
 		}
-		if extra := minus(have, want); len(extra) > 0 {
+		// Only what the runtime lists as added: on Podman a kept default capability is
+		// in neither list, and a custom default set there would make a guess wrong.
+		if extra := minus(toSet(shape.CapAdd), want); len(extra) > 0 {
 			found = append(found, fmt.Sprintf("still has %s, which the catalog no longer grants", strings.Join(extra, ", ")))
 		}
 	}
@@ -229,12 +233,15 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 		found = append(found, fmt.Sprintf("has no mount at %s, which the catalog now declares", strings.Join(missing, ", ")))
 	}
 
-	// Env: the keys a redeploy always sets (required, or with a default). Desktop
-	// puts every key in the environment, the ones the command uses included, so a key
-	// the catalog renamed shows here even though the command itself is never read.
+	// Env: the keys a redeploy sets on its own, the ones with a default. Desktop puts
+	// every key in the environment, the ones the command uses included, so a default
+	// the catalog renamed shows here even though the command itself is never read. A
+	// required key with no default is left out: the stored settings were saved with
+	// the deploy that made this container, so they lack it too, and a redeploy would
+	// fail validation instead of fixing it. The setup form is the way out there.
 	wantEnv := map[string]bool{}
 	for _, item := range dc.Env {
-		if item.Key != "" && (item.Required || item.Default != "") {
+		if item.Key != "" && item.Default != "" {
 			wantEnv[item.Key] = true
 		}
 	}
@@ -288,6 +295,33 @@ func ShapeFingerprint(svc catalog.Service) string {
 	blob, _ := json.Marshal(judged) // map keys are sorted by encoding/json
 	sum := sha256.Sum256(blob)
 	return hex.EncodeToString(sum[:])[:16]
+}
+
+// podmanDefaultCaps is Podman's default capability set (containers/common
+// pkg/config DefaultCapabilities). Podman's inspect reports capabilities against it
+// rather than the way Docker does: CapDrop is this set minus what the container
+// kept, and CapAdd only what it holds beyond this set (libpod
+// container_inspect_linux.go).
+var podmanDefaultCaps = []string{
+	"CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "KILL", "NET_BIND_SERVICE",
+	"SETFCAP", "SETGID", "SETPCAP", "SETUID", "SYS_CHROOT",
+}
+
+// heldCaps is what a hardened container holds. Docker reports the create request
+// (cap_drop ALL, then cap_add), so it is CapAdd. Podman never reports ALL: there it
+// is CapAdd plus every default capability its CapDrop does not name.
+func heldCaps(shape ContainerShape) map[string]bool {
+	held := toSet(shape.CapAdd)
+	if slices.Contains(shape.CapDrop, "ALL") {
+		return held
+	}
+	dropped := toSet(shape.CapDrop)
+	for _, c := range podmanDefaultCaps {
+		if !dropped[c] {
+			held[c] = true
+		}
+	}
+	return held
 }
 
 // deviceTarget is the path inside the container of a catalog device
