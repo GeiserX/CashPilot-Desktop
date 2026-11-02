@@ -23,6 +23,10 @@ type fakeDocker struct {
 	// initImage makes the pulled image report /sbin/init as its main process,
 	// the shape of a systemd image.
 	initImage bool
+	// createRefusal and startRefusal make the daemon refuse that step with this
+	// message, the way Docker refuses a host port another container holds.
+	createRefusal string
+	startRefusal  string
 }
 
 func (f *fakeDocker) record(call string) {
@@ -84,10 +88,21 @@ func (f *fakeDocker) start(t *testing.T) {
 		case path == "/containers/create":
 			f.record("POST /containers/create")
 			w.Header().Set("Content-Type", "application/json")
+			if f.createRefusal != "" {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": f.createRefusal})
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "deadbeef", "Warnings": []string{}})
 		case strings.HasSuffix(path, "/start"):
 			f.record("POST " + path)
+			if f.startRefusal != "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": f.startRefusal})
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/containers/"):
 			f.record("DELETE " + path)
