@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -25,8 +26,12 @@ type Service struct {
 	// Priority orders the catalog: entries with one come first, lowest number first,
 	// before the usual category-then-name order; 0 means none. The web catalog sets it
 	// on the services that pay the project best, so a reorder is a number change there.
-	Priority         int               `json:"priority" yaml:"priority"`
-	Website          string            `json:"website" yaml:"website"`
+	Priority int    `json:"priority" yaml:"priority"`
+	Website  string `json:"website" yaml:"website"`
+	// SupportURL is the provider's support page, offered when it has disabled the
+	// account (a health signal with state account_disabled). Only https:// links are
+	// kept; anything else is cleared at load.
+	SupportURL       string            `json:"supportUrl" yaml:"support_url"`
 	Description      string            `json:"description" yaml:"description"`
 	ShortDescription string            `json:"shortDescription" yaml:"short_description"`
 	Referral         Referral          `json:"referral" yaml:"referral"`
@@ -244,7 +249,10 @@ type CriticalVolume struct {
 
 // HealthSignal is one log pattern that reveals whether a service is earning. Pattern
 // is a regex matched case-insensitively against container logs, Means is the
-// explanation shown to the user, and State is "failing" (the default) or "idle".
+// explanation shown to the user, and State is "failing" (the default), "idle" or
+// "account_disabled": the provider refuses to run the client, so restarting cannot
+// help. The loader lowercases State and drops a signal whose state is none of these
+// (see normalizeSignals), as the web catalog rejects it.
 type HealthSignal struct {
 	Pattern string `json:"pattern" yaml:"pattern"`
 	Means   string `json:"means" yaml:"means"`
@@ -403,6 +411,75 @@ type CollectorMetadata struct {
 	// "gone quiet" heads-up waits at least this long. Desktop has no such
 	// heads-up yet; the field is read so the value is there when it does.
 	QuietDays int `json:"quietDays" yaml:"quiet_days"`
+	// NodeRead says how to read one node's own earnings from inside its running
+	// container, for a provider whose account API gives no balance or lifetime
+	// (Mysterium: the cloud's earningsTotal is a trailing 30-day sum). Nil means
+	// the service does not declare one.
+	NodeRead *NodeRead `json:"nodeRead,omitempty" yaml:"node_read"`
+}
+
+// NodeRead is collector.node_read (services/_schema.yml): Command runs inside the
+// node's container, read-only, and each regex's group 1 is taken from its output.
+// SettledNet and SettledFees come both or neither; every match of each is summed.
+type NodeRead struct {
+	Command     []string `json:"command" yaml:"command"`
+	Node        string   `json:"node" yaml:"node"`
+	Balance     string   `json:"balance" yaml:"balance"`
+	Lifetime    string   `json:"lifetime" yaml:"lifetime"`
+	SettledNet  string   `json:"settledNet,omitempty" yaml:"settled_net"`
+	SettledFees string   `json:"settledFees,omitempty" yaml:"settled_fees"`
+}
+
+// Health signal states the catalog allows. An absent state means failing.
+const (
+	SignalFailing         = "failing"
+	SignalIdle            = "idle"
+	SignalAccountDisabled = "account_disabled"
+)
+
+// normalize applies the web catalog's validation to the fields Desktop acts on,
+// without refusing the whole entry: a user's app must still start when one entry is
+// wrong. The vendored catalog is held to the strict rules by catalog tests instead.
+func normalize(svc *Service) {
+	if !strings.HasPrefix(svc.SupportURL, "https://") {
+		svc.SupportURL = ""
+	}
+	svc.Docker.HealthSignals = normalizeSignals(svc.Docker.HealthSignals)
+}
+
+// normalizeSignals lowercases each state and drops the signals the web catalog
+// rejects: an unknown state (read as failing, it would accuse a service of a problem
+// nobody declared), and an account_disabled one with no usable pattern or with
+// window_hours (it is judged on a stopped container's last run, never a window).
+func normalizeSignals(signals []HealthSignal) []HealthSignal {
+	if len(signals) == 0 {
+		return signals
+	}
+	kept := make([]HealthSignal, 0, len(signals))
+	for _, s := range signals {
+		s.State = strings.ToLower(strings.TrimSpace(s.State))
+		if !ValidSignal(s) {
+			continue
+		}
+		kept = append(kept, s)
+	}
+	return kept
+}
+
+// ValidSignal reports whether the web catalog would accept this health signal, with
+// State already lowercased.
+func ValidSignal(s HealthSignal) bool {
+	switch s.State {
+	case "", SignalFailing, SignalIdle:
+		return true
+	case SignalAccountDisabled:
+		if strings.TrimSpace(s.Pattern) == "" || s.WindowHours != 0 {
+			return false
+		}
+		_, err := regexp.Compile("(?i)" + s.Pattern)
+		return err == nil
+	}
+	return false
 }
 
 // HasNative reports whether the service declares at least one native binary, i.e. it
@@ -451,6 +528,7 @@ func Load() (*Catalog, error) {
 			return nil
 		}
 		svc.SourcePath = path
+		normalize(&svc)
 		// A service is tracked manually (no local lifecycle) only when it has neither a
 		// Docker image nor a native binary. Having a native: block makes it deployable
 		// via the NativeProcessProvider even with no image, so native-only services are
@@ -609,6 +687,7 @@ func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
 			return nil
 		}
 		svc.SourcePath = path
+		normalize(&svc)
 		// A service is tracked manually (no local lifecycle) only when it has neither a
 		// Docker image nor a native binary. Having a native: block makes it deployable
 		// via the NativeProcessProvider even with no image, so native-only services are

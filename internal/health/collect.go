@@ -47,7 +47,8 @@ const logTimeout = 3 * time.Second
 // Collect returns the producer verdict for every deployed service, keyed by slug.
 //
 // Logs are read ONLY for a service whose catalog entry declares signals to match them
-// against, and only while its container is up — reading a log tail nobody has a
+// against, and only while its container is up, except the short tail of a stopped or
+// restarting container whose entry declares an account_disabled signal — reading a log tail nobody has a
 // pattern for would be a container-runtime round trip per service per refresh, spent
 // to learn nothing. A natively supervised process is skipped for a second reason: the
 // catalog's signals sit under its docker: stanza and explain themselves in terms of a
@@ -90,13 +91,25 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 				in.WindowHits = windows.hits(reader, in.Slug, windowed)
 			}
 		}
-		if len(in.Signals) == 0 || logs == nil || !isUp(in.ContainerState) {
+		tail := len(in.Signals) > 0 && isUp(in.ContainerState)
+		refusal := !in.Native && declaresRefusal(in.Signals) && hasFinishedRun(in.ContainerState)
+		if logs == nil || (!tail && !refusal) {
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			in.Logs, in.LogsRead = readLogs(ctx, logs, in.Slug)
+			lines := logLines
+			if !tail {
+				lines = refusalLines
+			}
+			out, ok := readLogs(ctx, logs, in.Slug, lines)
+			if tail {
+				in.Logs, in.LogsRead = out, ok
+			}
+			if refusal && ok {
+				in.Refusal = MatchRefusal(out, in.Signals)
+			}
 		}()
 	}
 	wg.Wait()
@@ -108,6 +121,18 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 	return out
 }
 
+// refusalLines is the log tail read from a stopped container to find a refusal: its
+// last run's last words, which is where a client says the provider refused it.
+const refusalLines = 20
+
+// hasFinishedRun reports whether the container's newest log lines are those of a run
+// that ended: one the runtime is restarting, or one that stopped. A running
+// container is left out: an old refusal in its log is not about this run, and a
+// container the provider refuses lives about a second before it exits.
+func hasFinishedRun(state string) bool {
+	return state == containerRestarting || state == "exited" || state == "dead"
+}
+
 // isUp reports whether the container is in a state whose logs are worth reading.
 func isUp(state string) bool {
 	return state == containerRunning || state == containerRestarting
@@ -116,7 +141,7 @@ func isUp(state string) bool {
 // readLogs returns the log tail and whether the read succeeded. A failure is reported
 // as "not read" rather than as empty logs, so the verdict can say we could not look
 // instead of implying we looked and found nothing.
-func readLogs(ctx context.Context, logs LogReader, slug string) (string, bool) {
+func readLogs(ctx context.Context, logs LogReader, slug string, lines int) (string, bool) {
 	if ctx == nil {
 		// The app's context is nil until Startup has run, and a dashboard refresh
 		// that raced it used to panic here rather than simply skip the log read.
@@ -124,7 +149,7 @@ func readLogs(ctx context.Context, logs LogReader, slug string) (string, bool) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, logTimeout)
 	defer cancel()
-	out, err := logs.Logs(ctx, slug, logLines)
+	out, err := logs.Logs(ctx, slug, lines)
 	if err != nil {
 		return "", false
 	}

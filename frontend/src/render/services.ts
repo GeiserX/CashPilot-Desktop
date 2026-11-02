@@ -113,6 +113,8 @@ export function renderServicesTable(input: ServicesTableInput): string {
     const name = nameOf(slug);
     const copies = input.copies?.[slug];
     const running = deployment.status === "running";
+    // The provider refuses the client: starting it again cannot help.
+    const disabledAccount = input.producerStates?.[slug]?.state === "account_disabled";
     const nodeDetail = slug === "mysterium" ? renderMystNodes(input.serviceDetails?.["mysterium"]) : "";
     const tags = [
       renderProducerBadge(input.producerStates?.[slug], deployment.status),
@@ -136,12 +138,12 @@ export function renderServicesTable(input: ServicesTableInput): string {
           <div class="action-btns">
             ${rowButton("collect", slug, "Collect balance now")}
             ${rowButton("logs", slug, "Logs")}
-            ${running ? rowButton("stop", slug, "Stop") : rowButton("start", slug, "Start")}
+            ${running ? rowButton("stop", slug, "Stop") : disabledAccount ? "" : rowButton("start", slug, "Start")}
             ${rowButton("remove", slug, "Remove")}
           </div>
         </td>
       </tr>
-      ${copyRows(name, copies)}
+      ${copyRows(name, copies, disabledAccount)}
       ${nodeDetail ? `<tr class="detail-row"><td colspan="${SERVICE_COLUMNS}">${nodeDetail}</td></tr>` : ""}
     `;
   });
