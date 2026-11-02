@@ -24,6 +24,7 @@ import {
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
+  IgnoreDrift,
   ListPayouts,
   PreflightService,
   PlanServiceRemoval,
@@ -267,6 +268,7 @@ function renderDashboard(current: AppState) {
     earnings,
     outdated: current.outdatedServices,
     health: current.health,
+    drift: current.drift,
     producerStates: current.producerStates,
   });
 
@@ -330,6 +332,7 @@ function renderDashboard(current: AppState) {
               health: current.health,
               serviceDetails: current.serviceDetails,
               outdated: current.outdatedServices,
+              drift: current.drift,
               producerStates: current.producerStates,
               copies,
               displayCurrency: disp,
@@ -361,6 +364,9 @@ function renderDashboard(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-open-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.openService || ""));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-drift-action]").forEach((button) => {
+    button.addEventListener("click", () => void runDriftAction(button.dataset.slug || "", button.dataset.driftAction || ""));
   });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -752,6 +758,7 @@ function envInputName(key: string) {
     CASHPILOT_FLEET_BIND: "fleetBindAddress",
     CASHPILOT_FLEET_PORT: "fleetPort",
     CASHPILOT_FLEET_SERVER: "fleetServerEnabled",
+    CASHPILOT_DRIFT_WARNINGS: "driftWarnings",
     CASHPILOT_UPSTREAM_URL: "upstreamUrl",
     CASHPILOT_UPSTREAM_KEY: "upstreamKey",
     TZ: "timezone",
@@ -1377,6 +1384,30 @@ async function runServiceAction(slug: string, action: string) {
     }
     await refreshState();
     setOutput(`${slug} ${action} complete.`);
+  } catch (error) {
+    setOutput(String(error));
+  }
+}
+
+// The two buttons on a "Needs fixing" row. Redeploy sends no credentials, no image and
+// no copy count, so the deploy keeps the saved credentials, the image in use and the
+// number of copies, and rebuilds the rest from the current catalog.
+async function runDriftAction(slug: string, action: string) {
+  const name = state?.services.find((svc) => svc.slug === slug)?.name || slug;
+  try {
+    if (action === "redeploy") {
+      if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) return;
+      setOutput(`Redeploying ${name}...`);
+      await DeployService(slug, {}, null, null);
+      await refreshState();
+      setOutput(`${name} redeployed.`);
+      return;
+    }
+    if (action === "ignore") {
+      await IgnoreDrift(slug);
+      await refreshState();
+      setOutput(`${name}: warning ignored until the catalog changes it again.`);
+    }
   } catch (error) {
     setOutput(String(error));
   }

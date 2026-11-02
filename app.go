@@ -67,7 +67,9 @@ type App struct {
 	// addedDevices is, per slug, the device id the last deploy added to the user's
 	// account through the provider's API, so the deploy output can say so instead of
 	// asking the user to do it. Guarded by addedMu.
-	addedMu      sync.Mutex
+	addedMu sync.Mutex
+	// driftMu serialises IgnoreDrift's read-modify-write of the config.
+	driftMu      sync.Mutex
 	addedDevices map[string]string
 
 	collecting  atomic.Bool
@@ -285,6 +287,12 @@ type AppState struct {
 	// AddedDevices is, per slug, the device id the last deploy added to the user's
 	// account itself (ProxyRack with its API key saved), so no manual step is needed.
 	AddedDevices map[string]string `json:"addedDevices"`
+	// Drift is, per deployed slug, how its running container differs from what a
+	// redeploy would build from the current catalog, in plain words (a capability,
+	// device, port, mount or env key the catalog added since, or an older pin of our
+	// own image). Empty when warnings are off or the user ignored that service at
+	// the current catalog.
+	Drift map[string][]string `json:"drift"`
 }
 
 type Notification struct {
@@ -455,7 +463,66 @@ func (a *App) GetAppState() (AppState, error) {
 		Scaling:          a.services.ScalingLimits(visible),
 		Copies:           a.services.Copies(),
 		AddedDevices:     a.addedDeviceIDs(),
+		Drift:            a.containerDrift(),
 	}, nil
+}
+
+// driftTimeout bounds the docker inspects behind the drift check, so a daemon that
+// hangs cannot hold the whole dashboard.
+const driftTimeout = 5 * time.Second
+
+// containerDrift is the "needs fixing" list the dashboard shows: every deployed
+// container that differs from what a redeploy would build, minus the services the
+// user ignored at the current catalog, and nothing at all with warnings off.
+func (a *App) containerDrift() map[string][]string {
+	cfg := a.cfg.Config()
+	if cfg.DriftWarningsOff || a.services == nil || a.catalog == nil {
+		return nil
+	}
+	base := a.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, driftTimeout)
+	defer cancel()
+	return filterIgnoredDrift(a.services.ContainerDrift(ctx), cfg.DriftIgnored, a.catalog)
+}
+
+// filterIgnoredDrift drops the services muted at the catalog's current fingerprint.
+// A mute taken at an older fingerprint no longer counts: the catalog has changed a
+// judged field since, and that change is shown.
+func filterIgnoredDrift(found map[string][]string, ignored map[string]string, cat *catalog.Catalog) map[string][]string {
+	for slug := range found {
+		svc, ok := cat.Get(slug)
+		if mark, muted := ignored[slug]; ok && muted && mark == runtime.ShapeFingerprint(svc) {
+			delete(found, slug)
+		}
+	}
+	return found
+}
+
+// IgnoreDrift mutes the "needs fixing" warning of slug until the catalog changes a
+// field the check judges. For a container the user changed on purpose.
+func (a *App) IgnoreDrift(slug string) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	svc, ok := a.catalog.Get(slug)
+	if !ok {
+		return fmt.Errorf("unknown service: %s", slug)
+	}
+	// The map is read, extended and written back whole; two Ignores at once must
+	// not drop one.
+	a.driftMu.Lock()
+	defer a.driftMu.Unlock()
+	cfg := a.cfg.Config()
+	ignored := make(map[string]string, len(cfg.DriftIgnored)+1)
+	for k, v := range cfg.DriftIgnored {
+		ignored[k] = v
+	}
+	ignored[slug] = runtime.ShapeFingerprint(svc)
+	cfg.DriftIgnored = ignored
+	return a.cfg.Save(cfg)
 }
 
 func (a *App) addedDeviceIDs() map[string]string {
@@ -769,6 +836,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_FLEET_SERVER", Label: "Accept workers (hub mode)", Value: strconv.FormatBool(cfg.FleetServerEnabled), Source: "Config", Help: "OFF by default, and that is the intended shape: CashPilot Desktop is a SPOKE. The CashPilot server is the hub. Turning this on lets other workers and phones report to THIS machine, which makes it a second source of truth for a fleet -- only do that if you are deliberately running Desktop as a hub instead of a CashPilot server."},
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
+		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Optional. Leave EMPTY to stay standalone, which is the default and loses nothing. Set to a CashPilot server's URL and this machine reports to it as a worker, so its services appear on that fleet. Earnings are unaffected: the server collects those centrally and this only reports what is running."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
@@ -851,6 +919,15 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		// Presence-keyed, not non-emptiness: "false" is a meaningful value and
 		// turning the hub back OFF must be possible.
 		cfg.FleetServerEnabled = strings.EqualFold(strings.TrimSpace(value), "true")
+	}
+	if value, present := values["driftWarnings"]; present {
+		// Presence-keyed: "false" is meaningful. The spellings the web accepts.
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "off", "false", "0", "no":
+			cfg.DriftWarningsOff = true
+		default:
+			cfg.DriftWarningsOff = false
+		}
 	}
 	if value := strings.TrimSpace(values["fleetBindAddress"]); value != "" {
 		// Only a parseable IP or "localhost" is a valid bind host (an empty value

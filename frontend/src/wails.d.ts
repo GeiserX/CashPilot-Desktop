@@ -34,6 +34,9 @@ declare module "../wailsjs/go/main/App" {
   export function GetService(slug: string): Promise<Service>;
   export function ManagedRuntimePlan(): Promise<ManagedRuntimePlan>;
   export function GetEarningsSummary(): Promise<EarningsSummary>;
+  // Mutes the "needs fixing" warning of slug until the catalog changes a field the
+  // check judges.
+  export function IgnoreDrift(slug: string): Promise<void>;
   // The payout ledger: cash-outs the user records by hand. currency "" is the
   // service's balance unit; date "" is today, otherwise YYYY-MM-DD.
   export function ListPayouts(slug: string): Promise<Payout[]>;
@@ -82,6 +85,10 @@ export interface AppState {
   copies: Record<string, ServiceCopy[]> | null;
   // Per slug, the device id the last deploy added to the user's account itself.
   addedDevices: Record<string, string> | null;
+  // Per slug, how its running container differs from what a redeploy would build
+  // from the current catalog, in plain words. Missing: matches, ignored, or the
+  // warnings are off.
+  drift: Record<string, string[]> | null;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.

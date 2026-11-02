@@ -31,6 +31,8 @@ export interface ServicesTableInput {
   health?: Record<string, HealthScore> | null;
   serviceDetails?: Record<string, string> | null;
   outdated?: string[] | null;
+  /** Per slug, how its container differs from what a redeploy would build. */
+  drift?: Record<string, string[]> | null;
   producerStates?: Record<string, ProducerReport> | null;
   copies?: Record<string, ServiceCopy[]> | null;
   displayCurrency: string;
@@ -120,6 +122,7 @@ export function renderServicesTable(input: ServicesTableInput): string {
       renderProducerBadge(input.producerStates?.[slug], deployment.status),
       customImageBadge(deployment.customImage),
       outdatedSet.has(slug) ? `<span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : "",
+      input.drift?.[slug]?.length ? `<span class="badge warn" title="${escapeHtml(`Does not match the catalog: ${input.drift[slug].join("; ")}. Redeploy it to fix.`)}">needs fixing</span>` : "",
     ].filter(Boolean).join(" ");
     const instances = copies && copies.length ? ` <span class="badge-instances">${copies.length + 1}x</span>` : "";
     return `

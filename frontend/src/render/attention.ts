@@ -19,6 +19,8 @@ export interface AttentionInput {
   earnings: { platform: string; error?: string; errorKind?: string }[];
   outdated?: string[] | null;
   health?: Record<string, HealthScore> | null;
+  /** Per slug, how its container differs from what a redeploy would build. */
+  drift?: Record<string, string[]> | null;
   producerStates?: Record<string, ProducerReport> | null;
 }
 
@@ -143,6 +145,21 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
           ? `\n        <button class="btn btn-ghost btn-sm" data-open-service="${escapeHtml(record.platform)}">Fix credentials</button>`
           : ""
       }`,
+    });
+  }
+
+  // A container made before a catalog fix: it runs, and so looks healthy, without
+  // what the catalog now gives it. Bitping ran three months without NET_RAW this way.
+  for (const [slug, found] of Object.entries(input.drift || {})) {
+    if (!found || !found.length) continue;
+    const s = escapeHtml(slug);
+    items.push({
+      level: "fail",
+      tag: "Needs fixing",
+      what: nameOf(slug),
+      why: `container does not match the catalog: ${found.map((d) => escapeHtml(d)).join("; ")}. Redeploy it: CashPilot keeps the settings it was deployed with.`,
+      actions: `<button class="btn btn-primary btn-sm" data-drift-action="redeploy" data-slug="${s}">Redeploy</button>
+        <button class="btn btn-ghost btn-sm" data-drift-action="ignore" data-slug="${s}" title="Stop warning about this service until the catalog changes it again">Ignore</button>`,
     });
   }
 

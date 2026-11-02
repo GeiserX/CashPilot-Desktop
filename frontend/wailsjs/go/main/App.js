@@ -66,6 +66,10 @@ export function GetSettingsState() {
   return window['go']['main']['App']['GetSettingsState']();
 }
 
+export function IgnoreDrift(arg1) {
+  return window['go']['main']['App']['IgnoreDrift'](arg1);
+}
+
 export function InstallBackgroundHelper() {
   return window['go']['main']['App']['InstallBackgroundHelper']();
 }

@@ -105,6 +105,14 @@ type AppConfig struct {
 	// gets the history too. It is also why this is not a secret and belongs in
 	// config.json — it records where data was sent, not how to authenticate.
 	UpstreamHistoryPushedTo string `json:"upstreamHistoryPushedTo,omitempty"`
+	// DriftWarningsOff turns off the "needs fixing" warning for a container that no
+	// longer matches what a redeploy would build. Its zero value keeps warnings on
+	// (CASHPILOT_DRIFT_WARNINGS on the web).
+	DriftWarningsOff bool `json:"driftWarningsOff,omitempty"`
+	// DriftIgnored maps a service slug to the catalog fingerprint
+	// (runtime.ShapeFingerprint) its drift warning was muted at. The mute holds
+	// until the catalog changes a field the check judges.
+	DriftIgnored map[string]string `json:"driftIgnored,omitempty"`
 }
 
 // DefaultUpstreamIntervalMinutes matches what a CashPilot worker sends, so a

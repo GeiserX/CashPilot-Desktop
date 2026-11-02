@@ -39,6 +39,8 @@ export function GetService(arg1:string):Promise<catalog.Service>;
 
 export function GetSettingsState():Promise<main.SettingsState>;
 
+export function IgnoreDrift(arg1:string):Promise<void>;
+
 export function InstallBackgroundHelper():Promise<void>;
 
 export function ListPayouts(arg1:string):Promise<Array<store.Payout>>;
