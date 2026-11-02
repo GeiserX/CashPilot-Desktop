@@ -164,22 +164,49 @@ func ReadAll(ctx context.Context, run Runner, slug string, r *Reader) ([]Reading
 	}
 	readings := make([]Reading, 0, len(outputs))
 	for _, o := range outputs {
-		reading := Reading{Instance: o.Instance}
-		switch {
-		case o.Err != nil:
-			reading.Error = "read failed: " + o.Err.Error()
-		case o.ExitCode != 0:
-			reading.Error = "the read command exited with " + strconv.Itoa(o.ExitCode)
-		default:
-			figures, ok := r.Extract(o.Text)
-			if !ok {
-				reading.Error = "no figures in the node's answer"
-			} else {
-				figures.Instance = o.Instance
-				reading = figures
-			}
-		}
-		readings = append(readings, reading)
+		readings = append(readings, r.reading(o))
 	}
 	return readings, nil
+}
+
+// reading turns one output into a reading, by the one parser both paths share.
+func (r *Reader) reading(o Output) Reading {
+	reading := Reading{Instance: o.Instance}
+	switch {
+	case o.Err != nil:
+		reading.Error = "read failed: " + o.Err.Error()
+	case o.ExitCode != 0:
+		reading.Error = "the read command exited with " + strconv.Itoa(o.ExitCode)
+	default:
+		figures, ok := r.Extract(o.Text)
+		if !ok {
+			reading.Error = "no figures in the node's answer"
+		} else {
+			figures.Instance = o.Instance
+			reading = figures
+		}
+	}
+	return reading
+}
+
+// NativeOutput produces, without a container, the text a service's node_read
+// command prints inside one. It exists for a node Desktop runs as a native process,
+// where the catalog's sh and wget command cannot run (no sh on Windows, no wget on a
+// Mac). The text then goes through the same regexes as a container's.
+type NativeOutput func(ctx context.Context) (string, error)
+
+// NativeReaders are the services whose node can be read natively, by slug. A service
+// that declares node_read but has no entry here is not read when it runs natively.
+var NativeReaders = map[string]NativeOutput{
+	"mysterium": func(ctx context.Context) (string, error) {
+		return TequilAPIOutput(ctx, localClient, MysteriumTequilAPI)
+	},
+}
+
+// ReadNative reads a natively run node through its NativeOutput: one reading, for
+// the one process.
+func ReadNative(ctx context.Context, read NativeOutput, r *Reader) []Reading {
+	out := Output{Instance: 1}
+	out.Text, out.Err = read(ctx)
+	return []Reading{r.reading(out)}
 }

@@ -51,6 +51,16 @@ type Result struct {
 	Error    string
 }
 
+// KindUnread is the error kind of a collect whose login worked but whose figure
+// nothing could read (a Mysterium node that is not on this machine). Not a
+// credential problem, as the web's KIND_UNREAD.
+const KindUnread = "unread"
+
+// unreadError is a failure of kind KindUnread.
+type unreadError struct{ msg string }
+
+func (e unreadError) Error() string { return e.msg }
+
 // Option customises a Registry at construction time.
 type Option func(*Registry)
 
@@ -122,10 +132,16 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 	if err != nil {
 		result = Result{Platform: slug, Balance: 0, Currency: "USD", Error: err.Error()}
 	}
+	var unread unreadError
+	kind := ""
+	if errors.As(err, &unread) {
+		kind = KindUnread
+	}
 	record := store.EarningsRecord{
-		Platform: result.Platform,
-		Balance:  result.Balance,
-		Currency: result.Currency,
+		Platform:  result.Platform,
+		Balance:   result.Balance,
+		Currency:  result.Currency,
+		ErrorKind: kind,
 		// Redact any secret embedded in a URL query (e.g. the Repocket Firebase
 		// sign-in URL carries ?key=<FIREBASE_KEY>) before the error is persisted
 		// verbatim into earnings.error, where it would be readable in the dashboard/DB.
@@ -534,8 +550,8 @@ func (r *Registry) mystFromNodes(ctx context.Context, authHeaders map[string]str
 				}
 			}
 		}
-		return Result{}, fmt.Errorf("No Mysterium node running in Docker on this computer could be read%s. "+
-			"CashPilot reads the balance inside the node; MystNodes' cloud total covers the last 30 days only, so it is not used", why)
+		return Result{}, unreadError{fmt.Sprintf("No Mysterium node on this computer could be read%s. "+
+			"CashPilot reads the balance from the node itself, so it has to run here; MystNodes' cloud total covers the last 30 days only, so it is not used", why)}
 	}
 	if err := r.collectMystPerNode(ctx, authHeaders, nodes); err != nil {
 		log.Printf("mysterium per-node earnings unavailable (node balances still collected): %v", err)
@@ -608,6 +624,13 @@ func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[strin
 		} `json:"nodes"`
 	}
 	if err := r.doJSON(ctx, "GET", "https://my.mystnodes.com/api/v2/node?page=1&itemsPerPage=100", nil, authHeaders, &resp); err != nil {
+		// The nodes read here are still this cycle's figures: keep them rather
+		// than leave the last cycle's detail in place.
+		if len(read) > 0 {
+			if detail, mErr := json.Marshal(withNodeReadings(nil, read)); mErr == nil {
+				_ = r.store.SaveServiceDetail("mysterium", string(detail))
+			}
+		}
 		return err
 	}
 	nodes := make([]mystNode, 0, len(resp.Nodes))

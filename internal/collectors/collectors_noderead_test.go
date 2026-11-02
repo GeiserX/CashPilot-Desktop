@@ -110,3 +110,45 @@ func TestMystLoginStillGuardsTheNodePath(t *testing.T) {
 		t.Error("nodes were read before the login was checked")
 	}
 }
+
+// When the cloud's node list fails, the nodes read here still replace the last
+// cycle's per-node detail.
+func TestMystNodeReadingsSurviveACloudListFailure(t *testing.T) {
+	r := newTestRegistry(t, &stubTransport{routes: map[string]stubResponse{
+		"POST https://my.mystnodes.com/api/v2/auth/login": {body: `{"accessToken":"myst-token"}`},
+		"GET https://my.mystnodes.com/api/v2/node":        {status: 500, body: `{}`},
+	}})
+	if err := r.store.SaveServiceDetail("mysterium", `[{"identity":"0xold"}]`); err != nil {
+		t.Fatal(err)
+	}
+	r.readNodes = withReadings([]noderead.Reading{{Instance: 1, Node: "0xaaa", Balance: 1, Lifetime: 3}}, nil)
+	res, err := r.collectMystNodes(context.Background(), map[string]string{"MYSTNODES_EMAIL": "a@b.co", "MYSTNODES_PASSWORD": "pw"})
+	if err != nil || res.Balance != 1 {
+		t.Fatalf("got %+v, err %v; the balance comes from the node, the cloud list is a bonus", res, err)
+	}
+	detail, _ := r.store.GetServiceDetail("mysterium")
+	if strings.Contains(detail, "0xold") || !strings.Contains(detail, "0xaaa") {
+		t.Errorf("per-node detail = %s, want this cycle's node, not the last cycle's", detail)
+	}
+}
+
+// A no-node error is stored as the unread kind, so the dashboard does not send the
+// user to their credentials.
+func TestMystUnreadIsStoredAsItsOwnKind(t *testing.T) {
+	r := newTestRegistry(t, &stubTransport{routes: mystNodeRoutes()})
+	r.readNodes = withReadings(nil, nil)
+	if !r.Supports("mysterium") {
+		t.Fatal("mysterium must have a collector")
+	}
+	rec, err := r.Collect(context.Background(), "mysterium", map[string]string{"MYSTNODES_EMAIL": "a@b.co", "MYSTNODES_PASSWORD": "pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.ErrorKind != KindUnread || rec.Error == "" {
+		t.Errorf("record = %+v, want an error of kind %q", rec, KindUnread)
+	}
+	latest := r.store.ListLatestEarnings()
+	if len(latest) != 1 || latest[0].ErrorKind != KindUnread {
+		t.Errorf("stored = %+v, want the kind read back", latest)
+	}
+}

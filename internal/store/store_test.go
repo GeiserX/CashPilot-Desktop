@@ -1550,3 +1550,25 @@ func TestFleetDeviceInsertWaitsOutAPeerHoldingTheLock(t *testing.T) {
 		t.Fatal("the insert returned no id")
 	}
 }
+
+// TestEarningsErrorKindColumnMigrates covers an install whose earnings table predates
+// the error kind: its old rows must still be listed, and a new row keeps its kind.
+func TestEarningsErrorKindColumnMigrates(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.db.Exec("ALTER TABLE earnings DROP COLUMN error_kind"); err != nil {
+		t.Fatalf("drop column (simulate pre-migration schema): %v", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO earnings(platform,balance,currency,error,created_at) VALUES('honeygain',1,'USD','','2026-11-01T00:00:00Z')`); err != nil {
+		t.Fatalf("seed old-shape row: %v", err)
+	}
+	if err := s.migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "mysterium", Currency: "MYST", Error: "no node", ErrorKind: "unread"}); err != nil {
+		t.Fatal(err)
+	}
+	got := s.ListLatestEarnings()
+	if len(got) != 2 || got[0].Platform != "honeygain" || got[0].ErrorKind != "" || got[1].ErrorKind != "unread" {
+		t.Fatalf("after migrate: %+v, want the old row kept and the new kind read back", got)
+	}
+}

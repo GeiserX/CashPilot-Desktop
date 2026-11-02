@@ -3,7 +3,7 @@ package runtime
 import (
 	"bytes"
 	"context"
-	"io"
+	"fmt"
 	"sort"
 	"time"
 
@@ -15,6 +15,23 @@ import (
 // maxExecOutput caps what one exec's output may hold in memory. A node's identity
 // and settlement history are a few kilobytes; 1 MiB is far beyond any real answer.
 const maxExecOutput = 1 << 20
+
+// errExecOutputTooLong refuses an answer longer than maxExecOutput rather than
+// cutting it: a cut answer could still match the regexes and read as a figure.
+var errExecOutputTooLong = fmt.Errorf("the command printed more than %d bytes", maxExecOutput)
+
+// cappedBuffer holds up to limit bytes and fails the write that would pass it.
+type cappedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if c.buf.Len()+len(p) > c.limit {
+		return 0, errExecOutputTooLong
+	}
+	return c.buf.Write(p)
+}
 
 // execClient is the slice of the Docker client ExecRunning needs, so it can be tested
 // without a daemon.
@@ -75,17 +92,21 @@ func execOne(ctx context.Context, cli execClient, containerID string, cmd []stri
 	if err != nil {
 		return "", 0, err
 	}
-	// The hijacked connection ignores ctx once open, so the deadline closes it.
+	// The hijacked connection ignores ctx once open, so the deadline closes it. That
+	// stops the read, not the process: the Docker API has no call that kills an exec.
+	// The catalog's commands bound themselves (Mysterium's wget -T 5), so a stuck
+	// read ends inside the container on its own.
 	stop := context.AfterFunc(ctx, attached.Close)
 	defer stop()
 	defer attached.Close()
-	var buf bytes.Buffer
-	if _, err := stdcopy.StdCopy(&buf, &buf, io.LimitReader(attached.Reader, maxExecOutput)); err != nil {
+	out := &cappedBuffer{limit: maxExecOutput}
+	if _, err := stdcopy.StdCopy(out, out, attached.Reader); err != nil {
 		if ctx.Err() != nil {
 			return "", 0, ctx.Err()
 		}
 		return "", 0, err
 	}
+	buf := &out.buf
 	// The stream ends when the process does; the daemon may take a moment to record
 	// the exit code.
 	for {

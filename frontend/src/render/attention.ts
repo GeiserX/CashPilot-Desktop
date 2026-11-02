@@ -16,7 +16,7 @@ export interface AttentionInput {
   services: { slug: string; name: string; supportUrl?: string }[];
   deployments: { slug: string; name: string; status: string; runtime?: string }[];
   copies?: Record<string, ServiceCopy[]> | null;
-  earnings: { platform: string; error?: string }[];
+  earnings: { platform: string; error?: string; errorKind?: string }[];
   outdated?: string[] | null;
   health?: Record<string, HealthScore> | null;
   producerStates?: Record<string, ProducerReport> | null;
@@ -119,6 +119,18 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
 
   for (const record of input.earnings) {
     if (!record.error || disabled.has(record.platform)) continue;
+    if (record.errorKind === "unread") {
+      // The login worked; nothing here could read the figure (no node of this
+      // service runs on this machine). New credentials would not help.
+      items.push({
+        level: "warn",
+        tag: "No node read",
+        what: nameOf(record.platform),
+        why: escapeHtml(record.error),
+        actions: `<button class="btn btn-ghost btn-sm" data-row-action="collect" data-slug="${escapeHtml(record.platform)}">Retry</button>`,
+      });
+      continue;
+    }
     items.push({
       level: "warn",
       tag: "No reading",

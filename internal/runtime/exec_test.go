@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,5 +102,24 @@ func TestExecRunningRunsOnlyInTheServicesRunningContainers(t *testing.T) {
 	}
 	if got[1].ExitCode != 1 {
 		t.Errorf("copy 2 exit = %d, want 1", got[1].ExitCode)
+	}
+}
+
+// An answer past the cap is an error, never a cut answer that may still match.
+func TestExecRunningRefusesAnOverlongAnswer(t *testing.T) {
+	f := &fakeExec{
+		items:  []container.Summary{summary("c1", "mysterium", "running", nil)},
+		output: map[string][]byte{"c1": append(frame(1, strings.Repeat("x", maxExecOutput-10)), frame(1, strings.Repeat("y", 20))...)},
+	}
+	got, err := execRunning(context.Background(), f, "mysterium", []string{"true"}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Err == nil || got[0].Text != "" {
+		t.Fatalf("got %+v, want an error and no text for an answer over %d bytes", got, maxExecOutput)
+	}
+	f.output["c1"] = frame(1, strings.Repeat("x", maxExecOutput))
+	if got, _ := execRunning(context.Background(), f, "mysterium", []string{"true"}, time.Second); got[0].Err != nil || len(got[0].Text) != maxExecOutput {
+		t.Errorf("control: an answer exactly at the cap must be read whole, got err %v len %d", got[0].Err, len(got[0].Text))
 	}
 }
