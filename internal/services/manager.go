@@ -466,6 +466,22 @@ func (m *Manager) ExecRunning(ctx context.Context, slug string, cmd []string, ti
 	return runner.ExecRunning(ctx, slug, cmd, timeout)
 }
 
+// lastRunReader is a provider that can read one run's log on its own (the Docker one).
+type lastRunReader interface {
+	LastRunLogs(ctx context.Context, slug string, lines int) (string, error)
+}
+
+// LastRunLogs returns the log of the service's last finished run only (see
+// runtime.DockerProvider.LastRunLogs); any other runtime answers with an error, so
+// no refusal is judged from a log that may mix runs.
+func (m *Manager) LastRunLogs(ctx context.Context, slug string, lines int) (string, error) {
+	provider, ok := m.providerForSlug(slug).(lastRunReader)
+	if !ok {
+		return "", fmt.Errorf("this runtime cannot read one run's log")
+	}
+	return provider.LastRunLogs(ctx, slug, lines)
+}
+
 // logsMatcher is a provider that can filter a window of logs (the Docker one).
 type logsMatcher interface {
 	LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error)

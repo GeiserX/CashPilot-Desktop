@@ -3,6 +3,7 @@ package catalog
 import (
 	"errors"
 	"io/fs"
+	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -444,14 +445,14 @@ func normalize(svc *Service) {
 	if !strings.HasPrefix(svc.SupportURL, "https://") {
 		svc.SupportURL = ""
 	}
-	svc.Docker.HealthSignals = normalizeSignals(svc.Docker.HealthSignals)
+	svc.Docker.HealthSignals = normalizeSignals(svc.Slug, svc.Docker.HealthSignals)
 }
 
 // normalizeSignals lowercases each state and drops the signals the web catalog
 // rejects: an unknown state (read as failing, it would accuse a service of a problem
 // nobody declared), and an account_disabled one with no usable pattern or with
 // window_hours (it is judged on a stopped container's last run, never a window).
-func normalizeSignals(signals []HealthSignal) []HealthSignal {
+func normalizeSignals(slug string, signals []HealthSignal) []HealthSignal {
 	if len(signals) == 0 {
 		return signals
 	}
@@ -459,6 +460,7 @@ func normalizeSignals(signals []HealthSignal) []HealthSignal {
 	for _, s := range signals {
 		s.State = strings.ToLower(strings.TrimSpace(s.State))
 		if !ValidSignal(s) {
+			log.Printf("catalog: %s: dropped the health signal %q with state %q, which the web catalog rejects", slug, s.Pattern, s.State)
 			continue
 		}
 		kept = append(kept, s)
