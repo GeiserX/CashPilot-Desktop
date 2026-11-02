@@ -11,6 +11,8 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -166,5 +168,39 @@ func TestAMistakenCashOutCanBeRemoved(t *testing.T) {
 	}
 	if got, _ := app.store.ListPayouts("earnapp"); len(got) != 0 {
 		t.Fatalf("still listed after removal: %+v", got)
+	}
+}
+
+// The bound methods the frontend calls refuse while the app is still starting,
+// and once it is ready they record, list and remove through the same ledger.
+func TestPayoutBindingsWaitForStartupThenWork(t *testing.T) {
+	app := payoutApp(t)
+	if _, err := app.ListPayouts("earnapp"); err == nil {
+		t.Fatal("ListPayouts before startup must refuse")
+	}
+	if _, err := app.RecordPayout("earnapp", 5, "", "", ""); err == nil {
+		t.Fatal("RecordPayout before startup must refuse")
+	}
+	if err := app.RemovePayout(1); err == nil {
+		t.Fatal("RemovePayout before startup must refuse")
+	}
+
+	provider := runtime.NewDockerProvider()
+	app.runtime = provider
+	app.services = services.NewManager(provider, app.catalog, app.store)
+
+	p, err := app.RecordPayout("earnapp", 5, "USD", "PayPal", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := app.ListPayouts("earnapp")
+	if err != nil || len(got) != 1 || got[0].ID != p.ID {
+		t.Fatalf("ListPayouts after one record = %+v, %v", got, err)
+	}
+	if err := app.RemovePayout(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := app.ListPayouts("earnapp"); len(got) != 0 {
+		t.Fatalf("the removed cash-out is still listed: %+v", got)
 	}
 }
