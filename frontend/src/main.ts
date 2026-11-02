@@ -23,6 +23,7 @@ import {
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
+  GetUsage,
   PreflightService,
   PlanServiceRemoval,
   RemoveFleetDevice,
@@ -38,6 +39,7 @@ import {
 import { renderFleetSection } from "./render/fleet";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderEarningsBars } from "./render/chart";
+import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
 import { renderCatalogTable } from "./render/catalog";
 import { renderPreflight } from "./render/preflight";
@@ -48,7 +50,7 @@ import { instancesChoice } from "./render/instances";
 import { composeSelectionExport, deviceLinkText } from "./render/details";
 import { totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
-import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState } from "./wails";
+import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -64,6 +66,12 @@ let catalogSearch = "";
 let resetScrollAfterRender = false;
 // The dashboard chart's window: the web console opens on 7 days.
 let chartDays = 7;
+// The usage graphs under it share chartDays. usageContainer is the picked
+// container, "" for all of them; usageView is the last answer, kept so a
+// dashboard re-render does not blank the charts while the next one loads.
+let usageContainer = "";
+let usageView: UsageView | null = null;
+let usageRequest = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -244,6 +252,33 @@ function renderGuides(guides: InstallGuide[]) {
   });
 }
 
+// Fetch the usage graphs for the current window and container and redraw only
+// their panel, so a slow answer never re-renders the dashboard under the user.
+// A stale answer (the window or the pick changed meanwhile) is dropped.
+async function loadUsage() {
+  const request = ++usageRequest;
+  try {
+    const view = await GetUsage(chartDays, usageContainer);
+    if (request !== usageRequest) return;
+    usageView = view;
+    usageContainer = view.container;
+  } catch {
+    // The app is still starting or the store is busy: keep what is drawn.
+    return;
+  }
+  const panel = document.querySelector<HTMLDivElement>("#usage-panel");
+  if (!panel) return;
+  panel.innerHTML = renderUsagePanel(usageView);
+  wireUsagePanel();
+}
+
+function wireUsagePanel() {
+  document.querySelector<HTMLSelectElement>("#usage-container")?.addEventListener("change", (event) => {
+    usageContainer = (event.target as HTMLSelectElement).value;
+    void loadUsage();
+  });
+}
+
 function renderDashboard(current: AppState) {
   const services = current.services || [];
   const deployments = current.deployments || [];
@@ -310,6 +345,14 @@ function renderDashboard(current: AppState) {
           ${renderEarningsBars(summary?.daily || [], disp, chartDays)}
         </section>
 
+        <section class="usage" aria-labelledby="usage-title">
+          <div class="block-head">
+            <h2 class="block-title" id="usage-title">Resource use</h2>
+            <span class="block-meta">This machine, last ${chartDays} days</span>
+          </div>
+          <div id="usage-panel">${renderUsagePanel(usageView && usageView.days === chartDays ? usageView : null)}</div>
+        </section>
+
         <section class="services-block" aria-labelledby="services-title">
           <div class="block-head">
             <h2 class="block-title" id="services-title">Services</h2>
@@ -354,6 +397,8 @@ function renderDashboard(current: AppState) {
       render();
     });
   });
+  wireUsagePanel();
+  void loadUsage();
   document.querySelectorAll<HTMLButtonElement>("[data-open-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.openService || ""));
   });

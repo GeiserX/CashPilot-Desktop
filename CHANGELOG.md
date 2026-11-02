@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The dashboard graphs what each container costs this machine over time.** Under "Earned per day" there are three small line charts: CPU (100% is one core), memory, and network down and up as a rate, on the same 7-day (hourly points) or 30-day (6-hour points) window, with a container picker whose default is all containers. Desktop reads every running unit every five minutes and keeps one row per container per hour for 35 days. An hour with no reading is a gap in the line, never 0. A host-network container has no traffic counters of its own, so its traffic stays unknown and a network total without it is shown with ≥.
+
 ### Fixed
 
 - **A busy Anyone Protocol relay could outgrow its 1536 MB memory limit and be killed.** anon sizes its cell queues from the host's RAM, not the container's limit. The catalog now deploys `drumsergio/cashpilot-anyone:0.4.10.2-r2`, which sets `MaxMemInQueues` to half the limit (768 MB) unless the relay's `anonrc` sets one.
