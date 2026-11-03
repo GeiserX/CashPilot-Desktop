@@ -994,6 +994,9 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
+	if _, err = s.execWrite(stateBackupsDDL); err != nil {
+		return err
+	}
 	return s.migrateUsage()
 }
 

@@ -392,6 +392,17 @@ section { margin-bottom: 28px; }
 .attn-clear { display: flex; align-items: center; gap: 8px; padding: 8px 0; color: var(--text-secondary); }
 .attn-clear::before { content: ""; width: 10px; height: 10px; background: var(--success); }
 .attention-quiet .block-head { border-bottom: none; }
+/* Back these up: the attention rows, plus the volumes each one holds. */
+.backup-intro { color: var(--text-secondary); margin: 6px 0 8px; max-width: 80ch; }
+.backup-ok { border-left-color: var(--success); }
+.backup-ok .attn-tag { color: var(--success); }
+.backup-volumes { list-style: none; margin: 4px 0 0; padding: 0; }
+.backup-volumes code { font-size: var(--fs-2); }
+.backup-holds { font-size: var(--fs-2); color: var(--text-muted); }
+.backups-quiet summary { cursor: pointer; padding: 6px 0; }
+.backup-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 0 8px 12px; border-bottom: 1px solid var(--border-color); }
+.backup-form input[type="password"] { flex: 1 1 220px; }
+.backup-form .backup-holds { flex-basis: 100%; margin: 0; }
 
 /* ----- Earned per day ----- */
 .tab-strip, .filter-tabs { display: inline-flex; border: 1px solid var(--border-light); border-radius: var(--radius); }
