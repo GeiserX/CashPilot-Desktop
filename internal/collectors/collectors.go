@@ -797,10 +797,10 @@ func (r *Registry) collectTraffmonetizer(ctx context.Context, credentials map[st
 	}
 	headers := map[string]string{
 		"Authorization": "Bearer " + token,
-		"Origin":        "https://app.traffmonetizer.com",
-		"Referer":       "https://app.traffmonetizer.com/",
+		"Origin":        "https://app.traffmonetizer.io",
+		"Referer":       "https://app.traffmonetizer.io/",
 	}
-	if err := r.doJSON(ctx, "GET", "https://data.traffmonetizer.com/api/app_user/get_balance", nil, headers, &resp); err != nil {
+	if err := r.doJSON(ctx, "GET", "https://data.traffmonetizer.io/api/app_user/get_balance", nil, headers, &resp); err != nil {
 		return Result{}, err
 	}
 	return Result{Platform: "traffmonetizer", Balance: round(resp.Data.Balance, 4), Currency: "USD"}, nil

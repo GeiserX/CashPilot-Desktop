@@ -169,7 +169,7 @@ func TestCollectorsHTTPParse(t *testing.T) {
 			collect: (*Registry).collectTraffmonetizer,
 			creds:   map[string]string{"TRAFFMONETIZER_TOKEN": "tm-token"},
 			routes: map[string]stubResponse{
-				"GET https://data.traffmonetizer.com/api/app_user/get_balance": {body: `{"data":{"balance":7.25}}`},
+				"GET https://data.traffmonetizer.io/api/app_user/get_balance": {body: `{"data":{"balance":7.25}}`},
 			},
 			wantPlatform: "traffmonetizer",
 			wantBalance:  7.25,
@@ -217,7 +217,7 @@ func TestCollectorsHTTPParse(t *testing.T) {
 			collect: (*Registry).collectTraffmonetizer,
 			creds:   map[string]string{"TRAFFMONETIZER_TOKEN": "tm-token"},
 			routes: map[string]stubResponse{
-				"GET https://data.traffmonetizer.com/api/app_user/get_balance": {status: 500, body: `{}`},
+				"GET https://data.traffmonetizer.io/api/app_user/get_balance": {status: 500, body: `{}`},
 			},
 			wantErr: true,
 		},

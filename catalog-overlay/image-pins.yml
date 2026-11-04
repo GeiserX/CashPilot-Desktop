@@ -63,7 +63,7 @@ pins:
     image: "storjlabs/storagenode@sha256:21ca0ac819d1d66240830d28097eeb693923e51383aa3bb07bf823f9fad1f6e9"
     why: "Upstream ships no tag at all on this entry."
   traffmonetizer:
-    image: "traffmonetizer/cli_v2@sha256:6dbf8e75cc93e25131e2e701b1d478b3ccbf89212636b08d629621c270f0c966"
+    image: "traffmonetizer/cli_v2@sha256:4197c3765910e2f4e5e434bdaf16cdb1b5595fb0318f68dfa3de6ceaed42397c"
     why: >-
       Pins the amd64/default reference only. docker.image_by_arch still names the
       two ARM tags as floating tags, because Docker Hub labels every tag of this

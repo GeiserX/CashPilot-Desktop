@@ -145,7 +145,7 @@ func (p *Providers) handle(w http.ResponseWriter, r *http.Request) {
 		p.honeygain(w, r)
 	case "api.pawns.app":
 		p.iproyal(w, r)
-	case "data.traffmonetizer.com":
+	case "data.traffmonetizer.io":
 		p.traffmonetizer(w, r)
 	case "my.mystnodes.com":
 		p.mysterium(w, r)
