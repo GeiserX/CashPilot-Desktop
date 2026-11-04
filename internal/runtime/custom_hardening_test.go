@@ -110,7 +110,7 @@ func TestCustomServiceDeployIsHardenedIntegration(t *testing.T) {
 	}, true)
 	p := &runtime.DockerProvider{}
 	defer func() {
-		_ = p.Remove(context.Background(), slug, runtime.RemoveOptions{DeleteData: true})
+		_ = p.Remove(context.Background(), slug, runtime.RemoveOptions{DeleteData: true, AllowCritical: true})
 	}()
 	if _, err := p.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
@@ -140,7 +140,9 @@ func TestCustomServiceDeployIsHardenedIntegration(t *testing.T) {
 	if !slices.Contains(cfg.Env, "TOKEN=s3cret") {
 		t.Fatalf("env = %v, want the saved variable", cfg.Env)
 	}
-	if err := p.Remove(ctx, slug, runtime.RemoveOptions{DeleteData: true}); err != nil {
+	// The manager passes what the overlay says is critical about it: nothing, so the
+	// user's one "delete its data" answer is enough (services.Manager.Remove).
+	if err := p.Remove(ctx, slug, runtime.RemoveOptions{DeleteData: true, Critical: runtime.CriticalTargets(svc)}); err != nil {
 		t.Fatalf("Remove with its data: %v", err)
 	}
 	if _, err := cli.VolumeInspect(ctx, services.CustomVolumeName(slug), client.VolumeInspectOptions{}); err == nil {

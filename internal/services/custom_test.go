@@ -241,8 +241,18 @@ func TestCustomServiceLifecycle(t *testing.T) {
 	if err := m.DeleteCustom(ctx, "custom-my-node"); err == nil {
 		t.Fatal("delete accepted while deployed")
 	}
-	if err := st.DeleteDeployment("custom-my-node"); err != nil {
-		t.Fatal(err)
+
+	// Removing it with its data needs only the user's "delete its data" answer: the
+	// overlay knows the service and declares nothing irreplaceable, so its volume is
+	// not treated as the unknown data of a service that left the catalog.
+	if err := m.Remove(ctx, "custom-my-node", true, false); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if opts := fake.removeOpts[len(fake.removeOpts)-1]; opts.Critical == nil || len(opts.Critical) != 0 || !opts.DeleteData {
+		t.Fatalf("Remove options = %+v, want DeleteData and an empty, known critical list", opts)
+	}
+	if _, found, _ := st.GetDeployment("custom-my-node"); found {
+		t.Fatal("the deployment row survived Remove")
 	}
 	fake.listResult = []runtime.ContainerInfo{{Slug: "custom-my-node", Instance: 1}}
 	if err := m.DeleteCustom(ctx, "custom-my-node"); err == nil {
