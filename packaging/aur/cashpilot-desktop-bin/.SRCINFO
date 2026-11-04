@@ -1,0 +1,27 @@
+pkgbase = cashpilot-desktop-bin
+	pkgdesc = Deploy and monitor passive-income and DePIN services in Docker or Podman
+	pkgver = 0.32.0
+	pkgrel = 1
+	url = https://github.com/GeiserX/CashPilot-Desktop
+	arch = x86_64
+	license = GPL-3.0-or-later
+	depends = gdk-pixbuf2
+	depends = glib2
+	depends = glibc
+	depends = gtk3
+	depends = libsoup3
+	depends = webkit2gtk-4.1
+	optdepends = docker: run the earning services as containers
+	optdepends = podman: run the earning services as containers
+	provides = cashpilot-desktop
+	conflicts = cashpilot-desktop
+	options = !debug
+	options = !strip
+	source = cashpilot-desktop-0.32.0.tar.gz::https://github.com/GeiserX/CashPilot-Desktop/releases/download/v0.32.0/CashPilot-Desktop-linux-amd64.tar.gz
+	source = cashpilot-desktop-0.32.0.png::https://raw.githubusercontent.com/GeiserX/CashPilot-Desktop/v0.32.0/build/appicon.png
+	source = cashpilot-desktop.desktop
+	sha256sums = 770a5b6ad26b67defb9b906c5ff3f0f92e03e75c94c1b92e3e70d0360fe23456
+	sha256sums = c2327d215ffa8d33ebe80ec9a6d58ae5b6cd62c329d980f2739da1f19fe8586c
+	sha256sums = 4e591ce3a6888464b0cefd50fb74e8f2c680f182e7b1ec25a038f2ad041412f1
+
+pkgname = cashpilot-desktop-bin
