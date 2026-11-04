@@ -78,6 +78,9 @@ type Docker struct {
 	downAfter  string
 	nextID     int
 	cpuTicks   uint64
+	// networks are the user-defined networks, by name. The app creates one, its
+	// LAN fence network, and runs a one-shot helper container to write the fence.
+	networks map[string]map[string]any
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -85,6 +88,7 @@ func NewDocker() *Docker {
 	d := &Docker{
 		containers: map[string]*Container{},
 		volumes:    map[string]bool{},
+		networks:   map[string]map[string]any{},
 		logs:       "cashpilot fake container log line one\ncashpilot fake container log line two\n",
 	}
 	d.srv = httptest.NewUnstartedServer(http.HandlerFunc(d.handle))
@@ -263,7 +267,13 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Ostype", "linux")
 
 	d.mu.Lock()
-	d.record(r.Method+" "+path, r.URL.RawQuery)
+	call := r.Method + " " + path
+	if d.fenceCall(r, path) {
+		// The LAN fence helper is recorded apart, so assertions about the earner's
+		// own container (pull, replace, create) never match it.
+		call = "FENCE " + call
+	}
+	d.record(call, r.URL.RawQuery)
 	d.mu.Unlock()
 
 	switch {
@@ -287,6 +297,8 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 		d.removeVolume(w, strings.TrimPrefix(path, "/volumes/"))
 	case strings.HasPrefix(path, "/containers/"):
 		d.container(w, r, strings.TrimPrefix(path, "/containers/"))
+	case path == "/networks" || strings.HasPrefix(path, "/networks/"):
+		d.network(w, r, strings.TrimPrefix(strings.TrimPrefix(path, "/networks"), "/"))
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "fake daemon: no route for " + path})
 	}
@@ -428,10 +440,17 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 		d.inspect(w, id)
 	case action == "stats":
 		d.stats(w, id)
+	case action == "wait":
+		writeJSON(w, http.StatusOK, map[string]any{"StatusCode": 0})
 	case action == "logs":
 		d.mu.Lock()
 		text := d.logs
-		found := d.find(id) != nil
+		c := d.find(id)
+		found := c != nil
+		if found && c.Labels["cashpilot.probe"] == "fence" {
+			// The LAN fence helper prints one JSON result: the table is in place.
+			text = `{"backend":"nft","ok":true,"changed":true,"error":"","present":true,"matches":true,"counters":{}}` + "\n"
+		}
 		d.mu.Unlock()
 		if !found {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
@@ -556,4 +575,79 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// network answers the network endpoints: list (with a label filter), create, inspect
+// and remove. A bridge created with options keeps them, as the real daemon does.
+func (d *Docker) network(w http.ResponseWriter, r *http.Request, ref string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	find := func(ref string) map[string]any {
+		for name, n := range d.networks {
+			if name == ref || n["Id"] == ref {
+				return n
+			}
+		}
+		return nil
+	}
+	switch {
+	case ref == "" && r.Method == http.MethodGet:
+		out := make([]map[string]any, 0, len(d.networks))
+		for _, n := range d.networks {
+			out = append(out, n)
+		}
+		writeJSON(w, http.StatusOK, out)
+	case ref == "create" && r.Method == http.MethodPost:
+		var body struct {
+			Name    string
+			Driver  string
+			Options map[string]string
+			Labels  map[string]string
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"message": "fake daemon: unreadable network body"})
+			return
+		}
+		d.nextID++
+		id := fmt.Sprintf("net%09d", d.nextID)
+		d.networks[body.Name] = map[string]any{
+			"Name": body.Name, "Id": id, "Driver": body.Driver, "Options": body.Options, "Labels": body.Labels,
+			"IPAM":       map[string]any{"Config": []map[string]any{{"Subnet": "172.30.0.0/16", "Gateway": "172.30.0.1"}}},
+			"Containers": map[string]any{},
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{"Id": id})
+	case r.Method == http.MethodGet:
+		if n := find(ref); n != nil {
+			writeJSON(w, http.StatusOK, n)
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + ref + " not found"})
+	case r.Method == http.MethodDelete:
+		if n := find(ref); n != nil {
+			delete(d.networks, n["Name"].(string))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "network " + ref + " not found"})
+	default:
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "fake daemon: no network route " + ref})
+	}
+}
+
+// fenceCall reports a request about the LAN fence helper container. Called with d.mu held.
+func (d *Docker) fenceCall(r *http.Request, path string) bool {
+	const helper = "cashpilot-fence"
+	if path == "/containers/create" {
+		return strings.TrimPrefix(r.URL.Query().Get("name"), "/") == helper
+	}
+	rest, ok := strings.CutPrefix(path, "/containers/")
+	if !ok {
+		return false
+	}
+	id, _, _ := strings.Cut(rest, "/")
+	if id == helper {
+		return true
+	}
+	c := d.find(id)
+	return c != nil && c.Labels["cashpilot.probe"] == "fence"
 }

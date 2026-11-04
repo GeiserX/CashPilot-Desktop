@@ -8,7 +8,7 @@
 //
 // Pure: takes plain state, returns HTML.
 
-import type { HealthScore, ProducerReport, ServiceCopy } from "../wails";
+import type { FenceStatus, HealthScore, ProducerReport, ServiceCopy } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 export interface AttentionInput {
@@ -22,6 +22,8 @@ export interface AttentionInput {
   /** Per slug, how its container differs from what a redeploy would build. */
   drift?: Record<string, string[]> | null;
   producerStates?: Record<string, ProducerReport> | null;
+  /** The LAN fence: which earners can reach the LAN, and whether the fence holds. */
+  isolation?: FenceStatus | null;
 }
 
 export interface AttentionItem {
@@ -160,6 +162,33 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       why: `container does not match the catalog: ${found.map((d) => escapeHtml(d)).join("; ")}. Redeploy it: CashPilot keeps the settings it was deployed with.`,
       actions: `<button class="btn btn-primary btn-sm" data-drift-action="redeploy" data-slug="${s}">Redeploy</button>
         <button class="btn btn-ghost btn-sm" data-drift-action="ignore" data-slug="${s}" title="Stop warning about this service until the catalog changes it again">Ignore</button>`,
+    });
+  }
+
+  // The LAN fence. With isolation off nothing is said: that is the user's choice in
+  // Settings, and the Settings help names what it costs.
+  const fence = input.isolation;
+  if (fence && fence.mode === "on" && fence.state === "failed") {
+    items.push({
+      level: "fail",
+      tag: "Fence down",
+      what: "LAN isolation",
+      why: `the fence that keeps earners off your LAN could not be applied${fence.error ? `: ${escapeHtml(fence.error)}` : "."} Container deploys are refused until it can be. To deploy without it, set LAN isolation to off in Settings.`,
+      actions: "",
+    });
+  }
+  const outside = fence && fence.mode !== "off" ? fence.outside || [] : [];
+  if (outside.length) {
+    const stopped = fence?.outsideStopped || [];
+    const names = outside.map((slug) => escapeHtml(nameOf(slug))).join(", ");
+    items.push({
+      level: "warn",
+      tag: "Exposed",
+      what: outside.length === 1 ? nameOf(outside[0]) : `${outside.length} services`,
+      why: `${names} can reach your LAN and this computer. Turn on isolation to redeploy ${outside.length === 1 ? "it" : "them"} onto CashPilot's fenced network, with the same settings and data.${
+        stopped.length ? ` Stopped services (${stopped.map((slug) => escapeHtml(nameOf(slug))).join(", ")}) are left alone and move on their next deploy.` : ""
+      }`,
+      actions: `<button class="btn btn-primary btn-sm" data-isolation-action="enable">Turn on isolation</button>`,
     });
   }
 

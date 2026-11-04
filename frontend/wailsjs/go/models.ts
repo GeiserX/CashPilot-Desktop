@@ -713,6 +713,40 @@ export namespace main {
 	
 	
 	
+	export class IsolationResult {
+	    status: runtime.FenceStatus;
+	    moved: string[];
+	    failed: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new IsolationResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = this.convertValues(source["status"], runtime.FenceStatus);
+	        this.moved = source["moved"];
+	        this.failed = source["failed"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class SettingsState {
 	    environment: EnvSetting[];
 	    collectors: CollectorSetting[];
@@ -814,6 +848,31 @@ export namespace preflight {
 }
 
 export namespace runtime {
+	
+	export class FenceStatus {
+	    mode: string;
+	    setting: string;
+	    state: string;
+	    backend: string;
+	    error: string;
+	    outside: string[];
+	    outsideStopped: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FenceStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.setting = source["setting"];
+	        this.state = source["state"];
+	        this.backend = source["backend"];
+	        this.error = source["error"];
+	        this.outside = source["outside"];
+	        this.outsideStopped = source["outsideStopped"];
+	    }
+	}
 	
 	export class DataMount {
 	    target: string;

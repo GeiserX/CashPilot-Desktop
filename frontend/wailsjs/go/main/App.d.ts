@@ -25,6 +25,8 @@ export function DeleteCustomService(arg1:string):Promise<void>;
 
 export function DeployService(arg1:string,arg2:Record<string, string>,arg3:string,arg4:number):Promise<store.Deployment>;
 
+export function EnableIsolation():Promise<main.IsolationResult>;
+
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
 
 export function ExportStateBackup(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;

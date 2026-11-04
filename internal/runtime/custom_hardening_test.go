@@ -109,6 +109,9 @@ func TestCustomServiceDeployIsHardenedIntegration(t *testing.T) {
 		Env:     []services.CustomEnv{{Key: "TOKEN", Value: "s3cret", Secret: true}},
 	}, true)
 	p := &runtime.DockerProvider{}
+	// The LAN fence has its own live test (TestFenceIntegration); this one is about the
+	// hardening, so it runs on the default bridge.
+	p.SetIsolationSetting(func() string { return "off" })
 	defer func() {
 		_ = p.Remove(context.Background(), slug, runtime.RemoveOptions{DeleteData: true, AllowCritical: true})
 	}()
