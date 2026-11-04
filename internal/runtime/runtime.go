@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
@@ -247,15 +248,27 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// is: a replacement that mounts the spec's volume over a node whose identity
 	// lives elsewhere comes back as a different node. Read it BEFORE the removal,
 	// which is the only moment the fact still exists.
-	if live, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); err == nil {
+	custom := svc.Custom || catalog.IsCustomSlug(spec.Slug)
+	// An inspect that fails for any reason but "no such container" stops here: past
+	// it the ownership check would be skipped and the forced removal below would take
+	// whatever holds the name.
+	live, inspectErr := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if inspectErr != nil && !cerrdefs.IsNotFound(inspectErr) {
+		return ContainerInfo{}, fmt.Errorf("could not check what holds %s, so it was left as it is: %w", name, inspectErr)
+	}
+	if inspectErr == nil {
 		if live.Container.Config != nil {
 			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
 				return ContainerInfo{}, fmt.Errorf("%s already belongs to %s, not to copy %d of %s. It was left running; remove it or deploy under another name", name, owner, max(spec.Instance, 1), spec.Slug)
 			}
 		}
+		// A custom service mounts only its own named volume, never a host directory, so
+		// it does not inherit what the container before it had mounted.
 		var kept []KeptMount
-		mounts, kept = keepLiveMounts(mounts, svc.Docker.Volumes, env, live.Container)
-		hostConfig.Mounts = mounts
+		if !custom {
+			mounts, kept = keepLiveMounts(mounts, svc.Docker.Volumes, env, live.Container)
+			hostConfig.Mounts = mounts
+		}
 		for _, k := range kept {
 			if progress != nil {
 				progress(fmt.Sprintf("Keeping %s at %s, where its data already is (the catalog asked for %s).", k.Kept, k.Target, k.Requested))
@@ -271,7 +284,10 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		}
 		_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &stopTimeout})
 	}
-	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: false})
+	// A custom service's anonymous volumes (an image's VOLUME with no data path) go
+	// with its container: the replacement gets fresh ones, so the old ones would only
+	// pile up. RemoveVolumes never touches a named volume, so its data path stays.
+	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: custom})
 
 	if progress != nil {
 		progress("Creating " + name)
