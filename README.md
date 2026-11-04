@@ -24,6 +24,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 - **Multi-node fleet** -- Aggregate view across your entire CashPilot fleet from a single window
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Custom services** -- Run any image from Docker Hub or another registry that the catalog does not list, with the same restrictions as catalog services ([docs](docs/custom-services.md))
+- **Import from another tool** -- Bring service logins over from money4band, CashFactory or InternetIncome after a dry run ([docs](docs/migrate/money4band.md))
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
 - **Secure** -- Credentials encrypted at rest with AES-256-GCM; master key in the OS keychain. From the first release after v0.20.5 the macOS build is signed with a Developer ID certificate and notarized by Apple; Windows signing is planned.
@@ -51,6 +52,7 @@ CashPilot bundles a catalog of 41 active passive-income services across multiple
 - [Usage](docs/usage.md): a tour of every screen
 - [Supported services](docs/services.md): bandwidth-sharing explained, per-service limits and payouts, disclosure
 - [Custom services](docs/custom-services.md): run an image the catalog does not list, and what it may do
+- Moving from another tool: [money4band](docs/migrate/money4band.md), [CashFactory](docs/migrate/cashfactory.md), [InternetIncome](docs/migrate/internetincome.md)
 - [How it works](docs/how-it-works.md): the full design, grounded in the code
 - [FAQ](docs/faq.md): earnings, safety, Docker, crashes, several machines
 - [Development](docs/development.md): prerequisites, dev workflow, build, tests
