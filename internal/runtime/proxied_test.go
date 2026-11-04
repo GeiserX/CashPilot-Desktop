@@ -375,11 +375,11 @@ func TestSecretFilesAreRootOnlyAndPercentEncoded(t *testing.T) {
 			t.Errorf("%s: mode %o uid %d gid %d, want 0400 root", h.Name, h.Mode, h.Uid, h.Gid)
 		}
 	}
-	ts, err := tunnelSecretFiles(context.Background(), ProxySpec{Kind: "tailscale", AuthKey: "tskey-SECRET", ExitNode: "macbook-pro-de-francisco"}, "", "Earner_P3")
+	ts, err := tunnelSecretFiles(context.Background(), ProxySpec{Kind: "tailscale", AuthKey: "tskey-SECRET", ExitNode: "exit-node-a"}, "", "Earner_P3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ts["auth_key"] != "tskey-SECRET" || ts["exit_node"] != "macbook-pro-de-francisco" || ts["hostname"] != "cashpilot-earner-p3" {
+	if ts["auth_key"] != "tskey-SECRET" || ts["exit_node"] != "exit-node-a" || ts["hostname"] != "cashpilot-earner-p3" {
 		t.Fatalf("tailscale files: %v", ts)
 	}
 }

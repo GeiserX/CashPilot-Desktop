@@ -56,7 +56,7 @@ func TestCleanKeepsAndClearsSecretsOnEdit(t *testing.T) {
 	if cleared.Password != "" || cleared.Username != "" {
 		t.Fatalf("clear_<field> must drop the stored secret: %+v", cleared)
 	}
-	ts, err := Clean(map[string]string{"kind": "tailscale", "auth_key": "tskey-1", "exit_node": "macbook"}, &stored)
+	ts, err := Clean(map[string]string{"kind": "tailscale", "auth_key": "tskey-1", "exit_node": "exit-node-a"}, &stored)
 	if err != nil {
 		t.Fatal(err)
 	}
