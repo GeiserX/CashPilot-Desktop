@@ -352,7 +352,7 @@ func TestSecretFilesAreRootOnlyAndPercentEncoded(t *testing.T) {
 	if files["proxy_ip"] != "198.51.100.4" || files["proxy_port"] != "7000" || files["proxy_scheme"] != "socks5" || files["own_ip"] != "192.0.2.1" {
 		t.Fatalf("files: %v", files)
 	}
-	if files["proxy_auth"] != "user-SECRET:pa%20ss%40w%3Ard-SECRET@" {
+	if files["proxy_auth"] != "user-SECRET:pa%20ss%40w%3Ard-SECRET@" { // ggignore: a made-up test value
 		t.Fatalf("proxy_auth must be percent-encoded so the URL parses: %q", files["proxy_auth"])
 	}
 	if strings.Count(files["proxy_auth"], "@") != 1 {

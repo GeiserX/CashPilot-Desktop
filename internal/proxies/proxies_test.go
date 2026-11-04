@@ -66,7 +66,7 @@ func TestCleanKeepsAndClearsSecretsOnEdit(t *testing.T) {
 }
 
 func TestPublicViewNeverCarriesSecrets(t *testing.T) {
-	d := Definition{Name: "Gate", Kind: "socks5", Host: "h", Port: 1, Username: "SECRET-USER", Password: "SECRET-PW", AuthKey: "SECRET-KEY"}
+	d := Definition{Name: "Gate", Kind: "socks5", Host: "h", Port: 1, Username: "SECRET-USER", Password: "SECRET-PW", AuthKey: "SECRET-KEY"} // ggignore: made-up test values
 	raw, err := json.Marshal(PublicView(1, d, State{}, nil))
 	if err != nil {
 		t.Fatal(err)
