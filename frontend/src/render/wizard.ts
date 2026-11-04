@@ -21,6 +21,7 @@ import type { CollectorField, ScalingLimit, Service, ServiceEarning } from "../w
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
+import { ratingBlock } from "./rating.js";
 import { imageChoiceSection } from "./image.js";
 import { instancesSection } from "./instances.js";
 import { renderCustomServiceCard } from "./custom.js";
@@ -68,6 +69,7 @@ export function renderWizardServiceSetup(
         <button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>
       </div>
       ${referralNote(service)}
+      ${ratingBlock(service)}
       ${service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
       ${credentialHint(service)}
       <div class="credential-grid">

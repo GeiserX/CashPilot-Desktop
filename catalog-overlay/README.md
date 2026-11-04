@@ -70,11 +70,11 @@ the entry on its own, which is how a Desktop-only service would be carried.
 | `native:` block on mysterium | `append/bandwidth/mysterium.yml` | Desktop can run a service as a supervised native process with no container runtime. The web app deploys through Docker on a worker and has no such runtime. |
 | `native:` schema documentation | `append/_schema.yml` | Documents the field above. |
 
-## Fields Desktop reads but ignores
+## Files Desktop reads beside the services
 
-| Field | Why |
+| File | Why |
 | --- | --- |
-| `rating` | The web catalog's evidence for each provider's grade. Desktop does not show grades yet; `catalog.Service` declares it as an `IgnoredBlock`, so the strict-decode test passes and the contents are dropped. |
+| `_ratings.yml` | The published grading method. `internal/catalog/rating.go` grades each provider's `rating` block from it, the same way the web app does (`app/ratings.py`). It is embedded in the binary with the service files; without it every provider shows "Not rated yet". |
 
 There are no Desktop-only service entries. `vast-ai` used to be one and now exists
 upstream, so it is synced like everything else.

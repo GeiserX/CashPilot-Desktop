@@ -493,9 +493,41 @@ export interface Service {
   // Set for providers that pay a device only once its id is added to the account.
   deviceLink: { idEnv: string; url: string; steps: string } | null;
   resurrectionChecked: string;
+  // The provider's grade, computed in Go from services/_ratings.yml. Null for a
+  // service the user added, which nobody has reviewed.
+  ratingResult?: RatingResult | null;
   manualOnly: boolean;
   // A service the user added from an image reference, not a reviewed catalog entry.
   custom?: boolean;
+}
+
+export interface RatingItem {
+  text: string;
+  criterion: string;
+  kind: string;
+  source: string;
+  checkedOn: string;
+}
+
+// internal/catalog/rating.go RatingResult. rated false means "Not rated yet": no
+// grade, and nothing else below is meaningful.
+export interface RatingResult {
+  rated: boolean;
+  grade: string;
+  bandGrade: string;
+  score: number;
+  max: number;
+  percent: number;
+  caps: { key: string; maxGrade: string; reason: string }[] | null;
+  unknownCount: number;
+  thinEvidence: boolean;
+  reviewedOn: string;
+  verdicts: { key: string; title: string; verdict: string }[] | null;
+  notes: Record<string, string> | null;
+  cons: RatingItem[] | null;
+  pros: RatingItem[] | null;
+  topCons: RatingItem[] | null;
+  summary: string;
 }
 
 export interface DockerConfig {

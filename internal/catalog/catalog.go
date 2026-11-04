@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -99,24 +100,18 @@ type Service struct {
 	// of living only in the web repository's history.
 	ResurrectionChecked string `json:"resurrectionChecked" yaml:"resurrection_checked"`
 	// Rating is the web catalog's evidence for a provider's grade (verdicts, cons,
-	// pros). Desktop does not show grades yet, so the block is read and ignored:
-	// declaring it keeps the strict-decode test green after a sync. When Desktop
-	// shows grades it has to grade from the web repository's services/_ratings.yml.
-	Rating     IgnoredBlock `json:"-" yaml:"rating"`
-	SourcePath string       `json:"sourcePath" yaml:"-"`
-	ManualOnly bool         `json:"manualOnly" yaml:"-"`
+	// pros). It is checked at load and turned into RatingResult (rating.go); the
+	// block itself never reaches the frontend.
+	Rating Rating `json:"-" yaml:"rating"`
+	// RatingResult is the grade computed from services/_ratings.yml, or "not rated".
+	// Nil for a custom service, which nobody has reviewed. Never read from YAML.
+	RatingResult *RatingResult `json:"ratingResult" yaml:"-"`
+	SourcePath   string        `json:"sourcePath" yaml:"-"`
+	ManualOnly   bool          `json:"manualOnly" yaml:"-"`
 	// Custom marks a service the user added from an image reference rather than a
 	// reviewed catalog entry. Never read from YAML.
 	Custom bool `json:"custom" yaml:"-"`
 }
-
-// IgnoredBlock is a catalog key Desktop reads and deliberately drops, so the
-// strict-decode test accepts it without Desktop modelling its contents. Every
-// use is listed in catalog-overlay/README.md.
-type IgnoredBlock struct{}
-
-// UnmarshalYAML accepts any value and keeps nothing.
-func (*IgnoredBlock) UnmarshalYAML(*yaml.Node) error { return nil }
 
 type Referral struct {
 	SignupURL string `json:"signupUrl" yaml:"signup_url"`
@@ -606,6 +601,8 @@ func Load() (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	rules, rulesErr := os.ReadFile(filepath.Join(root, RatingRulesFile))
+	applyRatings(services, rules, rulesErr)
 	return newCatalog(services), nil
 }
 
@@ -774,6 +771,10 @@ func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
 		services = append(services, svc)
 		return nil
 	})
+	if err == nil {
+		rules, rulesErr := fs.ReadFile(fsys, path.Join(root, RatingRulesFile))
+		applyRatings(services, rules, rulesErr)
+	}
 	return services, err
 }
 
