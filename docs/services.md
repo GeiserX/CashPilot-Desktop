@@ -34,7 +34,7 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 | [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Crypto |
 | [Repocket](https://repocket.com/) | ✅ | ❌ | 5 | Undocumented | PayPal, Crypto |
 | [Storj](https://storj.dev/node/get-started/setup) | ✅ | ✅ | Unlimited | Undocumented \*\* | Crypto (STORJ) |
-| [Traffmonetizer](https://traffmonetizer.com/?aff=2111758) | ✅ | ✅ \*\*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
+| [Traffmonetizer](https://traffmonetizer.io/?aff=2111758) | ✅ | ✅ \*\*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
 | [URnetwork](https://ur.io/?referral_code=1Q3G19) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
 
 > **Undocumented** means the provider publishes no per-IP device limit, not that

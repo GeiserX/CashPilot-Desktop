@@ -89,8 +89,8 @@ const traffmonetizer = {
   ...honeygain,
   slug: "traffmonetizer",
   name: "Traffmonetizer",
-  website: "https://traffmonetizer.com",
-  referral: {signupUrl: "https://traffmonetizer.com/?aff=2111758", code: "2111758"},
+  website: "https://traffmonetizer.io",
+  referral: {signupUrl: "https://traffmonetizer.io/?aff=2111758", code: "2111758"},
 };
 
 check(
