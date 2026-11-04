@@ -66,7 +66,8 @@ func execRunning(ctx context.Context, cli execClient, slug string, cmd []string,
 	for _, c := range list.Items {
 		// Filtered by the daemon already; checked again so a runtime that ignores a
 		// filter cannot have the command run in another service's container.
-		if c.Labels[LabelService] != slug || c.Labels[LabelManaged] != "true" || string(c.State) != "running" {
+		// A proxied copy is read on its own, never as copy 1 of the service.
+		if c.Labels[LabelService] != slug || c.Labels[LabelManaged] != "true" || string(c.State) != "running" || IsProxied(c.Labels) {
 			continue
 		}
 		out := noderead.Output{Instance: instanceOf(c.Labels)}

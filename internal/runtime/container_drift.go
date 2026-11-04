@@ -91,7 +91,9 @@ func containerShapes(ctx context.Context, cli shapeClient) ([]ContainerShape, er
 	for _, c := range list.Items {
 		// Only what this app made: a container from the exported compose file, or one
 		// a CashPilot worker made on the same daemon, is someone else's to shape.
-		if c.Labels[labelDeployedBy] != "" || c.Labels[LabelService] == "" {
+		// A proxied copy and its tunnel are shaped by the proxy, not by the catalog
+		// entry, so they are never drift.
+		if c.Labels[labelDeployedBy] != "" || c.Labels[LabelService] == "" || IsProxied(c.Labels) {
 			continue
 		}
 		inspected, err := cli.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})

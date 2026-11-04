@@ -79,7 +79,7 @@ func managedCopy(ctx context.Context, cli inspectClient, slug string, n int) (st
 		return "", err
 	}
 	cfg := inspect.Container.Config
-	if cfg == nil || cfg.Labels[LabelManaged] != "true" || cfg.Labels[LabelService] != slug || instanceOf(cfg.Labels) != n {
+	if cfg == nil || cfg.Labels[LabelManaged] != "true" || cfg.Labels[LabelService] != slug || instanceOf(cfg.Labels) != n || IsProxied(cfg.Labels) {
 		return "", fmt.Errorf("%s is not copy %d of %s managed by CashPilot", name, n, slug)
 	}
 	return name, nil
@@ -102,7 +102,7 @@ func (p *DockerProvider) Copies(ctx context.Context, slug string) ([]int, error)
 	for _, c := range list.Items {
 		// The daemon filtered by label already; checked again so a runtime that
 		// ignores a filter cannot hand back another service's copies.
-		if n := instanceOf(c.Labels); n > 1 && c.Labels[LabelService] == slug {
+		if n := instanceOf(c.Labels); n > 1 && c.Labels[LabelService] == slug && !IsProxied(c.Labels) {
 			copies = append(copies, n)
 		}
 	}
