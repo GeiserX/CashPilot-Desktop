@@ -290,3 +290,48 @@ func TestCustomServiceScaling(t *testing.T) {
 		t.Fatalf("scaling: with data %d, without %d", m.ScalingLimit(with).Max, m.ScalingLimit(without).Max)
 	}
 }
+
+// THE RULE: a memory limit past 16g is refused however many digits it has. Before
+// the bound, 18014398509481985g wrapped to 1024 MB when multiplied and passed. 16g
+// itself is the positive control.
+func TestValidateCustomMemRefusesAnOverflowingLimit(t *testing.T) {
+	for _, raw := range []string{"18014398509481985g", "17g", "16385m", "99999999999999999999g"} {
+		if got, err := validateCustomMem(raw); err == nil {
+			t.Errorf("validateCustomMem(%q) = %q, want a refusal", raw, got)
+		}
+	}
+	for _, raw := range []string{"16g", "16384m", "32m"} {
+		if _, err := validateCustomMem(raw); err != nil {
+			t.Errorf("validateCustomMem(%q): %v", raw, err)
+		}
+	}
+}
+
+// THE RULE: a custom service cannot be deleted while it is being deployed. Before,
+// a delete in the deploy window found no deployment row and no container, removed
+// the definition, and the deploy then recorded a container nothing could redeploy.
+// The delete after the deploy is the control: it is refused for the usual reason,
+// the deployment row, not the in-flight mark.
+func TestDeleteCustomRefusedWhileItsDeployRuns(t *testing.T) {
+	m, fake, _ := newCustomManager(t)
+	ctx := context.Background()
+	view, err := m.SaveCustom("", validCustom())
+	if err != nil {
+		t.Fatalf("SaveCustom: %v", err)
+	}
+	var during error
+	fake.duringDeploy = func() { during = m.DeleteCustom(ctx, view.Slug) }
+	if _, err := m.DeployWith(ctx, view.Slug, nil, DeployOptions{}); err != nil {
+		t.Fatalf("DeployWith: %v", err)
+	}
+	if during == nil {
+		t.Fatal("the definition was deleted while its deploy was running")
+	}
+	if _, ok, err := m.customDefinition(view.Slug); err != nil || !ok {
+		t.Fatalf("definition after the deploy: ok=%v err=%v", ok, err)
+	}
+	fake.duringDeploy = nil
+	if err := m.DeleteCustom(ctx, view.Slug); err == nil || !strings.Contains(err.Error(), "still deployed here") {
+		t.Fatalf("delete after the deploy = %v, want the deployed-here refusal", err)
+	}
+}

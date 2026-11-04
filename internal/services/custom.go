@@ -243,6 +243,10 @@ func validateCustomMem(raw string) (string, error) {
 		return "", errors.New("memory limit must be between 32m and 16g")
 	}
 	if match[2] == "g" {
+		// Bound before multiplying: a huge g value would wrap into the valid range.
+		if mb > customMemMaxMB/1024 {
+			return "", errors.New("memory limit must be between 32m and 16g")
+		}
 		mb *= 1024
 	}
 	if mb < customMemMinMB || mb > customMemMaxMB {
@@ -428,6 +432,9 @@ func (m *Manager) DeleteCustom(ctx context.Context, slug string) error {
 	if !catalog.IsCustomSlug(slug) {
 		return fmt.Errorf("%s is not a custom service", slug)
 	}
+	if m.customDeploying[slug] > 0 {
+		return errors.New("it is being deployed right now; wait for the deploy to finish")
+	}
 	if _, ok, err := m.store.GetDeployment(slug); err != nil {
 		return err
 	} else if ok {
@@ -447,6 +454,30 @@ func (m *Manager) DeleteCustom(ctx context.Context, slug string) error {
 	}
 	m.store.RecordEvent(slug, "custom_deleted", "")
 	return m.LoadCustom()
+}
+
+// holdCustom reveals a custom service for a deploy and marks it in flight, so
+// DeleteCustom refuses it until release runs. Both happen under customMu, so a
+// delete lands either before the reveal (the deploy finds no service) or after
+// release (the deployment row or the container refuses it).
+func (m *Manager) holdCustom(slug string) (catalog.Service, func(), error) {
+	m.customMu.Lock()
+	defer m.customMu.Unlock()
+	svc, err := m.revealCustom(slug)
+	if err != nil {
+		return catalog.Service{}, nil, err
+	}
+	if m.customDeploying == nil {
+		m.customDeploying = map[string]int{}
+	}
+	m.customDeploying[slug]++
+	return svc, func() {
+		m.customMu.Lock()
+		defer m.customMu.Unlock()
+		if m.customDeploying[slug]--; m.customDeploying[slug] <= 0 {
+			delete(m.customDeploying, slug)
+		}
+	}, nil
 }
 
 // revealCustom is the custom service with its real env values and command, for a

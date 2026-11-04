@@ -54,6 +54,9 @@ type fakeProvider struct {
 	planCritical []map[string]string
 	planErr      error
 	logsResult   string
+	// duringDeploy, when set, runs inside Deploy, so a test can act while a deploy
+	// is in flight.
+	duringDeploy func()
 	logsErr      error
 	// deploySpecs records the spec each Deploy was handed, so a test can prove which
 	// image and which catalog grants reached the runtime.
@@ -65,6 +68,9 @@ func (f *fakeProvider) Status(context.Context) runtime.Status { return runtime.S
 func (f *fakeProvider) Deploy(_ context.Context, spec runtime.DeploySpec, progress func(string)) (runtime.ContainerInfo, error) {
 	f.deployCalls++
 	f.deploySpecs = append(f.deploySpecs, spec)
+	if f.duringDeploy != nil {
+		f.duringDeploy()
+	}
 	if progress != nil {
 		progress("pulling")
 	}

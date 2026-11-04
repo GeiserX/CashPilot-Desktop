@@ -50,6 +50,9 @@ type Manager struct {
 	// customMu serialises creating, editing and deleting custom services, so two
 	// saves cannot pick the same slug.
 	customMu sync.Mutex
+	// customDeploying counts, per slug, the deploys of a custom service in flight;
+	// DeleteCustom refuses a slug in it. Guarded by customMu.
+	customDeploying map[string]int
 }
 
 // NewManager builds a Manager whose registry holds the given provider under
@@ -229,10 +232,11 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		empty := ""
 		opts.Image = &empty
 		credentials = nil
-		revealed, err := m.revealCustom(slug)
+		revealed, release, err := m.holdCustom(slug)
 		if err != nil {
 			return store.Deployment{}, err
 		}
+		defer release()
 		svc = revealed
 	}
 	if err := validateRequired(svc, credentials); err != nil {
