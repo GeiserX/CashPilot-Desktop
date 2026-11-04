@@ -22,6 +22,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 - **System tray (macOS)** -- Runs quietly in the background with quick-access status and earnings summary; menu-bar icon is macOS-only today (Windows/Linux planned)
 - **Real-time monitoring** -- Live earnings, service health, container stats, and node uptime
 - **Multi-node fleet** -- Aggregate view across your entire CashPilot fleet from a single window
+- **Activity (opt-in)** -- Which destinations each earner talks to, whether it reaches into your network or sends mail; off by default, remote addresses kept 24 hours ([details](docs/activity.md))
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
@@ -48,6 +49,7 @@ CashPilot bundles a catalog of 41 active passive-income services across multiple
 - [Getting started](docs/getting-started.md): modes, downloads, system requirements, Desktop vs Web
 - [Configuration](docs/configuration.md): every setting and its default, Worker Node pairing, where secrets live
 - [Usage](docs/usage.md): a tour of every screen
+- [Activity](docs/activity.md): what the opt-in Activity page reads, keeps and alerts on
 - [Supported services](docs/services.md): bandwidth-sharing explained, per-service limits and payouts, disclosure
 - [How it works](docs/how-it-works.md): the full design, grounded in the code
 - [FAQ](docs/faq.md): earnings, safety, Docker, crashes, several machines
