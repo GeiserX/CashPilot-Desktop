@@ -21,6 +21,20 @@ export namespace bgservice {
 
 export namespace catalog {
 	
+	export class AddressRead {
+	    command: string[];
+	    pattern: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AddressRead(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.pattern = source["pattern"];
+	    }
+	}
 	export class Cashout {
 	    method: string;
 	    dashboardUrl: string;
@@ -41,9 +55,35 @@ export namespace catalog {
 	        this.notes = source["notes"];
 	    }
 	}
+	export class NodeRead {
+	    command: string[];
+	    node: string;
+	    balance: string;
+	    lifetime: string;
+	    settledNet?: string;
+	    settledFees?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NodeRead(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.command = source["command"];
+	        this.node = source["node"];
+	        this.balance = source["balance"];
+	        this.lifetime = source["lifetime"];
+	        this.settledNet = source["settledNet"];
+	        this.settledFees = source["settledFees"];
+	    }
+	}
 	export class CollectorMetadata {
 	    type: string;
 	    notes: string;
+	    credentialHint: string;
+	    perNodeEarnings: boolean;
+	    quietDays: number;
+	    nodeRead?: NodeRead;
 	
 	    static createFrom(source: any = {}) {
 	        return new CollectorMetadata(source);
@@ -53,12 +93,85 @@ export namespace catalog {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
 	        this.notes = source["notes"];
+	        this.credentialHint = source["credentialHint"];
+	        this.perNodeEarnings = source["perNodeEarnings"];
+	        this.quietDays = source["quietDays"];
+	        this.nodeRead = this.convertValues(source["nodeRead"], NodeRead);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CriticalVolume {
+	    target: string;
+	    holds: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CriticalVolume(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.holds = source["holds"];
+	    }
+	}
+	export class DeviceLink {
+	    idEnv: string;
+	    url: string;
+	    steps: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DeviceLink(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.idEnv = source["idEnv"];
+	        this.url = source["url"];
+	        this.steps = source["steps"];
+	    }
+	}
+	export class Disclosure {
+	    sells: string;
+	    thirdPartyTraffic: string;
+	    dataCollected: string;
+	    ispRisk: string;
+	    accountRules: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Disclosure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sells = source["sells"];
+	        this.thirdPartyTraffic = source["thirdPartyTraffic"];
+	        this.dataCollected = source["dataCollected"];
+	        this.ispRisk = source["ispRisk"];
+	        this.accountRules = source["accountRules"];
 	    }
 	}
 	export class ResourceLimits {
 	    memLimit: string;
 	    memReservation: string;
 	    oomScoreAdj?: number;
+	    cpuShares: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ResourceLimits(source);
@@ -69,6 +182,45 @@ export namespace catalog {
 	        this.memLimit = source["memLimit"];
 	        this.memReservation = source["memReservation"];
 	        this.oomScoreAdj = source["oomScoreAdj"];
+	        this.cpuShares = source["cpuShares"];
+	    }
+	}
+	export class HealthSignal {
+	    pattern: string;
+	    means: string;
+	    state: string;
+	    unless?: string;
+	    windowHours?: number;
+	    minMatches?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthSignal(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pattern = source["pattern"];
+	        this.means = source["means"];
+	        this.state = source["state"];
+	        this.unless = source["unless"];
+	        this.windowHours = source["windowHours"];
+	        this.minMatches = source["minMatches"];
+	    }
+	}
+	export class NodeFirewall {
+	    flag: string;
+	    chain: string;
+	    blackhole: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new NodeFirewall(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.flag = source["flag"];
+	        this.chain = source["chain"];
+	        this.blackhole = source["blackhole"];
 	    }
 	}
 	export class EnvVar {
@@ -78,6 +230,8 @@ export namespace catalog {
 	    secret: boolean;
 	    description: string;
 	    default: string;
+	    pattern?: string;
+	    portRange?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new EnvVar(source);
@@ -91,17 +245,27 @@ export namespace catalog {
 	        this.secret = source["secret"];
 	        this.description = source["description"];
 	        this.default = source["default"];
+	        this.pattern = source["pattern"];
+	        this.portRange = source["portRange"];
 	    }
 	}
 	export class DockerConfig {
 	    image: string;
+	    tag: string;
+	    imageByArch: Record<string, string>;
 	    platforms: string[];
 	    env: EnvVar[];
 	    ports: string[];
 	    volumes: string[];
+	    criticalVolumes: CriticalVolume[];
 	    command: string;
+	    entrypoint: string[];
 	    networkMode: string;
+	    nodeFirewall: NodeFirewall;
 	    capAdd: string[];
+	    devices: string[];
+	    healthSignals: HealthSignal[];
+	    advertisedAddressEnv: string;
 	    privileged: boolean;
 	    stopTimeout: number;
 	    resources: ResourceLimits;
@@ -115,13 +279,21 @@ export namespace catalog {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.image = source["image"];
+	        this.tag = source["tag"];
+	        this.imageByArch = source["imageByArch"];
 	        this.platforms = source["platforms"];
 	        this.env = this.convertValues(source["env"], EnvVar);
 	        this.ports = source["ports"];
 	        this.volumes = source["volumes"];
+	        this.criticalVolumes = this.convertValues(source["criticalVolumes"], CriticalVolume);
 	        this.command = source["command"];
+	        this.entrypoint = source["entrypoint"];
 	        this.networkMode = source["networkMode"];
+	        this.nodeFirewall = this.convertValues(source["nodeFirewall"], NodeFirewall);
 	        this.capAdd = source["capAdd"];
+	        this.devices = source["devices"];
+	        this.healthSignals = this.convertValues(source["healthSignals"], HealthSignal);
+	        this.advertisedAddressEnv = source["advertisedAddressEnv"];
 	        this.privileged = source["privileged"];
 	        this.stopTimeout = source["stopTimeout"];
 	        this.resources = this.convertValues(source["resources"], ResourceLimits);
@@ -168,6 +340,7 @@ export namespace catalog {
 	    }
 	}
 	
+	
 	export class NativeBinary {
 	    os: string;
 	    arch: string;
@@ -175,6 +348,8 @@ export namespace catalog {
 	    sha256: string;
 	    archive: string;
 	    bin: string;
+	    args?: string;
+	    firewallBlock?: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new NativeBinary(source);
@@ -188,6 +363,8 @@ export namespace catalog {
 	        this.sha256 = source["sha256"];
 	        this.archive = source["archive"];
 	        this.bin = source["bin"];
+	        this.args = source["args"];
+	        this.firewallBlock = source["firewallBlock"];
 	    }
 	}
 	export class NativeConfig {
@@ -224,8 +401,11 @@ export namespace catalog {
 		    return a;
 		}
 	}
+	
+	
 	export class Payment {
 	    methods: string[];
+	    cryptoToken: string;
 	    minimumPayout: string;
 	    currency: string;
 	    frequency: string;
@@ -237,13 +417,83 @@ export namespace catalog {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.methods = source["methods"];
+	        this.cryptoToken = source["cryptoToken"];
 	        this.minimumPayout = source["minimumPayout"];
 	        this.currency = source["currency"];
 	        this.frequency = source["frequency"];
 	    }
 	}
+	export class Payout {
+	    model: string;
+	    chain: string;
+	    addressEnv: string;
+	    addressSource: string;
+	    addressRead?: AddressRead;
+	    notes: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Payout(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.model = source["model"];
+	        this.chain = source["chain"];
+	        this.addressEnv = source["addressEnv"];
+	        this.addressSource = source["addressSource"];
+	        this.addressRead = this.convertValues(source["addressRead"], AddressRead);
+	        this.notes = source["notes"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ProxyProhibited {
+	    source: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyProhibited(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	    }
+	}
+	export class ReferralBonus {
+	    referrer: string;
+	    referee: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReferralBonus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.referrer = source["referrer"];
+	        this.referee = source["referee"];
+	    }
+	}
 	export class Referral {
 	    signupUrl: string;
+	    code: string;
+	    program?: boolean;
+	    bonus: ReferralBonus;
 	
 	    static createFrom(source: any = {}) {
 	        return new Referral(source);
@@ -252,17 +502,42 @@ export namespace catalog {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.signupUrl = source["signupUrl"];
+	        this.code = source["code"];
+	        this.program = source["program"];
+	        this.bonus = this.convertValues(source["bonus"], ReferralBonus);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
+	
 	export class Requirements {
 	    residentialIp: boolean;
 	    vpsIp: boolean;
 	    devicesPerAccount: number;
-	    devicesPerIp: number;
+	    devicesPerIp?: number;
 	    minBandwidth: string;
 	    gpu: boolean;
 	    minStorage: string;
+	    containerProhibited: boolean;
+	    proxyProhibited?: ProxyProhibited;
 	    note: string;
+	    noteColumn: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Requirements(source);
@@ -277,8 +552,29 @@ export namespace catalog {
 	        this.minBandwidth = source["minBandwidth"];
 	        this.gpu = source["gpu"];
 	        this.minStorage = source["minStorage"];
+	        this.containerProhibited = source["containerProhibited"];
+	        this.proxyProhibited = this.convertValues(source["proxyProhibited"], ProxyProhibited);
 	        this.note = source["note"];
+	        this.noteColumn = source["noteColumn"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	
 	export class Service {
@@ -286,7 +582,9 @@ export namespace catalog {
 	    slug: string;
 	    category: string;
 	    status: string;
+	    priority: number;
 	    website: string;
+	    supportUrl: string;
 	    description: string;
 	    shortDescription: string;
 	    referral: Referral;
@@ -298,6 +596,10 @@ export namespace catalog {
 	    cashout: Cashout;
 	    platforms: string[];
 	    collector: CollectorMetadata;
+	    payout: Payout;
+	    disclosure: Disclosure;
+	    deviceLink?: DeviceLink;
+	    resurrectionChecked: string;
 	    sourcePath: string;
 	    manualOnly: boolean;
 	    custom: boolean;
@@ -312,7 +614,9 @@ export namespace catalog {
 	        this.slug = source["slug"];
 	        this.category = source["category"];
 	        this.status = source["status"];
+	        this.priority = source["priority"];
 	        this.website = source["website"];
+	        this.supportUrl = source["supportUrl"];
 	        this.description = source["description"];
 	        this.shortDescription = source["shortDescription"];
 	        this.referral = this.convertValues(source["referral"], Referral);
@@ -324,6 +628,10 @@ export namespace catalog {
 	        this.cashout = this.convertValues(source["cashout"], Cashout);
 	        this.platforms = source["platforms"];
 	        this.collector = this.convertValues(source["collector"], CollectorMetadata);
+	        this.payout = this.convertValues(source["payout"], Payout);
+	        this.disclosure = this.convertValues(source["disclosure"], Disclosure);
+	        this.deviceLink = this.convertValues(source["deviceLink"], DeviceLink);
+	        this.resurrectionChecked = source["resurrectionChecked"];
 	        this.sourcePath = source["sourcePath"];
 	        this.manualOnly = source["manualOnly"];
 	        this.custom = source["custom"];
@@ -350,6 +658,31 @@ export namespace catalog {
 
 }
 
+export namespace collectors {
+	
+	export class Field {
+	    key: string;
+	    label: string;
+	    description: string;
+	    secret?: boolean;
+	    required?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Field(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.description = source["description"];
+	        this.secret = source["secret"];
+	        this.required = source["required"];
+	    }
+	}
+
+}
+
 export namespace config {
 	
 	export class AppConfig {
@@ -368,6 +701,12 @@ export namespace config {
 	    workerUrlPolicy: string;
 	    workerAllowedHosts: string[];
 	    workerAllowMetadata: boolean;
+	    fleetServerEnabled: boolean;
+	    upstreamUrl?: string;
+	    upstreamIntervalMinutes?: number;
+	    upstreamHistoryPushedTo?: string;
+	    driftWarningsOff?: boolean;
+	    driftIgnored?: Record<string, string>;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -390,6 +729,33 @@ export namespace config {
 	        this.workerUrlPolicy = source["workerUrlPolicy"];
 	        this.workerAllowedHosts = source["workerAllowedHosts"];
 	        this.workerAllowMetadata = source["workerAllowMetadata"];
+	        this.fleetServerEnabled = source["fleetServerEnabled"];
+	        this.upstreamUrl = source["upstreamUrl"];
+	        this.upstreamIntervalMinutes = source["upstreamIntervalMinutes"];
+	        this.upstreamHistoryPushedTo = source["upstreamHistoryPushedTo"];
+	        this.driftWarningsOff = source["driftWarningsOff"];
+	        this.driftIgnored = source["driftIgnored"];
+	    }
+	}
+
+}
+
+export namespace health {
+	
+	export class Report {
+	    slug: string;
+	    state: string;
+	    reasons: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Report(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.state = source["state"];
+	        this.reasons = source["reasons"];
 	    }
 	}
 
@@ -397,6 +763,64 @@ export namespace config {
 
 export namespace main {
 	
+	export class FleetViewPlatform {
+	    slug: string;
+	    usd?: number;
+	    shared: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetViewPlatform(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.usd = source["usd"];
+	        this.shared = source["shared"];
+	    }
+	}
+	export class FleetView {
+	    serverUrl: string;
+	    reportedAt: string;
+	    windowDays: number;
+	    currency: string;
+	    platforms: FleetViewPlatform[];
+	    totalUsd?: number;
+	    withoutReadings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.serverUrl = source["serverUrl"];
+	        this.reportedAt = source["reportedAt"];
+	        this.windowDays = source["windowDays"];
+	        this.currency = source["currency"];
+	        this.platforms = this.convertValues(source["platforms"], FleetViewPlatform);
+	        this.totalUsd = source["totalUsd"];
+	        this.withoutReadings = source["withoutReadings"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class DailyPoint {
 	    day: string;
 	    amount: number;
@@ -502,6 +926,7 @@ export namespace main {
 	export class EarningsSummary {
 	    displayCurrency: string;
 	    total: number;
+	    totalKnown: boolean;
 	    today: number;
 	    month: number;
 	    todayChange: number;
@@ -511,6 +936,9 @@ export namespace main {
 	    daily: DailyPoint[];
 	    ratesStale: boolean;
 	    ratesUpdated: string;
+	    paidOut?: number;
+	    earnedAllTime?: number;
+	    unpricedPayouts: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new EarningsSummary(source);
@@ -520,6 +948,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.displayCurrency = source["displayCurrency"];
 	        this.total = source["total"];
+	        this.totalKnown = source["totalKnown"];
 	        this.today = source["today"];
 	        this.month = source["month"];
 	        this.todayChange = source["todayChange"];
@@ -529,6 +958,9 @@ export namespace main {
 	        this.daily = this.convertValues(source["daily"], DailyPoint);
 	        this.ratesStale = source["ratesStale"];
 	        this.ratesUpdated = source["ratesUpdated"];
+	        this.paidOut = source["paidOut"];
+	        this.earnedAllTime = source["earnedAllTime"];
+	        this.unpricedPayouts = source["unpricedPayouts"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -570,13 +1002,23 @@ export namespace main {
 	    runtime: runtime.Status;
 	    services: catalog.Service[];
 	    deployments: store.Deployment[];
+	    outdatedServices: string[];
 	    earnings: store.EarningsRecord[];
 	    guides: runtime.InstallGuide[];
 	    notifications: Notification[];
 	    currencies: string[];
 	    summary: EarningsSummary;
 	    health: Record<string, store.HealthScore>;
+	    producerStates: Record<string, health.Report>;
 	    serviceDetails: Record<string, string>;
+	    fleet?: FleetView;
+	    hostname: string;
+	    collectorFields: Record<string, Array<collectors.Field>>;
+	    scaling: Record<string, services.ScalingLimit>;
+	    copies: Record<string, Array<runtime.ContainerInfo>>;
+	    addedDevices: Record<string, string>;
+	    stateBackups: statebackup.Row[];
+	    drift: Record<string, Array<string>>;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -588,13 +1030,23 @@ export namespace main {
 	        this.runtime = this.convertValues(source["runtime"], runtime.Status);
 	        this.services = this.convertValues(source["services"], catalog.Service);
 	        this.deployments = this.convertValues(source["deployments"], store.Deployment);
+	        this.outdatedServices = source["outdatedServices"];
 	        this.earnings = this.convertValues(source["earnings"], store.EarningsRecord);
 	        this.guides = this.convertValues(source["guides"], runtime.InstallGuide);
 	        this.notifications = this.convertValues(source["notifications"], Notification);
 	        this.currencies = source["currencies"];
 	        this.summary = this.convertValues(source["summary"], EarningsSummary);
 	        this.health = this.convertValues(source["health"], store.HealthScore, true);
+	        this.producerStates = this.convertValues(source["producerStates"], health.Report, true);
 	        this.serviceDetails = source["serviceDetails"];
+	        this.fleet = this.convertValues(source["fleet"], FleetView);
+	        this.hostname = source["hostname"];
+	        this.collectorFields = this.convertValues(source["collectorFields"], Array<collectors.Field>, true);
+	        this.scaling = this.convertValues(source["scaling"], services.ScalingLimit, true);
+	        this.copies = this.convertValues(source["copies"], Array<runtime.ContainerInfo>, true);
+	        this.addedDevices = source["addedDevices"];
+	        this.stateBackups = this.convertValues(source["stateBackups"], statebackup.Row);
+	        this.drift = source["drift"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -713,6 +1165,61 @@ export namespace main {
 	
 	
 	
+	
+	export class ProxyCandidate {
+	    slug: string;
+	    name: string;
+	    refusal: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.refusal = source["refusal"];
+	    }
+	}
+	export class ProxiesState {
+	    proxies: proxies.View[];
+	    candidates: ProxyCandidate[];
+	    tunnelImage: string;
+	    tunnelImageError: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxiesState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.proxies = this.convertValues(source["proxies"], proxies.View);
+	        this.candidates = this.convertValues(source["candidates"], ProxyCandidate);
+	        this.tunnelImage = source["tunnelImage"];
+	        this.tunnelImageError = source["tunnelImageError"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
 	export class SettingsState {
 	    environment: EnvSetting[];
 	    collectors: CollectorSetting[];
@@ -813,8 +1320,163 @@ export namespace preflight {
 
 }
 
+export namespace proxies {
+	
+	export class CapView {
+	    enabled: boolean;
+	    capBytes: number;
+	    thresholdPct: number;
+	    resetDay: number;
+	    usedBytes: number;
+	    periodStart: string;
+	    cappedAt: string;
+	    capReason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CapView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.capBytes = source["capBytes"];
+	        this.thresholdPct = source["thresholdPct"];
+	        this.resetDay = source["resetDay"];
+	        this.usedBytes = source["usedBytes"];
+	        this.periodStart = source["periodStart"];
+	        this.cappedAt = source["cappedAt"];
+	        this.capReason = source["capReason"];
+	    }
+	}
+	export class CopyView {
+	    slug: string;
+	    name: string;
+	    status: string;
+	    tunnelStatus: string;
+	    exitIp: string;
+	    exitCountry: string;
+	    stoppedByCap: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CopyView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.status = source["status"];
+	        this.tunnelStatus = source["tunnelStatus"];
+	        this.exitIp = source["exitIp"];
+	        this.exitCountry = source["exitCountry"];
+	        this.stoppedByCap = source["stoppedByCap"];
+	    }
+	}
+	export class TestResult {
+	    ok: boolean;
+	    at: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.at = source["at"];
+	        this.error = source["error"];
+	    }
+	}
+	export class View {
+	    id: number;
+	    name: string;
+	    kind: string;
+	    host: string;
+	    port: number;
+	    exitNode: string;
+	    loginServer: string;
+	    rotating: boolean;
+	    secrets: Record<string, boolean>;
+	    cap: CapView;
+	    lastExitIp: string;
+	    lastCountry: string;
+	    lastCheckedAt: string;
+	    lastTest?: TestResult;
+	    copies: CopyView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new View(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.kind = source["kind"];
+	        this.host = source["host"];
+	        this.port = source["port"];
+	        this.exitNode = source["exitNode"];
+	        this.loginServer = source["loginServer"];
+	        this.rotating = source["rotating"];
+	        this.secrets = source["secrets"];
+	        this.cap = this.convertValues(source["cap"], CapView);
+	        this.lastExitIp = source["lastExitIp"];
+	        this.lastCountry = source["lastCountry"];
+	        this.lastCheckedAt = source["lastCheckedAt"];
+	        this.lastTest = this.convertValues(source["lastTest"], TestResult);
+	        this.copies = this.convertValues(source["copies"], CopyView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
 export namespace runtime {
 	
+	export class ContainerInfo {
+	    slug: string;
+	    containerId: string;
+	    name: string;
+	    image: string;
+	    status: string;
+	    cpuPercent: number;
+	    memoryMb: number;
+	    instance: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ContainerInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.containerId = source["containerId"];
+	        this.name = source["name"];
+	        this.image = source["image"];
+	        this.status = source["status"];
+	        this.cpuPercent = source["cpuPercent"];
+	        this.memoryMb = source["memoryMb"];
+	        this.instance = source["instance"];
+	    }
+	}
 	export class DataMount {
 	    target: string;
 	    source: string;
@@ -1065,6 +1727,38 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class ProxiedResult {
+	    exitIp: string;
+	    country: string;
+	    warning: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxiedResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exitIp = source["exitIp"];
+	        this.country = source["country"];
+	        this.warning = source["warning"];
+	    }
+	}
+	export class ProxyTestResult {
+	    exitIp: string;
+	    country: string;
+	    ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProxyTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.exitIp = source["exitIp"];
+	        this.country = source["country"];
+	        this.ms = source["ms"];
+	    }
+	}
 	export class ScalingLimit {
 	    max: number;
 	    reason: string;
@@ -1078,6 +1772,67 @@ export namespace services {
 	        this.max = source["max"];
 	        this.reason = source["reason"];
 	    }
+	}
+
+}
+
+export namespace statebackup {
+	
+	export class Volume {
+	    target: string;
+	    holds: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Volume(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.holds = source["holds"];
+	    }
+	}
+	export class Row {
+	    slug: string;
+	    name: string;
+	    volumes: Volume[];
+	    state: string;
+	    confirmedAt: string;
+	    method: string;
+	    tracksChanges: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Row(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.volumes = this.convertValues(source["volumes"], Volume);
+	        this.state = source["state"];
+	        this.confirmedAt = source["confirmedAt"];
+	        this.method = source["method"];
+	        this.tracksChanges = source["tracksChanges"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -1123,6 +1878,7 @@ export namespace store {
 	    balance: number;
 	    currency: string;
 	    error?: string;
+	    errorKind?: string;
 	    createdAt: string;
 	
 	    static createFrom(source: any = {}) {
@@ -1135,6 +1891,7 @@ export namespace store {
 	        this.balance = source["balance"];
 	        this.currency = source["currency"];
 	        this.error = source["error"];
+	        this.errorKind = source["errorKind"];
 	        this.createdAt = source["createdAt"];
 	    }
 	}
@@ -1190,7 +1947,6 @@ export namespace store {
 	        this.stops = source["stops"];
 	    }
 	}
-
 	export class Payout {
 	    id: number;
 	    platform: string;
@@ -1200,11 +1956,11 @@ export namespace store {
 	    method: string;
 	    paidOn: string;
 	    createdAt: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Payout(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -1217,20 +1973,21 @@ export namespace store {
 	        this.createdAt = source["createdAt"];
 	    }
 	}
+
 }
 
 export namespace usage {
-
+	
 	export class Container {
 	    name: string;
 	    slug: string;
 	    service: string;
 	    noCounters: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Container(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -1254,11 +2011,11 @@ export namespace usage {
 	    trafficPartial: boolean[];
 	    cpuPartial: boolean[];
 	    memoryPartial: boolean[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new View(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.days = source["days"];
@@ -1276,7 +2033,7 @@ export namespace usage {
 	        this.cpuPartial = source["cpuPartial"];
 	        this.memoryPartial = source["memoryPartial"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

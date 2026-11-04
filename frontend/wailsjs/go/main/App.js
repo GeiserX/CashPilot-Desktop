@@ -30,6 +30,14 @@ export function DeleteCustomService(arg1) {
   return window['go']['main']['App']['DeleteCustomService'](arg1);
 }
 
+export function DeleteProxy(arg1) {
+  return window['go']['main']['App']['DeleteProxy'](arg1);
+}
+
+export function DeployProxiedCopy(arg1, arg2) {
+  return window['go']['main']['App']['DeployProxiedCopy'](arg1, arg2);
+}
+
 export function DeployService(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DeployService'](arg1, arg2, arg3, arg4);
 }
@@ -64,6 +72,10 @@ export function GetFleetState() {
 
 export function GetLogs(arg1, arg2) {
   return window['go']['main']['App']['GetLogs'](arg1, arg2);
+}
+
+export function GetProxiesState() {
+  return window['go']['main']['App']['GetProxiesState']();
 }
 
 export function GetRuntimeGuides() {
@@ -106,12 +118,12 @@ export function ManagedRuntimePlan() {
   return window['go']['main']['App']['ManagedRuntimePlan']();
 }
 
-export function PreflightService(arg1) {
-  return window['go']['main']['App']['PreflightService'](arg1);
-}
-
 export function PlanServiceRemoval(arg1) {
   return window['go']['main']['App']['PlanServiceRemoval'](arg1);
+}
+
+export function PreflightService(arg1) {
+  return window['go']['main']['App']['PreflightService'](arg1);
 }
 
 export function RecordPayout(arg1, arg2, arg3, arg4, arg5) {
@@ -134,8 +146,16 @@ export function RemovePayout(arg1) {
   return window['go']['main']['App']['RemovePayout'](arg1);
 }
 
+export function RemoveProxiedCopy(arg1, arg2) {
+  return window['go']['main']['App']['RemoveProxiedCopy'](arg1, arg2);
+}
+
 export function RemoveService(arg1, arg2, arg3) {
   return window['go']['main']['App']['RemoveService'](arg1, arg2, arg3);
+}
+
+export function ResetProxyUsage(arg1) {
+  return window['go']['main']['App']['ResetProxyUsage'](arg1);
 }
 
 export function RestartService(arg1) {
@@ -150,8 +170,16 @@ export function SaveCustomService(arg1, arg2) {
   return window['go']['main']['App']['SaveCustomService'](arg1, arg2);
 }
 
+export function SaveProxy(arg1, arg2) {
+  return window['go']['main']['App']['SaveProxy'](arg1, arg2);
+}
+
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function StartProxiedCopy(arg1, arg2) {
+  return window['go']['main']['App']['StartProxiedCopy'](arg1, arg2);
 }
 
 export function StartService(arg1) {
@@ -162,12 +190,20 @@ export function StartServiceCopy(arg1, arg2) {
   return window['go']['main']['App']['StartServiceCopy'](arg1, arg2);
 }
 
+export function StopProxiedCopy(arg1, arg2) {
+  return window['go']['main']['App']['StopProxiedCopy'](arg1, arg2);
+}
+
 export function StopService(arg1) {
   return window['go']['main']['App']['StopService'](arg1);
 }
 
 export function StopServiceCopy(arg1, arg2) {
   return window['go']['main']['App']['StopServiceCopy'](arg1, arg2);
+}
+
+export function TestProxy(arg1) {
+  return window['go']['main']['App']['TestProxy'](arg1);
 }
 
 export function UndoStateBackup(arg1) {

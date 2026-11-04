@@ -4,10 +4,11 @@ import {main} from '../models';
 import {bgservice} from '../models';
 import {runtime} from '../models';
 import {store} from '../models';
-import {catalog} from '../models';
-import {preflight} from '../models';
-import {usage} from '../models';
 import {services} from '../models';
+import {catalog} from '../models';
+import {usage} from '../models';
+import {preflight} from '../models';
+import {proxies} from '../models';
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
 
@@ -23,7 +24,11 @@ export function ConfirmStateBackup(arg1:string):Promise<void>;
 
 export function DeleteCustomService(arg1:string):Promise<void>;
 
-export function DeployService(arg1:string,arg2:Record<string, string>,arg3:string,arg4:number):Promise<store.Deployment>;
+export function DeleteProxy(arg1:number):Promise<void>;
+
+export function DeployProxiedCopy(arg1:string,arg2:number):Promise<services.ProxiedResult>;
+
+export function DeployService(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any):Promise<store.Deployment>;
 
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
 
@@ -40,6 +45,8 @@ export function GetEarningsSummary():Promise<main.EarningsSummary>;
 export function GetFleetState():Promise<main.FleetState>;
 
 export function GetLogs(arg1:string,arg2:number):Promise<string>;
+
+export function GetProxiesState():Promise<main.ProxiesState>;
 
 export function GetRuntimeGuides():Promise<Array<runtime.InstallGuide>>;
 
@@ -61,8 +68,9 @@ export function ListServices():Promise<Array<catalog.Service>>;
 
 export function ManagedRuntimePlan():Promise<runtime.ManagedRuntimePlan>;
 
-export function PreflightService(arg1:string):Promise<preflight.Report>;
 export function PlanServiceRemoval(arg1:string):Promise<runtime.RemovalPlan>;
+
+export function PreflightService(arg1:string):Promise<preflight.Report>;
 
 export function RecordPayout(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<store.Payout>;
 
@@ -74,7 +82,11 @@ export function RemoveFleetDevice(arg1:number):Promise<main.FleetState>;
 
 export function RemovePayout(arg1:number):Promise<void>;
 
+export function RemoveProxiedCopy(arg1:string,arg2:number):Promise<void>;
+
 export function RemoveService(arg1:string,arg2:boolean,arg3:boolean):Promise<void>;
+
+export function ResetProxyUsage(arg1:number):Promise<Array<string>>;
 
 export function RestartService(arg1:string):Promise<void>;
 
@@ -82,14 +94,22 @@ export function SaveCredentials(arg1:string,arg2:Record<string, string>):Promise
 
 export function SaveCustomService(arg1:string,arg2:services.CustomDefinition):Promise<services.CustomServiceView>;
 
+export function SaveProxy(arg1:number,arg2:Record<string, string>):Promise<proxies.View>;
+
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
+
+export function StartProxiedCopy(arg1:string,arg2:number):Promise<void>;
 
 export function StartService(arg1:string):Promise<void>;
 
 export function StartServiceCopy(arg1:string,arg2:number):Promise<void>;
 
+export function StopProxiedCopy(arg1:string,arg2:number):Promise<void>;
+
 export function StopService(arg1:string):Promise<void>;
 
 export function StopServiceCopy(arg1:string,arg2:number):Promise<void>;
+
+export function TestProxy(arg1:number):Promise<services.ProxyTestResult>;
 
 export function UndoStateBackup(arg1:string):Promise<void>;
