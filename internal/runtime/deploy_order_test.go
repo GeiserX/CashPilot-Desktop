@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,6 +28,18 @@ type fakeDocker struct {
 	// message, the way Docker refuses a host port another container holds.
 	createRefusal string
 	startRefusal  string
+	// liveLabels, when set, makes the container already holding the deploy's name
+	// carry these labels, so a test can say whose container it is.
+	liveLabels map[string]string
+	// liveMounts, with liveLabels, gives the live container these mounts.
+	liveMounts []map[string]any
+	// inspectStatus, when set, makes the container inspect answer with this HTTP
+	// status and an error body: 404 is "no such container", 500 a daemon failure.
+	inspectStatus int
+	createBody    []byte
+	// removeQueries is the query string of each container removal, so a test can
+	// tell whether anonymous volumes went with it (v=1).
+	removeQueries []string
 }
 
 func (f *fakeDocker) record(call string) {
@@ -65,6 +78,16 @@ func (f *fakeDocker) start(t *testing.T) {
 		switch {
 		case path == "/_ping":
 			w.WriteHeader(http.StatusOK)
+		case f.inspectStatus != 0 && r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
+			f.record("GET " + path)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(f.inspectStatus)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "inspect answered " + http.StatusText(f.inspectStatus)})
+		case f.liveLabels != nil && r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
+			f.record("GET " + path)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "live", "Config": map[string]any{"Labels": f.liveLabels}, "Mounts": f.liveMounts})
 		case path == "/images/create":
 			f.record("POST /images/create")
 			if f.pullFail {
@@ -87,6 +110,10 @@ func (f *fakeDocker) start(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "sha256:image", "Config": map[string]any{"Cmd": cmd}})
 		case path == "/containers/create":
 			f.record("POST /containers/create")
+			body, _ := io.ReadAll(r.Body)
+			f.mu.Lock()
+			f.createBody = body
+			f.mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
 			if f.createRefusal != "" {
 				w.WriteHeader(http.StatusConflict)
@@ -106,6 +133,9 @@ func (f *fakeDocker) start(t *testing.T) {
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/containers/"):
 			f.record("DELETE " + path)
+			f.mu.Lock()
+			f.removeQueries = append(f.removeQueries, r.URL.RawQuery)
+			f.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
 		default:
 			f.record(r.Method + " " + path)
@@ -246,5 +276,109 @@ func TestDeployStillReplacesTheContainerOnTheHappyPath(t *testing.T) {
 	}
 	if !(pull < remove && remove < create) {
 		t.Fatalf("expected pull -> remove -> create, got %v", calls)
+	}
+}
+
+// THE RULE: a deploy replaces only its own container. Copy 2 of "foo" and copy 1 of a
+// service slugged "foo-2" are both cashpilot-foo-2; a deploy of one must not stop the
+// other and take its name. The second case is the positive control: the same fake,
+// with the container labelled as this service, is replaced as before.
+func TestDeployRefusesToReplaceAnotherServicesContainer(t *testing.T) {
+	fake := &fakeDocker{liveLabels: map[string]string{LabelService: "orderly", LabelInstance: "2"}}
+	fake.start(t)
+	_, err := (&DockerProvider{}).Deploy(context.Background(), deploySpec("orderly-2"), nil)
+	if err == nil || !strings.Contains(err.Error(), "already belongs to orderly (copy 2)") {
+		t.Fatalf("Deploy error = %v, want a refusal naming the owner", err)
+	}
+	if fake.removedAContainer() {
+		t.Fatalf("the other service's container was removed (calls: %v)", fake.recorded())
+	}
+
+	own := &fakeDocker{liveLabels: map[string]string{LabelService: "orderly"}}
+	own.start(t)
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), deploySpec("orderly"), nil); err != nil {
+		t.Fatalf("redeploy over its own container: %v", err)
+	}
+	if !own.removedAContainer() {
+		t.Fatalf("its own container was not replaced (calls: %v)", own.recorded())
+	}
+}
+
+// THE RULE: an inspect that fails for any reason but "no such container" stops the
+// deploy. Without it the ownership check is skipped and the forced removal below it
+// takes whatever holds the name, another service's container included. The 404 case
+// is the positive control: a first deploy, where nothing holds the name, still runs.
+func TestDeployStopsWhenTheContainerCannotBeInspected(t *testing.T) {
+	fake := &fakeDocker{inspectStatus: http.StatusInternalServerError}
+	fake.start(t)
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), deploySpec("orderly"), nil); err == nil {
+		t.Fatalf("Deploy succeeded although the existing container could not be inspected")
+	}
+	if fake.removedAContainer() {
+		t.Fatalf("a container nobody could inspect was removed (calls: %v)", fake.recorded())
+	}
+
+	fresh := &fakeDocker{inspectStatus: http.StatusNotFound}
+	fresh.start(t)
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), deploySpec("orderly"), nil); err != nil {
+		t.Fatalf("first deploy with no existing container: %v", err)
+	}
+}
+
+// THE RULE: a custom service mounts only its own named volume. A container already
+// holding cashpilot-custom-x with a host bind at the data path must not hand that bind
+// to the replacement, or a custom service gets the host directory the restrictions
+// forbid. The catalog service is the positive control: there the live bind is kept.
+func TestDeployCustomServiceNeverKeepsALiveHostBind(t *testing.T) {
+	live := []map[string]any{{"Type": "bind", "Source": "/etc", "Destination": "/data", "RW": true}}
+	createdSources := func(slug string, custom bool) string {
+		t.Helper()
+		fake := &fakeDocker{liveLabels: map[string]string{LabelService: slug}, liveMounts: live}
+		fake.start(t)
+		spec := deploySpec(slug)
+		spec.Service.Custom = custom
+		spec.Service.Docker.Volumes = []string{"cashpilot-" + slug + "-data:/data"}
+		if _, err := (&DockerProvider{}).Deploy(context.Background(), spec, nil); err != nil {
+			t.Fatalf("Deploy %s: %v", slug, err)
+		}
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return string(fake.createBody)
+	}
+
+	if body := createdSources("custom-orderly", true); strings.Contains(body, `"/etc"`) {
+		t.Fatalf("the custom replacement mounts the live host bind: %s", body)
+	}
+	if body := createdSources("orderly", false); !strings.Contains(body, `"/etc"`) {
+		t.Fatalf("control: the catalog replacement lost its live bind: %s", body)
+	}
+}
+
+// THE RULE: replacing a custom service's container removes the old container's
+// anonymous volumes. The replacement gets fresh ones, so the old ones only pile up;
+// named volumes, the data path's included, are never touched by v=1. A catalog
+// service is the control: its replacement keeps removing without v=1, as before.
+func TestDeployCustomServiceRemovesTheOldAnonymousVolumes(t *testing.T) {
+	removal := func(slug string, custom bool) string {
+		t.Helper()
+		fake := &fakeDocker{liveLabels: map[string]string{LabelService: slug}}
+		fake.start(t)
+		spec := deploySpec(slug)
+		spec.Service.Custom = custom
+		if _, err := (&DockerProvider{}).Deploy(context.Background(), spec, nil); err != nil {
+			t.Fatalf("Deploy %s: %v", slug, err)
+		}
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		if len(fake.removeQueries) == 0 {
+			t.Fatalf("Deploy %s removed nothing (calls: %v)", slug, fake.calls)
+		}
+		return fake.removeQueries[0]
+	}
+	if q := removal("custom-orderly", true); !strings.Contains(q, "v=1") {
+		t.Fatalf("custom replacement removal query = %q, want v=1", q)
+	}
+	if q := removal("orderly", false); strings.Contains(q, "v=1") {
+		t.Fatalf("control: catalog replacement removal query = %q, want no v=1", q)
 	}
 }

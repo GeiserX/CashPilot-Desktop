@@ -20,6 +20,8 @@ import { copyRows, firstCopyLabel } from "./instances.js";
 import { renderMystNodes } from "./myst.js";
 import { rowButton } from "./actions.js";
 import { containerState } from "./attention.js";
+import { customBadge } from "./custom.js";
+import { outdatedBadge } from "./catalog.js";
 
 export const SERVICE_COLUMNS = 8;
 
@@ -113,6 +115,8 @@ export function renderServicesTable(input: ServicesTableInput): string {
   const rows = deployments.map((deployment) => {
     const slug = deployment.slug;
     const name = nameOf(slug);
+    const service = services.find((svc) => svc.slug === slug);
+    const custom = Boolean(service?.custom);
     const copies = input.copies?.[slug];
     const running = deployment.status === "running";
     // The provider refuses the client: starting it again cannot help.
@@ -120,8 +124,9 @@ export function renderServicesTable(input: ServicesTableInput): string {
     const nodeDetail = slug === "mysterium" ? renderMystNodes(input.serviceDetails?.["mysterium"]) : "";
     const tags = [
       renderProducerBadge(input.producerStates?.[slug], deployment.status),
+      customBadge(service),
       customImageBadge(deployment.customImage),
-      outdatedSet.has(slug) ? `<span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : "",
+      outdatedSet.has(slug) ? outdatedBadge(service) : "",
       input.drift?.[slug]?.length ? `<span class="badge warn" title="${escapeHtml(`Does not match the catalog: ${input.drift[slug].join("; ")}. Redeploy it to fix.`)}">needs fixing</span>` : "",
     ].filter(Boolean).join(" ");
     const instances = copies && copies.length ? ` <span class="badge-instances">${copies.length + 1}x</span>` : "";
@@ -133,13 +138,13 @@ export function renderServicesTable(input: ServicesTableInput): string {
         </td>
         <td>${statusCell(deployment.status, instances)}${tags ? `<div class="cell-tags">${tags}</div>` : ""}</td>
         <td class="c-num">${renderHealthBadge(input.health?.[slug]) || `<span class="muted">&mdash;</span>`}</td>
-        <td class="c-num c-bal">${balanceCell(itemBy.get(slug), recordBy.get(slug), displayCurrency)}</td>
+        <td class="c-num c-bal">${custom ? `<span class="muted" title="CashPilot has no collector for a custom service. Check its earnings on the provider's site.">&mdash;</span><div class="cell-sub">no collector</div>` : balanceCell(itemBy.get(slug), recordBy.get(slug), displayCurrency)}</td>
         <td class="c-num">${deployment.cpuPercent.toFixed(1)}%</td>
         <td class="c-num">${deployment.memoryMb.toFixed(0)} MB</td>
         <td class="c-pay">${payoutCell(itemBy.get(slug))}</td>
         <td class="c-act">
           <div class="action-btns">
-            ${rowButton("collect", slug, "Collect balance now")}
+            ${custom ? "" : rowButton("collect", slug, "Collect balance now")}
             ${rowButton("logs", slug, "Logs")}
             ${running ? rowButton("stop", slug, "Stop") : disabledAccount ? "" : rowButton("start", slug, "Start")}
             ${rowButton("remove", slug, "Remove")}

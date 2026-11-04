@@ -10,6 +10,7 @@ import type { Deployment, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { customImageBadge } from "./image.js";
 import { containerState } from "./attention.js";
+import { customBadge } from "./custom.js";
 
 /** "$0-5 / device" from the catalog's monthly estimate, or a dash when it has none. */
 export function estimateText(service: Service): string {
@@ -28,7 +29,15 @@ function statusDot(status: string): string {
   return `<span class="status-dot ${cls}" title="Deployed here: ${escapeHtml(status || "unknown")}"></span> `;
 }
 
-const KIND: Record<string, string> = { bandwidth: "Bandwidth", depin: "DePIN", storage: "Storage", compute: "Compute" };
+const KIND: Record<string, string> = { bandwidth: "Bandwidth", depin: "DePIN", storage: "Storage", compute: "Compute", custom: "Custom" };
+
+/** "update available": the catalog changed the image, or the user edited a custom service's. */
+export function outdatedBadge(service: Pick<Service, "custom"> | undefined): string {
+  const title = service?.custom
+    ? "You changed this service's image since it was deployed. Redeploy it to apply."
+    : "The provider changed this service's image. Re-deploy from the catalog to keep earning.";
+  return `<span class="badge warn" title="${title}">update available</span>`;
+}
 
 export function catalogRow(service: Service, deployment: Deployment | undefined, outdated: boolean): string {
   const deployed = Boolean(deployment);
@@ -40,8 +49,9 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
     ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">Sign up</button>`
     : "";
   const tags = [
+    customBadge(service),
     customImageBadge(deployment?.customImage),
-    outdated ? `<span class="badge warn" title="The provider changed this service's image. Re-deploy from the catalog to keep earning.">update available</span>` : "",
+    outdated ? outdatedBadge(service) : "",
   ].filter(Boolean).join(" ");
   return `
     <tr>
