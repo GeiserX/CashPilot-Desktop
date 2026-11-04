@@ -266,6 +266,13 @@ check(
   referralNote({...honeygain, referral: {signupUrl: "https://example.com/signup", code: ""}}) === "",
 );
 check("a service with no referral block gets no note", referralNote({...honeygain, referral: undefined}) === "");
+const withBonus = referralNote({
+  ...honeygain,
+  referral: {...honeygain.referral, bonus: {referrer: "10%", referee: "$3 <b>on joining</b>"}},
+});
+check("the note leads with the new user's bonus", withBonus.includes("New-user bonus with this link:") && withBonus.includes("$3"), withBonus);
+check("the bonus text is escaped", !withBonus.includes("<b>") && withBonus.includes("&lt;b&gt;"), withBonus);
+check("no bonus recorded, no bonus line", !note.includes("New-user bonus"), note);
 
 // ---------------------------------------------------------------------------
 // The device link: after a deploy, a provider that pays a device only once its id

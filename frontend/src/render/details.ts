@@ -159,7 +159,10 @@ export function signupButton(service: Service, label = "Create account"): string
  */
 export function referralNote(service: Service): string {
   if (!service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
-  return `<p class="referral-note">Referral link: the CashPilot maintainer may earn a commission from it.</p>`;
+  // The new user's bonus first, when the catalog records one: it is the reason to use the link.
+  const referee = (service.referral.bonus?.referee || "").trim();
+  const bonus = referee ? `<strong>New-user bonus with this link:</strong> ${escapeHtml(referee)}. ` : "";
+  return `<p class="referral-note">${bonus}Referral link: the CashPilot maintainer may earn a commission from it, which helps keep CashPilot free and maintained.</p>`;
 }
 
 /**

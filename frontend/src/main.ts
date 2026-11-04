@@ -662,7 +662,7 @@ function renderCatalog(current: AppState) {
             <div class="table-scroll">
               ${renderCatalogTable(services, current.deployments || [], current.outdatedServices)}
             </div>
-            <p class="referral-note">Visit and Sign up links to providers with a referral programme are referral links: the CashPilot maintainer may earn a commission from them.</p>
+            <p class="referral-note">Visit and Sign up links to providers with a referral programme are referral links: the CashPilot maintainer may earn a commission from them. Using them costs you nothing, sometimes gets you a sign-up bonus, and is the simplest way to support CashPilot.</p>
           </section>
         </main>
         ${pageFoot()}
