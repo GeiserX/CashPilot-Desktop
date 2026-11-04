@@ -54,9 +54,22 @@ type Service struct {
 	// carried so the reason a dead service stays dead travels with the entry instead
 	// of living only in the web repository's history.
 	ResurrectionChecked string `json:"resurrectionChecked" yaml:"resurrection_checked"`
-	SourcePath          string `json:"sourcePath" yaml:"-"`
-	ManualOnly          bool   `json:"manualOnly" yaml:"-"`
+	// Rating is the web catalog's evidence for a provider's grade (verdicts, cons,
+	// pros). Desktop does not show grades yet, so the block is read and ignored:
+	// declaring it keeps the strict-decode test green after a sync. When Desktop
+	// shows grades it has to grade from the web repository's services/_ratings.yml.
+	Rating     IgnoredBlock `json:"-" yaml:"rating"`
+	SourcePath string       `json:"sourcePath" yaml:"-"`
+	ManualOnly bool         `json:"manualOnly" yaml:"-"`
 }
+
+// IgnoredBlock is a catalog key Desktop reads and deliberately drops, so the
+// strict-decode test accepts it without Desktop modelling its contents. Every
+// use is listed in catalog-overlay/README.md.
+type IgnoredBlock struct{}
+
+// UnmarshalYAML accepts any value and keeps nothing.
+func (*IgnoredBlock) UnmarshalYAML(*yaml.Node) error { return nil }
 
 type Referral struct {
 	SignupURL string `json:"signupUrl" yaml:"signup_url"`
