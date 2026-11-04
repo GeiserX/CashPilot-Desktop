@@ -11,6 +11,8 @@ import {
   BackgroundHelperStatus,
   InstallBackgroundHelper,
   ListCustomServices,
+  ApplyImport,
+  PreviewImport,
   RemoveBackgroundHelper,
   CheckRuntime,
   CollectService,
@@ -64,13 +66,14 @@ import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/d
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
-import type { CustomEnv, CustomServiceView } from "./wails";
+import { importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
+import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult } from "./wails";
 import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
 let onboardingStep: "welcome" | "runtime" = "welcome";
-type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet";
+type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "import";
 
 let activeView: View = "dashboard";
 let wizardStep = 1;
@@ -81,6 +84,13 @@ let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
 // load), the one open in the editor ("new" for the add form), and a load failure.
 let customViews: CustomServiceView[] | null = null;
+// Import from another tool. importRequest is what was last previewed: a save sends the
+// same files again, so a masked value never has to come back from the page.
+let importSource = "auto";
+let importRequest: ImportRequest | null = null;
+let importPreview: ImportPreview | null = null;
+let importResult: ImportResult | null = null;
+let importDeployed: string[] = [];
 let customEditing: CustomServiceView | "new" | null = null;
 let customLoadError = "";
 let resetScrollAfterRender = false;
@@ -154,6 +164,10 @@ function render() {
   }
   if (activeView === "fleet") {
     void renderFleet(state);
+    return;
+  }
+  if (activeView === "import") {
+    renderImport(state);
     return;
   }
   renderDashboard(state);
@@ -624,7 +638,7 @@ function wireShellNav() {
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
-      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet") {
+      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "import") {
         activeView = next;
         if (next === "wizard") {
           wizardStep = 1;
@@ -816,6 +830,116 @@ async function deleteCustomService(slug: string) {
   }
 }
 
+// The import page: the files go to PreviewImport for a dry run, the ticked rows to
+// ApplyImport, and each saved service deploys through the normal DeployService.
+function renderImport(current: AppState) {
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      <div class="main-content">
+        ${topbar("settings", current)}
+        <main class="page-content">
+          ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
+          ${renderImportInput(importSource)}
+          ${importPreview ? renderImportPreview(importPreview) : ""}
+          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed) : ""}
+        </main>
+        ${pageFoot()}
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  document.querySelector<HTMLSelectElement>("#import-source")?.addEventListener("change", (event) => {
+    importSource = (event.target as HTMLSelectElement).value;
+  });
+  document.querySelector("#import-preview-btn")?.addEventListener("click", () => void runImportPreview());
+  document.querySelector("#import-apply-btn")?.addEventListener("click", () => void runImportApply());
+  document.querySelectorAll<HTMLButtonElement>("[data-import-deploy]").forEach((button) => {
+    button.addEventListener("click", () => void runImportDeploy(button.dataset.importDeploy || ""));
+  });
+}
+
+async function readImportFiles(): Promise<ImportFile[]> {
+  const files: ImportFile[] = [];
+  const picked = Array.from(document.querySelector<HTMLInputElement>("#import-files")?.files || []);
+  for (const file of picked) {
+    // Refuse before reading a file that alone is over the limit.
+    if (file.size > 64 * 1024) throw new Error(`${file.name} is larger than 64 KiB; this is not a config file.`);
+    files.push({ name: file.name, content: await file.text() });
+  }
+  const pasted = document.querySelector<HTMLTextAreaElement>("#import-paste")?.value || "";
+  if (pasted.trim()) files.push({ name: "pasted text", content: pasted });
+  const problem = importFilesProblem(files);
+  if (problem) throw new Error(problem);
+  return files;
+}
+
+async function runImportPreview() {
+  let files: ImportFile[];
+  try {
+    files = await readImportFiles();
+  } catch (error) {
+    showErrorToast({ scope: "import", error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  try {
+    const preview = await PreviewImport({ source: importSource, files });
+    importRequest = { source: preview.source, files };
+    importPreview = preview;
+    importResult = null;
+    importDeployed = [];
+    if (state) renderImport(state);
+  } catch (error) {
+    showErrorToast({ scope: "import", error: String(error) });
+  }
+}
+
+async function runImportApply() {
+  if (!importRequest) return;
+  const picks = Array.from(document.querySelectorAll<HTMLInputElement>(".import-pick")).map((el) => ({
+    slug: el.dataset.importSlug || "", checked: el.checked,
+  }));
+  const inputs = Array.from(document.querySelectorAll<HTMLInputElement>(".import-extra"));
+  const { slugs, extra } = importChoices(picks, inputs.map((el) => ({
+    slug: el.dataset.importSlug || "", key: el.dataset.importKey || "", value: el.value,
+  })));
+  if (!slugs.length) {
+    showErrorToast({ scope: "import", error: "Tick at least one service." });
+    return;
+  }
+  for (const input of inputs) {
+    if (slugs.includes(input.dataset.importSlug || "") && input.value.trim() && !input.checkValidity()) {
+      input.reportValidity();
+      return;
+    }
+  }
+  try {
+    importResult = await ApplyImport({ ...importRequest, slugs, extra });
+    importDeployed = [];
+    state = await GetAppState();
+    showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
+    if (state) renderImport(state);
+  } catch (error) {
+    showErrorToast({ scope: "import", error: String(error) });
+  }
+}
+
+async function runImportDeploy(slug: string) {
+  if (!slug) return;
+  const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
+  if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.`)) return;
+  try {
+    await DeployService(slug, {}, null, null);
+    importDeployed = [...importDeployed, slug];
+    state = await GetAppState();
+    if (state) renderImport(state);
+  } catch (error) {
+    showErrorToast({ scope: "deploy", error: String(error) });
+  }
+}
+
 async function renderSettings(current: AppState) {
   let settings: SettingsState;
   try {
@@ -863,6 +987,16 @@ async function renderSettings(current: AppState) {
             </div>
             <div class="collector-grid">
               ${settings.collectors.map(renderCollectorSetting).join("")}
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <span class="card-title">Import from another tool</span>
+                <p class="muted compact-copy">Coming from money4band, CashFactory or InternetIncome? Bring your service logins over instead of typing them again.</p>
+              </div>
+              <button class="compact-btn" data-view="import">Import</button>
             </div>
           </section>
 

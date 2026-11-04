@@ -54,6 +54,65 @@ declare module "../wailsjs/go/main/App" {
   export function ListCustomServices(): Promise<CustomServiceView[]>;
   export function SaveCustomService(slug: string, definition: CustomDefinition): Promise<CustomServiceView>;
   export function DeleteCustomService(slug: string): Promise<void>;
+  // Bring logins over from money4band, CashFactory or InternetIncome. Preview is the
+  // dry run (a secret is only ever "set"); Apply parses the same files again and
+  // saves the ticked, ready services, never over a value already set here.
+  export function PreviewImport(req: ImportRequest): Promise<ImportPreview>;
+  export function ApplyImport(req: ImportApplyRequest): Promise<ImportResult>;
+}
+
+export interface ImportFile {
+  name: string;
+  content: string;
+}
+
+export interface ImportRequest {
+  source: string;
+  files: ImportFile[];
+}
+
+export interface ImportApplyRequest extends ImportRequest {
+  slugs: string[];
+  extra: Record<string, Record<string, string>>;
+}
+
+export type ImportFieldState = "imported" | "missing" | "retype" | "placeholder" | "invalid";
+export type ImportRowState = "ready" | "missing_fields" | "invalid" | "unusable" | "not_deployable";
+
+export interface ImportField {
+  key: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  state: ImportFieldState;
+  pattern: string;
+  // Never set for a secret field.
+  value?: string;
+}
+
+export interface ImportRow {
+  slug: string;
+  name: string;
+  app: string;
+  selected: boolean;
+  offInSource: boolean;
+  state: ImportRowState;
+  reason: string;
+  fields: ImportField[];
+  existing: { configured: boolean; deployed: boolean };
+}
+
+export interface ImportPreview {
+  source: string;
+  sourceName: string;
+  rows: ImportRow[];
+  notImported: { key: string; reason: string }[];
+  notices: string[];
+}
+
+export interface ImportResult {
+  saved: string[];
+  kept: Record<string, string[]>;
 }
 
 export interface CustomEnv {

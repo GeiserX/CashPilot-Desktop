@@ -8,8 +8,11 @@ import {catalog} from '../models';
 import {preflight} from '../models';
 import {usage} from '../models';
 import {services} from '../models';
+import {importers} from '../models';
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
+
+export function ApplyImport(arg1:main.ImportApplyRequest):Promise<main.ImportResult>;
 
 export function BackgroundHelperStatus():Promise<bgservice.Status>;
 
@@ -63,6 +66,8 @@ export function ManagedRuntimePlan():Promise<runtime.ManagedRuntimePlan>;
 
 export function PreflightService(arg1:string):Promise<preflight.Report>;
 export function PlanServiceRemoval(arg1:string):Promise<runtime.RemovalPlan>;
+
+export function PreviewImport(arg1:main.ImportRequest):Promise<importers.Preview>;
 
 export function RecordPayout(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<store.Payout>;
 

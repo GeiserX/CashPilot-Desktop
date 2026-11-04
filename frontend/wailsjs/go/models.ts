@@ -395,6 +395,162 @@ export namespace config {
 
 }
 
+export namespace importers {
+	
+	export class Existing {
+	    configured: boolean;
+	    deployed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Existing(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.configured = source["configured"];
+	        this.deployed = source["deployed"];
+	    }
+	}
+	export class Field {
+	    key: string;
+	    label: string;
+	    secret: boolean;
+	    required: boolean;
+	    state: string;
+	    pattern: string;
+	    value?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Field(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.secret = source["secret"];
+	        this.required = source["required"];
+	        this.state = source["state"];
+	        this.pattern = source["pattern"];
+	        this.value = source["value"];
+	    }
+	}
+	export class File {
+	    name: string;
+	    content: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new File(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.content = source["content"];
+	    }
+	}
+	export class Skipped {
+	    key: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Skipped(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class Row {
+	    slug: string;
+	    name: string;
+	    app: string;
+	    selected: boolean;
+	    offInSource: boolean;
+	    state: string;
+	    reason: string;
+	    fields: Field[];
+	    existing: Existing;
+	
+	    static createFrom(source: any = {}) {
+	        return new Row(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.app = source["app"];
+	        this.selected = source["selected"];
+	        this.offInSource = source["offInSource"];
+	        this.state = source["state"];
+	        this.reason = source["reason"];
+	        this.fields = this.convertValues(source["fields"], Field);
+	        this.existing = this.convertValues(source["existing"], Existing);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Preview {
+	    source: string;
+	    sourceName: string;
+	    rows: Row[];
+	    notImported: Skipped[];
+	    notices: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Preview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.sourceName = source["sourceName"];
+	        this.rows = this.convertValues(source["rows"], Row);
+	        this.notImported = this.convertValues(source["notImported"], Skipped);
+	        this.notices = source["notices"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+
+}
+
 export namespace main {
 	
 	export class DailyPoint {
@@ -411,6 +567,91 @@ export namespace main {
 	        this.amount = source["amount"];
 	    }
 	}
+	export class ImportApplyRequest {
+	    source: string;
+	    files: importers.File[];
+	    slugs: string[];
+	    extra: Record<string, any>;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportApplyRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.files = this.convertValues(source["files"], importers.File);
+	        this.slugs = source["slugs"];
+	        this.extra = source["extra"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImportRequest {
+	    source: string;
+	    files: importers.File[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.files = this.convertValues(source["files"], importers.File);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImportResult {
+	    saved: string[];
+	    kept: Record<string, Array<string>>;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImportResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.saved = source["saved"];
+	        this.kept = source["kept"];
+	    }
+	}
+	
+	
+	
 	export class PointsBalance {
 	    platform: string;
 	    name: string;
