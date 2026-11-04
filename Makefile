@@ -36,9 +36,8 @@ generate:
 # services/ is a vendored copy of the CashPilot web catalog; catalog-overlay/ holds
 # the Desktop-only deltas. Set SRC=../CashPilot to use a local checkout.
 catalog-sync:
+	@# Also vendors the Activity helper's script, app/procnet.py, byte for byte.
 	go run ./cmd/catalogsync $(if $(SRC),-src $(SRC),)
-	@# The Activity helper's script is the web repository's app/procnet.py, byte for byte.
-	$(if $(SRC),cp $(SRC)/app/procnet.py internal/activity/procnet.py,)
 
 catalog-check:
 	go run ./cmd/catalogsync -check $(if $(SRC),-src $(SRC),)

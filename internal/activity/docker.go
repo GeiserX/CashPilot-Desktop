@@ -98,16 +98,19 @@ type ProbeRef struct {
 	State  string
 }
 
-// ShouldSweep says whether a sweep removes this helper: any of ours, and a
-// helper from an app that labelled no worker (an older release) only once it
-// has stopped. Another app's helper is never touched.
+// ShouldSweep says whether a sweep removes this helper: any of ours, any
+// finished (exited or dead) helper of another app, and a helper from an app
+// that labelled no worker (an older release) once it has stopped. A finished
+// helper is never mid-round and its log keeps that round's addresses, so it
+// must not outlive the app that started it. Another app's running or merely
+// created helper is never touched: it may be mid-round.
 func ShouldSweep(p ProbeRef, worker string) bool {
 	if p.Labels[ProbeLabel] != ProbeKind {
 		return false
 	}
 	owner, labelled := p.Labels[WorkerLabel]
 	if labelled {
-		return owner == worker
+		return owner == worker || p.State == "exited" || p.State == "dead"
 	}
 	return p.State != "running" && p.State != "restarting"
 }

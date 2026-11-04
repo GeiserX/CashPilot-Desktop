@@ -10,6 +10,11 @@
 // catalog-overlay/ and applied on top of the copied file. See catalog-overlay/README.md
 // for the mechanism and for every delta we currently declare.
 //
+// It also vendors the Activity helper's script: the web repository's app/procnet.py
+// is copied byte for byte to internal/activity/procnet.py, and -check reports it as
+// drift when the two differ. A web ref that has no app/procnet.py (a release before
+// the Activity page) leaves the local copy alone.
+//
 // Usage:
 //
 //	go run ./cmd/catalogsync                 # fetch GeiserX/CashPilot@main, rewrite services/
@@ -25,6 +30,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"flag"
@@ -58,6 +64,7 @@ func main() {
 		overlay = flag.String("overlay", "catalog-overlay", "directory holding the Desktop-only deltas")
 		check   = flag.Bool("check", false, "report drift instead of writing; exit 1 on drift, 2 when the comparison could not run")
 	)
+	flag.StringVar(&procnetPath, "procnet", procnetPath, "where the Activity helper's script is vendored; empty skips it")
 	flag.Parse()
 
 	if err := run(*src, *ref, *out, *overlay, *check); err != nil {
@@ -85,21 +92,41 @@ func exitCodeFor(err error) int {
 	return exitFailure
 }
 
+// procnetPath is where the web repository's app/procnet.py is vendored, relative to
+// the working directory (the repository root under make). Empty skips it.
+var procnetPath = filepath.Join("internal", "activity", "procnet.py")
+
+// webProcnet is the helper script's path inside the web repository.
+const webProcnet = "app/procnet.py"
+
 func run(src, ref, out, overlayDir string, check bool) error {
 	var (
 		upstream map[string][]byte
+		procnet  []byte
 		origin   string
 		err      error
 	)
 	if src != "" {
 		origin = filepath.Join(src, "services")
 		upstream, err = readDir(origin)
+		if err == nil {
+			procnet, err = os.ReadFile(filepath.Join(src, filepath.FromSlash(webProcnet)))
+			if errors.Is(err, os.ErrNotExist) {
+				procnet, err = nil, nil
+			}
+		}
 	} else {
 		origin = fmt.Sprintf("GeiserX/CashPilot@%s", ref)
-		upstream, err = fetchUpstream(ref)
+		upstream, procnet, err = fetchUpstream(ref)
 	}
 	if err != nil {
 		return err
+	}
+	if procnetPath == "" {
+		procnet = nil
+	}
+	if procnet != nil {
+		procnet = catalogsync.NormaliseEOL(procnet)
 	}
 	if len(upstream) == 0 {
 		return fmt.Errorf("no catalog files found in %s", origin)
@@ -124,20 +151,38 @@ func run(src, ref, out, overlayDir string, check bool) error {
 		if err := writeDir(out, want, have); err != nil {
 			return err
 		}
+		if procnet != nil {
+			if err := os.WriteFile(procnetPath, procnet, 0o644); err != nil {
+				return err
+			}
+		}
 		fmt.Printf("catalogsync: %s -> %s (%d files, %d overlay pins, %d overlay appends)\n",
 			origin, out, len(want), len(overlay.ImagePins), len(overlay.Appends))
 		return nil
 	}
 
 	drift := catalogsync.Diff(want, have)
-	if len(drift) == 0 {
+	procnetDrift := false
+	if procnet != nil {
+		local, err := os.ReadFile(procnetPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		procnetDrift = err != nil || !bytes.Equal(catalogsync.NormaliseEOL(local), procnet)
+	}
+	if len(drift) == 0 && !procnetDrift {
 		fmt.Printf("catalogsync: %s matches %s (%d files)\n", out, origin, len(want))
 		return nil
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "the vendored catalog in %s has drifted from %s in %d file(s):\n", out, origin, len(drift))
-	for _, d := range drift {
-		fmt.Fprintf(&b, "  %-10s %s\n", d.Kind, d.Path)
+	if len(drift) > 0 {
+		fmt.Fprintf(&b, "the vendored catalog in %s has drifted from %s in %d file(s):\n", out, origin, len(drift))
+		for _, d := range drift {
+			fmt.Fprintf(&b, "  %-10s %s\n", d.Kind, d.Path)
+		}
+	}
+	if procnetDrift {
+		fmt.Fprintf(&b, "the Activity helper %s differs from %s in %s\n", procnetPath, webProcnet, origin)
 	}
 	b.WriteString("\nRun `make catalog-sync` (or `go run ./cmd/catalogsync`) to vendor the current\n")
 	b.WriteString("web catalog, review the diff, and commit it. If a difference is deliberate,\n")
@@ -247,20 +292,24 @@ func retryableFetch(err error) bool {
 }
 
 // fetchUpstream downloads the CashPilot source tarball for ref from codeload and
-// returns its services/**.yml entries. codeload serves public repositories without
-// any credential, so the weekly drift workflow needs no token.
-func fetchUpstream(ref string) (map[string][]byte, error) {
+// returns its services/**.yml entries and its app/procnet.py (nil when the ref has
+// none). codeload serves public repositories without any credential, so the weekly
+// drift workflow needs no token.
+func fetchUpstream(ref string) (map[string][]byte, []byte, error) {
 	url := tarballURL(ref)
 	client := &http.Client{Timeout: 2 * time.Minute}
 	var err error
 	for attempt := 1; ; attempt++ {
-		var files map[string][]byte
-		files, err = fetchOnce(client, url)
+		var (
+			files   map[string][]byte
+			procnet []byte
+		)
+		files, procnet, err = fetchOnce(client, url)
 		if err == nil {
-			return files, nil
+			return files, procnet, nil
 		}
 		if attempt == fetchAttempts || !retryableFetch(err) {
-			return nil, err
+			return nil, nil, err
 		}
 		fmt.Fprintf(os.Stderr, "catalogsync: %v (attempt %d of %d, retrying)\n", err, attempt, fetchAttempts)
 		fetchSleep(time.Duration(attempt) * time.Second)
@@ -268,22 +317,23 @@ func fetchUpstream(ref string) (map[string][]byte, error) {
 }
 
 // fetchOnce performs a single download-and-extract.
-func fetchOnce(client *http.Client, url string) (map[string][]byte, error) {
+func fetchOnce(client *http.Client, url string) (map[string][]byte, []byte, error) {
 	resp, err := client.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("fetch %s: %w", url, err)
+		return nil, nil, fmt.Errorf("fetch %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, &httpStatusError{url: url, status: resp.StatusCode, text: resp.Status}
+		return nil, nil, &httpStatusError{url: url, status: resp.StatusCode, text: resp.Status}
 	}
 	gz, err := gzip.NewReader(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("decompress %s: %w", url, err)
+		return nil, nil, fmt.Errorf("decompress %s: %w", url, err)
 	}
 	defer gz.Close()
 
 	files := map[string][]byte{}
+	var procnet []byte
 	tr := tar.NewReader(gz)
 	for {
 		hdr, err := tr.Next()
@@ -291,22 +341,31 @@ func fetchOnce(client *http.Client, url string) (map[string][]byte, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", url, err)
+			return nil, nil, fmt.Errorf("read %s: %w", url, err)
 		}
-		if hdr.Typeflag != tar.TypeReg || !strings.HasSuffix(hdr.Name, ".yml") {
+		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
 		// The tarball's top-level directory is CashPilot-<ref>; strip it and keep
-		// only what sits under services/.
-		parts := strings.SplitN(path.Clean(hdr.Name), "/", 3)
-		if len(parts) != 3 || parts[1] != "services" {
+		// only what sits under services/, plus the Activity helper's script.
+		parts := strings.SplitN(path.Clean(hdr.Name), "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		rel := parts[1]
+		isProcnet := rel == webProcnet
+		if !isProcnet && (!strings.HasPrefix(rel, "services/") || !strings.HasSuffix(rel, ".yml")) {
 			continue
 		}
 		body, err := io.ReadAll(tr)
 		if err != nil {
-			return nil, fmt.Errorf("read %s from %s: %w", hdr.Name, url, err)
+			return nil, nil, fmt.Errorf("read %s from %s: %w", hdr.Name, url, err)
 		}
-		files[parts[2]] = catalogsync.NormaliseEOL(body)
+		if isProcnet {
+			procnet = body
+			continue
+		}
+		files[strings.TrimPrefix(rel, "services/")] = catalogsync.NormaliseEOL(body)
 	}
-	return files, nil
+	return files, procnet, nil
 }

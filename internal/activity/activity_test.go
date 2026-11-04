@@ -118,12 +118,21 @@ func TestProbeConfigKeepsTheFloor(t *testing.T) {
 
 func TestSweepRules(t *testing.T) {
 	mine := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "me"}, State: "running"}
-	other := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: "exited"}
+	other := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: "running"}
+	otherCreated := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: "created"}
 	legacyRun := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind}, State: "running"}
 	legacyDone := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind}, State: "exited"}
 	isolation := ProbeRef{Labels: map[string]string{ProbeLabel: "isolation"}, State: "exited"}
-	if !ShouldSweep(mine, "me") || ShouldSweep(other, "me") || ShouldSweep(legacyRun, "me") || !ShouldSweep(legacyDone, "me") || ShouldSweep(isolation, "me") {
+	if !ShouldSweep(mine, "me") || ShouldSweep(other, "me") || ShouldSweep(otherCreated, "me") || ShouldSweep(legacyRun, "me") || !ShouldSweep(legacyDone, "me") || ShouldSweep(isolation, "me") {
 		t.Fatal("sweep rules broken")
+	}
+	// A finished helper of another app is never mid-round, and its log keeps
+	// that round's addresses, so any app removes it.
+	for _, state := range []string{"exited", "dead"} {
+		done := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: state}
+		if !ShouldSweep(done, "me") {
+			t.Fatalf("a %s helper of another app must be swept", state)
+		}
 	}
 	if ProbeName("desktop-aaa", "x") == ProbeName("desktop-bbb", "x") {
 		t.Fatal("two apps on one host must get different helper names")
@@ -182,6 +191,29 @@ func TestBuildSampleHostCgroup(t *testing.T) {
 	s = BuildSample("myst", g, failed, d, 1200)
 	if s.Status != "host_network" || s.Reason != "cgroup_v1" || len(s.Out) != 0 {
 		t.Fatalf("a helper that could not attribute shows host_network with its reason, got %+v", s)
+	}
+}
+
+// A host-network reading is trusted only when the helper says it matched by
+// cgroup: a netns reading of the host is every program's sockets, not the
+// earner's. An unknown reason never reaches the page as-is. The web's
+// activity._sample applies the same two rules.
+func TestBuildSampleHostNeedsCgroupAttribution(t *testing.T) {
+	g := &Group{Owner: Container{ID: "h"}, Members: []string{"myst"}, Mode: "host", Kind: "cgroup", OwnerEarner: true}
+	for _, tc := range []struct{ fields, reason string }{
+		{``, "cgroup_missing"},
+		{`"attribution":"netns",`, "cgroup_missing"},
+		{`"attribution":"cgroup","reason":"made_up",`, "cgroup_missing"},
+		{`"attribution":"cgroup","reason":"sock_diag_refused",`, "sock_diag_refused"},
+	} {
+		r, err := ParseProbe(probeJSONText(tc.fields))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.fields, err)
+		}
+		s := BuildSample("myst", g, r, NewDeltas(), 1000)
+		if s.Status != "host_network" || s.Reason != tc.reason || len(s.Out) != 0 || len(s.In) != 0 {
+			t.Fatalf("%s: got status %q reason %q out %d", tc.fields, s.Status, s.Reason, len(s.Out))
+		}
 	}
 }
 
@@ -396,7 +428,8 @@ func TestBuildContext(t *testing.T) {
 	}
 }
 
-// The helper script is the web repository's app/procnet.py, byte for byte.
+// The helper script is the web repository's app/procnet.py, byte for byte. This is
+// the local shortcut; catalogsync -check (the weekly drift run) is the CI gate.
 func TestProcnetIsTheWebCopy(t *testing.T) {
 	web := filepath.Join("..", "..", "..", "CashPilot", "app", "procnet.py")
 	if src := os.Getenv("CASHPILOT_WEB"); src != "" {

@@ -236,10 +236,16 @@ func inRow(raw json.RawMessage) (Dest, bool) {
 
 // BuildSample turns one group's helper reading into its sample.
 func BuildSample(name string, g *Group, r ProbeResult, deltas *Deltas, now float64) Sample {
-	if g.Kind == "cgroup" && r.Reason != "" {
-		// The helper ran but could not tell this earner's sockets from the host's.
+	if g.Kind == "cgroup" && (r.Attribution != "cgroup" || r.Reason != "") {
+		// The helper ran but could not tell this earner's sockets from the
+		// host's. A reading not matched by cgroup is the whole machine's table,
+		// never the earner's.
 		deltas.Forget(g.Owner.ID)
-		return baseSample(name, g.Members, g.Mode, "host_network", r.Reason)
+		why := r.Reason
+		if _, known := CgroupReasons[why]; !known {
+			why = "cgroup_missing"
+		}
+		return baseSample(name, g.Members, g.Mode, "host_network", why)
 	}
 	s := baseSample(name, g.Members, g.Mode, "ok", "")
 	if g.Kind == "cgroup" {

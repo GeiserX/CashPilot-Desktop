@@ -44,7 +44,11 @@ helper.
 What that row cannot show, and says so:
 
 - connections already closing (TIME_WAIT) carry no cgroup, so a finished
-  connection may be missed;
+  connection may be missed; the helper does not even ask for them, so a busy
+  host does not run it out of memory;
+- when the kernel answers only part of the socket list (one without UDP socket
+  listing, for example) or the list passes 200,000 sockets, the row keeps what
+  it read and shows a `+` after its count, so it never passes as complete;
 - the connection counters are the machine's, so opens and failures show a dash;
 - traffic an earner forwards for VPN customers is routed by the kernel, not
   opened by the earner, so it is not shown. Seeing it would need the kernel's
@@ -64,8 +68,9 @@ read-only filesystem, no new privileges, 32 processes and 48 MiB at most, a
 64 KiB tmpfs at `/data` and no mounts. It carries the labels
 `cashpilot.probe=activity` and `cashpilot.probe.worker=<this app>`, and it is
 removed on every path. Before each round the app removes any helper of its own
-that is left, and any stopped helper from an older CashPilot that labelled no
-worker; it never touches another app's helper.
+that is left, any finished helper of another app (its log still holds that
+round's addresses), and any stopped helper from an older CashPilot that
+labelled no worker. It never touches another app's running helper.
 
 Programs run natively (not in a container) show "native program" and are not
 sampled.

@@ -1,7 +1,8 @@
 name: Catalog drift
 
-# services/ is a vendored copy of the CashPilot web catalog. This job says when the
-# two have parted.
+# services/ is a vendored copy of the CashPilot web catalog, and
+# internal/activity/procnet.py a copy of its app/procnet.py. This job says when
+# either has parted from the web repository.
 #
 # It deliberately does NOT run on pull_request. A change in the web repository is not
 # a reason to block an unrelated Desktop PR, and a gate that fails for something the
@@ -71,7 +72,7 @@ jobs:
               exit 0
               ;;
             1)
-              echo "::error::services/ no longer matches the CashPilot web catalog."
+              echo "::error::services/ or internal/activity/procnet.py no longer matches the CashPilot web repository."
               echo "Run 'make catalog-sync' locally, review the diff, and commit it."
               echo "If a difference is deliberate, declare it in catalog-overlay/ rather"
               echo "than editing services/ by hand. See catalog-overlay/README.md."
