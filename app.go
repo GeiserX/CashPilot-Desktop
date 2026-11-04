@@ -91,6 +91,8 @@ type App struct {
 	fleetLimiter *fleetRateLimiter
 	// usageStop stops the usage sampler (usage_sampler.go) and waits for it.
 	usageStop func()
+	// activity is the Activity sampler (activity_sampler.go): off until the owner switches it on.
+	activity activityState
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
@@ -212,6 +214,8 @@ func (a *App) startCore(ctx context.Context) error {
 	a.startScheduler(ctx)
 	// CPU, memory and traffic per container for the usage graphs.
 	a.startUsageSampler(ctx)
+	// What each earner talks to, when the owner switched Activity on.
+	a.startActivitySampler(ctx)
 	// Optional, and a no-op unless the user paired this Desktop with a
 	// CashPilot server. Standalone is the default and unaffected.
 	a.startUpstream(ctx)
@@ -234,6 +238,7 @@ func (a *App) Shutdown(_ context.Context) {
 	// writes to a database that is about to close.
 	a.stopScheduler()
 	a.stopUsageSampler()
+	a.stopActivitySampler()
 	a.stopUpstream()
 	if a.fleetAPI != nil {
 		_ = a.fleetAPI.Close()
@@ -1657,6 +1662,7 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 		}
 	}
 	items = append(items, a.unlinkedDeviceNotifications(deployments)...)
+	items = append(items, a.activityNotifications()...)
 	if len(deployments) == 0 {
 		items = append(items, Notification{Level: "info", Title: "No services deployed", Message: "Use the setup wizard or register a mobile device to start tracking earnings."})
 	}

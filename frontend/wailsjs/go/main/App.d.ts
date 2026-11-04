@@ -20,11 +20,17 @@ export function CompleteOnboarding():Promise<void>;
 
 export function ConfirmStateBackup(arg1:string):Promise<void>;
 
+export function DeleteActivityData():Promise<main.ActivityView>;
+
 export function DeployService(arg1:string,arg2:Record<string, string>,arg3:string,arg4:number):Promise<store.Deployment>;
 
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
 
 export function ExportStateBackup(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
+export function GetActivity(arg1:number):Promise<main.ActivityView>;
+
+export function GetActivityDetail(arg1:string,arg2:number):Promise<main.ActivityDetail>;
 
 export function GetAppState():Promise<main.AppState>;
 
@@ -61,6 +67,8 @@ export function PlanServiceRemoval(arg1:string):Promise<runtime.RemovalPlan>;
 
 export function RecordPayout(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<store.Payout>;
 
+export function RefreshActivityNetworks():Promise<main.ActivityView>;
+
 export function RefreshDeployments():Promise<Array<store.Deployment>>;
 
 export function RemoveBackgroundHelper():Promise<void>;
@@ -76,6 +84,8 @@ export function RestartService(arg1:string):Promise<void>;
 export function SaveCredentials(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
+
+export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
 
 export function StartService(arg1:string):Promise<void>;
 

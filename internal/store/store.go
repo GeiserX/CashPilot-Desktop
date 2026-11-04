@@ -997,7 +997,10 @@ func (s *Store) migrate() error {
 	if _, err = s.execWrite(stateBackupsDDL); err != nil {
 		return err
 	}
-	return s.migrateUsage()
+	if err := s.migrateUsage(); err != nil {
+		return err
+	}
+	return s.migrateActivity()
 }
 
 // isSafeSQLIdentifier allows only ^[A-Za-z_][A-Za-z0-9_]*$ — a plain SQL identifier

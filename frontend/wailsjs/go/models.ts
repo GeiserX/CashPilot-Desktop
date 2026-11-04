@@ -1,3 +1,23 @@
+export namespace activity {
+	
+	export class IPGeoStatus {
+	    present: boolean;
+	    ageSeconds?: number;
+	    rows?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new IPGeoStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.present = source["present"];
+	        this.ageSeconds = source["ageSeconds"];
+	        this.rows = source["rows"];
+	    }
+	}
+}
+
 export namespace bgservice {
 	
 	export class Status {
@@ -746,6 +766,190 @@ export namespace main {
 		}
 	}
 
+	export class ActivityTop {
+	    value: string;
+	    sightings: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActivityTop(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.value = source["value"];
+	        this.sightings = source["sightings"];
+	    }
+	}
+	export class ActivityDetail {
+	    container: string;
+	    ports: ActivityTop[];
+	    asn: ActivityTop[];
+	    cc: ActivityTop[];
+	    classes: ActivityTop[];
+	    raw: store.ActivityRawRow[];
+	    rawHours: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActivityDetail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.container = source["container"];
+	        this.ports = this.convertValues(source["ports"], ActivityTop);
+	        this.asn = this.convertValues(source["asn"], ActivityTop);
+	        this.cc = this.convertValues(source["cc"], ActivityTop);
+	        this.classes = this.convertValues(source["classes"], ActivityTop);
+	        this.raw = this.convertValues(source["raw"], store.ActivityRawRow);
+	        this.rawHours = source["rawHours"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ActivityRow {
+	    container: string;
+	    status: string;
+	    reason: string;
+	    members: string[];
+	    networkMode: string;
+	    listenPorts: number[];
+	    lastWindow: number;
+	    estMax?: number;
+	    remotesTotal?: number;
+	    truncated: boolean;
+	    opensLast?: number;
+	    attemptFailsLast?: number;
+	    series: store.ActivityPoint[];
+	    topPorts: ActivityTop[];
+	    topAsn: ActivityTop[];
+	    topCc: ActivityTop[];
+	    classes: Record<string, number>;
+	    dirs: Record<string, number>;
+	    alerts: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActivityRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.container = source["container"];
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	        this.members = source["members"];
+	        this.networkMode = source["networkMode"];
+	        this.listenPorts = source["listenPorts"];
+	        this.lastWindow = source["lastWindow"];
+	        this.estMax = source["estMax"];
+	        this.remotesTotal = source["remotesTotal"];
+	        this.truncated = source["truncated"];
+	        this.opensLast = source["opensLast"];
+	        this.attemptFailsLast = source["attemptFailsLast"];
+	        this.series = this.convertValues(source["series"], store.ActivityPoint);
+	        this.topPorts = this.convertValues(source["topPorts"], ActivityTop);
+	        this.topAsn = this.convertValues(source["topAsn"], ActivityTop);
+	        this.topCc = this.convertValues(source["topCc"], ActivityTop);
+	        this.classes = source["classes"];
+	        this.dirs = source["dirs"];
+	        this.alerts = source["alerts"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class activityRound {
+	    at: number;
+	    workerStatus: string;
+	    leftoverProbes: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new activityRound(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.at = source["at"];
+	        this.workerStatus = source["workerStatus"];
+	        this.leftoverProbes = source["leftoverProbes"];
+	    }
+	}
+	export class ActivityView {
+	    enabled: boolean;
+	    days: number;
+	    rawHours: number;
+	    lastWindow: number;
+	    round: activityRound;
+	    networks: activity.IPGeoStatus;
+	    networksEnabled: boolean;
+	    containers: ActivityRow[];
+	    alerts: store.ActivityAlert[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ActivityView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.days = source["days"];
+	        this.rawHours = source["rawHours"];
+	        this.lastWindow = source["lastWindow"];
+	        this.round = this.convertValues(source["round"], activityRound);
+	        this.networks = this.convertValues(source["networks"], activity.IPGeoStatus);
+	        this.networksEnabled = source["networksEnabled"];
+	        this.containers = this.convertValues(source["containers"], ActivityRow);
+	        this.alerts = this.convertValues(source["alerts"], store.ActivityAlert);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 }
 
 export namespace preflight {
@@ -1073,6 +1277,70 @@ export namespace store {
 	        this.method = source["method"];
 	        this.paidOn = source["paidOn"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class ActivityAlert {
+	    kind: string;
+	    subject: string;
+	    message: string;
+	    createdAt: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActivityAlert(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.subject = source["subject"];
+	        this.message = source["message"];
+	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class ActivityPoint {
+	    t: number;
+	    opens?: number;
+	    attemptFails?: number;
+	    estMax?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActivityPoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.t = source["t"];
+	        this.opens = source["opens"];
+	        this.attemptFails = source["attemptFails"];
+	        this.estMax = source["estMax"];
+	    }
+	}
+	export class ActivityRawRow {
+	    windowEnd: number;
+	    dir: string;
+	    proto: string;
+	    ip: string;
+	    port: number;
+	    class: string;
+	    asn: string;
+	    cc: string;
+	    seen: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ActivityRawRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.windowEnd = source["windowEnd"];
+	        this.dir = source["dir"];
+	        this.proto = source["proto"];
+	        this.ip = source["ip"];
+	        this.port = source["port"];
+	        this.class = source["class"];
+	        this.asn = source["asn"];
+	        this.cc = source["cc"];
+	        this.seen = source["seen"];
 	    }
 	}
 }

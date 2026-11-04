@@ -9,6 +9,11 @@ import {
 import {
   AddFleetDevice,
   BackgroundHelperStatus,
+  DeleteActivityData,
+  GetActivity,
+  GetActivityDetail,
+  RefreshActivityNetworks,
+  SetActivityEnabled,
   InstallBackgroundHelper,
   RemoveBackgroundHelper,
   CheckRuntime,
@@ -45,6 +50,7 @@ import {
   UndoStateBackup,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderEarningsBars } from "./render/chart";
@@ -60,12 +66,12 @@ import { instancesChoice } from "./render/instances";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
-import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
 let onboardingStep: "welcome" | "runtime" = "welcome";
-type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet";
+type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity";
 
 let activeView: View = "dashboard";
 let wizardStep = 1;
@@ -82,6 +88,10 @@ let chartDays = 7;
 let usageContainer = "";
 let usageView: UsageView | null = null;
 let usageRequest = 0;
+// The Activity page's window (1, 7 or 30 days) and its expanded rows, each with
+// its detail once loaded (null while it loads).
+let activityDays = 1;
+let activityOpen: Record<string, ActivityDetail | null> = {};
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -144,6 +154,10 @@ function render() {
   }
   if (activeView === "fleet") {
     void renderFleet(state);
+    return;
+  }
+  if (activeView === "activity") {
+    void renderActivity(state);
     return;
   }
   renderDashboard(state);
@@ -614,7 +628,7 @@ function wireShellNav() {
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
-      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet") {
+      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity") {
         activeView = next;
         if (next === "wizard") {
           wizardStep = 1;
@@ -888,6 +902,77 @@ function envInputName(key: string) {
     TZ: "timezone",
   };
   return names[key] || key;
+}
+
+async function renderActivity(current: AppState, view?: ActivityView) {
+  let data: ActivityView;
+  try {
+    data = view || (await GetActivity(activityDays));
+  } catch (error) {
+    showErrorToast({scope: "activity", error: String(error)});
+    return;
+  }
+  if (activeView !== "activity") return;
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      <div class="main-content">
+        ${topbar("activity", current)}
+        <main class="page-content">
+          ${pageHead("Activity")}
+          ${renderActivityPage(data, activityOpen)}
+        </main>
+        ${pageFoot()}
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  const run = async (action: () => Promise<ActivityView>) => {
+    try {
+      await renderActivity(current, await action());
+    } catch (error) {
+      showErrorToast({scope: "activity", error: String(error)});
+      void renderActivity(current);
+    }
+  };
+  document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
+    void run(() => SetActivityEnabled((event.target as HTMLInputElement).checked));
+  });
+  document.querySelector<HTMLSelectElement>("#activity-days")?.addEventListener("change", (event) => {
+    activityDays = Number((event.target as HTMLSelectElement).value) || 1;
+    activityOpen = {};
+    void run(() => GetActivity(activityDays));
+  });
+  document.querySelector("#activity-delete")?.addEventListener("click", () => {
+    if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
+    activityOpen = {};
+    void run(() => DeleteActivityData());
+  });
+  document.querySelector("#activity-networks")?.addEventListener("click", () => {
+    showInfoToast({scope: "activity", message: "Downloading the network table (about 11 MB)."});
+    void run(() => RefreshActivityNetworks());
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-activity-expand]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const name = button.dataset.activityExpand || "";
+      if (name in activityOpen) {
+        delete activityOpen[name];
+        void renderActivity(current, data);
+        return;
+      }
+      activityOpen[name] = null;
+      void renderActivity(current, data);
+      try {
+        activityOpen[name] = await GetActivityDetail(name, activityDays);
+      } catch (error) {
+        delete activityOpen[name];
+        showErrorToast({scope: "activity", error: String(error)});
+      }
+      if (activeView === "activity") void renderActivity(current, data);
+    });
+  });
 }
 
 async function renderFleet(current: AppState) {
