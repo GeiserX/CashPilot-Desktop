@@ -274,3 +274,66 @@ func TestTheVendoredCatalogIsGraded(t *testing.T) {
 		t.Fatalf("earnapp: %+v", earnapp.RatingResult)
 	}
 }
+
+// Every other way a block can be wrong is not rated too: the web validator's full
+// list, one mutation each.
+func TestEveryValidationRuleRefusesTheBlock(t *testing.T) {
+	rules := mustRules(t)
+	good := valid(all("good"))
+	cases := map[string]string{
+		"verdicts not a mapping": "rating:\n  reviewed_on: \"2026-11-04\"\n  verdicts: [good]\n",
+		"unknown criterion":      strings.Replace(good, "    support: good\n", "    support: good\n    vibes: good\n", 1),
+		"notes not a mapping":    good + "  notes: [x]\n",
+		"note on unknown key":    good + "  notes: {vibes: Searched.}\n",
+		"blank note":             good + "  notes: {support: \"  \"}\n",
+		"cons not a list":        good + "  cons: nope\n",
+		"item not a mapping":     good + "  cons: [just text]\n",
+		"blank text":             strings.Replace(good, "text: A cited fact.", "text: \"\"", 1),
+		"unpublished criterion":  good + item("vibes"),
+		"source with a space":    strings.Replace(good, "https://example.com/terms", "https://example.com/a b", 1),
+		"bad checked_on":         strings.Replace(good, "checked_on: 2026-11-04", "checked_on: last week", 1),
+		"bad reviewed_on":        strings.Replace(good, "\"2026-11-04\"", "\"04/11/2026\"", 1),
+		"good with no pro":       strings.Replace(good, item("support"), "", 1),
+	}
+	for name, block := range cases {
+		if got := GradeService(svcWith(t, block), rules); got.Rated {
+			t.Errorf("%s: graded %q, want not rated", name, got.Grade)
+		}
+	}
+	// Blank sections are the same as absent ones.
+	if got := GradeService(svcWith(t, good+"  cons: []\n  notes: \"\"\n"), rules); !got.Rated {
+		t.Errorf("empty cons and notes refused a valid block: %+v", got)
+	}
+}
+
+func TestARulesFileThisBuildCannotApplyIsRefused(t *testing.T) {
+	cases := map[string]string{
+		"not yaml":          "criteria: [",
+		"no criteria":       strings.Replace(testRules, "criteria:", "unused:", 1),
+		"duplicate key":     strings.Replace(testRules, "{key: support, title: Support}", "{key: terms_fit, title: Support}", 1),
+		"no bands":          strings.Replace(testRules, "bands:", "unused_bands:", 1),
+		"cap grade A":       strings.Replace(testRules, "max_grade: D", "max_grade: A", 1),
+		"no unknown points": strings.Replace(testRules, ", unknown: 0", "", 1),
+		"no kinds":          strings.Replace(testRules, "kinds:", "unused_kinds:", 1),
+	}
+	for name, raw := range cases {
+		if _, err := ParseRatingRules([]byte(raw)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestWithoutAMethodNobodyIsGraded(t *testing.T) {
+	for name, apply := range map[string]func([]Service){
+		"unreadable": func(s []Service) { applyRatings(s, nil, os.ErrNotExist) },
+		"refused":    func(s []Service) { applyRatings(s, []byte("criteria: []"), nil) },
+		"valid":      func(s []Service) { applyRatings(s, []byte(testRules), nil) },
+	} {
+		services := []Service{svcWith(t, valid(all("good")))}
+		apply(services)
+		want := name == "valid"
+		if services[0].RatingResult == nil || services[0].RatingResult.Rated != want {
+			t.Errorf("%s: %+v, want rated=%v", name, services[0].RatingResult, want)
+		}
+	}
+}

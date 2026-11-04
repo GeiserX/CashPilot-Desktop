@@ -200,39 +200,20 @@ func isoDate(v any) string {
 	return ""
 }
 
-// empty is Python's falsiness for the values `x or default` replaces.
+// empty is Python's falsiness for the values `x or default` replaces in the web
+// validator: an absent, blank or empty notes, cons or pros counts as none.
 func empty(v any) bool {
 	switch x := v.(type) {
 	case nil:
 		return true
 	case string:
 		return x == ""
-	case bool:
-		return !x
-	case int:
-		return x == 0
-	case float64:
-		return x == 0
 	case []any:
 		return len(x) == 0
 	case map[string]any:
 		return len(x) == 0
 	}
 	return false
-}
-
-func typeName(v any) string {
-	switch v.(type) {
-	case nil:
-		return "NoneType"
-	case string:
-		return "str"
-	case []any:
-		return "list"
-	case map[string]any:
-		return "dict"
-	}
-	return fmt.Sprintf("%T", v)
 }
 
 // validateRating is every problem with one service's rating block, in plain words.
@@ -242,7 +223,7 @@ func typeName(v any) string {
 func validateRating(block any, svc Service, rules *RatingRules) []string {
 	rating, ok := block.(map[string]any)
 	if !ok {
-		return []string{fmt.Sprintf("rating must be a mapping, not %s", typeName(block))}
+		return []string{fmt.Sprintf("rating must be a mapping, not %T", block)}
 	}
 	var errs []string
 
