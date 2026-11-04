@@ -73,6 +73,10 @@ type App struct {
 	driftMu      sync.Mutex
 	addedDevices map[string]string
 
+	// customPending is true while the custom services could not be loaded into the
+	// catalog; see loadCustom.
+	customPending atomic.Bool
+
 	collecting  atomic.Bool
 	schedMu     sync.Mutex
 	schedCancel context.CancelFunc
@@ -175,6 +179,7 @@ func (a *App) startCore(ctx context.Context) error {
 	a.native = native
 	a.services = services.NewManager(a.runtime, a.catalog, a.store)
 	a.services.Register(runtime.NativeRuntimeKind, a.native)
+	a.loadCustom()
 	a.collectors = collectors.NewRegistry(a.store, collectors.WithNodeReader(a.readNodes))
 
 	// Exchange rates power the earnings summary. Kick a best-effort initial fetch
@@ -441,6 +446,7 @@ func (a *App) GetAppState() (AppState, error) {
 	if err := a.ready(); err != nil {
 		return AppState{}, err
 	}
+	a.retryCustom()
 	runtimeStatus := a.runtime.Status(a.ctx)
 	// Surface the always-on native runtime alongside Docker's status so the frontend
 	// can proceed (and message honestly) on Docker OR native. Available keeps its
@@ -1175,10 +1181,18 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, err
 	}
+	a.retryCustom()
+	// A custom service deploys its saved definition; the form has no credentials for
+	// it, and nothing typed there or stored under its slug is read, stored or sent
+	// (services.DeployWith).
+	custom := catalog.IsCustomSlug(slug)
+	if custom {
+		values = nil
+	}
 	// The credentials this deploy will use: the submitted values (which replace the
 	// stored blob) when provided, else whatever is already stored.
 	creds := values
-	if len(creds) == 0 {
+	if len(creds) == 0 && !custom {
 		stored, err := a.store.GetCredentials(slug)
 		if err != nil {
 			return store.Deployment{}, err
@@ -1281,6 +1295,44 @@ func (a *App) RemoveService(slug string, deleteData, allowCritical bool) error {
 	// emitEvent, not EventsEmit: the raw call log.Fatalf's the whole process when the
 	// context carries no Wails event manager, which is every test. The only
 	// irreversible path in the app was untestable end to end because of it.
+	a.emitEvent("deployment:changed", slug)
+	return nil
+}
+
+// ListCustomServices returns the services the user added from an image reference,
+// as the editor may see them: a secret variable's value is never sent.
+func (a *App) ListCustomServices() ([]services.CustomServiceView, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	return a.services.ListCustom()
+}
+
+// SaveCustomService creates a custom service when slug is "", or replaces the
+// definition of an existing one. A secret left blank keeps its stored value. A
+// running copy keeps what it was deployed with until it is redeployed.
+func (a *App) SaveCustomService(slug string, definition services.CustomDefinition) (services.CustomServiceView, error) {
+	if err := a.ready(); err != nil {
+		return services.CustomServiceView{}, err
+	}
+	view, err := a.services.SaveCustom(slug, definition)
+	if err != nil {
+		return services.CustomServiceView{}, err
+	}
+	a.emitEvent("deployment:changed", view.Slug)
+	return view, nil
+}
+
+// DeleteCustomService deletes a custom service's definition. It is refused while
+// this computer still runs or records it. Its data volume, if it was kept on
+// removal, stays; the slug is never given out again, so nothing else mounts it.
+func (a *App) DeleteCustomService(slug string) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	if err := a.services.DeleteCustom(a.ctx, slug); err != nil {
+		return err
+	}
 	a.emitEvent("deployment:changed", slug)
 	return nil
 }
@@ -1819,6 +1871,27 @@ func isSupportedCurrency(code string) bool {
 		}
 	}
 	return false
+}
+
+// loadCustom puts the user's custom services into the catalog's lookups. A
+// definition that cannot be read is surfaced, not fatal: the catalog services still
+// work without it.
+// A failed load is remembered, and GetAppState and DeployService try it again until
+// it succeeds, so the services reappear without a restart.
+func (a *App) loadCustom() {
+	if err := a.services.LoadCustom(); err != nil {
+		a.customPending.Store(true)
+		a.emitError("custom-services", err)
+		return
+	}
+	a.customPending.Store(false)
+}
+
+// retryCustom loads the custom services again if the last load failed.
+func (a *App) retryCustom() {
+	if a.customPending.Load() {
+		a.loadCustom()
+	}
 }
 
 func (a *App) ready() error {

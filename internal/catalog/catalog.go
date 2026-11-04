@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -17,6 +18,49 @@ import (
 type Catalog struct {
 	services []Service
 	bySlug   map[string]Service
+
+	// custom holds the services the user added from an image reference
+	// (internal/services/custom.go), in the shape the rest of the app reads a catalog
+	// entry in. They live in the app's database, never in services/, and are set here
+	// whenever that table changes so every lookup by slug finds them.
+	mu     sync.RWMutex
+	custom []Service
+}
+
+// CustomPrefix starts every custom service's slug, and no catalog slug may use it:
+// an entry with such a slug would take over a user's service and hand it whatever
+// capabilities, devices or ports the entry declares.
+const CustomPrefix = "custom-"
+
+// IsCustomSlug reports whether slug names a service the user added themselves.
+func IsCustomSlug(slug string) bool {
+	return strings.HasPrefix(slug, CustomPrefix)
+}
+
+// SetCustom replaces the user's custom services. Each must carry the custom- prefix
+// and Custom set; anything else is dropped, so a custom definition can never shadow
+// or stand in for a catalog entry.
+func (c *Catalog) SetCustom(services []Service) {
+	kept := make([]Service, 0, len(services))
+	for _, svc := range services {
+		if !IsCustomSlug(svc.Slug) || !svc.Custom {
+			continue
+		}
+		if _, clash := c.bySlug[svc.Slug]; clash {
+			continue
+		}
+		kept = append(kept, svc)
+	}
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Name < kept[j].Name })
+	c.mu.Lock()
+	c.custom = kept
+	c.mu.Unlock()
+}
+
+func (c *Catalog) customList() []Service {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]Service(nil), c.custom...)
 }
 
 type Service struct {
@@ -61,6 +105,9 @@ type Service struct {
 	Rating     IgnoredBlock `json:"-" yaml:"rating"`
 	SourcePath string       `json:"sourcePath" yaml:"-"`
 	ManualOnly bool         `json:"manualOnly" yaml:"-"`
+	// Custom marks a service the user added from an image reference rather than a
+	// reviewed catalog entry. Never read from YAML.
+	Custom bool `json:"custom" yaml:"-"`
 }
 
 // IgnoredBlock is a catalog key Desktop reads and deliberately drops, so the
@@ -542,6 +589,10 @@ func Load() (*Catalog, error) {
 		if svc.Slug == "" || svc.Name == "" {
 			return nil
 		}
+		if IsCustomSlug(svc.Slug) {
+			log.Printf("catalog: %s: skipped, slug %q uses the reserved %q prefix", path, svc.Slug, CustomPrefix)
+			return nil
+		}
 		svc.SourcePath = path
 		normalize(&svc)
 		// A service is tracked manually (no local lifecycle) only when it has neither a
@@ -555,12 +606,7 @@ func Load() (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	sort.SliceStable(services, func(i, j int) bool { return catalogLess(services[i], services[j]) })
-	bySlug := make(map[string]Service, len(services))
-	for _, svc := range services {
-		bySlug[svc.Slug] = svc
-	}
-	return &Catalog{services: services, bySlug: bySlug}, nil
+	return newCatalog(services), nil
 }
 
 func LoadEmbedded(fsys fs.FS) (*Catalog, error) {
@@ -571,10 +617,11 @@ func LoadEmbedded(fsys fs.FS) (*Catalog, error) {
 	return newCatalog(services), nil
 }
 
+// List is every catalog entry, then the user's custom services.
 func (c *Catalog) List() []Service {
 	out := make([]Service, len(c.services))
 	copy(out, c.services)
-	return out
+	return append(out, c.customList()...)
 }
 
 // retiredStatuses are the lifecycle states that hide a service from the UI. "dropped"
@@ -596,12 +643,24 @@ func (c *Catalog) ListVisible() []Service {
 		}
 		out = append(out, svc)
 	}
-	return out
+	return append(out, c.customList()...)
 }
 
 func (c *Catalog) Get(slug string) (Service, bool) {
-	svc, ok := c.bySlug[slug]
-	return svc, ok
+	if svc, ok := c.bySlug[slug]; ok {
+		return svc, true
+	}
+	if !IsCustomSlug(slug) {
+		return Service{}, false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, svc := range c.custom {
+		if svc.Slug == slug {
+			return svc, true
+		}
+	}
+	return Service{}, false
 }
 
 // splitImage splits a Docker image reference into repository, tag, and digest.
@@ -699,6 +758,10 @@ func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
 			return err
 		}
 		if svc.Slug == "" || svc.Name == "" {
+			return nil
+		}
+		if IsCustomSlug(svc.Slug) {
+			log.Printf("catalog: %s: skipped, slug %q uses the reserved %q prefix", path, svc.Slug, CustomPrefix)
 			return nil
 		}
 		svc.SourcePath = path

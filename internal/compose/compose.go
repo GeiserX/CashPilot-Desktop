@@ -116,6 +116,11 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 		if catalog.IsRetired(svc.Status) {
 			return "", fmt.Errorf("%s is no longer available (%s), so there is nothing to export", svc.Name, svc.Status)
 		}
+		if svc.Custom || catalog.IsCustomSlug(slug) {
+			// The export is built from catalog entries; a custom service's variables and
+			// command are the user's own and stay encrypted in the app's database.
+			return "", fmt.Errorf("%s is a custom service, and custom services are not exported", svc.Name)
+		}
 		block, keys, changeable, err := serviceBlock(svc, family, opts.Hostname)
 		if err != nil {
 			return "", err

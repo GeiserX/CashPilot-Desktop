@@ -84,3 +84,29 @@ func TestManagedCopyChecksTheContainerIsThatCopy(t *testing.T) {
 		t.Error("managedCopy accepted copy 1, which is the service itself")
 	}
 }
+
+// A deploy may replace only its own container. Copy 2 of "foo" and copy 1 of a
+// service slugged "foo-2" share the name cashpilot-foo-2; neither may replace the
+// other. An unlabelled container keeps the old behaviour and is replaced.
+func TestOtherOwner(t *testing.T) {
+	cases := []struct {
+		labels   map[string]string
+		slug     string
+		instance int
+		refused  bool
+	}{
+		{map[string]string{LabelService: "foo"}, "foo", 1, false},
+		{map[string]string{LabelService: "foo"}, "foo", 0, false},
+		{map[string]string{LabelService: "foo", LabelInstance: "2"}, "foo", 2, false},
+		{map[string]string{LabelService: "foo", LabelInstance: "2"}, "foo-2", 1, true},
+		{map[string]string{LabelService: "foo-2"}, "foo", 2, true},
+		{map[string]string{LabelService: "bar"}, "foo", 1, true},
+		{map[string]string{}, "foo", 1, false},
+		{nil, "foo", 1, false},
+	}
+	for _, c := range cases {
+		if got := otherOwner(c.labels, c.slug, c.instance) != ""; got != c.refused {
+			t.Errorf("otherOwner(%v, %q, %d) refused = %v, want %v", c.labels, c.slug, c.instance, got, c.refused)
+		}
+	}
+}
