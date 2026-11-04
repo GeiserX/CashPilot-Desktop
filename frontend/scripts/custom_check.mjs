@@ -12,10 +12,13 @@
 //   5. THE EDITOR'S ROWS BECOME THE DEFINITION: blank rows dropped, a named secret
 //      with a blank value kept (blank means keep).
 //   6. USER TEXT IS ESCAPED.
+//   7. A RE-RENDER KEEPS THE EDITOR BEING TYPED IN. Search and the filter tabs redraw
+//      the catalog; the live form is carried over when the redrawn editor is for the
+//      same service, and only then.
 //
 //   node scripts/custom_check.mjs      # against ./.harness-build
 
-import { customDefinitionFrom, renderCustomEditor, renderCustomServiceCard, renderCustomServicesSection, UNTRUSTED_TEXT } from "../.harness-build/render/custom.js";
+import { customDefinitionFrom, keepsLiveEditor, renderCustomEditor, renderCustomServiceCard, renderCustomServicesSection, UNTRUSTED_TEXT } from "../.harness-build/render/custom.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 import { renderCatalogTable } from "../.harness-build/render/catalog.js";
 import { renderServicesTable } from "../.harness-build/render/services.js";
@@ -115,6 +118,17 @@ check("RULE 5: a value is sent as typed, spaces included", def.env[1].value === 
 const evil = { ...view, name: "<img src=x onerror=alert(1)>", image: "a/b:1\"><script>" };
 const evilHtml = renderCustomServicesSection([evil], [], evil);
 check("RULE 6: names and images are escaped", !evilHtml.includes("<img src=x") && !evilHtml.includes("<script>"), evilHtml);
+
+// RULE 7: the slugs compared are the editor's own data-custom-editor attribute.
+const editorSlug = (html) => html.match(/data-custom-editor="([^"]*)"/)?.[1] ?? null;
+const newSlug = editorSlug(renderCustomServicesSection([view], [], "new"));
+const editSlug = editorSlug(renderCustomServicesSection([view], [], view));
+const closedSlug = editorSlug(renderCustomServicesSection([view], [], null));
+check("RULE 7: the new-service editor carries an empty slug", newSlug === "", String(newSlug));
+check("RULE 7: a redraw of the open Add form keeps the typed draft", keepsLiveEditor(newSlug, newSlug));
+check("RULE 7: a redraw of the open Edit form keeps the typed draft", keepsLiveEditor(editSlug, editSlug));
+check("RULE 7: opening another service's editor does not keep the old draft", !keepsLiveEditor(newSlug, editSlug));
+check("RULE 7: a closed editor brings nothing back", !keepsLiveEditor(editSlug, closedSlug) && !keepsLiveEditor(closedSlug, closedSlug));
 
 console.log(`${checks - failures}/${checks} custom-service checks passed`);
 if (failures) process.exit(1);

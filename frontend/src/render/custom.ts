@@ -108,6 +108,16 @@ export function customDefinitionFrom(fields: Record<string, string>, rows: Custo
   };
 }
 
+/**
+ * Whether a redraw of the catalog keeps the editor the user is typing in. The values
+ * typed there live only in the DOM, so main.ts carries the live form over in place of
+ * the redrawn one when both are for the same service: liveSlug and freshSlug are the
+ * data-custom-editor attribute of each ("" for a new service, null for no editor).
+ */
+export function keepsLiveEditor(liveSlug: string | null | undefined, freshSlug: string | null | undefined): boolean {
+  return liveSlug != null && freshSlug != null && liveSlug === freshSlug;
+}
+
 /** The "Your custom services" block above the catalog: the list, and the editor when one is open. */
 export function renderCustomServicesSection(
   views: CustomServiceView[] | null,

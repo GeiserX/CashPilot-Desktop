@@ -63,7 +63,7 @@ import { instancesChoice } from "./render/instances";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
-import { customDefinitionFrom, customEnvRow, renderCustomServicesSection } from "./render/custom";
+import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import type { CustomEnv, CustomServiceView } from "./wails";
 import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
@@ -656,6 +656,9 @@ function renderCatalog(current: AppState) {
   });
   const categories = ["all", "bandwidth", "depin", "storage", "compute"];
   if ((current.services || []).some((service) => service.custom)) categories.push("custom");
+  // The open editor's typed values live only in the DOM. Search, the filter tabs and
+  // any refresh redraw this page, so the live form is put back over the redrawn copy.
+  const liveEditor = document.querySelector<HTMLFormElement>("[data-custom-editor]");
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -711,6 +714,10 @@ function renderCatalog(current: AppState) {
     });
   });
   wireCustomServices();
+  const freshEditor = document.querySelector<HTMLFormElement>("[data-custom-editor]");
+  if (liveEditor && freshEditor && keepsLiveEditor(liveEditor.dataset.customEditor, freshEditor.dataset.customEditor)) {
+    freshEditor.replaceWith(liveEditor);
+  }
   if (customViews === null && !customLoadError) void loadCustomViews();
 }
 
@@ -726,8 +733,7 @@ async function loadCustomViews() {
 }
 
 // The custom-service list and editor above the catalog. The editor's typed values
-// live only in the DOM until Save, so nothing here calls render() while it is open,
-// except to open or close it.
+// live only in the DOM until Save; renderCatalog carries the live form over a redraw.
 function wireCustomServices() {
   document.querySelector<HTMLButtonElement>("[data-custom-new]")?.addEventListener("click", () => {
     customEditing = "new";
@@ -780,9 +786,13 @@ async function saveCustomService(editor: HTMLFormElement) {
   }));
   try {
     const saved = await SaveCustomService(editor.dataset.customEditor || "", customDefinitionFrom(fields, rows));
-    customEditing = null;
+    // From here the service exists: if the refresh below fails, a retry from this
+    // form must update it, not add a second one.
+    editor.dataset.customEditor = saved.slug;
+    customEditing = saved;
     customViews = await ListCustomServices();
     state = await GetAppState();
+    customEditing = null;
     render();
     const deployed = state?.deployments?.some((dep) => dep.slug === saved.slug);
     showInfoToast({scope: "custom service", message: `${saved.name} saved.${saved.warnings?.length ? ` ${saved.warnings.join(" ")}` : ""}${deployed ? " Redeploy it to apply the change." : ""}`});
