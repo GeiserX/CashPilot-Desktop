@@ -30,6 +30,10 @@ export function DeleteActivityData() {
   return window['go']['main']['App']['DeleteActivityData']();
 }
 
+export function DeleteCustomService(arg1) {
+  return window['go']['main']['App']['DeleteCustomService'](arg1);
+}
+
 export function DeployService(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DeployService'](arg1, arg2, arg3, arg4);
 }
@@ -98,6 +102,10 @@ export function InstallBackgroundHelper() {
   return window['go']['main']['App']['InstallBackgroundHelper']();
 }
 
+export function ListCustomServices() {
+  return window['go']['main']['App']['ListCustomServices']();
+}
+
 export function ListPayouts(arg1) {
   return window['go']['main']['App']['ListPayouts'](arg1);
 }
@@ -152,6 +160,10 @@ export function RestartService(arg1) {
 
 export function SaveCredentials(arg1, arg2) {
   return window['go']['main']['App']['SaveCredentials'](arg1, arg2);
+}
+
+export function SaveCustomService(arg1, arg2) {
+  return window['go']['main']['App']['SaveCustomService'](arg1, arg2);
 }
 
 export function SaveSettings(arg1) {

@@ -320,6 +320,7 @@ export namespace catalog {
 	    collector: CollectorMetadata;
 	    sourcePath: string;
 	    manualOnly: boolean;
+	    custom: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Service(source);
@@ -345,6 +346,7 @@ export namespace catalog {
 	        this.collector = this.convertValues(source["collector"], CollectorMetadata);
 	        this.sourcePath = source["sourcePath"];
 	        this.manualOnly = source["manualOnly"];
+	        this.custom = source["custom"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1139,6 +1141,146 @@ export namespace runtime {
 	        this.version = source["version"];
 	        this.context = source["context"];
 	        this.tools = source["tools"];
+	    }
+	}
+
+}
+
+export namespace services {
+	
+	export class CustomEnv {
+	    key: string;
+	    value: string;
+	    secret: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CustomEnv(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.value = source["value"];
+	        this.secret = source["secret"];
+	    }
+	}
+	export class CustomDefinition {
+	    name: string;
+	    image: string;
+	    env: CustomEnv[];
+	    command: string;
+	    dataPath: string;
+	    memLimit: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CustomDefinition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.image = source["image"];
+	        this.env = this.convertValues(source["env"], CustomEnv);
+	        this.command = source["command"];
+	        this.dataPath = source["dataPath"];
+	        this.memLimit = source["memLimit"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class CustomEnvView {
+	    key: string;
+	    value: string;
+	    secret: boolean;
+	    isSet: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CustomEnvView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.value = source["value"];
+	        this.secret = source["secret"];
+	        this.isSet = source["isSet"];
+	    }
+	}
+	export class CustomServiceView {
+	    slug: string;
+	    name: string;
+	    image: string;
+	    env: CustomEnvView[];
+	    command: string;
+	    dataPath: string;
+	    memLimit: string;
+	    volume: string;
+	    warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CustomServiceView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.image = source["image"];
+	        this.env = this.convertValues(source["env"], CustomEnvView);
+	        this.command = source["command"];
+	        this.dataPath = source["dataPath"];
+	        this.memLimit = source["memLimit"];
+	        this.volume = source["volume"];
+	        this.warnings = source["warnings"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ScalingLimit {
+	    max: number;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScalingLimit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.max = source["max"];
+	        this.reason = source["reason"];
 	    }
 	}
 

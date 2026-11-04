@@ -575,6 +575,12 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .credential-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 12px 0; }
 .credential-hint, .instances-hint { font-size: var(--fs-2); }
 .image-choice, .instances-choice { margin: 0 0 12px; }
+/* Custom services: the list above the catalog and its editor. */
+.custom-services { margin-bottom: 16px; }
+.custom-editor { margin: 12px 0; }
+.custom-env { display: grid; gap: 8px; margin: 8px 0; }
+.custom-env-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr) auto auto; gap: 8px; align-items: center; }
+.custom-env-secret { display: inline-flex; gap: 4px; align-items: center; font-size: var(--fs-2); color: var(--text-secondary); }
 .instances-choice input { max-width: 6rem; }
 .image-choice summary { cursor: pointer; color: var(--text-secondary); font-size: var(--fs-2); margin-bottom: 6px; }
 

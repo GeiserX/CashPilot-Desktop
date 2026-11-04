@@ -7,6 +7,7 @@ import {store} from '../models';
 import {catalog} from '../models';
 import {preflight} from '../models';
 import {usage} from '../models';
+import {services} from '../models';
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
 
@@ -21,6 +22,8 @@ export function CompleteOnboarding():Promise<void>;
 export function ConfirmStateBackup(arg1:string):Promise<void>;
 
 export function DeleteActivityData():Promise<main.ActivityView>;
+
+export function DeleteCustomService(arg1:string):Promise<void>;
 
 export function DeployService(arg1:string,arg2:Record<string, string>,arg3:string,arg4:number):Promise<store.Deployment>;
 
@@ -56,6 +59,8 @@ export function IgnoreDrift(arg1:string):Promise<void>;
 
 export function InstallBackgroundHelper():Promise<void>;
 
+export function ListCustomServices():Promise<Array<services.CustomServiceView>>;
+
 export function ListPayouts(arg1:string):Promise<Array<store.Payout>>;
 
 export function ListServices():Promise<Array<catalog.Service>>;
@@ -82,6 +87,8 @@ export function RemoveService(arg1:string,arg2:boolean,arg3:boolean):Promise<voi
 export function RestartService(arg1:string):Promise<void>;
 
 export function SaveCredentials(arg1:string,arg2:Record<string, string>):Promise<void>;
+
+export function SaveCustomService(arg1:string,arg2:services.CustomDefinition):Promise<services.CustomServiceView>;
 
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
 

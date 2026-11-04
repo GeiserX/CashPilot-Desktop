@@ -55,6 +55,44 @@ declare module "../wailsjs/go/main/App" {
   export function ListPayouts(slug: string): Promise<Payout[]>;
   export function RecordPayout(slug: string, amount: number, currency: string, method: string, date: string): Promise<Payout>;
   export function RemovePayout(id: number): Promise<void>;
+  // Services the user adds from an image reference. slug "" creates one. A secret's
+  // value never comes back: a blank secret on save keeps the stored one.
+  export function ListCustomServices(): Promise<CustomServiceView[]>;
+  export function SaveCustomService(slug: string, definition: CustomDefinition): Promise<CustomServiceView>;
+  export function DeleteCustomService(slug: string): Promise<void>;
+}
+
+export interface CustomEnv {
+  key: string;
+  value: string;
+  secret: boolean;
+}
+
+export interface CustomDefinition {
+  name: string;
+  image: string;
+  env: CustomEnv[];
+  command: string;
+  dataPath: string;
+  memLimit: string;
+}
+
+export interface CustomEnvView extends CustomEnv {
+  // Whether a value is stored; a secret's value is always "" here.
+  isSet: boolean;
+}
+
+export interface CustomServiceView {
+  slug: string;
+  name: string;
+  image: string;
+  env: CustomEnvView[];
+  command: string;
+  dataPath: string;
+  memLimit: string;
+  // The named volume the data path is kept in, "" with no data path.
+  volume: string;
+  warnings: string[];
 }
 
 export interface AppState {
@@ -462,6 +500,8 @@ export interface Service {
   deviceLink: { idEnv: string; url: string; steps: string } | null;
   resurrectionChecked: string;
   manualOnly: boolean;
+  // A service the user added from an image reference, not a reviewed catalog entry.
+  custom?: boolean;
 }
 
 export interface DockerConfig {
