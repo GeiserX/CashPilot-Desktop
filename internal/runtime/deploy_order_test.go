@@ -27,6 +27,9 @@ type fakeDocker struct {
 	// message, the way Docker refuses a host port another container holds.
 	createRefusal string
 	startRefusal  string
+	// liveLabels, when set, makes the container already holding the deploy's name
+	// carry these labels, so a test can say whose container it is.
+	liveLabels map[string]string
 }
 
 func (f *fakeDocker) record(call string) {
@@ -65,6 +68,11 @@ func (f *fakeDocker) start(t *testing.T) {
 		switch {
 		case path == "/_ping":
 			w.WriteHeader(http.StatusOK)
+		case f.liveLabels != nil && r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
+			f.record("GET " + path)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "live", "Config": map[string]any{"Labels": f.liveLabels}})
 		case path == "/images/create":
 			f.record("POST /images/create")
 			if f.pullFail {
@@ -246,5 +254,30 @@ func TestDeployStillReplacesTheContainerOnTheHappyPath(t *testing.T) {
 	}
 	if !(pull < remove && remove < create) {
 		t.Fatalf("expected pull -> remove -> create, got %v", calls)
+	}
+}
+
+// THE RULE: a deploy replaces only its own container. Copy 2 of "foo" and copy 1 of a
+// service slugged "foo-2" are both cashpilot-foo-2; a deploy of one must not stop the
+// other and take its name. The second case is the positive control: the same fake,
+// with the container labelled as this service, is replaced as before.
+func TestDeployRefusesToReplaceAnotherServicesContainer(t *testing.T) {
+	fake := &fakeDocker{liveLabels: map[string]string{LabelService: "orderly", LabelInstance: "2"}}
+	fake.start(t)
+	_, err := (&DockerProvider{}).Deploy(context.Background(), deploySpec("orderly-2"), nil)
+	if err == nil || !strings.Contains(err.Error(), "already belongs to orderly (copy 2)") {
+		t.Fatalf("Deploy error = %v, want a refusal naming the owner", err)
+	}
+	if fake.removedAContainer() {
+		t.Fatalf("the other service's container was removed (calls: %v)", fake.recorded())
+	}
+
+	own := &fakeDocker{liveLabels: map[string]string{LabelService: "orderly"}}
+	own.start(t)
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), deploySpec("orderly"), nil); err != nil {
+		t.Fatalf("redeploy over its own container: %v", err)
+	}
+	if !own.removedAContainer() {
+		t.Fatalf("its own container was not replaced (calls: %v)", own.recorded())
 	}
 }

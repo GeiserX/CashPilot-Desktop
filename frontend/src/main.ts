@@ -10,11 +10,13 @@ import {
   AddFleetDevice,
   BackgroundHelperStatus,
   InstallBackgroundHelper,
+  ListCustomServices,
   RemoveBackgroundHelper,
   CheckRuntime,
   CollectService,
   CompleteOnboarding,
   ConfirmStateBackup,
+  DeleteCustomService,
   DeployService,
   ExportCompose,
   ExportStateBackup,
@@ -38,6 +40,7 @@ import {
   RemoveService,
   SaveSettings,
   SaveCredentials,
+  SaveCustomService,
   StartService,
   StartServiceCopy,
   StopService,
@@ -60,6 +63,8 @@ import { instancesChoice } from "./render/instances";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
+import { customDefinitionFrom, customEnvRow, renderCustomServicesSection } from "./render/custom";
+import type { CustomEnv, CustomServiceView } from "./wails";
 import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
@@ -73,6 +78,11 @@ let wizardCategories: string[] = [];
 let wizardSelected: string[] = [];
 let catalogFilter = "all";
 let catalogSearch = "";
+// Custom services on the Catalog page: the list as last loaded (null before the first
+// load), the one open in the editor ("new" for the add form), and a load failure.
+let customViews: CustomServiceView[] | null = null;
+let customEditing: CustomServiceView | "new" | null = null;
+let customLoadError = "";
 let resetScrollAfterRender = false;
 // The dashboard chart's window: the web console opens on 7 days.
 let chartDays = 7;
@@ -645,6 +655,7 @@ function renderCatalog(current: AppState) {
     return matchesCategory && haystack.includes(catalogSearch.toLowerCase());
   });
   const categories = ["all", "bandwidth", "depin", "storage", "compute"];
+  if ((current.services || []).some((service) => service.custom)) categories.push("custom");
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -652,6 +663,7 @@ function renderCatalog(current: AppState) {
         ${topbar("catalog", current)}
         <main class="page-content">
           ${pageHead("Catalog")}
+          ${renderCustomServicesSection(customViews, current.deployments || [], customEditing, customLoadError)}
           <div class="filter-bar">
             <div class="filter-tabs">
               ${categories.map((category) => `<button class="filter-tab ${catalogFilter === category ? "active" : ""}" data-filter="${category}">${escapeHtml(category === "depin" ? "DePIN" : capitalize(category))}</button>`).join("")}
@@ -698,6 +710,100 @@ function renderCatalog(current: AppState) {
       if (url) BrowserOpenURL(url);
     });
   });
+  wireCustomServices();
+  if (customViews === null && !customLoadError) void loadCustomViews();
+}
+
+async function loadCustomViews() {
+  try {
+    customViews = await ListCustomServices();
+    customLoadError = "";
+  } catch (error) {
+    customViews = [];
+    customLoadError = `Your custom services could not be read: ${String(error)}`;
+  }
+  if (activeView === "catalog") render();
+}
+
+// The custom-service list and editor above the catalog. The editor's typed values
+// live only in the DOM until Save, so nothing here calls render() while it is open,
+// except to open or close it.
+function wireCustomServices() {
+  document.querySelector<HTMLButtonElement>("[data-custom-new]")?.addEventListener("click", () => {
+    customEditing = "new";
+    render();
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-custom-edit]").forEach((button) => {
+    button.addEventListener("click", () => {
+      customEditing = customViews?.find((view) => view.slug === button.dataset.customEdit) || null;
+      render();
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-custom-delete]").forEach((button) => {
+    button.addEventListener("click", () => void deleteCustomService(button.dataset.customDelete || ""));
+  });
+  const editor = document.querySelector<HTMLFormElement>("[data-custom-editor]");
+  if (!editor) return;
+  const wireRow = (row: HTMLElement) => {
+    row.querySelector("[data-custom-env-remove]")?.addEventListener("click", () => row.remove());
+    const secret = row.querySelector<HTMLInputElement>("[data-custom-env-secret]");
+    const value = row.querySelector<HTMLInputElement>("[data-custom-env-value]");
+    secret?.addEventListener("change", () => {
+      if (value) value.type = secret.checked ? "password" : "text";
+    });
+  };
+  editor.querySelectorAll<HTMLElement>("[data-custom-env-row]").forEach(wireRow);
+  editor.querySelector("[data-custom-env-add]")?.addEventListener("click", () => {
+    const list = editor.querySelector<HTMLElement>("[data-custom-env]");
+    if (!list) return;
+    list.insertAdjacentHTML("beforeend", customEnvRow());
+    const rows = list.querySelectorAll<HTMLElement>("[data-custom-env-row]");
+    wireRow(rows[rows.length - 1]);
+  });
+  editor.querySelector("[data-custom-cancel]")?.addEventListener("click", () => {
+    customEditing = null;
+    render();
+  });
+  editor.querySelector("[data-custom-save]")?.addEventListener("click", () => void saveCustomService(editor));
+}
+
+async function saveCustomService(editor: HTMLFormElement) {
+  const output = editor.querySelector<HTMLPreElement>("[data-custom-output]");
+  const fields: Record<string, string> = {};
+  editor.querySelectorAll<HTMLInputElement>("[data-custom-field]").forEach((input) => {
+    fields[input.dataset.customField || ""] = input.value;
+  });
+  const rows: CustomEnv[] = [...editor.querySelectorAll<HTMLElement>("[data-custom-env-row]")].map((row) => ({
+    key: row.querySelector<HTMLInputElement>("[data-custom-env-key]")?.value || "",
+    value: row.querySelector<HTMLInputElement>("[data-custom-env-value]")?.value || "",
+    secret: Boolean(row.querySelector<HTMLInputElement>("[data-custom-env-secret]")?.checked),
+  }));
+  try {
+    const saved = await SaveCustomService(editor.dataset.customEditor || "", customDefinitionFrom(fields, rows));
+    customEditing = null;
+    customViews = await ListCustomServices();
+    state = await GetAppState();
+    render();
+    const deployed = state?.deployments?.some((dep) => dep.slug === saved.slug);
+    showInfoToast({scope: "custom service", message: `${saved.name} saved.${saved.warnings?.length ? ` ${saved.warnings.join(" ")}` : ""}${deployed ? " Redeploy it to apply the change." : ""}`});
+  } catch (error) {
+    if (output) output.textContent = String(error);
+  }
+}
+
+async function deleteCustomService(slug: string) {
+  const view = customViews?.find((item) => item.slug === slug);
+  if (!view) return;
+  const volume = view.volume ? ` Its data volume ${view.volume}, if you kept it when removing it, stays on this computer until you delete it with docker volume rm.` : "";
+  if (!confirm(`Delete ${view.name}?${volume}`)) return;
+  try {
+    await DeleteCustomService(slug);
+    customViews = await ListCustomServices();
+    state = await GetAppState();
+    render();
+  } catch (error) {
+    showErrorToast({scope: "custom service", error: String(error)});
+  }
 }
 
 async function renderSettings(current: AppState) {
@@ -1406,7 +1512,9 @@ async function runWizardAction(slug: string, action: string) {
         return;
       }
       if (output) output.textContent = "Deploying...";
-      await SaveCredentials(slug, values);
+      // A custom service has no credentials: it runs its saved definition.
+      const custom = state?.services?.some((service) => service.slug === slug && service.custom);
+      if (!custom) await SaveCredentials(slug, values);
       const deployment = await DeployService(slug, values, readWizardImage(slug), readWizardInstances(slug));
       state = await GetAppState();
       // The box now holds what runs, so a second Deploy without an edit keeps it.

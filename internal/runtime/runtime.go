@@ -248,6 +248,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// lives elsewhere comes back as a different node. Read it BEFORE the removal,
 	// which is the only moment the fact still exists.
 	if live, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); err == nil {
+		if live.Container.Config != nil {
+			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
+				return ContainerInfo{}, fmt.Errorf("%s already belongs to %s, not to copy %d of %s. It was left running; remove it or deploy under another name", name, owner, max(spec.Instance, 1), spec.Slug)
+			}
+		}
 		var kept []KeptMount
 		mounts, kept = keepLiveMounts(mounts, svc.Docker.Volumes, env, live.Container)
 		hostConfig.Mounts = mounts
@@ -797,7 +802,33 @@ func containerLabels(slug string, instance int) map[string]string {
 	if instance > 1 {
 		labels[LabelInstance] = strconv.Itoa(instance)
 	}
+	if catalog.IsCustomSlug(slug) {
+		labels[LabelCustom] = "true"
+	}
 	return labels
+}
+
+// LabelCustom is "true" on a container deployed from a service the user added from
+// an image reference (internal/services/custom.go) rather than from the reviewed
+// catalog. The web worker uses the same label.
+const LabelCustom = "cashpilot.custom"
+
+// otherOwner reports, for the container already holding a deploy's name, whose it is
+// when that is not this copy of this service: "" when it is ours to replace.
+//
+// The name alone is no proof. Copy 2 of "foo" and copy 1 of a service slugged
+// "foo-2" are both cashpilot-foo-2, and replacing another service's container would
+// stop it and start this one under its name. An unlabelled container keeps the old
+// behaviour, replaced, so a name taken by hand never blocks a deploy.
+func otherOwner(labels map[string]string, slug string, instance int) string {
+	owner := labels[LabelService]
+	if owner == "" {
+		return ""
+	}
+	if owner != slug || instanceOf(labels) != max(instance, 1) {
+		return fmt.Sprintf("%s (copy %d)", owner, instanceOf(labels))
+	}
+	return ""
 }
 
 func containerName(slug string) string {
