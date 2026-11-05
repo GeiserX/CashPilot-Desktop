@@ -393,8 +393,12 @@ func buildRow(app foundApp, svc catalog.Service, extra map[string]string) Row {
 			state = FieldRetype
 		} else if IsPlaceholder(value.Text) {
 			state = FieldPlaceholder
+		} else if strings.TrimSpace(value.Text) != value.Text {
+			// Desktop stores and deploys a value as given, so spaces at an end are
+			// not trimmed away silently: which one the old tool used is a guess.
+			state = FieldRetype
 		} else {
-			text, state = strings.TrimSpace(value.Text), FieldImported
+			text, state = value.Text, FieldImported
 		}
 		// A JSON "\u0000" decodes to a NUL after the file's own NUL check;
 		// no env value can carry one.

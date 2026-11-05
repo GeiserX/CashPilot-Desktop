@@ -29,7 +29,7 @@ const FIELD_STATE: Record<string, string> = {
   imported: "imported",
   missing: "missing",
   placeholder: "still the example value",
-  retype: "needs retyping (uses $ or quotes a shell would change)",
+  retype: "needs retyping (uses $, quotes a shell would change, or spaces at an end)",
   invalid: "not in the format this service needs",
 };
 

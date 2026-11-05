@@ -618,3 +618,16 @@ func TestADecodedNulIsAnInvalidValue(t *testing.T) {
 		t.Errorf("honeygain = %+v", r)
 	}
 }
+
+// Desktop deploys a saved value as it is, so a quoted value with spaces at an end
+// is asked for again instead of being trimmed into a different password.
+func TestAValueWithSpacesAtAnEndNeedsRetyping(t *testing.T) {
+	content := "HONEYGAIN_EMAIL=hg@example.com\nHONEYGAIN_PASSWD=' padded '\n" // ggignore: fake test value
+	r := rows(preview(t, []File{{Name: ".env", Content: content}}, "cashfactory", nil))["honeygain"]
+	if f := field(t, r, "HONEYGAIN_PASSWORD"); f.State != FieldRetype {
+		t.Errorf("password state = %q, want retype", f.State)
+	}
+	if r.State == RowReady {
+		t.Errorf("honeygain is ready with a guessed value: %+v", r)
+	}
+}
