@@ -339,7 +339,7 @@ func (a *App) raiseSpike(container, kind, message string, now time.Time) {
 }
 
 // activityBusyNotice is shown when a delete could not empty the database log.
-const activityBusyNotice = "Activity: the database was busy, so deleted addresses stay in its log until the next hourly purge."
+const activityBusyNotice = "Activity: the database was busy, so deleted addresses stay in its log until a later checkpoint empties it; the hourly purge tries again."
 
 // refreshActivityNetworks downloads the network table. One at a time.
 func (a *App) refreshActivityNetworks(ctx context.Context) error {

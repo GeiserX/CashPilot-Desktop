@@ -235,8 +235,9 @@ func (s *Store) PurgeActivity(now time.Time) (busy bool, err error) {
 				return err
 			}
 		}
-		busy = checkpoint(ctx, c)
-		return nil
+		var cerr error
+		busy, cerr = checkpoint(ctx, c)
+		return cerr
 	})
 	return busy, err
 }
@@ -256,18 +257,21 @@ func (s *Store) DeleteActivity(all bool) (busy bool, err error) {
 				return err
 			}
 		}
-		busy = checkpoint(ctx, c)
-		return nil
+		var cerr error
+		busy, cerr = checkpoint(ctx, c)
+		return cerr
 	})
 	return busy, err
 }
 
-func checkpoint(ctx context.Context, c *sql.Conn) bool {
+// checkpoint empties the database log. busy is SQLite's own answer that a
+// reader kept it from finishing; a failed query is an error, not busy.
+func checkpoint(ctx context.Context, c *sql.Conn) (bool, error) {
 	var busy, logFrames, done int
 	if err := c.QueryRowContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &done); err != nil {
-		return true
+		return false, err
 	}
-	return busy != 0
+	return busy != 0, nil
 }
 
 // ActivityLatest is the newest sample of every container seen since since.

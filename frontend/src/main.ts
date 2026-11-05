@@ -101,6 +101,9 @@ let usageRequest = 0;
 // The Activity page's window (1, 7 or 30 days) and its expanded rows, each with
 // its detail once loaded (null while it loads).
 let activityDays = 1;
+// Moves on with every window change, switch or delete, so a page answer that
+// arrives after a newer one is dropped instead of drawn over it.
+let activityRequest = 0;
 let activityOpen: Record<string, ActivityDetail | null> = {};
 let activitySwitchingOff = false;
 
@@ -1022,14 +1025,16 @@ function envInputName(key: string) {
 }
 
 async function renderActivity(current: AppState, view?: ActivityView) {
+  const request = activityRequest;
   let data: ActivityView;
   try {
     data = view || (await GetActivity(activityDays));
   } catch (error) {
+    if (request !== activityRequest || activeView !== "activity") return;
     showErrorToast({scope: "activity", error: String(error)});
     return;
   }
-  if (activeView !== "activity") return;
+  if (activeView !== "activity" || request !== activityRequest) return;
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -1058,6 +1063,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   };
   document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
     const on = (event.target as HTMLInputElement).checked;
+    activityRequest++;
     if (on) {
       void run(() => SetActivityEnabled(on));
       return;
@@ -1075,11 +1081,13 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   });
   document.querySelector<HTMLSelectElement>("#activity-days")?.addEventListener("change", (event) => {
     activityDays = Number((event.target as HTMLSelectElement).value) || 1;
+    activityRequest++;
     activityOpen = {};
     void run(() => GetActivity(activityDays));
   });
   document.querySelector("#activity-delete")?.addEventListener("click", () => {
     if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
+    activityRequest++;
     activityOpen = {};
     void run(() => DeleteActivityData());
   });
