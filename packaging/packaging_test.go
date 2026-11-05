@@ -262,15 +262,30 @@ func TestChecksumsAreWellFormed(t *testing.T) {
 	}
 }
 
-func TestDependsMatchPKGBUILD(t *testing.T) {
+// TestSrcinfoMatchesPKGBUILD checks every array .SRCINFO copies from the PKGBUILD,
+// so a hand edit to one file that render.sh did not regenerate into the other fails.
+func TestSrcinfoMatchesPKGBUILD(t *testing.T) {
 	pkgbuild := read(t, filepath.Join(aurDir, "PKGBUILD"))
-	m := regexp.MustCompile(`(?m)^depends=\((.*)\)$`).FindStringSubmatch(pkgbuild)
+	srcinfo := read(t, filepath.Join(aurDir, ".SRCINFO"))
+	m := regexp.MustCompile(`(?m)^pkgver=(\S+)$`).FindStringSubmatch(pkgbuild)
 	if m == nil {
-		t.Fatal("PKGBUILD has no single-line depends array")
+		t.Fatal("PKGBUILD has no pkgver")
 	}
-	pkgDeps := strings.Fields(strings.NewReplacer("'", " ", `"`, " ").Replace(m[1]))
-	srcDeps := srcinfoValues(read(t, filepath.Join(aurDir, ".SRCINFO")), "depends")
-	if len(pkgDeps) == 0 || strings.Join(pkgDeps, ",") != strings.Join(srcDeps, ",") {
-		t.Errorf("PKGBUILD depends %v differ from .SRCINFO %v; rerun packaging/render.sh", pkgDeps, srcDeps)
+	expand := strings.NewReplacer("${pkgver}", m[1], "$pkgver", m[1])
+	quoted := regexp.MustCompile(`'([^']*)'|"([^"]*)"`)
+	for _, key := range []string{"depends", "optdepends", "provides", "conflicts", "options", "source"} {
+		arr := regexp.MustCompile(`(?ms)^` + key + `=\((.*?)\)`).FindStringSubmatch(pkgbuild)
+		if arr == nil {
+			t.Errorf("PKGBUILD has no %s array", key)
+			continue
+		}
+		var want []string
+		for _, q := range quoted.FindAllStringSubmatch(arr[1], -1) {
+			want = append(want, expand.Replace(q[1]+q[2]))
+		}
+		got := srcinfoValues(srcinfo, key)
+		if len(want) == 0 || strings.Join(want, "|") != strings.Join(got, "|") {
+			t.Errorf("PKGBUILD %s %q differ from .SRCINFO %q; rerun packaging/render.sh", key, want, got)
+		}
 	}
 }
