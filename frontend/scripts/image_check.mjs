@@ -67,7 +67,7 @@ check("RULE 1: clearing a chosen image sends \"\"", imageChoice("  ", "honeygain
 check("RULE 1: a typed image is sent trimmed", imageChoice(" mirror.test/hg:1 ", "") === "mirror.test/hg:1");
 
 // RULE 2
-const card = renderWizardServiceSetup(honeygain, {}, "macmini", null, "honeygain/honeygain:0.8.1");
+const card = renderWizardServiceSetup(honeygain, {}, "devbox", null, "honeygain/honeygain:0.8.1");
 const inCard = imageInput(card);
 check("RULE 2: the wizard card carries the Image box with the recorded choice", inCard.value === "honeygain/honeygain:0.8.1", card);
 check("RULE 2: the Image box never carries data-wizard-env", inCard.tag !== "" && inCard.env === undefined, inCard.tag);
