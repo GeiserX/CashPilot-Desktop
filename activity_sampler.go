@@ -111,6 +111,11 @@ func (a *App) startActivitySampler(ctx context.Context) {
 	}
 	a.activity.deltas = activity.NewDeltas()
 	a.activity.geo = &activity.IPGeo{Dir: a.cfg.DataDir(), URL: activity.IPGeoURL}
+	// A switch-off whose delete failed before a restart left no flag behind:
+	// while off, the first tick deletes any addresses still stored.
+	a.activity.writeMu.Lock()
+	a.activity.deletePending = !a.activityOn()
+	a.activity.writeMu.Unlock()
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	a.activity.stop = func() {

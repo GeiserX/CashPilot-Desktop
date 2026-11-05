@@ -107,6 +107,9 @@ let activityRequest = 0;
 // Moves on with every page fetch, so of two fetches in one generation only the
 // newer one is drawn.
 let activityPage = 0;
+// The Activity view last drawn: a late detail answer redraws this one, never
+// the older view its click came from.
+let activityShown: ActivityView | null = null;
 let activityOpen: Record<string, ActivityDetail | null> = {};
 // Deletes still running (switch-off or Delete data): rows do not open meanwhile.
 let activityDeleting = 0;
@@ -1040,6 +1043,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     return;
   }
   if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
+  activityShown = data;
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -1117,25 +1121,24 @@ async function renderActivity(current: AppState, view?: ActivityView) {
         return;
       }
       const open = activityOpen;
-      const page = activityPage;
       open[name] = null;
       void renderActivity(current, data);
       let detail: ActivityDetail;
       try {
         detail = await GetActivityDetail(name, activityDays);
       } catch (error) {
-        if (open === activityOpen && open[name] === null) delete open[name];
+        if (open !== activityOpen || open[name] !== null) return;
+        delete open[name];
         showErrorToast({scope: "activity", error: String(error)});
-        if (activeView === "activity" && open === activityOpen && page === activityPage) void renderActivity(current, data);
+        if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
         return;
       }
       // The window changed, the data was deleted or the row was closed meanwhile:
       // this answer belongs to a page that is gone.
-      // A newer page was fetched meanwhile (the user left and came back): this
-      // answer and the view it would redraw are both stale.
-      if (open !== activityOpen || open[name] !== null || page !== activityPage) return;
+      if (open !== activityOpen || open[name] !== null) return;
       open[name] = detail;
-      if (activeView === "activity") void renderActivity(current, data);
+      // Redraw the newest view, not the one this click came from.
+      if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
     });
   });
 }

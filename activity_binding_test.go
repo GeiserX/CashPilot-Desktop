@@ -317,3 +317,14 @@ func TestAFailedSwitchOffDeleteIsRetried(t *testing.T) {
 		t.Fatalf("the retried delete must have removed the addresses: %+v", d.Raw)
 	}
 }
+
+// After a restart with Activity off, the first tick deletes any addresses a
+// failed switch-off left behind: the pending flag does not survive a restart.
+func TestStartWithActivityOffQueuesTheDelete(t *testing.T) {
+	a := newActivityTestApp(t)
+	a.startActivitySampler(t.Context())
+	t.Cleanup(a.stopActivitySampler)
+	if !a.activity.deletePending {
+		t.Fatal("starting with Activity off must queue the switch-off delete")
+	}
+}
