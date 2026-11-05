@@ -6,6 +6,10 @@ export function AddFleetDevice(arg1) {
   return window['go']['main']['App']['AddFleetDevice'](arg1);
 }
 
+export function ApplyImport(arg1) {
+  return window['go']['main']['App']['ApplyImport'](arg1);
+}
+
 export function BackgroundHelperStatus() {
   return window['go']['main']['App']['BackgroundHelperStatus']();
 }
@@ -124,6 +128,10 @@ export function PreflightService(arg1) {
 
 export function PlanServiceRemoval(arg1) {
   return window['go']['main']['App']['PlanServiceRemoval'](arg1);
+}
+
+export function PreviewImport(arg1) {
+  return window['go']['main']['App']['PreviewImport'](arg1);
 }
 
 export function RecordPayout(arg1, arg2, arg3, arg4, arg5) {
