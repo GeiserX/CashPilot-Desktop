@@ -23,6 +23,7 @@ import { serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
 import { imageChoiceSection } from "./image.js";
 import { instancesSection } from "./instances.js";
+import { renderCustomServiceCard } from "./custom.js";
 
 /**
  * Render the setup card for one service.
@@ -46,6 +47,8 @@ export function renderWizardServiceSetup(
   scaling?: ScalingLimit | null,
   instances?: number | null,
 ): string {
+  // A custom service runs its saved definition: no credentials, no Image box.
+  if (service.custom) return renderCustomServiceCard(service, scaling, instances);
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = serviceFormFields(service, collectorFields);
   const earning = breakdown?.find((item) => item.platform === service.slug);

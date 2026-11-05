@@ -109,10 +109,10 @@ func TestValidateWorkerURL(t *testing.T) {
 		{name: "hostname does not resolve blocked", url: "http://ghost.example.com", pol: Policy{Mode: "private"}, resolver: resolveFail, wantErr: true},
 
 		// ---- name-based allowlist (Tailscale MagicDNS suffix) -------------------
-		{name: "strict allows *.suffix name even if unresolvable", url: "http://nodeA.mango-alpha.ts.net:8081", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.mango-alpha.ts.net"}}, resolver: resolveFail},
-		{name: "strict suffix name resolving to public ok (name override)", url: "http://nodeA.mango-alpha.ts.net", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.mango-alpha.ts.net"}}, resolver: resolveTo("93.184.216.34")},
-		{name: "suffix-allowlisted name resolving to metadata still blocked", url: "http://nodeA.mango-alpha.ts.net", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.mango-alpha.ts.net"}}, resolver: resolveTo("169.254.169.254"), wantErr: true},
-		{name: "strict rejects name outside suffix", url: "http://nodeA.evil.example", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.mango-alpha.ts.net"}}, resolver: resolveTo("93.184.216.34"), wantErr: true},
+		{name: "strict allows *.suffix name even if unresolvable", url: "http://nodeA.tailnet-example.ts.net:8081", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.tailnet-example.ts.net"}}, resolver: resolveFail},
+		{name: "strict suffix name resolving to public ok (name override)", url: "http://nodeA.tailnet-example.ts.net", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.tailnet-example.ts.net"}}, resolver: resolveTo("93.184.216.34")},
+		{name: "suffix-allowlisted name resolving to metadata still blocked", url: "http://nodeA.tailnet-example.ts.net", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.tailnet-example.ts.net"}}, resolver: resolveTo("169.254.169.254"), wantErr: true},
+		{name: "strict rejects name outside suffix", url: "http://nodeA.evil.example", pol: Policy{Mode: "strict", AllowedHosts: []string{"*.tailnet-example.ts.net"}}, resolver: resolveTo("93.184.216.34"), wantErr: true},
 	}
 
 	for _, tc := range cases {

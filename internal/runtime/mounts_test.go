@@ -230,8 +230,8 @@ func TestKeepLiveMountsNormalisesTargets(t *testing.T) {
 // of it.
 //
 // Docker Desktop and Podman Desktop run the daemon in a Linux VM, and inspect's
-// Mounts[].Source answers with the path as that VM sees it: /Users/sergio/storj comes
-// back as /host_mnt/Users/sergio/storj on macOS, and C:\storj as
+// Mounts[].Source answers with the path as that VM sees it: /Users/me/storj comes
+// back as /host_mnt/Users/me/storj on macOS, and C:\storj as
 // /run/desktop/mnt/host/c/storj on Windows. Handing that back to a create either shows
 // the user a path they never typed or is refused outright ("mounts denied") — and by
 // then the old container has already been stopped and removed, so a Storj node is left
@@ -240,14 +240,14 @@ func TestKeepLiveMountsNormalisesTargets(t *testing.T) {
 // On a plain Linux daemon the two are the same string, which is why this cannot be
 // caught by the integration test that runs here.
 func TestKeepLiveMountsUsesTheRequestedPathNotTheVMPath(t *testing.T) {
-	const typed = "/Users/sergio/storj"
+	const typed = "/Users/me/storj"
 	spec := []mount.Mount{{Type: mount.TypeBind, Source: typed, Target: "/app/identity"}}
 	declared := []string{"${IDENTITY_DIR}:/app/identity"}
 	live := container.InspectResponse{
 		Config: &container.Config{Env: []string{"IDENTITY_DIR=" + typed}},
 		// What Docker Desktop reports back.
 		Mounts: []container.MountPoint{{
-			Type: mount.TypeBind, Source: "/host_mnt/Users/sergio/storj", Destination: "/app/identity", RW: true,
+			Type: mount.TypeBind, Source: "/host_mnt/Users/me/storj", Destination: "/app/identity", RW: true,
 		}},
 		// What the container was actually created with.
 		HostConfig: &container.HostConfig{

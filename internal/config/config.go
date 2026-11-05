@@ -62,7 +62,7 @@ type AppConfig struct {
 	// WorkerAllowedHosts is an explicit allowlist of worker hosts/IPs. It is the sole
 	// allow-source in "strict" mode and is always honored in the other modes. Entries
 	// may be an exact hostname, a "*.suffix" DNS suffix (e.g. Tailscale MagicDNS
-	// "*.mango-alpha.ts.net"), a CIDR, or a literal IP. Defaults to empty (nil).
+	// "*.tailnet-example.ts.net"), a CIDR, or a literal IP. Defaults to empty (nil).
 	WorkerAllowedHosts []string `json:"workerAllowedHosts"`
 	// WorkerAllowMetadata, when false (the default, the bool zero value), makes the
 	// cloud instance-metadata endpoints (169.254.169.254, fd00:ec2::254,
