@@ -104,8 +104,12 @@ let activityDays = 1;
 // Moves on with every window change, switch or delete, so a page answer that
 // arrives after a newer one is dropped instead of drawn over it.
 let activityRequest = 0;
+// Moves on with every page fetch, so of two fetches in one generation only the
+// newer one is drawn.
+let activityPage = 0;
 let activityOpen: Record<string, ActivityDetail | null> = {};
-let activitySwitchingOff = false;
+// Deletes still running (switch-off or Delete data): rows do not open meanwhile.
+let activityDeleting = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -1026,15 +1030,16 @@ function envInputName(key: string) {
 
 async function renderActivity(current: AppState, view?: ActivityView) {
   const request = activityRequest;
+  const page = view ? activityPage : ++activityPage;
   let data: ActivityView;
   try {
     data = view || (await GetActivity(activityDays));
   } catch (error) {
-    if (request !== activityRequest || activeView !== "activity") return;
+    if (page !== activityPage || request !== activityRequest || activeView !== "activity") return;
     showErrorToast({scope: "activity", error: String(error)});
     return;
   }
-  if (activeView !== "activity" || request !== activityRequest) return;
+  if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -1071,11 +1076,11 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     // Off deletes the addresses: drop the open rows' copies, refuse to open a
     // row until the delete is done, then drop anything opened meanwhile.
     activityOpen = {};
-    activitySwitchingOff = true;
+    activityDeleting++;
     // Take the open rows' addresses off the screen now, not when the delete returns.
     void renderActivity(current, {...data, enabled: false});
     void run(() => SetActivityEnabled(on)).finally(() => {
-      activitySwitchingOff = false;
+      activityDeleting--;
       activityOpen = {};
     });
   });
@@ -1083,13 +1088,18 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     activityDays = Number((event.target as HTMLSelectElement).value) || 1;
     activityRequest++;
     activityOpen = {};
-    void run(() => GetActivity(activityDays));
+    void renderActivity(current);
   });
   document.querySelector("#activity-delete")?.addEventListener("click", () => {
     if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
     activityRequest++;
     activityOpen = {};
-    void run(() => DeleteActivityData());
+    // As on switch-off: no row opens until the delete is done.
+    activityDeleting++;
+    void run(() => DeleteActivityData()).finally(() => {
+      activityDeleting--;
+      activityOpen = {};
+    });
   });
   document.querySelector("#activity-networks")?.addEventListener("click", () => {
     showInfoToast({scope: "activity", message: "Downloading the network table (about 11 MB)."});
@@ -1098,7 +1108,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   document.querySelectorAll<HTMLButtonElement>("[data-activity-expand]").forEach((button) => {
     button.addEventListener("click", async () => {
       const name = button.dataset.activityExpand || "";
-      if (activitySwitchingOff) return;
+      if (activityDeleting > 0) return;
       if (Object.hasOwn(activityOpen, name)) {
         delete activityOpen[name];
         void renderActivity(current, data);
