@@ -950,6 +950,9 @@ async function readImportFiles(): Promise<ImportFile[]> {
   }
   const pasted = document.querySelector<HTMLTextAreaElement>("#import-paste")?.value || "";
   if (pasted.trim()) files.push({ name: "pasted text", content: pasted });
+  // A redraw empties the file picker, so a second preview (another tool picked,
+  // say) reuses the files last previewed when nothing new was added.
+  if (!files.length && importRequest) files.push(...importRequest.files);
   const problem = importFilesProblem(files);
   if (problem) throw new Error(problem);
   return files;
