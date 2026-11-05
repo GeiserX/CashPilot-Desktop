@@ -242,8 +242,10 @@ func (s *Store) PurgeActivity(now time.Time) (busy bool, err error) {
 }
 
 // DeleteActivity deletes the raw destinations, or with all every Activity row.
-func (s *Store) DeleteActivity(all bool) error {
-	return s.withSecureDelete(func(c *sql.Conn) error {
+// busy is true when a reader kept the database log from being emptied: the
+// deleted rows may stay in it until the next hourly purge.
+func (s *Store) DeleteActivity(all bool) (busy bool, err error) {
+	err = s.withSecureDelete(func(c *sql.Conn) error {
 		ctx := context.Background()
 		tables := []string{"activity_dest_raw"}
 		if all {
@@ -254,9 +256,10 @@ func (s *Store) DeleteActivity(all bool) error {
 				return err
 			}
 		}
-		checkpoint(ctx, c)
+		busy = checkpoint(ctx, c)
 		return nil
 	})
+	return busy, err
 }
 
 func checkpoint(ctx context.Context, c *sql.Conn) bool {

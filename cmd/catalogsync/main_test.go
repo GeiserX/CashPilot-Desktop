@@ -308,6 +308,39 @@ func TestProcnetIsVendoredAndChecked(t *testing.T) {
 	}
 }
 
+// A helper path under a missing directory is created, as the catalog's is.
+func TestProcnetSyncCreatesItsDirectory(t *testing.T) {
+	src := webCheckout(t, upstreamEntry)
+	writeCatalog(t, src, map[string]string{"app/procnet.py": "print('h')\n"})
+	out := t.TempDir()
+	old := procnetPath
+	procnetPath = filepath.Join(t.TempDir(), "not", "yet", "procnet.py")
+	defer func() { procnetPath = old }()
+	if err := run(src, "main", out, t.TempDir(), false); err != nil {
+		t.Fatalf("sync into a missing directory: %v", err)
+	}
+	if got, _ := os.ReadFile(procnetPath); string(got) != "print('h')\n" {
+		t.Fatalf("wrote %q", got)
+	}
+}
+
+// With -procnet empty the helper is not read at all, so an unreadable one
+// cannot fail a catalog-only run.
+func TestAnEmptyProcnetPathSkipsTheHelper(t *testing.T) {
+	src := webCheckout(t, upstreamEntry)
+	// A directory where the file should be: reading it fails, and must not be tried.
+	if err := os.MkdirAll(filepath.Join(src, "app", "procnet.py"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	old := procnetPath
+	procnetPath = ""
+	defer func() { procnetPath = old }()
+	if err := run(src, "main", out, t.TempDir(), false); err != nil {
+		t.Fatalf("a catalog-only run failed on the helper: %v", err)
+	}
+}
+
 // The fetched tarball carries the helper too, so the weekly drift run compares it.
 func TestFetchExtractsTheHelper(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

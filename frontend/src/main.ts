@@ -1066,6 +1066,8 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     // row until the delete is done, then drop anything opened meanwhile.
     activityOpen = {};
     activitySwitchingOff = true;
+    // Take the open rows' addresses off the screen now, not when the delete returns.
+    void renderActivity(current, {...data, enabled: false});
     void run(() => SetActivityEnabled(on)).finally(() => {
       activitySwitchingOff = false;
       activityOpen = {};
@@ -1089,7 +1091,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     button.addEventListener("click", async () => {
       const name = button.dataset.activityExpand || "";
       if (activitySwitchingOff) return;
-      if (name in activityOpen) {
+      if (Object.hasOwn(activityOpen, name)) {
         delete activityOpen[name];
         void renderActivity(current, data);
         return;

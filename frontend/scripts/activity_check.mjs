@@ -84,5 +84,9 @@ const ageless = page({ present: true, ageSeconds: null, rows: 10 });
 check("a network table of unknown age never reads as 0 days old", !ageless.includes("0 days old") && ageless.includes(`${UNKNOWN} days old`), ageless);
 check("a known age is shown in days", page({ present: true, ageSeconds: 3 * 86400, rows: 10 }).includes("3 days old"));
 
+const ctorRow = row({ container: "constructor" });
+const notOpen = renderActivityPage({ enabled: true, days: 1, rawHours: 24, lastWindow: 0, round: { at: 5, workerStatus: "ok", leftoverProbes: [] }, networks: { present: false, ageSeconds: null, rows: null }, networksEnabled: true, containers: [ctorRow], alerts: [] }, {});
+check("a container named like an object property is not an open row", !notOpen.includes("Loading") && !notOpen.includes(`id="${domId("constructor")}"`), notOpen);
+
 console.log(`${checks - failures}/${checks} activity checks passed`);
 if (failures) process.exit(1);

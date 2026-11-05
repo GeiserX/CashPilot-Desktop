@@ -109,7 +109,7 @@ func run(src, ref, out, overlayDir string, check bool) error {
 	if src != "" {
 		origin = filepath.Join(src, "services")
 		upstream, err = readDir(origin)
-		if err == nil {
+		if err == nil && procnetPath != "" {
 			procnet, err = os.ReadFile(filepath.Join(src, filepath.FromSlash(webProcnet)))
 			if errors.Is(err, os.ErrNotExist) {
 				procnet, err = nil, nil
@@ -152,6 +152,9 @@ func run(src, ref, out, overlayDir string, check bool) error {
 			return err
 		}
 		if procnet != nil {
+			if err := os.MkdirAll(filepath.Dir(procnetPath), 0o755); err != nil {
+				return err
+			}
 			if err := os.WriteFile(procnetPath, procnet, 0o644); err != nil {
 				return err
 			}

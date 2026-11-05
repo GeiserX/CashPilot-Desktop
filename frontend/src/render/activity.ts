@@ -221,7 +221,11 @@ export function renderActivityPage(view: ActivityView, open: Record<string, Acti
     `<th scope="col">Container</th><th scope="col">Status</th><th scope="col">Opens</th><th scope="col">Peak open</th><th scope="col">Failed</th>` +
     `<th scope="col">Destinations</th><th scope="col">Top ports</th><th scope="col">Top networks</th><th scope="col" title="Country where the network is registered">Country (registered)</th><th scope="col">Alerts</th>` +
     `</tr></thead><tbody>` +
-    rows.map((r) => renderActivityRow(r, open[r.container], r.container in open)).join("") +
+    rows.map((r) => {
+      // Own keys only: a container named "constructor" is not an open row.
+      const isOpen = Object.hasOwn(open, r.container);
+      return renderActivityRow(r, isOpen ? open[r.container] : null, isOpen);
+    }).join("") +
     `</tbody></table></div></section>`
   );
 }

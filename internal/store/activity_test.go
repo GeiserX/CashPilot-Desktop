@@ -111,13 +111,13 @@ func TestDeleteActivity(t *testing.T) {
 	if _, err := s.RecordActivity(now.Unix()/300*300, []ActivitySample{activityRow("a")}, now, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DeleteActivity(false); err != nil {
+	if _, err := s.DeleteActivity(false); err != nil {
 		t.Fatal(err)
 	}
 	if countRows(t, s, "activity_dest_raw") != 0 || countRows(t, s, "activity_samples") != 1 {
 		t.Fatal("switching off deletes the addresses only")
 	}
-	if err := s.DeleteActivity(true); err != nil {
+	if _, err := s.DeleteActivity(true); err != nil {
 		t.Fatal(err)
 	}
 	if countRows(t, s, "activity_samples")+countRows(t, s, "activity_hourly") != 0 {

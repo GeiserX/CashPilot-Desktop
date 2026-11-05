@@ -232,7 +232,7 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 			if saveErr = a.cfg.Save(cfg); saveErr != nil {
 				return nil
 			}
-			return a.store.DeleteActivity(false)
+			return a.deleteActivityRows(false)
 		})
 		if saveErr != nil {
 			return ActivityView{}, saveErr
@@ -254,12 +254,21 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 	return a.GetActivity(1)
 }
 
+// deleteActivityRows deletes and says so when the database log kept a copy.
+func (a *App) deleteActivityRows(all bool) error {
+	busy, err := a.store.DeleteActivity(all)
+	if err == nil && busy {
+		a.emitNotice("activity", activityBusyNotice)
+	}
+	return err
+}
+
 // DeleteActivityData deletes every Activity row: samples, totals, addresses and alerts.
 func (a *App) DeleteActivityData() (ActivityView, error) {
 	if err := a.ready(); err != nil {
 		return ActivityView{}, err
 	}
-	if err := a.activityDelete(func() error { return a.store.DeleteActivity(true) }); err != nil {
+	if err := a.activityDelete(func() error { return a.deleteActivityRows(true) }); err != nil {
 		return ActivityView{}, err
 	}
 	return a.GetActivity(1)

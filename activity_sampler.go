@@ -133,18 +133,20 @@ func (a *App) activityTick(ctx context.Context, now time.Time) {
 	hour := now.Unix() / 3600
 	a.activity.mu.Lock()
 	due := hour != a.activity.lastPurge
-	if due {
-		a.activity.lastPurge = hour
-	}
 	a.activity.mu.Unlock()
 	if !due {
 		return
 	}
 	if busy, err := a.store.PurgeActivity(now); err != nil {
+		// The hour stays due, so the next tick (five minutes on) tries again.
 		a.emitError("activity", err)
+		return
 	} else if busy {
-		a.emitNotice("activity", "Activity: the database was busy, so deleted addresses stay in its log until the next hourly purge.")
+		a.emitNotice("activity", activityBusyNotice)
 	}
+	a.activity.mu.Lock()
+	a.activity.lastPurge = hour
+	a.activity.mu.Unlock()
 	if a.activityOn() {
 		a.activitySpikes(now, gen)
 		if a.activity.geo.NeedsRefresh() {
@@ -325,12 +327,19 @@ func (a *App) activitySpikes(now time.Time, gen uint64) {
 }
 
 func (a *App) raiseSpike(container, kind, message string, now time.Time) {
-	_, err := a.store.RaiseActivityAlert(store.ActivityAlert{Kind: "activity_spike", Subject: container + ":" + kind, Message: message, CreatedAt: now.Unix()},
+	raised, err := a.store.RaiseActivityAlert(store.ActivityAlert{Kind: "activity_spike", Subject: container + ":" + kind, Message: message, CreatedAt: now.Unix()},
 		time.Duration(activity.SpikeCooldownHours)*time.Hour)
 	if err != nil {
 		a.emitError("activity", err)
+		return
+	}
+	if raised {
+		a.emitNotice("activity", message)
 	}
 }
+
+// activityBusyNotice is shown when a delete could not empty the database log.
+const activityBusyNotice = "Activity: the database was busy, so deleted addresses stay in its log until the next hourly purge."
 
 // refreshActivityNetworks downloads the network table. One at a time.
 func (a *App) refreshActivityNetworks(ctx context.Context) error {
