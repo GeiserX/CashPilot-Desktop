@@ -197,6 +197,10 @@ func (a *App) GetActivityDetail(container string, days int) (ActivityDetail, err
 	if err != nil {
 		return ActivityDetail{}, err
 	}
+	if !a.activityOn() {
+		// Switching off deletes the addresses; a read racing that delete shows none.
+		raw = nil
+	}
 	if raw == nil {
 		raw = []store.ActivityRawRow{}
 	}
@@ -216,17 +220,31 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 	cfg := a.cfg.Config()
 	was := cfg.ActivityEnabled
 	cfg.ActivityEnabled = on
-	if err := a.cfg.Save(cfg); err != nil {
-		return ActivityView{}, err
+	if on {
+		if err := a.cfg.Save(cfg); err != nil {
+			return ActivityView{}, err
+		}
+	} else {
+		// Saved and deleted under the write lock, so a round already running
+		// stores nothing once the switch is off.
+		var saveErr error
+		delErr := a.activityDelete(func() error {
+			if saveErr = a.cfg.Save(cfg); saveErr != nil {
+				return nil
+			}
+			return a.store.DeleteActivity(false)
+		})
+		if saveErr != nil {
+			return ActivityView{}, saveErr
+		}
+		if delErr != nil {
+			return ActivityView{}, errors.New("Activity is off, but its remote addresses could not be deleted yet: " + delErr.Error())
+		}
 	}
 	if a.activity.deltas != nil && on != was {
 		a.activity.deltas.Reset()
 	}
-	if !on {
-		if err := a.store.DeleteActivity(false); err != nil {
-			return ActivityView{}, errors.New("Activity is off, but its remote addresses could not be deleted yet: " + err.Error())
-		}
-	} else if !was && a.ctx != nil {
+	if on && !was && a.ctx != nil {
 		go func() {
 			if a.activity.geo != nil && a.activity.geo.NeedsRefresh() {
 				_ = a.refreshActivityNetworks(a.ctx)
@@ -241,7 +259,7 @@ func (a *App) DeleteActivityData() (ActivityView, error) {
 	if err := a.ready(); err != nil {
 		return ActivityView{}, err
 	}
-	if err := a.store.DeleteActivity(true); err != nil {
+	if err := a.activityDelete(func() error { return a.store.DeleteActivity(true) }); err != nil {
 		return ActivityView{}, err
 	}
 	return a.GetActivity(1)

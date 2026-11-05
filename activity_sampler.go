@@ -29,6 +29,38 @@ type activityState struct {
 	geoBusy   sync.Mutex
 	last      activityRound
 	lastPurge int64
+	// writeMu orders every sampler write against the deletes. gen moves on each
+	// delete (switch-off or Delete data), so a round that started before it
+	// writes nothing after it: no window, no alert.
+	writeMu sync.Mutex
+	gen     uint64
+}
+
+// activityGen is the delete generation a round starts in.
+func (a *App) activityGen() uint64 {
+	a.activity.writeMu.Lock()
+	defer a.activity.writeMu.Unlock()
+	return a.activity.gen
+}
+
+// activityWrite runs fn unless a delete happened since gen, with no delete
+// able to run in between. It reports whether fn ran.
+func (a *App) activityWrite(gen uint64, fn func()) bool {
+	a.activity.writeMu.Lock()
+	defer a.activity.writeMu.Unlock()
+	if a.activity.gen != gen {
+		return false
+	}
+	fn()
+	return true
+}
+
+// activityDelete deletes under the write lock and moves the generation on.
+func (a *App) activityDelete(fn func() error) error {
+	a.activity.writeMu.Lock()
+	defer a.activity.writeMu.Unlock()
+	a.activity.gen++
+	return fn()
 }
 
 type activityRound struct {
@@ -94,8 +126,9 @@ func (a *App) stopActivitySampler() {
 }
 
 func (a *App) activityTick(ctx context.Context, now time.Time) {
+	gen := a.activityGen()
 	if a.activityOn() {
-		a.runActivityRound(ctx)
+		a.runActivityRound(ctx, gen)
 	}
 	hour := now.Unix() / 3600
 	a.activity.mu.Lock()
@@ -113,7 +146,7 @@ func (a *App) activityTick(ctx context.Context, now time.Time) {
 		a.emitNotice("activity", "Activity: the database was busy, so deleted addresses stay in its log until the next hourly purge.")
 	}
 	if a.activityOn() {
-		a.activitySpikes(now)
+		a.activitySpikes(now, gen)
 		if a.activity.geo.NeedsRefresh() {
 			go a.refreshActivityNetworks(ctx)
 		}
@@ -131,7 +164,7 @@ func (a *App) withActivityRunner(ctx context.Context, fn func(*activity.Runner))
 }
 
 // runActivityRound runs one round and stores it.
-func (a *App) runActivityRound(ctx context.Context) {
+func (a *App) runActivityRound(ctx context.Context, gen uint64) {
 	var w activity.Window
 	var rerr error
 	if !a.withActivityRunner(ctx, func(r *activity.Runner) { w, rerr = r.Round(ctx) }) {
@@ -144,22 +177,25 @@ func (a *App) runActivityRound(ctx context.Context) {
 	w.Samples = append(w.Samples, a.nativeActivitySamples()...)
 	activity.Fit(&w)
 	a.setActivityRound(activityRound{At: time.Now().Unix(), WorkerStatus: w.WorkerStatus, LeftoverProbes: w.LeftoverProbes})
-	a.storeActivityRound(w, time.Now())
+	a.storeActivityRound(w, time.Now(), gen)
 }
 
 // storeActivityRound stores a window and raises its alerts. A window that was
 // not stored (the switch went off meanwhile, or it was already stored) raises
-// none, so nothing new is kept after the owner opts out.
-func (a *App) storeActivityRound(w activity.Window, now time.Time) {
-	written, err := a.recordActivityWindow(w, now)
-	if err != nil {
-		a.emitError("activity", err)
-		return
-	}
-	if written == 0 {
-		return
-	}
-	a.raiseActivityAlerts(activity.AlertFindings(w), now)
+// none, so nothing new is kept after the owner opts out. Nothing is written
+// when a delete happened since gen.
+func (a *App) storeActivityRound(w activity.Window, now time.Time, gen uint64) {
+	a.activityWrite(gen, func() {
+		written, err := a.recordActivityWindow(w, now)
+		if err != nil {
+			a.emitError("activity", err)
+			return
+		}
+		if written == 0 {
+			return
+		}
+		a.raiseActivityAlerts(activity.AlertFindings(w), now)
+	})
 }
 
 // nativeActivitySamples marks every program this app runs natively: no helper
@@ -239,7 +275,7 @@ func (a *App) raiseActivityAlerts(found []activity.Finding, now time.Time) {
 // activitySpikes raises "unusual hour" when the last full hour moved more than
 // 10 times the median hour of the past week and over 1 GiB, or opened more than
 // 10 times the median and over 2,000 connections. Unknown hours are skipped.
-func (a *App) activitySpikes(now time.Time) {
+func (a *App) activitySpikes(now time.Time, gen uint64) {
 	last := now.Unix()/3600*3600 - 3600
 	since := last - 7*24*3600
 	type series map[int64]*float64
@@ -280,7 +316,7 @@ func (a *App) activitySpikes(now time.Time) {
 				history = append(history, data[c][h])
 			}
 			if activity.Spike(history, data[c][last], floor) {
-				a.raiseSpike(c, kind, c+" "+what+" in the last hour than 10 times its usual hour.", now)
+				a.activityWrite(gen, func() { a.raiseSpike(c, kind, c+" "+what+" in the last hour than 10 times its usual hour.", now) })
 			}
 		}
 	}

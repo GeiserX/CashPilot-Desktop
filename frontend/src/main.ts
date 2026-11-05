@@ -102,6 +102,7 @@ let usageRequest = 0;
 // its detail once loaded (null while it loads).
 let activityDays = 1;
 let activityOpen: Record<string, ActivityDetail | null> = {};
+let activitySwitchingOff = false;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -1045,9 +1046,11 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   wireChrome();
   wireShellNav();
   maybeResetScroll();
+  // The actions answer with the 24-hour view; render the window the owner chose.
   const run = async (action: () => Promise<ActivityView>) => {
     try {
-      await renderActivity(current, await action());
+      await action();
+      await renderActivity(current);
     } catch (error) {
       showErrorToast({scope: "activity", error: String(error)});
       void renderActivity(current);
@@ -1055,10 +1058,18 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   };
   document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
     const on = (event.target as HTMLInputElement).checked;
-    // Off deletes the addresses: drop the open rows' copies too, and with them
-    // any detail answer still on its way.
-    if (!on) activityOpen = {};
-    void run(() => SetActivityEnabled(on));
+    if (on) {
+      void run(() => SetActivityEnabled(on));
+      return;
+    }
+    // Off deletes the addresses: drop the open rows' copies, refuse to open a
+    // row until the delete is done, then drop anything opened meanwhile.
+    activityOpen = {};
+    activitySwitchingOff = true;
+    void run(() => SetActivityEnabled(on)).finally(() => {
+      activitySwitchingOff = false;
+      activityOpen = {};
+    });
   });
   document.querySelector<HTMLSelectElement>("#activity-days")?.addEventListener("change", (event) => {
     activityDays = Number((event.target as HTMLSelectElement).value) || 1;
@@ -1077,6 +1088,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   document.querySelectorAll<HTMLButtonElement>("[data-activity-expand]").forEach((button) => {
     button.addEventListener("click", async () => {
       const name = button.dataset.activityExpand || "";
+      if (activitySwitchingOff) return;
       if (name in activityOpen) {
         delete activityOpen[name];
         void renderActivity(current, data);

@@ -177,7 +177,7 @@ func TestActivitySpikesRaisesOnlyTheSpikingContainer(t *testing.T) {
 	record("spiky", last, 50_000)
 	record("steady", last, 12)
 
-	a.activitySpikes(now)
+	a.activitySpikes(now, a.activityGen())
 	alerts, err := a.store.ActivityAlerts(0)
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +185,7 @@ func TestActivitySpikesRaisesOnlyTheSpikingContainer(t *testing.T) {
 	if len(alerts) != 1 || alerts[0].Kind != "activity_spike" || alerts[0].Subject != "spiky:opens" {
 		t.Fatalf("alerts %+v", alerts)
 	}
-	a.activitySpikes(now)
+	a.activitySpikes(now, a.activityGen())
 	if alerts, _ := a.store.ActivityAlerts(0); len(alerts) != 1 {
 		t.Fatal("a spike inside its cooldown must not be raised twice")
 	}
@@ -216,15 +216,60 @@ func TestStoreActivityRoundRaisesNothingOnceSwitchedOff(t *testing.T) {
 		w.Samples[0].Out = []activity.Dest{{Proto: "tcp", IP: "1.2.3.4", Port: 25, Class: "public", Seen: 1}}
 		return w
 	}
-	a.storeActivityRound(mail(now.Unix()/300*300), now)
+	a.storeActivityRound(mail(now.Unix()/300*300), now, a.activityGen())
 	if alerts, _ := a.store.ActivityAlerts(0); len(alerts) != 0 {
 		t.Fatalf("the switch is off: nothing may be stored, got %+v", alerts)
 	}
 	if _, err := a.SetActivityEnabled(true); err != nil {
 		t.Fatal(err)
 	}
-	a.storeActivityRound(mail(now.Unix()/300*300), now)
+	a.storeActivityRound(mail(now.Unix()/300*300), now, a.activityGen())
 	if alerts, _ := a.store.ActivityAlerts(0); len(alerts) != 1 || alerts[0].Kind != "activity_mail" {
 		t.Fatalf("a stored window raises its alerts: %+v", alerts)
+	}
+}
+
+// A delete while a round runs wins: the round started before it stores no
+// window and raises no alert or spike afterwards, even with the switch on.
+func TestADeleteDuringARoundDropsTheRoundsWrites(t *testing.T) {
+	a := newActivityTestApp(t)
+	if _, err := a.SetActivityEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	w := earnerWindow(now.Unix() / 300 * 300)
+	w.Samples[0].Out = []activity.Dest{{Proto: "tcp", IP: "1.2.3.4", Port: 25, Class: "public", Seen: 1}}
+
+	gen := a.activityGen()
+	if _, err := a.DeleteActivityData(); err != nil {
+		t.Fatal(err)
+	}
+	a.storeActivityRound(w, now, gen)
+	if a.activityWrite(gen, func() {}) {
+		t.Fatal("a stale generation must refuse every write")
+	}
+	if alerts, _ := a.store.ActivityAlerts(0); len(alerts) != 0 {
+		t.Fatalf("a round older than the delete raised %+v", alerts)
+	}
+	if latest, _ := a.store.ActivityLatest(0); len(latest) != 0 {
+		t.Fatalf("a round older than the delete stored %+v", latest)
+	}
+
+	// Switching off moves the generation on too.
+	gen = a.activityGen()
+	if _, err := a.SetActivityEnabled(false); err != nil {
+		t.Fatal(err)
+	}
+	if a.activityWrite(gen, func() {}) {
+		t.Fatal("a round older than the switch-off must write nothing")
+	}
+
+	// The next round, in the new generation, stores as usual.
+	if _, err := a.SetActivityEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	a.storeActivityRound(w, now, a.activityGen())
+	if latest, _ := a.store.ActivityLatest(0); len(latest) != 1 {
+		t.Fatalf("a current round must be stored: %+v", latest)
 	}
 }
