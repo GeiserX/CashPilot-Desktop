@@ -113,6 +113,11 @@ type AppConfig struct {
 	// (runtime.ShapeFingerprint) its drift warning was muted at. The mute holds
 	// until the catalog changes a field the check judges.
 	DriftIgnored map[string]string `json:"driftIgnored,omitempty"`
+	// ActivityEnabled switches on the Activity page's sampling (internal/activity):
+	// a short-lived helper per earner every 5 minutes reads which destinations it
+	// talks to. Off by default, the bool zero value, so no install starts it on
+	// upgrade.
+	ActivityEnabled bool `json:"activityEnabled,omitempty"`
 }
 
 // DefaultUpstreamIntervalMinutes matches what a CashPilot worker sends, so a

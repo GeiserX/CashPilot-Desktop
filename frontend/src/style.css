@@ -794,3 +794,18 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
   /* "+" alone; the aria-label still says "Add service". */
   .topbar-add .topbar-add-label { display: none; }
 }
+
+/* Activity page (frontend/src/render/activity.ts) */
+.activity-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 8px 0; }
+.activity-switch { display: inline-flex; align-items: center; gap: 6px; }
+.activity-table, .activity-dim { width: 100%; border-collapse: collapse; font-size: 13px; }
+.activity-table th, .activity-table td, .activity-dim th, .activity-dim td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border-color); vertical-align: top; }
+.activity-chip { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: var(--accent-soft); }
+.activity-chip-muted { opacity: 0.75; }
+.activity-chip-info { white-space: normal; }
+.activity-chip-warn { background: var(--warning-soft); color: var(--warning); }
+.activity-top { display: inline-block; margin-right: 4px; font-variant-numeric: tabular-nums; }
+.activity-detail { padding: 8px 0; }
+.activity-dims { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+.activity-h3 { font-size: 13px; margin: 0 0 6px; }
+.activity-raw { margin-top: 12px; }
