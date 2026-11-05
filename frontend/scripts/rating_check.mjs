@@ -79,7 +79,7 @@ const block = ratingBlock(svc("alpha"));
 check("the card shows the grade and the score", block.includes("grade-badge grade-c") && block.includes("C, 15 of 20"), block);
 check("a ceiling that lowered the grade is explained", block.includes("caps the grade at C"), block);
 check("the card shows the top three cons, not the fourth", block.includes("Third con.") && !block.includes("Fourth con."), block);
-check("every con keeps its source and checked date", block.includes('data-url="https://example.com/thread/1"') && block.includes("checked 2026-11-04"), block);
+check("every con keeps its source and checked date", [1, 2, 3].every((n) => block.includes(`data-url="https://example.com/thread/${n}"`)) && block.split("checked 2026-11-04").length - 1 === 3, block);
 check("pros are there, folded", block.includes("<summary>Pros (1)</summary>") && block.includes("Pays by PayPal."), block);
 check("the method is one click away", block.includes(`data-url="${RATINGS_URL}#alpha"`), block);
 const unrated = ratingBlock(svc("beta", { ratingResult: null }));

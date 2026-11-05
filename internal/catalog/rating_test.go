@@ -308,13 +308,16 @@ func TestEveryValidationRuleRefusesTheBlock(t *testing.T) {
 
 func TestARulesFileThisBuildCannotApplyIsRefused(t *testing.T) {
 	cases := map[string]string{
-		"not yaml":          "criteria: [",
-		"no criteria":       strings.Replace(testRules, "criteria:", "unused:", 1),
-		"duplicate key":     strings.Replace(testRules, "{key: support, title: Support}", "{key: terms_fit, title: Support}", 1),
-		"no bands":          strings.Replace(testRules, "bands:", "unused_bands:", 1),
-		"cap grade A":       strings.Replace(testRules, "max_grade: D", "max_grade: A", 1),
-		"no unknown points": strings.Replace(testRules, ", unknown: 0", "", 1),
-		"no kinds":          strings.Replace(testRules, "kinds:", "unused_kinds:", 1),
+		"not yaml":           "criteria: [",
+		"no criteria":        strings.Replace(testRules, "criteria:", "unused:", 1),
+		"duplicate key":      strings.Replace(testRules, "{key: support, title: Support}", "{key: terms_fit, title: Support}", 1),
+		"no bands":           strings.Replace(testRules, "bands:", "unused_bands:", 1),
+		"cap grade A":        strings.Replace(testRules, "max_grade: D", "max_grade: A", 1),
+		"no unknown points":  strings.Replace(testRules, ", unknown: 0", "", 1),
+		"no kinds":           strings.Replace(testRules, "kinds:", "unused_kinds:", 1),
+		"bands out of order": strings.Replace(testRules, "{grade: C, min_percent: 55}", "{grade: C, min_percent: 80}", 1),
+		"duplicate band":     strings.Replace(testRules, "{grade: C, min_percent: 55}", "{grade: C, min_percent: 75}", 1),
+		"negative points":    strings.Replace(testRules, "poor: 0", "poor: -1", 1),
 	}
 	for name, raw := range cases {
 		if _, err := ParseRatingRules([]byte(raw)); err == nil {

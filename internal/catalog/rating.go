@@ -95,7 +95,8 @@ type RatingRules struct {
 var knownCaps = map[string]bool{"container_prohibited": true, "poor_payout_or_safety": true, "thin_evidence": true}
 
 // ParseRatingRules reads the published method and refuses one this build cannot apply
-// faithfully: no criteria, no bands, a letter outside B to F, or an unknown ceiling.
+// faithfully: no criteria, no bands, bands out of order, a letter outside B to F,
+// negative points, or an unknown ceiling.
 func ParseRatingRules(raw []byte) (*RatingRules, error) {
 	var rules RatingRules
 	if err := yaml.Unmarshal(raw, &rules); err != nil {
@@ -114,9 +115,15 @@ func ParseRatingRules(raw []byte) (*RatingRules, error) {
 	if len(rules.Bands) == 0 {
 		return nil, fmt.Errorf("no grade bands")
 	}
-	for _, b := range rules.Bands {
+	// Grading takes the first band whose threshold the score meets, so the bands
+	// must run from the highest threshold down; out of order, a provider would get
+	// the wrong letter instead of "Not rated yet".
+	for i, b := range rules.Bands {
 		if gradeIndex(b.Grade) < 0 {
 			return nil, fmt.Errorf("band grade %q is not one of %v", b.Grade, gradeOrder)
+		}
+		if i > 0 && b.MinPercent >= rules.Bands[i-1].MinPercent {
+			return nil, fmt.Errorf("band %q must have a lower min_percent than the band before it", b.Grade)
 		}
 	}
 	for _, c := range rules.Caps {
@@ -125,6 +132,11 @@ func ParseRatingRules(raw []byte) (*RatingRules, error) {
 		}
 		if gradeIndex(c.MaxGrade) < 0 {
 			return nil, fmt.Errorf("cap %q grade %q is not one of %v", c.Key, c.MaxGrade, gradeOrder)
+		}
+	}
+	for v, p := range rules.Points {
+		if p < 0 {
+			return nil, fmt.Errorf("points for %q must not be negative", v)
 		}
 	}
 	for v := range ratingVerdicts {
