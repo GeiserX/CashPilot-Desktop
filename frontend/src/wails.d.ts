@@ -41,6 +41,12 @@ declare module "../wailsjs/go/main/App" {
   export function ExportStateBackup(slug: string, passphrase: string, passphraseRepeat: string, recipientPublicKey: string): Promise<string>;
   // container "" is every container (the machine total).
   export function GetUsage(days: number, container: string): Promise<UsageView>;
+  // Activity: what each earner talks to (internal/activity). Off by default.
+  export function GetActivity(days: number): Promise<ActivityView>;
+  export function GetActivityDetail(container: string, days: number): Promise<ActivityDetail>;
+  export function SetActivityEnabled(on: boolean): Promise<ActivityView>;
+  export function DeleteActivityData(): Promise<ActivityView>;
+  export function RefreshActivityNetworks(): Promise<ActivityView>;
   // Mutes the "needs fixing" warning of slug until the catalog changes a field the
   // check judges.
   export function IgnoreDrift(slug: string): Promise<void>;
@@ -54,6 +60,65 @@ declare module "../wailsjs/go/main/App" {
   export function ListCustomServices(): Promise<CustomServiceView[]>;
   export function SaveCustomService(slug: string, definition: CustomDefinition): Promise<CustomServiceView>;
   export function DeleteCustomService(slug: string): Promise<void>;
+  // Bring logins over from money4band, CashFactory or InternetIncome. Preview is the
+  // dry run (a secret is only ever "set"); Apply parses the same files again and
+  // saves the ticked, ready services, never over a value already set here.
+  export function PreviewImport(req: ImportRequest): Promise<ImportPreview>;
+  export function ApplyImport(req: ImportApplyRequest): Promise<ImportResult>;
+}
+
+export interface ImportFile {
+  name: string;
+  content: string;
+}
+
+export interface ImportRequest {
+  source: string;
+  files: ImportFile[];
+}
+
+export interface ImportApplyRequest extends ImportRequest {
+  slugs: string[];
+  extra: Record<string, Record<string, string>>;
+}
+
+export type ImportFieldState = "imported" | "missing" | "retype" | "placeholder" | "invalid";
+export type ImportRowState = "ready" | "missing_fields" | "invalid" | "unusable" | "not_deployable";
+
+export interface ImportField {
+  key: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+  state: ImportFieldState;
+  pattern: string;
+  // Never set for a secret field.
+  value?: string;
+}
+
+export interface ImportRow {
+  slug: string;
+  name: string;
+  app: string;
+  selected: boolean;
+  offInSource: boolean;
+  state: ImportRowState;
+  reason: string;
+  fields: ImportField[];
+  existing: { configured: boolean; deployed: boolean };
+}
+
+export interface ImportPreview {
+  source: string;
+  sourceName: string;
+  rows: ImportRow[];
+  notImported: { key: string; reason: string }[];
+  notices: string[];
+}
+
+export interface ImportResult {
+  saved: string[];
+  kept: Record<string, string[]>;
 }
 
 export interface CustomEnv {
@@ -660,4 +725,79 @@ export interface RemovalPlan {
   volumes: DataMount[] | null;
   binds: DataMount[] | null;
   catalogKnown: boolean;
+}
+
+export interface ActivityTop {
+  value: string;
+  sightings: number;
+}
+
+export interface ActivityPoint {
+  t: number;
+  opens: number | null;
+  attemptFails: number | null;
+  estMax: number | null;
+}
+
+export interface ActivityRow {
+  container: string;
+  status: string;
+  reason: string;
+  members: string[];
+  networkMode: string;
+  listenPorts: number[];
+  lastWindow: number;
+  estMax: number | null;
+  remotesTotal: number | null;
+  truncated: boolean;
+  opensLast: number | null;
+  attemptFailsLast: number | null;
+  series: ActivityPoint[];
+  topPorts: ActivityTop[];
+  topAsn: ActivityTop[];
+  topCc: ActivityTop[];
+  classes: Record<string, number>;
+  dirs: Record<string, number>;
+  alerts: number;
+}
+
+export interface ActivityAlert {
+  kind: string;
+  subject: string;
+  message: string;
+  createdAt: number;
+}
+
+export interface ActivityView {
+  enabled: boolean;
+  days: number;
+  rawHours: number;
+  lastWindow: number;
+  round: { at: number; workerStatus: string; leftoverProbes: string[] };
+  networks: { present: boolean; ageSeconds: number | null; rows: number | null };
+  networksEnabled: boolean;
+  containers: ActivityRow[];
+  alerts: ActivityAlert[];
+}
+
+export interface ActivityRawRow {
+  windowEnd: number;
+  dir: string;
+  proto: string;
+  ip: string;
+  port: number;
+  class: string;
+  asn: string;
+  cc: string;
+  seen: number;
+}
+
+export interface ActivityDetail {
+  container: string;
+  ports: ActivityTop[];
+  asn: ActivityTop[];
+  cc: ActivityTop[];
+  classes: ActivityTop[];
+  raw: ActivityRawRow[];
+  rawHours: number;
 }

@@ -159,7 +159,7 @@ func TestFetchRetriesATransientFailure(t *testing.T) {
 	defer server.Close()
 	defer pointFetchAt(t, server.URL)()
 
-	files, err := fetchUpstream("main")
+	files, _, err := fetchUpstream("main")
 	if err != nil {
 		t.Fatalf("fetch gave up on a transient failure: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestFetchDoesNotRetryAMissingRef(t *testing.T) {
 	defer server.Close()
 	defer pointFetchAt(t, server.URL)()
 
-	if _, err := fetchUpstream("no-such-ref"); err == nil {
+	if _, _, err := fetchUpstream("no-such-ref"); err == nil {
 		t.Fatal("a 404 was reported as success")
 	}
 	if calls.Load() != 1 {
@@ -206,7 +206,7 @@ func TestFetchResolvesTagsAndCommitSHAs(t *testing.T) {
 			defer server.Close()
 			defer pointFetchAt(t, server.URL)()
 
-			files, err := fetchUpstream(ref)
+			files, _, err := fetchUpstream(ref)
 			if err != nil {
 				t.Fatalf("fetch %s: %v", ref, err)
 			}
@@ -271,5 +271,93 @@ func TestSyncWritesWhatCheckAccepts(t *testing.T) {
 	}
 	if err := run(src, "main", out, overlay, true); err != nil {
 		t.Fatalf("-check rejected what the sync just wrote: %v", err)
+	}
+}
+
+// THE RULE: the Activity helper is the web repository's app/procnet.py, byte for byte,
+// and the same check that guards the catalog guards it. Before, only a Go test that
+// skipped without a web checkout beside this one compared them, so CI never could.
+func TestProcnetIsVendoredAndChecked(t *testing.T) {
+	const script = "print('helper v2')\n"
+	src := webCheckout(t, upstreamEntry)
+	writeCatalog(t, src, map[string]string{"app/procnet.py": script})
+	out := t.TempDir()
+	writeCatalog(t, out, map[string]string{"bandwidth/example.yml": upstreamEntry})
+	old := procnetPath
+	procnetPath = filepath.Join(t.TempDir(), "procnet.py")
+	defer func() { procnetPath = old }()
+
+	err := run(src, "main", out, t.TempDir(), true)
+	if code := exitCodeFor(err); code != exitDrift || !strings.Contains(err.Error(), "procnet.py") {
+		t.Fatalf("a missing helper copy exited %d (%v); want drift naming procnet.py", code, err)
+	}
+	if err := os.WriteFile(procnetPath, []byte("print('helper v1')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := exitCodeFor(run(src, "main", out, t.TempDir(), true)); code != exitDrift {
+		t.Fatalf("a stale helper copy exited %d; want %d", code, exitDrift)
+	}
+	if err := run(src, "main", out, t.TempDir(), false); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if got, _ := os.ReadFile(procnetPath); string(got) != script {
+		t.Fatalf("sync wrote %q; want the web copy", got)
+	}
+	if err := run(src, "main", out, t.TempDir(), true); err != nil {
+		t.Fatalf("-check rejected the helper the sync just wrote: %v", err)
+	}
+}
+
+// A helper path under a missing directory is created, as the catalog's is.
+func TestProcnetSyncCreatesItsDirectory(t *testing.T) {
+	src := webCheckout(t, upstreamEntry)
+	writeCatalog(t, src, map[string]string{"app/procnet.py": "print('h')\n"})
+	out := t.TempDir()
+	old := procnetPath
+	procnetPath = filepath.Join(t.TempDir(), "not", "yet", "procnet.py")
+	defer func() { procnetPath = old }()
+	if err := run(src, "main", out, t.TempDir(), false); err != nil {
+		t.Fatalf("sync into a missing directory: %v", err)
+	}
+	if got, _ := os.ReadFile(procnetPath); string(got) != "print('h')\n" {
+		t.Fatalf("wrote %q", got)
+	}
+}
+
+// With -procnet empty the helper is not read at all, so an unreadable one
+// cannot fail a catalog-only run.
+func TestAnEmptyProcnetPathSkipsTheHelper(t *testing.T) {
+	src := webCheckout(t, upstreamEntry)
+	// A directory where the file should be: reading it fails, and must not be tried.
+	if err := os.MkdirAll(filepath.Join(src, "app", "procnet.py"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	old := procnetPath
+	procnetPath = ""
+	defer func() { procnetPath = old }()
+	if err := run(src, "main", out, t.TempDir(), false); err != nil {
+		t.Fatalf("a catalog-only run failed on the helper: %v", err)
+	}
+}
+
+// The fetched tarball carries the helper too, so the weekly drift run compares it.
+func TestFetchExtractsTheHelper(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(tarball(t, "CashPilot-main", map[string]string{
+			"services/bandwidth/example.yml": upstreamEntry,
+			"app/procnet.py":                 "print('x')\n",
+			"app/main.py":                    "ignored\n",
+		}))
+	}))
+	defer server.Close()
+	defer pointFetchAt(t, server.URL)()
+
+	files, procnet, err := fetchUpstream("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(procnet) != "print('x')\n" || len(files) != 1 {
+		t.Fatalf("procnet=%q files=%v", procnet, files)
 	}
 }

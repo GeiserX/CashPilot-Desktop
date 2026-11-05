@@ -12,6 +12,7 @@ import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in 
 const TABS: Array<[string, string]> = [
   ["dashboard", "Dashboard"],
   ["fleet", "Fleet"],
+  ["activity", "Activity"],
   ["catalog", "Catalog"],
   ["settings", "Settings"],
 ];

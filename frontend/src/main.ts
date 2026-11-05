@@ -9,8 +9,15 @@ import {
 import {
   AddFleetDevice,
   BackgroundHelperStatus,
+  DeleteActivityData,
+  GetActivity,
+  GetActivityDetail,
+  RefreshActivityNetworks,
+  SetActivityEnabled,
   InstallBackgroundHelper,
   ListCustomServices,
+  ApplyImport,
+  PreviewImport,
   RemoveBackgroundHelper,
   CheckRuntime,
   CollectService,
@@ -48,6 +55,7 @@ import {
   UndoStateBackup,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderEarningsBars } from "./render/chart";
@@ -64,13 +72,14 @@ import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/d
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
-import type { CustomEnv, CustomServiceView } from "./wails";
-import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
+import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
+import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
 let onboardingStep: "welcome" | "runtime" = "welcome";
-type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet";
+type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity" | "import";
 
 let activeView: View = "dashboard";
 let wizardStep = 1;
@@ -81,6 +90,21 @@ let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
 // load), the one open in the editor ("new" for the add form), and a load failure.
 let customViews: CustomServiceView[] | null = null;
+// Import from another tool. importRequest is what was last previewed: a save sends the
+// same files again, so a masked value never has to come back from the page.
+let importSource = "auto";
+let importRequest: ImportRequest | null = null;
+let importPreview: ImportPreview | null = null;
+let importResult: ImportResult | null = null;
+let importDeployed: string[] = [];
+// The device-link step of each deployed import, shown under it (slug -> text).
+let importLinks: Record<string, string> = {};
+let importDeploying = new Set<string>();
+// Bumped by each preview, so a slower earlier one cannot land over a later one.
+let importPreviewSeq = 0;
+// The preview the page last drew: a redraw of the same preview keeps the ticks and
+// typed values, which live only in the page until Save.
+let renderedImportPreview: ImportPreview | null = null;
 let customEditing: CustomServiceView | "new" | null = null;
 let customLoadError = "";
 let resetScrollAfterRender = false;
@@ -92,6 +116,21 @@ let chartDays = 7;
 let usageContainer = "";
 let usageView: UsageView | null = null;
 let usageRequest = 0;
+// The Activity page's window (1, 7 or 30 days) and its expanded rows, each with
+// its detail once loaded (null while it loads).
+let activityDays = 1;
+// Moves on with every window change, switch or delete, so a page answer that
+// arrives after a newer one is dropped instead of drawn over it.
+let activityRequest = 0;
+// Moves on with every page fetch, so of two fetches in one generation only the
+// newer one is drawn.
+let activityPage = 0;
+// The Activity view last drawn: a late detail answer redraws this one, never
+// the older view its click came from.
+let activityShown: ActivityView | null = null;
+let activityOpen: Record<string, ActivityDetail | null> = {};
+// Deletes still running (switch-off or Delete data): rows do not open meanwhile.
+let activityDeleting = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -154,6 +193,14 @@ function render() {
   }
   if (activeView === "fleet") {
     void renderFleet(state);
+    return;
+  }
+  if (activeView === "activity") {
+    void renderActivity(state);
+    return;
+  }
+  if (activeView === "import") {
+    renderImport(state);
     return;
   }
   renderDashboard(state);
@@ -624,7 +671,7 @@ function wireShellNav() {
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
-      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet") {
+      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import") {
         activeView = next;
         if (next === "wizard") {
           wizardStep = 1;
@@ -816,6 +863,182 @@ async function deleteCustomService(slug: string) {
   }
 }
 
+// The import page: the files go to PreviewImport for a dry run, the ticked rows to
+// ApplyImport, and each saved service deploys through the normal DeployService.
+type ImportForm = { picks: [string, boolean][]; extras: [string, string][]; paste: string };
+
+function readImportForm(): ImportForm {
+  return {
+    picks: Array.from(document.querySelectorAll<HTMLInputElement>(".import-pick")).map((el) => [el.dataset.importSlug || "", el.checked]),
+    extras: Array.from(document.querySelectorAll<HTMLInputElement>(".import-extra")).map((el) => [`${el.dataset.importSlug}|${el.dataset.importKey}`, el.value]),
+    paste: document.querySelector<HTMLTextAreaElement>("#import-paste")?.value || "",
+  };
+}
+
+function restoreImportForm(form: ImportForm) {
+  const picks = new Map(form.picks);
+  const extras = new Map(form.extras);
+  document.querySelectorAll<HTMLInputElement>(".import-pick").forEach((el) => {
+    const checked = picks.get(el.dataset.importSlug || "");
+    if (checked !== undefined && !el.disabled) el.checked = checked;
+  });
+  document.querySelectorAll<HTMLInputElement>(".import-extra").forEach((el) => {
+    const value = extras.get(`${el.dataset.importSlug}|${el.dataset.importKey}`);
+    if (value !== undefined) el.value = value;
+  });
+  const paste = document.querySelector<HTMLTextAreaElement>("#import-paste");
+  if (paste && form.paste) paste.value = form.paste;
+}
+
+function renderImportIfShown() {
+  if (state && activeView === "import") renderImport(state);
+}
+
+function renderImport(current: AppState) {
+  const keep = renderedImportPreview === importPreview ? readImportForm() : null;
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      <div class="main-content">
+        ${topbar("settings", current)}
+        <main class="page-content">
+          ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
+          ${renderImportInput(importSource)}
+          ${importPreview ? renderImportPreview(importPreview) : ""}
+          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks) : ""}
+        </main>
+        ${pageFoot()}
+      </div>
+    </div>
+  `;
+  renderedImportPreview = importPreview;
+  if (keep) restoreImportForm(keep);
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  document.querySelector<HTMLSelectElement>("#import-source")?.addEventListener("change", (event) => {
+    importSource = (event.target as HTMLSelectElement).value;
+  });
+  document.querySelector("#import-preview-btn")?.addEventListener("click", () => void runImportPreview());
+  document.querySelector("#import-apply-btn")?.addEventListener("click", () => void runImportApply());
+  document.querySelectorAll<HTMLButtonElement>("[data-import-deploy]").forEach((button) => {
+    button.addEventListener("click", () => void runImportDeploy(button.dataset.importDeploy || ""));
+  });
+}
+
+async function readImportFiles(): Promise<ImportFile[]> {
+  const files: ImportFile[] = [];
+  const picked = Array.from(document.querySelector<HTMLInputElement>("#import-files")?.files || []);
+  // Refuse by count and size before reading, so a huge file is never loaded.
+  if (picked.length > IMPORT_MAX_FILES) throw new Error(`At most ${IMPORT_MAX_FILES} files at a time.`);
+  if (picked.reduce((n, f) => n + f.size, 0) > IMPORT_MAX_BYTES) {
+    throw new Error(`The files add up to more than ${IMPORT_MAX_BYTES / 1024} KiB.`);
+  }
+  // Strict UTF-8: file.text() would turn bad bytes into U+FFFD, which the
+  // backend's UTF-8 check could then not see.
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  for (const file of picked) {
+    // Refuse before reading a file that alone is over the limit.
+    if (file.size > IMPORT_MAX_BYTES) throw new Error(`${file.name} is larger than 64 KiB; this is not a config file.`);
+    let content: string;
+    try {
+      content = decoder.decode(await file.arrayBuffer());
+    } catch {
+      throw new Error(`${file.name} is not UTF-8 text.`);
+    }
+    files.push({ name: file.name, content });
+  }
+  const pasted = document.querySelector<HTMLTextAreaElement>("#import-paste")?.value || "";
+  if (pasted.trim()) files.push({ name: "pasted text", content: pasted });
+  // A redraw empties the file picker, so a second preview (another tool picked,
+  // say) reuses the files last previewed when nothing new was added.
+  if (!files.length && importRequest) files.push(...importRequest.files);
+  const problem = importFilesProblem(files);
+  if (problem) throw new Error(problem);
+  return files;
+}
+
+async function runImportPreview() {
+  const seq = ++importPreviewSeq;
+  let files: ImportFile[];
+  try {
+    files = await readImportFiles();
+  } catch (error) {
+    showErrorToast({ scope: "import", error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  try {
+    const preview = await PreviewImport({ source: importSource, files });
+    if (seq !== importPreviewSeq) return;
+    importRequest = { source: preview.source, files };
+    importPreview = preview;
+    importResult = null;
+    importDeployed = [];
+    importLinks = {};
+    renderImportIfShown();
+  } catch (error) {
+    showErrorToast({ scope: "import", error: String(error) });
+  }
+}
+
+async function runImportApply() {
+  if (!importRequest) return;
+  const picks = Array.from(document.querySelectorAll<HTMLInputElement>(".import-pick")).map((el) => ({
+    slug: el.dataset.importSlug || "", checked: el.checked,
+  }));
+  const inputs = Array.from(document.querySelectorAll<HTMLInputElement>(".import-extra"));
+  const { slugs, extra } = importChoices(picks, inputs.map((el) => ({
+    slug: el.dataset.importSlug || "", key: el.dataset.importKey || "", value: el.value,
+  })));
+  if (!slugs.length) {
+    showErrorToast({ scope: "import", error: "Tick at least one service." });
+    return;
+  }
+  for (const input of inputs) {
+    // Check what is sent: importChoices trims, so the pattern sees the trimmed value.
+    input.value = input.value.trim();
+    if (slugs.includes(input.dataset.importSlug || "") && input.value && !input.checkValidity()) {
+      input.reportValidity();
+      return;
+    }
+  }
+  try {
+    importResult = await ApplyImport({ ...importRequest, slugs, extra });
+    importDeployed = [];
+    state = await GetAppState();
+    importLinks = {};
+    showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
+    renderImportIfShown();
+  } catch (error) {
+    showErrorToast({ scope: "import", error: String(error) });
+  }
+}
+
+async function runImportDeploy(slug: string) {
+  // A second click while this deploy runs does nothing.
+  if (!slug || importDeploying.has(slug)) return;
+  importDeploying.add(slug);
+  try {
+    const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
+    // The same pre-flight report the wizard shows, when there is one.
+    const report = await PreflightService(slug).catch(() => null);
+    const preflight = report?.summary ? `\n\n${report.summary}` : "";
+    if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) return;
+    await DeployService(slug, {}, null, null);
+    importDeployed = [...importDeployed, slug];
+    state = await GetAppState();
+    // The saved values hold the device id; the step is the one the wizard shows.
+    const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
+    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "");
+    if (link) importLinks = { ...importLinks, [slug]: link };
+    renderImportIfShown();
+  } catch (error) {
+    showErrorToast({ scope: "deploy", error: String(error) });
+  } finally {
+    importDeploying.delete(slug);
+  }
+}
+
 async function renderSettings(current: AppState) {
   let settings: SettingsState;
   try {
@@ -863,6 +1086,16 @@ async function renderSettings(current: AppState) {
             </div>
             <div class="collector-grid">
               ${settings.collectors.map(renderCollectorSetting).join("")}
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <span class="card-title">Import from another tool</span>
+                <p class="muted compact-copy">Coming from money4band, CashFactory or InternetIncome? Bring your service logins over instead of typing them again.</p>
+              </div>
+              <button class="compact-btn" data-view="import">Import</button>
             </div>
           </section>
 
@@ -1004,6 +1237,118 @@ function envInputName(key: string) {
     TZ: "timezone",
   };
   return names[key] || key;
+}
+
+async function renderActivity(current: AppState, view?: ActivityView) {
+  const request = activityRequest;
+  const page = view ? activityPage : ++activityPage;
+  let data: ActivityView;
+  try {
+    data = view || (await GetActivity(activityDays));
+  } catch (error) {
+    if (page !== activityPage || request !== activityRequest || activeView !== "activity") return;
+    showErrorToast({scope: "activity", error: String(error)});
+    return;
+  }
+  if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
+  activityShown = data;
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      <div class="main-content">
+        ${topbar("activity", current)}
+        <main class="page-content">
+          ${pageHead("Activity")}
+          ${renderActivityPage(data, activityOpen)}
+        </main>
+        ${pageFoot()}
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  // The actions answer with the 24-hour view; render the window the owner chose.
+  const run = async (action: () => Promise<ActivityView>) => {
+    try {
+      await action();
+      await renderActivity(current);
+    } catch (error) {
+      showErrorToast({scope: "activity", error: String(error)});
+      void renderActivity(current);
+    }
+  };
+  document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
+    const on = (event.target as HTMLInputElement).checked;
+    activityRequest++;
+    if (on) {
+      void run(() => SetActivityEnabled(on));
+      return;
+    }
+    // Off deletes the addresses: drop the open rows' copies, refuse to open a
+    // row until the delete is done, then drop anything opened meanwhile.
+    activityOpen = {};
+    activityDeleting++;
+    // Take the open rows' addresses off the screen now, not when the delete returns.
+    void renderActivity(current, {...data, enabled: false});
+    void run(() => SetActivityEnabled(on)).finally(() => {
+      activityDeleting--;
+      activityOpen = {};
+    });
+  });
+  document.querySelector<HTMLSelectElement>("#activity-days")?.addEventListener("change", (event) => {
+    activityDays = Number((event.target as HTMLSelectElement).value) || 1;
+    activityRequest++;
+    activityOpen = {};
+    void renderActivity(current);
+  });
+  document.querySelector("#activity-delete")?.addEventListener("click", () => {
+    if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
+    activityRequest++;
+    activityOpen = {};
+    // As on switch-off: no row opens until the delete is done, and the open
+    // rows' addresses leave the screen now.
+    activityDeleting++;
+    void renderActivity(current, data);
+    void run(() => DeleteActivityData()).finally(() => {
+      activityDeleting--;
+      activityOpen = {};
+    });
+  });
+  document.querySelector("#activity-networks")?.addEventListener("click", () => {
+    showInfoToast({scope: "activity", message: "Downloading the network table (about 11 MB)."});
+    void run(() => RefreshActivityNetworks());
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-activity-expand]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const name = button.dataset.activityExpand || "";
+      if (activityDeleting > 0) return;
+      if (Object.hasOwn(activityOpen, name)) {
+        delete activityOpen[name];
+        void renderActivity(current, data);
+        return;
+      }
+      const open = activityOpen;
+      open[name] = null;
+      void renderActivity(current, data);
+      let detail: ActivityDetail;
+      try {
+        detail = await GetActivityDetail(name, activityDays);
+      } catch (error) {
+        if (open !== activityOpen || open[name] !== null) return;
+        delete open[name];
+        showErrorToast({scope: "activity", error: String(error)});
+        if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+        return;
+      }
+      // The window changed, the data was deleted or the row was closed meanwhile:
+      // this answer belongs to a page that is gone.
+      if (open !== activityOpen || open[name] !== null) return;
+      open[name] = detail;
+      // Redraw the newest view, not the one this click came from.
+      if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+    });
+  });
 }
 
 async function renderFleet(current: AppState) {
