@@ -157,7 +157,7 @@ const collectorFields = {
 // CONTROL: the card renders at all. Without this every "is absent" check below
 // would pass just as happily against an empty string.
 // ---------------------------------------------------------------------------
-const hg = renderWizardServiceSetup(honeygain, collectorFields, "macmini");
+const hg = renderWizardServiceSetup(honeygain, collectorFields, "devbox");
 check("CONTROL: the card renders", hg.includes('<article class="wizard-setup-card"'), hg);
 check("CONTROL: it is the card for this service", hg.includes('data-form-slug="honeygain"'), hg);
 check("CONTROL: it renders inputs", inputs(hg).length > 0, hg);
@@ -179,7 +179,7 @@ check(
     .join("\n      "),
 );
 
-const rp = renderWizardServiceSetup(repocket, collectorFields, "macmini");
+const rp = renderWizardServiceSetup(repocket, collectorFields, "devbox");
 const rpKeys = inputs(rp).map((input) => input.env);
 check(
   "RULE 1: the collector's own credentials get inputs too, after the container's",
@@ -188,13 +188,13 @@ check(
 );
 check(
   "RULE 1: a service whose collector needs nothing renders only docker.env",
-  inputs(renderWizardServiceSetup(repocket, {}, "macmini"))
+  inputs(renderWizardServiceSetup(repocket, {}, "devbox"))
     .map((input) => input.env)
     .join(",") === "RP_EMAIL,RP_API_KEY",
 );
 check(
   "RULE 1: no backend map at all still renders the deploy form",
-  inputs(renderWizardServiceSetup(repocket, null, "macmini")).length === 2,
+  inputs(renderWizardServiceSetup(repocket, null, "devbox")).length === 2,
 );
 
 // ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ check(
 // RULE 3: a {hostname} default is expanded.
 // ---------------------------------------------------------------------------
 const deviceName = inputs(hg).find((input) => input.env === "HONEYGAIN_DEVICE_NAME");
-check("RULE 3: the hostname default is expanded to this machine", deviceName?.value === "cashpilot-macmini", hg);
+check("RULE 3: the hostname default is expanded to this machine", deviceName?.value === "cashpilot-devbox", hg);
 check("RULE 3: the literal token never reaches the markup", !hg.includes("{hostname}"), hg);
 const noHost = renderWizardServiceSetup(honeygain, collectorFields, "");
 check(
@@ -263,19 +263,19 @@ check(
 // object must stay out of the markup.
 const carrier = renderWizardServiceSetup(repocket, {
   repocket: [{ key: "REPOCKET_PASSWORD", label: "Password", description: "pw", secret: true, value: "hunter2-SECRET" }],
-}, "macmini");
+}, "devbox");
 check("RULE 5: a value riding on a field object never reaches the markup", !carrier.includes("hunter2-SECRET"), carrier);
 check(
   "a default that would break out of its value attribute is escaped",
   !renderWizardServiceSetup(
     service({ docker: { env: [envVar("NAME", { default: 'x" onfocus="alert(1)' })] } }),
     null,
-    "macmini",
+    "devbox",
   ).includes('onfocus="alert'),
 );
 check(
   "RULE 5: the render takes no credential store, so the same card twice is identical",
-  renderWizardServiceSetup(repocket, collectorFields, "macmini") === rp,
+  renderWizardServiceSetup(repocket, collectorFields, "devbox") === rp,
 );
 
 // ---------------------------------------------------------------------------
@@ -296,7 +296,7 @@ const hostile = renderWizardServiceSetup(
     docker: { env: [envVar('K" onfocus="alert(1)', { label: "<b>K</b>" })] },
   }),
   null,
-  "macmini",
+  "devbox",
 );
 check("a hostile key cannot break out of its data-wizard-env attribute", !hostile.includes('onfocus="alert'), hostile);
 check("a hostile service name is escaped, never executed", !hostile.includes("<img"), hostile);
@@ -316,7 +316,7 @@ check("and the output pane the action writes into", hg.includes('data-output-slu
 const manual = renderWizardServiceSetup(
   service({ slug: "pawns", name: "Pawns", manualOnly: true, docker: { env: [] } }),
   { pawns: [{ key: "PAWNS_EMAIL", label: "Pawns email", description: "Account email", required: true }] },
-  "macmini",
+  "devbox",
 );
 check("a manual-only service still renders its collector input", inputs(manual)[0]?.env === "PAWNS_EMAIL", manual);
 check("its Deploy button is disabled", manual.includes('data-wizard-action="deploy" data-slug="pawns" disabled'), manual);
@@ -342,7 +342,7 @@ check(
 check("RULE 6: a non-secret field carries no autocomplete hint", field(rp, "RP_EMAIL")?.autocomplete === undefined, field(rp, "RP_EMAIL")?.tag);
 
 // Nothing to ask for must say so rather than render an empty grid.
-const none = renderWizardServiceSetup(service({ slug: "quiet", docker: { env: [] } }), {}, "macmini");
+const none = renderWizardServiceSetup(service({ slug: "quiet", docker: { env: [] } }), {}, "devbox");
 check("a service with no credentials renders none", inputs(none).length === 0, none);
 check("and says so in words", none.includes("No credentials are required by the catalog"), none);
 
