@@ -1054,7 +1054,11 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     }
   };
   document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
-    void run(() => SetActivityEnabled((event.target as HTMLInputElement).checked));
+    const on = (event.target as HTMLInputElement).checked;
+    // Off deletes the addresses: drop the open rows' copies too, and with them
+    // any detail answer still on its way.
+    if (!on) activityOpen = {};
+    void run(() => SetActivityEnabled(on));
   });
   document.querySelector<HTMLSelectElement>("#activity-days")?.addEventListener("change", (event) => {
     activityDays = Number((event.target as HTMLSelectElement).value) || 1;

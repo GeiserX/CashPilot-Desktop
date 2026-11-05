@@ -205,3 +205,26 @@ func TestStopActivitySamplerWithoutStartIsSafe(t *testing.T) {
 		t.Fatalf("worker label %q", w)
 	}
 }
+
+// A round whose window was not stored, because the switch went off while it
+// ran, must raise no alert either: nothing new is kept after the opt-out.
+func TestStoreActivityRoundRaisesNothingOnceSwitchedOff(t *testing.T) {
+	a := newActivityTestApp(t)
+	now := time.Now()
+	mail := func(end int64) activity.Window {
+		w := earnerWindow(end)
+		w.Samples[0].Out = []activity.Dest{{Proto: "tcp", IP: "1.2.3.4", Port: 25, Class: "public", Seen: 1}}
+		return w
+	}
+	a.storeActivityRound(mail(now.Unix()/300*300), now)
+	if alerts, _ := a.store.ActivityAlerts(0); len(alerts) != 0 {
+		t.Fatalf("the switch is off: nothing may be stored, got %+v", alerts)
+	}
+	if _, err := a.SetActivityEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	a.storeActivityRound(mail(now.Unix()/300*300), now)
+	if alerts, _ := a.store.ActivityAlerts(0); len(alerts) != 1 || alerts[0].Kind != "activity_mail" {
+		t.Fatalf("a stored window raises its alerts: %+v", alerts)
+	}
+}

@@ -144,11 +144,22 @@ func (a *App) runActivityRound(ctx context.Context) {
 	w.Samples = append(w.Samples, a.nativeActivitySamples()...)
 	activity.Fit(&w)
 	a.setActivityRound(activityRound{At: time.Now().Unix(), WorkerStatus: w.WorkerStatus, LeftoverProbes: w.LeftoverProbes})
-	if _, err := a.recordActivityWindow(w, time.Now()); err != nil {
+	a.storeActivityRound(w, time.Now())
+}
+
+// storeActivityRound stores a window and raises its alerts. A window that was
+// not stored (the switch went off meanwhile, or it was already stored) raises
+// none, so nothing new is kept after the owner opts out.
+func (a *App) storeActivityRound(w activity.Window, now time.Time) {
+	written, err := a.recordActivityWindow(w, now)
+	if err != nil {
 		a.emitError("activity", err)
 		return
 	}
-	a.raiseActivityAlerts(activity.AlertFindings(w), time.Now())
+	if written == 0 {
+		return
+	}
+	a.raiseActivityAlerts(activity.AlertFindings(w), now)
 }
 
 // nativeActivitySamples marks every program this app runs natively: no helper
