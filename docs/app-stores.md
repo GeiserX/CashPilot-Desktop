@@ -14,7 +14,7 @@ The `packaging/` directory holds ready packages for three package managers. None
 Each package installs the same binary the release publishes. Nothing is rebuilt.
 
 - winget installs the Windows exe as a portable app and adds the `cashpilot-desktop` command. The exe is not code-signed yet, so the winget-pkgs checks may hold it for manual review.
-- The Homebrew cask installs the signed and notarized `cashpilot-desktop.app`. `brew uninstall` also unloads the background helper (`cloud.cashpilot.desktop.helper`). `brew uninstall --zap` also removes the app data, the helper's LaunchAgent, the preferences and the WebKit data.
+- The Homebrew cask installs the signed and notarized `cashpilot-desktop.app`. `brew uninstall` also unloads the background helper (`cloud.cashpilot.desktop.helper`) and deletes its LaunchAgent, so it does not start again at login. `brew uninstall --zap` also removes the app data, the preferences and the WebKit data.
 - The AUR package installs the Linux binary as `/usr/bin/cashpilot-desktop`, with a menu entry and the icon. Docker or Podman are optional dependencies, because either one works.
 
 Docker Desktop or Podman is not installed by any of these packages. The setup wizard detects it and explains what to install.
