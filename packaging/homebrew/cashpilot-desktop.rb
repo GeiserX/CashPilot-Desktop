@@ -18,7 +18,10 @@ cask "cashpilot-desktop" do
 
   app "cashpilot-desktop.app"
 
-  uninstall launchctl: "cloud.cashpilot.desktop.helper"
+  # Unloading alone leaves the plist, which launchd loads again at the next login
+  # and which then points into the removed app.
+  uninstall launchctl: "cloud.cashpilot.desktop.helper",
+            delete:    "~/Library/LaunchAgents/cloud.cashpilot.desktop.helper.plist"
 
   zap trash: [
     "~/Library/Application Support/com.cashpilot.desktop",

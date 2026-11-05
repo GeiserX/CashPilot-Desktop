@@ -159,6 +159,14 @@ func TestPackagesAgreeOnVersion(t *testing.T) {
 	srcinfo := read(t, filepath.Join(aurDir, ".SRCINFO"))
 	wdir := wingetDir(t)
 
+	// A URL pinned to a literal tag would install an old release under a new version line.
+	if !strings.Contains(cask, "releases/download/v#{version}/") {
+		t.Error("homebrew cask URL does not use the version line")
+	}
+	if !strings.Contains(pkgbuild, "releases/download/v${pkgver}/") {
+		t.Error("PKGBUILD source URL does not use pkgver")
+	}
+
 	versions := map[string]string{"winget directory": filepath.Base(wdir)}
 	if m := caskVerRe.FindStringSubmatch(cask); m != nil {
 		versions["homebrew cask"] = m[1]
@@ -251,5 +259,18 @@ func TestChecksumsAreWellFormed(t *testing.T) {
 	h := sha256.Sum256(desktop)
 	if got := hex.EncodeToString(h[:]); len(pkgSums) != 3 || pkgSums[2] != got {
 		t.Errorf("PKGBUILD lists %v for cashpilot-desktop.desktop, file hashes to %s; rerun packaging/render.sh", pkgSums, got)
+	}
+}
+
+func TestDependsMatchPKGBUILD(t *testing.T) {
+	pkgbuild := read(t, filepath.Join(aurDir, "PKGBUILD"))
+	m := regexp.MustCompile(`(?m)^depends=\((.*)\)$`).FindStringSubmatch(pkgbuild)
+	if m == nil {
+		t.Fatal("PKGBUILD has no single-line depends array")
+	}
+	pkgDeps := strings.Fields(strings.NewReplacer("'", " ", `"`, " ").Replace(m[1]))
+	srcDeps := srcinfoValues(read(t, filepath.Join(aurDir, ".SRCINFO")), "depends")
+	if len(pkgDeps) == 0 || strings.Join(pkgDeps, ",") != strings.Join(srcDeps, ",") {
+		t.Errorf("PKGBUILD depends %v differ from .SRCINFO %v; rerun packaging/render.sh", pkgDeps, srcDeps)
 	}
 }
