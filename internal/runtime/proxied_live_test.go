@@ -118,7 +118,7 @@ func TestProxiedCopyFailsClosedLive(t *testing.T) {
 		for _, args := range [][]string{
 			{"exec", earner, "wget", "-qO-", "-T", "3", "http://1.1.1.1"},
 			{"exec", earner, "wget", "-qO-", "-T", "3", "http://" + gateway},
-			{"exec", earner, "wget", "-qO-", "-T", "3", "http://192.168.10.1"},
+			{"exec", earner, "wget", "-qO-", "-T", "3", "http://192.168.1.1"},
 			{"exec", earner, "nslookup", "-timeout=2", "leak-check-" + slug + ".example.org", "8.8.8.8"},
 		} {
 			_, _ = dk(args...)
