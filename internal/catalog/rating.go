@@ -133,6 +133,10 @@ func ParseRatingRules(raw []byte) (*RatingRules, error) {
 		if gradeIndex(c.MaxGrade) < 0 {
 			return nil, fmt.Errorf("cap %q grade %q is not one of %v", c.Key, c.MaxGrade, gradeOrder)
 		}
+		// At zero the thin-evidence cap would hold for every provider.
+		if c.Key == "thin_evidence" && c.MinUnknown <= 0 {
+			return nil, fmt.Errorf("cap %q needs a positive min_unknown", c.Key)
+		}
 	}
 	for v, p := range rules.Points {
 		if p < 0 {
