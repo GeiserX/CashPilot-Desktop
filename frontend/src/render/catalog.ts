@@ -4,6 +4,9 @@
 // Sign up stays on every row that has a sign-up link: for providers with a
 // referral programme it is the referral link, disclosed under the table.
 //
+// The Grade column is the provider's letter from the published criteria
+// (render/rating.ts); its tooltip is the worst con.
+//
 // Pure: takes catalog data, returns HTML.
 
 import type { Deployment, Service } from "../wails";
@@ -11,6 +14,7 @@ import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in 
 import { customImageBadge } from "./image.js";
 import { containerState } from "./attention.js";
 import { customBadge } from "./custom.js";
+import { gradeBadge } from "./rating.js";
 
 /** "$0-5 / device" from the catalog's monthly estimate, or a dash when it has none. */
 export function estimateText(service: Service): string {
@@ -63,6 +67,7 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
       <td>${escapeHtml(KIND[service.category] || service.category)}</td>
       <td class="cell-sub-wrap">${escapeHtml((service.platforms || []).join(", ") || "none listed")}</td>
       <td class="c-num">${escapeHtml(estimateText(service))}</td>
+      <td class="c-grade">${gradeBadge(service.ratingResult)}</td>
       <td class="c-act"><div class="action-btns">${main}${signup}</div></td>
     </tr>
   `;
@@ -74,14 +79,14 @@ export function renderCatalogTable(services: Service[], deployments: Deployment[
   const here = services.filter((svc) => deployedBy.has(svc.slug));
   const rest = services.filter((svc) => !deployedBy.has(svc.slug));
   const group = (title: string, list: Service[]) => list.length
-    ? `<tr class="group-row"><th colspan="5">${escapeHtml(title)} <span class="count">${list.length}</span></th></tr>
+    ? `<tr class="group-row"><th colspan="6">${escapeHtml(title)} <span class="count">${list.length}</span></th></tr>
        ${list.map((svc) => catalogRow(svc, deployedBy.get(svc.slug), outdatedSet.has(svc.slug))).join("")}`
     : "";
   if (!services.length) return `<p class="block-empty">No service matches.</p>`;
   return `
     <table class="catalog-table">
       <thead>
-        <tr><th>Service</th><th>Kind</th><th>Runs on</th><th class="c-num">Est. per month</th><th class="c-act"></th></tr>
+        <tr><th>Service</th><th>Kind</th><th>Runs on</th><th class="c-num">Est. per month</th><th class="c-grade">Grade</th><th class="c-act"></th></tr>
       </thead>
       <tbody>
         ${group("Deployed here", here)}
