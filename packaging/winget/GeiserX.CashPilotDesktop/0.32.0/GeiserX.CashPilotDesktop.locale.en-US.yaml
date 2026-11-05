@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+
+PackageIdentifier: GeiserX.CashPilotDesktop
+PackageVersion: 0.32.0
+PackageLocale: en-US
+Publisher: GeiserX
+PublisherUrl: https://github.com/GeiserX
+PublisherSupportUrl: https://github.com/GeiserX/CashPilot-Desktop/issues
+Author: Sergio Fernandez
+PackageName: CashPilot Desktop
+PackageUrl: https://github.com/GeiserX/CashPilot-Desktop
+License: GPL-3.0-or-later
+LicenseUrl: https://github.com/GeiserX/CashPilot-Desktop/blob/main/LICENSE
+Copyright: Copyright 2026 Sergio Fernandez
+ShortDescription: Needs Docker Desktop or Podman. Deploys and monitors passive-income and DePIN services from one app.
+Description: |-
+  CashPilot Desktop needs Docker Desktop or Podman installed; the earning services run as containers there, and the setup wizard helps if neither is present.
+  It deploys and monitors passive-income and DePIN services from one window: live earnings, service health, container stats and node uptime. It runs either as the full CashPilot dashboard or as a Worker Node that joins an existing CashPilot instance.
+Moniker: cashpilot-desktop
+Tags:
+- depin
+- docker
+- passive-income
+- podman
+ReleaseNotesUrl: https://github.com/GeiserX/CashPilot-Desktop/releases/tag/v0.32.0
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0

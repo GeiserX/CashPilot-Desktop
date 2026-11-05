@@ -9,6 +9,11 @@ import {
 import {
   AddFleetDevice,
   BackgroundHelperStatus,
+  DeleteActivityData,
+  GetActivity,
+  GetActivityDetail,
+  RefreshActivityNetworks,
+  SetActivityEnabled,
   InstallBackgroundHelper,
   ListCustomServices,
   ApplyImport,
@@ -50,6 +55,7 @@ import {
   UndoStateBackup,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderEarningsBars } from "./render/chart";
@@ -68,12 +74,12 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult } from "./wails";
-import type { AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
 let onboardingStep: "welcome" | "runtime" = "welcome";
-type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "import";
+type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity" | "import";
 
 let activeView: View = "dashboard";
 let wizardStep = 1;
@@ -102,6 +108,21 @@ let chartDays = 7;
 let usageContainer = "";
 let usageView: UsageView | null = null;
 let usageRequest = 0;
+// The Activity page's window (1, 7 or 30 days) and its expanded rows, each with
+// its detail once loaded (null while it loads).
+let activityDays = 1;
+// Moves on with every window change, switch or delete, so a page answer that
+// arrives after a newer one is dropped instead of drawn over it.
+let activityRequest = 0;
+// Moves on with every page fetch, so of two fetches in one generation only the
+// newer one is drawn.
+let activityPage = 0;
+// The Activity view last drawn: a late detail answer redraws this one, never
+// the older view its click came from.
+let activityShown: ActivityView | null = null;
+let activityOpen: Record<string, ActivityDetail | null> = {};
+// Deletes still running (switch-off or Delete data): rows do not open meanwhile.
+let activityDeleting = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -164,6 +185,10 @@ function render() {
   }
   if (activeView === "fleet") {
     void renderFleet(state);
+    return;
+  }
+  if (activeView === "activity") {
+    void renderActivity(state);
     return;
   }
   if (activeView === "import") {
@@ -638,7 +663,7 @@ function wireShellNav() {
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
-      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "import") {
+      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import") {
         activeView = next;
         if (next === "wizard") {
           wizardStep = 1;
@@ -1138,6 +1163,118 @@ function envInputName(key: string) {
     TZ: "timezone",
   };
   return names[key] || key;
+}
+
+async function renderActivity(current: AppState, view?: ActivityView) {
+  const request = activityRequest;
+  const page = view ? activityPage : ++activityPage;
+  let data: ActivityView;
+  try {
+    data = view || (await GetActivity(activityDays));
+  } catch (error) {
+    if (page !== activityPage || request !== activityRequest || activeView !== "activity") return;
+    showErrorToast({scope: "activity", error: String(error)});
+    return;
+  }
+  if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
+  activityShown = data;
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      <div class="main-content">
+        ${topbar("activity", current)}
+        <main class="page-content">
+          ${pageHead("Activity")}
+          ${renderActivityPage(data, activityOpen)}
+        </main>
+        ${pageFoot()}
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  // The actions answer with the 24-hour view; render the window the owner chose.
+  const run = async (action: () => Promise<ActivityView>) => {
+    try {
+      await action();
+      await renderActivity(current);
+    } catch (error) {
+      showErrorToast({scope: "activity", error: String(error)});
+      void renderActivity(current);
+    }
+  };
+  document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
+    const on = (event.target as HTMLInputElement).checked;
+    activityRequest++;
+    if (on) {
+      void run(() => SetActivityEnabled(on));
+      return;
+    }
+    // Off deletes the addresses: drop the open rows' copies, refuse to open a
+    // row until the delete is done, then drop anything opened meanwhile.
+    activityOpen = {};
+    activityDeleting++;
+    // Take the open rows' addresses off the screen now, not when the delete returns.
+    void renderActivity(current, {...data, enabled: false});
+    void run(() => SetActivityEnabled(on)).finally(() => {
+      activityDeleting--;
+      activityOpen = {};
+    });
+  });
+  document.querySelector<HTMLSelectElement>("#activity-days")?.addEventListener("change", (event) => {
+    activityDays = Number((event.target as HTMLSelectElement).value) || 1;
+    activityRequest++;
+    activityOpen = {};
+    void renderActivity(current);
+  });
+  document.querySelector("#activity-delete")?.addEventListener("click", () => {
+    if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
+    activityRequest++;
+    activityOpen = {};
+    // As on switch-off: no row opens until the delete is done, and the open
+    // rows' addresses leave the screen now.
+    activityDeleting++;
+    void renderActivity(current, data);
+    void run(() => DeleteActivityData()).finally(() => {
+      activityDeleting--;
+      activityOpen = {};
+    });
+  });
+  document.querySelector("#activity-networks")?.addEventListener("click", () => {
+    showInfoToast({scope: "activity", message: "Downloading the network table (about 11 MB)."});
+    void run(() => RefreshActivityNetworks());
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-activity-expand]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const name = button.dataset.activityExpand || "";
+      if (activityDeleting > 0) return;
+      if (Object.hasOwn(activityOpen, name)) {
+        delete activityOpen[name];
+        void renderActivity(current, data);
+        return;
+      }
+      const open = activityOpen;
+      open[name] = null;
+      void renderActivity(current, data);
+      let detail: ActivityDetail;
+      try {
+        detail = await GetActivityDetail(name, activityDays);
+      } catch (error) {
+        if (open !== activityOpen || open[name] !== null) return;
+        delete open[name];
+        showErrorToast({scope: "activity", error: String(error)});
+        if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+        return;
+      }
+      // The window changed, the data was deleted or the row was closed meanwhile:
+      // this answer belongs to a page that is gone.
+      if (open !== activityOpen || open[name] !== null) return;
+      open[name] = detail;
+      // Redraw the newest view, not the one this click came from.
+      if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+    });
+  });
 }
 
 async function renderFleet(current: AppState) {
