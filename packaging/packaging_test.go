@@ -273,7 +273,7 @@ func TestSrcinfoMatchesPKGBUILD(t *testing.T) {
 	}
 	expand := strings.NewReplacer("${pkgver}", m[1], "$pkgver", m[1])
 	quoted := regexp.MustCompile(`'([^']*)'|"([^"]*)"`)
-	for _, key := range []string{"depends", "optdepends", "provides", "conflicts", "options", "source"} {
+	for _, key := range []string{"arch", "license", "depends", "optdepends", "provides", "conflicts", "options", "source"} {
 		arr := regexp.MustCompile(`(?ms)^` + key + `=\((.*?)\)`).FindStringSubmatch(pkgbuild)
 		if arr == nil {
 			t.Errorf("PKGBUILD has no %s array", key)
@@ -281,7 +281,14 @@ func TestSrcinfoMatchesPKGBUILD(t *testing.T) {
 		}
 		var want []string
 		for _, q := range quoted.FindAllStringSubmatch(arr[1], -1) {
-			want = append(want, expand.Replace(q[1]+q[2]))
+			value := q[1] + q[2]
+			if strings.HasPrefix(q[0], `"`) { // bash expands variables in double quotes only
+				value = expand.Replace(value)
+			}
+			want = append(want, value)
+		}
+		if bare := strings.Fields(quoted.ReplaceAllString(arr[1], " ")); len(bare) > 0 {
+			t.Errorf("PKGBUILD %s has unquoted entries %q; quote them so the .SRCINFO comparison covers them", key, bare)
 		}
 		got := srcinfoValues(srcinfo, key)
 		if len(want) == 0 || strings.Join(want, "|") != strings.Join(got, "|") {
