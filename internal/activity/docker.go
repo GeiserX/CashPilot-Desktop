@@ -50,7 +50,7 @@ func ProbeName(worker, ownerID string) string {
 
 // ProbeConfig is the helper's container config and host config: user 65534, no
 // capabilities, read-only, no new privileges, 32 processes and 48 MiB at most, a
-// 64 KiB tmpfs at /data, no mounts. A host-network earner's helper joins the
+// 64 KiB tmpfs at /data, no mounts, a json-file log. A host-network earner's helper joins the
 // host network and the host cgroup namespace (to find the earner's cgroup in
 // the read-only /sys/fs/cgroup); every other helper joins the earner's network
 // namespace.
@@ -73,6 +73,10 @@ func ProbeConfig(spec ProbeSpec) (*container.Config, *container.HostConfig, erro
 		ReadonlyRootfs: true,
 		Tmpfs:          map[string]string{"/data": "size=64k"},
 		Resources:      container.Resources{PidsLimit: &pids, Memory: 48 << 20},
+		// The output holds remote addresses. With the daemon's default driver
+		// (journald, syslog, a remote one) they would outlive the helper; a
+		// json-file log is deleted with it.
+		LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "1m"}},
 	}
 	if spec.Kind == "cgroup" {
 		env = append(env, "PROBE_MODE=cgroup", "PROBE_CONTAINER="+spec.OwnerID)

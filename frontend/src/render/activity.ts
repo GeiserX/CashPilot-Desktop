@@ -166,7 +166,7 @@ export function renderActivityDetail(d: ActivityDetail, hostNetwork: boolean): s
     `</div>` +
     `<details class="activity-raw"><summary>Destinations of the last ${escapeHtml(String(d.rawHours))} hours (${raw.length})</summary>` +
     (shown.length
-      ? `<table class="activity-dim"><thead><tr><th>Window</th><th>Direction</th><th>Address</th><th>Port</th><th>Kind</th><th>Network</th><th>Country</th></tr></thead><tbody>` +
+      ? `<table class="activity-dim"><thead><tr><th>Window (UTC)</th><th>Direction</th><th>Address</th><th>Port</th><th>Kind</th><th>Network</th><th>Country</th></tr></thead><tbody>` +
         shown
           .map(
             (r) =>
@@ -199,7 +199,7 @@ export function renderActivityPage(view: ActivityView, open: Record<string, Acti
     `</div>` +
     `<p class="muted activity-asn">${
       nets.present
-        ? `Network table: ${escapeHtml(String(nets.rows ?? UNKNOWN))} ranges, ${Math.round((nets.ageSeconds || 0) / 86400)} days old. `
+        ? `Network table: ${escapeHtml(String(nets.rows ?? UNKNOWN))} ranges, ${nets.ageSeconds == null ? UNKNOWN : Math.round(nets.ageSeconds / 86400)} days old. `
         : "Network table not downloaded, so networks and countries read as unknown. "
     }<button class="btn btn-link" id="activity-networks">Download now</button></p>` +
     `</section>`;

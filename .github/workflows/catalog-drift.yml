@@ -113,9 +113,9 @@ jobs:
 
           {
             if [ "$CODE" = "1" ]; then
-              echo "services/ no longer matches GeiserX/CashPilot@main."
+              echo "services/ or internal/activity/procnet.py no longer matches GeiserX/CashPilot@main; the log below names which."
               echo
-              echo "Run \`make catalog-sync\`, check every referral URL and code in the diff, and open a PR. If a difference is deliberate, declare it in catalog-overlay/ instead of editing services/ by hand."
+              echo "Run \`make catalog-sync\`, check every referral URL and code in the diff, and open a PR. If a difference is deliberate, declare it in catalog-overlay/ instead of editing services/ by hand. A procnet.py difference is the web's Activity helper: copy it as it is."
             else
               echo "The weekly check could not compare the catalogs (exit ${CODE:-none}). This is a fetch, overlay or IO failure, not drift. Re-run the workflow; if it keeps failing, the log says why."
             fi

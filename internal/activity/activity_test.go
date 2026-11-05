@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 )
@@ -89,7 +90,8 @@ func TestProbeConfigKeepsTheFloor(t *testing.T) {
 		if cfg.User != "65534:65534" || hc.Privileged || !hc.ReadonlyRootfs || len(hc.CapDrop) != 1 || hc.CapDrop[0] != "ALL" ||
 			len(hc.CapAdd) != 0 || len(hc.SecurityOpt) != 1 || hc.SecurityOpt[0] != "no-new-privileges:true" ||
 			hc.Resources.PidsLimit == nil || *hc.Resources.PidsLimit != 32 || hc.Resources.Memory != 48<<20 ||
-			hc.Tmpfs["/data"] != "size=64k" || len(hc.Mounts) != 0 || len(hc.Binds) != 0 || len(hc.Devices) != 0 {
+			hc.Tmpfs["/data"] != "size=64k" || len(hc.Mounts) != 0 || len(hc.Binds) != 0 || len(hc.Devices) != 0 ||
+			hc.LogConfig.Type != "json-file" {
 			t.Fatalf("%s: the helper lost part of its floor: cfg=%+v hc=%+v", kind, cfg, hc)
 		}
 		if cfg.Labels[ProbeLabel] != ProbeKind || cfg.Labels[WorkerLabel] != "desktop-1" {
@@ -325,6 +327,8 @@ type fakeEngine struct {
 	failRun  map[string]error
 	noImage  bool
 	leftover bool
+	// stallImage blocks EnsureImage until its context ends, as a stalled pull does.
+	stallImage bool
 }
 
 func (f *fakeEngine) Earners(context.Context) ([]Container, error) { return f.earners, nil }
@@ -347,7 +351,11 @@ func (f *fakeEngine) Remove(_ context.Context, id string) error {
 	f.removed = append(f.removed, id)
 	return nil
 }
-func (f *fakeEngine) EnsureImage(context.Context, string) error {
+func (f *fakeEngine) EnsureImage(ctx context.Context, _ string) error {
+	if f.stallImage {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if f.noImage {
 		return errors.New("no")
 	}
@@ -397,6 +405,27 @@ func TestRoundProbesHostEarnerByCgroupAndSweepsOnlyOurs(t *testing.T) {
 	}
 	if len(w.Samples) != 2 || w.Samples[0].Container != "cashpilot-honeygain" || w.Samples[1].Reason != "host_cgroup" {
 		t.Fatalf("samples %+v", w.Samples)
+	}
+}
+
+// A stalled image pull must end with the round, not hold the sampler loop.
+func TestRoundTimeoutEndsAStalledRound(t *testing.T) {
+	old := RoundTimeout
+	RoundTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { RoundTimeout = old })
+	f := &fakeEngine{earners: []Container{earner(strings.Repeat("b", 64), "e", "bridge")}, stallImage: true}
+	done := make(chan Window, 1)
+	go func() {
+		w, _ := (&Runner{Engine: f, Worker: "me", Deltas: NewDeltas()}).Round(context.Background())
+		done <- w
+	}()
+	select {
+	case w := <-done:
+		if w.WorkerStatus != "no_image" || len(f.specs) != 0 {
+			t.Fatalf("got %+v", w)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the round outlived RoundTimeout")
 	}
 }
 

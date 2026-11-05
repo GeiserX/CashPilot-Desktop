@@ -23,6 +23,11 @@ type Runner struct {
 	busy sync.Mutex
 }
 
+// RoundTimeout bounds a whole round, Docker calls and the helper image pull
+// included, so a stalled daemon cannot hold the sampler loop (and its hourly
+// purge) past the next window. A variable so tests can shorten it.
+var RoundTimeout = 270 * time.Second
+
 // ErrBusy is a round asked for while another is still running.
 var ErrBusy = errors.New("a round is already running")
 
@@ -52,6 +57,8 @@ func (r *Runner) Round(ctx context.Context) (Window, error) {
 		return Window{}, ErrBusy
 	}
 	defer r.busy.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, RoundTimeout)
+	defer cancel()
 	now := time.Now
 	if r.Now != nil {
 		now = r.Now

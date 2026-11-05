@@ -79,7 +79,7 @@ sampled.
 
 | Data | Kept |
 |---|---|
-| Remote addresses (the "last 24 hours" list) | 24 hours. Purged on every round and every hour, overwritten on disk (`secure_delete`), then the database log is emptied. |
+| Remote addresses (the "last 24 hours" list) | 24 hours while the app runs. Purged on every round and every hour, overwritten on disk (`secure_delete`), then the database log is emptied. The app cannot delete anything while it is closed: addresses older than 24 hours are deleted within five minutes of its next start. |
 | Counts per window, per container | 35 days |
 | Totals per hour by port, network, country, kind and direction (no addresses) | 35 days |
 | Alerts | 35 days |

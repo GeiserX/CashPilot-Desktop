@@ -1078,14 +1078,22 @@ async function renderActivity(current: AppState, view?: ActivityView) {
         void renderActivity(current, data);
         return;
       }
-      activityOpen[name] = null;
+      const open = activityOpen;
+      open[name] = null;
       void renderActivity(current, data);
+      let detail: ActivityDetail;
       try {
-        activityOpen[name] = await GetActivityDetail(name, activityDays);
+        detail = await GetActivityDetail(name, activityDays);
       } catch (error) {
-        delete activityOpen[name];
+        if (open === activityOpen && open[name] === null) delete open[name];
         showErrorToast({scope: "activity", error: String(error)});
+        if (activeView === "activity" && open === activityOpen) void renderActivity(current, data);
+        return;
       }
+      // The window changed, the data was deleted or the row was closed meanwhile:
+      // this answer belongs to a page that is gone.
+      if (open !== activityOpen || open[name] !== null) return;
+      open[name] = detail;
       if (activeView === "activity") void renderActivity(current, data);
     });
   });

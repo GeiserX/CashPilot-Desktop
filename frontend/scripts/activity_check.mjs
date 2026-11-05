@@ -79,5 +79,10 @@ const noImage = renderActivityPage({ enabled: true, days: 1, rawHours: 24, lastW
 check("a missing helper image is shown", noImage.includes("helper image could not be pulled"), noImage);
 check("an open row renders its box while it loads", noImage.includes(`id="${domId("cashpilot-mysterium")}"`) && noImage.includes("Loading"), noImage);
 
+const page = (networks) => renderActivityPage({ enabled: true, days: 1, rawHours: 24, lastWindow: 0, round: { at: 5, workerStatus: "ok", leftoverProbes: [] }, networks, networksEnabled: true, containers: [], alerts: [] }, {});
+const ageless = page({ present: true, ageSeconds: null, rows: 10 });
+check("a network table of unknown age never reads as 0 days old", !ageless.includes("0 days old") && ageless.includes(`${UNKNOWN} days old`), ageless);
+check("a known age is shown in days", page({ present: true, ageSeconds: 3 * 86400, rows: 10 }).includes("3 days old"));
+
 console.log(`${checks - failures}/${checks} activity checks passed`);
 if (failures) process.exit(1);
