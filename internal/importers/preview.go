@@ -396,7 +396,9 @@ func buildRow(app foundApp, svc catalog.Service, extra map[string]string) Row {
 		} else {
 			text, state = strings.TrimSpace(value.Text), FieldImported
 		}
-		if text != "" && !v.AcceptsValue(text) {
+		// A JSON "\u0000" decodes to a NUL after the file's own NUL check;
+		// no env value can carry one.
+		if text != "" && (!v.AcceptsValue(text) || strings.ContainsRune(text, 0)) {
 			state = FieldInvalid
 		}
 		label := v.Label

@@ -215,3 +215,26 @@ func TestApplyImportRefusesAnUnusableRowWhateverIsSaved(t *testing.T) {
 		t.Errorf("error = %v", err)
 	}
 }
+
+// A saved email that differs from the file, next to a password filled from the
+// file, would save one account's email with another's password: refused, and
+// nothing changes.
+func TestApplyImportRefusesToMixTwoLogins(t *testing.T) {
+	app, _ := importApp(t)
+	saved := map[string]string{"HONEYGAIN_EMAIL": "mine@example.com"}
+	if err := app.store.SaveCredentials("honeygain", saved); err != nil {
+		t.Fatal(err)
+	}
+	files := []importers.File{importFixture(t, "money4band/user-config.json")}
+	res, err := app.ApplyImport(ImportApplyRequest{Source: "auto", Files: files, Slugs: []string{"repocket", "honeygain"}})
+	if err == nil || !strings.Contains(err.Error(), "mix two logins") {
+		t.Fatalf("err = %v, res = %+v", err, res)
+	}
+	hg, _ := app.store.GetCredentials("honeygain")
+	if len(hg) != 1 || hg["HONEYGAIN_EMAIL"] != "mine@example.com" {
+		t.Errorf("honeygain = %v, want it untouched", hg)
+	}
+	if rp, _ := app.store.GetCredentials("repocket"); len(rp) != 0 {
+		t.Errorf("repocket was saved before the refusal: %v", rp)
+	}
+}

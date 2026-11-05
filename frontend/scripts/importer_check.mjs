@@ -102,6 +102,12 @@ check("a saved service offers Deploy", saved.includes('data-import-deploy="honey
 check("a deployed one no longer does", !saved.includes('data-import-deploy="earnfm"') && saved.includes("deployed"));
 check("kept values are named by label", saved.includes("left as it was: Password."));
 check("the saved list holds no secret", !saved.includes("LEAKED-SECRET"));
+const linked = renderImportSaved(
+  { saved: ["honeygain", "earnfm"], kept: {} }, preview, ["earnfm"],
+  { earnfm: "Link this device <now>", honeygain: "not deployed yet" },
+);
+check("a deployed import shows its device-link step, escaped", linked.includes("Link this device &lt;now&gt;"));
+check("control: no step under a service not deployed yet", !linked.includes("not deployed yet"));
 
 if (failures) {
   console.error(`\n${failures} of ${checks} import checks failed`);

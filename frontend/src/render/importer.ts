@@ -155,7 +155,7 @@ export function importChoices(
 }
 
 /** Step 3: what was saved, each with a Deploy button that runs the normal deploy. */
-export function renderImportSaved(result: ImportResult, preview: ImportPreview | null, deployed: string[]): string {
+export function renderImportSaved(result: ImportResult, preview: ImportPreview | null, deployed: string[], links: Record<string, string> = {}): string {
   const names: Record<string, string> = {};
   const labels: Record<string, Record<string, string>> = {};
   for (const row of preview?.rows || []) {
@@ -172,6 +172,7 @@ export function renderImportSaved(result: ImportResult, preview: ImportPreview |
       <strong>${escapeHtml(names[slug] || slug)}</strong>
       ${done ? `<span class="muted">deployed</span>` : `<button class="compact-btn" data-import-deploy="${escapeHtml(slug)}">Deploy</button>`}
       ${keptNote}
+      ${done && links[slug] ? `<pre class="muted device-link-text">${escapeHtml(links[slug])}</pre>` : ""}
     </li>`;
   }).join("");
   return `

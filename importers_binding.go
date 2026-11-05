@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/importers"
 )
@@ -72,6 +73,10 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 	if err != nil {
 		return ImportResult{}, err
 	}
+	// One import at a time from read to write, so two overlapping saves cannot
+	// both merge onto the same stored values and the later drop the earlier's.
+	a.importMu.Lock()
+	defer a.importMu.Unlock()
 	bySlug := map[string]importers.Row{}
 	for _, row := range preview.Rows {
 		bySlug[row.Slug] = row
@@ -104,6 +109,7 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 			merged[k] = v
 		}
 		var kept []string
+		filled := false
 		for k, v := range row.Env {
 			if merged[k] != "" {
 				if merged[k] != v {
@@ -112,8 +118,14 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 				continue
 			}
 			merged[k] = v
+			filled = true
 		}
 		sort.Strings(kept)
+		// A saved value that differs from the file next to a value filled from the
+		// file would pair one account's email with another's password.
+		if filled && len(kept) > 0 {
+			return ImportResult{}, fmt.Errorf("%s: %s saved here differs from the file, so the import would mix two logins. Fix it in Settings first.", row.Name, strings.Join(kept, ", "))
+		}
 		if err := a.services.ValidateCredentials(slug, merged); err != nil {
 			return ImportResult{}, fmt.Errorf("%s: %w", row.Name, err)
 		}
@@ -122,7 +134,12 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 	result := ImportResult{Saved: []string{}, Kept: map[string][]string{}}
 	for _, p := range todo {
 		if err := a.store.SaveCredentials(p.slug, p.values); err != nil {
-			return result, err
+			// Each service is its own write, so say which ones are already saved.
+			done := "nothing was saved"
+			if len(result.Saved) > 0 {
+				done = "already saved: " + strings.Join(result.Saved, ", ")
+			}
+			return result, fmt.Errorf("saving %s failed (%s): %w", p.slug, done, err)
 		}
 		result.Saved = append(result.Saved, p.slug)
 		if len(p.kept) > 0 {

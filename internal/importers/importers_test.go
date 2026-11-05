@@ -253,17 +253,17 @@ func TestPartlyFilledServiceComesInToBeCompleted(t *testing.T) {
 
 func TestCashFactoryEnvMapsWithItsOwnKeyNames(t *testing.T) {
 	rs := rows(preview(t, fixtures(t, "cashfactory/.env.sample"), "auto", nil))
-	checks := map[string]string{
-		rs["earnapp"].Env["EARNAPP_UUID"]:                "sdk-node-0123456789abcdef0123456789abcdef",
-		rs["honeygain"].Env["HONEYGAIN_PASSWORD"]:        "fake-pass-honeygain",
-		rs["earnfm"].Env["EARNFM_TOKEN"]:                 "fake-token-earnfm",
-		rs["repocket"].Env["RP_EMAIL"]:                   "rp@example.com",
-		rs["traffmonetizer"].Env["TRAFFMONETIZER_TOKEN"]: "fake-token-traffmonetizer",
-		rs["iproyal"].Env["IPROYALPAWNS_PASSWORD"]:       "fake-pass-iproyal",
+	checks := []struct{ slug, key, want string }{
+		{"earnapp", "EARNAPP_UUID", "sdk-node-0123456789abcdef0123456789abcdef"},
+		{"honeygain", "HONEYGAIN_PASSWORD", "fake-pass-honeygain"},
+		{"earnfm", "EARNFM_TOKEN", "fake-token-earnfm"},
+		{"repocket", "RP_EMAIL", "rp@example.com"},
+		{"traffmonetizer", "TRAFFMONETIZER_TOKEN", "fake-token-traffmonetizer"},
+		{"iproyal", "IPROYALPAWNS_PASSWORD", "fake-pass-iproyal"},
 	}
-	for got, want := range checks {
-		if got != want {
-			t.Errorf("got %q, want %q", got, want)
+	for _, c := range checks {
+		if got := rs[c.slug].Env[c.key]; got != c.want {
+			t.Errorf("%s %s = %q, want %q", c.slug, c.key, got, c.want)
 		}
 	}
 	if !strings.HasPrefix(rs["proxyrack"].Env["UUID"], "ABCDEF") {
@@ -606,5 +606,15 @@ func TestEveryAppIsNamedInTheToolsGuide(t *testing.T) {
 				t.Errorf("docs/migrate/%s.md does not mention %s", tool, appName)
 			}
 		}
+	}
+}
+
+// A JSON "\u0000" passes the file's NUL check (the raw text has none) and decodes
+// to a NUL, which no env value can carry: the field is invalid, never ready.
+func TestADecodedNulIsAnInvalidValue(t *testing.T) {
+	content := `{"apps": {"honeygain": {"enabled": true, "email": "hg@example.com", "password": "a\u0000b"}}}` // ggignore: fake test value
+	r := rows(preview(t, []File{{Name: "user-config.json", Content: content}}, "money4band", nil))["honeygain"]
+	if r.State == RowReady || field(t, r, "HONEYGAIN_PASSWORD").State != FieldInvalid {
+		t.Errorf("honeygain = %+v", r)
 	}
 }

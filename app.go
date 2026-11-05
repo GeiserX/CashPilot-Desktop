@@ -49,6 +49,8 @@ type App struct {
 	// it is a field so the export path can be driven in a test, which has no window
 	// for a native dialog to open in.
 	saveDialog func(wailsruntime.SaveDialogOptions) (string, error)
+	// importMu serializes ApplyImport's read-merge-write of stored credentials.
+	importMu sync.Mutex
 	// fleetKey is the fleet bearer token held in memory for the per-request auth
 	// check. It is loaded once at Startup by ensureFleetAPIKey from the OS keychain
 	// (0600 file fallback) so the token is never persisted in config.json and the

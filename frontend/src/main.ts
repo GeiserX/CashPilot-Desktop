@@ -72,7 +72,7 @@ import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/d
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
-import { importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
+import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult } from "./wails";
 import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
@@ -97,6 +97,14 @@ let importRequest: ImportRequest | null = null;
 let importPreview: ImportPreview | null = null;
 let importResult: ImportResult | null = null;
 let importDeployed: string[] = [];
+// The device-link step of each deployed import, shown under it (slug -> text).
+let importLinks: Record<string, string> = {};
+let importDeploying = new Set<string>();
+// Bumped by each preview, so a slower earlier one cannot land over a later one.
+let importPreviewSeq = 0;
+// The preview the page last drew: a redraw of the same preview keeps the ticks and
+// typed values, which live only in the page until Save.
+let renderedImportPreview: ImportPreview | null = null;
 let customEditing: CustomServiceView | "new" | null = null;
 let customLoadError = "";
 let resetScrollAfterRender = false;
@@ -857,7 +865,37 @@ async function deleteCustomService(slug: string) {
 
 // The import page: the files go to PreviewImport for a dry run, the ticked rows to
 // ApplyImport, and each saved service deploys through the normal DeployService.
+type ImportForm = { picks: [string, boolean][]; extras: [string, string][]; paste: string };
+
+function readImportForm(): ImportForm {
+  return {
+    picks: Array.from(document.querySelectorAll<HTMLInputElement>(".import-pick")).map((el) => [el.dataset.importSlug || "", el.checked]),
+    extras: Array.from(document.querySelectorAll<HTMLInputElement>(".import-extra")).map((el) => [`${el.dataset.importSlug}|${el.dataset.importKey}`, el.value]),
+    paste: document.querySelector<HTMLTextAreaElement>("#import-paste")?.value || "",
+  };
+}
+
+function restoreImportForm(form: ImportForm) {
+  const picks = new Map(form.picks);
+  const extras = new Map(form.extras);
+  document.querySelectorAll<HTMLInputElement>(".import-pick").forEach((el) => {
+    const checked = picks.get(el.dataset.importSlug || "");
+    if (checked !== undefined && !el.disabled) el.checked = checked;
+  });
+  document.querySelectorAll<HTMLInputElement>(".import-extra").forEach((el) => {
+    const value = extras.get(`${el.dataset.importSlug}|${el.dataset.importKey}`);
+    if (value !== undefined) el.value = value;
+  });
+  const paste = document.querySelector<HTMLTextAreaElement>("#import-paste");
+  if (paste && form.paste) paste.value = form.paste;
+}
+
+function renderImportIfShown() {
+  if (state && activeView === "import") renderImport(state);
+}
+
 function renderImport(current: AppState) {
+  const keep = renderedImportPreview === importPreview ? readImportForm() : null;
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -867,12 +905,14 @@ function renderImport(current: AppState) {
           ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
           ${renderImportInput(importSource)}
           ${importPreview ? renderImportPreview(importPreview) : ""}
-          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed) : ""}
+          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks) : ""}
         </main>
         ${pageFoot()}
       </div>
     </div>
   `;
+  renderedImportPreview = importPreview;
+  if (keep) restoreImportForm(keep);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -889,10 +929,24 @@ function renderImport(current: AppState) {
 async function readImportFiles(): Promise<ImportFile[]> {
   const files: ImportFile[] = [];
   const picked = Array.from(document.querySelector<HTMLInputElement>("#import-files")?.files || []);
+  // Refuse by count and size before reading, so a huge file is never loaded.
+  if (picked.length > IMPORT_MAX_FILES) throw new Error(`At most ${IMPORT_MAX_FILES} files at a time.`);
+  if (picked.reduce((n, f) => n + f.size, 0) > IMPORT_MAX_BYTES) {
+    throw new Error(`The files add up to more than ${IMPORT_MAX_BYTES / 1024} KiB.`);
+  }
+  // Strict UTF-8: file.text() would turn bad bytes into U+FFFD, which the
+  // backend's UTF-8 check could then not see.
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   for (const file of picked) {
     // Refuse before reading a file that alone is over the limit.
-    if (file.size > 64 * 1024) throw new Error(`${file.name} is larger than 64 KiB; this is not a config file.`);
-    files.push({ name: file.name, content: await file.text() });
+    if (file.size > IMPORT_MAX_BYTES) throw new Error(`${file.name} is larger than 64 KiB; this is not a config file.`);
+    let content: string;
+    try {
+      content = decoder.decode(await file.arrayBuffer());
+    } catch {
+      throw new Error(`${file.name} is not UTF-8 text.`);
+    }
+    files.push({ name: file.name, content });
   }
   const pasted = document.querySelector<HTMLTextAreaElement>("#import-paste")?.value || "";
   if (pasted.trim()) files.push({ name: "pasted text", content: pasted });
@@ -902,6 +956,7 @@ async function readImportFiles(): Promise<ImportFile[]> {
 }
 
 async function runImportPreview() {
+  const seq = ++importPreviewSeq;
   let files: ImportFile[];
   try {
     files = await readImportFiles();
@@ -911,11 +966,13 @@ async function runImportPreview() {
   }
   try {
     const preview = await PreviewImport({ source: importSource, files });
+    if (seq !== importPreviewSeq) return;
     importRequest = { source: preview.source, files };
     importPreview = preview;
     importResult = null;
     importDeployed = [];
-    if (state) renderImport(state);
+    importLinks = {};
+    renderImportIfShown();
   } catch (error) {
     showErrorToast({ scope: "import", error: String(error) });
   }
@@ -935,7 +992,9 @@ async function runImportApply() {
     return;
   }
   for (const input of inputs) {
-    if (slugs.includes(input.dataset.importSlug || "") && input.value.trim() && !input.checkValidity()) {
+    // Check what is sent: importChoices trims, so the pattern sees the trimmed value.
+    input.value = input.value.trim();
+    if (slugs.includes(input.dataset.importSlug || "") && input.value && !input.checkValidity()) {
       input.reportValidity();
       return;
     }
@@ -944,24 +1003,36 @@ async function runImportApply() {
     importResult = await ApplyImport({ ...importRequest, slugs, extra });
     importDeployed = [];
     state = await GetAppState();
+    importLinks = {};
     showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
-    if (state) renderImport(state);
+    renderImportIfShown();
   } catch (error) {
     showErrorToast({ scope: "import", error: String(error) });
   }
 }
 
 async function runImportDeploy(slug: string) {
-  if (!slug) return;
-  const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
-  if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.`)) return;
+  // A second click while this deploy runs does nothing.
+  if (!slug || importDeploying.has(slug)) return;
+  importDeploying.add(slug);
   try {
+    const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
+    // The same pre-flight report the wizard shows, when there is one.
+    const report = await PreflightService(slug).catch(() => null);
+    const preflight = report?.summary ? `\n\n${report.summary}` : "";
+    if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) return;
     await DeployService(slug, {}, null, null);
     importDeployed = [...importDeployed, slug];
     state = await GetAppState();
-    if (state) renderImport(state);
+    // The saved values hold the device id; the step is the one the wizard shows.
+    const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
+    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "");
+    if (link) importLinks = { ...importLinks, [slug]: link };
+    renderImportIfShown();
   } catch (error) {
     showErrorToast({ scope: "deploy", error: String(error) });
+  } finally {
+    importDeploying.delete(slug);
   }
 }
 
