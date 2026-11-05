@@ -1094,8 +1094,10 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
     activityRequest++;
     activityOpen = {};
-    // As on switch-off: no row opens until the delete is done.
+    // As on switch-off: no row opens until the delete is done, and the open
+    // rows' addresses leave the screen now.
     activityDeleting++;
+    void renderActivity(current, data);
     void run(() => DeleteActivityData()).finally(() => {
       activityDeleting--;
       activityOpen = {};
@@ -1115,6 +1117,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
         return;
       }
       const open = activityOpen;
+      const page = activityPage;
       open[name] = null;
       void renderActivity(current, data);
       let detail: ActivityDetail;
@@ -1123,12 +1126,14 @@ async function renderActivity(current: AppState, view?: ActivityView) {
       } catch (error) {
         if (open === activityOpen && open[name] === null) delete open[name];
         showErrorToast({scope: "activity", error: String(error)});
-        if (activeView === "activity" && open === activityOpen) void renderActivity(current, data);
+        if (activeView === "activity" && open === activityOpen && page === activityPage) void renderActivity(current, data);
         return;
       }
       // The window changed, the data was deleted or the row was closed meanwhile:
       // this answer belongs to a page that is gone.
-      if (open !== activityOpen || open[name] !== null) return;
+      // A newer page was fetched meanwhile (the user left and came back): this
+      // answer and the view it would redraw are both stale.
+      if (open !== activityOpen || open[name] !== null || page !== activityPage) return;
       open[name] = detail;
       if (activeView === "activity") void renderActivity(current, data);
     });

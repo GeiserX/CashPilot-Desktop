@@ -34,6 +34,8 @@ type activityState struct {
 	// writes nothing after it: no window, no alert.
 	writeMu sync.Mutex
 	gen     uint64
+	// deletePending is a switch-off whose delete failed; the tick retries it.
+	deletePending bool
 }
 
 // activityGen is the delete generation a round starts in.
@@ -53,6 +55,22 @@ func (a *App) activityWrite(gen uint64, fn func()) bool {
 	}
 	fn()
 	return true
+}
+
+// retryActivityDelete retries a failed switch-off delete while the switch is
+// still off, under the write lock, so a switch-on cannot slip in between.
+func (a *App) retryActivityDelete() {
+	a.activity.writeMu.Lock()
+	defer a.activity.writeMu.Unlock()
+	if !a.activity.deletePending || a.activityOn() {
+		return
+	}
+	a.activity.gen++
+	if err := a.deleteActivityRows(false); err != nil {
+		a.emitError("activity", err)
+		return
+	}
+	a.activity.deletePending = false
 }
 
 // activityDelete deletes under the write lock and moves the generation on.
@@ -129,6 +147,8 @@ func (a *App) activityTick(ctx context.Context, now time.Time) {
 	gen := a.activityGen()
 	if a.activityOn() {
 		a.runActivityRound(ctx, gen)
+	} else {
+		a.retryActivityDelete()
 	}
 	hour := now.Unix() / 3600
 	a.activity.mu.Lock()

@@ -273,3 +273,47 @@ func TestADeleteDuringARoundDropsTheRoundsWrites(t *testing.T) {
 		t.Fatalf("a current round must be stored: %+v", latest)
 	}
 }
+
+// A switch-off whose delete failed is retried by the tick while the switch
+// stays off, and never once it is back on.
+func TestAFailedSwitchOffDeleteIsRetried(t *testing.T) {
+	a := newActivityTestApp(t)
+	if _, err := a.SetActivityEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if n, err := a.recordActivityWindow(earnerWindow(now.Unix()/300*300), now); err != nil || n != 1 {
+		t.Fatalf("record: %d %v", n, err)
+	}
+	raw := func() int {
+		t.Helper()
+		d, err := a.GetActivityDetail("earner", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(d.Raw)
+	}
+	// While the switch is on, a pending retry does nothing.
+	a.activity.deletePending = true
+	a.retryActivityDelete()
+	if raw() != 2 {
+		t.Fatal("a retry must never delete while Activity is on")
+	}
+	// Switched off by config alone, as if the delete had failed after the save.
+	cfg := a.cfg.Config()
+	cfg.ActivityEnabled = false
+	if err := a.cfg.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	gen := a.activityGen()
+	a.activityTick(t.Context(), now)
+	if a.activity.deletePending || a.activityGen() == gen {
+		t.Fatal("the tick must retry the delete and move the generation on")
+	}
+	if _, err := a.SetActivityEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := a.GetActivityDetail("earner", 1); len(d.Raw) != 0 {
+		t.Fatalf("the retried delete must have removed the addresses: %+v", d.Raw)
+	}
+}

@@ -221,8 +221,16 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 	was := cfg.ActivityEnabled
 	cfg.ActivityEnabled = on
 	if on {
-		if err := a.cfg.Save(cfg); err != nil {
-			return ActivityView{}, err
+		// Under the write lock, so a pending switch-off retry cannot run between
+		// its "still off?" check and its delete.
+		a.activity.writeMu.Lock()
+		saveErr := a.cfg.Save(cfg)
+		if saveErr == nil {
+			a.activity.deletePending = false
+		}
+		a.activity.writeMu.Unlock()
+		if saveErr != nil {
+			return ActivityView{}, saveErr
 		}
 	} else {
 		// Saved and deleted under the write lock, so a round already running
@@ -232,7 +240,10 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 			if saveErr = a.cfg.Save(cfg); saveErr != nil {
 				return nil
 			}
-			return a.deleteActivityRows(false)
+			err := a.deleteActivityRows(false)
+			// A failed delete is retried on every tick while the switch stays off.
+			a.activity.deletePending = err != nil
+			return err
 		})
 		if saveErr != nil {
 			return ActivityView{}, saveErr
