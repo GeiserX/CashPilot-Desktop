@@ -216,6 +216,17 @@ func appsFromJSON(files []*fileSettings, spec toolSpec, skipped *[]Skipped) []fo
 				}
 			}
 			enabled, _ := conf.get("enabled").(bool)
+			// Off with only template placeholders: the user never set this app up. Every
+			// leaf counts, mapped or not, so an app CashPilot cannot carry still shows why.
+			hasValue := false
+			for _, k := range conf.keys {
+				if text, ok := jsonLeaf(conf.get(k)); ok && k != "enabled" && !IsPlaceholder(text) {
+					hasValue = true
+				}
+			}
+			if !enabled && !hasValue {
+				continue
+			}
 			found = append(found, foundApp{name: appName, spec: aspec, values: values, enabled: enabled})
 		}
 	}
@@ -328,7 +339,7 @@ func BuildPreview(files []*fileSettings, source string, getService func(string) 
 	notices := []string{spec.Stop}
 	for _, s := range skipped {
 		if strings.Contains(s.Reason, "Proxies") {
-			notices = append(notices, "Proxy settings were found and left out. Each CashPilot worker uses its own connection.")
+			notices = append(notices, "Proxy settings were found and left out. CashPilot deploys each service on this computer's own connection first; a proxied copy then runs beside it, and you can stop the original if you want the service on the proxy only. Add each proxy in the Proxies section of the Fleet page, then run copies of your services through it.")
 			break
 		}
 	}

@@ -2,7 +2,9 @@
 
 CashPilot Desktop can read CashFactory's `.env` and bring your service logins
 over, so you do not type them again. You check everything before CashPilot
-saves it. The CashPilot web app has the same import, with the same rules.
+saves it. The CashPilot web app has the same import, with the same rules but
+one: a value with spaces at either end is trimmed there, as its deploy form
+trims what you type, and marked to retype here.
 
 ## Before you start
 
@@ -57,6 +59,9 @@ the table.
 
 - **`DEVICE_NAME`.** CashPilot names the device itself. Your old devices stay
   listed as offline in each provider's dashboard until you remove them there.
+- **Bitping.** CashFactory keeps the Bitping login in a Docker volume, not in
+  `.env`, so the import has nothing to read and shows no Bitping row. Type the
+  login in Bitping's deploy form.
 - **Portainer and Watchtower.** CashPilot manages and updates its own
   containers.
 
@@ -65,6 +70,11 @@ the table.
 If a service already has values saved in CashPilot, the import keeps them and
 only fills fields that are empty. The page tells you which values it left as
 they were.
+
+If a value saved here differs from the file and the import would also fill an
+empty field of the same service, the import stops and saves nothing, so one
+service never ends up with half of two logins. Fix that service in Settings
+first, then import again.
 
 ## Earnings tracking
 
