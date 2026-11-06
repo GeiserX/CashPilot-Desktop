@@ -60,6 +60,18 @@ declare module "../wailsjs/go/main/App" {
   export function ListCustomServices(): Promise<CustomServiceView[]>;
   export function SaveCustomService(slug: string, definition: CustomDefinition): Promise<CustomServiceView>;
   export function DeleteCustomService(slug: string): Promise<void>;
+  // Proxies and the copies that run through them (docs/proxies.md). id 0 creates a
+  // proxy. A secret never comes back; a blank one on save keeps the stored value and
+  // clear_<field> = "true" drops it.
+  export function GetProxiesState(): Promise<ProxiesState>;
+  export function SaveProxy(id: number, values: Record<string, string>): Promise<ProxyView>;
+  export function DeleteProxy(id: number): Promise<void>;
+  export function TestProxy(id: number): Promise<ProxyTestResult>;
+  export function DeployProxiedCopy(slug: string, id: number): Promise<ProxiedResult>;
+  export function StopProxiedCopy(slug: string, id: number): Promise<void>;
+  export function StartProxiedCopy(slug: string, id: number): Promise<void>;
+  export function RemoveProxiedCopy(slug: string, id: number): Promise<void>;
+  export function ResetProxyUsage(id: number): Promise<string[]>;
   // Turns LAN isolation on for an upgraded install: applies the fence, then
   // redeploys each running earner onto the fenced network.
   export function EnableIsolation(): Promise<IsolationResult>;
@@ -68,6 +80,73 @@ declare module "../wailsjs/go/main/App" {
   // saves the ticked, ready services, never over a value already set here.
   export function PreviewImport(req: ImportRequest): Promise<ImportPreview>;
   export function ApplyImport(req: ImportApplyRequest): Promise<ImportResult>;
+}
+
+export interface ProxyCapView {
+  enabled: boolean;
+  capBytes: number;
+  thresholdPct: number;
+  // 0 when the cap is reset by hand.
+  resetDay: number;
+  usedBytes: number;
+  periodStart: string;
+  cappedAt: string;
+  capReason: string;
+}
+
+export interface ProxyCopyView {
+  slug: string;
+  name: string;
+  status: string;
+  tunnelStatus: string;
+  exitIp: string;
+  exitCountry: string;
+  stoppedByCap: boolean;
+}
+
+export interface ProxyView {
+  id: number;
+  name: string;
+  kind: string;
+  host: string;
+  port: number;
+  exitNode: string;
+  loginServer: string;
+  rotating: boolean;
+  // Which secrets are stored; their values never reach the frontend.
+  secrets: Record<string, boolean>;
+  cap: ProxyCapView;
+  lastExitIp: string;
+  lastCountry: string;
+  lastCheckedAt: string;
+  lastTest: { ok: boolean; at: string; error: string } | null;
+  copies: ProxyCopyView[];
+}
+
+export interface ProxyCandidate {
+  slug: string;
+  name: string;
+  // Why it cannot run behind a proxy, "" when it can.
+  refusal: string;
+}
+
+export interface ProxiesState {
+  proxies: ProxyView[];
+  candidates: ProxyCandidate[];
+  tunnelImage: string;
+  tunnelImageError: string;
+}
+
+export interface ProxiedResult {
+  exitIp: string;
+  country: string;
+  warning: string;
+}
+
+export interface ProxyTestResult {
+  exitIp: string;
+  country: string;
+  ms: number;
 }
 
 // FenceStatus mirrors runtime.FenceStatus: whether container earners are fenced off

@@ -418,10 +418,21 @@ type Requirements struct {
 	// its software in containers, VMs or on servers. It is the strongest verdict in
 	// the catalog: the stated penalty is a terminated account with the pending
 	// balance cancelled, and deploying it as a container IS the violation.
-	ContainerProhibited bool   `json:"containerProhibited" yaml:"container_prohibited"`
-	Note                string `json:"note" yaml:"note"`
+	ContainerProhibited bool `json:"containerProhibited" yaml:"container_prohibited"`
+	// ProxyProhibited is set only when the provider's own terms forbid running its
+	// software through a proxy or VPN; a proxied copy of the service is then refused
+	// (internal/proxies.Refusal). nil means nobody has documented it, never that it
+	// is allowed.
+	ProxyProhibited *ProxyProhibited `json:"proxyProhibited,omitempty" yaml:"proxy_prohibited"`
+	Note            string           `json:"note" yaml:"note"`
 	// NoteColumn says which column Note is a footnote for (vps_ip, devices_per_ip).
 	NoteColumn string `json:"noteColumn" yaml:"note_column"`
+}
+
+// ProxyProhibited is requirements.proxy_prohibited: the provider's own terms that
+// forbid running its software through a proxy or VPN.
+type ProxyProhibited struct {
+	Source string `json:"source" yaml:"source"`
 }
 
 type Payment struct {

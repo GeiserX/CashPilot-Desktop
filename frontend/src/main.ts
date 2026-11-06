@@ -24,6 +24,8 @@ import {
   CompleteOnboarding,
   ConfirmStateBackup,
   DeleteCustomService,
+  DeleteProxy,
+  DeployProxiedCopy,
   DeployService,
   EnableIsolation,
   ExportCompose,
@@ -33,6 +35,7 @@ import {
   GetCredentials,
   GetEarningsSummary,
   GetFleetState,
+  GetProxiesState,
   GetLogs,
   GetRuntimeGuides,
   GetSettingsState,
@@ -45,17 +48,24 @@ import {
   RecordPayout,
   RefreshDeployments,
   RemovePayout,
+  RemoveProxiedCopy,
   RemoveService,
+  ResetProxyUsage,
   SaveSettings,
   SaveCredentials,
   SaveCustomService,
+  SaveProxy,
+  StartProxiedCopy,
   StartService,
   StartServiceCopy,
+  StopProxiedCopy,
   StopService,
   StopServiceCopy,
+  TestProxy,
   UndoStateBackup,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
@@ -74,7 +84,7 @@ import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
-import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult } from "./wails";
+import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
 import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
 
 let state: AppState | null = null;
@@ -108,6 +118,10 @@ let importPreviewSeq = 0;
 let renderedImportPreview: ImportPreview | null = null;
 let customEditing: CustomServiceView | "new" | null = null;
 let customLoadError = "";
+// The proxy open in the Fleet page's editor ("new" for the add form), and the last
+// proxies state, kept so the editor can find the proxy it edits.
+let proxyEditing: ProxyView | "new" | null = null;
+let proxiesState: ProxiesState | null = null;
 let resetScrollAfterRender = false;
 // The dashboard chart's window: the web console opens on 7 days.
 let chartDays = 7;
@@ -1365,6 +1379,12 @@ async function renderFleet(current: AppState) {
     showErrorToast({scope: "fleet", error: String(error)});
     return;
   }
+  try {
+    proxiesState = await GetProxiesState();
+  } catch (error) {
+    proxiesState = null;
+    showErrorToast({scope: "proxies", error: String(error)});
+  }
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -1420,6 +1440,8 @@ async function renderFleet(current: AppState) {
               ${fleet.devices.map(renderFleetDevice).join("")}
             </div>
           </section>
+
+          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -1432,6 +1454,7 @@ async function renderFleet(current: AppState) {
   document.querySelectorAll<HTMLButtonElement>("[data-remove-device]").forEach((button) => {
     button.addEventListener("click", () => void removeFleetDevice(Number(button.dataset.removeDevice || 0)));
   });
+  wireProxies();
   document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
@@ -1460,6 +1483,67 @@ function renderFleetDevice(device: FleetState["devices"][number]) {
       <div class="badge-row">${(device.services || []).map((service) => `<span class="badge success">${escapeHtml(service)}</span>`).join("") || `<span class="badge">No services yet</span>`}</div>
     </article>
   `;
+}
+
+// The Proxies section's buttons. Every action re-renders the Fleet page, which reads
+// the proxies again, so what is shown is always what the backend now holds.
+function wireProxies() {
+  const on = (selector: string, handler: (button: HTMLButtonElement) => Promise<void> | void) => {
+    document.querySelectorAll<HTMLButtonElement>(selector).forEach((button) => {
+      button.addEventListener("click", () => void runProxyAction(button, handler));
+    });
+  };
+  const proxyById = (id: number) => proxiesState?.proxies.find((p) => p.id === id) || null;
+  on("[data-proxy-new]", () => { proxyEditing = "new"; });
+  on("[data-proxy-edit]", (b) => { proxyEditing = proxyById(Number(b.dataset.proxyEdit)); });
+  on("[data-proxy-cancel]", () => { proxyEditing = null; });
+  on("[data-proxy-save]", async () => {
+    const form = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
+    if (!form) return;
+    const fields: Record<string, string> = {};
+    form.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-proxy-field]").forEach((el) => {
+      const name = el.dataset.proxyField || "";
+      fields[name] = el instanceof HTMLInputElement && el.type === "checkbox" ? String(el.checked) : el.value;
+    });
+    await SaveProxy(Number(form.dataset.proxyEditor || 0), proxyValuesFrom(fields));
+    proxyEditing = null;
+  });
+  on("[data-proxy-test]", async (b) => {
+    const result = await TestProxy(Number(b.dataset.proxyTest));
+    showInfoToast({scope: "proxy test", message: `Exit IP ${result.exitIp}${result.country ? ` (${result.country})` : ""}, in ${result.ms} ms.`});
+  });
+  on("[data-proxy-delete]", async (b) => {
+    if (!confirm("Delete this proxy?")) return;
+    await DeleteProxy(Number(b.dataset.proxyDelete));
+  });
+  on("[data-proxy-reset]", async (b) => {
+    const started = await ResetProxyUsage(Number(b.dataset.proxyReset));
+    showInfoToast({scope: "proxy", message: started.length ? `New period started; started ${started.join(", ")}.` : "New period started."});
+  });
+  on("[data-proxy-copy-stop]", (b) => StopProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyStop)));
+  on("[data-proxy-copy-start]", (b) => StartProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyStart)));
+  on("[data-proxy-copy-remove]", async (b) => {
+    if (!confirm("Remove this proxied copy?")) return;
+    await RemoveProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyRemove));
+  });
+  on("[data-proxy-run-deploy]", async () => {
+    const slug = valueOf("[data-proxy-run-service]");
+    const id = Number(valueOf("[data-proxy-run-proxy]"));
+    if (!slug || !id) return;
+    const result = await DeployProxiedCopy(slug, id);
+    showInfoToast({scope: "proxy", message: `Running through the proxy, exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`});
+  });
+}
+
+async function runProxyAction(button: HTMLButtonElement, handler: (button: HTMLButtonElement) => Promise<void> | void) {
+  button.disabled = true;
+  try {
+    await handler(button);
+    render();
+  } catch (error) {
+    showErrorToast({scope: "proxies", error: String(error)});
+    button.disabled = false;
+  }
 }
 
 async function addFleetDevice() {

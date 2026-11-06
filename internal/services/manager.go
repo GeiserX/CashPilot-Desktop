@@ -52,6 +52,9 @@ type Manager struct {
 	// customDeploying counts, per slug, the deploys of a custom service in flight;
 	// DeleteCustom refuses a slug in it. Guarded by customMu.
 	customDeploying map[string]int
+
+	// proxy is the state of proxied copies between ticks (proxies.go).
+	proxy proxyState
 }
 
 // NewManager builds a Manager whose registry holds the given provider under
@@ -440,6 +443,12 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 		StopTimeout:   m.stopTimeout(slug),
 	}
 	provider := m.providerForSlug(slug)
+	// Proxied copies go first, earners before their tunnels, so no tunnel is left
+	// running for a service the app no longer shows.
+	if err := m.removeAllProxied(ctx, slug); err != nil {
+		m.store.RecordEvent(slug, "remove_error", "proxied copies: "+err.Error())
+		return err
+	}
 	// Copies 2..N first, then the service itself. A copy that fails to go leaves the
 	// first copy and the deployment row in place, so the service stays on the
 	// dashboard and Remove can be retried; the other order would leave running

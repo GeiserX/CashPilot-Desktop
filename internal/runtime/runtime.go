@@ -586,7 +586,16 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	return p.statsForContainers(ctx, cli, list.Items), nil
+	// Proxied copies and their tunnels are listed on their own (ProxiedStatus): they
+	// leave from another IP and are not copies of the service, so nothing that reads
+	// the first copy or counts copies may see them.
+	items := list.Items[:0:0]
+	for _, c := range list.Items {
+		if !IsProxied(c.Labels) {
+			items = append(items, c)
+		}
+	}
+	return p.statsForContainers(ctx, cli, items), nil
 }
 
 // statsForContainers builds the ContainerInfo list, sampling every container's CPU

@@ -1,0 +1,593 @@
+package runtime
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
+)
+
+const (
+	testPassword = "pa ss@w:rd-SECRET"
+	testUser     = "user-SECRET"
+)
+
+var proxiedService = catalog.Service{
+	Name: "Earner",
+	Slug: "earner",
+	Docker: catalog.DockerConfig{
+		Image: "example/earner:1.0",
+		Env: []catalog.EnvVar{
+			{Key: "TOKEN", Required: true},
+			{Key: "DEVICE_NAME", Default: "cashpilot-{hostname}"},
+		},
+		Command: "run --device ${DEVICE_NAME}",
+		CapAdd:  []string{"SETUID"},
+	},
+}
+
+func testSpec() ProxySpec {
+	return ProxySpec{Kind: "socks5", Host: "gate.example.net", Port: 7000, Username: testUser, Password: testPassword}
+}
+
+// fakeContainer is one container of fakeTunnelDocker.
+type fakeContainer struct {
+	id, name  string
+	opts      client.ContainerCreateOptions
+	state     string
+	startedAt string
+	files     map[string]string
+}
+
+// fakeTunnelDocker is a daemon for the proxied-copy logic: it records every call in
+// order and keeps the secret files a sidecar was given.
+type fakeTunnelDocker struct {
+	mu         sync.Mutex
+	containers map[string]*fakeContainer
+	calls      []string
+	next       int
+	clock      int
+	// exit is what a running sidecar's ready file holds; "" means the tunnel never
+	// gets an exit.
+	exit string
+	// archives are every tar copied in, for the secret checks.
+	archives [][]byte
+}
+
+func newFakeTunnelDocker() *fakeTunnelDocker {
+	return &fakeTunnelDocker{containers: map[string]*fakeContainer{}, exit: `{"ip":"203.0.113.7","country":"NL"}`}
+}
+
+func (f *fakeTunnelDocker) find(ref string) *fakeContainer {
+	if c, ok := f.containers[ref]; ok {
+		return c
+	}
+	for _, c := range f.containers {
+		if c.id == ref {
+			return c
+		}
+	}
+	return nil
+}
+
+func (f *fakeTunnelDocker) record(call string) { f.calls = append(f.calls, call) }
+
+func (f *fakeTunnelDocker) facts(context.Context) daemonInfo {
+	return daemonInfo{Architecture: "x86_64", OSType: "linux"}
+}
+func (f *fakeTunnelDocker) pull(_ context.Context, image string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("pull " + image)
+	return nil
+}
+func (f *fakeTunnelDocker) imageRuns(context.Context, string) ([]string, []string, error) {
+	return []string{"entrypoint"}, nil, nil
+}
+func (f *fakeTunnelDocker) create(_ context.Context, opts client.ContainerCreateOptions) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.containers[opts.Name] != nil {
+		return "", fmt.Errorf("name %s in use", opts.Name)
+	}
+	f.next++
+	c := &fakeContainer{id: fmt.Sprintf("id%03d", f.next), name: opts.Name, opts: opts, state: "created", files: map[string]string{}}
+	f.containers[opts.Name] = c
+	f.record("create " + opts.Name)
+	return c.id, nil
+}
+func (f *fakeTunnelDocker) copyTo(_ context.Context, id, dir string, archive []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(id)
+	if c == nil {
+		return errors.New("no such container")
+	}
+	f.archives = append(f.archives, archive)
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		data, _ := io.ReadAll(tr)
+		c.files[h.Name] = string(data)
+	}
+	f.record("copy " + c.name + " " + dir)
+	return nil
+}
+func (f *fakeTunnelDocker) start(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(id)
+	if c == nil {
+		return errors.New("no such container")
+	}
+	f.clock++
+	c.state, c.startedAt = "running", fmt.Sprintf("2026-11-04T00:00:%02dZ", f.clock)
+	f.record("start " + c.name)
+	return nil
+}
+func (f *fakeTunnelDocker) stop(_ context.Context, id string, _ int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(id)
+	if c == nil {
+		return errors.New("no such container")
+	}
+	c.state = "exited"
+	f.record("stop " + c.name)
+	return nil
+}
+func (f *fakeTunnelDocker) restart(_ context.Context, id string, _ int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(id)
+	if c == nil {
+		return errors.New("no such container")
+	}
+	f.clock++
+	c.state, c.startedAt = "running", fmt.Sprintf("2026-11-04T00:00:%02dZ", f.clock)
+	f.record("restart " + c.name)
+	return nil
+}
+func (f *fakeTunnelDocker) remove(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(id)
+	if c == nil {
+		return errors.New("no such container")
+	}
+	delete(f.containers, c.name)
+	f.record("remove " + c.name)
+	return nil
+}
+func (f *fakeTunnelDocker) inspect(_ context.Context, ref string) (container.InspectResponse, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(ref)
+	if c == nil {
+		return container.InspectResponse{}, false, nil
+	}
+	return container.InspectResponse{
+		ID:     c.id,
+		Name:   "/" + c.name,
+		State:  &container.State{Status: container.ContainerState(c.state), StartedAt: c.startedAt},
+		Config: c.opts.Config,
+	}, true, nil
+}
+func (f *fakeTunnelDocker) list(_ context.Context, _ ...string) ([]container.Summary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []container.Summary
+	for _, c := range f.containers {
+		out = append(out, container.Summary{ID: c.id, Names: []string{"/" + c.name}, Labels: c.opts.Config.Labels, State: container.ContainerState(c.state)})
+	}
+	return out, nil
+}
+func (f *fakeTunnelDocker) readFile(_ context.Context, id, path string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(id)
+	if c == nil || c.state != "running" || path != tunnelReadyFile || f.exit == "" || c.opts.Config.Labels[LabelRole] != RoleTunnel {
+		return "", errors.New("no such file")
+	}
+	return f.exit + "\n", nil
+}
+func (f *fakeTunnelDocker) logsTail(context.Context, string, int) string {
+	return "cp-tunnel: no working exit through the tunnel after 40 s (socks5://" + testUser + ":" + testPassword + "@gate)"
+}
+func (f *fakeTunnelDocker) netCounters(context.Context, string) (*uint64, *uint64) {
+	rx, tx := uint64(1000), uint64(500)
+	return &rx, &tx
+}
+
+func (f *fakeTunnelDocker) callList() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.calls...)
+}
+
+func withTestTunnel(t *testing.T) {
+	t.Helper()
+	t.Setenv(tunnelImageEnv, "example/cashpilot-tunnel:1.66.0")
+	oldLookup, oldPoll, oldTimeout := lookupIPv4, readyPoll, TunnelReadyTimeout
+	lookupIPv4 = func(context.Context, string) ([]net.IP, error) { return []net.IP{net.ParseIP("198.51.100.4")}, nil }
+	readyPoll, TunnelReadyTimeout = time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { lookupIPv4, readyPoll, TunnelReadyTimeout = oldLookup, oldPoll, oldTimeout })
+}
+
+func deployRequest() ProxiedDeploy {
+	return ProxiedDeploy{Slug: "earner", ProxyID: 3, Service: proxiedService, Env: map[string]string{"TOKEN": "tok"}, Proxy: testSpec(), OwnIP: "192.0.2.1"}
+}
+
+// The sidecar is the only container with any network power, so its create options
+// are the security boundary: NET_ADMIN and /dev/net/tun and nothing else, never
+// privileged, read-only, no Docker socket, no published ports.
+func TestSidecarIsLockedDown(t *testing.T) {
+	id := int64(3)
+	opts := sidecarCreate(tunnelName("earner", id), "earner", &id, "example/cashpilot-tunnel:1.66.0")
+	h := opts.HostConfig
+	if h.Privileged || !slices.Equal(h.CapDrop, []string{"ALL"}) || !slices.Equal(h.CapAdd, []string{"NET_ADMIN"}) {
+		t.Fatalf("capabilities: privileged=%v drop=%v add=%v", h.Privileged, h.CapDrop, h.CapAdd)
+	}
+	if !h.ReadonlyRootfs || !slices.Contains(h.SecurityOpt, noNewPrivileges) || h.PidsLimit == nil || *h.PidsLimit != tunnelPidsLimit {
+		t.Fatalf("hardening: ro=%v secopt=%v pids=%v", h.ReadonlyRootfs, h.SecurityOpt, h.PidsLimit)
+	}
+	if len(h.Resources.Devices) != 1 || h.Resources.Devices[0].PathOnHost != "/dev/net/tun" {
+		t.Fatalf("devices: %+v", h.Resources.Devices)
+	}
+	if len(h.Mounts) != 0 || len(h.Binds) != 0 || len(h.PortBindings) != 0 || h.NetworkMode != "bridge" {
+		t.Fatalf("mounts=%v binds=%v ports=%v net=%v", h.Mounts, h.Binds, h.PortBindings, h.NetworkMode)
+	}
+	if opts.Config.Labels[LabelRole] != RoleTunnel || opts.Config.Labels[LabelProxy] != "3" {
+		t.Fatalf("labels: %v", opts.Config.Labels)
+	}
+	if _, ok := opts.Config.Volumes[tunnelSecretDir]; !ok {
+		t.Fatalf("the secrets go in an anonymous volume: %v", opts.Config.Volumes)
+	}
+}
+
+func TestEarnerJoinsTheSidecarAndCannotEscapeIt(t *testing.T) {
+	opts, err := earnerCreate(deployRequest(), "sidecar-id", "example/earner:1.0", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := opts.HostConfig
+	if h.NetworkMode != "container:sidecar-id" || h.RestartPolicy.Name != "no" {
+		t.Fatalf("network=%v restart=%v", h.NetworkMode, h.RestartPolicy)
+	}
+	if opts.Config.Hostname != "" || len(h.PortBindings) != 0 || len(opts.Config.ExposedPorts) != 0 || len(h.Mounts) != 0 {
+		t.Fatalf("a joined container sets no network of its own: %+v %+v", opts.Config, h)
+	}
+	if h.Privileged || !slices.Equal(h.CapDrop, []string{"ALL"}) || len(h.Resources.Devices) != 0 {
+		t.Fatalf("privileged=%v drop=%v devices=%v", h.Privileged, h.CapDrop, h.Resources.Devices)
+	}
+	if opts.Name != "cashpilot-earner-p3" || opts.Config.Labels[LabelProxy] != "3" || opts.Config.Labels[LabelInstance] != "" {
+		t.Fatalf("name=%s labels=%v", opts.Name, opts.Config.Labels)
+	}
+	want := "DEVICE_NAME=cashpilot-" + DeviceHostname() + "-p3"
+	if !slices.Contains(opts.Config.Env, want) || argAfter(opts.Config.Cmd, "--device") != "cashpilot-"+DeviceHostname()+"-p3" {
+		t.Fatalf("a proxied copy is its own device: env=%v cmd=%v", opts.Config.Env, opts.Config.Cmd)
+	}
+
+	for name, mutate := range map[string]func(*catalog.Service){
+		"NET_RAW": func(s *catalog.Service) { s.Docker.CapAdd = []string{"NET_RAW"} },
+		"port":    func(s *catalog.Service) { s.Docker.Ports = []string{"8080:80"} },
+		"device":  func(s *catalog.Service) { s.Docker.Devices = []string{"/dev/net/tun"} },
+		"host":    func(s *catalog.Service) { s.Docker.NetworkMode = "host" },
+	} {
+		req := deployRequest()
+		svc := req.Service
+		svc.Docker.CapAdd = slices.Clone(svc.Docker.CapAdd)
+		mutate(&svc)
+		req.Service = svc
+		if _, err := earnerCreate(req, "sidecar-id", "example/earner:1.0", "linux"); err == nil {
+			t.Errorf("%s: a proxied earner that could leave the tunnel must be refused", name)
+		}
+	}
+}
+
+func TestTunnelImageIsAlwaysExact(t *testing.T) {
+	for ref, ok := range map[string]bool{
+		"drumsergio/cashpilot-tunnel:1.66.0":                              true,
+		"registry.local:5000/cp/tunnel@sha256:" + strings.Repeat("a", 64): true,
+		"drumsergio/cashpilot-tunnel":                                     false,
+		"drumsergio/cashpilot-tunnel:latest":                              false,
+		"drumsergio/cashpilot-tunnel:main":                                false,
+		"not an image":                                                    false,
+	} {
+		t.Setenv(tunnelImageEnv, ref)
+		_, err := TunnelImage()
+		if (err == nil) != ok {
+			t.Errorf("TunnelImage with %s=%q: err=%v, want ok=%v", tunnelImageEnv, ref, err, ok)
+		}
+	}
+	t.Setenv(tunnelImageEnv, "")
+	old := pinnedTunnelImage
+	t.Cleanup(func() { pinnedTunnelImage = old })
+	pinnedTunnelImage = ""
+	if _, err := TunnelImage(); err == nil {
+		t.Fatal("with no pin and no override there is no image to run")
+	}
+	pinnedTunnelImage = "drumsergio/cashpilot-tunnel:1.66.0@sha256:" + strings.Repeat("b", 64)
+	if img, err := TunnelImage(); err != nil || img != pinnedTunnelImage {
+		t.Fatalf("the pin is used: %q %v", img, err)
+	}
+}
+
+// The pin, once set, must be exact too: this is the test that fails a release that
+// pins a floating tag.
+func TestPinnedTunnelImageIsExactWhenSet(t *testing.T) {
+	if pinnedTunnelImage == "" {
+		t.Skip("no tunnel image pinned yet")
+	}
+	if err := exactImage(pinnedTunnelImage); err != nil || !strings.HasPrefix(pinnedTunnelImage, TunnelRepository+":") {
+		t.Fatalf("pinnedTunnelImage %q: %v", pinnedTunnelImage, err)
+	}
+}
+
+func TestSecretFilesAreRootOnlyAndPercentEncoded(t *testing.T) {
+	withTestTunnel(t)
+	files, err := tunnelSecretFiles(context.Background(), testSpec(), "192.0.2.1", "earner-p3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files["proxy_ip"] != "198.51.100.4" || files["proxy_port"] != "7000" || files["proxy_scheme"] != "socks5" || files["own_ip"] != "192.0.2.1" {
+		t.Fatalf("files: %v", files)
+	}
+	if files["proxy_auth"] != "user-SECRET:pa%20ss%40w%3Ard-SECRET@" { // ggignore: a made-up test value
+		t.Fatalf("proxy_auth must be percent-encoded so the URL parses: %q", files["proxy_auth"])
+	}
+	if strings.Count(files["proxy_auth"], "@") != 1 {
+		t.Fatalf("an @ in the password would end the userinfo early: %q", files["proxy_auth"])
+	}
+	archive, err := secretTar(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := tar.NewReader(bytes.NewReader(archive))
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if h.Mode != 0o400 || h.Uid != 0 || h.Gid != 0 {
+			t.Errorf("%s: mode %o uid %d gid %d, want 0400 root", h.Name, h.Mode, h.Uid, h.Gid)
+		}
+	}
+	ts, err := tunnelSecretFiles(context.Background(), ProxySpec{Kind: "tailscale", AuthKey: "tskey-SECRET", ExitNode: "exit-node-a"}, "", "Earner_P3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts["auth_key"] != "tskey-SECRET" || ts["exit_node"] != "exit-node-a" || ts["hostname"] != "cashpilot-earner-p3" {
+		t.Fatalf("tailscale files: %v", ts)
+	}
+}
+
+func TestDeployStartsTheEarnerOnlyAfterTheTunnelIsReady(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	exit, err := deployProxied(context.Background(), f, deployRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exit.IP != "203.0.113.7" || exit.Country != "NL" {
+		t.Fatalf("exit: %+v", exit)
+	}
+	calls := f.callList()
+	order := []string{"create cashpilot-tunnel-earner-p3", "copy cashpilot-tunnel-earner-p3 " + tunnelSecretDir, "start cashpilot-tunnel-earner-p3", "create cashpilot-earner-p3", "start cashpilot-earner-p3"}
+	last := -1
+	for _, step := range order {
+		i := slices.Index(calls, step)
+		if i <= last {
+			t.Fatalf("step %q out of order in %v", step, calls)
+		}
+		last = i
+	}
+	// The secrets went only through the archive, never through a create.
+	for name, c := range f.containers {
+		raw, _ := json.Marshal(c.opts)
+		if bytes.Contains(raw, []byte("SECRET")) {
+			t.Fatalf("%s carries a secret in its create options: %s", name, raw)
+		}
+	}
+	tunnel := f.containers["cashpilot-tunnel-earner-p3"]
+	if !strings.Contains(tunnel.files["proxy_auth"], "user-SECRET") {
+		t.Fatalf("the tunnel never got its credentials: %v", tunnel.files)
+	}
+	// A second deploy replaces the pair, earner first.
+	f.calls = nil
+	if _, err := deployProxied(context.Background(), f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	calls = f.callList()
+	if slices.Index(calls, "remove cashpilot-earner-p3") > slices.Index(calls, "remove cashpilot-tunnel-earner-p3") {
+		t.Fatalf("the earner goes before its tunnel: %v", calls)
+	}
+}
+
+func TestDeployFailsClosedWhenTheTunnelNeverGetsAnExit(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	f.exit = ""
+	_, err := deployProxied(context.Background(), f, deployRequest())
+	if err == nil {
+		t.Fatal("a tunnel with no exit must refuse the copy")
+	}
+	if strings.Contains(err.Error(), "SECRET") || strings.Contains(err.Error(), "pa%20ss") {
+		t.Fatalf("the error carries a secret: %v", err)
+	}
+	if len(f.containers) != 0 {
+		t.Fatalf("nothing may be left behind: %v", f.callList())
+	}
+	if slices.Contains(f.callList(), "create cashpilot-earner-p3") {
+		t.Fatal("the earner must never be created without a ready tunnel")
+	}
+}
+
+func TestEarnerAction(t *testing.T) {
+	cases := []struct {
+		earner, earnerAt, tunnel, tunnelAt string
+		ready                              bool
+		want                               string
+	}{
+		{"exited", "1", "running", "2", true, "start"},
+		{"created", "", "running", "2", true, "start"},
+		{"exited", "1", "running", "2", false, ""},
+		{"exited", "1", "exited", "2", true, ""},
+		{"running", "1", "running", "2", true, "restart"},
+		{"running", "3", "running", "2", true, ""},
+		{"running", "1", "restarting", "2", true, ""},
+	}
+	for _, c := range cases {
+		if got := earnerAction(c.earner, c.earnerAt, c.tunnel, c.tunnelAt, c.ready); got != c.want {
+			t.Errorf("earnerAction(%+v) = %q, want %q", c, got, c.want)
+		}
+	}
+}
+
+func TestStatusStartsAnEarnerOnlyBehindAReadyTunnel(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	if _, err := deployProxied(context.Background(), f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	// A reboot: both stopped, Docker brings the tunnel back but never the earner.
+	f.containers["cashpilot-earner-p3"].state = "exited"
+	f.containers["cashpilot-tunnel-earner-p3"].state = "exited"
+	status, err := proxiedStatus(context.Background(), f)
+	if err != nil || len(status) != 1 {
+		t.Fatalf("status %v %v", status, err)
+	}
+	if f.containers["cashpilot-earner-p3"].state != "exited" {
+		t.Fatal("the earner must stay down while its tunnel is down")
+	}
+	f.containers["cashpilot-tunnel-earner-p3"].state = "running"
+	status, _ = proxiedStatus(context.Background(), f)
+	if f.containers["cashpilot-earner-p3"].state != "running" || status[0].Status != "running" {
+		t.Fatalf("a ready tunnel gets its earner back: %+v", status)
+	}
+	if status[0].ExitIP != "203.0.113.7" || status[0].NetRxBytes == nil || *status[0].NetRxBytes != 1000 || status[0].ProxyID != 3 {
+		t.Fatalf("status entry: %+v", status[0])
+	}
+}
+
+func TestStopStartRemoveTouchOnlyTheirOwnPair(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if err := stopProxied(ctx, f, "earner", 4, 0); err == nil {
+		t.Fatal("proxy 4 has no copy here")
+	}
+	if err := stopProxied(ctx, f, "earner", 3, 0); err != nil {
+		t.Fatal(err)
+	}
+	if f.containers["cashpilot-earner-p3"].state != "exited" || f.containers["cashpilot-tunnel-earner-p3"].state != "exited" {
+		t.Fatal("stop stops both")
+	}
+	if _, err := startProxied(ctx, f, "earner", 3, 0, "gate.example.net"); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.callList()
+	if slices.Index(calls, "start cashpilot-tunnel-earner-p3") > lastIndex(calls, "start cashpilot-earner-p3") {
+		t.Fatalf("the tunnel starts first: %v", calls)
+	}
+	removed, err := removeAllProxied(ctx, f, "earner")
+	if err != nil || len(removed) != 2 || removed[0] != "cashpilot-earner-p3" {
+		t.Fatalf("remove all: %v %v", removed, err)
+	}
+}
+
+func TestTestProxyRemovesItsTunnelAndNeedsAPublicExit(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	exit, err := testProxy(context.Background(), f, testSpec(), "")
+	if err != nil || exit.IP != "203.0.113.7" {
+		t.Fatalf("test: %+v %v", exit, err)
+	}
+	if len(f.containers) != 0 {
+		t.Fatalf("the throwaway tunnel must go: %v", f.callList())
+	}
+	f.exit = `{"ip":"10.1.2.3","country":""}`
+	if _, err := testProxy(context.Background(), f, testSpec(), ""); err == nil {
+		t.Fatal("a private exit is not a pass")
+	}
+}
+
+func TestRedactStripsEveryShapeOfASecret(t *testing.T) {
+	msg := "dial socks5://" + testUser + ":pa%20ss%40w%3Ard-SECRET@1.2.3.4:7000 failed; raw " + testPassword
+	out := redact(msg, []string{testPassword, testUser})
+	if strings.Contains(out, "SECRET") {
+		t.Fatalf("redact left a secret: %q", out)
+	}
+}
+
+// A proxied copy has no instance label, so without the guard it would be listed as
+// copy 1 of its service and overwrite the service's row.
+func TestListAndCopiesSkipProxiedContainers(t *testing.T) {
+	docker := startHarnessDocker(t)
+	ctx := context.Background()
+	p := NewDockerProvider()
+	if _, err := p.Deploy(ctx, DeploySpec{Slug: "cmd-example", Service: commandService, Env: map[string]string{"TOKEN": "t"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	cli, err := dockerClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	for name, labels := range map[string]map[string]string{
+		"cashpilot-cmd-example-p3":        {LabelManaged: "true", LabelService: "cmd-example", LabelProxy: "3"},
+		"cashpilot-tunnel-cmd-example-p3": {LabelManaged: "true", LabelService: "cmd-example", LabelProxy: "3", LabelRole: RoleTunnel},
+	} {
+		if _, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Name: name, Config: &container.Config{Image: "x", Labels: labels}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(docker.Names()) != 3 {
+		t.Fatalf("fixture: %v", docker.Names())
+	}
+	listed, err := p.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != "cashpilot-cmd-example" {
+		t.Fatalf("List must hold only the service itself: %+v", listed)
+	}
+	copies, err := p.Copies(ctx, "cmd-example")
+	if err != nil || len(copies) != 0 {
+		t.Fatalf("Copies: %v %v", copies, err)
+	}
+}
+
+func lastIndex(list []string, v string) int {
+	for i := len(list) - 1; i >= 0; i-- {
+		if list[i] == v {
+			return i
+		}
+	}
+	return -1
+}
