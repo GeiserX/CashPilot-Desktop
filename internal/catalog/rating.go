@@ -415,14 +415,17 @@ func GradeService(svc Service, rules *RatingRules) *RatingResult {
 		}
 	}
 	maximum := best * len(rules.Criteria)
-	percent := 0.0
+	exact := 0.0
 	if maximum > 0 {
-		percent = math.Round(1000*float64(score)/float64(maximum)) / 10
+		exact = 100 * float64(score) / float64(maximum)
 	}
+	// Rounded for display only: a band compares the exact share, so 89.96%
+	// never rounds up into A.
+	percent := math.Round(10*exact) / 10
 
 	band := gradeOrder[len(gradeOrder)-1]
 	for _, b := range rules.Bands {
-		if percent >= b.MinPercent {
+		if exact >= b.MinPercent {
 			band = b.Grade
 			break
 		}

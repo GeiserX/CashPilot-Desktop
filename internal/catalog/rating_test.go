@@ -126,6 +126,24 @@ func TestBandsFollowThePercentage(t *testing.T) {
 	}
 }
 
+func TestABandComparesTheExactShareNotTheRoundedOne(t *testing.T) {
+	// 3 good and 1 fair at these points is 99.98%, shown as 100.0%. With A from
+	// 99.99% the score is short of it, whatever the display says.
+	src := strings.Replace(testRules, "points: {good: 2, fair: 1, poor: 0, unknown: 0}",
+		"points: {good: 10000, fair: 9992, poor: 0, unknown: 0}", 1)
+	src = strings.Replace(src, "bands:\n", "bands:\n  - {grade: A, min_percent: 99.99}\n", 1)
+	rules, err := ParseRatingRules([]byte(src))
+	if err != nil {
+		t.Fatalf("rules refused: %v", err)
+	}
+	verdicts := all("good")
+	verdicts["support"] = "fair"
+	got := GradeService(svcWith(t, valid(verdicts)), rules)
+	if got.Percent != 100 || got.Grade != "B" {
+		t.Fatalf("want 100.0%% shown and grade B, got %+v", got)
+	}
+}
+
 func TestCeilingsLowerTheGradeAndSayWhy(t *testing.T) {
 	rules := mustRules(t)
 
