@@ -64,11 +64,10 @@ const (
 // tunnel before the copy is refused.
 var TunnelReadyTimeout = 45 * time.Second
 
-// pinnedTunnelImage is the tunnel image this build runs, by exact version and digest.
-// It stays empty until a CashPilot release publishes the image (the web build adds a
-// build-tunnel job); until then proxied copies need CASHPILOT_TUNNEL_IMAGE set to an
-// exact tag or digest, and say so instead of pulling anything floating.
-var pinnedTunnelImage = ""
+// pinnedTunnelImage is the tunnel image this build runs, by exact version and digest
+// (the multi-arch index CashPilot v1.69.0 published). An empty pin makes proxied copies
+// ask for CASHPILOT_TUNNEL_IMAGE instead of pulling anything floating.
+var pinnedTunnelImage = "drumsergio/cashpilot-tunnel:1.69.0@sha256:322d3e784c4c5f1929328650b5b68f5d015c7354573be158beba1fe96dfd351b"
 
 var floatingTags = map[string]bool{"": true, "latest": true, "stable": true, "edge": true, "main": true, "master": true}
 
