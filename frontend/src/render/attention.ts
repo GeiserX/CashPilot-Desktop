@@ -185,8 +185,20 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       why: `the fence that keeps earners off your LAN could not be applied${fence.error ? `: ${escapeHtml(fence.error)}` : "."} Container deploys are refused until it can be. To deploy without it, set LAN isolation to off in Settings.`,
       actions: "",
     });
+  } else if (fence && fence.mode === "unsupported") {
+    // Podman: the fence cannot be set up there, so earners run unfenced. Said once,
+    // with no switch, because no switch can fix it.
+    items.push({
+      level: "warn",
+      tag: "Not fenced",
+      what: "LAN isolation",
+      why: `${fence.error ? escapeHtml(fence.error.replace(/\.\s*$/, "")) : "CashPilot cannot fence earners off the LAN on this container runtime"}. Container earners run on its default network and can reach your LAN and this computer.${
+        fence.setting === "on" ? " With LAN isolation set to on, container deploys are refused; set it to auto or off in Settings to deploy without the fence." : ""
+      }`,
+      actions: "",
+    });
   }
-  const outside = fence && fence.mode !== "off" ? fence.outside || [] : [];
+  const outside = fence && fence.mode !== "off" && fence.mode !== "unsupported" ? fence.outside || [] : [];
   if (outside.length) {
     const stopped = fence?.outsideStopped || [];
     const names = outside.map((slug) => escapeHtml(nameOf(slug))).join(", ");
