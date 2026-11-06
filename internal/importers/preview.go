@@ -216,10 +216,11 @@ func appsFromJSON(files []*fileSettings, spec toolSpec, skipped *[]Skipped) []fo
 				}
 			}
 			enabled, _ := conf.get("enabled").(bool)
-			// Off with only template placeholders: the user never set this app up.
+			// Off with only template placeholders: the user never set this app up. Every
+			// leaf counts, mapped or not, so an app CashPilot cannot carry still shows why.
 			hasValue := false
-			for _, v := range values {
-				if v.Retype || !IsPlaceholder(v.Text) {
+			for _, k := range conf.keys {
+				if text, ok := jsonLeaf(conf.get(k)); ok && k != "enabled" && !IsPlaceholder(text) {
 					hasValue = true
 				}
 			}

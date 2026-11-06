@@ -220,6 +220,16 @@ func TestUntouchedTemplatesImportNothing(t *testing.T) {
 	}
 }
 
+// Grass has no mapped field, so only its raw values say the user set it up.
+func TestAnOffAppCashPilotCannotCarryStillShowsWhy(t *testing.T) {
+	f := fixtures(t, "money4band/template-user-config.json")[0]
+	f.Content = strings.Replace(f.Content, `"email": "yourGRASSMail"`, `"email": "gr@example.com"`, 1)
+	rs := rows(preview(t, []File{f}, "auto", nil))
+	if g, ok := rs["grass"]; !ok || len(rs) != 1 || g.State != "unusable" {
+		t.Errorf("rows = %v, want grass only, unusable", rs)
+	}
+}
+
 func TestOnlyTheAppFilledInOnAJSONTemplateComesIn(t *testing.T) {
 	f := fixtures(t, "money4band/template-user-config.json")[0]
 	f.Content = strings.Replace(f.Content, `"enabled": false, "email": "yourHONEYGAINMail"`, `"enabled": true, "email": "hg@example.com"`, 1)
