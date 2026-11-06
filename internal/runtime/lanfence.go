@@ -82,7 +82,7 @@ const (
 // iptables-legacy and app/lan_fence.py; the worker starts the same helper from its own
 // image. Pinned, like every image this app runs: the rules it writes are the rules
 // of this exact release. A var so a live test can point it at a local build.
-var fenceHelperImage = "drumsergio/cashpilot-worker:1.66.0"
+var fenceHelperImage = "drumsergio/cashpilot-worker:1.70.0"
 
 // fenceDNS are the resolvers an earner on the fenced bridge gets. Docker's embedded
 // resolver forwards a container's lookups from inside its network, so a daemon whose
