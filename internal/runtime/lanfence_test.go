@@ -17,30 +17,32 @@ func earner(name string, running bool, mode string, nets map[string]string) fenc
 
 // THE RULE: a fresh install is fenced, an upgraded one is left as it is until the
 // user switches, and the switch, once made, survives anything short of the user
-// turning it off. The state lives in Docker, so each input here is a fact Docker holds.
+// turning it off. The state lives in Docker and in the config's memory of "on".
 func TestResolveFenceMode(t *testing.T) {
 	onBridge := earner("honeygain", true, "bridge", map[string]string{"bridge": "b1"})
 	onFence := earner("honeygain", true, FenceNetwork, map[string]string{FenceNetwork: "n1"})
 	host := earner("mysterium", true, "host", map[string]string{"host": "h"})
 	cases := []struct {
-		name           string
-		setting        string
-		managed, bound bool
-		earners        []fenceEarner
-		want           string
+		name                       string
+		setting                    string
+		managed, bound, remembered bool
+		earners                    []fenceEarner
+		want                       string
 	}{
-		{"fresh install, nothing deployed", "auto", false, false, nil, FenceModeOn},
-		{"fresh install with only a host-networked earner", "auto", false, false, []fenceEarner{host}, FenceModeOn},
-		{"upgraded install, earners on the default bridge", "auto", false, false, []fenceEarner{onBridge}, FenceModeLegacy},
-		{"our network exists", "auto", true, false, []fenceEarner{onBridge}, FenceModeOn},
-		{"our network was removed but an earner still names it", "auto", false, true, []fenceEarner{onBridge}, FenceModeOn},
-		{"earners already fenced", "auto", false, false, []fenceEarner{onFence}, FenceModeOn},
-		{"setting on beats an upgraded install", "on", false, false, []fenceEarner{onBridge}, FenceModeOn},
-		{"setting off beats our network", "off", true, true, []fenceEarner{onFence}, FenceModeOff},
-		{"a container in default network mode is on the default bridge", "auto", false, false, []fenceEarner{earner("x", true, "default", nil)}, FenceModeLegacy},
+		{"fresh install, nothing deployed", "auto", false, false, false, nil, FenceModeOn},
+		{"fresh install with only a host-networked earner", "auto", false, false, false, []fenceEarner{host}, FenceModeOn},
+		{"upgraded install, earners on the default bridge", "auto", false, false, false, []fenceEarner{onBridge}, FenceModeLegacy},
+		{"our network exists", "auto", true, false, false, []fenceEarner{onBridge}, FenceModeOn},
+		{"our network was removed but an earner still names it", "auto", false, true, false, []fenceEarner{onBridge}, FenceModeOn},
+		{"earners already fenced", "auto", false, false, false, []fenceEarner{onFence}, FenceModeOn},
+		{"setting on beats an upgraded install", "on", false, false, false, []fenceEarner{onBridge}, FenceModeOn},
+		{"setting off beats our network", "off", true, true, false, []fenceEarner{onFence}, FenceModeOff},
+		{"a container in default network mode is on the default bridge", "auto", false, false, false, []fenceEarner{earner("x", true, "default", nil)}, FenceModeLegacy},
+		{"isolation was on, and the network and every fenced earner are gone", "auto", false, false, true, []fenceEarner{earner("storj", false, "bridge", map[string]string{"bridge": "b1"})}, FenceModeOn},
+		{"setting off beats the memory", "off", false, false, true, nil, FenceModeOff},
 	}
 	for _, tc := range cases {
-		if got := resolveFenceMode(tc.setting, tc.managed, tc.bound, tc.earners); got != tc.want {
+		if got := resolveFenceMode(tc.setting, tc.managed, tc.bound, tc.remembered, tc.earners); got != tc.want {
 			t.Errorf("%s: mode %q, want %q", tc.name, got, tc.want)
 		}
 	}
@@ -503,5 +505,77 @@ func TestReconcileReducesTheFenceWhenTurnedOff(t *testing.T) {
 	_ = json.Unmarshal(fake.fenceCreate, &body)
 	if !slices.Contains(body.Env, "FENCE_FILTER=0") {
 		t.Errorf("the helper was asked for the full fence with isolation off: %v", body.Env)
+	}
+}
+
+// THE RULE: once isolation is on it stays on after Docker loses every trace of it.
+// Every fenced earner was removed, a prune or a runtime reset took the network, and a
+// stopped earner is left on the default bridge: without the remembered state that
+// reads as an upgraded install, and the next deploy lands on the default bridge.
+func TestIsolationOnSurvivesLosingTheNetwork(t *testing.T) {
+	stopped := map[string]any{
+		"Id": "storj", "Names": []string{"/cashpilot-storj"}, "State": "exited",
+		"Labels":          map[string]string{LabelManaged: "true", LabelService: "storj"},
+		"HostConfig":      map[string]any{"NetworkMode": "bridge"},
+		"NetworkSettings": map[string]any{"Networks": map[string]any{"bridge": map[string]any{"NetworkID": "b"}}},
+	}
+	remembered, writes := false, 0
+	wire := func(p *DockerProvider, setting string) {
+		p.SetIsolationSetting(func() string { return setting })
+		p.SetIsolationMemory(func() bool { return remembered }, func(on bool) { remembered = on; writes++ })
+	}
+
+	fresh := &fakeDocker{}
+	fresh.start(t)
+	p := &DockerProvider{}
+	wire(p, "auto")
+	p.ReconcileFence(context.Background())
+	if st := p.FenceStatus(); st.Mode != FenceModeOn || !remembered {
+		t.Fatalf("a fresh install: mode %q, remembered %v", st.Mode, remembered)
+	}
+	p.ReconcileFence(context.Background())
+	if writes != 1 {
+		t.Errorf("the memory was written %d times, want once", writes)
+	}
+
+	after := &fakeDocker{earners: []map[string]any{stopped}}
+	after.start(t)
+	p = &DockerProvider{}
+	wire(p, "auto")
+	p.ReconcileFence(context.Background())
+	if st := p.FenceStatus(); st.Mode != FenceModeOn {
+		t.Fatalf("after the network went: mode %q, want on", st.Mode)
+	}
+
+	// The way out: off forgets it, and a daemon with only that stopped earner reads as
+	// legacy again. A clean daemon, because the on pass above recreated our network.
+	off := &DockerProvider{}
+	wire(off, "off")
+	off.ReconcileFence(context.Background())
+	if remembered {
+		t.Fatal("off did not clear the remembered state")
+	}
+	clean := &fakeDocker{earners: []map[string]any{stopped}}
+	clean.start(t)
+	p = &DockerProvider{}
+	wire(p, "auto")
+	p.ReconcileFence(context.Background())
+	if st := p.FenceStatus(); st.Mode != FenceModeLegacy {
+		t.Errorf("after off and back to auto: mode %q, want legacy", st.Mode)
+	}
+}
+
+// Turning isolation on from the dashboard records it.
+func TestEnableFenceRemembersIt(t *testing.T) {
+	fake := &fakeDocker{}
+	fake.start(t)
+	p := &DockerProvider{}
+	remembered := false
+	p.SetIsolationMemory(func() bool { return remembered }, func(on bool) { remembered = on })
+	if _, err := p.EnableFence(context.Background()); err != nil {
+		t.Fatalf("EnableFence: %v", err)
+	}
+	if !remembered {
+		t.Error("the switch did not record isolation on")
 	}
 }

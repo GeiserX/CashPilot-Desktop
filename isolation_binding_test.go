@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
@@ -103,5 +104,29 @@ func TestSaveSettingsIsolation(t *testing.T) {
 	}
 	if _, err := app.SaveSettings(map[string]string{"isolation": "sometimes"}); err == nil {
 		t.Error("an unknown isolation value was stored")
+	}
+}
+
+// Saving off forgets that isolation was on in the same save, with no Docker involved,
+// so going back to auto while Docker is unreachable cannot bring a stale "on" back.
+// Saving auto or on leaves the memory alone.
+func TestSaveSettingsOffClearsTheIsolationMemory(t *testing.T) {
+	app := newRemovalTestApp(t, &deployCountingProvider{})
+	for _, value := range []string{"auto", "on"} {
+		if err := app.cfg.Update(func(c *config.AppConfig) { c.IsolationOn = true }); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := app.SaveSettings(map[string]string{"isolation": value}); err != nil {
+			t.Fatalf("SaveSettings(%q): %v", value, err)
+		}
+		if !app.cfg.Config().IsolationOn {
+			t.Errorf("saving %q cleared the memory", value)
+		}
+	}
+	if _, err := app.SaveSettings(map[string]string{"isolation": "off"}); err != nil {
+		t.Fatalf("SaveSettings(off): %v", err)
+	}
+	if app.cfg.Config().IsolationOn {
+		t.Error("saving off kept the memory that isolation was on")
 	}
 }

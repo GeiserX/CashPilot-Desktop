@@ -43,14 +43,16 @@ import (
 // Desktop and Podman Desktop the daemon's namespace is the Linux VM's, which is where
 // the containers' traffic leaves from, so the fence sits in the right place there too.
 //
-// Modes (the state lives in Docker, so a lost config changes nothing):
+// Modes (the state lives in Docker and in the app's config, so losing either one
+// alone changes nothing):
 //
 //   - off: Settings say off. Docker's default bridge, as before. If our network still
 //     exists, the table keeps only its masquerade, so earners still on it keep their
 //     internet until they are redeployed.
-//   - on: Settings say on, or our labelled network exists, or a managed earner is still
-//     bound to it after it was removed, or no managed earner sits on the default
-//     bridge (a fresh install).
+//   - on: Settings say on, or the config remembers isolation was on (written the first
+//     time the mode resolves to on, cleared by off), or our labelled network exists,
+//     or a managed earner is still bound to it after it was removed, or no managed
+//     earner sits on the default bridge (a fresh install).
 //   - legacy: an upgraded install whose earners are on the default bridge. Nothing
 //     changes until the user turns isolation on from the dashboard.
 
@@ -136,7 +138,13 @@ type fenceAPI interface {
 // fence holds the cached status and serialises the helper: two helpers writing the
 // table at once would race on the same container name.
 type fence struct {
-	setting     func() string
+	setting func() string
+	// remembered and remember keep "isolation on" in the app's config. Docker's own
+	// evidence (our network, an earner bound to it) is gone once every fenced earner
+	// was removed and a prune or a runtime reset took the network; without the memory
+	// a stopped earner left on the default bridge would read as an upgraded install.
+	remembered  func() bool
+	remember    func(on bool)
 	mu          sync.Mutex // the helper and the apply sequence
 	reconcileMu sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
 	stateMu     sync.Mutex // status
@@ -152,6 +160,18 @@ func FenceSetting(raw string) string {
 		return "off"
 	}
 	return "auto"
+}
+
+func (f *fence) wasOn() bool {
+	return f != nil && f.remembered != nil && f.remembered()
+}
+
+// record keeps whether isolation is on, writing only on a change.
+func (f *fence) record(on bool) {
+	if f == nil || f.remember == nil || on == f.wasOn() {
+		return
+	}
+	f.remember(on)
 }
 
 func (f *fence) chosen() string {
@@ -204,15 +224,16 @@ func onDefaultBridge(e fenceEarner) bool {
 	return ok
 }
 
-// resolveFenceMode decides the mode from the setting and what Docker holds.
-func resolveFenceMode(setting string, managedNetwork, boundToRemoved bool, earners []fenceEarner) string {
+// resolveFenceMode decides the mode from the setting, what Docker holds and whether
+// isolation was on before.
+func resolveFenceMode(setting string, managedNetwork, boundToRemoved, rememberedOn bool, earners []fenceEarner) string {
 	switch setting {
 	case "off":
 		return FenceModeOff
 	case "on":
 		return FenceModeOn
 	}
-	if managedNetwork || boundToRemoved {
+	if managedNetwork || boundToRemoved || rememberedOn {
 		return FenceModeOn
 	}
 	for _, e := range earners {
@@ -698,7 +719,14 @@ func (f *fence) mode(ctx context.Context, cli fenceAPI) (string, *network.Inspec
 		}
 		exists = other != nil
 	}
-	return resolveFenceMode(f.chosen(), net != nil, boundToRemoved(exists, earners), earners), net, earners, nil
+	mode := resolveFenceMode(f.chosen(), net != nil, boundToRemoved(exists, earners), f.wasOn(), earners)
+	switch mode {
+	case FenceModeOn:
+		f.record(true)
+	case FenceModeOff:
+		f.record(false)
+	}
+	return mode, net, earners, nil
 }
 
 func (f *fence) setOutside(mode string, earners []fenceEarner) {
@@ -786,6 +814,7 @@ func (f *fence) enable(ctx context.Context, cli fenceAPI) (FenceStatus, error) {
 	if err := f.apply(ctx, cli); err != nil {
 		return f.Status(), err
 	}
+	f.record(true)
 	earners, err := listEarners(ctx, cli)
 	if err != nil {
 		return f.Status(), err
