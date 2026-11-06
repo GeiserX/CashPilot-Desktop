@@ -979,6 +979,9 @@ func TestDockerProviderLifecycleIntegration(t *testing.T) {
 	useAmbientDocker(t)
 
 	p := &DockerProvider{}
+	// The LAN fence has its own live test (TestFenceIntegration); this one is about
+	// the container itself, so it runs on the default bridge.
+	p.SetIsolationSetting(func() string { return "off" })
 	ctx := context.Background()
 
 	if st := p.Status(ctx); st.Version == "" || !strings.Contains(st.Version, " / ") {
@@ -1279,6 +1282,9 @@ func TestDeployUsesThePerArchImageIntegration(t *testing.T) {
 	useAmbientDocker(t)
 
 	p := &DockerProvider{}
+	// The LAN fence has its own live test (TestFenceIntegration); this one is about
+	// the container itself, so it runs on the default bridge.
+	p.SetIsolationSetting(func() string { return "off" })
 	ctx := context.Background()
 
 	cli, err := dockerClient()

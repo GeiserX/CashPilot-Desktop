@@ -42,6 +42,10 @@ export function DeployService(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DeployService'](arg1, arg2, arg3, arg4);
 }
 
+export function EnableIsolation() {
+  return window['go']['main']['App']['EnableIsolation']();
+}
+
 export function ExportCompose(arg1, arg2) {
   return window['go']['main']['App']['ExportCompose'](arg1, arg2);
 }

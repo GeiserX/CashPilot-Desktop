@@ -60,11 +60,37 @@ declare module "../wailsjs/go/main/App" {
   export function ListCustomServices(): Promise<CustomServiceView[]>;
   export function SaveCustomService(slug: string, definition: CustomDefinition): Promise<CustomServiceView>;
   export function DeleteCustomService(slug: string): Promise<void>;
+  // Turns LAN isolation on for an upgraded install: applies the fence, then
+  // redeploys each running earner onto the fenced network.
+  export function EnableIsolation(): Promise<IsolationResult>;
   // Bring logins over from money4band, CashFactory or InternetIncome. Preview is the
   // dry run (a secret is only ever "set"); Apply parses the same files again and
   // saves the ticked, ready services, never over a value already set here.
   export function PreviewImport(req: ImportRequest): Promise<ImportPreview>;
   export function ApplyImport(req: ImportApplyRequest): Promise<ImportResult>;
+}
+
+// FenceStatus mirrors runtime.FenceStatus: whether container earners are fenced off
+// the LAN, this computer, a tailnet and cloud metadata.
+export interface FenceStatus {
+  // off, on or legacy; "" while Docker cannot be reached.
+  mode: string;
+  // What Settings ask for: auto, on or off.
+  setting: string;
+  // applied, reduced (masquerade only), failed or n/a.
+  state: string;
+  backend: string;
+  error: string;
+  // Running earners that can reach the LAN; a redeploy moves them.
+  outside: string[] | null;
+  // Stopped earners outside the fence, left alone until their next deploy.
+  outsideStopped: string[] | null;
+}
+
+export interface IsolationResult {
+  status: FenceStatus;
+  moved: string[] | null;
+  failed: Record<string, string> | null;
 }
 
 export interface ImportFile {
@@ -202,6 +228,8 @@ export interface AppState {
   // from the current catalog, in plain words. Missing: matches, ignored, or the
   // warnings are off.
   drift: Record<string, string[]> | null;
+  // The LAN fence's status; null before the first check.
+  isolation: FenceStatus | null;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.
