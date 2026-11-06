@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.39.1] - 2026-11-06
+## [0.39.2] - 2026-11-06
 
 ### Fixed
 
 - **The LAN fence left the home's public IP open, so an earner could reach a port the router forwards back into the LAN.** Most home routers loop a connection to their own public address back inside (NAT loopback). The CashPilot worker drops that address and Desktop did not. Desktop now reads this computer's public IPv4 once an hour and the fence drops it too; a failed lookup keeps the last address. Only one address is dropped, so a second WAN still needs a rule on the router. See docs/configuration.md.
+
+## [0.39.1] - 2026-11-06
+
+### Fixed
+
 - **A proxy edit reaches its copies, and the cap no longer restarts a copy you stopped.** A copy started from the settings written into its tunnel when it was deployed, so a new password, port, type, Tailscale auth key or exit node was saved and ignored; every start (by hand or after a cap reset) now writes the proxy as stored into the tunnel first, and stops and restarts a tunnel still running on old settings. A host that no longer resolves stops the start instead of sending the login to the old address. At a cap crossing a copy you had stopped was marked as stopped by the cap, because stopping a stopped container succeeds, so the next reset started it; only copies that were running are marked now, and a cap lifted while a stop ran starts the copy again. The tunnel now joins the fenced network with LAN isolation on, like every other bridge earner (it joined Docker's default bridge before). Also: a copy's record is saved before it is deployed and a proxy cannot be deleted under it; a deploy whose settings cannot work fails before the running copy is removed; Test tunnels do not restart with Docker and a stale one is removed; a Tailscale login server with a user name, password, query or fragment is refused; a cap under 0.001 GB is refused; a probe answer must be an IP; Start is disabled on a capped proxy's copies; a new proxy with a reset day starts its period at once.
 
 ## [0.39.0] - 2026-11-06
