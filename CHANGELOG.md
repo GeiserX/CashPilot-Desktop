@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.39.2] - 2026-11-06
+## [0.39.3] - 2026-11-06
 
 ### Fixed
 
@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A Settings save or the Activity switch could turn off the app's memory that isolation was on.** Both wrote back a whole earlier copy of the config; they now write only their own fields.
 - **The LAN fence helper image is pinned by digest**, `drumsergio/cashpilot-worker:1.70.0@sha256:1f0fccd1...`, like the tunnel image. It runs with host networking and `NET_ADMIN`, so a re-pushed tag must not change what it runs.
 - **Isolation stays on after the runtime loses the fenced network.** The app's config now remembers that isolation was on, so a prune or a runtime reset that removes the network and every fenced earner no longer turns the install back into an unfenced one. Setting LAN isolation to `off` clears it.
+
+## [0.39.2] - 2026-11-06
+
+### Fixed
+
 - **The LAN fence left the home's public IP open, so an earner could reach a port the router forwards back into the LAN.** Most home routers loop a connection to their own public address back inside (NAT loopback). The CashPilot worker drops that address and Desktop did not. Desktop now reads this computer's public IPv4 once an hour and the fence drops it too; a failed lookup keeps the last address. Only one address is dropped, so a second WAN still needs a rule on the router. See docs/configuration.md.
 
 ## [0.39.1] - 2026-11-06
