@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-11-06
+
+### Fixed
+
+- **A proxy edit reaches its copies, and the cap no longer restarts a copy you stopped.** A copy started from the settings written into its tunnel when it was deployed, so a new password, port, type, Tailscale auth key or exit node was saved and ignored; every start (by hand or after a cap reset) now writes the proxy as stored into the tunnel first, and stops and restarts a tunnel still running on old settings. A host that no longer resolves stops the start instead of sending the login to the old address. At a cap crossing a copy you had stopped was marked as stopped by the cap, because stopping a stopped container succeeds, so the next reset started it; only copies that were running are marked now, and a cap lifted while a stop ran starts the copy again. The tunnel now joins the fenced network with LAN isolation on, like every other bridge earner (it joined Docker's default bridge before). Also: a copy's record is saved before it is deployed and a proxy cannot be deleted under it; a deploy whose settings cannot work fails before the running copy is removed; Test tunnels do not restart with Docker and a stale one is removed; a Tailscale login server with a user name, password, query or fragment is refused; a cap under 0.001 GB is refused; a probe answer must be an IP; Start is disabled on a capped proxy's copies; a new proxy with a reset day starts its period at once.
+
 ## [0.39.0] - 2026-11-06
 
 ### Changed
@@ -29,7 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **A proxy edit reaches its copies, and the cap no longer restarts a copy you stopped.** A copy started from the settings written into its tunnel when it was deployed, so a new password, port, type, Tailscale auth key or exit node was saved and ignored; every start (by hand or after a cap reset) now writes the proxy as stored into the tunnel first, and stops and restarts a tunnel still running on old settings. A host that no longer resolves stops the start instead of sending the login to the old address. At a cap crossing a copy you had stopped was marked as stopped by the cap, because stopping a stopped container succeeds, so the next reset started it; only copies that were running are marked now, and a cap lifted while a stop ran starts the copy again. The tunnel now joins the fenced network with LAN isolation on, like every other bridge earner (it joined Docker's default bridge before). Also: a copy's record is saved before it is deployed and a proxy cannot be deleted under it; a deploy whose settings cannot work fails before the running copy is removed; Test tunnels do not restart with Docker and a stale one is removed; a Tailscale login server with a user name, password, query or fragment is refused; a cap under 0.001 GB is refused; a probe answer must be an IP; Start is disabled on a capped proxy's copies; a new proxy with a reset day starts its period at once.
 - **The LAN fence could not run on v0.37.0 and v0.38.0, so with isolation on every bridge deploy was refused.** Its helper was pinned to `drumsergio/cashpilot-worker:1.66.0`, which has no `app/lan_fence.py`. It is now pinned to 1.70.0, the first worker image that carries the fence. The same change closes gaps review found: an earner on the fenced network and a second network is named as exposed; a network missing masquerade-off or ICC-off is refused; earners left on a removed copy of the network are started only after the table is written; `network_mode: default` is fenced like `bridge`; a leftover container is removed only if it is our helper; turning isolation on reports the status after the moves; and Needs attention shows a fence check that failed.
 
 ## [0.38.0] - 2026-11-06
@@ -56,13 +61,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Bring service logins over from money4band, CashFactory or InternetIncome.** Settings, Import from another tool, takes up to four config files (64 KiB in total) or pasted text: money4band's `user-config.json` or `.env`, CashFactory's `.env`, InternetIncome's `properties.conf` with `earnapp.txt` and `proxyrack.txt`. A dry run shows each service the files set up, its fields as imported, missing, still the example value or needing a retype, secrets only as "set", and every setting left out with the reason. A value a shell or Docker Compose would expand is never guessed at, and nothing in the files is run or fetched. Saving parses the files again, stores only ready services, encrypted, and never replaces a value already set here; each saved service then deploys through the normal deploy. The mapping (`internal/importers/sources.yml`) is a copy of the web app's. See docs/migrate/.
 
+## [0.34.0] - 2026-11-05
+
+### Added
+
+- **Activity: see which destinations each earner talks to, opt-in.** Off by default. While it is on, every 5 minutes a short-lived helper per earner reads the socket tables and TCP/UDP counters of the earner's network namespace and reports connection opens, failures, open connections, ports, networks (ASN), registered countries and destination kinds; it never reads packet contents. The helper is the web console's `app/procnet.py`, vendored byte for byte, and runs pinned by digest as user 65534 with every capability dropped, a read-only filesystem and no mounts. Host-network earners such as Mysterium are matched by cgroup and show destinations and alerts but no counters. Remote addresses are kept 24 hours, hourly aggregates and alerts 35 days, and switching Activity off deletes the addresses at once. Mail-port, LAN and unusual-hour alerts go to the bell and never carry an address. See docs/activity.md.
+- **Packages for winget, a Homebrew tap and the AUR, ready to submit.** Each installs the exact binary the release publishes; `packaging/render.sh vX.Y.Z` writes the version and checksums into all three, and a test fails if a package names an asset the release does not publish. Nothing is submitted yet. See docs/app-stores.md.
+
+## [0.33.1] - 2026-11-05
+
+### Changed
+
+- **Test fixtures and design docs no longer use real machine names, a tailnet name or a home path as sample data.** They use neutral stand-ins. Behaviour is unchanged.
+
 ## [0.33.0] - 2026-11-04
 
 ### Added
 
 - **Run an image the catalog does not list, as a custom service.** Under Catalog, Your custom services, Add custom service takes a name, an image reference from Docker Hub or any registry (no tag or `:latest` is accepted with a warning), environment variables with a Secret tick, an optional command, an optional data path and a memory limit. The definition is stored encrypted in the app's database, never under `services/`, under an internal name `custom-<name>` that is never given out again after a delete. It deploys with the same restrictions as a catalog service with no special needs: every capability dropped, `no-new-privileges`, a process and a memory limit, never privileged, no host network, no devices, no ports, and one mount, its own named volume. Every place it shows says CashPilot has not reviewed the image; it has no collector, so its balance is a dash, and it is not exported to compose. A secret's value is never sent back to the window. The catalog loader now skips any entry with the reserved `custom-` prefix, and a deploy refuses to replace a container labelled as another service or another copy. See docs/custom-services.md.
 
-## 0.11.0 to 0.34.0
+## 0.11.0 to 0.32.0
 
 These releases are not split by version here. Each release's own notes are on GitHub: https://github.com/GeiserX/CashPilot-Desktop/releases
 
