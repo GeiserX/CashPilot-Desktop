@@ -53,7 +53,7 @@ Limits:
 
 - Host-networked services (Mysterium) are not on any bridge, so the fence does not cover them. Mysterium's catalog entry starts the node with `--firewall.protected.networks` for the same ranges, which blocks its VPN customers from them.
 - Published ports keep working: replies to inbound connections are allowed.
-- A proxied copy's tunnel runs on Docker's default bridge, not on the fenced network. Its own firewall lets out only the connection to the proxy, so the earner still cannot reach your LAN ([proxied copies](proxies.md#where-desktop-differs)).
+- A proxied copy's tunnel runs on Docker's default bridge, not on the fenced network. Its own firewall lets out only the connection to the proxy, so the earner cannot reach your LAN directly, but through a SOCKS5 or HTTP proxy it reaches whatever that proxy can reach ([proxied copies](proxies.md#where-desktop-differs)).
 - The home's own public IP is not dropped yet, so an earner can still reach a port your router forwards back into the LAN (NAT loopback). The CashPilot worker drops it because it knows its public IP; Desktop does not detect it yet.
 - Tested on colima (Docker 29.5.2) with nftables. Not tested on Docker Desktop itself, Podman, rootless Docker or Windows. A runtime that ignores the interface name is refused, because no rule would match it. On Docker Desktop, Enhanced Container Isolation may block the helper; the deploy is then refused and the message gives the opt-out.
 

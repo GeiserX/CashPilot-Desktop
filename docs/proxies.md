@@ -17,7 +17,7 @@ differences listed in [Where Desktop differs](#where-desktop-differs).
 
 | Type | What you give it | Notes |
 |---|---|---|
-| SOCKS5 | host, port, optional user and password | Carries UDP only if the provider supports SOCKS5 UDP ASSOCIATE. |
+| SOCKS5 | host, port, optional user and password | TCP only: the tunnel lets out only TCP to the proxy's port, so SOCKS5 UDP ASSOCIATE relays are dropped. Name lookups still work (see [DNS](#dns)). |
 | HTTP CONNECT | host, port, optional user and password | TCP only. Name lookups still work (see [DNS](#dns)). |
 | Tailscale exit node | an auth key, the exit node's name or 100.x address, and optionally a login server (for headscale) | Traffic leaves from the exit node's connection. See [Tailscale exit nodes](#tailscale-exit-nodes). |
 
@@ -85,10 +85,12 @@ firewall.
 
 ## DNS
 
-Name lookups from the earner never leave this computer directly. tun2proxy
-answers them inside the tunnel and passes the name to the proxy when a
-connection opens, so the proxy resolves it where it is. This works with plain
-HTTP CONNECT proxies, which cannot carry DNS themselves.
+Name lookups from the earner never leave this computer directly. For SOCKS5
+and HTTP, tun2proxy answers them inside the tunnel and passes the name to the
+proxy when a connection opens, so the proxy resolves it where it is. This works
+with plain HTTP CONNECT proxies, which cannot carry DNS themselves. A Tailscale
+tunnel runs no tun2proxy: lookups sent to Docker's resolver are redirected to
+1.1.1.1 and travel through the exit node like any other packet.
 
 ## What cannot run through a proxy
 
@@ -105,8 +107,7 @@ A service is refused, with the reason, when its catalog entry needs:
 
 With today's catalog that rules out EarnApp, URnetwork, ProxyBase Markets,
 Bitping, Mysterium, Storj, Sia and Anyone Protocol. Services that need UDP do
-not work through HTTP CONNECT, and through SOCKS5 only when the provider
-supports UDP ASSOCIATE.
+not work through SOCKS5 or HTTP CONNECT; a Tailscale exit node carries UDP.
 
 ## Exit IPs
 
@@ -124,8 +125,10 @@ at, and a reset day (1 to 28) or none for **Reset usage** by hand.
 Traffic is counted from the tunnel container's own interface, which every byte
 of the earner crosses, including TCP, TLS and WireGuard overhead, so it can
 differ from your provider's count. At the threshold every copy through that
-proxy is stopped and you get a notice. A reset starts only the copies the cap
-stopped; a copy you stopped yourself stays stopped.
+proxy is stopped and you get a notice. Every copy recorded for that proxy is
+then marked as stopped by the cap, including one you had already stopped
+yourself, and a reset starts every marked copy. Stop a copy again after the
+reset if you want it to stay stopped.
 
 ## Tailscale exit nodes
 
@@ -139,9 +142,14 @@ Before you add one:
 1. In your tailnet policy, declare a tag in `tagOwners` (for example
    `"tag:cashpilot-proxy": ["autogroup:admin"]`) and allow it to use the exit
    node, for example a grant from `tag:cashpilot-proxy` to `autogroup:internet`.
+   Remove or narrow any other rule that matches the tag (a default allow-all
+   policy does). The tunnel drops tailnet traffic anyway, but the policy should
+   not offer it.
 2. Create an auth key that is **reusable**, **ephemeral** and tagged with that
    tag. It must be reusable: the tunnel keeps no state, so every Test, copy and
-   restart joins as a new ephemeral node with the same key.
+   restart joins as a new ephemeral node with the same key. If your tailnet
+   has device approval on, make the key pre-approved, or every new node waits
+   for approval and the tunnel never becomes ready.
 3. On the exit node's machine, turn on **Run as exit node**, and approve it in
    the admin console.
 4. Add the proxy with the key and the exit node's name or 100.x address. For a
@@ -166,6 +174,11 @@ ephemeral, tagged and used for nothing else.
   fleet.
 - **The tunnel runs on Docker's default bridge, not on the fenced
   `cashpilot-isolated` network** ([LAN isolation](configuration.md#lan-isolation)).
-  The tunnel's own firewall still lets out only its connection to the proxy, so
-  the earner cannot reach your LAN, but a proxy at a LAN or tailnet address is
-  reachable here, where the web worker's fence drops it.
+  The tunnel's own firewall lets out only its connection to the proxy, so the
+  earner cannot reach your LAN directly, and a proxy at a LAN or tailnet address
+  is reachable here, where the web worker's fence drops it. For SOCKS5 and HTTP
+  the tunnel does not filter private destinations inside the tunnel, so the
+  earner reaches whatever the proxy itself can reach and allows: a proxy on your
+  LAN, or one that connects to private addresses, gives the earner your LAN.
+  Use a proxy outside your network that refuses private destinations.
+  Tailscale tunnels drop private and tailnet ranges inside the tunnel.
