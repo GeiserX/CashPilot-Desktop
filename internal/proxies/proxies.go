@@ -40,6 +40,9 @@ var ForbiddenCaps = map[string]bool{"NET_ADMIN": true, "NET_RAW": true, "SYS_ADM
 var (
 	hostRE     = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}$`)
 	exitNodeRE = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,253}$`)
+	// https://host[:port][/path]: no user name or password (the view shows this
+	// field back), no query and no fragment.
+	loginServerRE = regexp.MustCompile(`^https://[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?$`)
 )
 
 // Definition is a proxy as stored (encrypted) in the store.
@@ -147,8 +150,8 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 		if !exitNodeRE.MatchString(out.ExitNode) {
 			return Definition{}, inputErr("Name the exit node by its Tailscale name or IP")
 		}
-		if out.LoginServer != "" && !strings.HasPrefix(out.LoginServer, "https://") {
-			return Definition{}, inputErr("The login server must be an https:// URL")
+		if out.LoginServer != "" && !loginServerRE.MatchString(out.LoginServer) {
+			return Definition{}, inputErr("The login server must be an https:// URL with no user name, password, query or fragment")
 		}
 		out.Username, out.Password = "", ""
 	} else {
@@ -178,8 +181,10 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 		if err != nil {
 			return Definition{}, inputErr("The traffic cap is a number of GB, or empty for none")
 		}
-		if gb <= 0 || gb > 1_000_000 {
-			return Definition{}, inputErr("The traffic cap must be more than 0 GB")
+		// Below a megabyte the threshold rounds to nothing measurable and the
+		// first tick would stop every copy.
+		if gb < MinCapGB || gb > 1_000_000 {
+			return Definition{}, inputErr("The traffic cap must be between 0.001 and 1,000,000 GB")
 		}
 		out.CapGB = &gb
 	}
@@ -372,6 +377,9 @@ func RiskyCaps(caps []string) []string {
 // ---------------------------------------------------------------------------
 // Traffic cap
 // ---------------------------------------------------------------------------
+
+// MinCapGB is the smallest cap accepted: 1 MB.
+const MinCapGB = 0.001
 
 // CapBytes is the cap in bytes; false when the proxy has none.
 func CapBytes(d Definition) (uint64, bool) {
