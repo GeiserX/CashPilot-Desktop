@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Some provider ratings claimed more than their sources say.** The catalog now carries the web's corrected verdicts: cons and points that went past their cited source or rested on too few user reports are set to poor or unknown, and payout terms, fees and optional identity checks follow the sources. No grade letter changes.
+
 ## [0.39.3] - 2026-11-06
 
 ### Fixed
