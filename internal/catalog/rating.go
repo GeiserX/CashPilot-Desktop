@@ -13,8 +13,8 @@ package catalog
 //   - Nobody types a grade. The rating block has no grade, override, sponsor or
 //     featured field, and validateRating rejects any key it does not know, so the
 //     only way to move a grade is to change a verdict and cite why.
-//   - There is no A. The bands stop at B, and a rules file that declares any other
-//     letter is refused, which leaves every provider "Not rated yet".
+//   - A is the top tier, at 90% of the score. A rules file that declares a letter
+//     outside A to F is refused, which leaves every provider "Not rated yet".
 //   - Missing evidence never reads as good. "unknown" scores the same as "poor",
 //     four unknowns cap the grade, and a service with no block (or a block that does
 //     not validate) is "Not rated yet", never a neutral grade.
@@ -44,7 +44,7 @@ var ratingAllowedKeys = map[string]bool{"reviewed_on": true, "verdicts": true, "
 var ratingVerdicts = map[string]bool{"good": true, "fair": true, "poor": true, "unknown": true}
 
 // gradeOrder is best first. A ceiling of D means the grade is D or anything after it.
-var gradeOrder = []string{"B", "C", "D", "F"}
+var gradeOrder = []string{"A", "B", "C", "D", "F"}
 
 func gradeIndex(g string) int {
 	for i, v := range gradeOrder {
