@@ -136,10 +136,11 @@ type fenceAPI interface {
 // fence holds the cached status and serialises the helper: two helpers writing the
 // table at once would race on the same container name.
 type fence struct {
-	setting func() string
-	mu      sync.Mutex // the helper and the apply sequence
-	stateMu sync.Mutex // status
-	status  FenceStatus
+	setting     func() string
+	mu          sync.Mutex // the helper and the apply sequence
+	reconcileMu sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
+	stateMu     sync.Mutex // status
+	status      FenceStatus
 }
 
 // FenceSetting normalises a Settings value: auto, on or off. Anything else is auto.
@@ -731,7 +732,14 @@ func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI) (string, err
 
 // reconcile puts the fence back if it went and refreshes the status. Never fails: a
 // failure is recorded in the status, which the dashboard shows.
+//
+// Whole reconciles are serialised: a setting change schedules one (app.go SaveSettings),
+// and serialising it behind any in-flight reconcile means the later-started one runs
+// last and writes the current setting's status, rather than an earlier "on" apply
+// overwriting a just-finished "off" with a stale result.
 func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
+	f.reconcileMu.Lock()
+	defer f.reconcileMu.Unlock()
 	chosen := f.chosen()
 	mode, net, earners, err := f.mode(ctx, cli)
 	if err != nil {

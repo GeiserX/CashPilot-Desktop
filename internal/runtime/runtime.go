@@ -1038,9 +1038,11 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
 	}
 	applyHardening(hostConfig, svc, osType)
-	// "default" is Docker's other name for the default bridge: spelled either way it
-	// is a bridge earner, and the LAN fence applies to it.
-	if svc.Docker.NetworkMode == "" || svc.Docker.NetworkMode == "default" {
+	// "" and "default" both name the default bridge on a Linux daemon, so normalise
+	// them to bridge and the LAN fence (Linux only) catches them. A Windows-containers
+	// daemon is the exception: there "default" is nat and "bridge" is a user-defined
+	// network that need not exist, so leave the mode as the catalog declared it.
+	if osType != "windows" && (svc.Docker.NetworkMode == "" || svc.Docker.NetworkMode == "default") {
 		hostConfig.NetworkMode = "bridge"
 	}
 	if err := applyResourceLimits(hostConfig, svc.Docker.Resources); err != nil {
