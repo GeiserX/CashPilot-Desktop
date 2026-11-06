@@ -39,7 +39,7 @@ Then copy each package to its store:
 ## Channels we do not offer
 
 - **Mac App Store.** Apps there must run in the App Sandbox. CashPilot Desktop talks to the Docker socket outside its container, downloads and runs the native earner binaries, and installs a LaunchAgent. App Review Guidelines 2.4.5 and 2.5.2 rule out all three: https://developer.apple.com/app-store/review/guidelines/
-- **Official Homebrew cask.** A self-submitted cask must clear Homebrew's notability bar (90 forks, 90 watchers, 225 stars), far above where this repository is: https://github.com/Homebrew/brew/blob/main/docs/Package-Acceptance-Policy.md
+- **Official Homebrew cask.** A self-submitted cask must clear Homebrew's notability bar (at least 90 forks, 90 watchers or 225 stars), far above where this repository is: https://github.com/Homebrew/brew/blob/main/docs/Package-Acceptance-Policy.md
 - **Microsoft Store.** Every executable must be signed by a trusted certificate authority (policy 10.2.9), and ours is not signed yet: https://learn.microsoft.com/en-us/windows/apps/publish/store-policies
 - **Flathub.** Apps must build from source with no network access during the build, and must ask for the minimum permissions. CashPilot Desktop needs the Docker socket and host services, which give it the same power as host root: https://docs.flathub.org/docs/for-app-authors/requirements
 - **Snap.** The `docker` interface is reserved, and classic confinement needs manual approval.

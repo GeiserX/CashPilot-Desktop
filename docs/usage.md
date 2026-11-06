@@ -102,4 +102,8 @@ Run CashPilot across more than one machine: point workers or a mobile companion 
 the desktop's loopback API and they register automatically. Silent devices are
 flipped offline and long-dead ones are reaped, so the list stays honest.
 
+The **Proxies** section runs extra copies of a deployed service through a
+proxy, so this computer earns on more than one IP. See
+[Proxied copies](proxies.md).
+
 ![Fleet](images/screenshots/05-fleet.png)

@@ -12,6 +12,8 @@
 //      a typed one is sent as typed, everything else trimmed.
 //   6. USER TEXT IS ESCAPED.
 //   7. A MISSING TUNNEL IMAGE IS SAID, not hidden.
+//   8. A CAPPED PROXY'S COPIES OFFER NO LIVE START.
+//   9. THE EDITOR SAYS AN EDIT REACHES A COPY ON ITS NEXT START.
 //
 //   node scripts/proxies_check.mjs      # against ./.harness-build
 
@@ -97,6 +99,16 @@ const noImage = renderProxiesSection({ ...state, tunnelImage: "", tunnelImageErr
 check("a missing tunnel image is said", noImage.includes("This build has no tunnel image pinned yet"));
 check("formatGB", formatGB(150e9) === "150 GB" && formatGB(0) === "0.0 GB");
 check("an empty state still renders", renderProxiesSection({ proxies: [], candidates: [], tunnelImage: "", tunnelImageError: "" }, "new").includes("Add a proxy"));
+
+// 8. A capped proxy refuses every start, so its stopped copies offer no live Start.
+const cappedCard = renderProxyCard({ ...proxy, cap: { ...cap, cappedAt: "2026-11-05T00:00:00Z", capReason: "Gate reached 90%" } });
+check("a capped proxy's copy has no live Start", !cappedCard.includes('data-proxy-copy-start="3"'), cappedCard);
+check("its Start is disabled", /<button[^>]*disabled[^>]*>Start<\/button>/.test(cappedCard), cappedCard);
+check("an open proxy's stopped copy can be started", card.includes('data-proxy-copy-start="3"'), card);
+
+// 9. An edit says when it reaches copies that exist.
+check("the editor of a proxy with copies says edits apply on the next start", editor.includes("next time it starts"), editor);
+check("the add form says nothing about copies", !renderProxyEditor(null).includes("next time it starts"));
 
 if (failures) {
   console.error(`\n${failures} of ${checks} proxies checks failed`);
