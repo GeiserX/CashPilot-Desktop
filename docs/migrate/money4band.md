@@ -81,6 +81,10 @@ Any other app is listed as "CashPilot has no such service".
   listed as offline in each provider's dashboard until you remove them there.
 - **Proxies.** Add each one in the Proxies section of the Fleet page, then run
   copies of your services through it; adding a proxy starts nothing by itself.
+  A proxied copy runs beside the same service deployed on this computer, never
+  instead of it, so every imported service also uses this computer's own
+  connection. A service that must never use that connection cannot come over
+  through the import: leave it unticked.
 - **Watchtower and notifications.** CashPilot updates its own containers.
 - **money4band's dashboard and its ports.**
 

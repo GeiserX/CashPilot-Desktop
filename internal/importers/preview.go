@@ -339,7 +339,7 @@ func BuildPreview(files []*fileSettings, source string, getService func(string) 
 	notices := []string{spec.Stop}
 	for _, s := range skipped {
 		if strings.Contains(s.Reason, "Proxies") {
-			notices = append(notices, "Proxy settings were found and left out. Add each proxy in the Proxies section of the Fleet page, then run copies of your services through it.")
+			notices = append(notices, "Proxy settings were found and left out. CashPilot deploys each service on this computer's own connection, and a proxied copy runs beside it, never instead of it. Add each proxy in the Proxies section of the Fleet page, then run copies of your services through it.")
 			break
 		}
 	}

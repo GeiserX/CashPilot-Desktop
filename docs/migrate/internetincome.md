@@ -95,12 +95,12 @@ listed by name as not read.
 - **`DEVICE_NAME`.** CashPilot names the device itself. Your old devices stay
   listed as offline in each provider's dashboard until you remove them there.
 - **Proxies** (`USE_PROXIES`, `proxies.txt`). Add each one in the Proxies
-  section of the Fleet page, then run copies of your services through it;
-  adding a proxy starts nothing by itself. With `USE_PROXIES=true`
-  InternetIncome ran your services only through proxies. CashPilot runs each
-  imported service on this computer's own connection, and proxied copies come
-  on top, so untick a service in the import table if it must not use that
-  connection.
+  section of the Fleet page, then run copies of your services through it; adding
+  a proxy starts nothing by itself. With `USE_PROXIES=true` InternetIncome ran
+  your services only through proxies. A proxied copy runs beside the same
+  service deployed on this computer, never instead of it, so every imported
+  service also uses this computer's own connection. A service that must never
+  use that connection cannot come over through the import: leave it unticked.
 - **`BROWSER_USERNAME` and `BROWSER_PASSWORD`**, InternetIncome's own browser
   login.
 
