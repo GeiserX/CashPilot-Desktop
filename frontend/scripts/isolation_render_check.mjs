@@ -62,6 +62,17 @@ const hostile = rows(fence({ mode: "on", state: "failed", error: "<img src=x one
 const html = renderAttention(hostile, 0, 0);
 check("the error and names are escaped", !html.includes("<img src=x") && !html.includes("<script>"), html.slice(0, 300));
 
+const podmanError = "CashPilot cannot fence earners off the LAN on Podman yet: its Docker-compatible API does not keep the network settings the fence relies on.";
+const podman = rows(fence({ mode: "unsupported", state: "unsupported", error: podmanError, outside: ["honeygain"] }));
+const notFenced = podman.find((i) => i.tag === "Not fenced");
+check("a runtime the fence cannot work on gets one row", podman.length === 1 && !!notFenced, JSON.stringify(podman));
+check("the row says why and what it means", !!notFenced?.why.includes("Podman") && notFenced.why.includes("can reach your LAN"), notFenced?.why);
+check("the row offers no switch that cannot work", notFenced?.actions === "" && !podman.some((i) => i.tag === "Exposed"), JSON.stringify(podman));
+check("the reason and the consequence read as two sentences", !notFenced?.why.includes(".."), notFenced?.why);
+check("with auto it does not claim deploys are refused", !notFenced?.why.includes("refused"), notFenced?.why);
+const podmanOn = rows(fence({ mode: "unsupported", setting: "on", state: "unsupported", error: podmanError })).find((i) => i.tag === "Not fenced");
+check("with isolation on it says deploys are refused and how to opt out", !!podmanOn?.why.includes("refused") && podmanOn.why.includes("auto or off"), podmanOn?.why);
+
 if (failures) {
   console.error(`\n${failures} of ${checks} isolation checks failed`);
   process.exit(1);

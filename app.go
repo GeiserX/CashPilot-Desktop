@@ -563,8 +563,10 @@ func (a *App) isolationStatus() *runtime.FenceStatus {
 
 // EnableIsolation turns LAN isolation on for an upgraded install: it applies the
 // fence, then redeploys each running earner onto the fenced network with the settings
-// and data it already has. Stopped earners are left alone and move on their next
-// deploy. One failed redeploy does not stop the rest; each failure is named.
+// and data it already has. A redeploy is per service, so a service with a running
+// copy is redeployed whole, its stopped copies included, and they come back running.
+// A service with no running copy is left alone and moves on its next deploy. One
+// failed redeploy does not stop the rest; each failure is named.
 func (a *App) EnableIsolation() (IsolationResult, error) {
 	if err := a.ready(); err != nil {
 		return IsolationResult{}, err
@@ -964,7 +966,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
-		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Takes effect on the next deploy."},
+		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Podman cannot be fenced yet: there auto deploys unfenced and on refuses container deploys. Takes effect on the next deploy."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Optional. Leave EMPTY to stay standalone, which is the default and loses nothing. Set to a CashPilot server's URL and this machine reports to it as a worker, so its services appear on that fleet. Earnings are unaffected: the server collects those centrally and this only reports what is running."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
@@ -1096,7 +1098,25 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		}
 		cfg.FleetPort = port
 	}
-	if err := a.cfg.Save(cfg); err != nil {
+	// Only the fields this form owns are written, onto the config as it is now. A
+	// whole-snapshot Save would put back what background work changed since the
+	// snapshot above, such as the fence recording that isolation is on, and the
+	// keyring writes above make that window real.
+	if err := a.cfg.Update(func(cur *config.AppConfig) {
+		cur.DisplayCurrency = cfg.DisplayCurrency
+		cur.HostnamePrefix = cfg.HostnamePrefix
+		cur.Timezone = cfg.Timezone
+		cur.UpstreamURL = cfg.UpstreamURL
+		cur.FleetServerEnabled = cfg.FleetServerEnabled
+		cur.DriftWarningsOff = cfg.DriftWarningsOff
+		cur.Isolation = cfg.Isolation
+		if cfg.Isolation == "off" {
+			cur.IsolationOn = false
+		}
+		cur.FleetBindAddress = cfg.FleetBindAddress
+		cur.CollectIntervalMinutes = cfg.CollectIntervalMinutes
+		cur.FleetPort = cfg.FleetPort
+	}); err != nil {
 		return SettingsState{}, err
 	}
 	// If the collection cadence changed, restart the ticker so the new interval
