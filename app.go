@@ -187,6 +187,14 @@ func (a *App) startCore(ctx context.Context) error {
 
 	docker := runtime.NewDockerProvider()
 	docker.SetIsolationSetting(func() string { return a.cfg.Config().Isolation })
+	docker.SetIsolationMemory(
+		func() bool { return a.cfg.Config().IsolationOn },
+		func(on bool) {
+			if err := a.cfg.Update(func(c *config.AppConfig) { c.IsolationOn = on }); err != nil {
+				a.emitError("isolation", err)
+			}
+		},
+	)
 	a.runtime = docker
 	a.fence = docker
 	native := runtime.NewNativeProcessProvider(cfg.AppDir())

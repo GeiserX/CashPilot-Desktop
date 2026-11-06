@@ -130,6 +130,13 @@ func (p *DockerProvider) SetIsolationSetting(read func() string) {
 	p.fence.setting = read
 }
 
+// SetIsolationMemory wires in where "isolation is on" is kept, so a worker stays
+// fenced after Docker loses every trace of it. Call it before the first deploy.
+func (p *DockerProvider) SetIsolationMemory(read func() bool, write func(on bool)) {
+	p.fence.remembered = read
+	p.fence.remember = write
+}
+
 // FenceStatus is the cached LAN isolation status. No Docker call.
 func (p *DockerProvider) FenceStatus() FenceStatus {
 	return p.fence.Status()

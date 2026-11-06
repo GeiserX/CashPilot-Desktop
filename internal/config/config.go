@@ -117,6 +117,10 @@ type AppConfig struct {
 	// an upgraded one as it is until the user switches), "on" or "off".
 	// CASHPILOT_ISOLATION on the web worker; see internal/runtime/lanfence.go.
 	Isolation string `json:"isolation,omitempty"`
+	// IsolationOn is state, not a setting: true once the LAN fence has been on, so the
+	// app stays fenced after Docker loses every trace of it (internal/runtime/lanfence.go).
+	// Isolation set to off clears it. The web worker keeps it as /data/.isolation_on.
+	IsolationOn bool `json:"isolationOn,omitempty"`
 	// ActivityEnabled switches on the Activity page's sampling (internal/activity):
 	// a short-lived helper per earner every 5 minutes reads which destinations it
 	// talks to. Off by default, the bool zero value, so no install starts it on
