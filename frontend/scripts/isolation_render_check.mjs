@@ -52,6 +52,12 @@ check("the failure row carries the reason", !!downRow?.why.includes("Operation n
 check("the failure row says deploys are refused and how to opt out", !!downRow?.why.includes("refused") && downRow.why.includes("off in Settings"), downRow?.why);
 check("a fence that failed in off mode is not reported as down", !rows(fence({ mode: "off", state: "failed", error: "x" })).some((i) => i.tag === "Fence down"));
 
+const unknown = rows(fence({ mode: "", setting: "on", state: "failed", error: "Cannot connect to the Docker daemon" }));
+const unknownRow = unknown.find((i) => i.tag === "Fence unknown");
+check("a fence check that failed before any mode is reported", unknownRow?.level === "fail", JSON.stringify(unknown));
+check("it says the check failed, not the apply", !!unknownRow?.why.includes("could not check") && !unknownRow.why.includes("could not be applied"), unknownRow?.why);
+check("with isolation off a failed check says nothing", rows(fence({ mode: "", setting: "off", state: "failed", error: "x" })).length === 0);
+
 const hostile = rows(fence({ mode: "on", state: "failed", error: "<img src=x onerror=alert(1)>", outside: ["<script>"] }));
 const html = renderAttention(hostile, 0, 0);
 check("the error and names are escaped", !html.includes("<img src=x") && !html.includes("<script>"), html.slice(0, 300));

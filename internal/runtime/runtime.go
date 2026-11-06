@@ -1038,7 +1038,9 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
 	}
 	applyHardening(hostConfig, svc, osType)
-	if svc.Docker.NetworkMode == "" {
+	// "default" is Docker's other name for the default bridge: spelled either way it
+	// is a bridge earner, and the LAN fence applies to it.
+	if svc.Docker.NetworkMode == "" || svc.Docker.NetworkMode == "default" {
 		hostConfig.NetworkMode = "bridge"
 	}
 	if err := applyResourceLimits(hostConfig, svc.Docker.Resources); err != nil {
