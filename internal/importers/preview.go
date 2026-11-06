@@ -216,6 +216,16 @@ func appsFromJSON(files []*fileSettings, spec toolSpec, skipped *[]Skipped) []fo
 				}
 			}
 			enabled, _ := conf.get("enabled").(bool)
+			// Off with only template placeholders: the user never set this app up.
+			hasValue := false
+			for _, v := range values {
+				if v.Retype || !IsPlaceholder(v.Text) {
+					hasValue = true
+				}
+			}
+			if !enabled && !hasValue {
+				continue
+			}
 			found = append(found, foundApp{name: appName, spec: aspec, values: values, enabled: enabled})
 		}
 	}
@@ -328,7 +338,7 @@ func BuildPreview(files []*fileSettings, source string, getService func(string) 
 	notices := []string{spec.Stop}
 	for _, s := range skipped {
 		if strings.Contains(s.Reason, "Proxies") {
-			notices = append(notices, "Proxy settings were found and left out. Each CashPilot worker uses its own connection.")
+			notices = append(notices, "Proxy settings were found and left out. Add each proxy in the Proxies section of the Fleet page.")
 			break
 		}
 	}
