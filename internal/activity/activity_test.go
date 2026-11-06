@@ -480,3 +480,27 @@ func TestProcnetIsTheWebCopy(t *testing.T) {
 		t.Fatalf("internal/activity/procnet.py differs from %s: run make catalog-sync", web)
 	}
 }
+
+// stallingEngine never answers the probe list until its context ends.
+type stallingEngine struct{ fakeEngine }
+
+func (s *stallingEngine) Probes(ctx context.Context) ([]ProbeRef, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// The startup sweep runs outside any round's timeout, so a stalled daemon
+// must not hold the sampler loop for good.
+func TestSweepIsBoundedOnItsOwn(t *testing.T) {
+	old := sweepTimeout
+	sweepTimeout = 50 * time.Millisecond
+	defer func() { sweepTimeout = old }()
+	r := &Runner{Engine: &stallingEngine{}, Worker: "me"}
+	done := make(chan struct{})
+	go func() { r.Sweep(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stalled probe list held the sweep")
+	}
+}

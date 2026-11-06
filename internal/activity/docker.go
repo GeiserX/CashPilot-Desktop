@@ -249,6 +249,9 @@ func (e *DockerEngine) Network(ctx context.Context, id string, earners map[strin
 	return info
 }
 
+// inspectTimeout bounds the one inspect a sweep makes per finished helper.
+const inspectTimeout = 5 * time.Second
+
 func (e *DockerEngine) Probes(ctx context.Context) ([]ProbeRef, error) {
 	list, err := e.Client.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
@@ -270,8 +273,12 @@ func (e *DockerEngine) Probes(ctx context.Context) ([]ProbeRef, error) {
 				ref.Since = time.Unix(s.Created, 0)
 			}
 		case "exited", "dead":
-			// The list carries no finish time; a helper that has gone meanwhile is simply skipped.
-			if r, err := e.Client.ContainerInspect(ctx, s.ID, client.ContainerInspectOptions{}); err == nil && r.Container.State != nil {
+			// The list carries no finish time. The inspect is bounded so a stalled
+			// daemon cannot hold the sweep; on any failure the age stays unknown.
+			ictx, cancel := context.WithTimeout(ctx, inspectTimeout)
+			r, err := e.Client.ContainerInspect(ictx, s.ID, client.ContainerInspectOptions{})
+			cancel()
+			if err == nil && r.Container.State != nil {
 				if t, err := time.Parse(time.RFC3339Nano, r.Container.State.FinishedAt); err == nil && t.Year() > 1 {
 					ref.Since = t
 				}

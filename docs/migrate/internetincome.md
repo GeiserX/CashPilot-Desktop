@@ -96,7 +96,11 @@ listed by name as not read.
   listed as offline in each provider's dashboard until you remove them there.
 - **Proxies** (`USE_PROXIES`, `proxies.txt`). Add each one in the Proxies
   section of the Fleet page, then run copies of your services through it;
-  adding a proxy starts nothing by itself.
+  adding a proxy starts nothing by itself. With `USE_PROXIES=true`
+  InternetIncome ran your services only through proxies. CashPilot runs each
+  imported service on this computer's own connection, and proxied copies come
+  on top, so untick a service in the import table if it must not use that
+  connection.
 - **`BROWSER_USERNAME` and `BROWSER_PASSWORD`**, InternetIncome's own browser
   login.
 

@@ -31,9 +31,16 @@ var RoundTimeout = 270 * time.Second
 // ErrBusy is a round asked for while another is still running.
 var ErrBusy = errors.New("a round is already running")
 
+// sweepTimeout bounds one sweep. A variable so a test need not wait for it.
+var sweepTimeout = ProbeTimeout
+
 // Sweep removes every helper this app left behind, and stopped helpers of
 // apps that labelled no worker. It returns the names Docker would not remove.
 func (r *Runner) Sweep(ctx context.Context) []string {
+	// Bounded on its own: the startup sweep runs outside any round's timeout,
+	// and a stalled daemon must not hold the sampler loop.
+	ctx, cancel := context.WithTimeout(ctx, sweepTimeout)
+	defer cancel()
 	var left []string
 	probes, err := r.Engine.Probes(ctx)
 	if err != nil {
