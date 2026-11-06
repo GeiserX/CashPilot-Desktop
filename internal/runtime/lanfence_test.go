@@ -97,6 +97,55 @@ func TestOutsideFence(t *testing.T) {
 	if !slices.Equal(running, []string{"honeygain"}) || len(stopped) != 0 {
 		t.Errorf("copies: running %v, stopped %v", running, stopped)
 	}
+	// On the fenced network and another one: whatever the other reaches, it reaches.
+	both := []fenceEarner{earner("repocket", true, FenceNetwork, map[string]string{FenceNetwork: "n", "lan": "l"})}
+	if running, _ = outsideFence(both, FenceNetwork, false); !slices.Equal(running, []string{"repocket"}) {
+		t.Errorf("an earner on the fence and a second network counted as fenced: %v", running)
+	}
+}
+
+// THE RULE: an earner the removed network stopped is started only after the table is
+// written, and not at all when the apply fails.
+func TestReattachRunsOnlyAfterTheFence(t *testing.T) {
+	orphan := map[string]any{
+		"Id": "orphan", "Names": []string{"/cashpilot-honeygain"}, "State": "exited",
+		"Labels":          map[string]string{LabelManaged: "true", LabelService: "honeygain"},
+		"HostConfig":      map[string]any{"NetworkMode": FenceNetwork},
+		"NetworkSettings": map[string]any{"Networks": map[string]any{FenceNetwork: map[string]any{"NetworkID": "gone"}}},
+	}
+	for _, tc := range []struct {
+		name   string
+		output string
+		moved  bool
+	}{
+		{"applied", "", true},
+		{"failed", `{"backend":"nft","ok":false,"error":"no"}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeDocker{earners: []map[string]any{orphan}, fenceOutput: tc.output}
+			fake.start(t)
+			(&DockerProvider{}).ReconcileFence(context.Background())
+			calls := fake.recorded()
+			fence, connect := -1, -1
+			for i, c := range calls {
+				if strings.HasPrefix(c, "FENCE POST /containers/fence/start") {
+					fence = i
+				}
+				if strings.Contains(c, "/networks/fencenet/connect") && connect < 0 {
+					connect = i
+				}
+			}
+			if !tc.moved {
+				if connect >= 0 {
+					t.Fatalf("an earner was reattached after a failed apply: %v", calls)
+				}
+				return
+			}
+			if fence < 0 || connect < 0 || connect < fence {
+				t.Fatalf("want fence -> reattach, got %v", calls)
+			}
+		})
+	}
 }
 
 func TestStaleEndpoint(t *testing.T) {
@@ -133,9 +182,27 @@ func TestFenceNetworkOptions(t *testing.T) {
 }
 
 func TestCheckFenceNetworkRefusesAnotherInterfaceName(t *testing.T) {
-	good := &network.Inspect{Network: network.Network{Driver: "bridge", Options: map[string]string{optBridgeName: fenceBridge}}}
+	good := &network.Inspect{Network: network.Network{Driver: "bridge", Options: fenceNetworkOptions().Options}}
 	if err := checkFenceNetwork(good); err != nil {
 		t.Fatalf("our own network refused: %v", err)
+	}
+	// Docker's masquerade and ICC default to on, so a missing option counts as on.
+	for _, opt := range []string{optMasquerade, optICC} {
+		for _, value := range []string{"true", ""} {
+			opts := map[string]string{}
+			for k, v := range good.Options {
+				opts[k] = v
+			}
+			if value == "" {
+				delete(opts, opt)
+			} else {
+				opts[opt] = value
+			}
+			err := checkFenceNetwork(&network.Inspect{Network: network.Network{Driver: "bridge", Options: opts}})
+			if err == nil || !strings.Contains(err.Error(), opt) {
+				t.Errorf("%s=%q accepted (err %v)", opt, value, err)
+			}
+		}
 	}
 	ignored := &network.Inspect{Network: network.Network{Driver: "bridge", Options: map[string]string{}}}
 	if err := checkFenceNetwork(ignored); err == nil {
@@ -256,6 +323,42 @@ func TestDeployOnAFreshInstallJoinsTheFence(t *testing.T) {
 	}
 	if netCreate < 0 || fence < 0 || create < 0 || !(netCreate < fence && fence < create) {
 		t.Fatalf("want network -> fence -> earner, got %v", calls)
+	}
+}
+
+// "default" is the same default bridge, so a service that spells it that way is fenced
+// like one that says bridge or nothing.
+func TestDeployInDefaultNetworkModeJoinsTheFence(t *testing.T) {
+	fake := &fakeDocker{}
+	fake.start(t)
+	spec := deploySpec("orderly")
+	spec.Service.Docker.NetworkMode = "default"
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), spec, nil); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	if host := createdHostConfig(t, fake); string(host.NetworkMode) != FenceNetwork {
+		t.Fatalf("a default-mode earner joined %q, not the fenced network", host.NetworkMode)
+	}
+}
+
+// THE RULE: a reconcile that started under one setting does not publish its mode once
+// the setting has changed; the reconcile the change triggers does.
+func TestAStaleReconcileDoesNotPublishItsMode(t *testing.T) {
+	fake := &fakeDocker{}
+	fake.start(t)
+	p := &DockerProvider{}
+	calls := 0
+	p.SetIsolationSetting(func() string {
+		// Off for the reconcile's own reads (its start and the mode), on by the end.
+		calls++
+		if calls <= 2 {
+			return "off"
+		}
+		return "on"
+	})
+	p.ReconcileFence(context.Background())
+	if st := p.FenceStatus(); st.Mode == FenceModeOff {
+		t.Fatalf("a reconcile started with isolation off published off after the switch to on: %+v", st)
 	}
 }
 

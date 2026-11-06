@@ -85,7 +85,7 @@ func muxStdout(text string) []byte {
 // serveFence answers the fence's requests. It reports whether it did.
 func (f *fakeDocker) serveFence(w http.ResponseWriter, r *http.Request, path string) bool {
 	w.Header().Set("Content-Type", "application/json")
-	isHelper := strings.Contains(path, "/containers/fence/") || strings.Contains(path, "/containers/"+fenceHelperName) ||
+	isHelper := strings.Contains(path, "/containers/fence/") || path == "/containers/fence" || strings.Contains(path, "/containers/"+fenceHelperName) ||
 		(path == "/containers/create" && r.URL.Query().Get("name") == fenceHelperName)
 	switch {
 	case isHelper:

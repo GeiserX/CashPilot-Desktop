@@ -168,7 +168,16 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   // The LAN fence. With isolation off nothing is said: that is the user's choice in
   // Settings, and the Settings help names what it costs.
   const fence = input.isolation;
-  if (fence && fence.mode === "on" && fence.state === "failed") {
+  if (fence && !fence.mode && fence.setting !== "off" && fence.state === "failed") {
+    // The check itself failed (Docker did not answer), so no mode was settled.
+    items.push({
+      level: "fail",
+      tag: "Fence unknown",
+      what: "LAN isolation",
+      why: `CashPilot could not check the fence that keeps earners off your LAN${fence.error ? `: ${escapeHtml(fence.error)}` : "."} Container deploys are refused until it can.`,
+      actions: "",
+    });
+  } else if (fence && fence.mode === "on" && fence.state === "failed") {
     items.push({
       level: "fail",
       tag: "Fence down",
