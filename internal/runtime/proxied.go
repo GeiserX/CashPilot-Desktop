@@ -673,7 +673,9 @@ func removeQuietly(d tunnelDocker, id string, timeout int) {
 
 // startSidecar creates, provisions and starts a sidecar, then waits for its exit. It
 // is removed on any failure, and the error never carries a secret.
-func startSidecar(ctx context.Context, d tunnelDocker, name, slug string, proxyID *int64, spec ProxySpec, ownIP string) (string, Exit, error) {
+// network is what sidecarNetwork answered; the caller asks before it removes anything,
+// so a fence that cannot be applied never costs the running copy.
+func startSidecar(ctx context.Context, d tunnelDocker, name, slug, network string, proxyID *int64, spec ProxySpec, ownIP string) (string, Exit, error) {
 	label := slug
 	if proxyID != nil {
 		label = fmt.Sprintf("%s-p%d", slug, *proxyID)
@@ -687,10 +689,6 @@ func startSidecar(ctx context.Context, d tunnelDocker, name, slug string, proxyI
 		return "", Exit{}, err
 	}
 	archive, err := secretTar(files)
-	if err != nil {
-		return "", Exit{}, err
-	}
-	network, err := d.sidecarNetwork(ctx)
 	if err != nil {
 		return "", Exit{}, err
 	}
@@ -782,11 +780,15 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	if _, err := TunnelImage(); err != nil {
 		return Exit{}, err
 	}
+	network, err := d.sidecarNetwork(ctx)
+	if err != nil {
+		return Exit{}, err
+	}
 	if _, err := removeProxied(ctx, d, req.Slug, req.ProxyID, StopTimeoutSeconds(req.Service)); err != nil {
 		return Exit{}, err
 	}
 	pid := req.ProxyID
-	sidecarID, exit, err := startSidecar(ctx, d, tunnelName(req.Slug, pid), req.Slug, &pid, req.Proxy, req.OwnIP)
+	sidecarID, exit, err := startSidecar(ctx, d, tunnelName(req.Slug, pid), req.Slug, network, &pid, req.Proxy, req.OwnIP)
 	if err != nil {
 		return Exit{}, err
 	}
@@ -1115,7 +1117,11 @@ func testProxy(ctx context.Context, d tunnelDocker, spec ProxySpec, ownIP string
 	var suffix [5]byte
 	_, _ = io.ReadFull(randReader, suffix[:])
 	name := fmt.Sprintf("%stunnel-test-%x", containerName(""), suffix)
-	id, exit, err := startSidecar(ctx, d, name, testTunnelSlug, nil, spec, ownIP)
+	network, err := d.sidecarNetwork(ctx)
+	if err != nil {
+		return Exit{}, err
+	}
+	id, exit, err := startSidecar(ctx, d, name, testTunnelSlug, network, nil, spec, ownIP)
 	if err != nil {
 		return Exit{}, err
 	}

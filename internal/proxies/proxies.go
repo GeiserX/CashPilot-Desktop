@@ -184,7 +184,7 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 		// Below a megabyte the threshold rounds to nothing measurable and the
 		// first tick would stop every copy.
 		if gb < MinCapGB || gb > 1_000_000 {
-			return Definition{}, inputErr("The traffic cap must be at least 0.001 GB")
+			return Definition{}, inputErr("The traffic cap must be between 0.001 and 1,000,000 GB")
 		}
 		out.CapGB = &gb
 	}

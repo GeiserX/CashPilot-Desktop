@@ -67,6 +67,8 @@ type fakeTunnelDocker struct {
 	archives [][]byte
 	// network is what sidecarNetwork answers: "" for the default bridge.
 	network string
+	// networkErr is what sidecarNetwork fails with: a fence that cannot be applied.
+	networkErr error
 	// created is the Created time list reports for every container (unix seconds).
 	created int64
 }
@@ -220,7 +222,9 @@ func (f *fakeTunnelDocker) readFile(_ context.Context, id, path string) (string,
 	}
 	return f.exit + "\n", nil
 }
-func (f *fakeTunnelDocker) sidecarNetwork(context.Context) (string, error) { return f.network, nil }
+func (f *fakeTunnelDocker) sidecarNetwork(context.Context) (string, error) {
+	return f.network, f.networkErr
+}
 func (f *fakeTunnelDocker) logsTail(context.Context, string, int) string {
 	return "cp-tunnel: no working exit through the tunnel after 40 s (socks5://" + testUser + ":" + testPassword + "@gate)"
 }
@@ -712,6 +716,23 @@ func TestTheTunnelJoinsTheFencedNetwork(t *testing.T) {
 	}
 	if got := f.containers["cashpilot-tunnel-earner-p3"].opts.HostConfig.NetworkMode; got != container.NetworkMode(FenceNetwork) {
 		t.Fatalf("tunnel network: %q", got)
+	}
+}
+
+// A fence that cannot be applied refuses the redeploy before the running pair goes.
+func TestAFenceFailureKeepsTheRunningCopy(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	f.networkErr = errors.New("the fence could not be applied")
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if f.containers["cashpilot-earner-p3"] == nil || f.containers["cashpilot-tunnel-earner-p3"] == nil {
+		t.Fatal("the running copy was removed before the fence was known to work")
 	}
 }
 

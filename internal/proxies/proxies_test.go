@@ -249,3 +249,13 @@ func TestACapTooSmallToMeasureIsRefused(t *testing.T) {
 		t.Fatal("the smallest cap must still measure something")
 	}
 }
+
+// Both ends of the range are refused with a message naming both bounds.
+func TestACapOutOfRangeNamesBothBounds(t *testing.T) {
+	for _, gb := range []string{"0.0000000001", "2000000"} {
+		_, err := Clean(map[string]string{"name": "x", "kind": "http", "host": "h", "port": "1", "cap_gb": gb}, nil)
+		if err == nil || !strings.Contains(err.Error(), "between 0.001 and 1,000,000 GB") {
+			t.Fatalf("cap %s: %v", gb, err)
+		}
+	}
+}
