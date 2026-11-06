@@ -2,8 +2,8 @@
 // ratingBlock in GeiserX/CashPilot#572).
 //
 // The grade is computed in Go (internal/catalog/rating.go) from the published
-// criteria in services/_ratings.yml; nothing here decides a letter. There is no A,
-// and a provider without valid evidence says "not rated", never a neutral grade.
+// criteria in services/_ratings.yml; nothing here decides a letter. A is the top
+// grade, and a provider without valid evidence says "not rated", never a neutral grade.
 //
 // Every con and pro carries its source and the date it was checked, opened through
 // data-url like every other external link in the app.
@@ -16,7 +16,7 @@ import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in 
 /** The published method, on the web docs. */
 export const RATINGS_URL = "https://geiserx.github.io/CashPilot/ratings/";
 
-const GRADES = new Set(["B", "C", "D", "F"]);
+const GRADES = new Set(["A", "B", "C", "D", "F"]);
 
 /** The letter as a badge; its tooltip is the thin-evidence note and the worst con. */
 export function gradeBadge(r: RatingResult | null | undefined): string {

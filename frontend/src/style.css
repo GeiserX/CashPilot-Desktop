@@ -474,12 +474,13 @@ th.c-num { font-family: var(--font-ui); }
 .c-act { text-align: right; white-space: nowrap; width: 1%; }
 .c-grade { white-space: nowrap; width: 1%; }
 
-/* Provider grades (render/rating.ts). There is no A, so B takes the best colour. */
+/* Provider grades (render/rating.ts). A and B share the best colour. */
 .grade-badge {
   display: inline-block; min-width: 1.6em; padding: 1px 6px;
   border: 1px solid currentColor; border-radius: var(--radius);
   font-family: var(--font-mono); font-weight: 600; text-align: center; cursor: help;
 }
+.grade-badge.grade-a,
 .grade-badge.grade-b { color: var(--success); background: var(--success-soft); }
 .grade-badge.grade-c { color: var(--warning); background: var(--warning-soft); }
 .grade-badge.grade-d { color: var(--error); background: var(--error-soft); }

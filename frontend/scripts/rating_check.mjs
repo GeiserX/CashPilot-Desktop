@@ -54,9 +54,11 @@ for (const [name, r] of [["null", null], ["undefined", undefined], ["not rated",
   const out = gradeBadge(r);
   check(`${name} reads "not rated", never a letter`, out.includes("not rated") && !/grade-badge/.test(out), out);
 }
-// There is no A: a letter outside B to F is never drawn, whatever the backend says.
-const forgedA = gradeBadge({ ...graded, grade: "A" });
-check("an A is never drawn", !/>A</.test(forgedA) && forgedA.includes("not rated"), forgedA);
+// A is drawn; a letter outside A to F is never drawn, whatever the backend says.
+const top = gradeBadge({ ...graded, grade: "A" });
+check("an A is drawn as the top grade", />A</.test(top) && top.includes("grade-a"), top);
+const forgedZ = gradeBadge({ ...graded, grade: "Z" });
+check("a Z is never drawn", !/>Z</.test(forgedZ) && forgedZ.includes("not rated"), forgedZ);
 check("catalog text in a con is escaped", !gradeBadge({ ...graded, topCons: [con('"><img src=x>', 9)] }).includes("<img"));
 
 // The catalog table: a Grade column, one cell per row, header and cells aligned.

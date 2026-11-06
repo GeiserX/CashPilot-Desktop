@@ -126,6 +126,24 @@ func TestBandsFollowThePercentage(t *testing.T) {
 	}
 }
 
+func TestABandComparesTheExactShareNotTheRoundedOne(t *testing.T) {
+	// 3 good and 1 fair at these points is 99.98%, shown as 100.0%. With A from
+	// 99.99% the score is short of it, whatever the display says.
+	src := strings.Replace(testRules, "points: {good: 2, fair: 1, poor: 0, unknown: 0}",
+		"points: {good: 10000, fair: 9992, poor: 0, unknown: 0}", 1)
+	src = strings.Replace(src, "bands:\n", "bands:\n  - {grade: A, min_percent: 99.99}\n", 1)
+	rules, err := ParseRatingRules([]byte(src))
+	if err != nil {
+		t.Fatalf("rules refused: %v", err)
+	}
+	verdicts := all("good")
+	verdicts["support"] = "fair"
+	got := GradeService(svcWith(t, valid(verdicts)), rules)
+	if got.Percent != 100 || got.Grade != "B" {
+		t.Fatalf("want 100.0%% shown and grade B, got %+v", got)
+	}
+}
+
 func TestCeilingsLowerTheGradeAndSayWhy(t *testing.T) {
 	rules := mustRules(t)
 
@@ -207,12 +225,20 @@ func TestNoBlockNoRulesAndCustomAreNotRated(t *testing.T) {
 	}
 }
 
-// There is no A: a rules file with an A band (or any letter outside B to F) is
-// refused, and with no rules nobody is graded.
-func TestARulesFileWithAnABandIsRefused(t *testing.T) {
+// A is the top band, as on the web; a letter outside A to F is refused, and
+// with no rules nobody is graded.
+func TestAnABandGradesTheTopAndAnUnknownLetterIsRefused(t *testing.T) {
 	withA := strings.Replace(testRules, "  - {grade: B, min_percent: 75}", "  - {grade: A, min_percent: 90}\n  - {grade: B, min_percent: 75}", 1)
-	if _, err := ParseRatingRules([]byte(withA)); err == nil {
-		t.Fatal("a rules file with an A band was accepted")
+	rules, err := ParseRatingRules([]byte(withA))
+	if err != nil {
+		t.Fatalf("a rules file with an A band was refused: %v", err)
+	}
+	if got := GradeService(svcWith(t, valid(all("good"))), rules); got.Grade != "A" {
+		t.Fatalf("every criterion good under an A band: %+v", got)
+	}
+	withZ := strings.Replace(testRules, "  - {grade: B, min_percent: 75}", "  - {grade: Z, min_percent: 90}\n  - {grade: B, min_percent: 75}", 1)
+	if _, err := ParseRatingRules([]byte(withZ)); err == nil {
+		t.Fatal("a rules file with a Z band was accepted")
 	}
 	unknownCap := strings.Replace(testRules, "key: thin_evidence", "key: paid_placement", 1)
 	if _, err := ParseRatingRules([]byte(unknownCap)); err == nil {
@@ -312,7 +338,7 @@ func TestARulesFileThisBuildCannotApplyIsRefused(t *testing.T) {
 		"no criteria":         strings.Replace(testRules, "criteria:", "unused:", 1),
 		"duplicate key":       strings.Replace(testRules, "{key: support, title: Support}", "{key: terms_fit, title: Support}", 1),
 		"no bands":            strings.Replace(testRules, "bands:", "unused_bands:", 1),
-		"cap grade A":         strings.Replace(testRules, "max_grade: D", "max_grade: A", 1),
+		"cap grade Z":         strings.Replace(testRules, "max_grade: D", "max_grade: Z", 1),
 		"no unknown points":   strings.Replace(testRules, ", unknown: 0", "", 1),
 		"no kinds":            strings.Replace(testRules, "kinds:", "unused_kinds:", 1),
 		"bands out of order":  strings.Replace(testRules, "{grade: C, min_percent: 55}", "{grade: C, min_percent: 80}", 1),
