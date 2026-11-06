@@ -2017,9 +2017,15 @@ async function runEnableIsolation() {
     await refreshState();
     const failed = Object.entries(result.failed || {});
     const moved = result.moved || [];
+    // The status after the moves, not the switch: the last check can find the fence
+    // down, or Settings turned off meanwhile.
+    const after = result.status;
+    const head = after && after.mode === "on" && after.state === "applied"
+      ? "Isolation is on."
+      : `Isolation is not in place (mode ${after?.mode || "unknown"}, fence ${after?.state || "unknown"}${after?.error ? `: ${after.error}` : ""}).`;
     setOutput(failed.length
-      ? `Isolation is on. Moved: ${moved.join(", ") || "none"}. Not moved: ${failed.map(([slug, why]) => `${slug} (${why})`).join("; ")}.`
-      : `Isolation is on. Moved: ${moved.join(", ") || "none"}.`);
+      ? `${head} Moved: ${moved.join(", ") || "none"}. Not moved: ${failed.map(([slug, why]) => `${slug} (${why})`).join("; ")}.`
+      : `${head} Moved: ${moved.join(", ") || "none"}.`);
   } catch (error) {
     setOutput(String(error));
   }
