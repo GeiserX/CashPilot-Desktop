@@ -725,12 +725,15 @@ func (f *fence) egressIP(ctx context.Context) string {
 	return f.egress
 }
 
+// publicIPURL answers with the caller's public IP as plain text; a seam for tests.
+var publicIPURL = "https://api.ipify.org"
+
 // LookupPublicIP asks a public echo service for this machine's public IP, "" when it
 // cannot be read. The fence's egress lookup in production.
 func LookupPublicIP(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.ipify.org", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, publicIPURL, nil)
 	if err != nil {
 		return ""
 	}

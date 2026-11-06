@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
@@ -640,5 +642,51 @@ func TestFenceDropsTheHomePublicIP(t *testing.T) {
 		if env := helperEnv(t, fresh); !slices.Contains(env, "FENCE_EGRESS=") {
 			t.Errorf("%s: want an empty FENCE_EGRESS, got %v", bad, env)
 		}
+	}
+}
+
+// Until the first answer the lookup is retried every five minutes, not hourly.
+func TestFenceRetriesTheEgressLookupUntilItHasOne(t *testing.T) {
+	now := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	old := fenceNow
+	fenceNow = func() time.Time { return now }
+	t.Cleanup(func() { fenceNow = old })
+	lookups := 0
+	f := &fence{lookupEgress: func(context.Context) string { lookups++; return "" }}
+	f.egressIP(context.Background())
+	now = now.Add(egressRetry / 2)
+	f.egressIP(context.Background())
+	if lookups != 1 {
+		t.Fatalf("%d lookups within the retry window, want 1", lookups)
+	}
+	now = now.Add(egressRetry)
+	if got := f.egressIP(context.Background()); got != "" || lookups != 2 {
+		t.Errorf("after the retry window: %q, %d lookups", got, lookups)
+	}
+}
+
+func TestLookupPublicIP(t *testing.T) {
+	answer, status := "203.0.113.7", http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(answer))
+	}))
+	old := publicIPURL
+	publicIPURL = srv.URL
+	t.Cleanup(func() { publicIPURL = old })
+	if got := LookupPublicIP(context.Background()); got != answer {
+		t.Errorf("got %q, want %q", got, answer)
+	}
+	status = http.StatusServiceUnavailable
+	if got := LookupPublicIP(context.Background()); got != "" {
+		t.Errorf("an error status gave %q", got)
+	}
+	srv.Close()
+	if got := LookupPublicIP(context.Background()); got != "" {
+		t.Errorf("an unreachable service gave %q", got)
+	}
+	publicIPURL = "://bad"
+	if got := LookupPublicIP(context.Background()); got != "" {
+		t.Errorf("a bad URL gave %q", got)
 	}
 }
