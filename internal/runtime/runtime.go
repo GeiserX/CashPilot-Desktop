@@ -137,6 +137,13 @@ func (p *DockerProvider) SetIsolationMemory(read func() bool, write func(on bool
 	p.fence.remember = write
 }
 
+// SetEgressLookup wires in how this machine's public IP is read, so the fence also
+// drops it and an earner cannot reach a port the router forwards back into the LAN.
+// Call it before the first deploy.
+func (p *DockerProvider) SetEgressLookup(lookup func(ctx context.Context) string) {
+	p.fence.lookupEgress = lookup
+}
+
 // FenceStatus is the cached LAN isolation status. No Docker call.
 func (p *DockerProvider) FenceStatus() FenceStatus {
 	return p.fence.Status()
