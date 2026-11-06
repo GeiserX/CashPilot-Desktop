@@ -8,9 +8,12 @@ import {services} from '../models';
 import {catalog} from '../models';
 import {usage} from '../models';
 import {preflight} from '../models';
+import {importers} from '../models';
 import {proxies} from '../models';
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
+
+export function ApplyImport(arg1:main.ImportApplyRequest):Promise<main.ImportResult>;
 
 export function BackgroundHelperStatus():Promise<bgservice.Status>;
 
@@ -21,6 +24,8 @@ export function CollectService(arg1:string):Promise<store.EarningsRecord>;
 export function CompleteOnboarding():Promise<void>;
 
 export function ConfirmStateBackup(arg1:string):Promise<void>;
+
+export function DeleteActivityData():Promise<main.ActivityView>;
 
 export function DeleteCustomService(arg1:string):Promise<void>;
 
@@ -33,6 +38,10 @@ export function DeployService(arg1:string,arg2:Record<string, string>,arg3:any,a
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
 
 export function ExportStateBackup(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
+
+export function GetActivity(arg1:number):Promise<main.ActivityView>;
+
+export function GetActivityDetail(arg1:string,arg2:number):Promise<main.ActivityDetail>;
 
 export function GetAppState():Promise<main.AppState>;
 
@@ -72,7 +81,11 @@ export function PlanServiceRemoval(arg1:string):Promise<runtime.RemovalPlan>;
 
 export function PreflightService(arg1:string):Promise<preflight.Report>;
 
+export function PreviewImport(arg1:main.ImportRequest):Promise<importers.Preview>;
+
 export function RecordPayout(arg1:string,arg2:number,arg3:string,arg4:string,arg5:string):Promise<store.Payout>;
+
+export function RefreshActivityNetworks():Promise<main.ActivityView>;
 
 export function RefreshDeployments():Promise<Array<store.Deployment>>;
 
@@ -97,6 +110,8 @@ export function SaveCustomService(arg1:string,arg2:services.CustomDefinition):Pr
 export function SaveProxy(arg1:number,arg2:Record<string, string>):Promise<proxies.View>;
 
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
+
+export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
 
 export function StartProxiedCopy(arg1:string,arg2:number):Promise<void>;
 

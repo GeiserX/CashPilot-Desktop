@@ -1,0 +1,27 @@
+# Maintainer: GeiserX <9169332+GeiserX@users.noreply.github.com>
+# Written by packaging/render.sh in https://github.com/GeiserX/CashPilot-Desktop.
+pkgname=cashpilot-desktop-bin
+pkgver=0.32.0
+pkgrel=1
+pkgdesc='Deploy and monitor passive-income and DePIN services in Docker or Podman'
+arch=('x86_64')
+url='https://github.com/GeiserX/CashPilot-Desktop'
+license=('GPL-3.0-or-later')
+depends=('gdk-pixbuf2' 'glib2' 'glibc' 'gtk3' 'libsoup3' 'webkit2gtk-4.1')
+optdepends=('docker: run the earning services as containers'
+            'podman: run the earning services as containers')
+provides=('cashpilot-desktop')
+conflicts=('cashpilot-desktop')
+options=('!debug' '!strip')
+source=("cashpilot-desktop-${pkgver}.tar.gz::https://github.com/GeiserX/CashPilot-Desktop/releases/download/v${pkgver}/CashPilot-Desktop-linux-amd64.tar.gz"
+        "cashpilot-desktop-${pkgver}.png::https://raw.githubusercontent.com/GeiserX/CashPilot-Desktop/v${pkgver}/build/appicon.png"
+        'cashpilot-desktop.desktop')
+sha256sums=('770a5b6ad26b67defb9b906c5ff3f0f92e03e75c94c1b92e3e70d0360fe23456'
+            'c2327d215ffa8d33ebe80ec9a6d58ae5b6cd62c329d980f2739da1f19fe8586c'
+            '4e591ce3a6888464b0cefd50fb74e8f2c680f182e7b1ec25a038f2ad041412f1')
+
+package() {
+  install -Dm755 "CashPilot Desktop" "${pkgdir}/usr/bin/cashpilot-desktop"
+  install -Dm644 "cashpilot-desktop-${pkgver}.png" "${pkgdir}/usr/share/pixmaps/cashpilot-desktop.png"
+  install -Dm644 cashpilot-desktop.desktop "${pkgdir}/usr/share/applications/cashpilot-desktop.desktop"
+}

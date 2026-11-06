@@ -6,6 +6,10 @@ export function AddFleetDevice(arg1) {
   return window['go']['main']['App']['AddFleetDevice'](arg1);
 }
 
+export function ApplyImport(arg1) {
+  return window['go']['main']['App']['ApplyImport'](arg1);
+}
+
 export function BackgroundHelperStatus() {
   return window['go']['main']['App']['BackgroundHelperStatus']();
 }
@@ -24,6 +28,10 @@ export function CompleteOnboarding() {
 
 export function ConfirmStateBackup(arg1) {
   return window['go']['main']['App']['ConfirmStateBackup'](arg1);
+}
+
+export function DeleteActivityData() {
+  return window['go']['main']['App']['DeleteActivityData']();
 }
 
 export function DeleteCustomService(arg1) {
@@ -48,6 +56,14 @@ export function ExportCompose(arg1, arg2) {
 
 export function ExportStateBackup(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ExportStateBackup'](arg1, arg2, arg3, arg4);
+}
+
+export function GetActivity(arg1) {
+  return window['go']['main']['App']['GetActivity'](arg1);
+}
+
+export function GetActivityDetail(arg1, arg2) {
+  return window['go']['main']['App']['GetActivityDetail'](arg1, arg2);
 }
 
 export function GetAppState() {
@@ -126,8 +142,16 @@ export function PreflightService(arg1) {
   return window['go']['main']['App']['PreflightService'](arg1);
 }
 
+export function PreviewImport(arg1) {
+  return window['go']['main']['App']['PreviewImport'](arg1);
+}
+
 export function RecordPayout(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['RecordPayout'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function RefreshActivityNetworks() {
+  return window['go']['main']['App']['RefreshActivityNetworks']();
 }
 
 export function RefreshDeployments() {
@@ -176,6 +200,10 @@ export function SaveProxy(arg1, arg2) {
 
 export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
+}
+
+export function SetActivityEnabled(arg1) {
+  return window['go']['main']['App']['SetActivityEnabled'](arg1);
 }
 
 export function StartProxiedCopy(arg1, arg2) {

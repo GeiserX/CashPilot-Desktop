@@ -19,7 +19,7 @@
 - **The decision:** **stay on Wails v2 + Go.** (Reasoning below — the short version: it keeps ~3,400 lines
   of working Go, including the native Docker SDK integration and all 15 collectors, and every remaining gap
   is solved with focused work rather than a rewrite.)
-- **How we prove it:** every slice is built and run on an always‑on **Apple‑Silicon Mac mini test bed**,
+- **How we prove it:** every slice is built and run on an always‑on **arm64 macOS test machine**,
   driven remotely, with dated screenshots captured into `docs/` so progress is verifiable, not asserted.
 
 ## Confirmed architecture
@@ -158,9 +158,9 @@ These make the app safe and honest for the person running it, and are part of th
   requires it (flagged prominently), image digests pinned, never mount the Docker socket into a service.
 - **Honest earnings:** realistic per‑device ranges and payout thresholds; dead/broken services filtered.
 
-## Live test bed (Mac mini)
+## Live test bed
 
-An always‑on Apple‑Silicon Mac mini (16 GB / 10 cores, fast NVMe, full Xcode, Colima + Docker) is the
+An always‑on arm64 macOS machine (full Xcode, Colima + Docker) is the
 verification surface. Each build is deployed there, driven remotely, and screenshotted into `docs/`. Real
 service credentials from the existing CashPilot deployment are imported for realistic earnings testing. This
 is what makes "genuinely usable" checkable rather than claimed.

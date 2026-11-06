@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -98,8 +99,15 @@ type Service struct {
 	// carried so the reason a dead service stays dead travels with the entry instead
 	// of living only in the web repository's history.
 	ResurrectionChecked string `json:"resurrectionChecked" yaml:"resurrection_checked"`
-	SourcePath          string `json:"sourcePath" yaml:"-"`
-	ManualOnly          bool   `json:"manualOnly" yaml:"-"`
+	// Rating is the web catalog's evidence for a provider's grade (verdicts, cons,
+	// pros). It is checked at load and turned into RatingResult (rating.go); the
+	// block itself never reaches the frontend.
+	Rating Rating `json:"-" yaml:"rating"`
+	// RatingResult is the grade computed from services/_ratings.yml, or "not rated".
+	// Nil for a custom service, which nobody has reviewed. Never read from YAML.
+	RatingResult *RatingResult `json:"ratingResult" yaml:"-"`
+	SourcePath   string        `json:"sourcePath" yaml:"-"`
+	ManualOnly   bool          `json:"manualOnly" yaml:"-"`
 	// Custom marks a service the user added from an image reference rather than a
 	// reviewed catalog entry. Never read from YAML.
 	Custom bool `json:"custom" yaml:"-"`
@@ -604,6 +612,8 @@ func Load() (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
+	rules, rulesErr := os.ReadFile(filepath.Join(root, RatingRulesFile))
+	applyRatings(services, rules, rulesErr)
 	return newCatalog(services), nil
 }
 
@@ -772,6 +782,10 @@ func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
 		services = append(services, svc)
 		return nil
 	})
+	if err == nil {
+		rules, rulesErr := fs.ReadFile(fsys, path.Join(root, RatingRulesFile))
+		applyRatings(services, rules, rulesErr)
+	}
 	return services, err
 }
 

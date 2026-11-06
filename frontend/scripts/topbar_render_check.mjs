@@ -3,7 +3,7 @@
 // catalog row's action, against the HTML the real render functions return.
 //
 //   1. ADD SERVICE IS A PRIMARY BUTTON, NOT A TAB. The tabs are Dashboard, Fleet,
-//      Catalog and Settings; none of them opens the wizard.
+//      Activity, Catalog and Settings; none of them opens the wizard.
 //   2. THE BUTTON OPENS THE WIZARD and keeps an aria-label, because on a narrow
 //      window only "+" shows. Its visible label sits in its own span so the CSS
 //      can hide it.
@@ -32,8 +32,8 @@ const current = (html) => [...html.matchAll(/<button\b[^>]*aria-current="page"[^
 
 // RULE 1
 const nav = renderTopnav("dashboard");
-check("RULE 1: the tabs are Dashboard, Fleet, Catalog, Settings, in that order",
-  JSON.stringify(views(nav)) === JSON.stringify(["dashboard", "fleet", "catalog", "settings"]), nav);
+check("RULE 1: the tabs are Dashboard, Fleet, Activity, Catalog, Settings, in that order",
+  JSON.stringify(views(nav)) === JSON.stringify(["dashboard", "fleet", "activity", "catalog", "settings"]), nav);
 check("RULE 1: no tab opens the wizard", !views(nav).includes("wizard") && !/Add services?/.test(nav), nav);
 
 // RULE 2

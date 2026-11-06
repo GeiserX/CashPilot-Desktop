@@ -762,6 +762,9 @@ func memoryMB(mem container.MemoryStats) float64 {
 // There is no WithAPIVersionNegotiation option any more: the moby client negotiates
 // the API version by default, lazily on the first versioned request, so the old
 // explicit option is a deprecated no-op.
+// NewDockerClient is a client for the same daemon every other call here uses.
+func NewDockerClient() (*client.Client, error) { return dockerClient() }
+
 func dockerClient(host ...string) (*client.Client, error) {
 	opts := []client.Opt{client.FromEnv}
 	if len(host) > 0 && host[0] != "" {

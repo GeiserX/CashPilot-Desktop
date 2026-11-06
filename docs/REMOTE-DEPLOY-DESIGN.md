@@ -10,7 +10,7 @@
 
 CashPilot Desktop is a Wails + Go GUI that manages **only its own local Docker socket**. Its fleet server (`fleet_server.go`) is **heartbeat-RECEIVE only**: remote workers and mobiles POST `/api/workers/heartbeat`, the desktop records their presence (`store.UpsertFleetHeartbeat`, `store.ListFleetDevices`), and that is the end of the relationship. The desktop **cannot deploy to, stop, restart, remove, or read logs from any remote machine.** Every lifecycle method the GUI calls — `App.DeployService`, `StopService`, `StartService`, `RestartService`, `RemoveService`, `GetLogs` (`app.go:774-856`) — runs against the **local** runtime through `services.Manager` (`internal/services/manager.go`). The operator runs this app on three home servers and drives each one separately; the single biggest missing capability is **managing all of them from one desktop**.
 
-The production original — CashPilot (Python/FastAPI, `/Users/sergio/repos/personal/CashPilot`) — already solves this: a **UI** container proxies deploy/stop/restart/remove/logs commands to per-server **worker** containers over an authenticated, SSRF-guarded channel, and each worker runs a hardened deploy-spec validator before touching Docker. This document ports that capability to the Desktop, reusing the Desktop's existing catalog, runtime, and bearer-token plumbing, and adapting the security-critical parts **verbatim**.
+The production original — CashPilot (Python/FastAPI, `/Users/me/repos/personal/CashPilot`) — already solves this: a **UI** container proxies deploy/stop/restart/remove/logs commands to per-server **worker** containers over an authenticated, SSRF-guarded channel, and each worker runs a hardened deploy-spec validator before touching Docker. This document ports that capability to the Desktop, reusing the Desktop's existing catalog, runtime, and bearer-token plumbing, and adapting the security-critical parts **verbatim**.
 
 This is [`ROADMAP.md`](../ROADMAP.md) **Milestone 3 → "Remote deploy from master to this Desktop node"** and [`docs/design/desktop-master-plan.md`](design/desktop-master-plan.md) **Phase 7 → "the desktop can deploy to a connected worker."**
 
@@ -237,7 +237,7 @@ def _validate_worker_url(raw_url):
     return raw_url.rstrip("/")
 ```
 
-**Strict mode** (`main.py:823-842`, `862-867`, `899-918`): `CASHPILOT_WORKER_URL_POLICY=strict` restricts targets to `CASHPILOT_WORKER_ALLOWED_HOSTS`, parsed into **CIDRs**, `*.suffix` **name suffixes** (so Tailscale MagicDNS names like `*.mango-alpha.ts.net` match by name), and **exact hostnames**. An unresolvable host is fatal in strict, tolerated in permissive.
+**Strict mode** (`main.py:823-842`, `862-867`, `899-918`): `CASHPILOT_WORKER_URL_POLICY=strict` restricts targets to `CASHPILOT_WORKER_ALLOWED_HOSTS`, parsed into **CIDRs**, `*.suffix` **name suffixes** (so Tailscale MagicDNS names like `*.tailnet-example.ts.net` match by name), and **exact hostnames**. An unresolvable host is fatal in strict, tolerated in permissive.
 
 **Go equivalent — specification** (`internal/fleetnet`, NEW):
 
