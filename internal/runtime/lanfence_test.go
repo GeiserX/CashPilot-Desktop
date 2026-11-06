@@ -3,9 +3,11 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -577,5 +579,185 @@ func TestEnableFenceRemembersIt(t *testing.T) {
 	}
 	if !remembered {
 		t.Error("the switch did not record isolation on")
+	}
+}
+
+// THE RULE: a proxied copy's tunnel sidecar is never named as exposed and never makes
+// an install legacy. Its own firewall drops everything but the proxy and the tunnel,
+// and Turn on isolation could not move it, so the row would never clear.
+func TestATunnelSidecarIsNotOutsideTheFence(t *testing.T) {
+	tunnel := earner("honeygain", true, "bridge", map[string]string{"bridge": "b"})
+	tunnel.Tunnel = true
+	fenced := earner("honeygain", true, FenceNetwork, map[string]string{FenceNetwork: "n"})
+	if running, stopped := outsideFence([]fenceEarner{tunnel, fenced}, FenceNetwork, false); len(running)+len(stopped) != 0 {
+		t.Errorf("on mode named a tunnel sidecar: running %v, stopped %v", running, stopped)
+	}
+	if running, _ := outsideFence([]fenceEarner{tunnel}, "", true); len(running) != 0 {
+		t.Errorf("legacy mode named a tunnel sidecar: %v", running)
+	}
+	if got := resolveFenceMode("auto", false, false, false, []fenceEarner{tunnel}); got != FenceModeOn {
+		t.Errorf("a fresh install whose only bridge container is a tunnel sidecar resolved to %q, want on", got)
+	}
+	// The control: the same container without the role is outside.
+	tunnel.Tunnel = false
+	if running, _ := outsideFence([]fenceEarner{tunnel}, FenceNetwork, false); !slices.Equal(running, []string{"honeygain"}) {
+		t.Errorf("an earner on the default bridge was not named: %v", running)
+	}
+	// The role comes from the container's label.
+	sum := container.Summary{ID: "t", Labels: map[string]string{LabelManaged: "true", LabelService: "honeygain", LabelRole: RoleTunnel}}
+	if !earnerFromSummary(sum).Tunnel {
+		t.Error("a container labelled as a tunnel was not read as one")
+	}
+}
+
+func helperContainer(id string, ours bool, state map[string]any) map[string]any {
+	labels := map[string]string{}
+	if ours {
+		labels[fenceProbeLabel] = "fence"
+	}
+	return map[string]any{"Id": id, "Name": "/" + fenceHelperName, "Created": time.Now().UTC().Format(time.RFC3339Nano), "Config": map[string]any{"Labels": labels}, "State": state}
+}
+
+func deleted(fake *fakeDocker, id string) bool {
+	return slices.Contains(fake.recorded(), "DELETE /containers/"+id)
+}
+
+// THE RULE: the helper's cleanup only ever removes a helper of ours that nobody is
+// using. A container someone else named cashpilot-fence is left alone, and a helper
+// another CashPilot process (the window, the background daemon, the web worker) is
+// still running is waited for, not killed, so that process gets its result. The
+// control is the stale leftover, which is removed.
+func TestTheHelperCleanupRemovesOnlyAnIdleHelperOfOurs(t *testing.T) {
+	oldPoll := helperPoll
+	helperPoll = 5 * time.Millisecond
+	t.Cleanup(func() { helperPoll = oldPoll })
+	longAgo := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	exited := map[string]any{"Status": "exited", "Running": false, "FinishedAt": longAgo}
+	running := map[string]any{"Status": "running", "Running": true}
+	run := func(t *testing.T, fake *fakeDocker) {
+		t.Helper()
+		fake.start(t)
+		cli, err := dockerClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cli.Close()
+		if _, err := runHelper(context.Background(), cli, "apply", "172.30.0.0/16", true); err != nil {
+			t.Fatalf("runHelper: %v (calls %v)", err, fake.recorded())
+		}
+	}
+
+	t.Run("someone else's container", func(t *testing.T) {
+		fake := &fakeDocker{helperInspect: []map[string]any{helperContainer("foreign", false, exited)}}
+		run(t, fake)
+		if deleted(fake, "foreign") {
+			t.Fatal("removed a container CashPilot did not create")
+		}
+	})
+	t.Run("a stale leftover of ours", func(t *testing.T) {
+		fake := &fakeDocker{helperInspect: []map[string]any{helperContainer("leftover", true, exited)}}
+		run(t, fake)
+		if !deleted(fake, "leftover") {
+			t.Fatalf("a leftover helper was not removed (calls %v)", fake.recorded())
+		}
+	})
+	t.Run("another process's running helper", func(t *testing.T) {
+		// Running for three looks, then its owner removes it.
+		fake := &fakeDocker{helperInspect: []map[string]any{
+			helperContainer("busy", true, running), helperContainer("busy", true, running), helperContainer("busy", true, running),
+		}}
+		run(t, fake)
+		if deleted(fake, "busy") {
+			t.Fatal("killed another process's helper while it ran")
+		}
+		if len(fake.helperInspect) != 0 {
+			t.Fatalf("did not wait for the running helper: %d looks left", len(fake.helperInspect))
+		}
+	})
+	t.Run("another process created its helper first", func(t *testing.T) {
+		fake := &fakeDocker{helperConflicts: 1}
+		run(t, fake)
+		if fake.helperCreates != 2 {
+			t.Fatalf("helper creates %d, want a retry after the name conflict", fake.helperCreates)
+		}
+	})
+}
+
+func TestHelperBusy(t *testing.T) {
+	now := time.Now()
+	stamp := func(ago time.Duration) string { return now.Add(-ago).UTC().Format(time.RFC3339Nano) }
+	cases := []struct {
+		name    string
+		st      *container.State
+		created string
+		want    bool
+	}{
+		{"running", &container.State{Status: container.StateRunning, Running: true}, stamp(time.Hour), true},
+		{"just created", &container.State{Status: container.StateCreated}, stamp(time.Second), true},
+		{"created long ago", &container.State{Status: container.StateCreated}, stamp(time.Hour), false},
+		{"just exited", &container.State{Status: container.StateExited, FinishedAt: stamp(time.Second)}, "", true},
+		{"exited long ago", &container.State{Status: container.StateExited, FinishedAt: stamp(time.Hour)}, "", false},
+		{"no state", nil, "", false},
+	}
+	for _, tc := range cases {
+		if got := helperBusy(tc.st, tc.created, now); got != tc.want {
+			t.Errorf("%s: busy %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// THE RULE: on Podman, whose compatible API cannot hold the fence's network, a fresh
+// install still deploys: on the default network, with the dashboard saying it is not
+// fenced. Setting isolation on there refuses the deploy before the running container
+// is touched, and the switch says why. The control is the same fake without Podman,
+// where the earner joins the fence.
+func TestPodmanDeploysUnfencedAndSaysSo(t *testing.T) {
+	fake := &fakeDocker{podman: true}
+	fake.start(t)
+	p := &DockerProvider{}
+	if _, err := p.Deploy(context.Background(), deploySpec("orderly"), nil); err != nil {
+		t.Fatalf("Deploy on Podman: %v", err)
+	}
+	if host := createdHostConfig(t, fake); string(host.NetworkMode) != "bridge" {
+		t.Errorf("the earner joined %q on Podman, want the default network", host.NetworkMode)
+	}
+	if ranFence(fake) {
+		t.Error("the helper ran on Podman")
+	}
+	p.ReconcileFence(context.Background())
+	if st := p.FenceStatus(); st.Mode != FenceModeUnsupported || st.State != "unsupported" || !strings.Contains(st.Error, "Podman") {
+		t.Errorf("status on Podman: %+v", st)
+	}
+	if _, err := p.EnableFence(context.Background()); err == nil || !strings.Contains(err.Error(), "Podman") {
+		t.Errorf("the switch on Podman: %v", err)
+	}
+
+	on := &fakeDocker{podman: true}
+	on.start(t)
+	p = &DockerProvider{}
+	p.SetIsolationSetting(func() string { return "on" })
+	_, err := p.Deploy(context.Background(), deploySpec("orderly"), nil)
+	if err == nil || !strings.Contains(err.Error(), "Podman") {
+		t.Fatalf("isolation on, on Podman: %v", err)
+	}
+	if on.removedAContainer() {
+		t.Error("a refused deploy touched the running container")
+	}
+
+	docker := &fakeDocker{}
+	docker.start(t)
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), deploySpec("orderly"), nil); err != nil {
+		t.Fatalf("Deploy on Docker: %v", err)
+	}
+	if host := createdHostConfig(t, docker); string(host.NetworkMode) != FenceNetwork {
+		t.Errorf("the control did not join the fence: %q", host.NetworkMode)
+	}
+}
+
+// The helper runs with host networking and NET_ADMIN, so it is pinned by digest: a
+// re-pushed tag must not change what it runs.
+func TestTheFenceHelperIsPinnedByDigest(t *testing.T) {
+	if !regexp.MustCompile(`^drumsergio/cashpilot-worker:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$`).MatchString(fenceHelperImage) {
+		t.Errorf("the fence helper image %q is not pinned by tag and digest", fenceHelperImage)
 	}
 }

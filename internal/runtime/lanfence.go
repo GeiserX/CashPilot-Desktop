@@ -40,8 +40,14 @@ import (
 //
 // The helper runs the worker image's own rule writer (app/lan_fence.py HELPER_SCRIPT),
 // so the rules are the web's, byte for byte, at the pinned image version. On Docker
-// Desktop and Podman Desktop the daemon's namespace is the Linux VM's, which is where
-// the containers' traffic leaves from, so the fence sits in the right place there too.
+// Desktop and colima the daemon's namespace is the Linux VM's, which is where the
+// containers' traffic leaves from, so the fence sits in the right place there too.
+//
+// Podman is not fenced. Its Docker-compatible API keeps the interface name out of the
+// network's options and drops the masquerade and inter-container options, and netavark
+// adds its own masquerade, so none of what the fence relies on can be set or checked
+// there. A Podman daemon resolves to the unsupported mode instead of refusing every
+// deploy: earners run on the default network and the dashboard says they are not fenced.
 //
 // Modes (the state lives in Docker and in the app's config, so losing either one
 // alone changes nothing):
@@ -55,6 +61,13 @@ import (
 //     earner sits on the default bridge (a fresh install).
 //   - legacy: an upgraded install whose earners are on the default bridge. Nothing
 //     changes until the user turns isolation on from the dashboard.
+//   - unsupported: a Podman daemon with Settings not off. Earners deploy on the default
+//     network; with Settings on, deploys are refused, since on was asked for and cannot
+//     be given.
+//
+// A proxied copy's tunnel sidecar (cashpilot.role=tunnel) never counts as outside and
+// never makes an install legacy: its own firewall drops every packet but those to the
+// proxy and through the tunnel, private ranges included (the tunnel image's cp-tunnel).
 
 const (
 	FenceNetwork = "cashpilot-isolated"
@@ -67,6 +80,8 @@ const (
 	FenceModeOff    = "off"
 	FenceModeOn     = "on"
 	FenceModeLegacy = "legacy"
+	// FenceModeUnsupported is a runtime the fence cannot work on (Podman).
+	FenceModeUnsupported = "unsupported"
 
 	// FenceRecheck is how often the app puts the table back if it went.
 	FenceRecheck = 5 * time.Minute
@@ -82,9 +97,10 @@ const (
 
 // fenceHelperImage is the CashPilot worker image the helper runs. It carries nft,
 // iptables-legacy and app/lan_fence.py; the worker starts the same helper from its own
-// image. Pinned, like every image this app runs: the rules it writes are the rules
-// of this exact release. A var so a live test can point it at a local build.
-var fenceHelperImage = "drumsergio/cashpilot-worker:1.70.0"
+// image. Pinned by digest, like the tunnel image: the helper runs with host networking
+// and NET_ADMIN, so a re-pushed tag must not change what it runs. A var so a live test
+// can point it at a local build.
+var fenceHelperImage = "drumsergio/cashpilot-worker:1.70.0@sha256:1f0fccd176b1ad6128665bdde36c20f5c070a02049ef405d0d45ebb769af5b64"
 
 // fenceDNS are the resolvers an earner on the fenced bridge gets. Docker's embedded
 // resolver forwards a container's lookups from inside its network, so a daemon whose
@@ -100,11 +116,11 @@ const fenceHelperScript = "from app import lan_fence as f; exec(f.HELPER_SCRIPT)
 // FenceStatus is what the dashboard shows. A copy of the cached state; reading it
 // costs no Docker call.
 type FenceStatus struct {
-	// Mode is off, on or legacy, or "" while Docker cannot be reached.
+	// Mode is off, on, legacy or unsupported, or "" while Docker cannot be reached.
 	Mode string `json:"mode"`
 	// Setting is what Settings ask for: auto, on or off.
 	Setting string `json:"setting"`
-	// State is applied, reduced (masquerade only), failed or n/a.
+	// State is applied, reduced (masquerade only), failed, unsupported or n/a.
 	State   string `json:"state"`
 	Backend string `json:"backend"`
 	Error   string `json:"error"`
@@ -133,7 +149,29 @@ type fenceAPI interface {
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImagePull(ctx context.Context, refStr string, options client.ImagePullOptions) (client.ImagePullResponse, error)
+	ServerVersion(ctx context.Context, options client.ServerVersionOptions) (client.ServerVersionResult, error)
 }
+
+// isPodman reports a Podman daemon behind the Docker-compatible API. Podman names
+// itself in /version's components ("Podman Engine"). A daemon that does not answer
+// is taken for Docker: the fence's own checks still refuse a network it cannot hold.
+func isPodman(ctx context.Context, cli fenceAPI) bool {
+	v, err := cli.ServerVersion(ctx, client.ServerVersionOptions{})
+	if err != nil {
+		return false
+	}
+	if strings.Contains(strings.ToLower(v.Platform.Name), "podman") {
+		return true
+	}
+	for _, c := range v.Components {
+		if strings.Contains(strings.ToLower(c.Name), "podman") {
+			return true
+		}
+	}
+	return false
+}
+
+const podmanUnsupported = "CashPilot cannot fence earners off the LAN on Podman yet: its Docker-compatible API does not keep the network settings the fence relies on"
 
 // fence holds the cached status and serialises the helper: two helpers writing the
 // table at once would race on the same container name.
@@ -183,10 +221,12 @@ func (f *fence) chosen() string {
 
 // fenceEarner is what the fence needs to know about one managed container.
 type fenceEarner struct {
-	ID          string
-	Name        string
-	Slug        string
-	Running     bool
+	ID      string
+	Name    string
+	Slug    string
+	Running bool
+	// Tunnel is a proxied copy's sidecar, which carries its own firewall.
+	Tunnel      bool
 	NetworkMode string
 	// Networks maps each endpoint's network name to the network ID it was bound to.
 	Networks map[string]string
@@ -197,6 +237,7 @@ func earnerFromSummary(c container.Summary) fenceEarner {
 		ID:          c.ID,
 		Slug:        c.Labels[LabelService],
 		Running:     strings.EqualFold(string(c.State), "running"),
+		Tunnel:      c.Labels[LabelRole] == RoleTunnel,
 		NetworkMode: c.HostConfig.NetworkMode,
 		Networks:    map[string]string{},
 	}
@@ -237,7 +278,7 @@ func resolveFenceMode(setting string, managedNetwork, boundToRemoved, remembered
 		return FenceModeOn
 	}
 	for _, e := range earners {
-		if onDefaultBridge(e) {
+		if !e.Tunnel && onDefaultBridge(e) {
 			return FenceModeLegacy
 		}
 	}
@@ -261,10 +302,13 @@ func boundToRemoved(networkExists bool, earners []fenceEarner) bool {
 
 // outsideFence splits the earners that are not on the network into running and
 // stopped. Host, none and container: networking are the service's own choice and
-// never count.
+// never count, and neither does a tunnel sidecar, whose own firewall closes the LAN.
 func outsideFence(earners []fenceEarner, onNetwork string, legacy bool) (running, stopped []string) {
 	runSet, stopSet := map[string]bool{}, map[string]bool{}
 	for _, e := range earners {
+		if e.Tunnel {
+			continue
+		}
 		mode := e.NetworkMode
 		if mode == "" {
 			mode = "bridge"
@@ -553,15 +597,65 @@ func ensureHelperImage(ctx context.Context, cli fenceAPI) error {
 	return nil
 }
 
-// removeHelper removes a leftover helper by name, and only a container that carries
-// the helper's label: a container someone else named cashpilot-fence is left alone,
-// and the create that follows fails on the name instead.
-func removeHelper(cli fenceAPI) {
-	got, err := cli.ContainerInspect(context.Background(), fenceHelperName, client.ContainerInspectOptions{})
-	if err != nil || got.Container.Config == nil || got.Container.Config.Labels[fenceProbeLabel] != "fence" {
-		return
+// helperGrace is how long a helper that was just created or has just exited still
+// belongs to the process that started it: that process starts it, then reads its
+// logs and removes it, all within moments. helperPoll is how often a busy helper is
+// looked at again. Vars so a test can shorten them.
+var (
+	helperGrace = 10 * time.Second
+	helperPoll  = 250 * time.Millisecond
+)
+
+// helperBusy reports a helper another process is still using: running, or created or
+// exited within helperGrace.
+func helperBusy(st *container.State, created string, now time.Time) bool {
+	if st == nil {
+		return false
 	}
-	_, _ = cli.ContainerRemove(context.Background(), got.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	if st.Running || st.Restarting {
+		return true
+	}
+	recent := func(stamp string) bool {
+		t, err := time.Parse(time.RFC3339Nano, stamp)
+		return err == nil && now.Sub(t) < helperGrace
+	}
+	switch st.Status {
+	case container.StateCreated:
+		return recent(created)
+	case container.StateExited, container.StateDead:
+		return recent(st.FinishedAt)
+	}
+	return false
+}
+
+// clearHelper makes room for this process's helper. Only a container that carries
+// the helper's label is touched: a container someone else named cashpilot-fence is
+// left alone, and the create that follows fails on the name instead.
+//
+// The window and the background daemon both run the fence, and the web worker's
+// helper uses the same name and label, so a helper of ours can belong to another
+// process that is still waiting for its result. That one is waited for, never killed:
+// killing it would make the other side record a failed fence and refuse its deploy.
+// Only a leftover, one idle past helperGrace or still there after the helper timeout,
+// is removed.
+func clearHelper(ctx context.Context, cli fenceAPI) {
+	deadline := time.Now().Add(fenceHelperTimeout + helperGrace)
+	for {
+		got, err := cli.ContainerInspect(ctx, fenceHelperName, client.ContainerInspectOptions{})
+		if err != nil || got.Container.Config == nil || got.Container.Config.Labels[fenceProbeLabel] != "fence" {
+			return
+		}
+		now := time.Now()
+		if !helperBusy(got.Container.State, got.Container.Created, now) || now.After(deadline) {
+			_, _ = cli.ContainerRemove(context.Background(), got.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(helperPoll):
+		}
+	}
 }
 
 func helperLogs(ctx context.Context, cli fenceAPI, id string, stdout bool) string {
@@ -580,9 +674,17 @@ func runHelper(ctx context.Context, cli fenceAPI, action, subnet string, filtere
 	if err := ensureHelperImage(ctx, cli); err != nil {
 		return fenceResult{}, err
 	}
-	removeHelper(cli)
 	cfg, host := fenceHelperSpec(action, subnet, filtered)
-	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: host, Name: fenceHelperName})
+	var created client.ContainerCreateResult
+	var err error
+	// Twice: another process can create its helper between our clear and our create.
+	for attempt := 0; attempt < 2; attempt++ {
+		clearHelper(ctx, cli)
+		created, err = cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: host, Name: fenceHelperName})
+		if err == nil || !cerrdefs.IsConflict(err) {
+			break
+		}
+	}
 	if err != nil {
 		return fenceResult{}, err
 	}
@@ -719,7 +821,11 @@ func (f *fence) mode(ctx context.Context, cli fenceAPI) (string, *network.Inspec
 		}
 		exists = other != nil
 	}
-	mode := resolveFenceMode(f.chosen(), net != nil, boundToRemoved(exists, earners), f.wasOn(), earners)
+	chosen := f.chosen()
+	if chosen != "off" && isPodman(ctx, cli) {
+		return FenceModeUnsupported, net, earners, nil
+	}
+	mode := resolveFenceMode(chosen, net != nil, boundToRemoved(exists, earners), f.wasOn(), earners)
 	switch mode {
 	case FenceModeOn:
 		f.record(true)
@@ -749,6 +855,12 @@ func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI) (string, err
 		return "", fmt.Errorf("could not check the LAN fence, so the running container was not touched: %w", err)
 	}
 	f.setStatus(func(s *FenceStatus) { s.Mode = mode })
+	if mode == FenceModeUnsupported {
+		if f.chosen() == "on" {
+			return "", fmt.Errorf("LAN isolation is set to on, but %s. The running container was not touched. Set LAN isolation to auto or off in Settings to deploy on Podman's default network, without the fence", podmanUnsupported)
+		}
+		return "", nil
+	}
 	if mode != FenceModeOn {
 		return "", nil
 	}
@@ -782,6 +894,8 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		}
 	case mode == FenceModeOff && net != nil:
 		f.reduce(ctx, cli, net)
+	case mode == FenceModeUnsupported:
+		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "unsupported", "", podmanUnsupported+"." })
 	default:
 		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "n/a", "", "" })
 	}
@@ -810,6 +924,9 @@ func (f *fence) refreshOutside(ctx context.Context, cli fenceAPI) {
 func (f *fence) enable(ctx context.Context, cli fenceAPI) (FenceStatus, error) {
 	if f.chosen() == "off" {
 		return f.Status(), errors.New("LAN isolation is off in Settings. Set it to auto or on first")
+	}
+	if isPodman(ctx, cli) {
+		return f.Status(), errors.New(podmanUnsupported + ".")
 	}
 	if err := f.apply(ctx, cli); err != nil {
 		return f.Status(), err
