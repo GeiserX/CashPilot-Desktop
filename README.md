@@ -25,6 +25,9 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 - **Activity (opt-in)** -- Which destinations each earner talks to, whether it reaches into your network or sends mail; off by default, remote addresses kept 24 hours ([details](docs/activity.md))
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Custom services** -- Run any image from Docker Hub or another registry that the catalog does not list, with the same restrictions as catalog services ([docs](docs/custom-services.md))
+- **Proxied copies** -- Run extra copies of a deployed service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy, so one computer earns on several IPs; a dead proxy stops the copy instead of leaking ([docs](docs/proxies.md))
+- **LAN isolation** -- New installs fence container earners off your LAN, this computer, a tailnet and cloud metadata; an upgraded install turns it on with one button ([docs](docs/configuration.md#lan-isolation))
+- **Provider grades** -- Every catalog provider gets a letter grade from the same published criteria as the web app, with its cons and their sources ([how we grade](https://geiserx.github.io/CashPilot/ratings/))
 - **Import from another tool** -- Bring service logins over from money4band, CashFactory or InternetIncome after a dry run ([docs](docs/migrate/money4band.md))
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
@@ -54,6 +57,7 @@ CashPilot bundles a catalog of 41 active passive-income services across multiple
 - [Activity](docs/activity.md): what the opt-in Activity page reads, keeps and alerts on
 - [Supported services](docs/services.md): bandwidth-sharing explained, per-service limits and payouts, disclosure
 - [Custom services](docs/custom-services.md): run an image the catalog does not list, and what it may do
+- [Proxied copies](docs/proxies.md): run extra copies through a proxy, what cannot, the traffic cap, Tailscale exit nodes
 - Moving from another tool: [money4band](docs/migrate/money4band.md), [CashFactory](docs/migrate/cashfactory.md), [InternetIncome](docs/migrate/internetincome.md)
 - [How it works](docs/how-it-works.md): the full design, grounded in the code
 - [FAQ](docs/faq.md): earnings, safety, Docker, crashes, several machines
