@@ -65,6 +65,10 @@ type fakeTunnelDocker struct {
 	exit string
 	// archives are every tar copied in, for the secret checks.
 	archives [][]byte
+	// network is what sidecarNetwork answers: "" for the default bridge.
+	network string
+	// created is the Created time list reports for every container (unix seconds).
+	created int64
 }
 
 func newFakeTunnelDocker() *fakeTunnelDocker {
@@ -197,7 +201,7 @@ func (f *fakeTunnelDocker) list(_ context.Context, _ ...string) ([]container.Sum
 	defer f.mu.Unlock()
 	var out []container.Summary
 	for _, c := range f.containers {
-		out = append(out, container.Summary{ID: c.id, Names: []string{"/" + c.name}, Labels: c.opts.Config.Labels, State: container.ContainerState(c.state)})
+		out = append(out, container.Summary{ID: c.id, Names: []string{"/" + c.name}, Labels: c.opts.Config.Labels, State: container.ContainerState(c.state), Created: f.created})
 	}
 	return out, nil
 }
@@ -205,11 +209,18 @@ func (f *fakeTunnelDocker) readFile(_ context.Context, id, path string) (string,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	c := f.find(id)
+	if c != nil && c.state == "running" && strings.HasPrefix(path, tunnelSecretDir+"/") {
+		if v, ok := c.files[strings.TrimPrefix(path, tunnelSecretDir+"/")]; ok {
+			return v, nil
+		}
+		return "", errors.New("no such file")
+	}
 	if c == nil || c.state != "running" || path != tunnelReadyFile || f.exit == "" || c.opts.Config.Labels[LabelRole] != RoleTunnel {
 		return "", errors.New("no such file")
 	}
 	return f.exit + "\n", nil
 }
+func (f *fakeTunnelDocker) sidecarNetwork(context.Context) (string, error) { return f.network, nil }
 func (f *fakeTunnelDocker) logsTail(context.Context, string, int) string {
 	return "cp-tunnel: no working exit through the tunnel after 40 s (socks5://" + testUser + ":" + testPassword + "@gate)"
 }
@@ -242,7 +253,7 @@ func deployRequest() ProxiedDeploy {
 // privileged, read-only, no Docker socket, no published ports.
 func TestSidecarIsLockedDown(t *testing.T) {
 	id := int64(3)
-	opts := sidecarCreate(tunnelName("earner", id), "earner", &id, "example/cashpilot-tunnel:1.66.0")
+	opts := sidecarCreate(tunnelName("earner", id), "earner", &id, "example/cashpilot-tunnel:1.66.0", "")
 	h := opts.HostConfig
 	if h.Privileged || !slices.Equal(h.CapDrop, []string{"ALL"}) || !slices.Equal(h.CapAdd, []string{"NET_ADMIN"}) {
 		t.Fatalf("capabilities: privileged=%v drop=%v add=%v", h.Privileged, h.CapDrop, h.CapAdd)
@@ -499,16 +510,19 @@ func TestStopStartRemoveTouchOnlyTheirOwnPair(t *testing.T) {
 	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
 		t.Fatal(err)
 	}
-	if err := stopProxied(ctx, f, "earner", 4, 0); err == nil {
+	if _, err := stopProxied(ctx, f, "earner", 4, 0); err == nil {
 		t.Fatal("proxy 4 has no copy here")
 	}
-	if err := stopProxied(ctx, f, "earner", 3, 0); err != nil {
-		t.Fatal(err)
+	if wasRunning, err := stopProxied(ctx, f, "earner", 3, 0); err != nil || !wasRunning {
+		t.Fatal(wasRunning, err)
+	}
+	if wasRunning, err := stopProxied(ctx, f, "earner", 3, 0); err != nil || wasRunning {
+		t.Fatalf("a second stop finds it stopped: %v %v", wasRunning, err)
 	}
 	if f.containers["cashpilot-earner-p3"].state != "exited" || f.containers["cashpilot-tunnel-earner-p3"].state != "exited" {
 		t.Fatal("stop stops both")
 	}
-	if _, err := startProxied(ctx, f, "earner", 3, 0, "gate.example.net"); err != nil {
+	if _, err := startProxied(ctx, f, "earner", 3, 0, testSpec(), ""); err != nil {
 		t.Fatal(err)
 	}
 	calls := f.callList()
@@ -590,4 +604,152 @@ func lastIndex(list []string, v string) int {
 		}
 	}
 	return -1
+}
+
+// An edit of the proxy reached nothing before: a start only resolved the host again
+// and wrote proxy_ip. Every setting is written now, the unused ones empty.
+func TestStartWritesTheProxyAsStoredNow(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stopProxied(ctx, f, "earner", 3, 0); err != nil {
+		t.Fatal(err)
+	}
+	edited := testSpec()
+	edited.Password, edited.Port = "n3w", 7100
+	if _, err := startProxied(ctx, f, "earner", 3, 0, edited, "192.0.2.9"); err != nil {
+		t.Fatal(err)
+	}
+	files := f.containers["cashpilot-tunnel-earner-p3"].files
+	for _, k := range tunnelSecretKeys {
+		if _, ok := files[k]; !ok {
+			t.Errorf("%s was not written", k)
+		}
+	}
+	if files["proxy_auth"] != "user-SECRET:n3w@" || files["proxy_port"] != "7100" || files["own_ip"] != "192.0.2.9" || files["login_server"] != "" {
+		t.Fatalf("files after the edit: %v", files)
+	}
+	if f.containers["cashpilot-earner-p3"].state != "running" {
+		t.Fatal("the earner comes back")
+	}
+}
+
+func TestStartRestartsATunnelRunningOnOldSettings(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := startProxied(ctx, f, "earner", 3, 0, testSpec(), "192.0.2.1"); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(f.callList(), "stop cashpilot-tunnel-earner-p3") {
+		t.Fatal("the same settings leave the tunnel running")
+	}
+	edited := testSpec()
+	edited.Password = "n3w"
+	if _, err := startProxied(ctx, f, "earner", 3, 0, edited, "192.0.2.1"); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.callList()
+	stop, copyIn := lastIndex(calls, "stop cashpilot-tunnel-earner-p3"), lastIndex(calls, "copy cashpilot-tunnel-earner-p3 "+tunnelSecretDir)
+	if stop < 0 || copyIn < stop || lastIndex(calls, "stop cashpilot-earner-p3") > stop {
+		t.Fatalf("earner and tunnel stop, then the new settings go in: %v", calls)
+	}
+	if f.containers["cashpilot-tunnel-earner-p3"].files["proxy_auth"] != "user-SECRET:n3w@" {
+		t.Fatal("new password not written")
+	}
+}
+
+// Keeping the old address would send the proxy login to whoever holds it now.
+func TestStartStopsWhenTheHostNoLongerResolves(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stopProxied(ctx, f, "earner", 3, 0); err != nil {
+		t.Fatal(err)
+	}
+	lookupIPv4 = func(context.Context, string) ([]net.IP, error) { return nil, errors.New("no such host") }
+	if _, err := startProxied(ctx, f, "earner", 3, 0, testSpec(), ""); err == nil {
+		t.Fatal("a start with an unresolvable host must fail")
+	}
+	if f.containers["cashpilot-tunnel-earner-p3"].state != "exited" {
+		t.Fatal("the tunnel must stay down")
+	}
+}
+
+func TestADeployThatCannotWorkKeepsTheRunningCopy(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	lookupIPv4 = func(context.Context, string) ([]net.IP, error) { return nil, errors.New("no such host") }
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil {
+		t.Fatal("expected a refusal")
+	}
+	if f.containers["cashpilot-earner-p3"] == nil || f.containers["cashpilot-tunnel-earner-p3"] == nil {
+		t.Fatal("the running copy was removed for settings that could never work")
+	}
+}
+
+// With LAN isolation on, every bridge earner joins the fenced network; the tunnel
+// joined Docker's default bridge instead, outside the fence.
+func TestTheTunnelJoinsTheFencedNetwork(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	f.network = FenceNetwork
+	if _, err := deployProxied(context.Background(), f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.containers["cashpilot-tunnel-earner-p3"].opts.HostConfig.NetworkMode; got != container.NetworkMode(FenceNetwork) {
+		t.Fatalf("tunnel network: %q", got)
+	}
+}
+
+func TestATestTunnelNeverRestartsAndAStaleOneIsSwept(t *testing.T) {
+	withTestTunnel(t)
+	if got := sidecarCreate("cashpilot-tunnel-test-x", testTunnelSlug, nil, "example/cashpilot-tunnel:1.66.0", "").HostConfig.RestartPolicy.Name; got != "no" {
+		t.Fatalf("test tunnel restart policy: %q", got)
+	}
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.create(ctx, sidecarCreate("cashpilot-tunnel-test-x", testTunnelSlug, nil, "example/cashpilot-tunnel:1.66.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	f.created = time.Now().Add(-time.Minute).Unix()
+	sweepTestTunnels(ctx, f, time.Now())
+	if f.containers["cashpilot-tunnel-test-x"] == nil {
+		t.Fatal("a test that may still run must be left alone")
+	}
+	f.created = time.Now().Add(-time.Hour).Unix()
+	if _, err := proxiedStatus(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+	if f.containers["cashpilot-tunnel-test-x"] != nil {
+		t.Fatal("the stale test tunnel was not swept")
+	}
+	if f.containers["cashpilot-tunnel-earner-p3"] == nil {
+		t.Fatal("a copy's tunnel must never be swept")
+	}
+}
+
+func TestAProbeAnswerThatIsNotAnIPIsNotReady(t *testing.T) {
+	if _, ok := parseReady(`{"ip":"e","country":""}`); ok {
+		t.Fatal(`"e" is not an exit IP`)
+	}
+	if e, ok := parseReady(`{"ip":"203.0.113.7","country":"NL"}`); !ok || e.IP != "203.0.113.7" {
+		t.Fatal("a real IP is ready")
+	}
 }

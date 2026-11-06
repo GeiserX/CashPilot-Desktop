@@ -220,3 +220,32 @@ func TestPublicIPAndSameExit(t *testing.T) {
 		t.Fatal("an unknown exit is never shared")
 	}
 }
+
+// The view shows login_server back, so a URL with a user name or password in it would
+// leak through it; a query or fragment has no business there either.
+func TestALoginServerWithASecretPartIsRefused(t *testing.T) {
+	for _, server := range []string{"https://u:p@hs.example", "https://@hs.example", "https://hs.example/?token=x", "https://hs.example/#f"} {
+		values := map[string]string{"name": "T", "kind": "tailscale", "auth_key": "k", "exit_node": "box", "login_server": server}
+		if _, err := Clean(values, nil); err == nil || !IsInputError(err) {
+			t.Errorf("login server %q was accepted", server)
+		}
+	}
+	d, err := Clean(map[string]string{"name": "T", "kind": "tailscale", "auth_key": "k", "exit_node": "box", "login_server": "https://hs.example:8443/x"}, nil)
+	if err != nil || d.LoginServer != "https://hs.example:8443/x" {
+		t.Fatalf("a plain login server: %+v %v", d, err)
+	}
+}
+
+// A cap that rounds to zero bytes would stop every copy on the first tick.
+func TestACapTooSmallToMeasureIsRefused(t *testing.T) {
+	if _, err := Clean(map[string]string{"name": "x", "kind": "http", "host": "h", "port": "1", "cap_gb": "0.0000000001"}, nil); err == nil {
+		t.Fatal("a cap of a fraction of a byte was accepted")
+	}
+	d, err := Clean(map[string]string{"name": "x", "kind": "http", "host": "h", "port": "1", "cap_gb": "0.001"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if th, _ := ThresholdBytes(d); th == 0 {
+		t.Fatal("the smallest cap must still measure something")
+	}
+}
