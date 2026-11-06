@@ -152,11 +152,11 @@ export interface ProxyTestResult {
 // FenceStatus mirrors runtime.FenceStatus: whether container earners are fenced off
 // the LAN, this computer, a tailnet and cloud metadata.
 export interface FenceStatus {
-  // off, on or legacy; "" while Docker cannot be reached.
+  // off, on, legacy or unsupported (Podman); "" while Docker cannot be reached.
   mode: string;
   // What Settings ask for: auto, on or off.
   setting: string;
-  // applied, reduced (masquerade only), failed or n/a.
+  // applied, reduced (masquerade only), failed, unsupported or n/a.
   state: string;
   backend: string;
   error: string;

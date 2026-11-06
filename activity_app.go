@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/activity"
+	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -217,14 +218,16 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 	if err := a.ready(); err != nil {
 		return ActivityView{}, err
 	}
-	cfg := a.cfg.Config()
-	was := cfg.ActivityEnabled
-	cfg.ActivityEnabled = on
+	was := a.cfg.Config().ActivityEnabled
+	// Only this field is written, onto the config as it is now: a whole-snapshot Save
+	// would put back what background work changed meanwhile (the fence's memory that
+	// isolation is on, the pairing loop's records).
+	save := func() error { return a.cfg.Update(func(c *config.AppConfig) { c.ActivityEnabled = on }) }
 	if on {
 		// Under the write lock, so a pending switch-off retry cannot run between
 		// its "still off?" check and its delete.
 		a.activity.writeMu.Lock()
-		saveErr := a.cfg.Save(cfg)
+		saveErr := save()
 		if saveErr == nil {
 			a.activity.deletePending = false
 		}
@@ -237,7 +240,7 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 		// stores nothing once the switch is off.
 		var saveErr error
 		delErr := a.activityDelete(func() error {
-			if saveErr = a.cfg.Save(cfg); saveErr != nil {
+			if saveErr = save(); saveErr != nil {
 				return nil
 			}
 			err := a.deleteActivityRows(false)
