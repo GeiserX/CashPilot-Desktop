@@ -121,20 +121,28 @@ func TestProbeConfigKeepsTheFloor(t *testing.T) {
 func TestSweepRules(t *testing.T) {
 	mine := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "me"}, State: "running"}
 	other := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: "running"}
-	otherCreated := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: "created"}
+	otherCreated := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: "created", Since: time.Now()}
 	legacyRun := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind}, State: "running"}
 	legacyDone := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind}, State: "exited"}
 	isolation := ProbeRef{Labels: map[string]string{ProbeLabel: "isolation"}, State: "exited"}
 	if !ShouldSweep(mine, "me") || ShouldSweep(other, "me") || ShouldSweep(otherCreated, "me") || ShouldSweep(legacyRun, "me") || !ShouldSweep(legacyDone, "me") || ShouldSweep(isolation, "me") {
 		t.Fatal("sweep rules broken")
 	}
-	// A finished helper of another app is never mid-round, and its log keeps
-	// that round's addresses, so any app removes it.
-	for _, state := range []string{"exited", "dead"} {
-		done := ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: state}
-		if !ShouldSweep(done, "me") {
-			t.Fatalf("a %s helper of another app must be swept", state)
+	// A stale helper of another app is never mid-round, and its log keeps
+	// that round's addresses, so any app removes it. A just-finished one is
+	// left for its owner, which reads the log right after the helper exits.
+	old := time.Now().Add(-ProbeTimeout - 5*time.Second)
+	for _, state := range []string{"exited", "dead", "created"} {
+		theirs := map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}
+		if !ShouldSweep(ProbeRef{Labels: theirs, State: state, Since: old}, "me") {
+			t.Fatalf("a stale %s helper of another app must be swept", state)
 		}
+		if ShouldSweep(ProbeRef{Labels: theirs, State: state, Since: time.Now().Add(-2 * time.Second)}, "me") {
+			t.Fatalf("a fresh %s helper of another app must be left for its owner", state)
+		}
+	}
+	if !ShouldSweep(ProbeRef{Labels: map[string]string{ProbeLabel: ProbeKind, WorkerLabel: "other"}, State: "exited"}, "me") {
+		t.Fatal("a finished helper whose age Docker did not report must be swept")
 	}
 	if ProbeName("desktop-aaa", "x") == ProbeName("desktop-bbb", "x") {
 		t.Fatal("two apps on one host must get different helper names")
