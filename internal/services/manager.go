@@ -7,7 +7,6 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -689,16 +688,11 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 			if item.Required && value == "" && item.Default == "" {
 				return fmt.Errorf("missing required field: %s", label)
 			}
-			// A value the catalog constrains must match all of the pattern before it
-			// is deployed or saved. Only what the user supplied is checked; an empty
-			// value falls back to the default, which the catalog itself vouches for.
-			if item.Pattern != "" && value != "" {
-				re, err := regexp.Compile(`^(?:` + item.Pattern + `)$`)
-				if err != nil || !re.MatchString(value) {
-					return fmt.Errorf("invalid value for field: %s", label)
-				}
-			}
-			if item.PortRange && value != "" && !isPortRange(value) {
+			// A value the catalog constrains must match all of the pattern (and a port
+			// range must be well ordered) before it is deployed or saved. Only what the
+			// user supplied is checked; an empty value falls back to the default, which
+			// the catalog itself vouches for.
+			if !item.AcceptsValue(value) {
 				return fmt.Errorf("invalid value for field: %s", label)
 			}
 		}
@@ -706,18 +700,8 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 	return nil
 }
 
-// isPortRange reports whether value is "start:end" in ASCII digits with
-// 1 <= start <= end <= 65535.
-func isPortRange(value string) bool {
-	start, end, ok := strings.Cut(value, ":")
-	if !ok {
-		return false
-	}
-	lo, err1 := strconv.Atoi(start)
-	hi, err2 := strconv.Atoi(end)
-	digits := func(s string) bool { return s != "" && strings.Trim(s, "0123456789") == "" }
-	return err1 == nil && err2 == nil && digits(start) && digits(end) && 1 <= lo && lo <= hi && hi <= 65535
-}
+// isPortRange reports whether value is "start:end" with 1 <= start <= end <= 65535.
+func isPortRange(value string) bool { return catalog.IsPortRange(value) }
 
 // ValidateCredentials reports whether the given credentials would let the service
 // deploy — mirroring Deploy's pre-checks (known, deployable, required fields present) —

@@ -74,7 +74,7 @@ var privateNets = mustCIDRs(
 //     unspecified.
 //
 // AllowedHosts entries may be an exact hostname, a "*.suffix" DNS-name suffix (e.g.
-// "*.mango-alpha.ts.net" for Tailscale MagicDNS), a CIDR, or a literal IP — a port
+// "*.tailnet-example.ts.net" for Tailscale MagicDNS), a CIDR, or a literal IP — a port
 // of the original's allowlist parsing (main.py:823-839).
 //
 // AllowMetadata, when false (the default), blocks the cloud-metadata endpoints

@@ -62,7 +62,7 @@ type AppConfig struct {
 	// WorkerAllowedHosts is an explicit allowlist of worker hosts/IPs. It is the sole
 	// allow-source in "strict" mode and is always honored in the other modes. Entries
 	// may be an exact hostname, a "*.suffix" DNS suffix (e.g. Tailscale MagicDNS
-	// "*.mango-alpha.ts.net"), a CIDR, or a literal IP. Defaults to empty (nil).
+	// "*.tailnet-example.ts.net"), a CIDR, or a literal IP. Defaults to empty (nil).
 	WorkerAllowedHosts []string `json:"workerAllowedHosts"`
 	// WorkerAllowMetadata, when false (the default, the bool zero value), makes the
 	// cloud instance-metadata endpoints (169.254.169.254, fd00:ec2::254,
@@ -117,6 +117,11 @@ type AppConfig struct {
 	// an upgraded one as it is until the user switches), "on" or "off".
 	// CASHPILOT_ISOLATION on the web worker; see internal/runtime/lanfence.go.
 	Isolation string `json:"isolation,omitempty"`
+	// ActivityEnabled switches on the Activity page's sampling (internal/activity):
+	// a short-lived helper per earner every 5 minutes reads which destinations it
+	// talks to. Off by default, the bool zero value, so no install starts it on
+	// upgrade.
+	ActivityEnabled bool `json:"activityEnabled,omitempty"`
 }
 
 // DefaultUpstreamIntervalMinutes matches what a CashPilot worker sends, so a

@@ -15,3 +15,7 @@ catalog-overlay/** text eol=lf
 *.yaml text eol=lf
 *.sh text eol=lf
 Makefile text eol=lf
+
+# The store packages carry sha256 sums of their own files (the AUR .desktop) and are
+# parsed line by line by go test ./packaging/, so they stay LF as well.
+packaging/** text eol=lf

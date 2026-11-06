@@ -17,7 +17,10 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
-//go:embed services/**/*.yml
+// services/_ratings.yml is the published grading method; the service files alone
+// cannot be graded, and a release without it would show every provider not rated.
+//
+//go:embed services/**/*.yml services/_ratings.yml
 var serviceFiles embed.FS
 
 //go:embed build/appicon.png

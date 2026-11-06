@@ -117,7 +117,7 @@ func TestSavePreservesValidValues(t *testing.T) {
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              9000,
 		WorkerURLPolicy:        "strict",
-		WorkerAllowedHosts:     []string{"10.0.0.0/8", "*.mango-alpha.ts.net"},
+		WorkerAllowedHosts:     []string{"10.0.0.0/8", "*.tailnet-example.ts.net"},
 		WorkerAllowMetadata:    true,
 	}
 	if err := m.Save(in); err != nil {
@@ -215,7 +215,7 @@ func TestWorkerURLPolicyDefaults(t *testing.T) {
 	}
 
 	cfg.WorkerURLPolicy = "strict"
-	cfg.WorkerAllowedHosts = []string{"192.168.0.0/16", "*.mango-alpha.ts.net"}
+	cfg.WorkerAllowedHosts = []string{"192.168.0.0/16", "*.tailnet-example.ts.net"}
 	cfg.WorkerAllowMetadata = true
 	if err := m.Save(cfg); err != nil {
 		t.Fatalf("Save error: %v", err)
@@ -233,7 +233,7 @@ func TestWorkerURLPolicyDefaults(t *testing.T) {
 	if got.WorkerURLPolicy != "strict" || !got.WorkerAllowMetadata {
 		t.Fatalf("worker-URL policy did not persist across reload: %+v", got)
 	}
-	if !reflect.DeepEqual(got.WorkerAllowedHosts, []string{"192.168.0.0/16", "*.mango-alpha.ts.net"}) {
+	if !reflect.DeepEqual(got.WorkerAllowedHosts, []string{"192.168.0.0/16", "*.tailnet-example.ts.net"}) {
 		t.Fatalf("WorkerAllowedHosts did not persist across reload: %v", got.WorkerAllowedHosts)
 	}
 }

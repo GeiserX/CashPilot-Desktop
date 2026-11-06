@@ -102,7 +102,7 @@ func TestSendPostsTheServerContract(t *testing.T) {
 	defer srv.Close()
 
 	in := Payload{
-		Name:       "macmini",
+		Name:       "devbox",
 		ClientID:   "abc",
 		Containers: []Item{{Slug: "earnapp", Name: "EarnApp", Status: "running"}},
 		SystemInfo: SystemInfo{OS: "darwin", DeviceType: "desktop", Version: "1.2.3"},
