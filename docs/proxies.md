@@ -83,6 +83,22 @@ holds `NET_ADMIN`, `NET_RAW` or `SYS_ADMIN`, a host device or privileged mode,
 since inside the tunnel's namespace those would let it change or bypass the
 firewall.
 
+### LAN isolation
+
+With [LAN isolation](configuration.md#lan-isolation) on, the tunnel joins the
+fenced `cashpilot-isolated` network, like every other bridge earner, so a proxy
+at a LAN or tailnet address cannot be reached: use one on the internet. With
+isolation off the tunnel runs on Docker's default bridge, and its own firewall
+is what keeps the earner off your LAN. A tunnel created before v0.39.1 ran on
+the default bridge in every mode, and stays there until its copy is deployed
+again.
+
+For SOCKS5 and HTTP the tunnel does not filter private destinations inside the
+tunnel, so the earner reaches whatever the proxy itself can reach and allows. A
+proxy that connects to private addresses on its side gives the earner that
+network. Use a proxy that refuses private destinations. Tailscale tunnels drop
+private and tailnet ranges inside the tunnel.
+
 ## DNS
 
 Name lookups from the earner never leave this computer directly. For SOCKS5
@@ -109,6 +125,16 @@ With today's catalog that rules out EarnApp, URnetwork, ProxyBase Markets,
 Bitping, Mysterium, Storj, Sia and Anyone Protocol. Services that need UDP do
 not work through SOCKS5 or HTTP CONNECT; a Tailscale exit node carries UDP.
 
+## Editing a proxy
+
+A saved edit (a new password, port, type, auth key or exit node) reaches a copy
+the next time it starts. Every start, by hand or after a cap reset, writes the
+proxy as stored into the tunnel and resolves its host again. A tunnel still
+running on the old settings is stopped with its earner and comes back on the
+new ones. To apply an edit to a running copy now, press **Stop**, then
+**Start**. If the host no longer resolves, the start stops there, rather than
+sending the login to the address it had before.
+
 ## Exit IPs
 
 The exit IP a copy shows is the one the tunnel saw when it came up. When a new
@@ -125,10 +151,12 @@ at, and a reset day (1 to 28) or none for **Reset usage** by hand.
 Traffic is counted from the tunnel container's own interface, which every byte
 of the earner crosses, including TCP, TLS and WireGuard overhead, so it can
 differ from your provider's count. At the threshold every copy through that
-proxy is stopped and you get a notice. Every copy recorded for that proxy is
-then marked as stopped by the cap, including one you had already stopped
-yourself, and a reset starts every marked copy. Stop a copy again after the
-reset if you want it to stay stopped.
+proxy is stopped and you get a notice. Only the copies that were running are
+marked as stopped by the cap, so a copy you had already stopped stays stopped
+after the reset. While the proxy is capped, Start is disabled on its copies:
+reset the usage or raise the cap first. A reset starts every marked copy; one
+whose start fails keeps its mark, the failure shows in its events, and the next
+reset or a Start by hand tries again.
 
 ## Tailscale exit nodes
 
@@ -172,13 +200,3 @@ ephemeral, tagged and used for nothing else.
   copy's exit IP with this computer's own IP and with the copies through your
   other proxies here. It does not see the services on other machines in your
   fleet.
-- **The tunnel runs on Docker's default bridge, not on the fenced
-  `cashpilot-isolated` network** ([LAN isolation](configuration.md#lan-isolation)).
-  The tunnel's own firewall lets out only its connection to the proxy, so the
-  earner cannot reach your LAN directly, and a proxy at a LAN or tailnet address
-  is reachable here, where the web worker's fence drops it. For SOCKS5 and HTTP
-  the tunnel does not filter private destinations inside the tunnel, so the
-  earner reaches whatever the proxy itself can reach and allows: a proxy on your
-  LAN, or one that connects to private addresses, gives the earner your LAN.
-  Use a proxy outside your network that refuses private destinations.
-  Tailscale tunnels drop private and tailnet ranges inside the tunnel.
