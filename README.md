@@ -26,7 +26,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Custom services** -- Run any image from Docker Hub or another registry that the catalog does not list, with the same restrictions as catalog services ([docs](docs/custom-services.md))
 - **Proxied copies** -- Run extra copies of a deployed service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy, so one computer earns on several IPs; a dead proxy stops the copy instead of leaking ([docs](docs/proxies.md))
-- **LAN isolation** -- New installs fence container earners off your LAN, this computer, a tailnet and cloud metadata; an upgraded install turns it on with one button ([docs](docs/configuration.md#lan-isolation))
+- **LAN isolation** -- New installs fence bridge-networked container earners (not host-networked ones such as Mysterium) off your LAN, this computer, a tailnet and cloud metadata; an upgraded install turns it on with one button ([docs](docs/configuration.md#lan-isolation))
 - **Provider grades** -- Every catalog provider gets a letter grade from the same published criteria as the web app, with its cons and their sources ([how we grade](https://geiserx.github.io/CashPilot/ratings/))
 - **Import from another tool** -- Bring service logins over from money4band, CashFactory or InternetIncome after a dry run ([docs](docs/migrate/money4band.md))
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)

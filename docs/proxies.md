@@ -23,6 +23,11 @@ differences listed in [Where Desktop differs](#where-desktop-differs).
 
 Any provider works. Nothing in CashPilot is specific to one.
 
+SOCKS5 and HTTP CONNECT send the proxy user and password in the clear, so
+anyone on the path between this computer and the proxy can read them and use
+your proxy account. Use a proxy reached over a network you trust, or a
+Tailscale exit node, whose traffic is encrypted end to end.
+
 The definition, login and auth key are stored encrypted. The window only
 learns whether a secret is set: an edit form leaves those boxes empty, and
 leaving one empty keeps what is stored. To drop a stored user or password, tick
@@ -86,8 +91,10 @@ firewall.
 ### LAN isolation
 
 With [LAN isolation](configuration.md#lan-isolation) on, the tunnel joins the
-fenced `cashpilot-isolated` network, like every other bridge earner, so a proxy
-at a LAN or tailnet address cannot be reached: use one on the internet. With
+fenced `cashpilot-isolated` network, like every other bridge earner, so a
+SOCKS5 or HTTP proxy at a LAN or tailnet address cannot be reached: use one on
+the internet. A Tailscale exit node still works by its 100.x address, because
+tailscaled reaches it through the node's public endpoints, not that address. With
 isolation off the tunnel runs on Docker's default bridge, and its own firewall
 is what keeps the earner off your LAN. A tunnel created before v0.39.1 ran on
 the default bridge in every mode, and stays there until its copy is deployed
@@ -128,8 +135,10 @@ not work through SOCKS5 or HTTP CONNECT; a Tailscale exit node carries UDP.
 ## Editing a proxy
 
 A saved edit (a new password, port, type, auth key or exit node) reaches a copy
-the next time it starts. Every start, by hand or after a cap reset, writes the
-proxy as stored into the tunnel and resolves its host again. A tunnel still
+the next time the app starts it. Every start by the app, by hand or after a
+cap reset, writes the proxy as stored into the tunnel and resolves its host
+again. A restart Docker does on its own, after a reboot or a tunnel crash,
+keeps the settings the tunnel already has. A tunnel still
 running on the old settings is stopped with its earner and comes back on the
 new ones. To apply an edit to a running copy now, press **Stop**, then
 **Start**. If the host no longer resolves, the start stops there, rather than
@@ -199,4 +208,5 @@ ephemeral, tagged and used for nothing else.
 - **The same-exit warning covers this computer only.** It compares the new
   copy's exit IP with this computer's own IP and with the copies through your
   other proxies here. It does not see the services on other machines in your
-  fleet.
+  fleet, and it skips copies through a proxy ticked **Rotating exit IP**,
+  whose sampled IP says nothing about the next connection.
