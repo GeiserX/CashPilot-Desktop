@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	neturl "net/url"
@@ -38,6 +39,7 @@ type App struct {
 	catalog    *catalog.Catalog
 	store      *store.Store
 	runtime    runtime.Provider
+	fence      fenceController // LAN isolation of the Docker runtime (internal/runtime/lanfence.go)
 	native     runtime.Provider
 	services   *services.Manager
 	collectors collectorRegistry
@@ -101,6 +103,14 @@ type App struct {
 	proxyStop func()
 	// activity is the Activity sampler (activity_sampler.go): off until the owner switches it on.
 	activity activityState
+}
+
+// fenceController is the slice of the Docker provider that keeps earners off the LAN.
+// An interface so the app tests can fake it without a daemon.
+type fenceController interface {
+	FenceStatus() runtime.FenceStatus
+	ReconcileFence(ctx context.Context)
+	EnableFence(ctx context.Context) (runtime.FenceStatus, error)
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
@@ -175,7 +185,10 @@ func (a *App) startCore(ctx context.Context) error {
 	}
 	a.catalog = cat
 
-	a.runtime = runtime.NewDockerProvider()
+	docker := runtime.NewDockerProvider()
+	docker.SetIsolationSetting(func() string { return a.cfg.Config().Isolation })
+	a.runtime = docker
+	a.fence = docker
 	native := runtime.NewNativeProcessProvider(cfg.AppDir())
 	// Feed the native supervisor's autonomous crashes/respawns into the same runtime_events
 	// stream HealthScores aggregates, so native earners get the crash/restart accounting the
@@ -230,7 +243,24 @@ func (a *App) startCore(ctx context.Context) error {
 	// Optional, and a no-op unless the user paired this Desktop with a
 	// CashPilot server. Standalone is the default and unaffected.
 	a.startUpstream(ctx)
+	// The LAN fence: put the table back at startup and every few minutes, so a
+	// reboot or a firewall reload leaves the earners offline only briefly, never on
+	// the LAN.
+	go a.runFence(ctx)
 	return nil
+}
+
+func (a *App) runFence(ctx context.Context) {
+	ticker := time.NewTicker(runtime.FenceRecheck)
+	defer ticker.Stop()
+	for {
+		a.fence.ReconcileFence(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (a *App) DomReady(ctx context.Context) {
@@ -319,6 +349,17 @@ type AppState struct {
 	// own image). Empty when warnings are off or the user ignored that service at
 	// the current catalog.
 	Drift map[string][]string `json:"drift"`
+	// Isolation is the LAN fence's status: whether earners are fenced off the LAN,
+	// this machine, a tailnet and cloud metadata, and which ones are not yet.
+	Isolation *runtime.FenceStatus `json:"isolation"`
+}
+
+// IsolationResult is what turning isolation on did: the status after, the services
+// moved onto the fenced network, and the ones whose redeploy failed with why.
+type IsolationResult struct {
+	Status runtime.FenceStatus `json:"status"`
+	Moved  []string            `json:"moved"`
+	Failed map[string]string   `json:"failed"`
 }
 
 type Notification struct {
@@ -492,7 +533,49 @@ func (a *App) GetAppState() (AppState, error) {
 		AddedDevices:     a.addedDeviceIDs(),
 		StateBackups:     a.stateBackups(deployments),
 		Drift:            a.containerDrift(),
+		Isolation:        a.isolationStatus(),
 	}, nil
+}
+
+func (a *App) isolationStatus() *runtime.FenceStatus {
+	if a.fence == nil {
+		return nil
+	}
+	status := a.fence.FenceStatus()
+	return &status
+}
+
+// EnableIsolation turns LAN isolation on for an upgraded install: it applies the
+// fence, then redeploys each running earner onto the fenced network with the settings
+// and data it already has. Stopped earners are left alone and move on their next
+// deploy. One failed redeploy does not stop the rest; each failure is named.
+func (a *App) EnableIsolation() (IsolationResult, error) {
+	if err := a.ready(); err != nil {
+		return IsolationResult{}, err
+	}
+	if a.fence == nil {
+		return IsolationResult{}, errors.New("this runtime has no LAN fence")
+	}
+	status, err := a.fence.EnableFence(a.ctx)
+	if err != nil {
+		a.emitError("isolation", err)
+		return IsolationResult{Status: status}, err
+	}
+	result := IsolationResult{Failed: map[string]string{}}
+	for _, slug := range status.Outside {
+		if _, known := a.catalog.Get(slug); !known {
+			result.Failed[slug] = "not a service CashPilot knows, so it was left as it is"
+			continue
+		}
+		if _, err := a.DeployService(slug, nil, nil, nil); err != nil {
+			result.Failed[slug] = err.Error()
+			continue
+		}
+		result.Moved = append(result.Moved, slug)
+	}
+	a.fence.ReconcileFence(a.ctx)
+	result.Status = a.fence.FenceStatus()
+	return result, nil
 }
 
 // driftTimeout bounds the docker inspects behind the drift check, so a daemon that
@@ -865,6 +948,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
+		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Takes effect on the next deploy."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Optional. Leave EMPTY to stay standalone, which is the default and loses nothing. Set to a CashPilot server's URL and this machine reports to it as a worker, so its services appear on that fleet. Earnings are unaffected: the server collects those centrally and this only reports what is running."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
@@ -901,6 +985,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	previousInterval := cfg.CollectIntervalMinutes
 	previousFleetPort := cfg.FleetPort
 	previousFleetBind := cfg.FleetBindAddress
+	previousIsolation := cfg.Isolation
 	if value := strings.TrimSpace(values["displayCurrency"]); value != "" {
 		upper := strings.ToUpper(value)
 		if !isSupportedCurrency(upper) {
@@ -957,6 +1042,16 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 			cfg.DriftWarningsOff = false
 		}
 	}
+	if value, present := values["isolation"]; present {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "", "auto":
+			cfg.Isolation = ""
+		case "on", "off":
+			cfg.Isolation = strings.ToLower(strings.TrimSpace(value))
+		default:
+			return SettingsState{}, fmt.Errorf("LAN isolation must be auto, on or off, not %q", value)
+		}
+	}
 	if value := strings.TrimSpace(values["fleetBindAddress"]); value != "" {
 		// Only a parseable IP or "localhost" is a valid bind host (an empty value
 		// keeps the loopback default via config.Normalize). A bad value stored verbatim
@@ -994,6 +1089,11 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// the app is restarted.
 	if cfg.FleetPort != previousFleetPort || cfg.FleetBindAddress != previousFleetBind {
 		a.emitNotice("fleet-api", "Fleet API port/bind change takes effect after restarting the app.")
+	}
+	// A changed isolation setting is checked at once rather than at the next five-minute
+	// pass, so turning it off drops the filtering now and the dashboard says so.
+	if cfg.Isolation != previousIsolation && a.fence != nil && a.ctx != nil {
+		go a.fence.ReconcileFence(a.ctx)
 	}
 	// Pairing DOES take effect immediately, unlike the fleet listener above --
 	// startUpstream stops any previous loop first, so this cannot leave two loops

@@ -35,6 +35,8 @@ export function DeployProxiedCopy(arg1:string,arg2:number):Promise<services.Prox
 
 export function DeployService(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any):Promise<store.Deployment>;
 
+export function EnableIsolation():Promise<main.IsolationResult>;
+
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
 
 export function ExportStateBackup(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;

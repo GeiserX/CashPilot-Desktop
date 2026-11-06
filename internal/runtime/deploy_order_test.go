@@ -40,6 +40,136 @@ type fakeDocker struct {
 	// removeQueries is the query string of each container removal, so a test can
 	// tell whether anonymous volumes went with it (v=1).
 	removeQueries []string
+
+	// The LAN fence (lanfence.go). Every request for the helper container is answered
+	// here and recorded with a "FENCE " prefix, so the assertions above about the
+	// earner's own container never see it.
+	//
+	// fenceOutput is what the helper prints; empty is a fence applied cleanly.
+	fenceOutput string
+	// fenceExit is the helper's exit status.
+	fenceExit int
+	// earners is what the managed-container list answers.
+	earners []map[string]any
+	// fenceNet is the network the fake holds under cashpilot-isolated, nil for none.
+	// netOptions overrides the options it is created with, to model a runtime that
+	// ignores the bridge name.
+	fenceNet   map[string]any
+	netOptions map[string]string
+	// fenceCreate is the last helper create body.
+	fenceCreate []byte
+}
+
+const fenceAppliedOutput = `{"backend":"nft","ok":true,"changed":true,"error":"","present":true,"matches":true,"counters":{"host":0}}`
+
+// fenceNetwork answers like the daemon's network inspect for cashpilot-isolated.
+func (f *fakeDocker) fenceNetwork(labelled bool, options map[string]string) map[string]any {
+	labels := map[string]string{}
+	if labelled {
+		labels[fenceLabel] = fenceLabelValue
+	}
+	return map[string]any{
+		"Name": FenceNetwork, "Id": "fencenet", "Driver": "bridge",
+		"Options": options, "Labels": labels,
+		"IPAM":       map[string]any{"Config": []map[string]any{{"Subnet": "172.30.0.0/16", "Gateway": "172.30.0.1"}}},
+		"Containers": map[string]any{},
+	}
+}
+
+// muxStdout frames text as one stdout record of Docker's multiplexed log stream.
+func muxStdout(text string) []byte {
+	header := []byte{1, 0, 0, 0, byte(len(text) >> 24), byte(len(text) >> 16), byte(len(text) >> 8), byte(len(text))}
+	return append(header, text...)
+}
+
+// serveFence answers the fence's requests. It reports whether it did.
+func (f *fakeDocker) serveFence(w http.ResponseWriter, r *http.Request, path string) bool {
+	w.Header().Set("Content-Type", "application/json")
+	isHelper := strings.Contains(path, "/containers/fence/") || strings.Contains(path, "/containers/"+fenceHelperName) ||
+		(path == "/containers/create" && r.URL.Query().Get("name") == fenceHelperName)
+	switch {
+	case isHelper:
+		f.record("FENCE " + r.Method + " " + path)
+		switch {
+		case path == "/containers/create":
+			body, _ := io.ReadAll(r.Body)
+			f.mu.Lock()
+			f.fenceCreate = body
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "fence", "Warnings": []string{}})
+		case strings.HasSuffix(path, "/wait"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"StatusCode": f.fenceExit})
+		case strings.HasSuffix(path, "/logs"):
+			w.Header().Set("Content-Type", "application/vnd.docker.multiplexed-stream")
+			out := f.fenceOutput
+			if out == "" {
+				out = fenceAppliedOutput
+			}
+			if r.URL.Query().Get("stdout") != "1" {
+				out = "Traceback: helper failed"
+			}
+			_, _ = w.Write(muxStdout(out + "\n"))
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+		return true
+	case r.Method == http.MethodGet && path == "/containers/json":
+		f.record("GET /containers/json")
+		list := f.earners
+		if list == nil {
+			list = []map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(list)
+		return true
+	case r.Method == http.MethodGet && path == "/networks":
+		f.record("GET /networks")
+		list := []map[string]any{}
+		f.mu.Lock()
+		if f.fenceNet != nil && len(f.fenceNet["Labels"].(map[string]string)) > 0 {
+			list = append(list, f.fenceNet)
+		}
+		f.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(list)
+		return true
+	case r.Method == http.MethodPost && path == "/networks/create":
+		f.record("POST /networks/create")
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Options map[string]string
+		}
+		_ = json.Unmarshal(body, &req)
+		options := req.Options
+		if f.netOptions != nil {
+			options = f.netOptions
+		}
+		f.mu.Lock()
+		f.fenceNet = f.fenceNetwork(true, options)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{"Id": "fencenet"})
+		return true
+	case r.Method == http.MethodGet && (path == "/networks/"+FenceNetwork || path == "/networks/fencenet"):
+		f.record("GET " + path)
+		f.mu.Lock()
+		net := f.fenceNet
+		f.mu.Unlock()
+		if net == nil {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "network not found"})
+			return true
+		}
+		_ = json.NewEncoder(w).Encode(net)
+		return true
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/networks/"):
+		f.record("DELETE " + path)
+		f.mu.Lock()
+		f.fenceNet = nil
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	return false
 }
 
 func (f *fakeDocker) record(call string) {
@@ -75,6 +205,9 @@ func (f *fakeDocker) start(t *testing.T) {
 		}
 		w.Header().Set("Api-Version", "1.51")
 		w.Header().Set("Ostype", "linux")
+		if f.serveFence(w, r, path) {
+			return
+		}
 		switch {
 		case path == "/_ping":
 			w.WriteHeader(http.StatusOK)

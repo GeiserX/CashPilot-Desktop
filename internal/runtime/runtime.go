@@ -114,10 +114,56 @@ type ContainerInfo struct {
 	NetTxBytes  *uint64 `json:"-"`
 }
 
-type DockerProvider struct{}
+type DockerProvider struct {
+	// fence keeps bridge earners off the LAN (lanfence.go). The zero value works:
+	// with no setting wired in, the setting reads as auto.
+	fence fence
+}
 
 func NewDockerProvider() *DockerProvider {
 	return &DockerProvider{}
+}
+
+// SetIsolationSetting wires in where the LAN isolation setting (auto, on, off) is read
+// from. Call it before the first deploy.
+func (p *DockerProvider) SetIsolationSetting(read func() string) {
+	p.fence.setting = read
+}
+
+// FenceStatus is the cached LAN isolation status. No Docker call.
+func (p *DockerProvider) FenceStatus() FenceStatus {
+	return p.fence.Status()
+}
+
+// ReconcileFence puts the fence back if it went and refreshes its status: at startup
+// and every FenceRecheck. Never fails; a failure shows in the status.
+func (p *DockerProvider) ReconcileFence(ctx context.Context) {
+	cli, err := dockerClient()
+	if err != nil {
+		p.fence.setStatus(func(s *FenceStatus) { *s = FenceStatus{State: "n/a"} })
+		return
+	}
+	defer cli.Close()
+	if _, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		p.fence.setStatus(func(s *FenceStatus) { *s = FenceStatus{State: "n/a"} })
+		return
+	}
+	if facts := daemonFacts(ctx, cli); facts.OSType != "linux" {
+		p.fence.setStatus(func(s *FenceStatus) { *s = FenceStatus{State: "n/a"} })
+		return
+	}
+	p.fence.reconcile(ctx, cli)
+}
+
+// EnableFence turns isolation on for an upgraded install: applies the fence and
+// returns the status, whose Outside lists the running earners still to redeploy.
+func (p *DockerProvider) EnableFence(ctx context.Context) (FenceStatus, error) {
+	cli, err := dockerClient()
+	if err != nil {
+		return p.fence.Status(), err
+	}
+	defer cli.Close()
+	return p.fence.enable(ctx, cli)
 }
 
 func (p *DockerProvider) Status(ctx context.Context) Status {
@@ -242,6 +288,18 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if bootsInitSystem(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd) {
 		return ContainerInfo{}, fmt.Errorf("%s runs an init system as its main process (/sbin/init, usually systemd), which needs a privileged container with the host's cgroup tree. CashPilot never grants that, so the container would exit at once and restart forever. Use the image's non-init tag (often ':lite') or the catalog image", image)
 	}
+
+	// Which network a bridge earner joins is settled on this side of the line too: if
+	// the LAN fence cannot be applied, the deploy is refused and the running container
+	// keeps earning. A Windows-containers daemon has no Linux bridge to fence.
+	if hostConfig.NetworkMode == "bridge" && facts.OSType == "linux" {
+		fenced, err := p.fence.networkForDeploy(ctx, cli)
+		if err != nil {
+			return ContainerInfo{}, err
+		}
+		isolate(hostConfig, fenced)
+	}
+	defer p.fence.refreshOutside(context.Background(), cli)
 
 	// Past this point the deploy is destructive: the existing container goes.
 	// Where the running container keeps its data beats where the catalog thinks it

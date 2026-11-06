@@ -113,6 +113,10 @@ type AppConfig struct {
 	// (runtime.ShapeFingerprint) its drift warning was muted at. The mute holds
 	// until the catalog changes a field the check judges.
 	DriftIgnored map[string]string `json:"driftIgnored,omitempty"`
+	// Isolation is the LAN isolation setting: "" or "auto" (fence new installs, leave
+	// an upgraded one as it is until the user switches), "on" or "off".
+	// CASHPILOT_ISOLATION on the web worker; see internal/runtime/lanfence.go.
+	Isolation string `json:"isolation,omitempty"`
 	// ActivityEnabled switches on the Activity page's sampling (internal/activity):
 	// a short-lived helper per earner every 5 minutes reads which destinations it
 	// talks to. Off by default, the bool zero value, so no install starts it on

@@ -27,6 +27,7 @@ import {
   DeleteProxy,
   DeployProxiedCopy,
   DeployService,
+  EnableIsolation,
   ExportCompose,
   ExportStateBackup,
   GetAppState,
@@ -380,6 +381,7 @@ function renderDashboard(current: AppState) {
     health: current.health,
     drift: current.drift,
     producerStates: current.producerStates,
+    isolation: current.isolation,
   });
 
   root.innerHTML = `
@@ -489,6 +491,9 @@ function renderDashboard(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-drift-action]").forEach((button) => {
     button.addEventListener("click", () => void runDriftAction(button.dataset.slug || "", button.dataset.driftAction || ""));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-isolation-action]").forEach((button) => {
+    button.addEventListener("click", () => void runEnableIsolation());
   });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1246,6 +1251,7 @@ function envInputName(key: string) {
     CASHPILOT_FLEET_PORT: "fleetPort",
     CASHPILOT_FLEET_SERVER: "fleetServerEnabled",
     CASHPILOT_DRIFT_WARNINGS: "driftWarnings",
+    CASHPILOT_ISOLATION: "isolation",
     CASHPILOT_UPSTREAM_URL: "upstreamUrl",
     CASHPILOT_UPSTREAM_KEY: "upstreamKey",
     TZ: "timezone",
@@ -2079,6 +2085,25 @@ async function runDriftAction(slug: string, action: string) {
       await refreshState();
       setOutput(`${name}: warning ignored until the catalog changes it again.`);
     }
+  } catch (error) {
+    setOutput(String(error));
+  }
+}
+
+// "Turn on isolation": the fence goes up, then each running earner is redeployed onto
+// the fenced network with the credentials, image and copies it already has.
+async function runEnableIsolation() {
+  const names = state?.isolation?.outside || [];
+  if (!confirm(`Turn on LAN isolation? CashPilot redeploys ${names.length === 1 ? "1 running service" : `${names.length} running services`} onto its fenced network. Each keeps its settings and saved data, and is offline for a few seconds.`)) return;
+  try {
+    setOutput("Turning on LAN isolation...");
+    const result = await EnableIsolation();
+    await refreshState();
+    const failed = Object.entries(result.failed || {});
+    const moved = result.moved || [];
+    setOutput(failed.length
+      ? `Isolation is on. Moved: ${moved.join(", ") || "none"}. Not moved: ${failed.map(([slug, why]) => `${slug} (${why})`).join("; ")}.`
+      : `Isolation is on. Moved: ${moved.join(", ") || "none"}.`);
   } catch (error) {
     setOutput(String(error));
   }
