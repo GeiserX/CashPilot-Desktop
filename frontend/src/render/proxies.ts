@@ -42,7 +42,7 @@ export function capText(p: ProxyView): string {
   return `${formatGB(cap.usedBytes)} of ${formatGB(cap.capBytes)} used, stops at ${cap.thresholdPct}%, ${reset}`;
 }
 
-function copyRow(proxyId: number, c: ProxyCopyView): string {
+function copyRow(proxyId: number, c: ProxyCopyView, capped: boolean): string {
   const running = c.status === "running";
   const status = c.stoppedByCap ? "stopped by the cap" : c.status;
   return `
@@ -51,7 +51,10 @@ function copyRow(proxyId: number, c: ProxyCopyView): string {
       <span class="device-actions">
         ${running
           ? `<button class="secondary compact-btn" data-proxy-copy-stop="${proxyId}" data-slug="${escapeHtml(c.slug)}">Stop</button>`
-          : `<button class="secondary compact-btn" data-proxy-copy-start="${proxyId}" data-slug="${escapeHtml(c.slug)}">Start</button>`}
+          : capped
+            // A capped proxy refuses every start until its usage is reset or the cap changes.
+            ? `<button class="secondary compact-btn" disabled title="Reset the usage or raise the cap to start it">Start</button>`
+            : `<button class="secondary compact-btn" data-proxy-copy-start="${proxyId}" data-slug="${escapeHtml(c.slug)}">Start</button>`}
         <button class="danger compact-btn" data-proxy-copy-remove="${proxyId}" data-slug="${escapeHtml(c.slug)}">Remove</button>
       </span>
     </li>`;
@@ -87,7 +90,7 @@ export function renderProxyCard(p: ProxyView): string {
       ${secrets ? `<div class="badge-row">${secrets}</div>` : ""}
       ${capped}
       ${test}
-      ${(p.copies || []).length ? `<ul class="proxy-copies">${p.copies.map((c) => copyRow(p.id, c)).join("")}</ul>` : `<p class="muted compact-copy">No copies run through this proxy yet.</p>`}
+      ${(p.copies || []).length ? `<ul class="proxy-copies">${p.copies.map((c) => copyRow(p.id, c, !!p.cap.cappedAt)).join("")}</ul>` : `<p class="muted compact-copy">No copies run through this proxy yet.</p>`}
     </article>`;
 }
 
@@ -123,6 +126,7 @@ export function renderProxyEditor(p: ProxyView | null): string {
     <form class="custom-editor panel" data-proxy-editor="${v.id}" onsubmit="return false">
       <h3>${p ? `Edit ${escapeHtml(p.name)}` : "Add a proxy"}</h3>
       <p class="muted compact-copy">Use the host, port and proxy login your provider gives for SOCKS5 or HTTP, not your dashboard login. Any provider works.</p>
+      ${p && (p.copies || []).length ? `<p class="muted compact-copy">A copy picks up a change the next time it starts. To apply it to a running copy now, press Stop, then Start.</p>` : ""}
       <div class="credential-grid">
         ${text("name", "Name", v.name, "Residential gate")}
         <label><span>Type</span><select data-proxy-field="kind">${kind("socks5", "SOCKS5")}${kind("http", "HTTP CONNECT")}${kind("tailscale", "Tailscale exit node")}</select></label>

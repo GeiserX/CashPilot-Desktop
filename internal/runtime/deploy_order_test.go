@@ -58,6 +58,15 @@ type fakeDocker struct {
 	netOptions map[string]string
 	// fenceCreate is the last helper create body.
 	fenceCreate []byte
+	// podman makes /version name the Podman engine.
+	podman bool
+	// helperInspect answers the inspects of the helper's name in turn; once it runs
+	// out, the name is free (404). Nil keeps the plain answer.
+	helperInspect []map[string]any
+	// helperConflicts makes that many helper creates fail on the name.
+	helperConflicts int
+	// helperCreates counts helper creates.
+	helperCreates int
 }
 
 const fenceAppliedOutput = `{"backend":"nft","ok":true,"changed":true,"error":"","present":true,"matches":true,"counters":{"host":0}}`
@@ -91,11 +100,34 @@ func (f *fakeDocker) serveFence(w http.ResponseWriter, r *http.Request, path str
 	case isHelper:
 		f.record("FENCE " + r.Method + " " + path)
 		switch {
+		case r.Method == http.MethodGet && path == "/containers/"+fenceHelperName+"/json" && f.helperInspect != nil:
+			f.mu.Lock()
+			var next map[string]any
+			if len(f.helperInspect) > 0 {
+				next, f.helperInspect = f.helperInspect[0], f.helperInspect[1:]
+			}
+			f.mu.Unlock()
+			if next == nil {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": "No such container: " + fenceHelperName})
+				return true
+			}
+			_ = json.NewEncoder(w).Encode(next)
 		case path == "/containers/create":
 			body, _ := io.ReadAll(r.Body)
 			f.mu.Lock()
 			f.fenceCreate = body
+			f.helperCreates++
+			conflict := f.helperConflicts > 0
+			if conflict {
+				f.helperConflicts--
+			}
 			f.mu.Unlock()
+			if conflict {
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]string{"message": "Conflict. The container name \"/" + fenceHelperName + "\" is already in use"})
+				return true
+			}
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "fence", "Warnings": []string{}})
 		case strings.HasSuffix(path, "/wait"):
@@ -113,6 +145,14 @@ func (f *fakeDocker) serveFence(w http.ResponseWriter, r *http.Request, path str
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
+		return true
+	case r.Method == http.MethodGet && path == "/version" && f.podman:
+		f.record("GET /version")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Platform":   map[string]string{"Name": "linux/amd64/fedora-41"},
+			"Components": []map[string]any{{"Name": "Podman Engine", "Version": "5.4.0"}},
+			"Version":    "5.4.0", "ApiVersion": "1.41",
+		})
 		return true
 	case r.Method == http.MethodGet && path == "/containers/json":
 		f.record("GET /containers/json")

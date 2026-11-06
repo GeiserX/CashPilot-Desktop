@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	_ "modernc.org/sqlite"
@@ -24,6 +25,7 @@ type fakeProxyProvider struct {
 	rx       map[string]uint64
 	stops    []string
 	starts   []string
+	specs    []runtime.ProxySpec
 	removed  []string
 	allGone  []string
 }
@@ -42,13 +44,15 @@ func (f *fakeProxyProvider) DeployProxied(_ context.Context, req runtime.Proxied
 	f.running[key(req.Slug, req.ProxyID)] = true
 	return runtime.Exit{IP: "203.0.113.7", Country: "NL"}, nil
 }
-func (f *fakeProxyProvider) StopProxied(_ context.Context, slug string, id int64, _ int) error {
+func (f *fakeProxyProvider) StopProxied(_ context.Context, slug string, id int64, _ int) (bool, error) {
 	f.stops = append(f.stops, key(slug, id))
+	was := f.running[key(slug, id)]
 	f.running[key(slug, id)] = false
-	return nil
+	return was, nil
 }
-func (f *fakeProxyProvider) StartProxied(_ context.Context, slug string, id int64, _ int, _ string) (runtime.Exit, error) {
+func (f *fakeProxyProvider) StartProxied(_ context.Context, slug string, id int64, _ int, spec runtime.ProxySpec, _ string) (runtime.Exit, error) {
 	f.starts = append(f.starts, key(slug, id))
+	f.specs = append(f.specs, spec)
 	f.running[key(slug, id)] = true
 	return runtime.Exit{IP: "203.0.113.7"}, nil
 }
@@ -320,5 +324,93 @@ func TestTestProxyKeepsTheOutcomeOnTheProxy(t *testing.T) {
 	got, _ := m.view(view.ID)
 	if got.LastExitIP != "203.0.113.9" || got.LastTest == nil || !got.LastTest.OK {
 		t.Fatalf("view: %+v", got)
+	}
+}
+
+// Docker answers a stop of a stopped container with success, so a crossing marked a
+// copy the owner had stopped as stopped by the cap, and the next reset started it.
+func TestACopyTheOwnerStoppedStaysStoppedThroughACrossingAndAReset(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	p.rx[key("example", view.ID)] = 950_000_000
+	if crossed, err := m.ProxyTick(ctx); err != nil || len(crossed) != 1 {
+		t.Fatalf("crossing: %v %v", crossed, err)
+	}
+	p.starts = nil
+	if started, err := m.ResetProxy(ctx, view.ID); err != nil || len(started) != 0 || len(p.starts) != 0 {
+		t.Fatalf("the reset started a copy the owner stopped: %v %v %v", started, p.starts, err)
+	}
+}
+
+// An edit reached nothing before: a start passed only the host.
+func TestAStartUsesTheProxyAsStoredNow(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "password": "old"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.SaveProxy(ctx, view.ID, map[string]string{"password": "n3w", "port": "7100"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StartProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	last := p.specs[len(p.specs)-1]
+	if last.Password != "n3w" || last.Port != 7100 {
+		t.Fatalf("start got %+v", last)
+	}
+}
+
+func TestAProxyCannotBeDeletedWhileACopyOfItDeploys(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000"})
+	var deleteErr error
+	p.deployFn = func(runtime.ProxiedDeploy) (runtime.Exit, error) {
+		deleteErr = m.DeleteProxy(view.ID)
+		return runtime.Exit{IP: "203.0.113.7"}, nil
+	}
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	if deleteErr == nil {
+		t.Fatal("the proxy was deleted under a copy being deployed")
+	}
+}
+
+func TestAFailedDeployLeavesNoRecord(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000"})
+	p.deployFn = func(runtime.ProxiedDeploy) (runtime.Exit, error) { return runtime.Exit{}, errors.New("refused") }
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err == nil {
+		t.Fatal("expected the refusal")
+	}
+	if records, _ := st.ListProxiedCopies(view.ID); len(records) != 0 {
+		t.Fatalf("records after a failed deploy: %+v", records)
+	}
+}
+
+func TestANewProxyWithAResetDayStartsItsPeriod(t *testing.T) {
+	m, _, _ := newProxyManager(t)
+	view, err := m.SaveProxy(context.Background(), 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1", "reset_day": "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, s, err := m.loadProxy(view.ID)
+	if err != nil || s.PeriodStart == "" || proxies.ResetDue(d, s, proxyNow().UTC()) {
+		t.Fatalf("period: %+v %v", s, err)
 	}
 }
