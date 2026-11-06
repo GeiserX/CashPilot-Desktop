@@ -23,6 +23,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -136,10 +138,12 @@ func proxyErr(format string, args ...any) error { return &ProxyError{fmt.Sprintf
 // ProxyProvider is a runtime that can run proxied copies (Docker only).
 type ProxyProvider interface {
 	DeployProxied(ctx context.Context, req ProxiedDeploy) (Exit, error)
-	StopProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) error
-	// StartProxied resolves proxyHost again ("" keeps the address the tunnel has),
-	// so a provider that moved its gateway needs only a Stop and Start.
-	StartProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int, proxyHost string) (Exit, error)
+	// StopProxied reports whether the copy was running: Docker answers a stop of a
+	// stopped container with success, and the cap must tell the two apart.
+	StopProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) (bool, error)
+	// StartProxied writes spec, the proxy as stored now, into the tunnel before it
+	// starts, so an edit (a new password, key, port or exit node) reaches the copy.
+	StartProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int, spec ProxySpec, ownIP string) (Exit, error)
 	RemoveProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) ([]string, error)
 	RemoveAllProxied(ctx context.Context, slug string) ([]string, error)
 	ProxiedStatus(ctx context.Context) ([]ProxiedCopy, error)
@@ -268,9 +272,36 @@ func escapeAll(s string) string {
 	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
 }
 
+// tunnelSecretKeys is every file cp-tunnel reads. A rewrite writes them all, the ones
+// the new settings do not use as empty files, so nothing of the old settings (a
+// login server, a host) is left for cp-tunnel to pick up.
+var tunnelSecretKeys = []string{
+	"kind", "own_ip", "auth_key", "exit_node", "hostname", "login_server",
+	"proxy_host", "proxy_ip", "proxy_port", "proxy_scheme", "proxy_auth", "settings",
+}
+
 // tunnelSecretFiles are the files written into the sidecar's secret volume, one
-// value per file. The names and contents match what cp-tunnel reads.
+// value per file. The names and contents match what cp-tunnel reads. "settings" is a
+// digest of everything but own_ip and proxy_ip, so a start can tell whether the proxy
+// was edited since the tunnel last read its files.
 func tunnelSecretFiles(ctx context.Context, spec ProxySpec, ownIP, label string) (map[string]string, error) {
+	files, err := tunnelSettingFiles(ctx, spec, ownIP, label)
+	if err != nil {
+		return nil, err
+	}
+	digestOf := map[string]string{}
+	for k, v := range files {
+		if k != "own_ip" && k != "proxy_ip" {
+			digestOf[k] = v
+		}
+	}
+	raw, _ := json.Marshal(digestOf) // map keys marshal sorted
+	sum := sha256.Sum256(raw)
+	files["settings"] = hex.EncodeToString(sum[:])
+	return files, nil
+}
+
+func tunnelSettingFiles(ctx context.Context, spec ProxySpec, ownIP, label string) (map[string]string, error) {
 	files := map[string]string{"kind": spec.Kind, "own_ip": ownIP}
 	switch spec.Kind {
 	case "tailscale":
@@ -338,7 +369,12 @@ func secretTar(files map[string]string) ([]byte, error) {
 const tunnelPidsLimit int64 = 64
 
 // sidecarCreate is everything the sidecar is created with. No secret appears here.
-func sidecarCreate(name, slug string, proxyID *int64, image string) client.ContainerCreateOptions {
+//
+// network is the fenced network when LAN isolation is on, "" for Docker's default
+// bridge, the same choice every bridge earner gets. A Test tunnel (no proxy id) gets
+// no restart policy: one left behind by an app that quit during the test must not
+// come back with every daemon restart, holding the proxy login.
+func sidecarCreate(name, slug string, proxyID *int64, image, network string) client.ContainerCreateOptions {
 	labels := map[string]string{
 		LabelManaged: "true",
 		LabelRole:    RoleTunnel,
@@ -351,6 +387,14 @@ func sidecarCreate(name, slug string, proxyID *int64, image string) client.Conta
 	}
 	init := true
 	pids := tunnelPidsLimit
+	mode := container.NetworkMode("bridge")
+	if network != "" {
+		mode = container.NetworkMode(network)
+	}
+	restart := container.RestartPolicy{Name: "unless-stopped"}
+	if proxyID == nil {
+		restart = container.RestartPolicy{Name: "no"}
+	}
 	hostname := strings.TrimPrefix(name, containerName(""))
 	if len(hostname) > 63 {
 		hostname = hostname[:63]
@@ -364,7 +408,7 @@ func sidecarCreate(name, slug string, proxyID *int64, image string) client.Conta
 			Volumes:  map[string]struct{}{tunnelSecretDir: {}},
 		},
 		HostConfig: &container.HostConfig{
-			NetworkMode:    "bridge",
+			NetworkMode:    mode,
 			CapDrop:        []string{"ALL"},
 			CapAdd:         []string{"NET_ADMIN"},
 			Privileged:     false,
@@ -379,7 +423,7 @@ func sidecarCreate(name, slug string, proxyID *int64, image string) client.Conta
 				// loopback source until it is rewritten; see cp-tunnel.
 				"net.ipv4.conf.all.route_localnet": "1",
 			},
-			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+			RestartPolicy: restart,
 			// tun2proxy runs at warn, so this log holds errors, never the sites the
 			// earner reaches; the bound keeps even a noisy failure off the disk.
 			LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "2"}},
@@ -461,9 +505,22 @@ type tunnelDocker interface {
 	readFile(ctx context.Context, id, path string) (string, error)
 	logsTail(ctx context.Context, id string, lines int) string
 	netCounters(ctx context.Context, id string) (*uint64, *uint64)
+	// sidecarNetwork is the network a tunnel joins: the fenced one when LAN isolation
+	// is on, "" for the default bridge. An error means the fence could not be applied.
+	sidecarNetwork(ctx context.Context) (string, error)
 }
 
-type liveTunnelDocker struct{ cli *client.Client }
+type liveTunnelDocker struct {
+	cli   *client.Client
+	fence *fence
+}
+
+func (d liveTunnelDocker) sidecarNetwork(ctx context.Context) (string, error) {
+	if d.fence == nil {
+		return "", nil
+	}
+	return d.fence.networkForDeploy(ctx, d.cli)
+}
 
 func (d liveTunnelDocker) facts(ctx context.Context) daemonInfo { return daemonFacts(ctx, d.cli) }
 func (d liveTunnelDocker) pull(ctx context.Context, image string) error {
@@ -544,15 +601,15 @@ func (d liveTunnelDocker) netCounters(ctx context.Context, id string) (*uint64, 
 	return netCounters(sample)
 }
 
-// withTunnelDocker runs fn against the live daemon.
-func withTunnelDocker[T any](fn func(tunnelDocker) (T, error)) (T, error) {
+// withTunnelDocker runs fn against the live daemon, with the provider's LAN fence.
+func withTunnelDocker[T any](f *fence, fn func(tunnelDocker) (T, error)) (T, error) {
 	var zero T
 	cli, err := dockerClient()
 	if err != nil {
 		return zero, err
 	}
 	defer cli.Close()
-	return fn(liveTunnelDocker{cli: cli})
+	return fn(liveTunnelDocker{cli: cli, fence: f})
 }
 
 // randReader names throwaway test tunnels; a seam for nothing but clarity.
@@ -565,7 +622,9 @@ var readyPoll = time.Second
 func parseReady(out string) (Exit, bool) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	var e Exit
-	if err := json.Unmarshal([]byte(strings.TrimSpace(lines[len(lines)-1])), &e); err != nil || e.IP == "" {
+	// cp-probe keeps only IP characters of what an echo site answered, so an error
+	// page can still come through as "e"; only a real address counts.
+	if err := json.Unmarshal([]byte(strings.TrimSpace(lines[len(lines)-1])), &e); err != nil || net.ParseIP(e.IP) == nil {
 		return Exit{}, false
 	}
 	return e, true
@@ -614,7 +673,9 @@ func removeQuietly(d tunnelDocker, id string, timeout int) {
 
 // startSidecar creates, provisions and starts a sidecar, then waits for its exit. It
 // is removed on any failure, and the error never carries a secret.
-func startSidecar(ctx context.Context, d tunnelDocker, name, slug string, proxyID *int64, spec ProxySpec, ownIP string) (string, Exit, error) {
+// network is what sidecarNetwork answered; the caller asks before it removes anything,
+// so a fence that cannot be applied never costs the running copy.
+func startSidecar(ctx context.Context, d tunnelDocker, name, slug, network string, proxyID *int64, spec ProxySpec, ownIP string) (string, Exit, error) {
 	label := slug
 	if proxyID != nil {
 		label = fmt.Sprintf("%s-p%d", slug, *proxyID)
@@ -634,7 +695,7 @@ func startSidecar(ctx context.Context, d tunnelDocker, name, slug string, proxyI
 	// A failed pull falls back to a local copy of the exact image, which is what a
 	// test build or an offline mirror is.
 	_ = d.pull(ctx, image)
-	id, err := d.create(ctx, sidecarCreate(name, slug, proxyID, image))
+	id, err := d.create(ctx, sidecarCreate(name, slug, proxyID, image, network))
 	if err != nil {
 		return "", Exit{}, &ProxyError{redact("The tunnel could not be created: "+err.Error(), spec.secrets())}
 	}
@@ -711,11 +772,23 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	if bootsInitSystem(entrypoint, cmd, probe.Config.Entrypoint, probe.Config.Cmd) {
 		return Exit{}, proxyErr("%s runs an init system as its main process, which CashPilot never runs", image)
 	}
+	// Settings that cannot work (a host that does not resolve, no tunnel image) must
+	// not cost the copy running now either.
+	if _, err := tunnelSecretFiles(ctx, req.Proxy, req.OwnIP, fmt.Sprintf("%s-p%d", req.Slug, req.ProxyID)); err != nil {
+		return Exit{}, &ProxyError{redact(err.Error(), req.Proxy.secrets())}
+	}
+	if _, err := TunnelImage(); err != nil {
+		return Exit{}, err
+	}
+	network, err := d.sidecarNetwork(ctx)
+	if err != nil {
+		return Exit{}, err
+	}
 	if _, err := removeProxied(ctx, d, req.Slug, req.ProxyID, StopTimeoutSeconds(req.Service)); err != nil {
 		return Exit{}, err
 	}
 	pid := req.ProxyID
-	sidecarID, exit, err := startSidecar(ctx, d, tunnelName(req.Slug, pid), req.Slug, &pid, req.Proxy, req.OwnIP)
+	sidecarID, exit, err := startSidecar(ctx, d, tunnelName(req.Slug, pid), req.Slug, network, &pid, req.Proxy, req.OwnIP)
 	if err != nil {
 		return Exit{}, err
 	}
@@ -737,23 +810,30 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	return exit, nil
 }
 
-func stopProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64, timeout int) error {
+func live(ins *container.InspectResponse) bool {
+	return ins != nil && ins.State != nil && (ins.State.Status == "running" || ins.State.Status == "restarting")
+}
+
+// stopProxied stops the earner, then its tunnel, and reports whether either was
+// running.
+func stopProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64, timeout int) (bool, error) {
 	p, err := pairOf(ctx, d, slug, proxyID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !p.earnerOK && !p.tunnelOK {
-		return proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
+		return false, proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
 	}
+	wasRunning := (p.earnerOK && live(p.earner)) || (p.tunnelOK && live(p.tunnel))
 	if p.earnerOK {
 		if err := d.stop(ctx, p.earnerName, stopTimeoutOr(p.earner, timeout)); err != nil {
-			return err
+			return wasRunning, err
 		}
 	}
 	if p.tunnelOK {
-		return d.stop(ctx, p.tunnelNm, 10)
+		return wasRunning, d.stop(ctx, p.tunnelNm, 10)
 	}
-	return nil
+	return wasRunning, nil
 }
 
 func stopTimeoutOr(ins *container.InspectResponse, fromCatalog int) int {
@@ -766,23 +846,15 @@ func stopTimeoutOr(ins *container.InspectResponse, fromCatalog int) int {
 	return 10
 }
 
-// refreshProxyIP resolves the proxy host again before a start, so a provider that
-// moved its gateway to a new address does not leave the copy dialling the old one.
-// A failed lookup keeps the old address.
-func refreshProxyIP(ctx context.Context, d tunnelDocker, id string, host string) {
-	if host == "" {
-		return
-	}
-	ip, err := resolveProxyIP(ctx, host)
-	if err != nil {
-		return
-	}
-	if archive, err := secretTar(map[string]string{"proxy_ip": ip}); err == nil {
-		_ = d.copyTo(ctx, id, tunnelSecretDir, archive)
-	}
-}
-
-func startProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64, timeout int, proxyHost string) (Exit, error) {
+// startProxied starts the tunnel, waits for its exit, then the earner.
+//
+// spec is the proxy as stored now. Its settings are written over the ones the tunnel
+// was deployed with (the host is resolved again too, so a provider that moved its
+// gateway needs only a Stop and Start). A tunnel still running on other settings is
+// stopped first, with its earner, and comes back on the new ones. A host that no
+// longer resolves stops the start: the old address may belong to someone else now,
+// and cp-tunnel would hand it the proxy login.
+func startProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64, timeout int, spec ProxySpec, ownIP string) (Exit, error) {
 	p, err := pairOf(ctx, d, slug, proxyID)
 	if err != nil {
 		return Exit{}, err
@@ -790,8 +862,34 @@ func startProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int6
 	if !p.earnerOK || !p.tunnelOK {
 		return Exit{}, proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
 	}
-	if p.tunnel.State == nil || p.tunnel.State.Status != "running" {
-		refreshProxyIP(ctx, d, p.tunnelNm, proxyHost)
+	files, err := tunnelSecretFiles(ctx, spec, ownIP, fmt.Sprintf("%s-p%d", slug, proxyID))
+	if err != nil {
+		return Exit{}, &ProxyError{redact(err.Error(), spec.secrets())}
+	}
+	running := p.tunnel.State != nil && p.tunnel.State.Status == "running"
+	if running {
+		if current, err := d.readFile(ctx, p.tunnelNm, tunnelSecretDir+"/settings"); err != nil || strings.TrimSpace(current) != files["settings"] {
+			if err := d.stop(ctx, p.earnerName, stopTimeoutOr(p.earner, timeout)); err != nil {
+				return Exit{}, err
+			}
+			if err := d.stop(ctx, p.tunnelNm, 10); err != nil {
+				return Exit{}, err
+			}
+			running = false
+		}
+	}
+	if !running {
+		full := map[string]string{}
+		for _, k := range tunnelSecretKeys {
+			full[k] = files[k]
+		}
+		archive, err := secretTar(full)
+		if err != nil {
+			return Exit{}, err
+		}
+		if err := d.copyTo(ctx, p.tunnelNm, tunnelSecretDir, archive); err != nil {
+			return Exit{}, proxyErr("Could not hand the proxy settings to the tunnel container: %v", err)
+		}
 	}
 	if err := d.start(ctx, p.tunnelNm); err != nil {
 		return Exit{}, err
@@ -901,7 +999,33 @@ func startedAt(ins container.InspectResponse) string {
 	return ins.State.StartedAt
 }
 
+// testTunnelSlug is the service label of a throwaway Test tunnel.
+const testTunnelSlug = "proxy-test"
+
+// staleTestTunnel is how old a Test tunnel must be before the status read removes
+// it. A test lasts at most TunnelReadyTimeout, so an older one was left behind by an
+// app that quit during the test.
+const staleTestTunnel = 5 * time.Minute
+
+// sweepTestTunnels removes Test tunnels older than staleTestTunnel.
+func sweepTestTunnels(ctx context.Context, d tunnelDocker, now time.Time) {
+	found, err := d.list(ctx, LabelManaged+"=true", LabelRole+"="+RoleTunnel, LabelService+"="+testTunnelSlug)
+	if err != nil {
+		return
+	}
+	for _, c := range found {
+		if c.Labels[LabelService] != testTunnelSlug || c.Labels[LabelRole] != RoleTunnel || c.Labels[LabelProxy] != "" {
+			continue
+		}
+		if now.Sub(time.Unix(c.Created, 0)) < staleTestTunnel {
+			continue
+		}
+		removeQuietly(d, c.ID, 2)
+	}
+}
+
 func proxiedStatus(ctx context.Context, d tunnelDocker) ([]ProxiedCopy, error) {
+	sweepTestTunnels(ctx, d, time.Now())
 	found, err := d.list(ctx, LabelManaged+"=true", LabelProxy)
 	if err != nil {
 		return nil, err
@@ -993,7 +1117,11 @@ func testProxy(ctx context.Context, d tunnelDocker, spec ProxySpec, ownIP string
 	var suffix [5]byte
 	_, _ = io.ReadFull(randReader, suffix[:])
 	name := fmt.Sprintf("%stunnel-test-%x", containerName(""), suffix)
-	id, exit, err := startSidecar(ctx, d, name, "proxy-test", nil, spec, ownIP)
+	network, err := d.sidecarNetwork(ctx)
+	if err != nil {
+		return Exit{}, err
+	}
+	id, exit, err := startSidecar(ctx, d, name, testTunnelSlug, network, nil, spec, ownIP)
 	if err != nil {
 		return Exit{}, err
 	}
@@ -1009,28 +1137,27 @@ func testProxy(ctx context.Context, d tunnelDocker, spec ProxySpec, ownIP string
 // The old pair goes first, the sidecar starts and proves an exit, and only then is the
 // earner created inside its namespace.
 func (p *DockerProvider) DeployProxied(ctx context.Context, req ProxiedDeploy) (Exit, error) {
-	return withTunnelDocker(func(d tunnelDocker) (Exit, error) { return deployProxied(ctx, d, req) })
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) (Exit, error) { return deployProxied(ctx, d, req) })
 }
 
-// StopProxied stops the earner, then its tunnel.
-func (p *DockerProvider) StopProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) error {
-	_, err := withTunnelDocker(func(d tunnelDocker) (struct{}, error) {
-		return struct{}{}, stopProxied(ctx, d, slug, proxyID, stopTimeoutSeconds)
+// StopProxied stops the earner, then its tunnel, and reports whether either was running.
+func (p *DockerProvider) StopProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) (bool, error) {
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) (bool, error) {
+		return stopProxied(ctx, d, slug, proxyID, stopTimeoutSeconds)
 	})
-	return err
 }
 
-// StartProxied starts the tunnel, waits for its exit, then the earner. proxyHost is
-// resolved again first ("" keeps the address the tunnel was deployed with).
-func (p *DockerProvider) StartProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int, proxyHost string) (Exit, error) {
-	return withTunnelDocker(func(d tunnelDocker) (Exit, error) {
-		return startProxied(ctx, d, slug, proxyID, stopTimeoutSeconds, proxyHost)
+// StartProxied writes spec into the tunnel, starts it, waits for its exit, then
+// starts the earner (see startProxied).
+func (p *DockerProvider) StartProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int, spec ProxySpec, ownIP string) (Exit, error) {
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) (Exit, error) {
+		return startProxied(ctx, d, slug, proxyID, stopTimeoutSeconds, spec, ownIP)
 	})
 }
 
 // RemoveProxied removes the earner, then its tunnel and the tunnel's secret volume.
 func (p *DockerProvider) RemoveProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) ([]string, error) {
-	return withTunnelDocker(func(d tunnelDocker) ([]string, error) {
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) ([]string, error) {
 		return removeProxied(ctx, d, slug, proxyID, stopTimeoutSeconds)
 	})
 }
@@ -1038,17 +1165,17 @@ func (p *DockerProvider) RemoveProxied(ctx context.Context, slug string, proxyID
 // RemoveAllProxied removes every proxied copy of slug and its tunnel, when the
 // service itself is removed.
 func (p *DockerProvider) RemoveAllProxied(ctx context.Context, slug string) ([]string, error) {
-	return withTunnelDocker(func(d tunnelDocker) ([]string, error) { return removeAllProxied(ctx, d, slug) })
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) ([]string, error) { return removeAllProxied(ctx, d, slug) })
 }
 
 // ProxiedStatus is one entry per proxied copy on this machine, and it starts an
 // earner whose tunnel is ready but which is not running in it (see earnerAction).
 func (p *DockerProvider) ProxiedStatus(ctx context.Context) ([]ProxiedCopy, error) {
-	return withTunnelDocker(func(d tunnelDocker) ([]ProxiedCopy, error) { return proxiedStatus(ctx, d) })
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) ([]ProxiedCopy, error) { return proxiedStatus(ctx, d) })
 }
 
 // TestProxy starts a throwaway tunnel, reads the exit IP it gets, and removes it on
 // every path. It passes only when the exit IP is public and is not this machine's.
 func (p *DockerProvider) TestProxy(ctx context.Context, spec ProxySpec, ownIP string) (Exit, error) {
-	return withTunnelDocker(func(d tunnelDocker) (Exit, error) { return testProxy(ctx, d, spec, ownIP) })
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) (Exit, error) { return testProxy(ctx, d, spec, ownIP) })
 }
