@@ -95,7 +95,8 @@ listed by name as not read.
 - **`DEVICE_NAME`.** CashPilot names the device itself. Your old devices stay
   listed as offline in each provider's dashboard until you remove them there.
 - **Proxies** (`USE_PROXIES`, `proxies.txt`). Add each one in the Proxies
-  section of the Fleet page.
+  section of the Fleet page, then run copies of your services through it;
+  adding a proxy starts nothing by itself.
 - **`BROWSER_USERNAME` and `BROWSER_PASSWORD`**, InternetIncome's own browser
   login.
 
