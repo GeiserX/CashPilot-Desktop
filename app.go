@@ -187,12 +187,19 @@ func (a *App) startCore(ctx context.Context) error {
 
 	docker := runtime.NewDockerProvider()
 	docker.SetIsolationSetting(func() string { return a.cfg.Config().Isolation })
+	// A failed write is retried on every check, so it is reported once per failure
+	// rather than every five minutes. Docker's own evidence still counts meanwhile.
+	var memoryFailing atomic.Bool
 	docker.SetIsolationMemory(
 		func() bool { return a.cfg.Config().IsolationOn },
 		func(on bool) {
 			if err := a.cfg.Update(func(c *config.AppConfig) { c.IsolationOn = on }); err != nil {
-				a.emitError("isolation", err)
+				if !memoryFailing.Swap(true) {
+					a.emitError("isolation", fmt.Errorf("could not save that LAN isolation is on: %w", err))
+				}
+				return
 			}
+			memoryFailing.Store(false)
 		},
 	)
 	a.runtime = docker
@@ -1058,6 +1065,11 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 			cfg.Isolation = strings.ToLower(strings.TrimSpace(value))
 		default:
 			return SettingsState{}, fmt.Errorf("LAN isolation must be auto, on or off, not %q", value)
+		}
+		// Off forgets that isolation was on in this same save, so it holds even while
+		// Docker is unreachable and the reconcile below cannot run.
+		if cfg.Isolation == "off" {
+			cfg.IsolationOn = false
 		}
 	}
 	if value := strings.TrimSpace(values["fleetBindAddress"]); value != "" {
