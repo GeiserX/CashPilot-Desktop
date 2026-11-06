@@ -184,6 +184,13 @@ func (m *Manager) SaveProxy(ctx context.Context, id int64, values map[string]str
 		if err != nil {
 			return proxies.View{}, err
 		}
+		if d.ResetDay != nil && *d.ResetDay > 0 {
+			// The first period starts now; with no start the first tick would take it
+			// for a missed reset and zero what was counted so far.
+			if err := m.saveState(newID, proxies.ResetState(proxies.State{}, proxyNow().UTC())); err != nil {
+				return proxies.View{}, err
+			}
+		}
 		return m.view(newID)
 	}
 	m.proxy.proxyMu.Lock()
@@ -212,7 +219,9 @@ func (m *Manager) SaveProxy(ctx context.Context, id int64, values map[string]str
 		return proxies.View{}, err
 	}
 	if release {
-		m.releaseCapped(ctx, id, d)
+		if _, err := m.releaseCapped(ctx, id, d); err != nil {
+			return proxies.View{}, err
+		}
 	}
 	return m.view(id)
 }
@@ -232,6 +241,10 @@ func (m *Manager) view(id int64) (proxies.View, error) {
 
 // DeleteProxy deletes a proxy that no copy runs through.
 func (m *Manager) DeleteProxy(id int64) error {
+	// Under the lock a copy being deployed records itself first, so it is either seen
+	// here or finds the proxy gone.
+	m.proxy.proxyMu.Lock()
+	defer m.proxy.proxyMu.Unlock()
 	if _, _, err := m.loadProxy(id); err != nil {
 		return err
 	}
@@ -370,6 +383,28 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 		return ProxiedResult{}, err
 	}
 	ownIP := detectOwnIP(ctx)
+	// The record goes in before the copy exists, under the proxy's lock: a copy with
+	// no record would run outside the cap and the delete guard, and with no row to
+	// stop it from.
+	m.proxy.proxyMu.Lock()
+	d, s, err = m.loadProxy(id)
+	if err == nil && s.CappedAt != "" {
+		err = errors.New(orText(s.CapReason, "This proxy reached its traffic cap"))
+	}
+	hadRecord := false
+	if err == nil {
+		var records []store.ProxiedCopy
+		if records, err = m.store.ListProxiedCopies(id); err == nil {
+			for _, r := range records {
+				hadRecord = hadRecord || r.Slug == slug
+			}
+			err = m.store.SaveProxiedCopy(id, slug)
+		}
+	}
+	m.proxy.proxyMu.Unlock()
+	if err != nil {
+		return ProxiedResult{}, err
+	}
 	m.store.RecordEvent(slug, "proxied_deploy_start", fmt.Sprintf("proxy %d", id))
 	exit, err := p.DeployProxied(ctx, runtime.ProxiedDeploy{
 		Slug: slug, ProxyID: id, Service: svc, Env: credentials, Proxy: specOf(d), OwnIP: ownIP,
@@ -377,10 +412,10 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 	if err != nil {
 		msg := maskSecrets(err.Error(), d)
 		m.store.RecordEvent(slug, "proxied_deploy_error", msg)
+		if !hadRecord {
+			_ = m.store.DeleteProxiedCopy(id, slug)
+		}
 		return ProxiedResult{}, errors.New(msg)
-	}
-	if err := m.store.SaveProxiedCopy(id, slug); err != nil {
-		return ProxiedResult{}, err
 	}
 	m.store.RecordEvent(slug, "proxied_deployed", fmt.Sprintf("proxy %d", id))
 	result := ProxiedResult{ExitIP: proxies.PublicIP(exit.IP), Country: exit.Country}
@@ -439,10 +474,13 @@ func (m *Manager) StopProxied(ctx context.Context, slug string, id int64) error 
 	if err != nil {
 		return err
 	}
-	if err := p.StopProxied(ctx, slug, id, m.stopTimeout(slug)); err != nil {
+	if _, err := p.StopProxied(ctx, slug, id, m.stopTimeout(slug)); err != nil {
 		return err
 	}
-	_ = m.store.SetProxiedCopyCapped(id, slug, false)
+	// A flag left set would make the next reset start the copy again.
+	if err := m.store.SetProxiedCopyCapped(id, slug, false); err != nil {
+		return fmt.Errorf("the copy stopped, but could not be marked as stopped by you, so a cap reset could start it again: %w", err)
+	}
 	m.store.RecordEvent(slug, "proxied_stopped", fmt.Sprintf("proxy %d", id))
 	return nil
 }
@@ -460,7 +498,7 @@ func (m *Manager) StartProxied(ctx context.Context, slug string, id int64) error
 	if err != nil {
 		return err
 	}
-	if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), d.Host); err != nil {
+	if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), specOf(d), detectOwnIP(ctx)); err != nil {
 		return errors.New(maskSecrets(err.Error(), d))
 	}
 	_ = m.store.SetProxiedCopyCapped(id, slug, false)
@@ -505,36 +543,45 @@ func (m *Manager) ResetProxy(ctx context.Context, id int64) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.releaseCapped(ctx, id, d), nil
+	return m.releaseCapped(ctx, id, d)
 }
 
 // releaseCapped starts the copies the cap stopped. A copy the owner stopped stays
-// stopped.
-func (m *Manager) releaseCapped(ctx context.Context, id int64, d proxies.Definition) []string {
+// stopped. An error means the copies could not even be listed or reached; a copy
+// that failed to start is recorded as an event and keeps its flag.
+func (m *Manager) releaseCapped(ctx context.Context, id int64, d proxies.Definition) ([]string, error) {
 	m.proxy.lastMu.Lock()
 	delete(m.proxy.unstopped, id)
 	m.proxy.lastMu.Unlock()
 	copies, err := m.store.ListProxiedCopies(id)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("the cap was lifted, but its copies could not be listed to start them: %w", err)
+	}
+	var capped bool
+	for _, c := range copies {
+		capped = capped || c.StoppedByCap
+	}
+	if !capped {
+		return nil, nil
 	}
 	p, err := m.proxier()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("the cap was lifted, but its copies could not be started: %w", err)
 	}
+	ownIP := detectOwnIP(ctx)
 	var started []string
 	for _, c := range copies {
 		if !c.StoppedByCap {
 			continue
 		}
-		if _, err := p.StartProxied(ctx, c.Slug, id, m.stopTimeout(c.Slug), d.Host); err != nil {
+		if _, err := p.StartProxied(ctx, c.Slug, id, m.stopTimeout(c.Slug), specOf(d), ownIP); err != nil {
 			m.store.RecordEvent(c.Slug, "proxied_start_error", maskSecrets(err.Error(), d))
 			continue
 		}
 		_ = m.store.SetProxiedCopyCapped(id, c.Slug, false)
 		started = append(started, c.Slug)
 	}
-	return started
+	return started, nil
 }
 
 // ProxiedCopies is the latest status read of the proxied copies on this machine.
@@ -641,7 +688,7 @@ func (m *Manager) ProxyTick(ctx context.Context) ([]CapNotice, error) {
 			continue
 		}
 		if reset && next.CappedAt == "" {
-			m.releaseCapped(ctx, id, d)
+			_, _ = m.releaseCapped(ctx, id, d) // the next reset or a start by hand retries
 		}
 		if next.CappedAt == "" {
 			continue
@@ -653,6 +700,9 @@ func (m *Manager) ProxyTick(ctx context.Context) ([]CapNotice, error) {
 			}
 		}
 		if crossed {
+			// Every recorded copy is asked to stop. Only those that were running are
+			// marked as stopped by the cap (see stopCapped), so one the owner stopped
+			// stays stopped.
 			if records, err := m.store.ListProxiedCopies(id); err == nil {
 				for _, r := range records {
 					targets[r.Slug] = true
@@ -674,7 +724,7 @@ func (m *Manager) stopCapped(ctx context.Context, p runtime.ProxyProvider, id in
 	}
 	sort.Strings(slugs)
 	for _, slug := range slugs {
-		err := p.StopProxied(ctx, slug, id, m.stopTimeout(slug))
+		wasRunning, err := p.StopProxied(ctx, slug, id, m.stopTimeout(slug))
 		m.proxy.lastMu.Lock()
 		if m.proxy.unstopped == nil {
 			m.proxy.unstopped = map[int64]map[string]string{}
@@ -690,9 +740,24 @@ func (m *Manager) stopCapped(ctx context.Context, p runtime.ProxyProvider, id in
 			m.proxy.unstopped[id][slug] = truncateText(maskSecrets(err.Error(), d), 200)
 		}
 		m.proxy.lastMu.Unlock()
-		if err == nil {
+		if err != nil || !wasRunning {
+			continue
+		}
+		// A reset or a cap change may have lifted the cap while the stop ran; then
+		// the copy goes back up instead of being marked.
+		m.proxy.proxyMu.Lock()
+		fresh, s, loadErr := m.loadProxy(id)
+		stillCapped := loadErr == nil && s.CappedAt != ""
+		if stillCapped {
 			_ = m.store.SetProxiedCopyCapped(id, slug, true)
+		}
+		m.proxy.proxyMu.Unlock()
+		if stillCapped {
 			m.store.RecordEvent(slug, "proxied_capped", fmt.Sprintf("proxy %d", id))
+		} else if loadErr == nil {
+			if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), specOf(fresh), detectOwnIP(ctx)); err != nil {
+				m.store.RecordEvent(slug, "proxied_start_error", maskSecrets(err.Error(), fresh))
+			}
 		}
 	}
 }

@@ -190,6 +190,7 @@ func (a *App) startCore(ctx context.Context) error {
 	// A failed write is retried on every check, so it is reported once per failure
 	// rather than every five minutes. Docker's own evidence still counts meanwhile.
 	var memoryFailing atomic.Bool
+	docker.SetEgressLookup(runtime.LookupPublicIP)
 	docker.SetIsolationMemory(
 		func() bool { return a.cfg.Config().IsolationOn },
 		func(on bool) {

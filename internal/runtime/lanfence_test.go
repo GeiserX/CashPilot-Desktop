@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"slices"
 	"strings"
@@ -219,7 +221,7 @@ func TestCheckFenceNetworkRefusesAnotherInterfaceName(t *testing.T) {
 
 // THE RULE: the helper gets NET_ADMIN in the host's namespace and nothing else.
 func TestFenceHelperSpecIsConfined(t *testing.T) {
-	cfg, host := fenceHelperSpec("apply", "172.30.0.0/16", true)
+	cfg, host := fenceHelperSpec("apply", "172.30.0.0/16", "", true)
 	if host.NetworkMode != "host" {
 		t.Errorf("network mode %q: the table must land in the daemon's namespace", host.NetworkMode)
 	}
@@ -239,11 +241,11 @@ func TestFenceHelperSpecIsConfined(t *testing.T) {
 		!slices.Contains(cfg.Env, "FENCE_SUBNET=172.30.0.0/16") || !slices.Contains(cfg.Env, "FENCE_FILTER=1") {
 		t.Errorf("cmd %v env %v", cfg.Cmd, cfg.Env)
 	}
-	_, reduced := fenceHelperSpec("apply", "172.30.0.0/16", false)
+	_, reduced := fenceHelperSpec("apply", "172.30.0.0/16", "", false)
 	if reduced.NetworkMode != "host" {
 		t.Error("the reduced helper is not on the host namespace")
 	}
-	cfgReduced, _ := fenceHelperSpec("apply", "172.30.0.0/16", false)
+	cfgReduced, _ := fenceHelperSpec("apply", "172.30.0.0/16", "", false)
 	if !slices.Contains(cfgReduced.Env, "FENCE_FILTER=0") {
 		t.Errorf("reduce does not ask for the masquerade only: %v", cfgReduced.Env)
 	}
@@ -642,7 +644,7 @@ func TestTheHelperCleanupRemovesOnlyAnIdleHelperOfOurs(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer cli.Close()
-		if _, err := runHelper(context.Background(), cli, "apply", "172.30.0.0/16", true); err != nil {
+		if _, err := runHelper(context.Background(), cli, "apply", "172.30.0.0/16", "", true); err != nil {
 			t.Fatalf("runHelper: %v (calls %v)", err, fake.recorded())
 		}
 	}
@@ -759,5 +761,113 @@ func TestPodmanDeploysUnfencedAndSaysSo(t *testing.T) {
 func TestTheFenceHelperIsPinnedByDigest(t *testing.T) {
 	if !regexp.MustCompile(`^drumsergio/cashpilot-worker:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$`).MatchString(fenceHelperImage) {
 		t.Errorf("the fence helper image %q is not pinned by tag and digest", fenceHelperImage)
+	}
+}
+
+// helperEnv is the environment of the last helper the fake was asked to create.
+func helperEnv(t *testing.T, fake *fakeDocker) []string {
+	t.Helper()
+	fake.mu.Lock()
+	body := fake.fenceCreate
+	fake.mu.Unlock()
+	var req struct{ Env []string }
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("helper create body: %v", err)
+	}
+	return req.Env
+}
+
+// THE RULE: most home routers loop a connection to their own public address back
+// into the LAN (NAT loopback), so the table drops this machine's public IPv4 too.
+// The lookup is cached, a failed one keeps the last address, and an address that is
+// not a public IPv4 is never passed on.
+func TestFenceDropsTheHomePublicIP(t *testing.T) {
+	now := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	old := fenceNow
+	fenceNow = func() time.Time { return now }
+	t.Cleanup(func() { fenceNow = old })
+
+	answer, lookups := "203.0.113.7\n", 0
+	fake := &fakeDocker{}
+	fake.start(t)
+	p := &DockerProvider{}
+	p.SetEgressLookup(func(context.Context) string { lookups++; return answer })
+
+	p.ReconcileFence(context.Background())
+	if env := helperEnv(t, fake); !slices.Contains(env, "FENCE_EGRESS=203.0.113.7") {
+		t.Fatalf("the home public IP is not dropped: %v", env)
+	}
+
+	// Within the hour the table is rewritten without asking again.
+	now = now.Add(30 * time.Minute)
+	p.ReconcileFence(context.Background())
+	if lookups != 1 {
+		t.Errorf("%d lookups within the hour, want 1", lookups)
+	}
+
+	// A failed lookup keeps the last address rather than dropping the drop.
+	now = now.Add(time.Hour)
+	answer = ""
+	p.ReconcileFence(context.Background())
+	if env := helperEnv(t, fake); !slices.Contains(env, "FENCE_EGRESS=203.0.113.7") || lookups != 2 {
+		t.Errorf("after a failed lookup (%d lookups): %v", lookups, helperEnv(t, fake))
+	}
+
+	// A private, CGNAT or IPv6 answer is never passed to the helper.
+	for _, bad := range []string{"192.168.1.5", "100.64.0.9", "2001:db8::1"} {
+		fresh := &fakeDocker{}
+		fresh.start(t)
+		q := &DockerProvider{}
+		q.SetEgressLookup(func(context.Context) string { return bad })
+		q.ReconcileFence(context.Background())
+		if env := helperEnv(t, fresh); !slices.Contains(env, "FENCE_EGRESS=") {
+			t.Errorf("%s: want an empty FENCE_EGRESS, got %v", bad, env)
+		}
+	}
+}
+
+// Until the first answer the lookup is retried every five minutes, not hourly.
+func TestFenceRetriesTheEgressLookupUntilItHasOne(t *testing.T) {
+	now := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
+	old := fenceNow
+	fenceNow = func() time.Time { return now }
+	t.Cleanup(func() { fenceNow = old })
+	lookups := 0
+	f := &fence{lookupEgress: func(context.Context) string { lookups++; return "" }}
+	f.egressIP(context.Background())
+	now = now.Add(egressRetry / 2)
+	f.egressIP(context.Background())
+	if lookups != 1 {
+		t.Fatalf("%d lookups within the retry window, want 1", lookups)
+	}
+	now = now.Add(egressRetry)
+	if got := f.egressIP(context.Background()); got != "" || lookups != 2 {
+		t.Errorf("after the retry window: %q, %d lookups", got, lookups)
+	}
+}
+
+func TestLookupPublicIP(t *testing.T) {
+	answer, status := "203.0.113.7", http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(answer))
+	}))
+	old := publicIPURL
+	publicIPURL = srv.URL
+	t.Cleanup(func() { publicIPURL = old })
+	if got := LookupPublicIP(context.Background()); got != answer {
+		t.Errorf("got %q, want %q", got, answer)
+	}
+	status = http.StatusServiceUnavailable
+	if got := LookupPublicIP(context.Background()); got != "" {
+		t.Errorf("an error status gave %q", got)
+	}
+	srv.Close()
+	if got := LookupPublicIP(context.Background()); got != "" {
+		t.Errorf("an unreachable service gave %q", got)
+	}
+	publicIPURL = "://bad"
+	if got := LookupPublicIP(context.Background()); got != "" {
+		t.Errorf("a bad URL gave %q", got)
 	}
 }
