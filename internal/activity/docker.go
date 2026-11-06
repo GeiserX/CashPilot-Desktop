@@ -100,21 +100,33 @@ type ProbeRef struct {
 	Name   string
 	Labels map[string]string
 	State  string
+	// Since is when a stopped helper finished, or was created for one that
+	// never started; zero when Docker did not say.
+	Since time.Time
 }
 
-// ShouldSweep says whether a sweep removes this helper: any of ours, any
-// finished (exited or dead) helper of another app, and a helper from an app
-// that labelled no worker (an older release) once it has stopped. A finished
-// helper is never mid-round and its log keeps that round's addresses, so it
-// must not outlive the app that started it. Another app's running or merely
-// created helper is never touched: it may be mid-round.
+// ShouldSweep says whether a sweep removes this helper: any of ours, a
+// stale helper of another app, and a helper from an app that labelled no
+// worker (an older release) once it has stopped. Another app's helper is
+// removed once it has sat finished (exited or dead), or only created, for
+// longer than ProbeTimeout. Its owner reads the log right after the helper
+// exits, so a fresh one is left for it; a stale one is never mid-round, and
+// its log keeps that round's addresses, so it must not outlive the app that
+// started it. A created helper younger than that may be about to start.
 func ShouldSweep(p ProbeRef, worker string) bool {
 	if p.Labels[ProbeLabel] != ProbeKind {
 		return false
 	}
 	owner, labelled := p.Labels[WorkerLabel]
 	if labelled {
-		return owner == worker || p.State == "exited" || p.State == "dead"
+		if owner == worker {
+			return true
+		}
+		if p.State != "exited" && p.State != "dead" && p.State != "created" {
+			return false
+		}
+		// An age Docker did not report counts as old: a leaked log is the worse outcome.
+		return p.Since.IsZero() || time.Since(p.Since) > ProbeTimeout
 	}
 	return p.State != "running" && p.State != "restarting"
 }
@@ -251,7 +263,21 @@ func (e *DockerEngine) Probes(ctx context.Context) ([]ProbeRef, error) {
 		if len(s.Names) > 0 {
 			name = strings.TrimPrefix(s.Names[0], "/")
 		}
-		out = append(out, ProbeRef{ID: s.ID, Name: name, Labels: s.Labels, State: string(s.State)})
+		ref := ProbeRef{ID: s.ID, Name: name, Labels: s.Labels, State: string(s.State)}
+		switch ref.State {
+		case "created":
+			if s.Created > 0 {
+				ref.Since = time.Unix(s.Created, 0)
+			}
+		case "exited", "dead":
+			// The list carries no finish time; a helper that has gone meanwhile is simply skipped.
+			if r, err := e.Client.ContainerInspect(ctx, s.ID, client.ContainerInspectOptions{}); err == nil && r.Container.State != nil {
+				if t, err := time.Parse(time.RFC3339Nano, r.Container.State.FinishedAt); err == nil && t.Year() > 1 {
+					ref.Since = t
+				}
+			}
+		}
+		out = append(out, ref)
 	}
 	return out, nil
 }
