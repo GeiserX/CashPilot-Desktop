@@ -191,6 +191,10 @@ func TestABlockThatIsNotJustEvidenceIsNotRated(t *testing.T) {
 		"http source":     strings.Replace(good, "https://example.com", "http://example.com", -1),
 		"unknown kind":    strings.Replace(good, "kind: terms", "kind: vibes", -1),
 		"not a mapping":   "rating: B\n",
+		// YAML reads `1:` as an int; the web validator once crashed sorting it
+		// next to a string key, so both sides pin "not rated, no crash".
+		"mixed-type keys":         good + "  1: x\n",
+		"mixed-type verdict keys": strings.Replace(good, "  verdicts:\n", "  verdicts:\n    2: good\n", 1),
 		// fair with no con citing it
 		"uncited verdict": strings.Replace(good, "    support: good\n", "    support: fair\n", 1),
 		// unknown with no note saying what was searched
