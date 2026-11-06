@@ -82,7 +82,7 @@ const (
 // iptables-legacy and app/lan_fence.py; the worker starts the same helper from its own
 // image. Pinned, like every image this app runs: the rules it writes are the rules
 // of this exact release. A var so a live test can point it at a local build.
-var fenceHelperImage = "drumsergio/cashpilot-worker:1.66.0"
+var fenceHelperImage = "drumsergio/cashpilot-worker:1.70.0"
 
 // fenceDNS are the resolvers an earner on the fenced bridge gets. Docker's embedded
 // resolver forwards a container's lookups from inside its network, so a daemon whose
@@ -136,10 +136,11 @@ type fenceAPI interface {
 // fence holds the cached status and serialises the helper: two helpers writing the
 // table at once would race on the same container name.
 type fence struct {
-	setting func() string
-	mu      sync.Mutex // the helper and the apply sequence
-	stateMu sync.Mutex // status
-	status  FenceStatus
+	setting     func() string
+	mu          sync.Mutex // the helper and the apply sequence
+	reconcileMu sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
+	stateMu     sync.Mutex // status
+	status      FenceStatus
 }
 
 // FenceSetting normalises a Settings value: auto, on or off. Anything else is auto.
@@ -254,7 +255,7 @@ func outsideFence(earners []fenceEarner, onNetwork string, legacy bool) (running
 			if !onDefaultBridge(e) {
 				continue
 			}
-		} else if _, ok := e.Networks[onNetwork]; ok {
+		} else if onlyOn(e, onNetwork) {
 			continue
 		}
 		label := e.Slug
@@ -278,6 +279,15 @@ func outsideFence(earners []fenceEarner, onNetwork string, legacy bool) (running
 	sort.Strings(running)
 	sort.Strings(stopped)
 	return running, stopped
+}
+
+// onlyOn reports an earner whose only network is the given one. One also attached
+// to another network can reach whatever that network reaches, so it is outside.
+func onlyOn(e fenceEarner, network string) bool {
+	if _, ok := e.Networks[network]; !ok {
+		return false
+	}
+	return len(e.Networks) == 1
 }
 
 // staleEndpoint reports a container bound to an earlier network of ours, by its ID.
@@ -359,6 +369,14 @@ func checkFenceNetwork(n *network.Inspect) error {
 	}
 	if n.Options[optBridgeName] != fenceBridge {
 		return fmt.Errorf("this container runtime did not name the %s network's interface %s, so the fence's rules would not match it", FenceNetwork, fenceBridge)
+	}
+	// Docker's own masquerade would give the earners internet with no table, and
+	// traffic between containers would pass no rule of ours. Both default to on, so
+	// a missing option is as bad as "true".
+	for _, opt := range []string{optMasquerade, optICC} {
+		if !strings.EqualFold(n.Options[opt], "false") {
+			return fmt.Errorf("%w: the %s network does not have %s=false, so the fence cannot hold on it. Remove the network so CashPilot can create it again", errFenceConflict, FenceNetwork, opt)
+		}
 	}
 	return nil
 }
@@ -514,8 +532,15 @@ func ensureHelperImage(ctx context.Context, cli fenceAPI) error {
 	return nil
 }
 
+// removeHelper removes a leftover helper by name, and only a container that carries
+// the helper's label: a container someone else named cashpilot-fence is left alone,
+// and the create that follows fails on the name instead.
 func removeHelper(cli fenceAPI) {
-	_, _ = cli.ContainerRemove(context.Background(), fenceHelperName, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	got, err := cli.ContainerInspect(context.Background(), fenceHelperName, client.ContainerInspectOptions{})
+	if err != nil || got.Container.Config == nil || got.Container.Config.Labels[fenceProbeLabel] != "fence" {
+		return
+	}
+	_, _ = cli.ContainerRemove(context.Background(), got.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
 }
 
 func helperLogs(ctx context.Context, cli fenceAPI, id string, stdout bool) string {
@@ -535,12 +560,15 @@ func runHelper(ctx context.Context, cli fenceAPI, action, subnet string, filtere
 		return fenceResult{}, err
 	}
 	removeHelper(cli)
-	defer removeHelper(cli)
 	cfg, host := fenceHelperSpec(action, subnet, filtered)
 	created, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{Config: cfg, HostConfig: host, Name: fenceHelperName})
 	if err != nil {
 		return fenceResult{}, err
 	}
+	// Ours by ID, so the cleanup can never hit another container.
+	defer func() {
+		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	}()
 	waitCtx, cancel := context.WithTimeout(ctx, fenceHelperTimeout)
 	defer cancel()
 	wait := cli.ContainerWait(waitCtx, created.ID, client.ContainerWaitOptions{Condition: container.WaitConditionNextExit})
@@ -613,9 +641,6 @@ func (f *fence) applyLocked(ctx context.Context, cli fenceAPI) (fenceResult, err
 		}
 		return fenceResult{}, fmt.Errorf("The LAN fence could not be applied on this machine: %w.", err)
 	}
-	if earners, err := listEarners(ctx, cli); err == nil {
-		reattach(ctx, cli, net.ID, earners)
-	}
 	subnet, err := networkSubnet(net)
 	if err != nil {
 		return fenceResult{}, fmt.Errorf("The LAN fence could not be applied on this machine: %w.", err)
@@ -626,6 +651,11 @@ func (f *fence) applyLocked(ctx context.Context, cli fenceAPI) (fenceResult, err
 	}
 	if !res.OK {
 		return res, fmt.Errorf("The LAN fence could not be applied on this machine (%s): %s.", res.Backend, res.Error)
+	}
+	// Only now: reattaching starts an earner the removed network had stopped, and it
+	// must not run before the drops are in place.
+	if earners, err := listEarners(ctx, cli); err == nil {
+		reattach(ctx, cli, net.ID, earners)
 	}
 	return res, nil
 }
@@ -702,7 +732,15 @@ func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI) (string, err
 
 // reconcile puts the fence back if it went and refreshes the status. Never fails: a
 // failure is recorded in the status, which the dashboard shows.
+//
+// Whole reconciles are serialised: a setting change schedules one (app.go SaveSettings),
+// and serialising it behind any in-flight reconcile means the later-started one runs
+// last and writes the current setting's status, rather than an earlier "on" apply
+// overwriting a just-finished "off" with a stale result.
 func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
+	f.reconcileMu.Lock()
+	defer f.reconcileMu.Unlock()
+	chosen := f.chosen()
 	mode, net, earners, err := f.mode(ctx, cli)
 	if err != nil {
 		f.setStatus(func(s *FenceStatus) { s.State, s.Error = "failed", err.Error() })
@@ -718,6 +756,11 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		f.reduce(ctx, cli, net)
 	default:
 		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "n/a", "", "" })
+	}
+	// Settings changed while this ran: its mode is stale, and the reconcile the
+	// change triggers publishes the right one.
+	if f.chosen() != chosen {
+		return
 	}
 	f.setOutside(mode, earners)
 }

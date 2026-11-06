@@ -117,6 +117,29 @@ func TestBuildHostConfigSkipsLinuxOnlyKnobsOnAWindowsDaemon(t *testing.T) {
 	}
 }
 
+// "default" is the default bridge on a Linux daemon and the LAN fence catches it there,
+// so it is normalised to bridge. On a Windows-containers daemon "default" is nat and the
+// bridge network need not exist, so the mode is left exactly as the catalog declared it.
+func TestBuildHostConfigKeepsDefaultNetworkOnWindows(t *testing.T) {
+	svc := catalog.Service{Docker: catalog.DockerConfig{Image: "x:1", NetworkMode: "default"}}
+
+	linux, err := buildHostConfig(svc, nil, nil, "linux")
+	if err != nil {
+		t.Fatalf("buildHostConfig(linux): %v", err)
+	}
+	if string(linux.NetworkMode) != "bridge" {
+		t.Fatalf("on Linux, default should be fenced as bridge, got %q", linux.NetworkMode)
+	}
+
+	win, err := buildHostConfig(svc, nil, nil, "windows")
+	if err != nil {
+		t.Fatalf("buildHostConfig(windows): %v", err)
+	}
+	if string(win.NetworkMode) != "default" {
+		t.Fatalf("on Windows, default must be left alone, got %q", win.NetworkMode)
+	}
+}
+
 // A daemon that cannot say what it is gets the hardening anyway: failing open on
 // security is the wrong direction, and every catalog image is a Linux image.
 func TestBuildHostConfigHardensWhenTheDaemonOSIsUnknown(t *testing.T) {
