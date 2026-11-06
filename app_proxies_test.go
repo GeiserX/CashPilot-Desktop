@@ -9,10 +9,10 @@ import (
 
 // The Proxies section reads what the bindings return: a proxy without its secrets,
 // each deployed service with why it cannot go behind a proxy, and a plain reason when
-// this build has no tunnel image yet.
+// the tunnel image cannot be used (here a floating override, which is refused).
 func TestProxiesStateNeverCarriesSecretsAndSaysWhatCannotRun(t *testing.T) {
 	app := newAppUnderTest(t)
-	t.Setenv("CASHPILOT_TUNNEL_IMAGE", "")
+	t.Setenv("CASHPILOT_TUNNEL_IMAGE", "drumsergio/cashpilot-tunnel:latest")
 	for _, slug := range []string{"honeygain", "mysterium"} {
 		if err := app.store.UpsertDeployment(store.Deployment{Slug: slug, Name: "cashpilot-" + slug, Status: "running", Runtime: "existing-docker"}); err != nil {
 			t.Fatal(err)
@@ -43,7 +43,7 @@ func TestProxiesStateNeverCarriesSecretsAndSaysWhatCannotRun(t *testing.T) {
 		t.Fatalf("mysterium needs the host's network and cannot, got %q", refusals["mysterium"])
 	}
 	if state.TunnelImage != "" || !strings.Contains(state.TunnelImageError, "CASHPILOT_TUNNEL_IMAGE") {
-		t.Fatalf("with no pin the section says so: %+v", state)
+		t.Fatalf("a refused tunnel image is said: %+v", state)
 	}
 	if err := app.DeleteProxy(view.ID); err != nil {
 		t.Fatal(err)
