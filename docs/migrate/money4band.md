@@ -2,7 +2,9 @@
 
 CashPilot Desktop can read money4band's config and bring your service logins
 over, so you do not type them again. You check everything before CashPilot
-saves it. The CashPilot web app has the same import, with the same rules.
+saves it. The CashPilot web app has the same import, with the same rules but
+one: a value with spaces at either end is trimmed there, as its deploy form
+trims what you type, and marked to retype here.
 
 ## Before you start
 
@@ -57,8 +59,9 @@ writes (`<APP>_<FLAG>`, for example `REPOCKET_APIKEY`).
 | `bitping` | Bitping | email, password |
 | `mystnode` | Mysterium | turned on; see the Mysterium note below |
 
-An app you turned off in money4band shows up unticked. An app whose values
-are still the template's placeholders (`yourHONEYGAINMail`) is left out.
+An app you turned off in money4band shows up unticked. An app that is off and
+holds only the template's placeholders (`yourHONEYGAINMail`) is left out, so an
+untouched `user-config.json` gives an empty table.
 
 These apps are listed but not brought over:
 
@@ -76,7 +79,7 @@ Any other app is listed as "CashPilot has no such service".
 
 - **Device name.** CashPilot names the device itself. Your old devices stay
   listed as offline in each provider's dashboard until you remove them there.
-- **Proxies.** CashPilot runs each service on this computer's own connection.
+- **Proxies.** Add each one in the Proxies section of the Fleet page.
 - **Watchtower and notifications.** CashPilot updates its own containers.
 - **money4band's dashboard and its ports.**
 
@@ -85,6 +88,11 @@ Any other app is listed as "CashPilot has no such service".
 If a service already has values saved in CashPilot, the import keeps them and
 only fills fields that are empty. The page tells you which values it left as
 they were. Change them in the deploy form if you want the imported ones.
+
+If a value saved here differs from the file and the import would also fill an
+empty field of the same service, the import stops and saves nothing, so one
+service never ends up with half of two logins. Fix that service in Settings
+first, then import again.
 
 ## Earnings tracking
 

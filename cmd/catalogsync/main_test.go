@@ -347,17 +347,49 @@ func TestFetchExtractsTheHelper(t *testing.T) {
 		_, _ = w.Write(tarball(t, "CashPilot-main", map[string]string{
 			"services/bandwidth/example.yml": upstreamEntry,
 			"app/procnet.py":                 "print('x')\n",
+			"app/importers/sources.yml":      "tools: {}\n",
 			"app/main.py":                    "ignored\n",
 		}))
 	}))
 	defer server.Close()
 	defer pointFetchAt(t, server.URL)()
 
-	files, procnet, err := fetchUpstream("main")
+	files, extra, err := fetchUpstream("main")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(procnet) != "print('x')\n" || len(files) != 1 {
-		t.Fatalf("procnet=%q files=%v", procnet, files)
+	if string(extra["app/procnet.py"]) != "print('x')\n" || string(extra["app/importers/sources.yml"]) != "tools: {}\n" || len(files) != 1 {
+		t.Fatalf("extra=%q files=%v", extra, files)
+	}
+}
+
+// THE RULE: the import mapping is the web repository's app/importers/sources.yml,
+// byte for byte, under the same check as the catalog. A hand copy used to be the
+// only thing keeping the two importers reading files the same way.
+func TestImportMappingIsVendoredAndChecked(t *testing.T) {
+	const mapping = "tools: {money4band: {}}\n"
+	src := webCheckout(t, upstreamEntry)
+	writeCatalog(t, src, map[string]string{"app/importers/sources.yml": mapping})
+	out := t.TempDir()
+	writeCatalog(t, out, map[string]string{"bandwidth/example.yml": upstreamEntry})
+	oldP, oldS := procnetPath, sourcesPath
+	procnetPath, sourcesPath = "", filepath.Join(t.TempDir(), "sources.yml")
+	defer func() { procnetPath, sourcesPath = oldP, oldS }()
+
+	if err := os.WriteFile(sourcesPath, []byte("tools: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := run(src, "main", out, t.TempDir(), true)
+	if code := exitCodeFor(err); code != exitDrift || !strings.Contains(err.Error(), "sources.yml") {
+		t.Fatalf("a stale mapping exited %d (%v); want drift naming sources.yml", code, err)
+	}
+	if err := run(src, "main", out, t.TempDir(), false); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if got, _ := os.ReadFile(sourcesPath); string(got) != mapping {
+		t.Fatalf("sync wrote %q; want the web copy", got)
+	}
+	if err := run(src, "main", out, t.TempDir(), true); err != nil {
+		t.Fatalf("-check rejected the mapping the sync just wrote: %v", err)
 	}
 }

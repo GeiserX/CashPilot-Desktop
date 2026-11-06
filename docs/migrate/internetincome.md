@@ -3,7 +3,9 @@
 CashPilot Desktop can read InternetIncome's `properties.conf`, and the files
 where it keeps your EarnApp and ProxyRack device ids, and bring them over. You
 check everything before CashPilot saves it. The CashPilot web app has the same
-import, with the same rules.
+import, with the same rules but one: a value with spaces at either end is
+trimmed there, as its deploy form trims what you type, and marked to retype
+here.
 
 ## Before you start
 
@@ -39,7 +41,7 @@ used and the one you linked to your account. The other lines belonged to proxy
 copies, and the page tells you how many it left out.
 
 InternetIncome runs every value through the shell
-([line 1374](https://github.com/engageub/InternetIncome/blob/db9338ab5a77539db8420476742af647b6cf82e5/internetIncome.sh#L1374)).
+([line 1375](https://github.com/engageub/InternetIncome/blob/db9338ab5a77539db8420476742af647b6cf82e5/internetIncome.sh#L1375)).
 A value in single quotes is taken as written, as the comments in
 [properties.conf](https://github.com/engageub/InternetIncome/blob/db9338ab5a77539db8420476742af647b6cf82e5/properties.conf)
 advise. A value outside single quotes that holds `$`, a backtick, a space or
@@ -92,8 +94,8 @@ listed by name as not read.
 
 - **`DEVICE_NAME`.** CashPilot names the device itself. Your old devices stay
   listed as offline in each provider's dashboard until you remove them there.
-- **Proxies** (`USE_PROXIES`, `proxies.txt`). CashPilot runs each service on
-  this computer's own connection.
+- **Proxies** (`USE_PROXIES`, `proxies.txt`). Add each one in the Proxies
+  section of the Fleet page.
 - **`BROWSER_USERNAME` and `BROWSER_PASSWORD`**, InternetIncome's own browser
   login.
 
@@ -102,6 +104,11 @@ listed by name as not read.
 If a service already has values saved in CashPilot, the import keeps them and
 only fills fields that are empty. The page tells you which values it left as
 they were.
+
+If a value saved here differs from the file and the import would also fill an
+empty field of the same service, the import stops and saves nothing, so one
+service never ends up with half of two logins. Fix that service in Settings
+first, then import again.
 
 ## Earnings tracking
 

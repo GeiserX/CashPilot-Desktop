@@ -206,7 +206,7 @@ func TestMoney4bandV3Aliases(t *testing.T) {
 }
 
 func TestUntouchedTemplatesImportNothing(t *testing.T) {
-	for _, p := range []string{"money4band/template.env", "cashfactory/template.env"} {
+	for _, p := range []string{"money4band/template.env", "money4band/template-user-config.json", "cashfactory/template.env"} {
 		if got := preview(t, fixtures(t, p), "auto", nil).Rows; len(got) != 0 {
 			t.Errorf("%s gave %d rows", p, len(got))
 		}
@@ -217,6 +217,15 @@ func TestUntouchedTemplatesImportNothing(t *testing.T) {
 	}
 	if sk := skippedKeys(tpl); len(sk) != 1 || sk["DEVICE_NAME"] == "" {
 		t.Errorf("blank values and false switches are off; not imported = %v", sk)
+	}
+}
+
+func TestOnlyTheAppFilledInOnAJSONTemplateComesIn(t *testing.T) {
+	f := fixtures(t, "money4band/template-user-config.json")[0]
+	f.Content = strings.Replace(f.Content, `"enabled": false, "email": "yourHONEYGAINMail"`, `"enabled": true, "email": "hg@example.com"`, 1)
+	rs := rows(preview(t, []File{f}, "auto", nil))
+	if _, ok := rs["honeygain"]; !ok || len(rs) != 1 {
+		t.Errorf("rows = %v, want honeygain only", rs)
 	}
 }
 
