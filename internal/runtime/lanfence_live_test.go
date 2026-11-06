@@ -77,7 +77,7 @@ func TestFenceIntegration(t *testing.T) {
 	}
 	subnet, _ := networkSubnet(net)
 	read := func() map[string]int {
-		res, err := runHelper(ctx, cli, "read", subnet, true)
+		res, err := runHelper(ctx, cli, "read", subnet, "", true)
 		if err != nil {
 			t.Fatalf("read the counters: %v", err)
 		}
