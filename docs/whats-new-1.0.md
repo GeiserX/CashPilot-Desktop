@@ -19,9 +19,15 @@ limits what they can reach.
   10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, tailnets at 100.64.0.0/10, cloud
   metadata at 169.254.0.0/16, subnets directly connected to this computer, the
   computer itself and its public IPv4. That last one stops NAT loopback from
-  reaching a port your router forwards. NAT and the drops live in the same table, so if the
-  table goes missing the earners lose the internet, not gain your LAN. The app
-  writes the table again at startup, before every deploy and every five
+  reaching a port your router forwards. The app learns that address with a
+  lookup, so until the first lookup after a start succeeds the address is open,
+  and only one public IPv4 is covered. With a second WAN, block the others on
+  the router. NAT and the drops live in the same table, so if the table goes
+  missing the earners lose the internet over TCP instead of gaining your LAN.
+  Three things still get through while it is missing: traffic to this computer
+  itself, one-way UDP to a LAN device, and everything when the host has a
+  masquerade rule of its own that covers the bridge. The app writes the table
+  again at startup, before every deploy and every five
   minutes, and refuses a deploy it can't fence before it touches the running
   container. An upgraded install gets a **Turn on isolation** button under Needs
   attention. See [LAN isolation](configuration.md#lan-isolation).
@@ -43,10 +49,16 @@ limits what they can reach.
   format is the web app's, so either app's tool opens either app's backups.
   See [Backup](backup.md).
 - **Credentials encrypted at rest** with AES-256-GCM, with the master key in the
-  OS keychain.
+  OS keychain. Where no keychain is available the key falls back to a
+  `.credential_key` file with `0600` permissions in the app's data folder, so a
+  backup of that folder holds the key too. A native, non-Docker service's
+  environment, which can include its credentials, sits unencrypted in
+  `native/state.json` with `0600` permissions.
 - **Mysterium on Windows** runs in userspace mode, which blocks its VPN
   customers from your LAN, plus a Windows Firewall rule for 100.64.0.0/10 and
-  169.254.0.0/16. The node does not start without the rule.
+  169.254.0.0/16. The node does not start without the rule. A node deployed
+  before this change keeps its old launch, which lets VPN customers reach your
+  LAN and tailnet, until you deploy it again.
 - **Signed macOS builds.** The macOS app is signed with a Developer ID
   certificate, notarized and stapled. The release job fails if a signing secret
   is missing, so it never ships unsigned. Releases are built with Go 1.26.10,
@@ -65,10 +77,14 @@ its exit IP and country, then run a copy through it.
 
 - Each copy is a tunnel container plus the earner in the tunnel's network
   namespace. The tunnel's firewall goes in first, and the earner starts only
-  after an exit IP that isn't this computer's shows up within 45 seconds.
+  after the tunnel sees an exit IP within 45 seconds. When the app knows this
+  computer's public IP, that exit must also differ from it.
 - It fails closed. If the proxy or the tunnel dies, the earner can't send a
   packet anywhere, not from your own IP and not to your LAN.
 - DNS goes through the proxy too, including plain HTTP CONNECT proxies.
+- A SOCKS5 or HTTP proxy gives the earner whatever the proxy itself can reach,
+  private networks on its side included. Pick a proxy that refuses private
+  destinations. Tailscale tunnels drop private and tailnet ranges.
 - An optional traffic cap stops every copy behind a proxy at a percentage you
   pick. A reset day, or Reset usage, starts only the copies the cap stopped,
   and a copy that fails to start then is tried again.
@@ -152,14 +168,18 @@ tested against the release assets, but not submitted yet. See
 
 ## Upgrading from 0.x
 
-Nothing to do. A few things stay as they were until you act:
+Your settings, data and services carry over. A few older deployments stay as
+they were until you act. The first three matter for security:
 
 - An install from before v0.37.0 keeps its earners on Docker's default bridge.
   Press **Turn on isolation** under Needs attention to fence them.
 - A proxied copy created before v0.39.1 keeps its tunnel on the default bridge
   until you deploy that copy again.
 - A Windows Mysterium node deployed before the userspace change keeps its old
-  launch until you deploy it again.
+  launch, which lets its VPN customers reach your LAN and tailnet. Deploy it
+  again.
+- A ProxyBase service deployed before v0.10.1 runs the retired client and earns
+  nothing. Deploy it again with a fresh Access Token.
 - Copying your history to a server needs CashPilot v1.16.0 or newer.
 
 ## Known limits
