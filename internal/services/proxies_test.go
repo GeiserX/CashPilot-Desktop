@@ -487,3 +487,26 @@ func TestACopyAResetCouldNotStartIsStartedOnTheNextPass(t *testing.T) {
 		t.Fatalf("a copy the owner stopped was started: %v %v", p.starts, err)
 	}
 }
+
+// A retry that picked a copy before the owner stopped it reads the mark again under
+// the lock the owner's Stop holds, so the stop that returned stands.
+func TestARetryNeverUndoesAnOwnerStop(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	d, _, _ := m.loadProxy(view.ID)
+	p.starts = nil
+	if m.retryCapStart(ctx, p, view.ID, d, "example", "192.0.2.1") || len(p.starts) != 0 {
+		t.Fatalf("the retry started a copy the owner stopped: %v", p.starts)
+	}
+}
