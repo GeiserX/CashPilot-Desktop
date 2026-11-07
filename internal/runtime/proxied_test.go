@@ -72,6 +72,8 @@ type fakeTunnelDocker struct {
 	networkErr error
 	// created is the Created time list reports for every container (unix seconds).
 	created int64
+	// renameErr makes every rename fail.
+	renameErr error
 	// stopErr makes a stop of that container name fail.
 	stopErr map[string]error
 }
@@ -190,6 +192,25 @@ func (f *fakeTunnelDocker) remove(_ context.Context, id string) error {
 	f.record("remove " + c.name)
 	return nil
 }
+func (f *fakeTunnelDocker) rename(_ context.Context, id, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c := f.find(id)
+	if c == nil {
+		return errors.New("no such container")
+	}
+	if f.renameErr != nil {
+		return f.renameErr
+	}
+	if f.containers[name] != nil {
+		return fmt.Errorf("name %s in use", name)
+	}
+	delete(f.containers, c.name)
+	f.record("rename " + c.name + " " + name)
+	c.name = name
+	f.containers[name] = c
+	return nil
+}
 func (f *fakeTunnelDocker) inspect(_ context.Context, ref string) (container.InspectResponse, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -198,10 +219,11 @@ func (f *fakeTunnelDocker) inspect(_ context.Context, ref string) (container.Ins
 		return container.InspectResponse{}, false, nil
 	}
 	return container.InspectResponse{
-		ID:     c.id,
-		Name:   "/" + c.name,
-		State:  &container.State{Status: container.ContainerState(c.state), StartedAt: c.startedAt},
-		Config: c.opts.Config,
+		ID:      c.id,
+		Name:    "/" + c.name,
+		State:   &container.State{Status: container.ContainerState(c.state), StartedAt: c.startedAt},
+		Config:  c.opts.Config,
+		Created: time.Unix(f.created, 0).UTC().Format(time.RFC3339Nano),
 	}, true, nil
 }
 func (f *fakeTunnelDocker) list(_ context.Context, _ ...string) ([]container.Summary, error) {
@@ -416,7 +438,7 @@ func TestDeployStartsTheEarnerOnlyAfterTheTunnelIsReady(t *testing.T) {
 		t.Fatalf("exit: %+v", exit)
 	}
 	calls := f.callList()
-	order := []string{"create cashpilot-tunnel-earner-p3", "copy cashpilot-tunnel-earner-p3 " + tunnelSecretDir, "start cashpilot-tunnel-earner-p3", "create cashpilot-earner-p3", "start cashpilot-earner-p3"}
+	order := []string{"create cashpilot-tunnel-earner-p3-next", "copy cashpilot-tunnel-earner-p3-next " + tunnelSecretDir, "start cashpilot-tunnel-earner-p3-next", "rename cashpilot-tunnel-earner-p3-next cashpilot-tunnel-earner-p3", "create cashpilot-earner-p3", "start cashpilot-earner-p3"}
 	last := -1
 	for _, step := range order {
 		i := slices.Index(calls, step)
@@ -778,6 +800,186 @@ func TestAProbeAnswerThatIsNotAnIPIsNotReady(t *testing.T) {
 	}
 	if e, ok := parseReady(`{"ip":"203.0.113.7","country":"NL"}`); !ok || e.IP != "203.0.113.7" {
 		t.Fatal("a real IP is ready")
+	}
+}
+
+// A redeploy whose new tunnel cannot start keeps the copy running now: the new tunnel
+// proves its exit under a staged name before the old pair goes.
+func TestARedeployWhoseTunnelCannotStartKeepsTheRunningCopy(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	oldEarner, oldTunnel := f.containers["cashpilot-earner-p3"].id, f.containers["cashpilot-tunnel-earner-p3"].id
+	f.exit = "" // the new tunnel never sees an exit
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil {
+		t.Fatal("a tunnel with no exit must fail the deploy")
+	}
+	if e, tn := f.containers["cashpilot-earner-p3"], f.containers["cashpilot-tunnel-earner-p3"]; e == nil || tn == nil || e.id != oldEarner || tn.id != oldTunnel {
+		t.Fatalf("the running copy was replaced or removed: %v", f.callList())
+	}
+	if f.containers["cashpilot-tunnel-earner-p3-next"] != nil {
+		t.Fatal("the staged tunnel was left behind")
+	}
+}
+
+// The staged tunnel takes the final name only after the old pair is gone, and keeps
+// the final hostname from the start.
+func TestARedeployPromotesTheStagedTunnelAfterTheOldPairGoes(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	before := len(f.callList())
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	calls := f.callList()[before:]
+	ready, gone, renamed := slices.Index(calls, "start cashpilot-tunnel-earner-p3-next"), slices.Index(calls, "remove cashpilot-tunnel-earner-p3"), slices.Index(calls, "rename cashpilot-tunnel-earner-p3-next cashpilot-tunnel-earner-p3")
+	if ready < 0 || gone < ready || renamed < gone || slices.Index(calls, "remove cashpilot-earner-p3") > gone {
+		t.Fatalf("order: %v", calls)
+	}
+	if h := f.containers["cashpilot-tunnel-earner-p3"].opts.Config.Hostname; h != "tunnel-earner-p3" {
+		t.Fatalf("hostname %q", h)
+	}
+}
+
+// A staged tunnel a dead deploy left is replaced, never a stranger under that name;
+// the status read never reports one, and sweeps it once it is stale.
+func TestAStagedTunnelIsNeverReportedAndAStrangerIsNeverRemoved(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	pid := int64(3)
+	if _, err := f.create(ctx, sidecarCreate("cashpilot-tunnel-earner-p3-next", "earner", &pid, "example/cashpilot-tunnel:1.66.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	f.created = time.Now().Unix()
+	status, err := proxiedStatus(ctx, f)
+	if err != nil || len(status) != 1 || status[0].TunnelContainerID != f.containers["cashpilot-tunnel-earner-p3"].id {
+		t.Fatalf("status reported the staged tunnel: %+v %v", status, err)
+	}
+	f.created = time.Now().Add(-2 * staleTestTunnel).Unix()
+	if _, err := proxiedStatus(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+	if f.containers["cashpilot-tunnel-earner-p3-next"] != nil || f.containers["cashpilot-tunnel-earner-p3"] == nil {
+		t.Fatal("a stale staged tunnel is swept, and only it")
+	}
+	stranger := sidecarCreate("cashpilot-tunnel-earner-p3-next", "other", &pid, "example/cashpilot-tunnel:1.66.0", "")
+	if _, err := f.create(ctx, stranger); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil || !strings.Contains(err.Error(), "did not create") {
+		t.Fatalf("a stranger under the staged name must stop the deploy, got %v", err)
+	}
+	if f.containers["cashpilot-tunnel-earner-p3-next"] == nil {
+		t.Fatal("the stranger was removed")
+	}
+}
+
+// A young staged tunnel belongs to a deploy still running, maybe in another app on
+// the same Docker host: a second deploy refuses instead of removing it.
+func TestADeployLeavesAnotherDeploysStagedTunnelAlone(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	pid := int64(3)
+	if _, err := f.create(ctx, sidecarCreate("cashpilot-tunnel-earner-p3-next", "earner", &pid, "example/cashpilot-tunnel:1.66.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	staged := f.containers["cashpilot-tunnel-earner-p3-next"].id
+	oldTunnel := f.containers["cashpilot-tunnel-earner-p3"].id
+	f.created = time.Now().Unix()
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil || !strings.Contains(err.Error(), "under way") {
+		t.Fatalf("a young staged tunnel must stop the deploy, got %v", err)
+	}
+	if c := f.containers["cashpilot-tunnel-earner-p3-next"]; c == nil || c.id != staged {
+		t.Fatal("the other deploy's staged tunnel was removed")
+	}
+	if c := f.containers["cashpilot-tunnel-earner-p3"]; c == nil || c.id != oldTunnel {
+		t.Fatal("the running pair was touched")
+	}
+	f.created = time.Now().Add(-2 * staleTestTunnel).Unix()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatalf("an abandoned staged tunnel is replaced: %v", err)
+	}
+}
+
+// The sweep leaves a stale-looking staged tunnel alone while a deploy of its copy in
+// this app still holds the copy's lock.
+func TestTheSweepSkipsAStagedTunnelWhoseDeployIsRunning(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	pid := int64(3)
+	if _, err := f.create(ctx, sidecarCreate("cashpilot-tunnel-earner-p3-next", "earner", &pid, "example/cashpilot-tunnel:1.66.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	f.created = time.Now().Add(-2 * staleTestTunnel).Unix()
+	mu := deployLock("earner", 3)
+	mu.Lock()
+	sweepTestTunnels(ctx, f, time.Now())
+	if f.containers["cashpilot-tunnel-earner-p3-next"] == nil {
+		mu.Unlock()
+		t.Fatal("the sweep removed a staged tunnel its deploy still holds")
+	}
+	mu.Unlock()
+	sweepTestTunnels(ctx, f, time.Now())
+	if f.containers["cashpilot-tunnel-earner-p3-next"] != nil {
+		t.Fatal("once the deploy is done the stale staged tunnel is swept")
+	}
+}
+
+// A swap that fails after the old pair went removes the staged tunnel, so nothing is
+// left running under a name the status read never reports.
+func TestAFailedPromotionRemovesTheStagedTunnel(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	f.renameErr = errors.New("409 Conflict")
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil || !strings.Contains(err.Error(), "409") {
+		t.Fatalf("the failed rename must fail the deploy, got %v", err)
+	}
+	if f.containers["cashpilot-tunnel-earner-p3-next"] != nil || f.containers["cashpilot-earner-p3"] != nil {
+		t.Fatalf("left behind: %v", f.callList())
+	}
+}
+
+// Two deploys of one copy take turns, so the second never removes the first one's
+// staged tunnel as a leftover.
+func TestTwoDeploysOfOneCopyTakeTurns(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = deployProxied(ctx, f, deployRequest())
+		}(i)
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("both deploys must succeed one after the other: %v", errs)
+	}
+	if f.containers["cashpilot-tunnel-earner-p3"] == nil || f.containers["cashpilot-earner-p3"] == nil || f.containers["cashpilot-tunnel-earner-p3-next"] != nil {
+		t.Fatalf("containers after two deploys: %v", f.callList())
 	}
 }
 
