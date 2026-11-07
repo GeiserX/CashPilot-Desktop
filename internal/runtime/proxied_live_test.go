@@ -2,6 +2,9 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -48,6 +51,29 @@ func TestProxiedCopyFailsClosedLive(t *testing.T) {
 	cleanup := func() {
 		_, _ = dk("rm", "-f", "-v", earner, tunnel, gost)
 	}
+	// The names are fixed, so a container of the operator's could hold one: it is
+	// never removed. Only what this test created (its labels say so) is cleared.
+	inspectLabels := func(name string) (map[string]string, bool, error) {
+		out, err := dk("inspect", "-f", "{{json .Config.Labels}}", name)
+		if err != nil {
+			if strings.Contains(strings.ToLower(out), "no such") {
+				return nil, false, nil
+			}
+			return nil, false, fmt.Errorf("docker inspect %s: %v: %s", name, err, out)
+		}
+		var labels map[string]string
+		if err := json.Unmarshal([]byte(out), &labels); err != nil {
+			return nil, true, fmt.Errorf("docker inspect %s: %v", name, err)
+		}
+		return labels, true, nil
+	}
+	if err := refuseForeignLiveContainers(inspectLabels, map[string]func(map[string]string) bool{
+		earner: func(l map[string]string) bool { return isOurs(l, slug, pid) },
+		tunnel: func(l map[string]string) bool { return isOurs(l, slug, pid) },
+		gost:   func(l map[string]string) bool { return l[liveTestLabel] == slug },
+	}); err != nil {
+		t.Fatal(err)
+	}
 	cleanup()
 	t.Cleanup(cleanup)
 
@@ -61,7 +87,7 @@ func TestProxiedCopyFailsClosedLive(t *testing.T) {
 	}
 
 	// The proxy: gost with a user and a password that needs percent-encoding.
-	must("run", "-d", "--name", gost, "gogost/gost:3.3.3", "-L", "socks5://puser:live%20p%40ss%3Aword-SECRET@:1080")
+	must("run", "-d", "--name", gost, "--label", liveTestLabel+"="+slug, "gogost/gost:3.3.3", "-L", "socks5://puser:live%20p%40ss%3Aword-SECRET@:1080")
 	gostIP := must("inspect", "-f", "{{.NetworkSettings.Networks.bridge.IPAddress}}", gost)
 	if gostIP == "" {
 		t.Fatal("the proxy got no bridge address")
@@ -185,4 +211,24 @@ func TestProxiedCopyFailsClosedLive(t *testing.T) {
 		time.Sleep(3 * time.Second)
 	}
 	t.Fatal("the earner never came back after its tunnel restarted")
+}
+
+// liveTestLabel marks a helper container the live test created, so a rerun may
+// remove it and nothing else.
+const liveTestLabel = "cashpilot.live-test"
+
+// refuseForeignLiveContainers fails when a fixed name the live test is about to
+// remove is held by a container it did not create.
+func refuseForeignLiveContainers(inspect func(string) (map[string]string, bool, error), owned map[string]func(map[string]string) bool) error {
+	var errs []error
+	for name, ours := range owned {
+		labels, found, err := inspect(name)
+		switch {
+		case err != nil:
+			errs = append(errs, err)
+		case found && !ours(labels):
+			errs = append(errs, fmt.Errorf("a container named %s exists and this test did not create it; remove or rename it, then run again", name))
+		}
+	}
+	return errors.Join(errs...)
 }

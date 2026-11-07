@@ -774,3 +774,27 @@ func TestAProbeAnswerThatIsNotAnIPIsNotReady(t *testing.T) {
 		t.Fatal("a real IP is ready")
 	}
 }
+
+// The live test removes fixed names before it runs; a container of the operator's
+// under one of those names must stop it instead of being removed.
+func TestTheLiveTestNeverRemovesAContainerItDidNotCreate(t *testing.T) {
+	ours := map[string]string{LabelManaged: "true", LabelService: "mp-live", LabelProxy: "1"}
+	containers := map[string]map[string]string{"cashpilot-mp-live-p1": ours, "cp-mp-live-gost": {"com.example": "mine"}}
+	inspect := func(name string) (map[string]string, bool, error) {
+		labels, ok := containers[name]
+		return labels, ok, nil
+	}
+	owned := map[string]func(map[string]string) bool{
+		"cashpilot-mp-live-p1":        func(l map[string]string) bool { return isOurs(l, "mp-live", 1) },
+		"cashpilot-tunnel-mp-live-p1": func(l map[string]string) bool { return isOurs(l, "mp-live", 1) },
+		"cp-mp-live-gost":             func(l map[string]string) bool { return l[liveTestLabel] == "mp-live" },
+	}
+	err := refuseForeignLiveContainers(inspect, owned)
+	if err == nil || !strings.Contains(err.Error(), "cp-mp-live-gost") || strings.Contains(err.Error(), "cashpilot-mp-live-p1") {
+		t.Fatalf("only the stranger must be refused, got %v", err)
+	}
+	containers["cp-mp-live-gost"] = map[string]string{liveTestLabel: "mp-live"}
+	if err := refuseForeignLiveContainers(inspect, owned); err != nil {
+		t.Fatalf("containers this test created, or none, must pass: %v", err)
+	}
+}
