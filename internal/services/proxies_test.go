@@ -28,6 +28,10 @@ type fakeProxyProvider struct {
 	specs    []runtime.ProxySpec
 	removed  []string
 	allGone  []string
+	// startFails makes that many StartProxied calls fail before they succeed again.
+	startFails int
+	// earnerDown reports that copy's earner stopped while its tunnel runs.
+	earnerDown map[string]bool
 }
 
 func newFakeProxyProvider() *fakeProxyProvider {
@@ -52,6 +56,10 @@ func (f *fakeProxyProvider) StopProxied(_ context.Context, slug string, id int64
 }
 func (f *fakeProxyProvider) StartProxied(_ context.Context, slug string, id int64, _ int, spec runtime.ProxySpec, _ string) (runtime.Exit, error) {
 	f.starts = append(f.starts, key(slug, id))
+	if f.startFails > 0 {
+		f.startFails--
+		return runtime.Exit{}, errors.New("daemon busy")
+	}
 	f.specs = append(f.specs, spec)
 	f.running[key(slug, id)] = true
 	return runtime.Exit{IP: "203.0.113.7"}, nil
@@ -75,7 +83,11 @@ func (f *fakeProxyProvider) ProxiedStatus(context.Context) ([]runtime.ProxiedCop
 			status = "running"
 		}
 		rx, tx := f.rx[k], uint64(0)
-		out = append(out, runtime.ProxiedCopy{Slug: slug, ProxyID: id, Status: status, TunnelStatus: status, TunnelContainerID: "t-" + k, TunnelStartedAt: "s", NetRxBytes: &rx, NetTxBytes: &tx, ExitIP: "203.0.113.7"})
+		earner := status
+		if f.earnerDown[k] {
+			earner = "exited"
+		}
+		out = append(out, runtime.ProxiedCopy{Slug: slug, ProxyID: id, Status: earner, TunnelStatus: status, TunnelContainerID: "t-" + k, TunnelStartedAt: "s", NetRxBytes: &rx, NetTxBytes: &tx, ExitIP: "203.0.113.7"})
 	}
 	return out, nil
 }
@@ -412,5 +424,164 @@ func TestANewProxyWithAResetDayStartsItsPeriod(t *testing.T) {
 	d, s, err := m.loadProxy(view.ID)
 	if err != nil || s.PeriodStart == "" || proxies.ResetDue(d, s, proxyNow().UTC()) {
 		t.Fatalf("period: %+v %v", s, err)
+	}
+}
+
+// A reset whose start failed left the copy marked as the cap's and stopped until the
+// next reset, a month later. Every pass now tries again while the proxy is uncapped.
+func TestACopyAResetCouldNotStartIsStartedOnTheNextPass(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	k := key("example", view.ID)
+	p.rx[k] = 950_000_000
+	if _, err := m.ProxyTick(ctx); err != nil || p.running[k] {
+		t.Fatalf("capped: %v", err)
+	}
+	p.startFails = 1
+	if started, _ := m.ResetProxy(ctx, view.ID); len(started) != 0 || p.running[k] {
+		t.Fatalf("the reset's start was meant to fail: %v", started)
+	}
+	if _, err := m.ProxyTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !p.running[k] {
+		t.Fatal("the next pass must start the copy the reset could not")
+	}
+	records, _ := st.ListProxiedCopies(view.ID)
+	if len(records) != 1 || records[0].StoppedByCap {
+		t.Fatalf("the mark is cleared once it runs: %+v", records)
+	}
+	// A running copy left marked (its clear failed) has the mark cleared on a pass.
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	p.starts = nil
+	if _, err := m.ProxyTick(ctx); err != nil || len(p.starts) != 0 {
+		t.Fatalf("a running marked copy must not be started: %v %v", p.starts, err)
+	}
+	if records, _ := st.ListProxiedCopies(view.ID); records[0].StoppedByCap {
+		t.Fatal("the stale mark on a running copy is cleared")
+	}
+	// A tunnel left up by a start that timed out, with the earner down, keeps the mark
+	// and is started again.
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	p.earnerDown = map[string]bool{k: true}
+	p.starts = nil
+	if _, err := m.ProxyTick(ctx); err != nil || len(p.starts) != 1 {
+		t.Fatalf("a copy with only its tunnel up must be started again: %v %v", p.starts, err)
+	}
+	p.earnerDown = nil
+	// A copy the owner stops afterwards stays stopped on the next pass.
+	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	p.starts = nil
+	if _, err := m.ProxyTick(ctx); err != nil || len(p.starts) != 0 {
+		t.Fatalf("a copy the owner stopped was started: %v %v", p.starts, err)
+	}
+}
+
+// A retry that picked a copy before the owner stopped it reads the mark again under
+// the lock the owner's Stop holds, so the stop that returned stands.
+func TestARetryNeverUndoesAnOwnerStop(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	p.starts = nil
+	if m.retryCapStart(ctx, p, view.ID, "example", "192.0.2.1") || len(p.starts) != 0 {
+		t.Fatalf("the retry started a copy the owner stopped: %v", p.starts)
+	}
+	// A cap that came back while the retry waited stops it too.
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	m.proxy.proxyMu.Lock()
+	_, s, _ := m.loadProxy(view.ID)
+	s.CappedAt, s.CapReason = "2026-11-07T00:00:00Z", "Gate reached its cap"
+	_ = m.saveState(view.ID, s)
+	m.proxy.proxyMu.Unlock()
+	if m.retryCapStart(ctx, p, view.ID, "example", "192.0.2.1") || len(p.starts) != 0 {
+		t.Fatalf("the retry started a copy while the cap holds: %v", p.starts)
+	}
+}
+
+// A delete the critical-data check refuses must not cost the proxied copies: the
+// refusal comes before they are removed.
+func TestARefusedDeleteKeepsTheProxiedCopies(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	p.planVolumes = []runtime.DataMount{{Target: "/data", Source: "cashpilot-example-data", Volume: true, Critical: true, Holds: "the node identity"}}
+	err := m.Remove(context.Background(), "example", true, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot be recovered") {
+		t.Fatalf("the delete must be refused for the critical volume, got %v", err)
+	}
+	if len(p.allGone) != 0 {
+		t.Fatalf("a refused delete removed the proxied copies: %v", p.allGone)
+	}
+	if len(p.removeOpts) != 0 {
+		t.Fatalf("a refused delete reached provider.Remove: %+v", p.removeOpts)
+	}
+	// A plan that cannot be read stops the delete before the copies go, too.
+	p.planVolumes, p.planErr = nil, errors.New("daemon busy")
+	if err := m.Remove(context.Background(), "example", true, false); err == nil || len(p.allGone) != 0 {
+		t.Fatalf("an unreadable plan must stop the delete first: %v, copies %v", err, p.allGone)
+	}
+	if err := m.Remove(context.Background(), "example", true, true); err == nil || len(p.allGone) != 0 {
+		t.Fatalf("an unreadable plan must stop an approved delete first too: %v, copies %v", err, p.allGone)
+	}
+	p.planErr = nil
+	// With the separate yes, the copies go first, then the service.
+	if err := m.Remove(context.Background(), "example", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.allGone, []string{"example"}) || len(p.removeOpts) != 1 {
+		t.Fatalf("allowed delete: copies %v, removes %d", p.allGone, len(p.removeOpts))
+	}
+}
+
+// A service deployed on the native runtime is offered as a proxy candidate only with
+// its refusal, so the option is disabled instead of failing on click.
+func TestProxyRefusalNamesTheNativeRuntime(t *testing.T) {
+	m, _, st := newProxyManager(t)
+	deployExample(t, st)
+	if got := m.ProxyRefusal("example"); got != "" {
+		t.Fatalf("a Docker deployment must be allowed, got %q", got)
+	}
+	if err := st.UpsertDeployment(store.Deployment{Slug: "example", Name: "example", Status: "running", Runtime: "native"}); err != nil {
+		t.Fatal(err)
+	}
+	got := m.ProxyRefusal("example")
+	if !strings.Contains(got, "native runtime") {
+		t.Fatalf("the refusal must name the native runtime, got %q", got)
+	}
+	view, err := m.SaveProxy(context.Background(), 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "gate.example.net", "port": "7000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.DeployProxied(context.Background(), "example", view.ID)
+	if err == nil || !strings.Contains(err.Error(), "native runtime") {
+		t.Fatalf("the deploy must refuse with the same reason, got %v", err)
+	}
+	// A deployment that cannot be read is a refusal too, never a silent yes.
+	_ = st.Close()
+	if got := m.ProxyRefusal("example"); !strings.Contains(got, "Could not read its deployment") {
+		t.Fatalf("a failed lookup must be the refusal, got %q", got)
 	}
 }
