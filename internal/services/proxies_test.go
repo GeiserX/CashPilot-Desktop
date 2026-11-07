@@ -32,6 +32,8 @@ type fakeProxyProvider struct {
 	startFails int
 	// earnerDown reports that copy's earner stopped while its tunnel runs.
 	earnerDown map[string]bool
+	startErr   error  // every start fails with it while set
+	stopFn     func() // runs inside a stop, before it returns
 }
 
 func newFakeProxyProvider() *fakeProxyProvider {
@@ -52,6 +54,9 @@ func (f *fakeProxyProvider) StopProxied(_ context.Context, slug string, id int64
 	f.stops = append(f.stops, key(slug, id))
 	was := f.running[key(slug, id)]
 	f.running[key(slug, id)] = false
+	if f.stopFn != nil {
+		f.stopFn()
+	}
 	return was, nil
 }
 func (f *fakeProxyProvider) StartProxied(_ context.Context, slug string, id int64, _ int, spec runtime.ProxySpec, _ string) (runtime.Exit, error) {
@@ -59,6 +64,9 @@ func (f *fakeProxyProvider) StartProxied(_ context.Context, slug string, id int6
 	if f.startFails > 0 {
 		f.startFails--
 		return runtime.Exit{}, errors.New("daemon busy")
+	}
+	if f.startErr != nil {
+		return runtime.Exit{}, f.startErr
 	}
 	f.specs = append(f.specs, spec)
 	f.running[key(slug, id)] = true
@@ -583,5 +591,75 @@ func TestProxyRefusalNamesTheNativeRuntime(t *testing.T) {
 	_ = st.Close()
 	if got := m.ProxyRefusal("example"); !strings.Contains(got, "Could not read its deployment") {
 		t.Fatalf("a failed lookup must be the refusal, got %q", got)
+	}
+}
+
+// A copy whose start failed when the cap lifted is started by a later pass, not left
+// stopped until the next reset a month away. Only the first failure is an event.
+func TestACappedCopyThatDidNotStartIsRetriedEveryPass(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	k := key("example", view.ID)
+	p.rx[k] = 950_000_000
+	if _, err := m.ProxyTick(ctx); err != nil || p.running[k] {
+		t.Fatalf("capped: %v", err)
+	}
+	p.startErr = errors.New("Cannot connect to the Docker daemon")
+	if started, err := m.ResetProxy(ctx, view.ID); err != nil || len(started) != 0 {
+		t.Fatalf("a failed start is not reported as started: %v %v", started, err)
+	}
+	if _, err := m.ProxyTick(ctx); err != nil || p.running[k] {
+		t.Fatalf("still failing: %v", err)
+	}
+	// Each *_error event costs the health score 20 points.
+	if got := st.HealthScores(1)["example"].Crashes; got != 1 {
+		t.Fatalf("%d start-error events; a retry every minute must not add one each time", got)
+	}
+	p.startErr = nil
+	p.starts = nil
+	if _, err := m.ProxyTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !p.running[k] || len(p.starts) != 1 {
+		t.Fatalf("the next pass starts the copy the reset could not: running=%v starts=%v", p.running[k], p.starts)
+	}
+	if _, err := m.ProxyTick(ctx); err != nil || len(p.starts) != 1 {
+		t.Fatalf("a started copy loses the mark and is not started again: %v %v", p.starts, err)
+	}
+}
+
+// The cap lifts while a stop is on its way and the start back fails: the copy gets
+// the mark, so the next pass starts it.
+func TestACopyWhoseStartBackFailedMidStopIsRetried(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	k := key("example", view.ID)
+	p.rx[k] = 950_000_000
+	p.startErr = errors.New("the proxy did not answer")
+	p.stopFn = func() {
+		p.stopFn = nil
+		if _, err := m.ResetProxy(ctx, view.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	if _, err := m.ProxyTick(ctx); err != nil || p.running[k] {
+		t.Fatalf("the start back failed: %v", err)
+	}
+	p.startErr = nil
+	if _, err := m.ProxyTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !p.running[k] {
+		t.Fatal("the next pass starts the copy the failed start back left stopped")
 	}
 }

@@ -823,7 +823,8 @@ func (m *Manager) retryCapStart(ctx context.Context, p runtime.ProxyProvider, id
 		return false
 	}
 	if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), specOf(d), ownIP); err != nil {
-		m.store.RecordEvent(slug, "proxied_start_error", maskSecrets(err.Error(), d))
+		// Not an event: the reset or stop that left the copy marked recorded the first
+		// failure, retries run every minute, and events feed the health score.
 		return false
 	}
 	// Cleared inside the copy's lock, which stopCapped also takes, and only while the
@@ -892,6 +893,8 @@ func (m *Manager) stopCappedCopy(ctx context.Context, p runtime.ProxyProvider, i
 		} else if loadErr == nil {
 			if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), specOf(fresh), detectOwnIP(ctx)); err != nil {
 				m.store.RecordEvent(slug, "proxied_start_error", maskSecrets(err.Error(), fresh))
+				// Marked, so the next pass starts it; unmarked it would stay stopped.
+				_ = m.store.SetProxiedCopyCapped(id, slug, true)
 			}
 		}
 	}
