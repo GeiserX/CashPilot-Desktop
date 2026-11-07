@@ -407,10 +407,6 @@ func sidecarCreate(name, slug string, proxyID *int64, image, network string) cli
 	}
 	init := true
 	pids := tunnelPidsLimit
-	mode := container.NetworkMode("bridge")
-	if network != "" {
-		mode = container.NetworkMode(network)
-	}
 	restart := container.RestartPolicy{Name: "unless-stopped"}
 	if proxyID == nil {
 		restart = container.RestartPolicy{Name: "no"}
@@ -420,6 +416,34 @@ func sidecarCreate(name, slug string, proxyID *int64, image, network string) cli
 	if len(hostname) > 63 {
 		hostname = hostname[:63]
 	}
+	host := &container.HostConfig{
+		NetworkMode:    "bridge",
+		CapDrop:        []string{"ALL"},
+		CapAdd:         []string{"NET_ADMIN"},
+		Privileged:     false,
+		SecurityOpt:    []string{noNewPrivileges},
+		ReadonlyRootfs: true,
+		Tmpfs:          map[string]string{"/run": "size=8m,mode=0755"},
+		Init:           &init,
+		Sysctls: map[string]string{
+			"net.ipv6.conf.all.disable_ipv6":     "1",
+			"net.ipv6.conf.default.disable_ipv6": "1",
+			// DNS sent to Docker's resolver is redirected into the tunnel and keeps a
+			// loopback source until it is rewritten; see cp-tunnel.
+			"net.ipv4.conf.all.route_localnet": "1",
+		},
+		RestartPolicy: restart,
+		// tun2proxy runs at warn, so this log holds errors, never the sites the
+		// earner reaches; the bound keeps even a noisy failure off the disk.
+		LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "2"}},
+		Resources: container.Resources{
+			PidsLimit: &pids,
+			Devices:   []container.DeviceMapping{{PathOnHost: "/dev/net/tun", PathInContainer: "/dev/net/tun", CgroupPermissions: "rwm"}},
+		},
+	}
+	// The fenced network and its resolvers, as every bridge earner gets them: the
+	// fence drops the daemon's LAN resolver, so the tunnel needs the public ones.
+	isolate(host, network)
 	return client.ContainerCreateOptions{
 		Name: name,
 		Config: &container.Config{
@@ -428,31 +452,7 @@ func sidecarCreate(name, slug string, proxyID *int64, image, network string) cli
 			Hostname: hostname,
 			Volumes:  map[string]struct{}{tunnelSecretDir: {}},
 		},
-		HostConfig: &container.HostConfig{
-			NetworkMode:    mode,
-			CapDrop:        []string{"ALL"},
-			CapAdd:         []string{"NET_ADMIN"},
-			Privileged:     false,
-			SecurityOpt:    []string{noNewPrivileges},
-			ReadonlyRootfs: true,
-			Tmpfs:          map[string]string{"/run": "size=8m,mode=0755"},
-			Init:           &init,
-			Sysctls: map[string]string{
-				"net.ipv6.conf.all.disable_ipv6":     "1",
-				"net.ipv6.conf.default.disable_ipv6": "1",
-				// DNS sent to Docker's resolver is redirected into the tunnel and keeps a
-				// loopback source until it is rewritten; see cp-tunnel.
-				"net.ipv4.conf.all.route_localnet": "1",
-			},
-			RestartPolicy: restart,
-			// tun2proxy runs at warn, so this log holds errors, never the sites the
-			// earner reaches; the bound keeps even a noisy failure off the disk.
-			LogConfig: container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "1m", "max-file": "2"}},
-			Resources: container.Resources{
-				PidsLimit: &pids,
-				Devices:   []container.DeviceMapping{{PathOnHost: "/dev/net/tun", PathInContainer: "/dev/net/tun", CgroupPermissions: "rwm"}},
-			},
-		},
+		HostConfig: host,
 	}
 }
 
