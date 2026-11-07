@@ -814,8 +814,14 @@ func live(ins *container.InspectResponse) bool {
 	return ins != nil && ins.State != nil && (ins.State.Status == "running" || ins.State.Status == "restarting")
 }
 
-// stopProxied stops the earner, then its tunnel, and reports whether either was
+// stopProxied stops the tunnel, then its earner, and reports whether either was
 // running.
+//
+// The tunnel goes first so a stop that fails halfway never leaves a ready tunnel
+// beside a stopped earner: the status read starts an earner in that state, which
+// would undo the owner's stop. An earner left running after its tunnel stopped sits
+// in a namespace with no way out, so it does not leak, and earnerAction leaves it
+// alone because the tunnel is not running.
 func stopProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64, timeout int) (bool, error) {
 	p, err := pairOf(ctx, d, slug, proxyID)
 	if err != nil {
@@ -825,13 +831,15 @@ func stopProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64
 		return false, proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
 	}
 	wasRunning := (p.earnerOK && live(p.earner)) || (p.tunnelOK && live(p.tunnel))
-	if p.earnerOK {
-		if err := d.stop(ctx, p.earnerName, stopTimeoutOr(p.earner, timeout)); err != nil {
+	if p.tunnelOK {
+		// A tunnel removed since pairOf read it is as good as stopped: with no
+		// tunnel the status read never starts the earner, so stop it too.
+		if err := d.stop(ctx, p.tunnelNm, 10); err != nil && !cerrdefs.IsNotFound(err) {
 			return wasRunning, err
 		}
 	}
-	if p.tunnelOK {
-		return wasRunning, d.stop(ctx, p.tunnelNm, 10)
+	if p.earnerOK {
+		return wasRunning, d.stop(ctx, p.earnerName, stopTimeoutOr(p.earner, timeout))
 	}
 	return wasRunning, nil
 }
