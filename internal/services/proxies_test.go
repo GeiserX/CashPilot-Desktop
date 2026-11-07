@@ -30,6 +30,8 @@ type fakeProxyProvider struct {
 	allGone  []string
 	// startFails makes that many StartProxied calls fail before they succeed again.
 	startFails int
+	// earnerDown reports that copy's earner stopped while its tunnel runs.
+	earnerDown map[string]bool
 }
 
 func newFakeProxyProvider() *fakeProxyProvider {
@@ -81,7 +83,11 @@ func (f *fakeProxyProvider) ProxiedStatus(context.Context) ([]runtime.ProxiedCop
 			status = "running"
 		}
 		rx, tx := f.rx[k], uint64(0)
-		out = append(out, runtime.ProxiedCopy{Slug: slug, ProxyID: id, Status: status, TunnelStatus: status, TunnelContainerID: "t-" + k, TunnelStartedAt: "s", NetRxBytes: &rx, NetTxBytes: &tx, ExitIP: "203.0.113.7"})
+		earner := status
+		if f.earnerDown[k] {
+			earner = "exited"
+		}
+		out = append(out, runtime.ProxiedCopy{Slug: slug, ProxyID: id, Status: earner, TunnelStatus: status, TunnelContainerID: "t-" + k, TunnelStartedAt: "s", NetRxBytes: &rx, NetTxBytes: &tx, ExitIP: "203.0.113.7"})
 	}
 	return out, nil
 }
@@ -461,6 +467,17 @@ func TestACopyAResetCouldNotStartIsStartedOnTheNextPass(t *testing.T) {
 	if records, _ := st.ListProxiedCopies(view.ID); records[0].StoppedByCap {
 		t.Fatal("the stale mark on a running copy is cleared")
 	}
+	// A tunnel left up by a start that timed out, with the earner down, keeps the mark
+	// and is started again.
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	p.earnerDown = map[string]bool{k: true}
+	p.starts = nil
+	if _, err := m.ProxyTick(ctx); err != nil || len(p.starts) != 1 {
+		t.Fatalf("a copy with only its tunnel up must be started again: %v %v", p.starts, err)
+	}
+	p.earnerDown = nil
 	// A copy the owner stops afterwards stays stopped on the next pass.
 	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
 		t.Fatal(err)

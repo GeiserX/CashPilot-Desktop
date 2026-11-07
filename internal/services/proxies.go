@@ -729,9 +729,11 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 	if err != nil {
 		return
 	}
+	// Only a running earner counts: a tunnel left up by a start that timed out is not
+	// a copy that runs, so its mark stays and the next pass tries again.
 	running := map[string]bool{}
 	for _, c := range status {
-		running[c.Slug] = copyRunning(c)
+		running[c.Slug] = c.Status == "running" || c.Status == "restarting"
 	}
 	var ownIP string
 	for _, r := range records {
