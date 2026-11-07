@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Redeploying a proxied copy could leave the proxy with no copy at all.** The old earner and tunnel were removed before the new tunnel started, so a tunnel that could not start (an image missing locally, a proxy that does not answer) cost the running copy. The new tunnel now starts under a staged name next to the running copy, and the old pair goes only after the new tunnel has proved an exit.
 - **Two apps on one Docker host could lose each other's Activity sample.** A sweep removed another app's helper the moment it exited, before its owner had read the log. Another app's helper is now removed only after it has been finished, or stuck before starting, for longer than the 30-second helper limit. A sock_diag dump the kernel ends with an error code is now an error, and a reading in which every dump of one snapshot failed is marked partial.
 - **An untouched money4band `user-config.json` filled the import table with placeholder rows.** An app that is off and holds only template placeholders is now left out, as the `.env` reader already did. The import notice and guides now point proxies at the Proxies section of the Fleet page, and the guides explain the missing CashFactory Bitping row and the refusal when a saved value differs from the file. `make catalog-check` now also compares the import mapping with the web app's, so the two importers cannot drift apart unseen.
 

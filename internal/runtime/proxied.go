@@ -36,6 +36,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -211,6 +212,16 @@ func ValidateImageRef(ref string) error {
 func tunnelName(slug string, proxyID int64) string {
 	return fmt.Sprintf("%stunnel-%s-p%d", containerName(""), slug, proxyID)
 }
+
+// stagedSuffix: a redeploy starts the new tunnel under its name plus this suffix,
+// next to the copy that runs now, and gives it the final name only once the old pair
+// is gone. The status read never reports a staged tunnel.
+const stagedSuffix = "-next"
+
+// proxiedSwap makes deployProxied's swap of the old pair for the staged tunnel, and
+// the status read, take turns: a status read must not start an earner that is being
+// removed, or read a half-swapped pair.
+var proxiedSwap sync.Mutex
 
 func proxiedName(slug string, proxyID int64) string {
 	return fmt.Sprintf("%s-p%d", containerName(slug), proxyID)
@@ -395,7 +406,8 @@ func sidecarCreate(name, slug string, proxyID *int64, image, network string) cli
 	if proxyID == nil {
 		restart = container.RestartPolicy{Name: "no"}
 	}
-	hostname := strings.TrimPrefix(name, containerName(""))
+	// A staged tunnel already gets the hostname of the name it is promoted to.
+	hostname := strings.TrimSuffix(strings.TrimPrefix(name, containerName("")), stagedSuffix)
 	if len(hostname) > 63 {
 		hostname = hostname[:63]
 	}
@@ -500,6 +512,7 @@ type tunnelDocker interface {
 	stop(ctx context.Context, id string, timeout int) error
 	restart(ctx context.Context, id string, timeout int) error
 	remove(ctx context.Context, id string) error
+	rename(ctx context.Context, id, name string) error
 	inspect(ctx context.Context, nameOrID string) (container.InspectResponse, bool, error)
 	list(ctx context.Context, labels ...string) ([]container.Summary, error)
 	readFile(ctx context.Context, id, path string) (string, error)
@@ -558,6 +571,10 @@ func (d liveTunnelDocker) restart(ctx context.Context, id string, timeout int) e
 }
 func (d liveTunnelDocker) remove(ctx context.Context, id string) error {
 	_, err := d.cli.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	return err
+}
+func (d liveTunnelDocker) rename(ctx context.Context, id, name string) error {
+	_, err := d.cli.ContainerRename(ctx, id, client.ContainerRenameOptions{NewName: name})
 	return err
 }
 func (d liveTunnelDocker) inspect(ctx context.Context, nameOrID string) (container.InspectResponse, bool, error) {
@@ -784,12 +801,32 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	if err != nil {
 		return Exit{}, err
 	}
-	if _, err := removeProxied(ctx, d, req.Slug, req.ProxyID, StopTimeoutSeconds(req.Service)); err != nil {
+	pid := req.ProxyID
+	final := tunnelName(req.Slug, pid)
+	staged := final + stagedSuffix
+	// Left by a deploy that died midway; replaced only if it is ours.
+	if ins, found, err := d.inspect(ctx, staged); err != nil {
+		return Exit{}, err
+	} else if found {
+		if ins.Config == nil || !isOurs(ins.Config.Labels, req.Slug, pid) {
+			return Exit{}, proxyErr("A container named %s that CashPilot did not create is in the way", staged)
+		}
+		removeQuietly(d, ins.ID, 2)
+	}
+	// The new tunnel proves an exit while the old pair keeps running, so a tunnel that
+	// cannot start costs nothing. Only then does the old pair go.
+	sidecarID, exit, err := startSidecar(ctx, d, staged, req.Slug, network, &pid, req.Proxy, req.OwnIP)
+	if err != nil {
 		return Exit{}, err
 	}
-	pid := req.ProxyID
-	sidecarID, exit, err := startSidecar(ctx, d, tunnelName(req.Slug, pid), req.Slug, network, &pid, req.Proxy, req.OwnIP)
+	proxiedSwap.Lock()
+	_, err = removeProxied(ctx, d, req.Slug, req.ProxyID, StopTimeoutSeconds(req.Service))
+	if err == nil {
+		err = d.rename(ctx, sidecarID, final)
+	}
+	proxiedSwap.Unlock()
 	if err != nil {
+		removeQuietly(d, sidecarID, 2)
 		return Exit{}, err
 	}
 	opts, err := earnerCreate(req, sidecarID, image, facts.OSType)
@@ -1007,8 +1044,17 @@ const testTunnelSlug = "proxy-test"
 // app that quit during the test.
 const staleTestTunnel = 5 * time.Minute
 
-// sweepTestTunnels removes Test tunnels older than staleTestTunnel.
+// sweepTestTunnels removes Test tunnels older than staleTestTunnel, and staged
+// tunnels as old: a deploy is past its ready timeout by then, so the deploy that
+// staged it died, and it holds the proxy login while no status read reports it.
 func sweepTestTunnels(ctx context.Context, d tunnelDocker, now time.Time) {
+	if staged, err := d.list(ctx, LabelManaged+"=true", LabelRole+"="+RoleTunnel, LabelProxy); err == nil {
+		for _, c := range staged {
+			if c.Labels[LabelProxy] != "" && strings.HasSuffix(summaryName(c), stagedSuffix) && now.Sub(time.Unix(c.Created, 0)) >= staleTestTunnel {
+				removeQuietly(d, c.ID, 2)
+			}
+		}
+	}
 	found, err := d.list(ctx, LabelManaged+"=true", LabelRole+"="+RoleTunnel, LabelService+"="+testTunnelSlug)
 	if err != nil {
 		return
@@ -1026,6 +1072,8 @@ func sweepTestTunnels(ctx context.Context, d tunnelDocker, now time.Time) {
 
 func proxiedStatus(ctx context.Context, d tunnelDocker) ([]ProxiedCopy, error) {
 	sweepTestTunnels(ctx, d, time.Now())
+	proxiedSwap.Lock()
+	defer proxiedSwap.Unlock()
 	found, err := d.list(ctx, LabelManaged+"=true", LabelProxy)
 	if err != nil {
 		return nil, err
@@ -1036,8 +1084,8 @@ func proxiedStatus(ctx context.Context, d tunnelDocker) ([]ProxiedCopy, error) {
 	}
 	pairs := map[key]map[string]container.Summary{}
 	for _, c := range found {
-		if c.Labels[LabelManaged] != "true" {
-			continue
+		if c.Labels[LabelManaged] != "true" || strings.HasSuffix(summaryName(c), stagedSuffix) {
+			continue // a staged tunnel is not part of a copy until it is promoted
 		}
 		id, err := strconv.ParseInt(c.Labels[LabelProxy], 10, 64)
 		if err != nil {
