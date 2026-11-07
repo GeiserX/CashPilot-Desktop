@@ -125,10 +125,12 @@ catalog that rules out eight services. SOCKS5 and HTTP carry TCP only. See
   Unlinking leaves your local history as it was.
 - **Use Desktop as the hub instead.** Turn it on in Settings, and workers and
   the Android companion report to this Desktop. Phones report every
-  15 minutes, so a phone stays online between reports instead of flickering
-  offline.
+  15 minutes, so Desktop gives a phone 45 minutes before it shows offline,
+  against 3 minutes for a worker.
 - **The Android companion reaches 1.0 at the same time.** It reports the
-  earning apps on a phone to your CashPilot server or to this Desktop. Get it
+  earning apps on a phone to your CashPilot server or to this Desktop, and
+  sends nothing anywhere else. It needs CashPilot web 1.73.2 or newer, or
+  Desktop 0.39.6 or newer, so Desktop 1.0 works with it. Get it
   from https://github.com/GeiserX/CashPilot-android/releases. An F-Droid
   listing is submitted and waiting for review.
 
