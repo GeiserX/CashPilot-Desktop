@@ -1,6 +1,7 @@
 // The Proxies section of the Fleet page: proxies the owner runs copies of services
-// through, so this machine earns on more than one exit IP. It mirrors the web
-// console's fleet page (GeiserX/CashPilot docs/proxies.md).
+// through, so this machine earns on more than one exit IP. It mirrors the Proxies
+// section of the web console's fleet page, documented at PROXIES_DOCS_URL; the
+// Desktop differences are in this repo's docs/proxies.md.
 //
 // Pure: takes the state the backend sent, returns HTML, touches no global.
 //
@@ -13,6 +14,9 @@ import type { ProxiesState, ProxyCopyView, ProxyView } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 const GB = 1_000_000_000;
+
+/** The published page on proxied copies, opened from the section's help link. */
+export const PROXIES_DOCS_URL = "https://geiserx.github.io/CashPilot/proxies/";
 
 /** Bytes in the decimal GB providers sell, one decimal under 100 GB. */
 export function formatGB(bytes: number): string {
@@ -205,7 +209,7 @@ export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "
         <span class="card-title">Proxies</span>
         ${editing ? "" : `<button class="secondary compact-btn" data-proxy-new>Add proxy</button>`}
       </div>
-      <p class="muted">A proxied copy is an extra copy of a deployed service whose traffic leaves through a proxy instead of this machine's connection. If the proxy goes down, the copy reaches nothing; it never falls back to your own IP.</p>
+      <p class="muted">A proxied copy is an extra copy of a deployed service whose traffic leaves through a proxy instead of this machine's connection. If the proxy goes down, the copy reaches nothing; it never falls back to your own IP. <button class="text-link" data-url="${PROXIES_DOCS_URL}">How proxied copies work</button></p>
       ${state.tunnelImageError ? `<p class="tip">${escapeHtml(state.tunnelImageError)}</p>` : ""}
       ${editor}
       ${runForm}

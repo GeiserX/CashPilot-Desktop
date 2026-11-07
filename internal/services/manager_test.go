@@ -53,6 +53,7 @@ type fakeProvider struct {
 	// test can tell "the catalog said none" (empty) from "no catalog entry" (nil).
 	planCritical []map[string]string
 	planErr      error
+	planVolumes  []runtime.DataMount
 	logsResult   string
 	// duringDeploy, when set, runs inside Deploy, so a test can act while a deploy
 	// is in flight.
@@ -95,7 +96,7 @@ func (f *fakeProvider) Remove(_ context.Context, _ string, opts runtime.RemoveOp
 
 func (f *fakeProvider) PlanRemoval(_ context.Context, slug string, critical map[string]string) (runtime.RemovalPlan, error) {
 	f.planCritical = append(f.planCritical, critical)
-	return runtime.RemovalPlan{Slug: slug, CatalogKnown: critical != nil}, f.planErr
+	return runtime.RemovalPlan{Slug: slug, CatalogKnown: critical != nil, Volumes: f.planVolumes}, f.planErr
 }
 
 func (f *fakeProvider) Logs(context.Context, string, int) (string, error) {

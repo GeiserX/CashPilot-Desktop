@@ -14,11 +14,12 @@
 //   7. A MISSING TUNNEL IMAGE IS SAID, not hidden.
 //   8. A CAPPED PROXY'S COPIES OFFER NO LIVE START.
 //   9. THE EDITOR SAYS AN EDIT REACHES A COPY ON ITS NEXT START.
+//  10. THE SECTION LINKS TO THE PUBLISHED PROXIES PAGE, not to a repo path.
 //  11. A FLEET REDRAW NEVER OVERWRITES ANOTHER VIEW, and keeps the open editor's draft.
 //
 //   node scripts/proxies_check.mjs      # against ./.harness-build
 
-import { capText, fleetRedrawIsCurrent, formatGB, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection, renderProxyCard, renderProxyEditor } from "../.harness-build/render/proxies.js";
+import { capText, fleetRedrawIsCurrent, formatGB, keepsLiveProxyEditor, PROXIES_DOCS_URL, proxyValuesFrom, renderProxiesSection, renderProxyCard, renderProxyEditor } from "../.harness-build/render/proxies.js";
 
 let failures = 0;
 let checks = 0;
@@ -110,6 +111,11 @@ check("an open proxy's stopped copy can be started", card.includes('data-proxy-c
 // 9. An edit says when it reaches copies that exist.
 check("the editor of a proxy with copies says edits apply on the next start", editor.includes("next time it starts"), editor);
 check("the add form says nothing about copies", !renderProxyEditor(null).includes("next time it starts"));
+
+// 10. The help link.
+check("the help link is the published proxies page", PROXIES_DOCS_URL === "https://geiserx.github.io/CashPilot/proxies/", String(PROXIES_DOCS_URL));
+const helpSection = renderProxiesSection({ proxies: [], candidates: [], tunnelImage: "x", tunnelImageError: "" }, null);
+check("the section opens it through a data-url button", helpSection.includes(`data-url="${PROXIES_DOCS_URL}"`), helpSection);
 
 // 11. Redraws.
 check("a redraw still on Fleet and the newest writes the page", fleetRedrawIsCurrent(4, 4, "fleet"));

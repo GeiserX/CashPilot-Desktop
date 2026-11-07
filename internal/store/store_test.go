@@ -584,7 +584,7 @@ func TestSweepStaleFleetDevices(t *testing.T) {
 		t.Fatalf("seed long-dead error: %v", err)
 	}
 
-	offlined, reaped, err := s.SweepStaleFleetDevices(180*time.Second, time.Hour)
+	offlined, reaped, err := s.SweepStaleFleetDevices(180*time.Second, 45*time.Minute, time.Hour)
 	if err != nil {
 		t.Fatalf("SweepStaleFleetDevices error: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestSweepStaleFleetDevices(t *testing.T) {
 	}
 
 	// Idempotent: nothing new to age out on a second sweep.
-	offlined, reaped, err = s.SweepStaleFleetDevices(180*time.Second, time.Hour)
+	offlined, reaped, err = s.SweepStaleFleetDevices(180*time.Second, 45*time.Minute, time.Hour)
 	if err != nil {
 		t.Fatalf("second SweepStaleFleetDevices error: %v", err)
 	}
@@ -1570,5 +1570,39 @@ func TestEarningsErrorKindColumnMigrates(t *testing.T) {
 	got := s.ListLatestEarnings()
 	if len(got) != 2 || got[0].Platform != "honeygain" || got[0].ErrorKind != "" || got[1].ErrorKind != "unread" {
 		t.Fatalf("after migrate: %+v, want the old row kept and the new kind read back", got)
+	}
+}
+
+// TestSweepStaleFleetDevicesMobileGrace: a phone reports every 15 minutes, so the
+// sweep must leave it online between two reports and flip it only after three
+// missed periods. The worker in the same sweep proves the 180 s path still fires.
+func TestSweepStaleFleetDevicesMobileGrace(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Now().UTC()
+	rfc := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339) }
+
+	seed := []FleetDevice{
+		{Name: "phone-between-reports", Kind: "mobile", LastSeen: rfc(-20 * time.Minute)},
+		{Name: "phone-gone", Kind: "mobile", LastSeen: rfc(-50 * time.Minute)},
+		{Name: "worker-gone", Kind: "worker", LastSeen: rfc(-5 * time.Minute)},
+	}
+	for _, d := range seed {
+		if _, err := s.UpsertFleetHeartbeat(d); err != nil {
+			t.Fatalf("seed %s: %v", d.Name, err)
+		}
+	}
+
+	offlined, _, err := s.SweepStaleFleetDevices(180*time.Second, 45*time.Minute, time.Hour)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if offlined != 2 {
+		t.Fatalf("offlined = %d, want 2 (phone-gone and worker-gone)", offlined)
+	}
+	want := map[string]string{"phone-between-reports": "online", "phone-gone": "offline", "worker-gone": "offline"}
+	for _, d := range s.ListFleetDevices() {
+		if w, ok := want[d.Name]; ok && d.Status != w {
+			t.Errorf("%s: status %q, want %q", d.Name, d.Status, w)
+		}
 	}
 }
