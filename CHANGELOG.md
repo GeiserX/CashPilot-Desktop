@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Fleet page could draw over another view, and lose a half-typed proxy.** Fleet reads the backend twice before it draws, so a user who opened another view meanwhile got the Fleet page back. Any proxy action redraws the page, which also reset the open proxy editor and dropped unsaved values, a typed password included. A redraw now gives up when Fleet is no longer shown or a newer redraw started, and keeps the open editor when the same proxy's editor is drawn again.
 - **The Proxies section had no help link.** It now links to the published page on proxied copies, https://geiserx.github.io/CashPilot/proxies/.
 - **A proxied copy's stop that failed halfway could be undone.** The earner stopped first. If the tunnel then failed to stop, the next status read saw a ready tunnel beside a stopped earner and started the earner again. The tunnel now stops first, so a half-finished stop never leaves that state.
 - **A refused delete still removed the service's proxied copies.** Deleting a service with its data, without the extra yes for unrecoverable volumes, removed every proxied copy first and only then refused. The refusal now comes before anything is removed.

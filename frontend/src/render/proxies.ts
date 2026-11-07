@@ -167,6 +167,25 @@ export function proxyValuesFrom(fields: Record<string, string>): Record<string, 
   return out;
 }
 
+/**
+ * Whether a Fleet redraw that started as `request` may still write the page. The
+ * page reads the backend twice before it draws, so the owner may have opened another
+ * view, or a newer redraw may have started, in the meantime; then this one is dropped.
+ */
+export function fleetRedrawIsCurrent(request: number, latest: number, activeView: string): boolean {
+  return request === latest && activeView === "fleet";
+}
+
+/**
+ * Whether the open proxy editor in the DOM is carried over a redraw. Its typed values
+ * (a new password included) live only in the DOM until Save, so a redraw caused by an
+ * action on another card keeps it when the redraw opens the same proxy's editor ("0"
+ * for the Add form). Another proxy's editor, or none, is drawn fresh.
+ */
+export function keepsLiveProxyEditor(liveId: string | null | undefined, freshId: string | null | undefined): boolean {
+  return liveId != null && freshId != null && liveId === freshId;
+}
+
 /** The whole section. editing is the proxy open in the editor, "new", or null. */
 export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "new" | null): string {
   const proxies = state.proxies || [];
