@@ -504,9 +504,20 @@ func TestARetryNeverUndoesAnOwnerStop(t *testing.T) {
 	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
 		t.Fatal(err)
 	}
-	d, _, _ := m.loadProxy(view.ID)
 	p.starts = nil
-	if m.retryCapStart(ctx, p, view.ID, d, "example", "192.0.2.1") || len(p.starts) != 0 {
+	if m.retryCapStart(ctx, p, view.ID, "example", "192.0.2.1") || len(p.starts) != 0 {
 		t.Fatalf("the retry started a copy the owner stopped: %v", p.starts)
+	}
+	// A cap that came back while the retry waited stops it too.
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	m.proxy.proxyMu.Lock()
+	_, s, _ := m.loadProxy(view.ID)
+	s.CappedAt, s.CapReason = "2026-11-07T00:00:00Z", "Gate reached its cap"
+	_ = m.saveState(view.ID, s)
+	m.proxy.proxyMu.Unlock()
+	if m.retryCapStart(ctx, p, view.ID, "example", "192.0.2.1") || len(p.starts) != 0 {
+		t.Fatalf("the retry started a copy while the cap holds: %v", p.starts)
 	}
 }

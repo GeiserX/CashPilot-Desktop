@@ -48,10 +48,11 @@ var detectOwnIP = func(ctx context.Context) string {
 // write that one column, and two that overlap would lose one write.
 type proxyState struct {
 	proxyMu sync.Mutex
-	// ownerMu orders an owner's Start or Stop of a copy with the tick's retry of a
-	// copy the cap stopped, so a stop that returned is never undone by a retry that
-	// read the mark before it.
-	ownerMu sync.Mutex
+	// copyMu holds one mutex per copy ("id/slug"). It orders an owner's Start or Stop,
+	// a reset's start and the tick's retry of the same copy, so a stop that returned
+	// is never undone by a retry that read the mark before it, and two starts never
+	// overlap. Other copies never wait on it.
+	copyMu sync.Map
 	// last is the latest status read, for the UI.
 	lastMu sync.Mutex
 	last   []runtime.ProxiedCopy
@@ -474,8 +475,9 @@ func (m *Manager) otherExits(self int64) []proxies.Exit {
 // StopProxied stops a proxied copy. A stop by hand is the owner's decision, so a
 // later cap reset does not start it again.
 func (m *Manager) StopProxied(ctx context.Context, slug string, id int64) error {
-	m.proxy.ownerMu.Lock()
-	defer m.proxy.ownerMu.Unlock()
+	mu := m.copyLock(id, slug)
+	mu.Lock()
+	defer mu.Unlock()
 	p, err := m.proxier()
 	if err != nil {
 		return err
@@ -493,8 +495,9 @@ func (m *Manager) StopProxied(ctx context.Context, slug string, id int64) error 
 
 // StartProxied starts a proxied copy, refused while its proxy is capped.
 func (m *Manager) StartProxied(ctx context.Context, slug string, id int64) error {
-	m.proxy.ownerMu.Lock()
-	defer m.proxy.ownerMu.Unlock()
+	mu := m.copyLock(id, slug)
+	mu.Lock()
+	defer mu.Unlock()
 	d, s, err := m.loadProxy(id)
 	if err != nil {
 		return err
@@ -582,11 +585,17 @@ func (m *Manager) releaseCapped(ctx context.Context, id int64, d proxies.Definit
 		if !c.StoppedByCap {
 			continue
 		}
-		if _, err := p.StartProxied(ctx, c.Slug, id, m.stopTimeout(c.Slug), specOf(d), ownIP); err != nil {
+		mu := m.copyLock(id, c.Slug)
+		mu.Lock()
+		_, err := p.StartProxied(ctx, c.Slug, id, m.stopTimeout(c.Slug), specOf(d), ownIP)
+		if err == nil {
+			_ = m.store.SetProxiedCopyCapped(id, c.Slug, false)
+		}
+		mu.Unlock()
+		if err != nil {
 			m.store.RecordEvent(c.Slug, "proxied_start_error", maskSecrets(err.Error(), d))
 			continue
 		}
-		_ = m.store.SetProxiedCopyCapped(id, c.Slug, false)
 		started = append(started, c.Slug)
 	}
 	return started, nil
@@ -744,6 +753,7 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 		running[c.Slug] = c.Status == "running" || c.Status == "restarting"
 	}
 	var ownIP string
+	detected := false // one lookup per pass, even when it fails
 	for _, r := range records {
 		if !r.StoppedByCap {
 			continue
@@ -756,10 +766,10 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 			}
 			continue
 		}
-		if ownIP == "" {
-			ownIP = detectOwnIP(ctx)
+		if !detected {
+			ownIP, detected = detectOwnIP(ctx), true
 		}
-		if !m.retryCapStart(ctx, p, id, d, r.Slug, ownIP) {
+		if !m.retryCapStart(ctx, p, id, r.Slug, ownIP) {
 			continue
 		}
 		if err := m.store.SetProxiedCopyCapped(id, r.Slug, false); err != nil {
@@ -769,12 +779,25 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 	}
 }
 
-// retryCapStart starts one cap-stopped copy, unless an owner's Start or Stop got to
-// it first: the mark is read again under ownerMu, which those hold for their whole
-// run. It reports whether the copy was started.
-func (m *Manager) retryCapStart(ctx context.Context, p runtime.ProxyProvider, id int64, d proxies.Definition, slug, ownIP string) bool {
-	m.proxy.ownerMu.Lock()
-	defer m.proxy.ownerMu.Unlock()
+// copyLock is the mutex of one copy; see proxyState.copyMu.
+func (m *Manager) copyLock(id int64, slug string) *sync.Mutex {
+	mu, _ := m.proxy.copyMu.LoadOrStore(fmt.Sprintf("%d/%s", id, slug), &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
+// retryCapStart starts one cap-stopped copy, unless an owner's Start or Stop, or a
+// reset, got to it first: the mark is read again under the copy's lock, which those
+// hold for their whole run. It reports whether the copy was started.
+func (m *Manager) retryCapStart(ctx context.Context, p runtime.ProxyProvider, id int64, slug, ownIP string) bool {
+	mu := m.copyLock(id, slug)
+	mu.Lock()
+	defer mu.Unlock()
+	// The proxy as stored now: an edit while the retry waited reaches the copy, and a
+	// cap that came back stops the retry.
+	d, s, err := m.loadProxy(id)
+	if err != nil || s.CappedAt != "" {
+		return false
+	}
 	records, err := m.store.ListProxiedCopies(id)
 	if err != nil {
 		return false
