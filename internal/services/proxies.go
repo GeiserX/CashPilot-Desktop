@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -316,6 +317,11 @@ func (m *Manager) ProxyRefusal(slug string) string {
 	if !ok {
 		return "Unknown service"
 	}
+	if dep, deployed, err := m.store.GetDeployment(slug); err == nil && deployed {
+		if err := refuseNonDocker(svc, dep); err != nil {
+			return err.Error()
+		}
+	}
 	if svc.Custom {
 		revealed, err := m.revealCustom(slug)
 		if err != nil {
@@ -324,6 +330,15 @@ func (m *Manager) ProxyRefusal(slug string) string {
 		svc = revealed
 	}
 	return proxies.Refusal(svc)
+}
+
+// refuseNonDocker refuses a deployment that does not run on Docker: only Docker can
+// run a copy through a proxy. ProxyRefusal says it up front, DeployProxied enforces it.
+func refuseNonDocker(svc catalog.Service, dep store.Deployment) error {
+	if dep.Runtime != "" && dep.Runtime != defaultRuntimeKind {
+		return fmt.Errorf("%s runs on the %s runtime; only Docker can run a copy through a proxy", svc.Name, dep.Runtime)
+	}
+	return nil
 }
 
 // DeployProxied runs a copy of slug through proxy id. The service must already be
@@ -351,8 +366,8 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 	if !deployed {
 		return ProxiedResult{}, fmt.Errorf("deploy %s on this machine first; the proxied copy runs with its settings", svc.Name)
 	}
-	if dep.Runtime != "" && dep.Runtime != defaultRuntimeKind {
-		return ProxiedResult{}, fmt.Errorf("%s runs on the %s runtime; only Docker can run a copy through a proxy", svc.Name, dep.Runtime)
+	if err := refuseNonDocker(svc, dep); err != nil {
+		return ProxiedResult{}, err
 	}
 	var credentials map[string]string
 	if svc.Custom {
