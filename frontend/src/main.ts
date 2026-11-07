@@ -1455,6 +1455,12 @@ async function renderFleet(current: AppState) {
     button.addEventListener("click", () => void removeFleetDevice(Number(button.dataset.removeDevice || 0)));
   });
   wireProxies();
+  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url) BrowserOpenURL(url);
+    });
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
