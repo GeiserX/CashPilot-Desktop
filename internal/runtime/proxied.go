@@ -832,7 +832,9 @@ func stopProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64
 	}
 	wasRunning := (p.earnerOK && live(p.earner)) || (p.tunnelOK && live(p.tunnel))
 	if p.tunnelOK {
-		if err := d.stop(ctx, p.tunnelNm, 10); err != nil {
+		// A tunnel removed since pairOf read it is as good as stopped: with no
+		// tunnel the status read never starts the earner, so stop it too.
+		if err := d.stop(ctx, p.tunnelNm, 10); err != nil && !cerrdefs.IsNotFound(err) {
 			return wasRunning, err
 		}
 	}

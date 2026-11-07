@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
@@ -777,6 +778,23 @@ func TestAProbeAnswerThatIsNotAnIPIsNotReady(t *testing.T) {
 	}
 	if e, ok := parseReady(`{"ip":"203.0.113.7","country":"NL"}`); !ok || e.IP != "203.0.113.7" {
 		t.Fatal("a real IP is ready")
+	}
+}
+
+// A tunnel removed between the read and the stop must not leave its earner running.
+func TestAStopStillStopsTheEarnerWhenTheTunnelIsGone(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	f.stopErr = map[string]error{"cashpilot-tunnel-earner-p3": fmt.Errorf("No such container: %w", cerrdefs.ErrNotFound)}
+	if _, err := stopProxied(ctx, f, "earner", 3, 0); err != nil {
+		t.Fatalf("a tunnel that is gone must not fail the stop: %v", err)
+	}
+	if st := f.containers["cashpilot-earner-p3"].state; st == "running" {
+		t.Fatal("the earner was left running after its tunnel disappeared")
 	}
 }
 
