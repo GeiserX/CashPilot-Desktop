@@ -461,8 +461,8 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 
 	// Refuse BEFORE anything is removed. Refusing afterwards would already have
 	// destroyed the container this data belongs to.
-	if blocked := blockedCriticalVolumes(plan, opts); len(blocked) > 0 {
-		return criticalRefusal(slug, blocked)
+	if err := RefuseCriticalLoss(slug, plan, opts); err != nil {
+		return err
 	}
 
 	// Stop it cleanly first, with its own grace period. Data that is being kept has
