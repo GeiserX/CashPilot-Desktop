@@ -1383,13 +1383,17 @@ async function renderFleet(current: AppState) {
     showErrorToast({scope: "fleet", error: String(error)});
     return;
   }
+  // Kept local until this redraw is known to be current: a stale one must not replace
+  // the state wireProxies opens editors from.
+  let proxies: ProxiesState | null;
   try {
-    proxiesState = await GetProxiesState();
+    proxies = await GetProxiesState();
   } catch (error) {
-    proxiesState = null;
+    proxies = null;
     showErrorToast({scope: "proxies", error: String(error)});
   }
   if (!fleetRedrawIsCurrent(request, fleetRequest, activeView)) return;
+  proxiesState = proxies;
   // The open proxy editor's typed values live only in the DOM; see keepsLiveProxyEditor.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
   root.innerHTML = `
