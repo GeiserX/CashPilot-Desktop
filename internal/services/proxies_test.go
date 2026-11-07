@@ -28,6 +28,8 @@ type fakeProxyProvider struct {
 	specs    []runtime.ProxySpec
 	removed  []string
 	allGone  []string
+	// startFails makes that many StartProxied calls fail before they succeed again.
+	startFails int
 }
 
 func newFakeProxyProvider() *fakeProxyProvider {
@@ -52,6 +54,10 @@ func (f *fakeProxyProvider) StopProxied(_ context.Context, slug string, id int64
 }
 func (f *fakeProxyProvider) StartProxied(_ context.Context, slug string, id int64, _ int, spec runtime.ProxySpec, _ string) (runtime.Exit, error) {
 	f.starts = append(f.starts, key(slug, id))
+	if f.startFails > 0 {
+		f.startFails--
+		return runtime.Exit{}, errors.New("daemon busy")
+	}
 	f.specs = append(f.specs, spec)
 	f.running[key(slug, id)] = true
 	return runtime.Exit{IP: "203.0.113.7"}, nil
@@ -412,5 +418,44 @@ func TestANewProxyWithAResetDayStartsItsPeriod(t *testing.T) {
 	d, s, err := m.loadProxy(view.ID)
 	if err != nil || s.PeriodStart == "" || proxies.ResetDue(d, s, proxyNow().UTC()) {
 		t.Fatalf("period: %+v %v", s, err)
+	}
+}
+
+// A reset whose start failed left the copy marked as the cap's and stopped until the
+// next reset, a month later. Every pass now tries again while the proxy is uncapped.
+func TestACopyAResetCouldNotStartIsStartedOnTheNextPass(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, _ := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1"})
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	k := key("example", view.ID)
+	p.rx[k] = 950_000_000
+	if _, err := m.ProxyTick(ctx); err != nil || p.running[k] {
+		t.Fatalf("capped: %v", err)
+	}
+	p.startFails = 1
+	if started, _ := m.ResetProxy(ctx, view.ID); len(started) != 0 || p.running[k] {
+		t.Fatalf("the reset's start was meant to fail: %v", started)
+	}
+	if _, err := m.ProxyTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !p.running[k] {
+		t.Fatal("the next pass must start the copy the reset could not")
+	}
+	records, _ := st.ListProxiedCopies(view.ID)
+	if len(records) != 1 || records[0].StoppedByCap {
+		t.Fatalf("the mark is cleared once it runs: %+v", records)
+	}
+	// A copy the owner stops afterwards stays stopped on the next pass.
+	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	p.starts = nil
+	if _, err := m.ProxyTick(ctx); err != nil || len(p.starts) != 0 {
+		t.Fatalf("a copy the owner stopped was started: %v %v", p.starts, err)
 	}
 }

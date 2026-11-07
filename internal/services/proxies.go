@@ -688,7 +688,11 @@ func (m *Manager) ProxyTick(ctx context.Context) ([]CapNotice, error) {
 			continue
 		}
 		if reset && next.CappedAt == "" {
-			_, _ = m.releaseCapped(ctx, id, d) // the next reset or a start by hand retries
+			_, _ = m.releaseCapped(ctx, id, d)
+		} else if next.CappedAt == "" {
+			// A reset whose start failed leaves the copy marked as the cap's and down;
+			// while the proxy stays uncapped, every pass tries again.
+			m.restartCapStoppedDown(ctx, p, id, d, mine)
 		}
 		if next.CappedAt == "" {
 			continue
@@ -715,6 +719,34 @@ func (m *Manager) ProxyTick(ctx context.Context) ([]CapNotice, error) {
 		}
 	}
 	return crossedNow, nil
+}
+
+// restartCapStoppedDown starts this proxy's copies that are still marked as stopped
+// by the cap and are not running. A copy the owner stopped is never marked, so it
+// stays stopped; one that is running is left alone.
+func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProvider, id int64, d proxies.Definition, status []runtime.ProxiedCopy) {
+	records, err := m.store.ListProxiedCopies(id)
+	if err != nil {
+		return
+	}
+	running := map[string]bool{}
+	for _, c := range status {
+		running[c.Slug] = copyRunning(c)
+	}
+	var ownIP string
+	for _, r := range records {
+		if !r.StoppedByCap || running[r.Slug] {
+			continue
+		}
+		if ownIP == "" {
+			ownIP = detectOwnIP(ctx)
+		}
+		if _, err := p.StartProxied(ctx, r.Slug, id, m.stopTimeout(r.Slug), specOf(d), ownIP); err != nil {
+			m.store.RecordEvent(r.Slug, "proxied_start_error", maskSecrets(err.Error(), d))
+			continue
+		}
+		_ = m.store.SetProxiedCopyCapped(id, r.Slug, false)
+	}
 }
 
 func (m *Manager) stopCapped(ctx context.Context, p runtime.ProxyProvider, id int64, d proxies.Definition, targets map[string]bool) {
