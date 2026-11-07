@@ -414,3 +414,33 @@ func TestANewProxyWithAResetDayStartsItsPeriod(t *testing.T) {
 		t.Fatalf("period: %+v %v", s, err)
 	}
 }
+
+// A service deployed on the native runtime is offered as a proxy candidate only with
+// its refusal, so the option is disabled instead of failing on click.
+func TestProxyRefusalNamesTheNativeRuntime(t *testing.T) {
+	m, _, st := newProxyManager(t)
+	deployExample(t, st)
+	if got := m.ProxyRefusal("example"); got != "" {
+		t.Fatalf("a Docker deployment must be allowed, got %q", got)
+	}
+	if err := st.UpsertDeployment(store.Deployment{Slug: "example", Name: "example", Status: "running", Runtime: "native"}); err != nil {
+		t.Fatal(err)
+	}
+	got := m.ProxyRefusal("example")
+	if !strings.Contains(got, "native runtime") {
+		t.Fatalf("the refusal must name the native runtime, got %q", got)
+	}
+	view, err := m.SaveProxy(context.Background(), 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "gate.example.net", "port": "7000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.DeployProxied(context.Background(), "example", view.ID)
+	if err == nil || !strings.Contains(err.Error(), "native runtime") {
+		t.Fatalf("the deploy must refuse with the same reason, got %v", err)
+	}
+	// A deployment that cannot be read is a refusal too, never a silent yes.
+	_ = st.Close()
+	if got := m.ProxyRefusal("example"); !strings.Contains(got, "Could not read its deployment") {
+		t.Fatalf("a failed lookup must be the refusal, got %q", got)
+	}
+}
