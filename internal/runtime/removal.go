@@ -177,6 +177,15 @@ func blockedCriticalVolumes(plan RemovalPlan, opts RemoveOptions) []DataMount {
 	return blocked
 }
 
+// RefuseCriticalLoss is the refusal Remove gives for this plan, or nil. Callers that
+// touch anything before Remove (proxied copies) ask it first.
+func RefuseCriticalLoss(slug string, plan RemovalPlan, opts RemoveOptions) error {
+	if blocked := blockedCriticalVolumes(plan, opts); len(blocked) > 0 {
+		return criticalRefusal(slug, blocked)
+	}
+	return nil
+}
+
 // criticalRefusal is the error a delete is refused with. It names every volume and what
 // it holds, so the message is enough on its own to decide with — a bare refusal would
 // send the user looking for the reason somewhere it is not written down.
