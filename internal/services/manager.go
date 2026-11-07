@@ -443,6 +443,20 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 		StopTimeout:   m.stopTimeout(slug),
 	}
 	provider := m.providerForSlug(slug)
+	// A delete the critical-data check refuses must cost nothing, so it is asked
+	// before the proxied copies go. A plan that cannot be read stops the delete
+	// here too, approved or not: provider.Remove reads it again and would fail
+	// after the copies were already gone.
+	if deleteData {
+		plan, err := provider.PlanRemoval(ctx, slug, opts.Critical)
+		if err == nil {
+			err = runtime.RefuseCriticalLoss(slug, plan, opts)
+		}
+		if err != nil {
+			m.store.RecordEvent(slug, "remove_error", err.Error())
+			return err
+		}
+	}
 	// Proxied copies go first, earners before their tunnels, so no tunnel is left
 	// running for a service the app no longer shows.
 	if err := m.removeAllProxied(ctx, slug); err != nil {

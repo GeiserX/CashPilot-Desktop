@@ -501,7 +501,10 @@ type FleetState struct {
 // offline immediately, without waiting for the next tick.
 const (
 	fleetOfflineAfter = 180 * time.Second
-	fleetReapAfter    = 1 * time.Hour
+	// A phone reports every 15 minutes (Android's WorkManager minimum), so it
+	// gets three missed periods, the same rule as a 60 s worker's 180 s.
+	fleetOfflineAfterMobile = 45 * time.Minute
+	fleetReapAfter          = 1 * time.Hour
 
 	// collectConcurrency bounds how many services collectAll collects at once. Each
 	// Collect is a real network round trip (up to ~90s worst case on a stalled
@@ -1171,7 +1174,7 @@ func (a *App) GetFleetState() (FleetState, error) {
 		// accurate between scheduler ticks: a device silent longer than
 		// fleetOfflineAfter shows offline immediately. This adjusts only the returned
 		// value — the actual DB flip and reap happen in collectAll's background sweep.
-		devices[i].Status = store.EffectiveFleetStatus(devices[i].Status, devices[i].LastSeen, fleetOfflineAfter)
+		devices[i].Status = store.EffectiveFleetStatus(devices[i].Status, devices[i].LastSeen, fleetOfflineAfterFor(devices[i].Kind))
 		if devices[i].Kind == "mobile" {
 			mobiles++
 		} else {
@@ -1689,7 +1692,7 @@ func (a *App) collectAll(ctx context.Context) {
 	// continue, the next cycle simply retries.
 	if a.store != nil {
 		a.fleetMu.Lock()
-		_, _, err := a.store.SweepStaleFleetDevices(fleetOfflineAfter, fleetReapAfter)
+		_, _, err := a.store.SweepStaleFleetDevices(fleetOfflineAfter, fleetOfflineAfterMobile, fleetReapAfter)
 		a.fleetMu.Unlock()
 		if err != nil {
 			a.emitError("fleet", err)
@@ -2198,4 +2201,13 @@ func (a *App) askWhereToSave(opts wailsruntime.SaveDialogOptions) (string, error
 		return a.saveDialog(opts)
 	}
 	return wailsruntime.SaveFileDialog(a.ctx, opts)
+}
+
+// fleetOfflineAfterFor is how long a device of this kind may stay silent before
+// it shows offline.
+func fleetOfflineAfterFor(kind string) time.Duration {
+	if kind == "mobile" {
+		return fleetOfflineAfterMobile
+	}
+	return fleetOfflineAfter
 }
