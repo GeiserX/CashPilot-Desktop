@@ -164,8 +164,8 @@ proxy is stopped and you get a notice. Only the copies that were running are
 marked as stopped by the cap, so a copy you had already stopped stays stopped
 after the reset. While the proxy is capped, Start is disabled on its copies:
 reset the usage or raise the cap first. A reset starts every marked copy; one
-whose start fails keeps its mark, the failure shows in its events, and the next
-reset or a Start by hand tries again.
+whose start fails keeps its mark, the failure shows in its events, and every
+minute after that the app tries again while the proxy stays uncapped.
 
 ## Tailscale exit nodes
 

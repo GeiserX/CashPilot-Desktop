@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A copy the cap reset could not start stayed stopped for a whole period.** It kept its "stopped by the cap" mark, and nothing tried again until the next reset or a Start by hand. The once-a-minute pass now starts such a copy while the proxy is uncapped, and leaves alone copies you stopped yourself.
 - **Redeploying a proxied copy could leave the proxy with no copy at all.** The old earner and tunnel were removed before the new tunnel started, so a tunnel that could not start (an image missing locally, a proxy that does not answer) cost the running copy. The new tunnel now starts under a staged name next to the running copy, and the old pair goes only after the new tunnel has proved an exit.
 - **The Fleet page could draw over another view, and lose a half-typed proxy.** Fleet reads the backend twice before it draws, so a user who opened another view meanwhile got the Fleet page back. Any proxy action redraws the page, which also reset the open proxy editor and dropped unsaved values, a typed password included. A redraw now gives up when Fleet is no longer shown or a newer redraw started, and keeps the open editor when the same proxy's editor is drawn again.
 - **The Proxies section had no help link.** It now links to the published page on proxied copies, https://geiserx.github.io/CashPilot/proxies/.
