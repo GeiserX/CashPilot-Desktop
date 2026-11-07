@@ -445,9 +445,9 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 	provider := m.providerForSlug(slug)
 	// A delete the critical-data check refuses must cost nothing, so it is asked
 	// before the proxied copies go. A plan that cannot be read stops the delete
-	// here too: provider.Remove reads it again and could refuse after the copies
-	// were already gone.
-	if deleteData && !allowCritical {
+	// here too, approved or not: provider.Remove reads it again and would fail
+	// after the copies were already gone.
+	if deleteData {
 		plan, err := provider.PlanRemoval(ctx, slug, opts.Critical)
 		if err == nil {
 			err = runtime.RefuseCriticalLoss(slug, plan, opts)

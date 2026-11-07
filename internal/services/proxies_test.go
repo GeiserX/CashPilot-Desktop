@@ -436,6 +436,9 @@ func TestARefusedDeleteKeepsTheProxiedCopies(t *testing.T) {
 	if err := m.Remove(context.Background(), "example", true, false); err == nil || len(p.allGone) != 0 {
 		t.Fatalf("an unreadable plan must stop the delete first: %v, copies %v", err, p.allGone)
 	}
+	if err := m.Remove(context.Background(), "example", true, true); err == nil || len(p.allGone) != 0 {
+		t.Fatalf("an unreadable plan must stop an approved delete first too: %v, copies %v", err, p.allGone)
+	}
 	p.planErr = nil
 	// With the separate yes, the copies go first, then the service.
 	if err := m.Remove(context.Background(), "example", true, true); err != nil {
