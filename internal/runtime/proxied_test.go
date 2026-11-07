@@ -892,3 +892,27 @@ func TestAFailedPromotionRemovesTheStagedTunnel(t *testing.T) {
 		t.Fatalf("left behind: %v", f.callList())
 	}
 }
+
+// Two deploys of one copy take turns, so the second never removes the first one's
+// staged tunnel as a leftover.
+func TestTwoDeploysOfOneCopyTakeTurns(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = deployProxied(ctx, f, deployRequest())
+		}(i)
+	}
+	wg.Wait()
+	if errs[0] != nil || errs[1] != nil {
+		t.Fatalf("both deploys must succeed one after the other: %v", errs)
+	}
+	if f.containers["cashpilot-tunnel-earner-p3"] == nil || f.containers["cashpilot-earner-p3"] == nil || f.containers["cashpilot-tunnel-earner-p3-next"] != nil {
+		t.Fatalf("containers after two deploys: %v", f.callList())
+	}
+}

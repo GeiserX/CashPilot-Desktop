@@ -223,6 +223,15 @@ const stagedSuffix = "-next"
 // removed, or read a half-swapped pair.
 var proxiedSwap sync.Mutex
 
+// proxiedDeploys runs one deploy per copy at a time: a second one would take the
+// first one's staged tunnel for a leftover and remove it.
+var proxiedDeploys sync.Map // "slug/id" -> *sync.Mutex
+
+func deployLock(slug string, proxyID int64) *sync.Mutex {
+	mu, _ := proxiedDeploys.LoadOrStore(fmt.Sprintf("%s/%d", slug, proxyID), &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 func proxiedName(slug string, proxyID int64) string {
 	return fmt.Sprintf("%s-p%d", containerName(slug), proxyID)
 }
@@ -765,6 +774,9 @@ func pairOf(ctx context.Context, d tunnelDocker, slug string, proxyID int64) (pr
 }
 
 func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit, error) {
+	mu := deployLock(req.Slug, req.ProxyID)
+	mu.Lock()
+	defer mu.Unlock()
 	facts := d.facts(ctx)
 	if facts.OSType != "" && facts.OSType != "linux" {
 		return Exit{}, proxyErr("Proxied copies need a Linux container runtime; this one runs %s containers.", facts.OSType)
