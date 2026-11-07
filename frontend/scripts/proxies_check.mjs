@@ -14,10 +14,12 @@
 //   7. A MISSING TUNNEL IMAGE IS SAID, not hidden.
 //   8. A CAPPED PROXY'S COPIES OFFER NO LIVE START.
 //   9. THE EDITOR SAYS AN EDIT REACHES A COPY ON ITS NEXT START.
+//  10. THE SECTION LINKS TO THE PUBLISHED PROXIES PAGE, not to a repo path.
+//  11. A FLEET REDRAW NEVER OVERWRITES ANOTHER VIEW, and keeps the open editor's draft.
 //
 //   node scripts/proxies_check.mjs      # against ./.harness-build
 
-import { capText, formatGB, proxyValuesFrom, renderProxiesSection, renderProxyCard, renderProxyEditor } from "../.harness-build/render/proxies.js";
+import { capText, fleetRedrawIsCurrent, formatGB, keepsLiveProxyEditor, PROXIES_DOCS_URL, proxyValuesFrom, renderProxiesSection, renderProxyCard, renderProxyEditor } from "../.harness-build/render/proxies.js";
 
 let failures = 0;
 let checks = 0;
@@ -109,6 +111,27 @@ check("an open proxy's stopped copy can be started", card.includes('data-proxy-c
 // 9. An edit says when it reaches copies that exist.
 check("the editor of a proxy with copies says edits apply on the next start", editor.includes("next time it starts"), editor);
 check("the add form says nothing about copies", !renderProxyEditor(null).includes("next time it starts"));
+
+// 10. The help link.
+check("the help link is the published proxies page", PROXIES_DOCS_URL === "https://geiserx.github.io/CashPilot/proxies/", String(PROXIES_DOCS_URL));
+const helpSection = renderProxiesSection({ proxies: [], candidates: [], tunnelImage: "x", tunnelImageError: "" }, null);
+check("the section opens it through a data-url button", helpSection.includes(`data-url="${PROXIES_DOCS_URL}"`), helpSection);
+
+// 11. Redraws.
+check("a redraw still on Fleet and the newest writes the page", fleetRedrawIsCurrent(4, 4, "fleet"));
+check("a redraw after the owner opened another view is dropped", !fleetRedrawIsCurrent(4, 4, "catalog"));
+check("a redraw a newer one overtook is dropped", !fleetRedrawIsCurrent(3, 4, "fleet"));
+const editorId = (html) => (html.match(/data-proxy-editor="([^"]*)"/) || [])[1];
+const sectionState = { proxies: [proxy], candidates: [], tunnelImage: "x", tunnelImageError: "" };
+const editId = editorId(renderProxiesSection(sectionState, proxy));
+const addId = editorId(renderProxiesSection(sectionState, "new"));
+const closedId = editorId(renderProxiesSection(sectionState, null));
+check("the edit form carries the proxy id", editId === "3", String(editId));
+check("the add form carries id 0", addId === "0", String(addId));
+check("a redraw of the open Edit form keeps the typed values", keepsLiveProxyEditor(editId, editId));
+check("a redraw of the open Add form keeps the typed values", keepsLiveProxyEditor(addId, addId));
+check("opening another proxy's editor drops the old draft", !keepsLiveProxyEditor(addId, editId));
+check("a closed editor brings nothing back", !keepsLiveProxyEditor(editId, closedId));
 
 if (failures) {
   console.error(`\n${failures} of ${checks} proxies checks failed`);
