@@ -414,3 +414,28 @@ func TestANewProxyWithAResetDayStartsItsPeriod(t *testing.T) {
 		t.Fatalf("period: %+v %v", s, err)
 	}
 }
+
+// A delete the critical-data check refuses must not cost the proxied copies: the
+// refusal comes before they are removed.
+func TestARefusedDeleteKeepsTheProxiedCopies(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	p.planVolumes = []runtime.DataMount{{Target: "/data", Source: "cashpilot-example-data", Volume: true, Critical: true, Holds: "the node identity"}}
+	err := m.Remove(context.Background(), "example", true, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot be recovered") {
+		t.Fatalf("the delete must be refused for the critical volume, got %v", err)
+	}
+	if len(p.allGone) != 0 {
+		t.Fatalf("a refused delete removed the proxied copies: %v", p.allGone)
+	}
+	if len(p.removeOpts) != 0 {
+		t.Fatalf("a refused delete reached provider.Remove: %+v", p.removeOpts)
+	}
+	// With the separate yes, the copies go first, then the service.
+	if err := m.Remove(context.Background(), "example", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.allGone, []string{"example"}) || len(p.removeOpts) != 1 {
+		t.Fatalf("allowed delete: copies %v, removes %d", p.allGone, len(p.removeOpts))
+	}
+}
