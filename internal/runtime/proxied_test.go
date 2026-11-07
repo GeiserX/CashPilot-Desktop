@@ -280,6 +280,23 @@ func deployRequest() ProxiedDeploy {
 	return ProxiedDeploy{Slug: "earner", ProxyID: 3, Service: proxiedService, Env: map[string]string{"TOKEN": "tok"}, Proxy: testSpec(), OwnIP: "192.0.2.1"}
 }
 
+// A fenced tunnel gets the fence's resolvers, as every fenced earner does: the fence
+// drops the daemon's LAN resolver, so without them the tunnel resolves nothing.
+func TestFencedSidecarGetsTheFencesDNS(t *testing.T) {
+	id := int64(3)
+	fenced := sidecarCreate(tunnelName("earner", id), "earner", &id, "example/cashpilot-tunnel:1.66.0", FenceNetwork).HostConfig
+	if fenced.NetworkMode != FenceNetwork {
+		t.Fatalf("network mode %q", fenced.NetworkMode)
+	}
+	if !slices.Equal(fenced.DNS, fenceDNS) {
+		t.Fatalf("DNS %v, want the fence's %v", fenced.DNS, fenceDNS)
+	}
+	plain := sidecarCreate(tunnelName("earner", id), "earner", &id, "example/cashpilot-tunnel:1.66.0", "").HostConfig
+	if plain.NetworkMode != "bridge" || plain.DNS != nil {
+		t.Fatalf("the default bridge tunnel was changed: net=%q dns=%v", plain.NetworkMode, plain.DNS)
+	}
+}
+
 // The sidecar is the only container with any network power, so its create options
 // are the security boundary: NET_ADMIN and /dev/net/tun and nothing else, never
 // privileged, read-only, no Docker socket, no published ports.
