@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **UpRock said you could cash out at $5.** Its minimum is 250 UPT. The catalog now says so, and UPT gets a price from CoinGecko, so the app can compare an UpRock balance with that minimum.
 - **Redeploying a proxied copy could leave the proxy with no copy at all.** The old earner and tunnel were removed before the new tunnel started, so a tunnel that could not start (an image missing locally, a proxy that does not answer) cost the running copy. The new tunnel now starts under a staged name next to the running copy, and the old pair goes only after the new tunnel has proved an exit.
 - **The Fleet page could draw over another view, and lose a half-typed proxy.** Fleet reads the backend twice before it draws, so a user who opened another view meanwhile got the Fleet page back. Any proxy action redraws the page, which also reset the open proxy editor and dropped unsaved values, a typed password included. A redraw now gives up when Fleet is no longer shown or a newer redraw started, and keeps the open editor when the same proxy's editor is drawn again.
 - **The Proxies section had no help link.** It now links to the published page on proxied copies, https://geiserx.github.io/CashPilot/proxies/.
