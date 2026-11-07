@@ -143,7 +143,7 @@ func (a *App) renderStoreMetrics(mw *metricsWriter) {
 	devices := a.store.ListFleetDevices()
 	online, offline := 0, 0
 	for _, d := range devices {
-		if store.EffectiveFleetStatus(d.Status, d.LastSeen, fleetOfflineAfter) == "online" {
+		if store.EffectiveFleetStatus(d.Status, d.LastSeen, fleetOfflineAfterFor(d.Kind)) == "online" {
 			online++
 		} else {
 			offline++
