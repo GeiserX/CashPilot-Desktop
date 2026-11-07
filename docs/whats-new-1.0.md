@@ -30,7 +30,9 @@ limits what they can reach.
   again at startup, before every deploy and every five
   minutes, and refuses a deploy it can't fence before it touches the running
   container. An upgraded install gets a **Turn on isolation** button under Needs
-  attention. See [LAN isolation](configuration.md#lan-isolation).
+  attention. On Podman the fence can't be written yet: with `auto`, earners
+  deploy unfenced on Podman's default network and Needs attention says so.
+  See [LAN isolation](configuration.md#lan-isolation).
 - **Least privilege for every container.** Every capability is dropped and only
   the ones the catalog entry declares are added back, with `no-new-privileges`,
   a process limit, host devices only from a fixed allow-list, and privileged
@@ -116,8 +118,10 @@ catalog that rules out eight services. SOCKS5 and HTTP carry TCP only. See
   restrictions. See [Custom services](custom-services.md).
 - **Several instances** of a service on one machine, where the provider pays per
   device and allows it.
-- **Compose export**: save a `docker-compose.yml` with the same hardening and no
-  credentials, and keep earning without CashPilot.
+- **Compose export**: save a `docker-compose.yml` with the same container
+  hardening and no credentials, and keep earning without CashPilot. The file
+  does not carry the LAN fence, so exported earners can reach your LAN and this
+  computer unless your own firewall stops them.
 - **Import** service logins from money4band, CashFactory or InternetIncome, after
   a dry run. See [money4band](migrate/money4band.md).
 

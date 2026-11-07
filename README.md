@@ -20,7 +20,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 
 1.0 is the first stable release, after about 130 releases since May 2026. Nothing breaks on upgrade. The highlights:
 
-- **Earners can't reach your LAN.** On a new install, bridge-networked earners run on a fenced network that drops private ranges, tailnets, cloud metadata, this computer and its public IP. If the fence can't be written, the deploy is refused. Upgraded installs turn it on with one button. Podman and host-networked services such as Mysterium are not fenced ([limits](docs/configuration.md#lan-isolation)).
+- **Earners can't reach your LAN.** On a new install, bridge-networked earners run on a fenced network that drops private ranges, tailnets, cloud metadata, this computer and its public IP. If the fence can't be written, the deploy is refused, and the app rewrites it every five minutes. Upgraded installs turn it on with one button. Not covered: Podman, host-networked services such as Mysterium, a second public IP, the minutes before the first public-IP lookup, and the gap after a firewall reload until the next rewrite ([limits](docs/configuration.md#lan-isolation)).
 - **Earn on more IPs.** Run extra copies of a service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy. If the proxy dies the copy stops. It never falls back to your IP.
 - **Your node identities are safe.** Removing a service keeps its data, an unrecoverable volume is never deleted without a separate yes, and encrypted backups take one click.
 - **41 graded services**, vendored from the web catalog, with a check before deploy that says what would stop a service earning here.
