@@ -735,7 +735,15 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 	}
 	var ownIP string
 	for _, r := range records {
-		if !r.StoppedByCap || running[r.Slug] {
+		if !r.StoppedByCap {
+			continue
+		}
+		if running[r.Slug] {
+			// Started, but clearing its mark failed: clear it now, or a later crash
+			// of the copy would be read as the cap's stop.
+			if err := m.store.SetProxiedCopyCapped(id, r.Slug, false); err != nil {
+				m.store.RecordEvent(r.Slug, "proxied_mark_error", err.Error())
+			}
 			continue
 		}
 		if ownIP == "" {
@@ -745,7 +753,10 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 			m.store.RecordEvent(r.Slug, "proxied_start_error", maskSecrets(err.Error(), d))
 			continue
 		}
-		_ = m.store.SetProxiedCopyCapped(id, r.Slug, false)
+		if err := m.store.SetProxiedCopyCapped(id, r.Slug, false); err != nil {
+			// The next pass sees it running and marked, and clears it then.
+			m.store.RecordEvent(r.Slug, "proxied_mark_error", err.Error())
+		}
 	}
 }
 

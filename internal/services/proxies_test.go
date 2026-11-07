@@ -450,6 +450,17 @@ func TestACopyAResetCouldNotStartIsStartedOnTheNextPass(t *testing.T) {
 	if len(records) != 1 || records[0].StoppedByCap {
 		t.Fatalf("the mark is cleared once it runs: %+v", records)
 	}
+	// A running copy left marked (its clear failed) has the mark cleared on a pass.
+	if err := st.SetProxiedCopyCapped(view.ID, "example", true); err != nil {
+		t.Fatal(err)
+	}
+	p.starts = nil
+	if _, err := m.ProxyTick(ctx); err != nil || len(p.starts) != 0 {
+		t.Fatalf("a running marked copy must not be started: %v %v", p.starts, err)
+	}
+	if records, _ := st.ListProxiedCopies(view.ID); records[0].StoppedByCap {
+		t.Fatal("the stale mark on a running copy is cleared")
+	}
 	// A copy the owner stops afterwards stays stopped on the next pass.
 	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
 		t.Fatal(err)
