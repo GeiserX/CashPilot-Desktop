@@ -56,9 +56,9 @@ func TestProxiedCopyFailsClosedLive(t *testing.T) {
 	inspectLabels := func(name string) (map[string]string, bool, error) {
 		out, err := dk("inspect", "-f", "{{json .Config.Labels}}", name)
 		if err != nil {
-			// Only the daemon's answer for this exact name means "absent"; any other
-			// failure (a lost connection included) stops the test.
-			if strings.Contains(out, "No such object: "+name) || strings.Contains(out, "No such container: "+name) {
+			// Only the answer for this exact name means "absent" (Docker 29 writes it in
+			// lower case); any other failure, a lost connection included, stops the test.
+			if lower := strings.ToLower(out); strings.Contains(lower, "no such object: "+name) || strings.Contains(lower, "no such container: "+name) {
 				return nil, false, nil
 			}
 			return nil, false, fmt.Errorf("docker inspect %s: %v: %s", name, err, out)
