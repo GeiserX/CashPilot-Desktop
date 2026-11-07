@@ -444,14 +444,17 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 	}
 	provider := m.providerForSlug(slug)
 	// A delete the critical-data check refuses must cost nothing, so it is asked
-	// before the proxied copies go. A plan that cannot be read is left to
-	// provider.Remove, which reads it again and fails the same way as before.
+	// before the proxied copies go. A plan that cannot be read stops the delete
+	// here too: provider.Remove reads it again and could refuse after the copies
+	// were already gone.
 	if deleteData && !allowCritical {
-		if plan, err := provider.PlanRemoval(ctx, slug, opts.Critical); err == nil {
-			if err := runtime.RefuseCriticalLoss(slug, plan, opts); err != nil {
-				m.store.RecordEvent(slug, "remove_error", err.Error())
-				return err
-			}
+		plan, err := provider.PlanRemoval(ctx, slug, opts.Critical)
+		if err == nil {
+			err = runtime.RefuseCriticalLoss(slug, plan, opts)
+		}
+		if err != nil {
+			m.store.RecordEvent(slug, "remove_error", err.Error())
+			return err
 		}
 	}
 	// Proxied copies go first, earners before their tunnels, so no tunnel is left
