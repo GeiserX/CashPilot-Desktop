@@ -415,6 +415,40 @@ func TestANewProxyWithAResetDayStartsItsPeriod(t *testing.T) {
 	}
 }
 
+// A delete the critical-data check refuses must not cost the proxied copies: the
+// refusal comes before they are removed.
+func TestARefusedDeleteKeepsTheProxiedCopies(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	p.planVolumes = []runtime.DataMount{{Target: "/data", Source: "cashpilot-example-data", Volume: true, Critical: true, Holds: "the node identity"}}
+	err := m.Remove(context.Background(), "example", true, false)
+	if err == nil || !strings.Contains(err.Error(), "cannot be recovered") {
+		t.Fatalf("the delete must be refused for the critical volume, got %v", err)
+	}
+	if len(p.allGone) != 0 {
+		t.Fatalf("a refused delete removed the proxied copies: %v", p.allGone)
+	}
+	if len(p.removeOpts) != 0 {
+		t.Fatalf("a refused delete reached provider.Remove: %+v", p.removeOpts)
+	}
+	// A plan that cannot be read stops the delete before the copies go, too.
+	p.planVolumes, p.planErr = nil, errors.New("daemon busy")
+	if err := m.Remove(context.Background(), "example", true, false); err == nil || len(p.allGone) != 0 {
+		t.Fatalf("an unreadable plan must stop the delete first: %v, copies %v", err, p.allGone)
+	}
+	if err := m.Remove(context.Background(), "example", true, true); err == nil || len(p.allGone) != 0 {
+		t.Fatalf("an unreadable plan must stop an approved delete first too: %v, copies %v", err, p.allGone)
+	}
+	p.planErr = nil
+	// With the separate yes, the copies go first, then the service.
+	if err := m.Remove(context.Background(), "example", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(p.allGone, []string{"example"}) || len(p.removeOpts) != 1 {
+		t.Fatalf("allowed delete: copies %v, removes %d", p.allGone, len(p.removeOpts))
+	}
+}
+
 // A service deployed on the native runtime is offered as a proxy candidate only with
 // its refusal, so the option is disabled instead of failing on click.
 func TestProxyRefusalNamesTheNativeRuntime(t *testing.T) {
