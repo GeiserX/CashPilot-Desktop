@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **1.0.0 is the first stable release.** Nothing breaks: config, database, saved credentials and deployed services carry over. An install from before v0.37.0 keeps its earners on Docker's default bridge until Turn on isolation is pressed, and a proxied copy from before v0.39.1 keeps its tunnel there until it is deployed again. `wails.json`, `package.json` and `frontend/package.json` now say 1.0.0; release builds still take the version from the tag. What 1.0 covers, upgrade notes and known limits: docs/whats-new-1.0.md.
+
 ### Fixed
 
 - **The Fleet page could draw over another view, and lose a half-typed proxy.** Fleet reads the backend twice before it draws, so a user who opened another view meanwhile got the Fleet page back. Any proxy action redraws the page, which also reset the open proxy editor and dropped unsaved values, a typed password included. A redraw now gives up when Fleet is no longer shown or a newer redraw started, and keeps the open editor when the same proxy's editor is drawn again.
