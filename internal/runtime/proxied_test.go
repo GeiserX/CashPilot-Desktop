@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
@@ -71,6 +72,8 @@ type fakeTunnelDocker struct {
 	networkErr error
 	// created is the Created time list reports for every container (unix seconds).
 	created int64
+	// stopErr makes a stop of that container name fail.
+	stopErr map[string]error
 }
 
 func newFakeTunnelDocker() *fakeTunnelDocker {
@@ -156,6 +159,9 @@ func (f *fakeTunnelDocker) stop(_ context.Context, id string, _ int) error {
 	c := f.find(id)
 	if c == nil {
 		return errors.New("no such container")
+	}
+	if err := f.stopErr[c.name]; err != nil {
+		return err
 	}
 	c.state = "exited"
 	f.record("stop " + c.name)
@@ -772,5 +778,78 @@ func TestAProbeAnswerThatIsNotAnIPIsNotReady(t *testing.T) {
 	}
 	if e, ok := parseReady(`{"ip":"203.0.113.7","country":"NL"}`); !ok || e.IP != "203.0.113.7" {
 		t.Fatal("a real IP is ready")
+	}
+}
+
+// The live test removes fixed names before it runs; a container of the operator's
+// under one of those names must stop it instead of being removed.
+func TestTheLiveTestNeverRemovesAContainerItDidNotCreate(t *testing.T) {
+	ours := map[string]string{LabelManaged: "true", LabelService: "mp-live", LabelProxy: "1"}
+	containers := map[string]map[string]string{"cashpilot-mp-live-p1": ours, "cp-mp-live-gost": {"com.example": "mine"}}
+	inspect := func(name string) (map[string]string, bool, error) {
+		labels, ok := containers[name]
+		return labels, ok, nil
+	}
+	owned := map[string]func(map[string]string) bool{
+		"cashpilot-mp-live-p1":        func(l map[string]string) bool { return isOurs(l, "mp-live", 1) },
+		"cashpilot-tunnel-mp-live-p1": func(l map[string]string) bool { return isOurs(l, "mp-live", 1) },
+		"cp-mp-live-gost":             func(l map[string]string) bool { return l[liveTestLabel] == "mp-live" },
+	}
+	err := refuseForeignLiveContainers(inspect, owned)
+	if err == nil || !strings.Contains(err.Error(), "cp-mp-live-gost") || strings.Contains(err.Error(), "cashpilot-mp-live-p1") {
+		t.Fatalf("only the stranger must be refused, got %v", err)
+	}
+	containers["cp-mp-live-gost"] = map[string]string{liveTestLabel: "mp-live"}
+	if err := refuseForeignLiveContainers(inspect, owned); err != nil {
+		t.Fatalf("containers this test created, or none, must pass: %v", err)
+	}
+}
+
+// A tunnel removed between the read and the stop must not leave its earner running.
+func TestAStopStillStopsTheEarnerWhenTheTunnelIsGone(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	f.stopErr = map[string]error{"cashpilot-tunnel-earner-p3": fmt.Errorf("No such container: %w", cerrdefs.ErrNotFound)}
+	if _, err := stopProxied(ctx, f, "earner", 3, 0); err != nil {
+		t.Fatalf("a tunnel that is gone must not fail the stop: %v", err)
+	}
+	if st := f.containers["cashpilot-earner-p3"].state; st == "running" {
+		t.Fatal("the earner was left running after its tunnel disappeared")
+	}
+}
+
+// A stop that fails halfway must not leave a ready tunnel beside a stopped earner,
+// which the next status read would start again, undoing the owner's stop.
+func TestAStopThatFailsHalfwayIsNotUndoneByTheStatusRead(t *testing.T) {
+	for _, failing := range []string{"cashpilot-tunnel-earner-p3", "cashpilot-earner-p3"} {
+		t.Run(failing, func(t *testing.T) {
+			withTestTunnel(t)
+			f := newFakeTunnelDocker()
+			ctx := context.Background()
+			if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+				t.Fatal(err)
+			}
+			f.stopErr = map[string]error{failing: errors.New("daemon timeout")}
+			if _, err := stopProxied(ctx, f, "earner", 3, 0); err == nil {
+				t.Fatal("the failed stop must be reported")
+			}
+			earner, tunnel := f.containers["cashpilot-earner-p3"], f.containers["cashpilot-tunnel-earner-p3"]
+			if tunnel.state == "running" && earner.state != "running" {
+				t.Fatalf("a ready tunnel was left beside a stopped earner")
+			}
+			before := len(f.callList())
+			if _, err := proxiedStatus(ctx, f); err != nil {
+				t.Fatal(err)
+			}
+			for _, call := range f.callList()[before:] {
+				if call == "start cashpilot-earner-p3" || call == "restart cashpilot-earner-p3" {
+					t.Fatalf("the status read started the earner again: %v", f.callList()[before:])
+				}
+			}
+		})
 	}
 }
