@@ -65,7 +65,7 @@ import {
   UndoStateBackup,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
-import { proxyValuesFrom, renderProxiesSection } from "./render/proxies";
+import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
@@ -1371,7 +1371,11 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   });
 }
 
+// Counts Fleet redraws, so one that finishes after a newer one never writes the page.
+let fleetRequest = 0;
+
 async function renderFleet(current: AppState) {
+  const request = ++fleetRequest;
   let fleet: FleetState;
   try {
     fleet = await GetFleetState();
@@ -1385,6 +1389,9 @@ async function renderFleet(current: AppState) {
     proxiesState = null;
     showErrorToast({scope: "proxies", error: String(error)});
   }
+  if (!fleetRedrawIsCurrent(request, fleetRequest, activeView)) return;
+  // The open proxy editor's typed values live only in the DOM; see keepsLiveProxyEditor.
+  const liveEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -1455,6 +1462,10 @@ async function renderFleet(current: AppState) {
     button.addEventListener("click", () => void removeFleetDevice(Number(button.dataset.removeDevice || 0)));
   });
   wireProxies();
+  const freshEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
+  if (liveEditor && freshEditor && keepsLiveProxyEditor(liveEditor.dataset.proxyEditor, freshEditor.dataset.proxyEditor)) {
+    freshEditor.replaceWith(liveEditor);
+  }
   document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
