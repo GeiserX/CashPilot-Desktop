@@ -71,6 +71,8 @@ type fakeTunnelDocker struct {
 	networkErr error
 	// created is the Created time list reports for every container (unix seconds).
 	created int64
+	// renameErr makes every rename fail.
+	renameErr error
 }
 
 func newFakeTunnelDocker() *fakeTunnelDocker {
@@ -190,6 +192,9 @@ func (f *fakeTunnelDocker) rename(_ context.Context, id, name string) error {
 	c := f.find(id)
 	if c == nil {
 		return errors.New("no such container")
+	}
+	if f.renameErr != nil {
+		return f.renameErr
 	}
 	if f.containers[name] != nil {
 		return fmt.Errorf("name %s in use", name)
@@ -870,5 +875,20 @@ func TestAStagedTunnelIsNeverReportedAndAStrangerIsNeverRemoved(t *testing.T) {
 	}
 	if f.containers["cashpilot-tunnel-earner-p3-next"] == nil {
 		t.Fatal("the stranger was removed")
+	}
+}
+
+// A swap that fails after the old pair went removes the staged tunnel, so nothing is
+// left running under a name the status read never reports.
+func TestAFailedPromotionRemovesTheStagedTunnel(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	f.renameErr = errors.New("409 Conflict")
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil || !strings.Contains(err.Error(), "409") {
+		t.Fatalf("the failed rename must fail the deploy, got %v", err)
+	}
+	if f.containers["cashpilot-tunnel-earner-p3-next"] != nil || f.containers["cashpilot-earner-p3"] != nil {
+		t.Fatalf("left behind: %v", f.callList())
 	}
 }
