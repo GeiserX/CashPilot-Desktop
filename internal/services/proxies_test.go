@@ -438,4 +438,9 @@ func TestProxyRefusalNamesTheNativeRuntime(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "native runtime") {
 		t.Fatalf("the deploy must refuse with the same reason, got %v", err)
 	}
+	// A deployment that cannot be read is a refusal too, never a silent yes.
+	_ = st.Close()
+	if got := m.ProxyRefusal("example"); !strings.Contains(got, "Could not read its deployment") {
+		t.Fatalf("a failed lookup must be the refusal, got %q", got)
+	}
 }

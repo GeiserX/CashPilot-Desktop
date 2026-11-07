@@ -317,7 +317,11 @@ func (m *Manager) ProxyRefusal(slug string) string {
 	if !ok {
 		return "Unknown service"
 	}
-	if dep, deployed, err := m.store.GetDeployment(slug); err == nil && deployed {
+	dep, deployed, err := m.store.GetDeployment(slug)
+	if err != nil {
+		return "Could not read its deployment: " + err.Error()
+	}
+	if deployed {
 		if err := refuseNonDocker(svc, dep); err != nil {
 			return err.Error()
 		}
