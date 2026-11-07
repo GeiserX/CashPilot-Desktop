@@ -832,15 +832,21 @@ func (s *Store) DeleteFleetDevice(id int64) error {
 // same way makes the lexicographic string comparison a correct chronological order. A
 // non-timestamp placeholder such as AddFleetDevice's "not connected yet" sorts above
 // any real cutoff, so a never-connected device is never swept.
-func (s *Store) SweepStaleFleetDevices(offlineAfter, reapAfter time.Duration) (offlined int64, reaped int64, err error) {
+//
+// mobileOfflineAfter applies to kind "mobile": a phone reports from Android's
+// WorkManager, whose shortest period is 15 minutes, so the workers' grace would
+// show it offline between two ordinary reports.
+func (s *Store) SweepStaleFleetDevices(offlineAfter, mobileOfflineAfter, reapAfter time.Duration) (offlined int64, reaped int64, err error) {
 	now := time.Now().UTC()
 	offlineCutoff := now.Add(-offlineAfter).Format(time.RFC3339)
+	mobileCutoff := now.Add(-mobileOfflineAfter).Format(time.RFC3339)
 	reapCutoff := now.Add(-reapAfter).Format(time.RFC3339)
 
 	offRes, err := s.execWrite(`
 		UPDATE fleet_devices SET status = 'offline', updated_at = datetime('now')
-		WHERE status != 'offline' AND last_seen < ?
-	`, offlineCutoff)
+		WHERE status != 'offline'
+		  AND ((kind = 'mobile' AND last_seen < ?) OR (kind != 'mobile' AND last_seen < ?))
+	`, mobileCutoff, offlineCutoff)
 	if err != nil {
 		return 0, 0, err
 	}
