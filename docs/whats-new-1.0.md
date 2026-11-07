@@ -127,6 +127,10 @@ catalog that rules out eight services. SOCKS5 and HTTP carry TCP only. See
   the Android companion report to this Desktop. Phones report every
   15 minutes, so a phone stays online between reports instead of flickering
   offline.
+- **The Android companion reaches 1.0 at the same time.** It reports the
+  earning apps on a phone to your CashPilot server or to this Desktop. Get it
+  from https://github.com/GeiserX/CashPilot-android/releases. An F-Droid
+  listing is submitted and waiting for review.
 
 ## Platforms
 

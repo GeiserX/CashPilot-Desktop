@@ -24,7 +24,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 - **Earn on more IPs.** Run extra copies of a service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy. If the proxy dies the copy stops. It never falls back to your IP.
 - **Your node identities are safe.** Removing a service keeps its data, an unrecoverable volume is never deleted without a separate yes, and encrypted backups take one click.
 - **41 graded services**, vendored from the web catalog, with a check before deploy that says what would stop a service earning here.
-- **Signed and notarized on macOS**, with builds for Windows and Linux. Pairs with a CashPilot server, or acts as the hub for workers and Android phones.
+- **Signed and notarized on macOS**, with builds for Windows and Linux. Pairs with a CashPilot server, or acts as the hub for workers and Android phones. The [Android companion](https://github.com/GeiserX/CashPilot-android/releases) reaches 1.0 at the same time.
 
 Full list, upgrade notes and known limits: [What's new in 1.0](docs/whats-new-1.0.md).
 
