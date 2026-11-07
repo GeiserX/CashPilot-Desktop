@@ -769,13 +769,7 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 		if !detected {
 			ownIP, detected = detectOwnIP(ctx), true
 		}
-		if !m.retryCapStart(ctx, p, id, r.Slug, ownIP) {
-			continue
-		}
-		if err := m.store.SetProxiedCopyCapped(id, r.Slug, false); err != nil {
-			// The next pass sees it running and marked, and clears it then.
-			m.store.RecordEvent(r.Slug, "proxied_mark_error", err.Error())
-		}
+		m.retryCapStart(ctx, p, id, r.Slug, ownIP)
 	}
 }
 
@@ -813,6 +807,18 @@ func (m *Manager) retryCapStart(ctx context.Context, p runtime.ProxyProvider, id
 		m.store.RecordEvent(slug, "proxied_start_error", maskSecrets(err.Error(), d))
 		return false
 	}
+	// Cleared inside the copy's lock, which stopCapped also takes, and only while the
+	// cap is still lifted: a cap that came back during the start keeps the mark, so
+	// the next stop and reset still treat the copy as the cap's.
+	m.proxy.proxyMu.Lock()
+	_, now, err := m.loadProxy(id)
+	m.proxy.proxyMu.Unlock()
+	if err == nil && now.CappedAt == "" {
+		if err := m.store.SetProxiedCopyCapped(id, slug, false); err != nil {
+			// The next pass sees it running and marked, and clears it then.
+			m.store.RecordEvent(slug, "proxied_mark_error", err.Error())
+		}
+	}
 	return true
 }
 
@@ -823,6 +829,17 @@ func (m *Manager) stopCapped(ctx context.Context, p runtime.ProxyProvider, id in
 	}
 	sort.Strings(slugs)
 	for _, slug := range slugs {
+		m.stopCappedCopy(ctx, p, id, d, slug)
+	}
+}
+
+// stopCappedCopy stops one copy at the cap under that copy's lock, so a retry's
+// start and mark clear never interleave with the stop and its mark.
+func (m *Manager) stopCappedCopy(ctx context.Context, p runtime.ProxyProvider, id int64, d proxies.Definition, slug string) {
+	mu := m.copyLock(id, slug)
+	mu.Lock()
+	defer mu.Unlock()
+	{
 		wasRunning, err := p.StopProxied(ctx, slug, id, m.stopTimeout(slug))
 		m.proxy.lastMu.Lock()
 		if m.proxy.unstopped == nil {
@@ -840,7 +857,7 @@ func (m *Manager) stopCapped(ctx context.Context, p runtime.ProxyProvider, id in
 		}
 		m.proxy.lastMu.Unlock()
 		if err != nil || !wasRunning {
-			continue
+			return
 		}
 		// A reset or a cap change may have lifted the cap while the stop ran; then
 		// the copy goes back up instead of being marked.
