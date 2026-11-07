@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Proxies section had no help link.** It now links to the published page on proxied copies, https://geiserx.github.io/CashPilot/proxies/.
 - **A proxied copy's stop that failed halfway could be undone.** The earner stopped first. If the tunnel then failed to stop, the next status read saw a ready tunnel beside a stopped earner and started the earner again. The tunnel now stops first, so a half-finished stop never leaves that state.
 - **A refused delete still removed the service's proxied copies.** Deleting a service with its data, without the extra yes for unrecoverable volumes, removed every proxied copy first and only then refused. The refusal now comes before anything is removed.
 - **The Proxies section offered a native-runtime service as a proxy candidate.** Picking it failed with "runs on the native runtime". The candidate list now shows that reason up front and disables the option, because only Docker can run a copy through a proxy.
