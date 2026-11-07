@@ -823,6 +823,12 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 		if ins.Config == nil || !isOurs(ins.Config.Labels, req.Slug, pid) {
 			return Exit{}, proxyErr("A container named %s that CashPilot did not create is in the way", staged)
 		}
+		// One younger than the sweep age belongs to a deploy still running, in this
+		// app or another one on the same Docker host; removing it would cut that
+		// deploy's tunnel after it may already have removed the old pair.
+		if created, perr := time.Parse(time.RFC3339Nano, ins.Created); perr == nil && time.Since(created) < staleTestTunnel {
+			return Exit{}, proxyErr("Another deploy of %s through proxy %d is under way; try again in a few minutes", req.Slug, pid)
+		}
 		removeQuietly(d, ins.ID, 2)
 	}
 	// The new tunnel proves an exit while the old pair keeps running, so a tunnel that
@@ -1071,7 +1077,17 @@ func sweepTestTunnels(ctx context.Context, d tunnelDocker, now time.Time) {
 	if staged, err := d.list(ctx, LabelManaged+"=true", LabelRole+"="+RoleTunnel, LabelProxy); err == nil {
 		for _, c := range staged {
 			if c.Labels[LabelProxy] != "" && strings.HasSuffix(summaryName(c), stagedSuffix) && now.Sub(time.Unix(c.Created, 0)) >= staleTestTunnel {
+				id, perr := strconv.ParseInt(c.Labels[LabelProxy], 10, 64)
+				if perr != nil {
+					continue
+				}
+				// A deploy of this copy in this app may still be waiting to swap it in.
+				mu := deployLock(c.Labels[LabelService], id)
+				if !mu.TryLock() {
+					continue
+				}
 				removeQuietly(d, c.ID, 2)
+				mu.Unlock()
 			}
 		}
 	}

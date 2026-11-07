@@ -219,10 +219,11 @@ func (f *fakeTunnelDocker) inspect(_ context.Context, ref string) (container.Ins
 		return container.InspectResponse{}, false, nil
 	}
 	return container.InspectResponse{
-		ID:     c.id,
-		Name:   "/" + c.name,
-		State:  &container.State{Status: container.ContainerState(c.state), StartedAt: c.startedAt},
-		Config: c.opts.Config,
+		ID:      c.id,
+		Name:    "/" + c.name,
+		State:   &container.State{Status: container.ContainerState(c.state), StartedAt: c.startedAt},
+		Config:  c.opts.Config,
+		Created: time.Unix(f.created, 0).UTC().Format(time.RFC3339Nano),
 	}, true, nil
 }
 func (f *fakeTunnelDocker) list(_ context.Context, _ ...string) ([]container.Summary, error) {
@@ -881,6 +882,65 @@ func TestAStagedTunnelIsNeverReportedAndAStrangerIsNeverRemoved(t *testing.T) {
 	}
 	if f.containers["cashpilot-tunnel-earner-p3-next"] == nil {
 		t.Fatal("the stranger was removed")
+	}
+}
+
+// A young staged tunnel belongs to a deploy still running, maybe in another app on
+// the same Docker host: a second deploy refuses instead of removing it.
+func TestADeployLeavesAnotherDeploysStagedTunnelAlone(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	pid := int64(3)
+	if _, err := f.create(ctx, sidecarCreate("cashpilot-tunnel-earner-p3-next", "earner", &pid, "example/cashpilot-tunnel:1.66.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	staged := f.containers["cashpilot-tunnel-earner-p3-next"].id
+	oldTunnel := f.containers["cashpilot-tunnel-earner-p3"].id
+	f.created = time.Now().Unix()
+	if _, err := deployProxied(ctx, f, deployRequest()); err == nil || !strings.Contains(err.Error(), "under way") {
+		t.Fatalf("a young staged tunnel must stop the deploy, got %v", err)
+	}
+	if c := f.containers["cashpilot-tunnel-earner-p3-next"]; c == nil || c.id != staged {
+		t.Fatal("the other deploy's staged tunnel was removed")
+	}
+	if c := f.containers["cashpilot-tunnel-earner-p3"]; c == nil || c.id != oldTunnel {
+		t.Fatal("the running pair was touched")
+	}
+	f.created = time.Now().Add(-2 * staleTestTunnel).Unix()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatalf("an abandoned staged tunnel is replaced: %v", err)
+	}
+}
+
+// The sweep leaves a stale-looking staged tunnel alone while a deploy of its copy in
+// this app still holds the copy's lock.
+func TestTheSweepSkipsAStagedTunnelWhoseDeployIsRunning(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	pid := int64(3)
+	if _, err := f.create(ctx, sidecarCreate("cashpilot-tunnel-earner-p3-next", "earner", &pid, "example/cashpilot-tunnel:1.66.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	f.created = time.Now().Add(-2 * staleTestTunnel).Unix()
+	mu := deployLock("earner", 3)
+	mu.Lock()
+	sweepTestTunnels(ctx, f, time.Now())
+	if f.containers["cashpilot-tunnel-earner-p3-next"] == nil {
+		mu.Unlock()
+		t.Fatal("the sweep removed a staged tunnel its deploy still holds")
+	}
+	mu.Unlock()
+	sweepTestTunnels(ctx, f, time.Now())
+	if f.containers["cashpilot-tunnel-earner-p3-next"] != nil {
+		t.Fatal("once the deploy is done the stale staged tunnel is swept")
 	}
 }
 
