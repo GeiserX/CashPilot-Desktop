@@ -48,6 +48,12 @@ var DefaultCryptoIDs = map[string]string{
 	"KOII":   "koii",
 	"NODL":   "nodle-network",
 	"TFUEL":  "theta-fuel",
+	// UpRock's token; its payout minimum is set in UPT (services/depin/uprock.yml).
+	"UPT": "uprock",
+	// Stablecoins some providers pay in; a cash-out recorded in one must count
+	// toward the totals.
+	"USDT": "tether",
+	"USDC": "usd-coin",
 }
 
 // PointsCurrencies lists reward "points" that are deliberately non-convertible
