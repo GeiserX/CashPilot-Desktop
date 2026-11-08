@@ -47,11 +47,11 @@ func TestCopyEnvSuffixesDeviceNames(t *testing.T) {
 		{Key: "TOKEN"},
 		{Key: "NODE", Default: "{hostname}"},
 	}}}
-	first := copyEnv(svc, map[string]string{"DEVICE": "cashpilot-box", "TOKEN": "t", "NODE": "box"}, 1)
+	first, _ := copyEnv(svc, map[string]string{"DEVICE": "cashpilot-box", "TOKEN": "t", "NODE": "box"}, 1)
 	if first["DEVICE"] != "cashpilot-box" || first["NODE"] != "box" {
 		t.Fatalf("copy 1 env = %v, want the device names unchanged", first)
 	}
-	env := copyEnv(svc, map[string]string{"DEVICE": "cashpilot-box", "TOKEN": "t", "NODE": ""}, 2)
+	env, _ := copyEnv(svc, map[string]string{"DEVICE": "cashpilot-box", "TOKEN": "t", "NODE": ""}, 2)
 	if env["DEVICE"] != "cashpilot-box-2" || env["TOKEN"] != "t" || env["NODE"] != "" {
 		t.Fatalf("copy 2 env = %v, want only the non-empty {hostname} value suffixed", env)
 	}

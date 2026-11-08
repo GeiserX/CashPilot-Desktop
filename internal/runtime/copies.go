@@ -53,17 +53,21 @@ func instanceOf(labels map[string]string) int {
 // copyEnv gives copy n its own device names. The env values the catalog derives from
 // {hostname} are the names a provider counts devices by, so two copies under one name
 // would be one device; copy n gets "-n" on each of them (cashpilot-box-2). Nothing
-// else differs between copies.
-func copyEnv(svc catalog.Service, env map[string]string, n int) map[string]string {
+// else differs between copies, except the per_device ids: copy n gets its own value
+// of each (renameDeviceIDs), or it is refused, since one id is one device.
+func copyEnv(svc catalog.Service, env map[string]string, n int) (map[string]string, error) {
 	if n <= 1 {
-		return env
+		return env, nil
 	}
 	for _, item := range svc.Docker.Env {
 		if strings.Contains(item.Default, "{hostname}") && env[item.Key] != "" {
 			env[item.Key] = fmt.Sprintf("%s-%d", env[item.Key], n)
 		}
 	}
-	return env
+	if err := renameDeviceIDs(svc, env, fmt.Sprint(n)); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 // managedCopy returns the name of copy n of slug after checking the container really
