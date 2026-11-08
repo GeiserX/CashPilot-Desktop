@@ -172,14 +172,18 @@ export function referralNote(service: Service): string {
  * short "added" note when the deploy added the device itself (addedId). The web app
  * shows the same step (app.js _showDeviceLink).
  */
-export function deviceLinkText(service: Service | undefined, values: Record<string, string>, addedId = ""): string {
+export function deviceLinkText(service: Service | undefined, values: Record<string, string>, addedId = "", retryingId = ""): string {
   const link = service?.deviceLink;
   const id = (values[link?.idEnv || ""] || "").trim();
   if (!link || !id) return "";
   // The deploy added it through the provider's API (ProxyRack with its API key).
   if (addedId === id) return ["Added to your account", id].join("\n");
   const url = (link.url || "").replace(/\$\{(\w+)\}/g, (_, key: string) => encodeURIComponent((values[key] || "").trim()));
-  return ["Link this device to your account", link.steps.trim(), id, url].filter(Boolean).join("\n");
+  // The provider did not know the new device yet; the app keeps trying to add it.
+  const retrying = retryingId === id
+    ? "The provider does not know this new device yet. CashPilot keeps trying to add it for a day and tells you if it cannot."
+    : "";
+  return ["Link this device to your account", retrying || link.steps.trim(), id, url].filter(Boolean).join("\n");
 }
 
 /** One block of label/value rows. */

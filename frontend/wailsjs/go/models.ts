@@ -1498,6 +1498,7 @@ export namespace main {
 	    scaling: Record<string, services.ScalingLimit>;
 	    copies: Record<string, Array<runtime.ContainerInfo>>;
 	    addedDevices: Record<string, string>;
+	    retryingDevices: Record<string, string>;
 	    stateBackups: statebackup.Row[];
 	    drift: Record<string, Array<string>>;
 	    isolation?: runtime.FenceStatus;
@@ -1527,6 +1528,7 @@ export namespace main {
 	        this.scaling = this.convertValues(source["scaling"], services.ScalingLimit, true);
 	        this.copies = this.convertValues(source["copies"], Array<runtime.ContainerInfo>, true);
 	        this.addedDevices = source["addedDevices"];
+	        this.retryingDevices = source["retryingDevices"];
 	        this.stateBackups = this.convertValues(source["stateBackups"], statebackup.Row);
 	        this.drift = source["drift"];
 	        this.isolation = this.convertValues(source["isolation"], runtime.FenceStatus);
