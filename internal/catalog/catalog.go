@@ -397,6 +397,10 @@ type EnvVar struct {
 	// 1 <= start <= end <= 65535. A pattern checks the shape but not the order, and
 	// Mysterium refuses to start on a reversed --udp.ports.
 	PortRange bool `json:"portRange,omitempty" yaml:"port_range"`
+	// PerDevice means the value is the id the provider knows this device by
+	// (ProxyRack's UUID). A copy, proxied or on the box, gets its own value derived
+	// from it, or is refused when none can be derived.
+	PerDevice bool `json:"perDevice,omitempty" yaml:"per_device"`
 }
 
 type Requirements struct {

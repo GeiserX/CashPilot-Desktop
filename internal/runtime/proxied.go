@@ -456,15 +456,19 @@ func sidecarCreate(name, slug string, proxyID *int64, image, network string) cli
 	}
 }
 
-// proxiedEnv gives a proxied copy its own device names: the env values the catalog
-// derives from {hostname} get "-p<id>", as copy N gets "-N".
-func proxiedEnv(svc catalog.Service, env map[string]string, proxyID int64) map[string]string {
+// proxiedEnv gives a proxied copy its own device names and ids: the env values the
+// catalog derives from {hostname} get "-p<id>", as copy N gets "-N", and every
+// per_device id gets its own value (renameDeviceIDs), or the copy is refused.
+func proxiedEnv(svc catalog.Service, env map[string]string, proxyID int64) (map[string]string, error) {
 	for _, item := range svc.Docker.Env {
 		if strings.Contains(item.Default, "{hostname}") && env[item.Key] != "" {
 			env[item.Key] = fmt.Sprintf("%s-p%d", env[item.Key], proxyID)
 		}
 	}
-	return env
+	if err := renameDeviceIDs(svc, env, fmt.Sprintf("p%d", proxyID)); err != nil {
+		return nil, err
+	}
+	return env, nil
 }
 
 // earnerCreate is the proxied earner: the service's own container spec, inside the
@@ -474,7 +478,14 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 	if why := proxies.Refusal(svc); why != "" {
 		return client.ContainerCreateOptions{}, proxyErr("%s", why)
 	}
-	env := proxiedEnv(svc, buildEnv(svc, req.Env), req.ProxyID)
+	env, err := proxiedEnv(svc, buildEnv(svc, req.Env), req.ProxyID)
+	if err != nil {
+		name := svc.Name
+		if name == "" {
+			name = req.Slug
+		}
+		return client.ContainerCreateOptions{}, proxyErr("%s: %s", name, err)
+	}
 	stopTimeout := StopTimeoutSeconds(svc)
 	labels := containerLabels(req.Slug, 1)
 	labels[LabelProxy] = strconv.FormatInt(req.ProxyID, 10)

@@ -245,7 +245,10 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	facts := daemonFacts(ctx, cli)
 	image := ImageForArch(svc.Docker, facts.Architecture)
 
-	env := copyEnv(svc, buildEnv(svc, spec.Env), spec.Instance)
+	env, err := copyEnv(svc, buildEnv(svc, spec.Env), spec.Instance)
+	if err != nil {
+		return ContainerInfo{}, fmt.Errorf("%s copy %d: %w", svc.Name, spec.Instance, err)
+	}
 	ports, bindings, err := buildPorts(svc.Docker.Ports)
 	if err != nil {
 		return ContainerInfo{}, err
