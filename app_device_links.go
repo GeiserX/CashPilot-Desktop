@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	neturl "net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,29 +22,75 @@ const (
 	deviceLinkTick = 3 * time.Minute
 )
 
-// deployedDeviceID is the device id the deployment of slug runs, or "" when slug
-// is not deployed here or has no device link.
-func (a *App) deployedDeviceID(slug string) string {
+// deployedDevice says whether slug is deployed here with a device link, and the
+// device id its saved credentials hold. An error means the store could not be read,
+// which proves nothing either way.
+func (a *App) deployedDevice(slug string) (id string, deployed bool, err error) {
 	if a.store == nil || a.catalog == nil {
-		return ""
+		return "", false, nil
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok || svc.DeviceLink == nil {
-		return ""
+		return "", false, nil
 	}
-	if _, deployed, err := a.store.GetDeployment(slug); err != nil || !deployed {
-		return ""
+	if _, deployed, err = a.store.GetDeployment(slug); err != nil || !deployed {
+		return "", false, err
 	}
 	creds, err := a.store.GetCredentials(slug)
 	if err != nil {
-		return ""
+		return "", false, err
 	}
-	return strings.TrimSpace(creds[svc.DeviceLink.IDEnv])
+	return strings.TrimSpace(creds[svc.DeviceLink.IDEnv]), true, nil
+}
+
+// runsDevice is whether slug is deployed here with deviceID; false when unsure.
+func (a *App) runsDevice(slug, deviceID string) bool {
+	id, deployed, err := a.deployedDevice(slug)
+	return err == nil && deployed && id == deviceID
+}
+
+// dropOtherDeviceLinks forgets slug's pending registrations of any device but id:
+// a deploy replaced that device.
+func (a *App) dropOtherDeviceLinks(slug, id string) {
+	if a.store == nil {
+		return
+	}
+	rows, err := a.store.ListPendingDeviceLinks()
+	if err != nil {
+		return
+	}
+	for _, row := range rows {
+		if row.Slug == slug && row.DeviceID != id {
+			_ = a.store.DeletePendingDeviceLink(row.Slug, row.DeviceID)
+		}
+	}
+}
+
+// pendingDeviceLinkIDs is, per slug, every device id with a stored registration,
+// retrying or given up.
+func (a *App) pendingDeviceLinkIDs() map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	if a.store == nil {
+		return out
+	}
+	rows, err := a.store.ListPendingDeviceLinks()
+	if err != nil {
+		return out
+	}
+	for _, row := range rows {
+		if out[row.Slug] == nil {
+			out[row.Slug] = map[string]bool{}
+		}
+		out[row.Slug][row.DeviceID] = true
+	}
+	return out
 }
 
 // retryDeviceLinks retries the registrations a provider asked to try again later,
-// with backoff, and gives up after a day. A device that no longer runs here is
-// forgotten without asking the provider.
+// with backoff, and gives up after a day. A service no longer deployed here is
+// forgotten without asking the provider. A row whose id the saved credentials no
+// longer hold is left alone: credentials saved without a redeploy leave the old
+// device running, and a deploy drops the row itself (dropOtherDeviceLinks).
 func (a *App) retryDeviceLinks(ctx context.Context, now time.Time) {
 	devicesReg, ok := a.collectors.(deviceRegistry)
 	if !ok || a.store == nil {
@@ -58,11 +105,15 @@ func (a *App) retryDeviceLinks(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		if a.deployedDeviceID(row.Slug) != row.DeviceID {
+		id, deployed, err := a.deployedDevice(row.Slug)
+		if err != nil {
+			continue
+		}
+		if !deployed {
 			_ = a.store.DeletePendingDeviceLink(row.Slug, row.DeviceID)
 			continue
 		}
-		if row.GaveUp || row.NextAt.After(now) {
+		if id != row.DeviceID || row.GaveUp || row.NextAt.After(now) {
 			continue
 		}
 		creds, err := a.store.GetCredentials(row.Slug)
@@ -75,7 +126,10 @@ func (a *App) retryDeviceLinks(ctx context.Context, now time.Time) {
 		if result == collectors.RegisterAdded {
 			_ = a.store.DeletePendingDeviceLink(row.Slug, row.DeviceID)
 			a.store.RecordEvent(row.Slug, "device_linked", row.DeviceID+" added to the account")
-			a.setAddedDevice(row.Slug, row.DeviceID)
+			// A redeploy during the call may have put another device in its place.
+			if a.runsDevice(row.Slug, row.DeviceID) {
+				a.setAddedDevice(row.Slug, row.DeviceID)
+			}
 			continue
 		}
 		attempts := row.Attempts + 1
@@ -138,7 +192,7 @@ func (a *App) retryingDeviceIDs() map[string]string {
 		return out
 	}
 	for _, row := range rows {
-		if !row.GaveUp {
+		if !row.GaveUp && a.runsDevice(row.Slug, row.DeviceID) {
 			out[row.Slug] = row.DeviceID
 		}
 	}
@@ -146,10 +200,13 @@ func (a *App) retryingDeviceIDs() map[string]string {
 }
 
 // deviceLinkGaveUpNotifications tells the user about every device the provider
-// never accepted after a day of retries and that still runs here. Read from the
-// store, so a restart cannot drop one.
+// never accepted after a day of retries, that still runs here, and that the
+// provider's last check still says is not on the account: a device the user then
+// adds by hand stops being reported at the next check. Read from the store, so a
+// restart cannot drop one.
 func (a *App) deviceLinkGaveUpNotifications() []Notification {
-	if a.store == nil || a.catalog == nil {
+	devicesReg, ok := a.collectors.(deviceRegistry)
+	if !ok || a.store == nil || a.catalog == nil {
 		return nil
 	}
 	rows, err := a.store.ListPendingDeviceLinks()
@@ -159,7 +216,8 @@ func (a *App) deviceLinkGaveUpNotifications() []Notification {
 	var items []Notification
 	for _, row := range rows {
 		svc, ok := a.catalog.Get(row.Slug)
-		if !row.GaveUp || !ok || svc.DeviceLink == nil || a.deployedDeviceID(row.Slug) != row.DeviceID {
+		if !row.GaveUp || !ok || svc.DeviceLink == nil || !a.runsDevice(row.Slug, row.DeviceID) ||
+			!slices.Contains(devicesReg.Unlinked(row.Slug), row.DeviceID) {
 			continue
 		}
 		url := strings.ReplaceAll(svc.DeviceLink.URL, "${"+svc.DeviceLink.IDEnv+"}", neturl.PathEscape(row.DeviceID))

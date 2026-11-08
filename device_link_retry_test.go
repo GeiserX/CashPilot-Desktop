@@ -76,6 +76,11 @@ func TestADeviceTheProviderDoesNotKnowYetIsStoredToRetry(t *testing.T) {
 	if _, ok := app.addedDeviceIDs()["linked"]; ok {
 		t.Fatal("a device the provider does not know yet is not added")
 	}
+	// No "add it by hand" warning while the app is still adding it.
+	app.collectors.(*fakeDevices).unlinked = map[string][]string{"linked": {retryUUID}}
+	if n := app.unlinkedDeviceNotifications([]store.Deployment{{Slug: "linked"}}); len(n) != 0 {
+		t.Fatalf("a device being retried got the manual-step warning: %+v", n)
+	}
 }
 
 func TestARetryThatSucceedsMarksTheDeviceAdded(t *testing.T) {
@@ -123,6 +128,7 @@ func TestARetryTheProviderStillRefusesBacksOff(t *testing.T) {
 
 func TestAfterADayItGivesUpAndTellsTheUser(t *testing.T) {
 	app, devices := retryApp(t, collectors.RegisterPending)
+	devices.unlinked = map[string][]string{"linked": {retryUUID}}
 	now := time.Now()
 	due(t, app, now.Add(-25*time.Hour), 8)
 
@@ -146,21 +152,22 @@ func TestAfterADayItGivesUpAndTellsTheUser(t *testing.T) {
 		!strings.Contains(found.Message, "Open the link.") || !strings.Contains(found.Message, "https://example.test/r/"+retryUUID) {
 		t.Fatalf("want a warning naming the device, its step and link, got %+v", found)
 	}
+	if n := app.unlinkedDeviceNotifications([]store.Deployment{{Slug: "linked"}}); len(n) != 0 {
+		t.Fatalf("one notice per device, but the generic warning fired too: %+v", n)
+	}
+	// The user adds it by hand: the provider's next check says it is on the account.
+	devices.unlinked = nil
+	if n := app.deviceLinkGaveUpNotifications(); len(n) != 0 {
+		t.Fatalf("a device now on the account still warned: %+v", n)
+	}
 }
 
-func TestADeviceThatNoLongerRunsIsDroppedWithoutAsking(t *testing.T) {
+func TestAServiceThatIsRemovedIsDroppedWithoutAsking(t *testing.T) {
 	app, devices := retryApp(t, collectors.RegisterAdded)
 	now := time.Now()
-	due(t, app, now.Add(-25*time.Hour), 8)
-	if err := app.store.UpdatePendingDeviceLink("linked", retryUUID, 8, now, true); err != nil {
+	due(t, app, now.Add(-10*time.Minute), 0)
+	if err := app.store.DeleteDeployment("linked"); err != nil {
 		t.Fatal(err)
-	}
-	// The service was redeployed with another device id.
-	if err := app.store.SaveCredentials("linked", map[string]string{"UUID": "dev-2"}); err != nil {
-		t.Fatal(err)
-	}
-	if n := app.deviceLinkGaveUpNotifications(); len(n) != 0 {
-		t.Fatalf("a device that no longer runs warns nobody, got %+v", n)
 	}
 
 	app.retryDeviceLinks(context.Background(), now)
@@ -170,6 +177,39 @@ func TestADeviceThatNoLongerRunsIsDroppedWithoutAsking(t *testing.T) {
 	}
 	if rows := pending(t, app); len(rows) != 0 {
 		t.Fatalf("want the row dropped, got %+v", rows)
+	}
+}
+
+func TestCredentialsSavedWithoutARedeployKeepTheRunningDevicesRetry(t *testing.T) {
+	app, devices := retryApp(t, collectors.RegisterAdded)
+	now := time.Now()
+	due(t, app, now.Add(-10*time.Minute), 0)
+	// The old container still runs dev-1; only the saved form changed.
+	if err := app.store.SaveCredentials("linked", map[string]string{"UUID": "dev-2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	app.retryDeviceLinks(context.Background(), now)
+
+	if len(devices.asked) != 0 {
+		t.Fatalf("the saved id is not the running one, so nothing can be added; asked %v", devices.asked)
+	}
+	if rows := pending(t, app); len(rows) != 1 || rows[0].DeviceID != retryUUID {
+		t.Fatalf("the running device's retry must stay, got %+v", rows)
+	}
+	if _, ok := app.retryingDeviceIDs()["linked"]; ok {
+		t.Fatal("the form's id is not being retried, so the deploy output must not say it is")
+	}
+}
+
+func TestARedeployWithAnotherDeviceDropsTheOldRetry(t *testing.T) {
+	app, _ := retryApp(t, collectors.RegisterFailed)
+	due(t, app, time.Now().Add(-10*time.Minute), 0)
+
+	app.registerDevice("linked", map[string]string{"UUID": "dev-2"})
+
+	if rows := pending(t, app); len(rows) != 0 {
+		t.Fatalf("the replaced device's retry must go, got %+v", rows)
 	}
 }
 

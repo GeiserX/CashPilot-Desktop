@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -689,6 +690,7 @@ func (a *App) registerDevice(slug string, creds map[string]string) {
 		return
 	}
 	id := strings.TrimSpace(creds[svc.DeviceLink.IDEnv])
+	a.dropOtherDeviceLinks(slug, id)
 	ctx, cancel := context.WithTimeout(a.ctx, 20*time.Second)
 	defer cancel()
 	result := devicesReg.RegisterDevice(ctx, slug, creds)
@@ -1909,9 +1911,12 @@ func (a *App) unlinkedDeviceNotifications(deployments []store.Deployment) []Noti
 	if !ok || a.catalog == nil {
 		return nil
 	}
+	// A device with a stored registration is being retried, or has its own
+	// give-up notice (app_device_links.go).
+	pending := a.pendingDeviceLinkIDs()
 	var items []Notification
 	for _, dep := range deployments {
-		ids := devicesReg.Unlinked(dep.Slug)
+		ids := slices.DeleteFunc(devicesReg.Unlinked(dep.Slug), func(id string) bool { return pending[dep.Slug][id] })
 		svc, inCatalog := a.catalog.Get(dep.Slug)
 		if len(ids) == 0 || !inCatalog || svc.DeviceLink == nil {
 			continue
