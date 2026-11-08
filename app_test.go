@@ -390,7 +390,9 @@ type fakeCollector struct {
 
 	inFlight atomic.Int32
 	maxSeen  atomic.Int32
-	hold     time.Duration
+	// gate, when set, parks every collect until it is closed, so a test can keep a
+	// run open for as long as it needs instead of guessing with a sleep.
+	gate chan struct{}
 }
 
 func newFakeCollector(supported, fail []string) *fakeCollector {
@@ -423,8 +425,8 @@ func (f *fakeCollector) Collect(_ context.Context, slug string, _ map[string]str
 			break
 		}
 	}
-	if f.hold > 0 {
-		time.Sleep(f.hold)
+	if f.gate != nil {
+		<-f.gate
 	}
 	f.inFlight.Add(-1)
 
@@ -584,20 +586,42 @@ func TestCollectAllCollectsCredentialOnlyServicesAndDedups(t *testing.T) {
 // (Within that one run the services now collect CONCURRENTLY, bounded by
 // collectConcurrency, so max-concurrent-collects may exceed 1 — that is expected and is
 // a separate property, asserted only to be within the bound.)
+//
+// The run that wins is parked on the fake's gate until every other call has
+// returned. A sleep used to stand in for that, and on a slow runner a call could
+// start after the first run had finished, which is a legitimate second run and
+// failed the test with 6 collects.
 func TestCollectAllSingleFlight(t *testing.T) {
 	fake := newFakeCollector([]string{"svc-a", "svc-b", "svc-c"}, nil)
-	fake.hold = 2 * time.Millisecond // hold each collect so overlapping runs would be observable
+	fake.gate = make(chan struct{})
 	app, _, cancel := newSchedulerTestApp(t, fake, "svc-a", "svc-b", "svc-c")
 	defer cancel()
 
+	const callers = 8
+	returned := make(chan struct{}, callers)
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := 0; i < callers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			app.collectAll(context.Background())
+			returned <- struct{}{}
 		}()
 	}
+
+	// A call can only return while the gate is shut by bailing on the guard, so
+	// callers-1 returns means exactly one run holds the guard and is parked.
+	deadline := time.After(10 * time.Second)
+	for got := 0; got < callers-1; got++ {
+		select {
+		case <-returned:
+		case <-deadline:
+			close(fake.gate)
+			wg.Wait()
+			t.Fatalf("single-flight violated: only %d of %d calls bailed while one run was in progress", got, callers-1)
+		}
+	}
+	close(fake.gate)
 	wg.Wait()
 
 	// Single-flight: exactly one collectAll body ran, so the 3 services were collected

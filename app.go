@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	neturl "net/url"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -101,6 +103,8 @@ type App struct {
 	usageStop func()
 	// proxyStop stops the proxied-copies pass (app_proxies.go) and waits for it.
 	proxyStop func()
+	// deviceLinkStop stops the device-registration retry pass (app_device_links.go).
+	deviceLinkStop func()
 	// activity is the Activity sampler (activity_sampler.go): off until the owner switches it on.
 	activity activityState
 }
@@ -127,7 +131,7 @@ type collectorRegistry interface {
 // collectorRegistry need not implement it.
 type deviceRegistry interface {
 	Unlinked(slug string) []string
-	RegisterDevice(ctx context.Context, slug string, credentials map[string]string) bool
+	RegisterDevice(ctx context.Context, slug string, credentials map[string]string) collectors.Registration
 }
 
 func NewApp() *App {
@@ -254,6 +258,8 @@ func (a *App) startCore(ctx context.Context) error {
 	a.startUsageSampler(ctx)
 	// Proxied copies: traffic per proxy, the cap, and earners whose tunnel came back.
 	a.startProxyTicker(ctx)
+	// Device registrations the provider asked to retry later.
+	a.startDeviceLinkRetry(ctx)
 	// What each earner talks to, when the owner switched Activity on.
 	a.startActivitySampler(ctx)
 	// Optional, and a no-op unless the user paired this Desktop with a
@@ -296,6 +302,7 @@ func (a *App) Shutdown(_ context.Context) {
 	a.stopScheduler()
 	a.stopUsageSampler()
 	a.stopProxyTicker()
+	a.stopDeviceLinkRetry()
 	a.stopActivitySampler()
 	a.stopUpstream()
 	if a.fleetAPI != nil {
@@ -356,6 +363,9 @@ type AppState struct {
 	// AddedDevices is, per slug, the device id the last deploy added to the user's
 	// account itself (ProxyRack with its API key saved), so no manual step is needed.
 	AddedDevices map[string]string `json:"addedDevices"`
+	// RetryingDevices is, per slug, the device id the provider did not know yet at
+	// deploy time and the app keeps trying to add to the account for a day.
+	RetryingDevices map[string]string `json:"retryingDevices"`
 	// StateBackups lists the deployed services whose catalog entry marks state as
 	// irreplaceable, and whether the user has a backup of it.
 	StateBackups []statebackup.Row `json:"stateBackups"`
@@ -550,6 +560,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Scaling:          a.services.ScalingLimits(visible),
 		Copies:           a.services.Copies(),
 		AddedDevices:     a.addedDeviceIDs(),
+		RetryingDevices:  a.retryingDeviceIDs(),
 		StateBackups:     a.stateBackups(deployments),
 		Drift:            a.containerDrift(),
 		Isolation:        a.isolationStatus(),
@@ -670,26 +681,44 @@ func (a *App) addedDeviceIDs() map[string]string {
 // registerDevice adds a just-deployed device to the user's account where the
 // provider's API can (ProxyRack, with its API key among the credentials). It never
 // fails the deploy, which has already happened: anything short of "on the account"
-// leaves the manual step in the deploy output.
+// leaves the manual step in the deploy output, except a device the provider does
+// not know yet, which is stored and retried (app_device_links.go).
 func (a *App) registerDevice(slug string, creds map[string]string) {
 	devicesReg, ok := a.collectors.(deviceRegistry)
 	svc, inCatalog := a.catalog.Get(slug)
 	if !ok || !inCatalog || svc.DeviceLink == nil {
 		return
 	}
+	id := strings.TrimSpace(creds[svc.DeviceLink.IDEnv])
+	a.dropOtherDeviceLinks(slug, id)
 	ctx, cancel := context.WithTimeout(a.ctx, 20*time.Second)
 	defer cancel()
-	added := devicesReg.RegisterDevice(ctx, slug, creds)
-	a.addedMu.Lock()
-	defer a.addedMu.Unlock()
-	if !added {
+	result := devicesReg.RegisterDevice(ctx, slug, creds)
+	if result == collectors.RegisterPending && a.store != nil {
+		now := time.Now()
+		if err := a.store.SavePendingDeviceLink(slug, id, now, now.Add(deviceLinkFirstRetry)); err != nil {
+			log.Printf("device links: store %s: %v", slug, err)
+		}
+	}
+	if result == collectors.RegisterAdded && a.store != nil {
+		_ = a.store.DeletePendingDeviceLink(slug, id)
+	}
+	if result != collectors.RegisterAdded {
+		a.addedMu.Lock()
 		delete(a.addedDevices, slug)
+		a.addedMu.Unlock()
 		return
 	}
+	a.setAddedDevice(slug, id)
+}
+
+func (a *App) setAddedDevice(slug, id string) {
+	a.addedMu.Lock()
+	defer a.addedMu.Unlock()
 	if a.addedDevices == nil {
 		a.addedDevices = map[string]string{}
 	}
-	a.addedDevices[slug] = strings.TrimSpace(creds[svc.DeviceLink.IDEnv])
+	a.addedDevices[slug] = id
 }
 
 // GetEarningsSummary returns the converted, aggregated earnings summary on its
@@ -1865,6 +1894,7 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 		}
 	}
 	items = append(items, a.unlinkedDeviceNotifications(deployments)...)
+	items = append(items, a.deviceLinkGaveUpNotifications()...)
 	items = append(items, a.proxyNotifications()...)
 	items = append(items, a.activityNotifications()...)
 	if len(deployments) == 0 {
@@ -1881,9 +1911,12 @@ func (a *App) unlinkedDeviceNotifications(deployments []store.Deployment) []Noti
 	if !ok || a.catalog == nil {
 		return nil
 	}
+	// A device with a stored registration is being retried, or has its own
+	// give-up notice (app_device_links.go).
+	pending := a.pendingDeviceLinkIDs()
 	var items []Notification
 	for _, dep := range deployments {
-		ids := devicesReg.Unlinked(dep.Slug)
+		ids := slices.DeleteFunc(devicesReg.Unlinked(dep.Slug), func(id string) bool { return pending[dep.Slug][id] })
 		svc, inCatalog := a.catalog.Get(dep.Slug)
 		if len(ids) == 0 || !inCatalog || svc.DeviceLink == nil {
 			continue

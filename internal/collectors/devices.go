@@ -136,39 +136,63 @@ func (r *Registry) checkProxyRackDevice(ctx context.Context, apiKey, uuid string
 	}
 }
 
+// Registration is what RegisterDevice made of a device.
+type Registration int
+
+const (
+	// RegisterFailed: not on the account, or this provider has no way to add it;
+	// the deploy output shows the manual step.
+	RegisterFailed Registration = iota
+	// RegisterAdded: the device is on the account.
+	RegisterAdded
+	// RegisterPending: the provider has not seen the device yet and says to try
+	// again later. A new ProxyRack UUID is unknown until its client has been
+	// connected for about five minutes; the app keeps retrying it.
+	RegisterPending
+)
+
 // RegisterDevice adds a just-deployed device to the user's account, where the
 // provider's API allows it and the credentials hold the key: today ProxyRack, with
 // /device/add, the call its own dashboard makes. A redeploy adds a UUID that is
 // already there, which the API refuses, so a refused add is followed by one status
-// check: a known id is linked. Returns whether the device is on the account
-// afterwards; false also means "this provider cannot do it", and the deploy output
-// then shows the manual step.
-func (r *Registry) RegisterDevice(ctx context.Context, slug string, credentials map[string]string) bool {
+// check: a known id is linked.
+func (r *Registry) RegisterDevice(ctx context.Context, slug string, credentials map[string]string) Registration {
 	if slug != "proxyrack" {
-		return false
+		return RegisterFailed
 	}
 	apiKey := firstCredential(credentials, "API_KEY", "PROXYRACK_API_KEY", "api_key")
 	uuid := strings.TrimSpace(credentials["UUID"])
 	if apiKey == "" || uuid == "" {
-		return false
+		return RegisterFailed
 	}
 	name := strings.TrimSpace(credentials["DEVICE_NAME"])
 	if name == "" || strings.Contains(name, "${") {
 		name = "cashpilot-" + uuid[:min(8, len(uuid))]
 	}
 	r.noteDevice("proxyrack", uuid)
+	raw, status, _, err := r.doRaw(ctx, "POST", proxyRackAddURL, map[string]string{"device_id": uuid, "device_name": name}, proxyRackHeaders(apiKey), nil)
 	var added struct {
-		Status string `json:"status"`
+		Status  string `json:"status"`
+		Details struct {
+			DeviceID string `json:"device_id"`
+		} `json:"details"`
 	}
-	status, err := r.doJSONStatus(ctx, "POST", proxyRackAddURL, map[string]string{"device_id": uuid, "device_name": name}, proxyRackHeaders(apiKey), nil, &added)
+	if err == nil {
+		_ = json.Unmarshal(raw, &added) // a body of another shape just matches nothing below
+	}
 	linked := err == nil && status == http.StatusOK && added.Status == "success"
+	if !linked && err == nil && status == http.StatusBadRequest &&
+		strings.Contains(strings.ToLower(added.Details.DeviceID), "try again") {
+		return RegisterPending
+	}
 	if !linked {
 		linked = r.proxyRackStatus(ctx, apiKey, uuid) == "linked"
 	}
-	if linked {
-		r.recordDeviceCheck("proxyrack", uuid, true)
+	if !linked {
+		return RegisterFailed
 	}
-	return linked
+	r.recordDeviceCheck("proxyrack", uuid, true)
+	return RegisterAdded
 }
 
 func proxyRackHeaders(apiKey string) map[string]string {

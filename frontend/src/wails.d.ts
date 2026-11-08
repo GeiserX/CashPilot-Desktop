@@ -300,6 +300,9 @@ export interface AppState {
   copies: Record<string, ServiceCopy[]> | null;
   // Per slug, the device id the last deploy added to the user's account itself.
   addedDevices: Record<string, string> | null;
+  // Per slug, the device id the provider did not know yet at deploy time; the app
+  // keeps trying to add it to the account for a day.
+  retryingDevices: Record<string, string> | null;
   // Deployed services whose catalog marks state irreplaceable, and whether the
   // user has a backup of it (the amber card under Needs attention).
   stateBackups: StateBackupRow[] | null;

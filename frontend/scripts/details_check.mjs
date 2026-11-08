@@ -298,6 +298,16 @@ check(
   "an added id that is not this one keeps the manual step",
   deviceLinkText(earnapp, {EARNAPP_UUID: uuid}, "other").startsWith("Link this device"),
 );
+const retrying = deviceLinkText(earnapp, {EARNAPP_UUID: uuid}, "", uuid);
+check(
+  "a device the app is still trying to add says so instead of the manual step, and keeps the link",
+  retrying.includes("keeps trying to add it") && !retrying.includes("Open this link") && retrying.includes(`https://earnapp.com/r/${uuid}`),
+  retrying,
+);
+check(
+  "a retrying id that is not this one keeps the manual step",
+  deviceLinkText(earnapp, {EARNAPP_UUID: uuid}, "", "other").includes("Open this link while signed in."),
+);
 check("a service with no device link gets nothing", deviceLinkText(honeygain, {EARNAPP_UUID: uuid}) === "");
 
 // ---------------------------------------------------------------------------

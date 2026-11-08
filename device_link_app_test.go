@@ -7,6 +7,7 @@ import (
 	"testing/fstest"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
@@ -15,13 +16,13 @@ import (
 type fakeDevices struct {
 	*fakeCollector
 	unlinked map[string][]string
-	register bool
+	register collectors.Registration
 	asked    []string
 }
 
 func (f *fakeDevices) Unlinked(slug string) []string { return f.unlinked[slug] }
 
-func (f *fakeDevices) RegisterDevice(_ context.Context, slug string, _ map[string]string) bool {
+func (f *fakeDevices) RegisterDevice(_ context.Context, slug string, _ map[string]string) collectors.Registration {
 	f.asked = append(f.asked, slug)
 	return f.register
 }
@@ -68,7 +69,7 @@ func TestADeviceTheProviderDoesNotKnowIsAWarning(t *testing.T) {
 }
 
 func TestDeployRecordsADeviceTheProviderAdded(t *testing.T) {
-	devices := &fakeDevices{fakeCollector: newFakeCollector(nil, nil), register: true}
+	devices := &fakeDevices{fakeCollector: newFakeCollector(nil, nil), register: collectors.RegisterAdded}
 	app := &App{ctx: context.Background(), catalog: deviceLinkCatalog(t), collectors: devices}
 
 	app.registerDevice("linked", map[string]string{"UUID": " dev-1 "})
@@ -76,7 +77,7 @@ func TestDeployRecordsADeviceTheProviderAdded(t *testing.T) {
 		t.Fatalf("addedDevices[linked] = %q, want dev-1", got)
 	}
 
-	devices.register = false
+	devices.register = collectors.RegisterFailed
 	app.registerDevice("linked", map[string]string{"UUID": "dev-1"})
 	if _, ok := app.addedDeviceIDs()["linked"]; ok {
 		t.Fatal("a failed add must leave the manual step, not a stale 'added'")

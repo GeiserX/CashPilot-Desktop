@@ -1048,7 +1048,7 @@ async function runImportDeploy(slug: string) {
     state = await GetAppState();
     // The saved values hold the device id; the step is the one the wizard shows.
     const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
-    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "");
+    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
     if (link) importLinks = { ...importLinks, [slug]: link };
     renderImportIfShown();
   } catch (error) {
@@ -1988,7 +1988,7 @@ async function runWizardAction(slug: string, action: string) {
         instancesInput.value = String(deployment.instances || 1);
         instancesInput.dataset.initial = String(deployment.instances || 1);
       }
-      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "");
+      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
       if (output) output.textContent = link ? `Deployed.\n\n${link}` : "Deployed.";
       return;
     }

@@ -144,17 +144,23 @@ func TestRegisterDeviceAddsAProxyRackUUIDWithTheSavedKey(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		routes map[string]stubResponse
-		want   bool
+		want   Registration
 	}{
-		{"added", map[string]stubResponse{proxyRackAdd: {body: `{"status":"success","message":"Device added successfully","data":{}}`}}, true},
+		{"added", map[string]stubResponse{proxyRackAdd: {body: `{"status":"success","message":"Device added successfully","data":{}}`}}, RegisterAdded},
 		{"already on the account", map[string]stubResponse{
 			proxyRackAdd:    {status: 400, body: `{"status":"error","error":"Invalid request parameters","details":{"device_id":"taken"}}`},
 			proxyRackStatus: {body: onlineBody},
-		}, true},
+		}, RegisterAdded},
 		{"rate limited", map[string]stubResponse{
 			proxyRackAdd:    {status: 400, body: rateLimitedBody},
 			proxyRackStatus: {status: 400, body: rateLimitedBody},
-		}, false},
+		}, RegisterFailed},
+		// A new UUID is unknown until its client has been connected for about five
+		// minutes; ProxyRack says so, and the app must retry instead of giving up.
+		{"not seen yet", map[string]stubResponse{
+			proxyRackAdd:    {status: 400, body: `{"status":"error","error":"Invalid request parameters","details":{"device_id":"Device not found. If you recently installed a device it may take 5 minutes before it is found in our system. Please try again in 5 minutes."}}`},
+			proxyRackStatus: {status: 400, body: `{"status":"error","details":{"device_id":"The selected device id is invalid."}}`},
+		}, RegisterPending},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stub := &stubTransport{routes: tc.routes}
@@ -167,10 +173,10 @@ func TestRegisterDeviceAddsAProxyRackUUIDWithTheSavedKey(t *testing.T) {
 
 	stub := &stubTransport{routes: map[string]stubResponse{proxyRackAdd: {body: `{"status":"success"}`}}}
 	r := newTestRegistry(t, stub)
-	if r.RegisterDevice(context.Background(), "proxyrack", map[string]string{"UUID": testProxyRackUUID}) {
+	if r.RegisterDevice(context.Background(), "proxyrack", map[string]string{"UUID": testProxyRackUUID}) != RegisterFailed {
 		t.Fatal("without an API key nothing can be added")
 	}
-	if r.RegisterDevice(context.Background(), "earnapp", map[string]string{"EARNAPP_UUID": testEarnAppUUID, "EARNAPP_OAUTH_TOKEN": "t"}) {
+	if r.RegisterDevice(context.Background(), "earnapp", map[string]string{"EARNAPP_UUID": testEarnAppUUID, "EARNAPP_OAUTH_TOKEN": "t"}) != RegisterFailed {
 		t.Fatal("EarnApp has no API to add a device; its step stays manual")
 	}
 }
