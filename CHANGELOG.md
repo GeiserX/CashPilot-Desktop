@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **1.0.0 is the first stable release.** Nothing breaks: config, database, saved credentials and deployed services carry over. An install from before v0.37.0 keeps its earners on Docker's default bridge until Turn on isolation is pressed, and a proxied copy from before v0.39.1 keeps its tunnel there until it is deployed again. `wails.json`, `package.json` and `frontend/package.json` now say 1.0.0; release builds still take the version from the tag. What 1.0 covers, upgrade notes and known limits: docs/whats-new-1.0.md.
+
 ### Fixed
 
 - **UpRock said you could cash out at $5.** Its minimum is 250 UPT. The catalog now says so, and UPT gets a price from CoinGecko, so the app can compare an UpRock balance with that minimum. USDT and USDC get prices too, so a cash-out recorded in either counts toward the totals.
