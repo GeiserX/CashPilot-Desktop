@@ -130,6 +130,13 @@ func (p *DockerProvider) SetIsolationSetting(read func() string) {
 	p.fence.setting = read
 }
 
+// SetFenceGated wires in which services the catalog marks fence_gated, so the fence
+// also covers a container made before LabelFenceGated existed (a Mysterium deployed
+// on the host's network by an older version). Call it before the first deploy.
+func (p *DockerProvider) SetFenceGated(gated func(slug string) bool) {
+	p.fence.gatedSlug = gated
+}
+
 // SetIsolationMemory wires in where "isolation is on" is kept, so a worker stays
 // fenced after Docker loses every trace of it. Call it before the first deploy.
 func (p *DockerProvider) SetIsolationMemory(read func() bool, write func(on bool)) {
@@ -312,6 +319,12 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// Which network a bridge earner joins is settled on this side of the line too: if
 	// the LAN fence cannot be applied, the deploy is refused and the running container
 	// keeps earning. A Windows-containers daemon has no Linux bridge to fence.
+	if svc.Docker.FenceGated {
+		// From the fence check to the start: a reconcile that turns isolation off
+		// in between would reduce the fence under a node about to start.
+		p.fence.reconcileMu.Lock()
+		defer p.fence.reconcileMu.Unlock()
+	}
 	fenced := ""
 	if hostConfig.NetworkMode == "bridge" && facts.OSType == "linux" {
 		fenced, err = p.fence.networkForDeploy(ctx, cli)
@@ -422,18 +435,48 @@ func (p *DockerProvider) Start(ctx context.Context, slug string) error {
 		return err
 	}
 	defer cli.Close()
-	if err := p.gatedStartProblem(ctx, cli, containerName(slug)); err != nil {
+	name := containerName(slug)
+	return p.startGuarded(ctx, cli, name, func() error {
+		_, err := cli.ContainerStart(ctx, name, client.ContainerStartOptions{})
+		return err
+	})
+}
+
+// startGuarded runs start for name. A fence-gated container is started only behind
+// the fence (gatedStartProblem), with the reconcile lock held from the check to the
+// start so a reconcile cannot reduce the fence between them. Other containers take
+// no lock, so their starts never wait on the fence helper.
+func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, name string, start func() error) error {
+	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		// Whether it is fence-gated cannot be known, so the start fails closed.
+		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+	}
+	if got.Container.Config == nil || !p.fence.isGated(got.Container.Config.Labels) {
+		return start()
+	}
+	p.fence.reconcileMu.Lock()
+	defer p.fence.reconcileMu.Unlock()
+	if err := p.gatedStartProblem(ctx, cli, name); err != nil {
 		return err
 	}
-	_, err = cli.ContainerStart(ctx, containerName(slug), client.ContainerStartOptions{})
-	return err
+	return start()
 }
 
 // gatedStartProblem refuses to start a fence-gated container unless the fence is on
 // and has just been applied: a stop while isolation was off must stay a stop.
+// The caller holds p.fence.reconcileMu. It inspects again under the lock, and a
+// container that cannot be inspected is refused.
 func (p *DockerProvider) gatedStartProblem(ctx context.Context, cli *client.Client, name string) error {
 	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
-	if err != nil || got.Container.Config == nil || got.Container.Config.Labels[LabelFenceGated] != "true" {
+	if err != nil {
+		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+	}
+	var labels map[string]string
+	if got.Container.Config != nil {
+		labels = got.Container.Config.Labels
+	}
+	if !p.fence.isGated(labels) {
 		return nil
 	}
 	fenced, err := p.fence.networkForDeploy(ctx, cli)
@@ -443,7 +486,35 @@ func (p *DockerProvider) gatedStartProblem(ctx context.Context, cli *client.Clie
 	if fenced != FenceNetwork {
 		return fmt.Errorf("%s runs only behind the LAN fence, and LAN isolation is %s here. Set it to auto or on in Settings first", name, p.fence.Status().Mode)
 	}
+	if problem := onlyOnFence(got.Container); problem != "" {
+		return fmt.Errorf("%s runs only behind the LAN fence, but %s. Redeploy it from the dashboard, which puts it back on the fence", name, problem)
+	}
 	return nil
+}
+
+// onlyOnFence is why a container is not on the fenced network alone, or "": a node
+// made before the fence (host networking) or moved to another network would start
+// with access the fence does not cover.
+func onlyOnFence(c container.InspectResponse) string {
+	if c.HostConfig == nil || string(c.HostConfig.NetworkMode) != FenceNetwork {
+		mode := ""
+		if c.HostConfig != nil {
+			mode = string(c.HostConfig.NetworkMode)
+		}
+		return fmt.Sprintf("its network mode is %q", mode)
+	}
+	if c.NetworkSettings == nil {
+		return "Docker did not say which networks it is attached to"
+	}
+	for name := range c.NetworkSettings.Networks {
+		if name != FenceNetwork {
+			return "it is also attached to " + name
+		}
+	}
+	if _, ok := c.NetworkSettings.Networks[FenceNetwork]; !ok {
+		return "it is not attached to " + FenceNetwork
+	}
+	return ""
 }
 
 func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error {
@@ -453,12 +524,11 @@ func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSe
 	}
 	defer cli.Close()
 	name := containerName(slug)
-	if err := p.gatedStartProblem(ctx, cli, name); err != nil {
-		return err
-	}
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
-	_, err = cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
-	return err
+	return p.startGuarded(ctx, cli, name, func() error {
+		_, err := cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
+		return err
+	})
 }
 
 // PlanRemoval reports what removing this service would delete.

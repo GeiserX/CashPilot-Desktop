@@ -191,12 +191,14 @@ type fence struct {
 	// (NAT loopback), so the table drops that address too. egress and egressAt cache
 	// it; mu guards them.
 	lookupEgress func(ctx context.Context) string
-	egress       string
-	egressAt     time.Time
-	mu           sync.Mutex // the helper and the apply sequence
-	reconcileMu  sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
-	stateMu      sync.Mutex // status
-	status       FenceStatus
+	// gatedSlug reports a service the catalog marks fence_gated (SetFenceGated).
+	gatedSlug   func(slug string) bool
+	egress      string
+	egressAt    time.Time
+	mu          sync.Mutex // the helper and the apply sequence
+	reconcileMu sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
+	stateMu     sync.Mutex // status
+	status      FenceStatus
 }
 
 // FenceSetting normalises a Settings value: auto, on or off. Anything else is auto.
@@ -955,9 +957,10 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		f.setStatus(func(s *FenceStatus) { s.State, s.Error = "failed", err.Error() })
 		return
 	}
+	var gatedErr error
 	if mode != FenceModeOn {
 		// Before the drops go: a fence-gated earner must not outlive the fence.
-		stopGated(ctx, cli)
+		gatedErr = f.stopGated(ctx, cli)
 	}
 	switch {
 	case mode == FenceModeOn:
@@ -965,6 +968,12 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		if fresh, err := listEarners(ctx, cli); err == nil {
 			earners = fresh
 		}
+	case mode == FenceModeOff && net != nil && gatedErr != nil:
+		// The drops stay until every fence-gated earner is stopped; the next
+		// reconcile tries again.
+		f.setStatus(func(s *FenceStatus) {
+			s.State, s.Error = "failed", gatedErr.Error()+". The LAN fence was kept"
+		})
 	case mode == FenceModeOff && net != nil:
 		f.reduce(ctx, cli, net)
 	case mode == FenceModeUnsupported:
@@ -980,27 +989,49 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 	f.setOutside(mode, earners)
 }
 
-// stopGated stops every running fence-gated container (LabelFenceGated). An explicit
-// stop, so a restart policy of unless-stopped does not bring it back; Start refuses
-// it until isolation is on again. Best effort: a failure shows as the container
-// still running, which the dashboard reports.
-func stopGated(ctx context.Context, cli fenceAPI) []string {
-	res, err := cli.ContainerList(ctx, client.ContainerListOptions{Filters: make(client.Filters).Add("label", LabelFenceGated+"=true")})
-	if err != nil {
-		return nil
+// isGated reports a fence-gated container: labelled so at deploy, or a service the
+// catalog marks fence_gated, which covers containers made before the label.
+func (f *fence) isGated(labels map[string]string) bool {
+	if labels[LabelFenceGated] == "true" {
+		return true
 	}
-	var stopped []string
+	return f.gatedSlug != nil && labels[LabelService] != "" && f.gatedSlug(labels[LabelService])
+}
+
+// stopGated stops every fence-gated container that is running or that Docker is
+// about to restart. An explicit stop, so a restart policy of unless-stopped does not
+// bring it back; Start refuses it until isolation is on again. An error means one
+// may still be running, and the caller must keep the fence.
+func (f *fence) stopGated(ctx context.Context, cli fenceAPI) error {
+	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true")})
+	if err != nil {
+		return fmt.Errorf("could not list the fence-gated earners: %w", err)
+	}
+	var failed []string
 	for _, c := range res.Items {
-		// The filter already says so; a runtime that ignores it must not get every
-		// earner stopped.
-		if c.Labels[LabelFenceGated] != "true" || c.State != container.StateRunning {
+		if !f.isGated(c.Labels) {
 			continue
 		}
-		if _, err := cli.ContainerStop(ctx, c.ID, client.ContainerStopOptions{}); err == nil {
-			stopped = append(stopped, c.ID)
+		// A restarting container is stopped too, or Docker would bring it back
+		// after the drops are gone, past the app's Start guard.
+		if c.State != container.StateRunning && c.State != container.StateRestarting {
+			continue
+		}
+		if _, err := cli.ContainerStop(ctx, c.ID, client.ContainerStopOptions{}); err != nil {
+			failed = append(failed, strings.TrimPrefix(firstName(c.Names), "/"))
 		}
 	}
-	return stopped
+	if len(failed) > 0 {
+		return fmt.Errorf("could not stop %s, which runs only behind the LAN fence", strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+func firstName(names []string) string {
+	if len(names) == 0 {
+		return "a fence-gated earner"
+	}
+	return names[0]
 }
 
 // refreshOutside recounts the earners outside the fence after a deploy or removal,
