@@ -44,3 +44,30 @@ docker:
 		t.Errorf("probe keys lost on the way through: %v", expect)
 	}
 }
+
+// TestHealthProbeNonFiniteFloatMarshals. YAML .nan, .inf and -.inf decode to
+// float64 NaN and Inf, which encoding/json refuses just like map[any]any.
+func TestHealthProbeNonFiniteFloatMarshals(t *testing.T) {
+	fsys := fstest.MapFS{"services/x/a.yml": {Data: []byte(`
+name: A
+slug: a
+docker:
+  image: a:1
+  health_probe:
+    threshold: .nan
+    checks:
+      - {max: .inf, min: -.inf, ok: 1.5}
+`)}}
+	cat, err := LoadEmbedded(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := json.Marshal(cat.ListVisible()); err != nil {
+		t.Fatalf("service list with a non-finite health_probe float must marshal to JSON: %v", err)
+	}
+	p := mustGet(t, cat, "a").Docker.HealthProbe
+	c := p["checks"].([]any)[0].(map[string]any)
+	if p["threshold"] != "NaN" || c["max"] != "+Inf" || c["min"] != "-Inf" || c["ok"] != 1.5 {
+		t.Errorf("probe floats not normalised as expected: %v", p)
+	}
+}

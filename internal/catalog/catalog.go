@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"path"
@@ -530,9 +531,9 @@ func normalize(svc *Service) {
 }
 
 // jsonSafe turns the map[any]any that yaml.v3 produces for a nested mapping with a
-// non-string key (an unquoted number, say) into map[string]any. encoding/json
-// cannot marshal map[any]any, and one such value would fail the whole service list
-// on its way to the UI.
+// non-string key (an unquoted number, say) into map[string]any, and a .nan, .inf or
+// -.inf into its string form ("NaN", "+Inf", "-Inf"). encoding/json refuses both,
+// and one such value would fail the whole service list on its way to the UI.
 func jsonSafe(v any) any {
 	switch t := v.(type) {
 	case map[string]any:
@@ -551,6 +552,10 @@ func jsonSafe(v any) any {
 			t[i] = jsonSafe(e)
 		}
 		return t
+	case float64:
+		if math.IsNaN(t) || math.IsInf(t, 0) {
+			return fmt.Sprint(t)
+		}
 	}
 	return v
 }
