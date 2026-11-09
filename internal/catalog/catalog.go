@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"net/url"
@@ -276,10 +277,12 @@ type DockerConfig struct {
 	// container health cannot see. For services with no collector it is the only
 	// signal there is.
 	HealthSignals []HealthSignal `json:"healthSignals" yaml:"health_signals"`
-	// HealthProbe is docker.health_probe (services/_schema.yml): a read-only command
+	// HealthProbe is the web catalog's docker.health_probe block: a read-only command
 	// the web worker runs inside a running node, with regex checks on its answer
-	// (Mysterium's monitoring status and recent sessions). Desktop parses it so the
-	// field round-trips and the strict-decode test passes, and does not act on it.
+	// (Mysterium's monitoring status and recent sessions). Neither schema file
+	// describes it yet. Desktop parses it so the field round-trips and the
+	// strict-decode test passes, and does not act on it. The loader makes it
+	// JSON-safe (see jsonSafe), since the service list crosses the Wails bridge.
 	HealthProbe map[string]any `json:"healthProbe,omitempty" yaml:"health_probe"`
 	// AdvertisedAddressEnv names the ONE env var holding the address the network
 	// dials this service back at, so it can be compared against the machine's
@@ -521,6 +524,35 @@ func normalize(svc *Service) {
 		svc.SupportURL = ""
 	}
 	svc.Docker.HealthSignals = normalizeSignals(svc.Slug, svc.Docker.HealthSignals)
+	if svc.Docker.HealthProbe != nil {
+		svc.Docker.HealthProbe = jsonSafe(svc.Docker.HealthProbe).(map[string]any)
+	}
+}
+
+// jsonSafe turns the map[any]any that yaml.v3 produces for a nested mapping with a
+// non-string key (an unquoted number, say) into map[string]any. encoding/json
+// cannot marshal map[any]any, and one such value would fail the whole service list
+// on its way to the UI.
+func jsonSafe(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, e := range t {
+			t[k] = jsonSafe(e)
+		}
+		return t
+	case map[any]any:
+		m := make(map[string]any, len(t))
+		for k, e := range t {
+			m[fmt.Sprint(k)] = jsonSafe(e)
+		}
+		return m
+	case []any:
+		for i, e := range t {
+			t[i] = jsonSafe(e)
+		}
+		return t
+	}
+	return v
 }
 
 // normalizeSignals lowercases each state and drops the signals the web catalog
