@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,9 +30,13 @@ func TestAFenceGatedStartWaitsForAReconcile(t *testing.T) {
 	docker.SetState("cashpilot-mysterium", "exited")
 
 	p.fence.reconcileMu.Lock() // a reconcile in progress
+	docker.ResetCalls()
 	done := make(chan error, 1)
 	go func() { done <- p.Start(context.Background(), "mysterium") }()
-	time.Sleep(300 * time.Millisecond)
+	// The inspect just before the lock, so the check below cannot pass only
+	// because the goroutine had not got that far yet.
+	waitForCall(t, docker, "GET /containers/cashpilot-mysterium/json")
+	time.Sleep(200 * time.Millisecond)
 	if c, _ := docker.Container("cashpilot-mysterium"); c.State == "running" {
 		p.fence.reconcileMu.Unlock()
 		t.Fatal("the node started while a reconcile held the fence")
@@ -123,7 +129,9 @@ func TestAFenceGatedDeployWaitsForAReconcile(t *testing.T) {
 		_, err := p.Deploy(context.Background(), DeploySpec{Slug: "mysterium", Service: mysteriumShaped()}, nil)
 		done <- err
 	}()
-	time.Sleep(300 * time.Millisecond)
+	// The image inspect comes just before the lock.
+	waitForCall(t, docker, "GET /images/")
+	time.Sleep(200 * time.Millisecond)
 	if _, ok := docker.Container("cashpilot-mysterium"); ok {
 		p.fence.reconcileMu.Unlock()
 		t.Fatal("the node was created while a reconcile held the fence")
@@ -137,4 +145,17 @@ func TestAFenceGatedDeployWaitsForAReconcile(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Deploy never finished after the reconcile")
 	}
+}
+
+// waitForCall waits until the fake daemon has received a call starting with prefix.
+func waitForCall(t *testing.T, docker *harness.Docker, prefix string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if slices.ContainsFunc(docker.Calls(), func(c string) bool { return strings.HasPrefix(c, prefix) }) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("the daemon never received %s; calls: %v", prefix, docker.Calls())
 }

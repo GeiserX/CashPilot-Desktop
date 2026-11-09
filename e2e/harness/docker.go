@@ -584,6 +584,14 @@ func (d *Docker) AttachNetwork(name, network string) {
 	}
 }
 
+// RemoveNetwork deletes a network behind the app's back, the way a user's
+// `docker network rm` or a daemon reset would.
+func (d *Docker) RemoveNetwork(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.networks, name)
+}
+
 // FailInspect makes inspecting this container fail with a server error.
 func (d *Docker) FailInspect(name string) { d.setFail(&d.failInspect, name) }
 

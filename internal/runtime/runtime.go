@@ -1073,7 +1073,7 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 	// (e.g. a pre-migration USER_ID/DEVICE_NAME left in the blob) must not leak into
 	// the environment of a service whose schema no longer includes it.
 	// The variables ui_port and udp_port_range publish from keep their default when
-	// left blank, as the deploy validation assumes: a blank UDP_PORTS would publish
+	// left blank or whitespace, as the deploy validation assumes: a blank UDP_PORTS would publish
 	// nothing and hand the node an empty --udp.ports.
 	published := map[string]bool{}
 	if ui := svc.Docker.UIPort; ui != nil {
@@ -1083,7 +1083,7 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 		published[rng.Env] = true
 	}
 	for key, value := range overrides {
-		if declared[key] && !(value == "" && published[key] && env[key] != "") {
+		if declared[key] && !(strings.TrimSpace(value) == "" && published[key] && env[key] != "") {
 			env[key] = value
 		}
 	}

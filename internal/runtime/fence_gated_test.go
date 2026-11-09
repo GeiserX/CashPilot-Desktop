@@ -209,18 +209,20 @@ func TestNamingTheFencedNetworkDoesNotSkipTheFence(t *testing.T) {
 	}
 }
 
-// A blank UI_ADDRESS or UDP_PORTS keeps the catalog default, as the deploy
+// A blank (or whitespace-only) UI_ADDRESS or UDP_PORTS keeps the catalog default, as the deploy
 // validation assumes; otherwise the node would get no UDP ports and an empty
 // --udp.ports.
 func TestABlankPublishedSettingKeepsItsDefault(t *testing.T) {
 	svc := mysteriumShaped()
-	env := buildEnv(svc, map[string]string{"UI_ADDRESS": "", "UDP_PORTS": ""})
-	if env["UDP_PORTS"] != "23000:23029" || env["UI_ADDRESS"] != "127.0.0.1" {
-		t.Fatalf("env = %v, want the defaults", env)
-	}
-	_, bindings, err := buildServicePorts(svc.Docker, env)
-	if err != nil || len(bindings) != 31 {
-		t.Fatalf("published %d ports (%v), want the WebUI and the 30 default UDP ports", len(bindings), err)
+	for _, blank := range []string{"", "  "} {
+		env := buildEnv(svc, map[string]string{"UI_ADDRESS": blank, "UDP_PORTS": blank})
+		if env["UDP_PORTS"] != "23000:23029" || env["UI_ADDRESS"] != "127.0.0.1" {
+			t.Fatalf("blank %q: env = %v, want the defaults", blank, env)
+		}
+		_, bindings, err := buildServicePorts(svc.Docker, env)
+		if err != nil || len(bindings) != 31 {
+			t.Fatalf("blank %q: published %d ports (%v), want the WebUI and the 30 default UDP ports", blank, len(bindings), err)
+		}
 	}
 	// Any other variable may still be blanked on purpose.
 	other := svc

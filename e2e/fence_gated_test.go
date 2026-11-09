@@ -59,6 +59,22 @@ func TestTheFenceStaysWhenMysteriumCannotBeStopped(t *testing.T) {
 	}
 }
 
+// With the fence network already gone, a node that cannot be stopped is still
+// named in the status, so the dashboard does not show a clean "n/a" while it runs.
+func TestAStuckMysteriumIsReportedWhenTheFenceNetworkIsGone(t *testing.T) {
+	e := newEnv(t)
+	setting := "auto"
+	provider := gatedProvider(t, e, &setting)
+	e.Docker.FailStop("cashpilot-mysterium")
+	e.Docker.RemoveNetwork(runtime.FenceNetwork)
+	setting = "off"
+	provider.ReconcileFence(e.ctx())
+	st := provider.FenceStatus()
+	if !strings.Contains(st.Error, "could not stop cashpilot-mysterium") {
+		t.Fatalf("status = %+v, want the failed stop named", st)
+	}
+}
+
 // A container whose inspect fails cannot be judged, so Start and Restart refuse it.
 func TestStartFailsClosedWhenTheContainerCannotBeInspected(t *testing.T) {
 	e := newEnv(t)

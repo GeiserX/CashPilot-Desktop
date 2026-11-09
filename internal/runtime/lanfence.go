@@ -977,9 +977,11 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 	case mode == FenceModeOff && net != nil:
 		f.reduce(ctx, cli, net)
 	case mode == FenceModeUnsupported:
-		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "unsupported", "", podmanUnsupported+"." })
+		f.setStatus(func(s *FenceStatus) {
+			s.State, s.Backend, s.Error = "unsupported", "", withGatedErr(podmanUnsupported+".", gatedErr)
+		})
 	default:
-		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "n/a", "", "" })
+		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "n/a", "", withGatedErr("", gatedErr) })
 	}
 	// Settings changed while this ran: its mode is stale, and the reconcile the
 	// change triggers publishes the right one.
@@ -987,6 +989,19 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		return
 	}
 	f.setOutside(mode, earners)
+}
+
+// withGatedErr adds a failed stop of a fence-gated earner to a status message, so a
+// node still running without the fence shows on the dashboard instead of an empty
+// error. The next reconcile tries the stop again.
+func withGatedErr(msg string, gatedErr error) string {
+	if gatedErr == nil {
+		return msg
+	}
+	if msg == "" {
+		return gatedErr.Error()
+	}
+	return msg + " " + gatedErr.Error()
 }
 
 // isGated reports a fence-gated container: labelled so at deploy, or a service the
