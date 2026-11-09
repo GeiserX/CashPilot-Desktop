@@ -226,7 +226,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	// Two copies would share the same host directories and fight over the same host
 	// ports. The manager refuses this first; this is the backstop.
-	if spec.Instance > 1 && (len(svc.Docker.Volumes) > 0 || len(svc.Docker.Ports) > 0) {
+	if spec.Instance > 1 && (len(svc.Docker.Volumes) > 0 || svc.Docker.PublishesPorts()) {
 		return ContainerInfo{}, fmt.Errorf("%s has volumes or published ports, so it runs once", svc.Name)
 	}
 
@@ -249,8 +249,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if err != nil {
 		return ContainerInfo{}, fmt.Errorf("%s copy %d: %w", svc.Name, spec.Instance, err)
 	}
-	ports, bindings, err := buildPorts(svc.Docker.Ports)
+	ports, bindings, err := buildServicePorts(svc.Docker, env)
 	if err != nil {
+		return ContainerInfo{}, fmt.Errorf("%s was not deployed: %w. The running container was not touched", svc.Name, err)
+	}
+	if err := checkRuntime(svc, facts.Runtimes); err != nil {
 		return ContainerInfo{}, err
 	}
 	mounts := buildMounts(svc.Docker.Volumes, env)
@@ -315,6 +318,9 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 			return ContainerInfo{}, err
 		}
 		isolate(hostConfig, fenced)
+	}
+	if problem := fenceGateProblem(svc, hostConfig, facts.OSType, p.fence.Status().Mode); problem != "" {
+		return ContainerInfo{}, errors.New(problem)
 	}
 	defer p.fence.refreshOutside(context.Background(), cli)
 
@@ -1005,6 +1011,96 @@ func buildPorts(raw []string) (network.PortSet, network.PortMap, error) {
 	return ports, bindings, nil
 }
 
+// buildServicePorts is everything the container publishes: the static ports, the
+// WebUI port (ui_port) on each address its env var lists, and the UDP range
+// (udp_port_range) its env var holds, 1:1. env is what the container gets, defaults
+// included. A bad address or a range that is reversed or wider than its cap is an
+// error, raised before the running container is touched.
+func buildServicePorts(dc catalog.DockerConfig, env map[string]string) (network.PortSet, network.PortMap, error) {
+	ports, bindings, err := buildPorts(dc.Ports)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ui := dc.UIPort; ui != nil {
+		if ui.Port < 1 || ui.Port > 65535 {
+			return nil, nil, fmt.Errorf("ui_port %d is not a port", ui.Port)
+		}
+		addrs, err := catalog.UIBindings(env[ui.Env])
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", ui.Env, err)
+		}
+		port, err := network.ParsePort(fmt.Sprintf("%d/tcp", ui.Port))
+		if err != nil {
+			return nil, nil, err
+		}
+		ports[port] = struct{}{}
+		for _, addr := range addrs {
+			bindings[port] = append(bindings[port], network.PortBinding{HostIP: addr, HostPort: strconv.Itoa(ui.Port)})
+		}
+	}
+	if rng := dc.UDPPortRange; rng != nil {
+		udp, err := catalog.ExpandUDPRange(env[rng.Env], rng.Cap())
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", rng.Env, err)
+		}
+		for _, p := range udp {
+			port, err := network.ParsePort(fmt.Sprintf("%d/udp", p))
+			if err != nil {
+				return nil, nil, err
+			}
+			ports[port] = struct{}{}
+			bindings[port] = []network.PortBinding{{HostPort: strconv.Itoa(p)}}
+		}
+	}
+	return ports, bindings, nil
+}
+
+// checkRuntime refuses a service whose catalog entry names a runtime the daemon does
+// not provide, before the running container is touched. runtimes nil means the
+// daemon did not say, which is refused too: the create would fail after the removal.
+func checkRuntime(svc catalog.Service, runtimes map[string]bool) error {
+	want := strings.TrimSpace(svc.Docker.Runtime)
+	if want == "" {
+		return nil
+	}
+	if runtimes == nil {
+		return fmt.Errorf("%s runs only under the %s runtime, and the container runtime did not say which runtimes it has. The running container was not touched", svc.Name, want)
+	}
+	if !runtimes[want] {
+		have := make([]string, 0, len(runtimes))
+		for name := range runtimes {
+			have = append(have, name)
+		}
+		slices.Sort(have)
+		return fmt.Errorf("%s runs only under the %s runtime, which this container runtime does not provide (it has %s). The running container was not touched", svc.Name, want, strings.Join(have, ", "))
+	}
+	return nil
+}
+
+// fenceGateProblem is why a fence-gated service cannot be deployed with this host
+// config, or "". Such a service runs only on the fenced network: anywhere else its
+// NET_ADMIN namespace sits on a bridge that reaches the LAN, this machine and the
+// tailnet (web app/lan_fence.py mode_problem). mode is the fence mode the deploy saw.
+func fenceGateProblem(svc catalog.Service, host *container.HostConfig, osType, mode string) string {
+	if !svc.Docker.FenceGated || string(host.NetworkMode) == FenceNetwork {
+		return ""
+	}
+	why := ""
+	switch {
+	case osType != "linux":
+		why = "the container runtime runs Windows containers, which have no LAN fence"
+	case string(host.NetworkMode) != "bridge":
+		why = fmt.Sprintf("its network mode %q is outside the fence", host.NetworkMode)
+	case mode == FenceModeUnsupported:
+		why = podmanUnsupported
+	case mode == FenceModeLegacy:
+		why = "LAN isolation is not on yet on this machine. Press \"Turn on isolation\" in the dashboard's notice, which moves the other earners behind the fence, then deploy it again"
+	default:
+		why = "LAN isolation is off in Settings. Set it to auto or on, then deploy it again"
+	}
+	return fmt.Sprintf("%s runs only behind the LAN fence: %s. The running container was not touched", svc.Name, why)
+}
+
 func buildMounts(raw []string, env map[string]string) []mount.Mount {
 	mounts := make([]mount.Mount, 0, len(raw))
 	for _, mapping := range raw {
@@ -1053,6 +1149,9 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 			Name: "unless-stopped",
 		},
 		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
+		// The runtime the entry names wins over the daemon's default (Deploy has
+		// checked the daemon has it); none leaves the daemon's default.
+		Runtime: strings.TrimSpace(svc.Docker.Runtime),
 	}
 	applyHardening(hostConfig, svc, osType)
 	// "" and "default" both name the default bridge on a Linux daemon, so normalise

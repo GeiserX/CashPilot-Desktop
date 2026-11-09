@@ -38,9 +38,9 @@ func bitping(capAdd ...string) catalog.Service {
 func deployedShape(t *testing.T, svc catalog.Service, creds map[string]string) ContainerShape {
 	t.Helper()
 	env := buildEnv(svc, creds)
-	_, bindings, err := buildPorts(svc.Docker.Ports)
+	_, bindings, err := buildServicePorts(svc.Docker, env)
 	if err != nil {
-		t.Fatalf("buildPorts: %v", err)
+		t.Fatalf("buildServicePorts: %v", err)
 	}
 	mounts := buildMounts(svc.Docker.Volumes, env)
 	host, err := buildHostConfig(svc, bindings, mounts, "linux")

@@ -66,9 +66,15 @@ the entry on its own, which is how a Desktop-only service would be carried.
 
 | Delta | Where | Why |
 | --- | --- | --- |
-| 15 image digest pins | `image-pins.yml` | Desktop's digest-pin rule; the web catalog ships floating references. |
+| 14 image digest pins | `image-pins.yml` | Desktop's digest-pin rule; the web catalog ships floating references. |
 | `native:` block on mysterium | `append/bandwidth/mysterium.yml` | Desktop can run a service as a supervised native process with no container runtime. The web app deploys through Docker on a worker and has no such runtime. |
 | `native:` schema documentation | `append/_schema.yml` | Documents the field above. |
+
+## Fields Desktop reads differently
+
+| Field | What Desktop does | Why |
+| --- | --- | --- |
+| `docker.fence_gated` | A deploy is refused unless the earner joins the fenced network (`internal/runtime/lanfence.go`), and the compose export refuses the service. The container keeps the restart policy every earner gets, `unless-stopped`. | The web worker sets restart policy `no` and starts the node only after it has read the fence back, at boot and after a crash. Desktop has no such starter yet; with `no` the node would stay down after every reboot until someone redeployed it. The gap that leaves: after a reboot, Docker starts the node before the app writes the fence again. In that window the fenced network has no masquerade, so the node has no internet route, but nothing drops what it sends to this machine itself. The node's own `--firewall.protected.networks` still blackholes private ranges inside its namespace. |
 
 ## Files Desktop reads beside the services
 

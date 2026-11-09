@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	goruntime "runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +47,17 @@ type Container struct {
 	Entrypoint  []string
 	StopTimeout *int
 	Mounts      []Mount
+	// Runtime, NetworkMode and PortBindings are the HostConfig fields of the same
+	// names, as the deploy sent them.
+	Runtime      string
+	NetworkMode  string
+	PortBindings map[string][]PortBinding
+}
+
+// PortBinding is one host binding of a published port.
+type PortBinding struct {
+	HostIP   string `json:"HostIp"`
+	HostPort string `json:"HostPort"`
 }
 
 // VolumeNames lists the names of the container's named volumes, in the order the
@@ -283,6 +295,14 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"Version": "28.0.0-fake", "ApiVersion": "1.51", "Os": "linux", "Arch": "amd64",
 		})
+	case path == "/info":
+		// What a real daemon reports and the deploy asks for: its CPU (this
+		// machine's, as the fallback assumed before /info was answered), its OS
+		// and its OCI runtimes.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"Architecture": goruntime.GOARCH, "OSType": "linux",
+			"Runtimes": map[string]any{"runc": map[string]string{"path": "runc"}},
+		})
 	case path == "/images/create":
 		d.pull(w, r)
 	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
@@ -356,7 +376,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		StopTimeout *int              `json:"StopTimeout"`
 		Labels      map[string]string `json:"Labels"`
 		HostConfig  struct {
-			Mounts []struct {
+			Runtime      string                   `json:"Runtime"`
+			NetworkMode  string                   `json:"NetworkMode"`
+			PortBindings map[string][]PortBinding `json:"PortBindings"`
+			Mounts       []struct {
 				Type   string `json:"Type"`
 				Source string `json:"Source"`
 				Target string `json:"Target"`
@@ -388,6 +411,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		Cmd:         body.Cmd,
 		Entrypoint:  body.Entrypoint,
 		StopTimeout: body.StopTimeout,
+
+		Runtime:      body.HostConfig.Runtime,
+		NetworkMode:  body.HostConfig.NetworkMode,
+		PortBindings: body.HostConfig.PortBindings,
 	}
 	for _, m := range body.HostConfig.Mounts {
 		if m.Type == "volume" && m.Source != "" {

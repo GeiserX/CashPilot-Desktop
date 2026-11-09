@@ -276,6 +276,11 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	// runtime. Record whatever kind actually served the deploy so the persisted
 	// Runtime is derived rather than a hardcoded literal.
 	kind := m.kindForService(svc)
+	if custom != "" && svc.Docker.FenceGated {
+		// It holds NET_ADMIN in its own namespace, so it runs only the image the
+		// catalog pins (web app/main.py _fence_gated_spec).
+		return store.Deployment{}, fmt.Errorf("%s runs only the image the catalog pins, since it holds NET_ADMIN; clear the Image box to deploy it", svc.Name)
+	}
 	if custom != "" {
 		// The chosen image replaces the catalog's and every per-architecture
 		// override with it: it is the user's answer for this machine. An image only
@@ -719,6 +724,19 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 				return fmt.Errorf("invalid value for field: %s", label)
 			}
 		}
+	}
+	// What ui_port and udp_port_range publish comes from the env, so a value the
+	// pattern lets through (a range wider than the cap) is refused here, before the
+	// deploy, rather than by the runtime.
+	env := map[string]string{}
+	for _, item := range svc.Docker.Env {
+		env[item.Key] = item.Default
+		if value := credentials[item.Key]; value != "" {
+			env[item.Key] = value
+		}
+	}
+	if err := svc.Docker.CheckPublishedValues(env); err != nil {
+		return fmt.Errorf("invalid value for field: %w", err)
 	}
 	return nil
 }

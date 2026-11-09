@@ -116,6 +116,11 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 		if catalog.IsRetired(svc.Status) {
 			return "", fmt.Errorf("%s is no longer available (%s), so there is nothing to export", svc.Name, svc.Status)
 		}
+		if svc.Docker.FenceGated {
+			// Compose would start it on Docker's default bridge, where nothing keeps its
+			// NET_ADMIN namespace off the LAN (web app/compose_generator.py refuses too).
+			return "", fmt.Errorf("%s runs only behind CashPilot's LAN fence, so it has no compose export. Deploy it from the dashboard", svc.Name)
+		}
 		if svc.Custom || catalog.IsCustomSlug(slug) {
 			// The export is built from catalog entries; a custom service's variables and
 			// command are the user's own and stay encrypted in the app's database.

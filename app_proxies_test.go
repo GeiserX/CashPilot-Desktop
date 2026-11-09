@@ -40,7 +40,7 @@ func TestProxiesStateNeverCarriesSecretsAndSaysWhatCannotRun(t *testing.T) {
 		t.Fatalf("honeygain can run behind a proxy, got %q", refusals["honeygain"])
 	}
 	if !strings.Contains(refusals["mysterium"], "cannot") {
-		t.Fatalf("mysterium needs the host's network and cannot, got %q", refusals["mysterium"])
+		t.Fatalf("mysterium runs only behind the LAN fence and cannot, got %q", refusals["mysterium"])
 	}
 	if state.TunnelImage != "" || !strings.Contains(state.TunnelImageError, "CASHPILOT_TUNNEL_IMAGE") {
 		t.Fatalf("a refused tunnel image is said: %+v", state)

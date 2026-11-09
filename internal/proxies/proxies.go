@@ -333,7 +333,10 @@ func Refusal(svc catalog.Service) string {
 	if strings.HasPrefix(dc.NetworkMode, "container:") {
 		return name + " joins another container's network, so it cannot be moved behind a proxy."
 	}
-	if len(dc.Ports) > 0 {
+	if dc.FenceGated {
+		return name + " runs only behind the LAN fence, so it cannot run through a proxy."
+	}
+	if dc.PublishesPorts() {
 		return name + " publishes a port on the host, which a proxied copy cannot do."
 	}
 	if len(dc.Volumes) > 0 {
