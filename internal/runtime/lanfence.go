@@ -960,16 +960,21 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 	var gatedErr error
 	if mode != FenceModeOn {
 		// Before the drops go: a fence-gated earner must not outlive the fence.
-		gatedErr = f.stopGated(ctx, cli)
+		gatedErr = f.stopGated(ctx, cli, nil)
 	}
 	switch {
 	case mode == FenceModeOn:
-		if err := f.apply(ctx, cli); err != nil {
-			// The table may be gone (a ruleset flush, a runtime restart that brought
-			// the node back), so a fence-gated earner must not keep running on it.
-			if gatedErr = f.stopGated(ctx, cli); gatedErr != nil {
-				f.setStatus(func(s *FenceStatus) { s.Error = withGatedErr(s.Error, gatedErr) })
-			}
+		// A failed apply may mean the table is gone (a ruleset flush, a runtime
+		// restart that brought the node back), so every fence-gated earner stops. One
+		// that applied leaves the earners on the fenced network alone, and stops one
+		// outside it: a host-networked node made before the fence keeps the host's
+		// and the LAN's addresses.
+		var keep func(fenceEarner) bool
+		if f.apply(ctx, cli) == nil {
+			keep = fencedAlone
+		}
+		if gatedErr = f.stopGated(ctx, cli, keep); gatedErr != nil {
+			f.setStatus(func(s *FenceStatus) { s.Error = withGatedErr(s.Error, gatedErr) })
 		}
 		if fresh, err := listEarners(ctx, cli); err == nil {
 			earners = fresh
@@ -1019,11 +1024,16 @@ func (f *fence) isGated(labels map[string]string) bool {
 	return f.gatedSlug != nil && labels[LabelService] != "" && f.gatedSlug(labels[LabelService])
 }
 
+// fencedAlone reports an earner on the fenced network and nothing else.
+func fencedAlone(e fenceEarner) bool {
+	return e.NetworkMode == FenceNetwork && onlyOn(e, FenceNetwork)
+}
+
 // stopGated stops every fence-gated container that is running or that Docker is
-// about to restart. An explicit stop, so a restart policy of unless-stopped does not
+// about to restart, except those keep accepts (nil keeps none). An explicit stop, so a restart policy of unless-stopped does not
 // bring it back; Start refuses it until isolation is on again. An error means one
 // may still be running, and the caller must keep the fence.
-func (f *fence) stopGated(ctx context.Context, cli fenceAPI) error {
+func (f *fence) stopGated(ctx context.Context, cli fenceAPI, keep func(fenceEarner) bool) error {
 	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true")})
 	if err != nil {
 		return fmt.Errorf("could not list the fence-gated earners: %w", err)
@@ -1036,6 +1046,9 @@ func (f *fence) stopGated(ctx context.Context, cli fenceAPI) error {
 		// A restarting container is stopped too, or Docker would bring it back
 		// after the drops are gone, past the app's Start guard.
 		if c.State != container.StateRunning && c.State != container.StateRestarting {
+			continue
+		}
+		if keep != nil && keep(earnerFromSummary(c)) {
 			continue
 		}
 		if _, err := cli.ContainerStop(ctx, c.ID, client.ContainerStopOptions{}); err != nil {

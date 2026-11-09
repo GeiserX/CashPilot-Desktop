@@ -1083,7 +1083,8 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 		published[rng.Env] = true
 	}
 	for key, value := range overrides {
-		if declared[key] && !(strings.TrimSpace(value) == "" && published[key] && env[key] != "") {
+		keepsDefault := published[key] && env[key] != "" && strings.TrimSpace(value) == ""
+		if declared[key] && !keepsDefault {
 			env[key] = value
 		}
 	}

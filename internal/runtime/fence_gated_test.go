@@ -264,50 +264,59 @@ func TestAFenceGatedContainerIsLabelled(t *testing.T) {
 	}
 }
 
-// A fence that cannot be put back in on mode must not leave a fence-gated node
-// running: the table may already be gone, and the fence is the only thing keeping it
-// off the host's own addresses. Other earners keep running; a fence that applies
-// leaves the node alone.
-func TestAFailedFenceStopsTheFenceGatedNode(t *testing.T) {
-	earner := func(id string, labels map[string]string) map[string]any {
+// In on mode a fence-gated node runs only on the fenced network alone. A fence that
+// cannot be put back stops every one, since the table may already be gone and the
+// fence is the only thing keeping it off the host's own addresses. A fence that
+// applies leaves the fenced node alone and stops one outside it, such as a
+// host-networked node made before the fence. Other earners keep running either way.
+func TestInOnModeAFenceGatedNodeRunsOnlyBehindAnAppliedFence(t *testing.T) {
+	earner := func(id, mode string, labels map[string]string) map[string]any {
 		return map[string]any{
 			"Id": id, "Names": []string{"/cashpilot-" + id}, "State": "running", "Labels": labels,
-			"HostConfig":      map[string]any{"NetworkMode": FenceNetwork},
-			"NetworkSettings": map[string]any{"Networks": map[string]any{FenceNetwork: map[string]any{"NetworkID": "fencenet"}}},
+			"HostConfig":      map[string]any{"NetworkMode": mode},
+			"NetworkSettings": map[string]any{"Networks": map[string]any{mode: map[string]any{"NetworkID": mode + "-id"}}},
 		}
 	}
-	gated := earner("mysterium", map[string]string{LabelManaged: "true", LabelService: "mysterium", LabelFenceGated: "true"})
-	plain := earner("honeygain", map[string]string{LabelManaged: "true", LabelService: "honeygain"})
-	stops := func(fake *fakeDocker) (gatedStopped, plainStopped bool) {
-		for _, call := range fake.recorded() {
-			gatedStopped = gatedStopped || call == "POST /containers/mysterium/stop"
-			plainStopped = plainStopped || call == "POST /containers/honeygain/stop"
-		}
-		return
+	gatedLabels := func(slug string) map[string]string {
+		return map[string]string{LabelManaged: "true", LabelService: slug, LabelFenceGated: "true"}
 	}
+	fenced := earner("mysterium", FenceNetwork, gatedLabels("mysterium"))
+	hosted := earner("oldmyst", "host", gatedLabels("oldmyst"))
+	plain := earner("honeygain", FenceNetwork, map[string]string{LabelManaged: "true", LabelService: "honeygain"})
 
-	for _, exit := range []int{1, 0} {
-		fake := &fakeDocker{earners: []map[string]any{gated, plain}, fenceExit: exit}
+	for _, tc := range []struct {
+		exit                     int
+		state                    string
+		fencedStops, hostedStops bool
+	}{
+		{exit: 1, state: "failed", fencedStops: true, hostedStops: true},
+		{exit: 0, state: "applied", fencedStops: false, hostedStops: true},
+	} {
+		fake := &fakeDocker{earners: []map[string]any{fenced, hosted, plain}, fenceExit: tc.exit}
 		fake.start(t)
 		p := &DockerProvider{}
 		p.SetIsolationSetting(func() string { return "on" })
 		p.ReconcileFence(context.Background())
 		st := p.FenceStatus()
-		gatedStopped, plainStopped := stops(fake)
-		if plainStopped {
-			t.Errorf("exit %d: an earner that is not fence-gated was stopped (calls %v)", exit, fake.recorded())
-		}
-		if exit != 0 {
-			if st.Mode != FenceModeOn || st.State != "failed" {
-				t.Fatalf("exit %d: status %+v, want on and failed", exit, st)
+		stopped := map[string]bool{}
+		for _, call := range fake.recorded() {
+			for _, id := range []string{"mysterium", "oldmyst", "honeygain"} {
+				if call == "POST /containers/"+id+"/stop" {
+					stopped[id] = true
+				}
 			}
-			if !gatedStopped {
-				t.Fatalf("the fence failed (%s) but the fence-gated node was not stopped (calls %v)", st.Error, fake.recorded())
-			}
-			continue
 		}
-		if st.State != "applied" || gatedStopped {
-			t.Fatalf("a fence that applied: status %+v, node stopped %v", st, gatedStopped)
+		if st.Mode != FenceModeOn || st.State != tc.state {
+			t.Fatalf("helper exit %d: status %+v, want on and %s", tc.exit, st, tc.state)
+		}
+		if stopped["honeygain"] {
+			t.Errorf("helper exit %d: an earner that is not fence-gated was stopped", tc.exit)
+		}
+		if stopped["mysterium"] != tc.fencedStops {
+			t.Errorf("helper exit %d (%s): the fenced node stopped = %v, want %v (calls %v)", tc.exit, st.Error, stopped["mysterium"], tc.fencedStops, fake.recorded())
+		}
+		if stopped["oldmyst"] != tc.hostedStops {
+			t.Errorf("helper exit %d: the host-networked node stopped = %v, want %v (calls %v)", tc.exit, stopped["oldmyst"], tc.hostedStops, fake.recorded())
 		}
 	}
 }
