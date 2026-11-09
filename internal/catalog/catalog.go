@@ -276,6 +276,11 @@ type DockerConfig struct {
 	// container health cannot see. For services with no collector it is the only
 	// signal there is.
 	HealthSignals []HealthSignal `json:"healthSignals" yaml:"health_signals"`
+	// HealthProbe is docker.health_probe (services/_schema.yml): a read-only command
+	// the web worker runs inside a running node, with regex checks on its answer
+	// (Mysterium's monitoring status and recent sessions). Desktop parses it so the
+	// field round-trips and the strict-decode test passes, and does not act on it.
+	HealthProbe map[string]any `json:"healthProbe,omitempty" yaml:"health_probe"`
 	// AdvertisedAddressEnv names the ONE env var holding the address the network
 	// dials this service back at, so it can be compared against the machine's
 	// current egress address. Only that variable is ever copied out; the rest may
