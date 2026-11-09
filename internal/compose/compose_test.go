@@ -741,3 +741,32 @@ func TestAFenceGatedServiceHasNoComposeExport(t *testing.T) {
 		t.Fatalf("err = %v, want the export refused naming the fence", err)
 	}
 }
+
+// A port published from a setting cannot be written into a file that carries the
+// setting as a placeholder, so the export refuses it.
+func TestAServicePublishingFromItsSettingsHasNoComposeExport(t *testing.T) {
+	for _, mutate := range []func(*catalog.Service){
+		func(s *catalog.Service) { s.Docker.UIPort = &catalog.UIPort{Env: "UI", Port: 4449} },
+		func(s *catalog.Service) { s.Docker.UDPPortRange = &catalog.UDPPortRange{Env: "UDP"} },
+	} {
+		svc := honeygain()
+		mutate(&svc)
+		if _, err := Generate(fakeCatalog{"honeygain": svc}, []string{"honeygain"}, Options{}); err == nil || !strings.Contains(err.Error(), "from its settings") {
+			t.Errorf("err = %v, want the export refused", err)
+		}
+	}
+}
+
+// The runtime the entry requires travels with the file.
+func TestTheRequiredRuntimeIsExported(t *testing.T) {
+	svc := honeygain()
+	svc.Docker.Runtime = "runc"
+	block := serviceBlockOf(t, parse(t, generate(t, fakeCatalog{"honeygain": svc}, []string{"honeygain"}, Options{})), "cashpilot-honeygain")
+	if block["runtime"] != "runc" {
+		t.Fatalf("runtime = %v, want runc", block["runtime"])
+	}
+	plain := parse(t, generate(t, fakeCatalog{"honeygain": honeygain()}, []string{"honeygain"}, Options{}))
+	if _, ok := serviceBlockOf(t, plain, "cashpilot-honeygain")["runtime"]; ok {
+		t.Fatal("an entry naming no runtime must leave the daemon's default")
+	}
+}

@@ -267,7 +267,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		// The grace period travels with the container, so stopping it later does not
 		// need the catalog to find it again.
 		StopTimeout: &stopTimeout,
-		Labels:      containerLabels(spec.Slug, spec.Instance),
+		Labels:      gatedLabels(containerLabels(spec.Slug, spec.Instance), svc),
 		Hostname:    name,
 	}
 	if svc.Docker.Command != "" {
@@ -312,14 +312,15 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// Which network a bridge earner joins is settled on this side of the line too: if
 	// the LAN fence cannot be applied, the deploy is refused and the running container
 	// keeps earning. A Windows-containers daemon has no Linux bridge to fence.
+	fenced := ""
 	if hostConfig.NetworkMode == "bridge" && facts.OSType == "linux" {
-		fenced, err := p.fence.networkForDeploy(ctx, cli)
+		fenced, err = p.fence.networkForDeploy(ctx, cli)
 		if err != nil {
 			return ContainerInfo{}, err
 		}
 		isolate(hostConfig, fenced)
 	}
-	if problem := fenceGateProblem(svc, hostConfig, facts.OSType, p.fence.Status().Mode); problem != "" {
+	if problem := fenceGateProblem(svc, hostConfig, fenced, facts.OSType, p.fence.Status().Mode); problem != "" {
 		return ContainerInfo{}, errors.New(problem)
 	}
 	defer p.fence.refreshOutside(context.Background(), cli)
@@ -421,8 +422,28 @@ func (p *DockerProvider) Start(ctx context.Context, slug string) error {
 		return err
 	}
 	defer cli.Close()
+	if err := p.gatedStartProblem(ctx, cli, containerName(slug)); err != nil {
+		return err
+	}
 	_, err = cli.ContainerStart(ctx, containerName(slug), client.ContainerStartOptions{})
 	return err
+}
+
+// gatedStartProblem refuses to start a fence-gated container unless the fence is on
+// and has just been applied: a stop while isolation was off must stay a stop.
+func (p *DockerProvider) gatedStartProblem(ctx context.Context, cli *client.Client, name string) error {
+	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil || got.Container.Config == nil || got.Container.Config.Labels[LabelFenceGated] != "true" {
+		return nil
+	}
+	fenced, err := p.fence.networkForDeploy(ctx, cli)
+	if err != nil {
+		return err
+	}
+	if fenced != FenceNetwork {
+		return fmt.Errorf("%s runs only behind the LAN fence, and LAN isolation is %s here. Set it to auto or on in Settings first", name, p.fence.Status().Mode)
+	}
+	return nil
 }
 
 func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error {
@@ -432,6 +453,9 @@ func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSe
 	}
 	defer cli.Close()
 	name := containerName(slug)
+	if err := p.gatedStartProblem(ctx, cli, name); err != nil {
+		return err
+	}
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	_, err = cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
 	return err
@@ -922,6 +946,18 @@ func containerLabels(slug string, instance int) map[string]string {
 // catalog. The web worker uses the same label.
 const LabelCustom = "cashpilot.custom"
 
+// LabelFenceGated marks a container whose catalog entry is fence_gated. The fence
+// stops it whenever isolation is not on, and Start refuses it then (lanfence.go
+// stopGated), without needing the catalog to find it again.
+const LabelFenceGated = "cashpilot.fence-gated"
+
+func gatedLabels(labels map[string]string, svc catalog.Service) map[string]string {
+	if svc.Docker.FenceGated {
+		labels[LabelFenceGated] = "true"
+	}
+	return labels
+}
+
 // otherOwner reports, for the container already holding a deploy's name, whose it is
 // when that is not this copy of this service: "" when it is ours to replace.
 //
@@ -966,8 +1002,18 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 	// Only catalog-declared keys reach the container: an orphaned stored credential
 	// (e.g. a pre-migration USER_ID/DEVICE_NAME left in the blob) must not leak into
 	// the environment of a service whose schema no longer includes it.
+	// The variables ui_port and udp_port_range publish from keep their default when
+	// left blank, as the deploy validation assumes: a blank UDP_PORTS would publish
+	// nothing and hand the node an empty --udp.ports.
+	published := map[string]bool{}
+	if ui := svc.Docker.UIPort; ui != nil {
+		published[ui.Env] = true
+	}
+	if rng := svc.Docker.UDPPortRange; rng != nil {
+		published[rng.Env] = true
+	}
 	for key, value := range overrides {
-		if declared[key] {
+		if declared[key] && !(value == "" && published[key] && env[key] != "") {
 			env[key] = value
 		}
 	}
@@ -1080,16 +1126,19 @@ func checkRuntime(svc catalog.Service, runtimes map[string]bool) error {
 // fenceGateProblem is why a fence-gated service cannot be deployed with this host
 // config, or "". Such a service runs only on the fenced network: anywhere else its
 // NET_ADMIN namespace sits on a bridge that reaches the LAN, this machine and the
-// tailnet (web app/lan_fence.py mode_problem). mode is the fence mode the deploy saw.
-func fenceGateProblem(svc catalog.Service, host *container.HostConfig, osType, mode string) string {
-	if !svc.Docker.FenceGated || string(host.NetworkMode) == FenceNetwork {
+// tailnet (web app/lan_fence.py mode_problem). fenced is the network the fence
+// handed out after applying its rules ("" when it applied none), so an entry that
+// names the fenced network itself does not skip the fence. mode is the fence mode
+// the deploy saw.
+func fenceGateProblem(svc catalog.Service, host *container.HostConfig, fenced, osType, mode string) string {
+	if !svc.Docker.FenceGated || (fenced == FenceNetwork && string(host.NetworkMode) == FenceNetwork) {
 		return ""
 	}
 	why := ""
 	switch {
 	case osType != "linux":
 		why = "the container runtime runs Windows containers, which have no LAN fence"
-	case string(host.NetworkMode) != "bridge":
+	case string(host.NetworkMode) != "bridge" && string(host.NetworkMode) != FenceNetwork:
 		why = fmt.Sprintf("its network mode %q is outside the fence", host.NetworkMode)
 	case mode == FenceModeUnsupported:
 		why = podmanUnsupported

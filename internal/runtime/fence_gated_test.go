@@ -149,7 +149,7 @@ func TestDaemonFactsListTheRuntimes(t *testing.T) {
 func TestAFenceGatedServiceDeploysOnlyOnTheFencedNetwork(t *testing.T) {
 	svc := mysteriumShaped()
 	on := &container.HostConfig{NetworkMode: FenceNetwork}
-	if p := fenceGateProblem(svc, on, "linux", FenceModeOn); p != "" {
+	if p := fenceGateProblem(svc, on, FenceNetwork, "linux", FenceModeOn); p != "" {
 		t.Fatalf("on the fenced network: %q, want no problem", p)
 	}
 	bridge := &container.HostConfig{NetworkMode: "bridge"}
@@ -159,21 +159,21 @@ func TestAFenceGatedServiceDeploysOnlyOnTheFencedNetwork(t *testing.T) {
 		FenceModeUnsupported: "Podman",
 		"":                   "off in Settings",
 	} {
-		p := fenceGateProblem(svc, bridge, "linux", mode)
+		p := fenceGateProblem(svc, bridge, "", "linux", mode)
 		if !strings.Contains(p, "only behind the LAN fence") || !strings.Contains(p, want) || !strings.Contains(p, "not touched") {
 			t.Errorf("mode %q: %q, want a refusal mentioning %q", mode, p, want)
 		}
 	}
-	if p := fenceGateProblem(svc, &container.HostConfig{NetworkMode: "host"}, "linux", FenceModeOn); !strings.Contains(p, "outside the fence") {
+	if p := fenceGateProblem(svc, &container.HostConfig{NetworkMode: "host"}, "", "linux", FenceModeOn); !strings.Contains(p, "outside the fence") {
 		t.Errorf("host networking: %q, want a refusal", p)
 	}
-	if p := fenceGateProblem(svc, &container.HostConfig{NetworkMode: "nat"}, "windows", ""); !strings.Contains(p, "Windows containers") {
+	if p := fenceGateProblem(svc, &container.HostConfig{NetworkMode: "nat"}, "", "windows", ""); !strings.Contains(p, "Windows containers") {
 		t.Errorf("Windows containers: %q, want a refusal", p)
 	}
 
 	plain := svc
 	plain.Docker.FenceGated = false
-	if p := fenceGateProblem(plain, bridge, "linux", FenceModeOff); p != "" {
+	if p := fenceGateProblem(plain, bridge, "", "linux", FenceModeOff); p != "" {
 		t.Fatalf("an ordinary earner on the default bridge was refused: %q", p)
 	}
 }
@@ -198,3 +198,66 @@ func TestAFencedMysteriumMissingItsWebUIPortIsDrift(t *testing.T) {
 }
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// An entry that names the fenced network itself never went through the fence, so
+// it is refused like any other network: the fence's rules may not be there.
+func TestNamingTheFencedNetworkDoesNotSkipTheFence(t *testing.T) {
+	svc := mysteriumShaped()
+	named := &container.HostConfig{NetworkMode: FenceNetwork}
+	if p := fenceGateProblem(svc, named, "", "linux", FenceModeOff); !strings.Contains(p, "only behind the LAN fence") {
+		t.Fatalf("a fenced network the fence did not hand out: %q, want a refusal", p)
+	}
+}
+
+// A blank UI_ADDRESS or UDP_PORTS keeps the catalog default, as the deploy
+// validation assumes; otherwise the node would get no UDP ports and an empty
+// --udp.ports.
+func TestABlankPublishedSettingKeepsItsDefault(t *testing.T) {
+	svc := mysteriumShaped()
+	env := buildEnv(svc, map[string]string{"UI_ADDRESS": "", "UDP_PORTS": ""})
+	if env["UDP_PORTS"] != "23000:23029" || env["UI_ADDRESS"] != "127.0.0.1" {
+		t.Fatalf("env = %v, want the defaults", env)
+	}
+	_, bindings, err := buildServicePorts(svc.Docker, env)
+	if err != nil || len(bindings) != 31 {
+		t.Fatalf("published %d ports (%v), want the WebUI and the 30 default UDP ports", len(bindings), err)
+	}
+	// Any other variable may still be blanked on purpose.
+	other := svc
+	other.Docker.Env = append(other.Docker.Env, catalog.EnvVar{Key: "EXTRA", Default: "x"})
+	if got := buildEnv(other, map[string]string{"EXTRA": ""})["EXTRA"]; got != "" {
+		t.Fatalf("EXTRA = %q, want the blank the user chose", got)
+	}
+}
+
+func TestARuntimeOtherThanTheCatalogsIsDrift(t *testing.T) {
+	svc := mysteriumShaped()
+	shape := deployedShape(t, svc, nil)
+	if shape.Runtime != "runc" {
+		t.Fatalf("shape runtime = %q, want runc", shape.Runtime)
+	}
+	shape.Runtime = "runsc"
+	if got := strings.Join(ShapeDrift(svc, shape, ""), "; "); !strings.Contains(got, "runsc") || !strings.Contains(got, "requires runc") {
+		t.Fatalf("drift = %q, want the runtime named", got)
+	}
+	shape.Runtime = ""
+	if found := ShapeDrift(svc, shape, ""); len(found) != 0 {
+		t.Fatalf("a container reporting no runtime was judged: %v", found)
+	}
+	plain := svc
+	plain.Docker.Runtime = ""
+	if ShapeFingerprint(plain) == ShapeFingerprint(svc) {
+		t.Fatal("a runtime-only catalog change keeps the fingerprint, so an Ignore would hide it")
+	}
+}
+
+func TestAFenceGatedContainerIsLabelled(t *testing.T) {
+	svc := mysteriumShaped()
+	if gatedLabels(containerLabels("mysterium", 1), svc)[LabelFenceGated] != "true" {
+		t.Fatal("a fence-gated container must carry the label the fence stops it by")
+	}
+	svc.Docker.FenceGated = false
+	if _, ok := gatedLabels(containerLabels("x", 1), svc)[LabelFenceGated]; ok {
+		t.Fatal("an ordinary earner must not carry the fence-gated label")
+	}
+}

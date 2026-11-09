@@ -2,11 +2,14 @@ package services
 
 import (
 	"context"
+	"fmt"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // gatedServiceYAML has Mysterium's network shape: no static ports, the WebUI and a
@@ -87,5 +90,38 @@ func TestAServicePublishingFromItsEnvRunsOnce(t *testing.T) {
 	svc, _ := m.catalog.Get("gated-example")
 	if limit := m.ScalingLimit(svc); limit.Max != 1 || !strings.Contains(limit.Reason, "port") {
 		t.Fatalf("ScalingLimit = %+v, want one copy because of its published ports", limit)
+	}
+}
+
+// The native node publishes nothing and ignores the UDP range, so a range the Docker
+// path would refuse does not stop a native deploy.
+func TestTheNativeNodeIsNotHeldToWhatDockerPublishes(t *testing.T) {
+	yaml := gatedServiceYAML + fmt.Sprintf(`native:
+  binaries:
+    - os: %s
+      arch: %s
+      url: "https://example.test/gated"
+      sha256: "%s"
+      archive: none
+      bin: "gatedstub"
+  command: ""
+`, goruntime.GOOS, goruntime.GOARCH, strings.Repeat("0", 64))
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{"services/bandwidth/gated.yml": {Data: []byte(yaml)}})
+	if err != nil {
+		t.Fatalf("LoadEmbedded error: %v", err)
+	}
+	docker := &fakeProvider{}
+	native := &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "n1", Status: "running"}}
+	m := NewManager(docker, cat, newTestStore(t))
+	m.Register(nativeRuntimeKind, native)
+	wide := map[string]string{"UDP_PORTS": "20000:30000"}
+	if err := m.ValidateCredentials("gated-example", wide); err != nil {
+		t.Fatalf("ValidateCredentials refused a range the native node ignores: %v", err)
+	}
+	if _, err := m.Deploy(context.Background(), "gated-example", wide); err != nil {
+		t.Fatalf("native deploy refused: %v", err)
+	}
+	if native.deployCalls != 1 || docker.deployCalls != 0 {
+		t.Fatalf("native=%d docker=%d, want the native runtime", native.deployCalls, docker.deployCalls)
 	}
 }

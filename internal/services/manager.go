@@ -290,6 +290,11 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		kind = ""
 	}
 	provider, runtimeKind := m.resolveProvider(kind)
+	if runtimeKind != nativeRuntimeKind {
+		if err := checkPublished(svc, credentials); err != nil {
+			return store.Deployment{}, err
+		}
+	}
 	// Copies are read only when copies are involved, so a plain deploy asks the
 	// runtime nothing it did not ask before.
 	copier, _ := provider.(runtime.CopyProvider)
@@ -725,9 +730,14 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 			}
 		}
 	}
-	// What ui_port and udp_port_range publish comes from the env, so a value the
-	// pattern lets through (a range wider than the cap) is refused here, before the
-	// deploy, rather than by the runtime.
+	return nil
+}
+
+// checkPublished refuses what ui_port and udp_port_range would publish from the env
+// when it cannot be published (a range the pattern lets through but wider than the
+// cap), before the deploy rather than in the runtime. Only a Docker deploy publishes
+// anything, so the caller asks it only for one: the native node ignores the range.
+func checkPublished(svc catalog.Service, credentials map[string]string) error {
 	env := map[string]string{}
 	for _, item := range svc.Docker.Env {
 		env[item.Key] = item.Default
@@ -758,7 +768,13 @@ func (m *Manager) ValidateCredentials(slug string, credentials map[string]string
 	if err := refuseRetired(svc); err != nil {
 		return err
 	}
-	return validateRequired(svc, credentials)
+	if err := validateRequired(svc, credentials); err != nil {
+		return err
+	}
+	if m.kindForService(svc) == nativeRuntimeKind {
+		return nil
+	}
+	return checkPublished(svc, credentials)
 }
 
 // RequiredCredentialsMet reports whether every required field for the service is present

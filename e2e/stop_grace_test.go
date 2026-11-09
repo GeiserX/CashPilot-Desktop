@@ -119,3 +119,54 @@ func TestMysteriumIsRefusedWithIsolationOff(t *testing.T) {
 		t.Fatal("a container was created for a refused deploy")
 	}
 }
+
+// Turning isolation off takes the fence's drops away, so the node is stopped first,
+// and it cannot be started again until isolation is back on. Ordinary earners keep
+// running.
+func TestTurningIsolationOffStopsMysteriumAndKeepsItStopped(t *testing.T) {
+	e := newEnv(t)
+	setting := "auto"
+	provider := runtime.NewDockerProvider()
+	provider.SetIsolationSetting(func() string { return setting })
+	for _, slug := range []string{"mysterium", "honeygain"} {
+		svc, _ := e.Catalog.Get(slug)
+		creds := map[string]string{}
+		if slug == "honeygain" {
+			creds = honeygainCreds
+		}
+		if _, err := provider.Deploy(e.ctx(), runtime.DeploySpec{Slug: slug, Service: svc, Env: creds}, nil); err != nil {
+			t.Fatalf("deploy %s: %v", slug, err)
+		}
+	}
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.Labels[runtime.LabelFenceGated] != "true" {
+		t.Fatalf("labels = %v, want the fence-gated label", c.Labels)
+	}
+
+	setting = "off"
+	provider.ReconcileFence(e.ctx())
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.State == "running" {
+		t.Fatal("mysterium is still running with isolation off")
+	}
+	if c, _ := e.Docker.Container("cashpilot-honeygain"); c.State != "running" {
+		t.Fatalf("honeygain state = %q, want it left running", c.State)
+	}
+	for name, err := range map[string]error{
+		"Start":   provider.Start(e.ctx(), "mysterium"),
+		"Restart": provider.Restart(e.ctx(), "mysterium", 5),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "only behind the LAN fence") {
+			t.Errorf("%s with isolation off: err = %v, want a refusal", name, err)
+		}
+	}
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.State == "running" {
+		t.Fatal("mysterium was started with isolation off")
+	}
+
+	setting = "on"
+	if err := provider.Start(e.ctx(), "mysterium"); err != nil {
+		t.Fatalf("Start with isolation on: %v", err)
+	}
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.State != "running" {
+		t.Fatalf("state = %q, want running", c.State)
+	}
+}

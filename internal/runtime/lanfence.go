@@ -146,6 +146,7 @@ type fenceAPI interface {
 	ContainerInspect(ctx context.Context, containerID string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error)
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
+	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
 	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
@@ -954,6 +955,10 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		f.setStatus(func(s *FenceStatus) { s.State, s.Error = "failed", err.Error() })
 		return
 	}
+	if mode != FenceModeOn {
+		// Before the drops go: a fence-gated earner must not outlive the fence.
+		stopGated(ctx, cli)
+	}
 	switch {
 	case mode == FenceModeOn:
 		_ = f.apply(ctx, cli)
@@ -973,6 +978,29 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		return
 	}
 	f.setOutside(mode, earners)
+}
+
+// stopGated stops every running fence-gated container (LabelFenceGated). An explicit
+// stop, so a restart policy of unless-stopped does not bring it back; Start refuses
+// it until isolation is on again. Best effort: a failure shows as the container
+// still running, which the dashboard reports.
+func stopGated(ctx context.Context, cli fenceAPI) []string {
+	res, err := cli.ContainerList(ctx, client.ContainerListOptions{Filters: make(client.Filters).Add("label", LabelFenceGated+"=true")})
+	if err != nil {
+		return nil
+	}
+	var stopped []string
+	for _, c := range res.Items {
+		// The filter already says so; a runtime that ignores it must not get every
+		// earner stopped.
+		if c.Labels[LabelFenceGated] != "true" || c.State != container.StateRunning {
+			continue
+		}
+		if _, err := cli.ContainerStop(ctx, c.ID, client.ContainerStopOptions{}); err == nil {
+			stopped = append(stopped, c.ID)
+		}
+	}
+	return stopped
 }
 
 // refreshOutside recounts the earners outside the fence after a deploy or removal,
