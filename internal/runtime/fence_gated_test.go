@@ -263,3 +263,51 @@ func TestAFenceGatedContainerIsLabelled(t *testing.T) {
 		t.Fatal("an ordinary earner must not carry the fence-gated label")
 	}
 }
+
+// A fence that cannot be put back in on mode must not leave a fence-gated node
+// running: the table may already be gone, and the fence is the only thing keeping it
+// off the host's own addresses. Other earners keep running; a fence that applies
+// leaves the node alone.
+func TestAFailedFenceStopsTheFenceGatedNode(t *testing.T) {
+	earner := func(id string, labels map[string]string) map[string]any {
+		return map[string]any{
+			"Id": id, "Names": []string{"/cashpilot-" + id}, "State": "running", "Labels": labels,
+			"HostConfig":      map[string]any{"NetworkMode": FenceNetwork},
+			"NetworkSettings": map[string]any{"Networks": map[string]any{FenceNetwork: map[string]any{"NetworkID": "fencenet"}}},
+		}
+	}
+	gated := earner("mysterium", map[string]string{LabelManaged: "true", LabelService: "mysterium", LabelFenceGated: "true"})
+	plain := earner("honeygain", map[string]string{LabelManaged: "true", LabelService: "honeygain"})
+	stops := func(fake *fakeDocker) (gatedStopped, plainStopped bool) {
+		for _, call := range fake.recorded() {
+			gatedStopped = gatedStopped || call == "POST /containers/mysterium/stop"
+			plainStopped = plainStopped || call == "POST /containers/honeygain/stop"
+		}
+		return
+	}
+
+	for _, exit := range []int{1, 0} {
+		fake := &fakeDocker{earners: []map[string]any{gated, plain}, fenceExit: exit}
+		fake.start(t)
+		p := &DockerProvider{}
+		p.SetIsolationSetting(func() string { return "on" })
+		p.ReconcileFence(context.Background())
+		st := p.FenceStatus()
+		gatedStopped, plainStopped := stops(fake)
+		if plainStopped {
+			t.Errorf("exit %d: an earner that is not fence-gated was stopped (calls %v)", exit, fake.recorded())
+		}
+		if exit != 0 {
+			if st.Mode != FenceModeOn || st.State != "failed" {
+				t.Fatalf("exit %d: status %+v, want on and failed", exit, st)
+			}
+			if !gatedStopped {
+				t.Fatalf("the fence failed (%s) but the fence-gated node was not stopped (calls %v)", st.Error, fake.recorded())
+			}
+			continue
+		}
+		if st.State != "applied" || gatedStopped {
+			t.Fatalf("a fence that applied: status %+v, node stopped %v", st, gatedStopped)
+		}
+	}
+}

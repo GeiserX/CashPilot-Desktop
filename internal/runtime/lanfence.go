@@ -964,7 +964,13 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 	}
 	switch {
 	case mode == FenceModeOn:
-		_ = f.apply(ctx, cli)
+		if err := f.apply(ctx, cli); err != nil {
+			// The table may be gone (a ruleset flush, a runtime restart that brought
+			// the node back), so a fence-gated earner must not keep running on it.
+			if gatedErr = f.stopGated(ctx, cli); gatedErr != nil {
+				f.setStatus(func(s *FenceStatus) { s.Error = withGatedErr(s.Error, gatedErr) })
+			}
+		}
 		if fresh, err := listEarners(ctx, cli); err == nil {
 			earners = fresh
 		}
