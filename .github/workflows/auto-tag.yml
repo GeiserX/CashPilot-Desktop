@@ -1,8 +1,16 @@
 name: Auto Tag
 
-# Conventional-commit auto-release on push to main (mirrors the CashPilot web repo).
-# Computes the next semver from the commits since the last tag, creates + pushes the
-# tag, then CALLS desktop-release.yml as a reusable workflow to build and publish.
+# One release a day at most (the CashPilot web repo does the same). A release used to
+# be cut on every merge that touched the app, which on a busy day was four or more
+# version bumps, each one an update notice for everyone who runs the app. Merges now
+# collect on main and the daily run releases them together: it computes the next semver
+# from the commits since the last tag, creates + pushes the tag, then CALLS
+# desktop-release.yml as a reusable workflow to build and publish. On a day when no file
+# the app is built from changed since the last tag, it tags nothing.
+# An urgent fix does not wait: start this workflow by hand (Actions, "Auto Tag",
+# "Run workflow"), which releases main as it is. A hand-started run always cuts a
+# version, also when nothing changed: that is how a release whose build failed is
+# cut again.
 #
 # The reusable-call is deliberate: a tag pushed with the default GITHUB_TOKEN does NOT
 # trigger another workflow (GitHub's loop-prevention), so relying on desktop-release.yml's
@@ -11,23 +19,15 @@ name: Auto Tag
 # desktop-release.yml through its tag trigger, unchanged.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '*.go'
-      - 'internal/**'
-      - 'frontend/**'
-      - 'services/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'wails.json'
+  schedule:
+    - cron: '47 3 * * *'  # 03:47 UTC, every day
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  # Serialize so two quick merges can't race on creating the same next tag.
+  # Serialize so a daily run and a hand-started one can't race on creating the same next tag.
   group: auto-tag
   cancel-in-progress: false
 
@@ -35,7 +35,9 @@ jobs:
   tag:
     name: Bump version and tag
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    # main only. "Run workflow" offers every branch, and a run from another one
+    # would tag and publish code that is not merged.
+    if: github.ref == 'refs/heads/main'
     outputs:
       new_tag: ${{ steps.version.outputs.new_tag }}
     steps:
@@ -46,10 +48,28 @@ jobs:
 
       - name: Compute next version
         id: version
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | head -1)
           if [ -z "$LATEST" ]; then
             LATEST="v0.0.0"
+          fi
+
+          # Nothing to release: no file the app is built from changed since the last
+          # tag. Without this the daily run would bump the version every day.
+          # A hand-started run skips the check and always releases: it is how a
+          # release whose build failed is cut again, as the next patch version.
+          if [ "$LATEST" != "v0.0.0" ] && [ "$EVENT" != "workflow_dispatch" ]; then
+            CHANGED=$(git diff --name-only "$LATEST"..HEAD -- \
+              '*.go' internal frontend services go.mod go.sum wails.json \
+              build trayicons packaging catalog-overlay \
+              .github/workflows/desktop-release.yml)
+            if [ -z "$CHANGED" ]; then
+              echo "Nothing the app is built from changed since $LATEST; no release."
+              exit 0
+            fi
+            echo "Changed since $LATEST:"; echo "$CHANGED"
           fi
 
           VERSION="${LATEST#v}"
