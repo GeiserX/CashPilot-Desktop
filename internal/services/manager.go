@@ -292,7 +292,7 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	provider, runtimeKind := m.resolveProvider(kind)
 	if runtimeKind != nativeRuntimeKind {
 		if err := checkPublished(svc, credentials); err != nil {
-			return store.Deployment{}, err
+			return store.Deployment{}, refusedDeploy(svc, err)
 		}
 	}
 	// Copies are read only when copies are involved, so a plain deploy asks the
@@ -746,9 +746,28 @@ func checkPublished(svc catalog.Service, credentials map[string]string) error {
 		}
 	}
 	if err := svc.Docker.CheckPublishedValues(env); err != nil {
-		return fmt.Errorf("invalid value for field: %w", err)
+		return unpublishableError{err}
 	}
 	return nil
+}
+
+// unpublishableError is a value ui_port or udp_port_range cannot publish.
+type unpublishableError struct{ err error }
+
+func (e unpublishableError) Error() string { return "invalid value for field: " + e.err.Error() }
+func (e unpublishableError) Unwrap() error { return e.err }
+
+// refusedDeploy adds to a value that cannot be published that the deploy stopped
+// before anything was touched. A node created under a wider cap (Mysterium's UDP
+// range was capped at 1,000 ports, now 300) keeps running with its range, and its
+// redeploy is refused until the range is narrowed (web app/main.py
+// _fence_gated_spec). Any other error, nil included, is returned as is.
+func refusedDeploy(svc catalog.Service, err error) error {
+	var unpublishable unpublishableError
+	if errors.As(err, &unpublishable) {
+		return fmt.Errorf("%w. Nothing was deployed; a running %s was not touched", err, svc.Name)
+	}
+	return err
 }
 
 // isPortRange reports whether value is "start:end" with 1 <= start <= end <= 65535.
@@ -775,6 +794,17 @@ func (m *Manager) ValidateCredentials(slug string, credentials map[string]string
 		return nil
 	}
 	return checkPublished(svc, credentials)
+}
+
+// ValidateDeploy is ValidateCredentials for a deploy: a value that cannot be
+// published also says that nothing was deployed and the running service was not
+// touched, which a caller that only saves the credentials must not claim.
+func (m *Manager) ValidateDeploy(slug string, credentials map[string]string) error {
+	err := m.ValidateCredentials(slug, credentials)
+	if svc, ok := m.catalog.Get(slug); ok {
+		return refusedDeploy(svc, err)
+	}
+	return err
 }
 
 // RequiredCredentialsMet reports whether every required field for the service is present

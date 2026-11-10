@@ -29,7 +29,7 @@ func mysteriumShaped() catalog.Service {
 			},
 			Runtime:      "runc",
 			UIPort:       &catalog.UIPort{Env: "UI_ADDRESS", Port: 4449},
-			UDPPortRange: &catalog.UDPPortRange{Env: "UDP_PORTS", MaxPorts: 1000},
+			UDPPortRange: &catalog.UDPPortRange{Env: "UDP_PORTS", MaxPorts: 300},
 			FenceGated:   true,
 			CapAdd:       []string{"NET_ADMIN", "SETUID", "SETGID"},
 			Devices:      []string{"/dev/net/tun"},

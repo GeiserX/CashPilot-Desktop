@@ -751,3 +751,48 @@ func TestDeployServiceValidatesBeforePersist(t *testing.T) {
 		t.Fatalf("a rejected deploy must not persist creds, got %v", got)
 	}
 }
+
+// A node deployed when Mysterium's UDP cap was 1,000 keeps that range in its saved
+// settings. A redeploy from the dashboard sends no values, so the saved range is
+// what would be published: it is refused before the runtime is asked, the message
+// says the running node was not touched and what range to use, and the saved
+// settings stay as they were.
+func TestARedeployOfASavedRangeWiderThanTheCapIsRefusedNotCut(t *testing.T) {
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatalf("config.NewManager error: %v", err)
+	}
+	st, err := store.Open(cfg.DataDir())
+	if err != nil {
+		t.Fatalf("store.Open error: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{
+		"services/bandwidth/node.yml": {Data: []byte("name: Node\nslug: node\ncategory: bandwidth\nstatus: active\n" +
+			"docker:\n  image: node/image:1.0.0\n  env:\n    - key: UDP_PORTS\n      default: \"23000:23029\"\n      port_range: true\n" +
+			"  udp_port_range:\n    env: UDP_PORTS\n    max_ports: 300\n")},
+	})
+	if err != nil {
+		t.Fatalf("catalog.LoadEmbedded error: %v", err)
+	}
+	saved := map[string]string{"UDP_PORTS": "23000:23999"}
+	if err := st.SaveCredentials("node", saved); err != nil {
+		t.Fatalf("SaveCredentials error: %v", err)
+	}
+	provider := runtime.NewDockerProvider()
+	app := &App{cfg: cfg, store: st, catalog: cat, runtime: provider, services: services.NewManager(provider, cat, st), ctx: context.Background()}
+
+	_, err = app.DeployService("node", nil, nil, nil)
+	if err == nil {
+		t.Fatal("a saved 1000-port range redeployed under a cap of 300")
+	}
+	for _, want := range []string{"spans 1000 ports", "such as 23000:23299", "a running Node was not touched"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+	if got, _ := st.GetCredentials("node"); got["UDP_PORTS"] != "23000:23999" {
+		t.Fatalf("saved settings = %v, want them unchanged", got)
+	}
+}

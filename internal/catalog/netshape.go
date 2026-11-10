@@ -12,9 +12,12 @@ import (
 // ui_bindings, expand_udp_range, MAX_UDP_PORTS), so a value one app accepts the
 // other publishes the same way.
 
-// MaxUDPPorts is the most UDP ports one udp_port_range may publish. Each published
-// port is a rule and, with Docker's userland proxy, a process on the host.
-const MaxUDPPorts = 1000
+// MaxUDPPorts is the most UDP ports one udp_port_range may publish, the web catalog's
+// ceiling. Each published port is a rule and, with Docker's userland proxy, a process
+// on the host, and each one slows the container's start: measured on a live node,
+// 300 ports start in about 12 s and 1,000 in about 51 s. An entry's own max_ports
+// (UDPPortRange.Cap) is what a deploy enforces; this only bounds it.
+const MaxUDPPorts = 300
 
 // UIPort is docker.ui_port: Port is published on each address the Env var lists.
 type UIPort struct {
@@ -92,7 +95,9 @@ func ExpandUDPRange(value string, limit int) ([]int, error) {
 	first, _ := strconv.Atoi(start)
 	last, _ := strconv.Atoi(end)
 	if n := last - first + 1; n > limit {
-		return nil, fmt.Errorf("%q spans %d ports; at most %d can be published", value, n, limit)
+		return nil, fmt.Errorf("%q spans %d ports; at most %d can be published, since every published port "+
+			"slows the container's start. Choose a range of %d ports or fewer, such as %d:%d, and forward the "+
+			"same range on your router", value, n, limit, limit, first, min(first+limit-1, 65535))
 	}
 	ports := make([]int, 0, last-first+1)
 	for p := first; p <= last; p++ {
