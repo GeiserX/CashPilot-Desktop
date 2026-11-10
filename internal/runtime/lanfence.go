@@ -204,12 +204,16 @@ type fence struct {
 	stoppedPath string
 	stoppedMem  map[string]bool
 	stoppedMu   sync.Mutex
-	egress      string
-	egressAt    time.Time
-	mu          sync.Mutex // the helper and the apply sequence
-	reconcileMu sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
-	stateMu     sync.Mutex // status
-	status      FenceStatus
+	// startRefused names the fence-gated containers whose last start from
+	// startGated Docker refused; the guard leaves them to the FenceRecheck
+	// reconcile. stateMu guards it.
+	startRefused map[string]bool
+	egress       string
+	egressAt     time.Time
+	mu           sync.Mutex // the helper and the apply sequence
+	reconcileMu  sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
+	stateMu      sync.Mutex // status
+	status       FenceStatus
 }
 
 // FenceSetting normalises a Settings value: auto, on or off. Anything else is auto.

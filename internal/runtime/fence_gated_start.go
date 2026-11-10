@@ -28,7 +28,11 @@ import (
 // back within FenceGuard, the interval of the web worker's guard (app/lan_fence.py
 // GUARD_SECONDS), instead of the five minutes of the fence recheck. It runs only
 // while the last reconcile applied the fence: a fence that fails to apply is retried
-// every FenceRecheck as before, not every FenceGuard.
+// every FenceRecheck as before, not every FenceGuard. A node whose start Docker
+// refused (a published port another program holds) is also left to the FenceRecheck
+// reconcile: each guard reconcile runs the fence helper, and a start that keeps
+// failing would run it every FenceGuard, forever. The refused start is named in the
+// status, and a start that works, from the recheck or the user, lifts the hold.
 //
 // A stop the user asked for stays a stop. Stop records the container's name, and
 // neither the reconcile nor the guard starts a recorded one; Start, Restart and
@@ -64,14 +68,49 @@ func (p *DockerProvider) GuardFenceGated(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	waiting, err := p.fence.waiting(ctx, cli)
+	nodes, err := p.fence.waitingNodes(ctx, cli)
 	cli.Close()
 	if err != nil {
 		return
 	}
-	p.fence.setStatus(func(s *FenceStatus) { s.Waiting = waiting })
-	if len(waiting) > 0 {
-		p.ReconcileFence(ctx)
+	p.fence.setStatus(func(s *FenceStatus) { s.Waiting = serviceLabels(nodes) })
+	refused := p.fence.refusedStarts()
+	for _, c := range nodes {
+		if !refused[containerLabel(c)] {
+			p.ReconcileFence(ctx)
+			return
+		}
+	}
+}
+
+// refusedStarts names the fence-gated containers whose last start from startGated
+// Docker refused. The guard leaves them to the FenceRecheck reconcile.
+func (f *fence) refusedStarts() map[string]bool {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	return f.startRefused
+}
+
+// setRefusedStarts replaces the record of refused starts with this pass's.
+func (f *fence) setRefusedStarts(names map[string]bool) {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	f.startRefused = names
+}
+
+// startedByUser lifts the guard's hold on a container the user just started or
+// deployed, so a later crash brings it back within FenceGuard again.
+func (f *fence) startedByUser(name string) {
+	f.stateMu.Lock()
+	defer f.stateMu.Unlock()
+	if f.startRefused[name] {
+		next := make(map[string]bool, len(f.startRefused))
+		for n := range f.startRefused {
+			if n != name {
+				next[n] = true
+			}
+		}
+		f.startRefused = next
 	}
 }
 
@@ -187,9 +226,9 @@ func (f *fence) listManaged(ctx context.Context, cli fenceAPI) ([]container.Summ
 	return res.Items, nil
 }
 
-// waiting names, by service, the fence-gated earners that are down and waiting for
-// the fence.
-func (f *fence) waiting(ctx context.Context, cli fenceAPI) ([]string, error) {
+// waitingNodes lists the fence-gated containers that are down and waiting for the
+// fence.
+func (f *fence) waitingNodes(ctx context.Context, cli fenceAPI) ([]container.Summary, error) {
 	items, err := f.listManaged(ctx, cli)
 	if err != nil {
 		return nil, err
@@ -198,12 +237,30 @@ func (f *fence) waiting(ctx context.Context, cli fenceAPI) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	var out []container.Summary
+	for _, c := range items {
+		if f.waitsForFence(c, stopped) {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// waiting names, by service, the fence-gated earners that are down and waiting for
+// the fence.
+func (f *fence) waiting(ctx context.Context, cli fenceAPI) ([]string, error) {
+	nodes, err := f.waitingNodes(ctx, cli)
+	if err != nil {
+		return nil, err
+	}
+	return serviceLabels(nodes), nil
+}
+
+// serviceLabels names containers by service, each once, sorted.
+func serviceLabels(nodes []container.Summary) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, c := range items {
-		if !f.waitsForFence(c, stopped) {
-			continue
-		}
+	for _, c := range nodes {
 		label := c.Labels[LabelService]
 		if label == "" {
 			label = containerLabel(c)
@@ -214,7 +271,7 @@ func (f *fence) waiting(ctx context.Context, cli fenceAPI) ([]string, error) {
 		}
 	}
 	sort.Strings(out)
-	return out, nil
+	return out
 }
 
 // refreshWaiting puts the waiting earners in the status. A failed read leaves the
@@ -237,14 +294,17 @@ func (f *fence) startGated(ctx context.Context, cli fenceAPI) error {
 		return fmt.Errorf("could not read which fence-gated earners were stopped from CashPilot, so none was started: %w", err)
 	}
 	var failed []string
+	refused := map[string]bool{}
 	for _, c := range items {
 		if !f.waitsForFence(c, stopped) {
 			continue
 		}
 		if _, err := cli.ContainerStart(ctx, c.ID, client.ContainerStartOptions{}); err != nil {
 			failed = append(failed, fmt.Sprintf("%s (%v)", containerLabel(c), err))
+			refused[containerLabel(c)] = true
 		}
 	}
+	f.setRefusedStarts(refused)
 	if len(failed) > 0 {
 		return fmt.Errorf("could not start %s behind the LAN fence", strings.Join(failed, ", "))
 	}
@@ -254,10 +314,13 @@ func (f *fence) startGated(ctx context.Context, cli fenceAPI) error {
 // pinGatedRestart moves each fence-gated container that still has a Docker restart
 // policy (one deployed before this change, with unless-stopped) to restart policy
 // "no", in place: docker update changes the policy without touching the container.
-// One that is down at that moment is recorded as stopped by the user. Under
-// unless-stopped Docker would not have started it either: the user stopped it, or
-// the fence did and the old version left it for the user to start. The record keeps
-// that, and Start lifts it.
+// One that is down at that moment with no start error is recorded as stopped by the
+// user. Under unless-stopped Docker would not have started it either: the user
+// stopped it, or the fence did and the old version left it for the user to start.
+// The record keeps that, and Start lifts it. One that is down with a start error
+// (State.Error, "network ... not found" after Unraid's boot removed our network) is
+// one Docker tried to start: it is not recorded, so CashPilot starts it behind the
+// fence (reattach, or startGated).
 func (f *fence) pinGatedRestart(ctx context.Context, cli fenceAPI) error {
 	items, err := f.listManaged(ctx, cli)
 	if err != nil {
@@ -278,7 +341,7 @@ func (f *fence) pinGatedRestart(ctx context.Context, cli fenceAPI) error {
 			continue
 		}
 		st := got.Container.State
-		if st == nil || (!st.Running && !st.Restarting) {
+		if st == nil || (!st.Running && !st.Restarting && st.Error == "") {
 			if err := f.markStopped(name, true); err != nil {
 				failed = append(failed, fmt.Sprintf("%s (%v)", name, err))
 				continue

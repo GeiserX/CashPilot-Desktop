@@ -57,6 +57,9 @@ type Container struct {
 	RestartPolicy string
 	// ExtraNetworks are networks a test attached it to beside its network mode.
 	ExtraNetworks []string
+	// StateError is inspect's State.Error: why Docker's last start of it failed.
+	// A start that works clears it.
+	StateError string
 }
 
 // PortBinding is one host binding of a published port.
@@ -98,8 +101,9 @@ type Docker struct {
 	// networks are the user-defined networks, by name. The app creates one, its
 	// LAN fence network, and runs a one-shot helper container to write the fence.
 	networks map[string]map[string]any
-	// failInspect and failStop name containers whose inspect or stop fails.
-	failInspect, failStop map[string]bool
+	// failInspect, failStop and failStart name containers whose inspect, stop or
+	// start fails.
+	failInspect, failStop, failStart map[string]bool
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -476,7 +480,8 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 	id, action, _ := strings.Cut(rest, "/")
 
 	d.mu.Lock()
-	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id))
+	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id)) ||
+		(action == "start" && d.failing(d.failStart, id))
 	d.mu.Unlock()
 	if failed {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "fake daemon: " + action + " failed for " + id})
@@ -540,7 +545,7 @@ func (d *Docker) inspect(w http.ResponseWriter, id string) {
 		"Id":     c.ID,
 		"Name":   "/" + c.Name,
 		"Image":  c.Image,
-		"State":  map[string]any{"Status": c.State, "Running": c.State == "running"},
+		"State":  map[string]any{"Status": c.State, "Running": c.State == "running", "Error": c.StateError},
 		"Config": map[string]any{"Image": c.Image, "Labels": c.Labels, "Env": c.Env, "Cmd": c.Cmd},
 		"Mounts": mounts,
 		"HostConfig": map[string]any{
@@ -610,6 +615,28 @@ func (d *Docker) FailInspect(name string) { d.setFail(&d.failInspect, name) }
 // FailStop makes stopping this container fail with a server error.
 func (d *Docker) FailStop(name string) { d.setFail(&d.failStop, name) }
 
+// FailStart makes starting this container fail with a server error (fail true), or
+// work again (fail false).
+func (d *Docker) FailStart(name string, fail bool) {
+	if fail {
+		d.setFail(&d.failStart, name)
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.failStart, name)
+}
+
+// SetStateError sets a container's State.Error, as Docker records a start that
+// failed ("network ... not found").
+func (d *Docker) SetStateError(name, message string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		c.StateError = message
+	}
+}
+
 func (d *Docker) setFail(set *map[string]bool, name string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -634,6 +661,9 @@ func (d *Docker) setState(w http.ResponseWriter, id, state string) {
 		return
 	}
 	c.State = state
+	if state == "running" {
+		c.StateError = ""
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

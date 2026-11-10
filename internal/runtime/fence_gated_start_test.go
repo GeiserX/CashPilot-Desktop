@@ -297,3 +297,91 @@ func TestARestartPolicyThatCannotBeChangedIsNamed(t *testing.T) {
 		t.Fatalf("status error = %q, want the node named", st.Error)
 	}
 }
+
+// helperRuns counts the fence helper containers created since the last ResetCalls.
+func helperRuns(docker *harness.Docker) int {
+	n := 0
+	for _, c := range docker.Calls() {
+		if c == "FENCE POST /containers/create" {
+			n++
+		}
+	}
+	return n
+}
+
+// A node Docker refuses to start (a published port another program holds) is left
+// to the five-minute recheck: the guard does not run the fence helper for it every
+// thirty seconds. A start that works lifts the hold, so a later crash comes back
+// from the guard again.
+func TestTheGuardDoesNotRetryARefusedStart(t *testing.T) {
+	docker, p := gatedDaemon(t, filepath.Join(t.TempDir(), "stopped"))
+	docker.SetState("cashpilot-mysterium", "exited")
+	docker.FailStart("cashpilot-mysterium", true)
+	p.ReconcileFence(context.Background())
+	if got := nodeState(docker); got != "exited" {
+		t.Fatalf("state = %q, want the refused start left exited", got)
+	}
+	docker.ResetCalls()
+	for range 3 {
+		p.GuardFenceGated(context.Background())
+	}
+	if n := helperRuns(docker); n != 0 {
+		t.Fatalf("the guard ran the fence helper %d times for a node whose start Docker refuses", n)
+	}
+	if w := p.FenceStatus().Waiting; !slices.Equal(w, []string{"mysterium"}) {
+		t.Fatalf("waiting = %v, want mysterium still listed", w)
+	}
+
+	docker.FailStart("cashpilot-mysterium", false)
+	p.ReconcileFence(context.Background()) // the five-minute recheck
+	if got := nodeState(docker); got != "running" {
+		t.Fatalf("state = %q, want the recheck to start it once Docker allows", got)
+	}
+	docker.SetState("cashpilot-mysterium", "exited")
+	p.GuardFenceGated(context.Background())
+	if got := nodeState(docker); got != "running" {
+		t.Fatalf("state = %q, want the guard to bring the next crash back", got)
+	}
+}
+
+// A user Start lifts the guard's hold on a node whose start was refused before.
+func TestAUserStartLiftsTheRefusedStartHold(t *testing.T) {
+	docker, p := gatedDaemon(t, filepath.Join(t.TempDir(), "stopped"))
+	docker.SetState("cashpilot-mysterium", "exited")
+	docker.FailStart("cashpilot-mysterium", true)
+	p.ReconcileFence(context.Background())
+	docker.FailStart("cashpilot-mysterium", false)
+	if err := p.Start(context.Background(), "mysterium"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	docker.SetState("cashpilot-mysterium", "exited")
+	p.GuardFenceGated(context.Background())
+	if got := nodeState(docker); got != "running" {
+		t.Fatalf("state = %q, want the guard to bring back a crash after the user's Start", got)
+	}
+}
+
+// An upgrade at a boot that failed to start the old node (Unraid removed our network,
+// so Docker's start said "network ... not found") is not a stop from the user: the
+// node is started behind the fence and not recorded, so the guard brings back its
+// next crash.
+func TestAnUpgradedNodeDockerFailedToStartIsNotRecordedAsStopped(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "stopped")
+	docker, p := gatedDaemon(t, record)
+	docker.SetRestartPolicy("cashpilot-mysterium", "unless-stopped")
+	docker.SetState("cashpilot-mysterium", "exited")
+	docker.SetStateError("cashpilot-mysterium", "network 0123abcd not found")
+	p.ReconcileFence(context.Background())
+	if c, _ := docker.Container("cashpilot-mysterium"); c.RestartPolicy != "no" || c.State != "running" {
+		t.Fatalf("policy %q, state %q: want no and started behind the fence", c.RestartPolicy, c.State)
+	}
+	stopped, err := p.fence.userStopped()
+	if err != nil || stopped["cashpilot-mysterium"] {
+		t.Fatalf("stop record = %v (%v), want the node not recorded as stopped by the user", stopped, err)
+	}
+	docker.SetState("cashpilot-mysterium", "exited")
+	p.GuardFenceGated(context.Background())
+	if got := nodeState(docker); got != "running" {
+		t.Fatalf("state = %q, want the guard to bring back its next crash", got)
+	}
+}

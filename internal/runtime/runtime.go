@@ -411,6 +411,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		// A record that cannot be cleared only keeps a crashed node down until the
 		// next Start, so it does not fail the deploy.
 		_ = p.fence.markStopped(name, false)
+		p.fence.startedByUser(name)
 	}
 
 	return ContainerInfo{
@@ -485,6 +486,7 @@ func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, n
 	// brings it back after a crash or a reboot again. A record that cannot be cleared
 	// only keeps a crashed node down until the next Start.
 	_ = p.fence.markStopped(name, false)
+	p.fence.startedByUser(name)
 	return nil
 }
 
