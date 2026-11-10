@@ -48,7 +48,10 @@ func (p *DockerProvider) RecoverSetAside(ctx context.Context) {
 	defer p.fence.reconcileMu.Unlock()
 	for _, c := range res.Items {
 		if base, ok := setAsideBase(firstName(c.Names), c.Labels); ok {
+			// Not while a deploy of the same container runs (lockReplacing).
+			unlock := p.lockReplacing(base)
 			_, _ = recoverSetAside(ctx, cli, base)
+			unlock()
 		}
 	}
 }
@@ -123,6 +126,31 @@ func removeSetAside(ctx context.Context, cli *client.Client, name string, volume
 		return fmt.Errorf("could not remove %s, the container a deploy that did not finish had set aside: %w", aside, err)
 	}
 	return nil
+}
+
+// onlySetAside reports whether copy n of slug exists only set aside: nothing holds
+// name, and the container under name's set-aside name is that copy's own (a roll-back
+// that could not rename it back left it there). Its inspect comes with it.
+func onlySetAside(ctx context.Context, cli inspectClient, name, slug string, n int) (container.InspectResponse, bool, error) {
+	if _, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); !cerrdefs.IsNotFound(err) {
+		return container.InspectResponse{}, false, err
+	}
+	aside := name + setAsideSuffix
+	left, err := cli.ContainerInspect(ctx, aside, client.ContainerInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return container.InspectResponse{}, false, nil
+	}
+	if err != nil {
+		return container.InspectResponse{}, false, fmt.Errorf("could not check %s: %w", aside, err)
+	}
+	if left.Container.Config == nil {
+		return container.InspectResponse{}, false, nil
+	}
+	labels := left.Container.Config.Labels
+	if base, ok := setAsideBase(aside, labels); !ok || base != name || labels[LabelService] != slug || instanceOf(labels) != n {
+		return container.InspectResponse{}, false, nil
+	}
+	return left.Container, true, nil
 }
 
 // withoutSetAside drops each container set aside beside the one that now holds its

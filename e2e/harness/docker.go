@@ -120,6 +120,9 @@ type Docker struct {
 	// failInspectFrom holds, by the exact name or id a request asks for, the count
 	// of inspects under it from which on each one fails; inspects counts them.
 	failInspectFrom, inspects map[string]int
+	// beforeCall holds, by call, a hook the next such request runs before it is
+	// answered (BeforeCall).
+	beforeCall map[string]func()
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -313,7 +316,11 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 		call = "FENCE " + call
 	}
 	d.record(call, r.URL.RawQuery)
+	hook := d.takeHook(call, path, r.Method)
 	d.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 
 	switch {
 	case path == "/_ping":
@@ -679,6 +686,39 @@ func (d *Docker) ClearFailures() {
 	defer d.mu.Unlock()
 	d.failInspect, d.failStop, d.failStart, d.failRename, d.failRemove = nil, nil, nil, nil, nil
 	d.failInspectFrom = nil
+}
+
+// BeforeCall makes the next request seen as call ("METHOD /path") run hook before
+// it is answered, outside the fake's lock, so the hook can call the fake. A
+// container's path may name it by name or by id: "POST /containers/cashpilot-x/start"
+// matches a start of that container under its id too. A test uses it to act at an
+// exact point in the middle of an operation.
+func (d *Docker) BeforeCall(call string, hook func()) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.beforeCall == nil {
+		d.beforeCall = map[string]func(){}
+	}
+	d.beforeCall[call] = hook
+}
+
+// takeHook removes and returns the hook for this request, if any. Called with d.mu
+// held.
+func (d *Docker) takeHook(call, path, method string) func() {
+	keys := []string{call}
+	if rest, ok := strings.CutPrefix(path, "/containers/"); ok {
+		id, action, _ := strings.Cut(rest, "/")
+		if c := d.find(id); c != nil {
+			keys = append(keys, method+" /containers/"+c.Name+"/"+action)
+		}
+	}
+	for _, k := range keys {
+		if hook, ok := d.beforeCall[k]; ok {
+			delete(d.beforeCall, k)
+			return hook
+		}
+	}
+	return nil
 }
 
 // FailStop makes stopping this container fail with a server error.

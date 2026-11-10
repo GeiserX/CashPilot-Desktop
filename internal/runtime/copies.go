@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
 
@@ -180,6 +181,14 @@ func (p *DockerProvider) RemoveCopy(ctx context.Context, slug string, n, stopTim
 	}
 	defer cli.Close()
 	name, err := managedCopy(ctx, cli, slug, n)
+	if cerrdefs.IsNotFound(err) {
+		// A roll-back that could not rename the copy back leaves only it, set aside.
+		if _, ok, aerr := onlySetAside(ctx, cli, copyName(slug, n), slug, n); aerr != nil {
+			return aerr
+		} else if ok {
+			return removeSetAside(ctx, cli, copyName(slug, n), false)
+		}
+	}
 	if err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/e2e/harness"
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -395,6 +396,170 @@ func TestARemoveCopyThatFailsCanBeRetried(t *testing.T) {
 			p.RecoverSetAside(context.Background())
 			if got := managedNames(docker, svc.Slug); len(got) != 0 {
 				t.Fatalf("containers after RemoveCopy = %v, want none", got)
+			}
+		})
+	}
+}
+
+// A deploy cancelled while Docker stops the old node still reads what the stop did,
+// with a context of its own: a node the stop did take down runs again, and the
+// error does not claim it still runs.
+func TestACancelledStopThatStoppedTheNodeStartsItAgain(t *testing.T) {
+	docker, p, _ := rollbackDaemon(t)
+	svc := plainEarner()
+	node := containerName(svc.Slug)
+	old := deployed(t, docker, p, svc)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	docker.FailStop(node)
+	docker.BeforeCall("POST /containers/"+node+"/stop", func() {
+		// The daemon finishes the stop; the client has given up waiting.
+		docker.SetState(node, "exited")
+		cancel()
+	})
+	_, err := p.Deploy(ctx, DeploySpec{Slug: svc.Slug, Service: svc}, nil)
+	if err == nil {
+		t.Fatal("a cancelled deploy succeeded")
+	}
+	if strings.Contains(err.Error(), "still running") {
+		t.Errorf("error %q says the stopped node still runs", err)
+	}
+	sameBox(t, box(docker, svc.Slug), map[string]string{node: old.ID + " running"})
+}
+
+// leaveOnlySetAside redeploys svc's copy n so that Docker refuses the replacement and
+// the old node cannot get its name back: it is left alone, stopped, set aside.
+func leaveOnlySetAside(t *testing.T, docker *harness.Docker, p *DockerProvider, svc catalog.Service, n int) harness.Container {
+	t.Helper()
+	name := copyName(svc.Slug, n)
+	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: svc.Slug, Service: svc, Instance: n}, nil); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	old, _ := docker.Container(name)
+	docker.FailStartOfNext(name, portRefusal)
+	docker.FailRename(name + setAsideSuffix)
+	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: svc.Slug, Service: svc, Instance: n}, nil); err == nil {
+		t.Fatal("the redeploy succeeded although Docker refused the replacement")
+	}
+	docker.ClearFailures()
+	sameBox(t, box(docker, svc.Slug), map[string]string{name + setAsideSuffix: old.ID + " exited"})
+	return old
+}
+
+// A service whose only container is the one a roll-back could not rename back is
+// still planned and removed, with the same data choices as any other removal.
+func TestAServiceLeftOnlySetAsideCanBeRemoved(t *testing.T) {
+	svc := plainEarner()
+	node := containerName(svc.Slug)
+	critical := map[string]string{"/data": "the node identity"}
+
+	t.Run("plan", func(t *testing.T) {
+		docker, p, _ := rollbackDaemon(t)
+		leaveOnlySetAside(t, docker, p, svc, 1)
+		plan, err := p.PlanRemoval(context.Background(), svc.Slug, critical)
+		if err != nil {
+			t.Fatalf("PlanRemoval: %v", err)
+		}
+		if len(plan.Volumes) != 1 || plan.Volumes[0].Source != "cashpilot-orderly-data" || !plan.Volumes[0].Critical {
+			t.Fatalf("plan = %+v, want the critical data volume", plan)
+		}
+	})
+	t.Run("keep the data", func(t *testing.T) {
+		docker, p, _ := rollbackDaemon(t)
+		leaveOnlySetAside(t, docker, p, svc, 1)
+		if err := p.Remove(context.Background(), svc.Slug, RemoveOptions{Critical: critical}); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		sameBox(t, box(docker, svc.Slug), map[string]string{})
+		if !slices.Contains(docker.Volumes(), "cashpilot-orderly-data") {
+			t.Fatalf("a remove that keeps the data took the volume: %v", docker.Volumes())
+		}
+	})
+	t.Run("critical data needs its own yes", func(t *testing.T) {
+		docker, p, _ := rollbackDaemon(t)
+		old := leaveOnlySetAside(t, docker, p, svc, 1)
+		err := p.Remove(context.Background(), svc.Slug, RemoveOptions{DeleteData: true, Critical: critical})
+		if err == nil || !strings.Contains(err.Error(), "cannot be recovered") {
+			t.Fatalf("Remove = %v, want the critical-data refusal", err)
+		}
+		sameBox(t, box(docker, svc.Slug), map[string]string{node + setAsideSuffix: old.ID + " exited"})
+		if err := p.Remove(context.Background(), svc.Slug, RemoveOptions{DeleteData: true, AllowCritical: true, Critical: critical}); err != nil {
+			t.Fatalf("Remove with the yes: %v", err)
+		}
+		sameBox(t, box(docker, svc.Slug), map[string]string{})
+		if slices.Contains(docker.Volumes(), "cashpilot-orderly-data") {
+			t.Fatalf("a remove that deletes the data kept the volume: %v", docker.Volumes())
+		}
+	})
+	t.Run("another service under the set-aside name", func(t *testing.T) {
+		docker, p, _ := rollbackDaemon(t)
+		other := plainEarner()
+		other.Slug, other.Docker.Volumes, other.Docker.Ports = svc.Slug+"-replaced", nil, nil
+		theirs := deployed(t, docker, p, other)
+		if _, err := p.PlanRemoval(context.Background(), svc.Slug, critical); !cerrdefs.IsNotFound(err) {
+			t.Fatalf("PlanRemoval = %v, want not found", err)
+		}
+		if err := p.Remove(context.Background(), svc.Slug, RemoveOptions{DeleteData: true, AllowCritical: true, Critical: critical}); !cerrdefs.IsNotFound(err) {
+			t.Fatalf("Remove = %v, want not found", err)
+		}
+		if now, ok := docker.Container(theirs.Name); !ok || now.ID != theirs.ID || now.State != "running" {
+			t.Fatalf("the other service's container was touched: %+v (box %v)", now, docker.Names())
+		}
+	})
+}
+
+// A copy whose only container is set aside is still listed and removed, so the
+// service's removal does not stop at it.
+func TestACopyLeftOnlySetAsideCanBeRemoved(t *testing.T) {
+	docker, p, _ := rollbackDaemon(t)
+	svc := plainEarner()
+	svc.Docker.Ports, svc.Docker.Volumes = nil, nil
+	leaveOnlySetAside(t, docker, p, svc, 2)
+	copies, err := p.Copies(context.Background(), svc.Slug)
+	if err != nil || !slices.Equal(copies, []int{2}) {
+		t.Fatalf("Copies = %v, %v; want [2]", copies, err)
+	}
+	if err := p.RemoveCopy(context.Background(), svc.Slug, 2, 5); err != nil {
+		t.Fatalf("RemoveCopy: %v", err)
+	}
+	sameBox(t, box(docker, svc.Slug), map[string]string{})
+}
+
+// Recovery, at app start or at the start of another deploy, never takes the
+// replacement a deploy in flight has made and not yet started: it waits for that
+// deploy, which then ends with its replacement running.
+func TestRecoveryWaitsForADeployInFlight(t *testing.T) {
+	svc := plainEarner()
+	node := containerName(svc.Slug)
+	for what, settle := range map[string]func(p *DockerProvider) error{
+		"recovery at app start": func(p *DockerProvider) error { p.RecoverSetAside(context.Background()); return nil },
+		"another deploy": func(p *DockerProvider) error {
+			_, err := p.Deploy(context.Background(), DeploySpec{Slug: svc.Slug, Service: svc}, nil)
+			return err
+		},
+	} {
+		t.Run(what, func(t *testing.T) {
+			docker, p, _ := rollbackDaemon(t)
+			deployed(t, docker, p, svc)
+			done := make(chan error, 1)
+			docker.BeforeCall("POST /containers/"+node+"/start", func() {
+				// The replacement exists, created, and the old node sits set aside.
+				go func() { done <- settle(p) }()
+				select {
+				case err := <-done:
+					done <- err
+				case <-time.After(300 * time.Millisecond):
+				}
+			})
+			if _, err := p.Deploy(context.Background(), DeploySpec{Slug: svc.Slug, Service: svc}, nil); err != nil {
+				t.Fatalf("the deploy in flight failed: %v", err)
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+			got := box(docker, svc.Slug)
+			if len(got) != 1 || !strings.HasSuffix(got[node], " running") {
+				t.Fatalf("the box holds %v, want only %s running", got, node)
 			}
 		})
 	}

@@ -118,6 +118,18 @@ type DockerProvider struct {
 	// fence keeps bridge earners off the LAN (lanfence.go). The zero value works:
 	// with no setting wired in, the setting reads as auto.
 	fence fence
+	// replacing holds a *sync.Mutex per container name: a deploy holds it from
+	// settling a set-aside leftover to its end, and recovery takes it to settle one,
+	// so recovery never takes a replacement a deploy has made and not yet started.
+	// Always taken after fence.reconcileMu, never before.
+	replacing sync.Map
+}
+
+// lockReplacing takes name's replacement lock (replacing) and returns its release.
+func (p *DockerProvider) lockReplacing(name string) func() {
+	mu, _ := p.replacing.LoadOrStore(name, new(sync.Mutex))
+	mu.(*sync.Mutex).Lock()
+	return mu.(*sync.Mutex).Unlock
 }
 
 func NewDockerProvider() *DockerProvider {
@@ -338,6 +350,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	defer p.fence.refreshOutside(context.Background(), cli)
 
+	// From here to the end no other deploy of this name, and no recovery, runs:
+	// either would take this deploy's replacement for a leftover. After the
+	// reconcile lock, as recovery takes them.
+	defer p.lockReplacing(name)()
+
 	// A deploy that did not finish may have left the old container set aside
 	// (setaside.go). It is settled first, so the name below is the one that counts.
 	if note, err := recoverSetAside(ctx, cli, name); err != nil {
@@ -400,8 +417,16 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 			progress(fmt.Sprintf("Stopping %s (up to %ds to shut down cleanly)", name, stopTimeout))
 		}
 		if _, err := cli.ContainerStop(ctx, live.Container.ID, client.ContainerStopOptions{Timeout: &stopTimeout}); err != nil {
-			still, ierr := cli.ContainerInspect(ctx, live.Container.ID, client.ContainerInspectOptions{})
-			if ierr != nil || still.Container.State == nil || still.Container.State.Running || still.Container.State.Restarting {
+			// A fresh context: a cancelled deploy's stop may still have happened.
+			still, ierr := cli.ContainerInspect(context.Background(), live.Container.ID, client.ContainerInspectOptions{})
+			if ierr != nil {
+				// Whether it stopped is not known: one that ran is started again.
+				return ContainerInfo{}, refusedReplacement{
+					err:      fmt.Errorf("%s could not be stopped (%v), so it was not replaced", name, err),
+					restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name),
+				}
+			}
+			if still.Container.State == nil || still.Container.State.Running || still.Container.State.Restarting {
 				return ContainerInfo{}, fmt.Errorf("%s could not be stopped (%v), so it was not replaced and is still running. Try again in a minute", name, err)
 			}
 		}
@@ -640,6 +665,14 @@ func (p *DockerProvider) PlanRemoval(ctx context.Context, slug string, critical 
 	defer cli.Close()
 	name := containerName(slug)
 	mounts, err := managedContainerMounts(ctx, cli, name)
+	if cerrdefs.IsNotFound(err) {
+		// Only its set-aside container may be left (setaside.go).
+		if left, ok, aerr := onlySetAside(ctx, cli, name, slug, 1); aerr != nil {
+			return RemovalPlan{}, aerr
+		} else if ok {
+			return planFromMounts(slug, name+setAsideSuffix, left.Mounts, critical), nil
+		}
+	}
 	if err != nil {
 		return RemovalPlan{}, err
 	}
@@ -657,6 +690,18 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 	defer cli.Close()
 	name := containerName(slug)
 	mounts, err := managedContainerMounts(ctx, cli, name)
+	// A roll-back that could not rename the old container back leaves only it, set
+	// aside: it is the service, and goes with the same data choices.
+	asideOnly := false
+	if cerrdefs.IsNotFound(err) {
+		left, ok, aerr := onlySetAside(ctx, cli, name, slug, 1)
+		if aerr != nil {
+			return aerr
+		}
+		if ok {
+			mounts, err, asideOnly = left.Mounts, nil, true
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -684,8 +729,10 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 	// RemoveVolumes only ever deletes ANONYMOUS volumes, never the named ones below.
 	// It is tied to the same choice: an anonymous volume is still the service's data,
 	// and nothing can say it is not the one thing that mattered.
-	if _, err := cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: opts.DeleteData}); err != nil {
-		return err
+	if !asideOnly {
+		if _, err := cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: opts.DeleteData}); err != nil {
+			return err
+		}
 	}
 	if !opts.DeleteData {
 		return nil
