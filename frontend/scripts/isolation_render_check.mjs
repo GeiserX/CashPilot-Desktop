@@ -79,12 +79,12 @@ const gatedServices = [...services, { slug: "mysterium", name: "MystNodes" }];
 const gatedRows = (isolation, status = "exited") =>
   attentionItems({ ...base, services: gatedServices, deployments: [{ slug: "mysterium", name: "cashpilot-mysterium", status }], isolation });
 const waitingOn = gatedRows(fence({ mode: "on", state: "applied", waiting: ["mysterium"] }));
-const waitRow = waitingOn.find((i) => i.tag === "Waiting for fence");
+const waitRow = waitingOn.find((i) => i.tag === "Waiting");
 check("a waiting fence-gated node gets a waiting row, not a Down row", !!waitRow && !waitingOn.some((i) => i.tag === "Down"), JSON.stringify(waitingOn));
 check("the waiting row offers no Start", !!waitRow && !waitRow.actions.includes('data-row-action="start"'), waitRow?.actions);
 check("the waiting row says CashPilot starts it behind the fence", !!waitRow?.why.includes("CashPilot starts it itself"), waitRow?.why);
 check("the waiting row says it stays down while CashPilot is not running", !!waitRow?.why.includes("While CashPilot is not running") && waitRow.why.includes("until CashPilot starts"), waitRow?.why);
-const waitingOff = gatedRows(fence({ mode: "off", setting: "off", state: "n/a", waiting: ["mysterium"] })).find((i) => i.tag === "Waiting for fence");
+const waitingOff = gatedRows(fence({ mode: "off", setting: "off", state: "n/a", waiting: ["mysterium"] })).find((i) => i.tag === "Waiting");
 check("with isolation off the waiting row says isolation must be on", !!waitingOff?.why.includes("isolation is on"), waitingOff?.why);
 const userStopped = gatedRows(fence({ mode: "on", state: "applied", waiting: [] }));
 check("a node the user stopped stays a Down row with Start", userStopped.some((i) => i.tag === "Down" && i.actions.includes('data-row-action="start"')), JSON.stringify(userStopped));

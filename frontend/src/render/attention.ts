@@ -117,7 +117,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       const fenced = fence?.mode === "on";
       items.push({
         level: "warn",
-        tag: "Waiting for fence",
+        tag: "Waiting",
         what: nameOf(slug),
         why: `runs only behind the LAN fence, so CashPilot starts it itself, never Docker. ${
           fenced
