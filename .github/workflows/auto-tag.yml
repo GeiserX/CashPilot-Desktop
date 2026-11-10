@@ -33,6 +33,9 @@ jobs:
   tag:
     name: Bump version and tag
     runs-on: ubuntu-latest
+    # main only. "Run workflow" offers every branch, and a run from another one
+    # would tag and publish code that is not merged.
+    if: github.ref == 'refs/heads/main'
     outputs:
       new_tag: ${{ steps.version.outputs.new_tag }}
     steps:
@@ -53,7 +56,8 @@ jobs:
           # tag. Without this the daily run would bump the version every day.
           if [ "$LATEST" != "v0.0.0" ]; then
             CHANGED=$(git diff --name-only "$LATEST"..HEAD -- \
-              '*.go' internal frontend services go.mod go.sum wails.json)
+              '*.go' internal frontend services go.mod go.sum wails.json \
+              build trayicons packaging catalog-overlay)
             if [ -z "$CHANGED" ]; then
               echo "Nothing the app is built from changed since $LATEST; no release."
               exit 0
