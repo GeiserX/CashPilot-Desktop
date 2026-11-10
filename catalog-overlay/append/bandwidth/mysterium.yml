@@ -2,13 +2,14 @@
 # Native (no-Docker) execution: run the official Mysterium headless node binary as a
 # supervised child process. Pinned to release 1.38.5; sha256 is the SHA-256 of each
 # published release artifact. There is no linux/arm64 tarball upstream (only .deb), so
-# arm64 Linux hosts fall back to the docker: image above.
+# arm64 Linux hosts fall back to the docker: image above, which deploys only behind
+# the LAN fence (docker.fence_gated).
 #
-# The launch args deliberately do NOT mirror docker.command any more. The container
-# binds its UI and Tequila API to 0.0.0.0 because it runs inside a container with
-# host networking on a worker box; a native process binds them to 127.0.0.1 because
-# it runs directly on the user's own machine, where 0.0.0.0 would publish an
-# unauthenticated node admin API to the local network. Port 4449 and the accepted
+# The launch args deliberately do NOT mirror docker.command. The container binds its
+# UI to 0.0.0.0 inside its own network namespace, which reaches the host only where
+# docker.ui_port publishes it; a native process binds it to 127.0.0.1 because it runs
+# directly on the user's own machine, where 0.0.0.0 would publish an unauthenticated
+# node admin API to the local network. Port 4449 and the accepted
 # terms are unchanged, so the earnings collector at
 # http://localhost:4449/tequilapi still works.
 #

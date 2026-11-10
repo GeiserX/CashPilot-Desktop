@@ -2,7 +2,10 @@ package e2e
 
 import (
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // A Storj node is created with the catalog's stop grace as the container's own stop
@@ -62,9 +65,10 @@ func TestAnEarnerWithoutAWrapperKeepsTheImagesEntrypoint(t *testing.T) {
 	}
 }
 
-// Mysterium's command now carries ${UI_ADDRESS}. Left blank, the variable's default
-// must fill it, or the node starts with an empty --ui.address.
-func TestMysteriumsUIAddressFallsBackToItsDefault(t *testing.T) {
+// Mysterium runs in its own namespace on the fenced network, under runc. UI_ADDRESS
+// left blank publishes the WebUI on loopback only, and UDP_PORTS left blank
+// publishes the default range 1:1 and hands it to the node.
+func TestMysteriumDeploysBehindTheFenceWithItsDefaults(t *testing.T) {
 	e := newEnv(t)
 	if _, err := e.Manager.Deploy(e.ctx(), "mysterium", map[string]string{}); err != nil {
 		t.Fatalf("Deploy: %v", err)
@@ -73,15 +77,96 @@ func TestMysteriumsUIAddressFallsBackToItsDefault(t *testing.T) {
 	if !ok {
 		t.Fatal("the daemon has no cashpilot-mysterium container")
 	}
-	if !slices.Contains(container.Cmd, "--ui.address=127.0.0.1") {
-		t.Errorf("command = %v, want --ui.address=127.0.0.1 from the default", container.Cmd)
+	if container.NetworkMode != runtime.FenceNetwork {
+		t.Errorf("network mode = %q, want %s", container.NetworkMode, runtime.FenceNetwork)
 	}
-	if slices.ContainsFunc(container.Cmd, func(arg string) bool { return arg == "--ui.address=" }) {
-		t.Errorf("the node was given an empty WebUI address: %v", container.Cmd)
+	if container.Runtime != "runc" {
+		t.Errorf("runtime = %q, want runc", container.Runtime)
 	}
-	// The guide says to forward UDP 56000-56100; without the flag the node picks
-	// from 10000:60000 and the forward is never used.
-	if !slices.Contains(container.Cmd, "--udp.ports=56000:56100") {
-		t.Errorf("command = %v, want --udp.ports=56000:56100 from the default", container.Cmd)
+	if ui := container.PortBindings["4449/tcp"]; len(ui) != 1 || ui[0].HostIP != "127.0.0.1" || ui[0].HostPort != "4449" {
+		t.Errorf("4449/tcp bindings = %+v, want 127.0.0.1:4449 only", ui)
+	}
+	udp := 0
+	for port, b := range container.PortBindings {
+		if strings.HasSuffix(port, "/udp") {
+			udp++
+			if len(b) != 1 || b[0].HostPort+"/udp" != port {
+				t.Errorf("%s bindings = %+v, want the same port on the host", port, b)
+			}
+		}
+	}
+	if udp != 30 {
+		t.Errorf("published %d UDP ports, want the 30 of 23000:23029", udp)
+	}
+	if !slices.Contains(container.Cmd, "--udp.ports=23000:23029") {
+		t.Errorf("command = %v, want --udp.ports=23000:23029 from the default", container.Cmd)
+	}
+}
+
+// With LAN isolation off the node would sit on Docker's default bridge, where
+// nothing keeps its NET_ADMIN namespace off the LAN. The deploy is refused and
+// nothing is created.
+func TestMysteriumIsRefusedWithIsolationOff(t *testing.T) {
+	e := newEnv(t)
+	provider := runtime.NewDockerProvider()
+	provider.SetIsolationSetting(func() string { return "off" })
+	svc, _ := e.Catalog.Get("mysterium")
+	_, err := provider.Deploy(e.ctx(), runtime.DeploySpec{Slug: "mysterium", Service: svc}, nil)
+	if err == nil || !strings.Contains(err.Error(), "only behind the LAN fence") {
+		t.Fatalf("err = %v, want a refusal naming the fence", err)
+	}
+	if _, ok := e.Docker.Container("cashpilot-mysterium"); ok {
+		t.Fatal("a container was created for a refused deploy")
+	}
+}
+
+// Turning isolation off takes the fence's drops away, so the node is stopped first,
+// and it cannot be started again until isolation is back on. Ordinary earners keep
+// running.
+func TestTurningIsolationOffStopsMysteriumAndKeepsItStopped(t *testing.T) {
+	e := newEnv(t)
+	setting := "auto"
+	provider := runtime.NewDockerProvider()
+	provider.SetIsolationSetting(func() string { return setting })
+	for _, slug := range []string{"mysterium", "honeygain"} {
+		svc, _ := e.Catalog.Get(slug)
+		creds := map[string]string{}
+		if slug == "honeygain" {
+			creds = honeygainCreds
+		}
+		if _, err := provider.Deploy(e.ctx(), runtime.DeploySpec{Slug: slug, Service: svc, Env: creds}, nil); err != nil {
+			t.Fatalf("deploy %s: %v", slug, err)
+		}
+	}
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.Labels[runtime.LabelFenceGated] != "true" {
+		t.Fatalf("labels = %v, want the fence-gated label", c.Labels)
+	}
+
+	setting = "off"
+	provider.ReconcileFence(e.ctx())
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.State == "running" {
+		t.Fatal("mysterium is still running with isolation off")
+	}
+	if c, _ := e.Docker.Container("cashpilot-honeygain"); c.State != "running" {
+		t.Fatalf("honeygain state = %q, want it left running", c.State)
+	}
+	for name, err := range map[string]error{
+		"Start":   provider.Start(e.ctx(), "mysterium"),
+		"Restart": provider.Restart(e.ctx(), "mysterium", 5),
+	} {
+		if err == nil || !strings.Contains(err.Error(), "only behind the LAN fence") {
+			t.Errorf("%s with isolation off: err = %v, want a refusal", name, err)
+		}
+	}
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.State == "running" {
+		t.Fatal("mysterium was started with isolation off")
+	}
+
+	setting = "on"
+	if err := provider.Start(e.ctx(), "mysterium"); err != nil {
+		t.Fatalf("Start with isolation on: %v", err)
+	}
+	if c, _ := e.Docker.Container("cashpilot-mysterium"); c.State != "running" {
+		t.Fatalf("state = %q, want running", c.State)
 	}
 }

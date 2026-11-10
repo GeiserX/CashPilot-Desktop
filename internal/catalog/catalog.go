@@ -261,6 +261,22 @@ type DockerConfig struct {
 	// seconds after any stop, however long Docker is willing to wait.
 	Entrypoint  []string `json:"entrypoint" yaml:"entrypoint"`
 	NetworkMode string   `json:"networkMode" yaml:"network_mode"`
+	// Runtime is the one container runtime this service works under ("runc"), set on
+	// the container whatever the daemon's default is. Mysterium needs it: gVisor has
+	// no iptables-nft and no kernel WireGuard, so the node starts there and carries
+	// nothing.
+	Runtime string `json:"runtime" yaml:"runtime"`
+	// UIPort publishes a WebUI port on each address the named env var lists
+	// (comma separated), instead of a static ports entry. See UIBindings.
+	UIPort *UIPort `json:"uiPort,omitempty" yaml:"ui_port"`
+	// UDPPortRange publishes the start:end range the named env var holds, 1:1, at
+	// most MaxPorts ports. See ExpandUDPRange.
+	UDPPortRange *UDPPortRange `json:"udpPortRange,omitempty" yaml:"udp_port_range"`
+	// FenceGated services run only behind the LAN fence (internal/runtime/lanfence.go):
+	// a deploy anywhere else is refused, and they have no compose export. Mysterium
+	// holds NET_ADMIN in its own network namespace, and the fence is what keeps that
+	// namespace off the LAN, this machine and the tailnet.
+	FenceGated bool `json:"fenceGated" yaml:"fence_gated"`
 	// NodeFirewall says where a node firewalls its own customers off private ranges
 	// (the flag in Command carrying the ranges, the nat chain, the blackhole address).
 	// The web worker reads it to check the node's isolation; Desktop parses it so the

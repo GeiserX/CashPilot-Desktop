@@ -243,6 +243,9 @@ type daemonInfo struct {
 	// Windows containers, and that daemon REFUSES cap_add/cap_drop outright, so the
 	// Linux-only hardening has to be skipped there rather than fail every deploy.
 	OSType string
+	// Runtimes are the OCI runtimes the daemon offers ("runc", "runsc"), nil when it
+	// did not say. A service whose entry names a runtime is checked against it.
+	Runtimes map[string]bool
 }
 
 // infoClient is the one call daemonFacts needs, narrowed so the fallback behaviour is
@@ -266,6 +269,12 @@ func daemonFacts(ctx context.Context, cli infoClient) daemonInfo {
 	}
 	if osType := strings.TrimSpace(strings.ToLower(result.Info.OSType)); osType != "" {
 		facts.OSType = osType
+	}
+	if len(result.Info.Runtimes) > 0 {
+		facts.Runtimes = make(map[string]bool, len(result.Info.Runtimes))
+		for name := range result.Info.Runtimes {
+			facts.Runtimes[name] = true
+		}
 	}
 	return facts
 }

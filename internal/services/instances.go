@@ -37,7 +37,7 @@ func (m *Manager) ScalingLimit(svc catalog.Service) ScalingLimit {
 	if len(svc.Docker.Volumes) > 0 {
 		return ScalingLimit{1, name + " keeps data in a host directory, which two copies would share."}
 	}
-	if len(svc.Docker.Ports) > 0 {
+	if svc.Docker.PublishesPorts() {
 		return ScalingLimit{1, name + " publishes a port on the host, which two copies cannot share."}
 	}
 	if link := svc.DeviceLink; link != nil && link.IDEnv != "" {

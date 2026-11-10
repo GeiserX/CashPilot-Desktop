@@ -53,11 +53,13 @@ type ContainerShape struct {
 	CapDrop     []string
 	Privileged  bool
 	NetworkMode string
-	Devices     []string
-	Ports       []string
-	Mounts      []string
-	EnvKeys     []string
-	Entrypoint  []string
+	// Runtime is the OCI runtime the container runs under, as inspect reports it.
+	Runtime    string
+	Devices    []string
+	Ports      []string
+	Mounts     []string
+	EnvKeys    []string
+	Entrypoint []string
 }
 
 // shapeClient is the part of the Docker client ContainerShapes needs, so the
@@ -135,6 +137,7 @@ func shapeOf(ctr container.InspectResponse) ContainerShape {
 		shape.CapDrop = capNames(host.CapDrop)
 		shape.Privileged = host.Privileged
 		shape.NetworkMode = string(host.NetworkMode)
+		shape.Runtime = host.Runtime
 		devices := map[string]bool{}
 		for _, d := range host.Devices {
 			if path := strings.TrimRight(d.PathInContainer, "/"); path != "" {
@@ -200,6 +203,11 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 		found = append(found, fmt.Sprintf("still has device %s, which the catalog no longer passes in", strings.Join(extra, ", ")))
 	}
 
+	// A container that reports no runtime is not judged: nothing is known.
+	if want := strings.TrimSpace(dc.Runtime); want != "" && shape.Runtime != "" && shape.Runtime != want {
+		found = append(found, fmt.Sprintf("runs under the %s runtime; the catalog requires %s", shape.Runtime, want))
+	}
+
 	if shape.Privileged && !dc.Privileged {
 		found = append(found, "runs privileged, which CashPilot no longer allows")
 	}
@@ -217,8 +225,17 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	case !wantHost && haveHost:
 		found = append(found, "shares the host's network")
 	case !wantHost:
-		if missing := minus(catalogPortKeys(dc.Ports), toSet(shape.Ports)); len(missing) > 0 {
+		want := catalogPortKeys(dc.Ports)
+		if dc.UIPort != nil {
+			want[fmt.Sprintf("%d/tcp", dc.UIPort.Port)] = true
+		}
+		if missing := minus(want, toSet(shape.Ports)); len(missing) > 0 {
 			found = append(found, fmt.Sprintf("does not publish port %s", strings.Join(missing, ", ")))
+		}
+		// Which range is the user's setting, which the shape does not carry, so only
+		// a container publishing none of it is judged.
+		if dc.UDPPortRange != nil && !slices.ContainsFunc(shape.Ports, func(p string) bool { return strings.HasSuffix(p, "/udp") }) {
+			found = append(found, "publishes none of its UDP ports")
 		}
 	}
 
@@ -293,7 +310,12 @@ func ShapeFingerprint(svc catalog.Service) string {
 		Ports       []string          `json:"ports"`
 		Volumes     []string          `json:"volumes"`
 		Env         []envField        `json:"env"`
-	}{dc.Image, dc.ImageByArch, dc.CapAdd, dc.Devices, dc.Privileged, dc.Entrypoint, dc.NetworkMode, dc.Ports, dc.Volumes, env}
+		// Only when set, so an entry without them keeps the fingerprint (and the
+		// Ignore) it had before these fields existed.
+		UIPort       *catalog.UIPort       `json:"ui_port,omitempty"`
+		UDPPortRange *catalog.UDPPortRange `json:"udp_port_range,omitempty"`
+		Runtime      string                `json:"runtime,omitempty"`
+	}{dc.Image, dc.ImageByArch, dc.CapAdd, dc.Devices, dc.Privileged, dc.Entrypoint, dc.NetworkMode, dc.Ports, dc.Volumes, env, dc.UIPort, dc.UDPPortRange, strings.TrimSpace(dc.Runtime)}
 	blob, _ := json.Marshal(judged) // map keys are sorted by encoding/json
 	sum := sha256.Sum256(blob)
 	return hex.EncodeToString(sum[:])[:16]

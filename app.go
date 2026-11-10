@@ -191,6 +191,10 @@ func (a *App) startCore(ctx context.Context) error {
 
 	docker := runtime.NewDockerProvider()
 	docker.SetIsolationSetting(func() string { return a.cfg.Config().Isolation })
+	docker.SetFenceGated(func(slug string) bool {
+		svc, ok := cat.Get(slug)
+		return ok && svc.Docker.FenceGated
+	})
 	// A failed write is retried on every check, so it is reported once per failure
 	// rather than every five minutes. Docker's own evidence still counts meanwhile.
 	var memoryFailing atomic.Bool
