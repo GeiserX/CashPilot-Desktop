@@ -1403,7 +1403,7 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 	// Validate BEFORE persisting, so a rejected deploy never leaves invalid/blank creds
 	// lingering — they could never deploy, yet they would linger and light the
 	// "Configured" badge for a service that cannot actually start.
-	if err := a.services.ValidateCredentials(slug, creds); err != nil {
+	if err := a.services.ValidateDeploy(slug, creds); err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, err
 	}
