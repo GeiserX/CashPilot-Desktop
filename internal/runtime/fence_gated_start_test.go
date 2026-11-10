@@ -254,3 +254,46 @@ func TestAFailedFenceDoesNotSendAGatedEarnerToIsolationOff(t *testing.T) {
 		t.Fatalf("ordinary: %v, want the isolation-off advice kept", err)
 	}
 }
+
+// A stop record that cannot be read starts nothing: it may hold the user's stop.
+func TestAnUnreadableStopRecordStartsNothing(t *testing.T) {
+	record := t.TempDir() // a directory, so reading it as the record fails
+	docker, p := gatedDaemon(t, record)
+	docker.SetState("cashpilot-mysterium", "exited")
+	p.ReconcileFence(context.Background())
+	if got := nodeState(docker); got != "exited" {
+		t.Fatalf("state = %q, want nothing started without the stop record", got)
+	}
+	if st := p.FenceStatus(); !strings.Contains(st.Error, "none was started") {
+		t.Fatalf("status error = %q, want the unread record named", st.Error)
+	}
+}
+
+// A node the daemon refuses to start is named in the status, not dropped.
+func TestAStartTheDaemonRefusesIsNamed(t *testing.T) {
+	node := map[string]any{
+		"Id": "myst", "Names": []string{"/cashpilot-mysterium"}, "State": "exited",
+		"Labels":          map[string]string{LabelManaged: "true", LabelService: "mysterium", LabelFenceGated: "true"},
+		"HostConfig":      map[string]any{"NetworkMode": FenceNetwork},
+		"NetworkSettings": map[string]any{"Networks": map[string]any{FenceNetwork: map[string]any{"NetworkID": "fencenet"}}},
+	}
+	fake := &fakeDocker{earners: []map[string]any{node}, startRefusal: "port is already allocated"}
+	fake.start(t)
+	p := NewDockerProvider()
+	p.SetIsolationSetting(func() string { return "on" })
+	p.ReconcileFence(context.Background())
+	if st := p.FenceStatus(); !strings.Contains(st.Error, "could not start cashpilot-mysterium") || !strings.Contains(st.Error, "already allocated") {
+		t.Fatalf("status error = %q, want the refused start named", st.Error)
+	}
+}
+
+// A node whose restart policy cannot be read or changed is named: Docker may still
+// start it after a reboot.
+func TestARestartPolicyThatCannotBeChangedIsNamed(t *testing.T) {
+	docker, p := gatedDaemon(t, filepath.Join(t.TempDir(), "stopped"))
+	docker.FailInspect("cashpilot-mysterium")
+	p.ReconcileFence(context.Background())
+	if st := p.FenceStatus(); !strings.Contains(st.Error, "could not take Docker's restart policy off cashpilot-mysterium") {
+		t.Fatalf("status error = %q, want the node named", st.Error)
+	}
+}
