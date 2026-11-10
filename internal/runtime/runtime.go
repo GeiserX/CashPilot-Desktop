@@ -434,17 +434,25 @@ func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSecon
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	got, inspectErr := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	gated := inspectErr == nil && got.Container.Config != nil && p.fence.isGated(got.Container.Config.Labels)
+	recorded := false // this call wrote the stop record
 	if gated || inspectErr != nil {
 		// CashPilot starts a fence-gated node itself, so the stop is recorded first or
 		// the next check would start it again. Under the reconcile lock, so a check
 		// that has already decided to start it cannot do so after this stop.
 		p.fence.reconcileMu.Lock()
 		defer p.fence.reconcileMu.Unlock()
+		before, _ := p.fence.userStopped()
 		if err := p.fence.markStopped(name, true); err != nil && gated {
 			return fmt.Errorf("%s was not stopped: the stop could not be recorded (%v), and without that record CashPilot would start it again behind the LAN fence", name, err)
 		}
+		recorded = !before[name]
 	}
 	_, err = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
+	if err != nil && recorded {
+		// The stop did not happen, so the record this call wrote goes: kept, it
+		// would leave the node down after its next crash. Still under the lock.
+		_ = p.fence.markStopped(name, false)
+	}
 	return err
 }
 

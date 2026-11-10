@@ -157,6 +157,31 @@ func TestAStopThatCannotBeRecordedIsRefused(t *testing.T) {
 	}
 }
 
+// A Stop that Docker fails leaves no record: the node is still running, and a
+// record would keep it down after its next crash. A record from an earlier stop
+// is kept.
+func TestAFailedStopLeavesNoStopRecord(t *testing.T) {
+	record := filepath.Join(t.TempDir(), "stopped")
+	docker, p := gatedDaemon(t, record)
+	docker.FailStop("cashpilot-mysterium")
+	if err := p.Stop(context.Background(), "mysterium", 5); err == nil {
+		t.Fatal("Stop = nil, want the daemon's failure")
+	}
+	docker.SetState("cashpilot-mysterium", "exited") // a crash
+	p.ReconcileFence(context.Background())
+	if got := nodeState(docker); got != "running" {
+		t.Fatalf("state = %q, want the crashed node started again: the stop never happened", got)
+	}
+
+	if err := p.fence.markStopped("cashpilot-mysterium", true); err != nil { // an earlier stop
+		t.Fatalf("markStopped: %v", err)
+	}
+	_ = p.Stop(context.Background(), "mysterium", 5)
+	if stopped, _ := p.fence.userStopped(); !stopped["cashpilot-mysterium"] {
+		t.Fatal("a failed second Stop cleared the record of the earlier stop")
+	}
+}
+
 // The guard brings a crashed node back without waiting for the five-minute
 // recheck, and does nothing while the fence has not been applied.
 func TestTheGuardStartsACrashedNode(t *testing.T) {
