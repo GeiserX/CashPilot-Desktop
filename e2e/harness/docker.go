@@ -112,6 +112,11 @@ type Docker struct {
 	// is refused, or why the next container created under it cannot start.
 	failRename                    map[string]bool
 	refuseCreate, refuseNextStart map[string]string
+	// failRemove names containers whose removal fails. failAfterCreate holds, by
+	// name, the error the next create under that name answers after it made the
+	// container anyway, as a call that timed out on the client's side.
+	failRemove      map[string]bool
+	failAfterCreate map[string]string
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -460,6 +465,11 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		c.Name = c.ID
 	}
 	d.containers[name] = c
+	if why := d.failAfterCreate[name]; why != "" {
+		delete(d.failAfterCreate, name)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": why})
+		return
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"Id": c.ID, "Warnings": []string{}})
 }
 
@@ -498,7 +508,8 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 
 	d.mu.Lock()
 	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id)) ||
-		(action == "start" && d.failing(d.failStart, id)) || (action == "rename" && d.failing(d.failRename, id))
+		(action == "start" && d.failing(d.failStart, id)) || (action == "rename" && d.failing(d.failRename, id)) ||
+		(action == "" && r.Method == http.MethodDelete && d.failing(d.failRemove, id))
 	refused := ""
 	if c := d.find(id); c != nil && action == "start" {
 		refused = c.refuseStart
@@ -661,6 +672,15 @@ func (d *Docker) FailRename(name string) { d.setFail(&d.failRename, name) }
 // FailCreate makes the next create of a container under this name fail with
 // message, the way Docker refuses a create.
 func (d *Docker) FailCreate(name, message string) { d.setRefusal(&d.refuseCreate, name, message) }
+
+// FailRemove makes removing this container fail with a server error.
+func (d *Docker) FailRemove(name string) { d.setFail(&d.failRemove, name) }
+
+// FailAfterCreate makes the next create under this name make the container and
+// still answer an error with message, as a create whose reply never arrived.
+func (d *Docker) FailAfterCreate(name, message string) {
+	d.setRefusal(&d.failAfterCreate, name, message)
+}
 
 // FailStartOfNext makes the next container created under this name fail every
 // start with message, the way Docker refuses a container whose published port a

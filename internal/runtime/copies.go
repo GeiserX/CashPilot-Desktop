@@ -103,7 +103,7 @@ func (p *DockerProvider) Copies(ctx context.Context, slug string) ([]int, error)
 		return nil, err
 	}
 	var copies []int
-	for _, c := range list.Items {
+	for _, c := range withoutSetAside(list.Items) {
 		// The daemon filtered by label already; checked again so a runtime that
 		// ignores a filter cannot hand back another service's copies.
 		if n := instanceOf(c.Labels); n > 1 && c.Labels[LabelService] == slug && !IsProxied(c.Labels) {
@@ -186,6 +186,8 @@ func (p *DockerProvider) RemoveCopy(ctx context.Context, slug string, n, stopTim
 	// Stopped first with its grace period, as every other removal here is.
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
-	_, err = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
-	return err
+	if _, err = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil {
+		return err
+	}
+	return removeSetAside(ctx, cli, name, false)
 }

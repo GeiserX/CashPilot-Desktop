@@ -101,6 +101,47 @@ func recoverSetAside(ctx context.Context, cli *client.Client, name string) (stri
 	return fmt.Sprintf("Put back %s, which a deploy that did not finish had set aside as %s. It is stopped.", name, aside), nil
 }
 
+// removeSetAside removes name's set-aside container, if a deploy that did not finish
+// left one of this copy of this service, with its anonymous volumes when volumes is
+// set. A removal of the service calls it, or the next app start would put it back.
+func removeSetAside(ctx context.Context, cli *client.Client, name string, volumes bool) error {
+	aside := name + setAsideSuffix
+	left, err := cli.ContainerInspect(ctx, aside, client.ContainerInspectOptions{})
+	if cerrdefs.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("could not check %s: %w", aside, err)
+	}
+	if left.Container.Config == nil {
+		return nil
+	}
+	if base, ok := setAsideBase(aside, left.Container.Config.Labels); !ok || base != name {
+		return nil
+	}
+	if _, err := cli.ContainerRemove(ctx, left.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: volumes}); err != nil && !cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("could not remove %s, the container a deploy that did not finish had set aside: %w", aside, err)
+	}
+	return nil
+}
+
+// withoutSetAside drops each container set aside beside the one that now holds its
+// name, so a listing shows a service's running container, not the one it replaced.
+func withoutSetAside(items []container.Summary) []container.Summary {
+	names := make(map[string]bool, len(items))
+	for _, c := range items {
+		names[strings.TrimPrefix(firstName(c.Names), "/")] = true
+	}
+	out := items[:0:0]
+	for _, c := range items {
+		if base, ok := setAsideBase(firstName(c.Names), c.Labels); ok && names[base] {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // putBack gives the old container its name back after Docker refused its replacement,
 // and starts it again if it ran. old is its inspect from before it was set aside. It
 // says what state the old container is in, as a sentence for the deploy's error.

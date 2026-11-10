@@ -442,7 +442,19 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		Name:       name,
 	})
 	if err != nil {
-		return ContainerInfo{}, rollBack(err, "")
+		// A create can fail after Docker made the container (a reply that never
+		// arrived). One of ours under the name that does not run is that one.
+		madeID := ""
+		if setAside {
+			if made, ierr := cli.ContainerInspect(context.Background(), name, client.ContainerInspectOptions{}); ierr == nil &&
+				made.Container.ID != live.Container.ID && made.Container.Config != nil && made.Container.State != nil &&
+				!made.Container.State.Running && !made.Container.State.Restarting &&
+				made.Container.Config.Labels[LabelService] == config.Labels[LabelService] &&
+				instanceOf(made.Container.Config.Labels) == instanceOf(config.Labels) {
+				madeID = made.Container.ID
+			}
+		}
+		return ContainerInfo{}, rollBack(err, madeID)
 	}
 	if progress != nil {
 		progress("Starting " + name)
@@ -668,6 +680,11 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 	if _, err := cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: opts.DeleteData}); err != nil {
 		return err
 	}
+	// The container a deploy that did not finish set aside goes too: it mounts the
+	// same volumes, and the next app start would give it the free name back.
+	if err := removeSetAside(ctx, cli, name, opts.DeleteData); err != nil {
+		return err
+	}
 	if !opts.DeleteData {
 		return nil
 	}
@@ -800,7 +817,7 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 			items = append(items, c)
 		}
 	}
-	return p.statsForContainers(ctx, cli, items), nil
+	return p.statsForContainers(ctx, cli, withoutSetAside(items)), nil
 }
 
 // statsForContainers builds the ContainerInfo list, sampling every container's CPU
