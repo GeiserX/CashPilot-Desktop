@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
 
@@ -103,7 +104,7 @@ func (p *DockerProvider) Copies(ctx context.Context, slug string) ([]int, error)
 		return nil, err
 	}
 	var copies []int
-	for _, c := range list.Items {
+	for _, c := range withoutSetAside(list.Items) {
 		// The daemon filtered by label already; checked again so a runtime that
 		// ignores a filter cannot hand back another service's copies.
 		if n := instanceOf(c.Labels); n > 1 && c.Labels[LabelService] == slug && !IsProxied(c.Labels) {
@@ -179,13 +180,27 @@ func (p *DockerProvider) RemoveCopy(ctx context.Context, slug string, n, stopTim
 		return err
 	}
 	defer cli.Close()
+	// Not while a deploy of the same copy runs, as Remove.
+	defer p.lockReplacing(copyName(slug, n))()
 	name, err := managedCopy(ctx, cli, slug, n)
+	if cerrdefs.IsNotFound(err) {
+		// A roll-back that could not rename the copy back leaves only it, set aside.
+		if _, ok, aerr := onlySetAside(ctx, cli, copyName(slug, n), slug, n); aerr != nil {
+			return aerr
+		} else if ok {
+			return removeSetAside(ctx, cli, copyName(slug, n), false)
+		}
+	}
 	if err != nil {
 		return err
 	}
 	// Stopped first with its grace period, as every other removal here is.
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
+	// Its set-aside leftover first, as Remove does, so a failure here can be retried.
+	if err := removeSetAside(ctx, cli, name, false); err != nil {
+		return err
+	}
 	_, err = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
 	return err
 }

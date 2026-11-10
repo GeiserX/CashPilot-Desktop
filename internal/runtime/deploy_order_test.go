@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -251,6 +252,13 @@ func (f *fakeDocker) start(t *testing.T) {
 		switch {
 		case path == "/_ping":
 			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodGet && strings.HasSuffix(path, setAsideSuffix+"/json"):
+			// Nothing is ever set aside here: the name a deploy sets the old container
+			// aside under is free.
+			f.record("GET " + path)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "No such container"})
 		case f.inspectStatus != 0 && r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
 			f.record("GET " + path)
 			w.Header().Set("Content-Type", "application/json")
@@ -310,6 +318,12 @@ func (f *fakeDocker) start(t *testing.T) {
 			f.removeQueries = append(f.removeQueries, r.URL.RawQuery)
 			f.mu.Unlock()
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
+			// The container holding the name, with no labels: one made by hand.
+			f.record("GET " + path)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"Id":"live"}`))
 		default:
 			f.record(r.Method + " " + path)
 			w.Header().Set("Content-Type", "application/json")
@@ -417,9 +431,11 @@ func TestDeployLeavesTheRunningContainerAloneWhenItCannotSucceed(t *testing.T) {
 	}
 }
 
-// The positive control: a deploy that CAN succeed still removes the old container,
-// still pulls, and does both in that order. Without this, the assertions above would
-// pass against a Deploy that had simply stopped removing anything.
+// The positive control: a deploy that CAN succeed still replaces the old container,
+// still pulls, and does it in this order: pull, set the old one aside (stop, rename),
+// create and start the new one, and only then remove the old one. Without this, the
+// assertions above would pass against a Deploy that had simply stopped touching
+// anything.
 func TestDeployStillReplacesTheContainerOnTheHappyPath(t *testing.T) {
 	fake := &fakeDocker{}
 	fake.start(t)
@@ -433,22 +449,14 @@ func TestDeployStillReplacesTheContainerOnTheHappyPath(t *testing.T) {
 	}
 
 	calls := fake.recorded()
-	var pull, remove, create int = -1, -1, -1
-	for i, call := range calls {
-		switch {
-		case call == "POST /images/create":
-			pull = i
-		case strings.HasPrefix(call, "DELETE /containers/"):
-			remove = i
-		case call == "POST /containers/create":
-			create = i
+	order := []string{"POST /images/create", "POST /containers/live/stop", "POST /containers/live/rename", "POST /containers/create", "POST /containers/deadbeef/start", "DELETE /containers/live"}
+	last := -1
+	for _, want := range order {
+		i := slices.Index(calls, want)
+		if i < 0 || i < last {
+			t.Fatalf("expected %v in that order, got %v", order, calls)
 		}
-	}
-	if pull < 0 || remove < 0 || create < 0 {
-		t.Fatalf("the deploy did not pull, remove and create; calls: %v", calls)
-	}
-	if !(pull < remove && remove < create) {
-		t.Fatalf("expected pull -> remove -> create, got %v", calls)
+		last = i
 	}
 }
 

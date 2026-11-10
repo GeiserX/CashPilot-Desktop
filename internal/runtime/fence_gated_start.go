@@ -215,6 +215,10 @@ func (f *fence) waitsForFence(c container.Summary, stopped map[string]bool) bool
 	if stopped[containerLabel(c)] {
 		return false
 	}
+	// One a deploy set aside would take the ports its replacement publishes.
+	if _, aside := setAsideBase(containerLabel(c), c.Labels); aside {
+		return false
+	}
 	return fencedAlone(earnerFromSummary(c))
 }
 
