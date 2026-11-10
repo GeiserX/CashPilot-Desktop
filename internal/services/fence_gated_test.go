@@ -84,6 +84,51 @@ func TestAPublishedValueThatCannotBePublishedIsRefusedBeforeTheRuntime(t *testin
 	}
 }
 
+// A node deployed when the cap was wider keeps its range in the saved settings. Its
+// redeploy is refused before the runtime is asked, so the running node is left as
+// it is, and the message says to narrow the range (web
+// tests/test_slow_start_deploy.py TestTheRangeCap).
+func TestARedeployOfARangeWiderThanTheCapIsRefusedNotCut(t *testing.T) {
+	fake := &fakeProvider{}
+	m := NewManager(fake, newGatedCatalog(t), newTestStore(t))
+	wide := map[string]string{"UDP_PORTS": "23000:23999"}
+	for name, err := range map[string]error{
+		"ValidateDeploy": m.ValidateDeploy("gated-example", wide),
+		"Deploy":         func() error { _, err := m.Deploy(context.Background(), "gated-example", wide); return err }(),
+	} {
+		if err == nil {
+			t.Fatalf("%s: a 1000-port range deployed under a cap of 100", name)
+		}
+		for _, want := range []string{"spans 1000 ports", "such as 23000:23099", "Nothing was deployed", "a running Gated Example was not touched"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("%s: %q does not say %q", name, err, want)
+			}
+		}
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("the runtime was called %d times for a refused range", fake.deployCalls)
+	}
+	// Saving settings deploys nothing, so it must not claim a deploy was refused.
+	if err := m.ValidateCredentials("gated-example", wide); err == nil || strings.Contains(err.Error(), "deployed") {
+		t.Errorf("ValidateCredentials = %v, want the refusal without the deploy note", err)
+	}
+	// A refusal for any other reason keeps its own message.
+	if err := m.ValidateDeploy("no-such-service", nil); err == nil || strings.Contains(err.Error(), "not touched") {
+		t.Errorf("ValidateDeploy(unknown) = %v, want the plain refusal", err)
+	}
+	// Control: a narrower range typed over the wide one deploys.
+	narrow := map[string]string{"UDP_PORTS": "23000:23099"}
+	if err := m.ValidateDeploy("gated-example", narrow); err != nil {
+		t.Fatalf("a range of the cap was refused: %v", err)
+	}
+	if _, err := m.Deploy(context.Background(), "gated-example", narrow); err != nil {
+		t.Fatalf("a range of the cap did not deploy: %v", err)
+	}
+	if fake.deployCalls != 1 {
+		t.Fatalf("deployCalls = %d, want the narrowed deploy to reach the runtime", fake.deployCalls)
+	}
+}
+
 // Ports published from the env still belong to one container.
 func TestAServicePublishingFromItsEnvRunsOnce(t *testing.T) {
 	m := NewManager(&fakeProvider{}, newGatedCatalog(t), newTestStore(t))

@@ -308,3 +308,21 @@ func TestAPodmanDefaultCapabilityAbsentFromCapDropIsNotStillHeld(t *testing.T) {
 		t.Fatalf("ShapeDrift = %q, want nothing: CHOWN is in neither of Podman's lists", found)
 	}
 }
+
+// A node created when the cap was wider runs every port of its range. Which range is
+// the user's setting is not in the shape, so drift does not judge its width: the node
+// keeps running and is not flagged (web tests/test_slow_start_deploy.py
+// test_drift_does_not_flag_a_node_running_its_wider_recorded_range).
+func TestDriftDoesNotFlagANodeRunningARangeWiderThanTheCap(t *testing.T) {
+	svc := mysteriumShaped()
+	shape := deployedShape(t, svc, nil)
+	shape.Ports = []string{"4449/tcp"}
+	for p := 23000; p <= 23999; p++ {
+		shape.Ports = append(shape.Ports, itoa(p)+"/udp")
+	}
+	for _, f := range ShapeDrift(svc, shape, "") {
+		if strings.Contains(strings.ToLower(f), "udp") || strings.Contains(f, "port") {
+			t.Errorf("a node running 1000 UDP ports under a cap of %d was flagged: %q", svc.Docker.UDPPortRange.Cap(), f)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -45,10 +46,36 @@ func TestExpandUDPRange(t *testing.T) {
 }
 
 func TestUDPCapStaysWithinTheCeiling(t *testing.T) {
-	for in, want := range map[int]int{0: 1000, -1: 1000, 5000: 1000, 30: 30} {
+	for in, want := range map[int]int{0: MaxUDPPorts, -1: MaxUDPPorts, 5000: MaxUDPPorts, MaxUDPPorts + 1: MaxUDPPorts, 30: 30} {
 		if got := (UDPPortRange{MaxPorts: in}).Cap(); got != want {
 			t.Errorf("Cap(%d) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+// The web catalog's ceiling (app/catalog.py MAX_UDP_PORTS): 300 ports start in
+// about 12 s, 1,000 in about 51 s.
+func TestTheUDPCeilingIsTheWebCatalogs(t *testing.T) {
+	if MaxUDPPorts != 300 {
+		t.Fatalf("MaxUDPPorts = %d, want the web catalog's 300", MaxUDPPorts)
+	}
+}
+
+// A range over the cap is refused with what to do instead: a range of the cap from
+// the same first port, and the router forward to match.
+func TestARangeOverTheCapSaysHowToNarrowIt(t *testing.T) {
+	_, err := ExpandUDPRange("23000:23999", 300)
+	if err == nil {
+		t.Fatal("1000 ports passed a cap of 300")
+	}
+	for _, want := range []string{"spans 1000 ports", "at most 300", "such as 23000:23299", "router"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not say %q", err, want)
+		}
+	}
+	// Near the top of the port space the example stays a valid range.
+	if _, err := ExpandUDPRange("65400:65535", 100); err == nil || !strings.Contains(err.Error(), "such as 65400:65499") {
+		t.Errorf("error = %v, want the example 65400:65499", err)
 	}
 }
 

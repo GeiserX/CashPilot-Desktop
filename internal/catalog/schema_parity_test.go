@@ -113,8 +113,8 @@ func TestMysteriumCapabilitiesAndDeviceParse(t *testing.T) {
 	if ui := svc.Docker.UIPort; ui == nil || ui.Env != "UI_ADDRESS" || ui.Port != 4449 {
 		t.Errorf("mysterium docker.ui_port = %+v, want UI_ADDRESS on 4449", ui)
 	}
-	if rng := svc.Docker.UDPPortRange; rng == nil || rng.Env != "UDP_PORTS" || rng.Cap() != 1000 {
-		t.Errorf("mysterium docker.udp_port_range = %+v, want UDP_PORTS capped at 1000", rng)
+	if rng := svc.Docker.UDPPortRange; rng == nil || rng.Env != "UDP_PORTS" || rng.MaxPorts != 300 || rng.Cap() != rng.MaxPorts {
+		t.Errorf("mysterium docker.udp_port_range = %+v, want UDP_PORTS capped at the web catalog's 300", rng)
 	}
 	if !svc.Docker.FenceGated {
 		t.Error("mysterium docker.fence_gated must parse as true")
