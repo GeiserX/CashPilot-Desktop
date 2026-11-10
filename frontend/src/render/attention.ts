@@ -120,9 +120,11 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
         tag: "Waiting",
         what: nameOf(slug),
         why: `runs only behind the LAN fence, so CashPilot starts it itself, never Docker. ${
-          fenced
-            ? "It starts as soon as CashPilot has confirmed the fence."
-            : "LAN isolation is not on here, so it stays stopped until isolation is on and the fence is in place."
+          fence?.state === "applied" && fence.error
+            ? `The fence is in place, but CashPilot reports: ${escapeHtml(fence.error)}. It tries again at the next fence check, within five minutes.`
+            : fenced
+              ? "It starts as soon as CashPilot has confirmed the fence."
+              : "LAN isolation is not on here, so it stays stopped until isolation is on and the fence is in place."
         } While CashPilot is not running, nothing starts it: after this computer restarts, it stays stopped until CashPilot starts.`,
         actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(slug)}">Logs</button>`,
       });
