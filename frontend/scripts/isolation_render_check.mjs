@@ -73,6 +73,30 @@ check("with auto it does not claim deploys are refused", !notFenced?.why.include
 const podmanOn = rows(fence({ mode: "unsupported", setting: "on", state: "unsupported", error: podmanError })).find((i) => i.tag === "Not fenced");
 check("with isolation on it says deploys are refused and how to opt out", !!podmanOn?.why.includes("refused") && podmanOn.why.includes("auto or off"), podmanOn?.why);
 
+// A fence-gated earner (Mysterium) that is down and waiting for the fence is not a
+// container to start by hand, and the fence-down advice never sends it to isolation off.
+const gatedServices = [...services, { slug: "mysterium", name: "MystNodes" }];
+const gatedRows = (isolation, status = "exited") =>
+  attentionItems({ ...base, services: gatedServices, deployments: [{ slug: "mysterium", name: "cashpilot-mysterium", status }], isolation });
+const waitingOn = gatedRows(fence({ mode: "on", state: "applied", waiting: ["mysterium"] }));
+const waitRow = waitingOn.find((i) => i.tag === "Waiting");
+check("a waiting fence-gated node gets a waiting row, not a Down row", !!waitRow && !waitingOn.some((i) => i.tag === "Down"), JSON.stringify(waitingOn));
+check("the waiting row offers no Start", !!waitRow && !waitRow.actions.includes('data-row-action="start"'), waitRow?.actions);
+check("the waiting row says CashPilot starts it behind the fence", !!waitRow?.why.includes("CashPilot starts it itself"), waitRow?.why);
+check("the waiting row says it stays down while CashPilot is not running", !!waitRow?.why.includes("While CashPilot is not running") && waitRow.why.includes("until CashPilot starts"), waitRow?.why);
+const waitingOff = gatedRows(fence({ mode: "off", setting: "off", state: "n/a", waiting: ["mysterium"] })).find((i) => i.tag === "Waiting");
+check("with isolation off the waiting row says isolation must be on", !!waitingOff?.why.includes("isolation is on"), waitingOff?.why);
+const refused = gatedRows(fence({ mode: "on", state: "applied", error: "could not start cashpilot-mysterium behind the LAN fence", waiting: ["mysterium"] })).find((i) => i.tag === "Waiting");
+check("with the fence applied and an error the waiting row shows the error, not a promise to start", !!refused?.why.includes("could not start cashpilot-mysterium") && !refused.why.includes("as soon as"), refused?.why);
+const userStopped = gatedRows(fence({ mode: "on", state: "applied", waiting: [] }));
+check("a node the user stopped stays a Down row with Start", userStopped.some((i) => i.tag === "Down" && i.actions.includes('data-row-action="start"')), JSON.stringify(userStopped));
+
+const gatedDown = gatedRows(fence({ mode: "on", state: "failed", error: "nft: Operation not permitted", waiting: ["mysterium"] })).find((i) => i.tag === "Fence down");
+check("the fence-down row keeps the isolation-off advice for other earners", !!gatedDown?.why.includes("other earners") && gatedDown.why.includes("off in Settings"), gatedDown?.why);
+check("the fence-down row says a fence-gated node would not start with isolation off", !!gatedDown?.why.includes("MystNodes runs only behind the fence") && gatedDown.why.includes("would not start it"), gatedDown?.why);
+const plainDown = rows(fence({ mode: "on", state: "failed", error: "x" })).find((i) => i.tag === "Fence down");
+check("with no fence-gated node waiting the fence-down row names none", !!plainDown && !plainDown.why.includes("only behind the fence"), plainDown?.why);
+
 if (failures) {
   console.error(`\n${failures} of ${checks} isolation checks failed`);
   process.exit(1);

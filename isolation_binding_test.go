@@ -35,7 +35,8 @@ type fakeFence struct {
 func (f *fakeFence) FenceStatus() runtime.FenceStatus {
 	return runtime.FenceStatus{Mode: runtime.FenceModeOn, State: "applied"}
 }
-func (f *fakeFence) ReconcileFence(context.Context) { f.reconciled++ }
+func (f *fakeFence) ReconcileFence(context.Context)  { f.reconciled++ }
+func (f *fakeFence) GuardFenceGated(context.Context) {}
 func (f *fakeFence) EnableFence(context.Context) (runtime.FenceStatus, error) {
 	return runtime.FenceStatus{Mode: runtime.FenceModeOn, Outside: f.outside}, f.enableErr
 }

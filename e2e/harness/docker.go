@@ -52,8 +52,14 @@ type Container struct {
 	Runtime      string
 	NetworkMode  string
 	PortBindings map[string][]PortBinding
+	// RestartPolicy is the HostConfig restart policy's name, as the deploy sent it or
+	// a later container update set it.
+	RestartPolicy string
 	// ExtraNetworks are networks a test attached it to beside its network mode.
 	ExtraNetworks []string
+	// StateError is inspect's State.Error: why Docker's last start of it failed.
+	// A start that works clears it.
+	StateError string
 }
 
 // PortBinding is one host binding of a published port.
@@ -95,8 +101,9 @@ type Docker struct {
 	// networks are the user-defined networks, by name. The app creates one, its
 	// LAN fence network, and runs a one-shot helper container to write the fence.
 	networks map[string]map[string]any
-	// failInspect and failStop name containers whose inspect or stop fails.
-	failInspect, failStop map[string]bool
+	// failInspect, failStop and failStart name containers whose inspect, stop or
+	// start fails.
+	failInspect, failStop, failStart map[string]bool
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -380,10 +387,13 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		StopTimeout *int              `json:"StopTimeout"`
 		Labels      map[string]string `json:"Labels"`
 		HostConfig  struct {
-			Runtime      string                   `json:"Runtime"`
-			NetworkMode  string                   `json:"NetworkMode"`
-			PortBindings map[string][]PortBinding `json:"PortBindings"`
-			Mounts       []struct {
+			Runtime       string                   `json:"Runtime"`
+			NetworkMode   string                   `json:"NetworkMode"`
+			PortBindings  map[string][]PortBinding `json:"PortBindings"`
+			RestartPolicy struct {
+				Name string `json:"Name"`
+			} `json:"RestartPolicy"`
+			Mounts []struct {
 				Type   string `json:"Type"`
 				Source string `json:"Source"`
 				Target string `json:"Target"`
@@ -416,9 +426,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		Entrypoint:  body.Entrypoint,
 		StopTimeout: body.StopTimeout,
 
-		Runtime:      body.HostConfig.Runtime,
-		NetworkMode:  body.HostConfig.NetworkMode,
-		PortBindings: body.HostConfig.PortBindings,
+		Runtime:       body.HostConfig.Runtime,
+		NetworkMode:   body.HostConfig.NetworkMode,
+		PortBindings:  body.HostConfig.PortBindings,
+		RestartPolicy: body.HostConfig.RestartPolicy.Name,
 	}
 	for _, m := range body.HostConfig.Mounts {
 		if m.Type == "volume" && m.Source != "" {
@@ -451,12 +462,14 @@ func (d *Docker) list(w http.ResponseWriter) {
 			continue
 		}
 		out = append(out, map[string]any{
-			"Id":     c.ID,
-			"Names":  []string{"/" + c.Name},
-			"Image":  c.Image,
-			"State":  c.State,
-			"Status": c.State,
-			"Labels": c.Labels,
+			"Id":              c.ID,
+			"Names":           []string{"/" + c.Name},
+			"Image":           c.Image,
+			"State":           c.State,
+			"Status":          c.State,
+			"Labels":          c.Labels,
+			"HostConfig":      map[string]any{"NetworkMode": c.NetworkMode},
+			"NetworkSettings": map[string]any{"Networks": c.networks()},
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -467,7 +480,8 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 	id, action, _ := strings.Cut(rest, "/")
 
 	d.mu.Lock()
-	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id))
+	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id)) ||
+		(action == "start" && d.failing(d.failStart, id))
 	d.mu.Unlock()
 	if failed {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "fake daemon: " + action + " failed for " + id})
@@ -506,6 +520,8 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 		d.setState(w, id, "running")
 	case action == "kill":
 		d.setState(w, id, "exited")
+	case action == "update" && r.Method == http.MethodPost:
+		d.update(w, r, id)
 	case action == "" && r.Method == http.MethodDelete:
 		d.remove(w, id)
 	default:
@@ -529,11 +545,12 @@ func (d *Docker) inspect(w http.ResponseWriter, id string) {
 		"Id":     c.ID,
 		"Name":   "/" + c.Name,
 		"Image":  c.Image,
-		"State":  map[string]any{"Status": c.State, "Running": c.State == "running"},
+		"State":  map[string]any{"Status": c.State, "Running": c.State == "running", "Error": c.StateError},
 		"Config": map[string]any{"Image": c.Image, "Labels": c.Labels, "Env": c.Env, "Cmd": c.Cmd},
 		"Mounts": mounts,
 		"HostConfig": map[string]any{
 			"NetworkMode": c.NetworkMode, "Runtime": c.Runtime, "PortBindings": c.PortBindings,
+			"RestartPolicy": map[string]any{"Name": c.RestartPolicy},
 		},
 		"NetworkSettings": map[string]any{"Networks": c.networks()},
 	})
@@ -598,6 +615,28 @@ func (d *Docker) FailInspect(name string) { d.setFail(&d.failInspect, name) }
 // FailStop makes stopping this container fail with a server error.
 func (d *Docker) FailStop(name string) { d.setFail(&d.failStop, name) }
 
+// FailStart makes starting this container fail with a server error (fail true), or
+// work again (fail false).
+func (d *Docker) FailStart(name string, fail bool) {
+	if fail {
+		d.setFail(&d.failStart, name)
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.failStart, name)
+}
+
+// SetStateError sets a container's State.Error, as Docker records a start that
+// failed ("network ... not found").
+func (d *Docker) SetStateError(name, message string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		c.StateError = message
+	}
+}
+
 func (d *Docker) setFail(set *map[string]bool, name string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -622,7 +661,45 @@ func (d *Docker) setState(w http.ResponseWriter, id, state string) {
 		return
 	}
 	c.State = state
+	if state == "running" {
+		c.StateError = ""
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// update applies a container update. Only the restart policy is kept; a real
+// daemon changes it in place without touching the running container.
+func (d *Docker) update(w http.ResponseWriter, r *http.Request, id string) {
+	var body struct {
+		RestartPolicy struct {
+			Name string `json:"Name"`
+		} `json:"RestartPolicy"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "fake daemon: unreadable update body"})
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	c := d.find(id)
+	if c == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
+		return
+	}
+	if body.RestartPolicy.Name != "" {
+		c.RestartPolicy = body.RestartPolicy.Name
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"Warnings": []string{}})
+}
+
+// SetRestartPolicy sets a container's restart policy, the way a container made by
+// an older version keeps the policy it was created with.
+func (d *Docker) SetRestartPolicy(name, policy string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		c.RestartPolicy = policy
+	}
 }
 
 func (d *Docker) remove(w http.ResponseWriter, id string) {

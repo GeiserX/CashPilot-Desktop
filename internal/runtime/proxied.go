@@ -552,7 +552,7 @@ func (d liveTunnelDocker) sidecarNetwork(ctx context.Context) (string, error) {
 	if d.fence == nil {
 		return "", nil
 	}
-	return d.fence.networkForDeploy(ctx, d.cli)
+	return d.fence.networkForDeploy(ctx, d.cli, false)
 }
 
 func (d liveTunnelDocker) facts(ctx context.Context) daemonInfo { return daemonFacts(ctx, d.cli) }
