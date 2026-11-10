@@ -8,7 +8,9 @@ name: Auto Tag
 # desktop-release.yml as a reusable workflow to build and publish. On a day when no file
 # the app is built from changed since the last tag, it tags nothing.
 # An urgent fix does not wait: start this workflow by hand (Actions, "Auto Tag",
-# "Run workflow"), which releases main as it is.
+# "Run workflow"), which releases main as it is. A hand-started run always cuts a
+# version, also when nothing changed: that is how a release whose build failed is
+# cut again.
 #
 # The reusable-call is deliberate: a tag pushed with the default GITHUB_TOKEN does NOT
 # trigger another workflow (GitHub's loop-prevention), so relying on desktop-release.yml's
@@ -46,6 +48,8 @@ jobs:
 
       - name: Compute next version
         id: version
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | head -1)
           if [ -z "$LATEST" ]; then
@@ -54,10 +58,13 @@ jobs:
 
           # Nothing to release: no file the app is built from changed since the last
           # tag. Without this the daily run would bump the version every day.
-          if [ "$LATEST" != "v0.0.0" ]; then
+          # A hand-started run skips the check and always releases: it is how a
+          # release whose build failed is cut again, as the next patch version.
+          if [ "$LATEST" != "v0.0.0" ] && [ "$EVENT" != "workflow_dispatch" ]; then
             CHANGED=$(git diff --name-only "$LATEST"..HEAD -- \
               '*.go' internal frontend services go.mod go.sum wails.json \
-              build trayicons packaging catalog-overlay)
+              build trayicons packaging catalog-overlay \
+              .github/workflows/desktop-release.yml)
             if [ -z "$CHANGED" ]; then
               echo "Nothing the app is built from changed since $LATEST; no release."
               exit 0
