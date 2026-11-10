@@ -186,8 +186,10 @@ func (p *DockerProvider) RemoveCopy(ctx context.Context, slug string, n, stopTim
 	// Stopped first with its grace period, as every other removal here is.
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
-	if _, err = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true}); err != nil {
+	// Its set-aside leftover first, as Remove does, so a failure here can be retried.
+	if err := removeSetAside(ctx, cli, name, false); err != nil {
 		return err
 	}
-	return removeSetAside(ctx, cli, name, false)
+	_, err = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
+	return err
 }

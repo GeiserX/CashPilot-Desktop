@@ -674,15 +674,17 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 	timeout := stopTimeoutForContainer(ctx, cli, name, opts.StopTimeout)
 	_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
 
+	// The container a deploy that did not finish set aside goes too: it mounts the
+	// same volumes, and the next app start would give it the free name back. It goes
+	// first, so a removal that fails here can be tried again: with the service's own
+	// container gone, a retry would no longer find the service.
+	if err := removeSetAside(ctx, cli, name, opts.DeleteData); err != nil {
+		return err
+	}
 	// RemoveVolumes only ever deletes ANONYMOUS volumes, never the named ones below.
 	// It is tied to the same choice: an anonymous volume is still the service's data,
 	// and nothing can say it is not the one thing that mattered.
 	if _, err := cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: opts.DeleteData}); err != nil {
-		return err
-	}
-	// The container a deploy that did not finish set aside goes too: it mounts the
-	// same volumes, and the next app start would give it the free name back.
-	if err := removeSetAside(ctx, cli, name, opts.DeleteData); err != nil {
 		return err
 	}
 	if !opts.DeleteData {

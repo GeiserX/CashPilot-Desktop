@@ -117,6 +117,9 @@ type Docker struct {
 	// container anyway, as a call that timed out on the client's side.
 	failRemove      map[string]bool
 	failAfterCreate map[string]string
+	// failInspectFrom holds, by the exact name or id a request asks for, the count
+	// of inspects under it from which on each one fails; inspects counts them.
+	failInspectFrom, inspects map[string]int
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -507,7 +510,13 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 	id, action, _ := strings.Cut(rest, "/")
 
 	d.mu.Lock()
-	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id)) ||
+	if action == "json" {
+		if d.inspects == nil {
+			d.inspects = map[string]int{}
+		}
+		d.inspects[id]++
+	}
+	failed := (action == "json" && (d.failing(d.failInspect, id) || (d.failInspectFrom[id] > 0 && d.inspects[id] >= d.failInspectFrom[id]))) || (action == "stop" && d.failing(d.failStop, id)) ||
 		(action == "start" && d.failing(d.failStart, id)) || (action == "rename" && d.failing(d.failRename, id)) ||
 		(action == "" && r.Method == http.MethodDelete && d.failing(d.failRemove, id))
 	refused := ""
@@ -649,6 +658,28 @@ func (d *Docker) RemoveNetwork(name string) {
 
 // FailInspect makes inspecting this container fail with a server error.
 func (d *Docker) FailInspect(name string) { d.setFail(&d.failInspect, name) }
+
+// FailInspectFrom makes inspecting by exactly this name or id fail from the nth
+// such inspect after this call on (n counts from 1). Unlike
+// FailInspect it matches the request, not the container: an inspect of the same
+// container under its other name or its id still works.
+func (d *Docker) FailInspectFrom(nameOrID string, n int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.failInspectFrom == nil {
+		d.failInspectFrom = map[string]int{}
+	}
+	d.failInspectFrom[nameOrID] = d.inspects[nameOrID] + n
+}
+
+// ClearFailures drops every inspect, stop, start, rename and remove failure set
+// so far, the way a daemon that was struggling recovers.
+func (d *Docker) ClearFailures() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.failInspect, d.failStop, d.failStart, d.failRename, d.failRemove = nil, nil, nil, nil, nil
+	d.failInspectFrom = nil
+}
 
 // FailStop makes stopping this container fail with a server error.
 func (d *Docker) FailStop(name string) { d.setFail(&d.failStop, name) }
