@@ -419,6 +419,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		if _, err := cli.ContainerStop(ctx, live.Container.ID, client.ContainerStopOptions{Timeout: &stopTimeout}); err != nil {
 			// A fresh context: a cancelled deploy's stop may still have happened.
 			still, ierr := cli.ContainerInspect(context.Background(), live.Container.ID, client.ContainerInspectOptions{})
+			// The daemon goes on with a stop the client gave up on, for up to the grace
+			// period: wait for it, so the node is not left stopped behind our back.
+			if ierr == nil && ctx.Err() != nil && runsOrRestarts(still.Container) {
+				still, ierr = waitStopped(cli, live.Container.ID, time.Duration(stopTimeout)*time.Second+10*time.Second)
+			}
 			if ierr != nil {
 				// Whether it stopped is not known: one that ran is started again.
 				return ContainerInfo{}, refusedReplacement{
@@ -426,8 +431,15 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 					restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name),
 				}
 			}
-			if still.Container.State == nil || still.Container.State.Running || still.Container.State.Restarting {
+			if still.Container.State == nil || runsOrRestarts(still.Container) {
 				return ContainerInfo{}, fmt.Errorf("%s could not be stopped (%v), so it was not replaced and is still running. Try again in a minute", name, err)
+			}
+			if ctx.Err() != nil {
+				// The deploy was cancelled and the node did stop: one that ran starts again.
+				return ContainerInfo{}, refusedReplacement{
+					err:      fmt.Errorf("%s was not replaced: %w", name, ctx.Err()),
+					restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name),
+				}
 			}
 		}
 		if progress != nil {
@@ -656,6 +668,24 @@ func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSe
 	})
 }
 
+// runsOrRestarts reports whether Docker says c runs or is restarting.
+func runsOrRestarts(c container.InspectResponse) bool {
+	return c.State != nil && (c.State.Running || c.State.Restarting)
+}
+
+// waitStopped polls container id, with a context of its own, until it no longer runs
+// or limit passes, and returns the last inspect.
+func waitStopped(cli *client.Client, id string, limit time.Duration) (client.ContainerInspectResult, error) {
+	deadline := time.Now().Add(limit)
+	for {
+		now, err := cli.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
+		if err != nil || !runsOrRestarts(now.Container) || time.Now().After(deadline) {
+			return now, err
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 // PlanRemoval reports what removing this service would delete.
 func (p *DockerProvider) PlanRemoval(ctx context.Context, slug string, critical map[string]string) (RemovalPlan, error) {
 	cli, err := dockerClient()
@@ -689,6 +719,10 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 	}
 	defer cli.Close()
 	name := containerName(slug)
+	// Not while a deploy of the same container runs: between setting the old node
+	// aside and starting its replacement the name is free, and the removal would take
+	// the node set aside while the deploy brings the service back.
+	defer p.lockReplacing(name)()
 	mounts, err := managedContainerMounts(ctx, cli, name)
 	// A roll-back that could not rename the old container back leaves only it, set
 	// aside: it is the service, and goes with the same data choices.

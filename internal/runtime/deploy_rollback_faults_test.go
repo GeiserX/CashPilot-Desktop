@@ -475,6 +475,44 @@ func TestAServiceLeftOnlySetAsideCanBeRemoved(t *testing.T) {
 			t.Fatalf("a remove that keeps the data took the volume: %v", docker.Volumes())
 		}
 	})
+	t.Run("keep the data keeps its anonymous volumes", func(t *testing.T) {
+		docker, p, _ := rollbackDaemon(t)
+		old := leaveOnlySetAside(t, docker, p, svc, 1)
+		docker.ResetCalls()
+		if err := p.Remove(context.Background(), svc.Slug, RemoveOptions{Critical: critical}); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if got := removalOf(docker, old.ID); got == "" || strings.Contains(got, "v=1") {
+			t.Fatalf("removal of the set-aside node = %q, want one without v=1", got)
+		}
+	})
+	t.Run("delete the data takes its anonymous volumes", func(t *testing.T) {
+		docker, p, _ := rollbackDaemon(t)
+		old := leaveOnlySetAside(t, docker, p, svc, 1)
+		docker.ResetCalls()
+		if err := p.Remove(context.Background(), svc.Slug, RemoveOptions{DeleteData: true, AllowCritical: true, Critical: critical}); err != nil {
+			t.Fatalf("Remove: %v", err)
+		}
+		if got := removalOf(docker, old.ID); !strings.Contains(got, "v=1") {
+			t.Fatalf("removal of the set-aside node = %q, want v=1", got)
+		}
+	})
+	t.Run("a copy of another service under the name", func(t *testing.T) {
+		// copy 2 of orderly and the service orderly-2 share the name cashpilot-orderly-2.
+		docker, p, _ := rollbackDaemon(t)
+		copySvc := plainEarner()
+		copySvc.Docker.Ports, copySvc.Docker.Volumes = nil, nil
+		old := leaveOnlySetAside(t, docker, p, copySvc, 2)
+		if _, err := p.PlanRemoval(context.Background(), svc.Slug+"-2", nil); !cerrdefs.IsNotFound(err) {
+			t.Fatalf("PlanRemoval = %v, want not found", err)
+		}
+		if err := p.Remove(context.Background(), svc.Slug+"-2", RemoveOptions{DeleteData: true, AllowCritical: true}); !cerrdefs.IsNotFound(err) {
+			t.Fatalf("Remove = %v, want not found", err)
+		}
+		if c, ok := docker.Container(old.Name + setAsideSuffix); !ok || c.ID != old.ID {
+			t.Fatalf("the removal took copy 2 of %s: %v", svc.Slug, docker.Names())
+		}
+	})
 	t.Run("critical data needs its own yes", func(t *testing.T) {
 		docker, p, _ := rollbackDaemon(t)
 		old := leaveOnlySetAside(t, docker, p, svc, 1)
@@ -561,6 +599,91 @@ func TestRecoveryWaitsForADeployInFlight(t *testing.T) {
 			if len(got) != 1 || !strings.HasSuffix(got[node], " running") {
 				t.Fatalf("the box holds %v, want only %s running", got, node)
 			}
+		})
+	}
+}
+
+// removalOf returns the DELETE call that removed the container with this id, with
+// its query, or "" when none did.
+func removalOf(docker *harness.Docker, id string) string {
+	for _, call := range docker.CallsWithQuery() {
+		if strings.HasPrefix(call, "DELETE /") && strings.Contains(call, id) {
+			return call
+		}
+	}
+	return ""
+}
+
+// A deploy cancelled while the daemon still stops the old node waits for that stop,
+// up to the node's grace period, and then starts the node again: it never reports a
+// node as running that the daemon stops a moment later.
+func TestACancelledStopTheDaemonFinishesLaterStartsTheNodeAgain(t *testing.T) {
+	docker, p, _ := rollbackDaemon(t)
+	svc := plainEarner()
+	node := containerName(svc.Slug)
+	old := deployed(t, docker, p, svc)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	docker.FailStop(node)
+	docker.BeforeCall("POST /containers/"+node+"/stop", func() {
+		// The client gives up; the daemon goes on and stops the node a moment later.
+		cancel()
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			docker.SetState(node, "exited")
+		}()
+	})
+	_, err := p.Deploy(ctx, DeploySpec{Slug: svc.Slug, Service: svc}, nil)
+	if err == nil {
+		t.Fatal("a cancelled deploy succeeded")
+	}
+	if strings.Contains(err.Error(), "still running") {
+		t.Errorf("error %q says the node still runs, but the daemon stopped it", err)
+	}
+	time.Sleep(400 * time.Millisecond) // past the daemon's late stop
+	sameBox(t, box(docker, svc.Slug), map[string]string{node: old.ID + " running"})
+}
+
+// A removal waits for a deploy of the same container in flight. Otherwise it takes
+// the node the deploy set aside, reports success, and the deploy brings the
+// service back.
+func TestARemovalWaitsForADeployInFlight(t *testing.T) {
+	svc := plainEarner()
+	svc.Docker.Ports, svc.Docker.Volumes = nil, nil
+	for what, c := range map[string]struct {
+		n      int
+		remove func(p *DockerProvider) error
+	}{
+		"the service": {1, func(p *DockerProvider) error {
+			return p.Remove(context.Background(), svc.Slug, RemoveOptions{})
+		}},
+		"a copy": {2, func(p *DockerProvider) error {
+			return p.RemoveCopy(context.Background(), svc.Slug, 2, 5)
+		}},
+	} {
+		t.Run(what, func(t *testing.T) {
+			docker, p, _ := rollbackDaemon(t)
+			spec := DeploySpec{Slug: svc.Slug, Service: svc, Instance: c.n}
+			if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+				t.Fatalf("deploy: %v", err)
+			}
+			done := make(chan error, 1)
+			docker.BeforeCall("POST /containers/create", func() {
+				// The old node sits set aside and the name is free.
+				go func() { done <- c.remove(p) }()
+				select {
+				case err := <-done:
+					done <- err
+				case <-time.After(300 * time.Millisecond):
+				}
+			})
+			if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+				t.Fatalf("the deploy in flight failed: %v", err)
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("remove: %v", err)
+			}
+			sameBox(t, box(docker, svc.Slug), map[string]string{})
 		})
 	}
 }

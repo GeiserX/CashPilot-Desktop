@@ -180,6 +180,8 @@ func (p *DockerProvider) RemoveCopy(ctx context.Context, slug string, n, stopTim
 		return err
 	}
 	defer cli.Close()
+	// Not while a deploy of the same copy runs, as Remove.
+	defer p.lockReplacing(copyName(slug, n))()
 	name, err := managedCopy(ctx, cli, slug, n)
 	if cerrdefs.IsNotFound(err) {
 		// A roll-back that could not rename the copy back leaves only it, set aside.
