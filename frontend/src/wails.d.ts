@@ -164,6 +164,9 @@ export interface FenceStatus {
   outside: string[] | null;
   // Stopped earners outside the fence, left alone until their next deploy.
   outsideStopped: string[] | null;
+  // Fence-gated earners that are down and that CashPilot starts itself once the
+  // fence is confirmed. One the user stopped is not listed.
+  waiting: string[] | null;
 }
 
 export interface IsolationResult {

@@ -131,6 +131,10 @@ type FenceStatus struct {
 	// OutsideStopped names stopped earners outside the fence. They are left alone and
 	// move the next time they are deployed.
 	OutsideStopped []string `json:"outsideStopped"`
+	// Waiting names the fence-gated earners that are down and that CashPilot starts
+	// itself once the fence is confirmed (fence_gated_start.go). A node the user
+	// stopped is not waiting.
+	Waiting []string `json:"waiting"`
 }
 
 // fenceAPI is the part of the Docker client the fence uses, so the decisions can be
@@ -147,6 +151,7 @@ type fenceAPI interface {
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	ContainerStart(ctx context.Context, containerID string, options client.ContainerStartOptions) (client.ContainerStartResult, error)
 	ContainerStop(ctx context.Context, containerID string, options client.ContainerStopOptions) (client.ContainerStopResult, error)
+	ContainerUpdate(ctx context.Context, containerID string, options client.ContainerUpdateOptions) (client.ContainerUpdateResult, error)
 	ContainerWait(ctx context.Context, containerID string, options client.ContainerWaitOptions) client.ContainerWaitResult
 	ContainerLogs(ctx context.Context, containerID string, options client.ContainerLogsOptions) (client.ContainerLogsResult, error)
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
@@ -192,7 +197,13 @@ type fence struct {
 	// it; mu guards them.
 	lookupEgress func(ctx context.Context) string
 	// gatedSlug reports a service the catalog marks fence_gated (SetFenceGated).
-	gatedSlug   func(slug string) bool
+	gatedSlug func(slug string) bool
+	// stoppedPath is the file that names the fence-gated containers the user stopped
+	// (fence_gated_start.go); "" keeps the record in stoppedMem instead. stoppedMu
+	// guards both.
+	stoppedPath string
+	stoppedMem  map[string]bool
+	stoppedMu   sync.Mutex
 	egress      string
 	egressAt    time.Time
 	mu          sync.Mutex // the helper and the apply sequence
@@ -730,6 +741,10 @@ func runHelper(ctx context.Context, cli fenceAPI, action, subnet, egress string,
 
 const fenceOffHint = "Set LAN isolation to off in Settings to deploy on Docker's default bridge instead, without the fence."
 
+// fenceGatedHint replaces fenceOffHint for a fence-gated earner, which isolation off
+// refuses outright: sending the user there would leave the node unable to run at all.
+const fenceGatedHint = "This service runs only behind the LAN fence, so setting LAN isolation to off would not let it run. Fix what stops the fence, then try again."
+
 func (f *fence) setStatus(update func(*FenceStatus)) {
 	f.stateMu.Lock()
 	defer f.stateMu.Unlock()
@@ -744,6 +759,7 @@ func (f *fence) Status() FenceStatus {
 	s.Setting = f.chosen()
 	s.Outside = append([]string(nil), s.Outside...)
 	s.OutsideStopped = append([]string(nil), s.OutsideStopped...)
+	s.Waiting = append([]string(nil), s.Waiting...)
 	return s
 }
 
@@ -920,7 +936,8 @@ func (f *fence) setOutside(mode string, earners []fenceEarner) {
 // networkForDeploy is the network a bridge-networked earner joins: "" for Docker's
 // default bridge (off and legacy). In on mode the fence is applied first; if it
 // cannot be, the deploy is refused here, before the running container is touched.
-func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI) (string, error) {
+// gated says the earner is fence-gated, which changes the advice a failed apply gives.
+func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI, gated bool) (string, error) {
 	mode, _, _, err := f.mode(ctx, cli)
 	if err != nil {
 		return "", fmt.Errorf("could not check the LAN fence, so the running container was not touched: %w", err)
@@ -936,7 +953,11 @@ func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI) (string, err
 		return "", nil
 	}
 	if err := f.apply(ctx, cli); err != nil {
-		return "", fmt.Errorf("%v The running container was not touched. %s", err, fenceOffHint)
+		hint := fenceOffHint
+		if gated {
+			hint = fenceGatedHint
+		}
+		return "", fmt.Errorf("%v The running container was not touched. %s", err, hint)
 	}
 	return FenceNetwork, nil
 }
@@ -957,7 +978,10 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		f.setStatus(func(s *FenceStatus) { s.State, s.Error = "failed", err.Error() })
 		return
 	}
-	var gatedErr error
+	// A fence-gated container made before Desktop started them itself still has
+	// Docker's restart policy, which would start it after a reboot ahead of the fence.
+	pinErr := f.pinGatedRestart(ctx, cli)
+	var gatedErr, startErr error
 	if mode != FenceModeOn {
 		// Before the drops go: a fence-gated earner must not outlive the fence.
 		gatedErr = f.stopGated(ctx, cli, nil)
@@ -970,11 +994,16 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		// outside it: a host-networked node made before the fence keeps the host's
 		// and the LAN's addresses.
 		var keep func(fenceEarner) bool
-		if f.apply(ctx, cli) == nil {
+		applied := f.apply(ctx, cli) == nil
+		if applied {
 			keep = fencedAlone
 		}
 		if gatedErr = f.stopGated(ctx, cli, keep); gatedErr != nil {
 			f.setStatus(func(s *FenceStatus) { s.Error = withGatedErr(s.Error, gatedErr) })
+		}
+		if applied {
+			// Only now, with the fence just applied: Docker never starts these itself.
+			startErr = f.startGated(ctx, cli)
 		}
 		if fresh, err := listEarners(ctx, cli); err == nil {
 			earners = fresh
@@ -994,6 +1023,10 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 	default:
 		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "n/a", "", withGatedErr("", gatedErr) })
 	}
+	if pinErr != nil || startErr != nil {
+		f.setStatus(func(s *FenceStatus) { s.Error = withGatedErr(withGatedErr(s.Error, pinErr), startErr) })
+	}
+	f.refreshWaiting(ctx, cli)
 	// Settings changed while this ran: its mode is stale, and the reconcile the
 	// change triggers publishes the right one.
 	if f.chosen() != chosen {
@@ -1030,9 +1063,11 @@ func fencedAlone(e fenceEarner) bool {
 }
 
 // stopGated stops every fence-gated container that is running or that Docker is
-// about to restart, except those keep accepts (nil keeps none). An explicit stop, so a restart policy of unless-stopped does not
-// bring it back; Start refuses it until isolation is on again. An error means one
-// may still be running, and the caller must keep the fence.
+// about to restart, except those keep accepts (nil keeps none). An explicit stop, so
+// one still on the old restart policy of unless-stopped does not come back; Start
+// refuses it until isolation is on again. This stop is not the user's, so the next
+// reconcile that applies the fence starts the node again (startGated). An error means
+// one may still be running, and the caller must keep the fence.
 func (f *fence) stopGated(ctx context.Context, cli fenceAPI, keep func(fenceEarner) bool) error {
 	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true")})
 	if err != nil {

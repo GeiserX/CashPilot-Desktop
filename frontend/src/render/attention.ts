@@ -45,6 +45,16 @@ export function containerState(status: string): "ok" | "warn" | "fail" {
   return "warn";
 }
 
+// gatedNote keeps the isolation-off advice from reaching a fence-gated earner, which
+// isolation off refuses: it says that earner stays stopped until the fence is back.
+function gatedNote(slugs: string[], nameOf: (slug: string) => string): string {
+  if (!slugs.length) return "";
+  const names = slugs.map((slug) => escapeHtml(nameOf(slug))).join(", ");
+  return slugs.length === 1
+    ? ` ${names} runs only behind the fence, so isolation off would not start it: it stays stopped until the fence is back.`
+    : ` ${names} run only behind the fence, so isolation off would not start them: they stay stopped until the fence is back.`;
+}
+
 export function attentionItems(input: AttentionInput): AttentionItem[] {
   const items: AttentionItem[] = [];
   const nameOf = (slug: string) => input.services.find((s) => s.slug === slug)?.name || slug;
@@ -94,10 +104,30 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     });
   }
 
+  // A fence-gated earner (Mysterium) has no Docker restart policy: CashPilot starts
+  // it itself, only behind a confirmed fence. Down and waiting for that, it is not a
+  // container to start by hand.
+  const fence = input.isolation;
+  const waiting = new Set(fence?.waiting || []);
   const down = (slug: string, name: string, status: string, copy: number) => {
     if (disabled.has(slug)) return;
     const st = containerState(status);
     if (st === "ok") return;
+    if (waiting.has(slug)) {
+      const fenced = fence?.mode === "on";
+      items.push({
+        level: "warn",
+        tag: "Waiting for fence",
+        what: nameOf(slug),
+        why: `runs only behind the LAN fence, so CashPilot starts it itself, never Docker. ${
+          fenced
+            ? "It starts as soon as CashPilot has confirmed the fence."
+            : "LAN isolation is not on here, so it stays stopped until isolation is on and the fence is in place."
+        } While CashPilot is not running, nothing starts it: after this computer restarts, it stays stopped until CashPilot starts.`,
+        actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(slug)}">Logs</button>`,
+      });
+      return;
+    }
     const copyAttr = copy > 1 ? ` data-copy="${copy}"` : "";
     items.push({
       level: st,
@@ -167,7 +197,6 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
 
   // The LAN fence. With isolation off nothing is said: that is the user's choice in
   // Settings, and the Settings help names what it costs.
-  const fence = input.isolation;
   if (fence && !fence.mode && fence.setting !== "off" && fence.state === "failed") {
     // The check itself failed (Docker did not answer), so no mode was settled.
     items.push({
@@ -182,7 +211,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       level: "fail",
       tag: "Fence down",
       what: "LAN isolation",
-      why: `the fence that keeps earners off your LAN could not be applied${fence.error ? `: ${escapeHtml(fence.error)}` : "."} Container deploys are refused until it can be. To deploy without it, set LAN isolation to off in Settings.`,
+      why: `the fence that keeps earners off your LAN could not be applied${fence.error ? `: ${escapeHtml(fence.error)}` : "."} Container deploys are refused until it can be. To deploy other earners without it, set LAN isolation to off in Settings.${gatedNote(fence.waiting || [], nameOf)}`,
       actions: "",
     });
   } else if (fence && fence.mode === "unsupported") {

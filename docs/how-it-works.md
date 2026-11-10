@@ -321,7 +321,10 @@ Podman** (Podman exposes a Docker-compatible API). Responsibilities:
 - **`Deploy`** pulls the image, then creates+starts a container named
   `cashpilot-<slug>` with CashPilot labels (`cashpilot.managed=true`, etc.),
   `unless-stopped` restart policy, and env/ports/volumes/caps from the catalog
-  entry. Bind vs named volumes are distinguished by `isNamedVolume`.
+  entry. A fence-gated earner (Mysterium) gets restart policy `no` instead, and the
+  app starts it itself right after it has applied the LAN fence
+  (`fence_gated_start.go`). Bind vs named volumes are distinguished by
+  `isNamedVolume`.
 - **`Stop`/`Start`/`Restart`/`Remove`/`Logs`/`List`** operate by container name.
   `Remove` also deletes the container's **named** volumes (host bind-mounts are
   left untouched); `List` filters to managed containers and computes live CPU%/MEM

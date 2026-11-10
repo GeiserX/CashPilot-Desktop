@@ -327,7 +327,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	fenced := ""
 	if hostConfig.NetworkMode == "bridge" && facts.OSType == "linux" {
-		fenced, err = p.fence.networkForDeploy(ctx, cli)
+		fenced, err = p.fence.networkForDeploy(ctx, cli, svc.Docker.FenceGated)
 		if err != nil {
 			return ContainerInfo{}, err
 		}
@@ -406,6 +406,12 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
 		return ContainerInfo{}, err
 	}
+	if svc.Docker.FenceGated {
+		// A deploy is a request to run it: a stop recorded earlier no longer holds.
+		// A record that cannot be cleared only keeps a crashed node down until the
+		// next Start, so it does not fail the deploy.
+		_ = p.fence.markStopped(name, false)
+	}
 
 	return ContainerInfo{
 		Slug:        spec.Slug,
@@ -425,6 +431,18 @@ func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSecon
 	defer cli.Close()
 	name := containerName(slug)
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
+	got, inspectErr := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	gated := inspectErr == nil && got.Container.Config != nil && p.fence.isGated(got.Container.Config.Labels)
+	if gated || inspectErr != nil {
+		// CashPilot starts a fence-gated node itself, so the stop is recorded first or
+		// the next check would start it again. Under the reconcile lock, so a check
+		// that has already decided to start it cannot do so after this stop.
+		p.fence.reconcileMu.Lock()
+		defer p.fence.reconcileMu.Unlock()
+		if err := p.fence.markStopped(name, true); err != nil && gated {
+			return fmt.Errorf("%s was not stopped: the stop could not be recorded (%v), and without that record CashPilot would start it again behind the LAN fence", name, err)
+		}
+	}
 	_, err = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
 	return err
 }
@@ -460,7 +478,14 @@ func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, n
 	if err := p.gatedStartProblem(ctx, cli, name); err != nil {
 		return err
 	}
-	return start()
+	if err := start(); err != nil {
+		return err
+	}
+	// Started by the user: a stop recorded earlier no longer holds, so CashPilot
+	// brings it back after a crash or a reboot again. A record that cannot be cleared
+	// only keeps a crashed node down until the next Start.
+	_ = p.fence.markStopped(name, false)
+	return nil
 }
 
 // gatedStartProblem refuses to start a fence-gated container unless the fence is on
@@ -479,7 +504,7 @@ func (p *DockerProvider) gatedStartProblem(ctx context.Context, cli *client.Clie
 	if !p.fence.isGated(labels) {
 		return nil
 	}
-	fenced, err := p.fence.networkForDeploy(ctx, cli)
+	fenced, err := p.fence.networkForDeploy(ctx, cli, true)
 	if err != nil {
 		return err
 	}
@@ -1263,12 +1288,10 @@ func buildMounts(raw []string, env map[string]string) []mount.Mount {
 // of the hardening can be sent at all (see applyHardening).
 func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mount.Mount, osType string) (*container.HostConfig, error) {
 	hostConfig := &container.HostConfig{
-		PortBindings: bindings,
-		Mounts:       mounts,
-		RestartPolicy: container.RestartPolicy{
-			Name: "unless-stopped",
-		},
-		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
+		PortBindings:  bindings,
+		Mounts:        mounts,
+		RestartPolicy: restartPolicyFor(svc),
+		NetworkMode:   container.NetworkMode(svc.Docker.NetworkMode),
 		// The runtime the entry names wins over the daemon's default (Deploy has
 		// checked the daemon has it); none leaves the daemon's default.
 		Runtime: strings.TrimSpace(svc.Docker.Runtime),
@@ -1290,6 +1313,16 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 	}
 	hostConfig.Resources.Devices = devices
 	return hostConfig, nil
+}
+
+// restartPolicyFor is unless-stopped for every earner but a fence-gated one, which
+// gets none: Docker would start it after a reboot before the LAN fence is back.
+// CashPilot starts it itself behind the fence (fence_gated_start.go).
+func restartPolicyFor(svc catalog.Service) container.RestartPolicy {
+	if svc.Docker.FenceGated {
+		return container.RestartPolicy{Name: container.RestartPolicyDisabled}
+	}
+	return container.RestartPolicy{Name: container.RestartPolicyUnlessStopped}
 }
 
 // allowedDevices is the hard ceiling on host devices a service may be given. A

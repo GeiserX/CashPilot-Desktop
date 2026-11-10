@@ -115,6 +115,8 @@ type fenceController interface {
 	FenceStatus() runtime.FenceStatus
 	ReconcileFence(ctx context.Context)
 	EnableFence(ctx context.Context) (runtime.FenceStatus, error)
+	// GuardFenceGated starts a fence-gated earner that is down, behind the fence.
+	GuardFenceGated(ctx context.Context)
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
@@ -199,6 +201,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// rather than every five minutes. Docker's own evidence still counts meanwhile.
 	var memoryFailing atomic.Bool
 	docker.SetEgressLookup(runtime.LookupPublicIP)
+	// Which fence-gated earners the user stopped, so CashPilot does not start them
+	// again. A file, read on every check, so the window and the daemon share it.
+	docker.SetGatedStoppedFile(filepath.Join(cfg.DataDir(), "fence_gated_stopped"))
 	docker.SetIsolationMemory(
 		func() bool { return a.cfg.Config().IsolationOn },
 		func(on bool) {
@@ -279,12 +284,19 @@ func (a *App) startCore(ctx context.Context) error {
 func (a *App) runFence(ctx context.Context) {
 	ticker := time.NewTicker(runtime.FenceRecheck)
 	defer ticker.Stop()
+	// Fence-gated earners have no Docker restart policy, so this is what brings one
+	// back after a crash (internal/runtime/fence_gated_start.go).
+	guard := time.NewTicker(runtime.FenceGuard)
+	defer guard.Stop()
+	a.fence.ReconcileFence(ctx)
 	for {
-		a.fence.ReconcileFence(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			a.fence.ReconcileFence(ctx)
+		case <-guard.C:
+			a.fence.GuardFenceGated(ctx)
 		}
 	}
 }
