@@ -86,6 +86,8 @@ check("the waiting row says CashPilot starts it behind the fence", !!waitRow?.wh
 check("the waiting row says it stays down while CashPilot is not running", !!waitRow?.why.includes("While CashPilot is not running") && waitRow.why.includes("until CashPilot starts"), waitRow?.why);
 const waitingOff = gatedRows(fence({ mode: "off", setting: "off", state: "n/a", waiting: ["mysterium"] })).find((i) => i.tag === "Waiting");
 check("with isolation off the waiting row says isolation must be on", !!waitingOff?.why.includes("isolation is on"), waitingOff?.why);
+const refused = gatedRows(fence({ mode: "on", state: "applied", error: "could not start cashpilot-mysterium behind the LAN fence", waiting: ["mysterium"] })).find((i) => i.tag === "Waiting");
+check("with the fence applied and an error the waiting row shows the error, not a promise to start", !!refused?.why.includes("could not start cashpilot-mysterium") && !refused.why.includes("as soon as"), refused?.why);
 const userStopped = gatedRows(fence({ mode: "on", state: "applied", waiting: [] }));
 check("a node the user stopped stays a Down row with Start", userStopped.some((i) => i.tag === "Down" && i.actions.includes('data-row-action="start"')), JSON.stringify(userStopped));
 
