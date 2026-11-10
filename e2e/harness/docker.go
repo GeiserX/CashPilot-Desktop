@@ -60,6 +60,9 @@ type Container struct {
 	// StateError is inspect's State.Error: why Docker's last start of it failed.
 	// A start that works clears it.
 	StateError string
+	// refuseStart is why every start of this container fails, "" for none
+	// (FailStartOfNext).
+	refuseStart string
 }
 
 // PortBinding is one host binding of a published port.
@@ -104,6 +107,11 @@ type Docker struct {
 	// failInspect, failStop and failStart name containers whose inspect, stop or
 	// start fails.
 	failInspect, failStop, failStart map[string]bool
+	// failRename names containers whose rename fails. refuseCreate and
+	// refuseNextStart hold, by container name, why the next create under that name
+	// is refused, or why the next container created under it cannot start.
+	failRename                    map[string]bool
+	refuseCreate, refuseNextStart map[string]string
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -408,6 +416,11 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if why := d.refuseCreate[name]; name != "" && why != "" {
+		delete(d.refuseCreate, name)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": why})
+		return
+	}
 	if name != "" && d.containers[name] != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{
 			"message": "Conflict. The container name \"/" + name + "\" is already in use",
@@ -430,6 +443,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		NetworkMode:   body.HostConfig.NetworkMode,
 		PortBindings:  body.HostConfig.PortBindings,
 		RestartPolicy: body.HostConfig.RestartPolicy.Name,
+	}
+	if why := d.refuseNextStart[name]; name != "" && why != "" {
+		delete(d.refuseNextStart, name)
+		c.refuseStart = why
 	}
 	for _, m := range body.HostConfig.Mounts {
 		if m.Type == "volume" && m.Source != "" {
@@ -481,8 +498,16 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 
 	d.mu.Lock()
 	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id)) ||
-		(action == "start" && d.failing(d.failStart, id))
+		(action == "start" && d.failing(d.failStart, id)) || (action == "rename" && d.failing(d.failRename, id))
+	refused := ""
+	if c := d.find(id); c != nil && action == "start" {
+		refused = c.refuseStart
+	}
 	d.mu.Unlock()
+	if refused != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": refused})
+		return
+	}
 	if failed {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "fake daemon: " + action + " failed for " + id})
 		return
@@ -522,8 +547,10 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 		d.setState(w, id, "exited")
 	case action == "update" && r.Method == http.MethodPost:
 		d.update(w, r, id)
+	case action == "rename" && r.Method == http.MethodPost:
+		d.rename(w, id, r.URL.Query().Get("name"))
 	case action == "" && r.Method == http.MethodDelete:
-		d.remove(w, id)
+		d.remove(w, id, r.URL.Query().Get("force") == "1")
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "fake daemon: no container route " + rest})
 	}
@@ -627,6 +654,42 @@ func (d *Docker) FailStart(name string, fail bool) {
 	delete(d.failStart, name)
 }
 
+// FailRename makes renaming this container fail with a server error. The name is
+// the one the container has when the rename is asked for.
+func (d *Docker) FailRename(name string) { d.setFail(&d.failRename, name) }
+
+// FailCreate makes the next create of a container under this name fail with
+// message, the way Docker refuses a create.
+func (d *Docker) FailCreate(name, message string) { d.setRefusal(&d.refuseCreate, name, message) }
+
+// FailStartOfNext makes the next container created under this name fail every
+// start with message, the way Docker refuses a container whose published port a
+// host process holds. Containers that already exist are not affected.
+func (d *Docker) FailStartOfNext(name, message string) {
+	d.setRefusal(&d.refuseNextStart, name, message)
+}
+
+func (d *Docker) setRefusal(set *map[string]string, name, message string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if *set == nil {
+		*set = map[string]string{}
+	}
+	(*set)[name] = message
+}
+
+// Rename renames a container behind the app's back, the way a deploy that died
+// midway leaves one under another name.
+func (d *Docker) Rename(name, to string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		delete(d.containers, c.Name)
+		c.Name = to
+		d.containers[to] = c
+	}
+}
+
 // SetStateError sets a container's State.Error, as Docker records a start that
 // failed ("network ... not found").
 func (d *Docker) SetStateError(name, message string) {
@@ -667,6 +730,33 @@ func (d *Docker) setState(w http.ResponseWriter, id, state string) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// rename gives a container a new name, refused when another container holds it
+// or when it is the name the container already has, as the real daemon does.
+func (d *Docker) rename(w http.ResponseWriter, id, to string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	to = strings.TrimPrefix(to, "/")
+	c := d.find(id)
+	if c == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
+		return
+	}
+	if to == c.Name {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Renaming a container with the same name as its current name"})
+		return
+	}
+	if d.containers[to] != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"message": "Conflict. The container name \"/" + to + "\" is already in use",
+		})
+		return
+	}
+	delete(d.containers, c.Name)
+	c.Name = to
+	d.containers[to] = c
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // update applies a container update. Only the restart policy is kept; a real
 // daemon changes it in place without touching the running container.
 func (d *Docker) update(w http.ResponseWriter, r *http.Request, id string) {
@@ -702,12 +792,17 @@ func (d *Docker) SetRestartPolicy(name, policy string) {
 	}
 }
 
-func (d *Docker) remove(w http.ResponseWriter, id string) {
+func (d *Docker) remove(w http.ResponseWriter, id string, force bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	c := d.find(id)
 	if c == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
+		return
+	}
+	if !force && (c.State == "running" || c.State == "restarting") {
+		// The real daemon removes a running container only when forced.
+		writeJSON(w, http.StatusConflict, map[string]string{"message": "cannot remove container \"/" + c.Name + "\": container is running: stop the container before removing or force remove"})
 		return
 	}
 	// A named volume survives its container, exactly as the real daemon leaves it:

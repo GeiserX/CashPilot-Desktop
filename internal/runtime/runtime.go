@@ -338,7 +338,16 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	defer p.fence.refreshOutside(context.Background(), cli)
 
-	// Past this point the deploy is destructive: the existing container goes.
+	// A deploy that did not finish may have left the old container set aside
+	// (setaside.go). It is settled first, so the name below is the one that counts.
+	if note, err := recoverSetAside(ctx, cli, name); err != nil {
+		return ContainerInfo{}, fmt.Errorf("%v. The running container was not touched", err)
+	} else if note != "" && progress != nil {
+		progress(note)
+	}
+
+	// Past this point the deploy is destructive: the existing container is set aside
+	// until its replacement runs (setaside.go).
 	// Where the running container keeps its data beats where the catalog thinks it
 	// is: a replacement that mounts the spec's volume over a node whose identity
 	// lives elsewhere comes back as a different node. Read it BEFORE the removal,
@@ -351,11 +360,24 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if inspectErr != nil && !cerrdefs.IsNotFound(inspectErr) {
 		return ContainerInfo{}, fmt.Errorf("could not check what holds %s, so it was left as it is: %w", name, inspectErr)
 	}
+	aside := name + setAsideSuffix
+	setAside, wasRunning := false, false
 	if inspectErr == nil {
 		if live.Container.Config != nil {
 			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
 				return ContainerInfo{}, fmt.Errorf("%s already belongs to %s, not to copy %d of %s. It was left running; remove it or deploy under another name", name, owner, max(spec.Instance, 1), spec.Slug)
 			}
+		}
+		// recoverSetAside settled a leftover of ours, so whatever holds the name the
+		// old container is set aside under is not ours to remove.
+		if holder, err := cli.ContainerInspect(ctx, aside, client.ContainerInspectOptions{}); err == nil {
+			owner := "a container CashPilot did not deploy"
+			if holder.Container.Config != nil && holder.Container.Config.Labels[LabelService] != "" {
+				owner = holder.Container.Config.Labels[LabelService]
+			}
+			return ContainerInfo{}, fmt.Errorf("%s was not replaced: %s, the name it is set aside under while its replacement starts, belongs to %s. It was left running; remove or rename that container, then deploy again", name, aside, owner)
+		} else if !cerrdefs.IsNotFound(err) {
+			return ContainerInfo{}, fmt.Errorf("could not check %s, so %s was left as it is: %w", aside, name, err)
 		}
 		// A custom service mounts only its own named volume, never a host directory, so
 		// it does not inherit what the container before it had mounted.
@@ -369,20 +391,47 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 				progress(fmt.Sprintf("Keeping %s at %s, where its data already is (the catalog asked for %s).", k.Kept, k.Target, k.Requested))
 			}
 		}
-		// Stop it the way Stop does, with its own grace period, before removing it.
-		// A forced removal is SIGKILL: a storage node gets no chance to flush (Storj
-		// asks for 300 seconds for exactly that) and pays for it with an unclean
-		// shutdown. A stop that fails is not a reason to abandon the deploy — the
-		// forced removal below is what ran before this existed.
+		// Stop it the way Stop does, with its own grace period: a storage node gets
+		// the chance to flush (Storj asks for 300 seconds for exactly that). The stop
+		// also frees its published ports for the replacement. One that still runs
+		// after a failed stop is not replaced: the replacement would run beside it.
+		wasRunning = live.Container.State != nil && (live.Container.State.Running || live.Container.State.Restarting)
 		if progress != nil {
 			progress(fmt.Sprintf("Stopping %s (up to %ds to shut down cleanly)", name, stopTimeout))
 		}
-		_, _ = cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &stopTimeout})
+		if _, err := cli.ContainerStop(ctx, live.Container.ID, client.ContainerStopOptions{Timeout: &stopTimeout}); err != nil {
+			still, ierr := cli.ContainerInspect(ctx, live.Container.ID, client.ContainerInspectOptions{})
+			if ierr != nil || still.Container.State == nil || still.Container.State.Running || still.Container.State.Restarting {
+				return ContainerInfo{}, fmt.Errorf("%s could not be stopped (%v), so it was not replaced and is still running. Try again in a minute", name, err)
+			}
+		}
+		if progress != nil {
+			progress(fmt.Sprintf("Setting %s aside as %s until its replacement runs", name, aside))
+		}
+		if _, err := cli.ContainerRename(ctx, live.Container.ID, client.ContainerRenameOptions{NewName: aside}); err != nil {
+			return ContainerInfo{}, refusedReplacement{
+				err:      fmt.Errorf("%s could not be set aside: %w", name, err),
+				restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name),
+			}
+		}
+		setAside = true
 	}
-	// A custom service's anonymous volumes (an image's VOLUME with no data path) go
-	// with its container: the replacement gets fresh ones, so the old ones would only
-	// pile up. RemoveVolumes never touches a named volume, so its data path stays.
-	_, _ = cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: custom})
+	// rollBack undoes a replacement Docker refused: the refused container goes (its
+	// id, "" when the create failed) and the old one comes back.
+	rollBack := func(err error, createdID string) error {
+		if createdID != "" {
+			// Best-effort, so a failed deploy does not orphan a managed container in
+			// "created" state. A fresh context, so a cancelled deploy still cleans up.
+			_, rmErr := cli.ContainerRemove(context.Background(), createdID, client.ContainerRemoveOptions{Force: true})
+			if rmErr != nil && !cerrdefs.IsNotFound(rmErr) && setAside {
+				return refusedReplacement{err: err, restored: fmt.Sprintf("The previous container is kept, stopped, as %s, with its data: the refused one still holds %s (%v). Remove %s, then deploy again", aside, name, rmErr, name)}
+			}
+		}
+		if !setAside {
+			return err
+		}
+		return refusedReplacement{err: err, restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name)}
+	}
 
 	if progress != nil {
 		progress("Creating " + name)
@@ -393,18 +442,22 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		Name:       name,
 	})
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerInfo{}, rollBack(err, "")
 	}
 	if progress != nil {
 		progress("Starting " + name)
 	}
 	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		// The container was created (it carries LabelManaged, holds the name, and
-		// shows in List()) but never started. Best-effort remove it so a failed
-		// deploy does not orphan a managed cashpilot-<slug> container in "created"
-		// state. Use a fresh context so a cancelled deploy ctx still cleans up.
-		_, _ = cli.ContainerRemove(context.Background(), created.ID, client.ContainerRemoveOptions{Force: true})
-		return ContainerInfo{}, err
+		return ContainerInfo{}, rollBack(err, created.ID)
+	}
+	if setAside {
+		// The replacement runs, so the old container goes. Its named volumes stay; a
+		// custom service's anonymous ones (an image's VOLUME with no data path) go,
+		// since the replacement has fresh ones. One that cannot be removed only
+		// stays as a leftover: the next deploy or app start removes it.
+		if _, err := cli.ContainerRemove(context.Background(), live.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: custom}); err != nil && !cerrdefs.IsNotFound(err) && progress != nil {
+			progress(fmt.Sprintf("Could not remove %s, the container this one replaced (%v). The next deploy or app start removes it.", aside, err))
+		}
 	}
 	if svc.Docker.FenceGated {
 		// A deploy is a request to run it: a stop recorded earlier no longer holds.

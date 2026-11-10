@@ -277,7 +277,11 @@ func (a *App) startCore(ctx context.Context) error {
 	// The LAN fence: put the table back at startup and every few minutes, so a
 	// reboot or a firewall reload leaves the earners offline only briefly, never on
 	// the LAN.
-	go a.runFence(ctx)
+	go func() {
+		// A deploy the app did not finish may have left an earner set aside.
+		docker.RecoverSetAside(ctx)
+		a.runFence(ctx)
+	}()
 	return nil
 }
 

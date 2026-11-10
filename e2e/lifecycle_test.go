@@ -44,22 +44,23 @@ func TestEarnerLifecycle(t *testing.T) {
 		}
 	})
 
-	t.Run("deploy pulls, replaces and starts, in that order", func(t *testing.T) {
+	t.Run("deploy pulls, creates and starts, in that order", func(t *testing.T) {
 		e.Docker.ResetCalls()
 		dep, err := e.Manager.Deploy(ctx, "honeygain", honeygainCreds)
 		if err != nil {
 			t.Fatalf("Deploy: %v", err)
 		}
 
+		// A first deploy has nothing to replace; the redeploy below checks the
+		// replacement.
 		calls := e.Docker.Calls()
 		pull := callIndex(calls, "POST /images/create")
-		replace := callIndex(calls, "DELETE /containers/cashpilot-honeygain")
 		create := callIndex(calls, "POST /containers/create")
-		if pull < 0 || replace < 0 || create < 0 {
-			t.Fatalf("the deploy did not pull, replace and create; calls: %v", calls)
+		if pull < 0 || create < 0 {
+			t.Fatalf("the deploy did not pull and create; calls: %v", calls)
 		}
-		if pull > replace || replace > create {
-			t.Fatalf("expected pull then replace then create, got %v", calls)
+		if pull > create {
+			t.Fatalf("expected pull then create, got %v", calls)
 		}
 		if !hasCallMatching(calls, "POST /containers/", "/start") {
 			t.Fatalf("the container was never started; calls: %v", calls)
@@ -213,7 +214,8 @@ func TestEarnerLifecycle(t *testing.T) {
 		}
 		deleted := ""
 		for _, call := range e.Docker.CallsWithQuery() {
-			if strings.HasPrefix(call, "DELETE /containers/cashpilot-earnapp") {
+			// Set aside under another name first, so it is removed by its id.
+			if strings.HasPrefix(call, "DELETE /containers/"+before.ID) {
 				deleted = call
 			}
 		}
