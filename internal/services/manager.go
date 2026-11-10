@@ -276,6 +276,11 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	// runtime. Record whatever kind actually served the deploy so the persisted
 	// Runtime is derived rather than a hardcoded literal.
 	kind := m.kindForService(svc)
+	if custom != "" && svc.Docker.FenceGated {
+		// It holds NET_ADMIN in its own namespace, so it runs only the image the
+		// catalog pins (web app/main.py _fence_gated_spec).
+		return store.Deployment{}, fmt.Errorf("%s runs only the image the catalog pins, since it holds NET_ADMIN; clear the Image box to deploy it", svc.Name)
+	}
 	if custom != "" {
 		// The chosen image replaces the catalog's and every per-architecture
 		// override with it: it is the user's answer for this machine. An image only
@@ -285,6 +290,11 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		kind = ""
 	}
 	provider, runtimeKind := m.resolveProvider(kind)
+	if runtimeKind != nativeRuntimeKind {
+		if err := checkPublished(svc, credentials); err != nil {
+			return store.Deployment{}, err
+		}
+	}
 	// Copies are read only when copies are involved, so a plain deploy asks the
 	// runtime nothing it did not ask before.
 	copier, _ := provider.(runtime.CopyProvider)
@@ -723,6 +733,24 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 	return nil
 }
 
+// checkPublished refuses what ui_port and udp_port_range would publish from the env
+// when it cannot be published (a range the pattern lets through but wider than the
+// cap), before the deploy rather than in the runtime. Only a Docker deploy publishes
+// anything, so the caller asks it only for one: the native node ignores the range.
+func checkPublished(svc catalog.Service, credentials map[string]string) error {
+	env := map[string]string{}
+	for _, item := range svc.Docker.Env {
+		env[item.Key] = item.Default
+		if value := credentials[item.Key]; value != "" {
+			env[item.Key] = value
+		}
+	}
+	if err := svc.Docker.CheckPublishedValues(env); err != nil {
+		return fmt.Errorf("invalid value for field: %w", err)
+	}
+	return nil
+}
+
 // isPortRange reports whether value is "start:end" with 1 <= start <= end <= 65535.
 func isPortRange(value string) bool { return catalog.IsPortRange(value) }
 
@@ -740,7 +768,13 @@ func (m *Manager) ValidateCredentials(slug string, credentials map[string]string
 	if err := refuseRetired(svc); err != nil {
 		return err
 	}
-	return validateRequired(svc, credentials)
+	if err := validateRequired(svc, credentials); err != nil {
+		return err
+	}
+	if m.kindForService(svc) == nativeRuntimeKind {
+		return nil
+	}
+	return checkPublished(svc, credentials)
 }
 
 // RequiredCredentialsMet reports whether every required field for the service is present

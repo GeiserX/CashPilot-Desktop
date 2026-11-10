@@ -130,6 +130,13 @@ func (p *DockerProvider) SetIsolationSetting(read func() string) {
 	p.fence.setting = read
 }
 
+// SetFenceGated wires in which services the catalog marks fence_gated, so the fence
+// also covers a container made before LabelFenceGated existed (a Mysterium deployed
+// on the host's network by an older version). Call it before the first deploy.
+func (p *DockerProvider) SetFenceGated(gated func(slug string) bool) {
+	p.fence.gatedSlug = gated
+}
+
 // SetIsolationMemory wires in where "isolation is on" is kept, so a worker stays
 // fenced after Docker loses every trace of it. Call it before the first deploy.
 func (p *DockerProvider) SetIsolationMemory(read func() bool, write func(on bool)) {
@@ -226,7 +233,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	// Two copies would share the same host directories and fight over the same host
 	// ports. The manager refuses this first; this is the backstop.
-	if spec.Instance > 1 && (len(svc.Docker.Volumes) > 0 || len(svc.Docker.Ports) > 0) {
+	if spec.Instance > 1 && (len(svc.Docker.Volumes) > 0 || svc.Docker.PublishesPorts()) {
 		return ContainerInfo{}, fmt.Errorf("%s has volumes or published ports, so it runs once", svc.Name)
 	}
 
@@ -249,8 +256,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if err != nil {
 		return ContainerInfo{}, fmt.Errorf("%s copy %d: %w", svc.Name, spec.Instance, err)
 	}
-	ports, bindings, err := buildPorts(svc.Docker.Ports)
+	ports, bindings, err := buildServicePorts(svc.Docker, env)
 	if err != nil {
+		return ContainerInfo{}, fmt.Errorf("%s was not deployed: %w. The running container was not touched", svc.Name, err)
+	}
+	if err := checkRuntime(svc, facts.Runtimes); err != nil {
 		return ContainerInfo{}, err
 	}
 	mounts := buildMounts(svc.Docker.Volumes, env)
@@ -264,7 +274,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		// The grace period travels with the container, so stopping it later does not
 		// need the catalog to find it again.
 		StopTimeout: &stopTimeout,
-		Labels:      containerLabels(spec.Slug, spec.Instance),
+		Labels:      gatedLabels(containerLabels(spec.Slug, spec.Instance), svc),
 		Hostname:    name,
 	}
 	if svc.Docker.Command != "" {
@@ -309,12 +319,22 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// Which network a bridge earner joins is settled on this side of the line too: if
 	// the LAN fence cannot be applied, the deploy is refused and the running container
 	// keeps earning. A Windows-containers daemon has no Linux bridge to fence.
+	if svc.Docker.FenceGated {
+		// From the fence check to the start: a reconcile that turns isolation off
+		// in between would reduce the fence under a node about to start.
+		p.fence.reconcileMu.Lock()
+		defer p.fence.reconcileMu.Unlock()
+	}
+	fenced := ""
 	if hostConfig.NetworkMode == "bridge" && facts.OSType == "linux" {
-		fenced, err := p.fence.networkForDeploy(ctx, cli)
+		fenced, err = p.fence.networkForDeploy(ctx, cli)
 		if err != nil {
 			return ContainerInfo{}, err
 		}
 		isolate(hostConfig, fenced)
+	}
+	if problem := fenceGateProblem(svc, hostConfig, fenced, facts.OSType, p.fence.Status().Mode); problem != "" {
+		return ContainerInfo{}, errors.New(problem)
 	}
 	defer p.fence.refreshOutside(context.Background(), cli)
 
@@ -415,8 +435,86 @@ func (p *DockerProvider) Start(ctx context.Context, slug string) error {
 		return err
 	}
 	defer cli.Close()
-	_, err = cli.ContainerStart(ctx, containerName(slug), client.ContainerStartOptions{})
-	return err
+	name := containerName(slug)
+	return p.startGuarded(ctx, cli, name, func() error {
+		_, err := cli.ContainerStart(ctx, name, client.ContainerStartOptions{})
+		return err
+	})
+}
+
+// startGuarded runs start for name. A fence-gated container is started only behind
+// the fence (gatedStartProblem), with the reconcile lock held from the check to the
+// start so a reconcile cannot reduce the fence between them. Other containers take
+// no lock, so their starts never wait on the fence helper.
+func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, name string, start func() error) error {
+	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		// Whether it is fence-gated cannot be known, so the start fails closed.
+		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+	}
+	if got.Container.Config == nil || !p.fence.isGated(got.Container.Config.Labels) {
+		return start()
+	}
+	p.fence.reconcileMu.Lock()
+	defer p.fence.reconcileMu.Unlock()
+	if err := p.gatedStartProblem(ctx, cli, name); err != nil {
+		return err
+	}
+	return start()
+}
+
+// gatedStartProblem refuses to start a fence-gated container unless the fence is on
+// and has just been applied: a stop while isolation was off must stay a stop.
+// The caller holds p.fence.reconcileMu. It inspects again under the lock, and a
+// container that cannot be inspected is refused.
+func (p *DockerProvider) gatedStartProblem(ctx context.Context, cli *client.Client, name string) error {
+	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+	}
+	var labels map[string]string
+	if got.Container.Config != nil {
+		labels = got.Container.Config.Labels
+	}
+	if !p.fence.isGated(labels) {
+		return nil
+	}
+	fenced, err := p.fence.networkForDeploy(ctx, cli)
+	if err != nil {
+		return err
+	}
+	if fenced != FenceNetwork {
+		return fmt.Errorf("%s runs only behind the LAN fence, and LAN isolation is %s here. Set it to auto or on in Settings first", name, p.fence.Status().Mode)
+	}
+	if problem := onlyOnFence(got.Container); problem != "" {
+		return fmt.Errorf("%s runs only behind the LAN fence, but %s. Redeploy it from the dashboard, which puts it back on the fence", name, problem)
+	}
+	return nil
+}
+
+// onlyOnFence is why a container is not on the fenced network alone, or "": a node
+// made before the fence (host networking) or moved to another network would start
+// with access the fence does not cover.
+func onlyOnFence(c container.InspectResponse) string {
+	if c.HostConfig == nil || string(c.HostConfig.NetworkMode) != FenceNetwork {
+		mode := ""
+		if c.HostConfig != nil {
+			mode = string(c.HostConfig.NetworkMode)
+		}
+		return fmt.Sprintf("its network mode is %q", mode)
+	}
+	if c.NetworkSettings == nil {
+		return "Docker did not say which networks it is attached to"
+	}
+	for name := range c.NetworkSettings.Networks {
+		if name != FenceNetwork {
+			return "it is also attached to " + name
+		}
+	}
+	if _, ok := c.NetworkSettings.Networks[FenceNetwork]; !ok {
+		return "it is not attached to " + FenceNetwork
+	}
+	return ""
 }
 
 func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSeconds int) error {
@@ -427,8 +525,10 @@ func (p *DockerProvider) Restart(ctx context.Context, slug string, stopTimeoutSe
 	defer cli.Close()
 	name := containerName(slug)
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
-	_, err = cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
-	return err
+	return p.startGuarded(ctx, cli, name, func() error {
+		_, err := cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
+		return err
+	})
 }
 
 // PlanRemoval reports what removing this service would delete.
@@ -916,6 +1016,18 @@ func containerLabels(slug string, instance int) map[string]string {
 // catalog. The web worker uses the same label.
 const LabelCustom = "cashpilot.custom"
 
+// LabelFenceGated marks a container whose catalog entry is fence_gated. The fence
+// stops it whenever isolation is not on, and Start refuses it then (lanfence.go
+// stopGated), without needing the catalog to find it again.
+const LabelFenceGated = "cashpilot.fence-gated"
+
+func gatedLabels(labels map[string]string, svc catalog.Service) map[string]string {
+	if svc.Docker.FenceGated {
+		labels[LabelFenceGated] = "true"
+	}
+	return labels
+}
+
 // otherOwner reports, for the container already holding a deploy's name, whose it is
 // when that is not this copy of this service: "" when it is ours to replace.
 //
@@ -960,8 +1072,19 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 	// Only catalog-declared keys reach the container: an orphaned stored credential
 	// (e.g. a pre-migration USER_ID/DEVICE_NAME left in the blob) must not leak into
 	// the environment of a service whose schema no longer includes it.
+	// The variables ui_port and udp_port_range publish from keep their default when
+	// left blank or whitespace, as the deploy validation assumes: a blank UDP_PORTS would publish
+	// nothing and hand the node an empty --udp.ports.
+	published := map[string]bool{}
+	if ui := svc.Docker.UIPort; ui != nil {
+		published[ui.Env] = true
+	}
+	if rng := svc.Docker.UDPPortRange; rng != nil {
+		published[rng.Env] = true
+	}
 	for key, value := range overrides {
-		if declared[key] {
+		keepsDefault := published[key] && env[key] != "" && strings.TrimSpace(value) == ""
+		if declared[key] && !keepsDefault {
 			env[key] = value
 		}
 	}
@@ -1003,6 +1126,99 @@ func buildPorts(raw []string) (network.PortSet, network.PortMap, error) {
 		bindings[port] = []network.PortBinding{{HostPort: host}}
 	}
 	return ports, bindings, nil
+}
+
+// buildServicePorts is everything the container publishes: the static ports, the
+// WebUI port (ui_port) on each address its env var lists, and the UDP range
+// (udp_port_range) its env var holds, 1:1. env is what the container gets, defaults
+// included. A bad address or a range that is reversed or wider than its cap is an
+// error, raised before the running container is touched.
+func buildServicePorts(dc catalog.DockerConfig, env map[string]string) (network.PortSet, network.PortMap, error) {
+	ports, bindings, err := buildPorts(dc.Ports)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ui := dc.UIPort; ui != nil {
+		if ui.Port < 1 || ui.Port > 65535 {
+			return nil, nil, fmt.Errorf("ui_port %d is not a port", ui.Port)
+		}
+		addrs, err := catalog.UIBindings(env[ui.Env])
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", ui.Env, err)
+		}
+		port, err := network.ParsePort(fmt.Sprintf("%d/tcp", ui.Port))
+		if err != nil {
+			return nil, nil, err
+		}
+		ports[port] = struct{}{}
+		for _, addr := range addrs {
+			bindings[port] = append(bindings[port], network.PortBinding{HostIP: addr, HostPort: strconv.Itoa(ui.Port)})
+		}
+	}
+	if rng := dc.UDPPortRange; rng != nil {
+		udp, err := catalog.ExpandUDPRange(env[rng.Env], rng.Cap())
+		if err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", rng.Env, err)
+		}
+		for _, p := range udp {
+			port, err := network.ParsePort(fmt.Sprintf("%d/udp", p))
+			if err != nil {
+				return nil, nil, err
+			}
+			ports[port] = struct{}{}
+			bindings[port] = []network.PortBinding{{HostPort: strconv.Itoa(p)}}
+		}
+	}
+	return ports, bindings, nil
+}
+
+// checkRuntime refuses a service whose catalog entry names a runtime the daemon does
+// not provide, before the running container is touched. runtimes nil means the
+// daemon did not say, which is refused too: the create would fail after the removal.
+func checkRuntime(svc catalog.Service, runtimes map[string]bool) error {
+	want := strings.TrimSpace(svc.Docker.Runtime)
+	if want == "" {
+		return nil
+	}
+	if runtimes == nil {
+		return fmt.Errorf("%s runs only under the %s runtime, and the container runtime did not say which runtimes it has. The running container was not touched", svc.Name, want)
+	}
+	if !runtimes[want] {
+		have := make([]string, 0, len(runtimes))
+		for name := range runtimes {
+			have = append(have, name)
+		}
+		slices.Sort(have)
+		return fmt.Errorf("%s runs only under the %s runtime, which this container runtime does not provide (it has %s). The running container was not touched", svc.Name, want, strings.Join(have, ", "))
+	}
+	return nil
+}
+
+// fenceGateProblem is why a fence-gated service cannot be deployed with this host
+// config, or "". Such a service runs only on the fenced network: anywhere else its
+// NET_ADMIN namespace sits on a bridge that reaches the LAN, this machine and the
+// tailnet (web app/lan_fence.py mode_problem). fenced is the network the fence
+// handed out after applying its rules ("" when it applied none), so an entry that
+// names the fenced network itself does not skip the fence. mode is the fence mode
+// the deploy saw.
+func fenceGateProblem(svc catalog.Service, host *container.HostConfig, fenced, osType, mode string) string {
+	if !svc.Docker.FenceGated || (fenced == FenceNetwork && string(host.NetworkMode) == FenceNetwork) {
+		return ""
+	}
+	why := ""
+	switch {
+	case osType != "linux":
+		why = "the container runtime runs Windows containers, which have no LAN fence"
+	case string(host.NetworkMode) != "bridge" && string(host.NetworkMode) != FenceNetwork:
+		why = fmt.Sprintf("its network mode %q is outside the fence", host.NetworkMode)
+	case mode == FenceModeUnsupported:
+		why = podmanUnsupported
+	case mode == FenceModeLegacy:
+		why = "LAN isolation is not on yet on this machine. Press \"Turn on isolation\" in the dashboard's notice, which moves the other earners behind the fence, then deploy it again"
+	default:
+		why = "LAN isolation is off in Settings. Set it to auto or on, then deploy it again"
+	}
+	return fmt.Sprintf("%s runs only behind the LAN fence: %s. The running container was not touched", svc.Name, why)
 }
 
 func buildMounts(raw []string, env map[string]string) []mount.Mount {
@@ -1053,6 +1269,9 @@ func buildHostConfig(svc catalog.Service, bindings network.PortMap, mounts []mou
 			Name: "unless-stopped",
 		},
 		NetworkMode: container.NetworkMode(svc.Docker.NetworkMode),
+		// The runtime the entry names wins over the daemon's default (Deploy has
+		// checked the daemon has it); none leaves the daemon's default.
+		Runtime: strings.TrimSpace(svc.Docker.Runtime),
 	}
 	applyHardening(hostConfig, svc, osType)
 	// "" and "default" both name the default bridge on a Linux daemon, so normalise

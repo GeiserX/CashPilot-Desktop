@@ -96,9 +96,35 @@ func TestMysteriumCapabilitiesAndDeviceParse(t *testing.T) {
 	if svc.Payout.Model != "external" || svc.Payout.Chain != "polygon" || svc.Payout.AddressSource != "manual" {
 		t.Errorf("mysterium payout = %+v, want model=external chain=polygon address_source=manual", svc.Payout)
 	}
-	// devices_per_ip: 0 is a verified "no per-IP limit", not an omission.
-	if svc.Requirements.DevicesPerIP == nil || *svc.Requirements.DevicesPerIP != 0 {
-		t.Errorf("mysterium devices_per_ip = %v, want an explicit 0", svc.Requirements.DevicesPerIP)
+	// MystNodes runs one node per public IP; the others show offline. The web
+	// catalog changed 0 to 1 on purpose, citing the MystNodes help centre.
+	if svc.Requirements.DevicesPerIP == nil || *svc.Requirements.DevicesPerIP != 1 {
+		t.Errorf("mysterium devices_per_ip = %v, want an explicit 1", svc.Requirements.DevicesPerIP)
+	}
+
+	// The fenced-bridge model: its own namespace, runc only, the WebUI and the UDP
+	// range published from the env, and no deploy outside the fence.
+	if svc.Docker.NetworkMode == "host" {
+		t.Error("mysterium must no longer share the host's network: NET_ADMIN there reaches the host firewall")
+	}
+	if svc.Docker.Runtime != "runc" {
+		t.Errorf("mysterium docker.runtime = %q, want runc", svc.Docker.Runtime)
+	}
+	if ui := svc.Docker.UIPort; ui == nil || ui.Env != "UI_ADDRESS" || ui.Port != 4449 {
+		t.Errorf("mysterium docker.ui_port = %+v, want UI_ADDRESS on 4449", ui)
+	}
+	if rng := svc.Docker.UDPPortRange; rng == nil || rng.Env != "UDP_PORTS" || rng.Cap() != 1000 {
+		t.Errorf("mysterium docker.udp_port_range = %+v, want UDP_PORTS capped at 1000", rng)
+	}
+	if !svc.Docker.FenceGated {
+		t.Error("mysterium docker.fence_gated must parse as true")
+	}
+	env := map[string]string{}
+	for _, item := range svc.Docker.Env {
+		env[item.Key] = item.Default
+	}
+	if err := svc.Docker.CheckPublishedValues(env); err != nil {
+		t.Errorf("mysterium's own defaults do not publish: %v", err)
 	}
 	// Desktop-only: the native block must survive the catalog sync.
 	if !svc.HasNative() {

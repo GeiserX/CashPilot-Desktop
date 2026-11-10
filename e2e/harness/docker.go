@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	goruntime "runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +47,19 @@ type Container struct {
 	Entrypoint  []string
 	StopTimeout *int
 	Mounts      []Mount
+	// Runtime, NetworkMode and PortBindings are the HostConfig fields of the same
+	// names, as the deploy sent them.
+	Runtime      string
+	NetworkMode  string
+	PortBindings map[string][]PortBinding
+	// ExtraNetworks are networks a test attached it to beside its network mode.
+	ExtraNetworks []string
+}
+
+// PortBinding is one host binding of a published port.
+type PortBinding struct {
+	HostIP   string `json:"HostIp"`
+	HostPort string `json:"HostPort"`
 }
 
 // VolumeNames lists the names of the container's named volumes, in the order the
@@ -81,6 +95,8 @@ type Docker struct {
 	// networks are the user-defined networks, by name. The app creates one, its
 	// LAN fence network, and runs a one-shot helper container to write the fence.
 	networks map[string]map[string]any
+	// failInspect and failStop name containers whose inspect or stop fails.
+	failInspect, failStop map[string]bool
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -283,6 +299,14 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"Version": "28.0.0-fake", "ApiVersion": "1.51", "Os": "linux", "Arch": "amd64",
 		})
+	case path == "/info":
+		// What a real daemon reports and the deploy asks for: its CPU (this
+		// machine's, as the fallback assumed before /info was answered), its OS
+		// and its OCI runtimes.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"Architecture": goruntime.GOARCH, "OSType": "linux",
+			"Runtimes": map[string]any{"runc": map[string]string{"path": "runc"}},
+		})
 	case path == "/images/create":
 		d.pull(w, r)
 	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
@@ -356,7 +380,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		StopTimeout *int              `json:"StopTimeout"`
 		Labels      map[string]string `json:"Labels"`
 		HostConfig  struct {
-			Mounts []struct {
+			Runtime      string                   `json:"Runtime"`
+			NetworkMode  string                   `json:"NetworkMode"`
+			PortBindings map[string][]PortBinding `json:"PortBindings"`
+			Mounts       []struct {
 				Type   string `json:"Type"`
 				Source string `json:"Source"`
 				Target string `json:"Target"`
@@ -388,6 +415,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		Cmd:         body.Cmd,
 		Entrypoint:  body.Entrypoint,
 		StopTimeout: body.StopTimeout,
+
+		Runtime:      body.HostConfig.Runtime,
+		NetworkMode:  body.HostConfig.NetworkMode,
+		PortBindings: body.HostConfig.PortBindings,
 	}
 	for _, m := range body.HostConfig.Mounts {
 		if m.Type == "volume" && m.Source != "" {
@@ -434,6 +465,14 @@ func (d *Docker) list(w http.ResponseWriter) {
 // container handles everything under /containers/<id or name>/...
 func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) {
 	id, action, _ := strings.Cut(rest, "/")
+
+	d.mu.Lock()
+	failed := (action == "json" && d.failing(d.failInspect, id)) || (action == "stop" && d.failing(d.failStop, id))
+	d.mu.Unlock()
+	if failed {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "fake daemon: " + action + " failed for " + id})
+		return
+	}
 
 	switch {
 	case action == "json":
@@ -493,7 +532,85 @@ func (d *Docker) inspect(w http.ResponseWriter, id string) {
 		"State":  map[string]any{"Status": c.State, "Running": c.State == "running"},
 		"Config": map[string]any{"Image": c.Image, "Labels": c.Labels, "Env": c.Env, "Cmd": c.Cmd},
 		"Mounts": mounts,
+		"HostConfig": map[string]any{
+			"NetworkMode": c.NetworkMode, "Runtime": c.Runtime, "PortBindings": c.PortBindings,
+		},
+		"NetworkSettings": map[string]any{"Networks": c.networks()},
 	})
+}
+
+// networks is what inspect reports the container attached to: its network mode's
+// network, plus any a test attached it to.
+func (c *Container) networks() map[string]any {
+	out := map[string]any{}
+	if c.NetworkMode != "" {
+		out[c.NetworkMode] = map[string]any{}
+	}
+	for _, n := range c.ExtraNetworks {
+		out[n] = map[string]any{}
+	}
+	return out
+}
+
+// SetState sets a container's state as Docker would report it ("restarting").
+func (d *Docker) SetState(name, state string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		c.State = state
+	}
+}
+
+// SetLabel sets (or, with value "", removes) one label of a container, the way a
+// container made by an older version lacks a label a newer one sets.
+func (d *Docker) SetLabel(name, key, value string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		if value == "" {
+			delete(c.Labels, key)
+		} else {
+			c.Labels[key] = value
+		}
+	}
+}
+
+// AttachNetwork reports the container attached to one more network.
+func (d *Docker) AttachNetwork(name, network string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		c.ExtraNetworks = append(c.ExtraNetworks, network)
+	}
+}
+
+// RemoveNetwork deletes a network behind the app's back, the way a user's
+// `docker network rm` or a daemon reset would.
+func (d *Docker) RemoveNetwork(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.networks, name)
+}
+
+// FailInspect makes inspecting this container fail with a server error.
+func (d *Docker) FailInspect(name string) { d.setFail(&d.failInspect, name) }
+
+// FailStop makes stopping this container fail with a server error.
+func (d *Docker) FailStop(name string) { d.setFail(&d.failStop, name) }
+
+func (d *Docker) setFail(set *map[string]bool, name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if *set == nil {
+		*set = map[string]bool{}
+	}
+	(*set)[name] = true
+}
+
+// failing reports a container whose name or id is in set. Called with d.mu held.
+func (d *Docker) failing(set map[string]bool, id string) bool {
+	c := d.find(id)
+	return set[id] || (c != nil && (set[c.Name] || set[c.ID]))
 }
 
 func (d *Docker) setState(w http.ResponseWriter, id, state string) {

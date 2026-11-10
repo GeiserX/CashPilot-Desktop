@@ -90,6 +90,7 @@ func TestRefusal(t *testing.T) {
 		"host's network":    func(s *catalog.Service) { s.Docker.NetworkMode = "host" },
 		"another container": func(s *catalog.Service) { s.Docker.NetworkMode = "container:x" },
 		"publishes a port":  func(s *catalog.Service) { s.Docker.Ports = []string{"1:1"} },
+		"LAN fence":         func(s *catalog.Service) { s.Docker.FenceGated = true },
 		"volume":            func(s *catalog.Service) { s.Docker.Volumes = []string{"v:/d"} },
 		"device":            func(s *catalog.Service) { s.Docker.Devices = []string{"/dev/net/tun"} },
 		"privileged":        func(s *catalog.Service) { s.Docker.Privileged = true },
@@ -103,6 +104,17 @@ func TestRefusal(t *testing.T) {
 		mutate(&svc)
 		if r := Refusal(svc); !strings.Contains(r, want) {
 			t.Errorf("Refusal = %q, want it to mention %q", r, want)
+		}
+	}
+	// Ports published from the env are published ports too.
+	for _, mutate := range []func(*catalog.Service){
+		func(s *catalog.Service) { s.Docker.UIPort = &catalog.UIPort{Env: "A", Port: 1} },
+		func(s *catalog.Service) { s.Docker.UDPPortRange = &catalog.UDPPortRange{Env: "B"} },
+	} {
+		svc := base
+		mutate(&svc)
+		if r := Refusal(svc); !strings.Contains(r, "publishes a port") {
+			t.Errorf("Refusal = %q, want it to mention the published port", r)
 		}
 	}
 	ok := base

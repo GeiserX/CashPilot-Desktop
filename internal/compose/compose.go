@@ -116,6 +116,17 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 		if catalog.IsRetired(svc.Status) {
 			return "", fmt.Errorf("%s is no longer available (%s), so there is nothing to export", svc.Name, svc.Status)
 		}
+		if svc.Docker.FenceGated {
+			// Compose would start it on Docker's default bridge, where nothing keeps its
+			// NET_ADMIN namespace off the LAN (web app/compose_generator.py refuses too).
+			return "", fmt.Errorf("%s runs only behind CashPilot's LAN fence, so it has no compose export. Deploy it from the dashboard", svc.Name)
+		}
+		if svc.Docker.UIPort != nil || svc.Docker.UDPPortRange != nil {
+			// The port it publishes follows a setting, and the file carries settings as
+			// .env placeholders: a published port written from today's value would part
+			// from the one the command uses as soon as the .env changes it.
+			return "", fmt.Errorf("%s publishes ports from its settings, which a compose file cannot follow, so it has no compose export. Deploy it from the dashboard", svc.Name)
+		}
 		if svc.Custom || catalog.IsCustomSlug(slug) {
 			// The export is built from catalog entries; a custom service's variables and
 			// command are the user's own and stay encrypted in the app's database.
@@ -168,6 +179,7 @@ type composeService struct {
 	Volumes       []string          `yaml:"volumes,omitempty"`
 	Devices       []string          `yaml:"devices,omitempty"`
 	NetworkMode   string            `yaml:"network_mode,omitempty"`
+	Runtime       string            `yaml:"runtime,omitempty"`
 	CapDrop       []string          `yaml:"cap_drop,omitempty"`
 	CapAdd        []string          `yaml:"cap_add,omitempty"`
 	SecurityOpt   []string          `yaml:"security_opt,omitempty"`
@@ -247,6 +259,9 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 		Ports:       ports(svc.Docker.Ports),
 		Devices:     devices,
 		NetworkMode: svc.Docker.NetworkMode,
+		// The runtime the entry requires, as the deploy sets it: the daemon's default
+		// (gVisor, say) may be one the service cannot run under.
+		Runtime: strings.TrimSpace(svc.Docker.Runtime),
 		// Every capability dropped, then only the ones this entry declares added
 		// back, and no path to new privileges. Same set the web CashPilot worker
 		// runs these images under.
