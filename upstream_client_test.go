@@ -271,6 +271,27 @@ func TestAPlainHTTPPairingURLToAPublicHostIsRefused(t *testing.T) {
 	}
 }
 
+// TestAStoredURLTheNewRuleRefusesDoesNotBlockOtherSettings: an address saved
+// under the older, looser rule must not stop the user from saving any other
+// setting. The Settings form sends every field, the pairing address included,
+// on every save.
+func TestAStoredURLTheNewRuleRefusesDoesNotBlockOtherSettings(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = "http://nas.example-lan:8085" }); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if upstream.ValidateServerURL("http://nas.example-lan:8085") == nil {
+		t.Fatal("the seeded address must be one the new rule refuses, or this test proves nothing")
+	}
+	_, err := app.SaveSettings(map[string]string{"timezone": "Europe/Madrid", "upstreamUrl": "http://nas.example-lan:8085"})
+	if err != nil {
+		t.Fatalf("saving an unrelated setting was refused: %v", err)
+	}
+	if got := app.cfg.Config().Timezone; got != "Europe/Madrid" {
+		t.Fatalf("timezone not saved: %q", got)
+	}
+}
+
 func TestClearingTheURLUnpairs(t *testing.T) {
 	// Empty is MEANINGFUL here, unlike every other settings field: it is how a
 	// user goes back to standalone. Keying this on non-emptiness -- the pattern

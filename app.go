@@ -1075,9 +1075,12 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// keyed on presence, not on non-emptiness.
 	if value, present := values["upstreamUrl"]; present {
 		next := strings.TrimRight(strings.TrimSpace(value), "/")
-		if next != "" {
+		if next != "" && next != cfg.UpstreamURL {
 			// Refused here, where the user sees it, rather than on every
-			// heartbeat, where only the log would.
+			// heartbeat, where only the log would. Only a NEW address is
+			// checked: the form sends every field on every save, so checking an
+			// address saved under an older, looser rule would block changing
+			// any other setting until the user retyped it.
 			if err := upstream.ValidateServerURL(next); err != nil {
 				return SettingsState{}, fmt.Errorf("pairing address: %w", err)
 			}
