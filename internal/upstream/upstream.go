@@ -202,7 +202,7 @@ func New() *Client {
 // every call so a zero-valued Client cannot end up with one timeout on the
 // heartbeat and none on the import.
 func defaultHTTPClient() *http.Client {
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: checkRedirect}
 }
 
 // Send posts one heartbeat and returns the server's response.

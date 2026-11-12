@@ -1,8 +1,10 @@
 package upstream
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -32,7 +34,7 @@ func ValidateServerURL(serverURL string) error {
 	if host == "" {
 		return fmt.Errorf("server URL has no host")
 	}
-	if host == "metadata.google.internal" {
+	if host == "metadata.google.internal" || host == "metadata" {
 		return fmt.Errorf("server URL host %s is a cloud metadata endpoint", host)
 	}
 	if ip := net.ParseIP(host); ip != nil && isMetadataIP(ip) {
@@ -45,7 +47,7 @@ func ValidateServerURL(serverURL string) error {
 		if cleartextAllowed(host) {
 			return nil
 		}
-		return fmt.Errorf("server URL %s is plain http to a public host; use https so the pairing key is not sent in clear text", serverURL)
+		return fmt.Errorf("server URL %s is plain http to a host that is not provably private; use https, or http only to an IP on this machine, the LAN or Tailscale, a single-label name, or a .local, .lan, .home.arpa, .internal or .ts.net name, so the pairing key is not sent in clear text", serverURL)
 	default:
 		return fmt.Errorf("server URL scheme %q is not allowed (only http and https)", u.Scheme)
 	}
@@ -66,7 +68,7 @@ var (
 		}
 		return out
 	}()
-	metadataIPs = []net.IP{net.ParseIP("169.254.169.254"), net.ParseIP("fd00:ec2::254")}
+	metadataIPs = []net.IP{net.ParseIP("169.254.169.254"), net.ParseIP("169.254.170.2"), net.ParseIP("fd00:ec2::254")}
 )
 
 // cleartextAllowed reports whether plain http may go to host (already lower
@@ -109,4 +111,21 @@ func isMetadataIP(ip net.IP) bool {
 		}
 	}
 	return false
+}
+
+// checkRedirect keeps the bearer key from following a redirect somewhere the
+// first request could not have gone. Go resends Authorization on a redirect to
+// the same host even when the scheme drops from https to http, so the scheme
+// must not change, and the new address must pass the same rule.
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("upstream: stopped after 10 redirects")
+	}
+	if !strings.EqualFold(req.URL.Scheme, via[0].URL.Scheme) {
+		return fmt.Errorf("upstream: refusing a redirect from %s to %s", via[0].URL.Scheme, req.URL.Redacted())
+	}
+	if err := ValidateServerURL(req.URL.String()); err != nil {
+		return fmt.Errorf("upstream: refusing a redirect: %w", err)
+	}
+	return nil
 }

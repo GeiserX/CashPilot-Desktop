@@ -1,6 +1,9 @@
 package upstream
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+)
 
 // TestValidateServerURL pins the pairing rule to CashPilot-android's
 // ServerUrlPolicy.allowsToken. Pairing used the SSRF worker policy before,
@@ -43,6 +46,8 @@ func TestValidateServerURL(t *testing.T) {
 		{"http://169.254.169.254", false},
 		{"https://169.254.169.254", false},
 		{"http://metadata.google.internal", false},
+		{"http://metadata/computeMetadata/v1", false},
+		{"http://169.254.170.2", false},
 		{"ftp://192.168.1.10", false},
 		{"http://", false},
 		{"192.168.1.10:8080", false},
@@ -50,6 +55,33 @@ func TestValidateServerURL(t *testing.T) {
 		err := ValidateServerURL(tc.url)
 		if (err == nil) != tc.allow {
 			t.Errorf("ValidateServerURL(%q) = %v, want allow=%v", tc.url, err, tc.allow)
+		}
+	}
+}
+
+// TestRedirectsCannotCarryTheKeyElsewhere: Go resends the Authorization header
+// on a redirect to the same host, also from https to http. A redirect must keep
+// the scheme and pass the pairing rule.
+func TestRedirectsCannotCarryTheKeyElsewhere(t *testing.T) {
+	client := defaultHTTPClient()
+	if client.CheckRedirect == nil {
+		t.Fatal("the default client follows every redirect")
+	}
+	for _, tc := range []struct {
+		from, to string
+		allow    bool
+	}{
+		{"https://cashpilot.example.com/api", "https://cashpilot.example.com/api/", true},
+		{"http://192.168.1.10:8080/api", "http://192.168.1.10:8080/api/", true},
+		{"https://cashpilot.example.com/api", "http://cashpilot.example.com/api", false},
+		{"http://192.168.1.10:8080/api", "http://cashpilot.example.com/api", false},
+		{"https://cashpilot.example.com/api", "https://169.254.169.254/latest", false},
+	} {
+		first, _ := http.NewRequest(http.MethodPost, tc.from, nil)
+		next, _ := http.NewRequest(http.MethodPost, tc.to, nil)
+		err := client.CheckRedirect(next, []*http.Request{first})
+		if (err == nil) != tc.allow {
+			t.Errorf("redirect %s -> %s: %v, want allow=%v", tc.from, tc.to, err, tc.allow)
 		}
 	}
 }
