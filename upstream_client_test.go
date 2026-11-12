@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -238,13 +242,53 @@ func TestTheFormExplainsThatStandaloneIsTheDefault(t *testing.T) {
 
 func TestSavingAPairingURLPersistsIt(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://cashpilot.example:8080/"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://cashpilot.example:8080/"}); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 	// The trailing slash is trimmed at the boundary so the client does not build
 	// //api/workers/heartbeat, which some proxies treat as a different path.
-	if got := app.cfg.Config().UpstreamURL; got != "http://cashpilot.example:8080" {
+	if got := app.cfg.Config().UpstreamURL; got != "https://cashpilot.example:8080" {
 		t.Fatalf("UpstreamURL = %q", got)
+	}
+}
+
+// TestAPlainHTTPPairingURLToAPublicHostIsRefused: the pairing key and the
+// worker key ride on every heartbeat, so plain http to the internet would send
+// them in clear text. The refusal comes from Save, where the user sees it.
+func TestAPlainHTTPPairingURLToAPublicHostIsRefused(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	_, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://cashpilot.example.com"})
+	if err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("expected a refusal that points at https, got %v", err)
+	}
+	if got := app.cfg.Config().UpstreamURL; got != "" {
+		t.Fatalf("the refused URL was stored: %q", got)
+	}
+	for _, ok := range []string{"http://192.168.1.10:8080", "http://localhost:8080", "https://cashpilot.example.com"} {
+		if _, err := app.SaveSettings(map[string]string{"upstreamUrl": ok}); err != nil {
+			t.Fatalf("%s was refused: %v", ok, err)
+		}
+	}
+}
+
+// TestAStoredURLTheNewRuleRefusesDoesNotBlockOtherSettings: an address saved
+// under the older, looser rule must not stop the user from saving any other
+// setting. The Settings form sends every field, the pairing address included,
+// on every save.
+func TestAStoredURLTheNewRuleRefusesDoesNotBlockOtherSettings(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = "http://nas.example-lan:8085" }); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if upstream.ValidateServerURL("http://nas.example-lan:8085") == nil {
+		t.Fatal("the seeded address must be one the new rule refuses, or this test proves nothing")
+	}
+	_, err := app.SaveSettings(map[string]string{"timezone": "Europe/Madrid", "upstreamUrl": "http://nas.example-lan:8085"})
+	if err != nil {
+		t.Fatalf("saving an unrelated setting was refused: %v", err)
+	}
+	if got := app.cfg.Config().Timezone; got != "Europe/Madrid" {
+		t.Fatalf("timezone not saved: %q", got)
 	}
 }
 
@@ -253,7 +297,7 @@ func TestClearingTheURLUnpairs(t *testing.T) {
 	// user goes back to standalone. Keying this on non-emptiness -- the pattern
 	// the surrounding fields use -- would make unpairing impossible.
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://a.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://a.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": ""}); err != nil {
@@ -269,13 +313,13 @@ func TestRepointingToAnotherServerDiscardsTheOldWorkerKey(t *testing.T) {
 	// a DIFFERENT server fails authentication with no obvious cause, and keeping
 	// it is a live secret for a machine the user has stopped talking to.
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://first.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://first.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "issued-by-first"); err != nil {
 		t.Fatalf("seed key: %v", err)
 	}
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://second.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://second.example"}); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	got, err := config.UpstreamWorkerKey(app.cfg.AppDir())
@@ -291,13 +335,13 @@ func TestSavingTheSameURLKeepsTheWorkerKey(t *testing.T) {
 	// The flip side: an unrelated settings save must not silently re-enrol this
 	// machine by throwing away a key it is already authenticating with.
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://same.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://same.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "keep-me"); err != nil {
 		t.Fatalf("seed key: %v", err)
 	}
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://same.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://same.example"}); err != nil {
 		t.Fatalf("resave: %v", err)
 	}
 	got, _ := config.UpstreamWorkerKey(app.cfg.AppDir())
@@ -322,5 +366,69 @@ func TestSavingThePairingKeyStoresItOutsideConfigJson(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(app.cfg.AppDir(), "config.json"))
 	if err == nil && strings.Contains(string(raw), "shared-enrolment-token") {
 		t.Error("the pairing token was written into config.json")
+	}
+}
+
+// TestARemovedDesktopEnrolsAgainAfterA401 pins clients-3. When the owner
+// removes this machine from the server's fleet page, the server answers 401
+// to its own key. The Desktop kept sending that dead key forever; it must fall
+// back to the pairing key once and store the new key the server issues.
+func TestARemovedDesktopEnrolsAgainAfterA401(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		seen = append(seen, auth)
+		mu.Unlock()
+		switch auth {
+		case "Bearer shared":
+			_, _ = w.Write([]byte(`{"status":"ok","worker_id":2,"worker_key":"new-key"}`))
+		case "Bearer new-key":
+			_, _ = w.Write([]byte(`{"status":"ok","worker_id":2}`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"Invalid API key"}`))
+		}
+	}))
+	defer srv.Close()
+
+	app := newPayloadTestApp(t, nil)
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "removed-key"); err != nil {
+		t.Fatal(err)
+	}
+	app.upstream.workerKey = "removed-key"
+	client := &upstream.Client{HTTP: srv.Client()}
+
+	app.sendUpstream(context.Background(), client, srv.URL, "shared")
+
+	got, _ := config.UpstreamWorkerKey(app.cfg.AppDir())
+	if got != "new-key" {
+		t.Fatalf("stored worker key = %q, want the newly issued one (requests: %v)", got, seen)
+	}
+	app.sendUpstream(context.Background(), client, srv.URL, "shared")
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"Bearer removed-key", "Bearer shared", "Bearer new-key"}; strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("requests = %v, want %v", seen, want)
+	}
+}
+
+// TestA401OnThePairingKeyKeepsTheWorkerKey: if the fallback is refused too,
+// the stored key stays. A 401 that was not about the key must not leave this
+// machine with no key at all.
+func TestA401OnThePairingKeyKeepsTheWorkerKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	app := newPayloadTestApp(t, nil)
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "mine"); err != nil {
+		t.Fatal(err)
+	}
+	app.upstream.workerKey = "mine"
+	app.sendUpstream(context.Background(), &upstream.Client{HTTP: srv.Client()}, srv.URL, "shared")
+	if got, _ := config.UpstreamWorkerKey(app.cfg.AppDir()); got != "mine" {
+		t.Fatalf("the worker key was dropped on a refused fallback: %q", got)
 	}
 }

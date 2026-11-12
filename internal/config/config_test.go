@@ -40,7 +40,6 @@ func TestNewManagerAppliesDefaults(t *testing.T) {
 		Timezone:               "UTC",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
-		WorkerURLPolicy:        "private",
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("unexpected default config:\n got %+v\nwant %+v", cfg, want)
@@ -65,7 +64,6 @@ func TestSaveCoercesEmptyAndInvalidValues(t *testing.T) {
 		Timezone:               "UTC",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
-		WorkerURLPolicy:        "private",
 	}
 
 	cases := []struct {
@@ -116,9 +114,6 @@ func TestSavePreservesValidValues(t *testing.T) {
 		Timezone:               "Europe/Madrid",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              9000,
-		WorkerURLPolicy:        "strict",
-		WorkerAllowedHosts:     []string{"10.0.0.0/8", "*.tailnet-example.ts.net"},
-		WorkerAllowMetadata:    true,
 	}
 	if err := m.Save(in); err != nil {
 		t.Fatalf("Save error: %v", err)
@@ -188,53 +183,6 @@ func TestMetricsEnabledOptInDefault(t *testing.T) {
 	}
 	if !m2.Config().MetricsEnabled {
 		t.Fatal("expected MetricsEnabled=true to persist across a reload")
-	}
-}
-
-// TestWorkerURLPolicyDefaults pins the SSRF worker-URL policy surface consumed by
-// internal/fleetnet: a fresh config defaults WorkerURLPolicy to "private" (the safe
-// homelab default), WorkerAllowMetadata to false (metadata always blocked), and
-// WorkerAllowedHosts to empty; a non-empty policy is preserved by Save (not coerced)
-// and the fields round-trip across a reload.
-func TestWorkerURLPolicyDefaults(t *testing.T) {
-	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
-
-	m, err := NewManager()
-	if err != nil {
-		t.Fatalf("NewManager error: %v", err)
-	}
-	cfg := m.Config()
-	if cfg.WorkerURLPolicy != "private" {
-		t.Fatalf("expected WorkerURLPolicy to default to \"private\", got %q", cfg.WorkerURLPolicy)
-	}
-	if cfg.WorkerAllowMetadata {
-		t.Fatal("expected WorkerAllowMetadata to default to false")
-	}
-	if len(cfg.WorkerAllowedHosts) != 0 {
-		t.Fatalf("expected WorkerAllowedHosts to default to empty, got %v", cfg.WorkerAllowedHosts)
-	}
-
-	cfg.WorkerURLPolicy = "strict"
-	cfg.WorkerAllowedHosts = []string{"192.168.0.0/16", "*.tailnet-example.ts.net"}
-	cfg.WorkerAllowMetadata = true
-	if err := m.Save(cfg); err != nil {
-		t.Fatalf("Save error: %v", err)
-	}
-	if got := m.Config(); got.WorkerURLPolicy != "strict" {
-		t.Fatalf("expected WorkerURLPolicy=strict to be preserved by Save, got %q", got.WorkerURLPolicy)
-	}
-
-	// A fresh Manager over the same directory reloads the persisted fields.
-	m2, err := NewManager()
-	if err != nil {
-		t.Fatalf("NewManager(reload) error: %v", err)
-	}
-	got := m2.Config()
-	if got.WorkerURLPolicy != "strict" || !got.WorkerAllowMetadata {
-		t.Fatalf("worker-URL policy did not persist across reload: %+v", got)
-	}
-	if !reflect.DeepEqual(got.WorkerAllowedHosts, []string{"192.168.0.0/16", "*.tailnet-example.ts.net"}) {
-		t.Fatalf("WorkerAllowedHosts did not persist across reload: %v", got.WorkerAllowedHosts)
 	}
 }
 
@@ -548,5 +496,75 @@ func TestFleetKeyRefusesRegenWhenKeychainLockedOnDarwin(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, ".fleet_api_key")); !os.IsNotExist(err) {
 		t.Fatal("expected no fleet key file to be written when regeneration is refused")
+	}
+}
+
+// TestClearedSecretStaysClearedAfterAFallbackWrite pins clients-2: a secret
+// written to the 0600 fallback file while the keychain refused writes must not
+// come back once the keychain works again and the secret is cleared. The
+// readers treat an empty keychain value as "not stored" and fall through to the
+// file, so a leftover file resurrected the old server's worker key.
+func TestClearedSecretStaysClearedAfterAFallbackWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(dir, v string) error
+		get  func(dir string) (string, error)
+	}{
+		{"upstream worker key", SetUpstreamWorkerKey, UpstreamWorkerKey},
+		{"upstream enrolment key", SetUpstreamEnrolmentKey, UpstreamEnrolmentKey},
+		{"fleet key", SetFleetKey, FleetKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			keyring.MockInitWithError(errors.New("keychain locked"))
+			if err := tc.set(dir, "OLD-SERVER-KEY"); err != nil {
+				t.Fatalf("fallback write: %v", err)
+			}
+			keyring.MockInit() // the keychain works again
+			defer keyring.MockInit()
+
+			if err := tc.set(dir, ""); err != nil {
+				t.Fatalf("clear: %v", err)
+			}
+			got, err := tc.get(dir)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if got != "" {
+				t.Fatalf("a cleared secret came back from the fallback file: %q", got)
+			}
+		})
+	}
+}
+
+// TestMigratingASecretKeepsTheFallbackFile: a reader copies a fallback value
+// into the keychain but keeps the file. On Linux the secret service can be
+// locked at a later start; the file is then the only copy, and a hub that lost
+// its fleet key would mint a new one and unpair every phone.
+func TestMigratingASecretKeepsTheFallbackFile(t *testing.T) {
+	prev := runtimeGOOS
+	runtimeGOOS = "linux"
+	defer func() { runtimeGOOS = prev }()
+	keyring.MockInit()
+	defer keyring.MockInit()
+	dir := t.TempDir()
+	for _, f := range []string{".upstream_worker_key", ".fleet_api_key"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("from-file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := UpstreamWorkerKey(dir); got != "from-file" {
+		t.Fatalf("worker key migration read %q", got)
+	}
+	if got, _ := FleetKey(dir); got != "from-file" {
+		t.Fatalf("fleet key migration read %q", got)
+	}
+
+	keyring.MockInitWithError(errors.New("secret service is locked")) // a later start
+	if got, err := UpstreamWorkerKey(dir); err != nil || got != "from-file" {
+		t.Fatalf("worker key lost when the keychain is locked: %q, %v", got, err)
+	}
+	if got, err := FleetKey(dir); err != nil || got != "from-file" {
+		t.Fatalf("fleet key lost when the keychain is locked: %q, %v", got, err)
 	}
 }

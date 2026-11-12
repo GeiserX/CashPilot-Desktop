@@ -61,14 +61,14 @@ func TestSaveSettingsKeepsTheFencesMemory(t *testing.T) {
 	recordIsolationOnWhileBlocked(t, app, ".(*App).SaveSettings(", app.upstream.mu.Lock, app.upstream.mu.Unlock, func() error {
 		// A new pairing address clears the old worker key under upstream.mu, after
 		// the form was read.
-		_, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://cashpilot.example", "displayCurrency": "EUR"})
+		_, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://cashpilot.example", "displayCurrency": "EUR"})
 		return err
 	})
 	got := app.cfg.Config()
 	if !got.IsolationOn {
 		t.Error("a Settings save put back isolation off over the fence's record")
 	}
-	if got.UpstreamURL != "http://cashpilot.example" || got.DisplayCurrency != "EUR" {
+	if got.UpstreamURL != "https://cashpilot.example" || got.DisplayCurrency != "EUR" {
 		t.Errorf("the form's own fields were not saved: %q %q", got.UpstreamURL, got.DisplayCurrency)
 	}
 }

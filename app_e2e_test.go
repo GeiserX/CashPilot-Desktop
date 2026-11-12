@@ -271,7 +271,7 @@ func TestAWorkerEnrollsOverTheNetwork(t *testing.T) {
 		t.Helper()
 		payload := `{"name":"kitchen-pi","url":"http://192.168.1.50:8081",` +
 			`"system_info":{"os":"linux","arch":"arm64","hostname":"kitchen-pi"},` +
-			`"containers":[{"slug":"honeygain","status":"running"}],"apps":["earnapp"]}`
+			`"containers":[{"slug":"honeygain","status":"running"}],"apps":[{"slug":"earnapp","running":true}]}`
 		req, err := http.NewRequest(http.MethodPost, base+"/api/workers/heartbeat", strings.NewReader(payload))
 		if err != nil {
 			t.Fatalf("building the heartbeat: %v", err)

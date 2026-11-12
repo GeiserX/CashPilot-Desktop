@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 	stdruntime "runtime"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -102,11 +101,7 @@ func (a *App) startUpstream(ctx context.Context) {
 	a.upstream.cancel, a.upstream.done, a.upstream.workerKey = cancel, done, workerKey
 	a.upstream.mu.Unlock()
 
-	client := upstream.New(fleetnet.Policy{
-		Mode:          cfg.WorkerURLPolicy,
-		AllowedHosts:  cfg.WorkerAllowedHosts,
-		AllowMetadata: cfg.WorkerAllowMetadata,
-	})
+	client := upstream.New()
 
 	go func() {
 		defer close(done)
@@ -166,7 +161,19 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	workerKey := a.upstream.workerKey
 	a.upstream.mu.Unlock()
 
-	resp, err := client.Send(ctx, serverURL, upstream.AuthToken(workerKey, enrolKey), a.upstreamPayload())
+	payload := a.upstreamPayload()
+	resp, err := client.Send(ctx, serverURL, upstream.AuthToken(workerKey, enrolKey), payload)
+	if errors.Is(err, upstream.ErrUnauthorized) && strings.TrimSpace(workerKey) != "" && strings.TrimSpace(enrolKey) != "" {
+		// The server no longer knows this machine's own key: the owner removed it
+		// from the fleet page, or the server lost its key store. Without this the
+		// Desktop sent the dead key forever and stayed unpaired. Enrol again with
+		// the shared key, once, as the Android app does. The old key is only
+		// replaced when the server issues a new one below, so a 401 that was not
+		// about the key cannot leave this machine with no key at all.
+		log.Printf("upstream: %s refused this machine's own key; enrolling again with the pairing key", serverURL)
+		workerKey = ""
+		resp, err = client.Send(ctx, serverURL, strings.TrimSpace(enrolKey), payload)
+	}
 	if err != nil {
 		// Never fatal: a phone or laptop is offline often, and an unreachable
 		// server must not stop Desktop from working standalone.

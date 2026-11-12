@@ -834,9 +834,6 @@ export namespace config {
 	    fleetBindAddress: string;
 	    fleetPort: number;
 	    metricsEnabled: boolean;
-	    workerUrlPolicy: string;
-	    workerAllowedHosts: string[];
-	    workerAllowMetadata: boolean;
 	    fleetServerEnabled: boolean;
 	    upstreamUrl?: string;
 	    upstreamIntervalMinutes?: number;
@@ -864,9 +861,6 @@ export namespace config {
 	        this.fleetBindAddress = source["fleetBindAddress"];
 	        this.fleetPort = source["fleetPort"];
 	        this.metricsEnabled = source["metricsEnabled"];
-	        this.workerUrlPolicy = source["workerUrlPolicy"];
-	        this.workerAllowedHosts = source["workerAllowedHosts"];
-	        this.workerAllowMetadata = source["workerAllowMetadata"];
 	        this.fleetServerEnabled = source["fleetServerEnabled"];
 	        this.upstreamUrl = source["upstreamUrl"];
 	        this.upstreamIntervalMinutes = source["upstreamIntervalMinutes"];

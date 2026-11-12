@@ -93,7 +93,7 @@ func TestHandleFleetHealthRejectsNonGet(t *testing.T) {
 
 func TestHandleWorkerHeartbeatSuccess(t *testing.T) {
 	app := newFleetTestApp(t, "secret-token")
-	payload := `{"name":"worker-7","url":"http://192.168.1.5:8081","system_info":{"os":"linux","arch":"amd64"},"containers":[{"slug":"storj","status":"running"}],"apps":["mysterium"]}`
+	payload := `{"name":"worker-7","url":"http://192.168.1.5:8081","system_info":{"os":"linux","arch":"amd64"},"containers":[{"slug":"storj","status":"running"}],"apps":[{"slug":"mysterium","running":true}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(payload))
 	req.Header.Set("Authorization", "Bearer secret-token")
 	w := httptest.NewRecorder()
@@ -128,6 +128,61 @@ func TestHandleWorkerHeartbeatSuccess(t *testing.T) {
 	}
 	if !found["storj"] || !found["mysterium"] {
 		t.Fatalf("expected services storj and mysterium, got %v", d.Services)
+	}
+}
+
+// TestAndroidHeartbeatWithInstalledAppsIsAccepted sends the body CashPilot-android
+// puts on the wire (service/Heartbeat.kt through HeartbeatJson, which drops
+// defaults): "apps" is a list of AppStatus OBJECTS, and "running" may be null.
+// The hub typed apps as []string, so this body failed to decode and every phone
+// with an installed app got 400 "invalid heartbeat".
+func TestAndroidHeartbeatWithInstalledAppsIsAccepted(t *testing.T) {
+	app := newFleetTestApp(t, "secret-token")
+	payload := `{"name":"Google Pixel 8 (a1b2c3d4)",` +
+		`"containers":[{"slug":"honeygain","name":"cashpilot-honeygain","status":"running",` +
+		`"labels":{"cashpilot.managed":"true","cashpilot.service":"honeygain"}},` +
+		`{"slug":"grass","name":"cashpilot-grass","status":"unknown",` +
+		`"labels":{"cashpilot.managed":"true","cashpilot.service":"grass"}}],` +
+		`"apps":[{"slug":"honeygain","running":true,"notification_active":true,"net_tx_24h":1048576,"net_rx_24h":2048,"last_active":"2026-11-12T10:00:00Z"},` +
+		`{"slug":"grass","running":null}],` +
+		`"system_info":{"os":"Android","arch":"arm64-v8a","os_version":"Android 16 (API 36)","device_type":"android","version":"0.2.1"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	w := httptest.NewRecorder()
+
+	app.handleWorkerHeartbeat(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("an Android heartbeat was refused: %d %s", w.Code, w.Body.String())
+	}
+	devices := app.store.ListFleetDevices()
+	if len(devices) != 1 || devices[0].Kind != "mobile" {
+		t.Fatalf("expected one mobile device, got %+v", devices)
+	}
+	got := strings.Join(devices[0].Services, ",")
+	if got != "honeygain,grass" {
+		t.Fatalf("expected services honeygain,grass, got %q", got)
+	}
+}
+
+// TestAHeartbeatWithAppsAsStringsIsStillAccepted: before the hub read Android's
+// objects it documented "apps" as a list of strings. A client written against
+// that shape must keep working.
+func TestAHeartbeatWithAppsAsStringsIsStillAccepted(t *testing.T) {
+	app := newFleetTestApp(t, "secret-token")
+	payload := `{"name":"worker-9","apps":["mysterium",{"slug":"grass"},null]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	w := httptest.NewRecorder()
+
+	app.handleWorkerHeartbeat(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("a heartbeat with string apps was refused: %d %s", w.Code, w.Body.String())
+	}
+	devices := app.store.ListFleetDevices()
+	if len(devices) != 1 || strings.Join(devices[0].Services, ",") != "mysterium,grass" {
+		t.Fatalf("expected services mysterium,grass, got %+v", devices)
 	}
 }
 
@@ -452,7 +507,7 @@ func TestHeartbeatKind(t *testing.T) {
 func TestHeartbeatServicesDeduplicates(t *testing.T) {
 	body := workerHeartbeat{
 		Containers: []workerContainer{{Slug: "a"}, {Slug: ""}, {Slug: "a"}, {Slug: "b"}},
-		Apps:       []string{"b", "c", ""},
+		Apps:       []workerApp{{Slug: "b"}, {Slug: "c"}, {Slug: ""}},
 	}
 	got := heartbeatServices(body)
 	want := []string{"a", "b", "c"}

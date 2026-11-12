@@ -26,9 +26,6 @@ Set `CASHPILOT_DESKTOP_DATA_DIR` to use another directory. The SQLite database s
 | `fleetBindAddress` | `127.0.0.1` | Address the fleet API listens on; loopback unless you change it |
 | `fleetPort` | `8085` | Port of the fleet API |
 | `metricsEnabled` | `false` | Opt-in Prometheus `/metrics` endpoint on the fleet API, without authentication |
-| `workerUrlPolicy` | `private` | Which worker addresses the app will call: `strict` (only the allowlist), `private` (private ranges, Tailscale and the allowlist) or `public` |
-| `workerAllowedHosts` | empty | Allowlist of worker hosts: exact names, `*.suffix`, CIDRs or IPs |
-| `workerAllowMetadata` | `false` | Allows cloud metadata addresses such as `169.254.169.254`; leave it off |
 | `isolation` | empty (`auto`) | LAN isolation for container earners: `auto`, `on` or `off`. See [LAN isolation](#lan-isolation) |
 
 ## LAN isolation
@@ -64,7 +61,9 @@ Limits:
 
 ## Worker Node mode
 
-To report to an existing CashPilot server, enter its address (`upstreamUrl`) and the pairing key, which is that server's `CASHPILOT_API_KEY`. The app uses it once to enrol and then keeps the per-worker key the server issues. The app sends a heartbeat every minute by default (`upstreamIntervalMinutes`), the same interval a CashPilot worker uses. Leaving the address empty keeps the app standalone.
+To report to an existing CashPilot server, enter its address (`upstreamUrl`) and the pairing key, which is that server's `CASHPILOT_API_KEY`. The app uses it once to enrol and then keeps the per-worker key the server issues. The app sends a heartbeat every minute by default (`upstreamIntervalMinutes`), the same interval a CashPilot worker uses. Leaving the address empty keeps the app standalone. The address must be https, or plain http to this machine, a private or Tailscale address, a single-label name or a `.local`, `.lan`, `.home.arpa`, `.internal` or `.ts.net` name, the same rule the Android app uses; anything else is refused when you save it, because the pairing key would cross the internet in clear text. An address saved before this rule existed is not checked again when you save other settings; the app logs the refusal on each heartbeat instead.
+
+If the server refuses this machine's own key (the owner removed it from the fleet page, or the server lost its keys), the app enrols again once with the pairing key, as the Android app does. To take a machine out of the fleet for good, clear its pairing address or key here, or change the server's `CASHPILOT_API_KEY`.
 
 ## Secrets
 

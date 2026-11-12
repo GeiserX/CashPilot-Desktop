@@ -31,8 +31,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 )
 
 // ImportChunk is how many readings go in one request.
@@ -125,10 +123,9 @@ func (c *Client) Import(ctx context.Context, serverURL, token string, p ImportPa
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("upstream: no credential to authenticate with")
 	}
-	// The same SSRF policy the heartbeat gets. The URL is user-supplied and the
-	// request carries a bearer token; sending earnings to it is not a reason to
-	// validate it less.
-	if err := fleetnet.ValidateWorkerURL(serverURL, c.Policy); err != nil {
+	// The same server URL rule the heartbeat gets: the request carries a bearer
+	// token, and sending earnings is not a reason to validate it less.
+	if err := ValidateServerURL(serverURL); err != nil {
 		return nil, fmt.Errorf("upstream: refusing to contact %s: %w", serverURL, err)
 	}
 

@@ -35,8 +35,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 )
 
 // Payload is the body POST /api/workers/heartbeat expects.
@@ -44,8 +42,7 @@ import (
 // Field names and shapes are the SERVER's, not Desktop's own inbound
 // workerHeartbeat — those differ and conflating them would fail at the wire.
 // In particular the server declares `apps` and `containers` as lists of
-// OBJECTS, while Desktop's inbound struct types Apps as []string; sending that
-// shape earns a 422. The server discovers what a worker runs via
+// OBJECTS; a list of strings earns a 422. The server discovers what a worker runs via
 // containers[*].slug, which is why Container carries one.
 type Payload struct {
 	Name       string     `json:"name"`
@@ -143,6 +140,13 @@ func ParseEarnings(raw json.RawMessage) (*FleetEarnings, error) {
 	return &out, nil
 }
 
+// ErrUnauthorized is wrapped by Send when the server answers 401: the token
+// it was given is not (or no longer) valid for this worker. The pairing loop
+// uses it to fall back to the enrolment key, the way the Android app does,
+// after the owner removed this machine from the fleet or the server lost its
+// key store.
+var ErrUnauthorized = errors.New("upstream: the server refused this machine's key")
+
 // ErrNotPaired is returned when no upstream server is configured. It is a
 // normal state, not a failure: standalone is the default.
 var ErrNotPaired = errors.New("upstream: not paired with a CashPilot server")
@@ -183,11 +187,6 @@ func KeyToPersist(current, received string) string {
 type Client struct {
 	// HTTP is the transport. Injectable so tests drive a stub server.
 	HTTP *http.Client
-	// Policy is the SSRF policy applied to the upstream URL before dialing.
-	// The URL is user-supplied and the request carries a bearer token, so it
-	// gets the same validation as any other outbound worker call rather than a
-	// weaker one just because the user typed it into a different box.
-	Policy fleetnet.Policy
 }
 
 // New returns a Client with a sane timeout.
@@ -195,15 +194,15 @@ type Client struct {
 // The timeout matters more than it looks: heartbeats are on a ticker, so a
 // server that accepts connections and never answers would otherwise pile up
 // goroutines for the lifetime of the process.
-func New(policy fleetnet.Policy) *Client {
-	return &Client{HTTP: defaultHTTPClient(), Policy: policy}
+func New() *Client {
+	return &Client{HTTP: defaultHTTPClient()}
 }
 
 // defaultHTTPClient is the transport used when none was injected. Shared by
 // every call so a zero-valued Client cannot end up with one timeout on the
 // heartbeat and none on the import.
 func defaultHTTPClient() *http.Client {
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{Timeout: 30 * time.Second, CheckRedirect: checkRedirect}
 }
 
 // Send posts one heartbeat and returns the server's response.
@@ -220,7 +219,7 @@ func (c *Client) Send(ctx context.Context, serverURL, token string, p Payload) (
 		// is worth surfacing as an error the UI can show.
 		return nil, errors.New("upstream: no credential to authenticate with")
 	}
-	if err := fleetnet.ValidateWorkerURL(serverURL, c.Policy); err != nil {
+	if err := ValidateServerURL(serverURL); err != nil {
 		return nil, fmt.Errorf("upstream: refusing to contact %s: %w", serverURL, err)
 	}
 
@@ -255,6 +254,9 @@ func (c *Client) Send(ctx context.Context, serverURL, token string, p Payload) (
 		// The status is carried in the message because 401 and 422 mean very
 		// different things to a user: the first is a wrong or revoked key, the
 		// second is a payload this server's version does not accept.
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("%w: server returned %d: %s", ErrUnauthorized, resp.StatusCode, strings.TrimSpace(string(raw)))
+		}
 		return nil, fmt.Errorf("upstream: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var out Response

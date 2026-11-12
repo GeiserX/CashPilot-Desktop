@@ -52,23 +52,6 @@ type AppConfig struct {
 	// fleet bind address (loopback by default) with no authentication, matching the
 	// Prometheus scraping convention.
 	MetricsEnabled bool `json:"metricsEnabled"`
-	// WorkerURLPolicy selects how the SSRF worker-URL validator (internal/fleetnet)
-	// classifies a remote worker endpoint before the desktop makes an authenticated
-	// request to it. One of "strict" (only WorkerAllowedHosts), "private" (RFC1918 +
-	// Tailscale CGNAT 100.64.0.0/10 + IPv6 ULA fc00::/7 + the allowlist — the sensible
-	// homelab default), or "public" (any non-loopback/link-local/metadata/unspecified
-	// address). Defaults to "private" via applyDefaults.
-	WorkerURLPolicy string `json:"workerUrlPolicy"`
-	// WorkerAllowedHosts is an explicit allowlist of worker hosts/IPs. It is the sole
-	// allow-source in "strict" mode and is always honored in the other modes. Entries
-	// may be an exact hostname, a "*.suffix" DNS suffix (e.g. Tailscale MagicDNS
-	// "*.tailnet-example.ts.net"), a CIDR, or a literal IP. Defaults to empty (nil).
-	WorkerAllowedHosts []string `json:"workerAllowedHosts"`
-	// WorkerAllowMetadata, when false (the default, the bool zero value), makes the
-	// cloud instance-metadata endpoints (169.254.169.254, fd00:ec2::254,
-	// metadata.google.internal) ALWAYS blocked regardless of policy or allowlist.
-	// Setting it true is the only way to reach a metadata address and should be rare.
-	WorkerAllowMetadata bool `json:"workerAllowMetadata"`
 	// FleetServerEnabled turns this Desktop into a HUB that accepts worker and
 	// mobile heartbeats. It defaults to FALSE, which is the bool zero value, so
 	// every existing install becomes a pure spoke on upgrade.
@@ -168,9 +151,6 @@ func applyDefaults(cfg AppConfig) AppConfig {
 	}
 	if cfg.FleetPort <= 0 {
 		cfg.FleetPort = 8085
-	}
-	if cfg.WorkerURLPolicy == "" {
-		cfg.WorkerURLPolicy = "private"
 	}
 	return cfg
 }
@@ -351,13 +331,7 @@ func FleetKey(appDir string) (string, error) {
 // <appDir>/.fleet_api_key file when the keychain is unavailable (headless Linux / CI),
 // exactly like MasterKey's storage tail.
 func SetFleetKey(appDir, value string) error {
-	if err := keyring.Set(keyringService, keyringUserFleet, value); err != nil {
-		keyPath := filepath.Join(appDir, ".fleet_api_key")
-		if err := os.WriteFile(keyPath, []byte(value), 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeSecret(appDir, keyringUserFleet, ".fleet_api_key", value)
 }
 
 // UpstreamEnrolmentKey returns the shared CashPilot token used to enrol this
@@ -407,13 +381,31 @@ func readSecret(appDir, keyringUser, fileName string) (string, error) {
 }
 
 // writeSecret is the shared body of the keychain-first writers.
+//
+// Once the keychain holds the value, the 0600 fallback file is removed. The
+// readers treat an empty keychain value as "not stored" and fall through to
+// that file, so a file left over from a time the keychain refused a write
+// would bring an old secret back after it was cleared (repointing at a new
+// server would keep sending the old server's worker key).
+//
+// Only an explicit write removes the file. The readers copy a file's value
+// into the keychain but keep the file: on Linux the secret service can be
+// locked or absent at a later start, and the file is then the only copy. A
+// hub that lost its fleet key that way would mint a new one and unpair every
+// phone.
 func writeSecret(appDir, keyringUser, fileName, value string) error {
+	keyPath := filepath.Join(appDir, fileName)
 	if err := keyring.Set(keyringService, keyringUser, value); err != nil {
-		if err := os.WriteFile(filepath.Join(appDir, fileName), []byte(value), 0o600); err != nil {
-			return err
-		}
+		return os.WriteFile(keyPath, []byte(value), 0o600)
 	}
+	dropFallback(keyPath)
 	return nil
+}
+
+// dropFallback removes a 0600 fallback file once the keychain holds its value.
+// Best effort: a file that cannot be removed only leaves the old behaviour.
+func dropFallback(keyPath string) {
+	_ = os.Remove(keyPath)
 }
 
 func appDataDir() (string, error) {
