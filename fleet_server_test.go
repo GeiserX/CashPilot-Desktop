@@ -165,6 +165,27 @@ func TestAndroidHeartbeatWithInstalledAppsIsAccepted(t *testing.T) {
 	}
 }
 
+// TestAHeartbeatWithAppsAsStringsIsStillAccepted: before the hub read Android's
+// objects it documented "apps" as a list of strings. A client written against
+// that shape must keep working.
+func TestAHeartbeatWithAppsAsStringsIsStillAccepted(t *testing.T) {
+	app := newFleetTestApp(t, "secret-token")
+	payload := `{"name":"worker-9","apps":["mysterium",{"slug":"grass"},null]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(payload))
+	req.Header.Set("Authorization", "Bearer secret-token")
+	w := httptest.NewRecorder()
+
+	app.handleWorkerHeartbeat(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("a heartbeat with string apps was refused: %d %s", w.Code, w.Body.String())
+	}
+	devices := app.store.ListFleetDevices()
+	if len(devices) != 1 || strings.Join(devices[0].Services, ",") != "mysterium,grass" {
+		t.Fatalf("expected services mysterium,grass, got %+v", devices)
+	}
+}
+
 func TestHandleWorkerHeartbeatRejectsBadToken(t *testing.T) {
 	app := newFleetTestApp(t, "right-token")
 	payload := `{"name":"worker-7"}`
