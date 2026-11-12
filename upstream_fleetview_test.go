@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 )
 
@@ -58,8 +57,7 @@ func reportEarnings(t *testing.T, app *App, payload any) *httptest.Server {
 
 func testClient(srv *httptest.Server) *upstream.Client {
 	return &upstream.Client{
-		HTTP:   srv.Client(),
-		Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}},
+		HTTP: srv.Client(),
 	}
 }
 

@@ -238,13 +238,32 @@ func TestTheFormExplainsThatStandaloneIsTheDefault(t *testing.T) {
 
 func TestSavingAPairingURLPersistsIt(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://cashpilot.example:8080/"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://cashpilot.example:8080/"}); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
 	// The trailing slash is trimmed at the boundary so the client does not build
 	// //api/workers/heartbeat, which some proxies treat as a different path.
-	if got := app.cfg.Config().UpstreamURL; got != "http://cashpilot.example:8080" {
+	if got := app.cfg.Config().UpstreamURL; got != "https://cashpilot.example:8080" {
 		t.Fatalf("UpstreamURL = %q", got)
+	}
+}
+
+// TestAPlainHTTPPairingURLToAPublicHostIsRefused: the pairing key and the
+// worker key ride on every heartbeat, so plain http to the internet would send
+// them in clear text. The refusal comes from Save, where the user sees it.
+func TestAPlainHTTPPairingURLToAPublicHostIsRefused(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	_, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://cashpilot.example.com"})
+	if err == nil || !strings.Contains(err.Error(), "https") {
+		t.Fatalf("expected a refusal that points at https, got %v", err)
+	}
+	if got := app.cfg.Config().UpstreamURL; got != "" {
+		t.Fatalf("the refused URL was stored: %q", got)
+	}
+	for _, ok := range []string{"http://192.168.1.10:8080", "http://localhost:8080", "https://cashpilot.example.com"} {
+		if _, err := app.SaveSettings(map[string]string{"upstreamUrl": ok}); err != nil {
+			t.Fatalf("%s was refused: %v", ok, err)
+		}
 	}
 }
 
@@ -253,7 +272,7 @@ func TestClearingTheURLUnpairs(t *testing.T) {
 	// user goes back to standalone. Keying this on non-emptiness -- the pattern
 	// the surrounding fields use -- would make unpairing impossible.
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://a.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://a.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": ""}); err != nil {
@@ -269,13 +288,13 @@ func TestRepointingToAnotherServerDiscardsTheOldWorkerKey(t *testing.T) {
 	// a DIFFERENT server fails authentication with no obvious cause, and keeping
 	// it is a live secret for a machine the user has stopped talking to.
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://first.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://first.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "issued-by-first"); err != nil {
 		t.Fatalf("seed key: %v", err)
 	}
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://second.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://second.example"}); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
 	got, err := config.UpstreamWorkerKey(app.cfg.AppDir())
@@ -291,13 +310,13 @@ func TestSavingTheSameURLKeepsTheWorkerKey(t *testing.T) {
 	// The flip side: an unrelated settings save must not silently re-enrol this
 	// machine by throwing away a key it is already authenticating with.
 	app := newPayloadTestApp(t, nil)
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://same.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://same.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
 	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "keep-me"); err != nil {
 		t.Fatalf("seed key: %v", err)
 	}
-	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "http://same.example"}); err != nil {
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://same.example"}); err != nil {
 		t.Fatalf("resave: %v", err)
 	}
 	got, _ := config.UpstreamWorkerKey(app.cfg.AppDir())

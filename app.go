@@ -32,6 +32,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
+	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -1020,7 +1021,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
 		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Podman cannot be fenced yet: there auto deploys unfenced and on refuses container deploys. Takes effect on the next deploy."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
-		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Optional. Leave EMPTY to stay standalone, which is the default and loses nothing. Set to a CashPilot server's URL and this machine reports to it as a worker, so its services appear on that fleet. Earnings are unaffected: the server collects those centrally and this only reports what is running."},
+		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Optional. Leave EMPTY to stay standalone, which is the default and loses nothing. Set to a CashPilot server's URL and this machine reports to it as a worker, so its services appear on that fleet. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text. Earnings are unaffected: the server collects those centrally and this only reports what is running."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
 		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime Provider", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "Current Docker-compatible runtime integration."},
@@ -1074,6 +1075,13 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// keyed on presence, not on non-emptiness.
 	if value, present := values["upstreamUrl"]; present {
 		next := strings.TrimRight(strings.TrimSpace(value), "/")
+		if next != "" {
+			// Refused here, where the user sees it, rather than on every
+			// heartbeat, where only the log would.
+			if err := upstream.ValidateServerURL(next); err != nil {
+				return SettingsState{}, fmt.Errorf("pairing address: %w", err)
+			}
+		}
 		if next != cfg.UpstreamURL {
 			// Repointing at a DIFFERENT server must discard the per-worker key
 			// the previous one issued. It is that server's credential and means

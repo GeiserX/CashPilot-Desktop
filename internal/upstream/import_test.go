@@ -8,16 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 )
-
-// testPolicy allows the loopback stub servers these tests dial. The SSRF policy
-// exists to stop a user-typed URL reaching somewhere it should not; it is not
-// what is under test here.
-func testPolicy() fleetnet.Policy {
-	return fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}
-}
 
 func TestConfirmed(t *testing.T) {
 	// The whole point: an import is refused by the server unless this worker is
@@ -131,7 +122,7 @@ func newStub(t *testing.T, status int, response any) *stubServer {
 
 func TestImportSendsTheServersShape(t *testing.T) {
 	stub := newStub(t, http.StatusOK, ImportResponse{Status: "ok", Imported: 2, Source: "mac"})
-	client := &Client{HTTP: stub.Client(), Policy: testPolicy()}
+	client := &Client{HTTP: stub.Client()}
 
 	rate := 0.4
 	resp, err := client.Import(context.Background(), stub.URL, "own-key", ImportPayload{
@@ -174,7 +165,7 @@ func TestImportOmitsAnUnknownFXRateRatherThanSendingZero(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &Client{HTTP: srv.Client(), Policy: testPolicy()}
+	client := &Client{HTTP: srv.Client()}
 	if _, err := client.Import(context.Background(), srv.URL, "k", ImportPayload{
 		ClientID: "mac",
 		Readings: []ImportReading{{Slug: "grass", Balance: 1, Date: "2026-01-01"}},
@@ -200,7 +191,7 @@ func TestImportCarriesNoSourceField(t *testing.T) {
 }
 
 func TestImportRefusesWithoutATarget(t *testing.T) {
-	client := &Client{Policy: testPolicy()}
+	client := &Client{}
 	if _, err := client.Import(context.Background(), "  ", "k", ImportPayload{}); err != ErrNotPaired {
 		t.Fatalf("err = %v, want ErrNotPaired", err)
 	}
@@ -209,17 +200,17 @@ func TestImportRefusesWithoutATarget(t *testing.T) {
 func TestImportRefusesWithoutACredential(t *testing.T) {
 	// Sending an unauthenticated import would be rejected anyway; refusing here
 	// surfaces a lost credential as an error the UI can show.
-	client := &Client{Policy: testPolicy()}
+	client := &Client{}
 	_, err := client.Import(context.Background(), "http://127.0.0.1:1", "  ", ImportPayload{})
 	if err == nil || !strings.Contains(err.Error(), "no credential") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestImportAppliesTheSSRFPolicy(t *testing.T) {
+func TestImportAppliesTheServerURLRule(t *testing.T) {
 	// The URL is user-supplied and the request carries a bearer token. Sending
 	// earnings to it is not a reason to validate it less than a heartbeat.
-	client := &Client{Policy: fleetnet.Policy{Mode: "allowlist", AllowedHosts: []string{"cashpilot.example"}}}
+	client := &Client{}
 	_, err := client.Import(context.Background(), "http://169.254.169.254", "k", ImportPayload{})
 	if err == nil || !strings.Contains(err.Error(), "refusing to contact") {
 		t.Fatalf("the policy was not applied: %v", err)
@@ -230,7 +221,7 @@ func TestImportSurfacesTheServersRefusal(t *testing.T) {
 	// 403 is its own diagnosis: the server still considers this worker
 	// unconfirmed, so the fix is another heartbeat, not a new key.
 	stub := newStub(t, http.StatusForbidden, map[string]string{"detail": "requires this worker's own key"})
-	client := &Client{HTTP: stub.Client(), Policy: testPolicy()}
+	client := &Client{HTTP: stub.Client()}
 	_, err := client.Import(context.Background(), stub.URL, "k", ImportPayload{ClientID: "mac"})
 	if err == nil {
 		t.Fatal("a 403 was reported as success")
@@ -243,7 +234,7 @@ func TestImportSurfacesTheServersRefusal(t *testing.T) {
 func TestImportReportsSkippedSlugs(t *testing.T) {
 	// A silent drop looks identical to a complete import.
 	stub := newStub(t, http.StatusOK, ImportResponse{Status: "ok", Imported: 1, Skipped: []string{"gone-service"}})
-	client := &Client{HTTP: stub.Client(), Policy: testPolicy()}
+	client := &Client{HTTP: stub.Client()}
 	resp, err := client.Import(context.Background(), stub.URL, "k", ImportPayload{ClientID: "mac"})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
@@ -257,7 +248,7 @@ func TestImportTrimsATrailingSlash(t *testing.T) {
 	// Otherwise the path becomes //api/workers/earnings-import, which some
 	// proxies route differently and some reject outright.
 	stub := newStub(t, http.StatusOK, ImportResponse{Status: "ok"})
-	client := &Client{HTTP: stub.Client(), Policy: testPolicy()}
+	client := &Client{HTTP: stub.Client()}
 	if _, err := client.Import(context.Background(), stub.URL+"/", "k", ImportPayload{ClientID: "mac"}); err != nil {
 		t.Fatalf("Import: %v", err)
 	}

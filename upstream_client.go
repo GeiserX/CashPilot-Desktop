@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 	stdruntime "runtime"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -102,11 +101,7 @@ func (a *App) startUpstream(ctx context.Context) {
 	a.upstream.cancel, a.upstream.done, a.upstream.workerKey = cancel, done, workerKey
 	a.upstream.mu.Unlock()
 
-	client := upstream.New(fleetnet.Policy{
-		Mode:          cfg.WorkerURLPolicy,
-		AllowedHosts:  cfg.WorkerAllowedHosts,
-		AllowMetadata: cfg.WorkerAllowMetadata,
-	})
+	client := upstream.New()
 
 	go func() {
 		defer close(done)

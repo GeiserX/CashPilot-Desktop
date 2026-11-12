@@ -9,16 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 )
-
-// loopbackOK lets a test server on 127.0.0.1 through the SSRF validator, which
-// blocks loopback by default. Only the transport is under test here; the
-// validator has its own suite.
-func loopbackOK() fleetnet.Policy {
-	return fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}
-}
 
 func TestAuthTokenPrefersThePerWorkerKey(t *testing.T) {
 	// Once enrolled, the server REFUSES the shared key for this worker, so
@@ -65,7 +56,7 @@ func TestKeyToPersist(t *testing.T) {
 func TestSendRefusesWhenNotPaired(t *testing.T) {
 	// Standalone is the default and a normal state, so this is a named error
 	// rather than a generic failure.
-	if _, err := New(loopbackOK()).Send(context.Background(), "", "tok", Payload{}); err != ErrNotPaired {
+	if _, err := New().Send(context.Background(), "", "tok", Payload{}); err != ErrNotPaired {
 		t.Fatalf("got %v, want ErrNotPaired", err)
 	}
 }
@@ -73,7 +64,7 @@ func TestSendRefusesWhenNotPaired(t *testing.T) {
 func TestSendRefusesWithoutACredential(t *testing.T) {
 	// A blank token means the credential was lost. Sending anyway would just
 	// earn a 401 and hide the real cause.
-	_, err := New(loopbackOK()).Send(context.Background(), "http://127.0.0.1:1", "", Payload{})
+	_, err := New().Send(context.Background(), "http://127.0.0.1:1", "", Payload{})
 	if err == nil || !strings.Contains(err.Error(), "no credential") {
 		t.Fatalf("got %v, want a missing-credential error", err)
 	}
@@ -83,7 +74,7 @@ func TestSendValidatesTheURLBeforeDialing(t *testing.T) {
 	// The URL is user-supplied and the request carries a bearer token, so it
 	// gets the same SSRF check as any other outbound worker call. Metadata
 	// endpoints are always blocked.
-	c := New(fleetnet.Policy{Mode: "private"})
+	c := New()
 	_, err := c.Send(context.Background(), "http://169.254.169.254", "tok", Payload{})
 	if err == nil || !strings.Contains(err.Error(), "refusing to contact") {
 		t.Fatalf("got %v, want the metadata address refused", err)
@@ -107,7 +98,7 @@ func TestSendPostsTheServerContract(t *testing.T) {
 		Containers: []Item{{Slug: "earnapp", Name: "EarnApp", Status: "running"}},
 		SystemInfo: SystemInfo{OS: "darwin", DeviceType: "desktop", Version: "1.2.3"},
 	}
-	resp, err := New(loopbackOK()).Send(context.Background(), srv.URL, "tok", in)
+	resp, err := New().Send(context.Background(), srv.URL, "tok", in)
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -142,7 +133,7 @@ func TestSendTrimsATrailingSlash(t *testing.T) {
 	defer srv.Close()
 	// Without the trim this requests //api/workers/heartbeat, which some proxies
 	// treat as a different path.
-	if _, err := New(loopbackOK()).Send(context.Background(), srv.URL+"/", "tok", Payload{}); err != nil {
+	if _, err := New().Send(context.Background(), srv.URL+"/", "tok", Payload{}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	if gotPath != "/api/workers/heartbeat" {
@@ -155,7 +146,7 @@ func TestSendReturnsTheIssuedWorkerKey(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"ok","worker_id":1,"worker_key":"issued-123"}`))
 	}))
 	defer srv.Close()
-	resp, err := New(loopbackOK()).Send(context.Background(), srv.URL, "shared", Payload{})
+	resp, err := New().Send(context.Background(), srv.URL, "shared", Payload{})
 	if err != nil {
 		t.Fatalf("send: %v", err)
 	}
@@ -175,7 +166,7 @@ func TestSendSurfacesTheStatusCode(t *testing.T) {
 			w.WriteHeader(code)
 			_, _ = w.Write([]byte(`{"detail":"nope"}`))
 		}))
-		_, err := New(loopbackOK()).Send(context.Background(), srv.URL, "tok", Payload{})
+		_, err := New().Send(context.Background(), srv.URL, "tok", Payload{})
 		srv.Close()
 		if err == nil || !strings.Contains(err.Error(), http.StatusText(code)) && !strings.Contains(err.Error(), strconv.Itoa(code)) {
 			t.Fatalf("code %d: got %v, want the status in the error", code, err)
@@ -191,7 +182,7 @@ func TestSendDoesNotTreatAnErrorBodyAsSuccess(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"ok","worker_id":9}`))
 	}))
 	defer srv.Close()
-	resp, err := New(loopbackOK()).Send(context.Background(), srv.URL, "tok", Payload{})
+	resp, err := New().Send(context.Background(), srv.URL, "tok", Payload{})
 	if err == nil {
 		t.Fatalf("a 500 decoded as success: %+v", resp)
 	}
@@ -202,7 +193,7 @@ func TestSendRejectsAGarbageBody(t *testing.T) {
 		_, _ = w.Write([]byte(`not json`))
 	}))
 	defer srv.Close()
-	if _, err := New(loopbackOK()).Send(context.Background(), srv.URL, "tok", Payload{}); err == nil {
+	if _, err := New().Send(context.Background(), srv.URL, "tok", Payload{}); err == nil {
 		t.Fatal("a non-JSON 200 was accepted")
 	}
 }
@@ -214,7 +205,7 @@ func TestSendHonoursContextCancellation(t *testing.T) {
 	defer srv.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := New(loopbackOK()).Send(ctx, srv.URL, "tok", Payload{}); err == nil {
+	if _, err := New().Send(ctx, srv.URL, "tok", Payload{}); err == nil {
 		t.Fatal("a cancelled context still sent a heartbeat")
 	}
 }
@@ -228,11 +219,26 @@ func TestSendOmitsAnEmptyVersionRatherThanSendingBlank(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer srv.Close()
-	if _, err := New(loopbackOK()).Send(context.Background(), srv.URL, "tok", Payload{}); err != nil {
+	if _, err := New().Send(context.Background(), srv.URL, "tok", Payload{}); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	si, _ := raw["system_info"].(map[string]any)
 	if _, present := si["version"]; present {
 		t.Fatalf("an empty version was sent as a key: %v", si)
+	}
+}
+
+// TestSendReachesAServerOnLocalhost: a CashPilot server on the same machine,
+// typed as http://localhost, is a normal pairing target. The SSRF worker
+// policy refused it by name, so every heartbeat failed and only the log said
+// why.
+func TestSendReachesAServerOnLocalhost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+	local := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	if _, err := New().Send(context.Background(), local, "tok", Payload{}); err != nil {
+		t.Fatalf("a server on localhost was refused: %v", err)
 	}
 }

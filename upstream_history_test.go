@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GeiserX/CashPilot-Desktop/internal/fleetnet"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 )
@@ -67,8 +66,7 @@ func (s *importStub) readings() []upstream.ImportReading {
 
 func testImportClient(stub *importStub) *upstream.Client {
 	return &upstream.Client{
-		HTTP:   stub.Client(),
-		Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}},
+		HTTP: stub.Client(),
 	}
 }
 
@@ -213,7 +211,7 @@ func TestTheHandOverIsAuthenticatedWithThisMachinesOwnKey(t *testing.T) {
 
 	app := newPayloadTestApp(t, nil)
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
-	client := &upstream.Client{HTTP: srv.Client(), Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}}
+	client := &upstream.Client{HTTP: srv.Client()}
 
 	app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key")
 	if auth != "Bearer own-key" {
@@ -298,7 +296,7 @@ func TestAnUnconfirmedWorkerDoesNotTryToImport(t *testing.T) {
 			app.upstream.mu.Unlock()
 
 			stub := newPairingStub(t, tc.reDelivered)
-			client := &upstream.Client{HTTP: stub.Client(), Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}}
+			client := &upstream.Client{HTTP: stub.Client()}
 
 			app.sendUpstream(context.Background(), client, stub.URL, tc.enrolmentToken)
 			if got := stub.importCount(); got != 0 {
@@ -318,7 +316,7 @@ func TestAConfirmedWorkerImportsOnItsNextHeartbeat(t *testing.T) {
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
 
 	stub := newPairingStub(t, "") // no key returned == this worker is confirmed
-	client := &upstream.Client{HTTP: stub.Client(), Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}}
+	client := &upstream.Client{HTTP: stub.Client()}
 
 	// sendUpstream reads the cached worker key, so seed it as a confirmed worker
 	// would already hold it.
@@ -353,7 +351,7 @@ func TestASettingsChangeDuringTheUploadIsNotClobbered(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := &upstream.Client{HTTP: srv.Client(), Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}}
+	client := &upstream.Client{HTTP: srv.Client()}
 	app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key")
 
 	got := app.cfg.Config()
@@ -383,7 +381,7 @@ func TestAServerTooOldToImportIsAskedOnce(t *testing.T) {
 
 	app := newPayloadTestApp(t, nil)
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
-	client := &upstream.Client{HTTP: srv.Client(), Policy: fleetnet.Policy{Mode: "private", AllowedHosts: []string{"127.0.0.1"}}}
+	client := &upstream.Client{HTTP: srv.Client()}
 
 	for range 3 {
 		app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key")
