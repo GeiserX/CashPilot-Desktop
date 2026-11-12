@@ -11,8 +11,8 @@ name: Auto Tag
 # the app is built from changed since the last tag, it tags nothing.
 # An urgent fix does not wait: start this workflow by hand (Actions, "Auto Tag",
 # "Run workflow"), which releases main as it is. A hand-started run always cuts a
-# version, also when nothing changed: that is how a release whose build failed is
-# cut again.
+# version, also when nothing changed. A build that fails leaves no tag, so the next
+# run releases the same version again.
 #
 # The reusable-call is deliberate: a tag created with the default GITHUB_TOKEN does NOT
 # trigger another workflow (GitHub's loop-prevention), so relying on desktop-release.yml's
@@ -60,8 +60,8 @@ jobs:
 
           # Nothing to release: no file the app is built from changed since the last
           # tag. Without this the daily run would bump the version every day.
-          # A hand-started run skips the check and always releases: it is how a
-          # release whose build failed is cut again, as the next patch version.
+          # A hand-started run skips the check and always releases. A failed build
+          # leaves no tag, so the next run retries the same version.
           if [ "$LATEST" != "v0.0.0" ] && [ "$EVENT" != "workflow_dispatch" ]; then
             CHANGED=$(git diff --name-only "$LATEST"..HEAD -- \
               '*.go' internal frontend services go.mod go.sum wails.json \
