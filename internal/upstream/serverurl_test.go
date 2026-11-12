@@ -39,7 +39,8 @@ func TestValidateServerURL(t *testing.T) {
 		{"http://[::ffff:8.8.8.8]", false},
 		{"http://134744072", false}, // dotless number: 8.8.8.8 to the resolver
 		{"http://0x08080808", false},
-		{"http://010.0.0.1", false}, // not canonical
+		{"http://010.0.0.1", false},       // not canonical
+		{"http://cash_pilot:8080", false}, // not a valid host name
 		{"http://.local", false},
 		{"http://[2001:db8::1]", false},
 		// never a server.
@@ -75,6 +76,9 @@ func TestRedirectsCannotCarryTheKeyElsewhere(t *testing.T) {
 		{"http://192.168.1.10:8080/api", "http://192.168.1.10:8080/api/", true},
 		{"https://cashpilot.example.com/api", "http://cashpilot.example.com/api", false},
 		{"http://192.168.1.10:8080/api", "http://cashpilot.example.com/api", false},
+		// A downgrade to the same private host passes the pairing rule, so only
+		// the scheme check stops it.
+		{"https://192.168.1.10:8443/api", "http://192.168.1.10:8443/api", false},
 		{"https://cashpilot.example.com/api", "https://169.254.169.254/latest", false},
 	} {
 		first, _ := http.NewRequest(http.MethodPost, tc.from, nil)
@@ -83,5 +87,22 @@ func TestRedirectsCannotCarryTheKeyElsewhere(t *testing.T) {
 		if (err == nil) != tc.allow {
 			t.Errorf("redirect %s -> %s: %v, want allow=%v", tc.from, tc.to, err, tc.allow)
 		}
+	}
+}
+
+// TestRedirectsStopAfterTen: a custom CheckRedirect replaces Go's own limit,
+// so the policy must keep one.
+func TestRedirectsStopAfterTen(t *testing.T) {
+	client := defaultHTTPClient()
+	next, _ := http.NewRequest(http.MethodPost, "https://cashpilot.example.com/api", nil)
+	via := make([]*http.Request, 10)
+	for i := range via {
+		via[i] = next
+	}
+	if err := client.CheckRedirect(next, via); err == nil {
+		t.Fatal("an eleventh redirect was followed")
+	}
+	if err := client.CheckRedirect(next, via[:9]); err != nil {
+		t.Fatalf("a tenth redirect was refused: %v", err)
 	}
 }
