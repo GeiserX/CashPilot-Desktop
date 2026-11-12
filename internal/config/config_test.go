@@ -589,10 +589,16 @@ func TestClearedSecretStaysClearedAfterAFallbackWrite(t *testing.T) {
 	}
 }
 
-// TestMigratingASecretRemovesTheFallbackFile: once a fallback value has been
-// copied into the keychain, the plaintext copy on disk goes away.
-func TestMigratingASecretRemovesTheFallbackFile(t *testing.T) {
+// TestMigratingASecretKeepsTheFallbackFile: a reader copies a fallback value
+// into the keychain but keeps the file. On Linux the secret service can be
+// locked at a later start; the file is then the only copy, and a hub that lost
+// its fleet key would mint a new one and unpair every phone.
+func TestMigratingASecretKeepsTheFallbackFile(t *testing.T) {
+	prev := runtimeGOOS
+	runtimeGOOS = "linux"
+	defer func() { runtimeGOOS = prev }()
 	keyring.MockInit()
+	defer keyring.MockInit()
 	dir := t.TempDir()
 	for _, f := range []string{".upstream_worker_key", ".fleet_api_key"} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("from-file"), 0o600); err != nil {
@@ -605,12 +611,12 @@ func TestMigratingASecretRemovesTheFallbackFile(t *testing.T) {
 	if got, _ := FleetKey(dir); got != "from-file" {
 		t.Fatalf("fleet key migration read %q", got)
 	}
-	for _, f := range []string{".upstream_worker_key", ".fleet_api_key"} {
-		if _, err := os.Stat(filepath.Join(dir, f)); !os.IsNotExist(err) {
-			t.Fatalf("%s was left on disk after the keychain took it", f)
-		}
+
+	keyring.MockInitWithError(errors.New("secret service is locked")) // a later start
+	if got, err := UpstreamWorkerKey(dir); err != nil || got != "from-file" {
+		t.Fatalf("worker key lost when the keychain is locked: %q, %v", got, err)
 	}
-	if got, _ := UpstreamWorkerKey(dir); got != "from-file" {
-		t.Fatalf("worker key not readable from the keychain after migration: %q", got)
+	if got, err := FleetKey(dir); err != nil || got != "from-file" {
+		t.Fatalf("fleet key lost when the keychain is locked: %q, %v", got, err)
 	}
 }

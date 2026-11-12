@@ -337,9 +337,7 @@ func FleetKey(appDir string) (string, error) {
 	keyPath := filepath.Join(appDir, ".fleet_api_key")
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		value = string(raw)
-		if keyring.Set(keyringService, keyringUserFleet, value) == nil {
-			dropFallback(keyPath)
-		}
+		_ = keyring.Set(keyringService, keyringUserFleet, value)
 		return value, nil
 	}
 
@@ -393,9 +391,7 @@ func readSecret(appDir, keyringUser, fileName string) (string, error) {
 	keyPath := filepath.Join(appDir, fileName)
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		value = strings.TrimSpace(string(raw))
-		if keyring.Set(keyringService, keyringUser, value) == nil {
-			dropFallback(keyPath)
-		}
+		_ = keyring.Set(keyringService, keyringUser, value)
 		return value, nil
 	}
 	if refuseKeyRegen(err, runtimeGOOS) {
@@ -411,6 +407,12 @@ func readSecret(appDir, keyringUser, fileName string) (string, error) {
 // that file, so a file left over from a time the keychain refused a write
 // would bring an old secret back after it was cleared (repointing at a new
 // server would keep sending the old server's worker key).
+//
+// Only an explicit write removes the file. The readers copy a file's value
+// into the keychain but keep the file: on Linux the secret service can be
+// locked or absent at a later start, and the file is then the only copy. A
+// hub that lost its fleet key that way would mint a new one and unpair every
+// phone.
 func writeSecret(appDir, keyringUser, fileName, value string) error {
 	keyPath := filepath.Join(appDir, fileName)
 	if err := keyring.Set(keyringService, keyringUser, value); err != nil {
