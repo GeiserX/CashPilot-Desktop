@@ -4,15 +4,17 @@ name: Auto Tag
 # be cut on every merge that touched the app, which on a busy day was four or more
 # version bumps, each one an update notice for everyone who runs the app. Merges now
 # collect on main and the daily run releases them together: it computes the next semver
-# from the commits since the last tag, creates + pushes the tag, then CALLS
-# desktop-release.yml as a reusable workflow to build and publish. On a day when no file
+# from the commits since the last tag, then CALLS desktop-release.yml as a reusable
+# workflow to test, build and publish. The tag is created by that workflow's publish job,
+# together with the release, after every platform built and passed its tests. Pushing it
+# here first left a version tag with no release whenever a build failed. On a day when no file
 # the app is built from changed since the last tag, it tags nothing.
 # An urgent fix does not wait: start this workflow by hand (Actions, "Auto Tag",
 # "Run workflow"), which releases main as it is. A hand-started run always cuts a
 # version, also when nothing changed: that is how a release whose build failed is
 # cut again.
 #
-# The reusable-call is deliberate: a tag pushed with the default GITHUB_TOKEN does NOT
+# The reusable-call is deliberate: a tag created with the default GITHUB_TOKEN does NOT
 # trigger another workflow (GitHub's loop-prevention), so relying on desktop-release.yml's
 # own `push: tags` trigger here would silently never build. Calling it directly (like the
 # web repo calls build.yml) sidesteps that. A human pushing a tag by hand still triggers
@@ -33,7 +35,7 @@ concurrency:
 
 jobs:
   tag:
-    name: Bump version and tag
+    name: Compute next version
     runs-on: ubuntu-latest
     # main only. "Run workflow" offers every branch, and a run from another one
     # would tag and publish code that is not merged.
@@ -100,17 +102,15 @@ jobs:
           echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
           echo "Bumping $LATEST -> $NEW_TAG ($LEVEL)"
 
-      - name: Create and push tag
-        if: steps.version.outputs.new_tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "${{ steps.version.outputs.new_tag }}" -m "Release ${{ steps.version.outputs.new_tag }}"
-          git push origin "${{ steps.version.outputs.new_tag }}"
-
   release:
     needs: tag
     if: needs.tag.outputs.new_tag
+    # A called workflow gets at most the caller's permissions; publish needs the
+    # last two to sign the build provenance attestation.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/desktop-release.yml
     with:
       version: ${{ needs.tag.outputs.new_tag }}

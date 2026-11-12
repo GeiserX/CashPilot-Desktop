@@ -188,6 +188,10 @@ jobs:
     needs: build
     if: needs.build.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write      # signs the build provenance attestation
+      attestations: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -197,11 +201,37 @@ jobs:
         with:
           path: artifacts/
 
+      # A checksum file and a signed build provenance attestation, so a user can
+      # check that the file they downloaded is the one this workflow built:
+      #   sha256sum -c SHA256SUMS --ignore-missing
+      #   gh attestation verify <file> -R GeiserX/CashPilot-Desktop
+      - name: Write SHA256SUMS
+        working-directory: artifacts
+        run: |
+          set -euo pipefail
+          for f in desktop-*/*; do
+            (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
+          done > SHA256SUMS
+          cat SHA256SUMS
+          test -s SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/desktop-*/*
+
+      # The tag is created HERE, with the release, and only after every platform
+      # built and passed its tests. auto-tag used to push the tag first, so a
+      # failed build left a version tag with no release behind it. For a
+      # hand-pushed tag the tag already exists and target_commitish is ignored.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           tag_name: ${{ inputs.version || github.ref_name }}
-          files: artifacts/desktop-*/*
+          target_commitish: ${{ github.sha }}
+          files: |
+            artifacts/desktop-*/*
+            artifacts/SHA256SUMS
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
