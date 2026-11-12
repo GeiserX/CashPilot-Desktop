@@ -26,13 +26,22 @@ type workerHeartbeat struct {
 	URL        string            `json:"url"`
 	ClientID   string            `json:"client_id"`
 	Containers []workerContainer `json:"containers"`
-	Apps       []string          `json:"apps"`
+	Apps       []workerApp       `json:"apps"`
 	SystemInfo workerSystemInfo  `json:"system_info"`
 }
 
 type workerContainer struct {
 	Slug   string `json:"slug"`
 	Status string `json:"status"`
+}
+
+// workerApp is one entry of an Android heartbeat's "apps" list. Android sends
+// objects ({"slug":..,"running":..,"notification_active":..}), the same shape
+// the CashPilot server reads (list[dict]). Typing this as []string made every
+// Android heartbeat that reported an installed app fail to decode with a 400.
+// Only the slug is read; the other fields are ignored.
+type workerApp struct {
+	Slug string `json:"slug"`
 }
 
 type workerSystemInfo struct {
@@ -396,7 +405,7 @@ func heartbeatServices(body workerHeartbeat) []string {
 		}
 	}
 	for _, app := range body.Apps {
-		slug := strings.TrimSpace(app)
+		slug := strings.TrimSpace(app.Slug)
 		if slug != "" && !seen[slug] {
 			seen[slug] = true
 			out = append(out, slug)
