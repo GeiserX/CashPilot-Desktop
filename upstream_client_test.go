@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -341,5 +345,69 @@ func TestSavingThePairingKeyStoresItOutsideConfigJson(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(app.cfg.AppDir(), "config.json"))
 	if err == nil && strings.Contains(string(raw), "shared-enrolment-token") {
 		t.Error("the pairing token was written into config.json")
+	}
+}
+
+// TestARemovedDesktopEnrolsAgainAfterA401 pins clients-3. When the owner
+// removes this machine from the server's fleet page, the server answers 401
+// to its own key. The Desktop kept sending that dead key forever; it must fall
+// back to the pairing key once and store the new key the server issues.
+func TestARemovedDesktopEnrolsAgainAfterA401(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		mu.Lock()
+		seen = append(seen, auth)
+		mu.Unlock()
+		switch auth {
+		case "Bearer shared":
+			_, _ = w.Write([]byte(`{"status":"ok","worker_id":2,"worker_key":"new-key"}`))
+		case "Bearer new-key":
+			_, _ = w.Write([]byte(`{"status":"ok","worker_id":2}`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"detail":"Invalid API key"}`))
+		}
+	}))
+	defer srv.Close()
+
+	app := newPayloadTestApp(t, nil)
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "removed-key"); err != nil {
+		t.Fatal(err)
+	}
+	app.upstream.workerKey = "removed-key"
+	client := &upstream.Client{HTTP: srv.Client()}
+
+	app.sendUpstream(context.Background(), client, srv.URL, "shared")
+
+	got, _ := config.UpstreamWorkerKey(app.cfg.AppDir())
+	if got != "new-key" {
+		t.Fatalf("stored worker key = %q, want the newly issued one (requests: %v)", got, seen)
+	}
+	app.sendUpstream(context.Background(), client, srv.URL, "shared")
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"Bearer removed-key", "Bearer shared", "Bearer new-key"}; strings.Join(seen, ",") != strings.Join(want, ",") {
+		t.Fatalf("requests = %v, want %v", seen, want)
+	}
+}
+
+// TestA401OnThePairingKeyKeepsTheWorkerKey: if the fallback is refused too,
+// the stored key stays. A 401 that was not about the key must not leave this
+// machine with no key at all.
+func TestA401OnThePairingKeyKeepsTheWorkerKey(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+	app := newPayloadTestApp(t, nil)
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "mine"); err != nil {
+		t.Fatal(err)
+	}
+	app.upstream.workerKey = "mine"
+	app.sendUpstream(context.Background(), &upstream.Client{HTTP: srv.Client()}, srv.URL, "shared")
+	if got, _ := config.UpstreamWorkerKey(app.cfg.AppDir()); got != "mine" {
+		t.Fatalf("the worker key was dropped on a refused fallback: %q", got)
 	}
 }

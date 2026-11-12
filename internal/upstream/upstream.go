@@ -140,6 +140,13 @@ func ParseEarnings(raw json.RawMessage) (*FleetEarnings, error) {
 	return &out, nil
 }
 
+// ErrUnauthorized is wrapped by Send when the server answers 401: the token
+// it was given is not (or no longer) valid for this worker. The pairing loop
+// uses it to fall back to the enrolment key, the way the Android app does,
+// after the owner removed this machine from the fleet or the server lost its
+// key store.
+var ErrUnauthorized = errors.New("upstream: the server refused this machine's key")
+
 // ErrNotPaired is returned when no upstream server is configured. It is a
 // normal state, not a failure: standalone is the default.
 var ErrNotPaired = errors.New("upstream: not paired with a CashPilot server")
@@ -247,6 +254,9 @@ func (c *Client) Send(ctx context.Context, serverURL, token string, p Payload) (
 		// The status is carried in the message because 401 and 422 mean very
 		// different things to a user: the first is a wrong or revoked key, the
 		// second is a payload this server's version does not accept.
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, fmt.Errorf("%w: server returned %d: %s", ErrUnauthorized, resp.StatusCode, strings.TrimSpace(string(raw)))
+		}
 		return nil, fmt.Errorf("upstream: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	var out Response
