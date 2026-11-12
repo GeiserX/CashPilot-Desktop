@@ -30,7 +30,7 @@ func TestValidateServerURL(t *testing.T) {
 		{"http://nas.local:8080", true},
 		{"http://cashpilot.lan", true},
 		{"http://box.home.arpa", true},
-		{"http://watchtower.tailnet-x.ts.net:8080", true},
+		{"http://box.tailnet-x.ts.net:8080", true},
 		{"http://nas", true},
 		// plain http to a public host would send the key in clear text.
 		{"http://cashpilot.example.com", false},
