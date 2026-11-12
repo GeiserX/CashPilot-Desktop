@@ -26,9 +26,6 @@ Set `CASHPILOT_DESKTOP_DATA_DIR` to use another directory. The SQLite database s
 | `fleetBindAddress` | `127.0.0.1` | Address the fleet API listens on; loopback unless you change it |
 | `fleetPort` | `8085` | Port of the fleet API |
 | `metricsEnabled` | `false` | Opt-in Prometheus `/metrics` endpoint on the fleet API, without authentication |
-| `workerUrlPolicy` | `private` | Which worker addresses the app will call: `strict` (only the allowlist), `private` (private ranges, Tailscale and the allowlist) or `public` |
-| `workerAllowedHosts` | empty | Allowlist of worker hosts: exact names, `*.suffix`, CIDRs or IPs |
-| `workerAllowMetadata` | `false` | Allows cloud metadata addresses such as `169.254.169.254`; leave it off |
 | `isolation` | empty (`auto`) | LAN isolation for container earners: `auto`, `on` or `off`. See [LAN isolation](#lan-isolation) |
 
 ## LAN isolation
