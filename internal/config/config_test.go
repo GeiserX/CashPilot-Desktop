@@ -40,7 +40,6 @@ func TestNewManagerAppliesDefaults(t *testing.T) {
 		Timezone:               "UTC",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
-		WorkerURLPolicy:        "private",
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("unexpected default config:\n got %+v\nwant %+v", cfg, want)
@@ -65,7 +64,6 @@ func TestSaveCoercesEmptyAndInvalidValues(t *testing.T) {
 		Timezone:               "UTC",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
-		WorkerURLPolicy:        "private",
 	}
 
 	cases := []struct {
@@ -116,9 +114,6 @@ func TestSavePreservesValidValues(t *testing.T) {
 		Timezone:               "Europe/Madrid",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              9000,
-		WorkerURLPolicy:        "strict",
-		WorkerAllowedHosts:     []string{"10.0.0.0/8", "*.tailnet-example.ts.net"},
-		WorkerAllowMetadata:    true,
 	}
 	if err := m.Save(in); err != nil {
 		t.Fatalf("Save error: %v", err)
@@ -188,53 +183,6 @@ func TestMetricsEnabledOptInDefault(t *testing.T) {
 	}
 	if !m2.Config().MetricsEnabled {
 		t.Fatal("expected MetricsEnabled=true to persist across a reload")
-	}
-}
-
-// TestWorkerURLPolicyDefaults pins the SSRF worker-URL policy surface consumed by
-// internal/fleetnet: a fresh config defaults WorkerURLPolicy to "private" (the safe
-// homelab default), WorkerAllowMetadata to false (metadata always blocked), and
-// WorkerAllowedHosts to empty; a non-empty policy is preserved by Save (not coerced)
-// and the fields round-trip across a reload.
-func TestWorkerURLPolicyDefaults(t *testing.T) {
-	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
-
-	m, err := NewManager()
-	if err != nil {
-		t.Fatalf("NewManager error: %v", err)
-	}
-	cfg := m.Config()
-	if cfg.WorkerURLPolicy != "private" {
-		t.Fatalf("expected WorkerURLPolicy to default to \"private\", got %q", cfg.WorkerURLPolicy)
-	}
-	if cfg.WorkerAllowMetadata {
-		t.Fatal("expected WorkerAllowMetadata to default to false")
-	}
-	if len(cfg.WorkerAllowedHosts) != 0 {
-		t.Fatalf("expected WorkerAllowedHosts to default to empty, got %v", cfg.WorkerAllowedHosts)
-	}
-
-	cfg.WorkerURLPolicy = "strict"
-	cfg.WorkerAllowedHosts = []string{"192.168.0.0/16", "*.tailnet-example.ts.net"}
-	cfg.WorkerAllowMetadata = true
-	if err := m.Save(cfg); err != nil {
-		t.Fatalf("Save error: %v", err)
-	}
-	if got := m.Config(); got.WorkerURLPolicy != "strict" {
-		t.Fatalf("expected WorkerURLPolicy=strict to be preserved by Save, got %q", got.WorkerURLPolicy)
-	}
-
-	// A fresh Manager over the same directory reloads the persisted fields.
-	m2, err := NewManager()
-	if err != nil {
-		t.Fatalf("NewManager(reload) error: %v", err)
-	}
-	got := m2.Config()
-	if got.WorkerURLPolicy != "strict" || !got.WorkerAllowMetadata {
-		t.Fatalf("worker-URL policy did not persist across reload: %+v", got)
-	}
-	if !reflect.DeepEqual(got.WorkerAllowedHosts, []string{"192.168.0.0/16", "*.tailnet-example.ts.net"}) {
-		t.Fatalf("WorkerAllowedHosts did not persist across reload: %v", got.WorkerAllowedHosts)
 	}
 }
 

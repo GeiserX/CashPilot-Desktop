@@ -20,7 +20,7 @@ import (
 //     or .ts.net.
 //
 // The server URL is one the user typed, not one a remote party supplied, so
-// the SSRF worker policy (fleetnet) is the wrong rule here: it refused a
+// the SSRF worker policy this replaced was the wrong rule here: it refused a
 // server on a public name or on localhost, and in its "public" mode it let the
 // keys go over plain http to the internet. The answer comes from the URL's
 // literal host and never from DNS, so it does not depend on the network the
