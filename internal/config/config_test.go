@@ -550,3 +550,67 @@ func TestFleetKeyRefusesRegenWhenKeychainLockedOnDarwin(t *testing.T) {
 		t.Fatal("expected no fleet key file to be written when regeneration is refused")
 	}
 }
+
+// TestClearedSecretStaysClearedAfterAFallbackWrite pins clients-2: a secret
+// written to the 0600 fallback file while the keychain refused writes must not
+// come back once the keychain works again and the secret is cleared. The
+// readers treat an empty keychain value as "not stored" and fall through to the
+// file, so a leftover file resurrected the old server's worker key.
+func TestClearedSecretStaysClearedAfterAFallbackWrite(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(dir, v string) error
+		get  func(dir string) (string, error)
+	}{
+		{"upstream worker key", SetUpstreamWorkerKey, UpstreamWorkerKey},
+		{"upstream enrolment key", SetUpstreamEnrolmentKey, UpstreamEnrolmentKey},
+		{"fleet key", SetFleetKey, FleetKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			keyring.MockInitWithError(errors.New("keychain locked"))
+			if err := tc.set(dir, "OLD-SERVER-KEY"); err != nil {
+				t.Fatalf("fallback write: %v", err)
+			}
+			keyring.MockInit() // the keychain works again
+			defer keyring.MockInit()
+
+			if err := tc.set(dir, ""); err != nil {
+				t.Fatalf("clear: %v", err)
+			}
+			got, err := tc.get(dir)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if got != "" {
+				t.Fatalf("a cleared secret came back from the fallback file: %q", got)
+			}
+		})
+	}
+}
+
+// TestMigratingASecretRemovesTheFallbackFile: once a fallback value has been
+// copied into the keychain, the plaintext copy on disk goes away.
+func TestMigratingASecretRemovesTheFallbackFile(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+	for _, f := range []string{".upstream_worker_key", ".fleet_api_key"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("from-file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, _ := UpstreamWorkerKey(dir); got != "from-file" {
+		t.Fatalf("worker key migration read %q", got)
+	}
+	if got, _ := FleetKey(dir); got != "from-file" {
+		t.Fatalf("fleet key migration read %q", got)
+	}
+	for _, f := range []string{".upstream_worker_key", ".fleet_api_key"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); !os.IsNotExist(err) {
+			t.Fatalf("%s was left on disk after the keychain took it", f)
+		}
+	}
+	if got, _ := UpstreamWorkerKey(dir); got != "from-file" {
+		t.Fatalf("worker key not readable from the keychain after migration: %q", got)
+	}
+}

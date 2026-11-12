@@ -337,7 +337,9 @@ func FleetKey(appDir string) (string, error) {
 	keyPath := filepath.Join(appDir, ".fleet_api_key")
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		value = string(raw)
-		_ = keyring.Set(keyringService, keyringUserFleet, value)
+		if keyring.Set(keyringService, keyringUserFleet, value) == nil {
+			dropFallback(keyPath)
+		}
 		return value, nil
 	}
 
@@ -351,13 +353,7 @@ func FleetKey(appDir string) (string, error) {
 // <appDir>/.fleet_api_key file when the keychain is unavailable (headless Linux / CI),
 // exactly like MasterKey's storage tail.
 func SetFleetKey(appDir, value string) error {
-	if err := keyring.Set(keyringService, keyringUserFleet, value); err != nil {
-		keyPath := filepath.Join(appDir, ".fleet_api_key")
-		if err := os.WriteFile(keyPath, []byte(value), 0o600); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeSecret(appDir, keyringUserFleet, ".fleet_api_key", value)
 }
 
 // UpstreamEnrolmentKey returns the shared CashPilot token used to enrol this
@@ -397,7 +393,9 @@ func readSecret(appDir, keyringUser, fileName string) (string, error) {
 	keyPath := filepath.Join(appDir, fileName)
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		value = strings.TrimSpace(string(raw))
-		_ = keyring.Set(keyringService, keyringUser, value)
+		if keyring.Set(keyringService, keyringUser, value) == nil {
+			dropFallback(keyPath)
+		}
 		return value, nil
 	}
 	if refuseKeyRegen(err, runtimeGOOS) {
@@ -407,13 +405,25 @@ func readSecret(appDir, keyringUser, fileName string) (string, error) {
 }
 
 // writeSecret is the shared body of the keychain-first writers.
+//
+// Once the keychain holds the value, the 0600 fallback file is removed. The
+// readers treat an empty keychain value as "not stored" and fall through to
+// that file, so a file left over from a time the keychain refused a write
+// would bring an old secret back after it was cleared (repointing at a new
+// server would keep sending the old server's worker key).
 func writeSecret(appDir, keyringUser, fileName, value string) error {
+	keyPath := filepath.Join(appDir, fileName)
 	if err := keyring.Set(keyringService, keyringUser, value); err != nil {
-		if err := os.WriteFile(filepath.Join(appDir, fileName), []byte(value), 0o600); err != nil {
-			return err
-		}
+		return os.WriteFile(keyPath, []byte(value), 0o600)
 	}
+	dropFallback(keyPath)
 	return nil
+}
+
+// dropFallback removes a 0600 fallback file once the keychain holds its value.
+// Best effort: a file that cannot be removed only leaves the old behaviour.
+func dropFallback(keyPath string) {
+	_ = os.Remove(keyPath)
 }
 
 func appDataDir() (string, error) {
