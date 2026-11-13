@@ -2,7 +2,7 @@
 
 > Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
 
-CashPilot bundles a catalog of 39 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
+CashPilot bundles a catalog of 42 active passive-income services across multiple categories (the catalog also carries 10 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
 
 ## Before you start: how bandwidth-sharing works
 
