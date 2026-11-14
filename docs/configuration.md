@@ -52,7 +52,8 @@ A proxied copy's tunnel container is never named as exposed. Its own firewall dr
 
 Limits:
 
-- Host-networked services (Mysterium) are not on any bridge, so the fence does not cover them. Mysterium's catalog entry starts the node with `--firewall.protected.networks` for the same ranges, which blocks its VPN customers from them.
+- Mysterium's container runs only behind the fence. With isolation off, on Podman or with Windows containers, its deploy and start are refused. Docker does not restart it on its own: the app starts it after it has applied the fence.
+- A native (no-Docker) Mysterium node is not on any bridge, so the fence does not cover it. The app starts it with `--firewall.protected.networks` for the same ranges. On Windows it also runs with `--userspace` and a Windows Firewall rule.
 - Published ports keep working: replies to inbound connections are allowed.
 - A proxied copy's tunnel joins the fenced network too, so a SOCKS5 or HTTP proxy at a LAN or tailnet address cannot be reached. A tunnel created before v0.39.1 stays on the default bridge until its copy is deployed again, so until then such a proxy is still reachable. Inside the tunnel, a SOCKS5 or HTTP proxy still gives the earner whatever that proxy can reach ([proxied copies](proxies.md#lan-isolation)).
 - Most home routers send a connection to their own public address back into the LAN (NAT loopback), so the table also drops this computer's public IPv4. The app reads it from api.ipify.org once an hour, every five minutes until the first answer, and keeps the last address when a lookup fails. Until the first lookup succeeds after a start, a port your router forwards into the LAN is reachable through that address.

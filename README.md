@@ -20,7 +20,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 
 1.0 is the first stable release, after about 130 releases since May 2026. Nothing breaks on upgrade. The highlights:
 
-- **Earners can't reach your LAN.** On a new install, bridge-networked earners run on a fenced network that drops private ranges, tailnets, cloud metadata, this computer and its public IP. If the fence can't be written, the deploy is refused, and the app rewrites it every five minutes. Upgraded installs turn it on with one button. Not covered: Podman, host-networked services such as Mysterium, a second public IP, the minutes before the first public-IP lookup, and the gap after a firewall reload until the next rewrite ([limits](docs/configuration.md#lan-isolation)).
+- **Earners can't reach your LAN.** On a new install, bridge-networked earners run on a fenced network that drops private ranges, tailnets, cloud metadata, this computer and its public IP. If the fence can't be written, the deploy is refused, and the app rewrites it every five minutes. Upgraded installs turn it on with one button. Mysterium's container runs only behind the fence, and its deploy is refused where the fence can't be applied. Not covered: Podman, a native (no-Docker) Mysterium node, a second public IP, the minutes before the first public-IP lookup, and the gap after a firewall reload until the next rewrite ([limits](docs/configuration.md#lan-isolation)).
 - **Earn on more IPs.** Run extra copies of a service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy. If the proxy dies the copy stops. It never falls back to your IP.
 - **Your node identities are safe.** Removing a service keeps its data, an unrecoverable volume is never deleted without a separate yes, and encrypted backups take one click.
 - **41 graded services**, vendored from the web catalog, with a check before deploy that says what would stop a service earning here.
@@ -38,7 +38,7 @@ Full list, upgrade notes and known limits: [What's new in 1.0](docs/whats-new-1.
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
 - **Custom services** -- Run any image from Docker Hub or another registry that the catalog does not list, with the same restrictions as catalog services ([docs](docs/custom-services.md))
 - **Proxied copies** -- Run extra copies of a deployed service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy, so one computer earns on several IPs; a dead proxy stops the copy instead of leaking ([docs](docs/proxies.md))
-- **LAN isolation** -- New installs fence bridge-networked container earners (not host-networked ones such as Mysterium) off your LAN, this computer, a tailnet and cloud metadata; an upgraded install turns it on with one button ([docs](docs/configuration.md#lan-isolation))
+- **LAN isolation** -- New installs fence bridge-networked container earners, Mysterium's container included, off your LAN, this computer, a tailnet and cloud metadata; an upgraded install turns it on with one button ([docs](docs/configuration.md#lan-isolation))
 - **Provider grades** -- Every catalog provider gets a letter grade from the same published criteria as the web app, with its cons and their sources ([how we grade](https://geiserx.github.io/CashPilot/ratings/))
 - **Import from another tool** -- Bring service logins over from money4band, CashFactory or InternetIncome after a dry run ([docs](docs/migrate/money4band.md))
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
