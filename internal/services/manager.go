@@ -411,6 +411,10 @@ func (m *Manager) Start(ctx context.Context, slug string) error {
 	if id, ok := m.Route(slug); ok {
 		return m.StartProxied(ctx, slug, id)
 	}
+	if err := m.startAllowed(slug); err != nil {
+		m.store.RecordEvent(slug, "start_error", err.Error())
+		return err
+	}
 	if err := m.providerForSlug(slug).Start(ctx, slug); err != nil {
 		m.store.RecordEvent(slug, "start_error", err.Error())
 		return err
@@ -429,6 +433,10 @@ func (m *Manager) Restart(ctx context.Context, slug string) error {
 			return err
 		}
 		return m.StartProxied(ctx, slug, id)
+	}
+	if err := m.startAllowed(slug); err != nil {
+		m.store.RecordEvent(slug, "restart_error", err.Error())
+		return err
 	}
 	if err := m.providerForSlug(slug).Restart(ctx, slug, m.stopTimeout(slug)); err != nil {
 		m.store.RecordEvent(slug, "restart_error", err.Error())

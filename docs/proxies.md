@@ -43,8 +43,13 @@ hide it from the provider's website, your earnings login or a referral page
 you open in the browser: those come from wherever they run.
 
 Start the app with `CASHPILOT_PROXIED_ONLY=true` in its environment and it
-refuses every service that does not run through a proxy. The app itself cannot
-change this setting.
+refuses every service that does not run through a proxy: a deploy, and a Start
+or Restart of a service that runs from this computer's own IP. A service that
+was already running that way is stopped when the app starts and checked again
+every 30 seconds; Docker would otherwise start it after each reboot. Until the
+app is up after a reboot it can run for a moment, so remove such services (or
+deploy them again with a route) rather than leave them stopped. The app itself
+cannot change this setting.
 
 ## What a proxy can be
 

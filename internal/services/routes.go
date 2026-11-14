@@ -69,6 +69,61 @@ func (m *Manager) directAllowed(svc catalog.Service, slug string, leaveRoute boo
 	return id, routed, nil
 }
 
+// startAllowed is the deploy's rule (directAllowed) for a Start or Restart of a
+// container that already exists on this machine's own network: one made before
+// CASHPILOT_PROXIED_ONLY was set, or before the service was routed, is held to it
+// all the same. Leaving a route takes a deploy, so a start never does.
+func (m *Manager) startAllowed(slug string) error {
+	svc, _ := m.catalog.Get(slug)
+	_, _, err := m.directAllowed(svc, slug, false)
+	return err
+}
+
+// HoldDirect stops every service running from this machine's own IP when
+// CASHPILOT_PROXIED_ONLY is set. A deploy, a Start and a Restart refuse one
+// already, but one deployed before the setting keeps running, and Docker starts it
+// again after a reboot (restart policy unless-stopped). The app runs this at its
+// start and every runtime.FenceGuard. A stop counts as the user's for Docker and for
+// the LAN fence's guard, so neither brings it back. It returns the slugs it stopped,
+// with "-N" for copy N.
+func (m *Manager) HoldDirect(ctx context.Context) []string {
+	if !ProxiedOnly() {
+		return nil
+	}
+	units, err := m.List(ctx)
+	if err != nil {
+		return nil
+	}
+	var stopped []string
+	for _, u := range units {
+		if u.Status != "running" {
+			continue
+		}
+		why := fmt.Sprintf("%s is set, so nothing runs from this computer's own IP", ProxiedOnlyEnv)
+		var err error
+		name := u.Slug
+		if u.Instance > 1 {
+			name = fmt.Sprintf("%s-%d", u.Slug, u.Instance)
+			err = m.StopCopy(ctx, u.Slug, u.Instance)
+		} else {
+			err = m.providerForSlug(u.Slug).Stop(ctx, u.Slug, m.stopTimeout(u.Slug))
+			if err == nil {
+				if dep, ok, derr := m.store.GetDeployment(u.Slug); derr == nil && ok {
+					dep.Status = "stopped"
+					_ = m.store.UpsertDeployment(dep)
+				}
+			}
+		}
+		if err != nil {
+			m.store.RecordEvent(u.Slug, "stop_error", err.Error())
+			continue
+		}
+		m.store.RecordEvent(u.Slug, "stopped", why)
+		stopped = append(stopped, name)
+	}
+	return stopped
+}
+
 // Route returns the proxy slug is routed through and whether it runs as that route:
 // routed, with a copy through that proxy and no container of its own on this machine.
 func (m *Manager) Route(slug string) (int64, bool) {

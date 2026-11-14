@@ -180,3 +180,94 @@ func TestTheButtonsOfARoutedServiceReachItsCopy(t *testing.T) {
 		t.Fatal("a removed routed service no longer runs as its route")
 	}
 }
+
+// A container that already exists on this machine's own network: Start, Restart and
+// CASHPILOT_PROXIED_ONLY set after it was made.
+
+func TestProxiedOnlyRefusesStartAndRestartOfADirectService(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	t.Setenv(ProxiedOnlyEnv, "true")
+	p.startErr = errors.New("the runtime was asked to start it")
+	ctx := context.Background()
+	for name, act := range map[string]func(context.Context, string) error{"start": m.Start, "restart": m.Restart} {
+		var re *RouteError
+		if err := act(ctx, "example"); !errors.As(err, &re) || re.Code != "proxied_only" {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if len(p.restartTimeouts) != 0 {
+		t.Fatal("the runtime was asked to restart it")
+	}
+}
+
+func TestARoutedServiceIsNotStartedFromThisMachinesOwnIP(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	if _, _, err := st.SetRoute("example", 1); err != nil {
+		t.Fatal(err)
+	}
+	p.startErr = errors.New("the runtime was asked to start it")
+	if err := m.Start(context.Background(), "example"); !IsRouteLocked(err) {
+		t.Fatalf("start: %v", err)
+	}
+	if err := m.Restart(context.Background(), "example"); !IsRouteLocked(err) || len(p.restartTimeouts) != 0 {
+		t.Fatalf("restart: %v %v", err, p.restartTimeouts)
+	}
+}
+
+func TestADirectServiceStartsOnAnOrdinaryMachine(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	if err := m.Start(context.Background(), "example"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Restart(context.Background(), "example"); err != nil || len(p.restartTimeouts) != 1 {
+		t.Fatalf("restart: %v %v", err, p.restartTimeouts)
+	}
+}
+
+func TestProxiedOnlyRefusesStartOfACopy(t *testing.T) {
+	t.Setenv(ProxiedOnlyEnv, "true")
+	fake := newCopyFake()
+	m := NewManager(fake, newScalingCatalog(t), newTestStore(t))
+	var re *RouteError
+	if err := m.StartCopy(context.Background(), "scalable", 2); !errors.As(err, &re) || re.Code != "proxied_only" {
+		t.Fatalf("start copy: %v", err)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("the runtime was asked: %v", fake.calls)
+	}
+}
+
+func TestProxiedOnlyStopsWhatAlreadyRuns(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	p.listResult = []runtime.ContainerInfo{
+		{Slug: "example", Name: "cashpilot-example", Status: "running", Instance: 1},
+		{Slug: "other", Name: "cashpilot-other", Status: "exited", Instance: 1},
+	}
+	if got := m.HoldDirect(context.Background()); got != nil || len(p.stopTimeouts) != 0 {
+		t.Fatalf("without the setting nothing stops: %v %v", got, p.stopTimeouts)
+	}
+	t.Setenv(ProxiedOnlyEnv, "true")
+	if got := m.HoldDirect(context.Background()); strings.Join(got, ",") != "example" || len(p.stopTimeouts) != 1 {
+		t.Fatalf("the running direct service stops, the stopped one is left: %v %v", got, p.stopTimeouts)
+	}
+	if dep, ok, _ := st.GetDeployment("example"); !ok || dep.Status != "stopped" {
+		t.Fatalf("its record says stopped: %+v", dep)
+	}
+}
+
+func TestProxiedOnlyStopsARunningCopy(t *testing.T) {
+	t.Setenv(ProxiedOnlyEnv, "true")
+	fake := newCopyFake()
+	fake.listResult = []runtime.ContainerInfo{{Slug: "scalable", Status: "running", Instance: 2}}
+	m := NewManager(fake, newScalingCatalog(t), newTestStore(t))
+	if got := m.HoldDirect(context.Background()); strings.Join(got, ",") != "scalable-2" {
+		t.Fatalf("stopped %v", got)
+	}
+	if strings.Join(fake.calls, ",") != "stop 2" {
+		t.Fatalf("calls %v", fake.calls)
+	}
+}

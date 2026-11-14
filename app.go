@@ -279,6 +279,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// reboot or a firewall reload leaves the earners offline only briefly, never on
 	// the LAN.
 	go func() {
+		// First: on a CASHPILOT_PROXIED_ONLY machine every second a direct earner
+		// runs after a reboot is traffic from its own IP.
+		a.services.HoldDirect(ctx)
 		// A deploy the app did not finish may have left an earner set aside.
 		docker.RecoverSetAside(ctx)
 		a.runFence(ctx)
@@ -301,6 +304,7 @@ func (a *App) runFence(ctx context.Context) {
 		case <-ticker.C:
 			a.fence.ReconcileFence(ctx)
 		case <-guard.C:
+			a.services.HoldDirect(ctx)
 			a.fence.GuardFenceGated(ctx)
 		}
 	}
