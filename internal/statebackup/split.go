@@ -8,22 +8,51 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 )
+
+// MaxArchiveBytes is the most file data a restore unpacks. An export never reads
+// more than MaxStateBytes, tar headers included, so every bundle Desktop made
+// fits. The web caps its own exports at 64 MB, so its bundles fit too.
+const MaxArchiveBytes = MaxStateBytes
+
+// MaxArchiveEntries is the most entries a restore accepts. An identity, keystore
+// or wallet folder holds tens of files, a relay folder a few hundred. Past this it
+// is a data folder, which belongs in a disk-level backup. Same number as the web.
+const MaxArchiveEntries = 20_000
+
+// paxFields are the only PAX records a restore accepts. The tar reader turns each
+// into a Header field (name, link, size, owner, times) and the entry is rebuilt
+// from those fields. Anything else is refused: SCHILY.xattr.* (file capabilities,
+// SELinux labels), ACLs, GNU.sparse.*, vendor records. Docker applies every
+// SCHILY.xattr.* record it extracts, so passing one through would hand a bundle's
+// author a file capability on the restored volume. Same list as the web.
+var paxFields = map[string]bool{
+	"path": true, "linkpath": true, "size": true, "uid": true, "gid": true, "uname": true,
+	"gname": true, "mtime": true, "atime": true, "ctime": true, "hdrcharset": true,
+}
 
 // SplitArchives turns a decrypted payload into one tar per backed-up mount.
 //
 // The payload is Docker's archive of each critical mount, one after another, so
 // each archive's entries sit under the mount's last path component
 // (/var/lib/mysterium-node becomes mysterium-node/...). They are regrouped by that
-// name. Owners, modes and times are kept, which is what `docker cp` needs to put
-// the files back the way the service expects.
+// name.
+//
+// Every entry is rebuilt from a short list of fields: name, type, permission bits,
+// owner ids, modification time, size and link target. Owners, modes and times are
+// what `docker cp` and `tar -x` need to put the files back the way the service
+// expects; nothing else from the input reaches the output.
 //
 // The archives get extracted as root into a volume, and in recipient mode anyone
 // holding the public key can build a bundle that opens cleanly. So every entry is
-// checked on its own and one unsafe entry fails the whole restore: an absolute
-// name, "..", a link that points out of its folder, a path through a link, a device
-// or a pipe. Setuid and setgid bits are dropped. Same rules as the web's
-// split_archives.
+// checked on its own and one refused entry fails the whole restore, with an error
+// that names the rule: an absolute name, "..", a link that points out of its
+// folder, a path through a link, a path given twice, a device or pipe, a sparse
+// file, a PAX global header, or any extended record such as a file capability.
+// Setuid, setgid and sticky bits are dropped. More than MaxArchiveBytes of file
+// data or MaxArchiveEntries entries is refused before the data is read. Same rules
+// as the web's split_archives.
 func SplitArchives(payload []byte) (map[string][]byte, error) {
 	type entry struct {
 		hdr  *tar.Header
@@ -32,42 +61,62 @@ func SplitArchives(payload []byte) (map[string][]byte, error) {
 	groups := map[string][]entry{}
 	var order []string
 	links := map[string]bool{}
+	files := map[string]bool{}
+	seen := map[string]bool{}
+	count := 0
+	var total int64
 
 	err := eachMember(payload, func(hdr *tar.Header, body io.Reader) error {
+		count++
+		if count > MaxArchiveEntries {
+			return fail("the backup holds more than %d entries and was not restored (entry cap); that is a data folder, not an identity: back it up at the disk level", MaxArchiveEntries)
+		}
 		name := strings.TrimPrefix(hdr.Name, "./")
-		if why := unsafeMember(hdr, name, links); why != "" {
+		if why := unsafeMember(hdr, name, links, files, seen); why != "" {
 			return fail("the backup holds an unsafe entry and was not restored: %s", why)
 		}
 		name = strings.Join(cleanParts(name), "/")
-		if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
-			links[name] = true
+		seen[name] = true
+		out := &tar.Header{
+			Name:    name,
+			Mode:    hdr.Mode & 0o777,
+			Uid:     hdr.Uid,
+			Gid:     hdr.Gid,
+			ModTime: hdr.ModTime.Truncate(time.Second),
+			Format:  tar.FormatPAX,
 		}
-		out := *hdr
-		out.Name = name
-		out.Mode &= 0o1777
-		out.Format = tar.FormatPAX
-		out.PAXRecords = nil
 		var data []byte
 		switch hdr.Typeflag {
-		case tar.TypeReg, tar.TypeCont, tar.TypeGNUSparse:
+		case tar.TypeReg, tar.TypeCont:
+			total += hdr.Size
+			if total > MaxArchiveBytes {
+				return fail("the backup unpacks to more than %d MB and was not restored (size cap); no export is that large", MaxArchiveBytes>>20)
+			}
 			b, err := io.ReadAll(body)
 			if err != nil {
-				return err
+				return fail("the backup's archive is damaged: %v", err)
 			}
 			data = b
 			out.Typeflag = tar.TypeReg
 			out.Size = int64(len(b))
+			files[name] = true
 		case tar.TypeDir:
+			out.Typeflag = tar.TypeDir
 			out.Name = name + "/"
-			out.Size = 0
-		default:
-			out.Size = 0
+		case tar.TypeSymlink:
+			out.Typeflag = tar.TypeSymlink
+			out.Linkname = hdr.Linkname
+			links[name] = true
+		case tar.TypeLink:
+			out.Typeflag = tar.TypeLink
+			out.Linkname = strings.Join(cleanParts(hdr.Linkname), "/")
+			links[name] = true
 		}
 		top := strings.SplitN(name, "/", 2)[0]
 		if _, ok := groups[top]; !ok {
 			order = append(order, top)
 		}
-		groups[top] = append(groups[top], entry{&out, data})
+		groups[top] = append(groups[top], entry{out, data})
 		return nil
 	})
 	if err != nil {
@@ -145,9 +194,40 @@ func cleanParts(name string) []string {
 	return parts
 }
 
-// unsafeMember says why an entry could write outside its own folder on restore,
-// or "" when it cannot. links holds the (cleaned) names of links seen so far.
-func unsafeMember(hdr *tar.Header, name string, links map[string]bool) string {
+// unsafeMember says which rule refuses an entry, or "" when it may be restored.
+// links, files and seen hold the cleaned names of the links, regular files and all
+// entries read so far. A hard link must point at a regular file that came earlier
+// in the same folder.
+func unsafeMember(hdr *tar.Header, name string, links, files, seen map[string]bool) string {
+	if hdr.Typeflag == tar.TypeXGlobalHeader {
+		return "the archive carries a PAX global header (refused: it would apply its records to every entry after it)"
+	}
+	sparse := hdr.Typeflag == tar.TypeGNUSparse
+	var extra []string
+	for k := range hdr.PAXRecords {
+		if strings.HasPrefix(k, "GNU.sparse.") {
+			sparse = true
+		}
+		if !paxFields[k] {
+			extra = append(extra, k)
+		}
+	}
+	if sparse {
+		return fmt.Sprintf("%q is a sparse file (refused: a few bytes in the file unpack to gigabytes)", name)
+	}
+	if len(extra) > 0 {
+		sort.Strings(extra)
+		key := extra[0]
+		if len(key) > 80 {
+			key = key[:80]
+		}
+		return fmt.Sprintf("%q carries the extended record %q (refused: only names, sizes, owners, modes and times are restored, never extended attributes such as file capabilities)", name, key)
+	}
+	switch hdr.Typeflag {
+	case tar.TypeReg, tar.TypeCont, tar.TypeDir, tar.TypeSymlink, tar.TypeLink:
+	default:
+		return fmt.Sprintf("%q is a device, pipe or other special entry, not a file, folder or link", name)
+	}
 	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, `\`) {
 		return fmt.Sprintf("%q is an absolute path", name)
 	}
@@ -160,26 +240,21 @@ func unsafeMember(hdr *tar.Header, name string, links map[string]bool) string {
 			return fmt.Sprintf("%q is written through a link", name)
 		}
 	}
-	switch hdr.Typeflag {
-	case tar.TypeSymlink, tar.TypeLink:
+	if seen[strings.Join(parts, "/")] {
+		return fmt.Sprintf("%q appears twice (each path may appear once)", name)
+	}
+	if hdr.Typeflag == tar.TypeSymlink || hdr.Typeflag == tar.TypeLink {
 		target := hdr.Linkname
 		tparts := strings.Split(target, "/")
 		if target == "" || strings.HasPrefix(target, "/") || strings.HasPrefix(target, `\`) || contains(tparts, "..") {
 			return fmt.Sprintf("%q links to %q, outside its folder", name, target)
 		}
 		if hdr.Typeflag == tar.TypeLink {
-			if tparts[0] != parts[0] {
-				return fmt.Sprintf("%q links to %q, outside its folder", name, target)
-			}
-			for d := 1; d < len(tparts); d++ {
-				if links[strings.Join(tparts[:d], "/")] {
-					return fmt.Sprintf("%q links to %q, outside its folder", name, target)
-				}
+			clean := cleanParts(target)
+			if len(clean) == 0 || !files[strings.Join(clean, "/")] || clean[0] != parts[0] {
+				return fmt.Sprintf("%q hard-links to %q, which is not a file earlier in the same folder", name, target)
 			}
 		}
-	case tar.TypeReg, tar.TypeCont, tar.TypeGNUSparse, tar.TypeDir:
-	default:
-		return fmt.Sprintf("%q is a device or pipe, not a file or folder", name)
 	}
 	return ""
 }
