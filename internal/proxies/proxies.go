@@ -107,7 +107,10 @@ func IsInputError(err error) bool {
 //
 // On an edit (existing non-nil) a secret left blank keeps the stored value, because
 // the form never shows secrets back; "clear_<field>" set to "true" removes it. Any
-// other field left out keeps its stored value too.
+// other field left out keeps its stored value too. A stored secret is kept only
+// while the proxy still points at the same place (host and port, or the Tailscale
+// login server): when that changes the owner must type it again or clear it, so an
+// edit never sends a stored credential to a server it was not entered for.
 func Clean(values map[string]string, existing *Definition) (Definition, error) {
 	var base Definition
 	if existing != nil {
@@ -128,6 +131,7 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 	if !contains(Kinds, out.Kind) {
 		return Definition{}, inputErr("The type must be socks5, http or tailscale")
 	}
+	kept := map[string]bool{}
 	secret := func(field, stored string) string {
 		if isTrue(values["clear_"+field]) {
 			return ""
@@ -135,6 +139,7 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 		if v, ok := values[field]; ok && v != "" {
 			return v
 		}
+		kept[field] = stored != ""
 		return stored
 	}
 	out.Username = secret("username", base.Username)
@@ -168,6 +173,11 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 			return Definition{}, inputErr("The port must be between 1 and 65535")
 		}
 		out.AuthKey = ""
+	}
+	if existing != nil {
+		if err := refuseRetargetedSecret(*existing, out, kept); err != nil {
+			return Definition{}, err
+		}
 	}
 
 	out.Rotating = base.Rotating
@@ -213,6 +223,42 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 		out.ResetDay = &day
 	}
 	return out, nil
+}
+
+// target is where a proxy's secrets are sent: the SOCKS/HTTP server, or the
+// Tailscale control server. The exit node is not part of it: the auth key goes to
+// the control server whatever exit node is picked. socks5 and http on the same host
+// and port are the same server.
+func target(d Definition) string {
+	if d.Kind == "tailscale" {
+		return "tailscale|" + d.LoginServer
+	}
+	return "net|" + strings.ToLower(d.Host) + "|" + strconv.Itoa(d.Port)
+}
+
+// refuseRetargetedSecret refuses an edit that would carry a stored secret to a new
+// server.
+func refuseRetargetedSecret(existing, out Definition, kept map[string]bool) error {
+	// Only the fields the new kind uses: a kind change already wiped the rest.
+	var carried []string
+	if kept["username"] && out.Username != "" {
+		carried = append(carried, "user")
+	}
+	if kept["password"] && out.Password != "" {
+		carried = append(carried, "password")
+	}
+	if kept["auth_key"] && out.AuthKey != "" {
+		carried = append(carried, "auth key")
+	}
+	if len(carried) == 0 || target(existing) == target(out) {
+		return nil
+	}
+	where, clear := "host or port", ", or tick Remove to save without it"
+	if out.Kind == "tailscale" {
+		where, clear = "login server", ""
+	}
+	return inputErr("The %s changed, so type the %s again%s. CashPilot never sends a stored secret to a server it was not entered for.",
+		where, strings.Join(carried, " and "), clear)
 }
 
 // SecretValues are the secret values of a definition, for redacting messages.

@@ -54,6 +54,7 @@ const pwBox = editor.match(/<input data-proxy-field="password"[^>]*>/)?.[0] || "
 check("the password box is a password box", pwBox.includes('type="password"'), pwBox);
 check("the password box is empty", pwBox.includes('value=""'), pwBox);
 check("a stored password says blank keeps it", pwBox.includes("leave blank to keep it"), pwBox);
+check("a stored password says a new host or port needs it again", pwBox.includes("unless the host or port changes"), pwBox);
 check("a stored password can be removed", editor.includes('data-proxy-field="clear_password"'));
 check("an auth key that is not stored offers no remove box", !editor.includes('data-proxy-field="clear_auth_key"'));
 check("the card says which secrets are stored", card.includes("password stored") && card.includes("username stored"), card);

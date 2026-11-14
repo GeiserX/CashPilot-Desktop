@@ -143,6 +143,13 @@ func TestProxySecretsAreEncryptedAndNeverShown(t *testing.T) {
 	if err != nil || !view.Secrets["password"] || view.Name != "Gate 2" {
 		t.Fatalf("edit: %+v %v", view, err)
 	}
+	// A new host with blank boxes is refused, and nothing is saved.
+	if _, err := m.SaveProxy(context.Background(), view.ID, map[string]string{"host": "evil.example.org", "password": ""}); err == nil || !proxies.IsInputError(err) {
+		t.Fatalf("moving a stored password to a new host must be refused: %v", err)
+	}
+	if after, err := m.view(view.ID); err != nil || after.Host != "gate.example.net" || !after.Secrets["password"] {
+		t.Fatalf("a refused edit changes nothing: %+v %v", after, err)
+	}
 	_ = st.Close()
 	db, err := sql.Open("sqlite", filepath.Join(dir, "cashpilot-desktop.db"))
 	if err != nil {
