@@ -56,11 +56,12 @@ type Manager struct {
 	// proxy is the state of proxied copies between ticks (proxies.go).
 	proxy proxyState
 
-	// deployLocks holds one lock per slug, taken for the whole of DeployWith and
-	// DeployRouted (lockDeploy): each reads the service's route and deployment, then
-	// writes them after a pull or a tunnel start, so two deploys of one service in
-	// flight could each decide on what the other is about to change. Remove takes it
-	// too, so a removal never lands between a deploy's record and its start.
+	// deployLocks holds one lock per slug, taken for the whole of DeployWith,
+	// DeployRouted and DeployProxied (lockDeploy): each reads the service's route and
+	// deployment, then writes them after a pull or a tunnel start, so two deploys of
+	// one service in flight could each decide on what the other is about to change.
+	// Remove and RemoveProxied take it too, so a removal never lands between a
+	// deploy's record and its start.
 	deployLocksMu sync.Mutex
 	deployLocks   map[string]*sync.Mutex
 }
@@ -345,7 +346,7 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	if routed {
 		// The routed copy runs the same device ids, so it goes before the service
 		// runs from this machine's own IP; a copy that cannot go stops the switch.
-		if err := m.RemoveProxied(ctx, slug, leaving); err != nil {
+		if err := m.removeProxied(ctx, slug, leaving); err != nil {
 			return store.Deployment{}, fmt.Errorf("the copy of %s through proxy %d could not be removed first, so nothing was deployed: %w", svc.Name, leaving, err)
 		}
 	}
@@ -522,7 +523,7 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 	if id, ok := m.Route(slug); ok {
 		// No container of its own and no volumes: its copy is the service. The
 		// route stays recorded, so a later deploy from this machine's IP still asks.
-		if err := m.RemoveProxied(ctx, slug, id); err != nil {
+		if err := m.removeProxied(ctx, slug, id); err != nil {
 			m.store.RecordEvent(slug, "remove_error", err.Error())
 			return err
 		}

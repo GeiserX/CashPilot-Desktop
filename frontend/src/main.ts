@@ -81,7 +81,7 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
-import { routeChoice, routedDeployText, runRouteDeploy } from "./render/route";
+import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -101,7 +101,7 @@ let wizardCategories: string[] = [];
 let wizardSelected: string[] = [];
 // The Route box's pick per slug (a proxy id, null for this computer's own IP), kept so
 // a redraw of the wizard does not put an unsaved proxy choice back to Direct. Cleared
-// when the wizard opens or closes.
+// when the wizard opens or closes, and on a tab or Add service click (wizardAfterNav).
 let wizardRouteDrafts: Record<string, number | null> = {};
 let catalogFilter = "all";
 let catalogSearch = "";
@@ -699,9 +699,7 @@ function wireShellNav() {
       const next = button.dataset.view;
       if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import") {
         activeView = next;
-        if (next === "wizard") {
-          wizardStep = 1;
-        }
+        ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav(next, wizardStep));
         resetScrollAfterRender = true;
         render();
       }

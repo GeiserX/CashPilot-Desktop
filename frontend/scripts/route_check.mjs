@@ -12,10 +12,11 @@
 //   8. A REFUSED OR DECLINED DEPLOY SAVES NO CREDENTIALS; THE CONFIRMATION COMES FIRST.
 //   9. A CHOICE MADE IN THE BOX OUTLIVES A REDRAW OF THE CARD, A PROXY AND DIRECT ALIKE.
 //  10. A ROUTED DEPLOY SHOWS THE DEVICE-LINK STEP, AS A DIRECT ONE DOES.
+//  11. A PICK NEVER OUTLIVES ITS WIZARD VISIT: LEAVING BY A TAB OR COMING BACK DROPS IT.
 //
 //   node scripts/route_check.mjs      # against ./.harness-build
 
-import { leavesRoute, routeChoice, routeChoiceSection, routedDeployText, runRouteDeploy } from "../.harness-build/render/route.js";
+import { leavesRoute, routeChoice, routeChoiceSection, routedDeployText, runRouteDeploy, wizardAfterNav } from "../.harness-build/render/route.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 
 let failures = 0;
@@ -123,6 +124,16 @@ for (const [image, instances] of [["ghcr.io/me/honeygain:1", null], [null, 3]]) 
   check("RULE 10: the routed result says where it leaves", text.startsWith("Deployed through the proxy. It leaves from 203.0.113.7 (NL)."), text);
   check("RULE 10: the device-link step follows", text.endsWith(`\n\n${link}`) && text.includes("Shared exit."), text);
   check("RULE 10: no step, no trailing gap", routedDeployText({ exitIp: "", country: "", warning: "" }, "") === "Deployed through the proxy.");
+}
+
+// A pick made in the wizard and left undeployed: the owner goes to the Dashboard by a tab
+// and later comes back by Add service. The box must show the recorded route again.
+{
+  const away = wizardAfterNav("dashboard", 3);
+  check("RULE 11: leaving by a tab drops the pick", Object.keys(away.drafts).length === 0, JSON.stringify(away));
+  const back = wizardAfterNav("wizard", 3);
+  check("RULE 11: coming back drops the pick and starts at step 1", Object.keys(back.drafts).length === 0 && back.step === 1, JSON.stringify(back));
+  check("RULE 11: the setup card then shows the recorded route", /<option value="3" selected>/.test(routeChoiceSection(honeygain, route, back.drafts.honeygain)));
 }
 
 if (failures) {

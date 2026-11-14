@@ -54,6 +54,16 @@ export function routeChoice(value: string | null | undefined): number | null {
 }
 
 /**
+ * The wizard after a click on a button that switches the page (data-view: the tabs and
+ * Add service). Each such click leaves the wizard or starts it again at its first step,
+ * so the Route box picks of the visit before are dropped: a pick never outlives the
+ * visit it was made in, and the next visit starts from the recorded route.
+ */
+export function wizardAfterNav(next: string, step: number): { step: number; drafts: Record<string, number | null> } {
+  return { step: next === "wizard" ? 1 : step, drafts: {} };
+}
+
+/**
  * Whether a deploy from this computer's own IP must first be confirmed by the owner:
  * the service was routed through a proxy here, running or not.
  */

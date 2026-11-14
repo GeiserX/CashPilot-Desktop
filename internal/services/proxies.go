@@ -352,8 +352,10 @@ func refuseNonDocker(svc catalog.Service, dep store.Deployment) error {
 
 // DeployProxied runs a copy of slug through proxy id. The service must already be
 // deployed here: the copy runs with its image and credentials, under its own device
-// names.
+// names. It holds the service's deploy lock, so a removal never lands between the
+// copy's record and its start.
 func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (ProxiedResult, error) {
+	defer m.lockDeploy(slug)()
 	_, s, err := m.loadProxy(id)
 	if err != nil {
 		return ProxiedResult{}, err
@@ -542,8 +544,15 @@ func (m *Manager) StartProxied(ctx context.Context, slug string, id int64) error
 	return nil
 }
 
-// RemoveProxied removes a proxied copy and its record.
+// RemoveProxied removes a proxied copy and its record. It holds the service's deploy
+// lock, so it never lands between a deploy's copy record and the copy's start.
 func (m *Manager) RemoveProxied(ctx context.Context, slug string, id int64) error {
+	defer m.lockDeploy(slug)()
+	return m.removeProxied(ctx, slug, id)
+}
+
+// removeProxied is RemoveProxied for a caller that already holds slug's deploy lock.
+func (m *Manager) removeProxied(ctx context.Context, slug string, id int64) error {
 	p, err := m.proxier()
 	if err != nil {
 		return err

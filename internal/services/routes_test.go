@@ -390,3 +390,76 @@ func TestARemoveWaitsForARoutedDeployInFlight(t *testing.T) {
 		t.Fatalf("the removal after the deploy takes the new copy and its record: running %v", p.running)
 	}
 }
+
+// The Remove button of a copy row on the Proxies page reaches RemoveProxied, not
+// Remove. It waits for a routed deploy in flight the same way, so the new copy never
+// runs with its record taken from under it.
+func TestARemovedCopyWaitsForARoutedDeployInFlight(t *testing.T) {
+	m, p, id := routedExample(t)
+	ctx := context.Background()
+	if _, err := m.DeployRouted(ctx, "example", map[string]string{"TOKEN": "tok"}, id); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	finishedEarly := false
+	p.deployFn = func(req runtime.ProxiedDeploy) (runtime.Exit, error) {
+		go func() { done <- m.RemoveProxied(ctx, "example", id) }()
+		select {
+		case err := <-done:
+			finishedEarly = true
+			done <- err
+		case <-time.After(200 * time.Millisecond):
+		}
+		p.running[key(req.Slug, req.ProxyID)] = true
+		return runtime.Exit{IP: "203.0.113.7", Country: "NL"}, nil
+	}
+	if _, err := m.DeployRouted(ctx, "example", map[string]string{"TOKEN": "tok"}, id); err != nil {
+		t.Fatal(err)
+	}
+	if finishedEarly {
+		t.Fatal("the copy's removal ran while the routed deploy was in flight")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Route("example"); ok || p.running[key("example", id)] {
+		t.Fatalf("the removal after the deploy takes the new copy and its record: running %v", p.running)
+	}
+}
+
+// A copy added on the Proxies page saves its record before it starts. Removing the
+// service in between would drop that record and leave the new copy running with none.
+func TestARemoveWaitsForACopyDeployInFlight(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, err := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	finishedEarly := false
+	p.deployFn = func(req runtime.ProxiedDeploy) (runtime.Exit, error) {
+		go func() { done <- m.Remove(ctx, "example", false, false) }()
+		select {
+		case err := <-done:
+			finishedEarly = true
+			done <- err
+		case <-time.After(200 * time.Millisecond):
+		}
+		p.running[key(req.Slug, req.ProxyID)] = true
+		return runtime.Exit{IP: "203.0.113.7", Country: "NL"}, nil
+	}
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	if finishedEarly {
+		t.Fatal("the removal ran while the copy's deploy was in flight")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if records, _ := st.ListProxiedCopies(view.ID); len(records) != 0 || len(p.allGone) != 1 {
+		t.Fatalf("the removal after the deploy takes the copy and its record: %+v %v", records, p.allGone)
+	}
+}
