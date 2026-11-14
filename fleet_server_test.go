@@ -16,14 +16,18 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/zalando/go-keyring"
 )
 
 // TestMain mocks the keyring so store.Open (via config.MasterKey) stays fully
 // in-memory and never touches the real OS keychain.
+// CASHPILOT_PROXIED_ONLY is cleared, so a shell that sets it cannot turn the
+// ordinary-machine tests red.
 func TestMain(m *testing.M) {
 	keyring.MockInit()
+	os.Unsetenv(services.ProxiedOnlyEnv)
 	os.Exit(m.Run())
 }
 

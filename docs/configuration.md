@@ -12,6 +12,8 @@ Most settings are on the **Settings** screen. The app stores them in `config.jso
 
 Set `CASHPILOT_DESKTOP_DATA_DIR` to use another directory. The SQLite database sits in `data/` inside it.
 
+Set `CASHPILOT_PROXIED_ONLY=true` to run services only through a proxy: the app then refuses any deploy, Start or Restart from this computer's own IP, and stops a service already running that way when it starts and every 30 seconds after. See [Route a service at deploy](proxies.md#route-a-service-at-deploy).
+
 ## Settings
 
 | Key in `config.json` | Default | What it does |

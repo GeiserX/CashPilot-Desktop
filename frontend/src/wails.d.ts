@@ -18,6 +18,10 @@ declare module "../wailsjs/go/main/App" {
   // catalog's, anything else runs that image instead. instances: null keeps the number
   // of copies the deployment already runs (1 for a new one).
   export function DeployService(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
+  // A service routed through a proxy from its first start, and the owner's confirmed
+  // switch of a routed service back to this machine's own IP.
+  export function DeployServiceRouted(slug: string, values: Record<string, string>, proxyId: number): Promise<ProxiedResult>;
+  export function DeployServiceLeavingRoute(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
   export function RestartService(slug: string): Promise<void>;
@@ -315,9 +319,25 @@ export interface AppState {
   drift: Record<string, string[]> | null;
   // The LAN fence's status; null before the first check.
   isolation: FenceStatus | null;
+  route: RouteState | null;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.
+export interface RouteProxy {
+  id: number;
+  name: string;
+  exitIp: string;
+  country: string;
+}
+
+export interface RouteState {
+  proxies: RouteProxy[] | null;
+  refusals: Record<string, string> | null;
+  recorded: Record<string, number> | null;
+  running: Record<string, number> | null;
+  proxiedOnly: boolean;
+}
+
 export interface ScalingLimit {
   max: number;
   reason: string;

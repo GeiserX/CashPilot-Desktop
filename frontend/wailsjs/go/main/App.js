@@ -50,6 +50,14 @@ export function DeployService(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['DeployService'](arg1, arg2, arg3, arg4);
 }
 
+export function DeployServiceLeavingRoute(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['DeployServiceLeavingRoute'](arg1, arg2, arg3, arg4);
+}
+
+export function DeployServiceRouted(arg1, arg2, arg3) {
+  return window['go']['main']['App']['DeployServiceRouted'](arg1, arg2, arg3);
+}
+
 export function EnableIsolation() {
   return window['go']['main']['App']['EnableIsolation']();
 }

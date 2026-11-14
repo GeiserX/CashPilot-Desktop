@@ -108,3 +108,18 @@ func TestACopyWhoseDeviceIDCannotBeDerivedIsRefused(t *testing.T) {
 		t.Fatalf("a missing required device id must refuse the copy, got %v", err)
 	}
 }
+
+// A service routed through a proxy from its first deploy is the service, not a copy:
+// it keeps the device the deploy registers, so no second (phantom) device appears.
+func TestARoutedServiceKeepsItsOwnDevice(t *testing.T) {
+	name := "cashpilot-box-" + proxyrackUUID[:8]
+	req := ProxiedDeploy{Slug: "proxyrack", ProxyID: 7, Service: proxyrackLike, Proxy: testSpec(), OwnIP: "192.0.2.1", Routed: true,
+		Env: map[string]string{"UUID": proxyrackUUID, "DEVICE_NAME": name, "API_KEY": "k"}}
+	opts, err := earnerCreate(req, "sidecar-id", "proxyrack/pop:1", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(opts.Config.Env, "UUID="+proxyrackUUID) || !slices.Contains(opts.Config.Env, "DEVICE_NAME="+name) {
+		t.Fatalf("a routed service must run the device its deploy registered: %v", opts.Config.Env)
+	}
+}

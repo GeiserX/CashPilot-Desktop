@@ -788,6 +788,15 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 const maxLogBytes = 8 << 20
 
 func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (string, error) {
+	return containerLogs(ctx, containerName(slug), lines)
+}
+
+// ProxiedLogs is Logs for the earner of slug's proxied copy through proxyID.
+func (p *DockerProvider) ProxiedLogs(ctx context.Context, slug string, proxyID int64, lines int) (string, error) {
+	return containerLogs(ctx, proxiedName(slug, proxyID), lines)
+}
+
+func containerLogs(ctx context.Context, name string, lines int) (string, error) {
 	cli, err := dockerClient()
 	if err != nil {
 		return "", err
@@ -796,7 +805,7 @@ func (p *DockerProvider) Logs(ctx context.Context, slug string, lines int) (stri
 	if lines <= 0 {
 		lines = 200
 	}
-	reader, err := cli.ContainerLogs(ctx, containerName(slug), client.ContainerLogsOptions{
+	reader, err := cli.ContainerLogs(ctx, name, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       fmt.Sprintf("%d", lines),
