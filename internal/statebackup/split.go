@@ -104,10 +104,11 @@ func SplitArchives(payload []byte) (map[string][]byte, error) {
 		var data []byte
 		switch hdr.Typeflag {
 		case tar.TypeReg, tar.TypeCont:
-			total += hdr.Size
-			if total > MaxArchiveBytes {
+			// Compared before the addition, so a huge declared size cannot wrap total.
+			if hdr.Size > MaxArchiveBytes-total {
 				return fail("the backup unpacks to more than %d MB and was not restored (size cap); no export is that large", MaxArchiveBytes>>20)
 			}
+			total += hdr.Size
 			b, err := io.ReadAll(body)
 			if err != nil {
 				return fail("the backup's archive is damaged: %v", err)

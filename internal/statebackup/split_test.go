@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -288,6 +289,20 @@ func TestSplitCaps(t *testing.T) {
 		_, err := SplitArchives(buf.Bytes())
 		if !errors.Is(err, ErrBackup) || !strings.Contains(err.Error(), "size cap") {
 			t.Fatalf("an oversized file was not refused by the size cap: %v", err)
+		}
+	})
+
+	t.Run("overflow", func(t *testing.T) {
+		// A one-byte file, then one that declares the largest int64: adding the two
+		// wraps the running total negative, which must still trip the cap.
+		var buf bytes.Buffer
+		w := tar.NewWriter(&buf)
+		_ = w.WriteHeader(&tar.Header{Name: "node/a", Typeflag: tar.TypeReg, Size: 1, Mode: 0o644})
+		_, _ = w.Write([]byte("x"))
+		_ = w.WriteHeader(&tar.Header{Name: "node/b", Typeflag: tar.TypeReg, Size: math.MaxInt64, Mode: 0o644})
+		_, err := SplitArchives(buf.Bytes())
+		if !errors.Is(err, ErrBackup) || !strings.Contains(err.Error(), "size cap") {
+			t.Fatalf("a size that wraps the total was not refused by the size cap: %v", err)
 		}
 	})
 }

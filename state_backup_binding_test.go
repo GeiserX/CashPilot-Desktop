@@ -1,7 +1,12 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -138,5 +143,66 @@ func TestExportRefusesBadSecretsBeforeAsking(t *testing.T) {
 	}
 	if c, _ := app.store.StateBackup("keeper"); c != nil {
 		t.Errorf("a dismissed export was recorded as a backup: %+v", c)
+	}
+}
+
+// stateStub is the Docker provider with a fixed state archive in place of the
+// daemon's.
+type stateStub struct {
+	*runtime.DockerProvider
+	payload []byte
+}
+
+func (s stateStub) StateFingerprint(context.Context, string, []string) (string, error) {
+	return "fp", nil
+}
+
+func (s stateStub) ReadState(context.Context, string, []string, int64) ([]byte, []string, error) {
+	return s.payload, []string{"/var/lib/keeper"}, nil
+}
+
+func dirsTar(t *testing.T, n int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	for i := 0; i < n; i++ {
+		if err := w.WriteHeader(&tar.Header{Name: fmt.Sprintf("keeper/%d/", i), Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// An export that restore would refuse (here: past the entry cap) is not saved and
+// not recorded as a backup; one that restore accepts is both.
+func TestExportRefusesWhatRestoreRefuses(t *testing.T) {
+	var dialogs int
+	app := backupApp(t, &dialogs)
+	dest := filepath.Join(t.TempDir(), "keeper.cpbackup")
+	app.saveDialog = func(wailsruntime.SaveDialogOptions) (string, error) { return dest, nil }
+	export := func(payload []byte) (string, error) {
+		app.services = services.NewManager(stateStub{runtime.NewDockerProvider(), payload}, app.catalog, app.store)
+		return app.ExportStateBackup("keeper", "correct horse battery", "correct horse battery", "")
+	}
+
+	if _, err := export(dirsTar(t, statebackup.MaxArchiveEntries+1)); err == nil || !strings.Contains(err.Error(), "entry cap") {
+		t.Fatalf("exported a backup restore refuses: %v", err)
+	}
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("the refused backup was written: %v", err)
+	}
+	if c, _ := app.store.StateBackup("keeper"); c != nil {
+		t.Fatalf("a refused export was recorded as a backup: %+v", c)
+	}
+
+	// Control: a restorable payload is saved and confirmed.
+	if path, err := export(dirsTar(t, 3)); err != nil || path != dest {
+		t.Fatalf("good payload: path %q, err %v", path, err)
+	}
+	if c, _ := app.store.StateBackup("keeper"); c == nil || c.Method != "export" {
+		t.Fatalf("the export was not recorded: %+v", c)
 	}
 }
