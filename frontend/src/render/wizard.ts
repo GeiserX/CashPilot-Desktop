@@ -17,13 +17,14 @@
 // backend's collector-field map, this machine's hostname and the earnings
 // breakdown the facts strip shows a balance from) and returns HTML.
 
-import type { CollectorField, ScalingLimit, Service, ServiceEarning } from "../wails";
+import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
 import { ratingBlock } from "./rating.js";
 import { imageChoiceSection } from "./image.js";
 import { instancesSection } from "./instances.js";
+import { routeChoiceSection } from "./route.js";
 import { renderCustomServiceCard } from "./custom.js";
 
 /**
@@ -38,6 +39,9 @@ import { renderCustomServiceCard } from "./custom.js";
  *
  * `scaling` is how many copies this machine may run (the Instances box; absent, no
  * box) and `instances` how many the deployment runs now.
+ *
+ * `route` is the Route box's state: the proxies the service can run through from its
+ * first start (absent: no box).
  */
 export function renderWizardServiceSetup(
   service: Service,
@@ -47,6 +51,7 @@ export function renderWizardServiceSetup(
   customImage?: string | null,
   scaling?: ScalingLimit | null,
   instances?: number | null,
+  route?: RouteState | null,
 ): string {
   // A custom service runs its saved definition: no credentials, no Image box.
   if (service.custom) return renderCustomServiceCard(service, scaling, instances);
@@ -81,6 +86,7 @@ export function renderWizardServiceSetup(
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
       ${instancesSection(service, scaling, instances)}
+      ${routeChoiceSection(service, route)}
       ${imageChoiceSection(service, customImage)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">

@@ -27,6 +27,8 @@ import {
   DeleteProxy,
   DeployProxiedCopy,
   DeployService,
+  DeployServiceLeavingRoute,
+  DeployServiceRouted,
   EnableIsolation,
   ExportCompose,
   ExportStateBackup,
@@ -79,6 +81,7 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
+import { leavesRoute, routeChoice } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -1864,7 +1867,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances)).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route)).join("")}
     </div>
   `;
 }
@@ -1897,6 +1900,12 @@ function readWizardImage(slug: string): string | null {
 function readWizardInstances(slug: string): number | null {
   const input = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
   return input ? instancesChoice(input.value, input.dataset.initial || "", input.disabled) : null;
+}
+
+// The Route box's answer: a proxy id, or null for this computer's own IP.
+function readWizardRoute(slug: string): number | null {
+  const select = document.querySelector<HTMLSelectElement>(`[data-form-slug="${slug}"] [data-wizard-route]`);
+  return select ? routeChoice(select.value) : null;
 }
 
 function closeWizard() {
@@ -1975,7 +1984,26 @@ async function runWizardAction(slug: string, action: string) {
       // A custom service has no credentials: it runs its saved definition.
       const custom = state?.services?.some((service) => service.slug === slug && service.custom);
       if (!custom) await SaveCredentials(slug, values);
-      const deployment = await DeployService(slug, values, readWizardImage(slug), readWizardInstances(slug));
+      const route = readWizardRoute(slug);
+      if (route !== null) {
+        const routed = await DeployServiceRouted(slug, values, route);
+        state = await GetAppState();
+        const where = routed.exitIp ? ` It leaves from ${routed.exitIp}${routed.country ? ` (${routed.country})` : ""}.` : "";
+        if (output) output.textContent = `Deployed through the proxy.${where}${routed.warning ? `\n\n${routed.warning}` : ""}`;
+        return;
+      }
+      let deployment;
+      if (leavesRoute(slug, state?.route)) {
+        // The service runs through a proxy here: from this computer's own IP, the
+        // provider sees that IP. Only the owner's yes switches it.
+        if (!confirm(`${slug} runs through a proxy on this computer. Running it from this computer's own IP shows that IP to the provider. Switch it?`)) {
+          if (output) output.textContent = "Nothing was deployed.";
+          return;
+        }
+        deployment = await DeployServiceLeavingRoute(slug, values, readWizardImage(slug), readWizardInstances(slug));
+      } else {
+        deployment = await DeployService(slug, values, readWizardImage(slug), readWizardInstances(slug));
+      }
       state = await GetAppState();
       // The box now holds what runs, so a second Deploy without an edit keeps it.
       const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);

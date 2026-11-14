@@ -1009,6 +1009,9 @@ func (s *Store) migrate() error {
 	if _, err = s.execWrite(proxiesDDL); err != nil {
 		return err
 	}
+	if _, err = s.execWrite(routesDDL); err != nil {
+		return err
+	}
 	if _, err = s.execWrite(pendingDeviceLinksDDL); err != nil {
 		return err
 	}

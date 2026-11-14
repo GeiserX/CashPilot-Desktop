@@ -354,7 +354,7 @@ func refuseNonDocker(svc catalog.Service, dep store.Deployment) error {
 // deployed here: the copy runs with its image and credentials, under its own device
 // names.
 func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (ProxiedResult, error) {
-	d, s, err := m.loadProxy(id)
+	_, s, err := m.loadProxy(id)
 	if err != nil {
 		return ProxiedResult{}, err
 	}
@@ -396,6 +396,12 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 			svc.Docker.ImageByArch = nil
 		}
 	}
+	return m.runProxied(ctx, slug, id, svc, credentials, false)
+}
+
+// runProxied starts slug through proxy id: a copy beside the service, or with routed
+// the service itself (DeployRouted), under its own device names.
+func (m *Manager) runProxied(ctx context.Context, slug string, id int64, svc catalog.Service, credentials map[string]string, routed bool) (ProxiedResult, error) {
 	if why := proxies.Refusal(svc); why != "" {
 		return ProxiedResult{}, errors.New(why)
 	}
@@ -411,7 +417,7 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 	// no record would run outside the cap and the delete guard, and with no row to
 	// stop it from.
 	m.proxy.proxyMu.Lock()
-	d, s, err = m.loadProxy(id)
+	d, s, err := m.loadProxy(id)
 	if err == nil && s.CappedAt != "" {
 		err = errors.New(orText(s.CapReason, "This proxy reached its traffic cap"))
 	}
@@ -431,7 +437,7 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 	}
 	m.store.RecordEvent(slug, "proxied_deploy_start", fmt.Sprintf("proxy %d", id))
 	exit, err := p.DeployProxied(ctx, runtime.ProxiedDeploy{
-		Slug: slug, ProxyID: id, Service: svc, Env: credentials, Proxy: specOf(d), OwnIP: ownIP,
+		Slug: slug, ProxyID: id, Service: svc, Env: credentials, Proxy: specOf(d), OwnIP: ownIP, Routed: routed,
 	})
 	if err != nil {
 		msg := maskSecrets(err.Error(), d)
