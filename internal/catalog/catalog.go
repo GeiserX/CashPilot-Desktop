@@ -429,9 +429,11 @@ type EnvVar struct {
 	// Identifier means the value names this device to the provider (a device name
 	// or id) without being a secret. The web app keeps these values, and the
 	// PerDevice ones, after a service is removed so the owner can see and reuse
-	// them. Desktop already keeps every value it deployed with in its stored
-	// credentials, which a removal does not delete, so it reads the flag and has
-	// nothing else to do with it.
+	// them. Desktop keeps the values it deployed with in its stored credentials,
+	// which a removal does not delete, so it reads the flag and has nothing else
+	// to do with it. One difference stays on purpose: a redeploy with a new value
+	// replaces the stored one (SaveCredentials), where the web app keeps the old
+	// value as retired. The user typed the new id on the one machine Desktop runs.
 	Identifier bool `json:"identifier,omitempty" yaml:"identifier"`
 }
 
