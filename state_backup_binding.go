@@ -136,6 +136,11 @@ func (a *App) ExportStateBackup(slug, passphrase, passphraseRepeat, recipientPub
 	if err != nil {
 		return "", err
 	}
+	// Run the restore's own checks now, while the user can still act: a backup
+	// that cpbackup would refuse must not be saved and counted as one.
+	if _, err := statebackup.SplitArchives(payload); err != nil {
+		return "", fmt.Errorf("the backup was not saved, because a restore would refuse it: %w", err)
+	}
 	bundle, err := statebackup.Seal(payload, passphrase, recipientPublicKey, map[string]any{
 		"slug":    slug,
 		"worker":  runtime.DeviceHostname(),
