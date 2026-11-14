@@ -30,7 +30,7 @@ up, no URLs. It never changes the earner container.
 The helper's script is the web console's `app/procnet.py`, byte for byte, so
 both apps classify a destination the same way.
 
-## Earners on the host network (Mysterium)
+## Earners on the host network
 
 An earner with `network_mode: host` shares the machine's socket table, so
 reading `/proc/net` would show every socket on the machine. Instead its helper

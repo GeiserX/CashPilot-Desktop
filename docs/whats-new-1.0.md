@@ -191,8 +191,10 @@ they were until you act. The first three matter for security:
 - The tray icon is macOS only.
 - Podman is not fenced yet. With `auto`, Needs attention says so; with `on`,
   container deploys are refused.
-- Host-networked services such as Mysterium are not behind the fence. Mysterium
-  blocks its customers from private ranges itself.
+- A native (no-Docker) Mysterium node is not behind the fence. On Linux and
+  Windows it keeps its customers off private ranges itself. On macOS it does
+  not block that traffic; run the container instead if that matters.
+  Mysterium's container runs only behind the fence.
 - The fence is tested on colima. It is not tested on Docker Desktop itself,
   rootless Docker or Windows.
 - The proxy traffic cap is only counted while the app runs.
