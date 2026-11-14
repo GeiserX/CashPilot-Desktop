@@ -31,8 +31,11 @@ import (
 // TestMain replaces the OS keychain with an in-memory one for the whole package.
 // Without it these tests would read and write the real login keychain — the
 // user's own credential master key — which is not something a test may touch.
+// CASHPILOT_PROXIED_ONLY is cleared too: these tests run an ordinary machine, and a
+// shell that sets it must not turn them red.
 func TestMain(m *testing.M) {
 	keyring.MockInit()
+	os.Unsetenv(services.ProxiedOnlyEnv)
 	os.Exit(m.Run())
 }
 

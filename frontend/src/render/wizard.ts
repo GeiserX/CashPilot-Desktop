@@ -41,7 +41,8 @@ import { renderCustomServiceCard } from "./custom.js";
  * box) and `instances` how many the deployment runs now.
  *
  * `route` is the Route box's state: the proxies the service can run through from its
- * first start (absent: no box).
+ * first start (absent: no box). `routeDraft` is the owner's pick in that box from
+ * before this redraw (undefined: none, the recorded route shows).
  */
 export function renderWizardServiceSetup(
   service: Service,
@@ -52,6 +53,7 @@ export function renderWizardServiceSetup(
   scaling?: ScalingLimit | null,
   instances?: number | null,
   route?: RouteState | null,
+  routeDraft?: number | null,
 ): string {
   // A custom service runs its saved definition: no credentials, no Image box.
   if (service.custom) return renderCustomServiceCard(service, scaling, instances);
@@ -86,7 +88,7 @@ export function renderWizardServiceSetup(
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
       ${instancesSection(service, scaling, instances)}
-      ${routeChoiceSection(service, route)}
+      ${routeChoiceSection(service, route, routeDraft)}
       ${imageChoiceSection(service, customImage)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">

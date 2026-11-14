@@ -7,11 +7,18 @@
 //
 // Pure: takes catalog data and the route state, returns HTML strings or values.
 
-import type { RouteState, Service } from "../wails";
+import type { ProxiedResult, RouteState, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
-/** Render the Route box for one service, or "" when there is nothing to choose. */
-export function routeChoiceSection(service: Service, route: RouteState | null | undefined): string {
+/**
+ * Render the Route box for one service, or "" when there is nothing to choose.
+ *
+ * `draft` is what the owner picked in the box before a redraw: a proxy id, null for
+ * this computer's own IP, or undefined for no pick (the recorded route is selected).
+ * A redraw must keep the pick, or a proxy chosen for an unrouted service would fall
+ * back to Direct and the next deploy would show this computer's IP unasked.
+ */
+export function routeChoiceSection(service: Service, route: RouteState | null | undefined, draft?: number | null): string {
   if (service.manualOnly || service.custom || !route) return "";
   const slug = escapeHtml(service.slug);
   const refusal = route.refusals?.[service.slug] || "";
@@ -20,7 +27,7 @@ export function routeChoiceSection(service: Service, route: RouteState | null | 
     return `<p class="muted compact-copy route-hint">Route: this computer's own IP. ${escapeHtml(refusal)}</p>`;
   }
   if (proxies.length === 0 && !route.proxiedOnly) return "";
-  const current = route.recorded?.[service.slug];
+  const current = draft !== undefined ? draft : route.recorded?.[service.slug];
   const options = [
     route.proxiedOnly ? "" : `<option value="">Direct: this computer's own IP</option>`,
     ...proxies.map((p) => {
@@ -52,6 +59,12 @@ export function routeChoice(value: string | null | undefined): number | null {
  */
 export function leavesRoute(slug: string, route: RouteState | null | undefined): boolean {
   return route?.recorded?.[slug] !== undefined;
+}
+
+/** What the setup card says after a routed deploy: where it leaves, then the device-link step. */
+export function routedDeployText(result: Partial<ProxiedResult>, link: string): string {
+  const where = result.exitIp ? ` It leaves from ${result.exitIp}${result.country ? ` (${result.country})` : ""}.` : "";
+  return [`Deployed through the proxy.${where}`, result.warning || "", link].filter(Boolean).join("\n\n");
 }
 
 /** What a deploy from the setup card ran, or why it ran nothing. */

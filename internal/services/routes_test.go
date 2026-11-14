@@ -353,3 +353,40 @@ func TestARoutedDeployThatFailsKeepsTheRouteOfOneInFlight(t *testing.T) {
 		t.Fatalf("the failed deploy must not undo the route of the one that runs: %d %v", got, ok)
 	}
 }
+
+// A Remove while a routed redeploy is starting its copy: the redeploy saved the copy
+// record before the runtime call, so a Remove in between would take the old copy and
+// the record, and the new copy would run with no record to show or stop it.
+func TestARemoveWaitsForARoutedDeployInFlight(t *testing.T) {
+	m, p, id := routedExample(t)
+	ctx := context.Background()
+	if _, err := m.DeployRouted(ctx, "example", map[string]string{"TOKEN": "tok"}, id); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	finishedEarly := false
+	p.deployFn = func(req runtime.ProxiedDeploy) (runtime.Exit, error) {
+		// The redeploy is starting its tunnel: the owner removes the service now.
+		go func() { done <- m.Remove(ctx, "example", false, false) }()
+		select {
+		case err := <-done:
+			finishedEarly = true
+			done <- err
+		case <-time.After(200 * time.Millisecond):
+		}
+		p.running[key(req.Slug, req.ProxyID)] = true
+		return runtime.Exit{IP: "203.0.113.7", Country: "NL"}, nil
+	}
+	if _, err := m.DeployRouted(ctx, "example", map[string]string{"TOKEN": "tok"}, id); err != nil {
+		t.Fatal(err)
+	}
+	if finishedEarly {
+		t.Fatal("the removal ran while the routed deploy was in flight")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.Route("example"); ok || p.running[key("example", id)] {
+		t.Fatalf("the removal after the deploy takes the new copy and its record: running %v", p.running)
+	}
+}

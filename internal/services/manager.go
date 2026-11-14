@@ -59,7 +59,8 @@ type Manager struct {
 	// deployLocks holds one lock per slug, taken for the whole of DeployWith and
 	// DeployRouted (lockDeploy): each reads the service's route and deployment, then
 	// writes them after a pull or a tunnel start, so two deploys of one service in
-	// flight could each decide on what the other is about to change.
+	// flight could each decide on what the other is about to change. Remove takes it
+	// too, so a removal never lands between a deploy's record and its start.
 	deployLocksMu sync.Mutex
 	deployLocks   map[string]*sync.Mutex
 }
@@ -512,7 +513,12 @@ func (m *Manager) PlanRemoval(ctx context.Context, slug string) (runtime.Removal
 // it; allowCritical is the separate yes needed for the volumes whose loss cannot be
 // undone. Both default to false, so the ordinary "remove this service" leaves every
 // node identity and keystore on disk for a later redeploy to pick up.
+//
+// It holds the service's deploy lock, as DeployWith and DeployRouted do: a routed
+// deploy saves its copy record before the copy starts, and a removal in between
+// would take the record and leave the new copy running with none.
 func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCritical bool) error {
+	defer m.lockDeploy(slug)()
 	if id, ok := m.Route(slug); ok {
 		// No container of its own and no volumes: its copy is the service. The
 		// route stays recorded, so a later deploy from this machine's IP still asks.

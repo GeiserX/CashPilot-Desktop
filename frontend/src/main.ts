@@ -81,7 +81,7 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
-import { routeChoice, runRouteDeploy } from "./render/route";
+import { routeChoice, routedDeployText, runRouteDeploy } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -99,6 +99,10 @@ let activeView: View = "dashboard";
 let wizardStep = 1;
 let wizardCategories: string[] = [];
 let wizardSelected: string[] = [];
+// The Route box's pick per slug (a proxy id, null for this computer's own IP), kept so
+// a redraw of the wizard does not put an unsaved proxy choice back to Direct. Cleared
+// when the wizard opens or closes.
+let wizardRouteDrafts: Record<string, number | null> = {};
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -1641,6 +1645,7 @@ function openWizard(input?: string | Event) {
   activeView = "wizard";
   wizardStep = slug ? 3 : 1;
   wizardSelected = slug ? [slug] : [];
+  wizardRouteDrafts = {};
   const service = state?.services.find((svc) => svc.slug === slug);
   wizardCategories = service ? [service.category] : [];
   render();
@@ -1718,6 +1723,11 @@ function renderSetupWizard(current: AppState) {
         ? wizardSelected.filter((item) => item !== slug)
         : [...wizardSelected, slug];
       render();
+    });
+  });
+  document.querySelectorAll<HTMLSelectElement>("[data-wizard-route]").forEach((select) => {
+    select.addEventListener("change", () => {
+      wizardRouteDrafts[select.dataset.wizardRoute || ""] = routeChoice(select.value);
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-wizard-action]").forEach((button) => {
@@ -1867,7 +1877,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route)).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug])).join("")}
     </div>
   `;
 }
@@ -1911,6 +1921,7 @@ function readWizardRoute(slug: string): number | null {
 function closeWizard() {
   activeView = "dashboard";
   wizardStep = 1;
+  wizardRouteDrafts = {};
   render();
 }
 
@@ -2000,10 +2011,9 @@ async function runWizardAction(slug: string, action: string) {
         return;
       }
       if (outcome.kind === "routed") {
-        const routed = outcome.result;
         state = await GetAppState();
-        const where = routed.exitIp ? ` It leaves from ${routed.exitIp}${routed.country ? ` (${routed.country})` : ""}.` : "";
-        if (output) output.textContent = `Deployed through the proxy.${where}${routed.warning ? `\n\n${routed.warning}` : ""}`;
+        const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+        if (output) output.textContent = routedDeployText(outcome.result, link);
         return;
       }
       const deployment = outcome.deployment;

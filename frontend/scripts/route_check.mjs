@@ -10,10 +10,12 @@
 //   6. THE SETUP CARD CARRIES THE BOX.
 //   7. A ROUTED DEPLOY WITH A CHOSEN IMAGE OR MORE THAN ONE COPY IS REFUSED, NOT DROPPED.
 //   8. A REFUSED OR DECLINED DEPLOY SAVES NO CREDENTIALS; THE CONFIRMATION COMES FIRST.
+//   9. A CHOICE MADE IN THE BOX OUTLIVES A REDRAW OF THE CARD, A PROXY AND DIRECT ALIKE.
+//  10. A ROUTED DEPLOY SHOWS THE DEVICE-LINK STEP, AS A DIRECT ONE DOES.
 //
 //   node scripts/route_check.mjs      # against ./.harness-build
 
-import { leavesRoute, routeChoice, routeChoiceSection, runRouteDeploy } from "../.harness-build/render/route.js";
+import { leavesRoute, routeChoice, routeChoiceSection, routedDeployText, runRouteDeploy } from "../.harness-build/render/route.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 
 let failures = 0;
@@ -99,6 +101,28 @@ for (const [image, instances] of [["ghcr.io/me/honeygain:1", null], [null, 3]]) 
   const r = recorder(true);
   const out = await runRouteDeploy("storj", null, null, null, route, r.calls);
   check("RULE 8: an unrouted service deploys without asking", out.kind === "direct" && r.log.join(",") === "save,direct false", r.log.join(","));
+}
+
+// A redraw (a currency change) rebuilds the card from state: the owner's unsaved pick wins
+// over the recorded route, or an unrouted service would fall back to Direct unasked.
+{
+  const fresh = { ...route, recorded: {} };
+  const picked = routeChoiceSection(honeygain, fresh, 4);
+  check("RULE 9: a picked proxy is still selected after a redraw", /<option value="4" selected>/.test(picked), picked);
+  check("RULE 9: no other proxy is selected", !/<option value="3" selected>/.test(picked), picked);
+  const direct = routeChoiceSection(honeygain, route, null);
+  check("RULE 9: a picked Direct is still Direct after a redraw", !/ selected>/.test(direct), direct);
+  check("RULE 9: no pick keeps the recorded route", /<option value="3" selected>/.test(routeChoiceSection(honeygain, route, undefined)));
+  const card = renderWizardServiceSetup(honeygain, {}, "box", null, "", null, null, fresh, 4);
+  check("RULE 9: the setup card passes the pick to the box", /<option value="4" selected>/.test(card), card);
+}
+
+{
+  const link = "Link this device to your account\nOpen the dashboard\nabc";
+  const text = routedDeployText({ exitIp: "203.0.113.7", country: "NL", warning: "Shared exit." }, link);
+  check("RULE 10: the routed result says where it leaves", text.startsWith("Deployed through the proxy. It leaves from 203.0.113.7 (NL)."), text);
+  check("RULE 10: the device-link step follows", text.endsWith(`\n\n${link}`) && text.includes("Shared exit."), text);
+  check("RULE 10: no step, no trailing gap", routedDeployText({ exitIp: "", country: "", warning: "" }, "") === "Deployed through the proxy.");
 }
 
 if (failures) {
