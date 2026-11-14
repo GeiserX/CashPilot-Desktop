@@ -100,7 +100,8 @@ export function renderProxyCard(p: ProxyView): string {
 
 /**
  * The add or edit form. A secret box is always empty: on an edit, blank keeps what
- * is stored, and the "Remove the stored ..." box drops it.
+ * is stored while the proxy points at the same server, and the "Remove the stored
+ * ..." box drops it. A new host, port or login server needs the secret typed again.
  */
 export function renderProxyEditor(p: ProxyView | null): string {
   const v = p || {
@@ -120,7 +121,7 @@ export function renderProxyEditor(p: ProxyView | null): string {
     return `
     <label>
       <span>${escapeHtml(label)}</span>
-      <input data-proxy-field="${name}" type="password" autocomplete="new-password" value="" placeholder="${stored ? "Stored; leave blank to keep it" : ""}" />
+      <input data-proxy-field="${name}" type="password" autocomplete="new-password" value="" placeholder="${stored ? (name === "auth_key" ? "Stored; leave blank to keep it, unless the login server changes" : "Stored; leave blank to keep it, unless the host or port changes") : ""}" />
       ${stored ? `<small><input type="checkbox" data-proxy-field="clear_${name}" /> Remove the stored ${escapeHtml(label.toLowerCase())}</small>` : ""}
     </label>`;
   };

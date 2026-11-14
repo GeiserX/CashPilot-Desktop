@@ -33,6 +33,13 @@ learns whether a secret is set: an edit form leaves those boxes empty, and
 leaving one empty keeps what is stored. To drop a stored user or password, tick
 the matching **Remove the stored** box and save.
 
+A stored secret is kept only while the proxy points at the same server. When
+you change a SOCKS5 or HTTP proxy's host or port, or a Tailscale proxy's login
+server, type the user, password or auth key again (or tick **Remove the stored**
+to save without it); the save is refused otherwise. So an edit can never send a
+stored credential to a server it was not entered for. A new name, cap or exit
+node keeps the stored secret.
+
 **Test** starts a throwaway tunnel, reports the exit IP and country it gets,
 and removes it. A failed test stays on the proxy, with the reason, until the
 next test.

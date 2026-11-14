@@ -65,6 +65,60 @@ func TestCleanKeepsAndClearsSecretsOnEdit(t *testing.T) {
 	}
 }
 
+// A stored secret goes only to the server it was entered for (CashPilot #738).
+func TestCleanRefusesToMoveAStoredSecretToANewServer(t *testing.T) {
+	stored := Definition{Name: "Gate", Kind: "socks5", Host: "gate.example.net", Port: 7000, Username: "user", Password: "pw", CapThresholdPct: 90}
+	for _, over := range []map[string]string{{"host": "evil.example.org"}, {"port": "1080"}} {
+		_, err := Clean(over, &stored)
+		if err == nil || !IsInputError(err) || !strings.Contains(err.Error(), "type the user and password again") {
+			t.Errorf("Clean(%v) = %v, want a refusal that names the user and password", over, err)
+		}
+	}
+	_, err := Clean(map[string]string{"host": "gate2.example.net", "username": "user"}, &stored)
+	if err == nil || !strings.Contains(err.Error(), "type the password again") || strings.Contains(err.Error(), "user and") {
+		t.Errorf("a retyped user still needs the password: %v", err)
+	}
+	moved, err := Clean(map[string]string{"host": "gate2.example.net", "username": "user", "password": "pw2"}, &stored)
+	if err != nil || moved.Host != "gate2.example.net" || moved.Password != "pw2" || moved.Username != "user" {
+		t.Fatalf("a move with the secrets typed again is saved: %+v %v", moved, err)
+	}
+	cleared, err := Clean(map[string]string{"host": "gate2.example.net", "clear_username": "true", "clear_password": "true"}, &stored)
+	if err != nil || cleared.Username != "" || cleared.Password != "" {
+		t.Fatalf("a move with the secrets removed is saved: %+v %v", cleared, err)
+	}
+	for _, over := range []map[string]string{{"name": "Renamed"}, {"host": "GATE.Example.NET"}, {"kind": "http"}, {"cap_gb": "5", "rotating": "true"}} {
+		kept, err := Clean(over, &stored)
+		if err != nil || kept.Username != "user" || kept.Password != "pw" {
+			t.Errorf("Clean(%v) keeps the server, so it keeps the secret: %+v %v", over, kept, err)
+		}
+	}
+	bare := Definition{Name: "Gate", Kind: "socks5", Host: "gate.example.net", Port: 7000, CapThresholdPct: 90}
+	if d, err := Clean(map[string]string{"host": "gate2.example.net"}, &bare); err != nil || d.Host != "gate2.example.net" {
+		t.Errorf("a proxy with no stored secret moves freely: %+v %v", d, err)
+	}
+}
+
+func TestCleanNeedsTheAuthKeyAgainForANewLoginServer(t *testing.T) {
+	stored := Definition{Name: "Exit", Kind: "tailscale", AuthKey: "tskey-1", ExitNode: "exit-node-a", CapThresholdPct: 90}
+	_, err := Clean(map[string]string{"login_server": "https://headscale.example.org"}, &stored)
+	if err == nil || !strings.Contains(err.Error(), "login server changed, so type the auth key again") {
+		t.Fatalf("a new login server needs the auth key: %v", err)
+	}
+	moved, err := Clean(map[string]string{"login_server": "https://headscale.example.org", "auth_key": "tskey-2"}, &stored)
+	if err != nil || moved.AuthKey != "tskey-2" {
+		t.Fatalf("a new login server with a new key is saved: %+v %v", moved, err)
+	}
+	// The key goes to the control server whatever exit node is picked.
+	renamed, err := Clean(map[string]string{"exit_node": "exit-node-b", "name": "Exit B"}, &stored)
+	if err != nil || renamed.AuthKey != "tskey-1" {
+		t.Fatalf("a new exit node keeps the key: %+v %v", renamed, err)
+	}
+	socks, err := Clean(map[string]string{"kind": "socks5", "host": "gate.example.net", "port": "7000"}, &stored)
+	if err != nil || socks.AuthKey != "" {
+		t.Fatalf("a kind change never carries the other kind's secret: %+v %v", socks, err)
+	}
+}
+
 func TestPublicViewNeverCarriesSecrets(t *testing.T) {
 	d := Definition{Name: "Gate", Kind: "socks5", Host: "h", Port: 1, Username: "SECRET-USER", Password: "SECRET-PW", AuthKey: "SECRET-KEY"} // ggignore: made-up test values
 	raw, err := json.Marshal(PublicView(1, d, State{}, nil))
