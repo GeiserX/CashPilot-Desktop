@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
@@ -269,5 +270,86 @@ func TestProxiedOnlyStopsARunningCopy(t *testing.T) {
 	}
 	if strings.Join(fake.calls, ",") != "stop 2" {
 		t.Fatalf("calls %v", fake.calls)
+	}
+}
+
+func TestProxiedOnlyStopsARestartingDirectService(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	deployExample(t, st)
+	p.listResult = []runtime.ContainerInfo{{Slug: "example", Name: "cashpilot-example", Status: "restarting", Instance: 1}}
+	t.Setenv(ProxiedOnlyEnv, "true")
+	if got := m.HoldDirect(context.Background()); strings.Join(got, ",") != "example" || len(p.stopTimeouts) != 1 {
+		t.Fatalf("a restarting container runs again after Docker's backoff, so it stops too: %v %v", got, p.stopTimeouts)
+	}
+}
+
+// Two deploys of one service in flight: each reads the route and the deployment, then
+// writes them after a pull or a tunnel start, so they run one after the other.
+
+func TestARoutedDeployWaitsForADirectDeployInFlight(t *testing.T) {
+	m, p, id := routedExample(t)
+	ctx := context.Background()
+	done := make(chan error, 1)
+	p.duringDeploy = func() {
+		// The direct deploy is pulling: a routed deploy starts now.
+		go func() {
+			_, err := m.DeployRouted(ctx, "example", map[string]string{"TOKEN": "tok"}, id)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			done <- err
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	if _, err := m.DeployWith(ctx, "example", map[string]string{"TOKEN": "tok"}, DeployOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "own IP") {
+		t.Fatalf("the routed deploy sees the direct one and is refused: %v", err)
+	}
+	if len(p.deploys) != 0 {
+		t.Fatalf("no routed copy beside the direct container: %+v", p.deploys)
+	}
+	if _, routed, _ := m.store.GetRoute("example"); routed {
+		t.Fatal("no route recorded for a service that runs from this machine's IP")
+	}
+}
+
+func TestARoutedDeployThatFailsKeepsTheRouteOfOneInFlight(t *testing.T) {
+	m, p, id := routedExample(t)
+	ctx := context.Background()
+	calls := 0
+	done := make(chan error, 1)
+	finishedEarly := false
+	p.deployFn = func(runtime.ProxiedDeploy) (runtime.Exit, error) {
+		calls++
+		if calls > 1 {
+			return runtime.Exit{}, errors.New("tunnel did not start")
+		}
+		// The first deploy is starting its tunnel: a second one starts now, and fails.
+		go func() {
+			_, err := m.DeployRouted(ctx, "example", map[string]string{"TOKEN": "tok"}, id)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			finishedEarly = true
+			done <- err
+		case <-time.After(200 * time.Millisecond):
+		}
+		return runtime.Exit{IP: "203.0.113.7", Country: "NL"}, nil
+	}
+	if _, err := m.DeployRouted(ctx, "example", map[string]string{"TOKEN": "tok"}, id); err != nil {
+		t.Fatal(err)
+	}
+	if finishedEarly {
+		t.Fatal("the second deploy ran while the first was in flight")
+	}
+	if err := <-done; err == nil {
+		t.Fatal("the second deploy's failure reaches the user")
+	}
+	if got, ok := m.Route("example"); !ok || got != id {
+		t.Fatalf("the failed deploy must not undo the route of the one that runs: %d %v", got, ok)
 	}
 }

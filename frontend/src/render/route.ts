@@ -53,3 +53,50 @@ export function routeChoice(value: string | null | undefined): number | null {
 export function leavesRoute(slug: string, route: RouteState | null | undefined): boolean {
   return route?.recorded?.[slug] !== undefined;
 }
+
+/** What a deploy from the setup card ran, or why it ran nothing. */
+export type RouteDeployOutcome<D, R> =
+  | { kind: "refused"; message: string }
+  | { kind: "cancelled" }
+  | { kind: "routed"; result: R }
+  | { kind: "direct"; deployment: D };
+
+/** The calls a deploy makes; main.ts passes the Wails bindings and window.confirm. */
+export interface RouteDeployCalls<D, R> {
+  /** Saves the typed credentials. */
+  save(): Promise<void>;
+  confirm(message: string): boolean;
+  routed(proxyId: number): Promise<R>;
+  /** leaveRoute is the owner's yes to running a routed service from this computer's own IP. */
+  direct(leaveRoute: boolean): Promise<D>;
+}
+
+/**
+ * Deploy from the setup card. A routed deploy runs the catalog image once, so a chosen
+ * image or more than one copy is refused instead of dropped. Every refusal and the
+ * owner's confirmation come before the credentials are saved, so a deploy that does
+ * not run changes nothing.
+ */
+export async function runRouteDeploy<D, R>(
+  slug: string,
+  proxyId: number | null,
+  image: string | null,
+  instances: number | null,
+  route: RouteState | null | undefined,
+  calls: RouteDeployCalls<D, R>,
+): Promise<RouteDeployOutcome<D, R>> {
+  if (proxyId !== null && (image || (instances !== null && instances > 1))) {
+    return {
+      kind: "refused",
+      message: "A service routed through a proxy runs the catalog image, once. Clear the Image box and set Instances to 1, or choose this computer's own IP. Nothing was deployed.",
+    };
+  }
+  const leaving = proxyId === null && leavesRoute(slug, route);
+  // From this computer's own IP, the provider sees that IP: only the owner's yes switches it.
+  if (leaving && !calls.confirm(`${slug} runs through a proxy on this computer. Running it from this computer's own IP shows that IP to the provider. Switch it?`)) {
+    return { kind: "cancelled" };
+  }
+  await calls.save();
+  if (proxyId !== null) return { kind: "routed", result: await calls.routed(proxyId) };
+  return { kind: "direct", deployment: await calls.direct(leaving) };
+}

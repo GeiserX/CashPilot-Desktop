@@ -96,7 +96,8 @@ func (m *Manager) HoldDirect(ctx context.Context) []string {
 	}
 	var stopped []string
 	for _, u := range units {
-		if u.Status != "running" {
+		// A restarting container runs again as soon as Docker's backoff ends.
+		if u.Status != "running" && u.Status != "restarting" {
 			continue
 		}
 		why := fmt.Sprintf("%s is set, so nothing runs from this computer's own IP", ProxiedOnlyEnv)
@@ -164,7 +165,10 @@ func (m *Manager) Routes() map[string]int64 {
 // DeployRouted deploys slug through proxy id, never from this machine's own IP. The
 // route is recorded before the copy exists, so no other deploy can start the service
 // from this machine's IP meanwhile; a deploy that fails puts the earlier route back.
+// It holds the service's deploy lock throughout, as DeployWith does, so that rollback
+// never undoes another deploy's route.
 func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map[string]string, id int64) (ProxiedResult, error) {
+	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
 		return ProxiedResult{}, fmt.Errorf("unknown service: %s", slug)

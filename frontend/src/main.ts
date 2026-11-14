@@ -81,7 +81,7 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
-import { leavesRoute, routeChoice } from "./render/route";
+import { routeChoice, runRouteDeploy } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -1983,27 +1983,30 @@ async function runWizardAction(slug: string, action: string) {
       if (output) output.textContent = "Deploying...";
       // A custom service has no credentials: it runs its saved definition.
       const custom = state?.services?.some((service) => service.slug === slug && service.custom);
-      if (!custom) await SaveCredentials(slug, values);
-      const route = readWizardRoute(slug);
-      if (route !== null) {
-        const routed = await DeployServiceRouted(slug, values, route);
+      const image = readWizardImage(slug);
+      const instances = readWizardInstances(slug);
+      const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
+        save: async () => {
+          if (!custom) await SaveCredentials(slug, values);
+        },
+        confirm: (message) => confirm(message),
+        routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
+        direct: (leaveRoute) => leaveRoute
+          ? DeployServiceLeavingRoute(slug, values, image, instances)
+          : DeployService(slug, values, image, instances),
+      });
+      if (outcome.kind === "refused" || outcome.kind === "cancelled") {
+        if (output) output.textContent = outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
+        return;
+      }
+      if (outcome.kind === "routed") {
+        const routed = outcome.result;
         state = await GetAppState();
         const where = routed.exitIp ? ` It leaves from ${routed.exitIp}${routed.country ? ` (${routed.country})` : ""}.` : "";
         if (output) output.textContent = `Deployed through the proxy.${where}${routed.warning ? `\n\n${routed.warning}` : ""}`;
         return;
       }
-      let deployment;
-      if (leavesRoute(slug, state?.route)) {
-        // The service runs through a proxy here: from this computer's own IP, the
-        // provider sees that IP. Only the owner's yes switches it.
-        if (!confirm(`${slug} runs through a proxy on this computer. Running it from this computer's own IP shows that IP to the provider. Switch it?`)) {
-          if (output) output.textContent = "Nothing was deployed.";
-          return;
-        }
-        deployment = await DeployServiceLeavingRoute(slug, values, readWizardImage(slug), readWizardInstances(slug));
-      } else {
-        deployment = await DeployService(slug, values, readWizardImage(slug), readWizardInstances(slug));
-      }
+      const deployment = outcome.deployment;
       state = await GetAppState();
       // The box now holds what runs, so a second Deploy without an edit keeps it.
       const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);

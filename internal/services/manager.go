@@ -55,6 +55,29 @@ type Manager struct {
 
 	// proxy is the state of proxied copies between ticks (proxies.go).
 	proxy proxyState
+
+	// deployLocks holds one lock per slug, taken for the whole of DeployWith and
+	// DeployRouted (lockDeploy): each reads the service's route and deployment, then
+	// writes them after a pull or a tunnel start, so two deploys of one service in
+	// flight could each decide on what the other is about to change.
+	deployLocksMu sync.Mutex
+	deployLocks   map[string]*sync.Mutex
+}
+
+// lockDeploy takes slug's deploy lock and returns its release.
+func (m *Manager) lockDeploy(slug string) func() {
+	m.deployLocksMu.Lock()
+	if m.deployLocks == nil {
+		m.deployLocks = map[string]*sync.Mutex{}
+	}
+	l := m.deployLocks[slug]
+	if l == nil {
+		l = &sync.Mutex{}
+		m.deployLocks[slug] = l
+	}
+	m.deployLocksMu.Unlock()
+	l.Lock()
+	return l.Unlock
 }
 
 // NewManager builds a Manager whose registry holds the given provider under
@@ -218,6 +241,7 @@ type DeployOptions struct {
 // as a single-copy service always was; copies 2..N follow it, and copies above N that
 // are still running are removed, highest first.
 func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, error) {
+	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
 		return store.Deployment{}, fmt.Errorf("unknown service: %s", slug)

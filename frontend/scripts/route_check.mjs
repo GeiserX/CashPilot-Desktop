@@ -8,10 +8,12 @@
 //   4. THE BOX SENDS A PROXY ID, OR null FOR THIS COMPUTER'S OWN IP.
 //   5. A SERVICE ROUTED HERE, RUNNING OR NOT, ASKS BEFORE IT RUNS FROM THIS COMPUTER'S IP.
 //   6. THE SETUP CARD CARRIES THE BOX.
+//   7. A ROUTED DEPLOY WITH A CHOSEN IMAGE OR MORE THAN ONE COPY IS REFUSED, NOT DROPPED.
+//   8. A REFUSED OR DECLINED DEPLOY SAVES NO CREDENTIALS; THE CONFIRMATION COMES FIRST.
 //
 //   node scripts/route_check.mjs      # against ./.harness-build
 
-import { leavesRoute, routeChoice, routeChoiceSection } from "../.harness-build/render/route.js";
+import { leavesRoute, routeChoice, routeChoiceSection, runRouteDeploy } from "../.harness-build/render/route.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 
 let failures = 0;
@@ -58,6 +60,46 @@ check("RULE 5: an unrouted service does not", leavesRoute("storj", route) === fa
 const card = renderWizardServiceSetup(honeygain, {}, "box", null, "", null, null, route);
 check("RULE 6: the setup card carries the box", card.includes('data-wizard-route="honeygain"'), card);
 check("RULE 6: the box is not a credential", !/data-wizard-env="[^"]*"[^>]*data-wizard-route/.test(card));
+
+function recorder(answer) {
+  const log = [];
+  return {
+    log,
+    calls: {
+      save: async () => { log.push("save"); },
+      confirm: () => { log.push("confirm"); return answer; },
+      routed: async (id) => { log.push(`routed ${id}`); return { exitIp: "203.0.113.7" }; },
+      direct: async (leave) => { log.push(`direct ${leave}`); return { slug: "honeygain" }; },
+    },
+  };
+}
+
+for (const [image, instances] of [["ghcr.io/me/honeygain:1", null], [null, 3]]) {
+  const r = recorder(true);
+  const out = await runRouteDeploy("honeygain", 3, image, instances, route, r.calls);
+  check(`RULE 7: image ${image} instances ${instances} is refused`, out.kind === "refused" && out.message.includes("Image box"), JSON.stringify(out));
+  check(`RULE 7: image ${image} instances ${instances} runs and saves nothing`, r.log.length === 0, r.log.join(","));
+}
+{
+  const r = recorder(true);
+  const out = await runRouteDeploy("honeygain", 3, "", 1, route, r.calls);
+  check("RULE 7: the catalog image, once, deploys through the proxy", out.kind === "routed" && r.log.join(",") === "save,routed 3", r.log.join(","));
+}
+{
+  const r = recorder(false);
+  const out = await runRouteDeploy("honeygain", null, null, null, route, r.calls);
+  check("RULE 8: a declined switch saves no credentials", out.kind === "cancelled" && r.log.join(",") === "confirm", r.log.join(","));
+}
+{
+  const r = recorder(true);
+  const out = await runRouteDeploy("honeygain", null, "ghcr.io/me/honeygain:1", 2, route, r.calls);
+  check("RULE 8: a confirmed switch saves, then leaves the route", out.kind === "direct" && r.log.join(",") === "confirm,save,direct true", r.log.join(","));
+}
+{
+  const r = recorder(true);
+  const out = await runRouteDeploy("storj", null, null, null, route, r.calls);
+  check("RULE 8: an unrouted service deploys without asking", out.kind === "direct" && r.log.join(",") === "save,direct false", r.log.join(","));
+}
 
 if (failures) {
   console.error(`\n${failures} of ${checks} route checks failed`);
