@@ -57,9 +57,10 @@ line. It checks the file, refuses an altered one, and writes one tar per folder
 into an empty `--out` folder, printing where each one goes. Step 2 extracts as
 root, so it also refuses the whole file if any entry could land outside its
 folder (an absolute path, `..`, a link pointing out, a device or pipe), names a
-path twice, is a sparse file, or carries an extended attribute such as a file
-capability. The error says which rule fired. It writes each entry again from its
-name, type, permission bits, owner ids, time and contents only, and drops setuid,
+path twice, is a sparse file, carries an extended attribute such as a file
+capability, has a control character in a name or link target, or has an invalid
+time. The error says which rule fired. It writes each entry again from its name,
+type, permission bits, owner ids, time and contents only, and drops setuid,
 setgid and sticky bits. A file that unpacks to more than 256 MB or holds more
 than 20,000 entries is refused too; no export is that large.
 

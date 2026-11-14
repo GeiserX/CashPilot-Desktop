@@ -100,6 +100,20 @@ func paxRaw(t *testing.T, name string, records map[string]string, size int) []by
 	return out.Bytes()
 }
 
+// paxTime is one regular file with the given modification time, written as PAX
+// so a time outside the ustar range survives.
+func paxTime(t *testing.T, name string, mtime time.Time) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	if err := w.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: 1, Mode: 0o644, ModTime: mtime, Format: tar.FormatPAX}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write([]byte("x"))
+	_ = w.Close()
+	return buf.Bytes()
+}
+
 var capability = map[string]string{"SCHILY.xattr.security.capability": "\x01\x00\x00\x02\x00\x10"}
 
 // Each case is refused, and the error names the rule that refused it.
@@ -123,13 +137,20 @@ func TestSplitRefusesWithTheRuleThatFired(t *testing.T) {
 		"fifo":                     {tarOf(t, member{name: "node/p", kind: tar.TypeFifo}), "device, pipe"},
 		"absolute":                 {tarOf(t, member{name: "/etc/passwd", kind: tar.TypeReg}), "absolute path"},
 		"dot-dot":                  {tarOf(t, member{name: "node/../../x", kind: tar.TypeReg}), "leaves its folder"},
+		"newline in a name":        {tarOf(t, member{name: "node/a\nb", kind: tar.TypeReg}), "control character"},
+		"control char in a target": {tarOf(t, member{name: "node/s", link: "a\x01b", kind: tar.TypeSymlink}), "control character"},
+		"time too far out":         {paxTime(t, "node/f", time.Unix(maxModTime, 0)), "invalid modification time"},
+		"time too far back":        {paxTime(t, "node/f", time.Unix(-maxModTime, 0)), "invalid modification time"},
+		// archive/tar refuses these records itself; the web checks them by rule.
+		"nul in a pax path":  {paxRaw(t, "node/s", map[string]string{"path": "node/s\x00", "linkpath": "..\x00"}, 0), "damaged"},
+		"infinite pax mtime": {paxRaw(t, "node/f", map[string]string{"mtime": "inf"}, 1), "damaged"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := SplitArchives(tc.payload)
 			if !errors.Is(err, ErrBackup) {
 				t.Fatalf("refused archive was split: %v", err)
 			}
-			if !strings.Contains(err.Error(), "unsafe entry") || !strings.Contains(err.Error(), tc.rule) {
+			if !strings.Contains(err.Error(), tc.rule) || (tc.rule != "damaged" && !strings.Contains(err.Error(), "unsafe entry")) {
 				t.Fatalf("error %q does not name the rule %q", err, tc.rule)
 			}
 		})

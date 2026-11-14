@@ -32,6 +32,22 @@ var paxFields = map[string]bool{
 	"gname": true, "mtime": true, "atime": true, "ctime": true, "hdrcharset": true,
 }
 
+// maxModTime is how far from 1970 a modification time may be (about 317 years).
+// The web refuses past it too, so a bundle opens in both tools or in neither.
+const maxModTime = 10_000_000_000
+
+// controlChar returns the first control character in s, or -1. A NUL would end
+// the name once it is written back to a fixed ustar field, so the rules below
+// would have judged a different name than the one that gets extracted.
+func controlChar(s string) rune {
+	for _, c := range s {
+		if c < 0x20 || c == 0x7f {
+			return c
+		}
+	}
+	return -1
+}
+
 // SplitArchives turns a decrypted payload into one tar per backed-up mount.
 //
 // The payload is Docker's archive of each critical mount, one after another, so
@@ -49,8 +65,8 @@ var paxFields = map[string]bool{
 // checked on its own and one refused entry fails the whole restore, with an error
 // that names the rule: an absolute name, "..", a link that points out of its
 // folder, a path through a link, a path given twice, a device or pipe, a sparse
-// file, a PAX global header, or any extended record such as a file capability.
-// Setuid, setgid and sticky bits are dropped. More than MaxArchiveBytes of file
+// file, a PAX global header, any extended record such as a file capability, a
+// control character in a name or link target, or an invalid time. Setuid, setgid and sticky bits are dropped. More than MaxArchiveBytes of file
 // data or MaxArchiveEntries entries is refused before the data is read. Same rules
 // as the web's split_archives.
 func SplitArchives(payload []byte) (map[string][]byte, error) {
@@ -201,6 +217,12 @@ func cleanParts(name string) []string {
 func unsafeMember(hdr *tar.Header, name string, links, files, seen map[string]bool) string {
 	if hdr.Typeflag == tar.TypeXGlobalHeader {
 		return "the archive carries a PAX global header (refused: it would apply its records to every entry after it)"
+	}
+	if c := controlChar(name + hdr.Linkname); c >= 0 {
+		return fmt.Sprintf("%q has the control character %q in its name or link target", name, c)
+	}
+	if u := hdr.ModTime.Unix(); u >= maxModTime || u <= -maxModTime {
+		return fmt.Sprintf("%q has an invalid modification time", name)
 	}
 	sparse := hdr.Typeflag == tar.TypeGNUSparse
 	var extra []string
