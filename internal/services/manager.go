@@ -55,6 +55,31 @@ type Manager struct {
 
 	// proxy is the state of proxied copies between ticks (proxies.go).
 	proxy proxyState
+
+	// deployLocks holds one lock per slug, taken for the whole of DeployWith,
+	// DeployRouted and DeployProxied (lockDeploy): each reads the service's route and
+	// deployment, then writes them after a pull or a tunnel start, so two deploys of
+	// one service in flight could each decide on what the other is about to change.
+	// Remove and RemoveProxied take it too, so a removal never lands between a
+	// deploy's record and its start.
+	deployLocksMu sync.Mutex
+	deployLocks   map[string]*sync.Mutex
+}
+
+// lockDeploy takes slug's deploy lock and returns its release.
+func (m *Manager) lockDeploy(slug string) func() {
+	m.deployLocksMu.Lock()
+	if m.deployLocks == nil {
+		m.deployLocks = map[string]*sync.Mutex{}
+	}
+	l := m.deployLocks[slug]
+	if l == nil {
+		l = &sync.Mutex{}
+		m.deployLocks[slug] = l
+	}
+	m.deployLocksMu.Unlock()
+	l.Lock()
+	return l.Unlock
 }
 
 // NewManager builds a Manager whose registry holds the given provider under
@@ -208,12 +233,17 @@ type DeployOptions struct {
 	Image *string
 	// Instances is how many copies of the service to run; see ScalingLimit.
 	Instances *int
+	// LeaveRoute is the owner's confirmation that a service routed through a proxy
+	// (routes.go) runs from this machine's own IP from now on. Its routed copy is
+	// removed first, since both would run the same device.
+	LeaveRoute bool
 }
 
 // DeployWith deploys slug with the given options. The first copy is deployed exactly
 // as a single-copy service always was; copies 2..N follow it, and copies above N that
 // are still running are removed, highest first.
 func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, error) {
+	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
 		return store.Deployment{}, fmt.Errorf("unknown service: %s", slug)
@@ -242,6 +272,11 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		svc = revealed
 	}
 	if err := validateRequired(svc, credentials); err != nil {
+		return store.Deployment{}, err
+	}
+	leaving, routed, err := m.directAllowed(svc, slug, opts.LeaveRoute)
+	if err != nil {
+		m.store.RecordEvent(slug, "deploy_refused", err.Error())
 		return store.Deployment{}, err
 	}
 	recorded, recordedCopies := "", 1
@@ -308,6 +343,13 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		}
 	}
 
+	if routed {
+		// The routed copy runs the same device ids, so it goes before the service
+		// runs from this machine's own IP; a copy that cannot go stops the switch.
+		if err := m.removeProxied(ctx, slug, leaving); err != nil {
+			return store.Deployment{}, fmt.Errorf("the copy of %s through proxy %d could not be removed first, so nothing was deployed: %w", svc.Name, leaving, err)
+		}
+	}
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
 	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
@@ -341,6 +383,13 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	}
 	deployment.Instances = instances
 	m.store.RecordEvent(slug, "deployed", info.ContainerID)
+	if routed {
+		// It runs from this machine's own IP now, as the owner confirmed.
+		if err := m.store.DeleteRoute(slug); err != nil {
+			m.store.RecordEvent(slug, "route_error", err.Error())
+		}
+		m.store.RecordEvent(slug, "route_left", fmt.Sprintf("proxy %d", leaving))
+	}
 
 	var copies []runtime.ContainerInfo
 	for n := 2; n <= instances; n++ {
@@ -369,6 +418,9 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 }
 
 func (m *Manager) Stop(ctx context.Context, slug string) error {
+	if id, ok := m.Route(slug); ok {
+		return m.StopProxied(ctx, slug, id)
+	}
 	if err := m.providerForSlug(slug).Stop(ctx, slug, m.stopTimeout(slug)); err != nil {
 		m.store.RecordEvent(slug, "stop_error", err.Error())
 		return err
@@ -382,6 +434,13 @@ func (m *Manager) Stop(ctx context.Context, slug string) error {
 }
 
 func (m *Manager) Start(ctx context.Context, slug string) error {
+	if id, ok := m.Route(slug); ok {
+		return m.StartProxied(ctx, slug, id)
+	}
+	if err := m.startAllowed(slug); err != nil {
+		m.store.RecordEvent(slug, "start_error", err.Error())
+		return err
+	}
 	if err := m.providerForSlug(slug).Start(ctx, slug); err != nil {
 		m.store.RecordEvent(slug, "start_error", err.Error())
 		return err
@@ -395,6 +454,16 @@ func (m *Manager) Start(ctx context.Context, slug string) error {
 }
 
 func (m *Manager) Restart(ctx context.Context, slug string) error {
+	if id, ok := m.Route(slug); ok {
+		if err := m.StopProxied(ctx, slug, id); err != nil {
+			return err
+		}
+		return m.StartProxied(ctx, slug, id)
+	}
+	if err := m.startAllowed(slug); err != nil {
+		m.store.RecordEvent(slug, "restart_error", err.Error())
+		return err
+	}
 	if err := m.providerForSlug(slug).Restart(ctx, slug, m.stopTimeout(slug)); err != nil {
 		m.store.RecordEvent(slug, "restart_error", err.Error())
 		return err
@@ -445,7 +514,22 @@ func (m *Manager) PlanRemoval(ctx context.Context, slug string) (runtime.Removal
 // it; allowCritical is the separate yes needed for the volumes whose loss cannot be
 // undone. Both default to false, so the ordinary "remove this service" leaves every
 // node identity and keystore on disk for a later redeploy to pick up.
+//
+// It holds the service's deploy lock, as DeployWith and DeployRouted do: a routed
+// deploy saves its copy record before the copy starts, and a removal in between
+// would take the record and leave the new copy running with none.
 func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCritical bool) error {
+	defer m.lockDeploy(slug)()
+	if id, ok := m.Route(slug); ok {
+		// No container of its own and no volumes: its copy is the service. The
+		// route stays recorded, so a later deploy from this machine's IP still asks.
+		if err := m.removeProxied(ctx, slug, id); err != nil {
+			m.store.RecordEvent(slug, "remove_error", err.Error())
+			return err
+		}
+		m.store.RecordEvent(slug, "removed", fmt.Sprintf("routed copy through proxy %d", id))
+		return nil
+	}
 	opts := runtime.RemoveOptions{
 		DeleteData:    deleteData,
 		AllowCritical: allowCritical,
@@ -508,6 +592,9 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 }
 
 func (m *Manager) Logs(ctx context.Context, slug string, lines int) (string, error) {
+	if id, ok := m.Route(slug); ok {
+		return m.RouteLogs(ctx, slug, id, lines)
+	}
 	return m.providerForSlug(slug).Logs(ctx, slug, lines)
 }
 

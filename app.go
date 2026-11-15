@@ -279,6 +279,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// reboot or a firewall reload leaves the earners offline only briefly, never on
 	// the LAN.
 	go func() {
+		// First: on a CASHPILOT_PROXIED_ONLY machine every second a direct earner
+		// runs after a reboot is traffic from its own IP.
+		a.services.HoldDirect(ctx)
 		// A deploy the app did not finish may have left an earner set aside.
 		docker.RecoverSetAside(ctx)
 		a.runFence(ctx)
@@ -301,6 +304,7 @@ func (a *App) runFence(ctx context.Context) {
 		case <-ticker.C:
 			a.fence.ReconcileFence(ctx)
 		case <-guard.C:
+			a.services.HoldDirect(ctx)
 			a.fence.GuardFenceGated(ctx)
 		}
 	}
@@ -399,6 +403,33 @@ type AppState struct {
 	// Isolation is the LAN fence's status: whether earners are fenced off the LAN,
 	// this machine, a tailnet and cloud metadata, and which ones are not yet.
 	Isolation *runtime.FenceStatus `json:"isolation"`
+	// Route is the deploy form's Route box (internal/services/routes.go): the proxies
+	// a service can run through from its first start, why each service cannot, and
+	// which services are routed.
+	Route RouteState `json:"route"`
+}
+
+// RouteState is what the deploy form needs to offer a route.
+type RouteState struct {
+	// Proxies are the owner's proxies, without their secrets.
+	Proxies []RouteProxy `json:"proxies"`
+	// Refusals is, per visible service, why it cannot run through a proxy ("" when it can).
+	Refusals map[string]string `json:"refusals"`
+	// Recorded is slug -> proxy id of every service routed on this machine, running or
+	// not: a deploy from this machine's own IP asks the owner first.
+	Recorded map[string]int64 `json:"recorded"`
+	// Running is slug -> proxy id of the routed services that run as their copy now.
+	Running map[string]int64 `json:"running"`
+	// ProxiedOnly is CASHPILOT_PROXIED_ONLY: no service runs from this machine's own IP.
+	ProxiedOnly bool `json:"proxiedOnly"`
+}
+
+// RouteProxy is one proxy in the Route box.
+type RouteProxy struct {
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	ExitIP  string `json:"exitIp"`
+	Country string `json:"country"`
 }
 
 // IsolationResult is what turning isolation on did: the status after, the services
@@ -585,7 +616,30 @@ func (a *App) GetAppState() (AppState, error) {
 		StateBackups:     a.stateBackups(deployments),
 		Drift:            a.containerDrift(),
 		Isolation:        a.isolationStatus(),
+		Route:            a.routeState(visible),
 	}, nil
+}
+
+func (a *App) routeState(visible []catalog.Service) RouteState {
+	out := RouteState{
+		Proxies:     []RouteProxy{},
+		Refusals:    map[string]string{},
+		Recorded:    map[string]int64{},
+		Running:     a.services.Routes(),
+		ProxiedOnly: services.ProxiedOnly(),
+	}
+	if views, err := a.services.ListProxies(); err == nil {
+		for _, v := range views {
+			out.Proxies = append(out.Proxies, RouteProxy{ID: v.ID, Name: v.Name, ExitIP: v.LastExitIP, Country: v.LastCountry})
+		}
+	}
+	if recorded, err := a.store.ListRoutes(); err == nil {
+		out.Recorded = recorded
+	}
+	for _, svc := range visible {
+		out.Refusals[svc.Slug] = a.services.ProxyRefusal(svc.Slug)
+	}
+	return out
 }
 
 func (a *App) isolationStatus() *runtime.FenceStatus {
@@ -1394,6 +1448,10 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
+	return a.deployService(slug, values, image, instances, false)
+}
+
+func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool) (store.Deployment, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, err
 	}
@@ -1433,7 +1491,7 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 			return store.Deployment{}, err
 		}
 	}
-	deployment, err := a.services.DeployWith(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances})
+	deployment, err := a.services.DeployWith(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute})
 	if err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, err
@@ -1448,6 +1506,46 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 		go a.collectOne(a.ctx, slug)
 	}
 	return deployment, nil
+}
+
+// DeployServiceRouted deploys slug through proxy proxyID from its first start, so it
+// never runs from this machine's own IP (internal/services/routes.go).
+func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID int64) (services.ProxiedResult, error) {
+	if err := a.ready(); err != nil {
+		return services.ProxiedResult{}, err
+	}
+	creds := values
+	if len(creds) == 0 {
+		stored, err := a.store.GetCredentials(slug)
+		if err != nil {
+			return services.ProxiedResult{}, err
+		}
+		creds = stored
+	}
+	if err := a.services.ValidateDeploy(slug, creds); err != nil {
+		a.emitError("deploy", err)
+		return services.ProxiedResult{}, err
+	}
+	if len(values) > 0 {
+		if err := a.store.SaveCredentials(slug, values); err != nil {
+			return services.ProxiedResult{}, err
+		}
+	}
+	result, err := a.services.DeployRouted(a.ctx, slug, creds, proxyID)
+	if err != nil {
+		a.emitError("deploy", err)
+		return services.ProxiedResult{}, err
+	}
+	a.emitEvent("deployment:changed", slug)
+	a.registerDevice(slug, creds)
+	return result, nil
+}
+
+// DeployServiceLeavingRoute is DeployService for a service routed through a proxy, once
+// the owner confirmed it runs from this machine's own IP from now on. Its routed copy
+// is removed first.
+func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
+	return a.deployService(slug, values, image, instances, true)
 }
 
 func (a *App) StopService(slug string) error {

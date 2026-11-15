@@ -27,6 +27,8 @@ import {
   DeleteProxy,
   DeployProxiedCopy,
   DeployService,
+  DeployServiceLeavingRoute,
+  DeployServiceRouted,
   EnableIsolation,
   ExportCompose,
   ExportStateBackup,
@@ -79,6 +81,7 @@ import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
+import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -96,6 +99,10 @@ let activeView: View = "dashboard";
 let wizardStep = 1;
 let wizardCategories: string[] = [];
 let wizardSelected: string[] = [];
+// The Route box's pick per slug (a proxy id, null for this computer's own IP), kept so
+// a redraw of the wizard does not put an unsaved proxy choice back to Direct. Cleared
+// when the wizard opens or closes, and on a tab or Add service click (wizardAfterNav).
+let wizardRouteDrafts: Record<string, number | null> = {};
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -692,9 +699,7 @@ function wireShellNav() {
       const next = button.dataset.view;
       if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import") {
         activeView = next;
-        if (next === "wizard") {
-          wizardStep = 1;
-        }
+        ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav(next, wizardStep));
         resetScrollAfterRender = true;
         render();
       }
@@ -1638,6 +1643,7 @@ function openWizard(input?: string | Event) {
   activeView = "wizard";
   wizardStep = slug ? 3 : 1;
   wizardSelected = slug ? [slug] : [];
+  wizardRouteDrafts = {};
   const service = state?.services.find((svc) => svc.slug === slug);
   wizardCategories = service ? [service.category] : [];
   render();
@@ -1715,6 +1721,11 @@ function renderSetupWizard(current: AppState) {
         ? wizardSelected.filter((item) => item !== slug)
         : [...wizardSelected, slug];
       render();
+    });
+  });
+  document.querySelectorAll<HTMLSelectElement>("[data-wizard-route]").forEach((select) => {
+    select.addEventListener("change", () => {
+      wizardRouteDrafts[select.dataset.wizardRoute || ""] = routeChoice(select.value);
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-wizard-action]").forEach((button) => {
@@ -1864,7 +1875,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances)).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug])).join("")}
     </div>
   `;
 }
@@ -1899,9 +1910,16 @@ function readWizardInstances(slug: string): number | null {
   return input ? instancesChoice(input.value, input.dataset.initial || "", input.disabled) : null;
 }
 
+// The Route box's answer: a proxy id, or null for this computer's own IP.
+function readWizardRoute(slug: string): number | null {
+  const select = document.querySelector<HTMLSelectElement>(`[data-form-slug="${slug}"] [data-wizard-route]`);
+  return select ? routeChoice(select.value) : null;
+}
+
 function closeWizard() {
   activeView = "dashboard";
   wizardStep = 1;
+  wizardRouteDrafts = {};
   render();
 }
 
@@ -1974,8 +1992,29 @@ async function runWizardAction(slug: string, action: string) {
       if (output) output.textContent = "Deploying...";
       // A custom service has no credentials: it runs its saved definition.
       const custom = state?.services?.some((service) => service.slug === slug && service.custom);
-      if (!custom) await SaveCredentials(slug, values);
-      const deployment = await DeployService(slug, values, readWizardImage(slug), readWizardInstances(slug));
+      const image = readWizardImage(slug);
+      const instances = readWizardInstances(slug);
+      const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
+        save: async () => {
+          if (!custom) await SaveCredentials(slug, values);
+        },
+        confirm: (message) => confirm(message),
+        routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
+        direct: (leaveRoute) => leaveRoute
+          ? DeployServiceLeavingRoute(slug, values, image, instances)
+          : DeployService(slug, values, image, instances),
+      });
+      if (outcome.kind === "refused" || outcome.kind === "cancelled") {
+        if (output) output.textContent = outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
+        return;
+      }
+      if (outcome.kind === "routed") {
+        state = await GetAppState();
+        const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+        if (output) output.textContent = routedDeployText(outcome.result, link);
+        return;
+      }
+      const deployment = outcome.deployment;
       state = await GetAppState();
       // The box now holds what runs, so a second Deploy without an edit keeps it.
       const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);

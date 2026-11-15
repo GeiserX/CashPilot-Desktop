@@ -20,9 +20,12 @@ import (
 )
 
 // TestMain mocks the keyring so store.Open (via config.MasterKey) stays fully
-// in-memory and never touches the real OS keychain.
+// in-memory and never touches the real OS keychain. It also clears
+// CASHPILOT_PROXIED_ONLY, so a shell that sets it cannot turn the ordinary-machine
+// tests red; the proxied-only tests set it themselves.
 func TestMain(m *testing.M) {
 	keyring.MockInit()
+	os.Unsetenv(ProxiedOnlyEnv)
 	os.Exit(m.Run())
 }
 

@@ -121,6 +121,10 @@ func (m *Manager) StartCopy(ctx context.Context, slug string, n int) error {
 	if err != nil {
 		return err
 	}
+	if err := m.startAllowed(slug); err != nil {
+		m.store.RecordEvent(slug, "start_error", fmt.Sprintf("copy %d: %v", n, err))
+		return err
+	}
 	if err := copier.StartCopy(ctx, slug, n); err != nil {
 		m.store.RecordEvent(slug, "start_error", fmt.Sprintf("copy %d: %v", n, err))
 		return err

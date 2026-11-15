@@ -104,6 +104,10 @@ type ProxiedDeploy struct {
 	// OwnIP is this machine's public IP, or "" when unknown. A tunnel whose exit is
 	// this IP is not ready, because traffic would not be leaving through the proxy.
 	OwnIP string
+	// Routed is the service itself, routed through the proxy from its first deploy,
+	// not a copy beside it: it keeps the deploy's own device names and ids, since no
+	// other copy of it runs on this machine to tell apart.
+	Routed bool
 }
 
 // Exit is where a tunnel's traffic comes out.
@@ -478,7 +482,10 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 	if why := proxies.Refusal(svc); why != "" {
 		return client.ContainerCreateOptions{}, proxyErr("%s", why)
 	}
-	env, err := proxiedEnv(svc, buildEnv(svc, req.Env), req.ProxyID)
+	env, err := buildEnv(svc, req.Env), error(nil)
+	if !req.Routed {
+		env, err = proxiedEnv(svc, env, req.ProxyID)
+	}
 	if err != nil {
 		name := svc.Name
 		if name == "" {

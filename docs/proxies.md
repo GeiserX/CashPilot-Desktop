@@ -13,6 +13,44 @@ This is the same feature as the CashPilot web app's
 ([proxied copies](https://geiserx.github.io/CashPilot/proxies/)), with the
 differences listed in [Where Desktop differs](#where-desktop-differs).
 
+A service can also run only through a proxy, from its first start: see
+[Route a service at deploy](#route-a-service-at-deploy).
+
+## Route a service at deploy
+
+A proxied copy runs beside the service, so the service itself still starts once
+from this computer's own IP. If the provider must never see that IP, pick a
+**Route** on the service's setup card. The choices are this computer's own IP
+(the default) and each of your proxies. With a proxy, the service runs only inside
+its tunnel, from its first start.
+
+- Only services that can run through a proxy get the choice, by the rules in
+  [What cannot run through a proxy](#what-cannot-run-through-a-proxy). The
+  card says why when a service cannot. Custom services are deployed first and
+  then get a copy through the proxy.
+- It runs with the settings you deploy it with, under the device name you give
+  it. No second device is registered.
+- It runs once, in a tunnel of its own. To route a service that already runs
+  from this computer's own IP, remove it first, then deploy it with the route.
+- Stop, Start, Restart, Logs and Remove act on it. It is listed on the Proxies
+  page with the proxy it runs through.
+- The app remembers every service routed here, also after you remove it. A
+  later deploy from this computer's own IP asks you first, removes the routed
+  copy, and then runs the service directly.
+
+Routing hides this computer's IP from the service's own traffic. It does not
+hide it from the provider's website, your earnings login or a referral page
+you open in the browser: those come from wherever they run.
+
+Start the app with `CASHPILOT_PROXIED_ONLY=true` in its environment and it
+refuses every service that does not run through a proxy: a deploy, and a Start
+or Restart of a service that runs from this computer's own IP. A service that
+was already running that way is stopped when the app starts and checked again
+every 30 seconds; Docker would otherwise start it after each reboot. Until the
+app is up after a reboot it can run for a moment, so remove such services (or
+deploy them again with a route) rather than leave them stopped. The app itself
+cannot change this setting.
+
 ## What a proxy can be
 
 | Type | What you give it | Notes |
