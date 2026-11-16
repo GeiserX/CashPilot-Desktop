@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Restore a node identity backup from the app.** Settings > Restore from a backup takes a `.cpbackup` file made with a passphrase and puts Mysterium, ProxyBase or Anyone back on this machine, with the web app's rules. It only creates: the service must not be here in any state and its identity volume must not exist. A file sealed to a key stays on `cpbackup`. A file this app did not export needs the service name typed, and is refused while the machine named inside it still runs the service. The container is created without starting, the backup is written into its new volume, read back and compared file by file, and only then does it start; Mysterium only behind the LAN fence. Any failure removes what the restore made. A restore that did not finish holds the service, so Deploy and Start refuse it until the partial restore is deleted. Exports now record each file's SHA-256 so the app knows its own files (docs/backup.md).
+
 ### Changed
 
 - **1.0.0 is the first stable release.** Nothing breaks: config, database, saved credentials and deployed services carry over. An install from before v0.37.0 keeps its earners on Docker's default bridge until Turn on isolation is pressed, and a proxied copy from before v0.39.1 keeps its tunnel there until it is deployed again. `wails.json`, `package.json` and `frontend/package.json` now say 1.0.0; release builds still take the version from the tag. What 1.0 covers, upgrade notes and known limits: docs/whats-new-1.0.md.

@@ -43,6 +43,14 @@ declare module "../wailsjs/go/main/App" {
   export function ConfirmStateBackup(slug: string): Promise<void>;
   export function UndoStateBackup(slug: string): Promise<void>;
   export function ExportStateBackup(slug: string, passphrase: string, passphraseRepeat: string, recipientPublicKey: string): Promise<string>;
+  // Restore from a backup (restore_binding.go). ChooseRestoreFile opens the file
+  // dialog and returns null when it was dismissed. RestoreStateBackup takes the
+  // preview's token, the passphrase and, for a file this app did not make, the
+  // service's name typed.
+  export function ChooseRestoreFile(): Promise<RestorePreview | null>;
+  export function RestoreStateBackup(token: string, passphrase: string, typedName: string): Promise<RestoreResult>;
+  export function UnfinishedRestores(): Promise<UnfinishedRestore[] | null>;
+  export function DiscardPartialRestore(slug: string): Promise<void>;
   // container "" is every container (the machine total).
   export function GetUsage(days: number, container: string): Promise<UsageView>;
   // Activity: what each earner talks to (internal/activity). Off by default.
@@ -848,6 +856,49 @@ export interface StateBackupRow {
   confirmedAt: string;
   method: string;
   tracksChanges: boolean;
+}
+
+// RestorePreview is what restoring the chosen backup file would do on this machine.
+// ok is false when this machine refuses it now, and why says why. known is true when
+// this app exported this exact file; otherwise the restore needs the name typed.
+export interface RestorePreview {
+  token: string;
+  file: string;
+  slug: string;
+  service: string;
+  bytes: number;
+  sha256: string;
+  known: boolean;
+  // The machine the file's header names. Not proof of anything.
+  madeOn: string;
+  container: string;
+  creates: { target: string; volume: string }[] | null;
+  ok: boolean;
+  why: string;
+  // Fleet machines that report this service now.
+  runsOn: string[] | null;
+}
+
+// RestoreResult is what a restore made. started is false while a fence-gated node
+// waits for the LAN fence.
+export interface RestoreResult {
+  containerId: string;
+  name: string;
+  image: string;
+  targets: string[] | null;
+  files: number;
+  started: boolean;
+  waiting?: string;
+  left?: string[] | null;
+}
+
+// UnfinishedRestore is a restore that is running or did not finish: Deploy and
+// Start refuse its service until the partial restore is deleted.
+export interface UnfinishedRestore {
+  slug: string;
+  service: string;
+  volumes: string[] | null;
+  startedAt: string;
 }
 
 // RemovalPlan is what removing a service would delete, read off the live container so

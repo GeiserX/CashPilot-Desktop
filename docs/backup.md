@@ -41,7 +41,54 @@ scheduled backup: a timer would need a stored key.
 The file format is the CashPilot web app's, so either app's tool opens either
 app's backups.
 
-## Restore a backup
+## Restore from the app
+
+**Settings > Restore from a backup** puts a node identity or wallet back on this
+machine from a `.cpbackup` file. It covers Mysterium, ProxyBase and Anyone, whose
+identity sits on a named Docker volume. Choose the file, read what the restore
+would create, type the passphrase and confirm. The rules:
+
+- **It only creates.** This machine must not have the service in any state (no
+  container, no copy, nothing set aside), and its identity volume must not exist.
+  The restore never writes over anything. To replace a running identity, download
+  its backup first, remove the service and say yes to deleting its data, then
+  restore.
+- **Passphrase files only.** A file sealed to a key is refused before anything
+  secret is asked for: its private key never goes through the app. Use the
+  command line steps below for it.
+- **Files the app did not make need the name typed.** The app keeps the SHA-256 of
+  every file it exports. For any other file you type the service name, because
+  nobody can tell from the file whose identity is inside. A file exported before
+  this record existed is one of these.
+- **One identity, one machine.** For a file the app did not make, the restore is
+  refused while the machine named inside the file still runs the service, as far
+  as this app's fleet list shows. The preview also names the fleet machines that
+  run the service now. Two machines on one identity look like one node to the
+  provider, which may merge or ban them.
+- **Checked before it starts.** The app creates the volumes, each with a random
+  `cashpilot.restore` label, and the container without starting it. It writes the
+  backup into the volume, reads the folder back and compares every file, link,
+  owner and permission with the backup. Only then does the container start.
+  Mysterium starts only behind the LAN fence; until the fence holds it waits, and
+  the fence guard never starts it before its data is checked. On any failure the
+  container and the volumes the restore made are removed. A volume under the same
+  name without the restore's label belongs to another program and stays.
+- **A restore that did not finish holds the service.** Before it makes anything,
+  the app records that a restore is under way. The record goes once the data reads
+  back as the backup, or once the undo removed everything. If the app stops
+  mid-restore, or the undo cannot remove something, the record stays: Deploy,
+  Start and Restore refuse the service, and the Restore card lists it. **Delete
+  the partial restore** removes its container and the volumes the restore made,
+  then the service is free again.
+- **Nothing kept.** The app reads the file where it is and keeps only its path and
+  SHA-256 for 15 minutes; the restore reads it again and refuses a file that
+  changed. The passphrase is used once and never stored or logged. The service's
+  saved settings are used, so fill them in on its deploy form first.
+
+Storj and Sia keep their state in host folders, and Storj's is over the export
+cap: restore those with the command line steps.
+
+## Restore a backup from the command line
 
 **1. Open the file** on a machine you trust (needs Go and git). Run `cpbackup` from
 a checkout of the release that made the backup:

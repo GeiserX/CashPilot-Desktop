@@ -53,6 +53,7 @@ check("changed says to back it up again", backupStatusText(row({state: "changed"
 check("expired says six months", backupStatusText(row({state: "expired", confirmedAt: "2026-01-01T00:00:00Z"})).includes("more than six months ago"));
 check("recheck asks once more", backupStatusText(row({state: "recheck", confirmedAt: "2026-01-01T00:00:00Z"})).includes("Confirm it once more"));
 check("an export says it was saved from here", backupStatusText(row({state: "confirmed", confirmedAt: "2026-10-01T09:00:00Z", method: "export"})).includes("(saved from here)"));
+check("a restore says it came from that file", backupStatusText(row({state: "confirmed", confirmedAt: "2026-10-01T09:00:00Z", method: "restore"})).includes("(restored from that file)"));
 check("an untracked confirmation says only the time limit applies",
   backupStatusText(row({state: "confirmed", confirmedAt: "2026-10-01T09:00:00Z", tracksChanges: false})).includes("only the six-month limit applies"));
 

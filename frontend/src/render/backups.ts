@@ -17,7 +17,8 @@ export function backupStatusText(row: StateBackupRow): string {
   const day = String(row.confirmedAt || "").slice(0, 10);
   switch (row.state) {
     case "confirmed": {
-      let text = `Backup confirmed ${day}${row.method === "export" ? " (saved from here)" : ""}`;
+      const how = row.method === "export" ? " (saved from here)" : row.method === "restore" ? " (restored from that file)" : "";
+      let text = `Backup confirmed ${day}${how}`;
       if (!row.tracksChanges) text += ". CashPilot cannot read this volume right now, so only the six-month limit applies";
       return text;
     }

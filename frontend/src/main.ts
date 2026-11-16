@@ -20,6 +20,7 @@ import {
   PreviewImport,
   RemoveBackgroundHelper,
   CheckRuntime,
+  ChooseRestoreFile,
   CollectService,
   CompleteOnboarding,
   ConfirmStateBackup,
@@ -65,12 +66,16 @@ import {
   StopServiceCopy,
   TestProxy,
   UndoStateBackup,
+  UnfinishedRestores,
+  RestoreStateBackup,
+  DiscardPartialRestore,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
+import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
@@ -88,7 +93,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UnfinishedRestore, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -1081,6 +1086,14 @@ async function renderSettings(current: AppState) {
   } catch (error) {
     backgroundError = String(error);
   }
+  // A restore that did not finish holds its service; the card lists it. An error
+  // reading the list is shown, never read as "none".
+  let unfinished: UnfinishedRestore[] = [];
+  try {
+    unfinished = (await UnfinishedRestores()) || [];
+  } catch (error) {
+    showErrorToast({scope: "restore", error: String(error)});
+  }
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -1123,6 +1136,8 @@ async function renderSettings(current: AppState) {
             </div>
           </section>
 
+          ${renderRestoreCard(unfinished)}
+
           ${renderBackgroundCard(background, backgroundError)}
         </main>
         ${pageFoot()}
@@ -1134,8 +1149,75 @@ async function renderSettings(current: AppState) {
   maybeResetScroll();
   document.querySelector("#save-settings")?.addEventListener("click", () => void saveSettingsFromForm());
   document.querySelector<HTMLInputElement>("#bg-helper-toggle")?.addEventListener("change", (event) => void toggleBackgroundHelper(event));
+  wireRestore();
   document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.service));
+  });
+}
+
+// Settings > Restore from a backup: choose a file, read its preview, confirm, restore.
+// The Go side holds every rule (restore_binding.go); a refused restore makes nothing.
+function wireRestore() {
+  document.querySelector<HTMLButtonElement>("#restore-choose")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    const out = document.querySelector<HTMLElement>("#restore-preview");
+    if (!out) return;
+    button.disabled = true;
+    try {
+      const preview = await ChooseRestoreFile();
+      out.innerHTML = preview ? renderRestorePreview(preview) : "";
+      if (preview) wireRestoreForm(out.querySelector<HTMLFormElement>(".restore-form"), preview.known);
+    } catch (error) {
+      out.innerHTML = "";
+      showErrorToast({scope: "restore", error: String(error)});
+    } finally {
+      button.disabled = false;
+    }
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-restore-discard]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const slug = button.dataset.restoreDiscard || "";
+      if (!confirm(`Delete the partial restore of ${slug}? CashPilot removes its container and the volumes the restore made, and nothing else. Then Deploy and Start accept it again.`)) return;
+      button.disabled = true;
+      try {
+        await DiscardPartialRestore(slug);
+        showInfoToast({scope: "restore", message: `The partial restore of ${slug} was deleted.`});
+      } catch (error) {
+        showErrorToast({scope: "restore", error: String(error)});
+      }
+      render();
+    });
+  });
+}
+
+function wireRestoreForm(form: HTMLFormElement | null, known: boolean) {
+  if (!form) return;
+  const passphrase = form.querySelector<HTMLInputElement>("input[name=passphrase]")!;
+  const typed = form.querySelector<HTMLInputElement>("input[name=confirm_name]");
+  (typed || passphrase).focus();
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const service = form.dataset.service || "";
+    if (!known && !typed?.value.trim()) {
+      showErrorToast(`Type ${service} to say whose identity is in this file`);
+      return;
+    }
+    // Desktop has one user: this confirm takes the place of the web's password step.
+    if (!confirm(`Restore ${service} on this machine from this file? CashPilot creates its container and volumes, writes the backup, checks it and then starts it.`)) return;
+    const secret = passphrase.value;
+    passphrase.value = "";
+    const button = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
+    button.disabled = true;
+    button.textContent = "Writing and checking\u2026";
+    try {
+      const result = await RestoreStateBackup(form.dataset.token || "", secret, typed?.value || "");
+      showInfoToast({scope: "restore", message: restoreResultText(service, result)});
+      await refreshState();
+    } catch (error) {
+      // The file was used: a retry chooses it again and sees a fresh preview.
+      showErrorToast({scope: "restore", error: String(error)});
+    }
+    render();
   });
 }
 
