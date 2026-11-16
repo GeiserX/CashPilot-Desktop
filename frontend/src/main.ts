@@ -158,6 +158,9 @@ let activityShown: ActivityView | null = null;
 let activityOpen: Record<string, ActivityDetail | null> = {};
 // Deletes still running (switch-off or Delete data): rows do not open meanwhile.
 let activityDeleting = 0;
+// Moves on with every Settings draw, so an answer that arrives after the user left
+// Settings, or after a newer draw began, is dropped instead of drawn over the page.
+let settingsRequest = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -1069,6 +1072,7 @@ async function runImportDeploy(slug: string) {
 }
 
 async function renderSettings(current: AppState) {
+  const request = ++settingsRequest;
   let settings: SettingsState;
   try {
     settings = await GetSettingsState();
@@ -1094,6 +1098,7 @@ async function renderSettings(current: AppState) {
   } catch (error) {
     showErrorToast({scope: "restore", error: String(error)});
   }
+  if (request !== settingsRequest || activeView !== "settings") return;
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -98,8 +99,10 @@ func TreeManifest(archive []byte) (map[string]ManifestEntry, error) {
 // into a new volume when the container is created) may stay when the backup does
 // not name it: it is empty, or its files are listed on their own. Every file, link
 // and owner must match exactly, the folder's own owner and mode (Root) included.
-// Same lines as the web's manifest_differences.
+// Paths hardlinked to one another may come back with another of them as the file
+// (see sameLinkRoles). Otherwise the same lines as the web's manifest_differences.
 func ManifestDifferences(expected, found map[string]ManifestEntry) []string {
+	found = sameLinkRoles(expected, found)
 	paths := map[string]bool{}
 	for p := range expected {
 		paths[p] = true
@@ -140,6 +143,49 @@ func ManifestDifferences(expected, found map[string]ManifestEntry) []string {
 		}
 	}
 	return lines
+}
+
+// sameLinkRoles gives found's hardlink groups the file the backup named. Docker's
+// archive makes the first path its walk visits the file and every other path to the
+// same inode a link to it, so a backup whose archive named another path first reads
+// back with the roles swapped although it holds the same files. When the backup
+// links found's file to a path in the same group, that path becomes the file (with
+// the content found holds) and the group links to it. Anything else is left as found
+// has it, so its differences show as the web's would.
+func sameLinkRoles(expected, found map[string]ManifestEntry) map[string]ManifestEntry {
+	groups := map[string][]string{}
+	for path, e := range found {
+		if e.Kind == "hardlink" && found[e.Content].Kind == "file" {
+			groups[e.Content] = append(groups[e.Content], path)
+		}
+	}
+	var out map[string]ManifestEntry
+	for target, links := range groups {
+		want := expected[target]
+		if want.Kind != "hardlink" || expected[want.Content].Kind != "file" || !slices.Contains(links, want.Content) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]ManifestEntry, len(found))
+			for path, e := range found {
+				out[path] = e
+			}
+		}
+		file := want.Content
+		for _, path := range append(links, target) {
+			e := out[path]
+			if path == file {
+				e.Kind, e.Content = "file", found[target].Content
+			} else {
+				e.Kind, e.Content = "hardlink", file
+			}
+			out[path] = e
+		}
+	}
+	if out == nil {
+		return found
+	}
+	return out
 }
 
 // WritableArchive is one archive from SplitArchives, ready to be extracted into the

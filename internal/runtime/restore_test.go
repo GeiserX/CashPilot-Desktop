@@ -31,6 +31,9 @@ type fakeRestoreDaemon struct {
 	onCreateVolume func(name string)
 	calls          []string
 	removeFails    bool
+	// createLies names a volume Docker makes but whose answer never arrives: the
+	// create returns an error although the volume is there with the restore's label.
+	createLies string
 }
 
 func newFakeRestoreDaemon() *fakeRestoreDaemon {
@@ -98,6 +101,9 @@ func (f *fakeRestoreDaemon) VolumeCreate(_ context.Context, opts client.VolumeCr
 	}
 	if f.onCreateVolume != nil {
 		f.onCreateVolume(opts.Name)
+	}
+	if opts.Name == f.createLies {
+		return client.VolumeCreateResult{}, errors.New("unexpected EOF")
 	}
 	return client.VolumeCreateResult{Volume: volume.Volume{Name: opts.Name, Labels: f.volumes[opts.Name]}}, nil
 }
@@ -406,6 +412,24 @@ func TestRestoreUndoLeavesAVolumeAnotherProgramReplaced(t *testing.T) {
 	}
 	if r.daemon.volumes["keeper-data"]["owner"] != "someone else" {
 		t.Fatal("another program's volume was deleted")
+	}
+}
+
+// A volume create that errors may still have made the volume (the answer was cut
+// off). The undo removes it when it carries the restore's label, so nothing is left
+// behind that blocks the next restore while no hold lists it.
+func TestRestoreUndoesAVolumeWhoseCreateErrored(t *testing.T) {
+	r := newRestoreRun()
+	r.daemon.createLies = "keeper-data"
+	res, err := r.restore(t, keeper(false), map[string][]byte{"keeper": keeperArchive(t)})
+	if err == nil || !strings.Contains(err.Error(), "could not create the volume keeper-data") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, ok := r.daemon.volumes["keeper-data"]; ok {
+		t.Fatalf("the volume the errored create made was left behind: %v", r.daemon.volumes)
+	}
+	if len(res.Left) != 0 || r.created {
+		t.Fatalf("res = %+v, created = %v", res, r.created)
 	}
 }
 

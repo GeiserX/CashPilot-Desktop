@@ -351,6 +351,9 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		for _, volume := range sortedNames(nonces) {
 			created, err := cli.VolumeCreate(ctx, client.VolumeCreateOptions{Name: volume, Labels: map[string]string{LabelRestore: nonces[volume]}})
 			if err != nil {
+				// Docker may have made it all the same (an answer cut off). The undo
+				// removes it only when it carries this restore's label.
+				made[volume] = nonces[volume]
 				return fmt.Errorf("Docker could not create the volume %s (%v)", volume, err)
 			}
 			if created.Volume.Labels[LabelRestore] != nonces[volume] {

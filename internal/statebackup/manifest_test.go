@@ -202,3 +202,53 @@ func TestFolderName(t *testing.T) {
 		}
 	}
 }
+
+// Docker's archive makes the first path its walk visits the file and every other
+// path to the same inode a link to it. A backup whose archive named the other path
+// first restores into the same files, so the read-back may swap the two roles; that
+// is still the backup. Linked paths that came back as two separate files are not.
+func TestManifestDifferencesAcceptsEitherPathOfAHardlinkAsTheFile(t *testing.T) {
+	file := func(hash string) ManifestEntry {
+		return ManifestEntry{Kind: "file", Mode: 0o644, UID: 1000, GID: 1000, Content: hash}
+	}
+	link := func(to string) ManifestEntry {
+		return ManifestEntry{Kind: "hardlink", Mode: 0o644, UID: 1000, GID: 1000, Content: to}
+	}
+	expected := map[string]ManifestEntry{
+		Root:                     {Kind: "dir", Mode: 0o700, UID: 1000, GID: 1000},
+		"keystore/remember.json": file("aa"),
+		"keystore/copy.json":     link("keystore/remember.json"),
+		"keystore/z.json":        link("keystore/remember.json"),
+	}
+	swapped := map[string]ManifestEntry{
+		Root:                     expected[Root],
+		"keystore/copy.json":     file("aa"),
+		"keystore/remember.json": link("keystore/copy.json"),
+		"keystore/z.json":        link("keystore/copy.json"),
+	}
+	if diff := ManifestDifferences(expected, swapped); diff != nil {
+		t.Fatalf("the same hardlink group read back with the roles swapped: %v", diff)
+	}
+	if diff := ManifestDifferences(swapped, expected); diff != nil {
+		t.Fatalf("the same hardlink group, other way round: %v", diff)
+	}
+
+	split := map[string]ManifestEntry{
+		Root:                     expected[Root],
+		"keystore/copy.json":     file("aa"),
+		"keystore/remember.json": file("aa"),
+		"keystore/z.json":        link("keystore/copy.json"),
+	}
+	if diff := ManifestDifferences(expected, split); !reflect.DeepEqual(diff, []string{"keystore/copy.json: a file, not a hardlink", "keystore/z.json: different content"}) {
+		t.Fatalf("a link that came back as its own file must differ, got %v", diff)
+	}
+	changed := map[string]ManifestEntry{
+		Root:                     expected[Root],
+		"keystore/copy.json":     file("bb"),
+		"keystore/remember.json": link("keystore/copy.json"),
+		"keystore/z.json":        link("keystore/copy.json"),
+	}
+	if diff := ManifestDifferences(expected, changed); !reflect.DeepEqual(diff, []string{"keystore/remember.json: different content"}) {
+		t.Fatalf("a changed file must differ, got %v", diff)
+	}
+}

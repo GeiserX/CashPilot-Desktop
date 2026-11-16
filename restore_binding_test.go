@@ -30,6 +30,9 @@ type restoreStub struct {
 	got      *runtime.RestoreRequest
 	calls    *int
 	discards *int
+	// entered and proceed, when set, pause the restore before its hold is written.
+	entered chan struct{}
+	proceed chan struct{}
 }
 
 func (s restoreStub) RestoreRefusal(context.Context, string, catalog.Service) (string, error) {
@@ -39,6 +42,10 @@ func (s restoreStub) RestoreRefusal(context.Context, string, catalog.Service) (s
 func (s restoreStub) RestoreState(_ context.Context, req runtime.RestoreRequest) (runtime.RestoreResult, error) {
 	*s.calls++
 	*s.got = req
+	if s.entered != nil {
+		close(s.entered)
+		<-s.proceed
+	}
 	if err := req.Hold(map[string]string{"keeper-data": "nonce"}); err != nil {
 		return runtime.RestoreResult{}, err
 	}
@@ -415,6 +422,51 @@ func TestAnUnfinishedRestoreHoldsTheService(t *testing.T) {
 	}
 	if err := h.app.DiscardPartialRestore("keeper"); err == nil {
 		t.Fatal("discarded a restore that is not unfinished")
+	}
+}
+
+// A Start or Restart that arrives while a restore runs, even before its hold is on
+// disk, waits for the restore to end: it must never start the container the restore
+// created before its data read back.
+func TestStartWaitsForARunningRestore(t *testing.T) {
+	for _, op := range []string{"start", "restart"} {
+		t.Run(op, func(t *testing.T) {
+			h := newRestoreHarness(t)
+			h.keeperFile(t, "")
+			h.stub.entered, h.stub.proceed = make(chan struct{}), make(chan struct{})
+			h.use()
+			p := h.choose(t)
+			restored := make(chan error, 1)
+			go func() {
+				_, err := h.app.RestoreStateBackup(p.Token, restorePass, "keeper")
+				restored <- err
+			}()
+			<-h.stub.entered
+			started := make(chan struct{})
+			go func() {
+				if op == "start" {
+					_ = h.app.services.Start(context.Background(), "keeper")
+				} else {
+					_ = h.app.services.Restart(context.Background(), "keeper")
+				}
+				close(started)
+			}()
+			select {
+			case <-started:
+				close(h.stub.proceed)
+				t.Fatalf("%s ran while the restore was writing the service", op)
+			case <-time.After(300 * time.Millisecond):
+			}
+			close(h.stub.proceed)
+			if err := <-restored; err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-started:
+			case <-time.After(10 * time.Second):
+				t.Fatalf("%s never ran after the restore ended", op)
+			}
+		})
 	}
 }
 
