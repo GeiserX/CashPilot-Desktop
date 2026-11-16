@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -434,6 +435,9 @@ func TestStartWaitsForARunningRestore(t *testing.T) {
 			h := newRestoreHarness(t)
 			h.keeperFile(t, "")
 			h.stub.entered, h.stub.proceed = make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			release := func() { once.Do(func() { close(h.stub.proceed) }) }
+			t.Cleanup(release)
 			h.use()
 			p := h.choose(t)
 			restored := make(chan error, 1)
@@ -441,7 +445,13 @@ func TestStartWaitsForARunningRestore(t *testing.T) {
 				_, err := h.app.RestoreStateBackup(p.Token, restorePass, "keeper")
 				restored <- err
 			}()
-			<-h.stub.entered
+			select {
+			case <-h.stub.entered:
+			case err := <-restored:
+				t.Fatalf("the restore ended before it reached the runtime: %v", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("the restore never reached the runtime")
+			}
 			started := make(chan struct{})
 			go func() {
 				if op == "start" {
@@ -453,13 +463,17 @@ func TestStartWaitsForARunningRestore(t *testing.T) {
 			}()
 			select {
 			case <-started:
-				close(h.stub.proceed)
 				t.Fatalf("%s ran while the restore was writing the service", op)
 			case <-time.After(300 * time.Millisecond):
 			}
-			close(h.stub.proceed)
-			if err := <-restored; err != nil {
-				t.Fatal(err)
+			release()
+			select {
+			case err := <-restored:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("the restore never ended")
 			}
 			select {
 			case <-started:
