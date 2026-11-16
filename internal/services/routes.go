@@ -74,6 +74,9 @@ func (m *Manager) directAllowed(svc catalog.Service, slug string, leaveRoute boo
 // CASHPILOT_PROXIED_ONLY was set, or before the service was routed, is held to it
 // all the same. Leaving a route takes a deploy, so a start never does.
 func (m *Manager) startAllowed(slug string) error {
+	if err := m.refuseHeld(slug, "started"); err != nil {
+		return err
+	}
 	svc, _ := m.catalog.Get(slug)
 	_, _, err := m.directAllowed(svc, slug, false)
 	return err
@@ -184,6 +187,9 @@ func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map
 	}
 	if why := m.ProxyRefusal(slug); why != "" {
 		return ProxiedResult{}, errors.New(why)
+	}
+	if err := m.refuseHeld(slug, "deployed"); err != nil {
+		return ProxiedResult{}, err
 	}
 	if _, deployed, err := m.store.GetDeployment(slug); err != nil {
 		return ProxiedResult{}, err

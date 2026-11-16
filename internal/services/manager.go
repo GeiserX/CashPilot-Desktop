@@ -274,6 +274,10 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	if err := validateRequired(svc, credentials); err != nil {
 		return store.Deployment{}, err
 	}
+	if err := m.refuseHeld(slug, "deployed"); err != nil {
+		m.store.RecordEvent(slug, "deploy_refused", err.Error())
+		return store.Deployment{}, err
+	}
 	leaving, routed, err := m.directAllowed(svc, slug, opts.LeaveRoute)
 	if err != nil {
 		m.store.RecordEvent(slug, "deploy_refused", err.Error())

@@ -54,6 +54,14 @@ type App struct {
 	// it is a field so the export path can be driven in a test, which has no window
 	// for a native dialog to open in.
 	saveDialog func(wailsruntime.SaveDialogOptions) (string, error)
+	// openDialog is saveDialog's twin for choosing a file to read (a backup to
+	// restore). Zero value means the real Wails dialog.
+	openDialog func(wailsruntime.OpenDialogOptions) (string, error)
+	// restoreFiles are the backup files the restore preview checked, by token, until
+	// one is restored or restoreFileTTL passes (restore_binding.go). Guarded by
+	// restoreMu.
+	restoreMu    sync.Mutex
+	restoreFiles map[string]restoreFile
 	// importMu serializes ApplyImport's read-merge-write of stored credentials.
 	importMu sync.Mutex
 	// fleetKey is the fleet bearer token held in memory for the per-request auth
