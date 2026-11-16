@@ -217,6 +217,15 @@ type DeviceLink struct {
 	IDEnv string `json:"idEnv" yaml:"id_env"`
 	URL   string `json:"url" yaml:"url"`
 	Steps string `json:"steps" yaml:"steps"`
+	// IDShape is the regex of the device id's shape, and IDShapeUnique says the
+	// shape fits this provider's ids only. An unlinked id claims its earnings for
+	// whoever adds it first, so the web app masks what matches in every text shown
+	// to anyone but the owner: other roles, the read-only feed, pushed alerts.
+	// Desktop has no such reader. Its notices and container logs are shown only in
+	// the owner's own window, and the fleet API and the pairing heartbeat carry
+	// slugs and status, not text, so it reads the fields and has nothing to mask.
+	IDShape       string `json:"idShape,omitempty" yaml:"id_shape"`
+	IDShapeUnique bool   `json:"idShapeUnique,omitempty" yaml:"id_shape_unique"`
 }
 
 // Disclosure is what a service does with the user's machine, in plain words. An
