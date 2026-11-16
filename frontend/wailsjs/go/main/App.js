@@ -18,6 +18,10 @@ export function CheckRuntime() {
   return window['go']['main']['App']['CheckRuntime']();
 }
 
+export function ChooseRestoreFile() {
+  return window['go']['main']['App']['ChooseRestoreFile']();
+}
+
 export function CollectService(arg1) {
   return window['go']['main']['App']['CollectService'](arg1);
 }
@@ -56,6 +60,10 @@ export function DeployServiceLeavingRoute(arg1, arg2, arg3, arg4) {
 
 export function DeployServiceRouted(arg1, arg2, arg3) {
   return window['go']['main']['App']['DeployServiceRouted'](arg1, arg2, arg3);
+}
+
+export function DiscardPartialRestore(arg1) {
+  return window['go']['main']['App']['DiscardPartialRestore'](arg1);
 }
 
 export function EnableIsolation() {
@@ -198,6 +206,10 @@ export function RestartService(arg1) {
   return window['go']['main']['App']['RestartService'](arg1);
 }
 
+export function RestoreStateBackup(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RestoreStateBackup'](arg1, arg2, arg3);
+}
+
 export function SaveCredentials(arg1, arg2) {
   return window['go']['main']['App']['SaveCredentials'](arg1, arg2);
 }
@@ -248,4 +260,8 @@ export function TestProxy(arg1) {
 
 export function UndoStateBackup(arg1) {
   return window['go']['main']['App']['UndoStateBackup'](arg1);
+}
+
+export function UnfinishedRestores() {
+  return window['go']['main']['App']['UnfinishedRestores']();
 }

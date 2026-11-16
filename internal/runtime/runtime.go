@@ -90,6 +90,10 @@ type DeploySpec struct {
 	// Instance is which copy of the service this is. 0 and 1 both mean the first,
 	// which keeps the name and labels it always had; see LabelInstance.
 	Instance int
+	// CreateOnly is a restore's create (restore.go): the container is made and never
+	// started, and a container already under the name refuses it instead of being
+	// replaced. Every other deploy check applies as on a deploy.
+	CreateOnly bool
 }
 
 type ContainerInfo struct {
@@ -118,6 +122,8 @@ type DockerProvider struct {
 	// fence keeps bridge earners off the LAN (lanfence.go). The zero value works:
 	// with no setting wired in, the setting reads as auto.
 	fence fence
+	// restoring lets one restore run at a time (restore.go).
+	restoring sync.Mutex
 	// replacing holds a *sync.Mutex per container name: a deploy holds it from
 	// settling a set-aside leftover to its end, and recovery takes it to settle one,
 	// so recovery never takes a replacement a deploy has made and not yet started.
@@ -377,6 +383,9 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if inspectErr != nil && !cerrdefs.IsNotFound(inspectErr) {
 		return ContainerInfo{}, fmt.Errorf("could not check what holds %s, so it was left as it is: %w", name, inspectErr)
 	}
+	if spec.CreateOnly && inspectErr == nil {
+		return ContainerInfo{}, fmt.Errorf("%s already exists, so nothing was restored. A restore only creates a new container", name)
+	}
 	aside := name + setAsideSuffix
 	setAside, wasRunning := false, false
 	if inspectErr == nil {
@@ -492,6 +501,10 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 			}
 		}
 		return ContainerInfo{}, rollBack(err, madeID)
+	}
+	if spec.CreateOnly {
+		// Nothing was set aside (the name was free), so there is nothing to put back.
+		return ContainerInfo{Slug: spec.Slug, ContainerID: created.ID, Name: name, Image: image, Status: "created", Instance: 1}, nil
 	}
 	if progress != nil {
 		progress("Starting " + name)

@@ -790,30 +790,54 @@ func (s *Store) ConfirmFleetDeviceKey(kind, name string) error {
 }
 
 func (s *Store) ListFleetDevices() []FleetDevice {
+	out, err := s.readFleetDevices(false)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// FleetDevices is ListFleetDevices for a check that must not mistake a failed read
+// for an empty fleet: it returns the error of the query, of any row, and of the read.
+func (s *Store) FleetDevices() ([]FleetDevice, error) {
+	return s.readFleetDevices(true)
+}
+
+// readFleetDevices reads every fleet device. A row that does not scan is skipped,
+// unless strict.
+func (s *Store) readFleetDevices(strict bool) ([]FleetDevice, error) {
 	rows, err := s.db.Query(`
 		SELECT id, name, kind, endpoint, os, arch, status, services, last_seen, created_at
 		FROM fleet_devices ORDER BY kind, name
 	`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []FleetDevice
 	for rows.Next() {
 		var device FleetDevice
 		var servicesRaw string
-		if err := rows.Scan(&device.ID, &device.Name, &device.Kind, &device.Endpoint, &device.OS, &device.Arch, &device.Status, &servicesRaw, &device.LastSeen, &device.CreatedAt); err == nil {
-			// best-effort: a corrupt services blob just yields no badges
-			_ = json.Unmarshal([]byte(servicesRaw), &device.Services)
-			out = append(out, device)
+		if err := rows.Scan(&device.ID, &device.Name, &device.Kind, &device.Endpoint, &device.OS, &device.Arch, &device.Status, &servicesRaw, &device.LastSeen, &device.CreatedAt); err != nil {
+			if strict {
+				return nil, err
+			}
+			continue
 		}
+		if err := json.Unmarshal([]byte(servicesRaw), &device.Services); err != nil {
+			if strict {
+				return nil, fmt.Errorf("fleet device %s: its service list does not read (%v)", device.Name, err)
+			}
+			// best-effort: a corrupt services blob just yields no badges
+		}
+		out = append(out, device)
 	}
 	// Fail closed on a truncated read rather than returning a partial device list.
 	// Mirrors HealthScores' rows.Err() handling.
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 func (s *Store) DeleteFleetDevice(id int64) error {
@@ -1001,6 +1025,12 @@ func (s *Store) migrate() error {
 		}
 	}
 	if _, err = s.execWrite(stateBackupsDDL); err != nil {
+		return err
+	}
+	if _, err = s.execWrite(exportedBackupsDDL); err != nil {
+		return err
+	}
+	if _, err = s.execWrite(restoreHoldsDDL); err != nil {
 		return err
 	}
 	if _, err = s.execWrite(customServicesDDL); err != nil {

@@ -274,6 +274,10 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	if err := validateRequired(svc, credentials); err != nil {
 		return store.Deployment{}, err
 	}
+	if err := m.refuseHeld(slug, "deployed"); err != nil {
+		m.store.RecordEvent(slug, "deploy_refused", err.Error())
+		return store.Deployment{}, err
+	}
 	leaving, routed, err := m.directAllowed(svc, slug, opts.LeaveRoute)
 	if err != nil {
 		m.store.RecordEvent(slug, "deploy_refused", err.Error())
@@ -437,6 +441,9 @@ func (m *Manager) Start(ctx context.Context, slug string) error {
 	if id, ok := m.Route(slug); ok {
 		return m.StartProxied(ctx, slug, id)
 	}
+	// A restore holds the deploy lock from before its hold is on disk until its data
+	// read back, so a start never lands on the container it is still writing.
+	defer m.lockDeploy(slug)()
 	if err := m.startAllowed(slug); err != nil {
 		m.store.RecordEvent(slug, "start_error", err.Error())
 		return err
@@ -460,6 +467,7 @@ func (m *Manager) Restart(ctx context.Context, slug string) error {
 		}
 		return m.StartProxied(ctx, slug, id)
 	}
+	defer m.lockDeploy(slug)() // as Start: never while a restore writes the service
 	if err := m.startAllowed(slug); err != nil {
 		m.store.RecordEvent(slug, "restart_error", err.Error())
 		return err

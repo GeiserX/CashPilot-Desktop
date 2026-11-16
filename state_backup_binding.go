@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -151,6 +153,12 @@ func (a *App) ExportStateBackup(slug, passphrase, passphraseRepeat, recipientPub
 	}
 	if err := os.WriteFile(path, bundle, 0o600); err != nil {
 		return "", fmt.Errorf("could not save the backup: %w", err)
+	}
+	// A restore of this exact file needs no typed service name: this app made it,
+	// so it knows whose identity is inside (restore_binding.go).
+	sum := sha256.Sum256(bundle)
+	if err := a.store.RecordExportedBackup(hex.EncodeToString(sum[:]), slug, time.Now()); err != nil {
+		return path, fmt.Errorf("the backup was saved to %s, but the app could not record that it made it, so a restore of it will ask for the service name: %w", path, err)
 	}
 	live, _ := a.services.StateFingerprint(a.ctx, slug)
 	if err := a.store.ConfirmStateBackup(slug, live, "export", time.Now()); err != nil {
