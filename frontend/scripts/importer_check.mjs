@@ -52,6 +52,10 @@ const preview = {
       slug: "grass", name: "Grass<img src=x>", app: "grass", selected: false, offInSource: false, state: "unusable", reason: "Grass runs as a browser extension.",
       existing: { configured: false, deployed: false }, fields: [],
     },
+    {
+      slug: "nodeploy", name: "No Deploy", app: "nodeploy", selected: true, offInSource: false, state: "not_deployable", reason: "This service has no container to run.",
+      existing: { configured: false, deployed: false }, fields: [],
+    },
   ],
 };
 
@@ -70,6 +74,8 @@ check("a ready row comes ticked", tick("honeygain")?.[1] === " checked");
 check("a row turned off in the old tool comes unticked", tick("earnfm") && !tick("earnfm")[1]);
 check("an unusable row has no tick", !tick("grass"));
 check("an unusable row still says why", html.includes("Grass runs as a browser extension."));
+check("a row with nothing to deploy has no tick, even when marked selected", !tick("nodeploy"));
+check("a row with nothing to deploy still says why", html.includes("This service has no container to run."));
 check("a service already set up says its values are kept", html.includes("values already set are kept"));
 
 // 3
@@ -94,6 +100,10 @@ check("typed values go only with ticked rows, trimmed, blanks dropped",
 check("no files is refused", importFilesProblem([]) !== "");
 check("five files are refused", importFilesProblem(Array.from({ length: 5 }, (_, i) => ({ name: `${i}`, content: "A=1" }))) !== "");
 check("over 64 KiB is refused", importFilesProblem([{ name: "big", content: "x".repeat(64 * 1024 + 1) }]) !== "");
+const half = "x".repeat(32 * 1024 + 1);
+check("control: one file just under half the limit is fine", importFilesProblem([{ name: "a", content: half }]) === "");
+check("two files over 64 KiB together are refused, though each is under it",
+  importFilesProblem([{ name: "a", content: half }, { name: "b", content: half }]) !== "");
 check("control: one small file is fine", importFilesProblem([{ name: ".env", content: "A=1" }]) === "");
 
 // 6
