@@ -46,15 +46,25 @@ export function renderRestorePreview(p: RestorePreview): string {
   const service = escapeHtml(p.service || p.slug);
   const creates = (p.creates || []).map((c) =>
     `<li>volume <code>${escapeHtml(c.volume)}</code> at <code>${escapeHtml(c.target)}</code></li>`).join("");
+  const runsOn = p.runsOn || [];
+  // Never less strict than the Go side: a file this app did not make always asks.
+  const needsName = p.needsName || !p.known;
+  const typeIt = `To go on, type <strong>${service}</strong>:`;
   const origin = p.known
     ? `<p class="muted compact-copy">This app made this file.</p>`
     : `<p class="restore-warn">This app did not make this file${p.madeOn ? ` (it says it came from ${escapeHtml(p.madeOn)})` : ""},
-        so it cannot tell whose identity or wallet is inside. Restore only a file you made yourself. To go on, type <strong>${service}</strong>:</p>
-       <input type="text" name="confirm_name" autocomplete="off" spellcheck="false" aria-label="Type the service name">`;
-  // A file this app does not know may be a backup of a node another machine runs.
-  const elsewhere = !p.known && p.ok && (p.runsOn || []).length
-    ? `<p class="restore-warn">${service} runs now on ${escapeHtml((p.runsOn || []).join(", "))}. If this file is a backup of
-        that node, restoring it puts one identity on two machines: remove it there first.</p>` : "";
+        so it cannot tell whose identity or wallet is inside. Restore only a file you made yourself.${runsOn.length && p.ok ? "" : ` ${typeIt}`}</p>`;
+  // Any machine that runs the service now may run the very node in the file, made
+  // here or not: the export record says who wrote the file, not where its identity
+  // went since.
+  const elsewhere = p.ok && runsOn.length
+    ? `<p class="restore-warn">${service} runs now on ${escapeHtml(runsOn.join(", "))}.${p.known
+        ? " This app made this file, but it cannot tell whether that node came from it."
+        : ""} If this file is a backup of that node, restoring it puts one identity on two machines: remove it there first. ${typeIt}</p>`
+    : "";
+  const confirmName = needsName
+    ? `<input type="text" name="confirm_name" autocomplete="off" spellcheck="false" aria-label="Type the service name">`
+    : "";
   const refused = p.ok ? "" : `<p class="restore-refused" role="alert">This machine cannot restore it now: ${escapeHtml(p.why)}</p>`;
   return `
     <form class="restore-form" data-token="${escapeHtml(p.token)}" data-service="${service}">
@@ -63,7 +73,7 @@ export function renderRestorePreview(p: RestorePreview): string {
       <ul>${creates}</ul>
       <p class="muted compact-copy">It never writes over anything: ${service} must not be on this machine and these volumes must
         not exist. The backup is written, read back and compared before the container first starts.</p>
-      ${refused}${origin}${elsewhere}
+      ${refused}${origin}${elsewhere}${confirmName}
       <input type="password" name="passphrase" autocomplete="off" required aria-label="Passphrase of the backup" placeholder="Passphrase of the backup">
       <button type="submit" class="btn btn-primary btn-sm"${p.ok ? "" : " disabled"}>Restore</button>
     </form>`;

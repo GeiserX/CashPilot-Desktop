@@ -29,7 +29,10 @@ import (
 //     file's SHA-256 for this (store.RecordExportedBackup).
 //   - One identity, one machine: a file this app does not know is refused while the
 //     machine named inside it runs the service, as far as this app's fleet list
-//     shows (the web's made_on rule). The header is used only to refuse more.
+//     shows (the web's made_on rule). The header is used only to refuse more. A file
+//     this app exported needs the name typed while any fleet machine runs the
+//     service: the identity may have moved there, and Desktop has no ledger to tell.
+//     A fleet list that cannot be read refuses.
 //   - The frontend asks the user to confirm, in place of the web's password step-up:
 //     Desktop has one user.
 //
@@ -74,9 +77,12 @@ type RestorePreview struct {
 	// OK is false when this machine refuses the restore now; Why says why.
 	OK  bool   `json:"ok"`
 	Why string `json:"why"`
-	// RunsOn names the fleet machines that report this service now. For a file
-	// this app does not know, one of them may run the very identity inside it.
+	// RunsOn names the fleet machines that report this service now. One of them
+	// may run the very identity inside the file, known or not.
 	RunsOn []string `json:"runsOn"`
+	// NeedsName is true when the restore needs the service's name typed: the file
+	// is not known, or a fleet machine runs the service now.
+	NeedsName bool `json:"needsName"`
 }
 
 // UnfinishedRestore is a restore that is running or did not finish.
@@ -138,12 +144,12 @@ func (a *App) ChooseRestoreFile() (*RestorePreview, error) {
 	if preview.Known, err = a.exportedHere(sum, slug); err != nil {
 		return nil, err
 	}
-	preview.RunsOn = a.fleetRunning(slug)
-	why, err := a.restoreRefusal(slug, preview.Known, preview.MadeOn)
+	why, runsOn, err := a.restoreCheck(slug, preview.Known, preview.MadeOn)
 	if err != nil {
 		return nil, err
 	}
-	preview.Why, preview.OK = why, why == ""
+	preview.Why, preview.OK, preview.RunsOn = why, why == "", runsOn
+	preview.NeedsName = needsName(preview.Known, runsOn)
 
 	token, err := restoreToken()
 	if err != nil {
@@ -189,16 +195,20 @@ func (a *App) RestoreStateBackup(token, passphrase, typedName string) (runtime.R
 	if err != nil {
 		return runtime.RestoreResult{}, err
 	}
-	if !known {
-		typed := strings.ToLower(strings.TrimSpace(typedName))
-		if typed == "" || (typed != strings.ToLower(slug) && typed != strings.ToLower(a.serviceName(slug))) {
-			return runtime.RestoreResult{}, fmt.Errorf("this app did not make this file, so type %s to say whose identity is inside", a.serviceName(slug))
-		}
-	}
-	if why, err := a.restoreRefusal(slug, known, header.MetadataString("worker")); err != nil {
+	why, runsOn, err := a.restoreCheck(slug, known, header.MetadataString("worker"))
+	if err != nil {
 		return runtime.RestoreResult{}, err
 	} else if why != "" {
 		return runtime.RestoreResult{}, fmt.Errorf("nothing was restored: %s", strings.TrimSuffix(why, "."))
+	}
+	if needsName(known, runsOn) {
+		typed := strings.ToLower(strings.TrimSpace(typedName))
+		if typed == "" || (typed != strings.ToLower(slug) && typed != strings.ToLower(a.serviceName(slug))) {
+			if known {
+				return runtime.RestoreResult{}, fmt.Errorf("%s runs now on %s, and the app cannot tell whether that is the node in this file, so type %s to restore it here anyway", a.serviceName(slug), strings.Join(runsOn, ", "), a.serviceName(slug))
+			}
+			return runtime.RestoreResult{}, fmt.Errorf("this app did not make this file, so type %s to say whose identity is inside", a.serviceName(slug))
+		}
 	}
 	payload, err := statebackup.Open(data, passphrase, "")
 	if err != nil {
@@ -292,10 +302,15 @@ func (a *App) exportedHere(sum, slug string) (bool, error) {
 	return ok && exported == slug, nil
 }
 
-// fleetRunning names the fleet machines that report slug, sorted.
-func (a *App) fleetRunning(slug string) []string {
+// fleetRunning names the fleet machines that report slug, sorted. A list it could
+// not read is an error, never an empty fleet.
+func (a *App) fleetRunning(slug string) ([]string, error) {
+	devices, err := a.store.FleetDevices()
+	if err != nil {
+		return nil, err
+	}
 	names := []string{}
-	for _, device := range a.store.ListFleetDevices() {
+	for _, device := range devices {
 		for _, running := range device.Services {
 			if strings.TrimSpace(running) == slug {
 				names = append(names, strings.TrimSpace(device.Name))
@@ -304,32 +319,46 @@ func (a *App) fleetRunning(slug string) []string {
 		}
 	}
 	sort.Strings(names)
-	return names
+	return names, nil
 }
 
-// restoreRefusal says why slug cannot be restored here now, or "": every check of
-// the manager and the runtime, then the one-identity rule. A file this app does not
-// know is refused while the machine its header names runs the service: the file may
-// hold the very identity that machine runs. An offline machine counts, since it may
-// come back with the node.
-func (a *App) restoreRefusal(slug string, known bool, madeOn string) (string, error) {
+// restoreCheck says why slug cannot be restored here now, or "", and which fleet
+// machines run it: every check of the manager and the runtime, then the
+// one-identity rule. A fleet list it cannot read refuses, since it cannot tell where
+// the identity runs. A file this app does not know is refused while the machine its
+// header names runs the service: the file may hold the very identity that machine
+// runs. An offline machine counts, since it may come back with the node.
+func (a *App) restoreCheck(slug string, known bool, madeOn string) (string, []string, error) {
 	creds, err := a.store.GetCredentials(slug)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
+	runsOn, fleetErr := a.fleetRunning(slug)
 	if why, err := a.services.RestoreRefusal(a.ctx, slug, creds); why != "" || err != nil {
-		return why, err
+		return why, runsOn, err
+	}
+	if fleetErr != nil {
+		return fmt.Sprintf("the app could not read which fleet machines run %s (%v), so it cannot tell whether this identity runs on one of them. Try again", a.serviceName(slug), fleetErr), nil, nil
 	}
 	madeOn = strings.TrimSpace(madeOn)
 	if known || madeOn == "" {
-		return "", nil
+		return "", runsOn, nil
 	}
-	for _, name := range a.fleetRunning(slug) {
+	for _, name := range runsOn {
 		if strings.EqualFold(name, madeOn) {
-			return fmt.Sprintf("this file was made on %s, which still runs %s. Two machines on one identity look like one node to the provider, which may merge or ban them. Remove %s from %s first, then restore", name, a.serviceName(slug), a.serviceName(slug), name), nil
+			return fmt.Sprintf("this file was made on %s, which still runs %s. Two machines on one identity look like one node to the provider, which may merge or ban them. Remove %s from %s first, then restore", name, a.serviceName(slug), a.serviceName(slug), name), runsOn, nil
 		}
 	}
-	return "", nil
+	return "", runsOn, nil
+}
+
+// needsName is whether a restore needs the service's name typed. A file this app
+// did not export: nobody can tell whose identity is inside. A file it did export
+// while a fleet machine runs the service: the export record says only that this app
+// wrote the file, not where its identity runs now, and Desktop keeps no fingerprint
+// to tell that machine's node from the one in the file.
+func needsName(known bool, runsOn []string) bool {
+	return !known || len(runsOn) > 0
 }
 
 // dropExpiredRestoreFiles forgets chosen files older than restoreFileTTL. The

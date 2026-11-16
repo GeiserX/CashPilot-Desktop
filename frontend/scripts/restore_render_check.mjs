@@ -34,6 +34,7 @@ function preview(overrides = {}) {
     ok: true,
     why: "",
     runsOn: [],
+    needsName: false,
     ...overrides,
   };
 }
@@ -61,6 +62,17 @@ const foreign = renderRestorePreview(preview({known: false, madeOn: "other-box",
 check("a foreign file asks for the name typed", foreign.includes('name="confirm_name"') && foreign.includes("type <strong>Mysterium</strong>"), foreign);
 check("a foreign file says where it claims to come from", foreign.includes("it says it came from other-box"));
 check("a foreign file warns about machines running the service", foreign.includes("runs now on other-box"));
+
+const foreignNeedsName = renderRestorePreview(preview({known: false, madeOn: "other-box", runsOn: ["other-box"], needsName: true}));
+check("a foreign file asks for the name once", (foreignNeedsName.match(/name="confirm_name"/g) || []).length === 1, foreignNeedsName);
+check("a foreign file with no machine running it still asks for the name", renderRestorePreview(preview({known: false, needsName: true})).includes('name="confirm_name"'));
+
+// The app's own export, while a fleet machine runs the service: the identity may have
+// moved there, so the preview says so and asks for the name.
+const movedAway = renderRestorePreview(preview({known: true, runsOn: ["worker-b"], needsName: true}));
+check("a known file warns about machines running the service", movedAway.includes("runs now on worker-b") && movedAway.includes("cannot tell whether that node came from it"), movedAway);
+check("a known file the fleet may run asks for the name typed", (movedAway.match(/name="confirm_name"/g) || []).length === 1 && movedAway.includes("type <strong>Mysterium</strong>"), movedAway);
+check("a refused preview does not add the warning", !renderRestorePreview(preview({known: true, runsOn: ["worker-b"], needsName: true, ok: false, why: "x"})).includes("runs now on"));
 
 const refused = renderRestorePreview(preview({ok: false, why: "the volume mysterium-data already exists on this machine"}));
 check("a refusal is shown", refused.includes("cannot restore it now: the volume mysterium-data already exists"), refused);

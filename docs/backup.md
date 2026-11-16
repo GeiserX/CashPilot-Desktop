@@ -62,9 +62,12 @@ would create, type the passphrase and confirm. The rules:
   this record existed is one of these.
 - **One identity, one machine.** For a file the app did not make, the restore is
   refused while the machine named inside the file still runs the service, as far
-  as this app's fleet list shows. The preview also names the fleet machines that
-  run the service now. Two machines on one identity look like one node to the
-  provider, which may merge or ban them.
+  as this app's fleet list shows. For any file, the preview names the fleet
+  machines that run the service now. A file the app made needs the name typed
+  while one of them runs it: the record says the app wrote the file, not where its
+  identity went since. When the app cannot read its fleet list, the restore is
+  refused. Two machines on one identity look like one node to the provider, which
+  may merge or ban them.
 - **Checked before it starts.** The app creates the volumes, each with a random
   `cashpilot.restore` label, and the container without starting it. It writes the
   backup into the volume, reads the folder back and compares every file, link,
@@ -76,7 +79,8 @@ would create, type the passphrase and confirm. The rules:
 - **A restore that did not finish holds the service.** Before it makes anything,
   the app records that a restore is under way. The record goes once the data reads
   back as the backup, or once the undo removed everything. If the app stops
-  mid-restore, or the undo cannot remove something, the record stays: Deploy,
+  mid-restore, or the undo cannot remove something (also after a start that
+  failed), the record stays: Deploy,
   Start and Restore refuse the service, and the Restore card lists it. **Delete
   the partial restore** removes its container and the volumes the restore made,
   then the service is free again.

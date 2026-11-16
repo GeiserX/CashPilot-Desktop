@@ -195,6 +195,71 @@ func TestRestoreOfAnExportedFileNeedsNoName(t *testing.T) {
 	}
 }
 
+// A file this app exported says only that this app wrote those bytes, not where the
+// identity inside runs now: it may have moved to a fleet machine since. While one
+// reports the service, the preview names it and the restore needs the name typed,
+// as for a file this app does not know.
+func TestRestoreOfAnExportedFileWhileTheFleetRunsTheService(t *testing.T) {
+	h := newRestoreHarness(t)
+	if err := h.app.store.UpsertDeployment(store.Deployment{Slug: "keeper", Name: "cashpilot-keeper", Status: "running", Runtime: "existing-docker"}); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(t.TempDir(), "keeper.cpbackup")
+	h.app.saveDialog = func(wailsruntime.SaveDialogOptions) (string, error) { return dest, nil }
+	h.app.services = services.NewManager(stateStub{runtime.NewDockerProvider(), dirsTar(t, 2)}, h.app.catalog, h.app.store)
+	if _, err := h.app.ExportStateBackup("keeper", restorePass, restorePass, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.app.store.DeleteDeployment("keeper"); err != nil {
+		t.Fatal(err)
+	}
+	h.use()
+	if _, err := h.app.store.UpsertFleetDevice(store.FleetDevice{Name: "Worker-B", Services: []string{"keeper"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.chosen = dest
+	p := h.choose(t)
+	if !p.Known || !p.OK || !p.NeedsName || len(p.RunsOn) != 1 || p.RunsOn[0] != "Worker-B" {
+		t.Fatalf("preview = %+v", p)
+	}
+	if _, err := h.app.RestoreStateBackup(p.Token, restorePass, ""); err == nil || !strings.Contains(err.Error(), "runs now on Worker-B") {
+		t.Fatalf("restored a known file the fleet may run, with no name typed: %v", err)
+	}
+	if h.calls != 0 {
+		t.Fatal("the runtime was asked to restore")
+	}
+	p = h.choose(t)
+	if _, err := h.app.RestoreStateBackup(p.Token, restorePass, "Keeper"); err != nil {
+		t.Fatal(err)
+	}
+	if h.calls != 1 {
+		t.Fatalf("calls = %d", h.calls)
+	}
+}
+
+// The one-identity rule refuses when it cannot read the fleet list: an unreadable
+// list is not a fleet that runs nothing.
+func TestRestoreRefusesWhenTheFleetCannotBeRead(t *testing.T) {
+	h := newRestoreHarness(t)
+	h.keeperFile(t, "Other-Box")
+	if p := h.choose(t); !p.OK {
+		t.Fatalf("control: %+v", p)
+	}
+	if _, err := rawDB(t, h.app.cfg.DataDir()).Exec(`DROP TABLE fleet_devices`); err != nil {
+		t.Fatal(err)
+	}
+	p := h.choose(t)
+	if p.OK || !strings.Contains(p.Why, "could not read which fleet machines run Keeper") {
+		t.Fatalf("preview = %+v", p)
+	}
+	if _, err := h.app.RestoreStateBackup(p.Token, restorePass, "keeper"); err == nil || !strings.Contains(err.Error(), "could not read which fleet machines") {
+		t.Fatalf("restored with the fleet unread: %v", err)
+	}
+	if h.calls != 0 {
+		t.Fatal("the runtime was asked to restore")
+	}
+}
+
 // A file sealed to a key is refused before anything secret is asked for.
 func TestRestoreRefusesAKeySealedFile(t *testing.T) {
 	h := newRestoreHarness(t)

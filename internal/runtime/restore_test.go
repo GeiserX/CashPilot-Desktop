@@ -162,6 +162,7 @@ type restoreRun struct {
 	daemon   *fakeRestoreDaemon
 	p        *DockerProvider
 	held     map[string]string
+	holding  bool // the hold is on record now
 	released bool
 	created  bool
 	started  bool
@@ -177,11 +178,12 @@ func (r *restoreRun) restore(t *testing.T, svc catalog.Service, archives map[str
 		Spec:     DeploySpec{Slug: svc.Slug, Service: svc},
 		Archives: archives,
 		Hold: func(v map[string]string) error {
-			r.held = v
+			r.held, r.holding = v, true
 			return nil
 		},
 		Release: func() error {
 			r.released = true
+			r.holding = false
 			return nil
 		},
 	}
@@ -353,6 +355,38 @@ func TestRestoreReportsWhatTheUndoLeft(t *testing.T) {
 	}
 	if stopped, _ := r.p.fence.userStopped(); !stopped["cashpilot-keeper"] {
 		t.Fatal("a half-written node that stayed must stay held from the fence guard")
+	}
+}
+
+// A start that fails after the hold was lifted, with an undo that cannot remove the
+// container, records the hold again: what stayed is checked data nobody started, and
+// the Settings card must offer to delete it, as the error says.
+func TestRestoreHoldsAgainWhenTheUndoLeavesSomethingAfterTheRelease(t *testing.T) {
+	r := newRestoreRun()
+	r.startErr = errors.New("port is already allocated")
+	r.daemon.removeFails = true
+	res, err := r.restore(t, keeper(false), map[string][]byte{"keeper": keeperArchive(t)})
+	if err == nil || len(res.Left) == 0 || res.Left[0] != "cashpilot-keeper" {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+	if !r.released {
+		t.Fatal("the test needs the failure to come after the release")
+	}
+	if !r.holding || r.held["keeper-data"] == "" {
+		t.Fatalf("the hold was not recorded again, held = %v; err = %v", r.held, err)
+	}
+	if !strings.Contains(err.Error(), "delete the partial restore under Settings") {
+		t.Fatalf("err = %v", err)
+	}
+
+	// An undo that removed everything leaves no hold behind.
+	r = newRestoreRun()
+	r.startErr = errors.New("port is already allocated")
+	if res, err := r.restore(t, keeper(false), map[string][]byte{"keeper": keeperArchive(t)}); err == nil || len(res.Left) != 0 {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+	if r.holding {
+		t.Fatalf("a clean undo recorded a hold again: %v", r.held)
 	}
 }
 

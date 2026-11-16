@@ -85,7 +85,9 @@ type RestoreRequest struct {
 	// mid-restore leaves a service that Deploy and Start refuse.
 	Hold func(volumes map[string]string) error
 	// Release lifts that record once every folder read back as the backup, right
-	// before the start. One that fails undoes the restore.
+	// before the start. One that fails undoes the restore. When the start fails
+	// after it and the undo leaves something, Hold is called again with the same
+	// volumes.
 	Release  func() error
 	Progress func(string)
 }
@@ -328,6 +330,7 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 
 	gated := svc.Docker.FenceGated
 	wasStopped := false
+	released := false
 	made := map[string]string{}
 	var createdID string
 	result := RestoreResult{Name: name, Targets: sortedNames(targets)}
@@ -412,6 +415,7 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		if err := req.Release(); err != nil {
 			return fmt.Errorf("the app could not record that the restore of %s finished, so it was not started (%v)", svc.Name, err)
 		}
+		released = true
 		if !gated {
 			if err := steps.start(ctx); err != nil {
 				return fmt.Errorf("Docker could not start %s (%v)", name, err)
@@ -440,6 +444,15 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		_ = p.fence.markStopped(name, wasStopped)
 	}
 	msg := strings.TrimSuffix(failure.Error(), ".") + ". The restore was undone."
+	if len(left) > 0 && released {
+		// The hold went right before the start, and the start or the fence step after
+		// it failed. What the undo left needs the record back, or nothing lists it
+		// under Settings and nothing deletes it.
+		if err := req.Hold(nonces); err != nil {
+			msg += fmt.Sprintf(" Could not remove %s, and the app could not hold %s again (%v): remove them by hand with Docker before you deploy %s.", strings.Join(left, ", "), svc.Name, err, svc.Name)
+			return RestoreResult{Left: left}, &restoreError{msg: msg, left: left}
+		}
+	}
 	if len(left) > 0 {
 		msg += fmt.Sprintf(" Could not remove %s, so %s stays held: Deploy and Start refuse it until you delete the partial restore under Settings, Restore from a backup.", strings.Join(left, ", "), svc.Name)
 	}

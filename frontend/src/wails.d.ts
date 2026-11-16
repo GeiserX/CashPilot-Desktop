@@ -860,7 +860,8 @@ export interface StateBackupRow {
 
 // RestorePreview is what restoring the chosen backup file would do on this machine.
 // ok is false when this machine refuses it now, and why says why. known is true when
-// this app exported this exact file; otherwise the restore needs the name typed.
+// this app exported this exact file; needsName says whether the restore needs the
+// name typed.
 export interface RestorePreview {
   token: string;
   file: string;
@@ -875,8 +876,12 @@ export interface RestorePreview {
   creates: { target: string; volume: string }[] | null;
   ok: boolean;
   why: string;
-  // Fleet machines that report this service now.
+  // Fleet machines that report this service now. Any of them may run the identity
+  // in the file, known or not.
   runsOn: string[] | null;
+  // The restore needs the service name typed: the file is not known, or a fleet
+  // machine runs the service now.
+  needsName: boolean;
 }
 
 // RestoreResult is what a restore made. started is false while a fence-gated node

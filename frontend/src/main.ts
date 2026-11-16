@@ -1166,7 +1166,7 @@ function wireRestore() {
     try {
       const preview = await ChooseRestoreFile();
       out.innerHTML = preview ? renderRestorePreview(preview) : "";
-      if (preview) wireRestoreForm(out.querySelector<HTMLFormElement>(".restore-form"), preview.known);
+      if (preview) wireRestoreForm(out.querySelector<HTMLFormElement>(".restore-form"), preview.needsName || !preview.known);
     } catch (error) {
       out.innerHTML = "";
       showErrorToast({scope: "restore", error: String(error)});
@@ -1190,7 +1190,7 @@ function wireRestore() {
   });
 }
 
-function wireRestoreForm(form: HTMLFormElement | null, known: boolean) {
+function wireRestoreForm(form: HTMLFormElement | null, needsName: boolean) {
   if (!form) return;
   const passphrase = form.querySelector<HTMLInputElement>("input[name=passphrase]")!;
   const typed = form.querySelector<HTMLInputElement>("input[name=confirm_name]");
@@ -1198,8 +1198,8 @@ function wireRestoreForm(form: HTMLFormElement | null, known: boolean) {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const service = form.dataset.service || "";
-    if (!known && !typed?.value.trim()) {
-      showErrorToast(`Type ${service} to say whose identity is in this file`);
+    if (needsName && !typed?.value.trim()) {
+      showErrorToast(`Type ${service} to restore it from this file`);
       return;
     }
     // Desktop has one user: this confirm takes the place of the web's password step.
