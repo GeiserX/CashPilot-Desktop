@@ -101,7 +101,7 @@ check("no files is refused", importFilesProblem([]) !== "");
 check("five files are refused", importFilesProblem(Array.from({ length: 5 }, (_, i) => ({ name: `${i}`, content: "A=1" }))) !== "");
 check("over 64 KiB is refused", importFilesProblem([{ name: "big", content: "x".repeat(64 * 1024 + 1) }]) !== "");
 const half = "x".repeat(32 * 1024 + 1);
-check("control: one file just under half the limit is fine", importFilesProblem([{ name: "a", content: half }]) === "");
+check("control: one file just over half the limit is fine", importFilesProblem([{ name: "a", content: half }]) === "");
 check("two files over 64 KiB together are refused, though each is under it",
   importFilesProblem([{ name: "a", content: half }, { name: "b", content: half }]) !== "");
 check("control: one small file is fine", importFilesProblem([{ name: ".env", content: "A=1" }]) === "");
