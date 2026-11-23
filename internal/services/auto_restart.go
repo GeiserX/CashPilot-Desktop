@@ -61,10 +61,32 @@ func (m *Manager) RestartStuck(ctx context.Context, slug string, listedAt time.T
 		log.Printf("services: left %s stopped: the owner stopped it", slug)
 		return nil
 	}
+	// The state the check started from can be older than listedAt (the dashboard
+	// reads it from the last refresh), and a restart starts a stopped container.
+	// Ask the runtime now, under the lock a Stop holds until it is done.
+	if !m.runningNow(ctx, slug) {
+		log.Printf("services: left %s alone: it is not running now", slug)
+		return nil
+	}
 	if err := m.Restart(ctx, slug); err != nil {
 		return err
 	}
 	m.store.RecordEvent(slug, "auto_restarted", reason)
 	log.Printf("services: restarted %s by itself: %.300s", slug, reason)
 	return nil
+}
+
+// runningNow reports whether the runtime lists slug's first copy as running or
+// restarting right now. A failed listing is false: no restart on a guess.
+func (m *Manager) runningNow(ctx context.Context, slug string) bool {
+	infos, err := m.providerForSlug(slug).List(ctx)
+	if err != nil {
+		return false
+	}
+	for _, info := range infos {
+		if info.Slug == slug && info.Instance <= 1 {
+			return info.Status == "running" || info.Status == "restarting"
+		}
+	}
+	return false
 }

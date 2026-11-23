@@ -8,8 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	_ "modernc.org/sqlite"
 )
+
+// runningExample is the runtime's listing of a running first copy of example.
+var runningExample = []runtime.ContainerInfo{{Slug: "example", Instance: 1, Status: "running"}}
 
 func eventDetail(t *testing.T, dir, slug, event string) (string, bool) {
 	t.Helper()
@@ -31,7 +35,7 @@ func eventDetail(t *testing.T, dir, slug, event string) (string, bool) {
 
 func TestRestartStuckRestartsAndSaysWhy(t *testing.T) {
 	dir, st := newTestStoreInDir(t)
-	fake := &fakeProvider{}
+	fake := &fakeProvider{listResult: runningExample}
 	m := NewManager(fake, newTestCatalog(t), st)
 	if err := m.RestartStuck(context.Background(), "example", time.Now(), "it has not reached its relay"); err != nil {
 		t.Fatalf("RestartStuck: %v", err)
@@ -48,7 +52,7 @@ func TestRestartStuckRestartsAndSaysWhy(t *testing.T) {
 // hour of logs before it asks; a Stop pressed meanwhile must win.
 func TestRestartStuckLeavesAServiceTheOwnerStoppedDuringTheCheck(t *testing.T) {
 	dir, st := newTestStoreInDir(t)
-	fake := &fakeProvider{}
+	fake := &fakeProvider{listResult: runningExample}
 	m := NewManager(fake, newTestCatalog(t), st)
 	listedAt := time.Now()
 	if err := m.Stop(context.Background(), "example"); err != nil {
@@ -67,7 +71,7 @@ func TestRestartStuckLeavesAServiceTheOwnerStoppedDuringTheCheck(t *testing.T) {
 
 func TestRestartStuckIgnoresAStopFromBeforeTheCheck(t *testing.T) {
 	_, st := newTestStoreInDir(t)
-	fake := &fakeProvider{}
+	fake := &fakeProvider{listResult: runningExample}
 	m := NewManager(fake, newTestCatalog(t), st)
 	if err := m.Stop(context.Background(), "example"); err != nil {
 		t.Fatalf("Stop: %v", err)
@@ -112,6 +116,7 @@ func (p *orderedProvider) Stop(context.Context, string, int) error {
 func TestAStopDuringAnAutomaticRestartRunsAfterIt(t *testing.T) {
 	_, st := newTestStoreInDir(t)
 	p := &orderedProvider{entered: make(chan struct{}), release: make(chan struct{})}
+	p.listResult = runningExample
 	m := NewManager(p, newTestCatalog(t), st)
 	done := make(chan error, 2)
 	go func() { done <- m.RestartStuck(context.Background(), "example", time.Now(), "stuck") }()
@@ -128,5 +133,27 @@ func TestAStopDuringAnAutomaticRestartRunsAfterIt(t *testing.T) {
 	defer p.mu.Unlock()
 	if len(p.order) != 2 || p.order[0] != "restart" || p.order[1] != "stop" {
 		t.Fatalf("order = %v, want the restart then the owner's stop", p.order)
+	}
+}
+
+// The dashboard's state can be older than the check, and a restart starts a
+// stopped container. The runtime is asked again just before the restart.
+func TestRestartStuckLeavesAServiceThatIsNotRunningNow(t *testing.T) {
+	for name, list := range map[string][]runtime.ContainerInfo{
+		"exited":         {{Slug: "example", Instance: 1, Status: "exited"}},
+		"gone":           nil,
+		"only a copy up": {{Slug: "example", Instance: 1, Status: "exited"}, {Slug: "example", Instance: 2, Status: "running"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, st := newTestStoreInDir(t)
+			fake := &fakeProvider{listResult: list}
+			m := NewManager(fake, newTestCatalog(t), st)
+			if err := m.RestartStuck(context.Background(), "example", time.Now(), "stuck"); err != nil {
+				t.Fatalf("RestartStuck: %v", err)
+			}
+			if len(fake.restartTimeouts) != 0 {
+				t.Fatalf("restarted a service that is not running now")
+			}
+		})
 	}
 }

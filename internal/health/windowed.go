@@ -176,8 +176,9 @@ type windowCache struct {
 var windows = &windowCache{entries: map[string]*windowEntry{}, restarted: map[string]time.Time{}, now: time.Now}
 
 // hits returns the last verdict for slug and starts a fresh check in the
-// background when that verdict is older than windowEvery.
-func (c *windowCache) hits(reader WindowReader, slug string, signals []catalog.HealthSignal) []Hit {
+// background when that verdict is older than windowEvery. listedAt is when the
+// caller began reading the container state that says slug is up.
+func (c *windowCache) hits(reader WindowReader, slug string, signals []catalog.HealthSignal, listedAt time.Time) []Hit {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e := c.entries[slug]
@@ -188,7 +189,7 @@ func (c *windowCache) hits(reader WindowReader, slug string, signals []catalog.H
 	if !e.running && (e.checked.IsZero() || c.now().Sub(e.checked) >= windowEvery) {
 		e.running = true
 		c.wg.Add(1)
-		go c.refresh(reader, slug, signals)
+		go c.refresh(reader, slug, signals, listedAt)
 	}
 	return e.hits
 }
@@ -204,11 +205,8 @@ func (c *windowCache) forget(slug string) {
 
 // refresh judges every windowed signal. A failed read keeps the last verdict, so a
 // runtime blip does not clear a real problem.
-func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalog.HealthSignal) {
+func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalog.HealthSignal, listedAt time.Time) {
 	defer c.wg.Done()
-	// Wall time, as the owner's Stop is recorded: a Stop after this moment wins
-	// over a restart this check asks for.
-	listedAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), windowTimeout)
 	defer cancel()
 	var hits []Hit
