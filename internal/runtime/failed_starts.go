@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
@@ -35,7 +36,8 @@ type FailedStart struct {
 }
 
 // FailedStarts lists the managed earners Docker could not start. It costs one
-// container list, and one inspect for each managed container that is exited.
+// container list, and one inspect for each managed container that is exited. An
+// inspect that fails for any reason but "no such container" fails the whole list.
 func (p *DockerProvider) FailedStarts(ctx context.Context) ([]FailedStart, error) {
 	cli, err := dockerClient()
 	if err != nil {
@@ -61,8 +63,13 @@ func (p *DockerProvider) FailedStarts(ctx context.Context) ([]FailedStart, error
 			continue
 		}
 		got, err := cli.ContainerInspect(ctx, c.ID, client.ContainerInspectOptions{})
+		if cerrdefs.IsNotFound(err) {
+			continue // removed since the list
+		}
 		if err != nil {
-			continue
+			// An incomplete pass is no answer: the caller would forget when it
+			// last tried this container, and try it again at once.
+			return nil, err
 		}
 		if f, ok := failedStart(got.Container); ok {
 			failed = append(failed, f)

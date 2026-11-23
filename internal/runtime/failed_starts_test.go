@@ -83,6 +83,8 @@ func TestFailedStartsAsksTheDaemon(t *testing.T) {
 		"id-cashpilot-earnapp-replaced": inspected("cashpilot-earnapp-replaced", setAside, container.StateExited, goferError, container.RestartPolicyUnlessStopped),
 	}
 	var listQuery string
+	// inspectStatus, when set for an id, makes its inspect answer with that status.
+	inspectStatus := map[string]int{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if i := strings.Index(path[1:], "/"); i >= 0 && strings.HasPrefix(path, "/v1.") {
@@ -100,6 +102,11 @@ func TestFailedStartsAsksTheDaemon(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(list)
 		case strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/json"):
 			id := strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/json")
+			if status := inspectStatus[id]; status != 0 {
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"message":"inspect failed"}`))
+				return
+			}
 			c, ok := containers[id]
 			if !ok {
 				w.WriteHeader(http.StatusNotFound)
@@ -130,5 +137,17 @@ func TestFailedStartsAsksTheDaemon(t *testing.T) {
 	}
 	if !strings.Contains(listQuery, `"status":{"exited":true}`) || !strings.Contains(listQuery, LabelManaged+"=true") {
 		t.Fatalf("list filters %s", listQuery)
+	}
+
+	// A container removed between the list and its inspect is skipped.
+	inspectStatus["id-cashpilot-honeygain"] = http.StatusNotFound
+	if got, err := (&DockerProvider{}).FailedStarts(context.Background()); err != nil || len(got) != 0 {
+		t.Fatalf("a removed container: %v, %v", got, err)
+	}
+	// Any other inspect failure fails the list: an incomplete pass would make the
+	// caller forget when it last tried that container.
+	inspectStatus["id-cashpilot-honeygain"] = http.StatusInternalServerError
+	if got, err := (&DockerProvider{}).FailedStarts(context.Background()); err == nil {
+		t.Fatalf("an inspect that failed gave a complete list: %v", got)
 	}
 }

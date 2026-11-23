@@ -18,6 +18,9 @@ type failedStartProvider struct {
 	failed  []runtime.FailedStart
 	listErr error
 	starts  []string
+	// duringStart, when set, runs inside every Start, so a test can act while a
+	// start is in flight (one that waits on a deploy's lock).
+	duringStart func()
 }
 
 func (f *failedStartProvider) FailedStarts(context.Context) ([]runtime.FailedStart, error) {
@@ -26,6 +29,9 @@ func (f *failedStartProvider) FailedStarts(context.Context) ([]runtime.FailedSta
 
 func (f *failedStartProvider) Start(_ context.Context, slug string) error {
 	f.starts = append(f.starts, slug)
+	if f.duringStart != nil {
+		f.duringStart()
+	}
 	return f.startErr
 }
 
@@ -168,5 +174,56 @@ func TestStartFailedStartsSkipsAProviderThatCannotList(t *testing.T) {
 	m := NewManager(&fakeProvider{}, newTestCatalog(t), newTestStore(t))
 	if got := m.StartFailedStarts(context.Background()); got != nil {
 		t.Fatalf("started %v", got)
+	}
+}
+
+// The interval counts from each try, not from the start of the pass: a Start that
+// waited on a deploy must not shorten the next one's interval.
+func TestStartFailedStartsCountsTheIntervalFromEachTry(t *testing.T) {
+	now := withStartRetryClock(t)
+	m, p := newFailedStartRig(t,
+		runtime.FailedStart{ID: "a", Name: "cashpilot-example", Slug: "example", Instance: 1, Error: goferError},
+		runtime.FailedStart{ID: "b", Name: "cashpilot-manual-svc", Slug: "manual-svc", Instance: 1, Error: goferError},
+	)
+	p.startErr = errors.New("still broken")
+	p.duringStart = func() {
+		if len(p.starts) == 1 {
+			*now = now.Add(4 * time.Minute) // the first start waited on a deploy
+		}
+	}
+	ctx := context.Background()
+	m.StartFailedStarts(ctx)
+	p.duringStart = nil
+	*now = now.Add(StartRetry - 4*time.Minute) // StartRetry after the first try
+	m.StartFailedStarts(ctx)
+	if !slices.Equal(p.starts, []string{"example", "manual-svc", "example"}) {
+		t.Fatalf("starts %v: the second container was tried again one minute after its try", p.starts)
+	}
+}
+
+// One pass at a time: a pass that finds another still running (its Start waiting
+// on a deploy) returns at once and starts nothing.
+func TestStartFailedStartsRunsOnePassAtATime(t *testing.T) {
+	withStartRetryClock(t)
+	m, p := newFailedStartRig(t, runtime.FailedStart{ID: "a", Name: "cashpilot-example", Slug: "example", Instance: 1, Error: goferError})
+	var second []string
+	p.duringStart = func() {
+		p.duringStart = nil
+		// A container that is due, so only the one-pass rule can keep this
+		// second pass from starting it.
+		p.failed = append(p.failed, runtime.FailedStart{ID: "c", Name: "cashpilot-manual-svc", Slug: "manual-svc", Instance: 1, Error: goferError})
+		second = m.StartFailedStarts(context.Background())
+	}
+	got := m.StartFailedStarts(context.Background())
+	if len(second) != 0 || len(p.starts) != 1 {
+		t.Fatalf("a pass ran inside another: second %v, starts %v", second, p.starts)
+	}
+	if !slices.Equal(got, []string{"cashpilot-example"}) {
+		t.Fatalf("started %v", got)
+	}
+	// Positive control: once the first pass is over, the lock is free again and
+	// the container the second pass skipped starts.
+	if got := m.StartFailedStarts(context.Background()); !slices.Equal(got, []string{"cashpilot-manual-svc"}) {
+		t.Fatalf("the pass after it started %v", got)
 	}
 }

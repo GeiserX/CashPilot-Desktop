@@ -23,6 +23,9 @@ type failedStartLister interface {
 
 // failedStartState is when StartFailedStarts last tried each container, by id.
 type failedStartState struct {
+	// running lets one pass run at a time: a Start waits for its service's deploy
+	// lock, which a deploy holds through its image pull, so a pass can take long.
+	running sync.Mutex
 	mu      sync.Mutex
 	triedAt map[string]time.Time
 }
@@ -40,8 +43,14 @@ var startRetryNow = time.Now
 // CASHPILOT_PROXIED_ONLY hold the earner here as they hold a Start from the
 // dashboard, and a fence-gated container starts only behind the fence. One try per
 // container every StartRetry; a container that is no longer listed is forgotten.
-// The app runs this every runtime.FenceGuard, with HoldDirect. Never fails.
+// The app runs this every runtime.FenceGuard, in its own goroutine so a Start that
+// waits on a deploy never holds up the fence. A pass that finds another still
+// running returns at once. Never fails.
 func (m *Manager) StartFailedStarts(ctx context.Context) []string {
+	if !m.failedStarts.running.TryLock() {
+		return nil
+	}
+	defer m.failedStarts.running.Unlock()
 	kinds := make([]string, 0, len(m.providers))
 	for kind := range m.providers {
 		kinds = append(kinds, kind)
@@ -95,6 +104,11 @@ func (m *Manager) StartFailedStarts(ctx context.Context) []string {
 		if _, routed := m.Route(f.Slug); routed {
 			continue
 		}
+		// The interval counts from the try itself, not from the start of the pass:
+		// a Start before this one may have waited on a deploy.
+		m.failedStarts.mu.Lock()
+		m.failedStarts.triedAt[f.ID] = startRetryNow()
+		m.failedStarts.mu.Unlock()
 		var err error
 		if f.Instance > 1 {
 			err = m.StartCopy(ctx, f.Slug, f.Instance)
