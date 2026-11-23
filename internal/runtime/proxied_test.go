@@ -76,6 +76,8 @@ type fakeTunnelDocker struct {
 	renameErr error
 	// stopErr makes a stop of that container name fail.
 	stopErr map[string]error
+	// imageEntrypoint, when set, is the ENTRYPOINT the earner image reports.
+	imageEntrypoint []string
 }
 
 func newFakeTunnelDocker() *fakeTunnelDocker {
@@ -106,6 +108,9 @@ func (f *fakeTunnelDocker) pull(_ context.Context, image string) error {
 	return nil
 }
 func (f *fakeTunnelDocker) imageRuns(context.Context, string) ([]string, []string, error) {
+	if f.imageEntrypoint != nil {
+		return f.imageEntrypoint, nil, nil
+	}
 	return []string{"entrypoint"}, nil, nil
 }
 func (f *fakeTunnelDocker) create(_ context.Context, opts client.ContainerCreateOptions) (string, error) {

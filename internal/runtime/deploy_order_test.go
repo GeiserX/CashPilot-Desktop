@@ -25,6 +25,9 @@ type fakeDocker struct {
 	// initImage makes the pulled image report /sbin/init as its main process,
 	// the shape of a systemd image.
 	initImage bool
+	// imageConfig, when set, is the Config the pulled image reports, in place of
+	// the plain one above.
+	imageConfig map[string]any
 	// createRefusal and startRefusal make the daemon refuse that step with this
 	// message, the way Docker refuses a host port another container holds.
 	createRefusal string
@@ -286,9 +289,13 @@ func (f *fakeDocker) start(t *testing.T) {
 			if f.initImage {
 				cmd = []string{"/sbin/init"}
 			}
+			config := map[string]any{"Cmd": cmd}
+			if f.imageConfig != nil {
+				config = f.imageConfig
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "sha256:image", "Config": map[string]any{"Cmd": cmd}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "sha256:image", "Config": config})
 		case path == "/containers/create":
 			f.record("POST /containers/create")
 			body, _ := io.ReadAll(r.Body)
