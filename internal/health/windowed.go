@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"log"
 	"net"
 	"os"
 	"regexp"
@@ -25,6 +26,21 @@ type WindowReader interface {
 const windowEvery = 30 * time.Minute
 
 const windowTimeout = 60 * time.Second
+
+// Restarter restarts a service that a signal with restart: true found stuck, unless
+// the owner stopped it after listedAt. *services.Manager, narrowed.
+type Restarter interface {
+	RestartStuck(ctx context.Context, slug string, listedAt time.Time, reason string) error
+}
+
+// restartEvery is the least time between two automatic restarts of one service, so
+// a service a restart does not help (the computer has no internet) is not restarted
+// over and over.
+const restartEvery = 6 * time.Hour
+
+// restartTimeout bounds one automatic restart: a stop can wait for the catalog's
+// stop grace period first.
+const restartTimeout = 5 * time.Minute
 
 // IsWindowed reports whether a signal is judged over hours of logs, not the tail.
 func IsWindowed(s catalog.HealthSignal) bool { return s.WindowHours > 0 }
@@ -150,11 +166,14 @@ type windowEntry struct {
 type windowCache struct {
 	mu      sync.Mutex
 	entries map[string]*windowEntry
-	now     func() time.Time
-	wg      sync.WaitGroup
+	// restarted is when each service was last restarted by itself. It outlives
+	// the entry, so a stop and start, or a failed read, does not reset the wait.
+	restarted map[string]time.Time
+	now       func() time.Time
+	wg        sync.WaitGroup
 }
 
-var windows = &windowCache{entries: map[string]*windowEntry{}, now: time.Now}
+var windows = &windowCache{entries: map[string]*windowEntry{}, restarted: map[string]time.Time{}, now: time.Now}
 
 // hits returns the last verdict for slug and starts a fresh check in the
 // background when that verdict is older than windowEvery.
@@ -187,10 +206,14 @@ func (c *windowCache) forget(slug string) {
 // runtime blip does not clear a real problem.
 func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalog.HealthSignal) {
 	defer c.wg.Done()
+	// Wall time, as the owner's Stop is recorded: a Stop after this moment wins
+	// over a restart this check asks for.
+	listedAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), windowTimeout)
 	defer cancel()
 	var hits []Hit
 	failed := false
+	restartDue := false
 	for _, s := range signals {
 		re, err := regexp.Compile(windowFilter(s))
 		if err != nil {
@@ -208,6 +231,12 @@ func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalo
 				Means:   fillVars(meansOrDefault(s.Means), reader.SignalVars(slug)),
 				State:   signalState(s.State),
 			})
+			restartDue = restartDue || s.Restart
+		}
+	}
+	if !failed && restartDue {
+		if r, ok := reader.(Restarter); ok {
+			c.restart(r, slug, listedAt, hits)
 		}
 	}
 	c.mu.Lock()
@@ -221,6 +250,32 @@ func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalo
 	e.checked = c.now()
 	if !failed {
 		e.hits = hits
+	}
+}
+
+// restart restarts a service stuck in a state its catalog says a restart clears,
+// at most once every restartEvery. The wait starts at the try, so a restart that
+// failed is not tried again before it either.
+func (c *windowCache) restart(r Restarter, slug string, listedAt time.Time, hits []Hit) {
+	c.mu.Lock()
+	last, ok := c.restarted[slug]
+	if ok && c.now().Sub(last) < restartEvery {
+		c.mu.Unlock()
+		return
+	}
+	if c.restarted == nil {
+		c.restarted = map[string]time.Time{}
+	}
+	c.restarted[slug] = c.now()
+	c.mu.Unlock()
+	means := make([]string, 0, len(hits))
+	for _, h := range hits {
+		means = append(means, h.Means)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
+	defer cancel()
+	if err := r.RestartStuck(ctx, slug, listedAt, strings.Join(means, " ")); err != nil {
+		log.Printf("health: could not restart %s by itself: %v", slug, err)
 	}
 }
 

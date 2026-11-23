@@ -94,6 +94,9 @@ docker:
     - {pattern: "", state: account_disabled}
     - {pattern: "dropped windowed", state: account_disabled, window_hours: 2}
     - {pattern: "(", state: account_disabled}
+    - {pattern: "kept restart", window_hours: 1, restart: true}
+    - {pattern: "dropped restart on the tail", restart: true}
+    - {pattern: "dropped restart when idle", state: idle, window_hours: 1, restart: true}
 `)}}
 	cat, err := LoadEmbedded(fsys)
 	if err != nil {
@@ -107,8 +110,20 @@ docker:
 	for _, s := range svc.Docker.HealthSignals {
 		got = append(got, s.Pattern+"="+s.State)
 	}
-	want := "kept failing=failing,kept default=,kept disabled=account_disabled"
+	want := "kept failing=failing,kept default=,kept disabled=account_disabled,kept restart="
 	if strings.Join(got, ",") != want {
 		t.Errorf("signals after load = %v, want %s", got, want)
+	}
+}
+
+// The web catalog restarts a ProxyBase copy stuck on a dead relay. The flag must
+// survive the load, or Desktop shows the problem and never clears it.
+func TestProxyBaseKeepsItsRestartSignal(t *testing.T) {
+	var found bool
+	for _, s := range mustGet(t, realCatalog(t), "proxybase").Docker.HealthSignals {
+		found = found || (s.Restart && s.WindowHours > 0)
+	}
+	if !found {
+		t.Errorf("proxybase lost its windowed restart signal at load")
 	}
 }
