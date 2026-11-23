@@ -6,7 +6,7 @@ toolchain go1.26.11
 
 require (
 	github.com/containerd/errdefs v1.0.0
-	github.com/moby/moby/api v1.56.1
+	github.com/moby/moby/api v1.57.0
 	github.com/moby/moby/client v0.6.2
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/wailsapp/wails/v2 v2.17.1
