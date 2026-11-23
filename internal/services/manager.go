@@ -67,6 +67,10 @@ type Manager struct {
 	// deploy's record and its start.
 	deployLocksMu sync.Mutex
 	deployLocks   map[string]*sync.Mutex
+
+	// stops is when the owner last stopped each service, so an automatic restart
+	// does not start it again (auto_restart.go).
+	stops ownerStops
 }
 
 // lockDeploy takes slug's deploy lock and returns its release.
@@ -425,6 +429,10 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 }
 
 func (m *Manager) Stop(ctx context.Context, slug string) error {
+	// Before the stop, under the lock an automatic restart takes: a restart in
+	// flight finishes first, and one that comes after sees this Stop.
+	defer m.stops.lock(slug)()
+	m.stops.record(slug)
 	if id, ok := m.Route(slug); ok {
 		return m.StopProxied(ctx, slug, id)
 	}

@@ -70,6 +70,9 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 	if len(deployed) == 0 {
 		return nil
 	}
+	// Wall time, as the owner's Stop is recorded, taken before any state below is
+	// read: a Stop after it wins over a restart a windowed check asks for.
+	listedAt := time.Now()
 	inputs := make([]Input, 0, len(deployed))
 	for _, dep := range deployed {
 		if dep.Slug == "" {
@@ -98,7 +101,7 @@ func Collect(ctx context.Context, logs LogReader, services ServiceLookup, deploy
 			if !isUp(in.ContainerState) {
 				windows.forget(in.Slug)
 			} else if canWindow {
-				in.WindowHits = windows.hits(reader, in.Slug, windowed)
+				in.WindowHits = windows.hits(reader, in.Slug, windowed, listedAt)
 			}
 		}
 		if canRun && !in.Native && declaresRefusal(in.Signals) && mayBeRefused(in.ContainerState) {

@@ -2,8 +2,14 @@ package main
 
 import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/health"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
+
+// The windowed health check restarts a service through the manager it reads the
+// logs from; if the manager stops satisfying it, a restart: true signal would only
+// ever be shown.
+var _ health.Restarter = (*services.Manager)(nil)
 
 // producerStates gathers the per-service "is it actually earning?" verdicts that
 // container state cannot give (see internal/health). It is the wiring only: every

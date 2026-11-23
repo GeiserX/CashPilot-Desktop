@@ -355,6 +355,11 @@ type HealthSignal struct {
 	WindowHours float64 `json:"windowHours,omitempty" yaml:"window_hours"`
 	// MinMatches is how many lines the pattern must match in the window (default 1).
 	MinMatches int `json:"minMatches,omitempty" yaml:"min_matches"`
+	// Restart, on a failing signal with WindowHours, says a restart clears the state:
+	// while the signal holds, Desktop restarts the service itself, at most once every
+	// 6 hours (see health.windowed). The loader drops a signal that sets it anywhere
+	// else, as the web catalog rejects it.
+	Restart bool `json:"restart,omitempty" yaml:"restart"`
 }
 
 // ResourceLimits is the optional docker.resources block from a service YAML. Its
@@ -597,7 +602,8 @@ func jsonSafe(v any) any {
 // normalizeSignals lowercases each state and drops the signals the web catalog
 // rejects: an unknown state (read as failing, it would accuse a service of a problem
 // nobody declared), and an account_disabled one with no usable pattern or with
-// window_hours (it is judged on a stopped container's last run, never a window).
+// window_hours (it is judged on a stopped container's last run, never a window), and
+// one with restart: true that is not a failing signal with window_hours.
 func normalizeSignals(slug string, signals []HealthSignal) []HealthSignal {
 	if len(signals) == 0 {
 		return signals
@@ -617,6 +623,11 @@ func normalizeSignals(slug string, signals []HealthSignal) []HealthSignal {
 // ValidSignal reports whether the web catalog would accept this health signal, with
 // State already lowercased.
 func ValidSignal(s HealthSignal) bool {
+	// A restart is for a running copy stuck in a state a restart clears, which only
+	// a windowed failing signal can show.
+	if s.Restart && (s.WindowHours <= 0 || (s.State != "" && s.State != SignalFailing)) {
+		return false
+	}
 	switch s.State {
 	case "", SignalFailing, SignalIdle:
 		return true
