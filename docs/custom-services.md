@@ -32,6 +32,8 @@ The same as a catalog service with no special needs, and nothing more:
 
 - every Linux capability dropped, and none added back;
 - `no-new-privileges`, a process limit and the memory limit above;
+- Docker's init as PID 1, so orphaned processes are cleaned up, unless the image starts its own
+  init (s6-overlay's `/init` in linuxserver images, tini, dumb-init), which keeps PID 1;
 - never privileged, never on the host network, no host devices;
 - no host folders: its only mount is its own named volume;
 - no published ports;

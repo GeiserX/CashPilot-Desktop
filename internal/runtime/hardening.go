@@ -21,6 +21,8 @@ import (
 //     declares added back (most earners are plain outbound TCP clients and add none);
 //   - no-new-privileges, so a setuid binary inside the image cannot escalate;
 //   - a PID ceiling, so a runaway or hostile image cannot exhaust the host's PID space;
+//   - Docker's init as PID 1, so orphaned processes are reaped instead of filling
+//     that ceiling with zombies (see applyInit);
 //   - host devices only from the runtime's own allow-list (see buildDevices);
 //   - privileged only when the catalog entry asks for it, which no entry does today.
 
@@ -76,4 +78,26 @@ func applyHardening(hostConfig *container.HostConfig, svc catalog.Service, osTyp
 	hostConfig.SecurityOpt = []string{noNewPrivileges}
 	limit := pidsLimit()
 	hostConfig.PidsLimit = &limit
+}
+
+// applyInit puts Docker's init (tini) in front of the earner as PID 1, unless the
+// image starts an init of its own (bringsOwnInit).
+//
+// Without an init the earner itself is PID 1, and most earners never wait on a
+// child they did not start. Every process orphaned inside the container (a helper
+// left behind by a docker exec, a script's background job) then stays a zombie,
+// and each zombie counts against the PID ceiling above. On the web worker
+// Mysterium filled its 512 slots at two zombies an hour, and once the ceiling is
+// reached the earner cannot start a process or a thread. tini also forwards
+// signals to the earner, so stop and restart work as before.
+//
+// An image with its own init gets an explicit false, so a daemon configured to add
+// an init by default cannot put one in front of s6-overlay's /init, which exits
+// when it is not PID 1. Linux daemons only, like the rest of the hardening.
+func applyInit(hostConfig *container.HostConfig, ownInit bool, osType string) {
+	if osType != "" && osType != "linux" {
+		return
+	}
+	init := !ownInit
+	hostConfig.Init = &init
 }

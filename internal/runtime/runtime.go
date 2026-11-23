@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path"
 	"regexp"
 	goruntime "runtime"
 	"slices"
@@ -333,6 +334,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if bootsInitSystem(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd) {
 		return ContainerInfo{}, fmt.Errorf("%s runs an init system as its main process (/sbin/init, usually systemd), which needs a privileged container with the host's cgroup tree. CashPilot never grants that, so the container would exit at once and restart forever. Use the image's non-init tag (often ':lite') or the catalog image", image)
 	}
+	applyInit(hostConfig, bringsOwnInit(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd), facts.OSType)
 
 	// Which network a bridge earner joins is settled on this side of the line too: if
 	// the LAN fence cannot be applied, the deploy is refused and the running container
@@ -1739,18 +1741,43 @@ var initSystems = map[string]bool{
 // replaces the image's; the catalog's command replaces the image's CMD but never
 // its ENTRYPOINT. Only the first word of what finally runs matters.
 func bootsInitSystem(imageEntrypoint, imageCmd, entrypoint, cmd []string) bool {
-	var first string
+	return initSystems[mainProgram(imageEntrypoint, imageCmd, entrypoint, cmd)]
+}
+
+// mainProgram is the first word of what a container built from the image runs as
+// its main process. The catalog's entrypoint, when it declares one, replaces the
+// image's; the catalog's command replaces the image's CMD but never its ENTRYPOINT.
+func mainProgram(imageEntrypoint, imageCmd, entrypoint, cmd []string) string {
 	switch {
 	case len(entrypoint) > 0:
-		first = entrypoint[0]
+		return entrypoint[0]
 	case len(imageEntrypoint) > 0:
-		first = imageEntrypoint[0]
+		return imageEntrypoint[0]
 	case len(cmd) > 0:
-		first = cmd[0]
+		return cmd[0]
 	case len(imageCmd) > 0:
-		first = imageCmd[0]
+		return imageCmd[0]
 	}
-	return initSystems[first]
+	return ""
+}
+
+// ownInits are the small inits an image may start as its own main process. Each
+// one already reaps orphans, and s6-overlay's /init (linuxserver images, and any
+// custom service built on them) exits at once when it is not PID 1, so these
+// images get no Docker init in front of them. The same list as the web worker
+// (app/orchestrator.py _OWN_INITS).
+var ownInits = map[string]bool{
+	"tini":        true,
+	"tini-static": true,
+	"dumb-init":   true,
+	"s6-svscan":   true,
+}
+
+// bringsOwnInit reports whether a container built from the image starts an init
+// of its own (s6-overlay, tini, dumb-init) as PID 1.
+func bringsOwnInit(imageEntrypoint, imageCmd, entrypoint, cmd []string) bool {
+	first := mainProgram(imageEntrypoint, imageCmd, entrypoint, cmd)
+	return first == "/init" || ownInits[path.Base(first)]
 }
 
 func entrypointFor(svc catalog.Service) []string {

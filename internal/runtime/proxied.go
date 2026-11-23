@@ -870,6 +870,7 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 		removeQuietly(d, sidecarID, 2)
 		return Exit{}, err
 	}
+	applyInit(opts.HostConfig, bringsOwnInit(entrypoint, cmd, opts.Config.Entrypoint, opts.Config.Cmd), facts.OSType)
 	earnerID, err := d.create(ctx, opts)
 	if err != nil {
 		removeQuietly(d, sidecarID, 2)
