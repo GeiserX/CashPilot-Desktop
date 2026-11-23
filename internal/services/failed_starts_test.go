@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
 // failedStartProvider is a provider that reports earners Docker could not start and
@@ -225,5 +226,28 @@ func TestStartFailedStartsRunsOnePassAtATime(t *testing.T) {
 	// the container the second pass skipped starts.
 	if got := m.StartFailedStarts(context.Background()); !slices.Equal(got, []string{"cashpilot-manual-svc"}) {
 		t.Fatalf("the pass after it started %v", got)
+	}
+}
+
+// A container left behind on a runtime the service no longer runs on is not
+// retried: Start would start the service on its current runtime instead.
+func TestStartFailedStartsSkipsAContainerOfAnotherRuntime(t *testing.T) {
+	now := withStartRetryClock(t)
+	m, p := newFailedStartRig(t, runtime.FailedStart{ID: "a", Name: "cashpilot-example", Slug: "example", Instance: 1, Error: goferError})
+	native := &failedStartProvider{fakeProvider: &fakeProvider{}}
+	m.Register(nativeRuntimeKind, native)
+	if err := m.store.UpsertDeployment(store.Deployment{Slug: "example", Name: "example", Status: "stopped", Runtime: nativeRuntimeKind}); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.StartFailedStarts(context.Background()); len(got) != 0 || len(p.starts) != 0 || len(native.starts) != 0 {
+		t.Fatalf("started %v: docker %v, native %v", got, p.starts, native.starts)
+	}
+	// Positive control: back on Docker, the same container is started.
+	if err := m.store.UpsertDeployment(store.Deployment{Slug: "example", Name: "cashpilot-example", Status: "stopped", Runtime: defaultRuntimeKind}); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(StartRetry)
+	if got := m.StartFailedStarts(context.Background()); !slices.Equal(got, []string{"cashpilot-example"}) || !slices.Equal(p.starts, []string{"example"}) || len(native.starts) != 0 {
+		t.Fatalf("back on docker: started %v, docker %v, native %v", got, p.starts, native.starts)
 	}
 }

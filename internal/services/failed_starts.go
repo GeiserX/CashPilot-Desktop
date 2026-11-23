@@ -57,6 +57,8 @@ func (m *Manager) StartFailedStarts(ctx context.Context) []string {
 	}
 	sort.Strings(kinds)
 	var failed []runtime.FailedStart
+	// reporter is the provider that listed each container, by id.
+	reporter := map[string]runtime.Provider{}
 	listed := map[runtime.Provider]bool{}
 	for _, kind := range kinds {
 		p := m.providers[kind]
@@ -71,6 +73,9 @@ func (m *Manager) StartFailedStarts(ctx context.Context) []string {
 			// The daemon is gone; the next pass looks again. Forget nothing, or
 			// a daemon that comes and goes would let every pass try at once.
 			return nil
+		}
+		for _, f := range found {
+			reporter[f.ID] = p
 		}
 		failed = append(failed, found...)
 	}
@@ -102,6 +107,12 @@ func (m *Manager) StartFailedStarts(ctx context.Context) []string {
 		// A routed service runs as its proxy's copy, and Start would start that copy,
 		// not this container.
 		if _, routed := m.Route(f.Slug); routed {
+			continue
+		}
+		// Start acts on the runtime the service is deployed on now. A service moved
+		// to another runtime can leave this container behind, and Start would start
+		// the service there instead.
+		if m.providerForSlug(f.Slug) != reporter[f.ID] {
 			continue
 		}
 		// The interval counts from the try itself, not from the start of the pass:
