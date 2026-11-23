@@ -324,7 +324,11 @@ Podman** (Podman exposes a Docker-compatible API). Responsibilities:
   entry. A fence-gated earner (Mysterium) gets restart policy `no` instead, and the
   app starts it itself right after it has applied the LAN fence
   (`fence_gated_start.go`). Bind vs named volumes are distinguished by
-  `isNamedVolume`.
+  `isNamedVolume`. Docker tries an `unless-stopped` container once when its daemon
+  starts and never again if that start fails, so every 30 seconds the app also
+  starts an earner that Docker could not start: exited, with `State.Error` set and a
+  restarting policy. It tries each one at most every five minutes, through `Start`
+  (`failed_starts.go`, `services.StartFailedStarts`).
 - **`Stop`/`Start`/`Restart`/`Remove`/`Logs`/`List`** operate by container name.
   `Remove` also deletes the container's **named** volumes (host bind-mounts are
   left untouched); `List` filters to managed containers and computes live CPU%/MEM

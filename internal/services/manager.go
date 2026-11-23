@@ -56,6 +56,9 @@ type Manager struct {
 	// proxy is the state of proxied copies between ticks (proxies.go).
 	proxy proxyState
 
+	// failedStarts is when StartFailedStarts last tried each container (failed_starts.go).
+	failedStarts failedStartState
+
 	// deployLocks holds one lock per slug, taken for the whole of DeployWith,
 	// DeployRouted and DeployProxied (lockDeploy): each reads the service's route and
 	// deployment, then writes them after a pull or a tunnel start, so two deploys of

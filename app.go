@@ -314,6 +314,8 @@ func (a *App) runFence(ctx context.Context) {
 		case <-guard.C:
 			a.services.HoldDirect(ctx)
 			a.fence.GuardFenceGated(ctx)
+			// Docker tries an earner once at its own start and never again.
+			a.services.StartFailedStarts(ctx)
 		}
 	}
 }
