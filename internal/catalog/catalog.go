@@ -235,8 +235,8 @@ type Obligation struct {
 
 // ObligationWhen holds exactly one of three forms: a fixed Date ("YYYY-MM-DD"); a
 // monthly window that opens on day On (1-28) of Every "month" and closes DueDays
-// later; or a clock that runs Days from Since (over_minimum, last_activity or
-// last_payout).
+// later; or a clock that runs Days from Since (over_minimum, last_activity,
+// last_increase or last_payout).
 type ObligationWhen struct {
 	Date    string `json:"date,omitempty" yaml:"date"`
 	Every   string `json:"every,omitempty" yaml:"every"`
