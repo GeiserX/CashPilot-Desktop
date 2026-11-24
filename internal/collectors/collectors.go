@@ -770,19 +770,36 @@ func (r *Registry) collectSalad(ctx context.Context, credentials map[string]stri
 }
 
 func (r *Registry) collectStorj(ctx context.Context, credentials map[string]string) (Result, error) {
-	apiURL := firstCredential(credentials, "STORJ_API_URL", "api_url")
-	if apiURL == "" {
-		apiURL = "http://localhost:14002"
-	}
-	apiURL = strings.TrimRight(apiURL, "/")
-	var payout map[string]any
-	if err := r.doJSON(ctx, "GET", apiURL+"/api/sno/estimated-payout", nil, nil, &payout); err != nil {
-		if err := r.doJSON(ctx, "GET", apiURL+"/api/sno", nil, nil, &payout); err != nil {
-			return Result{}, err
+	// Several nodes are listed with commas and summed into one reading, as the
+	// web collector does (app/collectors/storj.py). Any node that fails fails the
+	// whole reading: a sum without it would be stored as a balance that dropped,
+	// which looks like a payout.
+	var urls []string
+	seen := map[string]bool{}
+	for _, u := range strings.Split(firstCredential(credentials, "STORJ_API_URL", "api_url"), ",") {
+		u = strings.TrimRight(strings.TrimSpace(u), "/")
+		if u != "" && !seen[u] {
+			seen[u] = true
+			urls = append(urls, u)
 		}
 	}
-	balance := storjPayoutUSD(payout)
-	return Result{Platform: "storj", Balance: round(balance, 4), Currency: "USD"}, nil
+	if len(urls) == 0 {
+		urls = []string{"http://localhost:14002"}
+	}
+	total := 0.0
+	for _, apiURL := range urls {
+		var payout map[string]any
+		if err := r.doJSON(ctx, "GET", apiURL+"/api/sno/estimated-payout", nil, nil, &payout); err != nil {
+			if err := r.doJSON(ctx, "GET", apiURL+"/api/sno", nil, nil, &payout); err != nil {
+				if len(urls) > 1 {
+					return Result{}, fmt.Errorf("Storagenode at %s: %w", apiURL, err)
+				}
+				return Result{}, err
+			}
+		}
+		total += storjPayoutUSD(payout)
+	}
+	return Result{Platform: "storj", Balance: round(total, 4), Currency: "USD"}, nil
 }
 
 func (r *Registry) collectTraffmonetizer(ctx context.Context, credentials map[string]string) (Result, error) {

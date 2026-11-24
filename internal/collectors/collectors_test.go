@@ -303,6 +303,34 @@ func TestStorjPayoutUSD(t *testing.T) {
 	}
 }
 
+// Several Storj nodes listed with commas are read one by one and summed, and one
+// node that fails fails the whole reading rather than storing a smaller sum.
+func TestCollectStorjSumsSeveralNodes(t *testing.T) {
+	month := `{"currentMonth":{"egressBandwidthPayout":100,"egressRepairAuditPayout":50,"diskSpacePayout":25}}`
+	var hosts []string
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Host)
+		if req.URL.Host == "down:14002" {
+			return &http.Response{StatusCode: 500, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(month)), Header: make(http.Header)}, nil
+	})
+	r := &Registry{http: &http.Client{Transport: rt}}
+
+	res, err := r.collectStorj(context.Background(), map[string]string{"STORJ_API_URL": "http://a:14002/, http://b:14002,http://a:14002"})
+	if err != nil {
+		t.Fatalf("two healthy nodes: %v", err)
+	}
+	if res.Balance != 3.5 {
+		t.Fatalf("want the two nodes summed to 3.5, got %v (hosts read: %v)", res.Balance, hosts)
+	}
+
+	_, err = r.collectStorj(context.Background(), map[string]string{"STORJ_API_URL": "http://a:14002,http://down:14002"})
+	if err == nil || !strings.Contains(err.Error(), "http://down:14002") {
+		t.Fatalf("want the failing node named in an error, got %v", err)
+	}
+}
+
 // TestRegistrySupports pins the collectorDispatch map / Supports contract the
 // scheduler relies on: every wired collector reports true, and unported or
 // unknown slugs report false (so the scheduler skips them instead of writing a
