@@ -61,7 +61,7 @@ func TestProxyBaseContainerContract(t *testing.T) {
 	}
 
 	// Referral revenue guard: the signup URL must keep the referral code.
-	if svc.Referral.SignupURL != "https://peer.proxybase.org?referral=nXzS3c6iTO" {
+	if svc.Referral.SignupURL != "https://peer.proxybase.org/dashboard/signup?referral=nXzS3c6iTO" {
 		t.Errorf("signup_url must keep the referral code, got %q", svc.Referral.SignupURL)
 	}
 
