@@ -105,6 +105,12 @@ type Service struct {
 	// pros). It is checked at load and turned into RatingResult (rating.go); the
 	// block itself never reaches the frontend.
 	Rating Rating `json:"-" yaml:"rating"`
+	// Obligations are the web catalog's reminders before a provider writes off money:
+	// a claim window, a balance that expires, a dormancy clock (services/_schema.yml
+	// `obligations:`). Desktop reads them and does not act on them yet; they are
+	// declared so the vendored key is read rather than silently dropped. Like the
+	// rating block, they never reach the frontend until something there uses them.
+	Obligations []Obligation `json:"-" yaml:"obligations"`
 	// RatingResult is the grade computed from services/_ratings.yml, or "not rated".
 	// Nil for a custom service, which nobody has reviewed. Never read from YAML.
 	RatingResult *RatingResult `json:"ratingResult" yaml:"-"`
@@ -200,6 +206,44 @@ type Payout struct {
 	// declared so the vendored key is read rather than silently dropped.
 	AddressRead *AddressRead `json:"addressRead,omitempty" yaml:"address_read"`
 	Notes       string       `json:"notes" yaml:"notes"`
+}
+
+// Obligation is one reminder from the web catalog. The web app evaluates it
+// (app/obligations.py) into its dashboard's "Money waiting" panel and pushes; Desktop
+// carries it unread until it ports that behaviour.
+type Obligation struct {
+	// ID is kebab-case and unique in its file; the web app keys done state on it.
+	ID string `json:"id" yaml:"id"`
+	// Action is claim, withdraw or keep-active.
+	Action string `json:"action" yaml:"action"`
+	Title  string `json:"title" yaml:"title"`
+	// Loss says what is lost if the deadline is missed, as a general fact.
+	Loss string `json:"loss" yaml:"loss"`
+	How  string `json:"how,omitempty" yaml:"how"`
+	// URL is where the user acts, on the service's own domain. Empty means the
+	// cashout dashboard, then the website.
+	URL  string         `json:"url,omitempty" yaml:"url"`
+	When ObligationWhen `json:"when" yaml:"when"`
+	// WarnDays are the days before the due date to warn, descending. Empty means
+	// 30, 7 and 1.
+	WarnDays []int `json:"warnDays,omitempty" yaml:"warn_days"`
+	// Source is the provider's own terms or docs, and Checked ("YYYY-MM-DD") when
+	// someone last read it.
+	Source  string `json:"source" yaml:"source"`
+	Checked string `json:"checked" yaml:"checked"`
+}
+
+// ObligationWhen holds exactly one of three forms: a fixed Date ("YYYY-MM-DD"); a
+// monthly window that opens on day On (1-28) of Every "month" and closes DueDays
+// later; or a clock that runs Days from Since (over_minimum, last_activity or
+// last_payout).
+type ObligationWhen struct {
+	Date    string `json:"date,omitempty" yaml:"date"`
+	Every   string `json:"every,omitempty" yaml:"every"`
+	On      int    `json:"on,omitempty" yaml:"on"`
+	DueDays int    `json:"dueDays,omitempty" yaml:"due_days"`
+	Since   string `json:"since,omitempty" yaml:"since"`
+	Days    int    `json:"days,omitempty" yaml:"days"`
 }
 
 // AddressRead is a read-only command run inside the container and the pattern
