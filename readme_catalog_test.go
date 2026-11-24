@@ -70,6 +70,59 @@ func TestReadmeReferralLinksCarryTheirCode(t *testing.T) {
 	}
 }
 
+// THE RULE, for docs/services.md: a service row that links a provider with a referral
+// code links the catalog's own signup_url, character for character.
+//
+// The page is kept by hand and shows a representative selection, so it does not have
+// to list every service. But a row it does show is a signup path, and a row that links
+// the provider's front page pays nothing. Repocket and Deeper Network sat there with
+// bare links while the catalog and the README carried their codes.
+//
+// Every visible entry with a code needs a row too, so a coded service cannot drop off
+// the page unnoticed. Wipter was missing that way.
+func TestServicesPageRowsLinkTheCatalogSignupURL(t *testing.T) {
+	raw, err := os.ReadFile("docs/services.md")
+	if err != nil {
+		t.Fatalf("read docs/services.md: %v", err)
+	}
+	cat := repoCatalog(t)
+	byName := map[string]catalog.Service{}
+	for _, svc := range cat.List() {
+		byName[svc.Name] = svc
+	}
+
+	row := regexp.MustCompile(`^\|\s*\[([^\]]+)\]\(([^)\s]+)\)\s*\|`)
+	listed := map[string]bool{}
+	rows := 0
+	for i, line := range strings.Split(string(raw), "\n") {
+		m := row.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		rows++
+		name, url := m[1], m[2]
+		svc, ok := byName[name]
+		if !ok {
+			t.Errorf("docs/services.md:%d links %q, which matches no catalog entry by name, so its link cannot be checked", i+1, name)
+			continue
+		}
+		listed[svc.Slug] = true
+		want := strings.TrimSpace(svc.Referral.SignupURL)
+		if strings.TrimSpace(svc.Referral.Code) != "" && url != want {
+			t.Errorf("docs/services.md:%d links %s to %q; the catalog's signup_url is %q", i+1, name, url, want)
+		}
+	}
+	if rows < 20 {
+		t.Fatalf("found only %d service rows in docs/services.md; the table format changed, so this check proves nothing", rows)
+	}
+
+	for _, svc := range cat.ListVisible() {
+		if strings.TrimSpace(svc.Referral.Code) != "" && !listed[svc.Slug] {
+			t.Errorf("%s carries referral code %q but has no row in docs/services.md", svc.Name, svc.Referral.Code)
+		}
+	}
+}
+
 // The README states how many services ship. Retired entries stay in the catalog (the
 // sync vendors the web catalog whole) but the app hides them and refuses to deploy
 // them, so the honest headline number is the visible one — and a count written by
