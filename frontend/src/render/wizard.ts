@@ -17,7 +17,7 @@
 // backend's collector-field map, this machine's hostname and the earnings
 // breakdown the facts strip shows a balance from) and returns HTML.
 
-import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning } from "../wails";
+import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning, SessionConsent } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
@@ -26,6 +26,7 @@ import { imageChoiceSection } from "./image.js";
 import { instancesSection } from "./instances.js";
 import { routeChoiceSection } from "./route.js";
 import { renderCustomServiceCard } from "./custom.js";
+import { needsSessionConsent, renderSessionSlot } from "./session.js";
 
 /**
  * Render the setup card for one service.
@@ -43,6 +44,10 @@ import { renderCustomServiceCard } from "./custom.js";
  * `route` is the Route box's state: the proxies the service can run through from its
  * first start (absent: no box). `routeDraft` is the owner's pick in that box from
  * before this redraw (undefined: none, the recorded route shows).
+ *
+ * `sessionConsent` is the desktop-app risk disclosures the user accepted, per slug
+ * (render/session.ts). A manual-only desktop app shows the disclosure in place of
+ * its install tip and setup guide until the user accepts the current text.
  */
 export function renderWizardServiceSetup(
   service: Service,
@@ -54,6 +59,7 @@ export function renderWizardServiceSetup(
   instances?: number | null,
   route?: RouteState | null,
   routeDraft?: number | null,
+  sessionConsent?: Record<string, SessionConsent> | null,
 ): string {
   // A custom service runs its saved definition: no credentials, no Image box.
   if (service.custom) return renderCustomServiceCard(service, scaling, instances);
@@ -61,6 +67,10 @@ export function renderWizardServiceSetup(
   const fields = serviceFormFields(service, collectorFields);
   const earning = breakdown?.find((item) => item.platform === service.slug);
   const balance = earning && !earning.error ? {amount: earning.balance, currency: earning.currency} : null;
+  const gated = needsSessionConsent(service);
+  const consent = sessionConsent?.[service.slug];
+  // A gated app's setup guide is its install steps, so it leaves the signup strip and
+  // shows inside the session slot once the user accepts (render/session.ts).
   return `
     <article class="wizard-setup-card" data-form-slug="${escapeHtml(service.slug)}">
       <div class="split">
@@ -73,11 +83,13 @@ export function renderWizardServiceSetup(
       <div class="signup-strip">
         ${signupButton(service)}
         ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
-        <button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>
+        ${gated ? "" : `<button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>`}
       </div>
       ${referralNote(service)}
       ${ratingBlock(service)}
-      ${service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
+      ${gated
+        ? `<div data-session-slot="${escapeHtml(service.slug)}">${renderSessionSlot(service, consent)}</div>`
+        : service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
       ${credentialHint(service)}
       <div class="credential-grid">
         ${fields.map((item) => `

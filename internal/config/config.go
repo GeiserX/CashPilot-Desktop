@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -109,6 +110,17 @@ type AppConfig struct {
 	// talks to. Off by default, the bool zero value, so no install starts it on
 	// upgrade.
 	ActivityEnabled bool `json:"activityEnabled,omitempty"`
+	// SessionConsent maps a service slug to the risk disclosure the user accepted
+	// before installing that provider's desktop app in their own session, outside
+	// any fence. The wizard shows the install steps only while the recorded text
+	// version matches the disclosure it shows now. Revoking deletes the entry.
+	SessionConsent map[string]SessionConsent `json:"sessionConsent,omitempty"`
+}
+
+// SessionConsent is one accepted disclosure: which text the user read, and when.
+type SessionConsent struct {
+	TextVersion string    `json:"textVersion"`
+	AcceptedAt  time.Time `json:"acceptedAt"`
 }
 
 // DefaultUpstreamIntervalMinutes matches what a CashPilot worker sends, so a

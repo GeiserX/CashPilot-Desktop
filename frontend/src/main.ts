@@ -69,6 +69,8 @@ import {
   UnfinishedRestores,
   RestoreStateBackup,
   DiscardPartialRestore,
+  AcceptSessionRisk,
+  RevokeSessionRisk,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
@@ -84,6 +86,7 @@ import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
+import { SESSION_DISCLOSURE_VERSION, renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
@@ -93,7 +96,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SettingsState, UnfinishedRestore, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SessionConsent, SettingsState, UnfinishedRestore, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -1141,6 +1144,8 @@ async function renderSettings(current: AppState) {
             </div>
           </section>
 
+          ${renderSessionConsentCard(current.config?.sessionConsent, current.services)}
+
           ${renderRestoreCard(unfinished)}
 
           ${renderBackgroundCard(background, backgroundError)}
@@ -1155,6 +1160,7 @@ async function renderSettings(current: AppState) {
   document.querySelector("#save-settings")?.addEventListener("click", () => void saveSettingsFromForm());
   document.querySelector<HTMLInputElement>("#bg-helper-toggle")?.addEventListener("change", (event) => void toggleBackgroundHelper(event));
   wireRestore();
+  wireSessionConsent(document);
   document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.service));
   });
@@ -1842,9 +1848,72 @@ function renderSetupWizard(current: AppState) {
       if (url) BrowserOpenURL(url);
     });
   });
+  wireSessionConsent(document);
   selectedServices.forEach((service) => void hydrateWizardForm(service));
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
   selectedServices.forEach((service) => void hydratePayouts(service));
+}
+
+// The desktop-app risk disclosure (render/session.ts). The tickbox enables the
+// accept button. Accept and Withdraw record the choice in the config, then redraw
+// only that app's slot and the Settings card, never the whole page, which would drop
+// credentials typed in the other cards but not saved yet.
+function wireSessionConsent(scope: ParentNode) {
+  scope.querySelectorAll<HTMLInputElement>("[data-session-tick]").forEach((tick) => {
+    tick.addEventListener("change", () => {
+      const slug = tick.dataset.sessionTick || "";
+      const button = document.querySelector<HTMLButtonElement>(`[data-session-accept="${CSS.escape(slug)}"]`);
+      if (button) button.disabled = !tick.checked;
+    });
+  });
+  scope.querySelectorAll<HTMLButtonElement>("[data-session-accept]").forEach((button) => {
+    button.addEventListener("click", () => void acceptSessionRisk(button.dataset.sessionAccept || ""));
+  });
+  scope.querySelectorAll<HTMLButtonElement>("[data-session-revoke]").forEach((button) => {
+    button.addEventListener("click", () => void revokeSessionRisk(button.dataset.sessionRevoke || ""));
+  });
+}
+
+async function acceptSessionRisk(slug: string) {
+  // The button is disabled until the tick, but the tick is the consent: check it again.
+  if (!document.querySelector<HTMLInputElement>(`[data-session-tick="${CSS.escape(slug)}"]`)?.checked) return;
+  try {
+    applySessionConsents(await AcceptSessionRisk(slug, SESSION_DISCLOSURE_VERSION), slug);
+  } catch (error) {
+    showErrorToast({scope: "consent", error: String(error)});
+  }
+}
+
+async function revokeSessionRisk(slug: string) {
+  const name = state?.services.find((svc) => svc.slug === slug)?.name || slug;
+  if (!confirm(`Withdraw your consent for ${name}? The setup card hides its install steps and asks again. This does not uninstall ${name}: remove it yourself if you no longer want it on this computer.`)) return;
+  try {
+    applySessionConsents(await RevokeSessionRisk(slug), slug);
+  } catch (error) {
+    showErrorToast({scope: "consent", error: String(error)});
+  }
+}
+
+function applySessionConsents(consents: Record<string, SessionConsent> | null, slug: string) {
+  if (state) state = {...state, config: {...state.config, sessionConsent: consents}};
+  const service = state?.services.find((svc) => svc.slug === slug);
+  const slot = document.querySelector<HTMLElement>(`[data-session-slot="${CSS.escape(slug)}"]`);
+  if (slot && service) {
+    slot.innerHTML = renderSessionSlot(service, consents?.[slug]);
+    wireSessionConsent(slot);
+    slot.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.url) BrowserOpenURL(button.dataset.url);
+      });
+    });
+  }
+  const card = document.querySelector<HTMLElement>("[data-session-consent-card]");
+  if (card) {
+    card.insertAdjacentHTML("afterend", renderSessionConsentCard(consents, state?.services));
+    const fresh = card.nextElementSibling;
+    card.remove();
+    if (fresh) wireSessionConsent(fresh);
+  }
 }
 
 // The payout ledger under a service's card: load it, then wire its record form
@@ -1962,7 +2031,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug])).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent)).join("")}
     </div>
   `;
 }

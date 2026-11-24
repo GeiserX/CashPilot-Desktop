@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -566,5 +567,67 @@ func TestMigratingASecretKeepsTheFallbackFile(t *testing.T) {
 	}
 	if got, err := FleetKey(dir); err != nil || got != "from-file" {
 		t.Fatalf("fleet key lost when the keychain is locked: %q, %v", got, err)
+	}
+}
+
+// A session consent must survive a restart with its text version and date intact:
+// the wizard shows install steps only while both are there, so a consent lost on
+// reload would ask again, and a consent that lost its version would never match.
+func TestSessionConsentPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", dir)
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	at := time.Date(2026, 11, 24, 18, 30, 0, 0, time.UTC)
+	if err := m.Update(func(c *AppConfig) {
+		c.SessionConsent = map[string]SessionConsent{"wipter": {TextVersion: "2026-11-24", AcceptedAt: at}}
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	reloaded, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager after restart: %v", err)
+	}
+	got, ok := reloaded.Config().SessionConsent["wipter"]
+	if !ok {
+		t.Fatalf("the consent was lost on reload: %+v", reloaded.Config().SessionConsent)
+	}
+	if got.TextVersion != "2026-11-24" || !got.AcceptedAt.Equal(at) {
+		t.Errorf("reloaded consent %+v, want version 2026-11-24 accepted at %v", got, at)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"textVersion": "2026-11-24"`)) || !bytes.Contains(raw, []byte(`"acceptedAt": "2026-11-24T18:30:00Z"`)) {
+		t.Errorf("config.json does not carry the version and date:\n%s", raw)
+	}
+}
+
+// An install from before this field has no consent at all, and a config with no
+// consent writes no key, so an older build reading the file sees nothing new.
+func TestSessionConsentAbsentByDefault(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"firstRunComplete":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager()
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if len(m.Config().SessionConsent) != 0 {
+		t.Fatalf("an old config gained consents: %+v", m.Config().SessionConsent)
+	}
+	if err := m.Save(m.Config()); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "config.json"))
+	if bytes.Contains(raw, []byte("sessionConsent")) {
+		t.Errorf("an empty consent map was written:\n%s", raw)
 	}
 }

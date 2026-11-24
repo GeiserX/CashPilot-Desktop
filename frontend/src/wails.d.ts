@@ -62,6 +62,11 @@ declare module "../wailsjs/go/main/App" {
   // Mutes the "needs fixing" warning of slug until the catalog changes a field the
   // check judges.
   export function IgnoreDrift(slug: string): Promise<void>;
+  // The desktop-app risk disclosure (session_consent_binding.go): accept records the
+  // text version and the date for one manual-only app, revoke deletes it. Both return
+  // every consent now recorded.
+  export function AcceptSessionRisk(slug: string, textVersion: string): Promise<Record<string, SessionConsent>>;
+  export function RevokeSessionRisk(slug: string): Promise<Record<string, SessionConsent>>;
   // The payout ledger: cash-outs the user records by hand. currency "" is the
   // service's balance unit; date "" is today, otherwise YYYY-MM-DD.
   export function ListPayouts(slug: string): Promise<Payout[]>;
@@ -548,6 +553,14 @@ export interface AppConfig {
   fleetApiKey: string;
   fleetBindAddress: string;
   fleetPort: number;
+  // Per service slug, the desktop-app risk disclosure the user accepted. Absent: none.
+  sessionConsent?: Record<string, SessionConsent> | null;
+}
+
+export interface SessionConsent {
+  textVersion: string;
+  // RFC3339, UTC.
+  acceptedAt: string;
 }
 
 export interface NotificationItem {
