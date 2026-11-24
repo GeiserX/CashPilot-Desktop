@@ -28,14 +28,14 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 | [IPRoyal Pawns](https://pawns.app?r=19266874) | ✅ | ❌ | Unlimited | 1 | PayPal, Crypto, Bank Transfer |
 | [MystNodes](https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE) | ✅ | ✅ | Unlimited | Unlimited | Crypto (MYST) |
 | [PacketStream](https://packetstream.io/?psr=7xgZ) | ✅ | ❌ | Unlimited | Undocumented | PayPal |
-| [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
+| [ProxyBase](https://peer.proxybase.org/dashboard/signup?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
 | [ProxyBase Markets](https://proxybase.xyz?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto (USDC) |
 | [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ) | ✅ | ✅ | Unlimited | Undocumented | Crypto, PayPal |
-| [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Crypto |
-| [Repocket](https://repocket.com/) | ✅ | ❌ | 5 | Undocumented | PayPal, Crypto |
+| [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Gift cards, Bank |
+| [Repocket](https://link.repocket.com/b1zM) | ✅ | ❌ | 5 | Undocumented | Gift Cards, Crypto |
 | [Storj](https://storj.dev/node/get-started/setup) | ✅ | ✅ | Unlimited | Undocumented \*\* | Crypto (STORJ) |
 | [Traffmonetizer](https://traffmonetizer.io/?aff=2111758) | ✅ | ✅ \*\*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
-| [URnetwork](https://ur.io/?referral_code=1Q3G19) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
+| [URnetwork](https://ur.io/c?bonus=1Q3G19) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
 
 > **Undocumented** means the provider publishes no per-IP device limit, not that
 > there is none. Check the provider's terms before running a second instance behind
@@ -59,9 +59,9 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 | [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3) | ✅ | ❌ | Unlimited | Undocumented | PayPal | Active |
 | [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
 | [Dawn Internet](https://dawninternet.com/?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
-| [Deeper Network](https://deeper.network) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |
+| [Deeper Network](https://shop.deeper.network?sca_ref=12020100.q8Vxm3SliA) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |
 | [Ebesucher](https://www.ebesucher.com/?ref=geiserx) | ✅ | ✅ | Unlimited | 1 | PayPal | Active |
-| [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) | Active |
+| [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) | Broken: node rewards ended August 2025 |
 | [Grass](https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE) | ✅ | ❌ | Unlimited | 1 | Crypto (GRASS) | Active |
 | [Helium](https://helium.com) | ✅ | ❌ | Unlimited | 1 | Crypto (HNT) | Active |
 | [Nodepay](https://app.nodepay.ai/register?ref=0wzzyznen64j9zx) | ✅ | ❌ | Unlimited | 1 | Crypto (NC) | Active |
@@ -69,10 +69,11 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 | [PassiveApp](https://passiveapp.com/i/bqpC4M) | ✅ | ❌ | Unlimited | 1 | Crypto, PayPal | Active |
 | [Sentinel dVPN](https://sentinel.co) | ✅ | ✅ | Unlimited | 1 | Crypto (DVPN) | Active |
 | [Spide](https://spide.network/register.html?f3bc51) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
-| [Teneo Protocol](https://dashboard.teneo.pro/?code=CAqef) | ✅ | ❌ | Unlimited | 1 | Crypto (TENEO) | Active |
+| [Teneo Protocol](https://dashboard.teneo.pro/auth/signup?referralCode=CAqef) | ✅ | ❌ | Unlimited | 1 | Crypto (TENEO) | Active |
 | [Theta Edge Node](https://thetatoken.org) | ✅ | ✅ | Unlimited | 1 | Crypto (TFUEL) | Active |
 | [Titan Network](https://edge.titannet.info/signup?inviteCode=2GKKJ495) | ✅ | ❌ | Unlimited | 1 | Crypto (TNT) | Active |
 | [Uprock](https://link.uprock.com/i/33e8492e) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
+| [Wipter](https://wipter.com/register?via=FB1373FBDA) | ✅ | ❌ | Unlimited | Undocumented | PayPal, Crypto | Active |
 
 ## GPU Compute
 
@@ -85,7 +86,7 @@ GPU-intensive computing services. Requires compatible hardware.
 | [io.net](https://io.net) | ✅ | ✅ | N/A | Crypto (IO) | Active |
 | [Nosana](https://nosana.io) | ✅ | ✅ | 50GB | Crypto (NOS) | Active |
 | [Salad](https://salad.io) | ✅ | ✅ | N/A | PayPal, Gift Cards | Active |
-| [Vast.ai](https://cloud.vast.ai/?ref_id=452772) | ✅ | ✅ | 100GB | Crypto, Bank Transfer | Active |
+| [Vast.ai](https://cloud.vast.ai/?ref_id=452772) | ✅ | ✅ | 100GB | Wise, PayPal, Stripe | Active |
 
 > **Note:** Earnings vary widely by location, hardware, and demand.
 
