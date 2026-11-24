@@ -358,12 +358,27 @@ type DockerConfig struct {
 	// dials this service back at, so it can be compared against the machine's
 	// current egress address. Only that variable is ever copied out; the rest may
 	// hold credentials.
+	// TrafficStall is the web catalog's docker.traffic_stall block: the web app alerts
+	// when one running copy sends almost nothing while the service's other copies are
+	// busy (app/traffic_stall.py). Desktop parses it so the field round-trips and the
+	// strict-decode test passes, and does not act on it.
+	TrafficStall         *TrafficStall  `json:"trafficStall,omitempty" yaml:"traffic_stall"`
 	AdvertisedAddressEnv string         `json:"advertisedAddressEnv" yaml:"advertised_address_env"`
 	Privileged           bool           `json:"privileged" yaml:"privileged"`
 	StopTimeout          int            `json:"stopTimeout" yaml:"stop_timeout"`
 	Resources            ResourceLimits `json:"resources" yaml:"resources"`
 	Setup                string         `json:"setup" yaml:"setup"`
 	Notes                string         `json:"notes" yaml:"notes"`
+}
+
+// TrafficStall is the optional docker.traffic_stall block (see services/_schema.yml).
+// Share is the fraction of the other copies' median a copy must send in an hour,
+// PeerMinMBPerHour the median below which the hour does not count, and Hours how many
+// whole low hours in a row raise the alert.
+type TrafficStall struct {
+	Share            float64 `json:"share,omitempty" yaml:"share"`
+	PeerMinMBPerHour float64 `json:"peerMinMbPerHour,omitempty" yaml:"peer_min_mb_per_hour"`
+	Hours            int     `json:"hours,omitempty" yaml:"hours"`
 }
 
 // NodeFirewall is the optional docker.node_firewall block (see services/_schema.yml).
