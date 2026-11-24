@@ -455,7 +455,6 @@ func TestCatalogCollectorParity(t *testing.T) {
 	knownUnported := map[string]bool{
 		"dawn":      true,
 		"golem":     true,
-		"gradient":  true,
 		"helium":    true,
 		"nodepay":   true,
 		"nosana":    true,
