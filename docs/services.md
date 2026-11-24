@@ -31,7 +31,7 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 | [ProxyBase](https://peer.proxybase.org?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
 | [ProxyBase Markets](https://proxybase.xyz?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto (USDC) |
 | [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ) | ✅ | ✅ | Unlimited | Undocumented | Crypto, PayPal |
-| [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Crypto |
+| [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Gift cards, Bank |
 | [Repocket](https://repocket.com/) | ✅ | ❌ | 5 | Undocumented | PayPal, Crypto |
 | [Storj](https://storj.dev/node/get-started/setup) | ✅ | ✅ | Unlimited | Undocumented \*\* | Crypto (STORJ) |
 | [Traffmonetizer](https://traffmonetizer.io/?aff=2111758) | ✅ | ✅ \*\*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
@@ -61,7 +61,7 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 | [Dawn Internet](https://dawninternet.com/?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
 | [Deeper Network](https://deeper.network) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |
 | [Ebesucher](https://www.ebesucher.com/?ref=geiserx) | ✅ | ✅ | Unlimited | 1 | PayPal | Active |
-| [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) | Active |
+| [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) | Broken: node rewards ended August 2025 |
 | [Grass](https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE) | ✅ | ❌ | Unlimited | 1 | Crypto (GRASS) | Active |
 | [Helium](https://helium.com) | ✅ | ❌ | Unlimited | 1 | Crypto (HNT) | Active |
 | [Nodepay](https://app.nodepay.ai/register?ref=0wzzyznen64j9zx) | ✅ | ❌ | Unlimited | 1 | Crypto (NC) | Active |
