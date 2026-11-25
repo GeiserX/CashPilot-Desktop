@@ -17,9 +17,10 @@ import (
 // the runtime status read with them, whose Reason says why Docker is or is not
 // ready, and the Docker checklist derived from both (Windows only).
 type HostCheckResult struct {
-	Facts   winvm.HostFacts `json:"facts"`
-	Runtime runtime.Status  `json:"runtime"`
-	Steps   []winvm.Step    `json:"steps"`
+	Facts         winvm.HostFacts `json:"facts"`
+	Runtime       runtime.Status  `json:"runtime"`
+	Steps         []winvm.Step    `json:"steps"`
+	RuntimeNotice *Notification   `json:"runtimeNotice"`
 	// SetupFinished is true when this reading ended the guided setup: this PC's
 	// own Docker Desktop runs Linux containers (winvm.LocalLinuxEngine), and the
 	// journal and RunOnce value are gone.
@@ -35,7 +36,9 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 		return HostCheckResult{}, err
 	}
 	facts := a.hostCache().refresh(a.ctx)
-	status := a.runtimeStatus(a.catalog.ListVisible())
+	status := a.engineStatus(a.catalog.ListVisible())
+	steps := dockerSteps(facts, status)
+	status.SetupTask = dockerSetupTask(steps)
 	finished := winvm.LocalLinuxEngine(facts, status.Reason, localEngine(status))
 	if finished {
 		// This PC's Docker Desktop runs Linux containers: a guided setup that
@@ -47,7 +50,10 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 			finished = false
 		}
 	}
-	return HostCheckResult{Facts: facts, Runtime: status, Steps: dockerSteps(facts, status), SetupFinished: finished}, nil
+	return HostCheckResult{
+		Facts: facts, Runtime: status, Steps: steps,
+		RuntimeNotice: runtimeNotification(status), SetupFinished: finished,
+	}, nil
 }
 
 // dockerSteps is the checklist for one reading. The engine answering proves the
@@ -55,6 +61,19 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 // Docker context go in with it.
 func dockerSteps(facts winvm.HostFacts, status runtime.Status) []winvm.Step {
 	return winvm.DockerSteps(facts, status.Reason, localEngine(status))
+}
+
+func dockerSetupTask(steps []winvm.Step) string {
+	var unknown string
+	for _, step := range steps {
+		if step.State == winvm.StepNeedsYou {
+			return step.Text
+		}
+		if step.ID == "a6" && step.State == winvm.StepUnknown {
+			unknown = step.Text
+		}
+	}
+	return unknown
 }
 
 // localEngine says the engine status reached is this PC's own Docker Desktop,
@@ -68,15 +87,33 @@ func localEngine(status runtime.Status) bool {
 // one. Native registration alone used to count as ready, which told a Windows user
 // with no Docker that the machine was ready when only one app could run.
 func (a *App) runtimeStatus(visible []catalog.Service) runtime.Status {
+	status := a.engineStatus(visible)
+	steps := dockerSteps(a.hostCache().cached(), status)
+	status.SetupTask = dockerSetupTask(steps)
+	if goruntime.GOOS == "windows" && len(steps) == 0 && status.Available {
+		status.SetupTask = "CashPilot is checking Docker Desktop on this PC."
+	}
+	return status
+}
+
+func (a *App) engineStatus(visible []catalog.Service) runtime.Status {
 	status := a.runtime.Status(a.ctx)
 	status.NativeServices = a.services.NativeServices(visible)
 	status.NativeAvailable = a.services.HasNativeRuntime() && len(status.NativeServices) > 0
 	return status
 }
 
+// refreshHostSetup starts a stale Windows reading even when the configured
+// engine answers. GetAppState still returns the cached facts immediately.
+func (a *App) refreshHostSetup() {
+	h := a.hostCache()
+	if goruntime.GOOS == "windows" || h.cached().OS == "windows" {
+		h.hints(a.ctx)
+	}
+}
+
 // hostFactsTTL is how long a background reading serves Status. "Check again" and
-// HostCheck read afresh, so this only bounds how often an idle app with no Docker
-// starts PowerShell on its own.
+// HostCheck read afresh. The TTL bounds how often app state starts PowerShell.
 const hostFactsTTL = 10 * time.Minute
 
 // hostFacts caches the last reading of this PC for Status, which runs on every
@@ -87,6 +124,7 @@ type hostFacts struct {
 	at         time.Time
 	refreshing bool
 	read       func(context.Context) winvm.HostFacts
+	updated    func()
 	// started numbers each reading as it begins; stored is the number of the
 	// reading in facts. A reading that started earlier never replaces a newer one.
 	started, stored uint64
@@ -103,6 +141,7 @@ func (a *App) hostCache() *hostFacts {
 		if a.host == nil {
 			a.host = newHostFacts()
 		}
+		a.host.updated = func() { a.emitEvent("runtime:host-checked") }
 	})
 	return a.host
 }
@@ -144,6 +183,9 @@ func (h *hostFacts) hints(ctx context.Context) runtime.HostHints {
 			h.mu.Lock()
 			h.refreshing = false
 			h.mu.Unlock()
+			if h.updated != nil {
+				h.updated()
+			}
 		}()
 	}
 	h.mu.Unlock()

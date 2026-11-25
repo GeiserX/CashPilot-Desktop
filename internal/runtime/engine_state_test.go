@@ -44,7 +44,7 @@ func TestClassifyGivesEachDockerStateItsOwnReason(t *testing.T) {
 		}), ReasonNotInstalled, "not installed"},
 		{"a CLI on PATH is not 'not installed'", winDown(func(ev *dockerEvidence) {
 			ev.host.DockerInstalled = HintNo
-		}), ReasonNotRunning, "no Docker engine answers"},
+		}), ReasonUnreachable, "no Docker engine answers"},
 		{"Docker Desktop.exe runs before its pipe exists, install unread", winDown(func(ev *dockerEvidence) {
 			ev.tools, ev.host.DockerInstalled, ev.host.DockerRunning = false, "unknown", HintYes
 		}), ReasonNotRunning, "engine is not running yet"},
@@ -81,7 +81,9 @@ func TestClassifyGivesEachDockerStateItsOwnReason(t *testing.T) {
 		}), ReasonWSLMissing, "waiting for a restart"},
 		{"a remote DOCKER_HOST is never 'not installed' and gets no Windows advice", winDown(func(ev *dockerEvidence) {
 			ev.hostSet, ev.tools, ev.endpoint, ev.host.DockerInstalled, ev.host.WSL = true, false, endpointUnknown, HintNo, "missing"
-		}), ReasonNotRunning, "DOCKER_HOST"},
+		}), ReasonUnreachable, "DOCKER_HOST"},
+		{"Windows with no conclusive install evidence", dockerEvidence{goos: "windows"}, ReasonUnreachable, "cannot reach"},
+		{"macOS with only a CLI", dockerEvidence{goos: "darwin", endpoint: endpointAbsent, tools: true}, ReasonUnreachable, "cannot reach"},
 		{"linux: nothing anywhere", dockerEvidence{goos: "linux", endpoint: endpointAbsent}, ReasonNotInstalled, "Choose one of the supported runtimes"},
 		{"linux: a stale socket file", dockerEvidence{goos: "linux", endpoint: endpointRefused}, ReasonNotRunning, "not running yet"},
 		{"macOS: Docker.app installed, PATH empty", dockerEvidence{goos: "darwin", endpoint: endpointAbsent, install: true}, ReasonNotRunning, "not running yet"},

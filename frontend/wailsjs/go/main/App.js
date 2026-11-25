@@ -94,6 +94,10 @@ export function DiscardPartialRestore(arg1) {
   return window['go']['main']['App']['DiscardPartialRestore'](arg1);
 }
 
+export function DockerDesktopEngineReady() {
+  return window['go']['main']['App']['DockerDesktopEngineReady']();
+}
+
 export function EnableIsolation() {
   return window['go']['main']['App']['EnableIsolation']();
 }

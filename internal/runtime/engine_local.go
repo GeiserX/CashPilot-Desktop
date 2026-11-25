@@ -1,13 +1,21 @@
 package runtime
 
-import "strings"
+import (
+	"context"
+	"errors"
+	"io/fs"
+	"strings"
+	"time"
+)
 
-// Docker Desktop's own engine endpoints on Windows: the default pipe, and the two
-// pipes its desktop-linux and desktop-windows contexts name.
-var dockerDesktopPipes = map[string]bool{
-	"docker_engine":              true,
-	"dockerdesktoplinuxengine":   true,
-	"dockerdesktopwindowsengine": true,
+const dockerDesktopWindowsPipe = "dockerDesktopWindowsEngine"
+
+// Prefer the pipes named by Docker Desktop's own contexts, then try the default
+// pipe, which Docker Desktop can use in either container mode.
+var dockerDesktopPipes = [...]string{
+	"dockerDesktopLinuxEngine",
+	dockerDesktopWindowsPipe,
+	"docker_engine",
 }
 
 // Docker Desktop's own context names. The Docker CLI calls the default endpoint
@@ -38,5 +46,33 @@ func LocalDockerDesktop(dockerHost, dockerContext string) bool {
 	}
 	// npipe:////./pipe/<name>: "." is this machine.
 	name, ok := strings.CutPrefix(strings.TrimLeft(strings.TrimPrefix(lower, "npipe:"), "/"), "./pipe/")
-	return ok && dockerDesktopPipes[name]
+	if !ok {
+		return false
+	}
+	for _, pipe := range dockerDesktopPipes {
+		if strings.EqualFold(name, pipe) {
+			return true
+		}
+	}
+	return false
+}
+
+func probeDockerDesktopPipes(ctx context.Context, ping func(context.Context, string) (string, error)) string {
+	denied := false
+	for _, pipe := range dockerDesktopPipes {
+		pipeCtx, cancel := context.WithTimeout(ctx, time.Second)
+		osType, err := ping(pipeCtx, "npipe:////./pipe/"+pipe)
+		cancel()
+		if err == nil {
+			if pipe == dockerDesktopWindowsPipe || strings.EqualFold(osType, "windows") {
+				return ReasonWindowsContainers
+			}
+			return ReasonRunning
+		}
+		denied = errors.Is(err, fs.ErrPermission) || denied
+	}
+	if denied {
+		return ReasonAccessDenied
+	}
+	return ""
 }

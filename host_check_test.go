@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	goruntime "runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -78,6 +79,116 @@ func TestHostCheckReturnsFactsAndTheRuntimeReason(t *testing.T) {
 	if res.Facts.Build != 26100 || res.Runtime.Reason != runtime.ReasonWSLMissing {
 		t.Fatalf("HostCheck returned %+v", res)
 	}
+}
+
+func TestRemoteEngineKeepsLocalDockerSetupInAlerts(t *testing.T) {
+	provider := &engineProvider{status: runtime.Status{Available: true, Reason: runtime.ReasonRunning}}
+	app := gateApp(t, provider)
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, Build: 26100, Virtualization: winvm.Yes, WSL: winvm.WSLMissing}
+	}}
+	res, err := app.HostCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SetupFinished || !res.Runtime.Available {
+		t.Fatalf("remote engine changed local setup completion or engine availability: %+v", res)
+	}
+	if res.RuntimeNotice == nil || !res.RuntimeNotice.Runtime || !strings.Contains(res.RuntimeNotice.Message, "WSL") {
+		t.Fatalf("HostCheck did not return the runtime alert with the reading: %+v", res.RuntimeNotice)
+	}
+	state, err := app.GetAppState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range state.Notifications {
+		if item.Title == "Docker setup needs you" && strings.Contains(item.Message, "WSL") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("alerts omit local WSL setup: %+v", state.Notifications)
+	}
+	if _, err := app.DeployService("earnfm", map[string]string{"EARNFM_TOKEN": "token"}, nil, nil); err != nil {
+		t.Fatalf("working engine should still deploy: %v", err)
+	}
+}
+
+func TestRemoteEngineCannotHideStoppedDockerDesktop(t *testing.T) {
+	app := gateApp(t, &engineProvider{status: runtime.Status{Available: true, Reason: runtime.ReasonRunning}})
+	t.Setenv("DOCKER_HOST", "tcp://192.0.2.1:2375")
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{
+			OS: "windows", Supported: true, Build: 26100, Virtualization: winvm.Yes,
+			WSL: winvm.WSLReady, WSLVersion: "2.3.0", VMPlatformFeature: winvm.Yes,
+			DockerDesktopInstalled: winvm.Yes, DockerDesktopRunning: winvm.No, DockerDesktopStarted: winvm.No,
+		}
+	}}
+	res, err := app.HostCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := make(map[string]string)
+	for _, step := range res.Steps {
+		rows[step.ID] = step.State
+	}
+	if rows["a6"] != winvm.StepNeedsYou || rows["a7"] != winvm.StepNeedsYou || rows["a9"] != winvm.StepBlocked {
+		t.Errorf("running, terms and Linux containers rows = %q, %q, %q", rows["a6"], rows["a7"], rows["a9"])
+	}
+	if !res.Runtime.Available || res.SetupFinished || !strings.Contains(res.Runtime.SetupTask, "Docker Desktop is not running") {
+		t.Errorf("remote engine availability or local setup is wrong: %+v", res)
+	}
+	if res.RuntimeNotice == nil || !strings.Contains(res.RuntimeNotice.Message, "Docker Desktop is not running") {
+		t.Errorf("Alerts omit the stopped desktop: %+v", res.RuntimeNotice)
+	}
+	if _, err := app.DeployService("earnfm", map[string]string{"EARNFM_TOKEN": "token"}, nil, nil); err != nil {
+		t.Fatalf("working remote engine should still deploy: %v", err)
+	}
+}
+
+func TestAppStateRefreshesStaleWindowsFactsWithWorkingEngine(t *testing.T) {
+	app := gateApp(t, &engineProvider{status: runtime.Status{Available: true, Reason: runtime.ReasonRunning}})
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+	old := winvm.HostFacts{
+		OS: "windows", Supported: true, Build: 26100, Virtualization: winvm.Yes,
+		WSL: winvm.WSLReady, WSLVersion: "2.3.0", VMPlatformFeature: winvm.Yes,
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	app.host = &hostFacts{facts: old, at: time.Now().Add(-20 * time.Minute), read: func(context.Context) winvm.HostFacts {
+		close(started)
+		<-release
+		fresh := old
+		fresh.WSL = winvm.WSLMissing
+		return fresh
+	}}
+	if _, err := app.GetAppState(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("GetAppState did not start a Windows reading with the working loopback engine")
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for app.host.cached().WSL != winvm.WSLMissing && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	state, err := app.GetAppState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Runtime.Available || !strings.Contains(state.Runtime.SetupTask, "WSL") {
+		t.Errorf("runtime did not pick up the new Windows reading: %+v", state.Runtime)
+	}
+	for _, notice := range state.Notifications {
+		if notice.Runtime && strings.Contains(notice.Message, "WSL") {
+			return
+		}
+	}
+	t.Errorf("Alerts omit the refreshed Windows reading: %+v", state.Notifications)
 }
 
 // CheckRuntime runs after every deploy, stop, restart and remove (refreshState),

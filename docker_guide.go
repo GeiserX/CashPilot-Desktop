@@ -34,6 +34,14 @@ func (a *App) StartDockerDesktop() error {
 	return launchDockerDesktop()
 }
 
+// DockerDesktopEngineReady checks only the local Docker Desktop engine pipes.
+func (a *App) DockerDesktopEngineReady() (bool, error) {
+	if err := a.ready(); err != nil {
+		return false, err
+	}
+	return dockerDesktopEngineReady(a.ctx), nil
+}
+
 // OpenWindowsUpdate opens Settings at Windows Update.
 func (a *App) OpenWindowsUpdate() error {
 	if err := a.ready(); err != nil {

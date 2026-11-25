@@ -59,6 +59,8 @@ export function DeployToWorker(arg1:string,arg2:main.WorkerDeployRequest):Promis
 
 export function DiscardPartialRestore(arg1:string):Promise<void>;
 
+export function DockerDesktopEngineReady():Promise<boolean>;
+
 export function EnableIsolation():Promise<main.IsolationResult>;
 
 export function ExportCompose(arg1:Array<string>,arg2:string):Promise<string>;
