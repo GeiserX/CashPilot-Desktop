@@ -25,7 +25,7 @@ import type { RuntimeStatus } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 export type RuntimeInput = Pick<RuntimeStatus, "available" | "nativeAvailable" | "message"> &
-  Partial<Pick<RuntimeStatus, "reason" | "nativeServices">>;
+  Partial<Pick<RuntimeStatus, "reason" | "nativeServices" | "setupTask">>;
 
 export type RuntimeKind = "ready" | "not-installed" | "not-running" | "not-ready" | "unknown";
 
@@ -88,8 +88,16 @@ export interface RuntimeAttention {
  * away stops something that ran.
  */
 export function runtimeAttention(runtime: RuntimeInput, containers: boolean): RuntimeAttention | null {
-  if (runtime.available) return null;
   const actions = setupDockerButton();
+  if (runtime.available) {
+    return runtime.setupTask ? {
+      level: "warn",
+      tag: "Set up",
+      what: "Docker on this computer",
+      why: escapeHtml(runtime.setupTask),
+      actions,
+    } : null;
+  }
   const message = escapeHtml(runtime.message || "Docker is not reachable.");
   if (!runtime.nativeAvailable) {
     return {
@@ -128,7 +136,8 @@ export function runtimeAttention(runtime: RuntimeInput, containers: boolean): Ru
 export function renderRuntimeSettings(runtime: RuntimeInput): string {
   const state = runtimeState(runtime);
   const ready = state.kind === "ready";
-  const tone = ready ? "ok" : "warn";
+  const setupNeeded = !ready || !!runtime.setupTask;
+  const tone = setupNeeded ? "warn" : "ok";
   const native = ready ? "" : withoutDocker(runtime);
   return `
     <section class="card" aria-labelledby="runtime-settings-title" data-runtime-settings="${state.kind}">
@@ -137,11 +146,12 @@ export function renderRuntimeSettings(runtime: RuntimeInput): string {
           <span class="card-title" id="runtime-settings-title">Runtime</span>
           <p class="muted compact-copy">What runs the apps on this computer. Most apps run in Docker.</p>
         </div>
-        ${setupDockerButton(ready)}
+        ${setupDockerButton(!setupNeeded)}
       </div>
       <div class="runtime-card ${tone}">
         <strong>Docker: ${escapeHtml(state.label)}</strong>
         ${runtime.message ? `<span>${escapeHtml(runtime.message)}</span>` : ""}
+        ${ready && runtime.setupTask ? `<small>${escapeHtml(runtime.setupTask)}</small>` : ""}
         ${native ? `<small>${native}</small>` : ""}
       </div>
     </section>

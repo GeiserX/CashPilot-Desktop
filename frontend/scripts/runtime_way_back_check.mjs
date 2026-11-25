@@ -66,6 +66,10 @@ for (const [name, runtime] of Object.entries(states)) {
   check(`RULE 1 (${name}): the row has Set up Docker`, SETUP.test(html), html);
   check(`RULE 1 (${name}): "Nothing needs you" does not show`, !html.includes("Nothing needs you"), html);
 }
+const remote = { ...states.ready, setupTask: "Turn on WSL" };
+const remoteDashboard = dashboard(remote);
+check("a working engine with local setup left still asks for WSL", remoteDashboard.items[0]?.level === "warn" && remoteDashboard.html.includes("Turn on WSL") && SETUP.test(remoteDashboard.html) && !remoteDashboard.html.includes("Nothing needs you"), remoteDashboard.html);
+check("Settings keeps Set up Docker for unfinished local setup with a working engine", SETUP.test(renderRuntimeSettings(remote)) && renderRuntimeSettings(remote).includes("Turn on WSL"));
 const fresh = dashboard(states.notInstalled).items[0];
 check("RULE 1: native only is a warning, not an outage", fresh?.level === "warn" && fresh.tag !== "Offline", JSON.stringify(fresh));
 check("RULE 1: it says Docker is not set up, and what still runs", /Docker is not set up yet/.test(fresh?.why) && /only MystNodes can run here/.test(fresh?.why), fresh?.why);

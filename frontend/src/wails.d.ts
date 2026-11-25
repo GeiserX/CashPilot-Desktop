@@ -847,6 +847,7 @@ export interface RuntimeStatus {
   nativeAvailable: boolean;
   // The catalog apps the native runtime can run on this machine.
   nativeServices: string[] | null;
+  setupTask?: string;
   kind: string;
   // Why Docker is or is not ready: running, not-installed, not-running,
   // windows-containers, access-denied, wsl-missing, wsl-outdated,

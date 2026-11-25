@@ -35,7 +35,9 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 		return HostCheckResult{}, err
 	}
 	facts := a.hostCache().refresh(a.ctx)
-	status := a.runtimeStatus(a.catalog.ListVisible())
+	status := a.engineStatus(a.catalog.ListVisible())
+	steps := dockerSteps(facts, status)
+	status.SetupTask = dockerSetupTask(steps)
 	finished := winvm.LocalLinuxEngine(facts, status.Reason, localEngine(status))
 	if finished {
 		// This PC's Docker Desktop runs Linux containers: a guided setup that
@@ -47,7 +49,7 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 			finished = false
 		}
 	}
-	return HostCheckResult{Facts: facts, Runtime: status, Steps: dockerSteps(facts, status), SetupFinished: finished}, nil
+	return HostCheckResult{Facts: facts, Runtime: status, Steps: steps, SetupFinished: finished}, nil
 }
 
 // dockerSteps is the checklist for one reading. The engine answering proves the
@@ -55,6 +57,15 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 // Docker context go in with it.
 func dockerSteps(facts winvm.HostFacts, status runtime.Status) []winvm.Step {
 	return winvm.DockerSteps(facts, status.Reason, localEngine(status))
+}
+
+func dockerSetupTask(steps []winvm.Step) string {
+	for _, step := range steps {
+		if step.State == winvm.StepNeedsYou {
+			return step.Text
+		}
+	}
+	return ""
 }
 
 // localEngine says the engine status reached is this PC's own Docker Desktop,
@@ -68,6 +79,12 @@ func localEngine(status runtime.Status) bool {
 // one. Native registration alone used to count as ready, which told a Windows user
 // with no Docker that the machine was ready when only one app could run.
 func (a *App) runtimeStatus(visible []catalog.Service) runtime.Status {
+	status := a.engineStatus(visible)
+	status.SetupTask = dockerSetupTask(dockerSteps(a.hostCache().cached(), status))
+	return status
+}
+
+func (a *App) engineStatus(visible []catalog.Service) runtime.Status {
 	status := a.runtime.Status(a.ctx)
 	status.NativeServices = a.services.NativeServices(visible)
 	status.NativeAvailable = a.services.HasNativeRuntime() && len(status.NativeServices) > 0

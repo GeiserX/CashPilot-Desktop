@@ -70,11 +70,16 @@ func (a *App) refuseWithoutDocker(slug string) error {
 	return err
 }
 
-// dockerNotice is the Alerts entry for a computer where only native apps run: no
-// Docker engine answers, but the native runtime can run something, so the app is
-// not offline. With nothing able to run, notifications() says "Runtime offline"
-// instead, and with Docker ready there is nothing to say.
+// dockerNotice keeps local setup visible when an engine answers elsewhere, or
+// explains what runs on a computer where only native apps can start.
 func dockerNotice(status runtime.Status) (Notification, bool) {
+	if status.Available && status.SetupTask != "" {
+		return Notification{
+			Level:   "warning",
+			Title:   "Docker setup needs you",
+			Message: status.SetupTask + " Use Set up Docker on the Dashboard or in Settings.",
+		}, true
+	}
 	if status.Available || !status.NativeAvailable {
 		return Notification{}, false
 	}

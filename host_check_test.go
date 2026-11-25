@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	goruntime "runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -77,6 +78,38 @@ func TestHostCheckReturnsFactsAndTheRuntimeReason(t *testing.T) {
 	}
 	if res.Facts.Build != 26100 || res.Runtime.Reason != runtime.ReasonWSLMissing {
 		t.Fatalf("HostCheck returned %+v", res)
+	}
+}
+
+func TestRemoteEngineKeepsLocalDockerSetupInAlerts(t *testing.T) {
+	provider := &engineProvider{status: runtime.Status{Available: true, Reason: runtime.ReasonRunning}}
+	app := gateApp(t, provider)
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, Build: 26100, Virtualization: winvm.Yes, WSL: winvm.WSLMissing}
+	}}
+	res, err := app.HostCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.SetupFinished || !res.Runtime.Available {
+		t.Fatalf("remote engine changed local setup completion or engine availability: %+v", res)
+	}
+	state, err := app.GetAppState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range state.Notifications {
+		if item.Title == "Docker setup needs you" && strings.Contains(item.Message, "WSL") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("alerts omit local WSL setup: %+v", state.Notifications)
+	}
+	if _, err := app.DeployService("earnfm", map[string]string{"EARNFM_TOKEN": "token"}, nil, nil); err != nil {
+		t.Fatalf("working engine should still deploy: %v", err)
 	}
 }
 
