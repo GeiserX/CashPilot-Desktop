@@ -21,9 +21,11 @@ $s.Connect()
 try {
   $task = $s.GetFolder(` + psLiteral(folder) + `).GetTask(` + psLiteral(name) + `)
 } catch {
-  $e = $_.Exception
-  while ($e -and -not ($e -is [System.Runtime.InteropServices.COMException])) { $e = $e.InnerException }
-  if ($e -and ($e.HResult -eq -2147024894 -or $e.HResult -eq -2147024893)) { exit 0 }
+  # .NET turns 0x80070002 into a FileNotFoundException, inside PowerShell's own
+  # wrapper, so every exception in the chain is checked for the code.
+  for ($e = $_.Exception; $e; $e = $e.InnerException) {
+    if ($e.HResult -eq -2147024894 -or $e.HResult -eq -2147024893) { exit 0 }
+  }
   throw
 }
 foreach ($a in $task.Definition.Actions) { if ($a.Type -eq 0 -and $a.Path) { [Console]::Out.Write($a.Path); break } }
