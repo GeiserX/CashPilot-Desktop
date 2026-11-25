@@ -89,6 +89,7 @@ import {
 import { renderFleetSection } from "./render/fleet";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
+import { bootWhenReady, renderFailed, renderStarting, wireBootRetry } from "./render/boot";
 import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, renderWelcome as welcomePanel, type Mode, type ModeCardView } from "./render/mode";
 import { gatePage, withChrome } from "./render/chrome";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
@@ -213,22 +214,36 @@ let settingsRequest = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
+// The window can load before the Go side has finished starting (render/boot.ts):
+// wait for it on a calm page, and keep a Try again on the failed page.
 async function boot() {
-  try {
-    state = await GetAppState();
-    await applySetupResume();
-    render();
-    wireBackendEvents();
-  } catch (error) {
-    renderError(error);
-  }
+  await bootWhenReady({
+    load: async () => {
+      state = await GetAppState();
+      await applySetupResume();
+      render();
+      wireBackendEvents();
+    },
+    showStarting: () => {
+      root.innerHTML = withChrome(renderStarting(""));
+      wireChrome();
+    },
+    showFailed: renderError,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+  });
 }
+
+let backendEventsWired = false;
 
 let eventRefreshInFlight = false;
 
 // The Go backend emits these after background collection cycles and deployment
 // changes. Refresh state so passive earnings appear without the user navigating.
 function wireBackendEvents() {
+  // Once: a Try again after a failed start runs boot again.
+  if (backendEventsWired) return;
+  backendEventsWired = true;
   EventsOn("earnings:changed", () => void onBackendEvent());
   EventsOn("deployment:changed", () => void onBackendEvent());
   // Background/startup failures the Go side reports via app:error had no listener,
@@ -2730,8 +2745,9 @@ function showInfoToast(payload: {scope?: string; message?: string} | string) {
 }
 
 function renderError(error: unknown) {
-  root.innerHTML = withChrome(`<main class="center"><section class="panel"><h1>CashPilot failed to start</h1><pre>${escapeHtml(String(error))}</pre></section></main>`);
+  root.innerHTML = withChrome(renderFailed("", error));
   wireChrome();
+  wireBootRetry(root, () => void boot());
 }
 
 function wireChrome() {
