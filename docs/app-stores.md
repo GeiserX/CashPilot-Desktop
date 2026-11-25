@@ -13,7 +13,7 @@ The `packaging/` directory holds ready packages for three package managers. None
 
 Each package installs the same binary the release publishes. Nothing is rebuilt.
 
-- winget installs the Windows exe as a portable app and adds the `cashpilot-desktop` command. The exe is not code-signed yet, so the winget-pkgs checks may hold it for manual review.
+- winget installs CashPilot Desktop for Windows with its installer, `CashPilot-Desktop-windows-amd64-setup.exe` (InstallerType `nullsoft`, Scope `user`), so `winget uninstall GeiserX.CashPilotDesktop` runs the same uninstaller as Settings > Apps. The installer is not code-signed yet, so the winget-pkgs checks may hold it for manual review. The checked-in manifest gets the installer's sha256 from `render.sh` at the next release; the one in the file today is a placeholder.
 - The Homebrew cask installs the signed and notarized `cashpilot-desktop.app`. `brew uninstall` also unloads the background helper (`cloud.cashpilot.desktop.helper`) and deletes its LaunchAgent, so it does not start again at login. `brew uninstall --zap` also removes the app data, the preferences and the WebKit data.
 - The AUR package installs the Linux binary as `/usr/bin/cashpilot-desktop`, with a menu entry and the icon. Docker or Podman are optional dependencies, because either one works.
 
@@ -26,7 +26,7 @@ packaging/render.sh v0.32.0
 go test ./packaging/
 ```
 
-`render.sh` downloads the three release assets and the icon at that tag. It checks that the zip holds `cashpilot-desktop.app` and the tarball holds `CashPilot Desktop`. It then writes the version and the sha256 of each file into all three packages, renames the winget version directory and regenerates the AUR `.SRCINFO`.
+`render.sh` downloads the three release assets the packages install (the macOS zip, the Linux tarball and the Windows installer) and the icon at that tag. It checks that the zip holds `cashpilot-desktop.app` and the tarball holds `CashPilot Desktop`. It then writes the version and the sha256 of each file into all three packages, renames the winget version directory and regenerates the AUR `.SRCINFO`.
 
 `go test ./packaging/` checks three things. Every package downloads an asset name that `.github/workflows/desktop-release.yml` really publishes. All packages name the same version. Every checksum is a well-formed sha256, and the AUR `.SRCINFO` matches the `PKGBUILD`.
 
