@@ -15,7 +15,7 @@ import (
 // First run lets a person open the dashboard before Docker is set up, because a
 // native app (MystNodes on Windows) runs without it. Docker apps cannot, so the
 // app has to say so wherever a Docker app is set up or deployed: the setup card's
-// "Before you deploy" panel (PreflightService), the deploy itself, which refuses
+// "Before you deploy" panel, the deploy itself, which refuses
 // before it saves or changes anything, and the Alerts list. The frontend's half,
 // with the Set up Docker button, is render/runtime_state.ts.
 

@@ -1530,8 +1530,8 @@ func (a *App) GetCredentials(slug string) (map[string]string, error) {
 // PreflightService reports what could stop a service earning on THIS machine,
 // before the user deploys it: a provider that forbids containers, an image with no
 // build for this CPU, a service already running on another machine in the fleet,
-// and the requirements nobody can verify from here. It never blocks a deploy — the
-// report is shown in the wizard and the Deploy button stays live either way.
+// and the requirements nobody can verify from here. The frontend checks the
+// shared Docker status separately when it renders the report and Deploy button.
 func (a *App) PreflightService(slug string) (preflight.Report, error) {
 	if err := a.ready(); err != nil {
 		return preflight.Report{}, err
@@ -1549,7 +1549,6 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 		Service:    svc,
 		Fleet:      fleet,
 		DaemonArch: preflight.DaemonArch(a.ctx),
-		RuntimeGap: a.dockerGapFor(slug),
 	}), nil
 }
 

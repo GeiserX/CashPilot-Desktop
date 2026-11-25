@@ -43,7 +43,6 @@ import {
   GetFleetState,
   GetProxiesState,
   GetLogs,
-  GetRuntimeGuides,
   GetSettingsState,
   GetUsage,
   HostCheck,
@@ -114,7 +113,7 @@ import { catalogFilterTabs, renderCatalogTable, wizardCategoryChoices, wizardCat
 import { wireCatalogRows } from "./render/catalog_open";
 import { wireOpenLinks } from "./render/open_links";
 import { renderAddServiceButton, renderTopnav } from "./render/topbar";
-import { renderPreflight } from "./render/preflight";
+import { localDockerGap, renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
@@ -125,7 +124,7 @@ import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
 import { guidesBesideChecklist, loadRuntimePage, readRuntimeSnapshot, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
-import { renderRuntimeSettings, runtimeProviderNote } from "./render/runtime_state";
+import { renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
@@ -151,6 +150,7 @@ let onboardingResumeChecked = false;
 // First run's reading of this PC for the runtime step, once it has landed (or
 // failed), and whether "Check again" is reading now.
 let firstRunHost: HostCheckResult | null = null;
+let firstRunHasChecklist = false;
 let firstRunHostTried = false;
 let firstRunChecking = false;
 // A guided setup a restart interrupted (render/dockerguide.ts), and the checklist
@@ -175,6 +175,7 @@ let wizardRouteDrafts: Record<string, number | null> = {};
 // The Where box's pick per slug (a worker id, null for this computer), kept and
 // cleared as the Route box's picks are (render/where.ts).
 let wizardWhereDrafts: Record<string, number | null> = {};
+const wizardPreflightDraws = new Map<string, () => void>();
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -245,7 +246,7 @@ const boot = createBoot({
   wireChrome,
   load: async () => {
     wireBackendEvents();
-    state = await GetAppState();
+    state = await getAppState();
     await applySetupResume();
     render();
     if (hostReadingPending) {
@@ -280,7 +281,10 @@ function wireBackendEvents() {
   EventsOn("app:error", (payload) => showErrorToast(payload));
   EventsOn("app:notice", (payload) => showInfoToast(payload));
   // Windows reopened CashPilot after a restart while this window was open.
-  EventsOn("setup:resume", () => void applySetupResume().then(render));
+  EventsOn("setup:resume", () => void applySetupResume().then(() => {
+    if (dockerGuide) dockerGuide.showResume(setupResume);
+    else render();
+  }));
 }
 
 // A setup a restart interrupted, or a start with --resume-setup, lands on the
@@ -293,18 +297,35 @@ async function applySetupResume() {
   else onboardingStep = "runtime";
 }
 
-// HostCheck, plus the frontend's half of finishing a setup: a reading that finds
-// this PC's Docker running ends it in Go (host_check.go), so the resume banner goes too.
+// Publish every explicit host check to the shared runtime, even when it fails.
 async function hostCheck() {
-  const result = await HostCheck();
-  if (setupFinished(result)) setupResume = null;
+  const request = ++runtimeSnapshotRequest;
+  const firstRun = !state?.config.firstRunComplete;
+  const publish = (result: HostCheckResult | null) => {
+    if (!state || request !== runtimeSnapshotRequest) return;
+    if (firstRun) {
+      firstRunHost = result;
+      if (result) firstRunHasChecklist = !!result.facts?.supported && !!result.steps?.length;
+    }
+    if (result && setupFinished(result)) setupResume = null;
+    setRuntimeReading(result?.runtime ?? unknownRuntime, result ? result.runtimeNotice : unknownRuntimeNotice);
+  };
+  let result: HostCheckResult;
+  try {
+    result = await HostCheck();
+  } catch (error) {
+    publish(null);
+    throw error;
+  }
+  publish(result);
   return result;
 }
 
-// What the checklist needs from Go. skip and checked differ per screen.
-function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked"> & Partial<Pick<DockerGuideDeps, "hostCheck">>): DockerGuideDeps {
+// What the checklist needs from Go. Skip differs per screen.
+function guideDeps(skip: DockerGuideDeps["skip"]): DockerGuideDeps {
   return {
     hostCheck,
+    currentRuntime: () => state?.runtime,
     startDocker: StartDockerDesktop,
     dockerEngineReady: DockerDesktopEngineReady,
     openWindowsUpdate: OpenWindowsUpdate,
@@ -320,26 +341,43 @@ function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked"> & Partial<Pi
       if (url) BrowserOpenURL(url);
     },
     failed: (error) => showErrorToast({scope: "runtime", error: String(error)}),
-    ...extra,
+    skip,
   };
 }
 
+// App-state reads also check Docker. While the checklist is on screen, HostCheck
+// owns the reading because it returns the rows and status together.
+function hostCheckOwnsRuntime() {
+  return state && (state.config.firstRunComplete ? activeView === "runtime" : onboardingStep === "runtime");
+}
+
+async function getAppState() {
+  const request = hostCheckOwnsRuntime() ? null : ++runtimeSnapshotRequest;
+  let next: AppState;
+  try {
+    next = await GetAppState();
+  } catch (error) {
+    if (request === runtimeSnapshotRequest) setRuntimeReading(unknownRuntime, unknownRuntimeNotice);
+    throw error;
+  }
+  if (!state) return next;
+  if (request === runtimeSnapshotRequest) {
+    state = { ...state, runtime: next.runtime, notifications: next.notifications };
+    if (activeView !== "dashboard") updateRuntimeSurfaces(state);
+    return next;
+  }
+  const notice = state.notifications?.find((item) => item.runtime) ?? null;
+  return { ...next, ...withRuntimeReading(next, state.runtime, notice) };
+}
 
 async function onBackendEvent() {
   if (eventRefreshInFlight) return;
   if (!state || !state.config.firstRunComplete) return;
   eventRefreshInFlight = true;
-  const runtimeRequest = runtimeSnapshotRequest;
   try {
-    const next = await GetAppState();
-    if (state && runtimeRequest !== runtimeSnapshotRequest) {
-      const notice = state.notifications?.find((item) => item.runtime) ?? null;
-      state = { ...next, ...withRuntimeReading(next, state.runtime, notice) };
-    } else {
-      state = next;
-    }
-    // Only re-render on the dashboard; other views own an in-progress form, so
-    // update state silently and let them pick it up on their next natural render.
+    state = await getAppState();
+    // Other views may have unsaved input, so getAppState updates their runtime
+    // controls in place.
     if (activeView === "dashboard") render();
   } catch {
     // transient background refresh failure — ignore; next event/read recovers
@@ -353,6 +391,7 @@ function render() {
   // Whatever was on screen is replaced: a checklist there stops drawing.
   dockerGuide?.dispose();
   dockerGuide = null;
+  wizardPreflightDraws.clear();
   // A seed phrase on screen goes with the view it was shown in.
   if (activeView !== "dashboard") hideRevealedSeed();
   if (activeView !== "wizard") dropNewWalletPhrase();
@@ -416,8 +455,7 @@ function renderOnboarding(current: AppState) {
   // generic message would tell a PC with virtualization off to open Docker.
   const checking = !runtime.available && !firstRunHostTried;
   if (checking) void firstRunHostCheck();
-  // On Windows the Docker checklist shows below the card while Docker is not ready.
-  const checklist = !runtime.available && !!firstRunHost?.facts?.supported && (firstRunHost.steps?.length ?? 0) > 0;
+  const checklist = firstRunHasChecklist;
   // Onboarding proceeds when Docker answers, or when the native runtime can run at
   // least one catalog app here. Native-only is never called ready: the card says
   // most apps need Docker and points at its guide (render/onboarding.ts).
@@ -437,7 +475,7 @@ function renderOnboarding(current: AppState) {
   wireChrome();
   document.querySelector("#continue-btn")?.addEventListener("click", async () => {
     await CompleteOnboarding();
-    state = await GetAppState();
+    state = await getAppState();
     render();
   });
   document.querySelector("#refresh-runtime")?.addEventListener("click", async () => {
@@ -447,8 +485,7 @@ function renderOnboarding(current: AppState) {
     firstRunChecking = true;
     render();
     try {
-      firstRunHost = await hostCheck();
-      state = {...current, runtime: firstRunHost.runtime, guides: await GetRuntimeGuides()};
+      await hostCheck();
     } catch (error) {
       showErrorToast({scope: "runtime", error: String(error)});
     } finally {
@@ -457,26 +494,12 @@ function renderOnboarding(current: AppState) {
     }
   });
   const holder = document.querySelector<HTMLDivElement>("#docker-guide");
-  if (checklist && holder && firstRunHost) {
-    dockerGuide = new DockerGuide(holder, guideDeps({
-      skip: async () => {
-        await CompleteOnboarding();
-        state = await GetAppState();
-        render();
-      },
-      // A reading from the checklist updates the card above it, in place, so the
-      // checklist keeps its screen.
-      checked: (result) => {
-        firstRunHost = result;
-        if (!state) return;
-        state = {...state, runtime: result.runtime};
-        const next = runtimeCard(result.runtime);
-        const slot = document.querySelector("#runtime-card-slot");
-        if (slot) slot.innerHTML = next.html;
-        const go = document.querySelector<HTMLButtonElement>("#continue-btn");
-        if (go) go.disabled = !next.canContinue;
-      },
-    }), {runtime, resume: setupResume, result: firstRunHost});
+  if (checklist && holder) {
+    dockerGuide = new DockerGuide(holder, guideDeps(async () => {
+      await CompleteOnboarding();
+      state = await getAppState();
+      render();
+    }), {runtime, resume: setupResume, result: firstRunHost, checkFailed: !firstRunHost});
   }
   renderGuides(guidesBesideChecklist(current.guides || [], checklist));
 }
@@ -488,10 +511,9 @@ async function firstRunHostCheck() {
   if (firstRunHostPending) return;
   firstRunHostPending = true;
   try {
-    firstRunHost = await hostCheck();
-    if (state) state = {...state, runtime: firstRunHost.runtime};
+    await hostCheck();
   } catch {
-    // The card falls back to the runtime's own message.
+    // hostCheck has already published the unknown status.
   } finally {
     firstRunHostTried = true;
     firstRunHostPending = false;
@@ -523,18 +545,10 @@ function renderRuntimeView(current: AppState) {
   const holder = document.querySelector<HTMLDivElement>("#docker-guide");
   const guides = current.guides || [];
   const runtimeViewCurrent = () => activeView === "runtime" && !!holder?.isConnected;
-  const showRuntime = (runtime: RuntimeStatus, notice: NotificationItem | null) => {
-    if (!state || !runtimeViewCurrent()) return;
-    state = { ...state, ...withRuntimeReading(state, runtime, notice) };
-    const slot = document.querySelector("#runtime-card-slot");
-    if (slot) slot.innerHTML = runtimeCard(state.runtime).html;
-    updateRuntimeChrome(state);
-  };
   // The checklist reads the PC when it opens; outside Windows the reading says so
   // and the install guides stay the whole page (render/runtimepage.ts).
   void loadRuntimePage(hostCheck, guides, {
     current: runtimeViewCurrent,
-    setRuntime: showRuntime,
     showGuides: renderGuides,
     showHolder: (html) => {
       if (!holder) return;
@@ -543,19 +557,8 @@ function renderRuntimeView(current: AppState) {
     },
     readResume: SetupResume,
     showChecklist: (result, resume) => {
-      if (!holder) return;
-      dockerGuide = new DockerGuide(holder, guideDeps({
-        skip: () => showView("dashboard"),
-        checked: (res) => showRuntime(res.runtime, res.runtimeNotice),
-        hostCheck: async () => {
-          try {
-            return await hostCheck();
-          } catch (error) {
-            showRuntime(unknownRuntime, unknownRuntimeNotice);
-            throw error;
-          }
-        },
-      }), {runtime: result.runtime, resume, result});
+      if (!holder || !state) return;
+      dockerGuide = new DockerGuide(holder, guideDeps(() => showView("dashboard")), {runtime: state.runtime, resume, result});
     },
   });
 }
@@ -579,7 +582,7 @@ function renderModeStep() {
       }
       try {
         await StartAsLead();
-        state = await GetAppState();
+        state = await getAppState();
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
         return;
@@ -600,7 +603,7 @@ function renderJoinStep() {
     onboardingStep = "mode";
     render();
   }, async () => {
-    state = await GetAppState();
+    state = await getAppState();
     onboardingStep = "runtime";
     render();
   });
@@ -1025,13 +1028,13 @@ function topbar(active: View, current: AppState) {
 }
 
 function runtimeUsable(runtime: RuntimeStatus) {
-  return runtime.available || runtime.nativeAvailable;
+  return runtime.available || (runtime.nativeAvailable && runtimeState(runtime).kind !== "unknown");
 }
 
 function topbarRuntimeLabel(runtime: RuntimeStatus) {
   const label = runtime.available ? "Runtime ready"
-    : runtime.nativeAvailable ? "Native mode"
-    : runtime.reason ? "Runtime offline" : "Runtime unknown";
+    : runtimeState(runtime).kind === "unknown" ? "Runtime unknown"
+    : runtime.nativeAvailable ? "Native mode" : "Runtime offline";
   return `<span class="runtime-dot ${runtimeUsable(runtime) ? "ok" : "warn"}"></span>${label}`;
 }
 
@@ -1061,27 +1064,51 @@ function updateRuntimeChrome(current: AppState) {
   if (alerts) alerts.innerHTML = renderAlerts(current.notifications);
 }
 
-// A Windows host reading can finish after GetAppState returned. Update the open
-// surfaces without replacing any in-progress form.
-async function refreshRuntimeSnapshot() {
-  if (!state?.config.firstRunComplete) return;
-  const request = ++runtimeSnapshotRequest;
-  const snapshot = await readRuntimeSnapshot(GetAppState, state);
-  if (!state || request !== runtimeSnapshotRequest) return;
-  state = { ...state, ...snapshot };
+function setRuntimeReading(runtime: RuntimeStatus, notice: NotificationItem | null) {
+  if (!state) return;
+  state = { ...state, ...withRuntimeReading(state, runtime, notice) };
+  updateRuntimeSurfaces(state);
+}
+
+function updateRuntimeSurfaces(current: AppState) {
+  const slot = document.querySelector("#runtime-card-slot");
+  if (slot) {
+    const card = runtimeCard(current.runtime);
+    slot.innerHTML = card.html;
+    const go = document.querySelector<HTMLButtonElement>("#continue-btn");
+    if (go) go.disabled = !card.canContinue;
+  }
+  if (!current.config.firstRunComplete) return;
   if (activeView === "dashboard") {
     render();
     return;
   }
-  updateRuntimeChrome(state);
-  if (activeView !== "settings") return;
-  const card = document.querySelector("#runtime-settings-slot");
-  if (card) {
-    card.innerHTML = renderRuntimeSettings(state.runtime);
-    wireShellNav(card);
+  updateRuntimeChrome(current);
+  if (activeView === "wizard") {
+    for (const draw of wizardPreflightDraws.values()) draw();
+    const summary = document.querySelector("#wizard-runtime-summary");
+    if (summary) summary.innerHTML = wizardSummaryServices((current.services || []).filter((service) => wizardSelected.includes(service.slug)));
   }
-  const provider = document.querySelector("[data-runtime-provider-state]");
-  if (provider) provider.outerHTML = runtimeProviderNote(state.runtime);
+  if (activeView === "settings") {
+    const card = document.querySelector("#runtime-settings-slot");
+    if (card) {
+      card.innerHTML = renderRuntimeSettings(current.runtime);
+      wireShellNav(card);
+    }
+    const provider = document.querySelector("[data-runtime-provider-state]");
+    if (provider) provider.outerHTML = runtimeProviderNote(current.runtime);
+  }
+}
+
+// A Windows host reading can finish after GetAppState returned. Update the open
+// surfaces without replacing any in-progress form.
+async function refreshRuntimeSnapshot() {
+  if (!state?.config.firstRunComplete || hostCheckOwnsRuntime()) return;
+  const request = ++runtimeSnapshotRequest;
+  const snapshot = await readRuntimeSnapshot(GetAppState, state);
+  if (!state || request !== runtimeSnapshotRequest) return;
+  state = { ...state, ...snapshot };
+  updateRuntimeSurfaces(state);
 }
 
 function showView(view: View) {
@@ -1106,7 +1133,7 @@ function wireShellNav(scope: ParentNode = document) {
   document.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
     const currency = (event.target as HTMLSelectElement).value;
     await SaveSettings({displayCurrency: currency});
-    state = await GetAppState();
+    state = await getAppState();
     render();
   });
 }
@@ -1247,7 +1274,7 @@ async function saveCustomService(editor: HTMLFormElement) {
     editor.dataset.customEditor = saved.slug;
     customEditing = saved;
     customViews = await ListCustomServices();
-    state = await GetAppState();
+    state = await getAppState();
     customEditing = null;
     render();
     const deployed = state?.deployments?.some((dep) => dep.slug === saved.slug);
@@ -1265,7 +1292,7 @@ async function deleteCustomService(slug: string) {
   try {
     await DeleteCustomService(slug);
     customViews = await ListCustomServices();
-    state = await GetAppState();
+    state = await getAppState();
     render();
   } catch (error) {
     showErrorToast({scope: "custom service", error: String(error)});
@@ -1413,7 +1440,7 @@ async function runImportApply() {
   try {
     importResult = await ApplyImport({ ...importRequest, slugs, extra });
     importDeployed = [];
-    state = await GetAppState();
+    state = await getAppState();
     importLinks = {};
     showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
     renderImportIfShown();
@@ -1430,11 +1457,16 @@ async function runImportDeploy(slug: string) {
     const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
     // The same pre-flight report the wizard shows, when there is one.
     const report = await PreflightService(slug).catch(() => null);
+    const gap = state && localDockerGap(state.services?.find((service) => service.slug === slug), state.runtime);
+    if (gap) {
+      showErrorToast({scope: "deploy", error: gap});
+      return;
+    }
     const preflight = report?.summary ? `\n\n${report.summary}` : "";
     if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) return;
     await DeployService(slug, {}, null, null);
     importDeployed = [...importDeployed, slug];
-    state = await GetAppState();
+    state = await getAppState();
     // The saved values hold the device id; the step is the one the wizard shows.
     const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
     const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
@@ -1480,7 +1512,8 @@ async function renderSettings(current: AppState) {
     modeState = null;
     showErrorToast({scope: "mode", error: String(error)});
   }
-  const runtimeRequest = runtimeSnapshotRequest;
+  if (request !== settingsRequest || activeView !== "settings") return;
+  const runtimeRequest = ++runtimeSnapshotRequest;
   const snapshot = await readRuntimeSnapshot(GetAppState, state ?? current);
   if (request !== settingsRequest || activeView !== "settings") return;
   current = state ?? current;
@@ -1584,7 +1617,7 @@ function wireModeCard() {
       try {
         modeLeft = await SwitchToLead();
         modeState = await GetModeState();
-        state = await GetAppState();
+        state = await getAppState();
         modeCardView = "left";
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
@@ -1599,7 +1632,7 @@ function wireModeCard() {
   if (modeCardView === "join") {
     wireJoinForm(slot, backToSummary, async () => {
       modeCardView = "summary";
-      state = await GetAppState();
+      state = await getAppState();
       render();
     });
   }
@@ -1736,7 +1769,7 @@ async function saveSettingsFromForm() {
       await SaveSettings(values);
     },
     refresh: async () => {
-      state = await GetAppState();
+      state = await getAppState();
       if (activeView === "settings") await renderSettings(state);
       else render();
     },
@@ -2488,13 +2521,19 @@ function renderWizardSetup(services: Service[]) {
 function renderWizardSummary(services: Service[]) {
   return `
     <div class="wizard-summary">
-      <h2>You're all set</h2>
+      <h2>Setup summary</h2>
       <p class="muted">Return to the dashboard to monitor balances, status, logs, and payout progress.</p>
-      <div class="earnings-breakdown">
-        ${services.map((service) => `<div class="earning-chip"><span>${escapeHtml(service.name)}</span><strong>${service.manualOnly ? "Tracking" : "Ready"}</strong><small>${escapeHtml(service.category)}</small></div>`).join("")}
-      </div>
+      <div class="earnings-breakdown" id="wizard-runtime-summary">${wizardSummaryServices(services)}</div>
     </div>
   `;
+}
+
+function wizardSummaryServices(services: Service[]) {
+  return services.map((service) => {
+    const gap = state && wizardWhereDrafts[service.slug] == null && localDockerGap(service, state.runtime);
+    const status = service.manualOnly ? "Tracking" : gap ? "Check Docker" : "Ready";
+    return `<div class="earning-chip"><span>${escapeHtml(service.name)}</span><strong>${status}</strong><small>${escapeHtml(service.category)}</small></div>`;
+  }).join("");
 }
 
 function deploymentOf(slug: string): Deployment | undefined {
@@ -2550,17 +2589,20 @@ async function hydrateWizardForm(service: Service) {
 
 // The pre-deploy check, filled in beside the Deploy button once the backend has
 // answered. It runs after the card is on screen because it talks to the container
-// runtime, and a slow or unreachable runtime must not hold up the wizard. A failed
-// check leaves the slot empty: a panel that cannot say anything must say nothing,
-// never a reassuring blank.
+// runtime for the engine architecture. The shared Docker status drives the local
+// Deploy button and setup message while those findings load.
 async function hydrateWizardPreflight(service: Service) {
   const slot = document.querySelector<HTMLDivElement>(`[data-preflight-slug="${service.slug}"]`);
   if (!slot) return;
   const select = document.querySelector<HTMLSelectElement>(`[data-wizard-where="${service.slug}"]`);
+  const deploy = document.querySelector<HTMLButtonElement>(`[data-wizard-action="deploy"][data-slug="${service.slug}"]`);
   let report: PreflightReport | null = null;
   const draw = () => {
-    if (!slot.isConnected) return;
-    slot.innerHTML = renderPreflight(report, whereChoice(select?.value));
+    if (!slot.isConnected || !state) return;
+    const worker = whereChoice(select?.value);
+    const gap = localDockerGap(service, state.runtime);
+    if (deploy) deploy.disabled = service.manualOnly || (worker === null && !!gap);
+    slot.innerHTML = renderPreflight(report, worker, gap);
     slot.querySelector('[data-view="runtime"]')?.addEventListener("click", () => {
       ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav("runtime", wizardStep));
       wizardWhereDrafts = {};
@@ -2568,7 +2610,9 @@ async function hydrateWizardPreflight(service: Service) {
       showView("runtime");
     });
   };
+  wizardPreflightDraws.set(service.slug, draw);
   select?.addEventListener("change", draw);
+  draw();
   report = await PreflightService(service.slug).catch(() => null);
   draw();
 }
@@ -2643,13 +2687,13 @@ async function runWizardAction(slug: string, action: string) {
         return;
       }
       if (outcome.kind === "routed") {
-        state = await GetAppState();
+        state = await getAppState();
         const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
         if (output) output.textContent = routedDeployText(outcome.result, link);
         return;
       }
       const deployment = outcome.deployment;
-      state = await GetAppState();
+      state = await getAppState();
       // The box now holds what runs, so a second Deploy without an edit keeps it.
       const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
       if (imageInput) {
@@ -2669,7 +2713,7 @@ async function runWizardAction(slug: string, action: string) {
       await SaveCredentials(slug, values);
       const record = await CollectService(slug);
       if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
-      state = await GetAppState();
+      state = await getAppState();
     }
   } catch (error) {
     if (output) output.textContent = String(error);
@@ -2743,7 +2787,7 @@ async function runWalletDeploy(slug: string, values: Record<string, string>, out
     newWallet = { slug, words: phraseWords(wallet.phrase), address: wallet.address || "", step: "show", positions: [], error: "" };
     wallet.phrase = "";
   }
-  state = await GetAppState();
+  state = await getAppState();
   let text = "Deployed.";
   if (newWallet) text = "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once.";
   else if (wallet?.migrated) text = "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume.";
@@ -3026,7 +3070,7 @@ async function runCopyAction(slug: string, n: number, action: string) {
 async function refreshState() {
   if (!state) return;
   const deployments = await RefreshDeployments().catch(() => state?.deployments || []);
-  state = {...await GetAppState(), deployments};
+  state = {...await getAppState(), deployments};
   render();
 }
 

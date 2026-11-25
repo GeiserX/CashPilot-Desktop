@@ -20,7 +20,7 @@
 //   node scripts/runtime_way_back_check.mjs      # against ./.harness-build
 
 import { attentionItems, renderAttention } from "../.harness-build/render/attention.js";
-import { renderPreflight } from "../.harness-build/render/preflight.js";
+import { localDockerGap, renderPreflight } from "../.harness-build/render/preflight.js";
 import { renderEnvSetting } from "../.harness-build/render/settings.js";
 import { renderRuntimeSettings, runtimeProviderNote, runtimeState } from "../.harness-build/render/runtime_state.js";
 import { loadRuntimePage } from "../.harness-build/render/runtimepage.js";
@@ -138,20 +138,27 @@ const fine = renderPreflight(report());
 check("RULE 3: a card that does not block has no button", !/<button/.test(fine), fine);
 const nativeCard = renderPreflight(report({ slug: "mysterium", name: "MystNodes", summary: "Nothing stands out — MystNodes should work normally here." }));
 check("RULE 3: a native app's card is untouched", !/<button/.test(nativeCard) && !nativeCard.includes("Docker"), nativeCard);
+const dockerService = { name: "Earn.fm", docker: { image: "earnfm:1" } };
+const unknownGap = localDockerGap(dockerService, states.unknown);
+const unknownCard = renderPreflight(report(), null, unknownGap);
+check("an unknown Docker reading replaces a clean local preflight", unknownCard.includes("Docker status is unknown") && SETUP.test(unknownCard) && !unknownCard.includes("should work normally"), unknownCard);
+check("the unknown Docker reading still shows before the service findings arrive", SETUP.test(renderPreflight(null, null, unknownGap)));
+check("a worker is unaffected by the local Docker reading", renderPreflight(report(), 7, unknownGap) === "");
+check("Docker ready clears the local refusal", localDockerGap(dockerService, states.ready) === "");
+check("a native app can run even when Docker is unknown", localDockerGap({ ...dockerService, name: "MystNodes" }, states.unknown) === "");
+check("a custom Docker app cannot use the catalog app's native runtime", localDockerGap({ ...dockerService, name: "MystNodes", custom: true }, states.unknown) === unknownGap);
 
 // RULE 4: outside Windows the runtime page reads the computer and shows the guides.
 for (const [os, guides] of [["macOS", [{ id: "docker-desktop-macos" }, { id: "colima" }]], ["Linux", [{ id: "docker-engine" }, { id: "podman" }]]]) {
-  const seen = { guides: null, holder: null, checklist: false, runtime: null };
+  const seen = { guides: null, holder: null, checklist: false };
   await loadRuntimePage(async () => ({ facts: { supported: false }, steps: [], runtime: states.nothing }), guides, {
     current: () => true,
-    setRuntime: (rt) => { seen.runtime = rt; },
     showGuides: (g) => { seen.guides = g; },
     showHolder: (html) => { seen.holder = html; },
     readResume: async () => null,
     showChecklist: () => { seen.checklist = true; },
   });
   check(`RULE 4 (${os}): Set up Docker lands on the install guides`, seen.guides?.length === guides.length && !seen.checklist, JSON.stringify(seen));
-  check(`RULE 4 (${os}): the page takes the fresh state`, seen.runtime === states.nothing);
 }
 
 if (failures > 0) {

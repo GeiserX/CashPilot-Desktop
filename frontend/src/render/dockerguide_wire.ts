@@ -15,9 +15,12 @@
 import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
 import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
 import { runLine } from "./dockersteps.js";
+import { unknownRuntime } from "./runtimepage.js";
 
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
+  /** The app's latest runtime reading, also used by the card and app controls. */
+  currentRuntime?(): RuntimeStatus | undefined;
   startDocker(): Promise<void>;
   dockerEngineReady(): Promise<boolean>;
   openWindowsUpdate(): Promise<void>;
@@ -31,8 +34,6 @@ export interface DockerGuideDeps {
   openUrl(url: string): void;
   /** The user chose native apps only, on the skip screen. */
   skip(): void | Promise<void>;
-  /** A reading landed: the caller updates what it shows around the checklist. */
-  checked?(result: HostCheckResult): void;
   /** An action failed in a way the user should hear about. */
   failed?(error: unknown): void;
   /** A test can advance the wait clock without sleeping. */
@@ -50,14 +51,14 @@ export class DockerGuide {
   constructor(
     private holder: Element,
     private deps: DockerGuideDeps,
-    init: { runtime: RuntimeStatus; resume: SetupResumeView | null; result?: HostCheckResult | null },
+    init: { runtime: RuntimeStatus; resume: SetupResumeView | null; result?: HostCheckResult | null; checkFailed?: boolean },
   ) {
-    const runtime = init.result?.runtime ?? init.runtime;
     this.model = {
       steps: init.result?.steps ?? null,
-      runtime,
+      runtime: init.runtime,
       view: "list",
       checking: false,
+      checkFailed: init.checkFailed,
       waiting: null,
       waitResult: "",
       // This PC's Docker already runs: the setup a restart interrupted is finished.
@@ -66,7 +67,7 @@ export class DockerGuide {
       restarting: false,
     };
     this.render();
-    if (!init.result) void this.check();
+    if (!init.result && !init.checkFailed) void this.check();
   }
 
   /** Stop drawing: the screen it was on is gone. */
@@ -74,8 +75,14 @@ export class DockerGuide {
     this.alive = false;
   }
 
+  showResume(resume: SetupResumeView | null): void {
+    this.model.resume = resume;
+    this.render();
+  }
+
   render(): void {
     if (!this.alive) return;
+    this.model.runtime = this.deps.currentRuntime?.() ?? this.model.runtime;
     this.holder.innerHTML = renderDockerGuide(this.model);
     this.wire();
   }
@@ -95,6 +102,7 @@ export class DockerGuide {
       this.applyReading(result, afterWait);
     } catch (error) {
       this.model.steps = null;
+      this.model.runtime = { ...unknownRuntime, nativeServices: this.model.runtime.nativeServices };
       this.model.checkFailed = true;
       this.deps.failed?.(error);
     } finally {
@@ -117,7 +125,6 @@ export class DockerGuide {
       if (!inconclusive) this.model.waitResult = "";
     }
     if (setupFinished(result)) this.model.resume = null;
-    this.deps.checked?.(result);
   }
 
   /**

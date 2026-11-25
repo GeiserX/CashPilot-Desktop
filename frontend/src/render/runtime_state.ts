@@ -36,7 +36,7 @@ export interface RuntimeState {
 }
 
 /** The state in a few words, from the engine's reason code (internal/runtime/engine_state.go). */
-export function runtimeState(runtime: RuntimeInput): RuntimeState {
+export function runtimeState(runtime: Pick<RuntimeInput, "available" | "reason">): RuntimeState {
   if (runtime.available) return { kind: "ready", label: "Ready" };
   switch (runtime.reason || "") {
     case "not-installed":
@@ -99,6 +99,16 @@ export function runtimeAttention(runtime: RuntimeInput, containers: boolean): Ru
       actions,
     } : null;
   }
+  const state = runtimeState(runtime);
+  if (runtime.reason !== undefined && state.kind === "unknown") {
+    return {
+      level: "warn",
+      tag: "Unknown",
+      what: "Docker",
+      why: escapeHtml(runtime.message || "CashPilot could not check Docker."),
+      actions,
+    };
+  }
   const message = escapeHtml(runtime.message || "Docker is not reachable.");
   if (!runtime.nativeAvailable) {
     return {
@@ -122,7 +132,6 @@ export function runtimeAttention(runtime: RuntimeInput, containers: boolean): Ru
   }
   // Nothing that ran has stopped, so this is not an outage: it is the setup a
   // person skipped on first run, and most apps wait for it.
-  const state = runtimeState(runtime);
   const why = state.kind === "not-installed" ? "Docker is not set up yet." : runtime.message || `${state.label}.`;
   return {
     level: "warn",

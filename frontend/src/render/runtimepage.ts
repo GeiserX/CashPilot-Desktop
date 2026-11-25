@@ -3,8 +3,7 @@
 // them, so the harness can drive it (scripts/runtimepage_check.mjs).
 //
 // Rules:
-//   - Every reading is fresh, so the runtime card and the app's state take its
-//     runtime, whether or not the PC has a checklist.
+//   - The caller publishes the status from every reading, including failures.
 //   - A reading that failed says so. The install guides it shows are not the
 //     result of a check, and the page says that, with a way to check again.
 //
@@ -16,8 +15,6 @@ import { escapeHtml } from "./format.js";
 export interface RuntimePageDeps {
   /** The page is still on screen; a reading that lands after it left draws nothing. */
   current(): boolean;
-  /** The reading's runtime: the card and the app's state take it. */
-  setRuntime(runtime: RuntimeStatus, notice: NotificationItem | null): void;
   /** The install guide cards under the checklist. */
   showGuides(guides: InstallGuide[]): void;
   /** HTML for the checklist's slot; "" empties it. */
@@ -79,13 +76,11 @@ export async function loadRuntimePage(check: () => Promise<HostCheckResult>, gui
     result = await check();
   } catch (error) {
     if (!deps.current()) return;
-    deps.setRuntime(unknownRuntime, unknownRuntimeNotice);
     deps.showHolder(runtimeCheckFailed(error));
     deps.showGuides(guides);
     return;
   }
   if (!deps.current()) return;
-  deps.setRuntime(result.runtime, result.runtimeNotice);
   const checklist = !!result.facts?.supported && (result.steps?.length ?? 0) > 0;
   deps.showGuides(guidesBesideChecklist(guides, checklist));
   if (!checklist) {

@@ -95,8 +95,8 @@ func TestDockerGapSaysWhyADockerAppCannotRunHere(t *testing.T) {
 }
 
 // With no engine, a Docker app's deploy stops before it saves or runs anything, and
-// says why in plain words. The "Before you deploy" panel says the same and blocks,
-// instead of "Nothing stands out — Earn.fm should work normally here".
+// says why in plain words. The frontend adds the shared Docker reading to the
+// preflight; the deploy still checks the engine before it changes anything.
 func TestADockerDeployWithoutAnEngineIsRefusedBeforeAnythingChanges(t *testing.T) {
 	provider := &engineProvider{status: runtime.Status{Reason: runtime.ReasonNotInstalled}}
 	app := gateApp(t, provider)
@@ -120,17 +120,14 @@ func TestADockerDeployWithoutAnEngineIsRefusedBeforeAnythingChanges(t *testing.T
 	if err != nil {
 		t.Fatalf("PreflightService: %v", err)
 	}
-	if !report.Blocking || !strings.HasPrefix(report.Summary, "Docker is not set up on this") || strings.Contains(report.Summary, "should work") {
-		t.Fatalf("preflight blocking=%v summary=%q, want the gap", report.Blocking, report.Summary)
+	if report.Blocking || strings.Contains(report.Summary, "Docker is not") {
+		t.Fatalf("preflight assessed Docker readiness separately: %+v", report)
 	}
 
-	// The engine answers: the same deploy goes through and the panel has no gap.
+	// The engine answers: the same deploy goes through.
 	provider.status = runtime.Status{Available: true, Reason: runtime.ReasonRunning}
 	if _, err := app.DeployService("earnfm", values, nil, nil); err != nil {
 		t.Fatalf("DeployService with an engine: %v", err)
-	}
-	if report, _ := app.PreflightService("earnfm"); report.Blocking || strings.Contains(report.Summary, "Docker is not") {
-		t.Fatalf("with an engine: blocking=%v summary=%q", report.Blocking, report.Summary)
 	}
 }
 

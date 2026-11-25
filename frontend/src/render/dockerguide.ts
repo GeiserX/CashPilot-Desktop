@@ -301,7 +301,7 @@ export function renderDockerGuide(model: GuideModel): string {
   const native = model.runtime.nativeServices ?? [];
   if (model.view === "skip" && native.length > 0) return `<section class="docker-guide">${skipScreen(native)}</section>`;
   const steps = model.steps ?? [];
-  const skip = native.length > 0 && model.runtime.reason !== "running"
+  const skip = native.length > 0 && !model.runtime.available
     ? `<button class="btn btn-ghost btn-lg" data-guide-action="skip">Skip, use native apps only</button>`
     : "";
   return `

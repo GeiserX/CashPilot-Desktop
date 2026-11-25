@@ -27,12 +27,11 @@ function check(name, condition, detail = "") {
 const guides = [{ id: "docker-desktop-windows", name: "Docker Desktop" }, { id: "podman", name: "Podman" }];
 const fresh = { available: true, reason: "running", message: "Connected." };
 const page = (current = true) => {
-  const seen = { runtime: [], alerts: [], guides: null, holder: null, checklist: null };
+  const seen = { guides: null, holder: null, checklist: null };
   return {
     seen,
     deps: {
       current: () => current,
-      setRuntime: (r, alert) => { seen.runtime.push(r); seen.alerts.push(alert); },
       showGuides: (g) => { seen.guides = g; },
       showHolder: (h) => { seen.holder = h; },
       readResume: async () => null,
@@ -44,7 +43,6 @@ const page = (current = true) => {
 {
   const { seen, deps } = page();
   await loadRuntimePage(async () => ({ facts: { supported: false }, runtime: fresh, steps: null }), guides, deps);
-  check("RULE 1: a PC with no checklist gets the fresh runtime", seen.runtime.length === 1 && seen.runtime[0] === fresh, JSON.stringify(seen.runtime));
   check("RULE 1: no checklist, every guide card", seen.guides?.length === 2 && seen.holder === "" && seen.checklist === null, JSON.stringify(seen));
 }
 
@@ -54,15 +52,14 @@ const page = (current = true) => {
   check("RULE 2: a failed reading says no check ran", /data-runtime-check-failed/.test(seen.holder || "") && /shown without that check/.test(seen.holder || ""), seen.holder);
   check("RULE 2: a failed reading offers Check again", /data-runtime-recheck/.test(seen.holder || ""), seen.holder);
   check("RULE 2: the error is escaped", !(seen.holder || "").includes("<did") && (seen.holder || "").includes("&lt;did not answer&gt;"), seen.holder);
-  check("RULE 2: a failed reading replaces ready status with Unknown", seen.checklist === null && seen.runtime[0]?.available === false && seen.runtime[0]?.reason === "");
-  check("RULE 2: a failed reading replaces the runtime alert", seen.alerts[0]?.title === "Docker status unknown");
+  check("RULE 2: a failed reading mounts no checklist", seen.checklist === null);
   check("RULE 2: the guides still show", seen.guides?.length === 2);
 }
 
 {
   const { seen, deps } = page(false);
   await loadRuntimePage(async () => ({ facts: { supported: true }, runtime: fresh, steps: [{ id: "a1" }] }), guides, deps);
-  check("RULE 3: a page that left draws nothing", seen.runtime.length === 0 && seen.guides === null && seen.holder === null && seen.checklist === null, JSON.stringify(seen));
+  check("RULE 3: a page that left draws nothing", seen.guides === null && seen.holder === null && seen.checklist === null, JSON.stringify(seen));
   const failed = page(false);
   await loadRuntimePage(async () => { throw new Error("x"); }, guides, failed.deps);
   check("RULE 3: a failure after the page left draws nothing", failed.seen.holder === null && failed.seen.guides === null);
@@ -73,8 +70,7 @@ const page = (current = true) => {
   const runtimeNotice = { runtime: true, level: "warning", title: "Docker setup needs you", message: "WSL is off." };
   const result = { facts: { supported: true }, runtime: fresh, runtimeNotice, steps: [{ id: "a1" }] };
   await loadRuntimePage(async () => result, guides, deps);
-  check("a successful read passes its runtime alert with its snapshot", seen.alerts[0] === runtimeNotice);
-  check("RULE 4: a checklist is mounted with the reading", seen.checklist === result && seen.runtime[0] === fresh);
+  check("RULE 4: a checklist is mounted with the reading", seen.checklist === result);
   check("RULE 4: the Docker Desktop guide card goes", seen.guides?.map((g) => g.id).join() === "podman", JSON.stringify(seen.guides));
 }
 
