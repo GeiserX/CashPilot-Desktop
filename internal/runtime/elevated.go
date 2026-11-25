@@ -38,8 +38,9 @@ const (
 // the launcher, once inside it), so it must stay well under this.
 const MaxCommandLine = 32767
 
-// ElevatedArgs is what RunElevated passes to powershell.exe after -NoProfile
-// -NonInteractive: the script with the signed-in user's SID in front, encoded.
+// ElevatedArgs is what RunElevated passes to System32's powershell.exe, by its
+// full path, after -NoProfile -NonInteractive: the script with the signed-in
+// user's SID in front, encoded.
 // An elevated app runs it directly. Otherwise a short launcher asks Windows for
 // admin rights and starts System32's powershell.exe with the script, so the admin
 // side never runs anything from a folder the user can write to. It refuses a
@@ -54,9 +55,9 @@ func ElevatedArgs(script, userSID string, alreadyElevated bool) ([]string, error
 	if !alreadyElevated {
 		args = []string{"-Command", elevatedLauncher(enc)}
 	}
-	// powershell.exe, its two fixed flags, the spaces and the quotes Go adds
-	// around an argument with spaces.
-	n := len(`powershell.exe -NoProfile -NonInteractive`) + 2
+	// PowerShell's full path (at most MAX_PATH, 260), its two fixed flags, the
+	// spaces and the quotes Go adds around an argument with spaces.
+	n := 260 + len(` -NoProfile -NonInteractive`) + 2
 	for _, a := range args {
 		n += 1 + len(utf16.Encode([]rune(a))) + 2
 	}

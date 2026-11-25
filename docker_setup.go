@@ -84,7 +84,7 @@ func (a *App) RunSetupStep(op string, webDownload bool) (SetupStepResult, error)
 	// The machine is the truth: the row must still ask for this change.
 	facts := a.hostCache().refresh(a.ctx)
 	status := a.runtimeStatus(a.catalog.ListVisible())
-	row, found := findStep(winvm.DockerSteps(facts, status.Reason), stepID)
+	row, found := findStep(dockerSteps(facts, status), stepID)
 	if !found || row.State != winvm.StepNeedsYou || row.Action.Op != op {
 		result.State = winvm.OutcomeFailed
 		result.Text = "Nothing ran: CashPilot read this PC again, and this step no longer asks for this change. The list below shows where it stands now."
@@ -142,10 +142,14 @@ func runSetupChange(ctx context.Context, r setupRunner, op string, webDownload b
 	return runtime.ElevatedResult{}, fmt.Errorf("%q has no runner", op)
 }
 
-// restartCodes reads a process that ended 3010 or 1641 as done with a restart
-// needed, as RunElevated does for admin scripts.
+// restartCodes reads the Docker install window's exit code, which is winget's:
+// its "restart to finish" and "your PC will restart" results are an install that
+// is done and needs a restart. winget never ends with the installer's 3010 or
+// 1641 itself (winvm's Winget* codes cite its list). Any other code stays as it
+// is: "restart, then try again" is a failure, and an unknown code is shown with
+// its number, after which Check again reads the PC.
 func restartCodes(err error) (runtime.ElevatedResult, error) {
-	if code, ok := runtime.ExitCodeOf(err); ok && (code == 3010 || code == 1641) {
+	if code, ok := runtime.ExitCodeOf(err); ok && (code == winvm.WingetRebootToFinish || code == winvm.WingetRebootInitiated) {
 		return runtime.ElevatedResult{RestartNeeded: true, ExitCode: int(code)}, nil
 	}
 	return runtime.ElevatedResult{}, err
@@ -190,6 +194,8 @@ func (a *App) SignOutNow() error {
 // armForFinish checks that a setup step waits (for a sign-out, when finish says
 // so) and points RunOnce at this app again, in case a start in between removed it.
 func (a *App) armForFinish(finish string) error {
+	journalMu.Lock()
+	defer journalMu.Unlock()
 	j := a.cfg.Config().SetupJournal
 	if j == nil {
 		return errors.New("no setup step waits for a restart")

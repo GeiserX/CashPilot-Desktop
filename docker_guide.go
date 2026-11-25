@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/setupresume"
+	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -81,6 +83,12 @@ func (a *App) beginRestart(step string) (bool, error) {
 	return a.beginFinish(step, setupresume.FinishRestart)
 }
 
+// journalMu keeps the journal and the RunOnce value in step: whoever writes one
+// writes the other before anyone else reads or changes either. Without it, a check
+// that ends the setup while a change notes its restart can leave RunOnce armed
+// with no journal, or a journal with no RunOnce.
+var journalMu sync.Mutex
+
 // beginFinish is beginRestart for a step that waits for finish: a restart, or a
 // sign-out and back in. RunOnce runs at the next sign-in, so it covers both.
 func (a *App) beginFinish(step, finish string) (bool, error) {
@@ -93,6 +101,8 @@ func (a *App) beginFinish(step, finish string) (bool, error) {
 	if boot == "" {
 		boot = a.hostCache().refresh(a.ctx).LastBoot
 	}
+	journalMu.Lock()
+	defer journalMu.Unlock()
 	err := a.cfg.Update(func(c *config.AppConfig) {
 		j := setupresume.Next(c.SetupJournal, setupresume.FlowDocker, step, boot, exe)
 		if finish == setupresume.FinishSignOut {
@@ -117,15 +127,19 @@ func (a *App) SetupResume() (setupresume.View, error) {
 	if err := a.ready(); err != nil {
 		return setupresume.View{}, err
 	}
-	j := a.cfg.Config().SetupJournal
-	boot := ""
-	if j != nil {
-		boot = a.hostCache().cached().LastBoot
-		if boot == "" {
-			boot = a.hostCache().refresh(a.ctx).LastBoot
+	var facts winvm.HostFacts
+	if a.cfg.Config().SetupJournal != nil {
+		facts = a.hostCache().cached()
+		if facts.LastBoot == "" {
+			facts = a.hostCache().refresh(a.ctx)
 		}
 	}
-	v := setupresume.Decide(j, boot, a.resumeSetup.Load(), fileExists)
+	journalMu.Lock()
+	defer journalMu.Unlock()
+	j := a.cfg.Config().SetupJournal
+	// This app's token carrying docker-users proves a sign-in since the group was
+	// added, even when the app was opened by hand rather than by RunOnce.
+	v := setupresume.Decide(j, facts.LastBoot, a.resumeSetup.Load(), facts.DockerUsersToken == winvm.Yes, fileExists)
 	if j != nil {
 		var err error
 		if v.Rearm {
@@ -149,17 +163,30 @@ func (a *App) CancelSetup() error {
 	return a.endSetup()
 }
 
-// endSetup clears the journal and the RunOnce value. With no journal it does
+// endSetup clears the RunOnce value, then the journal. With no journal it does
 // nothing, so HostCheck can call it on every check that finds Docker running.
+// When RunOnce cannot be removed, the journal stays and the error comes back, so
+// a cancel can be tried again and nothing reopens the app with no journal. The
+// resume flag goes only with the journal, so a failed cancel keeps both.
 func (a *App) endSetup() error {
-	a.resumeSetup.Store(false)
-	if a.cfg == nil || a.cfg.Config().SetupJournal == nil {
+	if a.cfg == nil {
+		a.resumeSetup.Store(false)
+		return nil
+	}
+	journalMu.Lock()
+	defer journalMu.Unlock()
+	if a.cfg.Config().SetupJournal == nil {
+		a.resumeSetup.Store(false)
 		return nil
 	}
 	if err := a.runOnceKey().Disarm(); err != nil {
-		log.Printf("setup: could not remove the RunOnce value: %v", err)
+		return fmt.Errorf("could not remove the RunOnce value, so the guided setup is not ended yet: %w", err)
 	}
-	return a.cfg.Update(func(c *config.AppConfig) { c.SetupJournal = nil })
+	if err := a.cfg.Update(func(c *config.AppConfig) { c.SetupJournal = nil }); err != nil {
+		return err
+	}
+	a.resumeSetup.Store(false)
+	return nil
 }
 
 // onSecondInstance runs in the open app when CashPilot is started again: the

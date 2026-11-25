@@ -259,6 +259,7 @@ func TestSetupOutcomeReadsExitCodes(t *testing.T) {
 		{"a blocked program stops", OpWSLInstall, runtime.ElevatedResult{}, exitErr(1260), false, false, OutcomePolicy, ""},
 		{"no group", OpDockerUsers, runtime.ElevatedResult{}, exitErr(CodeGroupMissing), false, false, OutcomeFailed, ""},
 		{"no winget falls back to the page", OpDockerInstall, runtime.ElevatedResult{}, exitErr(CodeWingetGone), false, false, OutcomeFallback, ""},
+		{"winget's restart-then-retry is a failure", OpDockerInstall, runtime.ElevatedResult{}, exitErr(WingetRebootForInstall), false, false, OutcomeFailed, ""},
 		{"no PowerShell at all", OpLanmanServer, runtime.ElevatedResult{}, errors.New("exec: not found"), false, false, OutcomeFailed, ""},
 	}
 	for _, c := range cases {
@@ -307,7 +308,7 @@ func TestEveryChangeIsOfferedByItsOwnRow(t *testing.T) {
 		f := goodPC()
 		c.mutate(&f)
 		derive(&f)
-		s := stepOf(t, DockerSteps(f, c.reason), SetupStepFor[op])
+		s := stepOf(t, DockerSteps(f, c.reason, true), SetupStepFor[op])
 		if s.State != StepNeedsYou || s.Action.Op != op {
 			t.Errorf("%s: row %s is %q with op %q", op, s.ID, s.State, s.Action.Op)
 		}
@@ -321,7 +322,53 @@ func TestEveryChangeIsOfferedByItsOwnRow(t *testing.T) {
 	// docker-users is offered only on access denied.
 	f := goodPC()
 	f.DockerUsersListed, f.DockerUsersToken = No, No
-	if hasStep(DockerSteps(f, runtime.ReasonNotRunning), "a8") {
+	if hasStep(DockerSteps(f, runtime.ReasonNotRunning, true), "a8") {
 		t.Error("docker-users is offered when nothing proved it is needed")
+	}
+}
+
+// The hypervisor change reads the launch type as a number first and changes
+// nothing when it is already Auto; that ending says so and asks for no restart.
+func TestHypervisorChangeReadsTheLaunchTypeFirst(t *testing.T) {
+	s, err := SetupScript(OpHypervisorLaunch, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := strings.Index(s, "GetElement(0x250000F0)")
+	skip := strings.Index(s, "if ($launch -eq 1) { exit "+psCode(CodeLaunchAuto)+" }")
+	set := strings.Index(s, "'hypervisorlaunchtype','auto'")
+	if read < 0 || skip < 0 || set < 0 || !(read < skip && skip < set) {
+		t.Fatalf("the script does not read the launch type, then stop when it is Auto, before it sets it:\n%s", s)
+	}
+	priv := strings.Index(s, "$scope.Options.EnablePrivileges = $true")
+	open := strings.Index(s, ".OpenStore('')")
+	if priv < 0 || open < 0 || priv > open {
+		t.Errorf("the script does not enable the Backup and Restore privileges before it opens the BCD store:\n%s", s)
+	}
+	if !strings.Contains(s, "{fa926493-6f1c-4193-a414-58f0b2456d1e}") {
+		t.Errorf("the script does not read {current}")
+	}
+	o := SetupOutcome(OpHypervisorLaunch, runtime.ElevatedResult{}, exitErr(CodeLaunchAuto), false, false)
+	if o.State == OutcomeRestart || o.State == OutcomeDone || !strings.Contains(o.Text, "already set to start at boot") {
+		t.Errorf("already Auto ended %+v", o)
+	}
+}
+
+// Only the install's own Windows features wait for a restart. The update turns on
+// nothing, so a restart pending for something else never reads as "WSL needs a
+// restart"; wsl.exe's own 3010 still does, through RunElevated.
+func TestWSLUpdateIgnoresAnUnrelatedPendingRestart(t *testing.T) {
+	for _, web := range []bool{false, true} {
+		install, _ := SetupScript(OpWSLInstall, web)
+		if !strings.Contains(install, "if (RebootPending) { exit 3010 }") {
+			t.Errorf("web=%v: the install no longer asks for the restart its features need:\n%s", web, install)
+		}
+		update, _ := SetupScript(OpWSLUpdate, web)
+		if strings.Contains(update, "if (RebootPending)") {
+			t.Errorf("web=%v: the update turns any pending restart into its own:\n%s", web, update)
+		}
+		if !strings.Contains(update, "if ($code -ne 0) { exit $code }") || !strings.HasSuffix(update, "exit 0\n") {
+			t.Errorf("web=%v: the update does not pass wsl.exe's own code through:\n%s", web, update)
+		}
 	}
 }

@@ -172,14 +172,17 @@ function stepHtml(step: GuideStep, index: number, all: GuideStep[], model: Guide
 function resumeBanner(resume: SetupResumeView | null): string {
   if (!resume || !resume.active) return "";
   const stop = `<button class="btn btn-ghost btn-sm" data-guide-action="cancel-setup">Stop guiding me after restarts</button>`;
-  if (resume.finish === "signout" && resume.restarted === "no" && !resume.fromRunOnce) {
+  // The sign-in is proven by RunOnce, or by a token that already carries the
+  // group (Go's SignedIn): then nothing asks for a sign-out again.
+  const signInProven = resume.fromRunOnce || !!resume.signedIn;
+  if (resume.finish === "signout" && resume.restarted === "no" && !signInProven) {
     return `<div class="docker-guide-resume warn" data-resume="sign-out">
         <strong>Sign out to finish</strong>
         <span>Your account joined the docker-users group. Windows applies it after you sign out and back in.</span>
         <div class="docker-step-actions"><button class="btn btn-secondary btn-sm" data-guide-action="finish-signout">Sign out…</button>${stop}</div>
       </div>`;
   }
-  if (resume.restarted === "no" && !(resume.finish === "signout" && resume.fromRunOnce)) {
+  if (resume.restarted === "no" && !(resume.finish === "signout" && signInProven)) {
     const again = resume.step === "a2"
       ? `<button class="btn btn-secondary btn-sm" data-guide-action="firmware" data-guide-step="a2">Restart into BIOS</button>`
       : `<button class="btn btn-secondary btn-sm" data-guide-action="finish-restart">Restart…</button>`;

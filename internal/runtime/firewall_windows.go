@@ -6,9 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
-	"syscall"
 
 	"golang.org/x/sys/windows"
 )
@@ -23,10 +21,13 @@ func powerShell(args ...string) ([]byte, error) {
 	return powerShellContext(context.Background(), args...)
 }
 
-// powerShellContext is powerShell, stopped when ctx ends.
+// powerShellContext is powerShell, stopped when ctx ends. It runs System32's
+// Windows PowerShell by its full path (powerShellCommand), never from PATH.
 func powerShellContext(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "powershell.exe", append([]string{"-NoProfile", "-NonInteractive"}, args...)...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	cmd, err := powerShellCommand(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("could not find Windows PowerShell: %w", err)
+	}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

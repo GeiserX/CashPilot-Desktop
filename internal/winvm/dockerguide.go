@@ -106,20 +106,27 @@ var stepAfter = map[string][]string{
 }
 
 // DockerSteps derives the checklist from one reading of this PC and the runtime's
-// reason code. Outside Windows it returns nothing.
-func DockerSteps(f HostFacts, reason string) []Step {
+// reason code. local says the engine the app reached is this PC's own Docker
+// Desktop (runtime.LocalDockerDesktop): no DOCKER_HOST and no Docker context that
+// names another engine. Outside Windows it returns nothing.
+func DockerSteps(f HostFacts, reason string, local bool) []Step {
 	if !f.Supported || f.OS != "windows" {
 		return nil
 	}
 	engineUp := reason == runtime.ReasonRunning || reason == runtime.ReasonWindowsContainers
 	// The engine answering proves the rest only when it is this PC's Docker
-	// Desktop that answers, not an engine DOCKER_HOST names elsewhere.
-	proven := engineUp && f.DockerDesktopRunning == Yes
+	// Desktop that answers, not an engine DOCKER_HOST or a Docker context names
+	// elsewhere.
+	proven := engineUp && local && f.DockerDesktopRunning == Yes
+	// Windows containers run without WSL, and Docker's Windows engine answers
+	// without virtualization, so only Linux containers prove the WSL rows and the
+	// virtualization row.
+	linuxProven := proven && reason == runtime.ReasonRunning
 	wslBackend := f.DockerBackend != BackendHyperV
 
-	steps := []Step{windowsStep(f, proven), virtualizationStep(f, proven)}
+	steps := []Step{windowsStep(f, proven), virtualizationStep(f, linuxProven)}
 	if wslBackend {
-		steps = append(steps, wslFeatureStep(f, proven), wslVersionStep(f, proven))
+		steps = append(steps, wslFeatureStep(f, linuxProven), wslVersionStep(f, linuxProven))
 	}
 	steps = append(steps,
 		installedStep(f, proven),
@@ -363,10 +370,12 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 	case f.OtherHypervisors == Yes && engineUp:
 		s.State, s.Text = StepDone, names+" is installed, and Docker runs next to it."
 	case f.OtherHypervisors == Yes && hypervisorOffAtBoot(f):
+		// The boot option itself needs admin rights to read, so this row cannot say
+		// it is off: the change reads it first and changes nothing when it is auto.
 		s.State = StepNeedsYou
-		s.Text = names + " is installed, and Windows' hypervisor did not start at boot, although virtualization and the Virtual Machine Platform feature are on. Older versions of " + names + " turn it off at boot, and Docker needs it."
-		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: "Turn Windows' hypervisor back on",
-			Manual: "Open PowerShell as administrator, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
+		s.Text = names + " is installed, and Windows' hypervisor is not running, although virtualization and the Virtual Machine Platform feature are on. Older versions of " + names + " may have turned it off at boot, and Docker needs it. CashPilot reads that boot option first and changes it only when it is not set to start the hypervisor."
+		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: "Check and turn Windows' hypervisor back on",
+			Manual: "Open PowerShell as administrator and run bcdedit /enum \"{current}\" (PowerShell needs the quotes). If hypervisorlaunchtype is not Auto, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
 	case f.OtherHypervisors == Yes:
 		// Nothing here proves it is what stops Docker, so it is a note, not a step.
 		s.State = StepNote
@@ -379,7 +388,7 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 	return s
 }
 
-// hypervisorOffAtBoot is the one case the hypervisor fix is for: no hypervisor
+// hypervisorOffAtBoot is the one case the hypervisor fix may be for: no hypervisor
 // runs, yet the firmware flag (meaningful only when none runs) says virtualization
 // is on, the Virtual Machine Platform feature is on, and no restart is pending
 // that would start it anyway. Inside a VM the facts describe the outer machine.
