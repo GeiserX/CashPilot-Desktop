@@ -59,6 +59,7 @@ func TestSupportXMRFailuresSkipBalanceHistory(t *testing.T) {
 		{name: "boolean history", body: `{"lastHash":true,"totalHashes":1,"amtPaid":0,"amtDue":0}`, message: "invalid balance or mining history", kind: "shape"},
 		{name: "array", body: `[]`, message: "expected a JSON object", kind: "shape"},
 		{name: "API unavailable", status: http.StatusServiceUnavailable, message: "Try again shortly", kind: "transient"},
+		{name: "address rejected", status: http.StatusNotFound, message: "SupportXMR returned HTTP 404"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
