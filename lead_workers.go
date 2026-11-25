@@ -245,8 +245,8 @@ func (a *App) workerFor(id int64) (commandTarget, error) {
 }
 
 // DeployToWorker deploys slug to a Docker worker that reports here, with the spec the
-// web UI sends. A deploy that needs the owner's yes first comes back with Ask set and
-// sends no deploy request.
+// web UI sends. A deploy that needs the owner's yes first comes back with Ask set
+// and leaves the worker's container unchanged.
 func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeployResult, error) {
 	if err := a.ready(); err != nil {
 		return WorkerDeployResult{}, err
@@ -283,16 +283,25 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	result := WorkerDeployResult{Worker: target.device.Name}
 	ctx := workerContext(a.ctx)
+	checked, exists, err := target.client.DeployState(ctx, slug)
+	if err != nil {
+		return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
+	}
+	replaceQuestion := fmt.Sprintf("Redeploy %s on %s? The existing container will be replaced, but its volumes are kept.", svc.Name, target.device.Name)
 	if !req.ReplaceExisting {
-		// A delayed heartbeat can overwrite the Fleet display after a deploy.
-		// Check the worker itself under workerDeployMu, which stays held through Deploy.
-		exists, err := target.client.HasManagedCopy(ctx, slug)
-		if err != nil {
-			return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
+		if !checked {
+			exists, err = target.client.LegacyDeployTargetExists(ctx, slug)
+			if err != nil {
+				return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
+			}
 		}
-		if exists {
+		if exists || !checked {
 			result.Ask = askReplace
-			result.Message = fmt.Sprintf("Redeploy %s on %s? The existing container will be replaced, but its volumes are kept.", svc.Name, target.device.Name)
+			result.Message = replaceQuestion
+			if !exists {
+				// An empty inventory can also mean a previous request is still deploying.
+				result.Message = fmt.Sprintf("Deploy %s on %s? This worker cannot confirm that the container is absent. If one exists when the deploy starts, it will be replaced and its volumes will be kept.", svc.Name, target.device.Name)
+			}
 			return result, nil
 		}
 	}
@@ -331,9 +340,22 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		}
 		spec.Approval = approval
 	}
-	answer, err := target.client.Deploy(ctx, slug, spec, workerapi.DeployTimeout(svc.Docker.StopTimeout))
+	spec.ReplaceExisting = req.ReplaceExisting
+	timeout := workerapi.DeployTimeout(svc.Docker.StopTimeout)
+	var answer workerapi.DeployResult
+	if checked {
+		answer, err = target.client.DeployChecked(ctx, slug, spec, timeout)
+	} else {
+		answer, err = target.client.Deploy(ctx, slug, spec, timeout)
+	}
 	if err != nil {
 		var refused *workerapi.Error
+		if errors.As(err, &refused) && refused.Code == askReplace && !req.ReplaceExisting {
+			// A prior request can finish after the state read, even if its reply was lost.
+			result.Ask = askReplace
+			result.Message = replaceQuestion
+			return result, nil
+		}
 		if errors.As(err, &refused) && refused.Code == askStepUp && !req.Confirmed && critical {
 			// The worker's own catalog sees a difference (a worker on another
 			// release): its message says which, and a yes sends it signed.
