@@ -133,7 +133,7 @@ type NativeProcessProvider struct {
 	ensureFirewall func(slug, program string, nets []string, mayElevate bool) error
 	removeFirewall func(slug, program string, mayElevate bool) error
 	firewallExists func(slug, program string) (bool, error)
-	firewallReady  func(slug, program string, nets []string) (bool, error)
+	firewallReady  func(slug, program string, nets []string) (ready, found bool, err error)
 
 	// maxDownload bounds a single artifact download and maxExtract bounds one archive's
 	// total extracted bytes. They default to maxDownloadBytes/maxExtractedBytes and are

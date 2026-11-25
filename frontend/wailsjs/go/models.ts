@@ -3043,6 +3043,7 @@ export namespace runtime {
 	    needed: boolean;
 	    kind?: string;
 	    ruleName?: string;
+	    replaceRule?: boolean;
 	    program?: string;
 	    networks?: string[];
 	    removeRuleName?: string;
@@ -3056,6 +3057,7 @@ export namespace runtime {
 	        this.needed = source["needed"];
 	        this.kind = source["kind"];
 	        this.ruleName = source["ruleName"];
+	        this.replaceRule = source["replaceRule"];
 	        this.program = source["program"];
 	        this.networks = source["networks"];
 	        this.removeRuleName = source["removeRuleName"];

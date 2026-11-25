@@ -40,7 +40,7 @@ func (f *firewallCalls) install(p *NativeProcessProvider) {
 		f.inPlace = true
 		return nil
 	}
-	p.firewallReady = func(string, string, []string) (bool, error) { return f.inPlace, nil }
+	p.firewallReady = func(string, string, []string) (bool, bool, error) { return f.inPlace, f.inPlace, nil }
 	p.firewallExists = func(string, string) (bool, error) { return f.inPlace, nil }
 	p.removeFirewall = func(slug, program string, mayElevate bool) error {
 		if !f.inPlace {

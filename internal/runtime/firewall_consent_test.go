@@ -113,9 +113,9 @@ func TestAdminStepNamesTheRuleTheLaunchWouldCreate(t *testing.T) {
 	}}}
 	var reads []string
 	ready := false
-	p.firewallReady = func(slug, program string, nets []string) (bool, error) {
+	p.firewallReady = func(slug, program string, nets []string) (bool, bool, error) {
 		reads = append(reads, program)
-		return ready, nil
+		return ready, ready, nil
 	}
 
 	step, err := p.AdminStep(svc, "mysterium")
@@ -136,15 +136,15 @@ func TestAdminStepNamesTheRuleTheLaunchWouldCreate(t *testing.T) {
 
 	// A firewall that would ignore the rule is no admin step: no prompt can fix
 	// it, so the card shows the reason instead of its consent screen.
-	p.firewallReady = func(slug, program string, nets []string) (bool, error) {
-		return false, firewallNotEnforced("mysterium was not started", firewallState{FirewallOff: true}.notEnforced())
+	p.firewallReady = func(slug, program string, nets []string) (bool, bool, error) {
+		return false, false, firewallNotEnforced("mysterium was not started", firewallState{FirewallOff: true}.notEnforced())
 	}
 	if step, err := p.AdminStep(svc, "mysterium"); err == nil || step.Needed || !strings.Contains(err.Error(), "Windows Firewall is off") {
 		t.Fatalf("firewall off: step = %+v, err = %v, want the reason and no step", step, err)
 	}
-	p.firewallReady = func(slug, program string, nets []string) (bool, error) {
+	p.firewallReady = func(slug, program string, nets []string) (bool, bool, error) {
 		reads = append(reads, program)
-		return ready, nil
+		return ready, ready, nil
 	}
 
 	// macOS and Linux binaries declare no rule: no step, and nothing is read.
@@ -235,5 +235,48 @@ func TestFirewallDisabledAfterAdminStepReportsCreation(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "was not asked") ||
 		!strings.Contains(err.Error(), "after the admin step") || !strings.Contains(err.Error(), "Windows Firewall is off") {
 		t.Fatalf("post-admin firewall check: %v, want the reason and the step that already ran", err)
+	}
+}
+
+func TestAdminStepIdentifiesSameNameFirewallReplacement(t *testing.T) {
+	p := newTestNativeProvider(t)
+	p.firewallReady = func(string, string, []string) (bool, bool, error) { return false, true, nil }
+	step, err := p.firewallAdminStep("mysterium", "myst.exe", []string{"100.64.0.0/10"}, "")
+	if err != nil || !step.Needed {
+		t.Fatalf("step = %+v, %v", step, err)
+	}
+	if !step.ReplaceRule {
+		t.Fatalf("step = %+v; want a same-name replacement", step)
+	}
+	approval := step
+	approval.ReplaceRule = false
+	if step.approvedBy(&approval) || !step.approvedBy(&step) {
+		t.Fatal("approval to add a rule must not approve a replacement")
+	}
+}
+
+func TestFirewallReadFailureNamesWhetherAdminStepRan(t *testing.T) {
+	for _, after := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after=%t", after), func(t *testing.T) {
+			ran := false
+			err := ensureFirewallRule("mysterium", "myst.exe", []string{"100.64.0.0/10"}, true,
+				func(string) (firewallState, error) {
+					if ran || !after {
+						return firewallState{}, errors.New("read failed")
+					}
+					return firewallState{}, nil
+				},
+				func(string) (ElevatedResult, error) {
+					ran = true
+					return ElevatedResult{}, nil
+				})
+			phase := "before the admin step"
+			if after {
+				phase = "after the admin step"
+			}
+			if ran != after || err == nil || !strings.Contains(err.Error(), phase) {
+				t.Fatalf("admin step ran = %v, error = %v; want %s", ran, err, phase)
+			}
+		})
 	}
 }

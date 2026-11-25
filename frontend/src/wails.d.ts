@@ -967,6 +967,7 @@ export interface AdminStep {
   // "firewall-rule" when needed.
   kind?: string;
   ruleName?: string;
+  replaceRule?: boolean;
   program?: string;
   networks?: string[];
   removeRuleName?: string;

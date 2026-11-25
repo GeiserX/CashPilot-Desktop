@@ -324,6 +324,14 @@ const hgFields = serviceFormFields(hg, {});
   check("invalid wizard field replaces old success with an alert and stops the deploy", c.said.at(-1)?.kind === "failed" && c.said.at(-1)?.text.includes("API_KEY") && !c.log.includes("adminStep"), JSON.stringify(c.said));
 }
 
+{
+  const replacement = adminConsentText("MystNodes", { ...step, replaceRule: true });
+  check("same-name firewall replacement describes removing and recreating one rule",
+    replacement.title.startsWith("Replace") && /removes.*recreates/.test(replacement.changes)
+      && replacement.prompt.includes("shows a permission prompt."),
+    JSON.stringify(replacement));
+}
+
 if (failures) {
   console.error(`\n${failures} of ${checks} deploy-consent checks failed`);
   process.exit(1);

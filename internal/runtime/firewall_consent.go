@@ -21,6 +21,8 @@ type AdminStep struct {
 	Kind string `json:"kind,omitempty"`
 	// RuleName is the display name the rule gets in Windows Firewall.
 	RuleName string `json:"ruleName,omitempty"`
+	// ReplaceRule means a rule with RuleName already exists and will be recreated.
+	ReplaceRule bool `json:"replaceRule,omitempty"`
 	// Program is the binary the rule covers.
 	Program string `json:"program,omitempty"`
 	// Networks are the ranges the rule blocks the binary from.
@@ -85,12 +87,13 @@ func (p *NativeProcessProvider) firewallAdminStep(slug, program string, nets []s
 		if err != nil {
 			return AdminStep{}, err
 		}
-		ready, err := p.firewallReady(slug, program, nets)
+		ready, found, err := p.firewallReady(slug, program, nets)
 		if err != nil {
 			return AdminStep{}, err
 		}
 		if !ready {
 			step.RuleName = firewallRuleName(slug, program)
+			step.ReplaceRule = found
 			step.Program = program
 			step.Networks = nets
 		}
@@ -116,7 +119,30 @@ func (p *NativeProcessProvider) firewallAdminStep(slug, program string, nets []s
 func (step AdminStep) approvedBy(approval *AdminStep) bool {
 	return approval != nil && step.Needed && approval.Needed &&
 		step.Kind == approval.Kind && step.RuleName == approval.RuleName &&
-		step.RemoveRuleName == approval.RemoveRuleName && step.Program == approval.Program && slices.Equal(step.Networks, approval.Networks)
+		step.RemoveRuleName == approval.RemoveRuleName && step.ReplaceRule == approval.ReplaceRule &&
+		step.Program == approval.Program && slices.Equal(step.Networks, approval.Networks)
+}
+
+// ensureFirewallRule checks a rule before and after the Windows admin step.
+func ensureFirewallRule(slug, program string, nets []string, mayElevate bool, read func(string) (firewallState, error), elevate func(string) (ElevatedResult, error)) error {
+	name := firewallRuleName(slug, program)
+	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
+	st, err := read(name)
+	if err != nil {
+		return fmt.Errorf("%s. CashPilot could not read the rule before the admin step: %w", what, err)
+	}
+	create, err := firewallNext(st, slug, program, nets, mayElevate, what)
+	if err != nil || !create {
+		return err
+	}
+	if _, err := elevate(firewallCreateScript(name, program, nets)); err != nil {
+		return firewallCreateFailed(slug, nets, what, err)
+	}
+	st, err = read(name)
+	if err != nil {
+		return fmt.Errorf("%s. CashPilot could not verify the rule after the admin step: %w", what, err)
+	}
+	return verifyCreatedFirewallRule(st, program, nets, what)
 }
 
 // firewallNext is what ensureFirewallBlock does once it has read the rule: create

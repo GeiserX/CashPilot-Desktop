@@ -23,8 +23,8 @@ func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate boo
 
 // firewallReady refuses outside Windows, as ensureFirewallBlock does: there is no
 // rule to read, and no admin prompt either.
-func firewallReady(slug, program string, nets []string) (bool, error) {
-	return false, ensureFirewallBlock(slug, program, nets)
+func firewallReady(slug, program string, nets []string) (ready, found bool, err error) {
+	return false, false, ensureFirewallBlock(slug, program, nets)
 }
 
 // firewallBlockExists always returns false outside Windows.

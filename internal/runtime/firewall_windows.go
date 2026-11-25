@@ -104,36 +104,20 @@ func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate boo
 	if err != nil {
 		return err
 	}
-	name := firewallRuleName(slug, program)
-	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
-	st, err := readFirewallRule(name)
-	if err != nil {
-		return fmt.Errorf("%s, and %v", what, err)
-	}
-	create, err := firewallNext(st, slug, program, nets, mayElevate, what)
-	if err != nil || !create {
-		return err
-	}
-	if _, err := RunElevated(firewallCreateScript(name, program, nets)); err != nil {
-		return firewallCreateFailed(slug, nets, what, err)
-	}
-	st, err = readFirewallRule(name)
-	if err != nil {
-		return fmt.Errorf("%s, and %v", what, err)
-	}
-	return verifyCreatedFirewallRule(st, program, nets, what)
+	return ensureFirewallRule(slug, program, nets, mayElevate, readFirewallRule, RunElevated)
 }
 
-// firewallReady reports whether the rule for program and nets is in place,
+// firewallReady reports whether the rule matches and whether it exists,
 // reading it without admin rights. A firewall that would ignore the rule is an
 // error, not "missing": no admin prompt can fix it, so the app must say what can.
-func firewallReady(slug, program string, nets []string) (bool, error) {
+func firewallReady(slug, program string, nets []string) (ready, found bool, err error) {
 	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
 	st, err := readFirewallRule(firewallRuleName(slug, program))
 	if err != nil {
-		return false, fmt.Errorf("%s, and CashPilot could not read the Windows Firewall: %v", what, err)
+		return false, false, fmt.Errorf("%s. CashPilot could not read the rule before the admin step: %w", what, err)
 	}
-	return firewallReadiness(st, program, nets, what)
+	ready, err = firewallReadiness(st, program, nets, what)
+	return ready, st.Found, err
 }
 
 // firewallBlockExists reads whether CashPilot's rule exists for the old binary.
