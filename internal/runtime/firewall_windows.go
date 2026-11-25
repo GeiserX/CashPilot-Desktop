@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -19,7 +20,12 @@ const createNoWindow = 0x08000000
 // CLIXML even with nothing to report, which is not part of any answer. On failure
 // the error carries stderr.
 func powerShell(args ...string) ([]byte, error) {
-	cmd := exec.Command("powershell.exe", append([]string{"-NoProfile", "-NonInteractive"}, args...)...)
+	return powerShellContext(context.Background(), args...)
+}
+
+// powerShellContext is powerShell, stopped when ctx ends.
+func powerShellContext(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "powershell.exe", append([]string{"-NoProfile", "-NonInteractive"}, args...)...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -40,30 +46,32 @@ func readFirewallRule(name string) (firewallState, error) {
 }
 
 // RunElevated runs a script with admin rights. An elevated app runs it directly;
-// otherwise Windows shows its admin prompt, and a "no" there fails the call. The
-// wrapper stops on error: Start-Process reports a declined prompt, or a session with
-// no desktop to show one on, as a non-terminating error, after which $p is null and
-// a bare "exit $p.ExitCode" would exit 0.
+// otherwise Windows shows its admin prompt, and a "no" there fails the call with
+// exit code ExitCancelled (ElevatedArgs).
 //
 // The script gets $CashPilotUserSid (UserSIDVariable): the SID of the account
 // signed in to the app, read here before the prompt, because the elevated script
 // may run as a different account. An exit code of 3010 or 1641 returns
 // RestartNeeded with no error.
 func RunElevated(script string) (ElevatedResult, error) {
+	return RunElevatedContext(context.Background(), script)
+}
+
+// RunElevatedContext is RunElevated that stops waiting when ctx ends. A script
+// already running as admin cannot be stopped from here, so a script that runs a
+// slow tool bounds that tool itself and exits ExitTimeout; ctx is the backstop.
+func RunElevatedContext(ctx context.Context, script string) (ElevatedResult, error) {
 	sid, err := currentUserSID()
 	if err != nil {
 		return ElevatedResult{}, fmt.Errorf("could not read which Windows account is signed in: %w", err)
 	}
-	full, err := elevatedScript(script, sid)
+	args, err := ElevatedArgs(script, sid, windows.GetCurrentProcessToken().IsElevated())
 	if err != nil {
 		return ElevatedResult{}, err
 	}
-	enc := psEncode(full)
-	if windows.GetCurrentProcessToken().IsElevated() {
-		_, err = powerShell("-EncodedCommand", enc)
-	} else {
-		_, err = powerShell("-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; $p = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru "+
-			"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','"+enc+"'; if ($null -eq $p) { exit 1 }; exit $p.ExitCode")
+	_, err = powerShellContext(ctx, args...)
+	if ctx.Err() != nil {
+		return ElevatedResult{}, fmt.Errorf("the admin step did not finish in time: %w", ctx.Err())
 	}
 	return elevatedOutcome(err)
 }

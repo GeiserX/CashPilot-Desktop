@@ -129,6 +129,8 @@ export function RemoveService(arg1:string,arg2:boolean,arg3:boolean):Promise<voi
 
 export function ResetProxyUsage(arg1:number):Promise<Array<string>>;
 
+export function RestartNow():Promise<void>;
+
 export function RestartService(arg1:string):Promise<void>;
 
 export function RestartToFirmware(arg1:string):Promise<main.FirmwareRestart>;
@@ -136,6 +138,8 @@ export function RestartToFirmware(arg1:string):Promise<main.FirmwareRestart>;
 export function RestoreStateBackup(arg1:string,arg2:string,arg3:string):Promise<runtime.RestoreResult>;
 
 export function RevokeSessionRisk(arg1:string):Promise<Record<string, config.SessionConsent>>;
+
+export function RunSetupStep(arg1:string,arg2:boolean):Promise<main.SetupStepResult>;
 
 export function SaveCredentials(arg1:string,arg2:Record<string, string>):Promise<void>;
 
@@ -148,6 +152,8 @@ export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsS
 export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
 
 export function SetupResume():Promise<setupresume.View>;
+
+export function SignOutNow():Promise<void>;
 
 export function StartAsLead():Promise<void>;
 

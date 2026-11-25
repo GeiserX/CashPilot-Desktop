@@ -144,6 +144,9 @@ type SetupJournal struct {
 	ExePath string `json:"exePath"`
 	// Attempts counts how many times this step asked for a restart.
 	Attempts int `json:"attempts"`
+	// Finish is what the step waits for: "" or "restart" for a restart, "signout"
+	// for a sign-out and back in (a restart does it too).
+	Finish string `json:"finish,omitempty"`
 }
 
 // The two values of AppConfig.Mode.
@@ -343,11 +346,59 @@ func (m *Manager) persist(cfg AppConfig) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.path, raw, 0o600); err != nil {
+	if err := writeFileAtomic(m.path, raw); err != nil {
 		return err
 	}
 	m.saved = raw
 	return nil
+}
+
+// writeFileAtomic replaces path with raw so that a reader sees the old file or
+// the new one, never an empty or half-written one. The window and the
+// background helper (--daemon) each read and write config.json, and a plain
+// os.WriteFile truncates the file before it writes. The new content goes to a
+// temp file in the same directory (created 0600), is synced, and is renamed
+// over path; on
+// Windows os.Rename replaces the target (MoveFileEx with
+// MOVEFILE_REPLACE_EXISTING).
+func writeFileAtomic(path string, raw []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	fail := func(err error) error {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := renameReplacing(name, path); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return nil
+}
+
+// renameReplacing is os.Rename, retried for a moment on Windows: there a
+// rename over a file the other process has open for reading fails with a
+// sharing violation until that read ends, which takes milliseconds.
+func renameReplacing(from, to string) error {
+	err := os.Rename(from, to)
+	for i := 0; err != nil && runtime.GOOS == "windows" && i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		err = os.Rename(from, to)
+	}
+	return err
 }
 
 // load runs once during NewManager (single-threaded, before the Manager is

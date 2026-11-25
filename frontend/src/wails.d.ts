@@ -19,6 +19,11 @@ declare module "../wailsjs/go/main/App" {
   export function RestartToFirmware(step: string): Promise<FirmwareRestart>;
   export function SetupResume(): Promise<SetupResumeView>;
   export function CancelSetup(): Promise<void>;
+  // Only from a change's confirm screen: makes the change (docker_setup.go).
+  export function RunSetupStep(op: string, webDownload: boolean): Promise<SetupStepResult>;
+  // Only from the restart or sign-out screen, while a setup step waits for it.
+  export function RestartNow(): Promise<void>;
+  export function SignOutNow(): Promise<void>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
@@ -819,8 +824,10 @@ export interface HostFacts {
 // One row of the Docker checklist (internal/winvm/dockerguide.go).
 export type GuideStepState = "done" | "needs-you" | "blocked" | "unknown" | "note";
 export interface GuideStepAction {
-  // "" none, url, windows-update, start-docker, show-docker, firmware, or
-  // elevated (an admin change the app does not run yet).
+  // "" none, url, windows-update, start-docker, show-docker, firmware,
+  // elevated (an admin change, after its confirm screen) or run (a change made
+  // as the user, after its confirm screen). url is also the download page of
+  // the Docker install.
   kind: string;
   label: string;
   url?: string;
@@ -859,6 +866,21 @@ export interface SetupResumeView {
   exeMoved: boolean;
   attempts: number;
   fromRunOnce: boolean;
+  // What the step waits for: a restart, or a sign-out and back in.
+  finish?: "restart" | "signout" | "";
+}
+
+// How a change of the checklist ended (docker_setup.go).
+export interface SetupStepResult {
+  step: string;
+  op: string;
+  state: "done" | "restart" | "signout" | "failed" | "timeout" | "cancelled" | "policy" | "fallback";
+  text: string;
+  code?: string;
+  // "web-download": a WSL change may work through a direct download.
+  retry?: string;
+  url?: string;
+  reopens: boolean;
 }
 
 export interface InstallGuide {

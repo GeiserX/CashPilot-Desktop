@@ -135,10 +135,7 @@ func (a *App) startUpstream(ctx context.Context) {
 		return
 	}
 
-	interval := time.Duration(cfg.UpstreamIntervalMinutes) * time.Minute
-	if interval <= 0 {
-		interval = time.Duration(config.DefaultUpstreamIntervalMinutes) * time.Minute
-	}
+	interval := heartbeatInterval(cfg.UpstreamIntervalMinutes)
 
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -190,6 +187,15 @@ func (a *App) stopUpstream() {
 func (a *App) linkStillSaved(serverURL string) bool {
 	a.refreshConfig()
 	return strings.TrimSpace(a.cfg.Config().UpstreamURL) == serverURL
+}
+
+// heartbeatInterval is how often the pairing loop sends, from the saved
+// interval in minutes. A var so tests can shorten it.
+var heartbeatInterval = func(minutes int) time.Duration {
+	if minutes <= 0 {
+		minutes = config.DefaultUpstreamIntervalMinutes
+	}
+	return time.Duration(minutes) * time.Minute
 }
 
 // configSyncInterval is how often syncConfig looks for a change the other

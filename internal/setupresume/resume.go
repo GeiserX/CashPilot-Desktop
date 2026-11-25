@@ -23,6 +23,12 @@ const Flag = "resume-setup"
 // FlowDocker is the Docker checklist.
 const FlowDocker = "docker"
 
+// What a step waits for before it is finished (config.SetupJournal.Finish).
+const (
+	FinishRestart = "restart"
+	FinishSignOut = "signout"
+)
+
 // RunOnceKey is the signed-in user's RunOnce key, under HKCU. HKLM's runs only
 // for administrators, so it is never used.
 const RunOnceKey = `Software\Microsoft\Windows\CurrentVersion\RunOnce`
@@ -98,6 +104,8 @@ type View struct {
 	ExeMoved    bool `json:"exeMoved"`
 	Attempts    int  `json:"attempts"`
 	FromRunOnce bool `json:"fromRunOnce"`
+	// Finish is what the step waits for: FinishRestart or FinishSignOut.
+	Finish string `json:"finish"`
 	// Rearm is true while the restart is still to come: RunOnce must point at this
 	// app again, so the restart reopens it. Otherwise the value is removed: it ran,
 	// or it points at a path that is gone and would fail at every sign-in.
@@ -120,9 +128,16 @@ func Decide(j *config.SetupJournal, bootNow string, flag bool, exists func(strin
 		Restarted:   restarted(j.BootTimeBefore, bootNow),
 		Attempts:    j.Attempts,
 		FromRunOnce: flag,
+		Finish:      FinishRestart,
+	}
+	if j.Finish == FinishSignOut {
+		v.Finish = FinishSignOut
 	}
 	v.ExeMoved = j.ExePath != "" && exists != nil && !exists(j.ExePath)
-	v.Rearm = v.Restarted == RestartedNo
+	// RunOnce runs at the next sign-in. A sign-out keeps the boot time, so for a
+	// step that waits for one, a start by RunOnce in the same boot is the proof
+	// that the sign-in happened: the value ran and is not armed again.
+	v.Rearm = v.Restarted == RestartedNo && !(v.Finish == FinishSignOut && flag)
 	return v
 }
 

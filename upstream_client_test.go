@@ -273,8 +273,8 @@ func TestAPlainHTTPPairingURLToAPublicHostIsRefused(t *testing.T) {
 
 // TestAStoredURLTheNewRuleRefusesDoesNotBlockOtherSettings: an address saved
 // under the older, looser rule must not stop the user from saving any other
-// setting. The Settings form sends every field, the pairing address included,
-// on every save.
+// setting, even when the save carries the saved address back unchanged. The
+// Settings form leaves out unchanged fields, but SaveSettings must not rely on it.
 func TestAStoredURLTheNewRuleRefusesDoesNotBlockOtherSettings(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
 	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = "http://nas.example-lan:8085" }); err != nil {
