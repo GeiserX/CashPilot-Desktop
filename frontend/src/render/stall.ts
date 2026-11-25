@@ -23,13 +23,18 @@ export function stallSince(since: number): string {
 export function stallItems(stalls: StallAlert[] | null | undefined): AttentionItem[] {
   return (stalls || []).map((s) => {
     const since = stallSince(s.since);
+    const why = `${escapeHtml(s.message)}${since ? ` Low since ${escapeHtml(since)}.` : ""}`;
+    if (s.proxyId) {
+      // A proxied copy has no Logs button: the logs route opens the service's own copies.
+      return { level: "warn", tag: "Almost no traffic", what: s.service || s.slug, where: "proxied copy", why, actions: "" };
+    }
     const copyAttr = s.copy > 1 ? ` data-copy="${s.copy}"` : "";
     return {
       level: "warn",
       tag: "Almost no traffic",
       what: s.service || s.slug,
       where: `copy ${s.copy}`,
-      why: `${escapeHtml(s.message)}${since ? ` Low since ${escapeHtml(since)}.` : ""}`,
+      why,
       actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(s.slug)}"${copyAttr}>Logs</button>`,
     };
   });

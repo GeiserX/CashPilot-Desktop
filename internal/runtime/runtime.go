@@ -133,6 +133,10 @@ type ContainerInfo struct {
 	// service with none. It can hold a new wallet's phrase, so it never travels
 	// with the rest of this struct: the caller hands it on once and drops it.
 	Wallet *WalletResult `json:"-"`
+	// ProxyID is set on a proxied copy (ProxiedStatus) that the usage graphs and
+	// the stall check read beside the service's own copies: its counters are its
+	// tunnel's, and ContainerID is the tunnel's, the container they belong to.
+	ProxyID int64 `json:"-"`
 }
 
 type DockerProvider struct {

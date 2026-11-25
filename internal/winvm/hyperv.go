@@ -97,11 +97,9 @@ type GuestProbe interface {
 }
 
 // Host is what this package implements against the real Hyper-V today: the
-// reads, and the disconnect and connect the guard needs. NewHost returns it.
+// reads and the guard's writes. NewHost returns it.
 type Host interface {
-	Reader
-	Disconnect(ctx context.Context, vmID string) error
-	Connect(ctx context.Context, vmID, switchName string) error
+	Guarder
 }
 
 // Usage is what the host measures of the VM, without resource metering.

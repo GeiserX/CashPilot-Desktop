@@ -72,6 +72,11 @@ type upstreamState struct {
 	// drops its table has rather than lose another line's.
 	fleetExits      []string
 	fleetExitsKnown bool
+	// stallsJudged is whether the server's last answer came from a CashPilot that
+	// judges this computer's copies for traffic stalls from the counters each
+	// heartbeat carries: v2.10.0 or newer, the release that added both the stall
+	// check and fleet_exits, so its answer carries the fleet_exits key (stallServer).
+	stallsJudged bool
 	// The pairing's health, for the dashboard and Settings (pairingStatus), so a
 	// failing link shows in the app and not only in the log. statusURL is the
 	// server these belong to: a status from another server is not shown.
@@ -272,6 +277,7 @@ func (a *App) stopUpstreamLocked() {
 	// The fleet's exits belong to the server we no longer talk to; a new pairing
 	// starts from unknown again.
 	a.upstream.fleetExits, a.upstream.fleetExitsKnown = nil, false
+	a.upstream.stallsJudged = false
 	a.upstream.mu.Unlock()
 }
 
@@ -285,6 +291,13 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	// The fence's own reading, cached for an hour: the server hands it to the fleet's
 	// other boxes, whose fences then drop this line too.
 	payload.SystemInfo.EgressIP = a.egressIP(ctx)
+	// Every copy with its traffic counters, read in this process's turn, which ends
+	// once the server answered (heartbeat_traffic.go).
+	release := func() {}
+	if a.services != nil {
+		list, proxied := heartbeatReads(a)
+		release = a.withLiveUnits(ctx, &payload, list, proxied)
+	}
 	resp, err := client.Send(ctx, serverURL, upstream.AuthToken(workerKey, enrolKey), payload)
 	if errors.Is(err, upstream.ErrUnauthorized) && strings.TrimSpace(workerKey) != "" && strings.TrimSpace(enrolKey) != "" {
 		// The server no longer knows this machine's own key: the owner removed it
@@ -297,6 +310,7 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		workerKey = ""
 		resp, err = client.Send(ctx, serverURL, strings.TrimSpace(enrolKey), payload)
 	}
+	release()
 	if err != nil {
 		// Never fatal: a phone or laptop is offline often, and an unreachable
 		// server must not stop Desktop from working standalone.
@@ -306,6 +320,10 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		}
 		return
 	}
+	_, _, judged := upstream.ParseFleetExits(resp.FleetExits)
+	a.upstream.mu.Lock()
+	a.upstream.stallsJudged = judged
+	a.upstream.mu.Unlock()
 	a.recordPairing(serverURL, upstream.Failure{})
 	// Apply the fleet's exits even if the keychain cannot save an issued key.
 	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
@@ -528,12 +546,14 @@ func (a *App) upstreamPayload() upstream.Payload {
 	// reason. Caught by a test, not by reading.
 	name := host
 
-	items := make([]upstream.Item, 0)
+	// The stored first copies, without counters. sendUpstream replaces them with a
+	// live reading of every copy (withLiveUnits) when it can take one.
+	items := make([]upstream.Container, 0)
 	for _, dep := range a.store.ListDeployments() {
 		if strings.TrimSpace(dep.Slug) == "" {
 			continue
 		}
-		items = append(items, upstream.Item{Slug: dep.Slug, Name: dep.Name, Status: dep.Status})
+		items = append(items, upstream.Container{Slug: dep.Slug, Name: dep.Name, Status: dep.Status})
 	}
 
 	return upstream.Payload{

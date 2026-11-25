@@ -29,6 +29,8 @@ import (
 func TestMain(m *testing.M) {
 	keyring.MockInit()
 	defaultRunOnce = &fakeRunOnce{}
+	// No heartbeat reads the real runtime unless its test says what it lists.
+	heartbeatReads = noHeartbeatReads
 	os.Unsetenv(services.ProxiedOnlyEnv)
 	os.Exit(m.Run())
 }

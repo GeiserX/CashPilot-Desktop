@@ -5,12 +5,14 @@
 //
 // Its container row says it runs, so this row is the only place it shows. These
 // checks hold that the row names the service and the copy, says since when and
-// what to check, opens that copy's logs, and that no stall means no row.
+// what to check, opens that copy's logs, and that no stall means no row. A proxied
+// copy is named as one, and the note says when a CashPilot server raises them.
 //
 //   node scripts/stall_render_check.mjs      # against ./.harness-build
 
 import { renderAttention } from "../.harness-build/render/attention.js";
 import { stallItems, stallSince } from "../.harness-build/render/stall.js";
+import { renderStallServerNote } from "../.harness-build/render/stall_server.js";
 
 let failures = 0;
 let checks = 0;
@@ -53,6 +55,21 @@ check("the message is escaped", !!hostile?.why.includes("&lt;img") && !hostile?.
 
 check("no stalls, no rows", stallItems(null).length === 0 && stallItems([]).length === 0);
 check("a missing time is left out", stallSince(0) === "" && !stallItems([{ ...stall, since: 0 }])[0].why.includes("Low since"));
+
+// A proxied copy is named as one, with no copy number and no Logs button: the
+// logs route opens the service's own copies, not a proxied one.
+const proxied = stallItems([{ ...stall, copy: 0, proxyId: 3, container: "cashpilot-honeygain-p3", message: "Honeygain proxied copy (cashpilot-honeygain-p3) has sent under 0.1 MB an hour for 12 hours." }])[0];
+check("a proxied copy is named as one", proxied?.where === "proxied copy", proxied?.where);
+check("a proxied copy has no Logs button", proxied?.actions === "", proxied?.actions);
+check("a proxied copy says what is wrong", !!proxied?.why.includes("Honeygain proxied copy"), proxied?.why);
+
+// While a CashPilot server raises the alerts of this computer's copies, the
+// dashboard says so, so an empty list does not read as "no copy is idle".
+const note = renderStallServerNote("https://cashpilot.example");
+check("the note names the server", note.includes("https://cashpilot.example") && note.includes("Almost no traffic"), note);
+check("the note says the proxied copies are still checked here", note.includes("still checks its proxied copies"), note);
+check("no server, no note", renderStallServerNote("") === "" && renderStallServerNote(undefined) === "" && renderStallServerNote(null) === "");
+check("the server address is escaped", renderStallServerNote('https://x"><img src=x>').includes("&lt;img") && !renderStallServerNote('https://x"><img src=x>').includes("<img"));
 
 if (failures) {
   console.error(`\n${failures} of ${checks} stall checks failed`);

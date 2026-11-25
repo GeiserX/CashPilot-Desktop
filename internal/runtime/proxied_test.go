@@ -578,6 +578,36 @@ func TestStatusStartsAnEarnerOnlyBehindAReadyTunnel(t *testing.T) {
 	}
 }
 
+// The read for the heartbeat and the usage graphs changes nothing: it reports a
+// stopped earner behind a ready tunnel as it is, and leaves a stale test tunnel,
+// both for the status read (ProxyTick) to act on.
+func TestTheReportOnlyReadStartsAndSweepsNothing(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	ctx := context.Background()
+	if _, err := deployProxied(ctx, f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	f.containers["cashpilot-earner-p3"].state = "exited"
+	if _, err := f.create(ctx, sidecarCreate("cashpilot-tunnel-test-x", testTunnelSlug, nil, "example/cashpilot-tunnel:1.66.0", "")); err != nil {
+		t.Fatal(err)
+	}
+	f.created = time.Now().Add(-time.Hour).Unix()
+	before := len(f.callList())
+	status, err := readProxied(ctx, f, false)
+	if err != nil || len(status) != 1 || status[0].Status != "exited" || status[0].NetRxBytes == nil || *status[0].NetRxBytes != 1000 {
+		t.Fatalf("status %+v %v, want the copy as it is, with its tunnel's counters", status, err)
+	}
+	if f.containers["cashpilot-earner-p3"].state != "exited" || f.containers["cashpilot-tunnel-test-x"] == nil {
+		t.Fatalf("the report-only read changed something: %v", f.callList()[before:])
+	}
+	for _, c := range f.callList()[before:] {
+		if strings.HasPrefix(c, "start ") || strings.HasPrefix(c, "restart ") || strings.HasPrefix(c, "remove ") {
+			t.Fatalf("the report-only read called %q", c)
+		}
+	}
+}
+
 func TestStopStartRemoveTouchOnlyTheirOwnPair(t *testing.T) {
 	withTestTunnel(t)
 	f := newFakeTunnelDocker()

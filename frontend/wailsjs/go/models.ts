@@ -1556,6 +1556,7 @@ export namespace main {
 	    service: string;
 	    container: string;
 	    copy: number;
+	    proxyId: number;
 	    since: number;
 	    hours: number;
 	    message: string;
@@ -1570,6 +1571,7 @@ export namespace main {
 	        this.service = source["service"];
 	        this.container = source["container"];
 	        this.copy = source["copy"];
+	        this.proxyId = source["proxyId"];
 	        this.since = source["since"];
 	        this.hours = source["hours"];
 	        this.message = source["message"];
@@ -1951,6 +1953,7 @@ export namespace main {
 	    route: RouteState;
 	    reminders: RemindersView;
 	    stalls: StallAlert[];
+	    stallsServer: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -1985,6 +1988,7 @@ export namespace main {
 	        this.route = this.convertValues(source["route"], RouteState);
 	        this.reminders = this.convertValues(source["reminders"], RemindersView);
 	        this.stalls = this.convertValues(source["stalls"], StallAlert);
+	        this.stallsServer = source["stallsServer"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
