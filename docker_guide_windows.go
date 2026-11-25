@@ -59,7 +59,11 @@ func openWindowsUpdate() error {
 // apps with unsaved work. A PC with a legacy BIOS, or a policy that refuses,
 // makes shutdown exit non-zero, and nothing restarts.
 func restartIntoFirmware() error {
-	cmd := exec.Command("shutdown.exe", "/r", "/fw", "/t", "0")
+	shutdown, err := systemTool("shutdown.exe")
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(shutdown, "/r", "/fw", "/t", "0")
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	return cmd.Run()
 }
