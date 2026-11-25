@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"runtime"
 	"time"
@@ -85,7 +87,13 @@ func snapshot(ctx context.Context, p probes, goos string, timeout time.Duration)
 		case r := <-results:
 			delete(pending, r.name)
 			if r.err != nil {
-				f.Problems[r.name] = r.err.Error()
+				// A probe that returns ctx.Err() at the deadline can land here
+				// rather than on ctx.Done(): it timed out all the same.
+				if errors.Is(r.err, context.DeadlineExceeded) {
+					f.Problems[r.name] = "timed out"
+				} else {
+					f.Problems[r.name] = r.err.Error()
+				}
 				continue
 			}
 			if r.apply != nil {
@@ -100,6 +108,29 @@ func snapshot(ctx context.Context, p probes, goos string, timeout time.Duration)
 	}
 	derive(&f)
 	return f
+}
+
+// settingsFileFound turns the Stat results for Docker Desktop's settings files
+// into "was it ever opened": Yes when one exists, No only when every one is
+// proven absent, and Unknown when a Stat failed any other way (access denied),
+// so an unreadable folder never reads as "never opened".
+func settingsFileFound(statErrs ...error) Tri {
+	if len(statErrs) == 0 {
+		return Unknown
+	}
+	absent := true
+	for _, err := range statErrs {
+		if err == nil {
+			return Yes
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			absent = false
+		}
+	}
+	if absent {
+		return No
+	}
+	return Unknown
 }
 
 // cpuScript and featureScript read the CIM facts as JSON, in two processes that

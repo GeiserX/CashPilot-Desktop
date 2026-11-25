@@ -128,12 +128,12 @@ func (systemProbes) docker(context.Context) (func(*HostFacts), error) {
 	running := processRunning("Docker Desktop.exe")
 	started := Unknown
 	if appData := os.Getenv("APPDATA"); appData != "" {
-		started = No
+		var errs []error
 		for _, name := range []string{"settings-store.json", "settings.json"} {
-			if _, err := os.Stat(filepath.Join(appData, "Docker", name)); err == nil {
-				started = Yes
-			}
+			_, err := os.Stat(filepath.Join(appData, "Docker", name))
+			errs = append(errs, err)
 		}
+		started = settingsFileFound(errs...)
 	}
 	service := serviceState("com.docker.service")
 	return func(f *HostFacts) {

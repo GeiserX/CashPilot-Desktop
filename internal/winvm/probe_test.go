@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
+	"io/fs"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -169,6 +171,48 @@ func TestMachineArch(t *testing.T) {
 	for m, want := range map[uint16]string{0x8664: "x64", 0xAA64: "arm64", 0x014C: "x86", 0x01C4: "arm", 0: "unknown"} {
 		if got := machineArch(m); got != want {
 			t.Errorf("machineArch(%#x) = %s, want %s", m, got, want)
+		}
+	}
+}
+
+// A probe that hands back ctx.Err() at the deadline races ctx.Done() in the
+// collector. Whichever side wins, the probe is reported as timed out.
+func TestSnapshotCallsADeadlineErrorTimedOut(t *testing.T) {
+	p := fakeProbes{
+		osV:      func(f *HostFacts) {},
+		cimErr:   fmt.Errorf("powershell: %w", context.DeadlineExceeded),
+		featV:    func(f *HostFacts) {},
+		wslV:     func(f *HostFacts) {},
+		dockerV:  func(f *HostFacts) {},
+		accountV: func(f *HostFacts) {},
+		restartV: func(f *HostFacts) {},
+	}
+	f := snapshot(context.Background(), p, "windows", time.Second)
+	if f.Problems["cpu"] != "timed out" {
+		t.Errorf("a deadline error is reported as %q, want \"timed out\"", f.Problems["cpu"])
+	}
+}
+
+// Docker Desktop's "ever opened" reads No only when every settings file is proven
+// absent. An access-denied Stat leaves it Unknown.
+func TestSettingsFileFound(t *testing.T) {
+	denied := &fs.PathError{Op: "stat", Path: "settings.json", Err: fs.ErrPermission}
+	missing := &fs.PathError{Op: "stat", Path: "settings.json", Err: fs.ErrNotExist}
+	cases := []struct {
+		name string
+		errs []error
+		want Tri
+	}{
+		{"both missing", []error{missing, missing}, No},
+		{"one found", []error{missing, nil}, Yes},
+		{"found beats denied", []error{denied, nil}, Yes},
+		{"denied and missing", []error{denied, missing}, Unknown},
+		{"both denied", []error{denied, denied}, Unknown},
+		{"nothing read", nil, Unknown},
+	}
+	for _, c := range cases {
+		if got := settingsFileFound(c.errs...); got != c.want {
+			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
 	}
 }
