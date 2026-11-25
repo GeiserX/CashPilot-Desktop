@@ -126,6 +126,10 @@ check("RULE 3: a blocked card says Docker is not set up", blocked.includes("Dock
 check("RULE 3: a blocked card has Set up Docker", SETUP.test(blocked), blocked);
 check("RULE 3: a blocked card says Deploy is refused", blocked.includes("Deploy is refused"), blocked);
 check("RULE 3: a blocked card keeps what was not checked", blocked.includes("Not checked"), blocked);
+const localOnly = report({ blocking: true, summary: "Docker is not set up on this PC yet." });
+check("switching Where to a worker hides the local Docker refusal", renderPreflight(localOnly, 7) === "");
+check("switching Where back to This computer shows the local refusal", SETUP.test(renderPreflight(localOnly, null)));
+check("a worker gets no local-only preflight verdict", renderPreflight(report(), 7) === "");
 const fine = renderPreflight(report());
 check("RULE 3: a card that does not block has no button", !/<button/.test(fine), fine);
 const nativeCard = renderPreflight(report({ slug: "mysterium", name: "MystNodes", summary: "Nothing stands out — MystNodes should work normally here." }));

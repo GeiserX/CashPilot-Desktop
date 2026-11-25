@@ -134,7 +134,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, NotificationItem, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, NotificationItem, PointsBalance, PreflightReport, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -2528,21 +2528,21 @@ async function hydrateWizardForm(service: Service) {
 async function hydrateWizardPreflight(service: Service) {
   const slot = document.querySelector<HTMLDivElement>(`[data-preflight-slug="${service.slug}"]`);
   if (!slot) return;
-  try {
-    slot.innerHTML = renderPreflight(await PreflightService(service.slug));
-  } catch {
-    slot.innerHTML = "";
-  }
-  // A panel that blocks carries Set up Docker; it lands after wireShellNav ran.
-  slot.querySelectorAll<HTMLButtonElement>('[data-view="runtime"]').forEach((button) => {
-    button.addEventListener("click", () => {
-      activeView = "runtime";
+  const select = document.querySelector<HTMLSelectElement>(`[data-wizard-where="${service.slug}"]`);
+  let report: PreflightReport | null = null;
+  const draw = () => {
+    if (!slot.isConnected) return;
+    slot.innerHTML = renderPreflight(report, whereChoice(select?.value));
+    slot.querySelector('[data-view="runtime"]')?.addEventListener("click", () => {
       ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav("runtime", wizardStep));
       wizardWhereDrafts = {};
       resetScrollAfterRender = true;
-      render();
+      showView("runtime");
     });
-  });
+  };
+  select?.addEventListener("change", draw);
+  report = await PreflightService(service.slug).catch(() => null);
+  draw();
 }
 
 function readWizardForm(slug: string): Record<string, string> {

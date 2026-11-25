@@ -38,13 +38,13 @@ function tone(verdict: string) {
 }
 
 /**
- * Render the pre-deploy check for one service.
+ * Render the pre-deploy check for a service on this computer.
  *
  * `report` is null while the check is still running, or when it failed — both
  * render nothing rather than an empty panel that implies an answer.
  */
-export function renderPreflight(report: PreflightReport | null | undefined): string {
-  if (!report || !report.summary) return "";
+export function renderPreflight(report: PreflightReport | null | undefined, workerId: number | null = null): string {
+  if (workerId !== null || !report?.summary) return "";
   const verdict = tone(report.verdict);
   const findings = report.findings || [];
   const notChecked = report.notChecked || [];
