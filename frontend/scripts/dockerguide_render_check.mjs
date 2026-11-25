@@ -168,7 +168,15 @@ const hostile = renderDockerGuide({ ...base, steps: [{ id: "a1", title: "<b>t</b
 check("RULE 10: Go's text is escaped", !/<img|<script|<b>t|<i>l/.test(hostile) && hostile.includes("&lt;img"), hostile);
 
 // The ready summary.
-check("Docker Desktop ready says so with a local Linux engine", text(renderDockerGuide({ ...base, steps: [{ ...steps[0], id: "a9" }] })).includes("Docker Desktop is ready on this PC."));
+const localReady = {
+  ...base,
+  runtime: { ...runtimeDown, available: true, reason: "running" },
+  steps: [{ ...steps[0], id: "a9" }],
+};
+check("Docker Desktop ready says so with a local Linux engine", text(renderDockerGuide(localReady)).includes("Docker Desktop is ready on this PC."));
+const localUnknown = { ...localReady, runtime: { ...runtimeDown, reason: "unreachable" } };
+check("An unknown runtime suppresses the ready summary even with a completed Linux engine row",
+  !renderDockerGuide(localUnknown).includes("Docker Desktop is ready on this PC."));
 check("Before the first reading it says it is checking", text(renderDockerGuide({ ...base, steps: null })).includes("Checking this PC…"));
 
 const elsewhere = { ...base, runtime: { available: true, reason: "running", nativeServices: [] } };
@@ -176,13 +184,17 @@ check("a working engine elsewhere does not make the local checklist ready", text
 
 // The wiring, against a holder that only takes HTML.
 const holder = () => ({ innerHTML: "", querySelectorAll: () => [], querySelector: () => null });
-const deps = (over = {}) => {
+const deps = (over = {}, initialRuntime = runtimeDown) => {
   let now = 0;
+  let runtime = initialRuntime;
   const calls = { firmware: [], hostCheck: 0, engineReady: 0, start: 0, cancel: 0, skip: 0 };
+  const hostCheck = over.hostCheck ?? (async () => {
+    calls.hostCheck++;
+    return { facts: { supported: true }, runtime: runtimeDown, steps };
+  });
   return {
     calls,
     deps: {
-      hostCheck: async () => { calls.hostCheck++; return { facts: { supported: true }, runtime: runtimeDown, steps }; },
       startDocker: async () => { calls.start++; },
       dockerEngineReady: async () => { calls.engineReady++; return false; },
       openWindowsUpdate: async () => {},
@@ -196,13 +208,24 @@ const deps = (over = {}) => {
       sleep: async (ms) => { now += ms; },
       now: () => now,
       ...over,
+      currentRuntime: () => runtime,
+      hostCheck: async () => {
+        try {
+          const result = await hostCheck();
+          runtime = result.runtime;
+          return result;
+        } catch (error) {
+          runtime = { ...runtime, available: false, reason: "unreachable" };
+          throw error;
+        }
+      },
     },
   };
 };
 
 {
   const { calls, deps: d } = deps();
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: { supported: true }, runtime: runtimeDown, steps } });
+  const g = new DockerGuide(holder(), d, { resume: null, result: { facts: { supported: true }, runtime: runtimeDown, steps } });
   await g.act("firmware-go", "a2");
   check("RULE 4 (wiring): a restart from the list is ignored", calls.firmware.length === 0, JSON.stringify(calls.firmware));
   await g.act("firmware", "a2");
@@ -221,7 +244,7 @@ const deps = (over = {}) => {
   let release;
   let started = 0;
   const { deps: d } = deps({ hostCheck: () => { started++; return new Promise((r) => { release = r; }); } });
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null });
+  const g = new DockerGuide(holder(), d, { resume: null });
   check("RULE 7 (wiring): opening with no reading starts one, busy", g.model.checking === true && started === 1);
   void g.check();
   check("RULE 7 (wiring): Check again during a reading starts nothing", started === 1, String(started));
@@ -233,7 +256,7 @@ const deps = (over = {}) => {
 {
   let reads = 0;
   const { deps: d } = deps({ hostCheck: async () => { reads++; return { facts: { supported: true }, runtime: runtimeDown, steps }; } });
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
+  const g = new DockerGuide(holder(), d, { resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
   await Promise.all([g.check(), g.check()]);
   check("RULE 7 (wiring): two clicks, one reading", reads === 1, String(reads));
 }
@@ -247,8 +270,8 @@ const deps = (over = {}) => {
       reads.push("checklist");
       return { runtime: remote, steps: [{ id: "a6", state: "done" }] };
     },
-  });
-  const g = new DockerGuide(holder(), d, { runtime: remote, resume: null, result: { facts: {}, runtime: remote, steps } });
+  }, remote);
+  const g = new DockerGuide(holder(), d, { resume: null, result: { facts: {}, runtime: remote, steps } });
   await g.startDocker();
   check("RULE 8 (wiring): the wait continues until this PC's engine answers", g.model.waitResult === "answered" && g.model.waiting === null && calls.start === 1, JSON.stringify(g.model));
   check("RULE 8 (wiring): only the local pipe is checked until the engine answers", reads.join() === "pipe,pipe,checklist", reads.join());
@@ -257,7 +280,7 @@ const deps = (over = {}) => {
 
 for (const rejects of [false, true]) {
   const runningUnknown = { ...steps.find((step) => step.id === "a6"), state: "unknown" };
-  const reading = { runtime: runtimeDown, steps: [runningUnknown] };
+  const reading = { runtime: { ...runtimeDown, reason: "unreachable" }, steps: [runningUnknown] };
   const error = new Error("HostCheck unavailable");
   let reads = 0;
   let reported;
@@ -271,13 +294,13 @@ for (const rejects of [false, true]) {
     failed: (err) => { reported = err; },
   });
   const h = holder();
-  const g = new DockerGuide(h, d, { runtime: runtimeDown, resume: null, result: { runtime: runtimeDown, steps } });
+  const g = new DockerGuide(h, d, { resume: null, result: { runtime: runtimeDown, steps } });
   await g.startDocker();
   const outcome = rejects ? "the checklist rejects" : "the running row is unknown";
   const message = text(waitLine(g.model));
   check(`RULE 8 (wiring): the first pipe answer ends the wait when ${outcome}`, d.now() === 3000 && reads === 1 && g.model.waiting === null);
-  const confirmation = rejects ? "CashPilot connected to Docker Desktop earlier." : "Docker's engine answered.";
-  check(`RULE 8 (wiring): the pipe answer is shown when ${outcome}`, message.includes(confirmation) && !message.includes("did not answer"), message);
+  check(`RULE 8 (wiring): the pipe answer is shown as history when ${outcome}`,
+    message === "CashPilot connected to Docker Desktop earlier." && !h.innerHTML.includes("docker-guide-wait ok"), message);
   if (rejects) {
     check("RULE 8 (wiring): a rejected checklist read is reported separately", reported === error && text(h.innerHTML).includes("could not refresh the Docker checklist"), text(h.innerHTML));
     await g.check();
@@ -289,7 +312,7 @@ for (const rejects of [false, true]) {
 
 {
   const { calls, deps: d } = deps();
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
+  const g = new DockerGuide(holder(), d, { resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
   const wait = g.startDocker();
   await g.check();
   await wait;
@@ -317,7 +340,7 @@ for (const retryFails of [true, false]) {
     failed: (err) => { reported = err; },
   });
   const h = holder();
-  const g = new DockerGuide(h, d, { runtime: runtimeDown, resume: null, result: { runtime: runtimeDown, steps } });
+  const g = new DockerGuide(h, d, { resume: null, result: { runtime: runtimeDown, steps } });
   await g.startDocker();
   const beforeRetry = text(h.innerHTML);
   check("RULE 8 (wiring): the deadline checklist can confirm readiness",
@@ -341,7 +364,7 @@ for (const retryFails of [true, false]) {
 
 {
   const { deps: d } = deps({ startDocker: async () => { throw new Error("not installed"); } });
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
+  const g = new DockerGuide(holder(), d, { resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
   await g.startDocker();
   check("RULE 8 (wiring): a start that failed says so and waits for nothing", g.model.waitResult === "failed" && g.model.waiting === null);
 }
@@ -351,7 +374,7 @@ for (const retryFails of [true, false]) {
   // frees the button again.
   let opened;
   const { calls, deps: d } = deps({ startDocker: () => { calls.start++; return new Promise((r, reject) => { opened = { r, reject }; }); } });
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
+  const g = new DockerGuide(holder(), d, { resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
   const first = g.startDocker();
   const second = g.startDocker();
   check("RULE 8 (wiring): a double click on Start Docker Desktop starts it once", calls.start === 1, String(calls.start));
@@ -369,7 +392,7 @@ for (const retryFails of [true, false]) {
   // A double click on Restart now asks Windows once.
   let answer;
   const { calls, deps: d } = deps({ restartToFirmware: (step) => { calls.firmware.push(step); return new Promise((r) => { answer = r; }); } });
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
+  const g = new DockerGuide(holder(), d, { resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
   await g.act("firmware", "a2");
   const first = g.act("firmware-go", "");
   const second = g.act("firmware-go", "");
@@ -396,7 +419,7 @@ for (const retryFails of [true, false]) {
   let up = false;
   let local = false;
   const { deps: d } = deps({ hostCheck: async () => ({ facts: { supported: true }, runtime: up ? running : runtimeDown, steps, setupFinished: up && local }) });
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: sameBootResume, result: { facts: {}, runtime: runtimeDown, steps, setupFinished: false } });
+  const g = new DockerGuide(holder(), d, { resume: sameBootResume, result: { facts: {}, runtime: runtimeDown, steps, setupFinished: false } });
   await g.check();
   check("RULE 9 (wiring): Docker still down keeps the banner", g.model.resume === sameBootResume);
   up = true;
@@ -405,9 +428,9 @@ for (const retryFails of [true, false]) {
   local = true;
   await g.check();
   check("RULE 9 (wiring): a reading that finds this PC's Docker running drops the banner", g.model.resume === null && !/data-resume/.test(renderDockerGuide(g.model)));
-  const later = new DockerGuide(holder(), d, { runtime: running, resume: sameBootResume, result: { facts: {}, runtime: running, steps, setupFinished: true } });
+  const later = new DockerGuide(holder(), { ...d, currentRuntime: () => running }, { resume: sameBootResume, result: { facts: {}, runtime: running, steps, setupFinished: true } });
   check("RULE 9 (wiring): a guide opened with this PC's Docker running draws no banner", later.model.resume === null);
-  const remote = new DockerGuide(holder(), d, { runtime: running, resume: sameBootResume, result: { facts: {}, runtime: running, steps, setupFinished: false } });
+  const remote = new DockerGuide(holder(), { ...d, currentRuntime: () => running }, { resume: sameBootResume, result: { facts: {}, runtime: running, steps, setupFinished: false } });
   check("RULE 9 (wiring): a guide opened with an engine elsewhere answering keeps the banner", remote.model.resume === sameBootResume);
 }
 

@@ -116,6 +116,7 @@ const deps = (over = {}) => {
   return {
     calls,
     deps: {
+      currentRuntime: () => runtimeDown,
       hostCheck: async () => { calls.hostCheck++; return { facts: { supported: true }, runtime: runtimeDown, steps }; },
       dockerEngineReady: async () => false,
       startDocker: async () => {},
@@ -132,7 +133,7 @@ const deps = (over = {}) => {
     },
   };
 };
-const open = (d) => new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: { supported: true }, runtime: runtimeDown, steps } });
+const open = (d) => new DockerGuide(holder(), d, { resume: null, result: { facts: { supported: true }, runtime: runtimeDown, steps } });
 const rowHtml = (html, id) => (html.match(new RegExp(`<li class="docker-step" data-step="${id}" data-state="([^"]*)">([\\s\\S]*?)</li>`)) || []);
 
 // RULE 3

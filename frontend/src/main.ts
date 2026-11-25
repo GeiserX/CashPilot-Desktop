@@ -325,7 +325,7 @@ async function hostCheck() {
 function guideDeps(skip: DockerGuideDeps["skip"]): DockerGuideDeps {
   return {
     hostCheck,
-    currentRuntime: () => state?.runtime,
+    currentRuntime: () => state?.runtime ?? unknownRuntime,
     startDocker: StartDockerDesktop,
     dockerEngineReady: DockerDesktopEngineReady,
     openWindowsUpdate: OpenWindowsUpdate,
@@ -412,11 +412,11 @@ function render() {
     return;
   }
   if (activeView === "fleet") {
-    void renderFleet(state);
+    void renderFleet();
     return;
   }
   if (activeView === "activity") {
-    void renderActivity(state);
+    void renderActivity();
     return;
   }
   if (activeView === "import") {
@@ -499,7 +499,7 @@ function renderOnboarding(current: AppState) {
       await CompleteOnboarding();
       state = await getAppState();
       render();
-    }), {runtime, resume: setupResume, result: firstRunHost, checkFailed: !firstRunHost});
+    }), {resume: setupResume, result: firstRunHost, checkFailed: !firstRunHost});
   }
   renderGuides(guidesBesideChecklist(current.guides || [], checklist));
 }
@@ -558,7 +558,7 @@ function renderRuntimeView(current: AppState) {
     readResume: SetupResume,
     showChecklist: (result, resume) => {
       if (!holder || !state) return;
-      dockerGuide = new DockerGuide(holder, guideDeps(() => showView("dashboard")), {runtime: state.runtime, resume, result});
+      dockerGuide = new DockerGuide(holder, guideDeps(() => showView("dashboard")), {resume, result});
     },
   });
 }
@@ -758,7 +758,7 @@ function renderDashboard(current: AppState) {
           </div>
         </section>
 
-        ${renderFenceStatusLine(current.isolation)}
+        ${renderFenceStatusLine(current.isolation, current.runtime)}
         ${renderAttention(attention, upCount, containers.length)}
         ${renderStallServerNote(current.stallsServer)}
 
@@ -1097,6 +1097,8 @@ function updateRuntimeSurfaces(current: AppState) {
     }
     const provider = document.querySelector("[data-runtime-provider-state]");
     if (provider) provider.outerHTML = runtimeProviderNote(current.runtime);
+    const fence = document.querySelector("[data-fence-status]");
+    if (fence) fence.outerHTML = renderFenceStatusLine(current.isolation, current.runtime, "small");
   }
 }
 
@@ -1539,7 +1541,7 @@ async function renderSettings(current: AppState) {
               <div class="save-row">${saveNoteSlot("save-settings-note")}<button class="primary compact-btn" id="save-settings">Save Variables</button></div>
             </div>
             <div class="settings-list">
-              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, "small") : item.key === "CASHPILOT_RUNTIME_PROVIDER" ? runtimeProviderNote(runtime) : "")).join("")}
+              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, runtime, "small") : item.key === "CASHPILOT_RUNTIME_PROVIDER" ? runtimeProviderNote(runtime) : "")).join("")}
             </div>
           </section>
 
@@ -1855,7 +1857,7 @@ async function toggleBackgroundHelper(event: Event) {
   }
 }
 
-async function renderActivity(current: AppState, view?: ActivityView) {
+async function renderActivity(view?: ActivityView) {
   const request = activityRequest;
   const page = view ? activityPage : ++activityPage;
   let data: ActivityView;
@@ -1866,12 +1868,12 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     showErrorToast({scope: "activity", error: String(error)});
     return;
   }
-  if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
+  if (!state || page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
   activityShown = data;
   root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
-        ${topbar("activity", current)}
+        ${topbar("activity", state)}
         <main class="page-content">
           ${pageHead("Activity")}
           ${renderActivityPage(data, activityOpen)}
@@ -1887,10 +1889,10 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   const run = async (action: () => Promise<ActivityView>) => {
     try {
       await action();
-      await renderActivity(current);
+      await renderActivity();
     } catch (error) {
       showErrorToast({scope: "activity", error: String(error)});
-      void renderActivity(current);
+      void renderActivity();
     }
   };
   document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
@@ -1905,7 +1907,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     activityOpen = {};
     activityDeleting++;
     // Take the open rows' addresses off the screen now, not when the delete returns.
-    void renderActivity(current, {...data, enabled: false});
+    void renderActivity({...data, enabled: false});
     void run(() => SetActivityEnabled(on)).finally(() => {
       activityDeleting--;
       activityOpen = {};
@@ -1915,7 +1917,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     activityDays = Number((event.target as HTMLSelectElement).value) || 1;
     activityRequest++;
     activityOpen = {};
-    void renderActivity(current);
+    void renderActivity();
   });
   document.querySelector("#activity-delete")?.addEventListener("click", () => {
     if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
@@ -1924,7 +1926,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     // As on switch-off: no row opens until the delete is done, and the open
     // rows' addresses leave the screen now.
     activityDeleting++;
-    void renderActivity(current, data);
+    void renderActivity(data);
     void run(() => DeleteActivityData()).finally(() => {
       activityDeleting--;
       activityOpen = {};
@@ -1940,12 +1942,12 @@ async function renderActivity(current: AppState, view?: ActivityView) {
       if (activityDeleting > 0) return;
       if (Object.hasOwn(activityOpen, name)) {
         delete activityOpen[name];
-        void renderActivity(current, data);
+        void renderActivity(data);
         return;
       }
       const open = activityOpen;
       open[name] = null;
-      void renderActivity(current, data);
+      void renderActivity(data);
       let detail: ActivityDetail;
       try {
         detail = await GetActivityDetail(name, activityDays);
@@ -1953,7 +1955,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
         if (open !== activityOpen || open[name] !== null) return;
         delete open[name];
         showErrorToast({scope: "activity", error: String(error)});
-        if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+        if (activeView === "activity" && activityShown) void renderActivity(activityShown);
         return;
       }
       // The window changed, the data was deleted or the row was closed meanwhile:
@@ -1961,7 +1963,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
       if (open !== activityOpen || open[name] !== null) return;
       open[name] = detail;
       // Redraw the newest view, not the one this click came from.
-      if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+      if (activeView === "activity" && activityShown) void renderActivity(activityShown);
     });
   });
 }
@@ -1969,7 +1971,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
 // Counts Fleet redraws, so one that finishes after a newer one never writes the page.
 let fleetRequest = 0;
 
-async function renderFleet(current: AppState) {
+async function renderFleet() {
   const request = ++fleetRequest;
   let fleet: FleetState;
   try {
@@ -1987,14 +1989,14 @@ async function renderFleet(current: AppState) {
     proxies = null;
     showErrorToast({scope: "proxies", error: String(error)});
   }
-  if (!fleetRedrawIsCurrent(request, fleetRequest, activeView)) return;
+  if (!state || !fleetRedrawIsCurrent(request, fleetRequest, activeView)) return;
   proxiesState = proxies;
   // The open proxy editor's typed values live only in the DOM; see keepsLiveProxyEditor.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
   root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
-        ${topbar("fleet", current)}
+        ${topbar("fleet", state)}
         <main class="page-content">
           ${pageHead("Fleet")}
           <section class="stats-grid">

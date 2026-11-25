@@ -105,19 +105,19 @@ export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-g
 }
 
 /** The progress line while waiting for Docker's engine, and how the wait ended. */
-export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "checkFailed">): string {
+export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "runtime">): string {
   let text = "";
   let tone = "";
   if (model.waiting !== null) {
     text = `Waiting for Docker's engine to start: ${Math.min(model.waiting, START_LIMIT_SECONDS)} s of ${START_LIMIT_SECONDS / 60} min.`;
-  } else if (model.checkFailed && (model.waitResult === "answered" || model.waitResult === "checklist-answered")) {
+  } else if (model.waitResult === "answered" || model.waitResult === "checklist-answered") {
     text = "CashPilot connected to Docker Desktop earlier.";
-  } else if (model.waitResult === "answered") {
-    text = "Docker's engine answered.";
-    tone = "ok";
-  } else if (model.waitResult === "checklist-answered") {
-    text = "Docker's engine answered during the checklist check.";
-    tone = "ok";
+    if (model.runtime.available) {
+      text = model.waitResult === "answered"
+        ? "Docker's engine answered."
+        : "Docker's engine answered during the checklist check.";
+      tone = "ok";
+    }
   } else if (model.waitResult === "timeout") {
     text = `Docker's engine did not answer within ${START_LIMIT_SECONDS / 60} minutes. Look at Docker Desktop's window: it may show its terms or a message. Then click Check again.`;
     tone = "warn";
@@ -215,7 +215,7 @@ function summary(model: GuideModel): string {
   if (model.checkFailed) {
     return `<p class="docker-guide-summary">Docker Desktop's current status is unknown.</p>`;
   }
-  if (model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
+  if (model.runtime.available && model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
     return `<p class="docker-guide-summary ok">Docker Desktop is ready on this PC.</p>`;
   }
   if (!model.steps) {

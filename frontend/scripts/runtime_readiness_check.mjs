@@ -1,4 +1,4 @@
-// Run the real first-run wiring with Wails and the browser clock stubbed.
+// Run the real runtime status wiring with Wails and the browser clock stubbed.
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { build } from "vite";
@@ -25,11 +25,15 @@ class Element {
 
   set innerHTML(html) {
     this.html = html;
-    this.children = [...html.matchAll(/<(button|details|div)\b([^>]*)>/g)];
+    this.children = [...html.matchAll(/<(button|details|div|p|small)\b([^>]*)>/g)];
     this.elements = new Map();
   }
 
   get innerHTML() { return this.html; }
+  set outerHTML(html) {
+    const [, , content] = html.match(/^<(p|small)\b[^>]*>([\s\S]*)<\/\1>$/);
+    this.innerHTML = content;
+  }
   get isConnected() { return true; }
   appendChild() {}
   addEventListener(event, fn) { this.listeners.set(event, fn); }
@@ -81,7 +85,7 @@ const answered = reading(ready, [
   { id: "a9", title: "Linux containers", state: "done", text: "Docker runs Linux containers." },
 ]);
 
-async function openApp(key, initialRuntime, firstRunComplete, hostCheck) {
+async function openApp(key, initialRuntime, firstRunComplete, hostCheck, bindings = {}) {
   const root = new Element();
   const events = new Map();
   let now = 0;
@@ -105,6 +109,7 @@ async function openApp(key, initialRuntime, firstRunComplete, hostCheck) {
       StartDockerDesktop: async () => {},
       DockerDesktopEngineReady: async () => true,
       HostCheck: hostCheck,
+      ...bindings,
     } } },
   };
   await import(`${appModule}#${key}`);
@@ -195,3 +200,126 @@ for (const outcome of ["failed", "stopped"]) {
   assert.doesNotMatch(root.querySelector(".notification-menu").innerHTML, /Docker status unknown/);
   console.log("runtime readiness: Runtime page and Alerts follow the checklist");
 }
+
+async function checkCase(name, run) {
+  try {
+    await run();
+    console.log(`runtime readiness: ${name} passed`);
+  } catch (error) {
+    console.error(`runtime readiness: ${name} failed\n${error.message}`);
+    process.exitCode = 1;
+  }
+}
+
+for (const view of ["fleet", "activity"]) {
+  await checkCase(`${view} load preserves a failed retry`, async () => {
+    const host = Promise.withResolvers();
+    const page = Promise.withResolvers();
+    let checks = 0;
+    let loads = 0;
+    const binding = view === "fleet" ? "GetFleetState" : "GetActivity";
+    const { root } = await openApp(view, ready, true, async () => ++checks === 1 ? answered : host.promise, {
+      [binding]: () => { loads++; return page.promise; },
+      GetProxiesState: async () => null,
+    });
+    root.querySelector(".topbar-runtime").click();
+    await setImmediate();
+    assert.match(root.querySelector(".topbar-runtime").innerHTML, /Runtime ready/);
+    root.querySelector("#docker-guide").querySelector("#docker-guide-check").click();
+    root.querySelector(`[data-view="${view}"]`).click();
+    assert.equal(loads, 1);
+
+    host.reject(new Error("Host check failed"));
+    await setImmediate();
+    const status = () => ({
+      unknownBadge: /Runtime unknown/.test(root.querySelector(".topbar-runtime").innerHTML),
+      unknownAlert: /Docker status unknown/.test(root.querySelector(".notification-menu").innerHTML),
+    });
+    const unknown = { unknownBadge: true, unknownAlert: true };
+    assert.deepEqual(status(), unknown, "the failed check publishes unknown before the page loads");
+
+    page.resolve(view === "fleet"
+      ? {
+        workers: 0, mobiles: 0, online: 0, services: 0, devices: [],
+        workerSnippet: "", mobileSnippet: "", reach: { hubOff: true },
+      }
+      : { days: 1, enabled: false, containers: [] });
+    await setImmediate();
+    assert.match(root.innerHTML, view === "fleet" ? /Add Worker or Mobile/ : /Activity is off/);
+    assert.deepEqual(status(), unknown, "the completed page load preserves the badge and alert");
+  });
+}
+
+await checkCase("Dashboard and Settings fence lines follow the runtime reading", async () => {
+  let snapshot = stopped;
+  let fail = false;
+  const { root, events } = await openApp("fence", stopped, true, async () => setup, {
+    GetAppState: async () => {
+      if (fail) throw new Error("App state check failed");
+      return {
+        config: { mode: "lead", firstRunComplete: true },
+        runtime: snapshot,
+        guides: [],
+        isolation: { state: "n/a", setting: "auto" },
+      };
+    },
+    GetSettingsState: async () => ({
+      environment: [{ key: "CASHPILOT_ISOLATION", label: "LAN isolation", value: "auto" }],
+      collectors: [],
+    }),
+    BackgroundHelperStatus: async () => ({ supported: false }),
+    UnfinishedRestores: async () => [],
+    GetModeState: async () => null,
+    GetUsage: async () => null,
+  });
+  const line = () => root.querySelector("[data-fence-status]").innerHTML;
+  const checkStatus = async () => {
+    events.get("runtime:host-checked")();
+    await setImmediate();
+  };
+  const expectUnknown = () => {
+    assert.match(root.querySelector(".topbar-runtime").innerHTML, /Runtime unknown/);
+    assert.match(line(), /Docker status is unknown/);
+    assert.doesNotMatch(line(), /Docker is not running/);
+  };
+
+  assert.match(line(), /Docker is not running/);
+  fail = true;
+  await checkStatus();
+  expectUnknown();
+
+  root.querySelector('[data-view="settings"]').click();
+  await setImmediate();
+  expectUnknown();
+
+  fail = false;
+  snapshot = ready;
+  await checkStatus();
+  assert.match(root.querySelector(".topbar-runtime").innerHTML, /Runtime ready/);
+  assert.match(line(), /Not checked yet/);
+  assert.doesNotMatch(line(), /Docker is not running/);
+
+  snapshot = stopped;
+  await checkStatus();
+  assert.match(line(), /Docker is not running/);
+});
+
+await checkCase("positive pipe poll followed by an inconclusive check", async () => {
+  const unknown = { ...stopped, reason: "unreachable", message: "CashPilot could not check Docker on this computer." };
+  const inconclusive = reading(unknown, [{ ...stoppedRow, state: "unknown", text: unknown.message, action: null }]);
+  let checks = 0;
+  let polls = 0;
+  const { root } = await openApp("inconclusive", stopped, false, async () => ++checks === 1 ? setup : inconclusive, {
+    DockerDesktopEngineReady: async () => { polls++; return true; },
+  });
+  const guide = () => root.querySelector("#docker-guide");
+  guide().querySelector('[data-guide-action="start-docker"]').click();
+  await setImmediate();
+  assert.equal(polls, 1);
+  assert.equal(checks, 2);
+  assert.match(root.querySelector("#runtime-card-slot").innerHTML, /Docker status unknown/);
+  assert.equal(root.querySelector("#continue-btn").disabled, true);
+  assert.match(guide().innerHTML, /data-step="a6" data-state="unknown"/);
+  assert.doesNotMatch(guide().innerHTML, /docker-guide-wait ok/);
+  assert.match(guide().innerHTML, /connected to Docker Desktop earlier/);
+});

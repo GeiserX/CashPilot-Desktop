@@ -9,13 +9,18 @@
 
 import type { FenceStatus } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { runtimeState, type RuntimeInput } from "./runtime_state.js";
+
+type EngineReading = Pick<RuntimeInput, "available" | "reason">;
 
 function earners(n: number): string {
   return n === 1 ? "1 running earner" : `${n} running earners`;
 }
 
 /** The fence's state in plain words, without the setting. */
-export function fenceStatusText(fence: FenceStatus): string {
+export function fenceStatusText(fence: FenceStatus, runtime: EngineReading): string {
+  const { kind, label } = runtimeState(runtime);
+  if (kind === "unknown") return "Docker status is unknown. CashPilot could not confirm the LAN fence.";
   const inside = (fence.inside || []).length;
   const outside = (fence.outside || []).length;
   const outsideNote = outside ? ` ${earners(outside)} ${outside === 1 ? "is" : "are"} still outside it and can reach your LAN until redeployed.` : "";
@@ -34,11 +39,12 @@ export function fenceStatusText(fence: FenceStatus): string {
     case "unsupported":
       return "Not fenced: CashPilot cannot fence earners on this container runtime (Podman).";
   }
-  // No mode: Docker could not be reached, or the first check has not finished.
-  // With Docker running, the check at start sets the fence up even before any
-  // earner runs, so "set up on the first deploy" is said only while Docker is down.
+  // A cached fence check can say n/a even after Docker has started.
   if (fence.state === "failed") return "Not known: CashPilot could not check it. Needs attention says why.";
-  if (fence.state === "n/a") return "No container earner runs now: Docker is not running. The fence is set up when Docker runs, at the latest on the first deploy.";
+  if (fence.state === "n/a" && kind !== "ready") {
+    const reason = kind === "not-running" ? "Docker is not running" : label;
+    return `No container earner runs now: ${reason}. The fence is set up when Docker runs, at the latest on the first deploy.`;
+  }
   return "Not checked yet. CashPilot checks it at start, before each deploy and every five minutes.";
 }
 
@@ -47,7 +53,7 @@ export function fenceStatusText(fence: FenceStatus): string {
  * runtime. tag is "p" on the dashboard and "small" inside a Settings row, whose
  * label may hold only inline content.
  */
-export function renderFenceStatusLine(fence: FenceStatus | null | undefined, tag: "p" | "small" = "p"): string {
+export function renderFenceStatusLine(fence: FenceStatus | null | undefined, runtime: EngineReading, tag: "p" | "small" = "p"): string {
   if (!fence) return "";
-  return `<${tag} class="muted compact-copy" data-fence-status="${escapeHtml(fence.mode || "unknown")}"><strong>LAN fence now</strong> (setting: ${escapeHtml(fence.setting || "auto")}). ${escapeHtml(fenceStatusText(fence))}</${tag}>`;
+  return `<${tag} class="muted compact-copy" data-fence-status="${escapeHtml(fence.mode || "unknown")}"><strong>LAN fence now</strong> (setting: ${escapeHtml(fence.setting || "auto")}). ${escapeHtml(fenceStatusText(fence, runtime))}</${tag}>`;
 }

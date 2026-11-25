@@ -12,15 +12,14 @@
 // It lives in src/render so the harness compiles it, but it touches elements, so
 // it takes everything that talks to Go as deps and never imports the bindings.
 
-import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
+import type { FirmwareRestart, HostCheckResult, SetupResumeView, SetupStepResult } from "../wails";
 import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
 import { runLine } from "./dockersteps.js";
-import { unknownRuntime } from "./runtimepage.js";
 
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
   /** The app's latest runtime reading, also used by the card and app controls. */
-  currentRuntime?(): RuntimeStatus | undefined;
+  currentRuntime(): GuideModel["runtime"];
   startDocker(): Promise<void>;
   dockerEngineReady(): Promise<boolean>;
   openWindowsUpdate(): Promise<void>;
@@ -51,11 +50,11 @@ export class DockerGuide {
   constructor(
     private holder: Element,
     private deps: DockerGuideDeps,
-    init: { runtime: RuntimeStatus; resume: SetupResumeView | null; result?: HostCheckResult | null; checkFailed?: boolean },
+    init: { resume: SetupResumeView | null; result?: HostCheckResult | null; checkFailed?: boolean },
   ) {
     this.model = {
       steps: init.result?.steps ?? null,
-      runtime: init.runtime,
+      runtime: deps.currentRuntime(),
       view: "list",
       checking: false,
       checkFailed: init.checkFailed,
@@ -82,7 +81,7 @@ export class DockerGuide {
 
   render(): void {
     if (!this.alive) return;
-    this.model.runtime = this.deps.currentRuntime?.() ?? this.model.runtime;
+    this.model.runtime = this.deps.currentRuntime();
     this.holder.innerHTML = renderDockerGuide(this.model);
     this.wire();
   }
@@ -102,7 +101,6 @@ export class DockerGuide {
       this.applyReading(result, afterWait);
     } catch (error) {
       this.model.steps = null;
-      this.model.runtime = { ...unknownRuntime, nativeServices: this.model.runtime.nativeServices };
       this.model.checkFailed = true;
       this.deps.failed?.(error);
     } finally {
@@ -114,13 +112,12 @@ export class DockerGuide {
 
   private applyReading(result: HostCheckResult, afterWait: boolean): void {
     this.model.steps = result.steps ?? [];
-    this.model.runtime = result.runtime;
     const { steps, waitResult } = this.model;
     const answers = engineAnswers(steps);
     if (waitResult === "timeout" && answers) {
       this.model.waitResult = "checklist-answered";
     } else if (!answers && (waitResult === "answered" || waitResult === "checklist-answered")) {
-      // A fresh pipe answer still counts if the checklist at the end of the wait could not read the row.
+      // Keep the pipe answer as history if the check at the end of the wait was inconclusive.
       const inconclusive = afterWait && steps.some((step) => step.id === "a6" && step.state === "unknown");
       if (!inconclusive) this.model.waitResult = "";
     }
