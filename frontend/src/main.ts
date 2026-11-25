@@ -79,6 +79,7 @@ import {
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
+import { flashCopied } from "./render/copy";
 import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, type Mode, type ModeCardView } from "./render/mode";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
@@ -1446,7 +1447,7 @@ function wireSecretSettings(environment: SettingsState["environment"]) {
     button.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(stored.get(button.dataset.secretCopy || "") || "");
-        button.textContent = "Copied";
+        flashCopied(button);
       } catch (error) {
         showErrorToast({scope: "clipboard", error: String(error)});
       }
@@ -1761,7 +1762,7 @@ async function renderFleet(current: AppState) {
     button.addEventListener("click", async () => {
       try {
         await navigator.clipboard.writeText(snippets[button.dataset.fleetCopy as FleetSnippet] || "");
-        button.textContent = "Copied";
+        flashCopied(button);
       } catch (error) {
         showErrorToast({scope: "clipboard", error: String(error)});
       }
