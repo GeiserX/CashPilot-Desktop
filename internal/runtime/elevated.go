@@ -145,10 +145,16 @@ func elevatedOutcome(err error) (ElevatedResult, error) {
 //  1. makes DataDir and DataDir\guard folders only SYSTEM and Administrators
 //     can write, owned by Administrators, with no inherited rule, refusing a
 //     path that is a link or a file;
-//  2. copies the bootstrap the app wrote (Script, in a folder the user can
-//     write) into the guard folder and checks the copy's SHA-256 against
-//     ScriptSHA256, exiting ExitBadHash when it differs, so a script changed
-//     after the app wrote it never runs;
+//  2. then refuses (exit 1) when anything inside DataDir is a link, or is
+//     owned by anyone but SYSTEM or Administrators. Users may create folders
+//     in ProgramData, so a standard user could have made DataDir first and
+//     put a file there with a rule that lets them write it; a folder ACL does
+//     not reach that file's own rules, and its owner can always change them;
+//  3. deletes any earlier copy, then copies the bootstrap the app wrote
+//     (Script, in a folder the user can write) into the guard folder as a new
+//     file that takes the folder's admin-only rules, and checks the copy's
+//     SHA-256 against ScriptSHA256, exiting ExitBadHash when it differs, so a
+//     script changed after the app wrote it never runs;
 //  3. runs the copy with the given arguments and exits with its exit code.
 type SecureVMStub struct {
 	DataDir      string
@@ -209,12 +215,23 @@ func (s SecureVMStub) Build() (string, error) {
 		"  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')",
 		"  Set-Acl -LiteralPath $p -AclObject $acl",
 		"}",
+		// Owners by SID: account names are translated.
+		"function Test-Tree([string]$p) {",
+		"  foreach ($c in @(Get-ChildItem -LiteralPath $p -Force)) {",
+		"    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('a link inside the data folder: ' + $c.FullName) }",
+		"    $o = (Get-Acl -LiteralPath $c.FullName).GetOwner([Security.Principal.SecurityIdentifier]).Value",
+		"    if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator, so not used: ' + $c.FullName + '. Delete it and try again.') }",
+		"    if ($c.PSIsContainer) { Test-Tree $c.FullName }",
+		"  }",
+		"}",
 		"$data = '" + s.DataDir + "'",
 		"$guard = Join-Path $data 'guard'",
 		"Lock-Dir $data",
 		"Lock-Dir $guard",
+		"Test-Tree $data",
 		"$dst = Join-Path $guard '" + s.ScriptName + "'",
-		"Copy-Item -LiteralPath '" + s.Script + "' -Destination $dst -Force",
+		"if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }",
+		"Copy-Item -LiteralPath '" + s.Script + "' -Destination $dst",
 		"if ((Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash -ne '" + s.ScriptSHA256 + "') { Remove-Item -LiteralPath $dst -Force; exit " + fmt.Sprint(ExitBadHash) + " }",
 		"$ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\\v1.0\\powershell.exe'",
 		"& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst " + strings.Join(args, " "),

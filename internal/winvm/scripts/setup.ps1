@@ -24,7 +24,10 @@ if ($t.Count -eq 1 -and $t[0].State.ToString() -eq 'Running') {
     Start-Sleep -Seconds 1
   }
 }
-Copy-Item -LiteralPath $Exe -Destination $copy -Force
+# A new file takes the admin-only rules of the guard folder; overwriting one
+# in place would keep whatever rules it had.
+if (Test-Path -LiteralPath $copy) { Remove-Item -LiteralPath $copy -Force }
+Copy-Item -LiteralPath $Exe -Destination $copy
 if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash -ne $ExeHash.ToUpper()) {
   Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
   exit 13

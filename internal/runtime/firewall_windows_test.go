@@ -67,7 +67,9 @@ func TestFirewallBlockLive(t *testing.T) {
 // TestSecureVMStubLive runs the Secure VM's admin stub for real in this
 // elevated process: a bootstrap with the right hash runs with its arguments
 // and hands back its exit code; one whose hash differs never runs and the stub
-// exits ExitBadHash; a data folder that is a link is refused.
+// exits ExitBadHash; a data folder that is a link is refused; and a data
+// folder holding a file a standard user owns (planted before setup, with a
+// rule that lets that user write it) is refused before anything runs.
 func TestSecureVMStubLive(t *testing.T) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		if os.Getenv("GITHUB_ACTIONS") == "true" {
@@ -120,5 +122,30 @@ func TestSecureVMStubLive(t *testing.T) {
 	}
 	if _, err := stub(link, good, "ok"); err == nil {
 		t.Fatal("a data folder that is a link was accepted")
+	}
+
+	// A standard user made the data folder first and planted the bootstrap
+	// copy, owned by Users, with a rule that gives Users write.
+	planted := filepath.Join(tmp, "planted")
+	guard := filepath.Join(planted, "guard")
+	if err := os.MkdirAll(guard, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	trap := filepath.Join(guard, "boot.ps1")
+	if err := os.WriteFile(trap, []byte("'planted' | Set-Content -LiteralPath $Out\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{trap, "/grant", "*S-1-5-32-545:(M)"}, {trap, "/setowner", "*S-1-5-32-545"}} {
+		if out, err := exec.Command("icacls", args...).CombinedOutput(); err != nil {
+			t.Fatalf("icacls %v: %v: %s", args, err, out)
+		}
+	}
+	os.Remove(marker)
+	_, err = stub(planted, good, "ok")
+	if code, ok := ExitCodeOf(err); !ok || code != 1 {
+		t.Fatalf("a planted file owned by Users: %v (code %d), want exit 1", err, code)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the bootstrap ran from a data folder holding a planted file")
 	}
 }
