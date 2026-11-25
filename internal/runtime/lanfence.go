@@ -99,9 +99,9 @@ const (
 
 // fenceHelperImage is the CashPilot worker image the helper runs. It carries nft,
 // iptables-legacy and app/lan_fence.py; the worker starts the same helper from its own
-// image. 2.10.0 is the first that reads FENCE_EXITS and FENCE_TUNNELS (lanfence_exits.go). Pinned by digest, like the tunnel image: the helper runs with host networking
-// and NET_ADMIN, so a re-pushed tag must not change what it runs. A var so a live test
-// can point it at a local build.
+// image. 2.10.0 is the first that reads FENCE_EXITS and FENCE_TUNNELS. The helper runs
+// with host networking and NET_ADMIN, so pin the image by digest. A live test can
+// override the pin with a local build.
 var fenceHelperImage = "drumsergio/cashpilot-worker:2.10.0@sha256:e8ddf83eed185aef0ba1a4a1f54c60f0703c1163126d9e59758f6496377ddc78"
 
 // fenceDNS are the resolvers an earner on the fenced bridge gets. Docker's embedded
@@ -833,29 +833,31 @@ var fenceNow = time.Now
 
 // egressIP is the public IPv4 the table drops, or "" when none is known; the helper
 // then keeps the drop the table already has. A failed lookup keeps the last address.
-// The lookup runs outside egressMu, so a reader of the cache never waits on it.
+// Serialize refreshes so a concurrent first apply gets the address before writing
+// the fence. This lock is separate from the helper's lock.
 func (f *fence) egressIP(ctx context.Context) string {
 	if f.lookupEgress == nil {
 		return ""
 	}
-	now := fenceNow()
 	f.egressMu.Lock()
+	defer f.egressMu.Unlock()
+	now := fenceNow()
 	ttl := egressTTL
 	if f.egress == "" {
 		ttl = egressRetry
 	}
-	if !f.egressAt.IsZero() && now.Sub(f.egressAt) < ttl {
-		defer f.egressMu.Unlock()
+	if ctx.Err() != nil || (!f.egressAt.IsZero() && now.Sub(f.egressAt) < ttl) {
 		return f.egress
 	}
-	f.egressAt = now
-	f.egressMu.Unlock()
 	// The fence only drops IPv4: the earners' network has no IPv6 route out.
 	ip, err := netip.ParseAddr(proxies.PublicIP(f.lookupEgress(ctx)))
-	f.egressMu.Lock()
-	defer f.egressMu.Unlock()
+	// A canceled heartbeat can still have received a valid answer. Cache a
+	// failed refresh only if the caller let it run to completion.
 	if err == nil && ip.Is4() {
 		f.egress = ip.String()
+		f.egressAt = now
+	} else if ctx.Err() == nil {
+		f.egressAt = now
 	}
 	return f.egress
 }

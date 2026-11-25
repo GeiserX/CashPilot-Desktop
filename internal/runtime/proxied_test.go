@@ -82,6 +82,7 @@ type fakeTunnelDocker struct {
 	// runningAtFence how many tunnels were running at each.
 	tunnelFences   int
 	runningAtFence []int
+	tunnelFenceErr func(attempt int) error
 }
 
 func newFakeTunnelDocker() *fakeTunnelDocker {
@@ -259,7 +260,7 @@ func (f *fakeTunnelDocker) readFile(_ context.Context, id, path string) (string,
 	}
 	return f.exit + "\n", nil
 }
-func (f *fakeTunnelDocker) tunnelStarted(context.Context) {
+func (f *fakeTunnelDocker) tunnelStarted(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	running := 0
@@ -270,6 +271,10 @@ func (f *fakeTunnelDocker) tunnelStarted(context.Context) {
 	}
 	f.tunnelFences++
 	f.runningAtFence = append(f.runningAtFence, running)
+	if f.tunnelFenceErr != nil {
+		return f.tunnelFenceErr(f.tunnelFences)
+	}
+	return nil
 }
 func (f *fakeTunnelDocker) sidecarNetwork(context.Context) (string, error) {
 	return f.network, f.networkErr
@@ -1106,5 +1111,23 @@ func TestTheFenceIsAppliedOnceTheTunnelRuns(t *testing.T) {
 	}
 	if f.tunnelFences != 1 || !slices.Equal(f.runningAtFence, []int{1}) {
 		t.Fatalf("fence applies %d, tunnels running at each %v; want one, with the tunnel up", f.tunnelFences, f.runningAtFence)
+	}
+}
+
+func TestTunnelStartupRetriesTheFenceBeforeStartingTheEarner(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	f.network = FenceNetwork
+	f.tunnelFenceErr = func(attempt int) error {
+		if attempt == 1 {
+			return errors.New("daemon temporarily unavailable")
+		}
+		return nil
+	}
+	if _, err := deployProxied(context.Background(), f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if f.tunnelFences != 2 {
+		t.Errorf("tunnel fence attempts = %d, want 2", f.tunnelFences)
 	}
 }

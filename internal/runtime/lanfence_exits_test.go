@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -69,6 +70,56 @@ func TestFenceWithNoFleetSendsAnEmptyCompleteList(t *testing.T) {
 	}
 	if got, _ := envValue(env, "FENCE_EXITS_COMPLETE"); got != "1" {
 		t.Errorf("FENCE_EXITS_COMPLETE = %q", got)
+	}
+}
+
+func TestCanceledEgressLookupDoesNotConsumeTheRefresh(t *testing.T) {
+	refresh, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	f := &fence{lookupEgress: func(ctx context.Context) string {
+		if ctx == refresh {
+			cancel()
+			return ""
+		}
+		return "203.0.113.7"
+	}}
+	if got := f.egressIP(refresh); got != "" {
+		t.Fatalf("canceled lookup returned %q", got)
+	}
+	if got := f.egressIP(context.Background()); got != "203.0.113.7" {
+		t.Errorf("lookup after cancellation returned %q", got)
+	}
+}
+
+func TestConcurrentFenceApplyWaitsForTheFirstEgressLookup(t *testing.T) {
+	lookupStarted := make(chan struct{})
+	lookupCanFinish := make(chan struct{})
+	f := &fence{lookupEgress: func(context.Context) string {
+		close(lookupStarted)
+		<-lookupCanFinish
+		return "203.0.113.7"
+	}}
+	heartbeat := make(chan string, 1)
+	go func() { heartbeat <- f.egressIP(context.Background()) }()
+	<-lookupStarted
+
+	applyStarted := make(chan struct{})
+	apply := make(chan string, 1)
+	go func() {
+		close(applyStarted)
+		apply <- f.egressIP(context.Background())
+	}()
+	<-applyStarted
+	select {
+	case early := <-apply:
+		close(lookupCanFinish)
+		<-heartbeat
+		t.Fatalf("the fence applied %q before the first lookup finished", early)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(lookupCanFinish)
+	if reported, dropped := <-heartbeat, <-apply; reported != "203.0.113.7" || dropped != reported {
+		t.Errorf("heartbeat reported %q and fence dropped %q", reported, dropped)
 	}
 }
 

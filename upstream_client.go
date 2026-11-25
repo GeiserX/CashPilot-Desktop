@@ -196,6 +196,10 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		}
 		return
 	}
+	// Apply the fleet's exits even if the keychain cannot save an issued key.
+	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
+		a.fence.ReconcileFence(ctx)
+	}
 	if next := upstream.KeyToPersist(workerKey, resp.WorkerKey); next != "" {
 		if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), next); err != nil {
 			// Losing the issued key is recoverable — the server re-delivers it
@@ -208,12 +212,6 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		a.upstream.workerKey = next
 		a.upstream.mu.Unlock()
 		log.Printf("upstream: enrolled with %s and stored this machine's own key", serverURL)
-	}
-
-	// The fleet's other exits: the fence drops them as soon as they arrive or change,
-	// as the web worker does.
-	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
-		a.fence.ReconcileFence(ctx)
 	}
 
 	// Whatever the server reported about the platforms this machine runs. An
@@ -350,7 +348,7 @@ func (a *App) applyFleetExits(raw json.RawMessage) bool {
 	switch {
 	case ok:
 		ips = runtime.ExitTargets(ips)
-	case !sent && !a.upstream.fleetExitsKnown:
+	case !sent:
 		ips = nil
 	default:
 		return false
@@ -369,8 +367,9 @@ func (a *App) applyFleetExits(raw json.RawMessage) bool {
 func (a *App) fenceOtherExits() ([]string, bool) {
 	var ips []string
 	complete := true
+	paired := a.cfg != nil && strings.TrimSpace(a.cfg.Config().UpstreamURL) != ""
 	a.upstream.mu.Lock()
-	if a.upstream.cancel != nil {
+	if paired {
 		ips = append(ips, a.upstream.fleetExits...)
 		complete = a.upstream.fleetExitsKnown
 	}

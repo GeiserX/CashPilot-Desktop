@@ -69,7 +69,7 @@ type workerSystemInfo struct {
 	DeviceType string `json:"device_type"`
 	// EgressIP is the worker's public IP. Kept per device, it goes back to every
 	// worker as fleet_exits, so each LAN fence drops the owner's other lines.
-	EgressIP string `json:"egress_ip"`
+	EgressIP any `json:"egress_ip"`
 }
 
 // deviceTypeDesktop is what internal/upstream sends when this app reports to a
@@ -275,13 +275,20 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kind := heartbeatKind(body)
-	// Read before the lock: on a stale cache it asks the echo service, and every
-	// other heartbeat would wait behind that.
-	ownExit := ""
-	if kind != "mobile" {
-		ownExit = a.egressIP(r.Context())
+	resp := a.recordWorkerHeartbeat(w, body, kind, name, bearerToken(r))
+	if resp == nil {
+		return
 	}
+	if kind != "mobile" {
+		// The echo service can be slow. Ask only after authentication and after
+		// releasing the lock that serializes heartbeat writes.
+		resp["fleet_exits"] = a.hubFleetExits(a.egressIP(r.Context()))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
 
+// recordWorkerHeartbeat writes an error and returns nil if the heartbeat cannot be accepted.
+func (a *App) recordWorkerHeartbeat(w http.ResponseWriter, body workerHeartbeat, kind, name, token string) map[string]any {
 	// Serialize the read(FleetDeviceKeyState) -> classify -> upsert -> set/confirm
 	// sequence: it is not one DB transaction, so without this lock two concurrent or
 	// retried heartbeats for the same device could both enroll and race the key write
@@ -297,12 +304,12 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.emitError("fleet-heartbeat", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record heartbeat"})
-		return
+		return nil
 	}
-	action := classifyFleetAuth(storedHash, confirmed, bearerToken(r), a.fleetKey)
+	action := classifyFleetAuth(storedHash, confirmed, token, a.fleetKey)
 	if action == fleetAuthReject {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid API key"})
-		return
+		return nil
 	}
 
 	device, err := a.store.UpsertFleetHeartbeat(store.FleetDevice{
@@ -321,13 +328,10 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.emitError("fleet-heartbeat", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not record heartbeat"})
-		return
+		return nil
 	}
 
 	resp := map[string]any{"status": "ok", "worker_id": device.ID}
-	if kind != "mobile" {
-		resp["fleet_exits"] = a.hubFleetExits(ownExit)
-	}
 	switch action {
 	case fleetAuthIssue:
 		// Enroll (or reissue a fresh key for an unconfirmed device that came back
@@ -339,7 +343,7 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			a.emitError("fleet-heartbeat", err)
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not issue worker key"})
-			return
+			return nil
 		}
 		resp["worker_key"] = key
 	case fleetAuthOK:
@@ -349,16 +353,17 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 			a.emitError("fleet-heartbeat", err)
 		}
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
 // workerExit is the exit a heartbeat reported, kept only for a worker and only when it
 // is a public IPv4.
-func workerExit(kind, reported string) string {
-	if kind == "mobile" {
+func workerExit(kind string, reported any) string {
+	ip, ok := reported.(string)
+	if kind == "mobile" || !ok {
 		return ""
 	}
-	if ips := runtime.ExitTargets([]string{reported}); len(ips) == 1 {
+	if ips := runtime.ExitTargets([]string{ip}); len(ips) == 1 {
 		return ips[0]
 	}
 	return ""
@@ -368,7 +373,7 @@ func workerExit(kind, reported string) string {
 // that reports here, and this Desktop's own, which runs earners too. The worker drops
 // them all but its own (web main._fleet_exits, GeiserX/CashPilot#810). nil goes out as
 // null when the devices cannot be read, so the worker keeps the list it has rather
-// than lose the drops. The caller holds fleetMu.
+// than lose the drops.
 func (a *App) hubFleetExits(ownExit string) []string {
 	devices, err := a.store.FleetDevices()
 	if err != nil {
@@ -438,16 +443,20 @@ func newFleetKey() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// heartbeatKind derives the device kind ("mobile"/"worker") from the reported OS
-// and name. NOTE: the per-worker key is keyed by (kind, name); a device that
+// heartbeatKind uses the device type and OS, with a name fallback for clients
+// that report neither. The per-worker key is keyed by (kind, name), so a device that
 // changes its reported OS/name therefore becomes a *different* identity and
 // re-enrolls from the shared bootstrap key. That is a graceful re-enrollment, not
 // a privilege escalation (an attacker gains nothing they didn't already have with
 // the shared token), but it can cause spurious re-enrollment for a renamed device.
 func heartbeatKind(body workerHeartbeat) string {
-	osValue := strings.ToLower(body.SystemInfo.OS)
+	deviceType := strings.ToLower(strings.TrimSpace(body.SystemInfo.DeviceType))
+	osValue := strings.ToLower(strings.TrimSpace(body.SystemInfo.OS))
+	if deviceType == "android" || deviceType == "ios" || deviceType == "mobile" || strings.Contains(osValue, "android") || strings.Contains(osValue, "ios") {
+		return "mobile"
+	}
 	nameValue := strings.ToLower(body.Name)
-	if strings.Contains(osValue, "android") || strings.Contains(osValue, "ios") || strings.Contains(nameValue, "android") || strings.Contains(nameValue, "iphone") {
+	if deviceType == "" && osValue == "" && (strings.Contains(nameValue, "android") || strings.Contains(nameValue, "iphone")) {
 		return "mobile"
 	}
 	return "worker"

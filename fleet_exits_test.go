@@ -3,15 +3,20 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
+	"github.com/zalando/go-keyring"
 )
 
 // The owner's other internet lines (web GeiserX/CashPilot#810): every box's fence
@@ -79,6 +84,10 @@ func TestTheHubSendsEveryBoxsExitBack(t *testing.T) {
 	if got := exitsOf(t, reply); !slices.Equal(got, []string{"192.0.2.44", "198.51.100.10", "203.0.113.1"}) {
 		t.Errorf("fleet_exits %v", got)
 	}
+	reply = heartbeatAs(t, app, `{"name":"a","system_info":{"os":"linux","egress_ip":123}}`)
+	if got := exitsOf(t, reply); !slices.Contains(got, "198.51.100.10") {
+		t.Errorf("an invalid address cleared the last known one: %v", got)
+	}
 
 	// Worker a's lookup failed this time: its line stays dropped.
 	reply = heartbeatAs(t, app, `{"name":"a","system_info":{"os":"linux"}}`)
@@ -99,6 +108,40 @@ func TestTheHubSendsAnEmptyListNotNull(t *testing.T) {
 	reply := heartbeatAs(t, app, `{"name":"a","system_info":{"os":"linux"}}`)
 	if got := exitsOf(t, reply); len(got) != 0 {
 		t.Errorf("fleet_exits %v, want []", got)
+	}
+}
+
+func TestHubFencesAWorkerWithAPhoneLikeName(t *testing.T) {
+	app := newFleetTestApp(t, "secret-token")
+	heartbeatAs(t, app, `{"name":"android-builder","system_info":{"os":"Linux","egress_ip":"198.51.100.40"}}`)
+	phone := heartbeatAs(t, app, `{"name":"pixel","system_info":{"device_type":"android","egress_ip":"192.0.2.44"}}`)
+	if _, ok := phone["fleet_exits"]; ok {
+		t.Error("the phone got a fleet list")
+	}
+	reply := heartbeatAs(t, app, `{"name":"second-worker","system_info":{"os":"Linux"}}`)
+	if got := exitsOf(t, reply); !slices.Equal(got, []string{"198.51.100.40"}) {
+		t.Errorf("fleet exits = %v, want the Linux worker's address", got)
+	}
+}
+
+type egressLookupFence struct {
+	fakeFence
+	lookup func() string
+}
+
+func (f *egressLookupFence) EgressIP(context.Context) string { return f.lookup() }
+
+func TestHubOnlyLooksUpItsExitForAuthenticatedWorkers(t *testing.T) {
+	app := newFleetTestApp(t, "secret-token")
+	app.fence = &egressLookupFence{lookup: func() string {
+		t.Error("a rejected heartbeat triggered a hub egress lookup")
+		return ""
+	}}
+	req := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(`{"name":"worker"}`))
+	w := httptest.NewRecorder()
+	app.handleWorkerHeartbeat(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("heartbeat status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 }
 
@@ -126,6 +169,7 @@ func TestPairedDesktopReportsItsExitAndTakesTheFleets(t *testing.T) {
 	app.fence = fence
 	// The pairing loop is running: until the server answers, the list is unknown.
 	app.upstream.cancel = func() {}
+	setFleetUpstreamURL(t, app, srv.URL)
 	if _, complete := app.fenceOtherExits(); complete {
 		t.Fatal("before the first reply the fleet's exits read as complete")
 	}
@@ -169,12 +213,14 @@ func TestPairedDesktopReportsItsExitAndTakesTheFleets(t *testing.T) {
 	}
 
 	// Unpairing forgets the server's list.
+	setFleetUpstreamURL(t, app, "")
 	app.stopUpstream()
 	if ips, complete := app.fenceOtherExits(); len(ips) != 0 || !complete {
 		t.Errorf("after unpairing: %v complete %v", ips, complete)
 	}
 	// Pairing again, maybe with another server, starts from unknown: the old
 	// server's list is not this one's.
+	setFleetUpstreamURL(t, app, srv.URL)
 	app.upstream.cancel = func() {}
 	if ips, complete := app.fenceOtherExits(); len(ips) != 0 || complete {
 		t.Errorf("after pairing again: %v complete %v", ips, complete)
@@ -186,20 +232,66 @@ func TestPairedDesktopReportsItsExitAndTakesTheFleets(t *testing.T) {
 func TestAServerWithoutFleetExitsMeansNone(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
 	app.upstream.cancel = func() {}
+	setFleetUpstreamURL(t, app, "https://hub.example")
 	if !app.applyFleetExits(nil) {
 		t.Error("the first reply without the key did not settle the list")
 	}
 	if ips, complete := app.fenceOtherExits(); len(ips) != 0 || !complete {
 		t.Errorf("other exits %v complete %v", ips, complete)
 	}
+	if !app.applyFleetExits(json.RawMessage(`["198.51.100.4"]`)) || !app.applyFleetExits(nil) {
+		t.Error("a reply without the key did not replace the previously held list")
+	}
+	if ips, complete := app.fenceOtherExits(); len(ips) != 0 || !complete {
+		t.Errorf("after receiving a reply without the key: other exits %v complete %v", ips, complete)
+	}
 	// null before any list: still unknown.
 	fresh := newPayloadTestApp(t, nil)
 	fresh.upstream.cancel = func() {}
+	setFleetUpstreamURL(t, fresh, "https://hub.example")
 	if fresh.applyFleetExits(json.RawMessage("null")) {
 		t.Error("null settled the list")
 	}
 	if _, complete := fresh.fenceOtherExits(); complete {
 		t.Error("null made the list complete")
+	}
+}
+
+func setFleetUpstreamURL(t *testing.T, app *App, url string) {
+	t.Helper()
+	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = url }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfiguredUpstreamKeepsFenceExitsWhileHeartbeatIsStopped(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	setFleetUpstreamURL(t, app, "https://hub.example")
+	// A locked keychain prevents the loop from starting, but the configured fleet
+	// still exists and may already be in the firewall table.
+	if _, complete := app.fenceOtherExits(); complete {
+		t.Fatal("a configured pairing with no heartbeat loop reported a complete list")
+	}
+}
+
+func TestHeartbeatAppliesFleetExitsEvenIfTheIssuedKeyCannotBeSaved(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	fence := &fakeFence{}
+	app.fence = fence
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"status":"ok","worker_key":"issued","fleet_exits":["198.51.100.4"]}`)
+	}))
+	defer srv.Close()
+	setFleetUpstreamURL(t, app, srv.URL)
+	if err := os.Mkdir(filepath.Join(app.cfg.AppDir(), ".upstream_worker_key"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyring.MockInitWithError(errors.New("test keychain locked"))
+	t.Cleanup(keyring.MockInit)
+
+	app.sendUpstream(context.Background(), &upstream.Client{HTTP: srv.Client()}, srv.URL, "shared")
+	if ips, complete := app.fenceOtherExits(); !slices.Equal(ips, []string{"198.51.100.4"}) || !complete || fence.reconciled != 1 {
+		t.Errorf("exits %v complete %v, fence applies %d", ips, complete, fence.reconciled)
 	}
 }
 
