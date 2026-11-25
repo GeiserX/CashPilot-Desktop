@@ -538,7 +538,7 @@ func TestServerCommandsFirewallRuleIsScoped(t *testing.T) {
 	}
 	var rule string
 	for _, line := range strings.Split(script, "\n") {
-		if strings.HasPrefix(line, "New-NetFirewallRule") {
+		if strings.HasPrefix(strings.TrimSpace(line), "New-NetFirewallRule") {
 			rule = line
 		}
 	}
@@ -803,6 +803,66 @@ foreach ($c in $cases) { if (Test-CoversPort $c 8086) { 'yes' } else { 'no' } }
 `
 
 const testCoversPortWant = "yes yes yes yes no no no no no"
+
+func TestAllowRemovesOnlyMatchingFirewallRules(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh is not installed; the firewall script runs on the Windows runners")
+	}
+	name, program := serverCommandsRuleName(), `C:\CashPilot.exe`
+	script := "$displayName = " + psLiteral(name) + "\n$program = " + psLiteral(program) + "\n" +
+		mockFirewallRules + "\n" + addRuleScript(name, program)
+	out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("pwsh: %v\n%s", err, out)
+	}
+	removed := strings.Fields(string(out))
+	slices.Sort(removed)
+	if want := []string{"own-tcp-block", "own-wide-block"}; !slices.Equal(removed, want) {
+		t.Fatalf("removed %v, want only %v", removed, want)
+	}
+}
+
+const mockFirewallRules = `
+function Test-Rule($name, $path, $direction, $action, $protocol, $port, $label = $displayName) {
+  [pscustomobject]@{ Name = $name; DisplayName = $label; Program = $path; Direction = $direction;
+    Action = $action; Protocol = $protocol; LocalPort = @($port) }
+}
+$rules = @(
+  Test-Rule other-outbound 'C:\Other.exe' Outbound Block TCP 8086
+  Test-Rule other-inbound 'C:\Other.exe' Inbound Block TCP 8086
+  Test-Rule own-outbound $program Outbound Block TCP 8086
+  Test-Rule own-udp $program Inbound Block UDP 8086
+  Test-Rule own-other-port $program Inbound Block TCP 8085
+  Test-Rule own-allowed $program Inbound Allow TCP 8086
+  Test-Rule own-tcp-block $program Inbound Block TCP 8086
+  Test-Rule own-wide-block $program Inbound Block Any Any 'Windows prompt'
+)
+function Get-NetFirewallRule {
+  [CmdletBinding()]
+  param([string]$DisplayName, [string]$Name, [Parameter(ValueFromPipeline)]$Filter)
+  process {
+    if ($DisplayName) { $rules | Where-Object DisplayName -eq $DisplayName }
+    elseif ($Name) { $rules | Where-Object Name -eq $Name }
+    else { $Filter }
+  }
+}
+function Get-NetFirewallApplicationFilter {
+  [CmdletBinding()]
+  param([string]$Program)
+  $rules | Where-Object Program -eq $Program
+}
+function Get-NetFirewallPortFilter {
+  param([Parameter(ValueFromPipeline)]$Rule)
+  process { $Rule }
+}
+function Remove-NetFirewallRule {
+  param([Parameter(ValueFromPipeline)]$Rule)
+  process { $Rule.Name }
+}
+function New-NetFirewallRule { }
+function Set-NetFirewallRule { }
+`
 
 // PowerShell ends a single-quoted string at ' and at the curly quotes U+2018 to U+201B,
 // so each is doubled. A Windows user folder can hold a curly apostrophe.

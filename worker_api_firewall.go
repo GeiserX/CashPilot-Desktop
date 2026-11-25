@@ -28,6 +28,9 @@ func serverCommandsRuleName() string {
 	return fmt.Sprintf("CashPilot: server commands (TCP %d)", workerAPIPort)
 }
 
+// Windows permits duplicate display names. This is the Allow rule's unique name.
+const serverCommandsRuleID = "CashPilot.Desktop.ServerCommands"
+
 // psLiteral makes a PowerShell single-quoted literal. Inside one, PowerShell ends the
 // string at ' and also at the curly quotes U+2018 to U+201B; each is escaped by
 // doubling it. A user folder such as O’Brien has one.
@@ -45,8 +48,8 @@ func psLiteral(s string) string {
 	return b.String()
 }
 
-// addRuleScript replaces any rule of that name with one scoped as described above.
-// It also removes the inbound Block rules Windows holds for this program that cover
+// addRuleScript creates or updates the scoped Allow rule. It removes the inbound
+// Block rules Windows holds for this program that cover
 // TCP workerAPIPort, which Windows makes when someone presses Cancel on its own
 // prompt: in Windows Firewall a Block rule wins over an Allow rule, so the scoped
 // rule would do nothing beside one. Only a Block rule whose protocol is Any or TCP
@@ -58,18 +61,21 @@ func addRuleScript(name, program string) string {
 	for _, s := range privateSubnets() {
 		subnets = append(subnets, psLiteral(s))
 	}
+	id := psLiteral(serverCommandsRuleID)
+	scope := " -Enabled True -Direction Inbound -Action Allow -Protocol TCP -LocalPort " + fmt.Sprint(workerAPIPort) +
+		" -Profile Private -RemoteAddress @(" + strings.Join(subnets, ",") + ") -Program " + psLiteral(program)
 	return strings.Join([]string{
 		"$ErrorActionPreference = 'Stop'",
-		"Get-NetFirewallRule -DisplayName " + psLiteral(name) + " -ErrorAction SilentlyContinue | Remove-NetFirewallRule",
-		"New-NetFirewallRule -DisplayName " + psLiteral(name) +
-			" -Direction Inbound -Action Allow -Protocol TCP -LocalPort " + fmt.Sprint(workerAPIPort) +
-			" -Profile Private -RemoteAddress @(" + strings.Join(subnets, ",") + ")" +
-			" -Program " + psLiteral(program) + " | Out-Null",
 		blocksPortFilter,
 		"Get-NetFirewallApplicationFilter -Program " + psLiteral(program) + " -ErrorAction SilentlyContinue |" +
 			" Get-NetFirewallRule -ErrorAction SilentlyContinue |" +
 			" Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' -and" +
 			" (Test-CoversPort ($_ | Get-NetFirewallPortFilter) " + fmt.Sprint(workerAPIPort) + ") } | Remove-NetFirewallRule",
+		"if (Get-NetFirewallRule -Name " + id + " -ErrorAction SilentlyContinue) {",
+		"  Set-NetFirewallRule -Name " + id + scope + " | Out-Null",
+		"} else {",
+		"  New-NetFirewallRule -Name " + id + " -DisplayName " + psLiteral(name) + scope + " | Out-Null",
+		"}",
 		"exit 0",
 	}, "\n")
 }
@@ -90,10 +96,10 @@ const blocksPortFilter = `function Test-CoversPort($pf, [int]$port) {
 }`
 
 // removeRuleScript deletes the rule; a rule that is already gone is no error.
-func removeRuleScript(name string) string {
+func removeRuleScript() string {
 	return strings.Join([]string{
 		"$ErrorActionPreference = 'Stop'",
-		"Get-NetFirewallRule -DisplayName " + psLiteral(name) + " -ErrorAction SilentlyContinue | Remove-NetFirewallRule",
+		"Get-NetFirewallRule -Name " + psLiteral(serverCommandsRuleID) + " -ErrorAction SilentlyContinue | Remove-NetFirewallRule",
 		"exit 0",
 	}, "\n")
 }
@@ -176,7 +182,7 @@ func (a *App) removeServerCommandsRule() error {
 	if name == "" {
 		return nil
 	}
-	if err := runFirewallScript(removeRuleScript(name)); err != nil {
+	if err := runFirewallScript(removeRuleScript()); err != nil {
 		return fmt.Errorf("the firewall rule %q was not removed: %w", name, err)
 	}
 	return a.cfg.Update(func(c *config.AppConfig) {
