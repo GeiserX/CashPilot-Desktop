@@ -1522,7 +1522,7 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 
 type deployCredentialsLock struct {
 	deploy        sync.Mutex
-	explicitSaves atomic.Uint64
+	explicitSaves uint64 // guarded by App.credentialsMu
 }
 
 func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
@@ -1533,9 +1533,13 @@ func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
 	return entry.(*deployCredentialsLock)
 }
 
-func (l *deployCredentialsLock) startDeploy() uint64 {
-	// A save made while this deploy queues must also win.
-	startSaves := l.explicitSaves.Load()
+func (l *deployCredentialsLock) startDeploy(credentialsMu *sync.Mutex) uint64 {
+	// Let an in-progress credential write finish before taking the snapshot.
+	// Release the mutex before queuing so the active deploy can finish its write
+	// and an explicit save made while this deploy waits can still win.
+	credentialsMu.Lock()
+	startSaves := l.explicitSaves
+	credentialsMu.Unlock()
 	l.deploy.Lock()
 	return startSaves
 }
@@ -1546,7 +1550,7 @@ func (a *App) deployService(slug string, values map[string]string, opts services
 	}
 	a.retryCustom()
 	lock := a.deployCredentialsLock(slug)
-	startSaves := lock.startDeploy()
+	startSaves := lock.startDeploy(&a.credentialsMu)
 	defer lock.deploy.Unlock()
 	creds, err := a.prepareDeployCredentials(slug, values, opts.Image)
 	if err != nil {
@@ -1600,7 +1604,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 		return services.ProxiedResult{}, err
 	}
 	lock := a.deployCredentialsLock(slug)
-	startSaves := lock.startDeploy()
+	startSaves := lock.startDeploy(&a.credentialsMu)
 	defer lock.deploy.Unlock()
 	creds, err := a.prepareDeployCredentials(slug, values, nil)
 	if err != nil {

@@ -71,7 +71,7 @@ func (a *App) SaveCredentials(slug string, values map[string]string) error {
 	if err := a.saveSubmittedCredentials(slug, values); err != nil {
 		return err
 	}
-	lock.explicitSaves.Add(1)
+	lock.explicitSaves++
 	return nil
 }
 
@@ -154,7 +154,7 @@ func (a *App) saveLocalDeployCredentials(slug string, values map[string]string, 
 	}
 	a.credentialsMu.Lock()
 	defer a.credentialsMu.Unlock()
-	if lock.explicitSaves.Load() != startSaves {
+	if lock.explicitSaves != startSaves {
 		return false, nil
 	}
 	if err := a.saveSubmittedCredentials(slug, values); err != nil {
