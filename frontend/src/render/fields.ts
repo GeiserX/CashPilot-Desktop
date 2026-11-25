@@ -34,8 +34,8 @@ export function deployNeeds(field: ServiceField): boolean {
  * would promise a check that never comes.
  */
 export function fieldMark(field: ServiceField): string {
-  if (!field.required) return "";
-  return field.earnings ? " (for earnings)" : " *";
+  if (deployNeeds(field)) return " *";
+  return field.required && field.earnings ? " (for earnings)" : "";
 }
 
 /** Strip HTML tags from a catalog description before it goes into a placeholder. */
