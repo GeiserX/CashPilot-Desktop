@@ -5,7 +5,8 @@ Most apps in the catalog run inside Docker. On Windows, Docker means Docker Desk
 ## Where you find it
 
 - On the first run, on the Runtime step, under the runtime card.
-- In the app: click the runtime status at the top right (Runtime ready, Native mode or Runtime offline).
+- In the app: click the runtime status at the top right (Runtime ready, Native mode or Runtime offline). On a narrow window it is hidden.
+- While Docker is not ready: Set up Docker in the Dashboard's Needs attention list, in Settings > Runtime, or in a Docker app's Before you deploy panel.
 
 Each step has a state:
 

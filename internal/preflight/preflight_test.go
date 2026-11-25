@@ -198,7 +198,7 @@ func TestProhibitedContainerSummarySaysTheAccountIsAtRisk(t *testing.T) {
 	}
 }
 
-// Nothing here may ever stop a deploy, whatever the verdict.
+// No finding may ever stop a deploy, whatever the verdict.
 func TestNothingBlocksTheDeploy(t *testing.T) {
 	for _, svc := range realCatalog(t).List() {
 		for _, arch := range []string{"", "x86_64", "arm64", "armv6l"} {
@@ -490,5 +490,32 @@ func TestAServiceThatAcceptsARentedServerIsNotToldItNeedsAHomeLine(t *testing.T)
 	honeygain := service(t, "honeygain")
 	if _, ok := findingWith(Assess(Input{Service: honeygain, DaemonArch: "x86_64"}), "home internet connection"); !ok {
 		t.Fatal("the home-connection finding no longer fires for a residential-only service")
+	}
+}
+
+// A Docker app on a computer with no engine cannot run, so the report must not say
+// it should work or that it can be deployed anyway: the gap is the summary, and
+// the report blocks. With no gap nothing changes.
+func TestARuntimeGapIsTheSummaryAndBlocks(t *testing.T) {
+	svc := service(t, "earnfm")
+	gap := "Docker is not set up on this PC yet, so Earn.fm cannot run here. Set up Docker shows how."
+	report := Assess(Input{Service: svc, RuntimeGap: gap})
+	if report.Summary != gap {
+		t.Fatalf("summary = %q, want the gap", report.Summary)
+	}
+	if !report.Blocking || report.Verdict != EarnsNothing {
+		t.Fatalf("blocking=%v verdict=%q, want true and %q", report.Blocking, report.Verdict, EarnsNothing)
+	}
+	for _, phrase := range []string{"should work", "deploy it anyway"} {
+		if strings.Contains(report.Summary, phrase) {
+			t.Fatalf("summary %q says %q", report.Summary, phrase)
+		}
+	}
+	if len(report.NotChecked) == 0 {
+		t.Fatal("the not-checked list went missing")
+	}
+	plain := Assess(Input{Service: svc})
+	if plain.Blocking || strings.Contains(plain.Summary, "Docker") {
+		t.Fatalf("with no gap: blocking=%v summary=%q", plain.Blocking, plain.Summary)
 	}
 }

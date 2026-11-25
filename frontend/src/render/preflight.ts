@@ -7,7 +7,9 @@
 //
 //   1. It never blocks. Even "this will earn nothing here" renders as a panel the
 //      user reads and then deploys anyway if they want to. Nothing here disables
-//      the Deploy button, and nothing here is a modal.
+//      the Deploy button, and nothing here is a modal. The one exception is not a
+//      verdict: a report that blocks (a Docker app with no Docker engine here)
+//      says so and offers Set up Docker, because the deploy itself is refused.
 //   2. What was NOT checked is always shown. A clean result that hides the list
 //      reads as a guarantee about things nobody looked at.
 //   3. Nothing renders at all until there is an answer. A blank panel with a
@@ -18,6 +20,7 @@
 
 import type { PreflightReport } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { setupDockerButton } from "./runtime_state.js";
 
 /** The four verdicts, in the same vocabulary the Go side and the web app use. */
 const TONES: Record<string, { label: string; color: string; tint: string }> = {
@@ -74,6 +77,7 @@ export function renderPreflight(report: PreflightReport | null | undefined): str
         ${badge}
       </div>
       <p class="preflight-summary">${escapeHtml(report.summary)}</p>
+      ${report.blocking ? `<p class="preflight-blocked" data-preflight-blocked>Deploy is refused until then. ${setupDockerButton()}</p>` : ""}
       ${list}
       ${unchecked}
     </section>

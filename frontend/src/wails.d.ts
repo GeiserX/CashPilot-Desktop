@@ -1166,8 +1166,9 @@ export interface PreflightFinding {
   message: string;
 }
 
-// PreflightReport is what CashPilot knows before a deploy runs. blocking is always
-// false: the report informs the decision, it never takes it. notChecked names what
+// PreflightReport is what CashPilot knows before a deploy runs. blocking is false
+// unless the service cannot run here at all (a Docker app with no Docker engine);
+// otherwise the report informs the decision, it never takes it. notChecked names what
 // nobody looked at, so a clean report is not mistaken for a guarantee. Mirrors
 // preflight.Report.
 export interface PreflightReport {

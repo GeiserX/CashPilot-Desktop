@@ -121,6 +121,7 @@ import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
 import { guidesBesideChecklist, loadRuntimePage } from "./render/runtimepage";
+import { renderRuntimeSettings, runtimeProviderNote } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
@@ -1420,6 +1421,8 @@ async function renderSettings(current: AppState) {
     modeState = null;
     showErrorToast({scope: "mode", error: String(error)});
   }
+  // The Runtime card says the state now, not the one read at start.
+  const runtime = await CheckRuntime().catch(() => current.runtime);
   if (request !== settingsRequest || activeView !== "settings") return;
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
@@ -1431,6 +1434,7 @@ async function renderSettings(current: AppState) {
         <main class="page-content">
           ${pageHead("Settings")}
           <div id="mode-card-slot">${modeState ? renderModeCard(modeState, modeCardView, modeLeft) : ""}</div>
+          ${renderRuntimeSettings(runtime)}
           <section class="card">
             <div class="card-header">
               <div>
@@ -1440,7 +1444,7 @@ async function renderSettings(current: AppState) {
               <button class="primary compact-btn" id="save-settings">Save Variables</button>
             </div>
             <div class="settings-list">
-              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, "small") : "")).join("")}
+              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, "small") : item.key === "CASHPILOT_RUNTIME_PROVIDER" ? runtimeProviderNote(runtime) : "")).join("")}
             </div>
           </section>
 
@@ -2494,6 +2498,16 @@ async function hydrateWizardPreflight(service: Service) {
   } catch {
     slot.innerHTML = "";
   }
+  // A panel that blocks carries Set up Docker; it lands after wireShellNav ran.
+  slot.querySelectorAll<HTMLButtonElement>('[data-view="runtime"]').forEach((button) => {
+    button.addEventListener("click", () => {
+      activeView = "runtime";
+      ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav("runtime", wizardStep));
+      wizardWhereDrafts = {};
+      resetScrollAfterRender = true;
+      render();
+    });
+  });
 }
 
 function readWizardForm(slug: string): Record<string, string> {

@@ -9,7 +9,9 @@
 // module's two rules:
 //
 //   - Informed consent, not a nanny. Where the answer is "this will earn nothing
-//     for you", say so plainly and let the deploy proceed. Nothing here blocks.
+//     for you", say so plainly and let the deploy proceed. No finding blocks.
+//     The one block is not a finding: with no engine to run the service on
+//     (Input.RuntimeGap) the deploy cannot happen, and the report says so.
 //   - Never imply a check we did not run. Desktop cannot see what kind of internet
 //     connection it is on, how fast it is, or how much disk is free. Requirements
 //     that depend on those are reported as unverified preconditions in the user's
@@ -86,10 +88,16 @@ type Input struct {
 	// unchecked rather than guessed — the Desktop binary's own architecture is not
 	// the same fact when the runtime is a VM or a remote context.
 	DaemonArch string
+	// RuntimeGap says, in plain words, why this computer cannot run the service at
+	// all right now: it needs Docker and no Docker-compatible engine answers. Empty
+	// when it can run. Unlike every finding, this is not a judgement about earning:
+	// the deploy itself is refused until it is fixed, so the report says that.
+	RuntimeGap string
 }
 
-// Report is the whole answer, ready to render. Blocking is always false: this
-// informs a decision, it never takes it.
+// Report is the whole answer, ready to render. Blocking is false unless the
+// service cannot run here at all (Input.RuntimeGap): the findings inform a
+// decision, they never take it.
 type Report struct {
 	Slug       string    `json:"slug"`
 	Name       string    `json:"name"`
@@ -236,7 +244,7 @@ func Assess(in Input) Report {
 		notChecked = append(notChecked, "whether your other machines use the same internet connection as this one")
 	}
 
-	return Report{
+	report := Report{
 		Slug:        svc.Slug,
 		Name:        name,
 		Verdict:     verdict,
@@ -246,6 +254,14 @@ func Assess(in Input) Report {
 		MachineArch: strings.TrimSpace(in.DaemonArch),
 		Blocking:    false, // informed consent, never a block
 	}
+	// No engine to run it on: "should work normally here" or "you can deploy it
+	// anyway" would be false, so the gap is the summary and the report blocks.
+	if gap := strings.TrimSpace(in.RuntimeGap); gap != "" {
+		report.Verdict = EarnsNothing
+		report.Summary = gap
+		report.Blocking = true
+	}
+	return report
 }
 
 // fleetFindings is what the REST of the fleet implies about deploying this here.

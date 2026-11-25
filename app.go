@@ -1141,7 +1141,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Leave EMPTY to run everything here (standalone), the default. To join a CashPilot, use How this computer runs above: it tests the connection before it saves anything. While joined, this computer reports what it runs and stops collecting earnings itself; your CashPilot collects them and shows them. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
-		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime Provider", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "Current Docker-compatible runtime integration."},
+		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime provider (chosen)", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "The kind of runtime CashPilot is set to use. existing-docker means a Docker-compatible engine you install, such as Docker Desktop. It does not mean one is installed or running: the Runtime card above says that."},
 	}
 	collectors := make([]CollectorSetting, 0)
 	for _, svc := range a.catalog.ListVisible() {
@@ -1489,6 +1489,12 @@ func (a *App) saveCredentials(slug string, values map[string]string) error {
 	if err != nil {
 		return err
 	}
+	if !hasCredentialValue(toSave) {
+		// Every box empty: nothing to keep. Storing the blanks would light
+		// "Configured" and send the collector off with no login. What was stored
+		// goes, as it did when the blanks replaced it.
+		return a.store.DeleteCredentials(slug)
+	}
 	return a.store.SaveCredentials(slug, toSave)
 }
 
@@ -1528,6 +1534,7 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 		Service:    svc,
 		Fleet:      fleet,
 		DaemonArch: preflight.DaemonArch(a.ctx),
+		RuntimeGap: a.dockerGapFor(slug),
 	}), nil
 }
 
@@ -1575,6 +1582,9 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 			return store.Deployment{}, nil, err
 		}
 	}
+	if err := a.refuseWithoutDocker(slug); err != nil {
+		return store.Deployment{}, nil, err
+	}
 	if len(values) > 0 {
 		if err := a.saveCredentials(slug, values); err != nil {
 			return store.Deployment{}, nil, err
@@ -1613,6 +1623,9 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	}
 	if err := a.services.ValidateDeploy(slug, creds); err != nil {
 		a.emitError("deploy", err)
+		return services.ProxiedResult{}, err
+	}
+	if err := a.refuseWithoutDocker(slug); err != nil {
 		return services.ProxiedResult{}, err
 	}
 	if len(values) > 0 {
@@ -2104,6 +2117,8 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 	// Docker, so a "Runtime offline" alert there would be dishonest and alarming.
 	if !status.Available && !status.NativeAvailable {
 		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
+	} else if notice, ok := dockerNotice(status); ok {
+		items = append(items, notice)
 	}
 	// A container whose image no longer matches the catalog often keeps running (so it
 	// looks healthy) while the retired provider client earns nothing — surface it so the
@@ -2234,9 +2249,18 @@ func hostnameOrDefault(value string) string {
 // current required fields. Keying off required fields (not merely len(creds) > 0) stops
 // an orphaned pre-migration blob — non-empty but missing the current keys — from
 // falsely reading as configured when a deploy would in fact fail until re-entry.
+//
+// A blob whose every value is blank is not configured, and neither is one that
+// leaves out a login the earnings collector requires (collectors.Fields): the form
+// sends every box, so a deploy with the boxes empty used to read as "Configured".
 func (a *App) credsConfigured(slug string, creds map[string]string) bool {
-	if len(creds) == 0 {
+	if !hasCredentialValue(creds) {
 		return false
+	}
+	for _, field := range collectors.Fields(slug) {
+		if field.Required && strings.TrimSpace(creds[field.Key]) == "" {
+			return false
+		}
 	}
 	if a.services == nil {
 		return true
