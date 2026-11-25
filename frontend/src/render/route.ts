@@ -94,9 +94,8 @@ export interface RouteDeployCalls<D, R> {
 
 /**
  * Deploy from the setup card. A routed deploy runs the catalog image once, so a chosen
- * image or more than one copy is refused instead of dropped. Every refusal and the
- * owner's confirmation come before the credentials are saved, so a deploy that does
- * not run changes nothing.
+ * image or more than one copy is refused. The deploy binding saves credentials
+ * when the service deploys successfully.
  */
 export async function runRouteDeploy<D, R>(
   slug: string,

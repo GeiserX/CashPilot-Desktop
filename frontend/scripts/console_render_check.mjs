@@ -70,7 +70,11 @@ check("RULE 1: an outdated image is listed", tags.includes("Outdated"));
 check("RULE 1: repeated crashes are listed", tags.includes("Unstable"));
 const offline = attentionItems({ runtime: { available: false, nativeAvailable: false, message: "Docker is not running." }, services, deployments: [], earnings: [] });
 check("RULE 1: no runtime at all is a failure", offline.length === 1 && offline[0].level === "fail" && offline[0].why.includes("Docker is not running."), JSON.stringify(offline));
-check("RULE 1: native alone is not an outage", attentionItems({ runtime: { available: false, nativeAvailable: true, message: "" }, services, deployments: [], earnings: [] }).length === 0);
+// Native alone is not an outage, but Docker is still missing: one warning row with
+// the way to set it up, never a failure and never the all-clear line.
+const nativeAlone = attentionItems({ runtime: { available: false, nativeAvailable: true, message: "" }, services, deployments: [], earnings: [] });
+check("RULE 1: native alone is not an outage", !nativeAlone.some((i) => i.level === "fail" || i.tag === "Offline"), JSON.stringify(nativeAlone));
+check("RULE 1: native alone still asks for Docker, with Set up Docker", nativeAlone.length === 1 && nativeAlone[0].level === "warn" && nativeAlone[0].actions.includes('data-view="runtime"'), JSON.stringify(nativeAlone));
 const dockerDown = attentionItems({ runtime: { available: false, nativeAvailable: true, message: "Docker is not running." }, services, deployments: [{ ...dep("honeygain", "exited"), runtime: "docker" }], earnings: [] });
 check("RULE 1: Docker down with container services stored is an outage, even with native up", dockerDown.some((i) => i.tag === "Offline" && i.what === "Container runtime"), JSON.stringify(dockerDown));
 const nativeOnly = attentionItems({ runtime: { available: false, nativeAvailable: true, message: "" }, services, deployments: [{ ...dep("honeygain", "running"), runtime: "native" }], earnings: [] });

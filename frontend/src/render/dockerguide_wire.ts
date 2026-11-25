@@ -12,14 +12,16 @@
 // It lives in src/render so the harness compiles it, but it touches elements, so
 // it takes everything that talks to Go as deps and never imports the bindings.
 
-import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
+import type { FirmwareRestart, HostCheckResult, SetupResumeView, SetupStepResult } from "../wails";
 import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
 import { runLine } from "./dockersteps.js";
 
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
-  checkRuntime(): Promise<RuntimeStatus>;
+  /** The app's latest runtime reading, also used by the card and app controls. */
+  currentRuntime(): GuideModel["runtime"];
   startDocker(): Promise<void>;
+  dockerEngineReady(): Promise<boolean>;
   openWindowsUpdate(): Promise<void>;
   restartToFirmware(step: string): Promise<FirmwareRestart>;
   cancelSetup(): Promise<void>;
@@ -31,16 +33,15 @@ export interface DockerGuideDeps {
   openUrl(url: string): void;
   /** The user chose native apps only, on the skip screen. */
   skip(): void | Promise<void>;
-  /** A reading landed: the caller updates what it shows around the checklist. */
-  checked?(result: HostCheckResult): void;
   /** An action failed in a way the user should hear about. */
   failed?(error: unknown): void;
-  /** Waits ms; a test can make it instant. */
+  /** A test can advance the wait clock without sleeping. */
   sleep?(ms: number): Promise<void>;
+  now?(): number;
 }
 
-/** How often the engine is asked while waiting, in seconds. */
-const POLL_EVERY = 3;
+/** How often to check Docker Desktop's engine while waiting, in milliseconds. */
+const POLL_EVERY_MS = 3000;
 
 export class DockerGuide {
   model: GuideModel;
@@ -49,14 +50,14 @@ export class DockerGuide {
   constructor(
     private holder: Element,
     private deps: DockerGuideDeps,
-    init: { runtime: RuntimeStatus; resume: SetupResumeView | null; result?: HostCheckResult | null },
+    init: { resume: SetupResumeView | null; result?: HostCheckResult | null; checkFailed?: boolean },
   ) {
-    const runtime = init.result?.runtime ?? init.runtime;
     this.model = {
       steps: init.result?.steps ?? null,
-      runtime,
+      runtime: deps.currentRuntime(),
       view: "list",
       checking: false,
+      checkFailed: init.checkFailed,
       waiting: null,
       waitResult: "",
       // This PC's Docker already runs: the setup a restart interrupted is finished.
@@ -65,7 +66,7 @@ export class DockerGuide {
       restarting: false,
     };
     this.render();
-    if (!init.result) void this.check();
+    if (!init.result && !init.checkFailed) void this.check();
   }
 
   /** Stop drawing: the screen it was on is gone. */
@@ -73,30 +74,54 @@ export class DockerGuide {
     this.alive = false;
   }
 
+  showResume(resume: SetupResumeView | null): void {
+    this.model.resume = resume;
+    this.render();
+  }
+
   render(): void {
     if (!this.alive) return;
+    this.model.runtime = this.deps.currentRuntime();
     this.holder.innerHTML = renderDockerGuide(this.model);
     this.wire();
   }
 
   /** Read the PC again and redraw every row. One reading at a time. */
   async check(): Promise<void> {
-    if (this.model.checking) return;
+    if (this.model.checking || this.model.waiting !== null) return;
+    await this.readChecklist();
+  }
+
+  private async readChecklist(afterWait = false): Promise<void> {
     this.model.checking = true;
     this.render();
     try {
       const result = await this.deps.hostCheck();
-      this.model.steps = result.steps ?? [];
-      this.model.runtime = result.runtime;
-      // Go ended the setup on this reading (host_check.go): no "Restart to finish".
-      if (setupFinished(result)) this.model.resume = null;
-      this.deps.checked?.(result);
+      this.model.checkFailed = false;
+      this.applyReading(result, afterWait);
     } catch (error) {
+      this.model.steps = null;
+      this.model.checkFailed = true;
       this.deps.failed?.(error);
     } finally {
       this.model.checking = false;
+      if (afterWait) this.model.waiting = null;
       this.render();
     }
+  }
+
+  private applyReading(result: HostCheckResult, afterWait: boolean): void {
+    this.model.steps = result.steps ?? [];
+    const { steps, waitResult } = this.model;
+    const answers = engineAnswers(steps);
+    if (waitResult === "timeout" && answers) {
+      this.model.waitResult = "checklist-answered";
+    } else if (!answers && (waitResult === "answered" || waitResult === "checklist-answered")) {
+      // Keep the pipe answer as history if the check at the end of the wait was inconclusive.
+      const inconclusive = afterWait && steps.some((step) => step.id === "a6" && step.state === "unknown");
+      if (!inconclusive) this.model.waitResult = "";
+    }
+    if (setupFinished(result)) this.model.resume = null;
   }
 
   /**
@@ -104,7 +129,7 @@ export class DockerGuide {
    * engine, with a line that says how long so far. A check follows either way.
    */
   async startDocker(): Promise<void> {
-    if (this.model.waiting !== null) return;
+    if (this.model.waiting !== null || this.model.checking) return;
     // Busy before the first await: a second click while Windows starts Docker
     // Desktop finds the wait under way and starts nothing.
     this.model.waitResult = "";
@@ -128,25 +153,37 @@ export class DockerGuide {
     this.model.waitResult = "";
     this.model.waiting = 0;
     this.render();
-    let up = false;
-    while (this.alive && this.model.waiting < START_LIMIT_SECONDS) {
-      await sleep(1000);
-      this.model.waiting++;
+    const now = this.deps.now ?? (() => performance.now());
+    const started = now();
+    const deadline = started + START_LIMIT_SECONDS * 1000;
+    let nextPoll = started + POLL_EVERY_MS;
+    let answered = false;
+    while (this.alive) {
+      const remaining = deadline - now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(1000, remaining));
+      if (!this.alive) break;
+
+      const tick = now();
+      this.model.waiting = Math.floor((tick - started) / 1000);
       this.updateWaitLine();
-      if (this.model.waiting % POLL_EVERY === 0) {
-        try {
-          if (engineAnswers(await this.deps.checkRuntime())) {
-            up = true;
-            break;
-          }
-        } catch {
-          // A failed ask is one missed poll; the next one tries again.
-        }
+      if (tick >= deadline) break;
+      if (tick < nextPoll) continue;
+
+      nextPoll = tick + POLL_EVERY_MS;
+      try {
+        answered = await this.deps.dockerEngineReady();
+        if (answered) break;
+      } catch {
+        // A failed probe can be retried at the next poll.
       }
     }
-    this.model.waiting = null;
-    this.model.waitResult = up ? "ready" : "timeout";
-    await this.check();
+    if (!this.alive) {
+      this.model.waiting = null;
+      return;
+    }
+    this.model.waitResult = answered ? "answered" : "timeout";
+    await this.readChecklist(true);
   }
 
   private sleeper(): (ms: number) => Promise<void> {

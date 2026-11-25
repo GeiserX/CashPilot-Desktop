@@ -103,6 +103,14 @@ for (const [image, instances] of [["ghcr.io/me/honeygain:1", null], [null, 3]]) 
   check("RULE 8: an unrouted service deploys without asking", out.kind === "direct" && r.log.join(",") === "direct false", r.log.join(","));
 }
 
+for (const proxyId of [null, 3]) {
+  const r = recorder(true);
+  const fail = async () => { r.log.push("rejected"); throw new Error("Docker is unavailable"); };
+  r.calls.direct = r.calls.routed = fail;
+  await runRouteDeploy("storj", proxyId, null, null, route, r.calls).catch(() => {});
+  check("failed deploy never calls a separate credential save", r.log.join(",") === "rejected", r.log.join(","));
+}
+
 // A redraw (a currency change) rebuilds the card from state: the owner's unsaved pick wins
 // over the recorded route, or an unrouted service would fall back to Direct unasked.
 {

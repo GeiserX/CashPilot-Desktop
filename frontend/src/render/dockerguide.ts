@@ -33,16 +33,18 @@ export type GuideView =
 export const START_LIMIT_SECONDS = 120;
 
 export interface GuideModel {
-  /** The rows; null before the first reading lands. */
+  /** Rows from the latest check. Null before a result or after a failed check. */
   steps: GuideStep[] | null;
   runtime: Pick<RuntimeStatus, "available" | "reason" | "nativeServices">;
   view: GuideView;
   /** A reading of the PC is running. */
   checking: boolean;
+  /** The last checklist read failed. */
+  checkFailed?: boolean;
   /** Seconds since Start Docker Desktop while waiting for its engine; null when not waiting. */
   waiting: number | null;
-  /** How the last wait ended. */
-  waitResult: "" | "ready" | "timeout" | "failed";
+  /** How the last wait ended. A later checklist read can supersede its engine answer. */
+  waitResult: "" | "answered" | "checklist-answered" | "timeout" | "failed";
   /** Set when the app opened on the checklist after a restart. */
   resume: SetupResumeView | null;
   /** What the last "Restart into BIOS" answered, when the PC did not restart. */
@@ -89,9 +91,9 @@ export function setupFinished(result: Pick<HostCheckResult, "setupFinished">): b
   return result.setupFinished === true;
 }
 
-/** The engine answers: Docker runs, in Linux or in Windows containers mode. */
-export function engineAnswers(runtime: Pick<RuntimeStatus, "available" | "reason">): boolean {
-  return runtime.reason === "running" || runtime.reason === "windows-containers" || (runtime.available && !runtime.reason);
+/** Docker Desktop's own engine answers, in either container mode. */
+export function engineAnswers(steps: GuideStep[] | null): boolean {
+  return steps?.some((step) => step.id === "a6" && step.state === "done") ?? false;
 }
 
 /**
@@ -103,14 +105,19 @@ export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-g
 }
 
 /** The progress line while waiting for Docker's engine, and how the wait ended. */
-export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult">): string {
+export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "steps">): string {
   let text = "";
   let tone = "";
   if (model.waiting !== null) {
     text = `Waiting for Docker's engine to start: ${Math.min(model.waiting, START_LIMIT_SECONDS)} s of ${START_LIMIT_SECONDS / 60} min.`;
-  } else if (model.waitResult === "ready") {
-    text = "Docker's engine is running.";
-    tone = "ok";
+  } else if (model.waitResult === "answered" || model.waitResult === "checklist-answered") {
+    text = "CashPilot connected to Docker Desktop earlier.";
+    if (engineAnswers(model.steps)) {
+      text = model.waitResult === "answered"
+        ? "Docker's engine answered."
+        : "Docker's engine answered during the checklist check.";
+      tone = "ok";
+    }
   } else if (model.waitResult === "timeout") {
     text = `Docker's engine did not answer within ${START_LIMIT_SECONDS / 60} minutes. Look at Docker Desktop's window: it may show its terms or a message. Then click Check again.`;
     tone = "warn";
@@ -205,8 +212,11 @@ function resumeBanner(resume: SetupResumeView | null): string {
 }
 
 function summary(model: GuideModel): string {
-  if (model.runtime.reason === "running") {
-    return `<p class="docker-guide-summary ok">Docker is ready. The apps in the catalog can run on this PC.</p>`;
+  if (model.checkFailed) {
+    return `<p class="docker-guide-summary">Docker Desktop's current status is unknown.</p>`;
+  }
+  if (engineAnswers(model.steps) && model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
+    return `<p class="docker-guide-summary ok">Docker Desktop is ready on this PC.</p>`;
   }
   if (!model.steps) {
     return `<p class="docker-guide-summary">Checking this PC…</p>`;
@@ -291,7 +301,7 @@ export function renderDockerGuide(model: GuideModel): string {
   const native = model.runtime.nativeServices ?? [];
   if (model.view === "skip" && native.length > 0) return `<section class="docker-guide">${skipScreen(native)}</section>`;
   const steps = model.steps ?? [];
-  const skip = native.length > 0 && model.runtime.reason !== "running"
+  const skip = native.length > 0 && !model.runtime.available
     ? `<button class="btn btn-ghost btn-lg" data-guide-action="skip">Skip, use native apps only</button>`
     : "";
   return `
@@ -302,8 +312,9 @@ export function renderDockerGuide(model: GuideModel): string {
       ${summary(model)}
       <ol class="docker-steps">${steps.map((s, i) => stepHtml(s, i, steps, model)).join("")}</ol>
       ${waitLine(model)}
+      ${model.checkFailed ? '<p class="docker-guide-wait warn" role="status">CashPilot could not refresh the Docker checklist. Click Check again to retry.</p>' : ""}
       <div class="gate-actions">
-        ${checkAgainButton("docker-guide-check", model.checking)}
+        ${checkAgainButton("docker-guide-check", model.checking || model.waiting !== null)}
         ${skip}
       </div>
     </section>`;

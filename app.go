@@ -103,6 +103,9 @@ type App struct {
 	// catalog; see loadCustom.
 	customPending atomic.Bool
 
+	// Keep a service's deploy and its credential write in the same order.
+	deployCredentialsLocks sync.Map // service slug -> *deployCredentialsLock
+
 	collecting  atomic.Bool
 	schedMu     sync.Mutex
 	schedCancel context.CancelFunc
@@ -506,6 +509,7 @@ type Notification struct {
 	Level   string `json:"level"`
 	Title   string `json:"title"`
 	Message string `json:"message"`
+	Runtime bool   `json:"runtime,omitempty"`
 }
 
 // EarningsSummary is the dashboard's converted, aggregated view of earnings.
@@ -647,6 +651,7 @@ func (a *App) GetAppState() (AppState, error) {
 		return AppState{}, err
 	}
 	a.retryCustom()
+	a.refreshHostSetup()
 	// Fetch these once and thread them into the helpers below instead of letting
 	// each helper re-run its own full-table scan (they were each queried up to 3x
 	// per GetAppState call before this).
@@ -1147,7 +1152,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Leave EMPTY to run everything here (standalone), the default. To join a CashPilot, use How this computer runs above: it tests the connection before it saves anything. While joined, this computer reports what it runs and stops collecting earnings itself; your CashPilot collects them and shows them. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
-		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime Provider", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "Current Docker-compatible runtime integration."},
+		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime provider (chosen)", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "The kind of runtime CashPilot is set to use. existing-docker means a Docker-compatible engine you install, such as Docker Desktop. It does not mean one is installed or running: the Runtime card above says that."},
 	}
 	collectors := make([]CollectorSetting, 0)
 	for _, svc := range a.catalog.ListVisible() {
@@ -1484,8 +1489,8 @@ func (a *App) GetService(slug string) (catalog.Service, error) {
 // PreflightService reports what could stop a service earning on THIS machine,
 // before the user deploys it: a provider that forbids containers, an image with no
 // build for this CPU, a service already running on another machine in the fleet,
-// and the requirements nobody can verify from here. It never blocks a deploy — the
-// report is shown in the wizard and the Deploy button stays live either way.
+// and the requirements nobody can verify from here. The frontend checks the
+// shared Docker status separately when it renders the report and Deploy button.
 func (a *App) PreflightService(slug string) (preflight.Report, error) {
 	if err := a.ready(); err != nil {
 		return preflight.Report{}, err
@@ -1515,13 +1520,43 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 	return deployment, err
 }
 
+type deployCredentialsLock struct {
+	deploy        sync.Mutex
+	explicitSaves uint64 // guarded by App.credentialsMu
+}
+
+func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
+	if _, ok := a.catalog.Get(slug); !ok {
+		return &deployCredentialsLock{}
+	}
+	entry, _ := a.deployCredentialsLocks.LoadOrStore(slug, &deployCredentialsLock{})
+	return entry.(*deployCredentialsLock)
+}
+
+func (l *deployCredentialsLock) startDeploy(credentialsMu *sync.Mutex) uint64 {
+	// Let an in-progress credential write finish before taking the snapshot.
+	// Release the mutex before queuing so the active deploy can finish its write
+	// and an explicit save made while this deploy waits can still win.
+	credentialsMu.Lock()
+	startSaves := l.explicitSaves
+	credentialsMu.Unlock()
+	l.deploy.Lock()
+	return startSaves
+}
+
 func (a *App) deployService(slug string, values map[string]string, opts services.DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, nil, err
 	}
 	a.retryCustom()
+	lock := a.deployCredentialsLock(slug)
+	startSaves := lock.startDeploy(&a.credentialsMu)
+	defer lock.deploy.Unlock()
 	creds, err := a.prepareDeployCredentials(slug, values, opts.Image)
 	if err != nil {
+		return store.Deployment{}, nil, err
+	}
+	if err := a.refuseWithoutDocker(slug); err != nil {
 		return store.Deployment{}, nil, err
 	}
 	deployment, walletResult, deployErr := a.services.DeployWallet(a.ctx, slug, creds, opts)
@@ -1529,7 +1564,7 @@ func (a *App) deployService(slug string, values map[string]string, opts services
 		a.emitError("deploy", deployErr)
 		return store.Deployment{}, nil, deployErr
 	}
-	saveErr := a.saveLocalDeployCredentials(slug, values)
+	saved, saveErr := a.saveLocalDeployCredentials(slug, values, lock, startSaves)
 	a.emitEvent("deployment:changed", deployment)
 	if saveErr != nil {
 		a.emitError("credentials", saveErr)
@@ -1537,7 +1572,7 @@ func (a *App) deployService(slug string, values map[string]string, opts services
 	if deployErr != nil {
 		if saveErr != nil {
 			deployErr = errors.Join(deployErr, saveErr)
-		} else {
+		} else if saved {
 			for key, secret := range a.credentialFields(slug) {
 				if secret && strings.TrimSpace(values[key]) != "" {
 					deployErr = savedPartialDeployError{deployErr}
@@ -1568,8 +1603,14 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	if err := a.ready(); err != nil {
 		return services.ProxiedResult{}, err
 	}
+	lock := a.deployCredentialsLock(slug)
+	startSaves := lock.startDeploy(&a.credentialsMu)
+	defer lock.deploy.Unlock()
 	creds, err := a.prepareDeployCredentials(slug, values, nil)
 	if err != nil {
+		return services.ProxiedResult{}, err
+	}
+	if err := a.refuseWithoutDocker(slug); err != nil {
 		return services.ProxiedResult{}, err
 	}
 	result, err := a.services.DeployRouted(a.ctx, slug, creds, proxyID)
@@ -1577,7 +1618,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 		a.emitError("deploy", err)
 		return services.ProxiedResult{}, err
 	}
-	saveErr := a.saveLocalDeployCredentials(slug, values)
+	_, saveErr := a.saveLocalDeployCredentials(slug, values, lock, startSaves)
 	a.emitEvent("deployment:changed", slug)
 	if saveErr != nil {
 		a.emitError("credentials", saveErr)
@@ -2056,11 +2097,8 @@ func (a *App) ManagedRuntimePlan() runtime.ManagedRuntimePlan {
 
 func (a *App) notifications(status runtime.Status, earnings []store.EarningsRecord, deployments []store.Deployment) []Notification {
 	var items []Notification
-	// Only warn that the runtime is offline when NEITHER Docker nor the always-on
-	// native runtime can run anything. With native available the app works without
-	// Docker, so a "Runtime offline" alert there would be dishonest and alarming.
-	if !status.Available && !status.NativeAvailable {
-		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
+	if notice := runtimeNotification(status); notice != nil {
+		items = append(items, *notice)
 	}
 	// A container whose image no longer matches the catalog often keeps running (so it
 	// looks healthy) while the retired provider client earns nothing — surface it so the
@@ -2191,9 +2229,18 @@ func hostnameOrDefault(value string) string {
 // current required fields. Keying off required fields (not merely len(creds) > 0) stops
 // an orphaned pre-migration blob — non-empty but missing the current keys — from
 // falsely reading as configured when a deploy would in fact fail until re-entry.
+//
+// A blob whose every value is blank is not configured, and neither is one that
+// leaves out a login the earnings collector requires (collectors.Fields): the form
+// sends every box, so a deploy with the boxes empty used to read as "Configured".
 func (a *App) credsConfigured(slug string, creds map[string]string) bool {
-	if len(creds) == 0 {
+	if !hasCredentialValue(creds) {
 		return false
+	}
+	for _, field := range collectors.Fields(slug) {
+		if field.Required && strings.TrimSpace(creds[field.Key]) == "" {
+			return false
+		}
 	}
 	if a.services == nil {
 		return true

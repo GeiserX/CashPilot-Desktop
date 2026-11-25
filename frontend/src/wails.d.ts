@@ -15,6 +15,8 @@ declare module "../wailsjs/go/main/App" {
   export function CheckRuntime(): Promise<RuntimeStatus>;
   // Reads this PC afresh (Windows only; elsewhere facts.supported is false).
   export function HostCheck(): Promise<HostCheckResult>;
+  // Checks the local Docker Desktop pipes without reading the full checklist.
+  export function DockerDesktopEngineReady(): Promise<boolean>;
   // The Docker checklist's actions (Windows only; elsewhere they fail).
   export function StartDockerDesktop(): Promise<void>;
   export function OpenWindowsUpdate(): Promise<void>;
@@ -767,6 +769,7 @@ export interface SessionConsent {
 }
 
 export interface NotificationItem {
+  runtime?: boolean;
   level: string;
   title: string;
   message: string;
@@ -857,8 +860,9 @@ export interface RuntimeStatus {
   nativeAvailable: boolean;
   // The catalog apps the native runtime can run on this machine.
   nativeServices: string[] | null;
+  setupTask?: string;
   kind: string;
-  // Why Docker is or is not ready: running, not-installed, not-running,
+  // Why Docker is or is not ready: running, not-installed, not-running, unreachable,
   // windows-containers, access-denied, wsl-missing, wsl-outdated,
   // virtualization-off or first-start-pending. message says it in plain words.
   reason: string;
@@ -940,6 +944,7 @@ export interface GuideStep {
 export interface HostCheckResult {
   facts: HostFacts;
   runtime: RuntimeStatus;
+  runtimeNotice: NotificationItem | null;
   // The Docker checklist; null outside Windows.
   steps: GuideStep[] | null;
   // This reading ended the guided setup: this PC's own Docker Desktop runs
@@ -1192,8 +1197,9 @@ export interface PreflightFinding {
   message: string;
 }
 
-// PreflightReport is what CashPilot knows before a deploy runs. blocking is always
-// false: the report informs the decision, it never takes it. notChecked names what
+// PreflightReport is what CashPilot knows before a deploy runs. blocking is false
+// unless the service cannot run here at all (a Docker app with no Docker engine);
+// otherwise the report informs the decision, it never takes it. notChecked names what
 // nobody looked at, so a clean report is not mistaken for a guarantee. Mirrors
 // preflight.Report.
 export interface PreflightReport {

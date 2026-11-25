@@ -20,6 +20,12 @@ type deployRecorder struct {
 	specs []runtime.DeploySpec
 }
 
+// Status says an engine answers: this fake takes deploys, and a deploy is refused
+// while no engine answers (runtime_gate.go).
+func (d *deployRecorder) Status(context.Context) runtime.Status {
+	return runtime.Status{Available: true, Reason: runtime.ReasonRunning}
+}
+
 func (d *deployRecorder) Deploy(_ context.Context, spec runtime.DeploySpec, _ func(string)) (runtime.ContainerInfo, error) {
 	d.specs = append(d.specs, spec)
 	return runtime.ContainerInfo{Slug: spec.Slug, ContainerID: "c1", Name: "cashpilot-" + spec.Slug, Status: "running", Image: spec.Service.Docker.Image}, nil

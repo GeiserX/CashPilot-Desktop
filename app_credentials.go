@@ -65,8 +65,18 @@ func (a *App) SaveCredentials(slug string, values map[string]string) error {
 	if err := a.ready(); err != nil {
 		return err
 	}
+	lock := a.deployCredentialsLock(slug)
 	a.credentialsMu.Lock()
 	defer a.credentialsMu.Unlock()
+	if err := a.saveSubmittedCredentials(slug, values); err != nil {
+		return err
+	}
+	lock.explicitSaves++
+	return nil
+}
+
+// saveSubmittedCredentials merges a form submission under credentialsMu.
+func (a *App) saveSubmittedCredentials(slug string, values map[string]string) error {
 	creds, err := a.withSavedSecrets(slug, values, false)
 	if err != nil {
 		return err
@@ -136,16 +146,21 @@ func (a *App) prepareDeployCredentials(slug string, values map[string]string, im
 	return creds, nil
 }
 
-// Merge the submitted settings once the runtime has started a copy. Read the current
-// store again so a blank field cannot overwrite a secret saved during deploy.
-func (a *App) saveLocalDeployCredentials(slug string, values map[string]string) error {
+// Save only after a copy starts. A later explicit save takes precedence over
+// the deploy's settings, including while the deploy waits in the queue.
+func (a *App) saveLocalDeployCredentials(slug string, values map[string]string, lock *deployCredentialsLock, startSaves uint64) (bool, error) {
 	if len(values) == 0 || catalog.IsCustomSlug(slug) {
-		return nil
+		return false, nil
 	}
-	if err := a.SaveCredentials(slug, values); err != nil {
-		return fmt.Errorf("The service deployed, but CashPilot could not save its settings: %w", err)
+	a.credentialsMu.Lock()
+	defer a.credentialsMu.Unlock()
+	if lock.explicitSaves != startSaves {
+		return false, nil
 	}
-	return nil
+	if err := a.saveSubmittedCredentials(slug, values); err != nil {
+		return false, fmt.Errorf("The service deployed, but CashPilot could not save its settings: %w", err)
+	}
+	return true, nil
 }
 
 type savedPartialDeployError struct{ cause error }
