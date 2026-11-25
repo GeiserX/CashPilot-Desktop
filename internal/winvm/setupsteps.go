@@ -232,6 +232,10 @@ exit 0
 // 0x250000F0 (BcdOSLoaderInteger_HypervisorLaunchType) of {current}, whose fixed
 // GUID is {fa926493-6f1c-4193-a414-58f0b2456d1e}; 1 is Auto
 // (https://learn.microsoft.com/en-us/previous-versions/windows/desktop/bcd/bcdosloaderelementtypes).
+// The connection enables the token's privileges (Backup and Restore) before it
+// opens the store, as Microsoft's BCD WMI samples do with
+// {impersonationlevel=Impersonate,(Backup,Restore)}: the scope's options are set
+// before it connects, so they apply.
 // Already Auto ends CodeLaunchAuto and changes nothing. A read that fails goes on
 // to the change. It only ever sets "auto". The change takes effect at the next
 // start, so success is 3010.
@@ -239,7 +243,10 @@ const hypervisorScript = `$bcd = Join-Path ([Environment]::SystemDirectory) 'bcd
 if (-not (Test-Path -LiteralPath $bcd)) { exit %d }
 $launch = $null
 try {
-  $opened = ([wmiclass]'\\.\root\WMI:BcdStore').OpenStore('')
+  $scope = New-Object System.Management.ManagementScope('\\.\root\WMI')
+  $scope.Options.EnablePrivileges = $true
+  $store = New-Object System.Management.ManagementClass($scope, (New-Object System.Management.ManagementPath('BcdStore')), $null)
+  $opened = $store.OpenStore('')
   if ($opened.ReturnValue) {
     $entry = $opened.Store.OpenObject('{fa926493-6f1c-4193-a414-58f0b2456d1e}')
     if ($entry.ReturnValue) {

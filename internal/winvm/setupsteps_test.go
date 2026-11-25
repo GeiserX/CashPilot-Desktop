@@ -340,6 +340,11 @@ func TestHypervisorChangeReadsTheLaunchTypeFirst(t *testing.T) {
 	if read < 0 || skip < 0 || set < 0 || !(read < skip && skip < set) {
 		t.Fatalf("the script does not read the launch type, then stop when it is Auto, before it sets it:\n%s", s)
 	}
+	priv := strings.Index(s, "$scope.Options.EnablePrivileges = $true")
+	open := strings.Index(s, ".OpenStore('')")
+	if priv < 0 || open < 0 || priv > open {
+		t.Errorf("the script does not enable the Backup and Restore privileges before it opens the BCD store:\n%s", s)
+	}
 	if !strings.Contains(s, "{fa926493-6f1c-4193-a414-58f0b2456d1e}") {
 		t.Errorf("the script does not read {current}")
 	}
