@@ -220,7 +220,15 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 
 	// Each account setup added comes out; taking out one that is no longer a
 	// member does nothing.
-	for _, sid := range p.AddedAdminSIDs {
+	confirmed, pending := p.AddedAdminSIDs, p.PendingAdminSIDs
+	if !p.AdminGrantsTracked {
+		pending = append(slices.Clone(pending), confirmed...)
+		confirmed = nil
+	}
+	for _, sid := range pending {
+		res.Left = append(res.Left, "the account "+sid+" (Hyper-V Administrators grant unconfirmed)")
+	}
+	for _, sid := range confirmed {
 		if err := d.HV.RemoveHyperVAdmin(ctx, sid); err != nil {
 			fail("Hyper-V Administrators", err)
 		} else {

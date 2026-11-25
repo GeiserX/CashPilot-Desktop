@@ -778,20 +778,39 @@ func (b *builder) enhancedSession(ctx context.Context) error {
 	return err
 }
 
-// hyperVAdmin adds the user to Hyper-V Administrators every time (DESKTOP-VM
-// §4, Privileges). It records the SID first when the account was not a
-// member, for every account a setup or a Repair adds, so removal takes out
-// each account setup added and no other.
+// hyperVAdmin journals intent before the host call and confirms a grant
+// only when that call reports adding the account.
 func (b *builder) hyperVAdmin(ctx context.Context) error {
-	recorded := slices.ContainsFunc(b.p.AddedAdminSIDs, func(s string) bool { return strings.EqualFold(s, b.sp.UserSID) })
-	if !b.inv.HyperVAdmin && !recorded {
-		b.p.AddedAdminSIDs = append(b.p.AddedAdminSIDs, b.sp.UserSID)
+	if !b.p.AdminGrantsTracked {
+		b.p.PendingAdminSIDs = append(b.p.PendingAdminSIDs, b.p.AddedAdminSIDs...)
+		b.p.AddedAdminSIDs = []string{}
+		b.p.AdminGrantsTracked = true
 		if err := b.save(); err != nil {
 			return err
 		}
 	}
-	_, err := b.HV.AddHyperVAdmin(ctx, b.sp.UserSID)
-	return err
+	if b.inv.HyperVAdmin {
+		return nil
+	}
+	sid := b.sp.UserSID
+	isSID := func(s string) bool { return strings.EqualFold(s, sid) }
+	b.p.AddedAdminSIDs = slices.DeleteFunc(b.p.AddedAdminSIDs, isSID)
+	if !slices.ContainsFunc(b.p.PendingAdminSIDs, isSID) {
+		b.p.PendingAdminSIDs = append(b.p.PendingAdminSIDs, sid)
+	}
+	if err := b.save(); err != nil {
+		return err
+	}
+	added, err := b.HV.AddHyperVAdmin(ctx, sid)
+	if err != nil || !added {
+		return err
+	}
+	b.p.PendingAdminSIDs = slices.DeleteFunc(b.p.PendingAdminSIDs, isSID)
+	if len(b.p.PendingAdminSIDs) == 0 {
+		b.p.PendingAdminSIDs = nil
+	}
+	b.p.AddedAdminSIDs = append(b.p.AddedAdminSIDs, sid)
+	return b.save()
 }
 
 // install starts the VM for Windows Setup, presses the boot key, and waits

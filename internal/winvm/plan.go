@@ -186,10 +186,11 @@ type Plan struct {
 	// of the firewall rule and the guard task it creates. A host object is this
 	// install's only when its ID is recorded here or it carries this token.
 	Owner string `json:"owner"`
-	// AddedAdminSIDs are the accounts setup or a Repair added to Hyper-V
-	// Administrators, each one recorded before it is added. An account that
-	// was a member already is not in the list. Removal takes out only these.
-	AddedAdminSIDs []string `json:"addedAdminSids"`
+	// AdminGrantsTracked distinguishes confirmed grants from older plans,
+	// which wrote AddedAdminSIDs before trying the host operation.
+	AdminGrantsTracked bool     `json:"adminGrantsTracked,omitempty"`
+	AddedAdminSIDs     []string `json:"addedAdminSids"`
+	PendingAdminSIDs   []string `json:"pendingAdminSids,omitempty"`
 
 	GCSBaseline []string  `json:"gcsBaseline"` // GuestCommunicationServices keys at setup, upper case
 	HostBuild   string    `json:"hostBuild"`   // CurrentBuild.UBR, for the re-proof trigger
@@ -358,7 +359,9 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 		p.VMID, p.AdapterID, p.SwitchID = prev.VMID, prev.AdapterID, prev.SwitchID
 		p.CreatedGuardian = prev.CreatedGuardian
 		p.Owner = prev.Owner
+		p.AdminGrantsTracked = prev.AdminGrantsTracked
 		p.AddedAdminSIDs = append([]string{}, prev.AddedAdminSIDs...)
+		p.PendingAdminSIDs = slices.Clone(prev.PendingAdminSIDs)
 		if prev.EnhancedSessionOriginal != nil {
 			v := *prev.EnhancedSessionOriginal
 			p.EnhancedSessionOriginal = &v
@@ -563,11 +566,12 @@ func (p Plan) validate() error {
 	if p.Owner != "" && !ownerRe.MatchString(p.Owner) {
 		return fmt.Errorf("plan: owner %q is not 32 lower-case hex digits", p.Owner)
 	}
-	for i, sid := range p.AddedAdminSIDs {
+	sids := append(slices.Clone(p.AddedAdminSIDs), p.PendingAdminSIDs...)
+	for i, sid := range sids {
 		if !sidRe.MatchString(sid) {
 			return fmt.Errorf("plan: %q is not a Windows account SID", sid)
 		}
-		if slices.ContainsFunc(p.AddedAdminSIDs[:i], func(s string) bool { return strings.EqualFold(s, sid) }) {
+		if slices.ContainsFunc(sids[:i], func(s string) bool { return strings.EqualFold(s, sid) }) {
 			return fmt.Errorf("plan: %q is recorded twice", sid)
 		}
 	}

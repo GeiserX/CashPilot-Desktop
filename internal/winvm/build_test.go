@@ -599,3 +599,45 @@ func TestBuildRepairFromAnotherAccount(t *testing.T) {
 	}
 	diffObjects(t, before, f.Objects())
 }
+
+type independentGrant struct{ *hvfake.HyperV }
+
+func (f independentGrant) AddHyperVAdmin(ctx context.Context, sid string) (bool, error) {
+	f.SetHyperVAdmin(sid, true)
+	return f.HyperV.AddHyperVAdmin(ctx, sid)
+}
+
+func TestRemoveKeepsGrantMadeAfterInventory(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	d.HV = independentGrant{f}
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	remove(t, f, dir)
+	if !slices.Contains(f.Objects(), "hyperv-admin "+testUserSID) {
+		t.Fatal("Remove revoked a grant from another caller")
+	}
+}
+
+func TestRemoveKeepsGrantAfterLostAddReply(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	f.FailNext("AddHyperVAdmin", errAfter)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); !errors.Is(err, errAfter) {
+		t.Fatalf("Build = %v, want the injected error", err)
+	}
+	f.SetHyperVAdmin(testUserSID, true)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	res := remove(t, f, dir)
+	if !slices.Contains(f.Objects(), "hyperv-admin "+testUserSID) {
+		t.Fatal("Remove revoked an unconfirmed grant")
+	}
+	if !strings.Contains(strings.Join(res.Left, "\n"), testUserSID) {
+		t.Fatalf("Remove did not list the unconfirmed grant: %v", res.Left)
+	}
+}
