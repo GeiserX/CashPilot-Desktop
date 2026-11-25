@@ -279,10 +279,11 @@ Write-Doc ([ordered]@{ left = @(Get-VMDvdDrive -VM $vm[0]).Count })
 // running one. Triggers: startup, resume (Power-Troubleshooter event 1), and
 // every 5 minutes from delay seconds on. IgnoreNew keeps one guard at a time.
 const scriptRegisterGuardTask = buildPrelude + `$t = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
+if ($t.Count -gt 1) { throw 'More than one scheduled task matched.' }
 if ($t.Count -eq 1) {
-  if ((Get-Owner ([string]$t[0].Description)) -ne $in.owner) { throw 'A scheduled task with this name was not made by this install.' }
+  if ($t[0].Description -cne ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner)) { throw 'A scheduled task with this name was not made by this install.' }
   if ($t[0].State.ToString() -eq 'Running') {
-    Stop-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName
+    Stop-ScheduledTask -InputObject $t[0] | Out-Null
     for ($i = 0; $i -lt 30; $i++) {
       if ((Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName).State.ToString() -ne 'Running') { break }
       Start-Sleep -Seconds 1
@@ -303,24 +304,23 @@ Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptStartGuardTask starts the guard task.
-const scriptStartGuardTask = buildPrelude + `Start-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName
+const scriptStartGuardTask = buildPrelude + `$t = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
+if ($t.Count -ne 1 -or $t[0].Description -cne ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner)) {
+  throw 'The owned guard task was not found.'
+}
+Start-ScheduledTask -InputObject $t[0] | Out-Null
 Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptUnregisterGuardTask stops and deletes the guard task when it carries
 // the owner tag, then deletes its folder when nothing else is in it.
 const scriptUnregisterGuardTask = buildPrelude + `$t = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
+if ($t.Count -gt 1) { throw 'More than one scheduled task matched.' }
 if ($t.Count -eq 1) {
-  if ((Get-Owner ([string]$t[0].Description)) -ne $in.owner) { throw 'The scheduled task was not made by this install.' }
-  Stop-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue
-  Unregister-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -Confirm:$false
+  if ($t[0].Description -cne ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner)) { throw 'The scheduled task was not made by this install.' }
+  Stop-ScheduledTask -InputObject $t[0] -ErrorAction SilentlyContinue | Out-Null
+  Unregister-ScheduledTask -InputObject $t[0] -Confirm:$false
 }
-try {
-  $svc = New-Object -ComObject Schedule.Service
-  $svc.Connect()
-  $f = $svc.GetFolder($in.taskPath.TrimEnd('\'))
-  if ($f.GetTasks(1).Count -eq 0 -and $f.GetFolders(0).Count -eq 0) { $svc.GetFolder('\').DeleteFolder($in.taskPath.Trim('\'), 0) }
-} catch { }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -900,8 +900,11 @@ func (b psBuilder) RegisterGuardTask(ctx context.Context, n Names, exe, owner st
 }
 
 // StartGuardTask starts the guard task.
-func (b psBuilder) StartGuardTask(ctx context.Context, n Names) error {
-	a, err := taskArg(n, "")
+func (b psBuilder) StartGuardTask(ctx context.Context, n Names, owner string) error {
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
+	a, err := taskArg(n, owner)
 	if err != nil {
 		return err
 	}

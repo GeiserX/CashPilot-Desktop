@@ -81,7 +81,7 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"EjectDVDs", `{"left":0}`, []string{tVMID}, func(b psBuilder) error { return b.EjectDVDs(ctx, tVMID) }},
 		{"RegisterGuardTask", ok, []string{`"exe":"C:\\ProgramData\\CashPilot\\guard\\CashPilot-guard.exe"`, `"delay":900`, `"dir":"C:\\ProgramData\\CashPilot"`},
 			func(b psBuilder) error { return b.RegisterGuardTask(ctx, n, n.GuardExe(), tOwner) }},
-		{"StartGuardTask", ok, []string{`"taskName":"VMGuard"`}, func(b psBuilder) error { return b.StartGuardTask(ctx, n) }},
+		{"StartGuardTask", ok, []string{`"taskName":"VMGuard"`}, func(b psBuilder) error { return b.StartGuardTask(ctx, n, tOwner) }},
 		{"Guest", `{"out":"{\"ok\":true}"}`, []string{`"user":"cpadmin"`, `"arg":"{}"`}, func(b psBuilder) error {
 			var out struct {
 				OK bool `json:"ok"`

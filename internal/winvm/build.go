@@ -252,10 +252,10 @@ type builder struct {
 	vnicIf int
 	h      HostNet
 	own    []netip.Addr
-	// guardOurs is whether the guard task on the host is this install's.
+	// guardOwner is the owner tag of the task setup can safely restart.
 	// setup.ps1 stopped it before the exe ran, so a build that fails starts
 	// it again (see Build).
-	guardOurs bool
+	guardOwner string
 	// booted is whether proveAndBoot reached the guard's boot routine.
 	booted bool
 }
@@ -273,13 +273,13 @@ func Build(ctx context.Context, d BuildDeps, sp SetupParams) (res BuildResult, e
 	// again, so the guard never stays off: on the unproven plan the journal
 	// wrote, the boot routine keeps the VM off the network.
 	defer func() {
-		if err == nil || b.booted || !b.guardOurs {
+		if err == nil || b.booted || b.guardOwner == "" {
 			return
 		}
 		bg := context.WithoutCancel(ctx)
 		gd := GuardDeps{HV: b.HV, Echo: b.Echo, Now: b.Now, Dir: b.Dir, Logf: b.Logf}
 		res.Status = gd.Boot(bg)
-		if serr := b.HV.StartGuardTask(bg, b.n); serr != nil {
+		if serr := b.HV.StartGuardTask(bg, b.n, b.guardOwner); serr != nil {
 			err = errors.Join(err, fmt.Errorf("the guard task did not start: %w", serr))
 		}
 	}()
@@ -368,7 +368,9 @@ func (b *builder) journal(ctx context.Context) error {
 	if err := b.checkOwnership(); err != nil {
 		return err
 	}
-	b.guardOurs = prev != nil && b.inv.Task != nil && b.inv.Task.Owner == prev.Owner
+	if prev != nil && b.inv.Task != nil && b.inv.Task.Owner == prev.Owner {
+		b.guardOwner = prev.Owner
+	}
 	// A Repair changes the fence, so the VM goes off the network before the
 	// first change and stays off until the proof passes and the guard's boot
 	// routine finds an exact match.
@@ -947,7 +949,7 @@ func (b *builder) guardTask(ctx context.Context) error {
 	if err := b.HV.RegisterGuardTask(ctx, b.n, b.Exe, b.p.Owner); err != nil {
 		return err
 	}
-	b.guardOurs = true
+	b.guardOwner = b.p.Owner
 	return nil
 }
 
@@ -1015,7 +1017,7 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	b.booted = true
 	gd := GuardDeps{HV: b.HV, Echo: b.Echo, Now: b.Now, Dir: b.Dir, Logf: b.Logf}
 	res.Status = gd.Boot(context.WithoutCancel(ctx))
-	if err := b.HV.StartGuardTask(context.WithoutCancel(ctx), b.n); err != nil {
+	if err := b.HV.StartGuardTask(context.WithoutCancel(ctx), b.n, b.p.Owner); err != nil {
 		return res, errors.Join(proofErr, fmt.Errorf("the guard task did not start: %w", err))
 	}
 	return res, proofErr

@@ -17,39 +17,81 @@ $ProgressPreference = 'SilentlyContinue'
 trap { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 $guard = Join-Path $DataDir 'guard'
 $copy = Join-Path $guard 'CashPilot-guard.exe'
-# A guard that runs holds the copy open: stop it first (Repair).
-$t = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue)
-if ($t.Count -eq 1 -and $t[0].State.ToString() -eq 'Running') {
-  Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName
-  for ($i = 0; $i -lt 30; $i++) {
-    if ((Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName).State.ToString() -ne 'Running') { break }
-    Start-Sleep -Seconds 1
-  }
-}
-# A new file takes the admin-only rules of the guard folder; overwriting one
-# in place would keep whatever rules it had.
-if (Test-Path -LiteralPath $copy) { Remove-Item -LiteralPath $copy -Force }
-Copy-Item -LiteralPath $Exe -Destination $copy
-if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash -ne $ExeHash.ToUpper()) {
-  Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
-  exit 13
-}
-# The params file lies in a folder the user can write. The exe reads only a
-# copy in the admin-only guard folder whose SHA-256 the app gave, so a file
-# swapped after the app wrote it is never read, and the elevated exe deletes
-# only that copy. The app deletes its own file.
 $pcopy = Join-Path $guard 'setup-params.json'
-if (Test-Path -LiteralPath $pcopy) { Remove-Item -LiteralPath $pcopy -Force }
-Copy-Item -LiteralPath $Params -Destination $pcopy
-if ((Get-FileHash -LiteralPath $pcopy -Algorithm SHA256).Hash -ne $ParamsHash.ToUpper()) {
-  Remove-Item -LiteralPath $pcopy -Force -ErrorAction SilentlyContinue
-  exit 13
+$nonce = [guid]::NewGuid().ToString('N')
+$stagedExe = Join-Path $guard ('.setup-exe.' + $nonce + '.tmp')
+$stagedParams = Join-Path $guard ('.setup-params.' + $nonce + '.tmp')
+$exeBackup = Join-Path $guard ('.guard-backup.' + $nonce + '.tmp')
+$paramsBackup = Join-Path $guard ('.params-backup.' + $nonce + '.tmp')
+$discard = Join-Path $guard ('.guard-discard.' + $nonce + '.tmp')
+$description = ''
+$stopped = $false
+$exePublished = $false
+$paramsPublished = $false
+$launched = $false
+
+function Get-OwnedTask {
+  $t = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue)
+  if ($t.Count -eq 0) { return }
+  if ($t.Count -ne 1 -or -not $description -or $t[0].Description -cne $description) {
+    throw 'The scheduled task was not made by this install.'
+  }
+  $t[0]
 }
+function Publish($from, $to, $backup) {
+  if ([IO.File]::Exists($to)) { [IO.File]::Replace($from, $to, $backup) }
+  else { [IO.File]::Move($from, $to) }
+}
+
 try {
-  # -Wait matters: the exe is a GUI-subsystem binary, so a bare call returns at once.
+  Copy-Item -LiteralPath $Exe -Destination $stagedExe
+  Copy-Item -LiteralPath $Params -Destination $stagedParams
+  if ((Get-FileHash -LiteralPath $stagedExe -Algorithm SHA256).Hash -ne $ExeHash.ToUpper() -or
+      (Get-FileHash -LiteralPath $stagedParams -Algorithm SHA256).Hash -ne $ParamsHash.ToUpper()) { exit 13 }
+
+  $journal = Join-Path $DataDir 'desired.json'
+  if (Test-Path -LiteralPath $journal -PathType Leaf) {
+    $plan = Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json
+    if ($plan.owner -cmatch '^[0-9a-f]{32}$' -and $plan.names.dataDir -eq $DataDir -and
+        $plan.names.guardTask -eq ($TaskPath + $TaskName)) {
+      $description = 'CashPilot Secure VM guard. cashpilot-owner=' + $plan.owner
+    }
+  }
+  $task = Get-OwnedTask
+  if ($task -and $task.State.ToString() -eq 'Running') {
+    Stop-ScheduledTask -InputObject $task | Out-Null
+    $stopped = $true
+    for ($i = 0; $i -lt 30; $i++) {
+      $task = Get-OwnedTask
+      if (-not $task -or $task.State.ToString() -ne 'Running') { break }
+      Start-Sleep -Seconds 1
+    }
+    if ($task -and $task.State.ToString() -eq 'Running') { throw 'The guard task did not stop.' }
+  }
+
+  Publish $stagedParams $pcopy $paramsBackup
+  $paramsPublished = $true
+  Publish $stagedExe $copy $exeBackup
+  $exePublished = $true
+  # -Wait matters for a GUI-subsystem exe.
   $p = Start-Process -FilePath $copy -ArgumentList @('--vm-setup', ('"' + $pcopy + '"')) -Wait -PassThru -WindowStyle Hidden
+  $launched = $true
   $code = $p.ExitCode
 } finally {
-  if (Test-Path -LiteralPath $pcopy) { Remove-Item -LiteralPath $pcopy -Force -ErrorAction SilentlyContinue }
+  if (-not $launched -and $exePublished) {
+    if ([IO.File]::Exists($exeBackup)) { Publish $exeBackup $copy $discard }
+    else { [IO.File]::Delete($copy) }
+  }
+  if ($paramsPublished) {
+    if (-not $launched -and [IO.File]::Exists($paramsBackup)) { Publish $paramsBackup $pcopy $stagedParams }
+    else { [IO.File]::Delete($pcopy) }
+  }
+  if ($stopped -and (-not $launched -or $code -ne 0)) {
+    $task = Get-OwnedTask
+    if ($task -and $task.State.ToString() -ne 'Running') { Start-ScheduledTask -InputObject $task | Out-Null }
+  }
+  foreach ($f in @($stagedExe, $stagedParams, $exeBackup, $paramsBackup, $discard)) {
+    Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+  }
 }
 exit $code

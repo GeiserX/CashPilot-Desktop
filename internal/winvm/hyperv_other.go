@@ -81,7 +81,7 @@ func (unsupported) EjectDVDs(context.Context, string) error              { retur
 func (unsupported) RegisterGuardTask(context.Context, Names, string, string) error {
 	return ErrUnsupported
 }
-func (unsupported) StartGuardTask(context.Context, Names) error { return ErrUnsupported }
+func (unsupported) StartGuardTask(context.Context, Names, string) error { return ErrUnsupported }
 func (unsupported) Guest(context.Context, string, Cred, GuestScript, any, any) error {
 	return ErrUnsupported
 }

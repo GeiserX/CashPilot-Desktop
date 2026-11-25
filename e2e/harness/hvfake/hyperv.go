@@ -1185,7 +1185,7 @@ func (f *HyperV) RegisterGuardTask(_ context.Context, n winvm.Names, exe, owner 
 }
 
 // StartGuardTask starts the guard task.
-func (f *HyperV) StartGuardTask(_ context.Context, n winvm.Names) error {
+func (f *HyperV) StartGuardTask(_ context.Context, n winvm.Names, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("StartGuardTask"); err != nil {
@@ -1194,6 +1194,9 @@ func (f *HyperV) StartGuardTask(_ context.Context, n winvm.Names) error {
 	t, ok := f.tasks[n.GuardTask]
 	if !ok {
 		return fmt.Errorf("fake Hyper-V: no task %s", n.GuardTask)
+	}
+	if err := f.notOwned("task", n.GuardTask, t.owner, owner); err != nil {
+		return err
 	}
 	t.running = true
 	t.starts++

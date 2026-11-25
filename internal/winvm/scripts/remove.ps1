@@ -14,28 +14,31 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 trap { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
 $guard = Join-Path $DataDir 'guard'
-$copy = Join-Path $guard 'CashPilot-guard.exe'
-$t = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue)
-if ($t.Count -eq 1 -and $t[0].State.ToString() -eq 'Running') {
-  Stop-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName
-  for ($i = 0; $i -lt 30; $i++) {
-    if ((Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName).State.ToString() -ne 'Running') { break }
-    Start-Sleep -Seconds 1
-  }
+$copy = Join-Path $guard ('.remove-exe.' + [guid]::NewGuid().ToString('N') + '.exe')
+$journal = Join-Path $DataDir 'desired.json'
+$ownsGuardFiles = $false
+if (Test-Path -LiteralPath $journal -PathType Leaf) {
+  $plan = Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json
+  $ownsGuardFiles = $plan.owner -cmatch '^[0-9a-f]{32}$' -and $plan.names.dataDir -eq $DataDir -and
+    $plan.names.guardTask -eq ($TaskPath + $TaskName)
 }
-# A new file takes the admin-only rules of the guard folder; overwriting one
-# in place would keep whatever rules it had.
-if (Test-Path -LiteralPath $copy) { Remove-Item -LiteralPath $copy -Force }
-Copy-Item -LiteralPath $Exe -Destination $copy
-if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash -ne $ExeHash.ToUpper()) {
+try {
+  Copy-Item -LiteralPath $Exe -Destination $copy
+  if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash -ne $ExeHash.ToUpper()) { exit 13 }
+  # Remove owns the task check and unregisters only a task with its owner tag.
+  $p = Start-Process -FilePath $copy -ArgumentList @('--vm-remove', ('"' + $DataDir + '"')) -Wait -PassThru -WindowStyle Hidden
+  $code = $p.ExitCode
+} finally {
   Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
-  exit 13
 }
-$p = Start-Process -FilePath $copy -ArgumentList @('--vm-remove', ('"' + $DataDir + '"')) -Wait -PassThru -WindowStyle Hidden
-$code = $p.ExitCode
-if ($code -eq 0) {
-  foreach ($f in @($copy, (Join-Path $guard 'remove.ps1'), (Join-Path $guard 'setup.ps1'))) {
-    Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+if ($code -eq 0 -and $ownsGuardFiles -and -not (Test-Path -LiteralPath $journal)) {
+  $tasks = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue)
+  if ($tasks.Count -eq 0) {
+    foreach ($f in @('CashPilot-guard.exe', 'remove.ps1', 'setup.ps1')) {
+      Remove-Item -LiteralPath (Join-Path $guard $f) -Force -ErrorAction SilentlyContinue
+    }
+  } else {
+    Write-Output ('left: ' + (Join-Path $guard 'CashPilot-guard.exe') + ' (a scheduled task still exists)')
   }
   foreach ($d in @($guard, $DataDir)) {
     if ((Test-Path -LiteralPath $d) -and @(Get-ChildItem -LiteralPath $d -Force).Count -eq 0) { Remove-Item -LiteralPath $d -Force }

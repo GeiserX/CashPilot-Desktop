@@ -98,7 +98,7 @@ type Builder interface {
 	// (Power-Troubleshooter 1) and every 5 minutes from ProofLockTTL on, with
 	// IgnoreNew, so a fresh guard never starts in the middle of the proof.
 	RegisterGuardTask(ctx context.Context, n Names, exe, owner string) error
-	StartGuardTask(ctx context.Context, n Names) error
+	StartGuardTask(ctx context.Context, n Names, owner string) error
 	// Guest runs one fixed script over PowerShell Direct with one JSON
 	// argument, and decodes its answer, capped at 64 KB, into out.
 	Guest(ctx context.Context, vmID string, cred Cred, s GuestScript, arg, out any) error
