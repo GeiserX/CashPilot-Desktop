@@ -163,6 +163,20 @@ export function renderJoinedBanner(pairing: PairingStatus, now: number = Date.no
   `;
 }
 
+/**
+ * A computer that reported to a CashPilot before this version is a follower now,
+ * but its "Accept workers" switch stays as it was, so the workers and phones that
+ * report to it keep working until the user points them at the server. Joining
+ * from the app turns the switch off; this line covers the upgrade.
+ */
+function hubStillOn(state: ModeState): string {
+  if (!state.hubOn) return "";
+  const devices = state.hubDevices || [];
+  return `<p class="pairing-line warn" data-hub-still-on>This computer still accepts workers and phones${
+    devices.length ? `: ${devices.map(escapeHtml).join(", ")}` : ""
+  }. Point them at your CashPilot, then turn off <strong>Accept workers (hub mode)</strong> under Environment Variables.</p>`;
+}
+
 /** The screen the Settings card "How this computer runs" shows. */
 export type ModeCardView = "summary" | "confirm-join" | "join" | "confirm-lead" | "left";
 
@@ -215,6 +229,7 @@ export function renderModeCard(state: ModeState, view: ModeCardView, left: Leave
     body = `
       <p><strong>${FOLLOWER_TITLE}.</strong> This computer runs earning apps for your CashPilot at <code>${escapeHtml(server)}</code>, which collects and shows the earnings.</p>
       ${state.pairing ? pairingLine(state.pairing, now) : ""}
+      ${hubStillOn(state)}
       <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="confirm-lead">Switch to ${LEAD_TITLE}</button></div>`;
   } else {
     body = `

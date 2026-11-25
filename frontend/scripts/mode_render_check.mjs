@@ -158,6 +158,10 @@ for (const [code, message] of [
   check("follower summary names the server", text(fs).includes("Join my CashPilot.") && text(fs).includes("http://192.168.1.10:8080"));
   check("follower summary shows the pairing", text(fs).includes("Last heartbeat 1 hour ago") && text(fs).includes("Last try failed: Your CashPilot refused the key."), text(fs));
   check("follower summary offers the switch", fs.includes('data-mode-action="confirm-lead"'));
+  check("follower summary: no hub line when off", !fs.includes("data-hub-still-on"));
+  const upgraded = text(renderModeCard({ ...follower, hubOn: true, hubDevices: ["nas-worker", "<b>x</b>"] }, "summary", null, now));
+  check("follower with the hub on: says it still accepts workers and names them", upgraded.includes("still accepts workers and phones") && upgraded.includes("nas-worker") && upgraded.includes("Accept workers (hub mode)"), upgraded);
+  check("follower with the hub on: names are escaped", !renderModeCard({ ...follower, hubOn: true, hubDevices: ["<b>x</b>"] }, "summary", null, now).includes("<b>x</b>"));
 
   const cl = text(renderModeCard(follower, "confirm-lead", null, now));
   check("lead confirm: earners keep running", cl.includes("keep running"));
