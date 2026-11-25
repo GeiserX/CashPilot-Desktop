@@ -18,6 +18,7 @@ var errUnsupported = errors.New("host checks run only on Windows")
 func (otherProbes) supported() bool { return false }
 
 func (otherProbes) osVersion(context.Context) (func(*HostFacts), error) { return nil, errUnsupported }
+func (otherProbes) processor(context.Context) (func(*HostFacts), error) { return nil, errUnsupported }
 func (otherProbes) cpu(context.Context) (func(*HostFacts), error)       { return nil, errUnsupported }
 func (otherProbes) features(context.Context) (func(*HostFacts), error)  { return nil, errUnsupported }
 func (otherProbes) wsl(context.Context) (func(*HostFacts), error)       { return nil, errUnsupported }

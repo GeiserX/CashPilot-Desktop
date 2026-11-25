@@ -4,6 +4,7 @@ package winvm
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -30,7 +31,10 @@ func TestSnapshotReadsThisPC(t *testing.T) {
 		t.Error("EditionID is empty")
 	}
 	if f.Arch == "unknown" {
-		t.Errorf("Win32_Processor.Architecture was not read (%v)", f.Problems["cpu"])
+		t.Error("the CPU architecture was not read")
+	}
+	if f.Firmware == Unknown || f.SLAT == Unknown {
+		t.Error("the firmware and SLAT flags were not read")
 	}
 	if !strings.HasPrefix(f.UserSID, "S-1-5-") {
 		t.Errorf("user SID %q (%v)", f.UserSID, f.Problems["account"])
@@ -43,5 +47,38 @@ func TestSnapshotReadsThisPC(t *testing.T) {
 	}
 	if f.DockerService == "unknown" {
 		t.Error("the service manager was not read")
+	}
+}
+
+// The CIM scripts must run and parse on real Windows. WMI on a loaded CI runner can
+// take longer than the reading's deadline, which the reading survives by leaving
+// these facts unknown, so this test gives each script its own generous deadline:
+// it checks the script and its parser, not the speed.
+func TestCIMScriptsOnThisPC(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	start := time.Now()
+	apply, err := systemProbes{}.cpu(ctx)
+	if err != nil {
+		t.Fatalf("the CPU script failed after %v: %v", time.Since(start), err)
+	}
+	f := unknownFacts("windows")
+	apply(&f)
+	t.Logf("CPU script took %v: hypervisor %s, arch %s", time.Since(start), f.HypervisorPresent, f.Arch)
+	if f.HypervisorPresent == Unknown || f.Arch == "unknown" {
+		t.Errorf("the CPU script answered without HypervisorPresent or Architecture: %+v", f)
+	}
+
+	start = time.Now()
+	apply, err = systemProbes{}.features(ctx)
+	if err != nil {
+		t.Fatalf("the feature script failed after %v: %v", time.Since(start), err)
+	}
+	f = unknownFacts("windows")
+	apply(&f)
+	raw, _ := json.Marshal(map[string]Tri{"wsl": f.WSLFeature, "vmp": f.VMPlatformFeature})
+	t.Logf("feature script took %v: %s", time.Since(start), raw)
+	if f.WSLFeature == Unknown || f.VMPlatformFeature == Unknown {
+		t.Errorf("the feature script answered without the feature states: %s", raw)
 	}
 }

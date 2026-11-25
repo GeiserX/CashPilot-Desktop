@@ -60,6 +60,18 @@ func (systemProbes) osVersion(context.Context) (func(*HostFacts), error) {
 	}, nil
 }
 
+// processor asks Windows directly. IsWow64Process2 needs Windows 10 1709; on an
+// older build the call fails and CIM's Win32_Processor.Architecture stands.
+func (systemProbes) processor(context.Context) (func(*HostFacts), error) {
+	var process, native uint16
+	if err := windows.IsWow64Process2(windows.CurrentProcess(), &process, &native); err != nil {
+		native = 0
+	}
+	return processorFacts(native,
+		windows.IsProcessorFeaturePresent(windows.PF_VIRT_FIRMWARE_ENABLED),
+		windows.IsProcessorFeaturePresent(windows.PF_SECOND_LEVEL_ADDRESS_TRANSLATION)), nil
+}
+
 // cpu and features run their CIM scripts in an unelevated, hidden PowerShell.
 func (systemProbes) cpu(ctx context.Context) (func(*HostFacts), error) {
 	return runCIM(ctx, cpuScript)

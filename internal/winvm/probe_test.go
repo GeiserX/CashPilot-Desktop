@@ -12,9 +12,9 @@ import (
 // fakeProbes answers each probe from a function; a nil one blocks until the
 // deadline, the way a hung PowerShell would.
 type fakeProbes struct {
-	unsupported                                         bool
-	osV, cimV, featV, wslV, dockerV, accountV, restartV func(*HostFacts)
-	cimErr                                              error
+	unsupported                                                bool
+	osV, procV, cimV, featV, wslV, dockerV, accountV, restartV func(*HostFacts)
+	cimErr                                                     error
 }
 
 func block(ctx context.Context) (func(*HostFacts), error) {
@@ -32,6 +32,12 @@ func answer(ctx context.Context, apply func(*HostFacts), err error) (func(*HostF
 func (p fakeProbes) supported() bool { return !p.unsupported }
 func (p fakeProbes) osVersion(ctx context.Context) (func(*HostFacts), error) {
 	return answer(ctx, p.osV, nil)
+}
+func (p fakeProbes) processor(ctx context.Context) (func(*HostFacts), error) {
+	if p.procV == nil {
+		return func(*HostFacts) {}, nil
+	}
+	return p.procV, nil
 }
 func (p fakeProbes) cpu(ctx context.Context) (func(*HostFacts), error) {
 	return answer(ctx, p.cimV, p.cimErr)
@@ -130,6 +136,40 @@ func TestSnapshotKeepsCPUFactsWhenTheFeatureReadHangs(t *testing.T) {
 	}
 	if f.VMPlatformFeature != Unknown || f.Problems["features"] != "timed out" {
 		t.Errorf("the hung feature read: %s, %v", f.VMPlatformFeature, f.Problems)
+	}
+}
+
+// The native processor read wins over CIM for the CPU, in whichever order the
+// two answers land, and CIM fills in only what the native read lacked.
+func TestNativeProcessorReadWinsOverCIM(t *testing.T) {
+	native := processorFacts(0xAA64, true, true)
+	cim, err := parseCIM([]byte(`{"hypervisorPresent":true,"architecture":9,"firmware":false,"slat":false}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, order := range [][]func(*HostFacts){{native, cim}, {cim, native}} {
+		f := unknownFacts("windows")
+		for _, apply := range order {
+			apply(&f)
+		}
+		if f.Arch != "arm64" || f.Firmware != Yes || f.SLAT != Yes || f.HypervisorPresent != Yes {
+			t.Errorf("CIM overrode the native read: %+v", f)
+		}
+	}
+	// A native call that failed (machine 0) leaves CIM's architecture.
+	f := unknownFacts("windows")
+	processorFacts(0, false, false)(&f)
+	cim(&f)
+	if f.Arch != "x64" {
+		t.Errorf("with no native machine, CIM's architecture was lost: %s", f.Arch)
+	}
+}
+
+func TestMachineArch(t *testing.T) {
+	for m, want := range map[uint16]string{0x8664: "x64", 0xAA64: "arm64", 0x014C: "x86", 0x01C4: "arm", 0: "unknown"} {
+		if got := machineArch(m); got != want {
+			t.Errorf("machineArch(%#x) = %s, want %s", m, got, want)
+		}
 	}
 }
 

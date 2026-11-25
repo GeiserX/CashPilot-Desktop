@@ -24,6 +24,12 @@ type probes interface {
 	// supported is false where nothing can be read.
 	supported() bool
 	osVersion(ctx context.Context) (func(*HostFacts), error)
+	// processor reads the CPU through native calls, at once: the native machine
+	// from IsWow64Process2 and the firmware and SLAT flags from
+	// IsProcessorFeaturePresent. cpu reads the same through CIM, plus
+	// HypervisorPresent, which has no documented native call; WMI can take many
+	// seconds on a busy PC, so the native answer wins where both have one.
+	processor(ctx context.Context) (func(*HostFacts), error)
 	cpu(ctx context.Context) (func(*HostFacts), error)
 	features(ctx context.Context) (func(*HostFacts), error)
 	wsl(ctx context.Context) (func(*HostFacts), error)
@@ -54,13 +60,14 @@ func snapshot(ctx context.Context, p probes, goos string, timeout time.Duration)
 		err   error
 	}
 	all := map[string]func(context.Context) (func(*HostFacts), error){
-		"os":       p.osVersion,
-		"cpu":      p.cpu,
-		"features": p.features,
-		"wsl":      p.wsl,
-		"docker":   p.docker,
-		"account":  p.account,
-		"restart":  p.restart,
+		"os":        p.osVersion,
+		"processor": p.processor,
+		"cpu":       p.cpu,
+		"features":  p.features,
+		"wsl":       p.wsl,
+		"docker":    p.docker,
+		"account":   p.account,
+		"restart":   p.restart,
 	}
 	// Buffered for every probe, so one that answers after the deadline does not
 	// leak its goroutine on the send.
@@ -129,6 +136,35 @@ type cimFacts struct {
 	VMPFeature        *int  `json:"vmpFeature"`
 }
 
+// processorFacts applies what the native processor probe read. It always wins
+// over CIM's answer for the same facts.
+func processorFacts(machine uint16, firmware, slat bool) func(*HostFacts) {
+	return func(f *HostFacts) {
+		if a := machineArch(machine); a != "unknown" {
+			f.Arch = a
+		}
+		f.Firmware = triOf(firmware)
+		f.SLAT = triOf(slat)
+	}
+}
+
+// machineArch maps an IMAGE_FILE_MACHINE value, as IsWow64Process2 reports the
+// native machine, to an arch name. An x64 exe emulated on an Arm PC is told
+// ARM64 here, where GOARCH says amd64.
+func machineArch(machine uint16) string {
+	switch machine {
+	case 0x8664:
+		return "x64"
+	case 0xAA64:
+		return "arm64"
+	case 0x014C:
+		return "x86"
+	case 0x01C4:
+		return "arm"
+	}
+	return "unknown"
+}
+
 // parseCIM decodes cpuScript's or featureScript's output into a function that
 // applies it. It writes only the fields the answer has, so the two answers never
 // undo each other, and a null value stays Unknown.
@@ -141,13 +177,15 @@ func parseCIM(out []byte) (func(*HostFacts), error) {
 		if c.HypervisorPresent != nil {
 			f.HypervisorPresent = triPtr(c.HypervisorPresent)
 		}
-		if c.Firmware != nil {
+		// The native processor probe wins these three; CIM fills them only when it
+		// had no answer.
+		if c.Firmware != nil && f.Firmware == Unknown {
 			f.Firmware = triPtr(c.Firmware)
 		}
-		if c.SLAT != nil {
+		if c.SLAT != nil && f.SLAT == Unknown {
 			f.SLAT = triPtr(c.SLAT)
 		}
-		if c.Architecture != nil {
+		if c.Architecture != nil && f.Arch == "unknown" {
 			f.Arch = archName(*c.Architecture)
 		}
 		if c.WSLFeature != nil {
