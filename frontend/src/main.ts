@@ -2650,6 +2650,10 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
     custom: Boolean(service?.custom),
     wallet: workerId === null && seedFileVar(service) ? readWalletChoice(slug) : undefined,
   };
+  if (settings.wallet) {
+    document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env][type="password"]`)
+      .forEach((input) => { input.value = ""; });
+  }
   const { proxyId, route } = settings;
   const replacesLocal = proxyId === null
     ? state?.deployments?.some((deployment) => deployment.slug === slug)

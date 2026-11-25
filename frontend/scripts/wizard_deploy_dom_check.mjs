@@ -15,8 +15,12 @@ assert.ok(process.env.CHROME_BIN, "Set CHROME_BIN to your Chromium executable.")
 function checkWizard(scenario) {
   const wallet = scenario === "wallet";
   const slug = wallet ? "sia-hostd" : "plain";
-  const env = [{ key: "TOKEN", label: "Token", required: true }];
-  if (wallet) env.push({ key: "SEED", required: true, seedFile: { path: "/wallet/seed" } });
+  const fieldKey = wallet ? "SIA_STORAGE_DIR" : "TOKEN";
+  const env = [{ key: fieldKey, label: wallet ? "Storage directory" : "Token", required: true }];
+  if (wallet) env.push(
+    { key: "HOSTD_API_PASSWORD", label: "Dashboard password", required: true, secret: true },
+    { key: "HOSTD_WALLET_SEED", required: true, seedFile: { path: "/wallet/seed" } },
+  );
   const state = {
     config: { firstRunComplete: true },
     services: [{ slug, name: "Fixture", category: "storage", status: "active", docker: { image: "fixture/node:1", env } }],
@@ -33,14 +37,17 @@ function checkWizard(scenario) {
   window.runtime = { EventsOnMultiple(name, fn) { events[name] = fn; } };
   window.go = { main: { App: new Proxy({
     async GetAppState() { return structuredClone(state); },
-    async GetCredentials() { return { TOKEN: "saved" }; },
+    async GetCredentials() { return { [fieldKey]: "saved" }; },
     async DeployAdminStep() {
       if (!wallet) throw Error("Unexpected local deploy");
       return new Promise(resolve => { finishAdminCheck = resolve; });
     },
     async DeployServiceWallet(slug, values, image, instances, choice) {
       sentChoice = choice;
-      settings = { token: values.TOKEN, image, instances, mode: choice.mode, phraseSent: choice.phrase === "test phrase" };
+      settings = {
+        storage: values.SIA_STORAGE_DIR, image, instances, mode: choice.mode,
+        passwordSent: values.HOSTD_API_PASSWORD === "test password", phraseSent: choice.phrase === "test phrase",
+      };
       return { deployment: { slug } };
     },
     async DeployToWorker() {
@@ -65,23 +72,39 @@ function checkWizard(scenario) {
     await until(() => q('[data-view="catalog"]'), "dashboard");
     click('[data-view="catalog"]');
     click("[data-service]");
-    await until(() => q(deploy) && q("[data-wizard-env]").value === "saved", "setup card");
+    const field = `[data-wizard-env="${fieldKey}"]`;
+    await until(() => q(deploy) && q(field).value === "saved", "setup card");
     if (wallet) {
       click('[data-wallet-mode][value="import"]');
       const phrase = q("[data-wallet-phrase]");
+      const password = q('[data-wizard-env="HOSTD_API_PASSWORD"][type="password"]');
+      q(field).value = "";
       phrase.value = "test phrase";
+      password.value = "test password";
+      click(deploy);
+      await until(() => status() === "missing", "missing storage directory");
+      const rejectedBeforeAdminCheck = !finishAdminCheck && Boolean(q('[data-missing-field="SIA_STORAGE_DIR"]'));
+      const passwordClearedAfterRejection = password.value === "";
+      const phraseClearedAfterRejection = phrase.value === "";
+
+      phrase.value = "test phrase";
+      password.value = "test password";
       q("[data-wizard-image]").value = "fixture/node:2";
       q("[data-wizard-instances]").value = "2";
-      q("[data-wizard-env]").value = "typed";
+      q(field).value = "/fixture/storage";
       click(deploy);
       await until(() => finishAdminCheck, "admin check");
+      const passwordClearedAtClick = password.value === "";
       const phraseClearedAtClick = phrase.value === "";
       click("#wizard-next");
       finishAdminCheck({ needed: false });
       await until(() => settings, "wallet deploy");
       click("#wizard-prev");
       await until(() => status() === "ok", "wallet result");
-      return { settings, phraseClearedAtClick, phraseClearedAtEnd: sentChoice.phrase === "" };
+      return {
+        settings, rejectedBeforeAdminCheck, passwordClearedAfterRejection, phraseClearedAfterRejection,
+        passwordClearedAtClick, phraseClearedAtClick, phraseClearedAtEnd: sentChoice.phrase === "",
+      };
     }
     const where = q("[data-wizard-where]");
     where.value = "23";
@@ -127,7 +150,14 @@ try {
   ], { encoding: "utf8", timeout: 60_000, maxBuffer: 4_000_000, stdio: ["ignore", "pipe", "ignore"] });
   const result = JSON.parse(html.match(/<pre id="result">(.*?)<\/pre>/s)?.[1] || "{}");
   assert.deepEqual(result, scenario === "wallet" ? {
-    settings: { token: "typed", image: "fixture/node:2", instances: 2, mode: "import", phraseSent: true },
+    settings: {
+      storage: "/fixture/storage", image: "fixture/node:2", instances: 2,
+      mode: "import", passwordSent: true, phraseSent: true,
+    },
+    rejectedBeforeAdminCheck: true,
+    passwordClearedAfterRejection: true,
+    phraseClearedAfterRejection: true,
+    passwordClearedAtClick: true,
     phraseClearedAtClick: true,
     phraseClearedAtEnd: true,
   } : { status: "failed", pickerRefused: true, statusAfterRedraw: "failed", workerDeploys: 1 });
