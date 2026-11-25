@@ -175,37 +175,72 @@ type windowCache struct {
 
 var windows = &windowCache{entries: map[string]*windowEntry{}, restarted: map[string]time.Time{}, now: time.Now}
 
+// target is one copy the windowed check reads and may restart. key is its entry in
+// the cache: the slug for a service's first copy, so its verdict and wait stay where
+// they always were, and Copy.key for any other copy.
+type target struct {
+	key   string
+	label string
+	read  func(ctx context.Context, since time.Duration, match *regexp.Regexp, lines int) (string, error)
+	vars  func() map[string]string
+	// restart is nil when the runtime cannot restart this copy.
+	restart func(ctx context.Context, listedAt time.Time, reason string) error
+}
+
+// serviceTarget is a service's first copy, read and restarted through reader.
+func serviceTarget(reader WindowReader, slug string) target {
+	t := target{
+		key:   slug,
+		label: slug,
+		read: func(ctx context.Context, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+			return reader.LogsMatching(ctx, slug, since, match, lines)
+		},
+		vars: func() map[string]string { return reader.SignalVars(slug) },
+	}
+	if r, ok := reader.(Restarter); ok {
+		t.restart = func(ctx context.Context, listedAt time.Time, reason string) error {
+			return r.RestartStuck(ctx, slug, listedAt, reason)
+		}
+	}
+	return t
+}
+
 // hits returns the last verdict for slug and starts a fresh check in the
 // background when that verdict is older than windowEvery. listedAt is when the
 // caller began reading the container state that says slug is up.
 func (c *windowCache) hits(reader WindowReader, slug string, signals []catalog.HealthSignal, listedAt time.Time) []Hit {
+	return c.hitsOf(serviceTarget(reader, slug), signals, listedAt)
+}
+
+// hitsOf is hits for any copy.
+func (c *windowCache) hitsOf(t target, signals []catalog.HealthSignal, listedAt time.Time) []Hit {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e := c.entries[slug]
+	e := c.entries[t.key]
 	if e == nil {
 		e = &windowEntry{}
-		c.entries[slug] = e
+		c.entries[t.key] = e
 	}
 	if !e.running && (e.checked.IsZero() || c.now().Sub(e.checked) >= windowEvery) {
 		e.running = true
 		c.wg.Add(1)
-		go c.refresh(reader, slug, signals, listedAt)
+		go c.refresh(t, signals, listedAt)
 	}
 	return e.hits
 }
 
-// forget drops a service's verdict: it stopped, so what its logs said no longer holds.
-func (c *windowCache) forget(slug string) {
+// forget drops a copy's verdict: it stopped, so what its logs said no longer holds.
+func (c *windowCache) forget(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if e := c.entries[slug]; e != nil && !e.running {
-		delete(c.entries, slug)
+	if e := c.entries[key]; e != nil && !e.running {
+		delete(c.entries, key)
 	}
 }
 
 // refresh judges every windowed signal. A failed read keeps the last verdict, so a
 // runtime blip does not clear a real problem.
-func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalog.HealthSignal, listedAt time.Time) {
+func (c *windowCache) refresh(t target, signals []catalog.HealthSignal, listedAt time.Time) {
 	defer c.wg.Done()
 	ctx, cancel := context.WithTimeout(context.Background(), windowTimeout)
 	defer cancel()
@@ -218,7 +253,7 @@ func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalo
 			continue
 		}
 		since := time.Duration(min(s.WindowHours, 24) * float64(time.Hour))
-		logs, err := reader.LogsMatching(ctx, slug, since, re, 1000)
+		logs, err := t.read(ctx, since, re, 1000)
 		if err != nil {
 			failed = true
 			break
@@ -226,23 +261,21 @@ func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalo
 		if WindowedHit(logs, s) {
 			hits = append(hits, Hit{
 				Pattern: s.Pattern,
-				Means:   fillVars(meansOrDefault(s.Means), reader.SignalVars(slug)),
+				Means:   fillVars(meansOrDefault(s.Means), t.vars()),
 				State:   signalState(s.State),
 			})
 			restartDue = restartDue || s.Restart
 		}
 	}
-	if !failed && restartDue {
-		if r, ok := reader.(Restarter); ok {
-			c.restart(r, slug, listedAt, hits)
-		}
+	if !failed && restartDue && t.restart != nil {
+		c.restart(t, listedAt, hits)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e := c.entries[slug]
+	e := c.entries[t.key]
 	if e == nil {
 		e = &windowEntry{}
-		c.entries[slug] = e
+		c.entries[t.key] = e
 	}
 	e.running = false
 	e.checked = c.now()
@@ -251,12 +284,12 @@ func (c *windowCache) refresh(reader WindowReader, slug string, signals []catalo
 	}
 }
 
-// restart restarts a service stuck in a state its catalog says a restart clears,
-// at most once every restartEvery. The wait starts at the try, so a restart that
-// failed is not tried again before it either.
-func (c *windowCache) restart(r Restarter, slug string, listedAt time.Time, hits []Hit) {
+// restart restarts a copy stuck in a state its catalog says a restart clears, at
+// most once every restartEvery for that copy. The wait starts at the try, so a
+// restart that failed is not tried again before it either.
+func (c *windowCache) restart(t target, listedAt time.Time, hits []Hit) {
 	c.mu.Lock()
-	last, ok := c.restarted[slug]
+	last, ok := c.restarted[t.key]
 	if ok && c.now().Sub(last) < restartEvery {
 		c.mu.Unlock()
 		return
@@ -264,7 +297,7 @@ func (c *windowCache) restart(r Restarter, slug string, listedAt time.Time, hits
 	if c.restarted == nil {
 		c.restarted = map[string]time.Time{}
 	}
-	c.restarted[slug] = c.now()
+	c.restarted[t.key] = c.now()
 	c.mu.Unlock()
 	means := make([]string, 0, len(hits))
 	for _, h := range hits {
@@ -272,8 +305,8 @@ func (c *windowCache) restart(r Restarter, slug string, listedAt time.Time, hits
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), restartTimeout)
 	defer cancel()
-	if err := r.RestartStuck(ctx, slug, listedAt, strings.Join(means, " ")); err != nil {
-		log.Printf("health: could not restart %s by itself: %v", slug, err)
+	if err := t.restart(ctx, listedAt, strings.Join(means, " ")); err != nil {
+		log.Printf("health: could not restart %s by itself: %v", t.label, err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/health"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	_ "modernc.org/sqlite"
 )
@@ -127,5 +128,35 @@ func TestNoDeploymentsMeansNoVerdicts(t *testing.T) {
 	app := producerApp(t)
 	if got := app.producerStates(nil); got != nil {
 		t.Fatalf("no deployments means no verdicts; got %v", got)
+	}
+}
+
+// Every copy besides a service's first reaches the windowed check: copies 2 and up,
+// and copies through a proxy. A proxied copy counts as running only behind a tunnel
+// that runs and has proved its exit, since the owner and the cap stop a copy by
+// stopping its tunnel.
+func TestOtherCopiesListsEveryCopyAndHoldsAProxiedOneToItsTunnel(t *testing.T) {
+	got := otherCopies(
+		map[string][]runtime.ContainerInfo{"proxybase": {{Slug: "proxybase", Instance: 2, Status: "running"}, {Slug: "proxybase", Instance: 3, Status: "exited"}}},
+		[]runtime.ProxiedCopy{
+			{Slug: "proxybase", ProxyID: 4, Status: "running", TunnelStatus: "running", ExitIP: "203.0.113.7"},
+			{Slug: "proxybase", ProxyID: 5, Status: "running", TunnelStatus: "exited"},
+			{Slug: "proxybase", ProxyID: 6, Status: "running", TunnelStatus: "running"},
+		},
+	)
+	want := map[health.Copy]bool{
+		{Slug: "proxybase", Instance: 2, State: "running"}:       true,
+		{Slug: "proxybase", Instance: 3, State: "exited"}:        true,
+		{Slug: "proxybase", ProxyID: 4, State: "running"}:        true,
+		{Slug: "proxybase", ProxyID: 5, State: "tunnel exited"}:  true,
+		{Slug: "proxybase", ProxyID: 6, State: "tunnel running"}: true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("copies = %+v, want %d", got, len(want))
+	}
+	for _, c := range got {
+		if !want[c] {
+			t.Fatalf("unexpected copy %+v in %+v", c, got)
+		}
 	}
 }
