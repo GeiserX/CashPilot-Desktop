@@ -181,3 +181,70 @@ func TestRemoveWithoutAPlanTouchesNothing(t *testing.T) {
 		t.Fatalf("left = %v, want the VM, switch, NAT, rule and task listed", res.Left)
 	}
 }
+
+// TestRemoveKeepsTheGuardianAKeyProtectorUses: a VM with a local key protector
+// and no vTPM (encrypted state only) still needs the guardian.
+func TestRemoveKeepsTheGuardianAKeyProtectorUses(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	other := f.AddForeignVM("someone-elses-vm", false)
+	if err := f.SetKeyProtector(other); err != nil {
+		t.Fatal(err)
+	}
+	res := remove(t, f, dir)
+	if !strings.Contains(strings.Join(f.Objects(), "\n"), "guardian=true") {
+		t.Fatal("Remove deleted the guardian a key-protector VM uses")
+	}
+	if len(res.Kept) != 1 || !strings.Contains(res.Kept[0], other) {
+		t.Fatalf("kept = %v", res.Kept)
+	}
+}
+
+// TestRemoveFindsRenamedObjects: a VM or a switch the user renamed after the
+// build is still this install's by its recorded ID, so Remove takes it out
+// with its disk, and the host ends as it was.
+func TestRemoveFindsRenamedObjects(t *testing.T) {
+	for _, what := range []string{"vm", "switch", "both"} {
+		t.Run(what, func(t *testing.T) {
+			f := hvfake.New()
+			before := f.Objects()
+			dir := build(t, f)
+			p := readPlan(t, dir)
+			if what != "switch" {
+				if err := f.RenameVM(p.VMID, "my renamed vm"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if what != "vm" {
+				if err := f.RenameSwitch(p.SwitchID, "my renamed switch"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res := remove(t, f, dir)
+			diffObjects(t, before, f.Objects())
+			if len(res.Left) != 0 || len(res.Kept) != 0 {
+				t.Fatalf("left %v, kept %v", res.Left, res.Kept)
+			}
+		})
+	}
+}
+
+// TestRemoveDeletesALeftoverProofFolder: a proof killed in the middle of a
+// capture leaves DataDir\proof\pktmon-N; Remove VM still finishes.
+func TestRemoveDeletesALeftoverProofFolder(t *testing.T) {
+	f := hvfake.New()
+	before := f.Objects()
+	dir := build(t, f)
+	left := filepath.Join(dir, "proof", "pktmon-1")
+	if err := os.MkdirAll(left, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(left, "capture.etl"), []byte("etl"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	remove(t, f, dir)
+	diffObjects(t, before, f.Objects())
+	if _, err := os.Stat(filepath.Join(dir, "proof")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the proof folder is still there: %v", err)
+	}
+}

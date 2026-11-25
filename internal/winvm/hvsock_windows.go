@@ -50,7 +50,7 @@ type hvListener struct {
 // every VM) and service, after registering service under
 // GuestCommunicationServices when register is set. Close removes what it
 // registered.
-func openHVListener(_ context.Context, bindVMID, service string, register bool) (HVListener, error) {
+func openHVListener(_ context.Context, bindVMID, service string, register bool, element string) (HVListener, error) {
 	vm, err := windows.GUIDFromString("{" + bindVMID + "}")
 	if err != nil {
 		return nil, err
@@ -70,7 +70,7 @@ func openHVListener(_ context.Context, bindVMID, service string, register bool) 
 			k.Close()
 			return nil, errors.New("the hv_sock test service is already registered")
 		}
-		err = k.SetStringValue("ElementName", "CashPilot Secure VM proof")
+		err = k.SetStringValue("ElementName", element)
 		k.Close()
 		l.key = name
 		if err != nil {

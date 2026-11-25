@@ -52,12 +52,22 @@ function Get-GroupSids([string]$sid) {
 }
 `
 
-// scriptInventory lists every object with one of our names, the owner token
+// scriptInventory lists every object with one of our names, and the VM and the
+// switch with the recorded IDs whatever their names are now, the owner token
 // each carries, and the host facts setup and Remove VM check.
-const scriptInventory = buildPrelude + `$o = [ordered]@{}
-$o.vms = @(Get-VM | Where-Object { $_.Name -eq $in.vm } | ForEach-Object { [ordered]@{ id = $_.Id.ToString(); owner = (Get-Owner ([string]$_.Notes)) } })
-$o.vtpmVms = @(Get-VM | Where-Object { try { (Get-VMSecurity -VM $_).TpmEnabled } catch { $false } } | ForEach-Object { $_.Id.ToString() })
-$o.switches = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch } | ForEach-Object {
+const scriptInventory = buildPrelude + `function Test-GuardianUser($v) {
+  if ($v.Generation -ne 2) { return $false }
+  try {
+    $s = Get-VMSecurity -VM $v
+    if ($s.TpmEnabled -or $s.EncryptStateAndVmMigrationTraffic -or $s.Shielded) { return $true }
+    # A VM with no key protector holds the 4-byte empty one.
+    return (@(Get-VMKeyProtector -VM $v).Count -gt 4)
+  } catch { return $true }
+}
+$o = [ordered]@{}
+$o.vms = @(Get-VM | Where-Object { ($_.Name -eq $in.vm) -or ($in.vmId -and ($_.Id.ToString() -eq $in.vmId)) } | ForEach-Object { [ordered]@{ id = $_.Id.ToString(); owner = (Get-Owner ([string]$_.Notes)) } })
+$o.guardianVms = @(Get-VM | Where-Object { Test-GuardianUser $_ } | ForEach-Object { $_.Id.ToString() })
+$o.switches = @(Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -or ($in.switchId -and ($_.Id.ToString() -eq $in.switchId)) } | ForEach-Object {
   $sw = $_
   $ports = @(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw.Id) } | ForEach-Object { $_.VMId.ToString() } | Select-Object -Unique)
   [ordered]@{ id = $sw.Id.ToString(); owner = (Get-Owner ([string]$sw.Notes)); ports = @($ports) }
@@ -80,17 +90,34 @@ $o.freeRam = [uint64](Get-CimInstance -ClassName Win32_OperatingSystem).FreePhys
 Write-Doc $o
 `
 
-// scriptEnsureSwitch creates the Internal switch with the owner tag, or takes
-// the one there when it carries the tag. It gives the host vNIC its static MAC
-// and the gateway address, and returns the switch ID and the vNIC's ifIndex.
-const scriptEnsureSwitch = buildPrelude + `$sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
-if ($sw.Count -gt 1) { throw 'More than one switch has this name.' }
+// scriptEnsureSwitch takes the switch with the recorded ID (renamed or not),
+// else the one with our name when it carries the tag, else creates the
+// Internal switch with the tag in the same call, so no switch of ours is ever
+// left without it. It gives the host vNIC its static MAC and the gateway
+// address, and returns the switch ID and the vNIC's ifIndex.
+const scriptEnsureSwitch = buildPrelude + `$sw = @()
+if ($in.switchId) { $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId }) }
+if ($sw.Count -eq 0) {
+  $sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
+  if ($sw.Count -gt 1) { throw 'More than one switch has this name.' }
+  if ($sw.Count -eq 1 -and (Get-Owner ([string]$sw[0].Notes)) -ne $in.owner) { throw 'A switch with this name exists and was not made by this install.' }
+}
 if ($sw.Count -eq 1) {
-  if ((Get-Owner ([string]$sw[0].Notes)) -ne $in.owner) { throw 'A switch with this name exists and was not made by this install.' }
   $sw = $sw[0]
+  if ($sw.Name -ne $in.switch) {
+    # Renamed by someone: the guard connects by our name, so take it back.
+    if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'Another switch has this name.' }
+    Rename-VMSwitch -VMSwitch $sw -NewName $in.switch
+  }
 } else {
-  $sw = New-VMSwitch -Name $in.switch -SwitchType Internal
-  Set-VMSwitch -VMSwitch $sw -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
+  $before = @(Get-VMSwitch | ForEach-Object { $_.Id.ToString() })
+  try {
+    $sw = New-VMSwitch -Name $in.switch -SwitchType Internal -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
+  } catch {
+    # A switch this call made without its tag would block every rerun.
+    Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -and ($before -notcontains $_.Id.ToString()) } | Remove-VMSwitch -Force -ErrorAction SilentlyContinue
+    throw
+  }
 }
 $mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
 if ($mo.Count -ne 1) { throw 'The switch does not have exactly one host vNIC.' }
@@ -131,20 +158,40 @@ const scriptCreateVM = buildPrelude + `if (@(Get-VM | Where-Object { $_.Name -eq
 $disk = Join-Path $in.vhdxDir ($in.vm + '.vhdx')
 if (Test-Path -LiteralPath $disk) { throw 'The VM disk already exists.' }
 New-Item -ItemType Directory -Force -Path $in.vhdxDir | Out-Null
-$vm = New-VM -Name $in.vm -Generation 2 -MemoryStartupBytes ([uint64]$in.memory) -NewVHDPath $disk -NewVHDSizeBytes ([uint64]$in.diskBytes) -Path $in.vhdxDir
-Set-VM -VM $vm -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner) -ProcessorCount ([int]$in.procCount) -StaticMemory -CheckpointType Disabled -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
-Set-VMProcessor -VM $vm -Maximum ([int]$in.procMax) -RelativeWeight ([int]$in.procWeight) -ExposeVirtualizationExtensions $false
-$a = @(Get-VMNetworkAdapter -VM $vm)
-if ($a.Count -ne 1) { throw 'The new VM does not have exactly one network adapter.' }
-if ($a[0].SwitchName) { Disconnect-VMNetworkAdapter -VMNetworkAdapter $a[0] }
-Set-VMNetworkAdapter -VMNetworkAdapter $a[0] -StaticMacAddress $in.mac -DhcpGuard On -RouterGuard On -MacAddressSpoofing Off -DeviceNaming Off
-Set-VMFirmware -VM $vm -EnableSecureBoot On -SecureBootTemplate MicrosoftWindows
-Set-VMKeyProtector -VM $vm -NewLocalKeyProtector
-Enable-VMTPM -VM $vm
-Add-VMDvdDrive -VM $vm -Path $in.iso
-Add-VMDvdDrive -VM $vm -Path $in.answer
-$dvd = @(Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $in.iso })
-Set-VMFirmware -VM $vm -FirstBootDevice $dvd[0]
+$before = @(Get-VM | ForEach-Object { $_.Id.ToString() })
+$vm = $null
+try {
+  $vm = New-VM -Name $in.vm -Generation 2 -MemoryStartupBytes ([uint64]$in.memory) -NewVHDPath $disk -NewVHDSizeBytes ([uint64]$in.diskBytes) -Path $in.vhdxDir
+  # The owner tag first, in its own call: it is what makes a rerun adopt the VM.
+  Set-VM -VM $vm -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
+  Set-VM -VM $vm -ProcessorCount ([int]$in.procCount) -StaticMemory -CheckpointType Disabled -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
+  Set-VMProcessor -VM $vm -Maximum ([int]$in.procMax) -RelativeWeight ([int]$in.procWeight) -ExposeVirtualizationExtensions $false
+  $a = @(Get-VMNetworkAdapter -VM $vm)
+  if ($a.Count -ne 1) { throw 'The new VM does not have exactly one network adapter.' }
+  if ($a[0].SwitchName) { Disconnect-VMNetworkAdapter -VMNetworkAdapter $a[0] }
+  Set-VMNetworkAdapter -VMNetworkAdapter $a[0] -StaticMacAddress $in.mac -DhcpGuard On -RouterGuard On -MacAddressSpoofing Off -DeviceNaming Off
+  Set-VMFirmware -VM $vm -EnableSecureBoot On -SecureBootTemplate MicrosoftWindows
+  Set-VMKeyProtector -VM $vm -NewLocalKeyProtector
+  Enable-VMTPM -VM $vm
+  Add-VMDvdDrive -VM $vm -Path $in.iso
+  Add-VMDvdDrive -VM $vm -Path $in.answer
+  $dvd = @(Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $in.iso })
+  Set-VMFirmware -VM $vm -FirstBootDevice $dvd[0]
+} catch {
+  # Take back what this call made, so the rerun starts clean: the new VM (by
+  # the IDs that were not there before), its disk and its empty folders.
+  Get-VM | Where-Object { ($_.Name -eq $in.vm) -and ($before -notcontains $_.Id.ToString()) } | ForEach-Object {
+    Stop-VM -VM $_ -TurnOff -Force -ErrorAction SilentlyContinue
+    Remove-VM -VM $_ -Force -ErrorAction SilentlyContinue
+  }
+  Remove-Item -LiteralPath $disk -Force -ErrorAction SilentlyContinue
+  $folder = Join-Path $in.vhdxDir $in.vm
+  if (Test-Path -LiteralPath $folder) {
+    Get-ChildItem -LiteralPath $folder -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending | Where-Object { @(Get-ChildItem -LiteralPath $_.FullName -Force).Count -eq 0 } | Remove-Item -Force -ErrorAction SilentlyContinue
+    if (@(Get-ChildItem -LiteralPath $folder -Force).Count -eq 0) { Remove-Item -LiteralPath $folder -Force -ErrorAction SilentlyContinue }
+  }
+  throw
+}
 Write-Doc ([ordered]@{ vmId = $vm.Id.ToString(); adapterId = ($a[0].Id -split '\\')[-1] })
 `
 
@@ -353,6 +400,33 @@ const scriptRemoveHyperVAdmin = buildPrelude + `if ((Get-GroupSids 'S-1-5-32-578
 Write-Doc ([ordered]@{ ok = $true })
 `
 
+// scriptClearProof removes what a killed proof left: the canary rules of the
+// proof group (by group and description), the hv_sock test key (by its
+// ElementName), and a pktmon session whose file lies under DataDir\proof\.
+const scriptClearProof = buildPrelude + `$done = @()
+foreach ($r in @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { [string]$_.Description -eq $in.desc })) {
+  Remove-NetFirewallRule -Name $r.Name
+  $done += 'the proof firewall rule ' + [string]$r.Name
+}
+$k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices'
+if (Test-Path -LiteralPath $k) {
+  foreach ($c in @(Get-ChildItem -LiteralPath $k)) {
+    if ([string]$c.GetValue('ElementName') -eq $in.element) {
+      Remove-Item -LiteralPath $c.PSPath -Recurse -Force
+      $done += 'the proof hv_sock key ' + [string]$c.PSChildName
+    }
+  }
+}
+$s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
+if ($s.Count -eq 1 -and ([string]$s[0].LocalFilePath).StartsWith($in.dir, [StringComparison]::OrdinalIgnoreCase)) {
+  $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
+  & $pm stop | Out-Null
+  & $pm filter remove | Out-Null
+  $done += 'the proof pktmon session'
+}
+Write-Doc ([ordered]@{ cleared = @($done) })
+`
+
 // scriptGuest runs one guest script over PowerShell Direct as the given
 // account. The script text and its JSON argument travel as data: the guest
 // side parses the argument into $a and dot-sources the fixed text, so $a is
@@ -392,6 +466,7 @@ var buildScripts = map[string]string{
 	"RemoveFirewall":      scriptRemoveFirewall,
 	"RemoveGuardian":      scriptRemoveGuardian,
 	"RemoveHyperVAdmin":   scriptRemoveHyperVAdmin,
+	"ClearProof":          scriptClearProof,
 	"Guest":               scriptGuest,
 }
 
@@ -486,7 +561,7 @@ type ownedWire struct {
 
 type inventoryWire struct {
 	VMs          []ownedWire `json:"vms"`
-	VTPMVMs      []string    `json:"vtpmVms"`
+	GuardianVMs  []string    `json:"guardianVms"`
 	Switches     []ownedWire `json:"switches"`
 	NATs         []natWire   `json:"nats"`
 	Firewall     []ownedWire `json:"firewall"`
@@ -517,10 +592,10 @@ func ownedFrom(w ownedWire, guid bool) (OwnedObject, error) {
 	return o, nil
 }
 
-// Inventory lists every object with our names, the owner token each carries,
-// and the host facts. The guard reads it to find the VM of an interrupted
-// setup.
-func (h *psHost) Inventory(ctx context.Context, n Names, sid string) (Inventory, error) {
+// Inventory lists every object with our names, and the VM and switch with the
+// known IDs, the owner token each carries, and the host facts. The guard reads
+// it to find the VM of an interrupted setup.
+func (h *psHost) Inventory(ctx context.Context, n Names, known KnownIDs, sid string) (Inventory, error) {
 	na, err := namesArg(n)
 	if err != nil {
 		return Inventory{}, err
@@ -528,10 +603,17 @@ func (h *psHost) Inventory(ctx context.Context, n Names, sid string) (Inventory,
 	if sid != "" && !sidRe.MatchString(sid) {
 		return Inventory{}, fmt.Errorf("%q is not a SID", sid)
 	}
+	for what, id := range map[string]string{"VM ID": known.VM, "switch ID": known.Switch} {
+		if id != "" && !guidRe.MatchString(id) {
+			return Inventory{}, fmt.Errorf("%s %q is not a GUID", what, id)
+		}
+	}
 	arg := struct {
 		nameArg
-		SID string `json:"sid"`
-	}{na, sid}
+		SID      string `json:"sid"`
+		VMID     string `json:"vmId"`
+		SwitchID string `json:"switchId"`
+	}{na, sid, known.VM, known.Switch}
 	var w inventoryWire
 	if err := h.call(ctx, scriptInventory, arg, &w); err != nil {
 		return Inventory{}, err
@@ -569,11 +651,11 @@ func (h *psHost) Inventory(ctx context.Context, n Names, sid string) (Inventory,
 		}
 		inv.Task = &o
 	}
-	for _, id := range w.VTPMVMs {
+	for _, id := range w.GuardianVMs {
 		if !guidRe.MatchString(id) {
 			return Inventory{}, fmt.Errorf("VM ID %q is not a GUID", id)
 		}
-		inv.VTPMVMs = append(inv.VTPMVMs, id)
+		inv.GuardianVMs = append(inv.GuardianVMs, id)
 	}
 	for _, x := range w.NATs {
 		p, err := netip.ParsePrefix(x.Prefix)
@@ -586,7 +668,10 @@ func (h *psHost) Inventory(ctx context.Context, n Names, sid string) (Inventory,
 }
 
 // EnsureSwitch creates or checks the switch and its host vNIC.
-func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC string) (string, int, error) {
+func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID string) (string, int, error) {
+	if switchID != "" && !guidRe.MatchString(switchID) {
+		return "", 0, fmt.Errorf("switch ID %q is not a GUID", switchID)
+	}
 	if err := n.Validate(); err != nil {
 		return "", 0, err
 	}
@@ -602,11 +687,12 @@ func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, 
 	}
 	arg := struct {
 		Switch    string `json:"switch"`
+		SwitchID  string `json:"switchId"`
 		Owner     string `json:"owner"`
 		MAC       string `json:"mac"`
 		Gateway   string `json:"gateway"`
 		PrefixLen int    `json:"prefixLen"`
-	}{n.Switch, owner, mac, sub.Addr().Next().String(), sub.Bits()}
+	}{n.Switch, switchID, owner, mac, sub.Addr().Next().String(), sub.Bits()}
 	var w struct {
 		SwitchID string `json:"switchId"`
 		IfIndex  int    `json:"ifIndex"`
@@ -950,4 +1036,23 @@ func (b psBuilder) RemoveHyperVAdmin(ctx context.Context, sid string) error {
 		return fmt.Errorf("%q is not a SID", sid)
 	}
 	return b.ok(ctx, scriptRemoveHyperVAdmin, map[string]string{"sid": sid})
+}
+
+// ClearProof removes what a killed proof left on the host.
+func (b psBuilder) ClearProof(ctx context.Context, n Names) ([]string, error) {
+	if err := n.Validate(); err != nil {
+		return nil, err
+	}
+	if err := checkWinPath("data folder", n.DataDir); err != nil {
+		return nil, err
+	}
+	var w struct {
+		Cleared []string `json:"cleared"`
+	}
+	arg := map[string]string{"group": n.FirewallGroup + proofGroupSuffix, "desc": proofCanaryDesc,
+		"element": ProofElementName(n), "dir": strings.TrimRight(n.DataDir, `\`) + `\proof\`}
+	if err := b.call(ctx, scriptClearProof, arg, &w); err != nil {
+		return nil, err
+	}
+	return w.Cleared, nil
 }

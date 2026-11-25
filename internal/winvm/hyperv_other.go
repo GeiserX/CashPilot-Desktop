@@ -47,10 +47,11 @@ func (unsupported) RemoveDeny(context.Context, string, []netip.Prefix) error {
 	return ErrUnsupported
 }
 
-func (unsupported) Inventory(context.Context, Names, string) (Inventory, error) {
+func (unsupported) ClearProof(context.Context, Names) ([]string, error) { return nil, ErrUnsupported }
+func (unsupported) Inventory(context.Context, Names, KnownIDs, string) (Inventory, error) {
 	return Inventory{}, ErrUnsupported
 }
-func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, string) (string, int, error) {
+func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, string, string) (string, int, error) {
 	return "", 0, ErrUnsupported
 }
 func (unsupported) EnsureNAT(context.Context, Names, netip.Prefix) error { return ErrUnsupported }

@@ -36,18 +36,18 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		want   []string // fragments of the JSON argument
 		call   func(b psBuilder) error
 	}{
-		{"Inventory", `{"vms":[{"id":"` + tVMID + `","owner":"` + tOwner + `"}],"vtpmVms":["` + tVMID + `"],"switches":[{"id":"` + tSwitchID + `","owner":"","ports":["` + tVMID + `"]}],"nats":[{"name":"CashPilot-VM","prefix":"172.31.250.0/29"},{"name":"v6","prefix":"fd00::/64"}],"firewall":[{"id":"CashPilotVM-block-in","owner":"` + tOwner + `"}],"task":{"id":"\\CashPilot\\VMGuard","owner":"` + tOwner + `"},"guardian":true,"hypervAdmin":false,"enhancedSession":true,"gcs":["0000aaaa-facb-11e6-bd58-64006a7986d3"],"hostBuild":"26100.1","installedRam":34359738368,"freeRam":17179869184}`,
-			[]string{`"vm":"CashPilot-VM"`, `"taskPath":"\\CashPilot\\"`, `"taskName":"VMGuard"`, `"sid":"S-1-5-21-1-2-3-1001"`},
+		{"Inventory", `{"vms":[{"id":"` + tVMID + `","owner":"` + tOwner + `"}],"guardianVms":["` + tVMID + `"],"switches":[{"id":"` + tSwitchID + `","owner":"","ports":["` + tVMID + `"]}],"nats":[{"name":"CashPilot-VM","prefix":"172.31.250.0/29"},{"name":"v6","prefix":"fd00::/64"}],"firewall":[{"id":"CashPilotVM-block-in","owner":"` + tOwner + `"}],"task":{"id":"\\CashPilot\\VMGuard","owner":"` + tOwner + `"},"guardian":true,"hypervAdmin":false,"enhancedSession":true,"gcs":["0000aaaa-facb-11e6-bd58-64006a7986d3"],"hostBuild":"26100.1","installedRam":34359738368,"freeRam":17179869184}`,
+			[]string{`"vm":"CashPilot-VM"`, `"taskPath":"\\CashPilot\\"`, `"taskName":"VMGuard"`, `"sid":"S-1-5-21-1-2-3-1001"`, `"vmId":"` + tVMID + `"`, `"switchId":"` + tSwitchID + `"`},
 			func(b psBuilder) error {
-				inv, err := b.Inventory(ctx, n, "S-1-5-21-1-2-3-1001")
-				if err == nil && (len(inv.VMs) != 1 || inv.Task == nil || len(inv.NATs) != 2 || len(inv.Switches[0].Ports) != 1) {
+				inv, err := b.Inventory(ctx, n, KnownIDs{VM: tVMID, Switch: tSwitchID}, "S-1-5-21-1-2-3-1001")
+				if err == nil && (len(inv.VMs) != 1 || inv.Task == nil || len(inv.NATs) != 2 || len(inv.Switches[0].Ports) != 1 || len(inv.GuardianVMs) != 1) {
 					t.Errorf("inventory %+v", inv)
 				}
 				return err
 			}},
-		{"EnsureSwitch", `{"switchId":"` + tSwitchID + `","ifIndex":20}`, []string{`"owner":"` + tOwner + `"`, `"mac":"00155D000002"`, `"gateway":"172.31.250.1"`, `"prefixLen":29`},
+		{"EnsureSwitch", `{"switchId":"` + tSwitchID + `","ifIndex":20}`, []string{`"owner":"` + tOwner + `"`, `"mac":"00155D000002"`, `"gateway":"172.31.250.1"`, `"prefixLen":29`, `"switchId":"` + tSwitchID + `"`},
 			func(b psBuilder) error {
-				_, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00-15-5D-00-00-02")
+				_, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00-15-5D-00-00-02", tSwitchID)
 				return err
 			}},
 		{"EnsureNAT", ok, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { return b.EnsureNAT(ctx, n, sub) }},
@@ -99,6 +99,14 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"RemoveFirewall", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.RemoveFirewall(ctx, n, tOwner) }},
 		{"RemoveGuardian", ok, []string{`{}`}, func(b psBuilder) error { return b.RemoveGuardian(ctx) }},
 		{"RemoveHyperVAdmin", ok, []string{`"sid":"S-1-5-21-1-2-3-1001"`}, func(b psBuilder) error { return b.RemoveHyperVAdmin(ctx, "S-1-5-21-1-2-3-1001") }},
+		{"ClearProof", `{"cleared":["the proof pktmon session"]}`, []string{`"group":"CashPilotVM-proof"`, `"element":"CashPilot Secure VM proof CashPilot-VM"`, `"dir":"C:\\ProgramData\\CashPilot\\proof\\"`, `"desc":"CashPilot Secure VM proof canary"`},
+			func(b psBuilder) error {
+				got, err := b.ClearProof(ctx, n)
+				if err == nil && len(got) != 1 {
+					t.Errorf("cleared %v", got)
+				}
+				return err
+			}},
 	}
 	seen := map[string]bool{}
 	for _, c := range cases {
@@ -135,7 +143,7 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 	p.Owner = tOwner
 	cases := map[string]func(b psBuilder) error{
 		"owner not hex": func(b psBuilder) error {
-			_, _, err := b.EnsureSwitch(ctx, n, sub, "x'; Remove-VM *", "00155D000002")
+			_, _, err := b.EnsureSwitch(ctx, n, sub, "x'; Remove-VM *", "00155D000002", "")
 			return err
 		},
 		"lab names elsewhere": func(b psBuilder) error {
@@ -168,6 +176,14 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 			return b.RemoveFirewall(ctx, n, "")
 		},
 		"unregister no owner": func(b psBuilder) error { return b.UnregisterGuardTask(ctx, n, "") },
+		"inventory VM ID not a GUID": func(b psBuilder) error {
+			_, err := b.Inventory(ctx, n, KnownIDs{VM: "*"}, "")
+			return err
+		},
+		"ensure switch ID not a GUID": func(b psBuilder) error {
+			_, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00155D000002", "x' -or 1")
+			return err
+		},
 	}
 	for name, call := range cases {
 		b, r := newBuildSeam()

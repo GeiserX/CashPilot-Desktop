@@ -33,10 +33,12 @@ type Reader interface {
 	// size and the adapter's byte counter. It never turns on resource metering,
 	// which can add Meter ACLs.
 	Usage(ctx context.Context, vmID string) (Usage, error)
-	// Inventory lists every host object that carries one of our names, with
-	// the owner token each carries, and the host facts build and remove check.
-	// The guard reads it only to find the VM of an interrupted setup.
-	Inventory(ctx context.Context, n Names, userSID string) (Inventory, error)
+	// Inventory lists every host object that carries one of our names, plus
+	// the VM and the switch whose IDs are given even when someone renamed
+	// them, with the owner token each carries, and the host facts build and
+	// remove check. The guard reads it only to find the VM of an interrupted
+	// setup.
+	Inventory(ctx context.Context, n Names, known KnownIDs, userSID string) (Inventory, error)
 }
 
 // Guarder is what the SYSTEM guard needs: the reads, and the few writes it may
@@ -65,9 +67,10 @@ type Builder interface {
 	Guarder
 	// EnsureSwitch creates the Internal switch with the owner token in its
 	// Notes, gives its host vNIC vnicMAC and the gateway address of sub, or
-	// checks those on the switch already there. It refuses a switch with our
-	// name that does not carry the token.
-	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC string) (switchID string, vnicIfIndex int, err error)
+	// checks those on the switch already there: the one with the recorded
+	// switchID (renamed or not), else the one with our name. It refuses a
+	// switch with our name that does not carry the token.
+	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID string) (id string, vnicIfIndex int, err error)
 	EnsureNAT(ctx context.Context, n Names, sub netip.Prefix) error
 	// CreateVM creates the VM off, with p.Owner in its Notes, the plan's
 	// shape, one disconnected adapter with its static MAC and port guards
@@ -112,17 +115,33 @@ type Builder interface {
 	RemoveFirewall(ctx context.Context, n Names, owner string) error
 	RemoveGuardian(ctx context.Context) error
 	RemoveHyperVAdmin(ctx context.Context, sid string) error
+	// ClearProof removes what a proof that was killed can leave behind: the
+	// canary rules of the instance's proof firewall group, the hv_sock test
+	// key named ProofElementName(n), and a pktmon session that writes under
+	// DataDir\proof. It lists what it removed. Setup runs it before it lists
+	// the host, so a stale key never enters the GCS baseline; Remove VM runs
+	// it too.
+	ClearProof(ctx context.Context, n Names) (cleared []string, err error)
+}
+
+// KnownIDs are the VM and switch IDs desired.json records, "" for none.
+// Inventory lists those objects by ID too, so a VM or a switch the user renamed
+// is still found, kept and removed.
+type KnownIDs struct {
+	VM, Switch string
 }
 
 // Inventory is what Builder.Inventory reads.
 type Inventory struct {
-	VMs      []OwnedObject `json:"vms"`      // every VM named Names.VM
-	Switches []OwnedObject `json:"switches"` // every switch named Names.Switch
+	VMs      []OwnedObject `json:"vms"`      // every VM named Names.VM, and the one with KnownIDs.VM
+	Switches []OwnedObject `json:"switches"` // every switch named Names.Switch, and the one with KnownIDs.Switch
 	NATs     []LiveNAT     `json:"nats"`     // every NetNat on the host
 	Firewall []OwnedObject `json:"firewall"` // every rule of Names.FirewallGroup, by rule name
 	Task     *OwnedObject  `json:"task"`     // the guard task, nil when absent
 	Guardian bool          `json:"guardian"` // the UntrustedGuardian exists
-	VTPMVMs  []string      `json:"vtpmVms"`  // IDs of every VM with a vTPM
+	// GuardianVMs are the IDs of every VM that may need the guardian: a vTPM,
+	// a key protector, encrypted state, or one Hyper-V could not read.
+	GuardianVMs []string `json:"guardianVms"`
 	// HyperVAdmin is whether the user SID is in Hyper-V Administrators.
 	HyperVAdmin  bool     `json:"hypervAdmin"`
 	Enhanced     bool     `json:"enhancedSession"`

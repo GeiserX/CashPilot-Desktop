@@ -202,8 +202,8 @@ func (w *failAfter) hit(m string) bool {
 
 var errAfter = errors.New("the call worked but its answer was lost")
 
-func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.Prefix, owner, mac string) (string, int, error) {
-	id, ifx, err := w.HyperV.EnsureSwitch(ctx, n, sub, owner, mac)
+func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.Prefix, owner, mac, switchID string) (string, int, error) {
+	id, ifx, err := w.HyperV.EnsureSwitch(ctx, n, sub, owner, mac, switchID)
 	if err == nil && w.hit("EnsureSwitch") {
 		return "", 0, errAfter
 	}
@@ -299,3 +299,157 @@ func TestBuildResumesAfterEachStep(t *testing.T) {
 // fakePassword is a made-up guest password for tests, built at run time so
 // that no password-shaped literal sits in the source.
 func fakePassword(tag string) string { return tag + "-Pass-" + "0123456789" }
+
+// TestBuildRepairFindsRenamedObjects: after the user renames the VM and the
+// switch, Repair keeps both by their recorded IDs (it makes no second VM or
+// switch), gives the switch our name back for the guard, and connects.
+func TestBuildRepairFindsRenamedObjects(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	first := readPlan(t, dir)
+	if err := f.RenameVM(first.VMID, "my renamed vm"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RenameSwitch(first.SwitchID, "my renamed switch"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := winvm.Build(context.Background(), d, setupParams())
+	if err != nil {
+		t.Fatalf("Repair after a rename: %v", err)
+	}
+	second := readPlan(t, dir)
+	if second.VMID != first.VMID || second.SwitchID != first.SwitchID {
+		t.Fatalf("Repair lost the recorded IDs: VM %s -> %s, switch %s -> %s", first.VMID, second.VMID, first.SwitchID, second.SwitchID)
+	}
+	vms, sws := 0, 0
+	for _, o := range f.Objects() {
+		if strings.HasPrefix(o, "vm ") {
+			vms++
+		}
+		if strings.HasPrefix(o, "switch ") {
+			sws++
+			if !strings.Contains(o, " "+first.Names.Switch+" ") {
+				t.Errorf("the switch did not get its name back: %s", o)
+			}
+		}
+	}
+	if vms != 1 || sws != 1 {
+		t.Fatalf("%d VMs and %d switches after Repair:\n%s", vms, sws, strings.Join(f.Objects(), "\n"))
+	}
+	if res.Status.Network != winvm.NetConnected {
+		t.Fatalf("after Repair the guard says %q: %s", res.Status.Network, res.Status.Reason)
+	}
+}
+
+// TestBuildRepairClearsProofLeftovers: a proof killed in the middle leaves a
+// canary rule, its hv_sock test key and a running pktmon session. Repair
+// clears them before it lists the host, so the key stays out of the GCS
+// baseline and the new proof can capture; Remove VM then ends with the host as
+// it was.
+func TestBuildRepairClearsProofLeftovers(t *testing.T) {
+	f := hvfake.New()
+	before := f.Objects()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	base := readPlan(t, dir).GCSBaseline
+	f.LeaveProofLeftovers(winvm.ProductNames())
+	if err := os.MkdirAll(filepath.Join(dir, "proof", "pktmon-3"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatalf("Repair with proof leftovers: %v", err)
+	}
+	if got := readPlan(t, dir).GCSBaseline; !slices.Equal(got, base) {
+		t.Fatalf("GCS baseline %v, want %v: a stale proof key entered it", got, base)
+	}
+	objs := strings.Join(f.Objects(), "\n")
+	if strings.Contains(objs, "-proof ") || strings.Contains(objs, "pktmon=true") {
+		t.Fatalf("proof leftovers survived Repair:\n%s", objs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "proof", "pktmon-3")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the old capture folder survived Repair: %v", err)
+	}
+	f.LeaveProofLeftovers(winvm.ProductNames())
+	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Objects(); !slices.Equal(got, before) {
+		t.Fatalf("after Remove the host differs:\n%s\n---\n%s", strings.Join(before, "\n"), strings.Join(got, "\n"))
+	}
+}
+
+// TestBuildRepairClosesHolesAStoppedProofLeft: a proof stopped before it
+// closed its holes leaves an Allow row and the L3 rule off. Repair takes the
+// Allow away and turns L3 back on before its own proof, which refuses a fence
+// with a hole.
+func TestBuildRepairClosesHolesAStoppedProofLeft(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	p := readPlan(t, dir)
+	ctx := context.Background()
+	if err := f.AddAllow(ctx, p.VMID, netip.PrefixFrom(f.LANIP, 32)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.SetL3(ctx, p.Names, false); err != nil {
+		t.Fatal(err)
+	}
+	res, err := winvm.Build(ctx, d, setupParams())
+	if err != nil {
+		t.Fatalf("Repair with an Allow row and L3 off: %v", err)
+	}
+	for _, o := range f.Objects() {
+		if strings.Contains(o, "Allow") || (strings.HasPrefix(o, "rule ") && strings.Contains(o, "enabled=false")) {
+			t.Fatalf("a hole survived Repair: %s", o)
+		}
+	}
+	if res.Status.Network != winvm.NetConnected {
+		t.Fatalf("after Repair the guard says %q: %s", res.Status.Network, res.Status.Reason)
+	}
+}
+
+// TestBuildWithAFailedProof: a fence that ignores its Deny rows fails the
+// proof. Build returns ErrProofFailed, desired.json stays unproven, the VM
+// stays off the network, and the guard task still runs to keep it off.
+func TestBuildWithAFailedProof(t *testing.T) {
+	f := hvfake.New()
+	f.SetMutant(true)
+	dir := t.TempDir()
+	res, err := winvm.Build(context.Background(), buildDeps(t, f, dir), setupParams())
+	if !errors.Is(err, winvm.ErrProofFailed) {
+		t.Fatalf("Build = %v, want ErrProofFailed", err)
+	}
+	p := readPlan(t, dir)
+	if !p.ProvedAt.IsZero() {
+		t.Fatalf("ProvedAt = %v after a failed proof", p.ProvedAt)
+	}
+	if res.Status.Network == winvm.NetConnected {
+		t.Fatalf("the guard connected after a failed proof: %s", res.Status.Reason)
+	}
+	for _, o := range f.Objects() {
+		if strings.HasPrefix(o, "vm ") {
+			live, err := f.ReadLive(context.Background(), p.Names, p.VMID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, a := range live.Adapters {
+				if a.SwitchID != "" {
+					t.Fatalf("the VM is on switch %s after a failed proof", a.SwitchID)
+				}
+			}
+		}
+	}
+	if !f.TaskRunning(p.Names.GuardTask) {
+		t.Fatal("the guard task does not run after a failed proof")
+	}
+}

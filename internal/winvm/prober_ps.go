@@ -24,6 +24,14 @@ import (
 // proofGroupSuffix names the firewall group of the canaries' Allow rules.
 const proofGroupSuffix = "-proof"
 
+// proofCanaryDesc is the description of every canary rule, so ClearProof
+// removes only those in the instance's proof group.
+const proofCanaryDesc = "CashPilot Secure VM proof canary"
+
+// ProofElementName is the ElementName of the proof's hv_sock test key for
+// instance n, so ClearProof finds a key a killed proof left, and only that.
+func ProofElementName(n Names) string { return "CashPilot Secure VM proof " + n.VM }
+
 // scriptSetL3 turns the rules of our group on or off.
 const scriptSetL3 = buildPrelude + `$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)
 if ($rs.Count -eq 0) { throw 'The group has no rule.' }
@@ -59,7 +67,7 @@ Write-Doc ([ordered]@{ addrs = @($ll) })
 // this program only.
 const scriptCanaryRule = buildPrelude + `$name = $in.group + '-' + [string]$in.port
 Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-if ($in.add) { New-NetFirewallRule -Name $name -DisplayName $name -Group $in.group -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$in.port) -Program $in.program -Description 'CashPilot Secure VM proof canary' | Out-Null }
+if ($in.add) { New-NetFirewallRule -Name $name -DisplayName $name -Group $in.group -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$in.port) -Program $in.program -Description $in.desc | Out-Null }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -304,7 +312,7 @@ func (p *psProber) Canary(ctx context.Context, ip netip.Addr, port uint16, token
 	}
 	group := p.n.FirewallGroup + proofGroupSuffix
 	rule := func(ctx context.Context, add bool) error {
-		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "port": port, "program": p.program, "add": add})
+		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "port": port, "program": p.program, "add": add, "desc": proofCanaryDesc})
 	}
 	if err := rule(ctx, true); err != nil {
 		return nil, err

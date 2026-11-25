@@ -332,10 +332,33 @@ func (b *builder) journal(ctx context.Context) error {
 		return fmt.Errorf("desired.json belongs to %q, not %q", prev.Names.VM, b.n.VM)
 	}
 	b.prev = prev
-	if b.inv, err = b.HV.Inventory(ctx, b.n, b.sp.UserSID); err != nil {
+	var known KnownIDs
+	if prev != nil {
+		known = KnownIDs{VM: prev.VMID, Switch: prev.SwitchID}
+	}
+	if b.inv, err = b.HV.Inventory(ctx, b.n, known, b.sp.UserSID); err != nil {
 		return err
 	}
 	if err := b.checkOwnership(); err != nil {
+		return err
+	}
+	// A proof killed in the middle can leave a canary rule, its hv_sock test
+	// key and a pktmon session. Clear them, and list the host again when
+	// something went, so the key never enters the GCS baseline and the next
+	// capture can start.
+	cleared, err := b.HV.ClearProof(ctx, b.n)
+	if err != nil {
+		return fmt.Errorf("could not clear what an earlier proof left: %w", err)
+	}
+	for _, c := range cleared {
+		b.logf("setup: removed %s, left by an earlier proof", c)
+	}
+	if len(cleared) > 0 {
+		if b.inv, err = b.HV.Inventory(ctx, b.n, known, b.sp.UserSID); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(b.Dir, proofDir)); err != nil {
 		return err
 	}
 	o := b.opts
@@ -504,7 +527,7 @@ func (b *builder) hostChecks(ctx context.Context) error {
 }
 
 func (b *builder) ensureSwitch(ctx context.Context) error {
-	id, ifx, err := b.HV.EnsureSwitch(ctx, b.n, b.p.Subnet, b.p.Owner, b.p.HostVNICMAC)
+	id, ifx, err := b.HV.EnsureSwitch(ctx, b.n, b.p.Subnet, b.p.Owner, b.p.HostVNICMAC, b.p.SwitchID)
 	if err != nil {
 		return err
 	}

@@ -472,7 +472,8 @@ func RemoveProofLock(dir string) error {
 }
 
 // Run runs every step, closing what each one opened before the next starts.
-// It takes the proof lock first and releases it last, and connects and starts
+// It takes the proof lock first, renews it before each step, and releases it
+// last, and connects and starts
 // the VM under the lock. A deferred restore closes every hole still open, in
 // reverse order, even when ctx ends; Run then checks that the fence is back:
 // no Allow row, L3 on, ms_tcpip6 off. It returns the results so far with any
@@ -504,6 +505,12 @@ func (r Runner) Run(ctx context.Context, p Plan, h HostNet, t ProofTargets) (rs 
 		}
 		if s.ID == StepIPv6StackOff || s.ID == StepVMBusGreen {
 			continue // runs inside its red step, on the same holes
+		}
+		// A whole proof can take close to ProofLockTTL on a slow host, and
+		// the guard task's 5-minute trigger starts then. Taking the lock again
+		// before each step keeps the guard back until the last one ends.
+		if err := WriteProofLock(r.Dir, r.now()); err != nil {
+			return rs, fmt.Errorf("could not renew the proof lock: %w", err)
 		}
 		got, err := run.step(ctx, s)
 		rs = append(rs, got...)

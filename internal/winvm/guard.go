@@ -228,7 +228,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	failClosed := func(until string, plan *Plan) {
 		vmID := gs.VMID
 		if vmID == "" && plan != nil {
-			inv, err := d.HV.Inventory(ctx, plan.Names, "")
+			inv, err := d.HV.Inventory(ctx, plan.Names, KnownIDs{}, "")
 			if err == nil {
 				vmID = adopt(inv.VMs, "", plan.Owner)
 				if vmID == "" && len(inv.VMs) == 0 {

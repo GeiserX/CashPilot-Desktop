@@ -54,6 +54,7 @@ type HyperV struct {
 	addrs    []netip.Prefix
 	network  winvm.CurrentNetwork
 	gcs      []string
+	gcsName  map[string]string // ElementName of a GCS key, by key
 	build    string
 	enhanced bool
 	guardian bool
@@ -97,6 +98,7 @@ type fakeSwitch struct {
 
 type fakeRule struct {
 	name, owner string
+	desc        string
 	enabled     bool
 	ifIndex     int
 }
@@ -110,7 +112,7 @@ type fakeTask struct {
 type fakeVM struct {
 	id, name, state, owner            string
 	vhdx                              string
-	vtpm                              bool
+	vtpm, keyProtector                bool
 	answer                            []byte // the answer file of the ISO it boots with, applied at the first start
 	accounts                          map[string]string
 	panther                           bool // Windows Setup left its copies of the answer file
@@ -446,7 +448,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 		return winvm.Plan{}, err
 	}
 	p.Owner = owner
-	if p.SwitchID, _, err = f.EnsureSwitch(ctx, n, sub, owner, p.HostVNICMAC); err != nil {
+	if p.SwitchID, _, err = f.EnsureSwitch(ctx, n, sub, owner, p.HostVNICMAC, ""); err != nil {
 		return winvm.Plan{}, err
 	}
 	if err := f.EnsureNAT(ctx, n, sub); err != nil {
@@ -791,8 +793,9 @@ func (f *HyperV) notOwned(what, name, have, want string) error {
 	return nil
 }
 
-// Inventory lists every object with one of our names, and the host facts.
-func (f *HyperV) Inventory(_ context.Context, n winvm.Names, sid string) (winvm.Inventory, error) {
+// Inventory lists every object with one of our names, the VM and switch with
+// the known IDs whatever their names, and the host facts.
+func (f *HyperV) Inventory(_ context.Context, n winvm.Names, known winvm.KnownIDs, sid string) (winvm.Inventory, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Inventory"); err != nil {
@@ -809,15 +812,15 @@ func (f *HyperV) Inventory(_ context.Context, n winvm.Names, sid string) (winvm.
 		FreeRAM:      f.FreeRAM,
 	}
 	for _, vm := range f.sortedVMs() {
-		if vm.name == n.VM {
+		if vm.name == n.VM || strings.EqualFold(vm.id, known.VM) {
 			inv.VMs = append(inv.VMs, winvm.OwnedObject{ID: vm.id, Owner: vm.owner})
 		}
-		if vm.vtpm {
-			inv.VTPMVMs = append(inv.VTPMVMs, vm.id)
+		if vm.vtpm || vm.keyProtector {
+			inv.GuardianVMs = append(inv.GuardianVMs, vm.id)
 		}
 	}
 	for _, s := range f.sortedSwitches() {
-		if s.name != n.Switch {
+		if s.name != n.Switch && !strings.EqualFold(s.id, known.Switch) {
 			continue
 		}
 		o := winvm.OwnedObject{ID: s.id, Owner: s.owner}
@@ -868,13 +871,26 @@ func sortedKeys[V any](m map[string]V) []string {
 }
 
 // EnsureSwitch creates the Internal switch with its host vNIC, every binding
-// on, the gateway address and the on-link route, or returns the one that
-// exists when it carries the owner token.
-func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix, owner, vnicMAC string) (string, int, error) {
+// on, the gateway address and the on-link route, or returns the one with the
+// recorded ID (renamed or not), or the one with our name when it carries the
+// owner token.
+func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix, owner, vnicMAC, switchID string) (string, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EnsureSwitch"); err != nil {
 		return "", 0, err
+	}
+	if s, ok := f.switches[strings.ToLower(switchID)]; ok && switchID != "" {
+		if s.vnicMAC != vnicMAC || s.subnet != sub {
+			return "", 0, fmt.Errorf("fake Hyper-V: the switch %s has another vNIC MAC or subnet", switchID)
+		}
+		if s.name != n.Switch {
+			if other, ok := f.switchByName(n.Switch); ok && other != s {
+				return "", 0, fmt.Errorf("fake Hyper-V: another switch is named %q", n.Switch)
+			}
+			s.name = n.Switch // the guard connects by this name
+		}
+		return s.id, s.vnicIf, nil
 	}
 	if s, ok := f.switchByName(n.Switch); ok {
 		if err := f.notOwned("switch", n.Switch, s.owner, owner); err != nil {
@@ -1405,6 +1421,99 @@ func (f *HyperV) AddForeignVM(name string, vtpm bool) string {
 	return vm.id
 }
 
+// SetKeyProtector gives a VM a local key protector without a vTPM, as a VM
+// with only encrypted state has. It is not a seam call.
+func (f *HyperV) SetKeyProtector(vmID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	vm.keyProtector = true
+	return nil
+}
+
+// RenameVM renames a VM, as a user in Hyper-V Manager could. It is not a seam
+// call.
+func (f *HyperV) RenameVM(vmID, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	vm.name = name
+	return nil
+}
+
+// RenameSwitch renames a switch, as a user in Hyper-V Manager could. It is not
+// a seam call.
+func (f *HyperV) RenameSwitch(switchID, name string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.switches[strings.ToLower(switchID)]
+	if !ok {
+		return fmt.Errorf("fake Hyper-V: no switch %s", switchID)
+	}
+	s.name = name
+	return nil
+}
+
+// LeaveProofLeftovers leaves what a proof killed in the middle leaves: a
+// canary rule in the instance's proof group, the hv_sock test key, and a
+// pktmon session still running. It is not a seam call.
+func (f *HyperV) LeaveProofLeftovers(n winvm.Names) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	g := n.FirewallGroup + "-proof"
+	f.firewall[g] = append(f.firewall[g], &fakeRule{name: g + "-40001", desc: "CashPilot Secure VM proof canary", enabled: true})
+	key := "12345678-1234-1234-1234-123456789ABC"
+	f.gcs = winvm.GCSBaseline(append(slices.Clone(f.gcs), key))
+	if f.gcsName == nil {
+		f.gcsName = map[string]string{}
+	}
+	f.gcsName[key] = winvm.ProofElementName(n)
+	f.capture = &fakeCapture{f: f, from: len(f.records), leftover: n.VM}
+}
+
+// ClearProof removes what a killed proof of instance n left.
+func (f *HyperV) ClearProof(_ context.Context, n winvm.Names) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.enter("ClearProof"); err != nil {
+		return nil, err
+	}
+	var done []string
+	g := n.FirewallGroup + "-proof"
+	keep := f.firewall[g][:0]
+	for _, r := range f.firewall[g] {
+		if r.desc == "CashPilot Secure VM proof canary" {
+			done = append(done, "the proof firewall rule "+r.name)
+			continue
+		}
+		keep = append(keep, r)
+	}
+	if len(keep) == 0 {
+		delete(f.firewall, g)
+	} else {
+		f.firewall[g] = keep
+	}
+	f.gcs = slices.DeleteFunc(f.gcs, func(k string) bool {
+		if f.gcsName[k] == winvm.ProofElementName(n) {
+			done = append(done, "the proof hv_sock key "+k)
+			delete(f.gcsName, k)
+			return true
+		}
+		return false
+	})
+	if f.capture != nil && f.capture.leftover == n.VM {
+		f.capture = nil
+		done = append(done, "the proof pktmon session")
+	}
+	return done, nil
+}
+
 // AddForeignNAT adds a NetNat this install did not make.
 func (f *HyperV) AddForeignNAT(name string, p netip.Prefix) {
 	f.mu.Lock()
@@ -1476,7 +1585,7 @@ func (f *HyperV) Objects() []string {
 	for _, sid := range sortedKeys(f.admins) {
 		out = append(out, "hyperv-admin "+sid)
 	}
-	out = append(out, fmt.Sprintf("guardian=%v enhancedSession=%v gcs=%v", f.guardian, f.enhanced, f.gcs))
+	out = append(out, fmt.Sprintf("guardian=%v enhancedSession=%v gcs=%v pktmon=%v", f.guardian, f.enhanced, f.gcs, f.capture != nil))
 	return out
 }
 
@@ -1519,6 +1628,8 @@ type fakeCapture struct {
 	f       *HyperV
 	filters []winvm.PktFilter
 	from    int
+	// leftover is the instance whose killed proof left this session running.
+	leftover string
 }
 
 // Stop ends the session and returns the records that match its filters.

@@ -213,3 +213,42 @@ func TestProofRestoresAfterEachFailure(t *testing.T) {
 		}
 	}
 }
+
+// lockSpy records when the proof lock was taken each time a step starts a
+// capture.
+type lockSpy struct {
+	*hvfake.HyperV
+	dir   string
+	taken []time.Time
+}
+
+func (s *lockSpy) Pktmon(ctx context.Context, fl []winvm.PktFilter) (winvm.Capture, error) {
+	if at, err := winvm.ReadProofLock(s.dir); err == nil {
+		s.taken = append(s.taken, at)
+	}
+	return s.HyperV.Pktmon(ctx, fl)
+}
+
+// TestProofRenewsItsLock: on a slow host a proof takes minutes, so the lock is
+// taken again before each step and never ages past ProofLockTTL while the
+// proof runs.
+func TestProofRenewsItsLock(t *testing.T) {
+	f, p, r, h, tg := proofRig(t)
+	now := buildNow
+	r.Clock = func() time.Time { now = now.Add(2 * time.Minute); return now }
+	spy := &lockSpy{HyperV: f, dir: r.Dir}
+	r.P = spy
+	if _, err := r.Run(context.Background(), p, h, tg); err != nil {
+		t.Fatal(err)
+	}
+	if len(spy.taken) < 2 {
+		t.Fatalf("saw the lock %d times", len(spy.taken))
+	}
+	first, last := spy.taken[0], spy.taken[len(spy.taken)-1]
+	if !last.After(first) {
+		t.Fatalf("the lock was never renewed: first %v, last %v", first, last)
+	}
+	if !winvm.ProofLockValid(last, now) {
+		t.Fatalf("the lock of the last step (%v) does not hold at %v", last, now)
+	}
+}

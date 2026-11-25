@@ -33,10 +33,14 @@ type RemoveResult struct {
 	Left    []string `json:"left"`
 }
 
+// proofDir holds pktmon's capture files while a proof runs. A proof that was
+// killed leaves files in it, so it is removed with what it holds.
+const proofDir = "proof"
+
 // dataFiles are the files in DataDir that setup and the guard write, deleted
 // by exact name. desired.json is not in the list: it goes last, on its own.
 var dataFiles = []string{
-	installFile, answerISOFile, StateFile, StatusFile, LockFile, ProofFile, PrefsFile, "proof", "setup.log",
+	installFile, answerISOFile, StateFile, StatusFile, LockFile, ProofFile, PrefsFile, proofDir, "setup.log",
 	"guard.log", "guard.log.1",
 }
 
@@ -52,7 +56,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 	}
 	p, err := loadPlanFile(filepath.Join(d.Dir, PlanFile))
 	if errors.Is(err, fs.ErrNotExist) {
-		inv, ierr := d.HV.Inventory(ctx, n, "")
+		inv, ierr := d.HV.Inventory(ctx, n, KnownIDs{}, "")
 		if ierr != nil {
 			return res, ierr
 		}
@@ -65,7 +69,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 	if p.Names != n {
 		return res, fmt.Errorf("desired.json belongs to %q, not %q", p.Names.VM, n.VM)
 	}
-	inv, err := d.HV.Inventory(ctx, n, p.AddedAdminSID)
+	inv, err := d.HV.Inventory(ctx, n, KnownIDs{VM: p.VMID, Switch: p.SwitchID}, p.AddedAdminSID)
 	if err != nil {
 		return res, err
 	}
@@ -86,6 +90,12 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 		} else {
 			res.Left = append(res.Left, "the scheduled task "+t.ID+" (not made by this install)")
 		}
+	}
+
+	if cleared, err := d.HV.ClearProof(ctx, n); err != nil {
+		fail("what an earlier proof left", err)
+	} else {
+		res.Removed = append(res.Removed, cleared...)
 	}
 
 	ourVM := ""
@@ -172,7 +182,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 
 	if p.CreatedGuardian && inv.Guardian {
 		var others []string
-		for _, id := range inv.VTPMVMs {
+		for _, id := range inv.GuardianVMs {
 			if !strings.EqualFold(id, ourVM) {
 				others = append(others, id)
 			}
@@ -198,10 +208,18 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 		return res, fmt.Errorf("Remove VM did not finish; run it again: %w", errors.Join(errs...))
 	}
 	for _, f := range dataFiles {
-		if err := os.Remove(filepath.Join(d.Dir, f)); err == nil {
-			res.Removed = append(res.Removed, f)
-		} else if !errors.Is(err, fs.ErrNotExist) {
+		path := filepath.Join(d.Dir, f)
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		rm := os.Remove
+		if f == proofDir {
+			rm = os.RemoveAll
+		}
+		if err := rm(path); err != nil {
 			fail(f, err)
+		} else {
+			res.Removed = append(res.Removed, f)
 		}
 	}
 	if len(errs) > 0 {
