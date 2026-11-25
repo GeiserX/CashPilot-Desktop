@@ -152,6 +152,9 @@ type ProxyProvider interface {
 	RemoveProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) ([]string, error)
 	RemoveAllProxied(ctx context.Context, slug string) ([]string, error)
 	ProxiedStatus(ctx context.Context) ([]ProxiedCopy, error)
+	// ReadProxied is ProxiedStatus that changes nothing: it starts no earner and
+	// sweeps no tunnel, for readers that only report (the heartbeat, the usage graphs).
+	ReadProxied(ctx context.Context) ([]ProxiedCopy, error)
 	TestProxy(ctx context.Context, spec ProxySpec, ownIP string) (Exit, error)
 }
 
@@ -1186,7 +1189,16 @@ func sweepTestTunnels(ctx context.Context, d tunnelDocker, now time.Time) {
 }
 
 func proxiedStatus(ctx context.Context, d tunnelDocker) ([]ProxiedCopy, error) {
-	sweepTestTunnels(ctx, d, time.Now())
+	return readProxied(ctx, d, true)
+}
+
+// readProxied lists the proxied copies. With act it also sweeps stale test tunnels
+// and starts or restarts an earner whose tunnel is ready (earnerAction); without
+// it, it only reads.
+func readProxied(ctx context.Context, d tunnelDocker, act bool) ([]ProxiedCopy, error) {
+	if act {
+		sweepTestTunnels(ctx, d, time.Now())
+	}
 	proxiedSwap.Lock()
 	defer proxiedSwap.Unlock()
 	found, err := d.list(ctx, LabelManaged+"=true", LabelProxy)
@@ -1258,7 +1270,10 @@ func proxiedStatus(ctx context.Context, d tunnelDocker) ([]ProxiedCopy, error) {
 			if ins, ok, err := d.inspect(ctx, earner.ID); err == nil && ok {
 				earnerIns = ins
 			}
-			action := earnerAction(cp.Status, startedAt(earnerIns), cp.TunnelStatus, startedAt(tunnelIns), cp.ExitIP != "")
+			action := ""
+			if act {
+				action = earnerAction(cp.Status, startedAt(earnerIns), cp.TunnelStatus, startedAt(tunnelIns), cp.ExitIP != "")
+			}
 			var actErr error
 			switch action {
 			case "restart":
@@ -1349,6 +1364,11 @@ func (p *DockerProvider) RemoveAllProxied(ctx context.Context, slug string) ([]s
 // earner whose tunnel is ready but which is not running in it (see earnerAction).
 func (p *DockerProvider) ProxiedStatus(ctx context.Context) ([]ProxiedCopy, error) {
 	return withTunnelDocker(&p.fence, func(d tunnelDocker) ([]ProxiedCopy, error) { return proxiedStatus(ctx, d) })
+}
+
+// ReadProxied is ProxiedStatus without its actions: it only reads.
+func (p *DockerProvider) ReadProxied(ctx context.Context) ([]ProxiedCopy, error) {
+	return withTunnelDocker(&p.fence, func(d tunnelDocker) ([]ProxiedCopy, error) { return readProxied(ctx, d, false) })
 }
 
 // TestProxy starts a throwaway tunnel, reads the exit IP it gets, and removes it on

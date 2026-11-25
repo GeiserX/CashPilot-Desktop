@@ -287,17 +287,42 @@ func TestStallCheckLeavesTheCopiesToAServerThatJudgesThem(t *testing.T) {
 	}
 }
 
+// A short outage of the server does not hand the copies back to the local check:
+// it waits out the grace (stallServerGrace), so the owner does not get each alert
+// twice, once from here and once from the server, for every blip.
+func TestStallCheckWaitsOutAShortServerOutage(t *testing.T) {
+	a := newStallApp(t)
+	url := judgedBy(t, a, stallNow.Add(-10*time.Minute), true)
+	if got := a.stallServer(stallNow); got != url {
+		t.Fatalf("stallServer = %q after a 10-minute outage, want %q", got, url)
+	}
+	sent(t, a, "honeygain", 1, stallNow, 12, 30_000_000)
+	sent(t, a, "honeygain", 2, stallNow, 12, 0)
+	a.checkStalls(listing("honeygain", 2, nil), stallNow)
+	if got := a.currentStalls(); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none during a short outage", got)
+	}
+}
+
 // The local check keeps judging whenever the server may not: a release older than
-// v2.10.0, no answer for three heartbeats, heartbeats more than an hour apart (the
-// server counts no traffic across that gap), or not joined at all.
+// v2.10.0, no answer for over 15 minutes (or three heartbeats, if longer),
+// heartbeats an hour or more apart (the server counts no traffic across a gap
+// longer than an hour, and a real gap is a little over the interval), or not
+// joined at all.
 func TestStallCheckRunsWhenTheServerMayNotJudge(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		setup func(t *testing.T, a *App)
 	}{
 		{"older server", func(t *testing.T, a *App) { judgedBy(t, a, stallNow.Add(-time.Minute), false) }},
-		{"no answer for three heartbeats", func(t *testing.T, a *App) { judgedBy(t, a, stallNow.Add(-4*time.Minute), true) }},
-		{"hourly or slower heartbeats", func(t *testing.T, a *App) {
+		{"no answer for over 15 minutes", func(t *testing.T, a *App) { judgedBy(t, a, stallNow.Add(-16*time.Minute), true) }},
+		{"hourly heartbeats", func(t *testing.T, a *App) {
+			judgedBy(t, a, stallNow.Add(-time.Minute), true)
+			if err := a.cfg.Update(func(c *config.AppConfig) { c.UpstreamIntervalMinutes = 60 }); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"slower than hourly heartbeats", func(t *testing.T, a *App) {
 			judgedBy(t, a, stallNow.Add(-time.Minute), true)
 			if err := a.cfg.Update(func(c *config.AppConfig) { c.UpstreamIntervalMinutes = 61 }); err != nil {
 				t.Fatal(err)

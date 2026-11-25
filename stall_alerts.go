@@ -178,10 +178,11 @@ func stallCopyLabel(copyN int) string {
 
 // stallServer is the CashPilot server that judges this computer's own copies for
 // traffic stalls, or "" when this computer judges them itself. A server judges them
-// when this computer is joined to it, its last answer came within three heartbeats
-// and from a release whose stall check reads the counters the heartbeat carries
-// (stallsJudged), and the heartbeats come at least hourly: the server counts no
-// traffic across a longer gap (usage.MaxBaselineAge, the web's too).
+// when this computer is joined to it, its last answer came within the grace
+// (stallServerGrace) and from a release whose stall check reads the counters the
+// heartbeat carries (stallsJudged), and the heartbeats come more often than hourly:
+// the server counts no traffic across a gap of over an hour (usage.MaxBaselineAge,
+// the web's too), and a real gap is the interval plus the time to send.
 func (a *App) stallServer(now time.Time) string {
 	if a.cfg == nil || !a.joined() {
 		return ""
@@ -189,16 +190,24 @@ func (a *App) stallServer(now time.Time) string {
 	cfg := a.cfg.Config()
 	serverURL := strings.TrimSpace(cfg.UpstreamURL)
 	interval := heartbeatInterval(cfg.UpstreamIntervalMinutes)
-	if serverURL == "" || interval.Seconds() > usage.MaxBaselineAge {
+	if serverURL == "" || interval.Seconds() >= usage.MaxBaselineAge {
 		return ""
 	}
 	a.upstream.mu.Lock()
 	defer a.upstream.mu.Unlock()
 	if a.upstream.statusURL != serverURL || !a.upstream.stallsJudged ||
-		a.upstream.lastOK.IsZero() || now.Sub(a.upstream.lastOK) > 3*interval {
+		a.upstream.lastOK.IsZero() || now.Sub(a.upstream.lastOK) > stallServerGrace(interval) {
 		return ""
 	}
 	return strings.TrimRight(serverURL, "/")
+}
+
+// stallServerGrace is how long the server may stay silent before this computer
+// judges its own copies again: three heartbeats, and at least 15 minutes, three
+// usage samples. A shorter grace would raise every local alert at a short outage,
+// and the owner would get it twice, from here and from the server.
+func stallServerGrace(interval time.Duration) time.Duration {
+	return max(3*interval, 3*usageSampleInterval)
 }
 
 // stallMessage says what is wrong and what to check, in the web alert's words.

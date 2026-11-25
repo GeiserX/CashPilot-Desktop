@@ -23,6 +23,10 @@ import (
 // client's 30 seconds. A var so tests can shorten it.
 var heartbeatLockWait = 45 * time.Second
 
+// heartbeatSendLock takes the turn (upstream.SendLock). A var so a test can count
+// that every turn taken is given back.
+var heartbeatSendLock = upstream.SendLock
+
 // heartbeatReads is the live reading each heartbeat takes: every copy, and the
 // proxied copies. A var so tests can keep the runtime out.
 var heartbeatReads = func(a *App) (func(context.Context) ([]runtime.ContainerInfo, error), func(context.Context) ([]runtime.ProxiedCopy, error)) {
@@ -46,7 +50,7 @@ func (a *App) heartbeatLockPath() string {
 func (a *App) withLiveUnits(ctx context.Context, p *upstream.Payload,
 	list func(context.Context) ([]runtime.ContainerInfo, error),
 	proxied func(context.Context) ([]runtime.ProxiedCopy, error)) (release func()) {
-	release, ok := upstream.SendLock(ctx, a.heartbeatLockPath(), heartbeatLockWait)
+	release, ok := heartbeatSendLock(ctx, a.heartbeatLockPath(), heartbeatLockWait)
 	if !ok {
 		log.Printf("upstream: the other CashPilot process did not give up its turn to send; this heartbeat carries no traffic counters")
 		return release
@@ -91,8 +95,8 @@ func heartbeatContainers(infos []runtime.ContainerInfo) []upstream.Container {
 	return out
 }
 
-// heartbeatProxied is every proxied copy in the web worker's shape, an empty list
-// when there is none.
+// heartbeatProxied is every proxied copy in the web worker's shape, without this
+// computer's proxy id (upstream.Proxied), an empty list when there is none.
 func heartbeatProxied(copies []runtime.ProxiedCopy) []upstream.Proxied {
 	out := make([]upstream.Proxied, 0, len(copies))
 	for _, c := range copies {
@@ -100,7 +104,7 @@ func heartbeatProxied(copies []runtime.ProxiedCopy) []upstream.Proxied {
 			continue
 		}
 		item := upstream.Proxied{
-			Slug: c.Slug, ProxyID: c.ProxyID, Name: c.Name, Status: c.Status,
+			Slug: c.Slug, Name: c.Name, Status: c.Status,
 			ContainerID:       shortContainerID(c.ContainerID),
 			TunnelStatus:      c.TunnelStatus,
 			TunnelContainerID: shortContainerID(c.TunnelContainerID),

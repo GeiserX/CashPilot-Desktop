@@ -642,22 +642,17 @@ func (m *Manager) ProxiedCopies() []runtime.ProxiedCopy {
 	return append([]runtime.ProxiedCopy(nil), m.proxy.last...)
 }
 
-// ReadProxiedCopies reads the proxied copies now, as ProxyTick does (which also
-// starts an earner whose tunnel came back), and keeps the read as the latest. A
-// runtime that cannot run proxied copies has none: nil and no error.
+// ReadProxiedCopies reads the proxied copies now, for the heartbeat and the usage
+// graphs. It only reads (runtime ReadProxied): starting an earner whose tunnel came
+// back stays ProxyTick's, once a minute, so these extra reads add no restarts and
+// no races between the window and the helper. A runtime that cannot run proxied
+// copies has none: nil and no error.
 func (m *Manager) ReadProxiedCopies(ctx context.Context) ([]runtime.ProxiedCopy, error) {
 	p, err := m.proxier()
 	if err != nil {
 		return nil, nil
 	}
-	status, err := p.ProxiedStatus(ctx)
-	if err != nil {
-		return nil, err
-	}
-	m.proxy.lastMu.Lock()
-	m.proxy.last = status
-	m.proxy.lastMu.Unlock()
-	return status, nil
+	return p.ReadProxied(ctx)
 }
 
 // CapNotice is a proxy whose cap holds, for the notification list.

@@ -85,9 +85,14 @@ type Container struct {
 // (proxy_tunnel.status). It is kept out of Containers, as on the web: it leaves
 // from another IP and is not a copy of the service. Its counters are its
 // tunnel's, which carries every byte the earner moves.
+//
+// It has no proxy_id. This computer numbers its proxies itself, and the server
+// reads proxy_id as one of its own proxies: it would count this copy's traffic
+// against that proxy, and stop the copy when that proxy hits its cap, and
+// read its logs, all through calls this computer does not serve. Without the id
+// the server skips the copy everywhere it needs one, and still groups it by exit.
 type Proxied struct {
 	Slug              string  `json:"slug"`
-	ProxyID           int64   `json:"proxy_id"`
 	Name              string  `json:"name"`
 	Status            string  `json:"status"`
 	ContainerID       string  `json:"container_id"`

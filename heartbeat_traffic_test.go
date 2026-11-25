@@ -119,7 +119,12 @@ func TestHeartbeatCarriesTheWebWorkersTrafficCounters(t *testing.T) {
 		t.Fatalf("system_info.proxied = %v, want the proxied copy", info["proxied"])
 	}
 	pc := proxied[0].(map[string]any)
-	if pc["slug"] != "honeygain" || pc["proxy_id"] != float64(4) || pc["name"] != "cashpilot-honeygain-p4" ||
+	// This computer's proxy ids are its own: a server reads proxy_id as one of its
+	// proxies, so it would count, cap and stop this copy as that proxy's.
+	if v, present := pc["proxy_id"]; present {
+		t.Fatalf("proxied copy proxy_id = %v, want none: the server reads it as its own proxy's id", v)
+	}
+	if pc["slug"] != "honeygain" || pc["name"] != "cashpilot-honeygain-p4" ||
 		pc["tunnel_container_id"] != "eeeeeeeeeeee" || pc["container_id"] != "dddddddddddd" ||
 		pc["net_tx_bytes"] != float64(77_000_000) || pc["net_rx_bytes"] != float64(5_000_000) || pc["exit_ip"] != "203.0.113.9" {
 		t.Fatalf("proxied copy = %v, want the tunnel's counters in the web worker's fields", pc)
@@ -274,10 +279,32 @@ func TestSendUpstreamSendsTheCountersToTheServer(t *testing.T) {
 	heartbeatLockWait = 200 * time.Millisecond
 	t.Cleanup(func() { heartbeatLockWait = oldWait })
 
+	// Count the turns given back: a file left unreleased can still be closed by the
+	// garbage collector, so the lock alone would catch a missed release only by luck.
+	oldLock := heartbeatSendLock
+	taken, given := 0, 0
+	heartbeatSendLock = func(ctx context.Context, path string, wait time.Duration) (func(), bool) {
+		release, ok := oldLock(ctx, path, wait)
+		if ok {
+			taken++
+		}
+		return func() { given++; release() }, ok
+	}
+	t.Cleanup(func() { heartbeatSendLock = oldLock })
+
 	app := newPayloadTestApp(t, nil)
 	app.upstream.workerKey = "own-key"
 	client := &upstream.Client{HTTP: srv.Client()}
 	app.sendUpstream(t.Context(), client, srv.URL, "shared")
+	if taken != 1 || given != 1 {
+		t.Fatalf("turns taken %d, given back %d; want the turn given back once the server answered", taken, given)
+	}
+	// The turn is free the moment the send returned: the other process can take it.
+	free, ok := upstream.SendLock(t.Context(), app.heartbeatLockPath(), 0)
+	if !ok {
+		t.Fatal("sendUpstream kept its turn after the server answered")
+	}
+	free()
 	app.sendUpstream(t.Context(), client, srv.URL, "shared")
 	if len(bodies) != 2 {
 		t.Fatalf("server got %d heartbeats, want 2", len(bodies))
