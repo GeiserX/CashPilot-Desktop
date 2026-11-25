@@ -310,12 +310,19 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 	if _, err := cli.CopyToContainer(ctx, helper, client.CopyToContainerOptions{DestinationPath: folder, Content: bytes.NewReader(archive)}); err != nil {
 		return nil, walletErr("wallet_write", "Docker did not write the wallet file (%v). Nothing was deployed.", err)
 	}
+	// What the file held before this write: the bytes it had, or, when there was
+	// none, an empty mapping (hostd reads it as no settings, the next deploy as no
+	// wallet).
+	prior := raw
+	if prior == nil {
+		prior = []byte("{}\n")
+	}
 	back, err := readContainerFile(ctx, cli, helper, spec.Path)
 	if err != nil {
-		return nil, walletErr("wallet_write", "The wallet file could not be read back (%v). Nothing was deployed.", err)
+		return nil, restoreSeedFile(cli, helper, folder, spec.Path, prior, walletErr("wallet_write", "The wallet file could not be read back (%v). Nothing was deployed.", err))
 	}
 	if _, got, err := parseSeedFile(back, spec.Key); err != nil || got != phrase {
-		return nil, walletErr("wallet_write", "The wallet file did not read back as written. Nothing was deployed.")
+		return nil, restoreSeedFile(cli, helper, folder, spec.Path, prior, walletErr("wallet_write", "The wallet file did not read back as written. Nothing was deployed."))
 	}
 	if address == "" {
 		address = walletAddress(svc, phrase)
@@ -328,53 +335,46 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 		// A new or pasted wallet is taken back out if the deploy then fails: the
 		// owner never saw a new one, and the next deploy must not keep it silently.
 		// A moved one stays: it is the wallet the node already ran.
-		prior := raw
-		if prior == nil {
-			cleared, err := yaml.Marshal(withoutKey(data, spec.Key))
-			if err != nil {
-				return nil, errors.New("could not write the wallet file. Nothing was deployed")
-			}
-			prior = cleared
-		}
 		result.undo = func(cause error) error {
-			return undoWallet(cli, svc, image, name, *volume, folder, spec.Path, prior, cause)
+			return undoWallet(cli, image, name, *volume, folder, spec.Path, prior, cause)
 		}
 	}
 	return result, nil
 }
 
-// withoutKey is data without key, never nil.
-func withoutKey(data map[string]any, key string) map[string]any {
-	out := map[string]any{}
-	for k, v := range data {
-		if k != key {
-			out[k] = v
-		}
-	}
-	return out
-}
-
 // undoWallet puts back the bytes the wallet file held before a deploy wrote a new
-// wallet into it (prior; a file that did not exist comes back holding no phrase),
-// after cause stopped that deploy. It uses a fresh context: a cancelled deploy is
-// still undone. The answer is cause, with a line when the undo itself failed.
-func undoWallet(cli seedClient, svc catalog.Service, image, name string, volume mount.Mount, folder, file string, prior []byte, cause error) error {
+// wallet into it (prior), after cause stopped that deploy. It uses a fresh
+// context: a cancelled deploy is still undone. The answer is cause, with a line
+// when the undo itself failed.
+func undoWallet(cli seedClient, image, name string, volume mount.Mount, folder, file string, prior []byte, cause error) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	kept := fmt.Errorf("%w. The new wallet stays in %s in %s's data volume and its seed phrase was not shown: deploy again and keep this node's wallet, then reveal its seed phrase from the service's card", cause, file, svc.Name)
 	helper, err := createFileHelper(ctx, cli, image, name+"-wallet", volume, folder)
 	if err != nil {
-		return kept
+		return walletKept(cause, file)
 	}
 	defer removeHelper(cli, helper)
+	return restoreSeedFile(cli, helper, folder, file, prior, cause)
+}
+
+// restoreSeedFile writes prior back as file through helper, after cause, and
+// answers cause, with a line when the write failed.
+func restoreSeedFile(cli seedClient, helper, folder, file string, prior []byte, cause error) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	archive, err := secretFileTar(path.Base(file), prior)
-	if err != nil {
-		return kept
+	if err == nil {
+		_, err = cli.CopyToContainer(ctx, helper, client.CopyToContainerOptions{DestinationPath: folder, Content: bytes.NewReader(archive)})
 	}
-	if _, err := cli.CopyToContainer(ctx, helper, client.CopyToContainerOptions{DestinationPath: folder, Content: bytes.NewReader(archive)}); err != nil {
-		return kept
+	if err != nil {
+		return walletKept(cause, file)
 	}
 	return cause
+}
+
+// walletKept is cause with the line that the new wallet may still be in file.
+func walletKept(cause error, file string) error {
+	return fmt.Errorf("%w. The new wallet stays in %s in the node's data volume and its seed phrase was not shown: deploy again and keep this node's wallet, then reveal its seed phrase from the service's card", cause, file)
 }
 
 // createFileHelper creates, and never starts, a container that mounts volume at

@@ -67,3 +67,68 @@ func TestAScrubbedCredentialLeavesNoOldCopyOnDisk(t *testing.T) {
 		t.Fatalf("a second scrub found a key to remove: %v, %v", removed, err)
 	}
 }
+
+// The scrub changes nothing it should not: no row, no key, and a blob it cannot
+// read are left as they are, the last one with an error.
+func TestTheScrubLeavesWhatItCannotOrNeedNotChange(t *testing.T) {
+	s := openTestStore(t)
+	if removed, busy, err := s.ScrubCredential("nothing-stored", "K"); removed || busy || err != nil {
+		t.Fatalf("no row: %v, %v, %v", removed, busy, err)
+	}
+	if err := s.SaveCredentials("svc", map[string]string{"OTHER": "v"}); err != nil {
+		t.Fatalf("SaveCredentials: %v", err)
+	}
+	if removed, _, err := s.ScrubCredential("svc", "K"); removed || err != nil {
+		t.Fatalf("no key: %v, %v", removed, err)
+	}
+	if got, _ := s.GetCredentials("svc"); got["OTHER"] != "v" {
+		t.Fatalf("a scrub with nothing to remove changed the settings: %v", got)
+	}
+
+	for name, value := range map[string]func() string{
+		"not base64":      func() string { return "%%%" },
+		"not sealed here": func() string { return "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
+		"not JSON": func() string {
+			sealed, err := s.encrypt([]byte("not json"))
+			if err != nil {
+				t.Fatalf("encrypt: %v", err)
+			}
+			return sealed
+		},
+	} {
+		if _, err := s.db.Exec(`UPDATE credentials SET value = ? WHERE slug = 'svc'`, value()); err != nil {
+			t.Fatalf("plant %s: %v", name, err)
+		}
+		if removed, _, err := s.ScrubCredential("svc", "K"); removed || err == nil {
+			t.Fatalf("%s: the scrub went on with a blob it cannot read: %v, %v", name, removed, err)
+		}
+	}
+}
+
+// The wallet's public address is kept with the deployment, and only there.
+func TestTheWalletAddressIsKeptWithTheDeployment(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.UpsertDeployment(Deployment{Slug: "sia-hostd", ContainerID: "c", Name: "cashpilot-sia-hostd", Image: "img", Status: "running", Runtime: "existing-docker"}); err != nil {
+		t.Fatalf("UpsertDeployment: %v", err)
+	}
+	if err := s.SetWalletAddress("sia-hostd", "a2a3773f"); err != nil {
+		t.Fatalf("SetWalletAddress: %v", err)
+	}
+	got, ok, err := s.GetDeployment("sia-hostd")
+	if err != nil || !ok || got.WalletAddress != "a2a3773f" {
+		t.Fatalf("GetDeployment = %+v, %v, %v", got, ok, err)
+	}
+	// A redeploy's upsert keeps it until the wallet step records another.
+	if err := s.UpsertDeployment(Deployment{Slug: "sia-hostd", ContainerID: "c2", Name: "cashpilot-sia-hostd", Image: "img", Status: "running", Runtime: "existing-docker"}); err != nil {
+		t.Fatalf("UpsertDeployment: %v", err)
+	}
+	if got, _, _ := s.GetDeployment("sia-hostd"); got.WalletAddress != "a2a3773f" {
+		t.Fatalf("a redeploy dropped the wallet address: %q", got.WalletAddress)
+	}
+	if err := s.SetWalletAddress("not-deployed", "x"); err != nil {
+		t.Fatalf("SetWalletAddress for no deployment: %v", err)
+	}
+	if _, ok, _ := s.GetDeployment("not-deployed"); ok {
+		t.Fatal("SetWalletAddress created a deployment")
+	}
+}

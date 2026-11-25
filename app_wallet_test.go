@@ -311,3 +311,18 @@ func keysOf(m map[string]string) []string {
 	}
 	return out
 }
+
+// historyHas reports whether the app's history holds an event of Sia named event.
+func historyHas(t *testing.T, app *appUnderTest, event string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(app.cfg.DataDir(), "cashpilot-desktop.db"))
+	if err != nil {
+		t.Fatalf("open the database: %v", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM runtime_events WHERE slug = ? AND event = ?`, siaSlug, event).Scan(&n); err != nil {
+		t.Fatalf("read the history: %v", err)
+	}
+	return n > 0
+}

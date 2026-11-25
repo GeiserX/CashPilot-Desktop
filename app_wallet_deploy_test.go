@@ -206,3 +206,20 @@ func TestANewWalletIsTakenBackWhenTheDeployFails(t *testing.T) {
 	assertSeedFile(t, app, seedPhraseB)
 	assertSeedNowhere(t, app, seedPhraseB)
 }
+
+// A reveal for a service the app does not know, or a node that is not deployed,
+// is refused plainly, and the failed read goes into the history without a phrase.
+func TestARevealOfANodeThatIsNotThereSaysSo(t *testing.T) {
+	app := newAppUnderTest(t)
+	if _, err := app.RevealWalletSeed("no-such-service", "anything"); err == nil || !strings.Contains(err.Error(), "unknown service") {
+		t.Fatalf("an unknown service: %v", err)
+	}
+	_, err := app.RevealWalletSeed(siaSlug, "Sia (hostd)")
+	if err == nil || !strings.Contains(err.Error(), "is not deployed") {
+		t.Fatalf("a reveal of a node that is not deployed: %v", err)
+	}
+	if !historyHas(t, app, "wallet_reveal_error") {
+		t.Fatal("the failed reveal is not in the history")
+	}
+	assertSeedNowhere(t, app, seedPhraseA)
+}

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"path"
 	"strings"
@@ -57,6 +58,22 @@ type fakeSeedDaemon struct {
 	writes     int
 	removed    []string
 	calls      []string
+	// fail makes one kind of call fail: "create <name>", "start <name>",
+	// "inspect <name>", "wait", "logs", "copyto", or "copyfrom <n>" for the n-th
+	// read (1-based). logsRaw replaces the log stream; rawTar replaces what a read
+	// of a path returns; afterWrite runs after each write.
+	fail       map[string]error
+	logsRaw    []byte
+	rawTar     map[string][]byte
+	afterWrite func()
+	reads      int
+}
+
+func (f *fakeSeedDaemon) failing(op string) error {
+	if f.fail == nil {
+		return nil
+	}
+	return f.fail[op]
 }
 
 func newFakeSeedDaemon() *fakeSeedDaemon {
@@ -74,6 +91,9 @@ func (f *fakeSeedDaemon) ContainerCreate(_ context.Context, o client.ContainerCr
 	if _, taken := f.containers[o.Name]; taken {
 		return client.ContainerCreateResult{}, errors.New("name in use")
 	}
+	if err := f.failing("create " + o.Name); err != nil {
+		return client.ContainerCreateResult{}, err
+	}
 	f.calls = append(f.calls, "create "+o.Name)
 	f.containers[o.Name] = o
 	id := "id-" + o.Name
@@ -83,16 +103,27 @@ func (f *fakeSeedDaemon) ContainerCreate(_ context.Context, o client.ContainerCr
 
 func (f *fakeSeedDaemon) ContainerStart(_ context.Context, id string, _ client.ContainerStartOptions) (client.ContainerStartResult, error) {
 	f.calls = append(f.calls, "start "+f.name(id))
-	return client.ContainerStartResult{}, nil
+	return client.ContainerStartResult{}, f.failing("start " + f.name(id))
 }
 
 func (f *fakeSeedDaemon) ContainerWait(context.Context, string, client.ContainerWaitOptions) client.ContainerWaitResult {
+	if err := f.failing("wait"); err != nil {
+		errs := make(chan error, 1)
+		errs <- err
+		return client.ContainerWaitResult{Result: make(chan container.WaitResponse), Error: errs}
+	}
 	res := make(chan container.WaitResponse, 1)
 	res <- container.WaitResponse{StatusCode: f.exitCode}
 	return client.ContainerWaitResult{Result: res, Error: make(chan error)}
 }
 
 func (f *fakeSeedDaemon) ContainerLogs(context.Context, string, client.ContainerLogsOptions) (client.ContainerLogsResult, error) {
+	if err := f.failing("logs"); err != nil {
+		return nil, err
+	}
+	if f.logsRaw != nil {
+		return io.NopCloser(bytes.NewReader(f.logsRaw)), nil
+	}
 	payload := []byte(f.output)
 	header := []byte{1, 0, 0, 0, byte(len(payload) >> 24), byte(len(payload) >> 16), byte(len(payload) >> 8), byte(len(payload))}
 	return io.NopCloser(bytes.NewReader(append(header, payload...))), nil
@@ -106,6 +137,9 @@ func (f *fakeSeedDaemon) ContainerRemove(_ context.Context, id string, _ client.
 }
 
 func (f *fakeSeedDaemon) ContainerInspect(_ context.Context, id string, _ client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	if err := f.failing("inspect " + f.name(id)); err != nil {
+		return client.ContainerInspectResult{}, err
+	}
 	o, ok := f.containers[f.name(id)]
 	if !ok {
 		return client.ContainerInspectResult{}, cerrdefs.ErrNotFound
@@ -129,10 +163,17 @@ func (f *fakeSeedDaemon) volumePath(id, p string) (string, bool) {
 
 func (f *fakeSeedDaemon) CopyToContainer(_ context.Context, id string, o client.CopyToContainerOptions) (client.CopyToContainerResult, error) {
 	f.writes++
+	if err := f.failing("copyto"); err != nil {
+		return client.CopyToContainerResult{}, err
+	}
 	tr := tar.NewReader(o.Content)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			if hook := f.afterWrite; hook != nil {
+				f.afterWrite = nil // once: a restore after it writes as asked
+				hook()
+			}
 			return client.CopyToContainerResult{}, nil
 		}
 		if err != nil {
@@ -148,6 +189,13 @@ func (f *fakeSeedDaemon) CopyToContainer(_ context.Context, id string, o client.
 }
 
 func (f *fakeSeedDaemon) CopyFromContainer(_ context.Context, id string, o client.CopyFromContainerOptions) (client.CopyFromContainerResult, error) {
+	f.reads++
+	if err := f.failing(fmt.Sprintf("copyfrom %d", f.reads)); err != nil {
+		return client.CopyFromContainerResult{}, err
+	}
+	if raw, ok := f.rawTar[o.SourcePath]; ok {
+		return client.CopyFromContainerResult{Content: io.NopCloser(bytes.NewReader(raw))}, nil
+	}
 	key, ok := f.volumePath(id, o.SourcePath)
 	data, found := f.files[key]
 	if !ok || !found {
