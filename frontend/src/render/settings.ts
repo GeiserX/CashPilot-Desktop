@@ -23,7 +23,8 @@ export function envInputName(key: string) {
   return names[key] || key;
 }
 
-export function renderEnvSetting(item: EnvSetting) {
+/** One setting row. extra is HTML drawn under the help, such as the fence's state now. */
+export function renderEnvSetting(item: EnvSetting, extra = "") {
   return `
     <label class="setting-row">
       <span>
@@ -31,7 +32,7 @@ export function renderEnvSetting(item: EnvSetting) {
         <small>${escapeHtml(item.key)} · ${escapeHtml(item.source)}</small>
       </span>
       ${item.secret ? secretInput(item) : `<input data-setting="${escapeHtml(envInputName(item.key))}" value="${escapeHtml(item.value)}" data-initial="${escapeHtml(item.value)}" ${item.readOnly ? "readonly" : ""} />`}
-      <small>${escapeHtml(item.help)}</small>
+      <small>${escapeHtml(item.help)}</small>${extra}
     </label>
   `;
 }

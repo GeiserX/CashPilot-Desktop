@@ -362,6 +362,8 @@ func (a *App) DomReady(ctx context.Context) {
 	wailsruntime.WindowShow(ctx)
 	PositionMainWindowOnPrimaryScreen()
 	InstallTrayIcon(a.trayIcon)
+	// A helper registered by another copy of the app follows this one (helper_follow.go).
+	go a.keepHelperOnThisCopy()
 }
 
 func (a *App) Shutdown(_ context.Context) {
@@ -609,6 +611,7 @@ type FleetState struct {
 	Devices       []store.FleetDevice `json:"devices"`
 	UIURL         string              `json:"uiUrl"`
 	LocalAPIURL   string              `json:"localApiUrl"`
+	Reach         FleetReach          `json:"reach"`
 	APIKey        string              `json:"apiKey"`
 	APIListening  bool                `json:"apiListening"`
 	WorkerSnippet string              `json:"workerSnippet"`
@@ -1136,7 +1139,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
-		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Podman cannot be fenced yet: there auto deploys unfenced and on refuses container deploys. Takes effect on the next deploy."},
+		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: isolationHelp(a.catalog.ListVisible())},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Leave EMPTY to run everything here (standalone), the default. To join a CashPilot, use How this computer runs above: it tests the connection before it saves anything. While joined, this computer reports what it runs and stops collecting earnings itself; your CashPilot collects them and shows them. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
@@ -1382,6 +1385,7 @@ func (a *App) GetFleetState() (FleetState, error) {
 		Devices:       devices,
 		UIURL:         uiURL,
 		LocalAPIURL:   localAPIURL,
+		Reach:         a.fleetReachNow(),
 		APIKey:        a.fleetKey,
 		APIListening:  a.fleetAPI != nil,
 		WorkerSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nCASHPILOT_WORKER_NAME=%s-worker\nCASHPILOT_WORKER_URL=http://<worker-lan-ip>:8081", uiURL, a.fleetKey, cfg.HostnamePrefix),

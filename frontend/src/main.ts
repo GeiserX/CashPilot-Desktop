@@ -126,6 +126,8 @@ import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
+import { renderFleetConnect } from "./render/fleet_reach";
+import { renderFenceStatusLine } from "./render/fence_status";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
@@ -727,6 +729,7 @@ function renderDashboard(current: AppState) {
           </div>
         </section>
 
+        ${renderFenceStatusLine(current.isolation)}
         ${renderAttention(attention, upCount, containers.length)}
         ${renderStallServerNote(current.stallsServer)}
 
@@ -1444,7 +1447,7 @@ async function renderSettings(current: AppState) {
               <button class="primary compact-btn" id="save-settings">Save Variables</button>
             </div>
             <div class="settings-list">
-              ${settings.environment.map(renderEnvSetting).join("")}
+              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, "small") : "")).join("")}
             </div>
           </section>
 
@@ -1899,14 +1902,7 @@ async function renderFleet(current: AppState) {
             <div class="card-header">
               <span class="card-title">Add Worker or Mobile</span>
             </div>
-            <p class="muted">Point CashPilot workers, mobile companions, or another machine on your LAN at this desktop API. The API listens for authenticated heartbeats and registers devices automatically.</p>
-            <div class="connection-grid">
-              ${detailStat("UI URL", fleet.uiUrl)}
-              ${detailStat("Local API", fleet.localApiUrl)}
-              ${detailStat("API Key", fleet.apiKey ? "Generated" : "Missing")}
-              ${detailStat("Listener", fleet.apiListening ? "Listening" : "Offline")}
-            </div>
-            ${renderFleetSnippets(fleet)}
+            ${renderFleetConnect(fleet, renderFleetSnippets(fleet))}
             <div class="fleet-form">
               <input id="fleet-name" placeholder="Device name" />
               <select id="fleet-kind">
@@ -2099,15 +2095,6 @@ function renderPointsSection(points: PointsBalance[]) {
         `).join("")}
       </div>
     </section>
-  `;
-}
-
-function detailStat(label: string, value: string) {
-  return `
-    <div class="detail-stat">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value)}</strong>
-    </div>
   `;
 }
 

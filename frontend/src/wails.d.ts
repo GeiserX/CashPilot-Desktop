@@ -204,6 +204,9 @@ export interface FenceStatus {
   error: string;
   // Running earners that can reach the LAN; a redeploy moves them.
   outside: string[] | null;
+  // Running earners behind the fence: on the fenced network and no other. Set only
+  // while the mode is on.
+  inside: string[] | null;
   // Stopped earners outside the fence, left alone until their next deploy.
   outsideStopped: string[] | null;
   // Fence-gated earners that are down and that CashPilot starts itself once the
@@ -783,6 +786,22 @@ export interface FleetDevice {
   createdAt: string;
 }
 
+// FleetReach mirrors main.FleetReach (fleet_reach.go): whether another machine can
+// report to this Desktop's fleet API now, and why not.
+export interface FleetReach {
+  open: boolean;
+  // Accept workers (hub mode) is off, so heartbeats are refused.
+  hubOff: boolean;
+  // The API listens on a loopback address, which only this PC reaches.
+  thisPcOnly: boolean;
+  // The API did not start (its port was taken, for instance).
+  notListening: boolean;
+  // The address the API listens on now, "" when it does not.
+  listen: string;
+  // A saved bind address or port waits for a restart.
+  restartPending: boolean;
+}
+
 export interface FleetState {
   workers: number;
   mobiles: number;
@@ -791,6 +810,7 @@ export interface FleetState {
   devices: FleetDevice[];
   uiUrl: string;
   localApiUrl: string;
+  reach: FleetReach;
   apiKey: string;
   apiListening: boolean;
   workerSnippet: string;
