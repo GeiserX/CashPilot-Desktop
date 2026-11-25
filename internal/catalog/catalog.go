@@ -107,10 +107,14 @@ type Service struct {
 	Rating Rating `json:"-" yaml:"rating"`
 	// Obligations are the web catalog's reminders before a provider writes off money:
 	// a claim window, a balance that expires, a dormancy clock (services/_schema.yml
-	// `obligations:`). Desktop reads them and does not act on them yet; they are
-	// declared so the vendored key is read rather than silently dropped. Like the
-	// rating block, they never reach the frontend until something there uses them.
+	// `obligations:`). internal/obligations evaluates them into the dashboard's Money
+	// waiting panel; the raw rules never reach the frontend, only the reminders due.
 	Obligations []Obligation `json:"-" yaml:"obligations"`
+	// Guest marks a desktop-only app that may run inside the Secure VM
+	// (docs/design/secure-windows-vm.md). It is Desktop-only, appended from
+	// catalog-overlay/. Nil means the app is never offered in the VM. A service with
+	// requirements.container_prohibited never carries one. Nothing reads it yet.
+	Guest *GuestConfig `json:"-" yaml:"guest"`
 	// RatingResult is the grade computed from services/_ratings.yml, or "not rated".
 	// Nil for a custom service, which nobody has reviewed. Never read from YAML.
 	RatingResult *RatingResult `json:"ratingResult" yaml:"-"`
@@ -208,9 +212,8 @@ type Payout struct {
 	Notes       string       `json:"notes" yaml:"notes"`
 }
 
-// Obligation is one reminder from the web catalog. The web app evaluates it
-// (app/obligations.py) into its dashboard's "Money waiting" panel and pushes; Desktop
-// carries it unread until it ports that behaviour.
+// Obligation is one reminder from the web catalog. internal/obligations evaluates it
+// into the dashboard's "Money waiting" panel, as the web app's app/obligations.py does.
 type Obligation struct {
 	// ID is kebab-case and unique in its file; the web app keys done state on it.
 	ID string `json:"id" yaml:"id"`
@@ -358,10 +361,10 @@ type DockerConfig struct {
 	// dials this service back at, so it can be compared against the machine's
 	// current egress address. Only that variable is ever copied out; the rest may
 	// hold credentials.
-	// TrafficStall is the web catalog's docker.traffic_stall block: the web app alerts
-	// when one running copy sends almost nothing while the service's other copies are
-	// busy (app/traffic_stall.py). Desktop parses it so the field round-trips and the
-	// strict-decode test passes, and does not act on it.
+	// TrafficStall is the web catalog's docker.traffic_stall block: alert when one
+	// running copy sends almost nothing while the service's other copies are busy.
+	// internal/stall judges it and stall_alerts.go raises the alert, as the web app's
+	// app/traffic_stall.py does.
 	TrafficStall         *TrafficStall  `json:"trafficStall,omitempty" yaml:"traffic_stall"`
 	AdvertisedAddressEnv string         `json:"advertisedAddressEnv" yaml:"advertised_address_env"`
 	Privileged           bool           `json:"privileged" yaml:"privileged"`
@@ -478,6 +481,23 @@ type NativeBinary struct {
 	Bin           string   `json:"bin" yaml:"bin"`
 	Args          string   `json:"args,omitempty" yaml:"args"`
 	FirewallBlock []string `json:"firewallBlock,omitempty" yaml:"firewall_block"`
+}
+
+// GuestConfig is the guest: block: how an app runs inside the Secure VM, per guest OS.
+type GuestConfig struct {
+	Windows *GuestWindows `json:"windows,omitempty" yaml:"windows"`
+}
+
+// GuestWindows describes one app inside the Windows guest. Process is the executable
+// name the guest read matches. Publisher is the expected Authenticode subject of the
+// official installer, in the form Windows prints it. DownloadPage is the vendor's
+// official HTTPS page the user installs from. Signin says how the user signs in:
+// "console" (by hand in the VM window) or "none".
+type GuestWindows struct {
+	Process      string `json:"process" yaml:"process"`
+	Publisher    string `json:"publisher" yaml:"publisher"`
+	DownloadPage string `json:"downloadPage" yaml:"download_page"`
+	Signin       string `json:"signin" yaml:"signin"`
 }
 
 type EnvVar struct {

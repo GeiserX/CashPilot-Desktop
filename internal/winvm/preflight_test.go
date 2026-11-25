@@ -1,6 +1,9 @@
 package winvm
 
-import "testing"
+import (
+	"net/netip"
+	"testing"
+)
 
 // facts is a Windows 11 Pro x64 PC with everything ready, for each test to break
 // one thing at a time.
@@ -160,5 +163,116 @@ func TestArchNameIsNotGOARCH(t *testing.T) {
 		if got := archName(code); got != want {
 			t.Errorf("archName(%d) = %s, want %s", code, got, want)
 		}
+	}
+}
+
+func TestVirtualMachineReadsTheFirmwareStrings(t *testing.T) {
+	cases := []struct {
+		manufacturer, model string
+		want                Tri
+	}{
+		{"Microsoft Corporation", "Virtual Machine", Yes},
+		{"VMware, Inc.", "VMware7,1", Yes},
+		{"innotek GmbH", "VirtualBox", Yes},
+		{"QEMU", "Standard PC (Q35 + ICH9, 2009)", Yes},
+		{"Microsoft Corporation", "Surface Pro 9", No},
+		{"Intel(R) Client Systems", "NUC12DCMi9", No},
+		{"", "", Unknown},
+	}
+	for _, tc := range cases {
+		if got := virtualMachine(tc.manufacturer, tc.model); got != tc.want {
+			t.Errorf("virtualMachine(%q, %q) = %s, want %s", tc.manufacturer, tc.model, got, tc.want)
+		}
+	}
+}
+
+// vmHostInput is a PC ready for the Secure VM, for each test to break one thing.
+func vmHostInput(edit func(*VMHostInput)) VMHostInput {
+	in := VMHostInput{
+		NATs:         []netip.Prefix{pfx("10.99.0.0/30")},
+		Subnet:       testSubnet,
+		Net:          testHost(),
+		Network:      CurrentNetwork{ID: NetworkID{GatewayMAC: "00-11-22-33-44-55", ProfileID: "{6F1C2D3E-0000-4000-8000-000000000001}"}},
+		InstalledRAM: 32 * GiB,
+		FreeRAM:      8 * GiB,
+		GCS:          []string{"999e53d4-3d5c-4c3e-8779-bed06ec056e1"},
+	}
+	if edit != nil {
+		edit(&in)
+	}
+	return in
+}
+
+func checkOf(r VMHostReport, id string) VMHostCheck {
+	for _, c := range r.Checks {
+		if c.ID == id {
+			return c
+		}
+	}
+	return VMHostCheck{ID: id, OK: "missing"}
+}
+
+func TestCheckVMHostReady(t *testing.T) {
+	r := CheckVMHost(vmHostInput(nil))
+	if !r.Ready {
+		t.Fatalf("a ready PC is not ready: %+v", r.Checks)
+	}
+	if len(r.Checks) != 6 {
+		t.Errorf("%d checks, want 6", len(r.Checks))
+	}
+	if len(r.GCSBaseline) != 1 || r.GCSBaseline[0] != "999E53D4-3D5C-4C3E-8779-BED06EC056E1" {
+		t.Errorf("GCSBaseline = %v", r.GCSBaseline)
+	}
+}
+
+func TestCheckVMHostRefusals(t *testing.T) {
+	cases := []struct {
+		name, id string
+		want     Tri
+		edit     func(*VMHostInput)
+	}{
+		{"NAT overlaps our /29", CheckNATOverlap, No, func(in *VMHostInput) { in.NATs = append(in.NATs, pfx("172.20.0.0/24")) }},
+		{"no subnet chosen", CheckNATOverlap, Unknown, func(in *VMHostInput) { in.Subnet = netip.Prefix{} }},
+		{"default route through a VPN", CheckDefaultRoute, No, func(in *VMHostInput) { in.Net.Egress = egressAll(ifWireGuard) }},
+		{"routes not read", CheckDefaultRoute, Unknown, func(in *VMHostInput) { in.Net = HostNet{} }},
+		{"routes read but no lookups", CheckDefaultRoute, No, func(in *VMHostInput) { in.Net.Egress = nil }},
+		{"metered", CheckMetered, No, func(in *VMHostInput) { in.Network.Metered = true }},
+		{"network unknown", CheckMetered, Unknown, func(in *VMHostInput) { in.Network = CurrentNetwork{} }},
+		{"8 GB installed", CheckInstalledRAM, No, func(in *VMHostInput) { in.InstalledRAM = 8 * GiB }},
+		{"RAM unread", CheckInstalledRAM, Unknown, func(in *VMHostInput) { in.InstalledRAM = 0 }},
+		{"free RAM below guest + 1 GiB", CheckFreeRAM, No, func(in *VMHostInput) { in.FreeRAM = 7*GiB - 1 }},
+		{"free RAM unread", CheckFreeRAM, Unknown, func(in *VMHostInput) { in.FreeRAM = 0 }},
+		{"GCS unread", CheckGCSBaseline, Unknown, func(in *VMHostInput) { in.GCS = nil }},
+	}
+	for _, c := range cases {
+		r := CheckVMHost(vmHostInput(c.edit))
+		if got := checkOf(r, c.id); got.OK != c.want {
+			t.Errorf("%s: %s = %s (%s), want %s", c.name, c.id, got.OK, got.Detail, c.want)
+		}
+		if r.Ready {
+			t.Errorf("%s: still ready", c.name)
+		}
+	}
+}
+
+func TestCheckVMHostRAMEdges(t *testing.T) {
+	// Exactly the guest plus 1 GiB free, and exactly 12 GiB installed, pass.
+	r := CheckVMHost(vmHostInput(func(in *VMHostInput) { in.FreeRAM = 7 * GiB; in.InstalledRAM = MinHostRAM }))
+	if !r.Ready {
+		t.Errorf("the exact minimums failed: %+v", r.Checks)
+	}
+	// A lab guest of 4 GiB needs 5 GiB free, and a lab minimum lowers the
+	// installed floor.
+	r = CheckVMHost(vmHostInput(func(in *VMHostInput) {
+		in.GuestMemory, in.FreeRAM = 4*GiB, 5*GiB
+		in.MinHostRAM, in.InstalledRAM = 8*GiB, 8*GiB
+	}))
+	if !r.Ready {
+		t.Errorf("the lab sizes failed: %+v", r.Checks)
+	}
+	// An empty GCS list is a valid baseline: nothing registered.
+	r = CheckVMHost(vmHostInput(func(in *VMHostInput) { in.GCS = []string{} }))
+	if got := checkOf(r, CheckGCSBaseline); got.OK != Yes || r.GCSBaseline == nil {
+		t.Errorf("an empty GCS list: %+v %v", got, r.GCSBaseline)
 	}
 }

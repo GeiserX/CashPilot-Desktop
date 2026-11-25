@@ -960,6 +960,26 @@ export namespace collectors {
 
 export namespace config {
 	
+	export class SetupJournal {
+	    flow: string;
+	    step: string;
+	    bootTimeBefore: string;
+	    exePath: string;
+	    attempts: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SetupJournal(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.flow = source["flow"];
+	        this.step = source["step"];
+	        this.bootTimeBefore = source["bootTimeBefore"];
+	        this.exePath = source["exePath"];
+	        this.attempts = source["attempts"];
+	    }
+	}
 	export class SessionConsent {
 	    textVersion: string;
 	    // Go type: time
@@ -1017,6 +1037,7 @@ export namespace config {
 	    activityEnabled?: boolean;
 	    sessionConsent?: Record<string, SessionConsent>;
 	    mode?: string;
+	    setupJournal?: SetupJournal;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1047,6 +1068,7 @@ export namespace config {
 	        this.activityEnabled = source["activityEnabled"];
 	        this.sessionConsent = this.convertValues(source["sessionConsent"], SessionConsent, true);
 	        this.mode = source["mode"];
+	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1067,6 +1089,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 
 }
 
@@ -1434,6 +1457,68 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class StallAlert {
+	    slug: string;
+	    service: string;
+	    container: string;
+	    copy: number;
+	    since: number;
+	    hours: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StallAlert(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.service = source["service"];
+	        this.container = source["container"];
+	        this.copy = source["copy"];
+	        this.since = source["since"];
+	        this.hours = source["hours"];
+	        this.message = source["message"];
+	    }
+	}
+	export class RemindersView {
+	    joined: boolean;
+	    serverUrl: string;
+	    unknown: boolean;
+	    items: obligations.Item[];
+	    muted: obligations.Muted[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RemindersView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.joined = source["joined"];
+	        this.serverUrl = source["serverUrl"];
+	        this.unknown = source["unknown"];
+	        this.items = this.convertValues(source["items"], obligations.Item);
+	        this.muted = this.convertValues(source["muted"], obligations.Muted);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RouteProxy {
 	    id: number;
 	    name: string;
@@ -1770,6 +1855,8 @@ export namespace main {
 	    drift: Record<string, Array<string>>;
 	    isolation?: runtime.FenceStatus;
 	    route: RouteState;
+	    reminders: RemindersView;
+	    stalls: StallAlert[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -1802,6 +1889,8 @@ export namespace main {
 	        this.drift = source["drift"];
 	        this.isolation = this.convertValues(source["isolation"], runtime.FenceStatus);
 	        this.route = this.convertValues(source["route"], RouteState);
+	        this.reminders = this.convertValues(source["reminders"], RemindersView);
+	        this.stalls = this.convertValues(source["stalls"], StallAlert);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1867,6 +1956,20 @@ export namespace main {
 	        this.help = source["help"];
 	    }
 	}
+	export class FirmwareRestart {
+	    started: boolean;
+	    reopens: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FirmwareRestart(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.started = source["started"];
+	        this.reopens = source["reopens"];
+	    }
+	}
 	export class FleetState {
 	    workers: number;
 	    mobiles: number;
@@ -1922,6 +2025,7 @@ export namespace main {
 	export class HostCheckResult {
 	    facts: winvm.HostFacts;
 	    runtime: runtime.Status;
+	    steps: winvm.Step[];
 	
 	    static createFrom(source: any = {}) {
 	        return new HostCheckResult(source);
@@ -1931,6 +2035,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.facts = this.convertValues(source["facts"], winvm.HostFacts);
 	        this.runtime = this.convertValues(source["runtime"], runtime.Status);
+	        this.steps = this.convertValues(source["steps"], winvm.Step);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2219,6 +2324,7 @@ export namespace main {
 		}
 	}
 	
+	
 	export class RestoreVolume {
 	    target: string;
 	    volume: string;
@@ -2327,6 +2433,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 	export class UnfinishedRestore {
 	    slug: string;
 	    service: string;
@@ -2343,6 +2450,81 @@ export namespace main {
 	        this.service = source["service"];
 	        this.volumes = source["volumes"];
 	        this.startedAt = source["startedAt"];
+	    }
+	}
+
+}
+
+export namespace obligations {
+	
+	export class Item {
+	    slug: string;
+	    name: string;
+	    rule: string;
+	    kind: string;
+	    action: string;
+	    title: string;
+	    loss: string;
+	    occurrence: string;
+	    stage: string;
+	    due: string;
+	    daysLeft?: number;
+	    censored: boolean;
+	    how: string;
+	    url: string;
+	    source: string;
+	    checked: string;
+	    canDone: boolean;
+	    canSnooze: boolean;
+	    balance?: number;
+	    currency?: string;
+	    balanceUsd?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Item(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.rule = source["rule"];
+	        this.kind = source["kind"];
+	        this.action = source["action"];
+	        this.title = source["title"];
+	        this.loss = source["loss"];
+	        this.occurrence = source["occurrence"];
+	        this.stage = source["stage"];
+	        this.due = source["due"];
+	        this.daysLeft = source["daysLeft"];
+	        this.censored = source["censored"];
+	        this.how = source["how"];
+	        this.url = source["url"];
+	        this.source = source["source"];
+	        this.checked = source["checked"];
+	        this.canDone = source["canDone"];
+	        this.canSnooze = source["canSnooze"];
+	        this.balance = source["balance"];
+	        this.currency = source["currency"];
+	        this.balanceUsd = source["balanceUsd"];
+	    }
+	}
+	export class Muted {
+	    slug: string;
+	    rule: string;
+	    name: string;
+	    title: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Muted(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.rule = source["rule"];
+	        this.name = source["name"];
+	        this.title = source["title"];
 	    }
 	}
 
@@ -2923,6 +3105,35 @@ export namespace services {
 
 }
 
+export namespace setupresume {
+	
+	export class View {
+	    active: boolean;
+	    flow: string;
+	    step: string;
+	    restarted: string;
+	    exeMoved: boolean;
+	    attempts: number;
+	    fromRunOnce: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new View(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active = source["active"];
+	        this.flow = source["flow"];
+	        this.step = source["step"];
+	        this.restarted = source["restarted"];
+	        this.exeMoved = source["exeMoved"];
+	        this.attempts = source["attempts"];
+	        this.fromRunOnce = source["fromRunOnce"];
+	    }
+	}
+
+}
+
 export namespace statebackup {
 	
 	export class Volume {
@@ -3306,11 +3517,19 @@ export namespace winvm {
 	    dockerUsersToken: string;
 	    restartPending: string;
 	    restartReasons: string[];
+	    lanmanServer: string;
+	    otherHypervisors: string;
+	    otherHypervisorNames: string[];
+	    manufacturer: string;
+	    model: string;
+	    lastBoot: string;
+	    dockerBackend: string;
 	    problems: Record<string, string>;
 	    virtualization: string;
 	    hyperVEdition: string;
 	    wsl: string;
 	    secureVmHost: HostVerdict;
+	    isVm: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new HostFacts(source);
@@ -3341,11 +3560,84 @@ export namespace winvm {
 	        this.dockerUsersToken = source["dockerUsersToken"];
 	        this.restartPending = source["restartPending"];
 	        this.restartReasons = source["restartReasons"];
+	        this.lanmanServer = source["lanmanServer"];
+	        this.otherHypervisors = source["otherHypervisors"];
+	        this.otherHypervisorNames = source["otherHypervisorNames"];
+	        this.manufacturer = source["manufacturer"];
+	        this.model = source["model"];
+	        this.lastBoot = source["lastBoot"];
+	        this.dockerBackend = source["dockerBackend"];
 	        this.problems = source["problems"];
 	        this.virtualization = source["virtualization"];
 	        this.hyperVEdition = source["hyperVEdition"];
 	        this.wsl = source["wsl"];
 	        this.secureVmHost = this.convertValues(source["secureVmHost"], HostVerdict);
+	        this.isVm = source["isVm"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class StepAction {
+	    kind: string;
+	    label: string;
+	    url?: string;
+	    op?: string;
+	    manual?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StepAction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.label = source["label"];
+	        this.url = source["url"];
+	        this.op = source["op"];
+	        this.manual = source["manual"];
+	    }
+	}
+	export class Step {
+	    id: string;
+	    title: string;
+	    state: string;
+	    text: string;
+	    blockedBy?: string;
+	    action: StepAction;
+	    help?: string;
+	    helpUrl?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Step(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.state = source["state"];
+	        this.text = source["text"];
+	        this.blockedBy = source["blockedBy"];
+	        this.action = this.convertValues(source["action"], StepAction);
+	        this.help = source["help"];
+	        this.helpUrl = source["helpUrl"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

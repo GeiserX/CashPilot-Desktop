@@ -25,3 +25,4 @@ func (otherProbes) wsl(context.Context) (func(*HostFacts), error)       { return
 func (otherProbes) docker(context.Context) (func(*HostFacts), error)    { return nil, errUnsupported }
 func (otherProbes) account(context.Context) (func(*HostFacts), error)   { return nil, errUnsupported }
 func (otherProbes) restart(context.Context) (func(*HostFacts), error)   { return nil, errUnsupported }
+func (otherProbes) services(context.Context) (func(*HostFacts), error)  { return nil, errUnsupported }

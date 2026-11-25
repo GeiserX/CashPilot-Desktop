@@ -12,6 +12,13 @@ declare module "../wailsjs/go/main/App" {
   export function CheckRuntime(): Promise<RuntimeStatus>;
   // Reads this PC afresh (Windows only; elsewhere facts.supported is false).
   export function HostCheck(): Promise<HostCheckResult>;
+  // The Docker checklist's actions (Windows only; elsewhere they fail).
+  export function StartDockerDesktop(): Promise<void>;
+  export function OpenWindowsUpdate(): Promise<void>;
+  // Only from the confirm screen: restarts the PC now, into its BIOS.
+  export function RestartToFirmware(step: string): Promise<FirmwareRestart>;
+  export function SetupResume(): Promise<SetupResumeView>;
+  export function CancelSetup(): Promise<void>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
@@ -99,6 +106,11 @@ declare module "../wailsjs/go/main/App" {
   // saves the ticked, ready services, never over a value already set here.
   export function PreviewImport(req: ImportRequest): Promise<ImportPreview>;
   export function ApplyImport(req: ImportApplyRequest): Promise<ImportResult>;
+  // Money waiting: the reminders before a provider writes off your earnings.
+  // action is done, snooze (days 1 or 7), mute or unmute; rule "*" is every
+  // reminder of the service; occurrence "" is the current one.
+  export function GetReminders(): Promise<RemindersView>;
+  export function ReminderAction(slug: string, rule: string, action: string, occurrence: string, days: number): Promise<RemindersView>;
 }
 
 export interface ProxyCapView {
@@ -338,6 +350,71 @@ export interface AppState {
   // The LAN fence's status; null before the first check.
   isolation: FenceStatus | null;
   route: RouteState | null;
+  // The Money waiting panel; null from a backend that predates it.
+  reminders?: RemindersView | null;
+  // Running copies that carry almost no traffic while the other copies of their
+  // service here are busy (stall_alerts.go).
+  stalls: StallAlert[] | null;
+}
+
+// RemindersView mirrors the Go RemindersView (reminders_app.go).
+export interface RemindersView {
+  // Joined to a CashPilot server, which owns the reminders: items is empty.
+  joined: boolean;
+  serverUrl: string;
+  // The check failed. Never shown as an all-clear.
+  unknown: boolean;
+  items: ReminderItem[] | null;
+  muted: ReminderMuted[] | null;
+}
+
+// ReminderItem mirrors internal/obligations.Item.
+export interface ReminderItem {
+  slug: string;
+  name: string;
+  rule: string;
+  // "rule" for a catalog rule, "cash-out" for the built-in nudge.
+  kind: string;
+  // claim, withdraw or keep-active.
+  action: string;
+  title: string;
+  loss: string;
+  occurrence: string;
+  // d<N>, overdue, recheck, ready or still-ready.
+  stage: string;
+  // YYYY-MM-DD, "" for a cash-out item.
+  due: string;
+  daysLeft?: number | null;
+  censored: boolean;
+  how: string;
+  url: string;
+  source: string;
+  checked: string;
+  canDone: boolean;
+  canSnooze: boolean;
+  balance?: number | null;
+  currency?: string;
+  balanceUsd?: number | null;
+}
+
+export interface ReminderMuted {
+  slug: string;
+  rule: string;
+  name: string;
+  title: string;
+}
+
+// StallAlert mirrors the Go StallAlert: one copy that runs but gets almost no work.
+// since is the start of its first low hour (Unix seconds); message is the whole
+// alert in plain words.
+export interface StallAlert {
+  slug: string;
+  service: string;
+  container: string;
+  copy: number;
+  since: number;
+  hours: number;
+  message: string;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.
@@ -727,11 +804,61 @@ export interface HostFacts {
   hyperVEdition: Tri;
   wsl: "ready" | "missing" | "outdated" | "unknown";
   secureVmHost: { eligible: Tri; reason: string };
+  // Server service start type: auto, manual, disabled, absent or unknown.
+  lanmanServer: string;
+  otherHypervisors: Tri;
+  otherHypervisorNames: string[] | null;
+  manufacturer: string;
+  model: string;
+  // LastBootUpTime, RFC 3339 UTC; "" unknown.
+  lastBoot: string;
+  dockerBackend: "wsl" | "hyperv" | "unknown";
+  isVm: Tri;
+}
+
+// One row of the Docker checklist (internal/winvm/dockerguide.go).
+export type GuideStepState = "done" | "needs-you" | "blocked" | "unknown" | "note";
+export interface GuideStepAction {
+  // "" none, url, windows-update, start-docker, show-docker, firmware, or
+  // elevated (an admin change the app does not run yet).
+  kind: string;
+  label: string;
+  url?: string;
+  op?: string;
+  manual?: string;
+}
+export interface GuideStep {
+  id: string;
+  title: string;
+  state: GuideStepState;
+  text: string;
+  blockedBy?: string;
+  action: GuideStepAction;
+  help?: string;
+  helpUrl?: string;
 }
 
 export interface HostCheckResult {
   facts: HostFacts;
   runtime: RuntimeStatus;
+  // The Docker checklist; null outside Windows.
+  steps: GuideStep[] | null;
+}
+
+export interface FirmwareRestart {
+  started: boolean;
+  reopens: boolean;
+}
+
+// Whether the app opens on the checklist after a restart (internal/setupresume).
+export interface SetupResumeView {
+  active: boolean;
+  flow: string;
+  step: string;
+  restarted: "yes" | "no" | "unknown" | "";
+  exeMoved: boolean;
+  attempts: number;
+  fromRunOnce: boolean;
 }
 
 export interface InstallGuide {

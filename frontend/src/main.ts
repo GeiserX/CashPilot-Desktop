@@ -72,10 +72,16 @@ import {
   DiscardPartialRestore,
   AcceptSessionRisk,
   RevokeSessionRisk,
+  ReminderAction,
   GetModeState,
   JoinCashPilot,
   StartAsLead,
   SwitchToLead,
+  StartDockerDesktop,
+  OpenWindowsUpdate,
+  RestartToFirmware,
+  SetupResume,
+  CancelSetup,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
@@ -84,6 +90,8 @@ import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, rend
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
+import { renderReminders, withReminders } from "./render/reminders";
+import { stallItems } from "./render/stall";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
 import { renderEnvSetting, settingField, settingsSaveValues } from "./render/settings";
@@ -99,6 +107,8 @@ import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
+import { checkAgainButton, setupFinished } from "./render/dockerguide";
+import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
@@ -107,7 +117,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, Service, SessionConsent, SettingsState, UnfinishedRestore, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -117,12 +127,21 @@ let onboardingStep: "welcome" | "mode" | "join" | "runtime" = "welcome";
 let firstRunPath: Mode = "";
 // A first run that chose a mode on an earlier start carries on from the runtime step.
 let onboardingResumeChecked = false;
+// First run's reading of this PC for the runtime step, once it has landed (or
+// failed), and whether "Check again" is reading now.
+let firstRunHost: HostCheckResult | null = null;
+let firstRunHostTried = false;
+let firstRunChecking = false;
+// A guided setup a restart interrupted (render/dockerguide.ts), and the checklist
+// on screen, if any.
+let setupResume: SetupResumeView | null = null;
+let dockerGuide: DockerGuide | null = null;
 // The Settings card "How this computer runs": its screen, its state, and what the
 // last switch to Run everything here said to do on the server.
 let modeCardView: ModeCardView = "summary";
 let modeState: ModeState | null = null;
 let modeLeft: LeaveResult | null = null;
-type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity" | "import";
+type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity" | "import" | "runtime";
 
 let activeView: View = "dashboard";
 let wizardStep = 1;
@@ -191,6 +210,7 @@ const root = document.querySelector<HTMLDivElement>("#app")!;
 async function boot() {
   try {
     state = await GetAppState();
+    await applySetupResume();
     render();
     wireBackendEvents();
   } catch (error) {
@@ -209,6 +229,51 @@ function wireBackendEvents() {
   // so ~every background error was silently dropped. Surface them to the user.
   EventsOn("app:error", (payload) => showErrorToast(payload));
   EventsOn("app:notice", (payload) => showInfoToast(payload));
+  // Windows reopened CashPilot after a restart while this window was open.
+  EventsOn("setup:resume", () => void applySetupResume().then(render));
+}
+
+// A setup a restart interrupted, or a start with --resume-setup, lands on the
+// Docker checklist, which reads every step again.
+async function applySetupResume() {
+  const resume = await SetupResume().catch(() => null);
+  if (!resume?.active) return;
+  setupResume = resume;
+  if (state?.config.firstRunComplete) activeView = "runtime";
+  else onboardingStep = "runtime";
+}
+
+// HostCheck, plus the frontend's half of finishing a setup: a reading that finds
+// Docker running ends it in Go (host_check.go), so the resume banner goes too.
+async function hostCheck() {
+  const result = await HostCheck();
+  if (setupFinished(result.runtime)) setupResume = null;
+  return result;
+}
+
+// What the checklist needs from Go. skip and checked differ per screen.
+function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked">): DockerGuideDeps {
+  return {
+    hostCheck,
+    checkRuntime: CheckRuntime,
+    startDocker: StartDockerDesktop,
+    openWindowsUpdate: OpenWindowsUpdate,
+    restartToFirmware: RestartToFirmware,
+    cancelSetup: async () => {
+      await CancelSetup();
+      setupResume = null;
+    },
+    openUrl: (url) => {
+      if (url) BrowserOpenURL(url);
+    },
+    failed: (error) => showErrorToast({scope: "runtime", error: String(error)}),
+    ...extra,
+  };
+}
+
+// The guide cards under the checklist: the checklist covers Docker Desktop.
+function otherGuides(guides: InstallGuide[], checklist: boolean): InstallGuide[] {
+  return checklist ? guides.filter((g) => g.id !== "docker-desktop-windows") : guides;
 }
 
 async function onBackendEvent() {
@@ -229,6 +294,9 @@ async function onBackendEvent() {
 
 function render() {
   if (!state) return;
+  // Whatever was on screen is replaced: a checklist there stops drawing.
+  dockerGuide?.dispose();
+  dockerGuide = null;
   if (!state.config.firstRunComplete) {
     renderOnboarding(state);
     return;
@@ -257,6 +325,10 @@ function render() {
     renderImport(state);
     return;
   }
+  if (activeView === "runtime") {
+    renderRuntimeView(state);
+    return;
+  }
   renderDashboard(state);
 }
 
@@ -281,10 +353,16 @@ function renderOnboarding(current: AppState) {
     return;
   }
   const runtime = current.runtime;
+  // Until the first reading of this PC lands, the card says it is checking: the
+  // generic message would tell a PC with virtualization off to open Docker.
+  const checking = !runtime.available && !firstRunHostTried;
+  if (checking) void firstRunHostCheck();
+  // On Windows the Docker checklist shows below the card while Docker is not ready.
+  const checklist = !runtime.available && !!firstRunHost?.facts?.supported && (firstRunHost.steps?.length ?? 0) > 0;
   // Onboarding proceeds when Docker answers, or when the native runtime can run at
   // least one catalog app here. Native-only is never called ready: the card says
   // most apps need Docker and points at its guide (render/onboarding.ts).
-  const card = runtimeCard(runtime);
+  const card = runtimeCard(runtime, {checking});
   root.innerHTML = `
     ${titlebar()}
     <div class="gate">
@@ -294,11 +372,12 @@ function renderOnboarding(current: AppState) {
           ${renderGateSteps(firstRunSteps(firstRunPath), "runtime")}
           <h1 class="gate-title">Put your idle machine to work</h1>
           <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
-          ${card.html}
+          <div id="runtime-card-slot">${card.html}</div>
           <div class="gate-actions">
             <button class="btn btn-primary btn-lg" id="continue-btn" ${card.canContinue ? "" : "disabled"}>Open the dashboard</button>
-            <button class="btn btn-ghost btn-lg" id="refresh-runtime">Check again</button>
+            ${checklist ? "" : checkAgainButton("refresh-runtime", firstRunChecking || checking)}
           </div>
+          <div id="docker-guide"></div>
           <div id="install-guides" class="guide-grid"></div>
         </section>
       </main>
@@ -311,12 +390,115 @@ function renderOnboarding(current: AppState) {
     render();
   });
   document.querySelector("#refresh-runtime")?.addEventListener("click", async () => {
+    if (firstRunChecking) return;
     // HostCheck reads this PC afresh, so a fix the user just made shows at once.
-    const updated = (await HostCheck()).runtime;
-    state = {...current, runtime: updated, guides: await GetRuntimeGuides()};
+    // The button is busy and disabled until it answers.
+    firstRunChecking = true;
     render();
+    try {
+      firstRunHost = await hostCheck();
+      state = {...current, runtime: firstRunHost.runtime, guides: await GetRuntimeGuides()};
+    } catch (error) {
+      showErrorToast({scope: "runtime", error: String(error)});
+    } finally {
+      firstRunChecking = false;
+      render();
+    }
   });
-  renderGuides(current.guides || []);
+  const holder = document.querySelector<HTMLDivElement>("#docker-guide");
+  if (checklist && holder && firstRunHost) {
+    dockerGuide = new DockerGuide(holder, guideDeps({
+      skip: async () => {
+        await CompleteOnboarding();
+        state = await GetAppState();
+        render();
+      },
+      // A reading from the checklist updates the card above it, in place, so the
+      // checklist keeps its screen.
+      checked: (result) => {
+        firstRunHost = result;
+        if (!state) return;
+        state = {...state, runtime: result.runtime};
+        const next = runtimeCard(result.runtime);
+        const slot = document.querySelector("#runtime-card-slot");
+        if (slot) slot.innerHTML = next.html;
+        const go = document.querySelector<HTMLButtonElement>("#continue-btn");
+        if (go) go.disabled = !next.canContinue;
+      },
+    }), {runtime, resume: setupResume, result: firstRunHost});
+  }
+  renderGuides(otherGuides(current.guides || [], checklist));
+}
+
+// First run's first reading of this PC. It lands after the first draw, so the
+// runtime step draws again with the reason and the checklist it brings.
+let firstRunHostPending = false;
+async function firstRunHostCheck() {
+  if (firstRunHostPending) return;
+  firstRunHostPending = true;
+  try {
+    firstRunHost = await hostCheck();
+    if (state) state = {...state, runtime: firstRunHost.runtime};
+  } catch {
+    // The card falls back to the runtime's own message.
+  } finally {
+    firstRunHostTried = true;
+    firstRunHostPending = false;
+    if (state && !state.config.firstRunComplete && onboardingStep === "runtime") render();
+  }
+}
+
+// The runtime page: the runtime card, then on Windows the Docker checklist and
+// elsewhere the install guides. The runtime status in the top bar opens it.
+function renderRuntimeView(current: AppState) {
+  const card = runtimeCard(current.runtime);
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="app-layout">
+      <div class="main-content">
+        ${topbar("runtime", current)}
+        <main class="page-content">
+          ${pageHead("Runtime")}
+          <div id="runtime-card-slot">${card.html}</div>
+          <div id="docker-guide"><p class="muted compact-copy">Checking this computer…</p></div>
+          <div id="install-guides" class="guide-grid"></div>
+        </main>
+        ${pageFoot()}
+      </div>
+    </div>
+  `;
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  const holder = document.querySelector<HTMLDivElement>("#docker-guide");
+  const guides = current.guides || [];
+  // The checklist reads the PC when it opens; outside Windows the reading says so
+  // and the install guides stay the whole page.
+  void hostCheck().then((result) => {
+    if (activeView !== "runtime" || !holder?.isConnected) return;
+    const checklist = !!result.facts?.supported && (result.steps?.length ?? 0) > 0;
+    renderGuides(otherGuides(guides, checklist));
+    if (!checklist) {
+      holder.innerHTML = "";
+      return;
+    }
+    dockerGuide = new DockerGuide(holder, guideDeps({
+      skip: () => {
+        activeView = "dashboard";
+        render();
+      },
+      checked: (res) => {
+        if (state) state = {...state, runtime: res.runtime};
+        const slot = document.querySelector("#runtime-card-slot");
+        if (slot) slot.innerHTML = runtimeCard(res.runtime).html;
+      },
+    }), {runtime: result.runtime, resume: setupResume, result});
+    const slot = document.querySelector("#runtime-card-slot");
+    if (slot) slot.innerHTML = runtimeCard(result.runtime).html;
+  }).catch(() => {
+    if (holder) holder.innerHTML = "";
+    renderGuides(guides);
+  });
 }
 
 // First run: the same bar as the app, one column, one step at a time.
@@ -505,7 +687,7 @@ function renderDashboard(current: AppState) {
   const containers = [...deployments, ...Object.values(copies).flat()];
   const upCount = containers.filter((item) => item.status === "running").length;
   const points = summary?.points || [];
-  const attention = attentionItems({
+  const attention = withReminders(attentionItems({
     runtime: current.runtime,
     services,
     deployments,
@@ -516,7 +698,7 @@ function renderDashboard(current: AppState) {
     drift: current.drift,
     producerStates: current.producerStates,
     isolation: current.isolation,
-  });
+  }).concat(stallItems(current.stalls)), current.reminders);
 
   root.innerHTML = `
     ${titlebar()}
@@ -554,6 +736,8 @@ function renderDashboard(current: AppState) {
         </section>
 
         ${renderAttention(attention, upCount, containers.length)}
+
+        ${renderReminders(current.reminders)}
 
         ${renderStateBackups(current.stateBackups)}
 
@@ -645,6 +829,19 @@ function renderDashboard(current: AppState) {
     });
   });
   wireStateBackups();
+  document.querySelectorAll<HTMLButtonElement>("[data-reminder-action]").forEach((button) => {
+    button.addEventListener("click", () => void runReminderAction(button.dataset));
+  });
+}
+
+// Money waiting: Done, Snooze, Not for me and Unmute, then redraw from the backend.
+async function runReminderAction(data: DOMStringMap) {
+  try {
+    await ReminderAction(data.slug || "", data.rule || "", data.reminderAction || "", data.occurrence || "", Number(data.days || "0"));
+    await refreshState();
+  } catch (error) {
+    setOutput(String(error));
+  }
 }
 
 // The "Back these up" card: confirm, undo, and the export form under a row.
@@ -799,7 +996,7 @@ function topbar(active: View, current: AppState) {
       ${renderTopnav(active)}
       <div class="topbar-right">
         ${renderAddServiceButton(active)}
-        <span class="topbar-runtime ${runtimeOk ? "" : "text-warn"}" title="${escapeHtml(current.runtime.message || "")}"><span class="runtime-dot ${runtimeOk ? "ok" : "warn"}"></span>${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</span>
+        <button class="topbar-runtime ${runtimeOk ? "" : "text-warn"} ${active === "runtime" ? "active" : ""}" data-view="runtime" title="${escapeHtml(current.runtime.message || "")}"><span class="runtime-dot ${runtimeOk ? "ok" : "warn"}"></span>${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</button>
         <span class="topbar-earnings" title="Total balance across every service">${escapeHtml(totalText(current.summary, disp))}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
@@ -825,7 +1022,7 @@ function wireShellNav() {
   document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
-      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import") {
+      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import" || next === "runtime") {
         activeView = next;
         ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav(next, wizardStep));
         resetScrollAfterRender = true;

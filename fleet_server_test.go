@@ -24,9 +24,11 @@ import (
 // TestMain mocks the keyring so store.Open (via config.MasterKey) stays fully
 // in-memory and never touches the real OS keychain.
 // CASHPILOT_PROXIED_ONLY is cleared, so a shell that sets it cannot turn the
-// ordinary-machine tests red.
+// ordinary-machine tests red. RunOnce is a fake, so no test can make Windows
+// start the test binary at the next sign-in (docker_guide.go).
 func TestMain(m *testing.M) {
 	keyring.MockInit()
+	defaultRunOnce = &fakeRunOnce{}
 	os.Unsetenv(services.ProxiedOnlyEnv)
 	os.Exit(m.Run())
 }

@@ -5,6 +5,11 @@
 // build (Mysterium today), so without Docker the card says plainly that most
 // apps need Docker and points at the Docker guide below it.
 //
+// On Windows the first reading of the PC can land after the card is first drawn.
+// Until then the runtime's message is the generic one, so the card says it is
+// checking instead: a PC with virtualization off must not first be told to open
+// Docker Desktop.
+//
 // Pure: takes the runtime status, returns the card and whether first run may go on.
 
 import type { RuntimeStatus } from "../wails";
@@ -28,20 +33,25 @@ function nameList(names: string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-export function runtimeCard(runtime: CardInput): RuntimeCard {
+export function runtimeCard(runtime: CardInput, opts: { checking?: boolean } = {}): RuntimeCard {
   const native = runtime.nativeServices ?? [];
   let tone: RuntimeCard["tone"] = "warn";
   let title: string;
   let body: string;
-  if (runtime.available) {
+  if (!runtime.available && opts.checking) {
+    title = "Checking this computer";
+    body = "CashPilot is reading what this computer has, so it can say exactly what Docker needs.";
+  } else if (runtime.available) {
     tone = "ok";
     title = "Runtime ready";
     body = escapeHtml(runtime.message);
   } else if (native.length > 0) {
     const only = native.length === 1 ? `only ${escapeHtml(native[0])} runs` : `only ${escapeHtml(nameList(native))} run`;
+    // The title says most apps need Docker; the body says it once more, at most,
+    // in the reason's own words, never in three sentences.
     const next = runtime.message ? escapeHtml(runtime.message) : "Set up Docker with the guide below, then click Check again.";
     title = "Docker needed for most apps";
-    body = `Without Docker, ${only} on this computer. Most apps in the catalog need Docker. ${next}`;
+    body = `Without Docker, ${only} on this computer. ${next}`;
   } else {
     title = "Runtime setup needed";
     body = escapeHtml(runtime.message);
@@ -51,5 +61,5 @@ export function runtimeCard(runtime: CardInput): RuntimeCard {
             <span>${body}</span>
             ${runtime.context ? `<small>Docker context: ${escapeHtml(runtime.context)}</small>` : ""}
           </div>`;
-  return { tone, canContinue: runtime.available || native.length > 0, html };
+  return { tone, canContinue: runtime.available || (native.length > 0 && !opts.checking), html };
 }

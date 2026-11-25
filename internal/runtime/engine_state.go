@@ -38,6 +38,9 @@ type HostHints struct {
 	Virtualization  string // the CPU's virtualization is on
 	WSL             string // ready, missing, outdated or unknown
 	WSLVersion      string
+	// DockerBackend is the engine Docker Desktop's settings choose: "wsl",
+	// "hyperv" or unknown. Docker on its Hyper-V backend does not need WSL.
+	DockerBackend string
 	// docker-users: on the group's member list, and in this session's token.
 	DockerUsersListed string
 	DockerUsersToken  string
@@ -85,7 +88,7 @@ func classify(ev dockerEvidence) (string, string) {
 	local := !ev.hostSet
 	if local && notInstalled(ev) {
 		if win {
-			return ReasonNotInstalled, "Docker Desktop is not installed. Most apps in the catalog run inside it. Install Docker Desktop with the guide below, then click Check again."
+			return ReasonNotInstalled, "Docker Desktop is not installed. Install it with the guide below, then click Check again."
 		}
 		return ReasonNotInstalled, "Choose one of the supported runtimes below so CashPilot can run earning services on this machine."
 	}
@@ -95,16 +98,19 @@ func classify(ev dockerEvidence) (string, string) {
 		}
 		return ReasonNotRunning, "A container runtime is installed, but it is not running yet. Start your runtime and try again."
 	}
+	// RestartPending is yes only for Windows Update and component servicing, never
+	// for routine file renames alone (internal/winvm restartPending).
 	restart := ""
 	if h.RestartPending == HintYes {
 		restart = " Windows is also waiting for a restart. Restart the PC first."
 	}
+	wsl := h.DockerBackend != "hyperv"
 	switch {
 	case h.Virtualization == HintNo:
 		return ReasonVirtualizationOff, "Virtualization is turned off in this PC's firmware (BIOS or UEFI), and Docker needs it. Restart into the firmware settings and turn on the setting called Intel Virtualization Technology, VT-x, AMD-V or SVM Mode." + restart
-	case h.WSL == "missing":
+	case wsl && h.WSL == "missing":
 		return ReasonWSLMissing, "Docker needs WSL, the Linux layer built into Windows, and it is not installed. Open PowerShell as administrator, run wsl --install --no-distribution, then restart the PC." + restart
-	case h.WSL == "outdated":
+	case wsl && h.WSL == "outdated":
 		have := "too old"
 		if h.WSLVersion != "" {
 			have = "version " + h.WSLVersion

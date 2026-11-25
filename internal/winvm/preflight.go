@@ -6,7 +6,12 @@
 // builds and tests on every OS. The probes that read the machine sit behind the
 // probes interface in probe.go: probe_windows.go reads Windows, probe_other.go
 // reports that nothing can be read. The Secure VM (DESKTOP-VM.md §3 step 2) reuses
-// the same facts later.
+// the same facts, and CheckVMHost adds the checks only the Secure VM needs.
+//
+// The Secure VM's fence is decided here too, in pure Go: names.go (the host
+// objects), plan.go (desired.json), diff.go (the compare and the one function
+// allowed to connect), routes.go and networks.go (the tunnel, host-address and
+// network rules), ownip.go and counters.go.
 //
 // Every fact is read from a value Windows does not translate: registry values, CIM
 // numbers and booleans, SIDs and exit codes. The test PC runs Spanish Windows, where
@@ -15,6 +20,8 @@
 package winvm
 
 import (
+	"fmt"
+	"net/netip"
 	"strconv"
 	"strings"
 )
@@ -121,12 +128,36 @@ type HostFacts struct {
 	DockerUsersListed Tri    `json:"dockerUsersListed"`
 	DockerUsersToken  Tri    `json:"dockerUsersToken"`
 
-	// RestartPending is whether Windows waits for a restart, and RestartReasons
-	// which marker said so: cbs (Component Based Servicing\RebootPending),
-	// windows-update (WindowsUpdate\Auto Update\RebootRequired) or file-rename
-	// (Session Manager\PendingFileRenameOperations).
+	// RestartPending is whether Windows waits for a restart before a change can
+	// take effect, and RestartReasons which marker said so: cbs (Component Based
+	// Servicing\RebootPending), windows-update (WindowsUpdate\Auto
+	// Update\RebootRequired) or file-rename (Session
+	// Manager\PendingFileRenameOperations). Only cbs and windows-update make it Yes:
+	// installers and updaters leave file renames behind all the time, and those
+	// alone never stop Docker, so a PC with only file-rename reads No and keeps the
+	// reason for a support report (restartPending).
 	RestartPending Tri      `json:"restartPending"`
 	RestartReasons []string `json:"restartReasons"`
+
+	// LanmanServer is the start type of the Server service, which Docker Desktop
+	// needs set to Automatic: auto, manual, disabled, absent or unknown.
+	LanmanServer string `json:"lanmanServer"`
+	// OtherHypervisors is whether another hypervisor's driver service is installed,
+	// VBoxSup (VirtualBox) or vmx86 (VMware Workstation), and OtherHypervisorNames
+	// names the ones found.
+	OtherHypervisors     Tri      `json:"otherHypervisors"`
+	OtherHypervisorNames []string `json:"otherHypervisorNames"`
+	// Manufacturer and Model are Win32_ComputerSystem's, copied from the firmware
+	// tables (SMBIOS), which Windows never translates. IsVM below is read from them.
+	Manufacturer string `json:"manufacturer"`
+	Model        string `json:"model"`
+	// LastBoot is Win32_OperatingSystem.LastBootUpTime in UTC, RFC 3339; "" is
+	// unknown. It is the same for every reading in one boot, so a setup that asks
+	// for a restart compares it to prove the restart happened.
+	LastBoot string `json:"lastBoot"`
+	// DockerBackend is the engine Docker Desktop's own settings file chooses: wsl
+	// (the WSL 2 backend), hyperv, or unknown when no settings file says.
+	DockerBackend string `json:"dockerBackend"`
 
 	// Problems names each probe that failed or timed out, with why. It is for a
 	// support report only; no decision reads it.
@@ -140,7 +171,18 @@ type HostFacts struct {
 	HyperVEdition  Tri         `json:"hyperVEdition"`
 	WSL            string      `json:"wsl"`
 	SecureVMHost   HostVerdict `json:"secureVmHost"`
+	// IsVM is whether this PC is itself a virtual machine, from Manufacturer and
+	// Model. Inside a VM, HypervisorPresent describes the outer hypervisor, so it
+	// does not prove that virtualization reaches this PC.
+	IsVM Tri `json:"isVm"`
 }
+
+// Docker Desktop backends, as DockerBackend reads them.
+const (
+	BackendWSL     = "wsl"
+	BackendHyperV  = "hyperv"
+	BackendUnknown = "unknown"
+)
 
 // HostVerdict says whether this PC can host the Secure VM, and when it cannot,
 // why, as one of the Host* reasons.
@@ -181,7 +223,12 @@ func unknownFacts(goos string) HostFacts {
 		DockerUsersToken:       Unknown,
 		RestartPending:         Unknown,
 		RestartReasons:         []string{},
+		LanmanServer:           "unknown",
+		OtherHypervisors:       Unknown,
+		OtherHypervisorNames:   []string{},
+		DockerBackend:          BackendUnknown,
 		Problems:               map[string]string{},
+		IsVM:                   Unknown,
 	}
 }
 
@@ -191,6 +238,29 @@ func derive(f *HostFacts) {
 	f.HyperVEdition = HyperVEdition(f.EditionID)
 	f.WSL = wslState(*f)
 	f.SecureVMHost = secureVMHost(*f)
+	f.IsVM = virtualMachine(f.Manufacturer, f.Model)
+}
+
+// vmMarkers are words the firmware tables of common hypervisors put in the
+// manufacturer or model: Hyper-V ("Microsoft Corporation", "Virtual Machine"),
+// VMware, VirtualBox ("innotek GmbH", "VirtualBox"), QEMU and KVM, Xen, Parallels,
+// Bochs, and the Amazon and Google clouds. They are vendor strings, never
+// translated.
+var vmMarkers = []string{"virtual machine", "vmware", "virtualbox", "innotek", "qemu", "kvm", "xen", "parallels", "bochs", "amazon ec2", "google compute engine"}
+
+// virtualMachine says whether a manufacturer and model name a virtual machine.
+// Nothing read is Unknown; a read that names no hypervisor is No.
+func virtualMachine(manufacturer, model string) Tri {
+	text := strings.ToLower(strings.TrimSpace(manufacturer) + " " + strings.TrimSpace(model))
+	if strings.TrimSpace(text) == "" {
+		return Unknown
+	}
+	for _, m := range vmMarkers {
+		if strings.Contains(text, m) {
+			return Yes
+		}
+	}
+	return No
 }
 
 // virtualizationOn reads HypervisorPresent first. A running hypervisor proves
@@ -323,4 +393,137 @@ func versionLess(a, b string) bool {
 		}
 	}
 	return false
+}
+
+// MinHostRAM is the installed RAM a PC needs to host the Secure VM (decision 6).
+// The reader passes installed memory (GetPhysicallyInstalledSystemMemory), not
+// what Windows can see, which is a little lower.
+const MinHostRAM = 12 * GiB
+
+// FreeRAMReserve is what the host keeps free on top of the guest at build time.
+const FreeRAMReserve = 1 * GiB
+
+// VMHostInput is what the Secure-VM checks read, on top of HostFacts.
+type VMHostInput struct {
+	NATs         []netip.Prefix // every NetNat's internal prefix
+	Subnet       netip.Prefix   // the /29 setup means to use
+	Net          HostNet
+	OurSwitchID  string // "" before the switch exists
+	Network      CurrentNetwork
+	InstalledRAM uint64 // 0 means unknown
+	FreeRAM      uint64 // 0 means unknown
+	GuestMemory  uint64 // 0 means DefaultGuestMemory
+	// MinHostRAM is 0 for the product. Only a lab build lowers it.
+	MinHostRAM uint64
+	// GCS is the GuestCommunicationServices key names; nil means not read.
+	GCS []string
+}
+
+// VMHostCheck is one Secure-VM check. OK is Unknown when its input was not read.
+type VMHostCheck struct {
+	ID     string `json:"id"`
+	OK     Tri    `json:"ok"`
+	Detail string `json:"detail"`
+}
+
+// Secure-VM check IDs.
+const (
+	CheckNATOverlap   = "nat-overlap"
+	CheckDefaultRoute = "default-route"
+	CheckMetered      = "metered"
+	CheckInstalledRAM = "installed-ram"
+	CheckFreeRAM      = "free-ram"
+	CheckGCSBaseline  = "gcs-baseline"
+)
+
+// VMHostReport is the result of CheckVMHost. Ready is true only when every check
+// is Yes. GCSBaseline is the list setup records into the plan.
+type VMHostReport struct {
+	Checks      []VMHostCheck `json:"checks"`
+	Ready       bool          `json:"ready"`
+	GCSBaseline []string      `json:"gcsBaseline"`
+}
+
+// CheckVMHost runs the checks the Secure VM needs before it is built: no NetNat
+// on our /29, the internet leaving through a physical-class adapter, a network
+// that is not metered, enough installed and free RAM, and a readable list of
+// hv_sock services to compare against later.
+func CheckVMHost(in VMHostInput) VMHostReport {
+	var r VMHostReport
+	add := func(id string, ok Tri, detail string) {
+		r.Checks = append(r.Checks, VMHostCheck{ID: id, OK: ok, Detail: detail})
+	}
+
+	if checkSubnet(in.Subnet) != nil {
+		add(CheckNATOverlap, Unknown, "no subnet chosen yet")
+	} else if n := overlapping(in.Subnet, in.NATs); n.IsValid() {
+		add(CheckNATOverlap, No, fmt.Sprintf("a NAT on this PC (%s) overlaps %s", n, in.Subnet))
+	} else {
+		add(CheckNATOverlap, Yes, "")
+	}
+
+	if len(in.Net.Interfaces) == 0 && len(in.Net.Routes) == 0 && len(in.Net.Egress) == 0 {
+		add(CheckDefaultRoute, Unknown, "could not read the routes")
+	} else if full, why := FullTunnel(in.Net, in.OurSwitchID); full {
+		add(CheckDefaultRoute, No, why)
+	} else {
+		add(CheckDefaultRoute, Yes, "")
+	}
+
+	switch _, why := NetworkOK(in.Network, []NetworkID{in.Network.ID}); why {
+	case NetworkMetered:
+		add(CheckMetered, No, "this network is metered")
+	case NetworkUnknown:
+		add(CheckMetered, Unknown, "could not identify this network")
+	default:
+		add(CheckMetered, Yes, "")
+	}
+
+	minRAM := in.MinHostRAM
+	if minRAM == 0 {
+		minRAM = MinHostRAM
+	}
+	guest := in.GuestMemory
+	if guest == 0 {
+		guest = DefaultGuestMemory
+	}
+	ok, why := ramCheck(in.InstalledRAM, minRAM)
+	add(CheckInstalledRAM, ok, why)
+	ok, why = ramCheck(in.FreeRAM, guest+FreeRAMReserve)
+	add(CheckFreeRAM, ok, why)
+
+	if in.GCS == nil {
+		add(CheckGCSBaseline, Unknown, "could not read the hv_sock services")
+	} else {
+		r.GCSBaseline = GCSBaseline(in.GCS)
+		add(CheckGCSBaseline, Yes, fmt.Sprintf("%d registered", len(r.GCSBaseline)))
+	}
+
+	r.Ready = true
+	for _, c := range r.Checks {
+		if c.OK != Yes {
+			r.Ready = false
+		}
+	}
+	return r
+}
+
+func ramCheck(have, need uint64) (Tri, string) {
+	if have == 0 {
+		return Unknown, "could not read the RAM"
+	}
+	if have < need {
+		return No, fmt.Sprintf("%.1f GiB, needs %.1f GiB", float64(have)/float64(GiB), float64(need)/float64(GiB))
+	}
+	return Yes, ""
+}
+
+// overlapping is the first prefix of set that overlaps p, or the zero prefix.
+func overlapping(p netip.Prefix, set []netip.Prefix) netip.Prefix {
+	for _, q := range set {
+		if q.IsValid() && q.Overlaps(p) {
+			return q
+		}
+	}
+	return netip.Prefix{}
 }

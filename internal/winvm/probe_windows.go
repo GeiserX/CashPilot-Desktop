@@ -85,7 +85,7 @@ func runCIM(ctx context.Context, script string) (func(*HostFacts), error) {
 	cmd := hidden(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(script))
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("PowerShell: %v", err)
+		return nil, cimError(ctx.Err(), err)
 	}
 	return parseCIM(out)
 }
@@ -122,16 +122,23 @@ func (systemProbes) wsl(ctx context.Context) (func(*HostFacts), error) {
 }
 
 // docker reads whether Docker Desktop is installed, running and was ever started
-// on this account, and the state of its service.
+// on this account, the state of its service, and the backend its settings choose.
 func (systemProbes) docker(context.Context) (func(*HostFacts), error) {
 	installed := dockerInstalled()
 	running := processRunning("Docker Desktop.exe")
 	started := Unknown
+	backend := BackendUnknown
 	if appData := os.Getenv("APPDATA"); appData != "" {
 		var errs []error
 		for _, name := range []string{"settings-store.json", "settings.json"} {
-			_, err := os.Stat(filepath.Join(appData, "Docker", name))
+			path := filepath.Join(appData, "Docker", name)
+			_, err := os.Stat(path)
 			errs = append(errs, err)
+			if err == nil && backend == BackendUnknown {
+				if data, err := os.ReadFile(path); err == nil {
+					backend = dockerBackend(data)
+				}
+			}
 		}
 		started = settingsFileFound(errs...)
 	}
@@ -141,7 +148,82 @@ func (systemProbes) docker(context.Context) (func(*HostFacts), error) {
 		f.DockerDesktopRunning = running
 		f.DockerDesktopStarted = started
 		f.DockerService = service
+		f.DockerBackend = backend
 	}, nil
+}
+
+// services reads the Server service's start type and looks for VirtualBox's and
+// VMware's driver services. Querying a service's configuration is open to every
+// user.
+func (systemProbes) services(context.Context) (func(*HostFacts), error) {
+	lanman := serviceStartType("LanmanServer")
+	others, names := otherHypervisors(serviceExists("VBoxSup"), serviceExists("vmx86"))
+	return func(f *HostFacts) {
+		f.LanmanServer = lanman
+		f.OtherHypervisors = others
+		f.OtherHypervisorNames = names
+	}, nil
+}
+
+// openService opens one service with the given rights. absent is true when the
+// service does not exist.
+func openService(name string, access uint32) (m, s windows.Handle, absent bool, err error) {
+	m, err = windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	n, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		windows.CloseServiceHandle(m)
+		return 0, 0, false, err
+	}
+	s, err = windows.OpenService(m, n, access)
+	if err != nil {
+		windows.CloseServiceHandle(m)
+		return 0, 0, errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST), err
+	}
+	return m, s, false, nil
+}
+
+// serviceExists is Yes when the service opens, No when the service manager says
+// it does not exist, Unknown on any other failure.
+func serviceExists(name string) Tri {
+	m, s, absent, err := openService(name, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		if absent {
+			return No
+		}
+		return Unknown
+	}
+	windows.CloseServiceHandle(s)
+	windows.CloseServiceHandle(m)
+	return Yes
+}
+
+// serviceStartType reads a service's start type: auto, manual, disabled, absent
+// or unknown.
+func serviceStartType(name string) string {
+	m, s, absent, err := openService(name, windows.SERVICE_QUERY_CONFIG)
+	if err != nil {
+		if absent {
+			return "absent"
+		}
+		return "unknown"
+	}
+	defer windows.CloseServiceHandle(m)
+	defer windows.CloseServiceHandle(s)
+	var needed uint32
+	// The first call asks how big the answer is.
+	_ = windows.QueryServiceConfig(s, nil, 0, &needed)
+	if needed == 0 {
+		return "unknown"
+	}
+	buf := make([]byte, needed)
+	cfg := (*windows.QUERY_SERVICE_CONFIG)(unsafe.Pointer(&buf[0]))
+	if err := windows.QueryServiceConfig(s, cfg, needed, &needed); err != nil {
+		return "unknown"
+	}
+	return startTypeName(cfg.StartType)
 }
 
 // dockerInstalled is Yes when the uninstall key or the app's exe is found, No when
@@ -343,13 +425,7 @@ func (systemProbes) restart(context.Context) (func(*HostFacts), error) {
 	} else {
 		certain = false
 	}
-	pending := Unknown
-	switch {
-	case len(reasons) > 0:
-		pending = Yes
-	case certain:
-		pending = No
-	}
+	pending := restartPending(reasons, certain)
 	return func(f *HostFacts) {
 		f.RestartPending = pending
 		f.RestartReasons = append([]string{}, reasons...)

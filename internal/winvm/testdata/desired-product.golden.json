@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "names": {
+    "vm": "CashPilot-VM",
+    "switch": "CashPilot-VM",
+    "nat": "CashPilot-VM",
+    "firewallGroup": "CashPilotVM",
+    "guardTask": "\\CashPilot\\VMGuard",
+    "dataDir": "C:\\ProgramData\\CashPilot"
+  },
+  "vhdxDir": "D:\\CashPilotVM",
+  "vmId": "",
+  "adapterId": "",
+  "switchId": "",
+  "subnet": "172.20.0.8/29",
+  "gateway": "172.20.0.9",
+  "guestIp": "172.20.0.10",
+  "hostVnicMac": "00155D000001",
+  "guestMac": "00155D000002",
+  "staticDeny": [
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.0.0.0/24",
+    "192.168.0.0/16",
+    "198.18.0.0/15",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+    "::/0"
+  ],
+  "extraExits": [
+    "203.0.113.7"
+  ],
+  "dhcpGuard": true,
+  "routerGuard": true,
+  "macSpoofing": false,
+  "procCount": 2,
+  "procMax": 75,
+  "procWeight": 50,
+  "memoryBytes": 6442450944,
+  "exposeVirt": false,
+  "checkpoints": "Disabled",
+  "autoStart": "Nothing",
+  "integration": {
+    "2497F4DE-E9FA-4204-80E4-4B75C46419C0": true,
+    "2A34B1C2-FD73-4043-8A5B-DD2159BC743F": false,
+    "5CED1297-4598-4915-A5FC-AD21BB4D02A4": false,
+    "6C09BB55-D683-4DA0-8931-C9BF705F6480": false,
+    "84EAAE65-2F2E-45F5-9BB5-0E857DC8EB47": true,
+    "9F8233AC-BE49-4C79-8EE3-E7E1985B2077": true
+  },
+  "bindingsOff": [
+    "ms_tcpip6",
+    "ms_server",
+    "ms_msclient",
+    "ms_lltdio",
+    "ms_rspndr",
+    "ms_lldp",
+    "ms_implat"
+  ],
+  "enhancedSession": "off",
+  "enhancedSessionOriginal": null,
+  "createdGuardian": false,
+  "gcsBaseline": [],
+  "hostBuild": "",
+  "provedAt": "0001-01-01T00:00:00Z"
+}

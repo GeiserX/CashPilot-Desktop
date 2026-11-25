@@ -2,11 +2,15 @@
 
 **How is this different from the CashPilot Docker container?**
 
-It's the same passive-income management system, but packaged as a desktop app instead of a Docker container. You get system tray integration, auto-updates, a guided Docker installation wizard, and a native window -- no need to manage Docker yourself or access a web UI via browser.
+It's the same passive-income management system, but packaged as a desktop app instead of a Docker container. You get system tray integration, auto-updates, a guided Docker setup checklist on Windows, and a native window -- no need to manage Docker yourself or access a web UI via browser.
 
 **Do I still need Docker installed?**
 
-Yes. CashPilot Desktop manages Docker containers for you, but Docker (or Podman) must be installed. The setup wizard detects if a compatible runtime is missing and guides you through installing Docker Desktop (macOS/Windows) or Docker Engine (Linux).
+Yes, for most apps. CashPilot Desktop manages Docker containers for you, but Docker (or Podman) must be installed. Without Docker, only the apps with a native build run (on Windows, Mysterium).
+
+On Windows, the first run and the runtime status at the top of the app open a checklist. It checks what Docker Desktop needs from your PC: the Windows version, virtualization in the BIOS, WSL, the Docker Desktop install and its terms, and a few more. Each step says what it means for your PC and offers the next safe action, such as opening Docker's download page, starting Docker Desktop, or restarting into the BIOS after you confirm. It never installs Docker or WSL for you, never accepts Docker's terms, and never changes a BIOS setting. Steps that need an administrator say how to do them by hand for now. See [Windows setup](windows-setup.md).
+
+On macOS and Linux, the first run detects a missing runtime and shows install guides for Docker Desktop (macOS) or Docker Engine (Linux).
 
 **How much can I earn?**
 
