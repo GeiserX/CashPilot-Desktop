@@ -215,17 +215,18 @@ func (s SecureVMStub) Build() (string, error) {
 		"  $o = (Get-Acl -LiteralPath $p).GetOwner([Security.Principal.SecurityIdentifier]).Value",
 		"  if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator, so not used: ' + $p + '. Delete it and try again.') }",
 		"}",
-		// A folder that exists must already be owned by SYSTEM or
-		// Administrators: its owner could hold a handle with WRITE_DAC that
-		// outlives any new rules. A new folder gets its rules as it is made.
+		// The folder must be owned by SYSTEM or Administrators before its
+		// rules are reset: its owner could hold a handle with WRITE_DAC that
+		// outlives any new rules. A new folder gets its rules as it is made,
+		// and the check runs after that too, so a folder or junction a user
+		// made in between is refused.
 		"function Lock-Dir([string]$p) {",
 		"  $acl = New-Object Security.AccessControl.DirectorySecurity",
 		"  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')",
-		"  if (Test-Path -LiteralPath $p) {",
-		"    $i = Get-Item -LiteralPath $p -Force",
-		"    if (-not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('not a plain folder: ' + $p) }",
-		"    Test-Owner $p",
-		"  } else { [IO.Directory]::CreateDirectory($p, $acl) | Out-Null }",
+		"  if (-not (Test-Path -LiteralPath $p)) { [IO.Directory]::CreateDirectory($p, $acl) | Out-Null }",
+		"  $i = Get-Item -LiteralPath $p -Force",
+		"  if (-not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('not a plain folder: ' + $p) }",
+		"  Test-Owner $p",
 		"  Set-Acl -LiteralPath $p -AclObject $acl",
 		"}",
 		"function Test-Tree([string]$p) {",
