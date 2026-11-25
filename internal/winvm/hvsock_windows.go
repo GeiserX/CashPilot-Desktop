@@ -138,16 +138,26 @@ func (l *hvListener) Received() []string {
 	return append([]string(nil), l.received...)
 }
 
+// Unregister deletes the registration and leaves the listener bound.
+func (l *hvListener) Unregister() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.key == "" {
+		return nil
+	}
+	if e := registry.DeleteKey(registry.LOCAL_MACHINE, l.key); e != nil && !errors.Is(e, registry.ErrNotExist) {
+		return e
+	}
+	l.key = ""
+	return nil
+}
+
 func (l *hvListener) Close() error {
 	var err error
 	l.once.Do(func() {
 		err = windows.Closesocket(l.s)
 		<-l.done
-		if l.key != "" {
-			if e := registry.DeleteKey(registry.LOCAL_MACHINE, l.key); e != nil && !errors.Is(e, registry.ErrNotExist) {
-				err = errors.Join(err, e)
-			}
-		}
+		err = errors.Join(err, l.Unregister())
 	})
 	return err
 }
