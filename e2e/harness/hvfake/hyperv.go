@@ -57,7 +57,7 @@ type HyperV struct {
 	gcsName  map[string]string // ElementName of a GCS key, by key
 	build    string
 	enhanced bool
-	guardian bool
+	guardian string
 	tasks    map[string]*fakeTask
 	admins   map[string]bool
 	isos     map[string][]byte
@@ -74,7 +74,7 @@ type HyperV struct {
 	GuestAnswers map[string]any
 
 	switches  map[string]*fakeSwitch
-	nats      map[string]netip.Prefix
+	nats      map[string]winvm.LiveNAT
 	firewall  map[string][]*fakeRule
 	vms       map[string]*fakeVM
 	canaries  []*fakeCanary
@@ -163,7 +163,7 @@ func New() *HyperV {
 		Router:       netip.MustParseAddr("192.0.2.1"),
 		MagicDNS:     map[string]netip.Addr{"host.example.ts.net": netip.MustParseAddr("100.64.0.5")},
 		switches:     map[string]*fakeSwitch{},
-		nats:         map[string]netip.Prefix{},
+		nats:         map[string]winvm.LiveNAT{},
 		firewall:     map[string][]*fakeRule{},
 		vms:          map[string]*fakeVM{},
 		guestARP:     map[netip.Addr]string{},
@@ -452,7 +452,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	if p.SwitchID, _, err = f.EnsureSwitch(ctx, n, sub, owner, p.HostVNICMAC, ""); err != nil {
 		return winvm.Plan{}, err
 	}
-	if err := f.EnsureNAT(ctx, n, sub); err != nil {
+	if p.NATID, err = f.EnsureNAT(ctx, n, sub, ""); err != nil {
 		return winvm.Plan{}, err
 	}
 	var disk winvm.OwnedDisk
@@ -581,8 +581,8 @@ func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID, switchID strin
 			l.HostNeighbor = &winvm.Neighbor{IP: ip, MAC: mac, State: "Permanent"}
 		}
 	}
-	for name, p := range f.nats {
-		l.NATs = append(l.NATs, winvm.LiveNAT{Name: name, Prefix: p})
+	for _, nat := range f.nats {
+		l.NATs = append(l.NATs, nat)
 	}
 	for _, r := range f.firewall[n.FirewallGroup] {
 		l.Firewall = append(l.Firewall, winvm.LiveRule{Direction: "Inbound", Action: "Block", Enabled: r.enabled, IfIndex: r.ifIndex})
@@ -806,7 +806,8 @@ func (f *HyperV) Inventory(_ context.Context, n winvm.Names, known winvm.KnownID
 	}
 	inv := winvm.Inventory{
 		NATs:         []winvm.LiveNAT{},
-		Guardian:     f.guardian,
+		Guardian:     f.guardian != "",
+		GuardianID:   f.guardian,
 		HyperVAdmin:  f.admins[sid],
 		Enhanced:     f.enhanced,
 		GCS:          slices.Clone(f.gcs),
@@ -837,7 +838,7 @@ func (f *HyperV) Inventory(_ context.Context, n winvm.Names, known winvm.KnownID
 		inv.Switches = append(inv.Switches, o)
 	}
 	for _, name := range sortedKeys(f.nats) {
-		inv.NATs = append(inv.NATs, winvm.LiveNAT{Name: name, Prefix: f.nats[name]})
+		inv.NATs = append(inv.NATs, f.nats[name])
 	}
 	for _, r := range f.firewall[n.FirewallGroup] {
 		inv.Firewall = append(inv.Firewall, winvm.OwnedObject{ID: r.name, Owner: r.owner})
@@ -931,18 +932,22 @@ func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix
 	return s.id, s.vnicIf, nil
 }
 
-// EnsureNAT records the NetNat. It refuses our name on another prefix.
-func (f *HyperV) EnsureNAT(_ context.Context, n winvm.Names, sub netip.Prefix) error {
+// EnsureNAT creates the NAT or verifies the identity of the recorded one.
+func (f *HyperV) EnsureNAT(_ context.Context, n winvm.Names, sub netip.Prefix, id string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EnsureNAT"); err != nil {
-		return err
+		return "", err
 	}
-	if have, ok := f.nats[n.NAT]; ok && have != sub {
-		return fmt.Errorf("fake Hyper-V: a NAT named %q exists on %v", n.NAT, have)
+	if have, ok := f.nats[n.NAT]; ok {
+		if have.Prefix != sub || have.ID != id {
+			return "", errors.New("fake Hyper-V: the NAT identity does not match")
+		}
+		return have.ID, nil
 	}
-	f.nats[n.NAT] = sub
-	return nil
+	id = f.newID()
+	f.nats[n.NAT] = winvm.LiveNAT{ID: id, Name: n.NAT, Prefix: sub}
+	return id, nil
 }
 
 // CreateVM creates the VM off, with the plan's settings, a vTPM, one
@@ -1090,17 +1095,18 @@ func (f *HyperV) SetEnhanced(on bool) {
 }
 
 // EnsureGuardian creates the vTPM guardian if none exists.
-func (f *HyperV) EnsureGuardian(context.Context) (bool, error) {
+func (f *HyperV) EnsureGuardian(context.Context) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EnsureGuardian"); err != nil {
-		return false, err
+		return "", err
 	}
-	if f.guardian {
-		return false, nil
+	if f.guardian != "" {
+		return "", nil
 	}
-	f.guardian = true
-	return true, nil
+	f.seq++
+	f.guardian = fmt.Sprintf("%064x", f.seq)
+	return f.guardian, nil
 }
 
 // AddHyperVAdmin adds the SID to Hyper-V Administrators.
@@ -1390,13 +1396,13 @@ func (f *HyperV) RemoveSwitch(_ context.Context, switchID, owner string) error {
 }
 
 // RemoveNAT removes our NAT when it has our prefix.
-func (f *HyperV) RemoveNAT(_ context.Context, n winvm.Names, sub netip.Prefix) error {
+func (f *HyperV) RemoveNAT(_ context.Context, n winvm.Names, sub netip.Prefix, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveNAT"); err != nil {
 		return err
 	}
-	if have, ok := f.nats[n.NAT]; ok && have == sub {
+	if have, ok := f.nats[n.NAT]; ok && have.Prefix == sub && have.ID == id {
 		delete(f.nats, n.NAT)
 	}
 	return nil
@@ -1419,13 +1425,15 @@ func (f *HyperV) RemoveFirewall(_ context.Context, n winvm.Names, owner string) 
 }
 
 // RemoveGuardian deletes the vTPM guardian.
-func (f *HyperV) RemoveGuardian(context.Context) error {
+func (f *HyperV) RemoveGuardian(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveGuardian"); err != nil {
 		return err
 	}
-	f.guardian = false
+	if f.guardian == id {
+		f.guardian = ""
+	}
 	return nil
 }
 
@@ -1530,7 +1538,7 @@ func (f *HyperV) LeaveProofLeftovers(n winvm.Names, owner string) {
 		f.gcsName = map[string]string{}
 	}
 	f.gcsName[key] = winvm.ProofElementName(n, owner)
-	f.capture = &fakeCapture{f: f, from: len(f.records), leftover: n.VM}
+	f.capture = &fakeCapture{f: f, from: len(f.records), leftover: n.VM, owner: owner}
 }
 
 // AddForeignProofObjects adds a rule to the instance's proof group with the
@@ -1554,20 +1562,21 @@ func (f *HyperV) AddForeignProofObjects(n winvm.Names) string {
 // ClearProof removes what a killed proof of instance n, made by the install
 // with the owner token, left. Like the script it matches the rule's
 // description and the key's ElementName exactly.
-func (f *HyperV) ClearProof(_ context.Context, n winvm.Names, owner string) ([]string, error) {
+func (f *HyperV) ClearProof(_ context.Context, n winvm.Names, owner string) (winvm.ProofCleanup, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("ClearProof"); err != nil {
-		return nil, err
+		return winvm.ProofCleanup{}, err
 	}
-	var done []string
+	var res winvm.ProofCleanup
 	g := n.FirewallGroup + "-proof"
 	keep := f.firewall[g][:0]
 	for _, r := range f.firewall[g] {
 		if owner != "" && r.desc == "CashPilot Secure VM proof canary. cashpilot-owner="+owner {
-			done = append(done, "the proof firewall rule "+r.name)
+			res.Cleared = append(res.Cleared, "the proof firewall rule "+r.name)
 			continue
 		}
+		res.Left = append(res.Left, "the unverified proof firewall rule "+r.name)
 		keep = append(keep, r)
 	}
 	if len(keep) == 0 {
@@ -1577,24 +1586,31 @@ func (f *HyperV) ClearProof(_ context.Context, n winvm.Names, owner string) ([]s
 	}
 	f.gcs = slices.DeleteFunc(f.gcs, func(k string) bool {
 		if owner != "" && f.gcsName[k] == winvm.ProofElementName(n, owner) {
-			done = append(done, "the proof hv_sock key "+k)
+			res.Cleared = append(res.Cleared, "the proof hv_sock key "+k)
 			delete(f.gcsName, k)
 			return true
 		}
+		if strings.HasPrefix(f.gcsName[k], "CashPilot Secure VM proof "+n.VM) {
+			res.Left = append(res.Left, "the unverified proof hv_sock key "+k)
+		}
 		return false
 	})
-	if f.capture != nil && f.capture.leftover == n.VM {
-		f.capture = nil
-		done = append(done, "the proof pktmon session")
+	if f.capture != nil {
+		if owner != "" && f.capture.leftover == n.VM && f.capture.owner == owner {
+			f.capture = nil
+			res.Cleared = append(res.Cleared, "the proof pktmon session")
+		} else {
+			res.Left = append(res.Left, "the unverified pktmon session")
+		}
 	}
-	return done, nil
+	return res, nil
 }
 
 // AddForeignNAT adds a NetNat this install did not make.
 func (f *HyperV) AddForeignNAT(name string, p netip.Prefix) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.nats[name] = p
+	f.nats[name] = winvm.LiveNAT{ID: f.newID(), Name: name, Prefix: p}
 }
 
 // AddForeignRule adds a firewall rule to a group, with no owner token.
@@ -1616,7 +1632,11 @@ func (f *HyperV) AddForeignTask(name string) {
 func (f *HyperV) SetGuardian(on bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.guardian = on
+	f.guardian = ""
+	if on {
+		f.seq++
+		f.guardian = fmt.Sprintf("%064x", f.seq)
+	}
 }
 
 // Objects lists every object on the fake host that a build makes or changes,
@@ -1648,7 +1668,7 @@ func (f *HyperV) Objects() []string {
 		}
 	}
 	for _, name := range sortedKeys(f.nats) {
-		out = append(out, fmt.Sprintf("nat %s %s", name, f.nats[name]))
+		out = append(out, fmt.Sprintf("nat %s %s", name, f.nats[name].Prefix))
 	}
 	for _, g := range sortedKeys(f.firewall) {
 		for _, r := range f.firewall[g] {
@@ -1661,7 +1681,7 @@ func (f *HyperV) Objects() []string {
 	for _, sid := range sortedKeys(f.admins) {
 		out = append(out, "hyperv-admin "+sid)
 	}
-	out = append(out, fmt.Sprintf("guardian=%v enhancedSession=%v gcs=%v pktmon=%v", f.guardian, f.enhanced, f.gcs, f.capture != nil))
+	out = append(out, fmt.Sprintf("guardian=%v enhancedSession=%v gcs=%v pktmon=%v", f.guardian != "", f.enhanced, f.gcs, f.capture != nil))
 	return out
 }
 
@@ -1707,6 +1727,7 @@ type fakeCapture struct {
 	from    int
 	// leftover is the instance whose killed proof left this session running.
 	leftover string
+	owner    string
 }
 
 // Stop ends the session and returns the records that match its filters.
@@ -1744,19 +1765,22 @@ func (f *HyperV) Pktmon(_ context.Context, fl []winvm.PktFilter) (winvm.Capture,
 }
 
 // SetL3 turns the group's firewall rule on or off.
-func (f *HyperV) SetL3(_ context.Context, n winvm.Names, on bool) error {
+func (f *HyperV) SetL3(_ context.Context, n winvm.Names, owner string, on bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("SetL3"); err != nil {
 		return err
 	}
-	rs, ok := f.firewall[n.FirewallGroup]
-	if !ok {
-		return fmt.Errorf("fake Hyper-V: no firewall group %q", n.FirewallGroup)
+	var owned []*fakeRule
+	for _, r := range f.firewall[n.FirewallGroup] {
+		if owner != "" && r.owner == owner {
+			owned = append(owned, r)
+		}
 	}
-	for _, r := range rs {
-		r.enabled = on
+	if len(owned) != 1 {
+		return fmt.Errorf("fake Hyper-V: owned rule missing or ambiguous in %q", n.FirewallGroup)
 	}
+	owned[0].enabled = on
 	return nil
 }
 

@@ -163,6 +163,7 @@ type Plan struct {
 	VMID      string     `json:"vmId"`
 	AdapterID string     `json:"adapterId"` // the GUID after `\` in Get-VMNetworkAdapter .Id
 	SwitchID  string     `json:"switchId"`
+	NATID     string     `json:"natId,omitempty"`
 	Disk      *OwnedDisk `json:"disk,omitempty"`
 
 	Subnet      netip.Prefix `json:"subnet"` // a free /29 in 172.16/12
@@ -198,7 +199,8 @@ type Plan struct {
 	EnhancedSessionOriginal *bool `json:"enhancedSessionOriginal"`
 	// CreatedGuardian is whether setup created the vTPM's UntrustedGuardian.
 	// Removal deletes it only then: other VMs may share it.
-	CreatedGuardian bool `json:"createdGuardian"`
+	CreatedGuardian bool   `json:"createdGuardian"`
+	GuardianID      string `json:"guardianId,omitempty"`
 
 	// Owner is a random token setup writes into desired.json before it creates
 	// anything, and into the Notes of the VM and the switch and the description
@@ -380,7 +382,8 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 			disk := *prev.Disk
 			p.Disk = &disk
 		}
-		p.CreatedGuardian = prev.CreatedGuardian
+		p.CreatedGuardian, p.GuardianID = prev.CreatedGuardian, prev.GuardianID
+		p.NATID = prev.NATID
 		p.Owner = prev.Owner
 		p.AdminGrantsTracked = prev.AdminGrantsTracked
 		p.AddedAdminSIDs = append([]string{}, prev.AddedAdminSIDs...)
@@ -582,6 +585,12 @@ func (p Plan) validate() error {
 		if id != "" && !guidRe.MatchString(id) {
 			return fmt.Errorf("plan: ID %q is not a GUID", id)
 		}
+	}
+	if p.NATID != "" && !validNATID(p.NATID) {
+		return errors.New("plan: invalid NAT identity")
+	}
+	if p.GuardianID != "" && !guardianIDRE.MatchString(p.GuardianID) {
+		return errors.New("plan: invalid guardian fingerprint")
 	}
 	if p.Disk != nil {
 		if err := p.Disk.validate(); err != nil {

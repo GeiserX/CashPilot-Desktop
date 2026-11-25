@@ -47,8 +47,8 @@ func (unsupported) RemoveDeny(context.Context, string, []netip.Prefix) error {
 	return ErrUnsupported
 }
 
-func (unsupported) ClearProof(context.Context, Names, string) ([]string, error) {
-	return nil, ErrUnsupported
+func (unsupported) ClearProof(context.Context, Names, string) (ProofCleanup, error) {
+	return ProofCleanup{}, ErrUnsupported
 }
 func (unsupported) Inventory(context.Context, Names, KnownIDs, string) (Inventory, error) {
 	return Inventory{}, ErrUnsupported
@@ -56,7 +56,9 @@ func (unsupported) Inventory(context.Context, Names, KnownIDs, string) (Inventor
 func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, string, string) (string, int, error) {
 	return "", 0, ErrUnsupported
 }
-func (unsupported) EnsureNAT(context.Context, Names, netip.Prefix) error { return ErrUnsupported }
+func (unsupported) EnsureNAT(context.Context, Names, netip.Prefix, string) (string, error) {
+	return "", ErrUnsupported
+}
 func (unsupported) CreateVM(context.Context, Plan, string, string) (string, string, OwnedDisk, error) {
 	return "", "", OwnedDisk{}, ErrUnsupported
 }
@@ -71,7 +73,7 @@ func (unsupported) SetHostNeighbor(context.Context, int, netip.Addr, string) err
 func (unsupported) SetEnhancedSession(context.Context, bool) (bool, error) {
 	return false, ErrUnsupported
 }
-func (unsupported) EnsureGuardian(context.Context) (bool, error) { return false, ErrUnsupported }
+func (unsupported) EnsureGuardian(context.Context) (string, error) { return "", ErrUnsupported }
 func (unsupported) AddHyperVAdmin(context.Context, string) (bool, error) {
 	return false, ErrUnsupported
 }
@@ -89,11 +91,13 @@ func (unsupported) UnregisterGuardTask(context.Context, Names, string) error { r
 func (unsupported) RemoveVM(context.Context, string, Plan) ([]string, error) {
 	return nil, ErrUnsupported
 }
-func (unsupported) RemoveSwitch(context.Context, string, string) error   { return ErrUnsupported }
-func (unsupported) RemoveNAT(context.Context, Names, netip.Prefix) error { return ErrUnsupported }
-func (unsupported) RemoveFirewall(context.Context, Names, string) error  { return ErrUnsupported }
-func (unsupported) RemoveGuardian(context.Context) error                 { return ErrUnsupported }
-func (unsupported) RemoveHyperVAdmin(context.Context, string) error      { return ErrUnsupported }
+func (unsupported) RemoveSwitch(context.Context, string, string) error { return ErrUnsupported }
+func (unsupported) RemoveNAT(context.Context, Names, netip.Prefix, string) error {
+	return ErrUnsupported
+}
+func (unsupported) RemoveFirewall(context.Context, Names, string) error { return ErrUnsupported }
+func (unsupported) RemoveGuardian(context.Context, string) error        { return ErrUnsupported }
+func (unsupported) RemoveHyperVAdmin(context.Context, string) error     { return ErrUnsupported }
 func (unsupported) LinkLocal(context.Context, int) (netip.Addr, error) {
 	return netip.Addr{}, ErrUnsupported
 }
@@ -104,7 +108,7 @@ func (unsupported) Canary(context.Context, netip.Addr, uint16, netip.Prefix) (Ca
 func (unsupported) Pktmon(context.Context, []PktFilter) (Capture, error) {
 	return nil, ErrUnsupported
 }
-func (unsupported) SetL3(context.Context, Names, bool) error                { return ErrUnsupported }
+func (unsupported) SetL3(context.Context, Names, string, bool) error        { return ErrUnsupported }
 func (unsupported) SetBinding(context.Context, int, string, bool) error     { return ErrUnsupported }
 func (unsupported) AddAllow(context.Context, string, netip.Prefix) error    { return ErrUnsupported }
 func (unsupported) RemoveAllow(context.Context, string, netip.Prefix) error { return ErrUnsupported }

@@ -181,7 +181,7 @@ func TestFakeHyperVRedSteps(t *testing.T) {
 	if len(c.Arrived()) != 0 {
 		t.Fatal("L3 alone did not hold")
 	}
-	if err := f.SetL3(ctx, p.Names, false); err != nil {
+	if err := f.SetL3(ctx, p.Names, p.Owner, false); err != nil {
 		t.Fatal(err)
 	}
 	f.TCP(ctx, netip.AddrPortFrom(p.Gateway, 40010), "red4")
@@ -246,7 +246,7 @@ func TestFakeHyperVIPv6Stack(t *testing.T) {
 		t.Fatal("the planned fence let IPv6 reach the host")
 	}
 	f.RemoveDeny(ctx, p.VMID, []netip.Prefix{netip.MustParsePrefix("::/0")})
-	f.SetL3(ctx, p.Names, false)
+	f.SetL3(ctx, p.Names, p.Owner, false)
 	f.SetBinding(ctx, live.VNICIfIndex, "ms_tcpip6", true)
 	f.TCP(ctx, to, "v6")
 	if len(c.Arrived()) != 1 {

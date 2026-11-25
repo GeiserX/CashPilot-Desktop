@@ -40,6 +40,7 @@ type sockaddrHV struct {
 type hvListener struct {
 	s        windows.Handle
 	key      string // the GCS registration this listener made, "" for none
+	element  string
 	mu       sync.Mutex
 	received []string
 	once     sync.Once
@@ -74,37 +75,30 @@ func openHVListener(_ context.Context, bindVMID, service string, register bool, 
 		}
 		err = k.SetStringValue("ElementName", element)
 		k.Close()
-		l.key = name
 		if err != nil {
-			l.unregister()
 			return nil, err
 		}
+		l.key, l.element = name, element
 	}
 	s, err := windows.Socket(afHyperV, windows.SOCK_STREAM, hvProtocolRaw)
 	if err != nil {
-		l.unregister()
+		l.Unregister()
 		return nil, err
 	}
 	l.s = s
 	sa := sockaddrHV{Family: afHyperV, VMID: vm, ServiceID: svc}
 	if r, _, e := procBind.Call(uintptr(s), uintptr(unsafe.Pointer(&sa)), unsafe.Sizeof(sa)); r != 0 {
 		windows.Closesocket(s)
-		l.unregister()
+		l.Unregister()
 		return nil, e
 	}
 	if err := windows.Listen(s, 4); err != nil {
 		windows.Closesocket(s)
-		l.unregister()
+		l.Unregister()
 		return nil, err
 	}
 	go l.serve()
 	return l, nil
-}
-
-func (l *hvListener) unregister() {
-	if l.key != "" {
-		registry.DeleteKey(registry.LOCAL_MACHINE, l.key)
-	}
 }
 
 func (l *hvListener) serve() {
@@ -154,6 +148,19 @@ func (l *hvListener) Unregister() error {
 	defer l.mu.Unlock()
 	if l.key == "" {
 		return nil
+	}
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, l.key, registry.QUERY_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		l.key = ""
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	element, _, err := k.GetStringValue("ElementName")
+	k.Close()
+	if err != nil || element != l.element {
+		return errors.New("the hv_sock registration no longer has this proof's owner tag")
 	}
 	if e := registry.DeleteKey(registry.LOCAL_MACHINE, l.key); e != nil && !errors.Is(e, registry.ErrNotExist) {
 		return e

@@ -56,6 +56,7 @@ type LiveAdapter struct {
 
 // LiveNAT is one NetNat.
 type LiveNAT struct {
+	ID     string       `json:"id,omitempty"`
 	Name   string       `json:"name"`
 	Prefix netip.Prefix `json:"prefix"`
 }
@@ -223,8 +224,11 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 	// Our NAT exactly, and no other NAT on our /29.
 	ours := 0
 	for _, n := range live.NATs {
-		if n.Name == p.Names.NAT {
+		if strings.EqualFold(n.Name, p.Names.NAT) {
 			ours++
+			if p.NATID != "" && n.ID != p.NATID {
+				add("nat", p.NATID, n.ID)
+			}
 			if n.Prefix.Masked() != p.Subnet {
 				add("nat", p.Subnet, n.Prefix)
 			}

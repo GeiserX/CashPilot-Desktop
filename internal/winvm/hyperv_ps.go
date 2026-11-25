@@ -174,7 +174,7 @@ if ($idx -ne 0) {
     $o.neighbors = @(Get-NetNeighbor -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.State.ToString() -eq 'Permanent' } | ForEach-Object { [ordered]@{ ip = [string]$_.IPAddress; mac = [string]$_.LinkLayerAddress; state = $_.State.ToString() } })
   } catch { }
 }
-try { $o.nats = @(Get-NetNat -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } }) } catch { }
+try { $o.nats = @(Get-NetNat -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ id = [string]$_.InstanceID; name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } }) } catch { }
 try {
   $o.firewall = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | ForEach-Object {
     $r = $_
@@ -592,6 +592,7 @@ type neighborWire struct {
 }
 
 type natWire struct {
+	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Prefix string `json:"prefix"`
 }
@@ -682,7 +683,7 @@ func (w liveWire) live() (LiveState, error) {
 	l.HostNeighbor = pickNeighbor(w.Neighbors)
 	for _, n := range w.NATs {
 		p, _ := parsePrefixOrAddr(n.Prefix)
-		l.NATs = append(l.NATs, LiveNAT{Name: n.Name, Prefix: p})
+		l.NATs = append(l.NATs, LiveNAT{ID: n.ID, Name: n.Name, Prefix: p})
 	}
 	if w.NATs != nil && l.NATs == nil {
 		l.NATs = []LiveNAT{}

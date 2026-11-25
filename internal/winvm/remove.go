@@ -50,7 +50,7 @@ var guardFiles = []string{"CashPilot-guard.exe", "remove.ps1", "setup.ps1"}
 var atomicTargets = []string{PlanFile, installFile, StateFile, StatusFile, LockFile, ProofFile, PrefsFile}
 var atomicSuffix = regexp.MustCompile(`^[0-9]+\.tmp$`)
 var bootstrapTemp = regexp.MustCompile(`^\.(bootstrap|setup-exe|setup-params|guard-backup|params-backup|guard-discard|lab-params)\.[0-9a-f]{32}\.tmp$`)
-var captureDir = regexp.MustCompile(`^pktmon-[0-9]+$`)
+var captureDir = regexp.MustCompile(`^pktmon-([0-9a-f]{32}-)?[0-9]+$`)
 var captureFile = regexp.MustCompile(`^c[0-9]+\.pcapng$`)
 
 // generatedData identifies only the paths setup writes. The plan and the
@@ -141,7 +141,9 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 			return res, ierr
 		}
 		res.Left = append(res.Left, listInventory(inv, n)...)
-		return res, nil
+		proof, err := d.HV.ClearProof(ctx, n, "")
+		res.Left = append(res.Left, proof.Left...)
+		return res, err
 	}
 	if err != nil {
 		return res, fmt.Errorf("desired.json cannot be read, so nothing was removed: %w", err)
@@ -173,11 +175,12 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		}
 	}
 
-	if cleared, err := d.HV.ClearProof(ctx, n, p.Owner); err != nil {
+	proof, err := d.HV.ClearProof(ctx, n, p.Owner)
+	if err != nil {
 		fail("what an earlier proof left", err)
-	} else {
-		res.Removed = append(res.Removed, cleared...)
 	}
+	res.Removed = append(res.Removed, proof.Cleared...)
+	res.Left = append(res.Left, proof.Left...)
 
 	ourVM := ""
 	vmID := adopt(inv.VMs, p.VMID, p.Owner)
@@ -232,14 +235,14 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	}
 
 	for _, x := range inv.NATs {
-		if x.Name != n.NAT {
+		if !strings.EqualFold(x.Name, n.NAT) {
 			continue
 		}
-		if !p.Subnet.IsValid() || x.Prefix.Masked() != p.Subnet {
-			res.Left = append(res.Left, fmt.Sprintf("the NAT %s on %s (not the range this install recorded)", x.Name, x.Prefix))
+		if !independentNATID(n.NAT, p.NATID) || p.NATID != x.ID || x.Prefix.Masked() != p.Subnet {
+			res.Left = append(res.Left, fmt.Sprintf("the NAT %s on %s (ownership could not be verified)", x.Name, x.Prefix))
 			continue
 		}
-		if err := d.HV.RemoveNAT(ctx, n, p.Subnet); err != nil {
+		if err := d.HV.RemoveNAT(ctx, n, p.Subnet, p.NATID); err != nil {
 			fail("NAT", err)
 			continue
 		}
@@ -273,7 +276,9 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		}
 	}
 
-	if p.CreatedGuardian && inv.Guardian {
+	if inv.Guardian && (p.GuardianID == "" || inv.GuardianID != p.GuardianID) {
+		res.Left = append(res.Left, "the vTPM guardian (ownership could not be verified)")
+	} else if inv.Guardian {
 		var others []string
 		for _, id := range inv.GuardianVMs {
 			if !strings.EqualFold(id, ourVM) {
@@ -282,7 +287,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		}
 		if len(others) > 0 {
 			res.Kept = append(res.Kept, "the vTPM guardian: other VMs use it ("+strings.Join(others, ", ")+")")
-		} else if err := d.HV.RemoveGuardian(ctx); err != nil {
+		} else if err := d.HV.RemoveGuardian(ctx, p.GuardianID); err != nil {
 			fail("guardian", err)
 		} else {
 			res.Removed = append(res.Removed, "the vTPM guardian")

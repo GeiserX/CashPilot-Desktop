@@ -389,14 +389,17 @@ func (b *builder) journal(ctx context.Context) error {
 	if prev != nil {
 		owner = prev.Owner
 	}
-	cleared, err := b.HV.ClearProof(ctx, b.n, owner)
+	proofCleanup, err := b.HV.ClearProof(ctx, b.n, owner)
 	if err != nil {
 		return fmt.Errorf("could not clear what an earlier proof left: %w", err)
 	}
-	for _, c := range cleared {
+	for _, c := range proofCleanup.Cleared {
 		b.logf("setup: removed %s, left by an earlier proof", c)
 	}
-	if len(cleared) > 0 {
+	for _, c := range proofCleanup.Left {
+		b.logf("setup left %s", c)
+	}
+	if len(proofCleanup.Cleared) > 0 {
 		if b.inv, err = b.HV.Inventory(ctx, b.n, known, b.sp.UserSID); err != nil {
 			return err
 		}
@@ -508,7 +511,7 @@ func (b *builder) checkOwnership() error {
 	count("vm", b.inv.VMs)
 	count("switch", b.inv.Switches)
 	for _, x := range b.inv.NATs {
-		if x.Name == b.n.NAT && (b.prev == nil || x.Prefix.Masked() != sub) {
+		if strings.EqualFold(x.Name, b.n.NAT) && (b.prev == nil || b.prev.NATID == "" || x.ID != b.prev.NATID || x.Prefix.Masked() != sub) {
 			bad = append(bad, fmt.Sprintf("the NAT %s on %s", x.Name, x.Prefix))
 		}
 	}
@@ -540,7 +543,7 @@ func (b *builder) hostChecks(ctx context.Context) error {
 	b.h = h
 	var nats []netip.Prefix
 	for _, x := range b.inv.NATs {
-		if x.Name != b.n.NAT {
+		if !strings.EqualFold(x.Name, b.n.NAT) {
 			nats = append(nats, x.Prefix)
 		}
 	}
@@ -594,7 +597,12 @@ func (b *builder) ensureSwitch(ctx context.Context) error {
 }
 
 func (b *builder) ensureNAT(ctx context.Context) error {
-	return b.HV.EnsureNAT(ctx, b.n, b.p.Subnet)
+	id, err := b.HV.EnsureNAT(ctx, b.n, b.p.Subnet, b.p.NATID)
+	if err != nil || id == b.p.NATID {
+		return err
+	}
+	b.p.NATID = id
+	return b.save()
 }
 
 func (b *builder) bindings(ctx context.Context) error {
@@ -609,17 +617,14 @@ func (b *builder) neighbor(ctx context.Context) error {
 	return b.HV.SetHostNeighbor(ctx, b.vnicIf, b.p.GuestIP, b.p.GuestMAC)
 }
 
-// guardian records that setup creates the vTPM guardian before it does, so a
-// stop in between never leaves removal thinking someone else made it.
+// guardian journals the certificate fingerprint from a confirmed creation.
 func (b *builder) guardian(ctx context.Context) error {
-	if !b.inv.Guardian && !b.p.CreatedGuardian {
-		b.p.CreatedGuardian = true
-		if err := b.save(); err != nil {
-			return err
-		}
+	id, err := b.HV.EnsureGuardian(ctx)
+	if err != nil || id == "" {
+		return err
 	}
-	_, err := b.HV.EnsureGuardian(ctx)
-	return err
+	b.p.CreatedGuardian, b.p.GuardianID = true, id
+	return b.save()
 }
 
 func (b *builder) installPath() string { return filepath.Join(b.Dir, installFile) }

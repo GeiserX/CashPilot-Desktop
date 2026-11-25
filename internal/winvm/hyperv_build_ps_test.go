@@ -3,7 +3,9 @@ package winvm
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"net"
 	"net/netip"
 	"os"
@@ -50,7 +52,7 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 				_, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00-15-5D-00-00-02", tSwitchID)
 				return err
 			}},
-		{"EnsureNAT", ok, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { return b.EnsureNAT(ctx, n, sub) }},
+		{"EnsureNAT", `{"id":"` + tSwitchID + `"}`, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { _, err := b.EnsureNAT(ctx, n, sub, ""); return err }},
 		{"CreateVM", `{"vmId":"` + tVMID + `","adapterId":"` + tAdapterID + `","disk":{"path":"D:\\VMs\\CashPilot-VM.vhdx","id":"` + strings.Repeat("1", 48) + `"}}`, []string{`"iso":"D:\\iso\\w.iso"`, `"owner":"` + tOwner + `"`},
 			func(b psBuilder) error {
 				_, _, _, err := b.CreateVM(ctx, p, `D:\iso\w.iso`, `C:\ProgramData\CashPilot\answer.iso`)
@@ -69,7 +71,7 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 			}
 			return err
 		}},
-		{"EnsureGuardian", `{"created":true}`, []string{`{}`}, func(b psBuilder) error { _, err := b.EnsureGuardian(ctx); return err }},
+		{"EnsureGuardian", `{"id":"` + strings.Repeat("1", 64) + `"}`, []string{`{}`}, func(b psBuilder) error { _, err := b.EnsureGuardian(ctx); return err }},
 		{"AddHyperVAdmin", `{"added":true}`, []string{`"sid":"S-1-5-21-1-2-3-1001"`}, func(b psBuilder) error {
 			_, err := b.AddHyperVAdmin(ctx, "S-1-5-21-1-2-3-1001")
 			return err
@@ -95,14 +97,14 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"UnregisterGuardTask", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.UnregisterGuardTask(ctx, n, tOwner) }},
 		{"RemoveVM", `{"left":[]}`, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { _, err := b.RemoveVM(ctx, tVMID, p); return err }},
 		{"RemoveSwitch", ok, []string{tSwitchID}, func(b psBuilder) error { return b.RemoveSwitch(ctx, tSwitchID, tOwner) }},
-		{"RemoveNAT", ok, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { return b.RemoveNAT(ctx, n, sub) }},
+		{"RemoveNAT", ok, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { return b.RemoveNAT(ctx, n, sub, tSwitchID) }},
 		{"RemoveFirewall", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.RemoveFirewall(ctx, n, tOwner) }},
-		{"RemoveGuardian", ok, []string{`{}`}, func(b psBuilder) error { return b.RemoveGuardian(ctx) }},
+		{"RemoveGuardian", ok, nil, func(b psBuilder) error { return b.RemoveGuardian(ctx, strings.Repeat("1", 64)) }},
 		{"RemoveHyperVAdmin", ok, []string{`"sid":"S-1-5-21-1-2-3-1001"`}, func(b psBuilder) error { return b.RemoveHyperVAdmin(ctx, "S-1-5-21-1-2-3-1001") }},
 		{"ClearProof", `{"cleared":["the proof pktmon session"]}`, []string{`"group":"CashPilotVM-proof"`, `"element":"CashPilot Secure VM proof CashPilot-VM. cashpilot-owner=` + tOwner + `"`, `"dir":"C:\\ProgramData\\CashPilot\\proof\\"`, `"desc":"CashPilot Secure VM proof canary. cashpilot-owner=` + tOwner + `"`},
 			func(b psBuilder) error {
 				got, err := b.ClearProof(ctx, n, tOwner)
-				if err == nil && len(got) != 1 {
+				if err == nil && len(got.Cleared) != 1 {
 					t.Errorf("cleared %v", got)
 				}
 				return err
@@ -153,7 +155,8 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 		"lab names elsewhere": func(b psBuilder) error {
 			m := n
 			m.VM = "Other"
-			return b.EnsureNAT(ctx, m, sub)
+			_, err := b.EnsureNAT(ctx, m, sub, "")
+			return err
 		},
 		"ISO path with a quote": func(b psBuilder) error {
 			_, _, _, err := b.CreateVM(ctx, p, `D:\iso\w'.iso`, `C:\a.iso`)
@@ -297,7 +300,7 @@ func TestProberSeam(t *testing.T) {
 		answers []string
 		call    func() error
 	}{
-		{"SetL3", []string{ok}, func() error { return p.SetL3(ctx, n, false) }},
+		{"SetL3", []string{ok}, func() error { return p.SetL3(ctx, n, tOwner, false) }},
 		{"SetBinding", []string{ok}, func() error { return p.SetBinding(ctx, 20, "ms_tcpip6", true) }},
 		{"Allow", []string{`{"allow":["192.0.2.10"]}`}, func() error { return p.AddAllow(ctx, tVMID, q) }},
 		{"Allow", []string{`{"allow":[]}`}, func() error { return p.RemoveAllow(ctx, tVMID, q) }},
@@ -362,7 +365,7 @@ func TestProberSeam(t *testing.T) {
 	os.WriteFile(out, pcapng(ipv4TCP(netip.MustParseAddr("192.0.2.10"), dst, 45000), ipv4TCP(netip.MustParseAddr("192.0.2.10"), dst, 1)), 0o600)
 	os.WriteFile(vnic, pcapng(ipv4TCP(netip.MustParseAddr("172.31.250.2"), dst, 45000)), 0o600)
 	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
-	r.answers = append(r.answers, `{"list":`+jsonQuote(list)+`}`, cannedHostNet,
+	r.answers = append(r.answers, `{"metadata":true,"list":`+jsonQuote(list)+`}`, cannedHostNet,
 		`{"files":[{"id":4,"path":`+jsonQuote(out)+`},{"id":9,"path":`+jsonQuote(vnic)+`}]}`)
 	recs, err := c.Stop(ctx)
 	if err != nil {
@@ -415,10 +418,74 @@ func TestPktmonRefusesMissingComponentExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
-	h, _, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet,
+	h, _, _ := newSeam(`{"metadata":true,"list":`+jsonQuote(list)+`}`, cannedHostNet,
 		`{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
 	c := psCapture{p: &psProber{h: h, switchID: tSwitchID}, dir: dir}
 	if _, err := c.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "component 9") {
 		t.Fatalf("Stop = %v, want a missing export error for component 9", err)
 	}
+}
+
+func TestProofFirewallKeepsForeignRules(t *testing.T) {
+	const mock = `
+function Get-NetFirewallRule {
+  param($Name, $Group, $ErrorAction)
+  [pscustomobject]@{ Name = 'owned'; Group = $g; Description = $desc }
+  [pscustomobject]@{ Name = 'foreign'; Group = $g; Description = 'some other rule' }
+}
+function Remove-NetFirewallRule {
+  [CmdletBinding()]
+  param([Parameter(ValueFromPipeline)]$InputObject, $Name)
+  process {
+    if ($InputObject.Name -eq 'foreign' -or $Name -eq 'foreign') { throw 'removed a foreign rule' }
+  }
+}
+function Set-NetFirewallRule {
+  [CmdletBinding()]
+  param([Parameter(ValueFromPipeline)]$InputObject, $Enabled)
+  process {
+    if ($InputObject.Name -eq 'foreign') { throw 'toggled a foreign rule' }
+  }
+}
+`
+	for _, tc := range []struct {
+		name, script, group, desc string
+		arg                       map[string]any
+	}{
+		{"toggle", scriptSetL3, "CashPilotVM", "CashPilot Secure VM. " + ownerTag + tOwner, map[string]any{"on": false}},
+		{"teardown", scriptCanaryRule, "CashPilotVM-proof", proofCanaryDesc(tOwner), map[string]any{"add": false, "port": 42000}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.arg["group"], tc.arg["desc"], tc.arg["owner"] = tc.group, tc.desc, tOwner
+			s := "param($g, $desc)\n" + mock
+			if code, out := runOwnedScriptWithFake(t, s, tc.script, tc.arg, tc.group, tc.desc); code != 0 {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+		})
+	}
+}
+
+func TestPktmonKeepsForeignFilters(t *testing.T) {
+	const mock = `
+function Get-EtwTraceSession {}
+function Join-Path { 'Invoke-FakePktmon' }
+function Start-Sleep {}
+function Invoke-FakePktmon {
+  if ($args[0] -eq 'filter') { throw 'changed a host pktmon filter' }
+  $global:LASTEXITCODE = 0
+}
+`
+	if code, out := runOwnedScriptWithFake(t, mock, scriptPktmonStart, map[string]any{"etl": "capture.etl"}); code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+}
+
+func runOwnedScriptWithFake(t *testing.T, mock, script string, arg map[string]any, args ...string) (int, []byte) {
+	t.Helper()
+	raw, err := json.Marshal(arg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runFakePowerShell(t,
+		mock+"\n$env:CPD_HV_ARG = '"+base64.StdEncoding.EncodeToString(raw)+"'\n"+script, args...)
 }

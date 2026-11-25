@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // The write side of the PowerShell seam (the Builder): setup, Repair and
@@ -28,7 +30,7 @@ const ownerTag = "cashpilot-owner="
 const guestDiskBytes = 128 * GiB
 
 // hgsGuardian is the guardian a local key protector uses.
-const hgsGuardian = "UntrustedGuardian"
+var guardianIDRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // hvAdmins is the Hyper-V Administrators group, by SID: its name is
 // translated.
@@ -46,12 +48,7 @@ function Get-GroupSids([string]$sid) {
     (New-Object Security.Principal.SecurityIdentifier($b, 0)).Value
   })
 }
-`
-
-// scriptInventory lists every object with one of our names, and the VM and the
-// switch with the recorded IDs whatever their names are now, the owner token
-// each carries, and the host facts setup and Remove VM check.
-const scriptInventory = buildPrelude + `function Test-GuardianUser($v) {
+function Test-GuardianUser($v) {
   if ($v.Generation -ne 2) { return $false }
   try {
     $s = Get-VMSecurity -VM $v
@@ -60,7 +57,19 @@ const scriptInventory = buildPrelude + `function Test-GuardianUser($v) {
     return (@(Get-VMKeyProtector -VM $v).Count -gt 4)
   } catch { return $true }
 }
-$o = [ordered]@{}
+function Get-GuardianIdentity($g) {
+  if (-not $g.SigningCertificate -or -not $g.EncryptionCertificate) { return '' }
+  $pair = [Convert]::ToBase64String([byte[]]$g.SigningCertificate) + ':' + [Convert]::ToBase64String([byte[]]$g.EncryptionCertificate)
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($pair))).Replace('-', '').ToLowerInvariant() }
+  finally { $sha.Dispose() }
+}
+`
+
+// scriptInventory lists every object with one of our names, and the VM and the
+// switch with the recorded IDs whatever their names are now, the owner token
+// each carries, and the host facts setup and Remove VM check.
+const scriptInventory = buildPrelude + `$o = [ordered]@{}
 $o.vms = @(Get-VM | Where-Object { ($_.Name -eq $in.vm) -or ($in.vmId -and ($_.Id.ToString() -eq $in.vmId)) } | ForEach-Object { [ordered]@{ id = $_.Id.ToString(); owner = (Get-Owner ([string]$_.Notes)) } })
 $o.guardianVms = @(Get-VM | Where-Object { Test-GuardianUser $_ } | ForEach-Object { $_.Id.ToString() })
 $o.switches = @(Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -or ($in.switchId -and ($_.Id.ToString() -eq $in.switchId)) } | ForEach-Object {
@@ -68,12 +77,14 @@ $o.switches = @(Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -or ($in.
   $ports = @(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw.Id) } | ForEach-Object { $_.VMId.ToString() } | Select-Object -Unique)
   [ordered]@{ id = $sw.Id.ToString(); owner = (Get-Owner ([string]$sw.Notes)); ports = @($ports) }
 })
-$o.nats = @(Get-NetNat -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } })
+$o.nats = @(Get-NetNat -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ id = [string]$_.InstanceID; name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } })
 $o.firewall = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ id = [string]$_.Name; owner = (Get-Owner ([string]$_.Description)) } })
 $t = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
 $o.task = $null
 if ($t.Count -eq 1) { $o.task = [ordered]@{ id = [string]$t[0].TaskPath + [string]$t[0].TaskName; owner = (Get-Owner ([string]$t[0].Description)) } }
-$o.guardian = [bool](Get-HgsGuardian -Name 'UntrustedGuardian' -ErrorAction SilentlyContinue)
+$guardian = @(Get-HgsGuardian -Name 'UntrustedGuardian' -ErrorAction SilentlyContinue)
+$o.guardian = $guardian.Count -gt 0
+if ($guardian.Count -eq 1) { $o.guardianId = Get-GuardianIdentity $guardian[0] }
 $o.hypervAdmin = $false
 if ($in.sid) { $o.hypervAdmin = ((Get-GroupSids 'S-1-5-32-578') -contains $in.sid) }
 $o.enhancedSession = [bool](Get-VMHost).EnableEnhancedSessionMode
@@ -129,15 +140,17 @@ if (-not ($have | Where-Object { ([string]$_.IPAddress -eq $in.gateway) -and ([i
 Write-Doc ([ordered]@{ switchId = $sw.Id.ToString(); ifIndex = $idx })
 `
 
-// scriptEnsureNAT creates the NetNat on our /29, or checks the one with our
-// name is on it.
+// scriptEnsureNAT returns the provider identity of the new or recorded NAT.
 const scriptEnsureNAT = buildPrelude + `$n = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $in.nat })
 if ($n.Count -gt 0) {
-  if ($n.Count -ne 1 -or [string]$n[0].InternalIPInterfaceAddressPrefix -ne $in.prefix) { throw 'A NAT with this name exists on another range.' }
+  if ($n.Count -ne 1 -or -not $in.id -or [string]$n[0].InstanceID -cne $in.id -or [string]$n[0].InternalIPInterfaceAddressPrefix -ne $in.prefix) {
+    throw 'A NAT with this name exists and its identity does not match the journal.'
+  }
+  $nat = $n[0]
 } else {
-  New-NetNat -Name $in.nat -InternalIPInterfaceAddressPrefix $in.prefix | Out-Null
+  $nat = New-NetNat -Name $in.nat -InternalIPInterfaceAddressPrefix $in.prefix
 }
-Write-Doc ([ordered]@{ ok = $true })
+Write-Doc ([ordered]@{ id = [string]$nat.InstanceID })
 `
 
 // scriptCreateVM creates the VM off, with one disconnected adapter: only the
@@ -230,11 +243,16 @@ if ($was -ne [bool]$in.on) { Set-VMHost -EnableEnhancedSessionMode ([bool]$in.on
 Write-Doc ([ordered]@{ was = $was })
 `
 
-// scriptEnsureGuardian creates the guardian a local key protector uses, when
-// there is none.
-const scriptEnsureGuardian = buildPrelude + `$c = $false
-if (-not (Get-HgsGuardian -Name 'UntrustedGuardian' -ErrorAction SilentlyContinue)) { New-HgsGuardian -Name 'UntrustedGuardian' -GenerateCertificates | Out-Null; $c = $true }
-Write-Doc ([ordered]@{ created = $c })
+// scriptEnsureGuardian records the fingerprint only when this call creates it.
+const scriptEnsureGuardian = buildPrelude + `$id = ''
+$gs = @(Get-HgsGuardian -Name 'UntrustedGuardian' -ErrorAction SilentlyContinue)
+if ($gs.Count -gt 1) { throw 'More than one UntrustedGuardian matched.' }
+if ($gs.Count -eq 0) {
+  $g = New-HgsGuardian -Name 'UntrustedGuardian' -GenerateCertificates
+  $id = Get-GuardianIdentity $g
+  if (-not $id) { throw 'The new guardian did not return both certificates.' }
+}
+Write-Doc ([ordered]@{ id = $id })
 `
 
 // scriptAddHyperVAdmin adds the account to Hyper-V Administrators.
@@ -382,9 +400,14 @@ if ($sw.Count -eq 1) {
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptRemoveNAT removes the NAT with our name when it is on our /29.
-const scriptRemoveNAT = buildPrelude + `$n = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq $in.nat) -and ([string]$_.InternalIPInterfaceAddressPrefix -eq $in.prefix) })
-$n | Remove-NetNat -Confirm:$false
+// scriptRemoveNAT removes the exact recorded provider object.
+const scriptRemoveNAT = buildPrelude + `$n = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $in.nat })
+if ($n.Count -gt 0) {
+  if ($n.Count -ne 1 -or [string]$n[0].InstanceID -cne $in.id -or [string]$n[0].InternalIPInterfaceAddressPrefix -ne $in.prefix) {
+    throw 'The NAT changed since inventory.'
+  }
+  Remove-NetNat -InputObject $n[0] -Confirm:$false
+}
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -394,8 +417,13 @@ const scriptRemoveFirewall = buildPrelude + `@(Get-NetFirewallRule -Group $in.gr
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptRemoveGuardian deletes the guardian.
-const scriptRemoveGuardian = buildPrelude + `Get-HgsGuardian -Name 'UntrustedGuardian' -ErrorAction SilentlyContinue | Remove-HgsGuardian
+// scriptRemoveGuardian rechecks the fingerprint and live VM dependencies.
+const scriptRemoveGuardian = buildPrelude + `$g = @(Get-HgsGuardian -Name 'UntrustedGuardian' -ErrorAction SilentlyContinue)
+if ($g.Count -gt 0) {
+  if ($g.Count -ne 1 -or (Get-GuardianIdentity $g[0]) -cne $in.id) { throw 'The guardian changed since inventory.' }
+  if (@(Get-VM | Where-Object { Test-GuardianUser $_ }).Count -gt 0) { throw 'A VM still needs the guardian.' }
+  Remove-HgsGuardian -InputObject $g[0] -Confirm:$false
+}
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -404,33 +432,40 @@ const scriptRemoveHyperVAdmin = buildPrelude + `if ((Get-GroupSids 'S-1-5-32-578
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptClearProof removes what a killed proof left: the canary rules of the
-// proof group whose description carries this install's owner token, the
-// hv_sock test key whose ElementName carries it, and a pktmon session whose
-// file lies under DataDir\proof\. With no token (a first build) it touches
-// no rule and no key.
+// scriptClearProof matches the owner tag on rules and registry keys and
+// the full instance-specific path of a pktmon session.
 const scriptClearProof = buildPrelude + `$done = @()
-if ($in.desc) { foreach ($r in @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { [string]$_.Description -eq $in.desc })) {
-  Remove-NetFirewallRule -Name $r.Name
-  $done += 'the proof firewall rule ' + [string]$r.Name
-} }
+$left = @()
+foreach ($r in @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)) {
+  if ($in.desc -and [string]$r.Description -ceq $in.desc) {
+    Remove-NetFirewallRule -InputObject $r
+    $done += 'the proof firewall rule ' + [string]$r.Name
+  } else { $left += 'the unverified proof firewall rule ' + [string]$r.Name }
+}
 $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices'
-if ($in.element -and (Test-Path -LiteralPath $k)) {
+if (Test-Path -LiteralPath $k) {
   foreach ($c in @(Get-ChildItem -LiteralPath $k)) {
-    if ([string]$c.GetValue('ElementName') -eq $in.element) {
-      Remove-Item -LiteralPath $c.PSPath -Recurse -Force
+    $element = [string]$c.GetValue('ElementName')
+    if ($in.element -and $element -ceq $in.element -and $c.SubKeyCount -eq 0) {
+      Remove-Item -LiteralPath $c.PSPath -Force
       $done += 'the proof hv_sock key ' + [string]$c.PSChildName
+    } elseif ($element.StartsWith($in.elementPrefix, [StringComparison]::Ordinal)) {
+      $left += 'the unverified proof hv_sock key ' + [string]$c.PSChildName
     }
   }
 }
 $s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
-if ($s.Count -eq 1 -and ([string]$s[0].LocalFilePath).StartsWith($in.dir, [StringComparison]::OrdinalIgnoreCase)) {
-  $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
-  & $pm stop | Out-Null
-  & $pm filter remove | Out-Null
-  $done += 'the proof pktmon session'
+if ($s.Count -gt 0) {
+  $path = [string]$s[0].LocalFilePath
+  $pattern = '^' + [regex]::Escape($in.dir + 'pktmon-' + $in.owner + '-') + '[0-9]+\\capture\.etl$'
+  if ($s.Count -eq 1 -and $in.owner -and $path -match $pattern) {
+    $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
+    & $pm stop | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
+    $done += 'the proof pktmon session'
+  } else { $left += 'the running pktmon session (ownership could not be verified)' }
 }
-Write-Doc ([ordered]@{ cleared = @($done) })
+Write-Doc ([ordered]@{ cleared = @($done); left = @($left) })
 `
 
 // scriptGuest runs one guest script over PowerShell Direct as the given
@@ -573,6 +608,7 @@ type inventoryWire struct {
 	Firewall     []ownedWire `json:"firewall"`
 	Task         *ownedWire  `json:"task"`
 	Guardian     bool        `json:"guardian"`
+	GuardianID   string      `json:"guardianId"`
 	HyperVAdmin  bool        `json:"hypervAdmin"`
 	Enhanced     bool        `json:"enhancedSession"`
 	GCS          []string    `json:"gcs"`
@@ -624,7 +660,7 @@ func (h *psHost) Inventory(ctx context.Context, n Names, known KnownIDs, sid str
 	if err := h.call(ctx, scriptInventory, arg, &w); err != nil {
 		return Inventory{}, err
 	}
-	inv := Inventory{Guardian: w.Guardian, HyperVAdmin: w.HyperVAdmin, Enhanced: w.Enhanced,
+	inv := Inventory{Guardian: w.Guardian, GuardianID: w.GuardianID, HyperVAdmin: w.HyperVAdmin, Enhanced: w.Enhanced,
 		HostBuild: w.HostBuild, InstalledRAM: w.InstalledRAM, FreeRAM: w.FreeRAM, NATs: []LiveNAT{}}
 	if w.GCS != nil {
 		inv.GCS = GCSBaseline(w.GCS)
@@ -668,7 +704,7 @@ func (h *psHost) Inventory(ctx context.Context, n Names, known KnownIDs, sid str
 		if err != nil {
 			continue // a NAT on IPv6 or a range Hyper-V cannot read is not ours
 		}
-		inv.NATs = append(inv.NATs, LiveNAT{Name: x.Name, Prefix: p})
+		inv.NATs = append(inv.NATs, LiveNAT{ID: x.ID, Name: x.Name, Prefix: p})
 	}
 	return inv, nil
 }
@@ -712,15 +748,37 @@ func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, 
 	return w.SwitchID, w.IfIndex, nil
 }
 
-// EnsureNAT creates or checks our NAT.
-func (b psBuilder) EnsureNAT(ctx context.Context, n Names, sub netip.Prefix) error {
+func validNATID(id string) bool {
+	return id != "" && len(id) <= 260 && strings.IndexFunc(id, unicode.IsControl) < 0
+}
+
+// A name or a name/store key can be reused by a replacement NAT.
+func independentNATID(name, id string) bool {
+	if !validNATID(id) {
+		return false
+	}
+	key, _, _ := strings.Cut(id, ";")
+	return !strings.EqualFold(key, name)
+}
+
+// EnsureNAT creates or reads the NAT, returning the provider's identity.
+func (b psBuilder) EnsureNAT(ctx context.Context, n Names, sub netip.Prefix, knownID string) (string, error) {
 	if err := n.Validate(); err != nil {
-		return err
+		return "", err
 	}
 	if err := checkSubnet(sub); err != nil {
-		return err
+		return "", err
 	}
-	return b.ok(ctx, scriptEnsureNAT, map[string]string{"nat": n.NAT, "prefix": sub.String()})
+	var w struct {
+		ID string `json:"id"`
+	}
+	if err := b.call(ctx, scriptEnsureNAT, map[string]string{"nat": n.NAT, "prefix": sub.String(), "id": knownID}, &w); err != nil {
+		return "", err
+	}
+	if !validNATID(w.ID) {
+		return "", errors.New("the NAT provider did not return an identity")
+	}
+	return w.ID, nil
 }
 
 // CreateVM creates the VM off, with one disconnected adapter.
@@ -825,13 +883,16 @@ func (b psBuilder) SetEnhancedSession(ctx context.Context, on bool) (bool, error
 	return w.Was, err
 }
 
-// EnsureGuardian creates the guardian when there is none.
-func (b psBuilder) EnsureGuardian(ctx context.Context) (bool, error) {
+// EnsureGuardian returns the fingerprint only when this call created it.
+func (b psBuilder) EnsureGuardian(ctx context.Context) (string, error) {
 	var w struct {
-		Created bool `json:"created"`
+		ID string `json:"id"`
 	}
 	err := b.call(ctx, scriptEnsureGuardian, map[string]string{}, &w)
-	return w.Created, err
+	if err == nil && w.ID != "" && !guardianIDRE.MatchString(w.ID) {
+		return "", errors.New("the guardian fingerprint is invalid")
+	}
+	return w.ID, err
 }
 
 // AddHyperVAdmin adds the account to Hyper-V Administrators.
@@ -1026,15 +1087,18 @@ func (b psBuilder) RemoveSwitch(ctx context.Context, switchID, owner string) err
 	return b.ok(ctx, scriptRemoveSwitch, map[string]string{"switchId": switchID, "owner": owner})
 }
 
-// RemoveNAT removes our NAT when it is on our /29.
-func (b psBuilder) RemoveNAT(ctx context.Context, n Names, sub netip.Prefix) error {
+// RemoveNAT deletes only an independently identified NAT.
+func (b psBuilder) RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id string) error {
 	if err := n.Validate(); err != nil {
 		return err
 	}
 	if err := checkSubnet(sub); err != nil {
 		return err
 	}
-	return b.ok(ctx, scriptRemoveNAT, map[string]string{"nat": n.NAT, "prefix": sub.String()})
+	if !independentNATID(n.NAT, id) {
+		return errors.New("the NAT has no independent provider identity")
+	}
+	return b.ok(ctx, scriptRemoveNAT, map[string]string{"nat": n.NAT, "prefix": sub.String(), "id": id})
 }
 
 // RemoveFirewall removes the group's rules that carry the owner tag.
@@ -1049,8 +1113,11 @@ func (b psBuilder) RemoveFirewall(ctx context.Context, n Names, owner string) er
 }
 
 // RemoveGuardian deletes the guardian.
-func (b psBuilder) RemoveGuardian(ctx context.Context) error {
-	return b.ok(ctx, scriptRemoveGuardian, map[string]string{})
+func (b psBuilder) RemoveGuardian(ctx context.Context, id string) error {
+	if !guardianIDRE.MatchString(id) {
+		return errors.New("the guardian has no recorded fingerprint")
+	}
+	return b.ok(ctx, scriptRemoveGuardian, map[string]string{"id": id})
 }
 
 // RemoveHyperVAdmin takes the account out of Hyper-V Administrators.
@@ -1061,29 +1128,25 @@ func (b psBuilder) RemoveHyperVAdmin(ctx context.Context, sid string) error {
 	return b.ok(ctx, scriptRemoveHyperVAdmin, map[string]string{"sid": sid})
 }
 
-// ClearProof removes what a killed proof of the install with the owner token
-// left on the host. With owner "" it clears only the pktmon session.
-func (b psBuilder) ClearProof(ctx context.Context, n Names, owner string) ([]string, error) {
+// ClearProof clears earlier owned proof artifacts and lists unverified ones.
+func (b psBuilder) ClearProof(ctx context.Context, n Names, owner string) (ProofCleanup, error) {
 	if err := n.Validate(); err != nil {
-		return nil, err
+		return ProofCleanup{}, err
 	}
 	desc, element := "", ""
 	if owner != "" {
-		if !ownerRe.MatchString(owner) {
-			return nil, fmt.Errorf("owner %q is not 32 lower-case hex digits", owner)
+		if err := checkOwner(owner); err != nil {
+			return ProofCleanup{}, err
 		}
 		desc, element = proofCanaryDesc(owner), ProofElementName(n, owner)
 	}
 	if err := checkWinPath("data folder", n.DataDir); err != nil {
-		return nil, err
+		return ProofCleanup{}, err
 	}
-	var w struct {
-		Cleared []string `json:"cleared"`
-	}
+	var w ProofCleanup
 	arg := map[string]string{"group": n.FirewallGroup + proofGroupSuffix, "desc": desc,
-		"element": element, "dir": strings.TrimRight(n.DataDir, `\`) + `\proof\`}
-	if err := b.call(ctx, scriptClearProof, arg, &w); err != nil {
-		return nil, err
-	}
-	return w.Cleared, nil
+		"element": element, "elementPrefix": "CashPilot Secure VM proof " + n.VM,
+		"owner": owner, "dir": strings.TrimRight(n.DataDir, `\`) + `\proof\`}
+	err := b.call(ctx, scriptClearProof, arg, &w)
+	return w, err
 }

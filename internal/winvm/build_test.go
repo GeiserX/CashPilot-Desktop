@@ -402,7 +402,7 @@ func TestBuildRepairClosesHolesAStoppedProofLeft(t *testing.T) {
 	if err := f.AddAllow(ctx, p.VMID, netip.PrefixFrom(f.LANIP, 32)); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.SetL3(ctx, p.Names, false); err != nil {
+	if err := f.SetL3(ctx, p.Names, p.Owner, false); err != nil {
 		t.Fatal(err)
 	}
 	res, err := winvm.Build(ctx, d, setupParams())

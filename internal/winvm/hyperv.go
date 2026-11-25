@@ -59,8 +59,8 @@ type Guarder interface {
 //
 // Ownership: a VM or switch must carry the plan's Owner token and match its
 // recorded ID when present. A firewall rule or the
-// guard task is ours only when its description carries the token. The NAT has
-// neither, so it is ours only when it has our name and our recorded /29. Build
+// guard task is ours only when its description carries the token. A NAT
+// needs an independent provider identity before it can be deleted. Build
 // and Remove read Inventory first and refuse, or leave alone, anything else.
 type Builder interface {
 	Guarder
@@ -70,7 +70,7 @@ type Builder interface {
 	// switchID (renamed or not), else the one with our name. It refuses a
 	// switch with our name that does not carry the token.
 	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID string) (id string, vnicIfIndex int, err error)
-	EnsureNAT(ctx context.Context, n Names, sub netip.Prefix) error
+	EnsureNAT(ctx context.Context, n Names, sub netip.Prefix, knownID string) (id string, err error)
 	// CreateVM creates the VM off, with p.Owner in its Notes, the plan's
 	// shape, one disconnected adapter with its static MAC and port guards
 	// (only the proof and the guard ever connect it), and the two ISOs as DVD
@@ -82,7 +82,7 @@ type Builder interface {
 	EnsureFirewall(ctx context.Context, n Names, vnicIfIndex int, owner string) error
 	SetHostNeighbor(ctx context.Context, vnicIfIndex int, ip netip.Addr, mac string) error
 	SetEnhancedSession(ctx context.Context, on bool) (was bool, err error)
-	EnsureGuardian(ctx context.Context) (created bool, err error)
+	EnsureGuardian(ctx context.Context) (createdID string, err error)
 	// AddHyperVAdmin adds the account to Hyper-V Administrators (S-1-5-32-578)
 	// by SID, and reports whether it was added now.
 	AddHyperVAdmin(ctx context.Context, sid string) (added bool, err error)
@@ -109,20 +109,19 @@ type Builder interface {
 	// recorded disk if its full path and file ID still match.
 	RemoveVM(ctx context.Context, vmID string, p Plan) (left []string, err error)
 	RemoveSwitch(ctx context.Context, switchID, owner string) error
-	RemoveNAT(ctx context.Context, n Names, sub netip.Prefix) error
+	RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id string) error
 	// RemoveFirewall removes the rules of our group that carry the owner token.
 	RemoveFirewall(ctx context.Context, n Names, owner string) error
-	RemoveGuardian(ctx context.Context) error
+	RemoveGuardian(ctx context.Context, id string) error
 	RemoveHyperVAdmin(ctx context.Context, sid string) error
-	// ClearProof removes what a proof that was killed can leave behind: the
-	// canary rules of the instance's proof firewall group whose description
-	// carries owner, the hv_sock test key named ProofElementName(n, owner),
-	// and a pktmon session that writes under DataDir\proof. A rule or key
-	// without the token is never touched; with owner "" only the pktmon
-	// session goes. It lists what it removed. Setup runs it before it lists
-	// the host, so a stale key never enters the GCS baseline; Remove VM runs
-	// it too.
-	ClearProof(ctx context.Context, n Names, owner string) (cleared []string, err error)
+	// ClearProof removes owned artifacts from earlier proofs and lists
+	// candidates whose ownership cannot be verified.
+	ClearProof(ctx context.Context, n Names, owner string) (ProofCleanup, error)
+}
+
+type ProofCleanup struct {
+	Cleared []string `json:"cleared"`
+	Left    []string `json:"left"`
 }
 
 // KnownIDs are the VM and switch IDs desired.json records, "" for none.
@@ -134,12 +133,13 @@ type KnownIDs struct {
 
 // Inventory is what Builder.Inventory reads.
 type Inventory struct {
-	VMs      []OwnedObject `json:"vms"`      // every VM named Names.VM, and the one with KnownIDs.VM
-	Switches []OwnedObject `json:"switches"` // every switch named Names.Switch, and the one with KnownIDs.Switch
-	NATs     []LiveNAT     `json:"nats"`     // every NetNat on the host
-	Firewall []OwnedObject `json:"firewall"` // every rule of Names.FirewallGroup, by rule name
-	Task     *OwnedObject  `json:"task"`     // the guard task, nil when absent
-	Guardian bool          `json:"guardian"` // the UntrustedGuardian exists
+	VMs        []OwnedObject `json:"vms"`        // every VM named Names.VM, and the one with KnownIDs.VM
+	Switches   []OwnedObject `json:"switches"`   // every switch named Names.Switch, and the one with KnownIDs.Switch
+	NATs       []LiveNAT     `json:"nats"`       // every NetNat on the host
+	Firewall   []OwnedObject `json:"firewall"`   // every rule of Names.FirewallGroup, by rule name
+	Task       *OwnedObject  `json:"task"`       // the guard task, nil when absent
+	Guardian   bool          `json:"guardian"`   // the UntrustedGuardian exists
+	GuardianID string        `json:"guardianId"` // fingerprint of both certificates
 	// GuardianVMs are the IDs of every VM that may need the guardian: a vTPM,
 	// a key protector, encrypted state, or one Hyper-V could not read.
 	GuardianVMs []string `json:"guardianVms"`
@@ -168,7 +168,7 @@ type Prober interface {
 	Canary(ctx context.Context, ip netip.Addr, port uint16, from netip.Prefix) (Canary, error)
 	// Pktmon refuses when a pktmon session already runs.
 	Pktmon(ctx context.Context, f []PktFilter) (Capture, error)
-	SetL3(ctx context.Context, n Names, on bool) error
+	SetL3(ctx context.Context, n Names, owner string, on bool) error
 	SetBinding(ctx context.Context, vnicIfIndex int, component string, on bool) error
 	AddAllow(ctx context.Context, vmID string, p netip.Prefix) error
 	RemoveAllow(ctx context.Context, vmID string, p netip.Prefix) error

@@ -651,10 +651,10 @@ func (r *proofRun) allowGone(ctx context.Context, q netip.Prefix) bool {
 }
 
 func (r *proofRun) l3Off(ctx context.Context) error {
-	if err := r.P.SetL3(ctx, r.p.Names, false); err != nil {
+	if err := r.P.SetL3(ctx, r.p.Names, r.p.Owner, false); err != nil {
 		return err
 	}
-	r.holes.push("L3 off", func(ctx context.Context) error { return r.P.SetL3(ctx, r.p.Names, true) })
+	r.holes.push("L3 off", func(ctx context.Context) error { return r.P.SetL3(ctx, r.p.Names, r.p.Owner, true) })
 	return nil
 }
 
