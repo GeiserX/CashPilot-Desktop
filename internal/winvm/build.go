@@ -987,22 +987,25 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	rs, runErr := run.Run(ctx, b.p, h, t)
 	res.Proof = rs
 	at := b.now()
-	if err := WriteProof(b.Dir, at, rs); err != nil {
-		b.logf("could not write proof.json: %v", err)
-	}
 	// Only a green verdict marks the plan proven. Whatever the proof found,
 	// the guard's boot routine runs next and the guard task starts: on an
 	// unproven plan they keep the VM off the network.
-	var proofErr error
+	var proofErr, saveErr error
 	switch {
 	case runErr != nil:
 		proofErr = fmt.Errorf("proof: %w", runErr)
 	default:
 		if err := b.p.markProven(rs, at); err != nil {
 			proofErr = err
-		} else if err := b.save(); err != nil {
-			return res, err
+		} else {
+			saveErr = b.save()
 		}
+	}
+	if err := WriteProof(b.Dir, at, rs, errors.Join(proofErr, saveErr)); err != nil {
+		b.logf("could not write proof.json: %v", err)
+	}
+	if saveErr != nil {
+		return res, saveErr
 	}
 	res.Plan = b.p
 	b.booted = true

@@ -2,6 +2,7 @@ package winvm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
@@ -82,6 +83,21 @@ func TestBuildIsNotProvenWhenTheFenceIsNotPutBack(t *testing.T) {
 	if res.Status.Network == winvm.NetConnected {
 		t.Fatalf("the guard connected with the fence open after the proof: %s", res.Status.Reason)
 	}
+	raw, err := os.ReadFile(filepath.Join(dir, winvm.ProofFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Green  bool
+		Reason string
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Green || !strings.Contains(doc.Reason, "still has a hole") {
+		t.Fatalf("proof report lost the restoration failure: %+v", doc)
+	}
+
 }
 
 // TestBuildRefusesTwoVMsWithOurToken: a copy of the Secure VM carries our

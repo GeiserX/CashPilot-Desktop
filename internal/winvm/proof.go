@@ -1066,8 +1066,11 @@ type proofDoc struct {
 
 // WriteProof saves the results for the app: SYSTEM and Administrators write,
 // Users read.
-func WriteProof(dir string, at time.Time, rs []StepResult) error {
+func WriteProof(dir string, at time.Time, rs []StepResult, proofErr error) error {
 	green, why := Verdict(rs)
+	if proofErr != nil {
+		green, why = false, proofErr.Error()
+	}
 	b, err := json.MarshalIndent(proofDoc{Version: 1, At: at, Green: green, Reason: why, Steps: rs}, "", "  ")
 	if err != nil {
 		return err

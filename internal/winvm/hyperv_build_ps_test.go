@@ -407,3 +407,18 @@ func jsonQuote(s string) string {
 	b.WriteByte('"')
 	return b.String()
 }
+
+func TestPktmonRefusesMissingComponentExport(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "c4.pcapng")
+	if err := os.WriteFile(out, pcapng(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
+	h, _, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ids":["`+tSwitchID+`"]}`,
+		`{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
+	c := psCapture{p: &psProber{h: h}, dir: dir}
+	if _, err := c.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "component 9") {
+		t.Fatalf("Stop = %v, want a missing export error for component 9", err)
+	}
+}

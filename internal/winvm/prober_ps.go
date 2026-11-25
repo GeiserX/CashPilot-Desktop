@@ -451,20 +451,29 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	if err := c.p.h.call(ctx, scriptPktmonExport, map[string]any{"etl": c.etl, "dir": c.dir, "components": want}, &w); err != nil {
 		return nil, err
 	}
-	var out []PktRecord
+	files := make(map[int]string, len(w.Files))
 	for _, f := range w.Files {
-		cp, ok := comps[f.ID]
-		if !ok || filepath.Dir(f.Path) != c.dir {
-			continue
+		expected := filepath.Join(c.dir, "c"+strconv.Itoa(f.ID)+".pcapng")
+		if _, ok := comps[f.ID]; !ok || f.Path != expected || files[f.ID] != "" {
+			return nil, fmt.Errorf("unexpected export for pktmon component %d", f.ID)
 		}
+		files[f.ID] = f.Path
+	}
+	var out []PktRecord
+	for _, id := range want {
+		path := files[id]
+		if path == "" {
+			return nil, fmt.Errorf("pktmon did not export component %d (%s)", id, comps[id].Name)
+		}
+		cp := comps[id]
 		class := componentClass(h, ourSwitch, cp.IfIndex)
-		b, err := readCapped(f.Path, 64<<20, true)
+		b, err := readCapped(path, 64<<20, true)
 		if err != nil {
 			return nil, err
 		}
 		pkts, err := parsePcapng(b)
 		if err != nil {
-			return nil, fmt.Errorf("component %d: %w", f.ID, err)
+			return nil, fmt.Errorf("component %d: %w", id, err)
 		}
 		for _, k := range pkts {
 			r := PktRecord{Component: cp.Name, Class: class, Src: k.Src, Dst: k.Dst, Proto: k.Proto, Port: k.Port}
