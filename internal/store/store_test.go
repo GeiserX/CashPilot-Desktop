@@ -1551,12 +1551,14 @@ func TestFleetDeviceInsertWaitsOutAPeerHoldingTheLock(t *testing.T) {
 	}
 }
 
-// TestEarningsErrorKindColumnMigrates covers an install whose earnings table predates
-// the error kind: its old rows must still be listed, and a new row keeps its kind.
-func TestEarningsErrorKindColumnMigrates(t *testing.T) {
+// The earnings metadata migration keeps existing readings and adds fields for
+// future errors and pool balances.
+func TestEarningsMetadataColumnsMigrate(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.db.Exec("ALTER TABLE earnings DROP COLUMN error_kind"); err != nil {
-		t.Fatalf("drop column (simulate pre-migration schema): %v", err)
+	for _, column := range []string{"error_kind", "pool_address_hash"} {
+		if _, err := s.db.Exec("ALTER TABLE earnings DROP COLUMN " + column); err != nil {
+			t.Fatalf("drop %s (simulate pre-migration schema): %v", column, err)
+		}
 	}
 	if _, err := s.db.Exec(`INSERT INTO earnings(platform,balance,currency,error,created_at) VALUES('honeygain',1,'USD','','2026-11-01T00:00:00Z')`); err != nil {
 		t.Fatalf("seed old-shape row: %v", err)
@@ -1567,9 +1569,13 @@ func TestEarningsErrorKindColumnMigrates(t *testing.T) {
 	if _, err := s.SaveEarnings(EarningsRecord{Platform: "mysterium", Currency: "MYST", Error: "no node", ErrorKind: "unread"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "supportxmr", Balance: 0.01, Currency: "XMR", PoolAddressHash: "address-hash"}); err != nil {
+		t.Fatal(err)
+	}
 	got := s.ListLatestEarnings()
-	if len(got) != 2 || got[0].Platform != "honeygain" || got[0].ErrorKind != "" || got[1].ErrorKind != "unread" {
-		t.Fatalf("after migrate: %+v, want the old row kept and the new kind read back", got)
+	if len(got) != 3 || got[0].Platform != "honeygain" || got[0].ErrorKind != "" ||
+		got[0].PoolAddressHash != "" || got[1].ErrorKind != "unread" || got[2].PoolAddressHash != "address-hash" {
+		t.Fatalf("after migrate: %+v, want the old row kept and the new metadata read back", got)
 	}
 }
 

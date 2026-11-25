@@ -34,7 +34,7 @@ func TestSupportXMRBalance(t *testing.T) {
 				t.Fatalf("collect = %+v, %v; want %g XMR", record, err, tt.balance)
 			}
 			history := registry.store.ListDailyBalances(1)
-			if len(history) != 1 || history[0].Balance != tt.balance {
+			if len(history) != 1 || history[0].Balance != tt.balance || history[0].PoolAddressHash != poolAddressHash(tt.address) {
 				t.Fatalf("balance history = %+v; want one reading of %g XMR", history, tt.balance)
 			}
 		})

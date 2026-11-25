@@ -2233,7 +2233,20 @@ function renderSetupWizard(current: AppState) {
   wireSessionConsent(document);
   wireWalletChoices();
   fillNewWalletPanel();
-  selectedServices.forEach((service) => void hydrateWizardForm(service));
+  selectedServices.forEach((service) => {
+    if (service.collector?.accrual === "pool") {
+      const card = root.querySelector(`[data-form-slug="${CSS.escape(service.slug)}"]`);
+      const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
+      const output = card?.querySelector<HTMLElement>("[data-output-slug]");
+      card?.querySelectorAll("[data-wizard-env]").forEach((input) => {
+        input.addEventListener("input", () => {
+          if (facts) facts.innerHTML = renderPayoutFacts(service);
+          if (output) output.textContent = "";
+        });
+      });
+    }
+    void hydrateWizardForm(service);
+  });
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
   selectedServices.forEach((service) => void hydratePayouts(service));
 }
@@ -2595,8 +2608,8 @@ async function runWizardAction(slug: string, action: string) {
       const pool = state?.services?.find((service) => service.slug === slug && service.collector?.accrual === "pool");
       const card = pool ? output?.closest(".wizard-setup-card") : null;
       const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
-      const button = card?.querySelector<HTMLButtonElement>('[data-wizard-action="collect"]');
-      if (button) button.disabled = true;
+      const controls = card?.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-wizard-env], [data-wizard-action="collect"]');
+      controls?.forEach((control) => { control.disabled = true; });
       if (pool && facts) facts.innerHTML = renderPayoutFacts(pool);
       try {
         await SaveCredentials(slug, values);
@@ -2611,7 +2624,7 @@ async function runWizardAction(slug: string, action: string) {
         }
         state = await GetAppState();
       } finally {
-        if (button) button.disabled = false;
+        controls?.forEach((control) => { control.disabled = false; });
       }
     }
   } catch (error) {

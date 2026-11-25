@@ -45,5 +45,8 @@ func (r *Registry) collectSupportXMR(ctx context.Context, credentials map[string
 	}
 
 	const piconeroPerXMR = 1e12
-	return Result{Platform: "supportxmr", Currency: "XMR", Balance: float64(due) / piconeroPerXMR}, nil
+	return Result{
+		Platform: "supportxmr", Currency: "XMR", Balance: float64(due) / piconeroPerXMR,
+		PoolAddressHash: poolAddressHash(address),
+	}, nil
 }

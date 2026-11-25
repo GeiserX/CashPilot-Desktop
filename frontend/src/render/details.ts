@@ -106,6 +106,9 @@ export function payoutFacts(service: Service, balance?: Balance | null): Fact[] 
     { label: "Paid out", value: (service.payment?.frequency || "").trim() || UNKNOWN },
   ];
 
+  const poolNotes = pool ? service.cashout?.notes?.trim() : "";
+  if (poolNotes) facts.push({ label: "Payout notes", value: poolNotes });
+
   if (balance && Number.isFinite(balance.amount)) {
     if (pool) {
       const unit = balance.currency.trim().toUpperCase();

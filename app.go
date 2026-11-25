@@ -915,17 +915,17 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 
 	// Build per-platform day -> cumulative balance maps, the platform's currency,
 	// and a sorted list of the days it was actually collected.
-	perPlat := map[string]map[string]float64{}
+	perPlat := map[string]map[string]store.DailyBalance{}
 	perCur := map[string]string{}
 	daysByPlat := map[string][]string{}
 	for _, b := range a.store.ListDailyBalances(daysBack) {
 		if perPlat[b.Platform] == nil {
-			perPlat[b.Platform] = map[string]float64{}
+			perPlat[b.Platform] = map[string]store.DailyBalance{}
 		}
 		if _, seen := perPlat[b.Platform][b.Day]; !seen {
 			daysByPlat[b.Platform] = append(daysByPlat[b.Platform], b.Day)
 		}
-		perPlat[b.Platform][b.Day] = b.Balance
+		perPlat[b.Platform][b.Day] = b
 		perCur[b.Platform] = b.Currency
 	}
 	for plat := range daysByPlat {
@@ -935,8 +935,8 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// asOf carries the cumulative balance forward: the balance on the latest
 	// collected day on or before `day` (ok=false when nothing was collected on or
 	// before that day, i.e. there is no established baseline yet).
-	asOf := func(plat, day string) (float64, bool) {
-		var val float64
+	asOf := func(plat, day string) (store.DailyBalance, bool) {
+		var val store.DailyBalance
 		found := false
 		for _, d := range daysByPlat[plat] {
 			if d <= day {
@@ -957,20 +957,22 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// counted as a single day's earning. Per-platform clamping at 0 keeps one
 	// platform's dip from cancelling another's gain.
 	platformDelta := func(plat, fromDay, toDay string) float64 {
-		fromBal, fromOK := asOf(plat, fromDay)
+		from, fromOK := asOf(plat, fromDay)
 		if !fromOK {
 			return 0
 		}
-		toBal, toOK := asOf(plat, toDay)
-		if !toOK {
+		to, toOK := asOf(plat, toDay)
+		// A different payout address starts a new baseline. Legacy pool rows
+		// lack a hash, so the first read with a hash also starts a baseline.
+		if !toOK || from.PoolAddressHash != to.PoolAddressHash {
 			return 0
 		}
 		cur := perCur[plat]
-		fromDisp, ok := a.exchange.ToDisplay(fromBal, cur, disp)
+		fromDisp, ok := a.exchange.ToDisplay(from.Balance, cur, disp)
 		if !ok {
 			return 0
 		}
-		toDisp, ok := a.exchange.ToDisplay(toBal, cur, disp)
+		toDisp, ok := a.exchange.ToDisplay(to.Balance, cur, disp)
 		if !ok {
 			return 0
 		}
@@ -1005,7 +1007,7 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 			latestDay = last
 		}
 		cur := perCur[plat]
-		bal := perPlat[plat][last]
+		bal := perPlat[plat][last].Balance
 		if a.exchange.IsPoints(cur) {
 			summary.Points = append(summary.Points, PointsBalance{
 				Platform: plat,

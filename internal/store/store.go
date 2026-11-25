@@ -65,14 +65,18 @@ type EarningsRecord struct {
 	// "unread" means the login worked but no node could be read, so the
 	// credentials are not what is wrong. Empty for a failure of unknown kind.
 	ErrorKind string `json:"errorKind,omitempty"`
-	CreatedAt string `json:"createdAt"`
+	// PoolAddressHash identifies the payout address behind a pool balance.
+	// It stays local so history can compare reads from the same address.
+	PoolAddressHash string `json:"-"`
+	CreatedAt       string `json:"createdAt"`
 }
 
 type DailyBalance struct {
-	Platform string
-	Currency string
-	Day      string // "YYYY-MM-DD" (UTC)
-	Balance  float64
+	Platform        string
+	Currency        string
+	Day             string // "YYYY-MM-DD" (UTC)
+	Balance         float64
+	PoolAddressHash string
 }
 
 // HealthScore is one service's rolling health over the query window: a 0-100
@@ -457,9 +461,9 @@ func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
 		record.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 	_, err := s.execWrite(`
-		INSERT INTO earnings(platform, balance, currency, error, error_kind, created_at)
-		VALUES(?, ?, ?, ?, ?, ?)
-	`, record.Platform, record.Balance, record.Currency, record.Error, record.ErrorKind, record.CreatedAt)
+		INSERT INTO earnings(platform, balance, currency, error, error_kind, created_at, pool_address_hash)
+		VALUES(?, ?, ?, ?, ?, ?, ?)
+	`, record.Platform, record.Balance, record.Currency, record.Error, record.ErrorKind, record.CreatedAt, record.PoolAddressHash)
 	return record, err
 }
 
@@ -473,7 +477,7 @@ func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
 // shape ListDailyBalances already uses.
 func (s *Store) ListLatestEarnings() []EarningsRecord {
 	rows, err := s.db.Query(`
-		SELECT e.platform, e.balance, e.currency, e.error, e.error_kind, e.created_at
+		SELECT e.platform, e.balance, e.currency, e.error, e.error_kind, e.created_at, e.pool_address_hash
 		FROM earnings e
 		INNER JOIN (
 			SELECT platform, MAX(id) AS mx FROM earnings GROUP BY platform
@@ -487,7 +491,7 @@ func (s *Store) ListLatestEarnings() []EarningsRecord {
 	var out []EarningsRecord
 	for rows.Next() {
 		var record EarningsRecord
-		if err := rows.Scan(&record.Platform, &record.Balance, &record.Currency, &record.Error, &record.ErrorKind, &record.CreatedAt); err == nil {
+		if err := rows.Scan(&record.Platform, &record.Balance, &record.Currency, &record.Error, &record.ErrorKind, &record.CreatedAt, &record.PoolAddressHash); err == nil {
 			out = append(out, record)
 		}
 	}
@@ -525,7 +529,7 @@ func (s *Store) DailyBalances(daysBack int) ([]DailyBalance, error) {
 // strict.
 func (s *Store) readDailyBalances(daysBack int, strict bool) ([]DailyBalance, error) {
 	rows, err := s.db.Query(`
-		SELECT e.platform, e.currency, date(e.created_at) AS day, e.balance
+		SELECT e.platform, e.currency, date(e.created_at) AS day, e.balance, e.pool_address_hash
 		FROM earnings e
 		JOIN (
 			SELECT platform, date(created_at) AS day, MAX(id) AS mx
@@ -544,7 +548,7 @@ func (s *Store) readDailyBalances(daysBack int, strict bool) ([]DailyBalance, er
 	var out []DailyBalance
 	for rows.Next() {
 		var record DailyBalance
-		if err := rows.Scan(&record.Platform, &record.Currency, &record.Day, &record.Balance); err != nil {
+		if err := rows.Scan(&record.Platform, &record.Currency, &record.Day, &record.Balance, &record.PoolAddressHash); err != nil {
 			if strict {
 				return nil, err
 			}
@@ -1019,6 +1023,7 @@ func (s *Store) migrate() error {
 			currency TEXT NOT NULL,
 			error TEXT NOT NULL DEFAULT '',
 			error_kind TEXT NOT NULL DEFAULT '',
+			pool_address_hash TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_earnings_platform_created ON earnings(platform, created_at);
@@ -1078,6 +1083,7 @@ func (s *Store) migrate() error {
 		{"deployments", "custom_image", "ALTER TABLE deployments ADD COLUMN custom_image TEXT NOT NULL DEFAULT ''"},
 		{"deployments", "instances", "ALTER TABLE deployments ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"},
 		{"earnings", "error_kind", "ALTER TABLE earnings ADD COLUMN error_kind TEXT NOT NULL DEFAULT ''"},
+		{"earnings", "pool_address_hash", "ALTER TABLE earnings ADD COLUMN pool_address_hash TEXT NOT NULL DEFAULT ''"},
 		{"fleet_devices", "egress_ip", "ALTER TABLE fleet_devices ADD COLUMN egress_ip TEXT NOT NULL DEFAULT ''"},
 		{"deployments", "wallet_address", "ALTER TABLE deployments ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''"},
 		// What a lead needs to command a worker (fleet_commands.go).

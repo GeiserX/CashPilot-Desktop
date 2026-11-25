@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -45,10 +46,15 @@ func WithNodeReader(fn NodeReadFunc) Option {
 }
 
 type Result struct {
-	Platform string
-	Balance  float64
-	Currency string
-	Error    string
+	Platform        string
+	Balance         float64
+	Currency        string
+	Error           string
+	PoolAddressHash string
+}
+
+func poolAddressHash(address string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(address)))
 }
 
 // KindUnread is the error kind of a collect whose login worked but whose figure
@@ -144,10 +150,11 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 		kind = classified.kind
 	}
 	record := store.EarningsRecord{
-		Platform:  result.Platform,
-		Balance:   result.Balance,
-		Currency:  result.Currency,
-		ErrorKind: kind,
+		Platform:        result.Platform,
+		Balance:         result.Balance,
+		Currency:        result.Currency,
+		ErrorKind:       kind,
+		PoolAddressHash: result.PoolAddressHash,
 		// Redact any secret embedded in a URL query (e.g. the Repocket Firebase
 		// sign-in URL carries ?key=<FIREBASE_KEY>) before the error is persisted
 		// verbatim into earnings.error, where it would be readable in the dashboard/DB.

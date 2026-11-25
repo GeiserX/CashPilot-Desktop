@@ -50,5 +50,8 @@ func (r *Registry) collectOcean(ctx context.Context, credentials map[string]stri
 	if err != nil || parseErr != nil || balance < 0 || math.IsNaN(balance) || math.IsInf(balance, 0) {
 		return Result{}, collectorError{"shape", "OCEAN's answer has no valid unpaid balance."}
 	}
-	return Result{Platform: "ocean", Currency: "BTC", Balance: balance}, nil
+	return Result{
+		Platform: "ocean", Currency: "BTC", Balance: balance,
+		PoolAddressHash: poolAddressHash(address),
+	}, nil
 }

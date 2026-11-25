@@ -282,6 +282,26 @@ func TestEarningsSummaryFirstObservationContributesZero(t *testing.T) {
 	}
 }
 
+func TestEarningsSummaryPoolAddressChangeIsANewBaseline(t *testing.T) {
+	app, st := newEarningsTestApp(t,
+		`{"monero":{"usd":200}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"XMR": "monero"}, true)
+	now := time.Now().UTC()
+	seedEarnings(t, st,
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.01, Currency: "XMR", PoolAddressHash: "first", CreatedAt: atUTC(now.AddDate(0, 0, -2), 10)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.09, Currency: "XMR", PoolAddressHash: "second", CreatedAt: atUTC(now.AddDate(0, 0, -1), 10)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.10, Currency: "XMR", PoolAddressHash: "second", CreatedAt: atUTC(now, 10)},
+	)
+	summary := app.computeEarningsSummary(st.ListLatestEarnings())
+	if got := summary.Daily[len(summary.Daily)-2].Amount; got != 0 {
+		t.Errorf("replacement address contributed %v to yesterday's earnings, want zero", got)
+	}
+	if !approxEq(summary.Today, 2) || !approxEq(summary.Total, 20) {
+		t.Errorf("today earned %v, total balance %v; want 2 and 20", summary.Today, summary.Total)
+	}
+}
+
 // TestEarningsSummaryCarryForwardAcrossGap proves asOf carries the last known
 // cumulative balance across days with no observation, so accrual over a gap is the
 // real delta — not the first-observation inflation and not zero.
