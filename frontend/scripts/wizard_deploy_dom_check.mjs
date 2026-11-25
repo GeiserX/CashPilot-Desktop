@@ -1,6 +1,6 @@
-// Run after Vite builds the frontend:
+// Run after Vite builds the frontend with CHROME_BIN set:
+// npm run test:dom
 // CHROME_BIN=/path/to/chrome node scripts/wizard_deploy_dom_check.mjs wallet [dist]
-// Use "worker" for the disappeared-worker regression on the combined tree.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -31,19 +31,32 @@ function checkWizard(scenario) {
   };
   const events = {};
   let finishAdminCheck;
+  let finishHydration;
+  let savedCredentials = { [fieldKey]: "saved" };
   let workerDeploys = 0;
+  let localAdminChecks = 0;
+  let passwordSends = 0;
   let settings;
   let sentChoice;
+  let sentValues;
   window.runtime = { EventsOnMultiple(name, fn) { events[name] = fn; } };
   window.go = { main: { App: new Proxy({
     async GetAppState() { return structuredClone(state); },
-    async GetCredentials() { return { [fieldKey]: "saved" }; },
+    async GetCredentials() {
+      if (wallet && !finishHydration) return new Promise(resolve => { finishHydration = resolve; });
+      return { ...savedCredentials };
+    },
     async DeployAdminStep() {
-      if (!wallet) throw Error("Unexpected local deploy");
+      if (!wallet) {
+        localAdminChecks++;
+        throw Error("Unexpected local deploy");
+      }
       return new Promise(resolve => { finishAdminCheck = resolve; });
     },
     async DeployServiceWallet(slug, values, image, instances, choice) {
       sentChoice = choice;
+      sentValues = values;
+      savedCredentials = { ...values };
       settings = {
         storage: values.SIA_STORAGE_DIR, image, instances, mode: choice.mode,
         passwordSent: values.HOSTD_API_PASSWORD === "test password", phraseSent: choice.phrase === "test phrase",
@@ -54,7 +67,10 @@ function checkWizard(scenario) {
       workerDeploys++;
       return { worker: "garage", containerId: "fixture" };
     },
-  }, { get: (app, name) => app[name] || (async () => null) }) } };
+  }, { get: (app, name) => async (...args) => {
+    if (args.some(arg => arg?.HOSTD_API_PASSWORD === "test password")) passwordSends++;
+    return app[name]?.(...args) ?? null;
+  } }) } };
 
   const q = selector => document.querySelector(selector);
   const click = selector => q(selector).click();
@@ -73,19 +89,25 @@ function checkWizard(scenario) {
     click('[data-view="catalog"]');
     click("[data-service]");
     const field = `[data-wizard-env="${fieldKey}"]`;
-    await until(() => q(deploy) && q(field).value === "saved", "setup card");
+    const notice = () => q("[data-deploy-notice]")?.textContent;
     if (wallet) {
+      await until(() => q(deploy) && finishHydration, "setup card while credentials are loading");
       click('[data-wallet-mode][value="import"]');
       const phrase = q("[data-wallet-phrase]");
-      const password = q('[data-wizard-env="HOSTD_API_PASSWORD"][type="password"]');
+      const passwordField = '[data-wizard-env="HOSTD_API_PASSWORD"][type="password"]';
+      const password = q(passwordField);
       q(field).value = "";
       phrase.value = "test phrase";
       password.value = "test password";
       click(deploy);
       await until(() => status() === "missing", "missing storage directory");
       const rejectedBeforeAdminCheck = !finishAdminCheck && Boolean(q('[data-missing-field="SIA_STORAGE_DIR"]'));
+      const rejectionSentNothing = passwordSends === 0 && !settings;
       const passwordClearedAfterRejection = password.value === "";
       const phraseClearedAfterRejection = phrase.value === "";
+      finishHydration({ ...savedCredentials, HOSTD_API_PASSWORD: "previous password" });
+      await until(() => q(field).value === "saved", "delayed credentials response");
+      const passwordEmptyAfterDelayedHydration = password.value === "";
 
       phrase.value = "test phrase";
       password.value = "test password";
@@ -100,12 +122,18 @@ function checkWizard(scenario) {
       finishAdminCheck({ needed: false });
       await until(() => settings, "wallet deploy");
       click("#wizard-prev");
-      await until(() => status() === "ok", "wallet result");
+      await until(() => status() === "ok" && q(field).value === "/fixture/storage", "wallet result and redrawn credentials");
       return {
-        settings, rejectedBeforeAdminCheck, passwordClearedAfterRejection, phraseClearedAfterRejection,
+        settings, rejectedBeforeAdminCheck, rejectionSentNothing,
+        passwordClearedAfterRejection, phraseClearedAfterRejection, passwordEmptyAfterDelayedHydration,
         passwordClearedAtClick, phraseClearedAtClick, phraseClearedAtEnd: sentChoice.phrase === "",
+        passwordEmptyAfterRedraw: q(passwordField).value === "",
+        phraseEmptyAfterRedraw: q("[data-wallet-phrase]").value === "",
+        passwordClearedFromRequest: !sentValues.HOSTD_API_PASSWORD,
+        passwordSends,
       };
     }
+    await until(() => q(deploy) && q(field).value === "saved", "setup card");
     const where = q("[data-wizard-where]");
     where.value = "23";
     where.dispatchEvent(new Event("change", { bubbles: true }));
@@ -116,14 +144,14 @@ function checkWizard(scenario) {
     events["earnings:changed"]();
     await pause();
     click(deploy);
-    await pause();
+    await until(() => status() === "failed", "unavailable worker refusal");
     const beforeRedraw = {
       status: status(),
-      pickerRefused: where.validationMessage.includes("Choose a target"),
+      workerRefused: notice().includes("The selected worker is no longer available. Choose a target and try again."),
     };
     click("#wizard-next");
     click("#wizard-prev");
-    return { ...beforeRedraw, statusAfterRedraw: status(), workerDeploys };
+    return { ...beforeRedraw, statusAfterRedraw: status(), workerDeploys, localAdminChecks };
   }
   document.addEventListener("DOMContentLoaded", async () => {
     try {
@@ -155,12 +183,18 @@ try {
       mode: "import", passwordSent: true, phraseSent: true,
     },
     rejectedBeforeAdminCheck: true,
+    rejectionSentNothing: true,
     passwordClearedAfterRejection: true,
     phraseClearedAfterRejection: true,
+    passwordEmptyAfterDelayedHydration: true,
     passwordClearedAtClick: true,
     phraseClearedAtClick: true,
     phraseClearedAtEnd: true,
-  } : { status: "failed", pickerRefused: true, statusAfterRedraw: "failed", workerDeploys: 1 });
+    passwordEmptyAfterRedraw: true,
+    phraseEmptyAfterRedraw: true,
+    passwordClearedFromRequest: true,
+    passwordSends: 1,
+  } : { status: "failed", workerRefused: true, statusAfterRedraw: "failed", workerDeploys: 1, localAdminChecks: 0 });
   console.log(`wizard deploy DOM: ${scenario} passed`);
 } finally {
   rmSync(temp, { recursive: true, force: true });

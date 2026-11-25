@@ -180,6 +180,8 @@ let wizardRouteDrafts: Record<string, number | null> = {};
 let wizardWhereDrafts: Record<string, number | null> = {};
 const wizardDeployFeedback: Record<string, DeployFeedback> = {};
 const wizardDeploying = new Set<string>();
+// Keep wallet passwords blank on redraw after a deploy attempt in this window.
+const wizardWalletAttempts = new Set<string>();
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -2513,6 +2515,8 @@ async function hydrateWizardForm(service: Service) {
     showErrorToast({scope: "credentials", error: String(error)});
   }
   document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${service.slug}"] [data-wizard-env]`).forEach((input) => {
+    // A deploy may have cleared the password while GetCredentials was pending.
+    if (input.type === "password" && wizardWalletAttempts.has(service.slug)) return;
     const key = input.dataset.wizardEnv || "";
     if (creds[key]) input.value = creds[key];
   });
@@ -2651,6 +2655,7 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
     wallet: workerId === null && seedFileVar(service) ? readWalletChoice(slug) : undefined,
   };
   if (settings.wallet) {
+    wizardWalletAttempts.add(slug);
     document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env][type="password"]`)
       .forEach((input) => { input.value = ""; });
   }
@@ -2676,7 +2681,12 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
     sayDeploy(slug, "failed", deployErrorText(error));
     return null;
   }).finally(() => {
-    if (settings.wallet) settings.wallet.phrase = "";
+    if (settings.wallet) {
+      settings.wallet.phrase = "";
+      for (const field of fields) {
+        if (field.secret) delete values[field.key];
+      }
+    }
   });
   const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
   form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
@@ -2816,7 +2826,6 @@ async function runWalletDeploy(
   if (choice.mode === "generate") sayDeploy(slug, "busy", "Deploying, and creating a new wallet...");
   let result: WalletDeployResult;
   try {
-    await SaveCredentials(slug, values);
     result = await DeployServiceWallet(slug, values, image, instances, choice);
   } finally {
     choice.phrase = "";

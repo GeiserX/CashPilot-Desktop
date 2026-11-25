@@ -124,6 +124,12 @@ jobs:
         working-directory: frontend
         run: npx vite build
 
+      - name: Wizard deploy checks in Chrome
+        working-directory: frontend
+        env:
+          CHROME_BIN: google-chrome
+        run: npm run test:dom
+
   # The Windows installer and uninstaller, end to end, on every PR: build the app
   # and its NSIS installer, install it silently, check the files, shortcuts and
   # Apps & Features entry, seed what the app itself creates, uninstall silently
