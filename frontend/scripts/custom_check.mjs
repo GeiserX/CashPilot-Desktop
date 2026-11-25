@@ -69,8 +69,8 @@ check("RULE 1: the editor opened from the list never prints it", !renderCustomSe
 
 // RULE 2
 const catalogHtml = renderCatalogTable([service, catalogService], [], []);
-const customRow = catalogHtml.split("<tr>").find((row) => row.includes("custom-mine")) || "";
-const catalogRowHtml = catalogHtml.split("<tr>").find((row) => row.includes("data-service=\"honeygain\"")) || "";
+const customRow = catalogHtml.split(/<tr[\s>]/).find((row) => row.includes("custom-mine")) || "";
+const catalogRowHtml = catalogHtml.split(/<tr[\s>]/).find((row) => row.includes("data-service=\"honeygain\"")) || "";
 check("RULE 2: the catalog marks the custom service unreviewed", customRow.includes("custom, not reviewed") && customRow.includes(UNTRUSTED_TEXT), customRow);
 check("CONTROL: a catalog service carries no such mark", catalogRowHtml !== "" && !catalogRowHtml.includes("custom, not reviewed"), catalogRowHtml);
 check("RULE 2: the custom list says it", renderCustomServicesSection([view], [], null).includes(UNTRUSTED_TEXT));
