@@ -73,7 +73,7 @@ export type WorkerDeployOutcome =
 export interface WorkerDeployCalls {
   confirm(message: string): boolean;
   /** One deploy, with the owner's yes so far. */
-  deploy(yes: { confirmed: boolean; allowSharedIdentity: boolean }): Promise<WorkerDeployResult>;
+  deploy(yes: { confirmed: boolean; allowSharedIdentity: boolean; replaceExisting: boolean }): Promise<WorkerDeployResult>;
   /** Saves the typed credentials, after the deploy ran. */
   save(): Promise<void>;
 }
@@ -102,13 +102,16 @@ export async function runWorkerDeploy(
       message: "A deploy to a worker runs one copy, from the worker's own IP. Set Route to Direct and Instances to 1, or choose This computer. Nothing was deployed.",
     };
   }
-  if ((worker.services || []).includes(slug) && !calls.confirm(`Redeploy ${slug} on ${worker.name}? The existing container will be replaced, but its volumes are kept.`)) {
-    return { kind: "cancelled" };
-  }
-  const yes = { confirmed: false, allowSharedIdentity: false };
-  // Each question is asked at most once, so the loop ends after both.
-  for (let round = 0; round < 3; round++) {
+  const yes = { confirmed: false, allowSharedIdentity: false, replaceExisting: false };
+  // Each question is asked at most once.
+  for (let round = 0; round < 4; round++) {
     const result = await calls.deploy({ ...yes });
+    if (result.ask === "replace_existing" && !yes.replaceExisting) {
+      const message = result.message || `Redeploy ${slug} on ${worker.name}? The existing container will be replaced, but its volumes are kept.`;
+      if (!calls.confirm(message)) return { kind: "cancelled" };
+      yes.replaceExisting = true;
+      continue;
+    }
     if (result.ask === "identity_in_use" && !yes.allowSharedIdentity) {
       if (!calls.confirm(`${result.message}\n\nDeploy anyway?`)) return { kind: "cancelled" };
       yes.allowSharedIdentity = true;

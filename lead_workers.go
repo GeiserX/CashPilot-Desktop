@@ -51,11 +51,13 @@ type WorkerDeployRequest struct {
 	// AllowSharedIdentity is the owner's yes to a device id that already runs on
 	// another box.
 	AllowSharedIdentity bool `json:"allowSharedIdentity"`
+	// ReplaceExisting is the owner's yes to replacing a managed copy on this worker.
+	ReplaceExisting bool `json:"replaceExisting"`
 }
 
 // WorkerDeployResult is what a deploy to a worker did. With Ask set it did nothing:
 // the owner must answer Message first, and the form sends the deploy again with the
-// matching yes ("step_up_required": Confirmed, "identity_in_use": AllowSharedIdentity).
+// matching approval for the image, identity, or replacement.
 type WorkerDeployResult struct {
 	Ask         string   `json:"ask"`
 	Message     string   `json:"message"`
@@ -67,6 +69,7 @@ type WorkerDeployResult struct {
 const (
 	askStepUp   = "step_up_required"
 	askIdentity = "identity_in_use"
+	askReplace  = "replace_existing"
 )
 
 // leadOnlyError is why this computer sends no commands to workers, or nil.
@@ -229,7 +232,10 @@ func (a *App) workerFor(id int64) (commandTarget, error) {
 		// key until then, as the web UI falls back to it.
 		auth, own = a.fleetKey, ""
 	}
-	reports, _ := a.store.FleetReports()
+	reports, err := a.store.FleetReports()
+	if err != nil {
+		return commandTarget{}, fmt.Errorf("could not read the selected worker's report: %w", err)
+	}
 	return commandTarget{
 		device: device,
 		report: reports[id],
@@ -245,6 +251,8 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	if err := a.ready(); err != nil {
 		return WorkerDeployResult{}, err
 	}
+	a.workerDeployMu.Lock()
+	defer a.workerDeployMu.Unlock()
 	target, err := a.workerFor(req.WorkerID)
 	if err != nil {
 		return WorkerDeployResult{}, err
@@ -274,6 +282,15 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		return WorkerDeployResult{}, err
 	}
 	result := WorkerDeployResult{Worker: target.device.Name}
+	if !req.ReplaceExisting {
+		for _, copy := range target.report.Containers {
+			if copy.Managed && copy.Slug == slug {
+				result.Ask = askReplace
+				result.Message = fmt.Sprintf("Redeploy %s on %s? The existing container will be replaced, but its volumes are kept.", svc.Name, target.device.Name)
+				return result, nil
+			}
+		}
+	}
 	carriesID := false
 	for _, key := range workerapi.PerDeviceKeys(svc) {
 		if strings.TrimSpace(spec.Env[key]) == "" {

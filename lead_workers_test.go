@@ -499,3 +499,25 @@ func TestAWorkerThatHasNotUsedItsKeyYetGetsTheSharedKey(t *testing.T) {
 		t.Fatalf("err = %v, calls %d", err, worker.count())
 	}
 }
+
+func TestWorkerDeployAsksBeforeReplacingTheLastDeploy(t *testing.T) {
+	app := newLeadApp(t)
+	worker := newFakeDockerWorker(t)
+	enrolWorker(t, app, "garage", worker.srv.URL, nil)
+	req := WorkerDeployRequest{
+		WorkerID: workerID(t, app, "garage"),
+		Values:   map[string]string{"TOKEN": "typed"},
+	}
+	if result, err := app.DeployToWorker("plain", req); err != nil || result.ContainerID == "" {
+		t.Fatalf("first deploy = %+v, %v", result, err)
+	}
+	result, err := app.DeployToWorker("plain", req)
+	if err != nil || result.Ask != "replace_existing" || worker.count() != 1 {
+		t.Fatalf("second deploy = %+v, %v, worker got %d requests; want approval before a second request", result, err, worker.count())
+	}
+	req.ReplaceExisting = true
+	if result, err := app.DeployToWorker("plain", req); err != nil || result.Ask != "" || worker.count() != 2 {
+		t.Fatalf("approved replacement = %+v, %v, worker got %d requests", result, err, worker.count())
+	}
+
+}
