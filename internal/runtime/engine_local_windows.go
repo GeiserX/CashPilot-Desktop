@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"io/fs"
-	"time"
 
 	"github.com/moby/moby/client"
 )
@@ -11,8 +10,6 @@ import (
 // DockerDesktopEngineReason probes Docker Desktop's own pipes with no Docker
 // environment overrides. The configured engine can still serve deployments.
 func DockerDesktopEngineReason(ctx context.Context) string {
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
 	return probeDockerDesktopPipes(ctx, pingDockerDesktopPipe)
 }
 

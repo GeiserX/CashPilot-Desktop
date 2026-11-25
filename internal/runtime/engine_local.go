@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"strings"
+	"time"
 )
 
 const dockerDesktopWindowsPipe = "dockerDesktopWindowsEngine"
@@ -59,7 +60,9 @@ func LocalDockerDesktop(dockerHost, dockerContext string) bool {
 func probeDockerDesktopPipes(ctx context.Context, ping func(context.Context, string) (string, error)) string {
 	denied := false
 	for _, pipe := range dockerDesktopPipes {
-		osType, err := ping(ctx, "npipe:////./pipe/"+pipe)
+		pipeCtx, cancel := context.WithTimeout(ctx, time.Second)
+		osType, err := ping(pipeCtx, "npipe:////./pipe/"+pipe)
+		cancel()
 		if err == nil {
 			if pipe == dockerDesktopWindowsPipe || strings.EqualFold(osType, "windows") {
 				return ReasonWindowsContainers
