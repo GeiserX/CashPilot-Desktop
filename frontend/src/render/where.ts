@@ -69,7 +69,7 @@ export interface WorkerDeployCalls {
   confirm(message: string): boolean;
   /** One deploy, with the owner's yes so far. */
   deploy(yes: { confirmed: boolean; allowSharedIdentity: boolean }): Promise<WorkerDeployResult>;
-  /** Saves the typed credentials after the caller shows the deploy result. */
+  /** Saves the typed credentials, after the deploy ran. */
   save(): Promise<void>;
 }
 
