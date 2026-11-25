@@ -105,10 +105,15 @@ export class DockerGuide {
    */
   async startDocker(): Promise<void> {
     if (this.model.waiting !== null) return;
+    // Busy before the first await: a second click while Windows starts Docker
+    // Desktop finds the wait under way and starts nothing.
     this.model.waitResult = "";
+    this.model.waiting = 0;
+    this.render();
     try {
       await this.deps.startDocker();
     } catch (error) {
+      this.model.waiting = null;
       this.model.waitResult = "failed";
       this.render();
       this.deps.failed?.(error);

@@ -257,6 +257,25 @@ const deps = (over = {}) => {
 }
 
 {
+  // A double click on Start Docker Desktop starts it once, and a failed start
+  // frees the button again.
+  let opened;
+  const { calls, deps: d } = deps({ startDocker: () => { calls.start++; return new Promise((r, reject) => { opened = { r, reject }; }); } });
+  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
+  const first = g.startDocker();
+  const second = g.startDocker();
+  check("RULE 8 (wiring): a double click on Start Docker Desktop starts it once", calls.start === 1, String(calls.start));
+  check("RULE 8 (wiring): the button is busy while Windows starts Docker Desktop", g.model.waiting !== null);
+  opened.reject(new Error("not installed"));
+  await Promise.all([first, second]);
+  check("RULE 8 (wiring): a failed start frees the button", g.model.waiting === null && g.model.waitResult === "failed", JSON.stringify(g.model));
+  void g.startDocker();
+  check("RULE 8 (wiring): after a failed start, a new click starts again", calls.start === 2, String(calls.start));
+  opened.reject(new Error("still not installed"));
+  await new Promise((r) => setTimeout(r, 0));
+}
+
+{
   // A double click on Restart now asks Windows once.
   let answer;
   const { calls, deps: d } = deps({ restartToFirmware: (step) => { calls.firmware.push(step); return new Promise((r) => { answer = r; }); } });
