@@ -137,7 +137,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult, WorkerTarget } from "./wails";
+import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RouteState, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult, WorkerTarget } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -2635,6 +2635,16 @@ function askDeployConsent(panel: HTMLElement | null, name: string, step: AdminSt
   });
 }
 
+interface WizardDeploySettings {
+  values: Record<string, string>;
+  proxyId: number | null;
+  image: string | null;
+  instances: number | null;
+  route: RouteState | null | undefined;
+  custom: boolean;
+  wallet?: WalletChoice;
+}
+
 // A deploy from the card: every field marked * is filled, and when Windows will
 // show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
 // answer replaces "Deploying..." next to Deploy however it ends.
@@ -2643,18 +2653,25 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
   const name = service?.name || slug;
   const fields = service && !service.custom ? serviceFormFields(service, state?.collectorFields) : [];
   const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
-  const proxyId = readWizardRoute(slug);
-  const image = readWizardImage(slug);
-  const instances = readWizardInstances(slug);
+  const settings: WizardDeploySettings = {
+    values,
+    proxyId: readWizardRoute(slug),
+    image: readWizardImage(slug),
+    instances: readWizardInstances(slug),
+    route: state?.route,
+    custom: Boolean(service?.custom),
+    wallet: workerId === null && seedFileVar(service) ? readWalletChoice(slug) : undefined,
+  };
+  const { proxyId, route } = settings;
   const replacesLocal = proxyId === null
     ? state?.deployments?.some((deployment) => deployment.slug === slug)
-    : state?.route?.recorded?.[slug] === proxyId;
+    : route?.recorded?.[slug] === proxyId;
   const outcome = await runCheckedDeploy(fields, values, proxyId === null, `Deploying ${name}...`, {
     confirmReplace: (message) => confirm(message),
     adminStep: () => DeployAdminStep(slug),
     askConsent: (step) => askDeployConsent(panel, name, step),
     say: (kind, text) => sayDeploy(slug, kind, text),
-    deploy: (approval, worker) => deployFromCard(slug, values, worker, approval, proxyId, image, instances),
+    deploy: (approval, worker) => deployFromCard(slug, settings, worker, approval),
   }, {
     workerId,
     workers: state?.workerTargets,
@@ -2666,6 +2683,8 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
   }).catch((error) => {
     sayDeploy(slug, "failed", deployErrorText(error));
     return null;
+  }).finally(() => {
+    if (settings.wallet) settings.wallet.phrase = "";
   });
   const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
   form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
@@ -2687,9 +2706,9 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
 // seed (Sia's hostd), or on this computer, directly or through a proxy. Every path
 // answers with what the note next to Deploy says.
 async function deployFromCard(
-  slug: string, values: Record<string, string>, worker: WorkerTarget | undefined, approval: AdminStep | null,
-  proxyId: number | null, image: string | null, instances: number | null,
+  slug: string, settings: WizardDeploySettings, worker: WorkerTarget | undefined, approval: AdminStep | null,
 ): Promise<DeployAnswer> {
+  const { values, proxyId, image, instances, route, custom, wallet } = settings;
   if (worker) {
     const outcome = await runWorkerDeploy(slug, worker, proxyId, instances, {
       confirm: (message) => confirm(message),
@@ -2708,10 +2727,9 @@ async function deployFromCard(
     }
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
-  if (state?.services?.some((service) => service.slug === slug && seedFileVar(service))) return runWalletDeploy(slug, values);
+  if (wallet) return runWalletDeploy(slug, values, image, instances, wallet);
   // A custom service has no credentials: it runs its saved definition.
-  const custom = state?.services?.some((service) => service.slug === slug && service.custom);
-  const outcome = await runRouteDeploy(slug, proxyId, image, instances, state?.route, {
+  const outcome = await runRouteDeploy(slug, proxyId, image, instances, route, {
     save: async () => {
       if (!custom) await SaveCredentials(slug, values);
     },
@@ -2798,15 +2816,16 @@ function readWalletChoice(slug: string): WalletChoice {
   return { mode, phrase };
 }
 
-async function runWalletDeploy(slug: string, values: Record<string, string>): Promise<DeployAnswer> {
-  const choice = readWalletChoice(slug);
+async function runWalletDeploy(
+  slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice,
+): Promise<DeployAnswer> {
   const refusal = walletChoiceRefusal(choice);
   if (refusal) return refusal;
   if (choice.mode === "generate") sayDeploy(slug, "busy", "Deploying, and creating a new wallet...");
   let result: WalletDeployResult;
   try {
     await SaveCredentials(slug, values);
-    result = await DeployServiceWallet(slug, values, readWizardImage(slug), readWizardInstances(slug), choice);
+    result = await DeployServiceWallet(slug, values, image, instances, choice);
   } finally {
     choice.phrase = "";
   }
