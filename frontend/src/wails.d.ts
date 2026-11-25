@@ -99,6 +99,11 @@ declare module "../wailsjs/go/main/App" {
   // saves the ticked, ready services, never over a value already set here.
   export function PreviewImport(req: ImportRequest): Promise<ImportPreview>;
   export function ApplyImport(req: ImportApplyRequest): Promise<ImportResult>;
+  // Money waiting: the reminders before a provider writes off your earnings.
+  // action is done, snooze (days 1 or 7), mute or unmute; rule "*" is every
+  // reminder of the service; occurrence "" is the current one.
+  export function GetReminders(): Promise<RemindersView>;
+  export function ReminderAction(slug: string, rule: string, action: string, occurrence: string, days: number): Promise<RemindersView>;
 }
 
 export interface ProxyCapView {
@@ -338,9 +343,58 @@ export interface AppState {
   // The LAN fence's status; null before the first check.
   isolation: FenceStatus | null;
   route: RouteState | null;
+  // The Money waiting panel; null from a backend that predates it.
+  reminders?: RemindersView | null;
   // Running copies that carry almost no traffic while the other copies of their
   // service here are busy (stall_alerts.go).
   stalls: StallAlert[] | null;
+}
+
+// RemindersView mirrors the Go RemindersView (reminders_app.go).
+export interface RemindersView {
+  // Joined to a CashPilot server, which owns the reminders: items is empty.
+  joined: boolean;
+  serverUrl: string;
+  // The check failed. Never shown as an all-clear.
+  unknown: boolean;
+  items: ReminderItem[] | null;
+  muted: ReminderMuted[] | null;
+}
+
+// ReminderItem mirrors internal/obligations.Item.
+export interface ReminderItem {
+  slug: string;
+  name: string;
+  rule: string;
+  // "rule" for a catalog rule, "cash-out" for the built-in nudge.
+  kind: string;
+  // claim, withdraw or keep-active.
+  action: string;
+  title: string;
+  loss: string;
+  occurrence: string;
+  // d<N>, overdue, recheck, ready or still-ready.
+  stage: string;
+  // YYYY-MM-DD, "" for a cash-out item.
+  due: string;
+  daysLeft?: number | null;
+  censored: boolean;
+  how: string;
+  url: string;
+  source: string;
+  checked: string;
+  canDone: boolean;
+  canSnooze: boolean;
+  balance?: number | null;
+  currency?: string;
+  balanceUsd?: number | null;
+}
+
+export interface ReminderMuted {
+  slug: string;
+  rule: string;
+  name: string;
+  title: string;
 }
 
 // StallAlert mirrors the Go StallAlert: one copy that runs but gets almost no work.

@@ -122,6 +122,10 @@ export function GetProxiesState() {
   return window['go']['main']['App']['GetProxiesState']();
 }
 
+export function GetReminders() {
+  return window['go']['main']['App']['GetReminders']();
+}
+
 export function GetRuntimeGuides() {
   return window['go']['main']['App']['GetRuntimeGuides']();
 }
@@ -192,6 +196,10 @@ export function RefreshActivityNetworks() {
 
 export function RefreshDeployments() {
   return window['go']['main']['App']['RefreshDeployments']();
+}
+
+export function ReminderAction(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['ReminderAction'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function RemoveBackgroundHelper() {

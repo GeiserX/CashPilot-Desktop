@@ -434,6 +434,9 @@ type AppState struct {
 	// a service can run through from its first start, why each service cannot, and
 	// which services are routed.
 	Route RouteState `json:"route"`
+	// Reminders is the Money waiting panel: what to claim, withdraw or keep active
+	// before a provider writes off the money (reminders_app.go).
+	Reminders RemindersView `json:"reminders"`
 	// Stalls are the running copies that carry almost no traffic while the other
 	// copies of their service here are busy (stall_alerts.go).
 	Stalls []StallAlert `json:"stalls"`
@@ -646,6 +649,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Drift:            a.containerDrift(),
 		Isolation:        a.isolationStatus(),
 		Route:            a.routeState(visible),
+		Reminders:        a.reminders(),
 		Stalls:           a.currentStalls(),
 	}, nil
 }

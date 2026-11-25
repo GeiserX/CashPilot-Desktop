@@ -72,6 +72,8 @@ export function GetModeState():Promise<main.ModeState>;
 
 export function GetProxiesState():Promise<main.ProxiesState>;
 
+export function GetReminders():Promise<main.RemindersView>;
+
 export function GetRuntimeGuides():Promise<Array<runtime.InstallGuide>>;
 
 export function GetService(arg1:string):Promise<catalog.Service>;
@@ -107,6 +109,8 @@ export function RecordPayout(arg1:string,arg2:number,arg3:string,arg4:string,arg
 export function RefreshActivityNetworks():Promise<main.ActivityView>;
 
 export function RefreshDeployments():Promise<Array<store.Deployment>>;
+
+export function ReminderAction(arg1:string,arg2:string,arg3:string,arg4:string,arg5:number):Promise<main.RemindersView>;
 
 export function RemoveBackgroundHelper():Promise<void>;
 
