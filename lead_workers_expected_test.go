@@ -28,6 +28,10 @@ type idWorker struct {
 	// dropReply makes the next deploy finish on the worker and close the connection
 	// before it answers.
 	dropReply bool
+	// older makes it answer as a worker before CashPilot #831 (a rollback): its
+	// lookup names no container, and a deploy with replace_existing replaces
+	// whatever container runs.
+	older bool
 }
 
 // dockerID is a full Docker container ID, distinct in its first 12 characters too.
@@ -46,8 +50,12 @@ func newIDWorker(t *testing.T) *idWorker {
 		}
 		if r.Method == http.MethodGet {
 			w.mu.Lock()
-			current := w.current
+			current, older := w.current, w.older
 			w.mu.Unlock()
+			if older {
+				_ = json.NewEncoder(rw).Encode(map[string]any{"exists": current != "none"})
+				return
+			}
 			_ = json.NewEncoder(rw).Encode(map[string]any{"exists": current != "none", "expected_container": current})
 			return
 		}
@@ -63,6 +71,20 @@ func newIDWorker(t *testing.T) *idWorker {
 		expected, _ := body["expected_container"].(string)
 		if expected == "" {
 			expected = "none"
+		}
+		if w.older {
+			// It reads only the flag: with it, the deploy replaces whatever runs.
+			if body["replace_existing"] == true {
+				expected = w.current
+			} else if w.current != "none" {
+				w.mu.Unlock()
+				rw.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(rw).Encode(map[string]any{"detail": map[string]any{
+					"error":   "replace_existing",
+					"message": "A container already exists. Confirm the replacement to redeploy.",
+				}})
+				return
+			}
 		}
 		if expected != w.current {
 			current := w.current
@@ -349,5 +371,95 @@ func TestAWorkerWithoutTheCheckedRouteSaysToUpdate(t *testing.T) {
 	defer mu.Unlock()
 	if len(deploys) != 1 || deploys[0]["replace_existing"] != true || deploys[0]["expected_container"] != nil {
 		t.Fatalf("legacy deploy sent %v", deploys)
+	}
+}
+
+// setOlder rolls the worker back to a release before CashPilot #831, or forward again.
+func (w *idWorker) setOlder(older bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.older = older
+}
+
+func TestAYesForOneContainerIsAskedAgainWhenTheWorkerStopsNamingIt(t *testing.T) {
+	app, worker, req := newIDWorkerLead(t)
+	seen, swapped := dockerID(1), dockerID(2)
+	worker.set(seen)
+	asked, err := app.DeployToWorker("plain", req)
+	if err != nil || asked.Ask != askReplace || asked.ExpectedContainer != seen {
+		t.Fatalf("first question = %+v, %v", asked, err)
+	}
+	// While the owner reads the question about seen, the worker is rolled back to
+	// a release that names no container, and another container takes seen's place.
+	worker.setOlder(true)
+	worker.set(swapped)
+	again, err := app.DeployToWorker("plain", approve(req, asked))
+	current, posts := worker.state()
+	if err != nil || again.Ask != askReplace || again.ExpectedContainer != "" || current != swapped || len(posts) != 0 {
+		t.Fatalf("yes for %s on a rolled-back worker = %+v, %v, worker runs %s, posts %v; want the older-worker question and no deploy",
+			seen[:12], again, err, current, posts)
+	}
+	for _, want := range []string{"does not count", "The existing container will be replaced", "Update CashPilot on garage"} {
+		if !strings.Contains(again.Message, want) {
+			t.Fatalf("new question %q must say %q", again.Message, want)
+		}
+	}
+	// Only a yes to that question sends the flag.
+	result, err := app.DeployToWorker("plain", approve(req, again))
+	current, posts = worker.state()
+	if err != nil || result.Ask != "" || result.ContainerID != current || current == swapped || len(posts) != 1 {
+		t.Fatalf("approved older-worker question = %+v, %v, worker runs %s, posts %v", result, err, current, posts)
+	}
+	if posts[0]["replace_existing"] != true || posts[0]["expected_container"] != nil {
+		t.Fatalf("older-worker redeploy sent %v; want replace_existing only", posts[0])
+	}
+}
+
+func TestAYesForOneContainerSendsNoFlagWhenTheRolledBackWorkerHasNone(t *testing.T) {
+	app, worker, req := newIDWorkerLead(t)
+	seen := dockerID(1)
+	worker.set(seen)
+	asked, err := app.DeployToWorker("plain", req)
+	if err != nil || asked.ExpectedContainer != seen {
+		t.Fatalf("first question = %+v, %v", asked, err)
+	}
+	// Rolled back with no container, and one appears after the lookup: the yes for
+	// seen must not reach the worker as the flag.
+	worker.setOlder(true)
+	worker.set("none")
+	worker.mu.Lock()
+	worker.beforeDeploy = func() { worker.current = dockerID(2) }
+	worker.mu.Unlock()
+	again, err := app.DeployToWorker("plain", approve(req, asked))
+	current, posts := worker.state()
+	if err != nil || again.Ask != askReplace || again.ExpectedContainer != "" || current != dockerID(2) || len(posts) != 1 {
+		t.Fatalf("deploy = %+v, %v, worker runs %s, posts %v; want the older-worker question", again, err, current, posts)
+	}
+	if posts[0]["replace_existing"] != nil && posts[0]["replace_existing"] != false {
+		t.Fatalf("a yes for %s was sent as %v", seen[:12], posts[0])
+	}
+}
+
+func TestAnOlderWorkerYesIsAskedAgainWhenTheWorkerStartsNamingTheContainer(t *testing.T) {
+	app, worker, req := newIDWorkerLead(t)
+	seen := dockerID(1)
+	worker.set(seen)
+	worker.setOlder(true)
+	asked, err := app.DeployToWorker("plain", req)
+	if err != nil || asked.Ask != askReplace || asked.ExpectedContainer != "" {
+		t.Fatalf("older-worker question = %+v, %v", asked, err)
+	}
+	// The worker is updated while the dialog is open: the yes named no container.
+	worker.setOlder(false)
+	again, err := app.DeployToWorker("plain", approve(req, asked))
+	current, posts := worker.state()
+	if err != nil || again.Ask != askReplace || again.ExpectedContainer != seen || current != seen || len(posts) != 0 {
+		t.Fatalf("older-worker yes on an updated worker = %+v, %v, worker runs %s, posts %v; want a question about %s",
+			again, err, current, posts, seen[:12])
+	}
+	result, err := app.DeployToWorker("plain", approve(req, again))
+	current, posts = worker.state()
+	if err != nil || result.ContainerID != current || len(posts) != 1 || posts[0]["expected_container"] != seen || posts[0]["replace_existing"] != nil {
+		t.Fatalf("approved question = %+v, %v, posts %v", result, err, posts)
 	}
 }

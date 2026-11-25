@@ -300,6 +300,10 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	// named: the worker names the container a deploy replaces (CashPilot #831), and
 	// replaces only the one the deploy expects.
 	named := state.Container != ""
+	// legacyYes is a yes to the older-worker question, which named no container. A
+	// yes that named one covers only that container, never the bare flag: if the
+	// worker stops naming it (rolled back while the dialog was open), it asks again.
+	legacyYes := req.ReplaceExisting && req.ExpectedContainer == ""
 	replaceQuestion := fmt.Sprintf("Redeploy %s on %s? The existing container will be replaced, but its volumes are kept.", svc.Name, target.device.Name)
 	if named {
 		// The owner's yes covers only the container its question named.
@@ -312,7 +316,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 			}
 			return result, nil
 		}
-	} else if !req.ReplaceExisting {
+	} else if !legacyYes {
 		if !checked {
 			exists, err = target.client.LegacyDeployTargetExists(ctx, slug)
 			if err != nil {
@@ -327,6 +331,9 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 				result.Message = fmt.Sprintf("Deploy %s on %s? This worker cannot confirm that the container is absent. If one exists when the deploy starts, it will be replaced and its volumes will be kept.", svc.Name, target.device.Name)
 			}
 			result.Message += fmt.Sprintf(" Update CashPilot on %s so it can confirm the exact container before replacing it.", target.device.Name)
+			if req.ReplaceExisting {
+				result.Message = fmt.Sprintf("%s no longer names the %s container you approved replacing, so that yes does not count.\n\n%s", target.device.Name, svc.Name, result.Message)
+			}
 			return result, nil
 		}
 	}
@@ -368,7 +375,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	if named {
 		spec.ExpectedContainer = state.Container
 	} else {
-		spec.ReplaceExisting = req.ReplaceExisting
+		spec.ReplaceExisting = legacyYes
 	}
 	timeout := workerapi.DeployTimeout(svc.Docker.StopTimeout)
 	var answer workerapi.DeployResult
@@ -379,7 +386,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	if err != nil {
 		var refused *workerapi.Error
-		if errors.As(err, &refused) && refused.Code == askReplace && !req.ReplaceExisting {
+		if errors.As(err, &refused) && refused.Code == askReplace && !legacyYes {
 			// A prior request can finish after the state read, even if its reply was lost.
 			result.Ask = askReplace
 			result.Message = replaceQuestion

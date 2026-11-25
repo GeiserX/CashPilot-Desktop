@@ -112,12 +112,13 @@ export async function runWorkerDeploy(
     };
   }
   const yes: WorkerDeployYes = { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "" };
-  // Each question is asked at most once, except a replacement: a worker that names
-  // the container asks again when another one is there, and the earlier yes is void.
+  // Each question is asked at most once, except a replacement: a yes covers only the
+  // container its question named ("" for an older worker that names none), so a
+  // question about another one, or about none after a named one, is asked again.
   for (let round = 0; round < 8; round++) {
     const result = await calls.deploy({ ...yes });
     const container = result.expectedContainer || "";
-    if (result.ask === "replace_existing" && (!yes.replaceExisting || (container !== "" && container !== yes.expectedContainer))) {
+    if (result.ask === "replace_existing" && (!yes.replaceExisting || container !== yes.expectedContainer)) {
       yes.replaceExisting = false;
       yes.expectedContainer = "";
       const message = result.message || `Redeploy ${slug} on ${worker.name}? The existing container will be replaced, but its volumes are kept.`;

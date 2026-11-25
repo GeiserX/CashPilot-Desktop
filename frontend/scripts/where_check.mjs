@@ -17,7 +17,9 @@
 //      CHOICE, NEVER A SEED FIELD.
 //   8. A YES TO A REPLACEMENT NAMES THE CONTAINER ITS QUESTION SHOWED. A WORKER THAT
 //      FINDS ANOTHER CONTAINER ASKS AGAIN, AND ONLY A NEW YES SENDS AGAIN; AN OLDER
-//      WORKER THAT NAMES NONE IS ASKED ONCE, AS BEFORE.
+//      WORKER THAT NAMES NONE IS ASKED ONCE, AS BEFORE. A YES FOR ONE CONTAINER IS
+//      NEVER SENT AS AN OLDER WORKER'S YES, NOR THE REVERSE: A WORKER ROLLED BACK OR
+//      UPDATED WHILE THE DIALOG IS OPEN IS ASKED ABOUT AGAIN.
 //
 //   node scripts/where_check.mjs      # against ./.harness-build
 
@@ -228,6 +230,21 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   check("RULE 8: an older worker is asked once and gets the yes alone",
     out.kind === "deployed" && c.log.asked[0] === older.message
       && c.log.deploys[1].replaceExisting === true && c.log.deploys[1].expectedContainer === "", JSON.stringify(c.log));
+  const rolledBack = { ...older, message: `attic no longer names the honeygain container you approved replacing, so that yes does not count.\n\n${older.message}` };
+  c = calls([named(1), rolledBack, ok], [true, true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: a yes for one container is asked again when the worker stops naming it",
+    out.kind === "deployed" && c.log.asked.length === 2 && c.log.asked[1] === rolledBack.message
+      && c.log.deploys.length === 3 && c.log.deploys[2].replaceExisting === true && c.log.deploys[2].expectedContainer === "", JSON.stringify(c.log));
+  c = calls([named(1), rolledBack], [true, false]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: a no to the older-worker question sends nothing more",
+    out.kind === "cancelled" && c.log.deploys.length === 2, JSON.stringify(c.log));
+  c = calls([older, named(1), ok], [true, true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: an older worker's yes is asked again when the worker starts naming the container",
+    out.kind === "deployed" && c.log.asked.length === 2 && c.log.asked[1] === named(1).message
+      && c.log.deploys[2].replaceExisting === true && c.log.deploys[2].expectedContainer === id(1), JSON.stringify(c.log));
   c = calls([older, older], [true]);
   out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
   check("RULE 8: an older worker that asks again after a yes is refused",
