@@ -333,6 +333,22 @@ section { margin-bottom: 28px; }
   font-size: var(--fs-2);
 }
 
+/* The desktop-app risk disclosure on a manual-only setup card (render/session.ts). */
+.session-risk {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  border-radius: var(--radius);
+}
+.session-risk h4 { margin: 0 0 6px; font-size: var(--fs-3); color: var(--text-primary); }
+.session-risk p, .session-risk li { color: var(--text-secondary); font-size: var(--fs-2); }
+.session-risk p { margin: 6px 0; }
+.session-risk ul { margin: 6px 0; padding-left: 20px; }
+.session-accept, .session-accepted { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 8px; }
+.session-tick { display: flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: var(--fs-2); }
+.session-consent-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+
 /* The log and action output under a page. Hidden until something writes to it. */
 .output {
   max-height: 320px;

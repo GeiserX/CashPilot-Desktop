@@ -156,6 +156,8 @@ export namespace catalog {
 	    idEnv: string;
 	    url: string;
 	    steps: string;
+	    idShape?: string;
+	    idShapeUnique?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new DeviceLink(source);
@@ -166,6 +168,8 @@ export namespace catalog {
 	        this.idEnv = source["idEnv"];
 	        this.url = source["url"];
 	        this.steps = source["steps"];
+	        this.idShape = source["idShape"];
+	        this.idShapeUnique = source["idShapeUnique"];
 	    }
 	}
 	export class Disclosure {
@@ -213,6 +217,7 @@ export namespace catalog {
 	    unless?: string;
 	    windowHours?: number;
 	    minMatches?: number;
+	    restart?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new HealthSignal(source);
@@ -226,6 +231,7 @@ export namespace catalog {
 	        this.unless = source["unless"];
 	        this.windowHours = source["windowHours"];
 	        this.minMatches = source["minMatches"];
+	        this.restart = source["restart"];
 	    }
 	}
 	export class NodeFirewall {
@@ -244,6 +250,34 @@ export namespace catalog {
 	        this.blackhole = source["blackhole"];
 	    }
 	}
+	export class UDPPortRange {
+	    env: string;
+	    maxPorts?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UDPPortRange(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.env = source["env"];
+	        this.maxPorts = source["maxPorts"];
+	    }
+	}
+	export class UIPort {
+	    env: string;
+	    port: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new UIPort(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.env = source["env"];
+	        this.port = source["port"];
+	    }
+	}
 	export class EnvVar {
 	    key: string;
 	    label: string;
@@ -253,6 +287,8 @@ export namespace catalog {
 	    default: string;
 	    pattern?: string;
 	    portRange?: boolean;
+	    perDevice?: boolean;
+	    identifier?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new EnvVar(source);
@@ -268,6 +304,8 @@ export namespace catalog {
 	        this.default = source["default"];
 	        this.pattern = source["pattern"];
 	        this.portRange = source["portRange"];
+	        this.perDevice = source["perDevice"];
+	        this.identifier = source["identifier"];
 	    }
 	}
 	export class DockerConfig {
@@ -282,10 +320,15 @@ export namespace catalog {
 	    command: string;
 	    entrypoint: string[];
 	    networkMode: string;
+	    runtime: string;
+	    uiPort?: UIPort;
+	    udpPortRange?: UDPPortRange;
+	    fenceGated: boolean;
 	    nodeFirewall: NodeFirewall;
 	    capAdd: string[];
 	    devices: string[];
 	    healthSignals: HealthSignal[];
+	    healthProbe?: Record<string, any>;
 	    advertisedAddressEnv: string;
 	    privileged: boolean;
 	    stopTimeout: number;
@@ -310,10 +353,15 @@ export namespace catalog {
 	        this.command = source["command"];
 	        this.entrypoint = source["entrypoint"];
 	        this.networkMode = source["networkMode"];
+	        this.runtime = source["runtime"];
+	        this.uiPort = this.convertValues(source["uiPort"], UIPort);
+	        this.udpPortRange = this.convertValues(source["udpPortRange"], UDPPortRange);
+	        this.fenceGated = source["fenceGated"];
 	        this.nodeFirewall = this.convertValues(source["nodeFirewall"], NodeFirewall);
 	        this.capAdd = source["capAdd"];
 	        this.devices = source["devices"];
 	        this.healthSignals = this.convertValues(source["healthSignals"], HealthSignal);
+	        this.healthProbe = source["healthProbe"];
 	        this.advertisedAddressEnv = source["advertisedAddressEnv"];
 	        this.privileged = source["privileged"];
 	        this.stopTimeout = source["stopTimeout"];
@@ -791,6 +839,7 @@ export namespace catalog {
 		    return a;
 		}
 	}
+	
 
 }
 
@@ -821,6 +870,39 @@ export namespace collectors {
 
 export namespace config {
 	
+	export class SessionConsent {
+	    textVersion: string;
+	    // Go type: time
+	    acceptedAt: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new SessionConsent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.textVersion = source["textVersion"];
+	        this.acceptedAt = this.convertValues(source["acceptedAt"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class AppConfig {
 	    firstRunComplete: boolean;
 	    displayCurrency: string;
@@ -841,7 +923,9 @@ export namespace config {
 	    driftWarningsOff?: boolean;
 	    driftIgnored?: Record<string, string>;
 	    isolation?: string;
+	    isolationOn?: boolean;
 	    activityEnabled?: boolean;
+	    sessionConsent?: Record<string, SessionConsent>;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -868,8 +952,28 @@ export namespace config {
 	        this.driftWarningsOff = source["driftWarningsOff"];
 	        this.driftIgnored = source["driftIgnored"];
 	        this.isolation = source["isolation"];
+	        this.isolationOn = source["isolationOn"];
 	        this.activityEnabled = source["activityEnabled"];
+	        this.sessionConsent = this.convertValues(source["sessionConsent"], SessionConsent, true);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
@@ -1238,6 +1342,62 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class RouteProxy {
+	    id: number;
+	    name: string;
+	    exitIp: string;
+	    country: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RouteProxy(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.exitIp = source["exitIp"];
+	        this.country = source["country"];
+	    }
+	}
+	export class RouteState {
+	    proxies: RouteProxy[];
+	    refusals: Record<string, string>;
+	    recorded: Record<string, number>;
+	    running: Record<string, number>;
+	    proxiedOnly: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RouteState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.proxies = this.convertValues(source["proxies"], RouteProxy);
+	        this.refusals = source["refusals"];
+	        this.recorded = source["recorded"];
+	        this.running = source["running"];
+	        this.proxiedOnly = source["proxiedOnly"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class FleetViewPlatform {
 	    slug: string;
 	    usd?: number;
@@ -1496,6 +1656,7 @@ export namespace main {
 	    stateBackups: statebackup.Row[];
 	    drift: Record<string, Array<string>>;
 	    isolation?: runtime.FenceStatus;
+	    route: RouteState;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -1526,6 +1687,7 @@ export namespace main {
 	        this.stateBackups = this.convertValues(source["stateBackups"], statebackup.Row);
 	        this.drift = source["drift"];
 	        this.isolation = this.convertValues(source["isolation"], runtime.FenceStatus);
+	        this.route = this.convertValues(source["route"], RouteState);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1814,6 +1976,79 @@ export namespace main {
 		}
 	}
 	
+	export class RestoreVolume {
+	    target: string;
+	    volume: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RestoreVolume(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.volume = source["volume"];
+	    }
+	}
+	export class RestorePreview {
+	    token: string;
+	    file: string;
+	    slug: string;
+	    service: string;
+	    bytes: number;
+	    sha256: string;
+	    known: boolean;
+	    madeOn: string;
+	    container: string;
+	    creates: RestoreVolume[];
+	    ok: boolean;
+	    why: string;
+	    runsOn: string[];
+	    needsName: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RestorePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.file = source["file"];
+	        this.slug = source["slug"];
+	        this.service = source["service"];
+	        this.bytes = source["bytes"];
+	        this.sha256 = source["sha256"];
+	        this.known = source["known"];
+	        this.madeOn = source["madeOn"];
+	        this.container = source["container"];
+	        this.creates = this.convertValues(source["creates"], RestoreVolume);
+	        this.ok = source["ok"];
+	        this.why = source["why"];
+	        this.runsOn = source["runsOn"];
+	        this.needsName = source["needsName"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
 	
 	export class SettingsState {
 	    environment: EnvSetting[];
@@ -1848,6 +2083,24 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	export class UnfinishedRestore {
+	    slug: string;
+	    service: string;
+	    volumes: string[];
+	    startedAt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new UnfinishedRestore(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.service = source["service"];
+	        this.volumes = source["volumes"];
+	        this.startedAt = source["startedAt"];
+	    }
 	}
 
 }
@@ -2100,6 +2353,7 @@ export namespace runtime {
 	    error: string;
 	    outside: string[];
 	    outsideStopped: string[];
+	    waiting: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FenceStatus(source);
@@ -2114,6 +2368,7 @@ export namespace runtime {
 	        this.error = source["error"];
 	        this.outside = source["outside"];
 	        this.outsideStopped = source["outsideStopped"];
+	        this.waiting = source["waiting"];
 	    }
 	}
 	export class InstallGuide {
@@ -2195,6 +2450,32 @@ export namespace runtime {
 		    }
 		    return a;
 		}
+	}
+	export class RestoreResult {
+	    containerId: string;
+	    name: string;
+	    image: string;
+	    targets: string[];
+	    files: number;
+	    started: boolean;
+	    waiting?: string;
+	    left?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RestoreResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.containerId = source["containerId"];
+	        this.name = source["name"];
+	        this.image = source["image"];
+	        this.targets = source["targets"];
+	        this.files = source["files"];
+	        this.started = source["started"];
+	        this.waiting = source["waiting"];
+	        this.left = source["left"];
+	    }
 	}
 	export class Status {
 	    available: boolean;

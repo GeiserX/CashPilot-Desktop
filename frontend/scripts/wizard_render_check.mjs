@@ -26,6 +26,7 @@
 //   node scripts/wizard_render_check.mjs      # against ./.harness-build
 
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
+import { SESSION_DISCLOSURE_VERSION } from "../.harness-build/render/session.js";
 
 let failures = 0;
 let checks = 0;
@@ -40,10 +41,11 @@ function check(name, condition, detail = "") {
 /**
  * Every credential <input> in the card, with the attributes the app depends on. The
  * Advanced section's Image box is not a credential and is checked on its own in
- * scripts/image_check.mjs, including that it never carries data-wizard-env.
+ * scripts/image_check.mjs, including that it never carries data-wizard-env. Nor is
+ * the risk disclosure's tickbox, checked in scripts/session_disclosure_render_check.mjs.
  */
 function inputs(html) {
-  return [...html.matchAll(/<input\b[^>]*>/g)].filter((match) => !/\bdata-wizard-image=/.test(match[0])).map((match) => {
+  return [...html.matchAll(/<input\b[^>]*>/g)].filter((match) => !/\bdata-wizard-image=|\bdata-session-tick=/.test(match[0])).map((match) => {
     const tag = match[0];
     const attr = (name) => (tag.match(new RegExp(`\\b${name}="([^"]*)"`)) || [])[1];
     return {
@@ -320,6 +322,57 @@ const manual = renderWizardServiceSetup(
 );
 check("a manual-only service still renders its collector input", inputs(manual)[0]?.env === "PAWNS_EMAIL", manual);
 check("its Deploy button is disabled", manual.includes('data-wizard-action="deploy" data-slug="pawns" disabled'), manual);
+
+// ---------------------------------------------------------------------------
+// RULE 7: a manual-only DESKTOP app asks for the risk disclosure first. Its install
+// tip and setup guide stay hidden until the user accepts the current text for that
+// app; its collector inputs and signup link do not wait (render/session.ts).
+// ---------------------------------------------------------------------------
+const wipterSvc = service({
+  name: "Wipter",
+  slug: "wipter",
+  manualOnly: true,
+  platforms: ["windows", "macos", "linux", "android"],
+  referral: { signupUrl: "https://wipter.com/register?via=FB1373FBDA", code: "FB1373FBDA", program: true, bonus: {} },
+  docker: { env: [] },
+});
+const wipterFields = { wipter: [{ key: "WIPTER_EMAIL", label: "Wipter email", description: "Account email", required: true }] };
+const guideUrl = 'data-url="https://geiserx.github.io/CashPilot/guides/wipter/"';
+const unasked = renderWizardServiceSetup(wipterSvc, wipterFields, "devbox");
+check("RULE 7: the card shows the disclosure inside its session slot", unasked.includes('data-session-slot="wipter"') && unasked.includes('data-session-disclosure="wipter"'), unasked);
+check("RULE 7: with no consent the install tip is hidden", !unasked.includes("Install this provider's native app"), unasked);
+check("RULE 7: with no consent the setup guide is hidden", !unasked.includes(guideUrl), unasked);
+check("RULE 7: the collector input still renders before the consent", inputs(unasked)[0]?.env === "WIPTER_EMAIL", unasked);
+check("RULE 7: the signup link with the referral code still renders", unasked.includes("FB1373FBDA"), unasked);
+check("RULE 7: Deploy stays disabled", unasked.includes('data-wizard-action="deploy" data-slug="wipter" disabled'), unasked);
+
+const accepted = renderWizardServiceSetup(wipterSvc, wipterFields, "devbox", null, null, null, null, null, undefined, {
+  wipter: { textVersion: SESSION_DISCLOSURE_VERSION, acceptedAt: "2026-11-24T18:30:00Z" },
+});
+check("RULE 7: after the consent the install tip shows", accepted.includes("Install this provider's native app"), accepted);
+check("RULE 7: after the consent the setup guide shows, once", accepted.split(guideUrl).length === 2, accepted);
+check("RULE 7: after the consent the disclosure is gone", !accepted.includes("data-session-disclosure"), accepted);
+check("RULE 7: after the consent it can be withdrawn", accepted.includes('data-session-revoke="wipter"'), accepted);
+
+const otherApp = renderWizardServiceSetup(wipterSvc, wipterFields, "devbox", null, null, null, null, null, undefined, {
+  passiveapp: { textVersion: SESSION_DISCLOSURE_VERSION, acceptedAt: "2026-11-24T18:30:00Z" },
+});
+check("RULE 7: a consent for another app does not open this one", otherApp.includes('data-session-disclosure="wipter"') && !otherApp.includes("Install this provider's native app"), otherApp);
+const oldText = renderWizardServiceSetup(wipterSvc, wipterFields, "devbox", null, null, null, null, null, undefined, {
+  wipter: { textVersion: "2000-01-01", acceptedAt: "2026-11-24T18:30:00Z" },
+});
+check("RULE 7: a consent to an older text asks again", oldText.includes('data-session-disclosure="wipter"') && !oldText.includes("Install this provider's native app"), oldText);
+
+const phoneApp = renderWizardServiceSetup(service({ slug: "nodle", name: "Nodle", manualOnly: true, platforms: ["ios", "android"], docker: { env: [] } }), {}, "devbox");
+check("RULE 7: a phone-only manual app keeps the plain install tip", phoneApp.includes("Install this provider's native app") && !phoneApp.includes("data-session-"), phoneApp);
+check("RULE 7: and its setup guide", phoneApp.includes('data-url="https://geiserx.github.io/CashPilot/guides/nodle/"'), phoneApp);
+// Teneo ships a Windows app, but its catalog entry lists only a browser extension.
+// The gate fails closed, so its card asks too.
+const teneo = renderWizardServiceSetup(service({ slug: "teneo", name: "Teneo", manualOnly: true, platforms: ["browser-extension"], docker: { env: [] } }), {}, "devbox");
+check("RULE 7: a manual app listed as a browser extension asks first (Teneo)", teneo.includes('data-session-disclosure="teneo"') && !teneo.includes("Install this provider's native app") && !teneo.includes("/guides/teneo/"), teneo);
+const noList = renderWizardServiceSetup(service({ slug: "mystery", name: "Mystery", manualOnly: true, platforms: null, docker: { env: [] } }), {}, "devbox");
+check("RULE 7: a manual app with no platform list asks first", noList.includes('data-session-disclosure="mystery"') && !noList.includes("Install this provider's native app"), noList);
+check("RULE 7: a container service shows no disclosure", !hg.includes("data-session-") && hg.includes('data-url="https://geiserx.github.io/CashPilot/guides/honeygain/"'), hg);
 
 // ---------------------------------------------------------------------------
 // RULE 6: a catalog pattern reaches the input, so the browser can point at a
