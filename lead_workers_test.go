@@ -33,19 +33,35 @@ type workerCall struct {
 // fakeDockerWorker is a CashPilot Docker worker's API: it records each call and
 // answers with reply (status 200 and {"status":"ok"} by default).
 type fakeDockerWorker struct {
-	srv   *httptest.Server
-	mu    sync.Mutex
-	calls []workerCall
-	reply func(call workerCall) (int, string)
+	srv    *httptest.Server
+	mu     sync.Mutex
+	calls  []workerCall
+	reply  func(call workerCall) (int, string)
+	copies map[string]bool
 }
 
 func newFakeDockerWorker(t *testing.T) *fakeDockerWorker {
 	t.Helper()
-	f := &fakeDockerWorker{}
+	f := &fakeDockerWorker{copies: make(map[string]bool)}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
 		call := workerCall{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Auth: r.Header.Get("Authorization")}
 		_ = json.Unmarshal(raw, &call.Body)
+		if slug, ok := strings.CutSuffix(strings.TrimPrefix(call.Path, "/api/containers/"), "/logs"); ok && r.Method == http.MethodGet {
+			if r.URL.Query().Get("lines") != "0" {
+				t.Error("presence check must request zero lines")
+			}
+			f.mu.Lock()
+			exists := f.copies[slug]
+			f.mu.Unlock()
+			if exists {
+				_, _ = io.WriteString(w, `{"logs":""}`)
+			} else {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]string{"detail": "Container for " + slug + " not found"})
+			}
+			return
+		}
 		f.mu.Lock()
 		f.calls = append(f.calls, call)
 		reply := f.reply
@@ -53,6 +69,11 @@ func newFakeDockerWorker(t *testing.T) *fakeDockerWorker {
 		status, body := 200, `{"status":"ok","container_id":"c0ffee"}`
 		if reply != nil {
 			status, body = reply(call)
+		}
+		if slug, ok := strings.CutSuffix(strings.TrimPrefix(call.Path, "/api/containers/"), "/deploy"); ok && status == http.StatusOK {
+			f.mu.Lock()
+			f.copies[slug] = true
+			f.mu.Unlock()
 		}
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
@@ -500,16 +521,29 @@ func TestAWorkerThatHasNotUsedItsKeyYetGetsTheSharedKey(t *testing.T) {
 	}
 }
 
-func TestWorkerDeployAsksBeforeReplacingTheLastDeploy(t *testing.T) {
+func TestWorkerDeployAsksAfterDelayedEmptyHeartbeat(t *testing.T) {
 	app := newLeadApp(t)
 	worker := newFakeDockerWorker(t)
-	enrolWorker(t, app, "garage", worker.srv.URL, nil)
+	key := enrolWorker(t, app, "garage", worker.srv.URL, nil)
+	// This heartbeat's inventory was collected before the first deploy.
+	body := `{"name":"garage","client_id":"client-garage","url":"` + worker.srv.URL + `","containers":[]}`
+	heartbeat := httptest.NewRequest(http.MethodPost, "/api/workers/heartbeat", strings.NewReader(body))
+	heartbeat.Header.Set("Authorization", "Bearer "+key)
 	req := WorkerDeployRequest{
 		WorkerID: workerID(t, app, "garage"),
 		Values:   map[string]string{"TOKEN": "typed"},
 	}
 	if result, err := app.DeployToWorker("plain", req); err != nil || result.ContainerID == "" {
 		t.Fatalf("first deploy = %+v, %v", result, err)
+	}
+	rec := httptest.NewRecorder()
+	app.handleWorkerHeartbeat(rec, heartbeat)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delayed heartbeat: %d %s", rec.Code, rec.Body.String())
+	}
+	reports, err := app.store.FleetReports()
+	if err != nil || len(reports[req.WorkerID].Containers) != 0 {
+		t.Fatalf("expected the stale heartbeat to clear the Fleet report: %+v, %v", reports[req.WorkerID], err)
 	}
 	result, err := app.DeployToWorker("plain", req)
 	if err != nil || result.Ask != "replace_existing" || worker.count() != 1 {
@@ -519,5 +553,4 @@ func TestWorkerDeployAsksBeforeReplacingTheLastDeploy(t *testing.T) {
 	if result, err := app.DeployToWorker("plain", req); err != nil || result.Ask != "" || worker.count() != 2 {
 		t.Fatalf("approved replacement = %+v, %v, worker got %d requests", result, err, worker.count())
 	}
-
 }

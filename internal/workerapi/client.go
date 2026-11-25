@@ -131,6 +131,28 @@ func (c *Client) Deploy(ctx context.Context, slug string, spec DeploySpec, timeo
 	return out, err
 }
 
+// HasManagedCopy looks up the worker's first direct copy in Docker. The
+// inventory endpoint can return cached status. A zero-line tail uses the
+// worker's live container lookup without requesting any log content.
+func (c *Client) HasManagedCopy(ctx context.Context, slug string) (bool, error) {
+	var out struct {
+		Logs *string `json:"logs"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/containers/"+url.PathEscape(slug)+"/logs",
+		url.Values{"lines": {"0"}}, nil, nil, 0, &out)
+	if err != nil {
+		var refusal *Error
+		if errors.As(err, &refusal) && refusal.Status == http.StatusNotFound && refusal.Message == "Container for "+slug+" not found" {
+			return false, nil
+		}
+		return false, err
+	}
+	if out.Logs == nil {
+		return false, errors.New("the worker did not answer the container lookup")
+	}
+	return true, nil
+}
+
 // Command sends stop, start or restart for copy instance of slug, or removes it.
 // Copy 1 is addressed without ?instance, as the web app sends it, so an older worker
 // sees the request it always did. Removing copy 1 removes the service on that worker:
