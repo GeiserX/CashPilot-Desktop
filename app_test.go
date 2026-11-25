@@ -288,10 +288,15 @@ func TestEarningsSummaryPoolAddressChangeIsANewBaseline(t *testing.T) {
 		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
 		map[string]string{"XMR": "monero"}, true)
 	now := time.Now().UTC()
+	address := "4" + strings.Repeat("A", 94)
+	if err := st.SaveCredentials("supportxmr", map[string]string{"SUPPORTXMR_ADDRESS": address}); err != nil {
+		t.Fatal(err)
+	}
+	addressHash := testPoolAddressHash(address)
 	seedEarnings(t, st,
 		store.EarningsRecord{Platform: "supportxmr", Balance: 0.01, Currency: "XMR", PoolAddressHash: "first", CreatedAt: atUTC(now.AddDate(0, 0, -2), 10)},
-		store.EarningsRecord{Platform: "supportxmr", Balance: 0.09, Currency: "XMR", PoolAddressHash: "second", CreatedAt: atUTC(now.AddDate(0, 0, -1), 10)},
-		store.EarningsRecord{Platform: "supportxmr", Balance: 0.10, Currency: "XMR", PoolAddressHash: "second", CreatedAt: atUTC(now, 10)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.09, Currency: "XMR", PoolAddressHash: addressHash, CreatedAt: atUTC(now.AddDate(0, 0, -1), 10)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.10, Currency: "XMR", PoolAddressHash: addressHash, CreatedAt: atUTC(now, 10)},
 	)
 	summary := app.computeEarningsSummary(st.ListLatestEarnings())
 	if got := summary.Daily[len(summary.Daily)-2].Amount; got != 0 {
@@ -436,7 +441,7 @@ func (f *fakeCollector) Supports(slug string) bool {
 	return f.supported[slug]
 }
 
-func (f *fakeCollector) Collect(_ context.Context, slug string, _ map[string]string) (store.EarningsRecord, error) {
+func (f *fakeCollector) CollectSaved(_ context.Context, slug string, _ map[string]string) (store.EarningsRecord, error) {
 	// Track concurrent in-flight collects to prove the single-flight guard.
 	cur := f.inFlight.Add(1)
 	for {

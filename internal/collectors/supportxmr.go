@@ -14,8 +14,10 @@ import (
 // address has 106. The pool checks the address after this format check.
 var moneroAddress = regexp.MustCompile(`^(?:[48][1-9A-HJ-NP-Za-km-z]{94}|4[1-9A-HJ-NP-Za-km-z]{105})$`)
 
+const supportXMRAddressKey = "SUPPORTXMR_ADDRESS"
+
 func (r *Registry) collectSupportXMR(ctx context.Context, credentials map[string]string) (Result, error) {
-	address := firstCredential(credentials, "SUPPORTXMR_ADDRESS")
+	address := firstCredential(credentials, supportXMRAddressKey)
 	if !moneroAddress.MatchString(address) {
 		return Result{}, collectorError{"auth", "Enter the Monero payout address your miner uses on SupportXMR, without .workername or +difficulty."}
 	}

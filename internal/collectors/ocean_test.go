@@ -14,11 +14,18 @@ func TestOceanReadsUnpaidBalance(t *testing.T) {
 			body: `{"result":{"unpaid":"0.00571777","estimated_payout_next_block":"0.00000000"}}`,
 		},
 	}})
-	record, err := registry.Collect(context.Background(), "ocean", map[string]string{
+	creds := map[string]string{
 		"OCEAN_ADDRESS": " " + strings.ToUpper(address) + " ",
-	})
+	}
+	if err := registry.store.SaveCredentials("ocean", creds); err != nil {
+		t.Fatal(err)
+	}
+	record, err := registry.CollectSaved(context.Background(), "ocean", creds)
 	if err != nil || record.Error != "" || record.Currency != "BTC" || record.Balance != 0.00571777 {
 		t.Fatalf("collect = %+v, %v", record, err)
+	}
+	if hash, ok := PoolAddressHash("ocean", creds); !ok || hash != poolAddressHash(address) || hash != record.PoolAddressHash {
+		t.Fatal("saved Bech32 address and collector result must use the same normalized hash")
 	}
 }
 

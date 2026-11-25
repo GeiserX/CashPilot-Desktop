@@ -241,8 +241,12 @@ func (s *Store) SaveCredentials(slug string, values map[string]string) error {
 }
 
 func (s *Store) GetCredentials(slug string) (map[string]string, error) {
+	return s.getCredentials(slug, s.db.QueryRow)
+}
+
+func (s *Store) getCredentials(slug string, queryRow func(string, ...any) *sql.Row) (map[string]string, error) {
 	var encrypted string
-	err := s.db.QueryRow(`SELECT value FROM credentials WHERE slug = ?`, slug).Scan(&encrypted)
+	err := queryRow(`SELECT value FROM credentials WHERE slug = ?`, slug).Scan(&encrypted)
 	if err == sql.ErrNoRows {
 		return map[string]string{}, nil
 	}
@@ -457,10 +461,44 @@ func (s *Store) RecordEvent(slug, event, detail string) {
 }
 
 func (s *Store) SaveEarnings(record EarningsRecord) (EarningsRecord, error) {
+	return saveEarnings(record, s.execWrite)
+}
+
+// SaveEarningsIfCredentialsMatch checks and saves in the same transaction. If
+// a credential write invalidates the read snapshot, retryBusy rechecks it
+// before inserting. This also covers another process sharing the database.
+func (s *Store) SaveEarningsIfCredentialsMatch(record EarningsRecord, matches func(map[string]string) bool) (EarningsRecord, bool, error) {
+	var saved EarningsRecord
+	matched := false
+	err := retryBusy(func() error {
+		tx, err := s.db.Begin()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		current, err := s.getCredentials(record.Platform, tx.QueryRow)
+		if err != nil || !matches(current) {
+			return err
+		}
+		result, err := saveEarnings(record, tx.Exec)
+		if err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+		saved, matched = result, true
+		return nil
+	})
+	return saved, matched, err
+}
+
+func saveEarnings(record EarningsRecord, exec func(string, ...any) (sql.Result, error)) (EarningsRecord, error) {
 	if record.CreatedAt == "" {
 		record.CreatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.execWrite(`
+	_, err := exec(`
 		INSERT INTO earnings(platform, balance, currency, error, error_kind, created_at, pool_address_hash)
 		VALUES(?, ?, ?, ?, ?, ?, ?)
 	`, record.Platform, record.Balance, record.Currency, record.Error, record.ErrorKind, record.CreatedAt, record.PoolAddressHash)
@@ -525,8 +563,25 @@ func (s *Store) DailyBalances(daysBack int) ([]DailyBalance, error) {
 	return s.readDailyBalances(daysBack, true)
 }
 
-// readDailyBalances reads the series. A row that does not scan is skipped, unless
-// strict.
+// ListPoolBalances keeps each successful reading so an opening balance and
+// later earnings on the same UTC day stay in the correct address period.
+func (s *Store) ListPoolBalances(slug string, daysBack int) []DailyBalance {
+	rows, err := s.db.Query(`
+		SELECT platform, currency, date(created_at) AS day, balance, pool_address_hash
+		FROM earnings
+		WHERE platform = ? AND error = '' AND date(created_at) >= date('now', ?)
+		ORDER BY day, id
+	`, slug, fmt.Sprintf("-%d days", daysBack))
+	if err != nil {
+		return nil
+	}
+	out, err := scanBalances(rows, true)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
 func (s *Store) readDailyBalances(daysBack int, strict bool) ([]DailyBalance, error) {
 	rows, err := s.db.Query(`
 		SELECT e.platform, e.currency, date(e.created_at) AS day, e.balance, e.pool_address_hash
@@ -544,6 +599,11 @@ func (s *Store) readDailyBalances(daysBack int, strict bool) ([]DailyBalance, er
 	if err != nil {
 		return nil, err
 	}
+	return scanBalances(rows, strict)
+}
+
+// scanBalances skips a row that does not scan unless strict.
+func scanBalances(rows *sql.Rows, strict bool) ([]DailyBalance, error) {
 	defer rows.Close()
 	var out []DailyBalance
 	for rows.Next() {

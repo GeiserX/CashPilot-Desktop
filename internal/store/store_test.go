@@ -1501,6 +1501,45 @@ func TestWriteWaitsOutAPeerHoldingTheLock(t *testing.T) {
 
 func approxEqual(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
 
+func TestSaveEarningsRechecksCredentialsAfterPeerWrite(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	peer, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+
+	const slug, key = "supportxmr", "SUPPORTXMR_ADDRESS"
+	if err := s.SaveCredentials(slug, map[string]string{key: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	record := EarningsRecord{Platform: slug, Currency: "XMR", Balance: 0.1}
+	_, matched, err := s.SaveEarningsIfCredentialsMatch(record, func(values map[string]string) bool {
+		if values[key] != "first" {
+			return false
+		}
+		// Commit the replacement after the comparison reads the old value.
+		if err := peer.SaveCredentials(slug, map[string]string{key: "second"}); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	})
+	if err != nil || matched || len(s.ListLatestEarnings()) != 0 {
+		t.Fatalf("changed credentials must discard the result, got matched=%v err=%v", matched, err)
+	}
+	saved, matched, err := s.SaveEarningsIfCredentialsMatch(record, func(values map[string]string) bool {
+		return values[key] == "second"
+	})
+	if err != nil || !matched || saved.CreatedAt == "" || len(s.ListLatestEarnings()) != 1 {
+		t.Fatalf("matching credentials must save the result, got record=%+v matched=%v err=%v", saved, matched, err)
+	}
+}
+
 // TestFleetDeviceInsertWaitsOutAPeerHoldingTheLock is the RETURNING-statement
 // twin of the earnings test above: a new fleet device is inserted through
 // QueryRow rather than Exec, and it has to wait for the lock the same way.
