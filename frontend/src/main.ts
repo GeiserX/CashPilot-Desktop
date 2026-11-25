@@ -2523,7 +2523,12 @@ async function runWizardAction(slug: string, action: string) {
       if (output) output.textContent = "Credentials saved.";
       return;
     }
-    const worker = action === "deploy" ? state?.workerTargets?.find((target) => target.id === readWizardWhere(slug)) : undefined;
+    const workerId = action === "deploy" ? readWizardWhere(slug) : null;
+    const worker = state?.workerTargets?.find((target) => target.id === workerId);
+    if (workerId !== null && !worker) {
+      if (output) output.textContent = "The selected worker is unavailable. Choose a target before deploying.";
+      return;
+    }
     if (worker) {
       if (output) output.textContent = `Deploying to ${worker.name}...`;
       const image = readWizardImage(slug) || "";

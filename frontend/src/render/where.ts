@@ -21,25 +21,29 @@ import { seedFileVar } from "./wallet.js";
  * deploy would fall back to this computer unasked.
  */
 export function whereChoiceSection(service: Service, targets: WorkerTarget[] | null | undefined, draft?: number | null): string {
-  if (service.manualOnly || service.custom || !targets || targets.length === 0) return "";
+  if (service.manualOnly || service.custom || (!draft && !targets?.length)) return "";
   const slug = escapeHtml(service.slug);
   if (seedFileVar(service)) {
     // The seed phrase is the wallet, and it never travels to a worker (workerapi.BuildDeploySpec):
     // the node runs where its wallet file is made, so the card's wallet choice applies here.
     return `<p class="muted compact-copy where-hint" data-where-local="${slug}">Where: this computer. ${escapeHtml(service.name)} keeps its wallet seed phrase in a file on the machine that runs it, so it runs only on this computer for now.</p>`;
   }
-  const ready = targets.filter((t) => t.online && !t.reason);
-  if (ready.length === 0) {
+  const workers = targets || [];
+  const ready = workers.filter((t) => t.online && !t.reason);
+  const unavailable = draft != null && !ready.some((t) => t.id === draft);
+  const picked = unavailable ? workers.find((t) => t.id === draft) : undefined;
+  if (ready.length === 0 && !unavailable) {
     return `<p class="muted compact-copy where-hint" data-where-none="${slug}">Where: this computer. No worker is online.</p>`;
   }
   const options = [
     `<option value="">This computer</option>`,
+    unavailable ? `<option value="${draft}" selected disabled>${picked ? `Worker ${escapeHtml(picked.name)}` : "Selected worker"} (unavailable)</option>` : "",
     ...ready.map((t) => {
       const runs = (t.services || []).includes(service.slug) ? " (runs it now)" : "";
       return `<option value="${t.id}"${draft === t.id ? " selected" : ""}>Worker ${escapeHtml(t.name)}${runs}</option>`;
     }),
   ].join("");
-  const waiting = targets.filter((t) => t.online && t.reason);
+  const waiting = workers.filter((t) => t.online && t.reason);
   return `
     <div class="where-choice">
       <label>
@@ -47,6 +51,7 @@ export function whereChoiceSection(service: Service, targets: WorkerTarget[] | n
         <select data-wizard-where="${slug}">${options}</select>
       </label>
       <p class="muted compact-copy where-hint">A worker gets the values above with this deploy and keeps none of them. It runs one copy, from its own IP.</p>
+      ${unavailable ? `<p class="muted compact-copy where-hint">${escapeHtml(picked?.reason || "The selected worker is unavailable.")} Choose a target before deploying.</p>` : ""}
       ${waiting.map((t) => `<p class="muted compact-copy where-hint">${escapeHtml(t.reason)}</p>`).join("")}
     </div>
   `;
@@ -88,6 +93,9 @@ export async function runWorkerDeploy(
   instances: number | null,
   calls: WorkerDeployCalls,
 ): Promise<WorkerDeployOutcome> {
+  if (!worker.online || worker.reason) {
+    return { kind: "refused", message: `${worker.reason || "The selected worker is unavailable."} Choose a target before deploying.` };
+  }
   if (proxyId !== null || (instances !== null && instances > 1)) {
     return {
       kind: "refused",

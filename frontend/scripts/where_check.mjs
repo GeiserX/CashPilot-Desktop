@@ -64,6 +64,16 @@ const targets = [
   check("RULE 2: a custom service has no box", whereChoiceSection({ ...honeygain, custom: true }, targets) === "");
 }
 
+{
+  const offline = { ...targets[1], online: false, reason: "attic is offline." };
+  for (const [label, workers] of [["offline", [offline]], ["removed", []], ["another worker online", [offline, targets[0]]]]) {
+    const card = renderWizardServiceSetup(honeygain, {}, "box", null, "", null, null, null, undefined, null, false, workers, offline.id);
+    check(`RULE 2: a selected worker stays selected when ${label}`,
+      /<option value="5" selected[^>]*>/.test(card) && card.includes("This computer") && card.includes("Choose"),
+      card.match(/<div class="where-choice">[\s\S]*?<\/div>/)?.[0] || "no Where picker");
+  }
+}
+
 function calls(answers, confirms) {
   const log = { deploys: [], saved: 0, asked: [] };
   return {
