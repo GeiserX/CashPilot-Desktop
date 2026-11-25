@@ -111,7 +111,7 @@ import { renderEnvSetting, settingField, settingsSaveValues } from "./render/set
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
-import { renderCatalogTable } from "./render/catalog";
+import { catalogFilterTabs, renderCatalogTable, wizardCategoryChoices, wizardCategoryCopy } from "./render/catalog";
 import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
@@ -1066,8 +1066,7 @@ function renderCatalog(current: AppState) {
     const haystack = `${service.name} ${service.shortDescription} ${service.description}`.toLowerCase();
     return matchesCategory && haystack.includes(catalogSearch.toLowerCase());
   });
-  const categories = ["all", "bandwidth", "depin", "storage", "compute"];
-  if ((current.services || []).some((service) => service.custom)) categories.push("custom");
+  const categories = catalogFilterTabs(current.services || []);
   // The open editor's typed values live only in the DOM. Search, the filter tabs and
   // any refresh redraw this page, so the live form is put back over the redrawn copy.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-custom-editor]");
@@ -2142,7 +2141,7 @@ function openWizard(input?: string | Event) {
 
 function renderSetupWizard(current: AppState) {
   const services = current.services || [];
-  const categories = ["bandwidth", "depin", "storage", "compute"].filter((category) => services.some((svc) => svc.category === category));
+  const categories = wizardCategoryChoices(services);
   if (wizardCategories.length === 0 && categories.length > 0) {
     wizardCategories = [categories[0]];
   }
@@ -2379,12 +2378,6 @@ function renderWizardProgress() {
 }
 
 function renderWizardCategories(categories: string[]) {
-  const copy: Record<string, string> = {
-    bandwidth: "Share your internet connection",
-    depin: "Run decentralized infrastructure",
-    storage: "Rent out disk space",
-    compute: "Share CPU or GPU power",
-  };
   return `
     <h2>What would you like to share?</h2>
     <p class="muted">Pick one or more categories and CashPilot will show matching services.</p>
@@ -2392,7 +2385,7 @@ function renderWizardCategories(categories: string[]) {
       ${categories.map((category) => `
         <button class="wizard-category ${wizardCategories.includes(category) ? "selected" : ""}" data-category="${category}">
           <strong>${escapeHtml(capitalize(category))}</strong>
-          <span>${escapeHtml(copy[category] || "Available providers")}</span>
+          <span>${escapeHtml(wizardCategoryCopy(category))}</span>
         </button>
       `).join("")}
     </div>
