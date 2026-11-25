@@ -55,7 +55,16 @@ function checkWizard(scenario) {
   const workerRequests = [];
   const localRequests = [];
   const questions = [];
-  window.confirm = (message) => { questions.push(message); return allowReplacement; };
+  // A worker that names its container (CashPilot #831): "" for an older one. A
+  // question can find another container in place once the owner answers it.
+  let namedContainer = "";
+  let swapOnQuestion = "";
+  const workerExpected = [];
+  window.confirm = (message) => {
+    questions.push(message);
+    if (swapOnQuestion) [namedContainer, swapOnQuestion] = [swapOnQuestion, ""];
+    return allowReplacement;
+  };
   window.runtime = { EventsOnMultiple(name, fn) { events[name] = fn; } };
   window.go = { main: { App: new Proxy({
     async GetAppState() {
@@ -96,6 +105,10 @@ function checkWizard(scenario) {
     async DeployToWorker(_slug, request) {
       workerDeploys++;
       workerRequests.push(request.values[secretKey] || savedPassword);
+      workerExpected.push(request.expectedContainer);
+      if (namedContainer && !(request.replaceExisting && request.expectedContainer === namedContainer)) {
+        return { ask: "replace_existing", expectedContainer: namedContainer, message: `Replace container ${namedContainer.slice(0, 12)}?` };
+      }
       if (workerReplacement && !request.replaceExisting) {
         return { ask: "replace_existing", message: "The existing container will be replaced." };
       }
@@ -280,6 +293,21 @@ function checkWizard(scenario) {
     const approved = questions.length === 2 && workerRequests.slice(-3).every(value => value === "replacement requiring approval")
       && token().value === "";
 
+    // The container changes while its question is open: the old yes is void, and
+    // only a yes to the new container sends the deploy that replaces it.
+    workerReplacement = false;
+    const [seen, swapped] = ["a".repeat(64), "b".repeat(64)];
+    namedContainer = seen;
+    swapOnQuestion = swapped;
+    const askedBefore = questions.length;
+    token().value = "named replacement";
+    click(deploy);
+    await until(() => status() === "ok", "replacement after the container changed");
+    const targetChanged = questions.length === askedBefore + 2
+      && questions[askedBefore].includes(seen.slice(0, 12)) && questions[askedBefore + 1].includes(swapped.slice(0, 12))
+      && JSON.stringify(workerExpected.slice(-3)) === JSON.stringify(["", seen, swapped]);
+    namedContainer = "";
+
     // A retry edit belongs to this Setup card, even if the same service is reopened.
     workerReplacement = false;
     workerFailure = "Worker unavailable.";
@@ -333,7 +361,7 @@ function checkWizard(scenario) {
     click(deploy);
     await until(() => status() === "ok", "retry after reopening Setup");
     const partialRetried = localRequests.at(-1) === replacement && localToken === replacement;
-    return { unavailable, retryWorker, keptOnRedraw, declined, approved, clearedOnClose, localKept, localRetried,
+    return { unavailable, retryWorker, keptOnRedraw, declined, approved, targetChanged, clearedOnClose, localKept, localRetried,
       totalFailure, partialFailure, reopenedUsingSaved, partialRetried };
   }
   document.addEventListener("DOMContentLoaded", async () => {
@@ -388,7 +416,7 @@ try {
       { kept: true, stillSaved: true, resent: true, cleared: true },
       { kept: true, stillSaved: true, resent: true, cleared: true },
     ],
-    keptOnRedraw: true, declined: true, approved: true, clearedOnClose: true, localKept: true, localRetried: true,
+    keptOnRedraw: true, declined: true, approved: true, targetChanged: true, clearedOnClose: true, localKept: true, localRetried: true,
     totalFailure: true, partialFailure: true, reopenedUsingSaved: true, partialRetried: true,
   });
   console.log(`wizard deploy DOM: ${scenario} passed`);

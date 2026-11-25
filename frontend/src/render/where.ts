@@ -73,7 +73,18 @@ export type WorkerDeployOutcome =
 export interface WorkerDeployCalls {
   confirm(message: string): boolean;
   /** One deploy, with the owner's yes so far. */
-  deploy(yes: { confirmed: boolean; allowSharedIdentity: boolean; replaceExisting: boolean }): Promise<WorkerDeployResult>;
+  deploy(yes: WorkerDeployYes): Promise<WorkerDeployResult>;
+}
+
+/**
+ * The owner's yes so far. expectedContainer is the container a replacement yes was
+ * for: the full Docker ID its question named, "" when the worker names none.
+ */
+export interface WorkerDeployYes {
+  confirmed: boolean;
+  allowSharedIdentity: boolean;
+  replaceExisting: boolean;
+  expectedContainer: string;
 }
 
 /**
@@ -100,14 +111,19 @@ export async function runWorkerDeploy(
       message: "A deploy to a worker runs one copy, from the worker's own IP. Set Route to Direct and Instances to 1, or choose This computer. Nothing was deployed.",
     };
   }
-  const yes = { confirmed: false, allowSharedIdentity: false, replaceExisting: false };
-  // Each question is asked at most once.
-  for (let round = 0; round < 4; round++) {
+  const yes: WorkerDeployYes = { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "" };
+  // Each question is asked at most once, except a replacement: a worker that names
+  // the container asks again when another one is there, and the earlier yes is void.
+  for (let round = 0; round < 8; round++) {
     const result = await calls.deploy({ ...yes });
-    if (result.ask === "replace_existing" && !yes.replaceExisting) {
+    const container = result.expectedContainer || "";
+    if (result.ask === "replace_existing" && (!yes.replaceExisting || (container !== "" && container !== yes.expectedContainer))) {
+      yes.replaceExisting = false;
+      yes.expectedContainer = "";
       const message = result.message || `Redeploy ${slug} on ${worker.name}? The existing container will be replaced, but its volumes are kept.`;
       if (!calls.confirm(message)) return { kind: "cancelled" };
       yes.replaceExisting = true;
+      yes.expectedContainer = container;
       continue;
     }
     if (result.ask === "identity_in_use" && !yes.allowSharedIdentity) {
@@ -123,7 +139,7 @@ export async function runWorkerDeploy(
     if (result.ask) return { kind: "refused", message: `${result.message} Nothing was deployed.` };
     return { kind: "deployed", result };
   }
-  return { kind: "refused", message: "The deploy kept asking the same question. Nothing was deployed." };
+  return { kind: "refused", message: "The deploy kept asking the same question, or the container on the worker kept changing. Nothing was deployed." };
 }
 
 /** What the setup card says after a deploy to a worker. */

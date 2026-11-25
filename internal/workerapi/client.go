@@ -61,8 +61,15 @@ type DeploySpec struct {
 	// Approval is the signed note that the owner confirmed this exact spec on a
 	// service that keeps a wallet or node identity (see Sign and DeployTarget).
 	Approval string `json:"approval,omitempty"`
-	// ReplaceExisting is sent only after the owner has approved a replacement.
+	// ReplaceExisting is sent only after the owner has approved a replacement, and
+	// only to a worker that cannot name the container it would replace.
 	ReplaceExisting bool `json:"replace_existing,omitempty"`
+	// ExpectedContainer is the container the deploy may replace, for a worker that
+	// names it (DeployTargetState.Container): "none" for a first deploy, or the full
+	// Docker ID the owner approved. The worker refuses with deploy_target_changed
+	// when another container is there, so a replacement never hits one the owner
+	// did not see.
+	ExpectedContainer string `json:"expected_container,omitempty"`
 }
 
 // KeptMount is one mount the worker kept where the running container has it.
@@ -97,6 +104,9 @@ type Error struct {
 	Code    string
 	Message string
 	Unknown bool
+	// CurrentContainer is the container the worker found instead of the expected
+	// one, on a deploy_target_changed refusal: "none" or a full Docker ID.
+	CurrentContainer string
 
 	missingEndpoint bool
 }
@@ -138,24 +148,67 @@ func (c *Client) Deploy(ctx context.Context, slug string, spec DeploySpec, timeo
 
 const checkedDeploySuffix = "/deploy-checked"
 
+// DeployTargetState is what a worker says about the container a deploy would replace.
+type DeployTargetState struct {
+	// Checked is true when the worker serves the checked deploy route.
+	Checked bool
+	// Exists is true when a container already has the deploy's Docker name.
+	Exists bool
+	// Container names that container: "none", or its full Docker ID. It is "" when
+	// the worker does not name it (a worker older than CashPilot #831), so a
+	// replacement there can hit whichever container runs when the deploy starts.
+	Container string
+}
+
 // DeployState reports whether the worker supports checked deploys, and if so
 // whether the actual Docker name to be deployed already exists.
-func (c *Client) DeployState(ctx context.Context, slug string) (supported, exists bool, err error) {
+func (c *Client) DeployState(ctx context.Context, slug string) (DeployTargetState, error) {
 	var out struct {
-		Exists *bool `json:"exists"`
+		Exists    *bool   `json:"exists"`
+		Container *string `json:"expected_container"`
 	}
-	err = c.do(ctx, http.MethodGet, "/api/containers/"+url.PathEscape(slug)+checkedDeploySuffix, nil, nil, nil, 0, &out)
+	err := c.do(ctx, http.MethodGet, "/api/containers/"+url.PathEscape(slug)+checkedDeploySuffix, nil, nil, nil, 0, &out)
 	if err != nil {
 		var refusal *Error
 		if errors.As(err, &refusal) && refusal.missingEndpoint {
-			return false, false, nil
+			return DeployTargetState{}, nil
 		}
-		return false, false, err
+		return DeployTargetState{}, err
 	}
 	if out.Exists == nil {
-		return false, false, errors.New("the worker did not answer the container lookup")
+		return DeployTargetState{}, errors.New("the worker did not answer the container lookup")
 	}
-	return true, *out.Exists, nil
+	state := DeployTargetState{Checked: true, Exists: *out.Exists}
+	if out.Container != nil {
+		// A worker that names the container must name one this app can send back,
+		// and agree with itself about whether it exists.
+		if !ContainerRef(*out.Container) || (*out.Container != NoContainer) != state.Exists {
+			return DeployTargetState{}, errors.New("the worker answered the container lookup with an ID this app cannot use; update the worker")
+		}
+		state.Container = *out.Container
+	}
+	return state, nil
+}
+
+// NoContainer is what a worker says, and a deploy expects, when no container has
+// the deploy's Docker name.
+const NoContainer = "none"
+
+// ContainerRef reports whether s names a deploy target as the worker does:
+// NoContainer, or a full Docker container ID (64 lowercase hex characters).
+func ContainerRef(s string) bool {
+	if s == NoContainer {
+		return true
+	}
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // LegacyDeployTargetExists checks the worker's inventory. It can show an
@@ -321,6 +374,7 @@ var forwardableCodes = map[string]bool{
 	"critical_volume_mount":       true,
 	"step_up_required":            true,
 	"replace_existing":            true,
+	"deploy_target_changed":       true,
 	"step_up_rejected":            true,
 	"restore_unfinished":          true,
 	"restore_cleared":             true,
@@ -356,6 +410,7 @@ func refusal(status int, raw []byte, sentEnv map[string]string) *Error {
 		var structured struct {
 			Error   any `json:"error"`
 			Message any `json:"message"`
+			Current any `json:"current_container"`
 		}
 		if json.Unmarshal(envelope.Detail, &structured) == nil {
 			if code, ok := structured.Error.(string); ok && forwardableCodes[code] {
@@ -364,7 +419,11 @@ func refusal(status int, raw []byte, sentEnv map[string]string) *Error {
 				if message == "" {
 					message = failureText(status)
 				}
-				return &Error{Status: status, Code: code, Message: message, Unknown: unknown}
+				failure := &Error{Status: status, Code: code, Message: message, Unknown: unknown}
+				if current, ok := structured.Current.(string); ok && ContainerRef(current) {
+					failure.CurrentContainer = current
+				}
+				return failure
 			}
 		}
 		var text string

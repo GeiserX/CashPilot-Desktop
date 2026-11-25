@@ -53,6 +53,10 @@ type WorkerDeployRequest struct {
 	AllowSharedIdentity bool `json:"allowSharedIdentity"`
 	// ReplaceExisting is the owner's yes to replacing a managed copy on this worker.
 	ReplaceExisting bool `json:"replaceExisting"`
+	// ExpectedContainer is the container that yes was for: the full Docker ID the
+	// replace question named (WorkerDeployResult.ExpectedContainer). "" for a
+	// worker that cannot name it.
+	ExpectedContainer string `json:"expectedContainer"`
 }
 
 // WorkerDeployResult is what a deploy to a worker did. With Ask set it did nothing:
@@ -65,6 +69,10 @@ type WorkerDeployResult struct {
 	ContainerID       string   `json:"containerId"`
 	Notes             []string `json:"notes"`
 	CredentialWarning string   `json:"credentialWarning,omitempty"`
+	// ExpectedContainer is, with Ask replace_existing, the container the question
+	// is about: "none" or its full Docker ID, "" when the worker cannot name it. A
+	// yes sends it back, and the worker replaces only that container.
+	ExpectedContainer string `json:"expectedContainer,omitempty"`
 }
 
 const (
@@ -284,12 +292,27 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	result := WorkerDeployResult{Worker: target.device.Name}
 	ctx := workerContext(a.ctx)
-	checked, exists, err := target.client.DeployState(ctx, slug)
+	state, err := target.client.DeployState(ctx, slug)
 	if err != nil {
 		return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
 	}
+	checked, exists := state.Checked, state.Exists
+	// named: the worker names the container a deploy replaces (CashPilot #831), and
+	// replaces only the one the deploy expects.
+	named := state.Container != ""
 	replaceQuestion := fmt.Sprintf("Redeploy %s on %s? The existing container will be replaced, but its volumes are kept.", svc.Name, target.device.Name)
-	if !req.ReplaceExisting {
+	if named {
+		// The owner's yes covers only the container its question named.
+		if state.Container != workerapi.NoContainer && (!req.ReplaceExisting || req.ExpectedContainer != state.Container) {
+			result.Ask = askReplace
+			result.ExpectedContainer = state.Container
+			result.Message = namedReplaceQuestion(svc.Name, target.device.Name, state.Container)
+			if req.ReplaceExisting && req.ExpectedContainer != "" {
+				result.Message = fmt.Sprintf("The %s container on %s changed since you approved replacing it.\n\n%s", svc.Name, target.device.Name, result.Message)
+			}
+			return result, nil
+		}
+	} else if !req.ReplaceExisting {
 		if !checked {
 			exists, err = target.client.LegacyDeployTargetExists(ctx, slug)
 			if err != nil {
@@ -303,6 +326,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 				// An empty inventory can also mean a previous request is still deploying.
 				result.Message = fmt.Sprintf("Deploy %s on %s? This worker cannot confirm that the container is absent. If one exists when the deploy starts, it will be replaced and its volumes will be kept.", svc.Name, target.device.Name)
 			}
+			result.Message += fmt.Sprintf(" Update CashPilot on %s so it can confirm the exact container before replacing it.", target.device.Name)
 			return result, nil
 		}
 	}
@@ -341,7 +365,11 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		}
 		spec.Approval = approval
 	}
-	spec.ReplaceExisting = req.ReplaceExisting
+	if named {
+		spec.ExpectedContainer = state.Container
+	} else {
+		spec.ReplaceExisting = req.ReplaceExisting
+	}
 	timeout := workerapi.DeployTimeout(svc.Docker.StopTimeout)
 	var answer workerapi.DeployResult
 	if checked {
@@ -355,6 +383,28 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 			// A prior request can finish after the state read, even if its reply was lost.
 			result.Ask = askReplace
 			result.Message = replaceQuestion
+			return result, nil
+		}
+		if errors.As(err, &refused) && refused.Code == codeTargetChanged {
+			if !named {
+				return WorkerDeployResult{}, fmt.Errorf("%s: %s (%s)", target.device.Name, refused.Message, refused.Code)
+			}
+			// The container changed after the lookup: the yes was for another one.
+			// Ask again about the one there now, with the worker's own words.
+			current := refused.CurrentContainer
+			if fresh, err := target.client.DeployState(ctx, slug); err == nil && fresh.Container != "" {
+				current = fresh.Container
+			}
+			if current == "" {
+				return WorkerDeployResult{}, fmt.Errorf("%s: %s (%s)", target.device.Name, refused.Message, refused.Code)
+			}
+			question := namedReplaceQuestion(svc.Name, target.device.Name, current)
+			if current == workerapi.NoContainer {
+				question = fmt.Sprintf("Deploy %s on %s? No %s container is there now.", svc.Name, target.device.Name, svc.Name)
+			}
+			result.Ask = askReplace
+			result.ExpectedContainer = current
+			result.Message = fmt.Sprintf("%s refused the deploy (%s): %s\n\n%s", target.device.Name, refused.Code, refused.Message, question)
 			return result, nil
 		}
 		if errors.As(err, &refused) && refused.Code == askStepUp && !req.Confirmed && critical {
@@ -378,6 +428,16 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		a.emitError("credentials", err)
 	}
 	return result, nil
+}
+
+// codeTargetChanged is the worker's refusal of a deploy whose expected container
+// is no longer the one there (CashPilot #831).
+const codeTargetChanged = "deploy_target_changed"
+
+// namedReplaceQuestion asks to replace the container id (a full Docker ID), named
+// by its short ID as docker ps shows it.
+func namedReplaceQuestion(service, worker, id string) string {
+	return fmt.Sprintf("Redeploy %s on %s? The existing container (%s) will be replaced, but its volumes are kept.", service, worker, id[:min(12, len(id))])
 }
 
 // boxesRunning names the other boxes that run slug: this computer, and every worker

@@ -216,27 +216,35 @@ func TestTimeoutsCoverTheStop(t *testing.T) {
 }
 
 func TestDeployStateDistinguishesAnOlderWorkerFromLookupFailure(t *testing.T) {
+	id := strings.Repeat("ab", 32)
 	cases := []struct {
-		name              string
-		status            int
-		body              string
-		supported, exists bool
-		wantErr           bool
+		name    string
+		status  int
+		body    string
+		want    DeployTargetState
+		wantErr bool
 	}{
-		{name: "existing", status: 200, body: `{"exists":true}`, supported: true, exists: true},
-		{name: "absent", status: 200, body: `{"exists":false}`, supported: true},
+		{name: "existing, unnamed", status: 200, body: `{"exists":true}`, want: DeployTargetState{Checked: true, Exists: true}},
+		{name: "absent, unnamed", status: 200, body: `{"exists":false}`, want: DeployTargetState{Checked: true}},
+		{name: "existing, named", status: 200, body: `{"exists":true,"expected_container":"` + id + `"}`, want: DeployTargetState{Checked: true, Exists: true, Container: id}},
+		{name: "absent, named", status: 200, body: `{"exists":false,"expected_container":"none"}`, want: DeployTargetState{Checked: true, Container: "none"}},
 		{name: "older worker", status: 404, body: `{"detail":"Not Found"}`},
 		{name: "lookup failed", status: 503, body: `{"detail":"Docker offline"}`, wantErr: true},
 		{name: "another 404", status: 404, body: `{"detail":"could not inspect Docker"}`, wantErr: true},
 		{name: "malformed state", status: 200, body: `{}`, wantErr: true},
+		{name: "short ID", status: 200, body: `{"exists":true,"expected_container":"abababababab"}`, wantErr: true},
+		{name: "empty ID", status: 200, body: `{"exists":true,"expected_container":""}`, wantErr: true},
+		{name: "ID with no container", status: 200, body: `{"exists":false,"expected_container":"` + id + `"}`, wantErr: true},
+		{name: "none with a container", status: 200, body: `{"exists":true,"expected_container":"none"}`, wantErr: true},
+		{name: "not a string", status: 200, body: `{"exists":true,"expected_container":7}`, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, seen := newFakeWorker(t, tc.status, tc.body)
 			c := &Client{BaseURL: srv.URL, Key: "own-key"}
-			supported, exists, err := c.DeployState(context.Background(), "honeygain")
-			if supported != tc.supported || exists != tc.exists || (err != nil) != tc.wantErr {
-				t.Fatalf("state = %t, %t, %v", supported, exists, err)
+			state, err := c.DeployState(context.Background(), "honeygain")
+			if (err != nil) != tc.wantErr || (err == nil && state != tc.want) || (err != nil && state != DeployTargetState{}) {
+				t.Fatalf("state = %+v, %v; want %+v", state, err, tc.want)
 			}
 			if seen.method != http.MethodGet || seen.path != "/api/containers/honeygain/deploy-checked" || seen.auth != "Bearer own-key" {
 				t.Fatalf("lookup = %+v", seen)
@@ -287,5 +295,45 @@ func TestCheckedDeployCarriesOnlyExplicitReplacementApproval(t *testing.T) {
 		if seen.method != http.MethodPost || seen.path != "/api/containers/honeygain/deploy-checked" || seen.body["image"] != "img" || seen.auth != "Bearer own-key" {
 			t.Fatalf("deploy = %+v", seen)
 		}
+	}
+}
+
+func TestCheckedDeployCarriesTheExpectedContainer(t *testing.T) {
+	srv, seen := newFakeWorker(t, 200, `{"status":"deployed","container_id":"new"}`)
+	c := &Client{BaseURL: srv.URL, Key: "own-key"}
+	id := strings.Repeat("cd", 32)
+	for _, expected := range []string{"", "none", id} {
+		if _, err := c.DeployChecked(context.Background(), "honeygain", DeploySpec{Image: "img", ExpectedContainer: expected}, time.Second); err != nil {
+			t.Fatal(err)
+		}
+		value, present := seen.body["expected_container"]
+		if present != (expected != "") || (present && value != expected) {
+			t.Fatalf("expected %q, sent %v", expected, seen.body)
+		}
+		if _, sent := seen.body["replace_existing"]; sent {
+			t.Fatalf("a named container needs no replace_existing flag: %v", seen.body)
+		}
+	}
+}
+
+func TestAChangedDeployTargetKeepsTheWorkersWordsAndTheContainerItFound(t *testing.T) {
+	id := strings.Repeat("ef", 32)
+	for _, current := range []string{id, "none"} {
+		srv, _ := newFakeWorker(t, 409, `{"detail":{"error":"deploy_target_changed","message":"The container on this worker no longer matches the deploy request.","current_container":"`+current+`"}}`)
+		c := &Client{BaseURL: srv.URL, Key: "k"}
+		_, err := c.DeployChecked(context.Background(), "honeygain", DeploySpec{Image: "i", ExpectedContainer: "none"}, time.Second)
+		var werr *Error
+		if !errors.As(err, &werr) || werr.Status != 409 || werr.Code != "deploy_target_changed" || werr.Unknown ||
+			werr.Message != "The container on this worker no longer matches the deploy request." || werr.CurrentContainer != current {
+			t.Fatalf("err = %#v", err)
+		}
+	}
+	// Anything but "none" or a full Docker ID is not passed on as a container.
+	srv, _ := newFakeWorker(t, 409, `{"detail":{"error":"deploy_target_changed","message":"changed","current_container":"<b>x</b>"}}`)
+	c := &Client{BaseURL: srv.URL, Key: "k"}
+	_, err := c.DeployChecked(context.Background(), "honeygain", DeploySpec{Image: "i"}, time.Second)
+	var werr *Error
+	if !errors.As(err, &werr) || werr.Code != "deploy_target_changed" || werr.CurrentContainer != "" {
+		t.Fatalf("err = %#v", err)
 	}
 }
