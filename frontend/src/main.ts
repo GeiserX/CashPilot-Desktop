@@ -94,6 +94,7 @@ import {
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { renderServerCommands } from "./render/server_commands";
+import { wireServerCommandsFirewall } from "./render/server_commands_wire";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
 import { bootWhenReady, renderFailed, renderStarting, wireBootRetry } from "./render/boot";
@@ -821,12 +822,11 @@ function renderDashboard(current: AppState) {
     const on = (event.target as HTMLInputElement).checked;
     void SetServerCommands(on).then(refreshState, (error) => setOutput(`Could not switch it: ${String(error)}`));
   });
-  document.querySelector<HTMLButtonElement>("[data-server-commands-firewall]")?.addEventListener("click", () => {
-    setOutput("Waiting for the Windows administrator prompt...");
-    void AllowServerCommandsThroughFirewall().then(
-      () => { setOutput("Windows Firewall now lets your CashPilot reach this computer."); return refreshState(); },
-      (error) => setOutput(String(error)),
-    );
+  wireServerCommandsFirewall(document, {
+    allow: AllowServerCommandsThroughFirewall,
+    refresh: refreshState,
+    setOutput,
+    notice: (message) => showInfoToast({ scope: "Server commands", message }),
   });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
     button.addEventListener("click", () => {

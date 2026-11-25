@@ -17,6 +17,8 @@
 
 import { lastCommandLine, renderServerCommands } from "../.harness-build/render/server_commands.js";
 
+import { wireServerCommandsFirewall } from "../.harness-build/render/server_commands_wire.js";
+
 let failures = 0;
 let checks = 0;
 
@@ -90,6 +92,35 @@ const base = {
   const made = renderServerCommands({ ...base, firewallNeeded: true, firewallRule: true }, now);
   check("no button once the rule exists", !made.includes("data-server-commands-firewall") && text(made).includes("removes this rule"), text(made));
   check("no button while off", !renderServerCommands({ ...base, firewallNeeded: true, on: false }, now).includes("data-server-commands-firewall"));
+}
+
+// 6. A pending Allow can finish after either leave path. Its error must reach
+// the app-wide notice even when the Dashboard output is no longer on the page.
+for (const leavePath of ["Leave button", "clear address"]) {
+  for (const pageAfterLeave of ["Dashboard", "Settings"]) {
+    const button = new EventTarget();
+    let activePage = "Dashboard";
+    const output = [];
+    const notices = [];
+    const rule = "CashPilot: server commands (TCP 8086)";
+    let declineRollback;
+    const pending = new Promise((_, reject) => { declineRollback = reject; });
+    wireServerCommandsFirewall({
+      querySelector: (selector) => selector === "[data-server-commands-firewall]" ? button : null,
+    }, {
+      allow: () => pending,
+      refresh: async () => {},
+      setOutput: (message) => { if (activePage === "Dashboard") output.push(message); },
+      notice: (message) => notices.push({ page: activePage, message }),
+    });
+    button.dispatchEvent(new Event("click"));
+    activePage = pageAfterLeave;
+    declineRollback(`the pairing changed and the firewall rule "${rule}" could not be removed`);
+    await pending.catch(() => {});
+    check(`late rollback after ${leavePath} shows the rule on ${pageAfterLeave}`,
+      notices.length === 1 && notices[0].page === pageAfterLeave && notices[0].message.includes(rule),
+      `notices: ${JSON.stringify(notices)}, Dashboard output: ${JSON.stringify(output)}`);
+  }
 }
 
 if (failures) {
