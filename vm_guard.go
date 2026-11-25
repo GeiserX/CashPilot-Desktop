@@ -31,6 +31,18 @@ const (
 	maxGuardLog  = 1 << 20
 )
 
+// vmGuardMain is main's --vm-guard branch; run is runVMGuardMain. Unlike a
+// GUI launch, the guard refuses a command line it could not read: "--once"
+// with no value would otherwise run the whole loop, Boot included. It returns
+// the exit code.
+func vmGuardMain(dir, once string, parseErr error, run func(dir, once string) int) int {
+	if parseErr != nil {
+		fmt.Fprintln(os.Stderr, "vm-guard:", parseErr)
+		return 2
+	}
+	return run(dir, once)
+}
+
 // runVMGuardMain is the --vm-guard entry point. It returns the exit code.
 func runVMGuardMain(dir, once string) int {
 	if runtime.GOOS != "windows" {
@@ -109,6 +121,8 @@ func openGuardLog(dir string, echo bool) *log.Logger {
 
 // rotatingLog appends to path, and moves it to path.1 once it passes max. A
 // log line that cannot be written is dropped: logging never stops the guard.
+// So is a line that would push the log past max when the move fails, so the
+// log stays bounded.
 type rotatingLog struct {
 	mu   sync.Mutex
 	path string
@@ -119,7 +133,9 @@ func (r *rotatingLog) Write(b []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if fi, err := os.Stat(r.path); err == nil && fi.Size()+int64(len(b)) > r.max {
-		os.Rename(r.path, r.path+".1")
+		if err := os.Rename(r.path, r.path+".1"); err != nil {
+			return len(b), nil
+		}
 	}
 	f, err := winvm.OpenAppend(r.path)
 	if err != nil {

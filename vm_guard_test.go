@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"flag"
+	"io"
 	"log"
 	"net/netip"
 	"os"
@@ -128,5 +130,44 @@ func TestGuardLogRotates(t *testing.T) {
 	ents, _ := os.ReadDir(dir)
 	if len(ents) != 2 {
 		t.Fatalf("the folder holds %d files, want 2", len(ents))
+	}
+}
+
+// A guard command line that could not be read is refused before anything
+// runs: "--vm-guard <dir> --once" with no value must not start the loop.
+func TestVMGuardMainRefusesABadCommandLine(t *testing.T) {
+	fs := flag.NewFlagSet("t", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	guard := fs.String(vmGuardFlag, "", "")
+	once := fs.String(vmGuardOnceFlag, "", "")
+	parseErr := fs.Parse([]string{"--" + vmGuardFlag, `C:\ProgramData\CashPilot`, "--" + vmGuardOnceFlag})
+	if parseErr == nil || *guard == "" {
+		t.Fatalf("the command line parsed: guard %q, err %v", *guard, parseErr)
+	}
+	ran := false
+	run := func(string, string) int { ran = true; return 0 }
+	if code := vmGuardMain(*guard, *once, parseErr, run); code != 2 || ran {
+		t.Fatalf("exit %d, ran %v", code, ran)
+	}
+	if code := vmGuardMain(*guard, "pass", nil, run); code != 0 || !ran {
+		t.Fatalf("a good command line: exit %d, ran %v", code, ran)
+	}
+}
+
+// When the move to guard.log.1 fails, a line that would push the log past its
+// cap is dropped, so the log stays bounded.
+func TestGuardLogStaysBoundedWhenTheMoveFails(t *testing.T) {
+	dir := t.TempDir()
+	r := &rotatingLog{path: filepath.Join(dir, guardLogFile), max: 100}
+	// A folder in guard.log.1's place makes every move fail.
+	if err := os.MkdirAll(filepath.Join(r.path+".1", "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := []byte(strings.Repeat("x", 39) + "\n")
+	for range 10 {
+		r.Write(line)
+	}
+	if cur, err := os.Stat(r.path); err != nil || cur.Size() > 100 {
+		t.Fatalf("guard.log: %v %v", cur, err)
 	}
 }

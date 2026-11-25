@@ -538,7 +538,7 @@ func TestSeamRefusesBadInput(t *testing.T) {
 		},
 		"an AddDeny over the row cap": func(h *psHost) error {
 			var ps []netip.Prefix
-			for i := range maxDenyRows + 1 {
+			for i := range maxDenyTotal + 1 {
 				ps = append(ps, netip.PrefixFrom(netip.AddrFrom4([4]byte{203, 0, byte(i >> 8), byte(i)}), 32))
 			}
 			return h.AddDeny(ctx, tVMID, ps)
@@ -656,5 +656,53 @@ func TestNewHostOtherOS(t *testing.T) {
 	}
 	if _, err := NewHost().ReadNetwork(context.Background()); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("got %v, want ErrUnsupported", err)
+	}
+}
+
+// A list over one script's cap goes in batches: 300 Denies are two writes of
+// 256 and 44, for an add and for a remove, and each batch's rows are checked.
+func TestSeamDenyBatches(t *testing.T) {
+	ctx := context.Background()
+	var ps []netip.Prefix
+	var rows []string
+	for i := range 300 {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{203, 0, byte(i >> 8), byte(i)}), 32)
+		ps = append(ps, p)
+		for _, dir := range []string{"Inbound", "Outbound"} {
+			rows = append(rows, `{"direction":"`+dir+`","remote":"`+p.Addr().String()+`"}`)
+		}
+	}
+	listed := `{"deny":[` + strings.Join(rows, ",") + `]}`
+	sizes := func(r *fakeRun) []int {
+		var out []int
+		for _, a := range r.args {
+			var w struct {
+				Remotes []string `json:"remotes"`
+			}
+			if err := json.Unmarshal([]byte(a), &w); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, len(w.Remotes))
+		}
+		return out
+	}
+	h, r, _ := newSeam(listed, listed)
+	if err := h.AddDeny(ctx, tVMID, ps); err != nil {
+		t.Fatalf("an add of 300 Denies: %v", err)
+	}
+	if got := sizes(r); !slices.Equal(got, []int{256, 44}) {
+		t.Fatalf("the add wrote batches of %v, want [256 44]", got)
+	}
+	h, r, _ = newSeam(`{"deny":[]}`, `{"deny":[]}`)
+	if err := h.RemoveDeny(ctx, tVMID, ps); err != nil {
+		t.Fatalf("a remove of 300 Denies: %v", err)
+	}
+	if got := sizes(r); !slices.Equal(got, []int{256, 44}) {
+		t.Fatalf("the remove wrote batches of %v, want [256 44]", got)
+	}
+	// A batch whose rows are not all there fails the add.
+	h, _, _ = newSeam(listed, `{"deny":[]}`)
+	if err := h.AddDeny(ctx, tVMID, ps); err == nil {
+		t.Fatal("an add whose second batch is missing was accepted")
 	}
 }

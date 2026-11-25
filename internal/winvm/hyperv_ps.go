@@ -1028,15 +1028,20 @@ func (h *psHost) Start(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// maxDenyRows caps how many rows one AddDeny or RemoveDeny call may touch.
+// maxDenyRows caps how many rows one write script touches. AddDeny and
+// RemoveDeny send a longer list in batches of this size, so a split tunnel
+// with many routes still gets its Denies.
 const maxDenyRows = 256
 
-// checkDenies accepts only masked IPv4 prefixes, at most maxDenyRows, with no
+// maxDenyTotal caps how many rows one AddDeny or RemoveDeny call may touch.
+const maxDenyTotal = 16 * maxDenyRows
+
+// checkDenies accepts only masked IPv4 prefixes, at most maxDenyTotal, with no
 // repeat, and returns each one as Hyper-V writes it: a /32 as a bare address.
 // The guard only manages its own IPv4 rows; IPv6 is one static row.
 func checkDenies(ps []netip.Prefix) ([]string, error) {
-	if len(ps) == 0 || len(ps) > maxDenyRows {
-		return nil, fmt.Errorf("%d prefixes; one call takes 1 to %d", len(ps), maxDenyRows)
+	if len(ps) == 0 || len(ps) > maxDenyTotal {
+		return nil, fmt.Errorf("%d prefixes; one call takes 1 to %d", len(ps), maxDenyTotal)
 	}
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
@@ -1089,6 +1094,26 @@ func (w denyWire) hasBoth(remote netip.Prefix) (in, out bool) {
 	return in, out
 }
 
+// denyBatches runs script once per batch of at most maxDenyRows prefixes, and
+// hands each batch and the rows listed after it to check.
+func (h *psHost) denyBatches(ctx context.Context, script, vmID string, ps []netip.Prefix, rs []string, check func([]netip.Prefix, denyWire) error) error {
+	for i := 0; i < len(ps); i += maxDenyRows {
+		j := min(i+maxDenyRows, len(ps))
+		var w denyWire
+		arg := struct {
+			VM      string   `json:"vm"`
+			Remotes []string `json:"remotes"`
+		}{vmID, rs[i:j]}
+		if err := h.call(ctx, script, arg, &w); err != nil {
+			return err
+		}
+		if err := check(ps[i:j], w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // AddDeny adds a Deny Both row for each prefix and checks that each one is
 // there afterwards.
 func (h *psHost) AddDeny(ctx context.Context, vmID string, ps []netip.Prefix) error {
@@ -1099,20 +1124,14 @@ func (h *psHost) AddDeny(ctx context.Context, vmID string, ps []netip.Prefix) er
 	if err != nil {
 		return err
 	}
-	var w denyWire
-	arg := struct {
-		VM      string   `json:"vm"`
-		Remotes []string `json:"remotes"`
-	}{vmID, rs}
-	if err := h.call(ctx, scriptAddDeny, arg, &w); err != nil {
-		return err
-	}
-	for _, p := range ps {
-		if in, out := w.hasBoth(p); !in || !out {
-			return fmt.Errorf("the Deny for %s is not in place after the add", aclArg(p))
+	return h.denyBatches(ctx, scriptAddDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
+		for _, p := range batch {
+			if in, out := w.hasBoth(p); !in || !out {
+				return fmt.Errorf("the Deny for %s is not in place after the add", aclArg(p))
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // RemoveDeny removes the Deny rows of each prefix and checks that none is left.
@@ -1131,20 +1150,14 @@ func (h *psHost) RemoveDeny(ctx context.Context, vmID string, ps []netip.Prefix)
 			return fmt.Errorf("the static Deny %v is never removed", p)
 		}
 	}
-	var w denyWire
-	arg := struct {
-		VM      string   `json:"vm"`
-		Remotes []string `json:"remotes"`
-	}{vmID, rs}
-	if err := h.call(ctx, scriptRemoveDeny, arg, &w); err != nil {
-		return err
-	}
-	for _, p := range ps {
-		if in, out := w.hasBoth(p); in || out {
-			return fmt.Errorf("a Deny for %s is still there after the remove", aclArg(p))
+	return h.denyBatches(ctx, scriptRemoveDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
+		for _, p := range batch {
+			if in, out := w.hasBoth(p); in || out {
+				return fmt.Errorf("a Deny for %s is still there after the remove", aclArg(p))
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // sleepCtx waits d, or until ctx ends.

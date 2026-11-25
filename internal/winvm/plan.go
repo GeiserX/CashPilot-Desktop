@@ -406,23 +406,34 @@ type Dynamic struct {
 }
 
 // WantACLs is the exact ACL set the guest's adapter must carry: every static
-// Deny, then each other line's exit and each dynamic prefix that no other row
-// already covers. No two rows share a prefix: Hyper-V refuses a second row with
-// the same prefix with 0x800700B7, so a duplicate would fail the apply.
+// Deny, each other line's exit that no static row covers, then each dynamic
+// prefix that no other row already covers. No two rows share a prefix: Hyper-V
+// refuses a second row with the same prefix with 0x800700B7, so a duplicate
+// would fail the apply.
+//
+// An exit's row never gives way to a dynamic row. Setup places it and the
+// guard does not manage it, so a tunnel route that covers it for a while must
+// not make it look extra, and must not leave it missing once the route goes.
 func (p Plan) WantACLs(d Dynamic) []ACL {
-	static := map[netip.Prefix]bool{}
+	fixed := map[netip.Prefix]bool{}
 	var rows []netip.Prefix
 	for _, s := range p.StaticDeny {
 		s = s.Masked()
-		if s.IsValid() && !static[s] {
-			static[s] = true
+		if s.IsValid() && !fixed[s] {
+			fixed[s] = true
 			rows = append(rows, s)
 		}
 	}
-	var dyn []netip.Prefix
+	staticRows := slices.Clone(rows)
 	for _, a := range p.ExtraExits {
-		dyn = append(dyn, netip.PrefixFrom(a.Unmap(), 32))
+		q := netip.PrefixFrom(a.Unmap(), 32)
+		if !q.IsValid() || fixed[q] || slices.ContainsFunc(staticRows, func(r netip.Prefix) bool { return r.Contains(q.Addr()) }) {
+			continue
+		}
+		fixed[q] = true
+		rows = append(rows, q)
 	}
+	var dyn []netip.Prefix
 	for _, set := range [][]netip.Prefix{d.HostAddrs, d.OnLink, d.OwnIPs, d.Tunnels} {
 		for _, q := range set {
 			if q = unmapPrefix(q); q.IsValid() {
@@ -433,7 +444,7 @@ func (p Plan) WantACLs(d Dynamic) []ACL {
 	// A dynamic prefix is dropped when any other row covers it, or when it repeats.
 	all := append(slices.Clone(rows), dyn...)
 	for i, q := range dyn {
-		if static[q] || slices.Contains(dyn[:i], q) {
+		if fixed[q] || slices.Contains(dyn[:i], q) {
 			continue
 		}
 		covered := false

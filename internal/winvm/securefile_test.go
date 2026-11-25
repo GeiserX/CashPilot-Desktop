@@ -1,6 +1,8 @@
 package winvm
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,5 +43,21 @@ func TestOpenAppend(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(log); string(b) != "y" {
 		t.Fatalf("guard.log %q, want y", b)
+	}
+}
+
+// A log file whose access rule could not be set is removed, so the next call
+// does not accept a file that kept the rule it inherited.
+func TestOpenAppendRemovesAFileItCouldNotProtect(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "guard.log")
+	old := protectFile
+	t.Cleanup(func() { protectFile = old })
+	protectFile = func(string, fileAccess) error { return errors.New("no DACL") }
+	if f, err := OpenAppend(log); err == nil {
+		f.Close()
+		t.Fatal("OpenAppend accepted a file it could not protect")
+	}
+	if _, err := os.Lstat(log); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the unprotected file is still there: %v", err)
 	}
 }

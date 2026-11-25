@@ -702,6 +702,24 @@ func (f *HyperV) RemoveDeny(_ context.Context, vmID string, ps []netip.Prefix) e
 	return nil
 }
 
+// LeaveOneWay turns the Deny Both row of p into an Inbound row only, as a
+// Remove-VMNetworkAdapterAcl that stopped halfway leaves it.
+func (f *HyperV) LeaveOneWay(vmID string, p netip.Prefix) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	for i, x := range vm.adapter.acls {
+		if x.Action == "Deny" && x.Remote == p.Masked() && x.Direction == "Both" {
+			vm.adapter.acls[i].Direction = "Inbound"
+			return nil
+		}
+	}
+	return fmt.Errorf("fake Hyper-V: no Deny Both row for %s", p)
+}
+
 // ---- Builder ----
 
 // EnsureSwitch creates the Internal switch with its host vNIC, every binding

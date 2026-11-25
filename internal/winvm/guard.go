@@ -85,7 +85,7 @@ type GuardState struct {
 // Boot is the boot routine: disconnect, compare, then connect and start only
 // on an exact match.
 func (d GuardDeps) Boot(ctx context.Context) Status {
-	st, _ := d.routine(ctx, Boot, false)
+	st, _ := d.routine(ctx, Boot, false, nil)
 	return st
 }
 
@@ -93,9 +93,12 @@ func (d GuardDeps) Boot(ctx context.Context) Status {
 type outcome int
 
 const (
-	// leftOn: the VM is on the network (or its adapter could not be taken off).
+	// leftOn: the VM is on the network and the routine did all it meant to: a
+	// Pass found nothing to stop, or Boot and Resume connected and started it.
 	leftOn outcome = iota
-	// leftOff: the VM is off the network, and not because the fence changed.
+	// leftOff: the VM is off the network, or not running, and not because the
+	// fence changed. This includes a boot routine that could not take the
+	// adapter off, could not connect it, or could not start the VM.
 	leftOff
 	// leftCut: the VM is off the network because the fence changed.
 	leftCut
@@ -104,7 +107,7 @@ const (
 // Pass refreshes the guard's own Denies, compares, may only disconnect, and
 // writes the status.
 func (d GuardDeps) Pass(ctx context.Context) Status {
-	st, _ := d.routine(ctx, Periodic, false)
+	st, _ := d.routine(ctx, Periodic, false, nil)
 	return st
 }
 
@@ -140,10 +143,19 @@ type guardLoop struct {
 	// after the change is undone: only Repair, a reboot, a resume or a new guard
 	// brings the VM back from that.
 	retry bool
+	// cut is the cut as the last routine left it, kept here as well as in
+	// state.json: a state file that could not be written must not lift it.
+	cut cutMemo
+}
+
+// cutMemo is a cut for a change to the fence, and the changes behind it.
+type cutMemo struct {
+	held    bool
+	changes []Change
 }
 
 func (l *guardLoop) boot(ctx context.Context) Status {
-	st, o := l.d.routine(ctx, Boot, false)
+	st, o := l.d.routine(ctx, Boot, false, &l.cut)
 	l.last = l.d.now()
 	l.note(o)
 	return st
@@ -163,11 +175,11 @@ func (l *guardLoop) tick(ctx context.Context) Status {
 	switch {
 	case gap > resumeGap:
 		l.d.logf("resume: the clock moved %s since the last routine ended", gap.Round(time.Second))
-		st, o = l.d.routine(ctx, Resume, false)
+		st, o = l.d.routine(ctx, Resume, false, &l.cut)
 	case l.retry:
-		st, o = l.d.routine(ctx, Resume, true)
+		st, o = l.d.routine(ctx, Resume, true, &l.cut)
 	default:
-		st, o = l.d.routine(ctx, Periodic, false)
+		st, o = l.d.routine(ctx, Periodic, false, &l.cut)
 	}
 	l.last = l.d.now()
 	l.note(o)
@@ -192,8 +204,12 @@ func (d GuardDeps) logf(format string, args ...any) {
 // Run's retry of the boot routine, which a valid proof lock turns into a Pass:
 // the proof must not lose its network to a retry.
 //
+// mem is Run's memory of a cut (nil for a one-shot routine). A routine that
+// does not run the exact check again keeps a cut it holds, even when state.json
+// lost it, and mem ends as the cut state.json should hold.
+//
 // It also reports where it left the VM, for Run.
-func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool) (Status, outcome) {
+func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutMemo) (Status, outcome) {
 	now := d.now()
 	st := Status{Version: StatusVersion, WrittenAt: now, Network: NetAbsent, Fence: FenceUnproven, Changes: []Change{}}
 	defer func() {
@@ -203,38 +219,51 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool) (Status, 
 	}()
 
 	gs := d.loadState()
+	// failClosed takes the VM of the last plan that could be read off the
+	// network, when the plan now gives no VM to check, and adds until to the
+	// reason. The state stays as it was for when the plan is back.
+	failClosed := func(until string) {
+		if gs.VMID == "" {
+			return
+		}
+		st.Fence, st.Network = FenceCut, NetConnected
+		if err := d.HV.Disconnect(ctx, gs.VMID); err != nil {
+			d.logf("disconnect failed: %v", err)
+		} else {
+			st.Network = NetDisconnected
+		}
+		st.Reason += " The VM stays off the network until " + until + "."
+	}
 	p, err := d.loadPlan()
 	if err != nil {
 		st.Reason = "Could not read the VM's desired state, so the guard cannot check it: " + err.Error()
 		d.logf("%s", st.Reason)
-		if gs.VMID != "" {
-			// Fail closed: the VM of the last plan that could be read goes off
-			// the network. The state stays as it was for when the plan is back.
-			st.Fence, st.Network = FenceCut, NetConnected
-			if err := d.HV.Disconnect(ctx, gs.VMID); err != nil {
-				d.logf("disconnect failed: %v", err)
-			} else {
-				st.Network = NetDisconnected
-			}
-			st.Reason += " The VM stays off the network until the guard can read it again."
-		}
+		failClosed("the guard can read it again")
 		return st, leftOff
 	}
 	st.VM, st.ProvedAt = p.Names.VM, p.ProvedAt
 	if p.VMID == "" || p.AdapterID == "" || p.SwitchID == "" {
 		st.Reason = "The VM is not built yet."
+		failClosed("its desired state names it again")
 		return st, leftOff
 	}
 	gs = gs.forPlan(p)
 	defer func() {
+		if mem != nil {
+			*mem = cutMemo{held: gs.Cut, changes: slices.Clone(gs.CutChanges)}
+		}
 		if err := d.saveState(gs); err != nil {
 			d.logf("could not write the state: %v", err)
 		}
 	}()
-	if m != Periodic && !retrying {
+	switch {
+	case m != Periodic && !retrying:
 		// Boot and Resume run the exact check again: the only way back from a
 		// cut for a change to the fence. A retry never lifts a cut.
 		gs.Cut, gs.CutChanges = false, nil
+	case mem != nil && mem.held && !gs.Cut:
+		// state.json lost the cut (a write that failed): Run still holds it.
+		gs.Cut, gs.CutChanges = true, slices.Clone(mem.changes)
 	}
 
 	connected := true // unknown until read: assume the worst
@@ -268,10 +297,13 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool) (Status, 
 			connected = anyConnected(l)
 		}
 		st.Network = networkState(l, err, connected)
-		if retrying || !connected {
-			return st, leftOff
+		// Only a plain Pass can leave the VM on here: Boot and Resume never
+		// connect under the lock, so a VM still on the network after them has
+		// an adapter that would not come off, and Run retries.
+		if m == Periodic && !retrying && connected {
+			return st, leftOn
 		}
-		return st, leftOn
+		return st, leftOff
 	}
 
 	// 1. Refresh what the Denies follow: the own IPs, the host's addresses and
@@ -359,12 +391,18 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool) (Status, 
 	if (act.Disconnect || gs.Cut) && connected {
 		disconnect()
 	}
-	started := false
+	started, booted := false, false
 	var afterConnect []Change
+	var startErr error
 	if m != Periodic && act.Connect && !gs.Cut {
-		connected, started, afterConnect = d.connect(ctx, p, dyn, act.Start)
-		if !connected {
+		connected, started, afterConnect, startErr = d.connect(ctx, p, dyn, act.Start)
+		switch {
+		case startErr != nil:
+			reason = "The VM could not be started (" + shortErr(startErr) + "), so it stays off the network. The guard tries again at its next check."
+		case !connected:
 			reason = "The VM could not be connected safely, so it stays off the network."
+		default:
+			booted = true
 		}
 	}
 	if act.Reason != "" {
@@ -403,7 +441,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool) (Status, 
 		st.Changes = append(st.Changes, gs.CutChanges...)
 	}
 	st.Reason = act.Reason
-	if reason != "" && !connected {
+	if reason != "" && (!connected || startErr != nil) {
 		st.Reason = reason
 	}
 	if gs.Cut && !connected {
@@ -427,12 +465,23 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool) (Status, 
 	}
 	st.Network = networkState(live, lErr, connected)
 	switch {
-	case connected:
-		return st, leftOn
 	case gs.Cut:
 		return st, leftCut
+	case connected && (m == Periodic || booted):
+		return st, leftOn
 	}
+	// Off the network, or a boot routine that did not finish (the adapter would
+	// not come off, or the VM would not start): Run retries the boot routine.
 	return st, leftOff
+}
+
+// shortErr is the first line of err, cut to 200 bytes, for the status.
+func shortErr(err error) string {
+	s, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+	if len(s) > 200 {
+		s = s[:200] + "..."
+	}
+	return s
 }
 
 // cutReason is the status reason while a cut holds: it names what changed and
@@ -442,7 +491,7 @@ func cutReason(cs []Change) string {
 	if why == "" {
 		why = "Your VM is cut off from the internet because its protection changed."
 	}
-	return why + " It stays off until you run Repair or restart this PC."
+	return why + " Run Repair to check the protection and restore it."
 }
 
 // asIfWritten is live with the guard's Deny writes that failed in this pass
@@ -470,14 +519,21 @@ func asIfWritten(live LiveState, notAdded, notRemoved []netip.Prefix) LiveState 
 	return live
 }
 
+// undoTimeout bounds the Disconnect that undoes a Connect.
+const undoTimeout = 2 * time.Minute
+
 // connect puts the VM on its switch, reads the fence again with the adapter
 // connected, and starts the VM only if that reading still matches. Anything
 // else takes it off again. It reports whether the VM is left connected,
-// whether it was started, and the changes to the fence the reading after the
-// connect showed.
-func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool) (connected, started bool, cut []Change) {
+// whether it was started, the changes to the fence the reading after the
+// connect showed, and why the VM did not start.
+func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool) (connected, started bool, cut []Change, startErr error) {
+	// off undoes the Connect on its own bounded context: a routine cut short
+	// (the service stopping) right after the Connect must still undo it.
 	off := func() bool {
-		if err := d.HV.Disconnect(ctx, p.VMID); err != nil {
+		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
+		defer cancel()
+		if err := d.HV.Disconnect(uctx, p.VMID); err != nil {
 			d.logf("disconnect failed: %v", err)
 			return true
 		}
@@ -485,29 +541,34 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 	}
 	if err := d.HV.Connect(ctx, p.VMID, p.Names.Switch); err != nil {
 		d.logf("connect failed: %v", err)
-		return off(), false, nil
+		return off(), false, nil, nil
 	}
 	live, err := d.HV.ReadLive(ctx, p.Names, p.VMID)
 	if err != nil {
 		d.logf("read live state after connect: %v", err)
-		return off(), false, nil
+		return off(), false, nil, nil
 	}
 	if cs := Diff(p, live, dyn); len(cs) > 0 {
 		for _, c := range cs {
 			d.logf("MISMATCH after connect %s: want %s, got %s", c.Field, c.Want, c.Got)
 		}
-		return off(), false, cs
+		return off(), false, cs, nil
 	}
 	d.logf("connected: the fence matches the proven one")
 	if start && live.VMState != "Running" {
 		if err := d.HV.Start(ctx, p.VMID); err != nil {
+			// A start that failed (often too little free memory) is a stop to
+			// retry, not a VM that is up. The VM goes off the network again and
+			// the routine reports it off, so Run's next tick runs the whole boot
+			// routine: disconnect, an exact check, Connect, Start. Pass never
+			// gets a Start or a Connect of its own.
 			d.logf("start failed: %v", err)
-			return true, false, nil
+			return off(), false, nil, err
 		}
 		d.logf("started the VM")
-		return true, true, nil
+		return true, true, nil, nil
 	}
-	return true, false, nil
+	return true, false, nil, nil
 }
 
 // refreshDenies adds each Deny the guard manages that is missing and new, and
@@ -532,8 +593,11 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 			rows = append(rows, ACL{Action: "Deny", Direction: a.Direction, Remote: a.Remote.Masked()})
 		}
 	}
-	inPlace := map[netip.Prefix]bool{}
+	// inPlace: the row is there both ways. present: it is there at least one
+	// way, so a row left one way by a remove that stopped halfway still counts.
+	inPlace, present := map[netip.Prefix]bool{}, map[netip.Prefix]bool{}
 	for _, a := range foldBoth(rows) {
+		present[a.Remote] = true
 		if a.Direction == "Both" {
 			inPlace[a.Remote] = true
 		}
@@ -544,8 +608,11 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 			add = append(add, q)
 		}
 	}
+	// A row of the guard's own that is no longer wanted goes, even when only
+	// one way of it is left: otherwise the leftover is extra for Diff and the
+	// VM stays cut off.
 	for _, q := range gs.Denied {
-		if inPlace[q] && !slices.Contains(owned, q) && !base[q] {
+		if present[q] && !slices.Contains(owned, q) && !base[q] {
 			remove = append(remove, q)
 		}
 	}

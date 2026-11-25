@@ -56,13 +56,13 @@ func main() {
 	// It never opens a window. --once boot|pass runs one routine, for the lab.
 	guard := fs.String(vmGuardFlag, "", "run the Secure VM's guard on this data folder; no window")
 	once := fs.String(vmGuardOnceFlag, "", "with --vm-guard: run one routine (boot or pass) and exit")
-	_ = fs.Parse(os.Args[1:])
+	parseErr := fs.Parse(os.Args[1:])
 
 	if *inspect != "" {
 		os.Exit(runVMInspectMain(*inspect))
 	}
 	if *guard != "" {
-		os.Exit(runVMGuardMain(*guard, *once))
+		os.Exit(vmGuardMain(*guard, *once, parseErr, runVMGuardMain))
 	}
 
 	if *daemon {

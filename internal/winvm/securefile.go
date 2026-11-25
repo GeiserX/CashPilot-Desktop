@@ -128,9 +128,15 @@ func OpenAppend(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := protect(path, usersRead); err != nil {
+	// A file that did not get its access rule goes again: left in place it
+	// would keep the rule it inherited, and the next call would accept it.
+	if err := protectFile(path, usersRead); err != nil {
 		f.Close()
+		os.Remove(path)
 		return nil, err
 	}
 	return f, nil
 }
+
+// protectFile is protect, replaced by a test that needs it to fail.
+var protectFile = protect

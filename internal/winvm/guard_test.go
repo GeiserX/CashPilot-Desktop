@@ -155,10 +155,18 @@ func (r *rig) connectedNow() bool {
 	return slices.ContainsFunc(l.Adapters, func(a winvm.LiveAdapter) bool { return a.SwitchID != "" })
 }
 
+// fenceViolation is a probe that got through the fence, as against a probe
+// that could not be set up.
+type fenceViolation struct{ msg string }
+
+func (e *fenceViolation) Error() string { return e.msg }
+
 // probeFence is a check that depends on the fence itself, not on its config:
 // the guest probes the host's LAN address, the LAN router, the gateway, the
 // tailnet and the line's own public address. It wants no arrival, nothing
 // leaving the host, and one drop counted per probe. The mutant fake fails it.
+// A probe that got through is a *fenceViolation; any other error is a probe
+// that could not run.
 func (r *rig) probeFence() error {
 	ctx := context.Background()
 	f, p := r.f, r.p
@@ -204,16 +212,16 @@ func (r *rig) probeFence() error {
 	}
 	for i, c := range canaries {
 		if len(c.Arrived()) > 0 {
-			return fmt.Errorf("a probe arrived at %v", targets[i])
+			return &fenceViolation{fmt.Sprintf("a probe arrived at %v", targets[i])}
 		}
 	}
 	for _, rec := range recs {
 		if rec.Class == "physical" || rec.Class == "tunnel" {
-			return fmt.Errorf("a probe left the host through %s to %v", rec.Class, rec.Dst)
+			return &fenceViolation{fmt.Sprintf("a probe left the host through %s to %v", rec.Class, rec.Dst)}
 		}
 	}
 	if got := after.Out - before.Out; got != uint64(len(targets)) {
-		return fmt.Errorf("the drop counter rose by %d, want %d", got, len(targets))
+		return &fenceViolation{fmt.Sprintf("the drop counter rose by %d, want %d", got, len(targets))}
 	}
 	return nil
 }
@@ -299,6 +307,12 @@ func TestGuardDeleteOneACLFailsWithTheMutant(t *testing.T) {
 	err := deleteOneACL(t, true)
 	if err == nil {
 		t.Fatal("the delete-one-ACL test passed with every Deny ignored, so it proves nothing")
+	}
+	// It must fail because a probe got through, not because a probe could not
+	// be set up.
+	var fv *fenceViolation
+	if !errors.As(err, &fv) {
+		t.Fatalf("the mutant failed the test for another reason: %v", err)
 	}
 	t.Logf("mutant on: %v", err)
 }
@@ -779,7 +793,9 @@ func TestGuardWithoutAPlan(t *testing.T) {
 // Run boots, then passes, and stops when its context ends. The passes never
 // disconnect or connect again.
 func TestGuardRun(t *testing.T) {
-	defer winvm.SetGuardInterval(5 * time.Millisecond)()
+	// A cleanup, not a defer: it must run after the cleanup below that waits
+	// for Run, which reads the interval.
+	t.Cleanup(winvm.SetGuardInterval(5 * time.Millisecond))
 	r := newRig(t)
 	count := func(calls []string, c string) int {
 		n := 0
@@ -1035,8 +1051,9 @@ func TestGuardRunNeverReconnectsAfterADriftCut(t *testing.T) {
 }
 
 // expectStillCut checks the status while a cut holds after the change was
-// undone: never green, the change still named, and the way back is Repair or a
-// restart, never the next check.
+// undone: never green, the change still named, and the way back is Repair,
+// never the next check. A restart is not promised: it does not undo a change
+// that persists.
 func expectStillCut(st winvm.Status, field string) error {
 	switch {
 	case st.Fence != winvm.FenceCut:
@@ -1045,7 +1062,7 @@ func expectStillCut(st winvm.Status, field string) error {
 		return fmt.Errorf("network %q while the cut holds", st.Network)
 	case !hasChange(st, field):
 		return fmt.Errorf("the changes %+v do not name %s", st.Changes, field)
-	case !strings.Contains(st.Reason, "Repair") || strings.Contains(st.Reason, "next check"):
+	case !strings.Contains(st.Reason, "Repair") || strings.Contains(st.Reason, "next check") || strings.Contains(st.Reason, "restart"):
 		return fmt.Errorf("reason %q", st.Reason)
 	}
 	return nil
@@ -1192,5 +1209,276 @@ func TestGuardBootChecksAgainAfterConnect(t *testing.T) {
 	// Boot runs the exact check again and connects.
 	if st := r.d.Boot(ctx); st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld {
 		t.Fatalf("Boot after the change was undone: %+v", st)
+	}
+}
+
+// A Start that fails after the boot routine connected is a stop to retry, not
+// a VM that is up: the VM goes off the network, the status says it did not
+// start and why, and the next tick runs the boot routine again, which starts
+// it.
+func TestGuardRunRetriesAFailedStart(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.f.Disconnect(ctx, r.p.VMID)
+	r.f.SetVMState(r.p.VMID, "Off")
+	r.f.FailNext("Start", errors.New("fake Hyper-V: not enough memory to start the VM"))
+	l := winvm.NewGuardLoop(r.d)
+	st := l.Boot(ctx)
+	if st.Network == winvm.NetConnected || r.connectedNow() {
+		t.Fatalf("a VM that did not start stayed on the network: %+v", st)
+	}
+	if !strings.Contains(st.Reason, "could not be started") || !strings.Contains(st.Reason, "not enough memory") || !strings.Contains(st.Reason, "tries again") {
+		t.Fatalf("reason %q", st.Reason)
+	}
+	m := r.mark()
+	st = l.Tick(ctx)
+	calls := r.since(m)
+	if len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") || !slices.Contains(calls, "Start") {
+		t.Fatalf("the tick after the failed start is not the boot routine: %v", calls)
+	}
+	if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld || st.Reason != "" || !r.connectedNow() {
+		t.Fatalf("not started on the retry: %+v", st)
+	}
+	// Back to passes.
+	m = r.mark()
+	l.Tick(ctx)
+	if calls := r.since(m); slices.Contains(calls, "Connect") || slices.Contains(calls, "Start") {
+		t.Fatalf("a tick after the start: %v", calls)
+	}
+}
+
+// A Boot under a proof lock whose disconnect failed has not done its job: once
+// the lock is gone, the next tick runs the boot routine, which disconnects.
+func TestGuardRunRetriesABootDisconnectThatFailed(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	if err := winvm.WriteProofLock(r.dir, provedAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	r.f.FailNext("Disconnect", nil)
+	l := winvm.NewGuardLoop(r.d)
+	l.Boot(ctx)
+	if !r.connectedNow() {
+		t.Fatal("the failed disconnect took the adapter off")
+	}
+	os.Remove(filepath.Join(r.dir, winvm.LockFile))
+	m := r.mark()
+	l.Tick(ctx)
+	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" {
+		t.Fatalf("the tick after the lock is not the boot routine: %v", calls)
+	}
+}
+
+// failingState puts a folder where state.json goes, so the guard cannot write
+// its state and starts each routine from a fresh one.
+func failingState(t *testing.T, r *rig) {
+	t.Helper()
+	path := filepath.Join(r.dir, winvm.StateFile)
+	os.Remove(path)
+	if err := os.MkdirAll(filepath.Join(path, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A cut holds in Run even when state.json cannot be written: after the change
+// is undone, the ticks still do not reconnect. A resume lifts it.
+func TestGuardRunKeepsACutWhenTheStateCannotBeWritten(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	l := winvm.NewGuardLoop(r.d)
+	l.Boot(ctx)
+	failingState(t, r)
+	ten := netip.MustParsePrefix("10.0.0.0/8")
+	r.f.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{ten})
+	m := r.mark()
+	if err := expectCut(r, l.Tick(ctx), r.since(m), "acl"); err != nil {
+		t.Fatal(err)
+	}
+	if !r.logged("could not write the state") {
+		t.Fatal("the state write did not fail, so this test proves nothing")
+	}
+	if err := r.f.AddDeny(ctx, r.p.VMID, []netip.Prefix{ten}); err != nil {
+		t.Fatal(err)
+	}
+	m = r.mark()
+	for range 3 {
+		if err := expectStillCut(l.Tick(ctx), "acl"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls := r.since(m); slices.Contains(calls, "Connect") || r.connectedNow() {
+		t.Fatalf("a tick reconnected after a cut the state lost: %v", calls)
+	}
+	r.setNow(provedAt.Add(3 * time.Hour))
+	if st := l.Tick(ctx); st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld {
+		t.Fatalf("the resume did not lift the cut: %+v", st)
+	}
+}
+
+// A cut, then a plan that cannot be read (Run retries), then the plan back and
+// the change undone: the retry never lifts the cut.
+func TestGuardRunCutHoldsAcrossAnUnreadablePlan(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	l := winvm.NewGuardLoop(r.d)
+	l.Boot(ctx)
+	ten := netip.MustParsePrefix("10.0.0.0/8")
+	r.f.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{ten})
+	m := r.mark()
+	if err := expectCut(r, l.Tick(ctx), r.since(m), "acl"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(r.dir, winvm.PlanFile), []byte(`{"version":99}`), 0o600)
+	if st := l.Tick(ctx); !strings.Contains(st.Reason, "desired state") {
+		t.Fatalf("an unreadable plan: %+v", st)
+	}
+	r.writePlan()
+	if err := r.f.AddDeny(ctx, r.p.VMID, []netip.Prefix{ten}); err != nil {
+		t.Fatal(err)
+	}
+	m = r.mark()
+	for range 2 {
+		if err := expectStillCut(l.Tick(ctx), "acl"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls := r.since(m); slices.Contains(calls, "Connect") || r.connectedNow() {
+		t.Fatalf("a retry lifted the cut: %v", calls)
+	}
+}
+
+// A readable plan that names no VM yet still takes the VM the guard knew off
+// the network.
+func TestGuardPlanWithoutIDsFailsClosed(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		edit func(p *winvm.Plan)
+	}{
+		{"no VM ID", func(p *winvm.Plan) { p.VMID = "" }},
+		{"no adapter ID", func(p *winvm.Plan) { p.AdapterID = "" }},
+		{"no switch ID", func(p *winvm.Plan) { p.SwitchID = "" }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t)
+			c.edit(&r.p)
+			r.writePlan()
+			m := r.mark()
+			st := r.d.Pass(context.Background())
+			if !slices.Contains(r.since(m), "Disconnect") || r.connectedNow() {
+				t.Fatalf("the VM stayed on the network: %v", r.since(m))
+			}
+			if st.Network != winvm.NetDisconnected || st.Fence != winvm.FenceCut || st.Reason == "" {
+				t.Fatalf("status %+v", st)
+			}
+		})
+	}
+}
+
+// An other line's exit that a tunnel route covers later keeps its row: the
+// row setup placed is neither extra while the route is up nor missing once it
+// goes, so the VM is never cut off for it.
+func TestGuardExtraExitUnderATunnelRoute(t *testing.T) {
+	ctx := context.Background()
+	exit := netip.MustParseAddr("198.51.100.9")
+	r := newRigWith(t, func(p *winvm.Plan) { p.ExtraExits = []netip.Addr{exit} }, false)
+	if err := r.f.AddDeny(ctx, r.p.VMID, []netip.Prefix{netip.PrefixFrom(exit, 32)}); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.d.Boot(ctx); st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld {
+		t.Fatalf("Boot with the exit's row: %+v", st)
+	}
+	r.f.SetRoute(winvm.Route{Prefix: netip.MustParsePrefix("198.51.100.0/24"), IfIndex: 15, NextHop: netip.IPv4Unspecified(), Metric: 5})
+	st := r.d.Pass(ctx)
+	if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld {
+		t.Fatalf("a tunnel route over the exit cut the VM off: %+v", st)
+	}
+	if !slices.Contains(r.acls(), netip.MustParsePrefix("198.51.100.0/24")) {
+		t.Fatalf("the tunnel route got no Deny: %v", r.acls())
+	}
+}
+
+// A row of the guard's own left one way by a remove that stopped halfway is
+// still the guard's: the next try removes it and the VM comes back.
+func TestGuardRunRemovesAOneWayLeftover(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	l := winvm.NewGuardLoop(r.d)
+	l.Boot(ctx)
+	old := netip.PrefixFrom(r.f.PublicIP, 32)
+	r.setOwn(netip.MustParseAddr("198.51.100.77"))
+	l.Tick(ctx)
+	r.setNow(provedAt.Add(26 * time.Hour))
+	r.f.FailNext("RemoveDeny", nil)
+	if st := l.Tick(ctx); st.Network != winvm.NetDisconnected || !strings.Contains(st.Reason, "tries again") {
+		t.Fatalf("after the failed remove: %+v", st)
+	}
+	if err := r.f.LeaveOneWay(r.p.VMID, old); err != nil {
+		t.Fatal(err)
+	}
+	st := l.Tick(ctx)
+	if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld {
+		t.Fatalf("not back after the one-way leftover: %+v", st)
+	}
+	l2, _ := r.f.ReadLive(ctx, r.p.Names, r.p.VMID)
+	if slices.ContainsFunc(l2.ACLs, func(a winvm.ACL) bool { return a.Remote == old }) {
+		t.Fatalf("the leftover is still there: %v", l2.ACLs)
+	}
+}
+
+// cancelAfterConnect is the fake with a routine cut short right after the
+// Connect: the reading after it ends the context, and a Disconnect on an ended
+// context fails, as PowerShell does.
+type cancelAfterConnect struct {
+	*hvfake.HyperV
+	cancel    context.CancelFunc
+	connected *bool
+}
+
+func (h cancelAfterConnect) Connect(ctx context.Context, vmID, switchName string) error {
+	*h.connected = true
+	return h.HyperV.Connect(ctx, vmID, switchName)
+}
+
+func (h cancelAfterConnect) ReadLive(ctx context.Context, n winvm.Names, vmID string) (winvm.LiveState, error) {
+	if *h.connected {
+		h.cancel()
+		return winvm.LiveState{}, ctx.Err()
+	}
+	return h.HyperV.ReadLive(ctx, n, vmID)
+}
+
+func (h cancelAfterConnect) Disconnect(ctx context.Context, vmID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return h.HyperV.Disconnect(ctx, vmID)
+}
+
+// A routine cut short after its Connect still undoes the Connect.
+func TestGuardUndoesAConnectWhenCutShort(t *testing.T) {
+	r := newRig(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	connected := false
+	r.d.HV = cancelAfterConnect{r.f, cancel, &connected}
+	r.d.Boot(ctx)
+	if !connected {
+		t.Fatal("Boot did not connect, so this test proves nothing")
+	}
+	if r.connectedNow() {
+		t.Fatal("the VM stayed on the network after a routine cut short")
+	}
+}
+
+// A change on connect while the VM already runs: the status says
+// disconnected, never connected, because the VM was taken off again.
+func TestGuardChangeOnConnectWhileRunning(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	ten := netip.MustParsePrefix("10.0.0.0/8")
+	r.d.HV = tamperOnConnect{r.f, func() { r.f.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{ten}) }}
+	st := r.d.Boot(ctx)
+	if st.Network != winvm.NetDisconnected || st.Fence != winvm.FenceCut || r.connectedNow() {
+		t.Fatalf("status %+v", st)
 	}
 }
