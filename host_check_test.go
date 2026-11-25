@@ -80,6 +80,59 @@ func TestHostCheckReturnsFactsAndTheRuntimeReason(t *testing.T) {
 	}
 }
 
+// CheckRuntime runs after every deploy, stop, restart and remove (refreshState),
+// so it must answer from the cache and never start a host reading of its own.
+func TestCheckRuntimeNeverReadsTheHost(t *testing.T) {
+	app := newRemovalTestApp(t, reasonProvider{})
+	var reads atomic.Int32
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		reads.Add(1)
+		return winvm.HostFacts{}
+	}}
+	st, err := app.CheckRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Reason != runtime.ReasonWSLMissing {
+		t.Fatalf("CheckRuntime returned %+v", st)
+	}
+	if n := reads.Load(); n != 0 {
+		t.Fatalf("CheckRuntime read the host %d times, want 0", n)
+	}
+}
+
+// A background reading that started first and ends last must not overwrite the
+// reading HostCheck made after it.
+func TestHostFactsKeepTheNewerReading(t *testing.T) {
+	var calls atomic.Int32
+	releaseOld := make(chan struct{})
+	h := &hostFacts{read: func(context.Context) winvm.HostFacts {
+		if calls.Add(1) == 1 {
+			<-releaseOld
+			return winvm.HostFacts{Build: 1}
+		}
+		return winvm.HostFacts{Build: 2}
+	}}
+	oldDone := make(chan winvm.HostFacts)
+	go func() { oldDone <- h.refresh(context.Background()) }()
+	for calls.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
+	if got := h.refresh(context.Background()); got.Build != 2 {
+		t.Fatalf("the newer reading returned build %d", got.Build)
+	}
+	close(releaseOld)
+	if got := <-oldDone; got.Build != 1 {
+		t.Fatalf("the older reading returned build %d, want its own reading", got.Build)
+	}
+	h.mu.Lock()
+	build := h.facts.Build
+	h.mu.Unlock()
+	if build != 2 {
+		t.Fatalf("the older reading overwrote the newer one: cached build %d, want 2", build)
+	}
+}
+
 type reasonProvider struct{ stubProvider }
 
 func (reasonProvider) Status(context.Context) runtime.Status {

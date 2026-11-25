@@ -1388,11 +1388,10 @@ func (a *App) CheckRuntime() (runtime.Status, error) {
 	if err := a.ready(); err != nil {
 		return runtime.Status{}, err
 	}
-	// "Check again" follows a fix the user just made, so the PC is read afresh.
-	a.refreshHostFactsForCheck()
-	// Native availability alongside Docker, so "Check again" can unblock on the
-	// native runtime too when it can run something here. Available still reflects
-	// Docker.
+	// Cache-only: refreshState calls this after every service action, so it must
+	// never wait for a host reading. "Check again" on first run calls HostCheck,
+	// which reads the PC afresh. Native availability rides alongside Docker;
+	// Available still reflects Docker.
 	return a.runtimeStatus(a.catalog.ListVisible()), nil
 }
 

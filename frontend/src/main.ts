@@ -43,6 +43,7 @@ import {
   GetRuntimeGuides,
   GetSettingsState,
   GetUsage,
+  HostCheck,
   IgnoreDrift,
   ListPayouts,
   PreflightService,
@@ -277,7 +278,8 @@ function renderOnboarding(current: AppState) {
     render();
   });
   document.querySelector("#refresh-runtime")?.addEventListener("click", async () => {
-    const updated = await CheckRuntime();
+    // HostCheck reads this PC afresh, so a fix the user just made shows at once.
+    const updated = (await HostCheck()).runtime;
     state = {...current, runtime: updated, guides: await GetRuntimeGuides()};
     render();
   });

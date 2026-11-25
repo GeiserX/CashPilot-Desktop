@@ -55,6 +55,9 @@ type hostFacts struct {
 	at         time.Time
 	refreshing bool
 	read       func(context.Context) winvm.HostFacts
+	// started numbers each reading as it begins; stored is the number of the
+	// reading in facts. A reading that started earlier never replaces a newer one.
+	started, stored uint64
 }
 
 func newHostFacts() *hostFacts {
@@ -72,11 +75,19 @@ func (a *App) hostCache() *hostFacts {
 	return a.host
 }
 
-// refresh reads the PC now and stores the reading.
+// refresh reads the PC now and returns the reading. It stores it only when no
+// reading that started later has been stored already: a slow background reading
+// must not overwrite what HostCheck just read.
 func (h *hostFacts) refresh(ctx context.Context) winvm.HostFacts {
+	h.mu.Lock()
+	h.started++
+	n := h.started
+	h.mu.Unlock()
 	f := h.read(ctx)
 	h.mu.Lock()
-	h.facts, h.at = f, time.Now()
+	if n > h.stored {
+		h.facts, h.at, h.stored = f, time.Now(), n
+	}
 	h.mu.Unlock()
 	return f
 }
@@ -128,12 +139,4 @@ func (a *App) wireHostFacts(ctx context.Context, docker *runtime.DockerProvider)
 	h := a.hostCache()
 	docker.SetHostHints(func() runtime.HostHints { return h.hints(ctx) })
 	h.hints(ctx) // the cache is empty, so this starts the first reading
-}
-
-// refreshHostFactsForCheck reads the PC afresh before "Check again" on Windows, so
-// a fix the user just made shows at once.
-func (a *App) refreshHostFactsForCheck() {
-	if goruntime.GOOS == "windows" {
-		a.hostCache().refresh(a.ctx)
-	}
 }
