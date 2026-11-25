@@ -128,6 +128,9 @@ type FenceStatus struct {
 	Error   string `json:"error"`
 	// Outside names the running earners that can reach the LAN. A redeploy moves them.
 	Outside []string `json:"outside"`
+	// Inside names the running earners behind the fence: on the fenced network and
+	// no other. Set only while the mode is on.
+	Inside []string `json:"inside"`
 	// OutsideStopped names stopped earners outside the fence. They are left alone and
 	// move the next time they are deployed.
 	OutsideStopped []string `json:"outsideStopped"`
@@ -376,6 +379,30 @@ func outsideFence(earners []fenceEarner, onNetwork string, legacy bool) (running
 	sort.Strings(running)
 	sort.Strings(stopped)
 	return running, stopped
+}
+
+// insideFence names the running earners behind the fence: on the network and no
+// other. A tunnel sidecar and a copy that shares its network sit behind the
+// tunnel's own firewall instead, and host or none networking is never fenced, so
+// none of them count.
+func insideFence(earners []fenceEarner, onNetwork string) []string {
+	seen := map[string]bool{}
+	var inside []string
+	for _, e := range earners {
+		if e.Tunnel || !e.Running || !onlyOn(e, onNetwork) {
+			continue
+		}
+		label := e.Slug
+		if label == "" {
+			label = e.Name
+		}
+		if !seen[label] {
+			seen[label] = true
+			inside = append(inside, label)
+		}
+	}
+	sort.Strings(inside)
+	return inside
 }
 
 // onlyOn reports an earner whose only network is the given one. One also attached
@@ -766,6 +793,7 @@ func (f *fence) Status() FenceStatus {
 	s := f.status
 	s.Setting = f.chosen()
 	s.Outside = append([]string(nil), s.Outside...)
+	s.Inside = append([]string(nil), s.Inside...)
 	s.OutsideStopped = append([]string(nil), s.OutsideStopped...)
 	s.Waiting = append([]string(nil), s.Waiting...)
 	return s
@@ -939,14 +967,15 @@ func (f *fence) mode(ctx context.Context, cli fenceAPI) (string, *network.Inspec
 }
 
 func (f *fence) setOutside(mode string, earners []fenceEarner) {
-	var running, stopped []string
+	var running, stopped, inside []string
 	switch mode {
 	case FenceModeLegacy:
 		running, stopped = outsideFence(earners, "", true)
 	case FenceModeOn:
 		running, stopped = outsideFence(earners, FenceNetwork, false)
+		inside = insideFence(earners, FenceNetwork)
 	}
-	f.setStatus(func(s *FenceStatus) { s.Mode, s.Outside, s.OutsideStopped = mode, running, stopped })
+	f.setStatus(func(s *FenceStatus) { s.Mode, s.Outside, s.OutsideStopped, s.Inside = mode, running, stopped, inside })
 }
 
 // networkForDeploy is the network a bridge-networked earner joins: "" for Docker's

@@ -488,13 +488,15 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+// fleetUIURL is the URL workers should use for CASHPILOT_UI_URL: the address the
+// API really listens on (fleetURLFor), or the saved one while it does not run.
 func (a *App) fleetUIURL() string {
-	cfg := a.cfg.Config()
-	host := firstLANAddress()
-	if host == "" {
-		host = "127.0.0.1"
+	listen := a.fleetListenAddr()
+	if listen == "" {
+		cfg := a.cfg.Config()
+		listen = net.JoinHostPort(cfg.FleetBindAddress, fmt.Sprint(cfg.FleetPort))
 	}
-	return fmt.Sprintf("http://%s:%d", host, cfg.FleetPort)
+	return fleetURLFor(listen, firstLANAddress)
 }
 
 func firstLANAddress() string {
