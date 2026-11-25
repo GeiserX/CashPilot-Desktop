@@ -86,7 +86,7 @@ for (const [image, instances] of [["ghcr.io/me/honeygain:1", null], [null, 3]]) 
 {
   const r = recorder(true);
   const out = await runRouteDeploy("honeygain", 3, "", 1, route, r.calls);
-  check("RULE 7: the catalog image, once, deploys through the proxy", out.kind === "routed" && r.log.join(",") === "save,routed 3", r.log.join(","));
+  check("RULE 7: the catalog image, once, deploys through the proxy", out.kind === "routed" && r.log.join(",") === "routed 3", r.log.join(","));
 }
 {
   const r = recorder(false);
@@ -96,12 +96,20 @@ for (const [image, instances] of [["ghcr.io/me/honeygain:1", null], [null, 3]]) 
 {
   const r = recorder(true);
   const out = await runRouteDeploy("honeygain", null, "ghcr.io/me/honeygain:1", 2, route, r.calls);
-  check("RULE 8: a confirmed switch saves, then leaves the route", out.kind === "direct" && r.log.join(",") === "confirm,save,direct true", r.log.join(","));
+  check("RULE 8: a confirmed switch leaves the route", out.kind === "direct" && r.log.join(",") === "confirm,direct true", r.log.join(","));
 }
 {
   const r = recorder(true);
   const out = await runRouteDeploy("storj", null, null, null, route, r.calls);
-  check("RULE 8: an unrouted service deploys without asking", out.kind === "direct" && r.log.join(",") === "save,direct false", r.log.join(","));
+  check("RULE 8: an unrouted service deploys without asking", out.kind === "direct" && r.log.join(",") === "direct false", r.log.join(","));
+}
+
+for (const proxyId of [null, 3]) {
+  const r = recorder(true);
+  const fail = async () => { r.log.push("rejected"); throw new Error("Docker is unavailable"); };
+  r.calls.direct = r.calls.routed = fail;
+  await runRouteDeploy("storj", proxyId, null, null, route, r.calls).catch(() => {});
+  check("failed deploy never calls a separate credential save", r.log.join(",") === "rejected", r.log.join(","));
 }
 
 // A redraw (a currency change) rebuilds the card from state: the owner's unsaved pick wins

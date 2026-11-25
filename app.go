@@ -103,6 +103,9 @@ type App struct {
 	// catalog; see loadCustom.
 	customPending atomic.Bool
 
+	// Keep a service's deploy and its credential write in the same order.
+	deployCredentialsLocks sync.Map // service slug -> *sync.Mutex
+
 	collecting  atomic.Bool
 	schedMu     sync.Mutex
 	schedCancel context.CancelFunc
@@ -1547,11 +1550,34 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 	return deployment, err
 }
 
+func (a *App) lockDeployCredentials(slug string) func() {
+	if _, ok := a.catalog.Get(slug); !ok {
+		return func() {}
+	}
+	entry, _ := a.deployCredentialsLocks.LoadOrStore(slug, &sync.Mutex{})
+	lock := entry.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
+func (a *App) saveDeployedCredentials(slug string, values map[string]string) bool {
+	if len(values) == 0 {
+		return true
+	}
+	if err := a.saveCredentials(slug, values); err != nil {
+		log.Printf("saving credentials after deploying %s: %v", slug, err)
+		a.emitNotice("deploy", "The service deployed, but CashPilot could not save its credentials. Use Save credentials to try again.")
+		return false
+	}
+	return true
+}
+
 func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, nil, err
 	}
 	a.retryCustom()
+	defer a.lockDeployCredentials(slug)()
 	// A custom service deploys its saved definition; the form has no credentials for
 	// it, and nothing typed there or stored under its slug is read, stored or sent
 	// (services.DeployWith).
@@ -1569,9 +1595,6 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 		}
 		creds = stored
 	}
-	// Validate BEFORE persisting, so a rejected deploy never leaves invalid/blank creds
-	// lingering — they could never deploy, yet they would linger and light the
-	// "Configured" badge for a service that cannot actually start.
 	if err := a.services.ValidateDeploy(slug, creds); err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
@@ -1585,23 +1608,19 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	if err := a.refuseWithoutDocker(slug); err != nil {
 		return store.Deployment{}, nil, err
 	}
-	if len(values) > 0 {
-		if err := a.saveCredentials(slug, values); err != nil {
-			return store.Deployment{}, nil, err
-		}
-	}
 	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute, Wallet: wallet})
 	if err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
 	}
+	saved := a.saveDeployedCredentials(slug, values)
 	a.emitEvent("deployment:changed", deployment)
 	a.registerDevice(slug, creds)
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
 	// services with a native collector are worth kicking; the rest would merely
 	// persist a "not ported yet" error row.
-	if a.collectors != nil && a.collectors.Supports(slug) {
+	if saved && a.collectors != nil && a.collectors.Supports(slug) {
 		go a.collectOne(a.ctx, slug)
 	}
 	return deployment, walletResult, nil
@@ -1613,6 +1632,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	if err := a.ready(); err != nil {
 		return services.ProxiedResult{}, err
 	}
+	defer a.lockDeployCredentials(slug)()
 	creds := values
 	if len(creds) == 0 {
 		stored, err := a.store.GetCredentials(slug)
@@ -1628,16 +1648,12 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	if err := a.refuseWithoutDocker(slug); err != nil {
 		return services.ProxiedResult{}, err
 	}
-	if len(values) > 0 {
-		if err := a.saveCredentials(slug, values); err != nil {
-			return services.ProxiedResult{}, err
-		}
-	}
 	result, err := a.services.DeployRouted(a.ctx, slug, creds, proxyID)
 	if err != nil {
 		a.emitError("deploy", err)
 		return services.ProxiedResult{}, err
 	}
+	a.saveDeployedCredentials(slug, values)
 	a.emitEvent("deployment:changed", slug)
 	a.registerDevice(slug, creds)
 	return result, nil

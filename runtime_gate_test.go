@@ -174,10 +174,6 @@ func TestAFailedDeployWithEmptyBoxesStoresNothingAndIsNotConfigured(t *testing.T
 	app := gateApp(t, provider)
 	blanks := map[string]string{"UI_ADDRESS": "", "UDP_PORTS": "", "MYSTNODES_EMAIL": "", "MYSTNODES_PASSWORD": ""}
 
-	// The card saves first, then deploys.
-	if err := app.SaveCredentials("mysterium", blanks); err != nil {
-		t.Fatalf("SaveCredentials: %v", err)
-	}
 	if _, err := app.DeployService("mysterium", blanks, nil, nil); err == nil {
 		t.Fatal("the deploy was meant to fail")
 	}
@@ -206,6 +202,52 @@ func TestAFailedDeployWithEmptyBoxesStoresNothingAndIsNotConfigured(t *testing.T
 	}
 	if got, _ := app.store.GetCredentials("mysterium"); len(got) != 0 {
 		t.Fatalf("emptying every box kept %v", got)
+	}
+}
+
+func TestFailedDeployKeepsPreviouslySavedCredentials(t *testing.T) {
+	provider := &engineProvider{status: runtime.Status{Available: true}, deployErr: errors.New("the runtime refused to start")}
+	app := gateApp(t, provider)
+	app.services.Register(runtime.NativeRuntimeKind, provider)
+	values := map[string]string{"MYSTNODES_EMAIL": "", "MYSTNODES_PASSWORD": "", "UDP_PORTS": "23000:23029"}
+
+	if _, err := app.DeployService("mysterium", values, nil, nil); err == nil {
+		t.Fatal("the deploy was meant to fail")
+	}
+	if got, _ := app.GetCredentials("mysterium"); len(got) != 0 {
+		t.Errorf("failed deploy stored defaults without a login: %v", got)
+	}
+	if slugs := app.store.ListCredentialSlugs(); len(slugs) != 0 {
+		t.Errorf("failed deploy queued collection: %v", slugs)
+	}
+
+	if err := app.SaveCredentials("earnfm", map[string]string{"EARNFM_TOKEN": "saved"}); err != nil {
+		t.Fatal(err)
+	}
+	typed := map[string]string{"EARNFM_TOKEN": "submitted"}
+	if _, err := app.DeployService("earnfm", typed, nil, nil); err == nil {
+		t.Fatal("the direct deploy was meant to fail")
+	}
+	if got, _ := app.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "saved" {
+		t.Errorf("failed direct deploy replaced saved credentials: %v", got)
+	}
+
+	if err := app.SaveCredentials("earnfm", map[string]string{"EARNFM_TOKEN": "saved"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.DeployServiceRouted("earnfm", typed, -1); err == nil {
+		t.Fatal("the routed deploy was meant to fail")
+	}
+	if got, _ := app.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "saved" {
+		t.Errorf("failed routed deploy replaced saved credentials: %v", got)
+	}
+
+	provider.deployErr = nil
+	if _, err := app.DeployService("earnfm", typed, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := app.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "submitted" {
+		t.Errorf("successful deploy did not store the submitted values: %v", got)
 	}
 }
 

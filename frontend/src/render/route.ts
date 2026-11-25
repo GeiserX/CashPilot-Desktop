@@ -86,8 +86,6 @@ export type RouteDeployOutcome<D, R> =
 
 /** The calls a deploy makes; main.ts passes the Wails bindings and window.confirm. */
 export interface RouteDeployCalls<D, R> {
-  /** Saves the typed credentials. */
-  save(): Promise<void>;
   confirm(message: string): boolean;
   routed(proxyId: number): Promise<R>;
   /** leaveRoute is the owner's yes to running a routed service from this computer's own IP. */
@@ -96,9 +94,8 @@ export interface RouteDeployCalls<D, R> {
 
 /**
  * Deploy from the setup card. A routed deploy runs the catalog image once, so a chosen
- * image or more than one copy is refused instead of dropped. Every refusal and the
- * owner's confirmation come before the credentials are saved, so a deploy that does
- * not run changes nothing.
+ * image or more than one copy is refused. The deploy binding saves credentials
+ * when the service deploys successfully.
  */
 export async function runRouteDeploy<D, R>(
   slug: string,
@@ -119,7 +116,6 @@ export async function runRouteDeploy<D, R>(
   if (leaving && !calls.confirm(`${slug} runs through a proxy on this computer. Running it from this computer's own IP shows that IP to the provider. Switch it?`)) {
     return { kind: "cancelled" };
   }
-  await calls.save();
   if (proxyId !== null) return { kind: "routed", result: await calls.routed(proxyId) };
   return { kind: "direct", deployment: await calls.direct(leaving) };
 }

@@ -2559,14 +2559,9 @@ async function runWizardAction(slug: string, action: string) {
         await runWalletDeploy(slug, values, output);
         return;
       }
-      // A custom service has no credentials: it runs its saved definition.
-      const custom = state?.services?.some((service) => service.slug === slug && service.custom);
       const image = readWizardImage(slug);
       const instances = readWizardInstances(slug);
       const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
-        save: async () => {
-          if (!custom) await SaveCredentials(slug, values);
-        },
         confirm: (message) => confirm(message),
         routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
         direct: (leaveRoute) => leaveRoute
@@ -2668,7 +2663,6 @@ async function runWalletDeploy(slug: string, values: Record<string, string>, out
   if (choice.mode === "generate" && output) output.textContent = "Deploying, and creating a new wallet...";
   let result: WalletDeployResult;
   try {
-    await SaveCredentials(slug, values);
     result = await DeployServiceWallet(slug, values, readWizardImage(slug), readWizardInstances(slug), choice);
   } finally {
     choice.phrase = "";
