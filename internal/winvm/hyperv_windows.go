@@ -12,8 +12,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// NewHost is the real Hyper-V, read through PowerShell, with the drop counter's
-// PDH fallback.
+// NewHost is the real Hyper-V, read and guarded through PowerShell, with the
+// drop counter's PDH fallback.
 func NewHost() Host {
 	return &psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx}
 }

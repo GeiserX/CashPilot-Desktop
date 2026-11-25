@@ -93,6 +93,7 @@ type fakeRule struct {
 type fakeVM struct {
 	id, name, state                   string
 	adapter                           *fakeAdapter
+	extra                             []*fakeAdapter // adapters someone added after setup
 	procCount, procMax, procWeight    int
 	memory                            uint64
 	checkpoints, autoStart            string
@@ -208,6 +209,82 @@ func (f *HyperV) ResetCounters() {
 	for _, vm := range f.vms {
 		vm.adapter.out, vm.adapter.in = 0, 0
 	}
+}
+
+// SetNetwork replaces the network the host is on.
+func (f *HyperV) SetNetwork(n winvm.CurrentNetwork) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.network = n
+}
+
+// SetBuild replaces the host's Windows build, as a feature update does.
+func (f *HyperV) SetBuild(build string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.build = build
+}
+
+// AddSwitch adds a switch of a type ("Internal", "External", "Private") with
+// no host side, and returns its ID.
+func (f *HyperV) AddSwitch(name, typ string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	s := &fakeSwitch{id: f.newID(), name: name, typ: typ, bindings: map[string]bool{}, neighbors: map[netip.Addr]string{}}
+	f.switches[s.id] = s
+	return s.id
+}
+
+// AddAdapter adds a second network adapter to a VM, on the named switch, or
+// on none when switchName is empty, as another program could.
+func (f *HyperV) AddAdapter(vmID, switchName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	a := &fakeAdapter{id: strings.ToUpper(f.newID()), mac: "00155D0A00FF"}
+	if switchName != "" {
+		s, ok := f.switchByName(switchName)
+		if !ok {
+			return fmt.Errorf("fake Hyper-V: no switch %q", switchName)
+		}
+		a.switchID = s.id
+	}
+	vm.extra = append(vm.extra, a)
+	return nil
+}
+
+// SetVMState sets a VM's state ("Off", "Running"), as a user or a host
+// restart could. It is not a seam call.
+func (f *HyperV) SetVMState(vmID, state string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	vm.state = state
+	return nil
+}
+
+// SetAdapterSwitch moves the VM's adapter to the named switch, as another
+// program could. It is not a seam call.
+func (f *HyperV) SetAdapterSwitch(vmID, switchName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	s, ok := f.switchByName(switchName)
+	if !ok {
+		return fmt.Errorf("fake Hyper-V: no switch %q", switchName)
+	}
+	vm.adapter.switchID = s.id
+	return nil
 }
 
 // VNICLinkLocal is the IPv6 link-local address of a switch's host vNIC, the
@@ -356,6 +433,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 		return winvm.Plan{}, err
 	}
 	p.SetGCSBaseline(live.GCS)
+	p.HostBuild = live.HostBuild
 	if err := f.Connect(ctx, p.VMID, n.Switch); err != nil {
 		return winvm.Plan{}, err
 	}
@@ -411,14 +489,19 @@ func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID string) (winvm.
 			l.ACLs = append(l.ACLs, r)
 		}
 	}
+	for _, x := range vm.extra {
+		l.Adapters = append(l.Adapters, winvm.LiveAdapter{ID: x.id, SwitchID: x.switchID, MAC: x.mac})
+	}
 	for id, on := range vm.integration {
 		l.Integration[id] = on
 	}
 	if s, ok := f.switchByName(n.Switch); ok {
 		l.SwitchType = s.typ
 		for _, v := range f.vms {
-			if v.adapter.switchID == s.id {
-				l.SwitchPorts++
+			for _, x := range append([]*fakeAdapter{v.adapter}, v.extra...) {
+				if x.switchID == s.id {
+					l.SwitchPorts++
+				}
 			}
 		}
 		l.VNICIfIndex = s.vnicIf
@@ -524,7 +607,7 @@ func (f *HyperV) Usage(_ context.Context, vmID string) (winvm.Usage, error) {
 
 // ---- Guarder ----
 
-// Disconnect takes the VM's adapter off its switch.
+// Disconnect takes every adapter of the VM off its switch.
 func (f *HyperV) Disconnect(_ context.Context, vmID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -536,10 +619,14 @@ func (f *HyperV) Disconnect(_ context.Context, vmID string) error {
 		return err
 	}
 	vm.adapter.switchID = ""
+	for _, x := range vm.extra {
+		x.switchID = ""
+	}
 	return nil
 }
 
-// Connect puts the VM's adapter on the switch with that name.
+// Connect puts the VM's one adapter on the switch with that name. Like the
+// real script, it refuses a VM with more than one adapter.
 func (f *HyperV) Connect(_ context.Context, vmID, switchName string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -549,6 +636,9 @@ func (f *HyperV) Connect(_ context.Context, vmID, switchName string) error {
 	vm, err := f.vm(vmID)
 	if err != nil {
 		return err
+	}
+	if len(vm.extra) > 0 {
+		return errors.New("fake Hyper-V: the VM must have exactly one network adapter")
 	}
 	s, ok := f.switchByName(switchName)
 	if !ok {
