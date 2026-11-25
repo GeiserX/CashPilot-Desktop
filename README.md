@@ -10,7 +10,7 @@
   <a href="https://github.com/GeiserX/CashPilot-Desktop/stargazers"><img src="https://img.shields.io/github/stars/GeiserX/CashPilot-Desktop?style=flat-square&logo=github" alt="Stars"></a>
 </p>
 
-CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Windows and Linux that deploys and monitors passive-income and DePIN services. It packs CashPilot into one app with a system tray and a setup wizard, so you open an app instead of running the CashPilot container and a browser; the earning services themselves still run in Docker or Podman. It runs either as the full CashPilot dashboard or as a Worker Node that joins an existing CashPilot instance.
+CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Windows and Linux that deploys and monitors passive-income and DePIN services. It packs CashPilot into one app with a system tray and a setup wizard, so you open an app instead of running the CashPilot container and a browser; the earning services themselves still run in Docker or Podman. It runs either as the full CashPilot dashboard (Run everything here) or as a box that joins a CashPilot server you already have (Join my CashPilot).
 
 <p align="center">
   <img src="docs/images/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
@@ -48,7 +48,7 @@ Full list, upgrade notes and known limits: [What's new in 1.0](docs/whats-new-1.
 ## Quick start
 
 1. Download the app for your platform from the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest). Docker or Podman must be installed; the wizard helps if it is missing.
-2. Launch the app and pick a mode: CashPilot (full dashboard) or Worker Node (enter your CashPilot address and fleet key).
+2. Launch the app and pick how it runs: **Run everything here** (it collects your earnings and shows the dashboard) or **Join my CashPilot** (paste the block from your CashPilot's Fleet page, Add a box; the app tests the connection before it saves anything).
 3. Browse the service catalog, deploy containers, and watch earnings from the dashboard or the tray.
 
 Platform notes, system requirements and the full walkthrough are in [Getting started](docs/getting-started.md).
@@ -64,7 +64,7 @@ CashPilot bundles a catalog of 41 active passive-income services across multiple
 ## Documentation
 
 - [Getting started](docs/getting-started.md): modes, downloads, system requirements, Desktop vs Web
-- [Configuration](docs/configuration.md): every setting and its default, Worker Node pairing, where secrets live
+- [Configuration](docs/configuration.md): every setting and its default, joining a CashPilot server, where secrets live
 - [Usage](docs/usage.md): a tour of every screen
 - [Activity](docs/activity.md): what the opt-in Activity page reads, keeps and alerts on
 - [Supported services](docs/services.md): bandwidth-sharing explained, per-service limits and payouts, disclosure

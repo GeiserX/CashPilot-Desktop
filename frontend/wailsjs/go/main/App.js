@@ -114,6 +114,10 @@ export function GetLogs(arg1, arg2) {
   return window['go']['main']['App']['GetLogs'](arg1, arg2);
 }
 
+export function GetModeState() {
+  return window['go']['main']['App']['GetModeState']();
+}
+
 export function GetProxiesState() {
   return window['go']['main']['App']['GetProxiesState']();
 }
@@ -148,6 +152,10 @@ export function IgnoreDrift(arg1) {
 
 export function InstallBackgroundHelper() {
   return window['go']['main']['App']['InstallBackgroundHelper']();
+}
+
+export function JoinCashPilot(arg1) {
+  return window['go']['main']['App']['JoinCashPilot'](arg1);
 }
 
 export function ListCustomServices() {
@@ -250,6 +258,10 @@ export function SetActivityEnabled(arg1) {
   return window['go']['main']['App']['SetActivityEnabled'](arg1);
 }
 
+export function StartAsLead() {
+  return window['go']['main']['App']['StartAsLead']();
+}
+
 export function StartProxiedCopy(arg1, arg2) {
   return window['go']['main']['App']['StartProxiedCopy'](arg1, arg2);
 }
@@ -272,6 +284,10 @@ export function StopService(arg1) {
 
 export function StopServiceCopy(arg1, arg2) {
   return window['go']['main']['App']['StopServiceCopy'](arg1, arg2);
+}
+
+export function SwitchToLead() {
+  return window['go']['main']['App']['SwitchToLead']();
 }
 
 export function TestProxy(arg1) {

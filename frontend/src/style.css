@@ -858,3 +858,27 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .activity-dims { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
 .activity-h3 { font-size: 13px; margin: 0 0 6px; }
 .activity-raw { margin-top: 12px; }
+
+/* ----- How this computer runs (render/mode.ts) ----- */
+.mode-choice { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 16px 0 12px; }
+.mode-card {
+  display: grid; gap: 6px; align-content: start; padding: 14px 16px;
+  color: var(--text-primary); text-align: left; background: none;
+  border: 1px solid var(--border-color); border-radius: var(--radius);
+}
+.mode-card:hover, .mode-card:focus-visible { background: var(--bg-hover); border-color: var(--border-light); }
+.mode-card span { color: var(--text-secondary); }
+.mode-card small { color: var(--text-muted); font-size: var(--fs-2); }
+.join-form { display: grid; gap: 12px; max-width: 640px; }
+.join-field { display: grid; gap: 4px; }
+.join-field span { color: var(--text-secondary); font-size: var(--fs-2); }
+.join-field textarea { font-family: var(--font-mono); resize: vertical; }
+.join-typed summary { cursor: pointer; color: var(--text-secondary); font-size: var(--fs-2); margin-bottom: 8px; }
+.join-typed .join-field { margin-bottom: 8px; }
+.join-outcome { display: grid; gap: 4px; padding: 6px 0 6px 10px; border-left: 2px solid var(--warning); text-align: left; }
+.join-outcome.ok { border-left-color: var(--success); }
+.join-outcome span, .join-outcome small { color: var(--text-secondary); }
+.mode-effects { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; color: var(--text-secondary); }
+.pairing-line { margin: 6px 0 0; font-size: var(--fs-2); color: var(--text-secondary); }
+.pairing-line.warn .pairing-error { color: var(--warning); }
+.mode-card-body p { margin: 0 0 6px; }

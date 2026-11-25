@@ -40,6 +40,13 @@ import (
 
 // upstreamState is the pairing loop's stop handle plus the cached credential.
 type upstreamState struct {
+	// run serialises startUpstream and stopUpstream, so the config sync and a
+	// join or a Settings save that restart the loop at the same moment cannot
+	// leave two loops running.
+	run sync.Mutex
+	// linkURL is the address startUpstream last ran for ("" when it found none),
+	// so syncConfig can tell when the saved address moved under it.
+	linkURL   string
 	mu        sync.Mutex
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -65,6 +72,27 @@ type upstreamState struct {
 	// drops its table has rather than lose another line's.
 	fleetExits      []string
 	fleetExitsKnown bool
+	// The pairing's health, for the dashboard and Settings (pairingStatus), so a
+	// failing link shows in the app and not only in the log. statusURL is the
+	// server these belong to: a status from another server is not shown.
+	statusURL   string
+	lastAttempt time.Time
+	lastOK      time.Time
+	lastFailure upstream.Failure
+}
+
+// recordPairing notes the outcome of one heartbeat to serverURL.
+func (a *App) recordPairing(serverURL string, failure upstream.Failure) {
+	now := time.Now().UTC()
+	a.upstream.mu.Lock()
+	defer a.upstream.mu.Unlock()
+	if a.upstream.statusURL != serverURL {
+		a.upstream.statusURL, a.upstream.lastOK = serverURL, time.Time{}
+	}
+	a.upstream.lastAttempt, a.upstream.lastFailure = now, failure
+	if failure.Code == "" {
+		a.upstream.lastOK = now
+	}
 }
 
 // startUpstream begins heartbeating when paired, and is a no-op when not.
@@ -73,28 +101,37 @@ type upstreamState struct {
 // previous loop first, so changing the URL cannot leave two loops reporting
 // under the same identity.
 func (a *App) startUpstream(ctx context.Context) {
-	a.stopUpstream()
+	a.upstream.run.Lock()
+	defer a.upstream.run.Unlock()
+	a.stopUpstreamLocked()
 
 	cfg := a.cfg.Config()
 	serverURL := strings.TrimSpace(cfg.UpstreamURL)
+	a.upstream.mu.Lock()
+	a.upstream.linkURL = serverURL
+	a.upstream.mu.Unlock()
 	if serverURL == "" {
 		return // standalone — the default
 	}
 
+	keychain := upstream.Failure{Code: "keychain", Message: "CashPilot cannot read the saved key from this computer's keychain. Unlock the keychain, then restart CashPilot."}
 	enrol, err := config.UpstreamEnrolmentKey(a.cfg.AppDir())
 	if err != nil {
 		// A locked keychain is NOT "no key". Re-enrolling would orphan this
 		// machine's existing worker identity on the server, so refuse and say so.
 		log.Printf("upstream: cannot read the enrolment key, not pairing: %v", err)
+		a.recordPairing(serverURL, keychain)
 		return
 	}
 	workerKey, err := config.UpstreamWorkerKey(a.cfg.AppDir())
 	if err != nil {
 		log.Printf("upstream: cannot read the worker key, not pairing: %v", err)
+		a.recordPairing(serverURL, keychain)
 		return
 	}
 	if upstream.AuthToken(workerKey, enrol) == "" {
 		log.Printf("upstream: %s is configured but no key is stored; not pairing", serverURL)
+		a.recordPairing(serverURL, upstream.Failure{Code: "no-key", Message: "No key is saved for your CashPilot. In Settings, under How this computer runs, switch to Run everything here and join again."})
 		return
 	}
 
@@ -121,6 +158,18 @@ func (a *App) startUpstream(ctx context.Context) {
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
+				if !a.linkStillSaved(serverURL) {
+					// The other process (the window or the helper) left or moved
+					// this server. Sending now would keep this computer online on
+					// the server's Fleet page, and a refused key would enrol it
+					// again after the user removed it there. The fleet's exits
+					// belong to that server too: drop them now, not at the next
+					// config sync, so the fence never uses another server's list.
+					a.upstream.mu.Lock()
+					a.upstream.fleetExits, a.upstream.fleetExitsKnown = nil, false
+					a.upstream.mu.Unlock()
+					return
+				}
 				a.sendUpstream(loopCtx, client, serverURL, enrol)
 			}
 		}
@@ -129,6 +178,60 @@ func (a *App) startUpstream(ctx context.Context) {
 
 // stopUpstream cancels the pairing loop and waits for it to exit. Idempotent.
 func (a *App) stopUpstream() {
+	a.upstream.run.Lock()
+	defer a.upstream.run.Unlock()
+	a.stopUpstreamLocked()
+}
+
+// linkStillSaved reads the config file again and reports whether it still names
+// serverURL. The window and the helper each run this loop from their own copy
+// of the config, so a join or a switch made in one reaches the other only from
+// the file.
+func (a *App) linkStillSaved(serverURL string) bool {
+	a.refreshConfig()
+	return strings.TrimSpace(a.cfg.Config().UpstreamURL) == serverURL
+}
+
+// configSyncInterval is how often syncConfig looks for a change the other
+// process saved. A var so tests can shorten it.
+var configSyncInterval = time.Minute
+
+// startConfigSync keeps this process in step with a join or a switch saved by
+// the other one: the window and the background helper (--daemon) each run the
+// collection scheduler and the pairing loop from their own copy of the config.
+func (a *App) startConfigSync(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(configSyncInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.syncConfig(ctx)
+			}
+		}
+	}()
+}
+
+// syncConfig reads the config file again and, when the saved server address no
+// longer matches the one the pairing loop runs for, starts or stops the loop to
+// match. Collection needs nothing more: collectAll reads the file at each tick.
+func (a *App) syncConfig(ctx context.Context) {
+	if a.cfg == nil || ctx.Err() != nil {
+		return
+	}
+	a.refreshConfig()
+	want := strings.TrimSpace(a.cfg.Config().UpstreamURL)
+	a.upstream.mu.Lock()
+	have := a.upstream.linkURL
+	a.upstream.mu.Unlock()
+	if want != have {
+		a.startUpstream(ctx)
+	}
+}
+
+func (a *App) stopUpstreamLocked() {
 	a.upstream.mu.Lock()
 	cancel, done := a.upstream.cancel, a.upstream.done
 	a.upstream.cancel, a.upstream.done = nil, nil
@@ -193,9 +296,11 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		// server must not stop Desktop from working standalone.
 		if ctx.Err() == nil {
 			log.Printf("upstream: %v", err)
+			a.recordPairing(serverURL, upstream.Explain(err, upstream.Host(serverURL), payload.Name))
 		}
 		return
 	}
+	a.recordPairing(serverURL, upstream.Failure{})
 	// Apply the fleet's exits even if the keychain cannot save an issued key.
 	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
 		a.fence.ReconcileFence(ctx)
