@@ -115,6 +115,39 @@ type AppConfig struct {
 	// any fence. The wizard shows the install steps only while the recorded text
 	// version matches the disclosure it shows now. Revoking deletes the entry.
 	SessionConsent map[string]SessionConsent `json:"sessionConsent,omitempty"`
+	// Mode is how this computer runs: ModeLead ("Run everything here": it collects
+	// the earnings, shows the dashboard and runs its earners) or ModeFollower ("Join
+	// my CashPilot": it runs earners for a CashPilot server, which collects and shows
+	// the earnings). Empty only on a new install whose first run has not asked yet.
+	// An install from before this field gets it once, from its saved state
+	// (inferMode), and never sees the first run again.
+	Mode string `json:"mode,omitempty"`
+}
+
+// The two values of AppConfig.Mode.
+const (
+	ModeLead     = "lead"
+	ModeFollower = "follower"
+)
+
+// inferMode gives an install from before AppConfig.Mode its mode, from what it
+// already has: a saved server address means it reports to a CashPilot, so it is
+// a follower; an install that finished its first run without one is a lead. A
+// new install that has not finished its first run keeps "" so the first run asks.
+// It reports whether it set anything, so load can persist the answer once.
+func inferMode(cfg *AppConfig) bool {
+	if cfg.Mode != "" {
+		return false
+	}
+	switch {
+	case strings.TrimSpace(cfg.UpstreamURL) != "":
+		cfg.Mode = ModeFollower
+	case cfg.FirstRunComplete:
+		cfg.Mode = ModeLead
+	default:
+		return false
+	}
+	return true
 }
 
 // SessionConsent is one accepted disclosure: which text the user read, and when.
@@ -267,6 +300,13 @@ func (m *Manager) load() error {
 		return err
 	}
 	m.cfg = applyDefaults(cfg)
+	if inferMode(&m.cfg) {
+		// Written once, so the answer holds even if the address is cleared later
+		// by hand: from now on only the user's own switch changes the mode.
+		if err := m.persist(m.cfg); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -629,5 +630,69 @@ func TestSessionConsentAbsentByDefault(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(dir, "config.json"))
 	if bytes.Contains(raw, []byte("sessionConsent")) {
 		t.Errorf("an empty consent map was written:\n%s", raw)
+	}
+}
+
+// TestModeIsInferredOnceForAnExistingInstall: an install from before the mode
+// existed must not see the first run again, and must keep doing what it did. A
+// saved server address means it reported to a CashPilot (follower); a finished
+// first run without one means it ran everything itself (lead). A new install
+// keeps no mode, so its first run asks. The answer is written to disk once.
+func TestModeIsInferredOnceForAnExistingInstall(t *testing.T) {
+	cases := []struct {
+		name string
+		disk string // config.json before the upgrade; "" = no file (new install)
+		want string
+	}{
+		{"new install", "", ""},
+		{"first run not finished, no address", `{"firstRunComplete":false}`, ""},
+		{"finished, no address", `{"firstRunComplete":true}`, ModeLead},
+		{"finished, address saved", `{"firstRunComplete":true,"upstreamUrl":"https://cp.example"}`, ModeFollower},
+		{"address saved before the first run finished", `{"upstreamUrl":"http://192.168.1.5:8080"}`, ModeFollower},
+		{"blank address is no address", `{"firstRunComplete":true,"upstreamUrl":"  "}`, ModeLead},
+		{"mode already chosen wins", `{"firstRunComplete":true,"upstreamUrl":"https://cp.example","mode":"lead"}`, ModeLead},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", dir)
+			if tc.disk != "" {
+				if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(tc.disk), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m, err := NewManager()
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			if got := m.Config().Mode; got != tc.want {
+				t.Fatalf("mode = %q, want %q", got, tc.want)
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var onDisk AppConfig
+			if err := json.Unmarshal(raw, &onDisk); err != nil {
+				t.Fatal(err)
+			}
+			if onDisk.Mode != tc.want {
+				t.Fatalf("mode on disk = %q, want %q: the inferred mode was not written once", onDisk.Mode, tc.want)
+			}
+			// Clearing the address by hand afterwards must not flip the mode back:
+			// only the user's own switch changes it.
+			if tc.want == ModeFollower {
+				if err := m.Update(func(c *AppConfig) { c.UpstreamURL = "" }); err != nil {
+					t.Fatal(err)
+				}
+				again, err := NewManager()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := again.Config().Mode; got != ModeFollower {
+					t.Fatalf("mode changed on a later start: %q", got)
+				}
+			}
+		})
 	}
 }

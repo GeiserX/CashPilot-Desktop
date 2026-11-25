@@ -65,6 +65,27 @@ type upstreamState struct {
 	// drops its table has rather than lose another line's.
 	fleetExits      []string
 	fleetExitsKnown bool
+	// The pairing's health, for the dashboard and Settings (pairingStatus), so a
+	// failing link shows in the app and not only in the log. statusURL is the
+	// server these belong to: a status from another server is not shown.
+	statusURL   string
+	lastAttempt time.Time
+	lastOK      time.Time
+	lastFailure upstream.Failure
+}
+
+// recordPairing notes the outcome of one heartbeat to serverURL.
+func (a *App) recordPairing(serverURL string, failure upstream.Failure) {
+	now := time.Now().UTC()
+	a.upstream.mu.Lock()
+	defer a.upstream.mu.Unlock()
+	if a.upstream.statusURL != serverURL {
+		a.upstream.statusURL, a.upstream.lastOK = serverURL, time.Time{}
+	}
+	a.upstream.lastAttempt, a.upstream.lastFailure = now, failure
+	if failure.Code == "" {
+		a.upstream.lastOK = now
+	}
 }
 
 // startUpstream begins heartbeating when paired, and is a no-op when not.
@@ -81,20 +102,24 @@ func (a *App) startUpstream(ctx context.Context) {
 		return // standalone — the default
 	}
 
+	keychain := upstream.Failure{Code: "keychain", Message: "CashPilot cannot read the saved key from this computer's keychain. Unlock the keychain, then restart CashPilot."}
 	enrol, err := config.UpstreamEnrolmentKey(a.cfg.AppDir())
 	if err != nil {
 		// A locked keychain is NOT "no key". Re-enrolling would orphan this
 		// machine's existing worker identity on the server, so refuse and say so.
 		log.Printf("upstream: cannot read the enrolment key, not pairing: %v", err)
+		a.recordPairing(serverURL, keychain)
 		return
 	}
 	workerKey, err := config.UpstreamWorkerKey(a.cfg.AppDir())
 	if err != nil {
 		log.Printf("upstream: cannot read the worker key, not pairing: %v", err)
+		a.recordPairing(serverURL, keychain)
 		return
 	}
 	if upstream.AuthToken(workerKey, enrol) == "" {
 		log.Printf("upstream: %s is configured but no key is stored; not pairing", serverURL)
+		a.recordPairing(serverURL, upstream.Failure{Code: "no-key", Message: "No key is saved for your CashPilot. In Settings, under How this computer runs, switch to Run everything here and join again."})
 		return
 	}
 
@@ -193,9 +218,11 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		// server must not stop Desktop from working standalone.
 		if ctx.Err() == nil {
 			log.Printf("upstream: %v", err)
+			a.recordPairing(serverURL, upstream.Explain(err, upstream.Host(serverURL), payload.Name))
 		}
 		return
 	}
+	a.recordPairing(serverURL, upstream.Failure{})
 	// Apply the fleet's exits even if the keychain cannot save an issued key.
 	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
 		a.fence.ReconcileFence(ctx)

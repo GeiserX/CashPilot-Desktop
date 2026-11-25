@@ -289,14 +289,41 @@ func (c *Client) Send(ctx context.Context, serverURL, token string, p Payload) (
 		// The status is carried in the message because 401 and 422 mean very
 		// different things to a user: the first is a wrong or revoked key, the
 		// second is a payload this server's version does not accept.
-		if resp.StatusCode == http.StatusUnauthorized {
-			return nil, fmt.Errorf("%w: server returned %d: %s", ErrUnauthorized, resp.StatusCode, strings.TrimSpace(string(raw)))
-		}
-		return nil, fmt.Errorf("upstream: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(raw)), JSON: json.Valid(raw)}
 	}
 	var out Response
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("upstream: decoding response: %w", err)
+		return nil, fmt.Errorf("%w: decoding response: %v", ErrNotCashPilot, err)
 	}
 	return &out, nil
 }
+
+// StatusError is a heartbeat the server answered with a status other than 200.
+// The join screen reads Code and Body to tell the user what went wrong in plain
+// words (Explain); a 401 also matches ErrUnauthorized, which the pairing loop
+// uses to enrol again.
+type StatusError struct {
+	Code int
+	Body string
+	// JSON is true when the body was JSON. A CashPilot server answers in JSON even
+	// for a route it does not have; a web page that is not CashPilot answers HTML.
+	JSON bool
+}
+
+func (e *StatusError) Error() string {
+	if e.Code == http.StatusUnauthorized {
+		return fmt.Sprintf("%v: server returned %d: %s", ErrUnauthorized, e.Code, e.Body)
+	}
+	return fmt.Sprintf("upstream: server returned %d: %s", e.Code, e.Body)
+}
+
+func (e *StatusError) Unwrap() error {
+	if e.Code == http.StatusUnauthorized {
+		return ErrUnauthorized
+	}
+	return nil
+}
+
+// ErrNotCashPilot is wrapped by Send when the server answered 200 with a body
+// that is not a heartbeat reply: the address is some other web service.
+var ErrNotCashPilot = errors.New("upstream: the reply is not from a CashPilot server")

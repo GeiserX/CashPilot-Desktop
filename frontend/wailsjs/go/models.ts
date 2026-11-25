@@ -210,6 +210,22 @@ export namespace catalog {
 	        this.cpuShares = source["cpuShares"];
 	    }
 	}
+	export class TrafficStall {
+	    share?: number;
+	    peerMinMbPerHour?: number;
+	    hours?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TrafficStall(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.share = source["share"];
+	        this.peerMinMbPerHour = source["peerMinMbPerHour"];
+	        this.hours = source["hours"];
+	    }
+	}
 	export class HealthSignal {
 	    pattern: string;
 	    means: string;
@@ -329,6 +345,7 @@ export namespace catalog {
 	    devices: string[];
 	    healthSignals: HealthSignal[];
 	    healthProbe?: Record<string, any>;
+	    trafficStall?: TrafficStall;
 	    advertisedAddressEnv: string;
 	    privileged: boolean;
 	    stopTimeout: number;
@@ -362,6 +379,7 @@ export namespace catalog {
 	        this.devices = source["devices"];
 	        this.healthSignals = this.convertValues(source["healthSignals"], HealthSignal);
 	        this.healthProbe = source["healthProbe"];
+	        this.trafficStall = this.convertValues(source["trafficStall"], TrafficStall);
 	        this.advertisedAddressEnv = source["advertisedAddressEnv"];
 	        this.privileged = source["privileged"];
 	        this.stopTimeout = source["stopTimeout"];
@@ -471,6 +489,77 @@ export namespace catalog {
 		}
 	}
 	
+	
+	export class ObligationWhen {
+	    date?: string;
+	    every?: string;
+	    on?: number;
+	    dueDays?: number;
+	    since?: string;
+	    days?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ObligationWhen(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.every = source["every"];
+	        this.on = source["on"];
+	        this.dueDays = source["dueDays"];
+	        this.since = source["since"];
+	        this.days = source["days"];
+	    }
+	}
+	export class Obligation {
+	    id: string;
+	    action: string;
+	    title: string;
+	    loss: string;
+	    how?: string;
+	    url?: string;
+	    when: ObligationWhen;
+	    warnDays?: number[];
+	    source: string;
+	    checked: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Obligation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.action = source["action"];
+	        this.title = source["title"];
+	        this.loss = source["loss"];
+	        this.how = source["how"];
+	        this.url = source["url"];
+	        this.when = this.convertValues(source["when"], ObligationWhen);
+	        this.warnDays = source["warnDays"];
+	        this.source = source["source"];
+	        this.checked = source["checked"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class Payment {
 	    methods: string[];
@@ -840,6 +929,7 @@ export namespace catalog {
 		}
 	}
 	
+	
 
 }
 
@@ -926,6 +1016,7 @@ export namespace config {
 	    isolationOn?: boolean;
 	    activityEnabled?: boolean;
 	    sessionConsent?: Record<string, SessionConsent>;
+	    mode?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -955,6 +1046,7 @@ export namespace config {
 	        this.isolationOn = source["isolationOn"];
 	        this.activityEnabled = source["activityEnabled"];
 	        this.sessionConsent = this.convertValues(source["sessionConsent"], SessionConsent, true);
+	        this.mode = source["mode"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1398,6 +1490,26 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class PairingStatus {
+	    serverUrl: string;
+	    lastHeartbeat: string;
+	    lastAttempt: string;
+	    lastError: string;
+	    errorCode: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PairingStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.serverUrl = source["serverUrl"];
+	        this.lastHeartbeat = source["lastHeartbeat"];
+	        this.lastAttempt = source["lastAttempt"];
+	        this.lastError = source["lastError"];
+	        this.errorCode = source["errorCode"];
+	    }
+	}
 	export class FleetViewPlatform {
 	    slug: string;
 	    usd?: number;
@@ -1647,6 +1759,7 @@ export namespace main {
 	    producerStates: Record<string, health.Report>;
 	    serviceDetails: Record<string, string>;
 	    fleet?: FleetView;
+	    pairing?: PairingStatus;
 	    hostname: string;
 	    collectorFields: Record<string, Array<collectors.Field>>;
 	    scaling: Record<string, services.ScalingLimit>;
@@ -1678,6 +1791,7 @@ export namespace main {
 	        this.producerStates = this.convertValues(source["producerStates"], health.Report, true);
 	        this.serviceDetails = source["serviceDetails"];
 	        this.fleet = this.convertValues(source["fleet"], FleetView);
+	        this.pairing = this.convertValues(source["pairing"], PairingStatus);
 	        this.hostname = source["hostname"];
 	        this.collectorFields = this.convertValues(source["collectorFields"], Array<collectors.Field>, true);
 	        this.scaling = this.convertValues(source["scaling"], services.ScalingLimit, true);
@@ -1921,6 +2035,103 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class JoinRequest {
+	    block: string;
+	    url: string;
+	    key: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new JoinRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.block = source["block"];
+	        this.url = source["url"];
+	        this.key = source["key"];
+	    }
+	}
+	export class JoinResult {
+	    ok: boolean;
+	    code: string;
+	    message: string;
+	    serverUrl: string;
+	    serverHost: string;
+	    name: string;
+	    workerId: number;
+	    hubWasOn: boolean;
+	    hubDevices: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new JoinResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.code = source["code"];
+	        this.message = source["message"];
+	        this.serverUrl = source["serverUrl"];
+	        this.serverHost = source["serverHost"];
+	        this.name = source["name"];
+	        this.workerId = source["workerId"];
+	        this.hubWasOn = source["hubWasOn"];
+	        this.hubDevices = source["hubDevices"];
+	    }
+	}
+	export class LeaveResult {
+	    serverUrl: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LeaveResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.serverUrl = source["serverUrl"];
+	        this.name = source["name"];
+	    }
+	}
+	export class ModeState {
+	    mode: string;
+	    name: string;
+	    pairing?: PairingStatus;
+	    hubOn: boolean;
+	    hubDevices: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ModeState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.name = source["name"];
+	        this.pairing = this.convertValues(source["pairing"], PairingStatus);
+	        this.hubOn = source["hubOn"];
+	        this.hubDevices = source["hubDevices"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	
 	
 	export class ProxyCandidate {
