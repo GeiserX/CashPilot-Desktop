@@ -88,12 +88,13 @@ export class DockerGuide {
 
   private async readChecklist(afterWait = false): Promise<void> {
     this.model.checking = true;
-    this.model.checkFailed = false;
     this.render();
     try {
       const result = await this.deps.hostCheck();
-      this.applyReading(result);
+      this.model.checkFailed = false;
+      this.applyReading(result, afterWait);
     } catch (error) {
+      this.model.steps = null;
       this.model.checkFailed = true;
       this.deps.failed?.(error);
     } finally {
@@ -103,11 +104,17 @@ export class DockerGuide {
     }
   }
 
-  private applyReading(result: HostCheckResult): void {
+  private applyReading(result: HostCheckResult, afterWait: boolean): void {
     this.model.steps = result.steps ?? [];
     this.model.runtime = result.runtime;
-    if (this.model.waitResult === "timeout" && engineAnswers(this.model.steps)) {
+    const { steps, waitResult } = this.model;
+    const answers = engineAnswers(steps);
+    if (waitResult === "timeout" && answers) {
       this.model.waitResult = "checklist-answered";
+    } else if (!answers && (waitResult === "answered" || waitResult === "checklist-answered")) {
+      // A fresh pipe answer still counts if the checklist at the end of the wait could not read the row.
+      const inconclusive = afterWait && steps.some((step) => step.id === "a6" && step.state === "unknown");
+      if (!inconclusive) this.model.waitResult = "";
     }
     if (setupFinished(result)) this.model.resume = null;
     this.deps.checked?.(result);

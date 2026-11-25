@@ -33,7 +33,7 @@ export type GuideView =
 export const START_LIMIT_SECONDS = 120;
 
 export interface GuideModel {
-  /** The rows; null before the first reading lands. */
+  /** Rows from the latest check. Null before a result or after a failed check. */
   steps: GuideStep[] | null;
   runtime: Pick<RuntimeStatus, "available" | "reason" | "nativeServices">;
   view: GuideView;
@@ -43,7 +43,7 @@ export interface GuideModel {
   checkFailed?: boolean;
   /** Seconds since Start Docker Desktop while waiting for its engine; null when not waiting. */
   waiting: number | null;
-  /** How the last wait ended, including an answer found by a checklist read after the deadline. */
+  /** How the last wait ended. A later checklist read can supersede its engine answer. */
   waitResult: "" | "answered" | "checklist-answered" | "timeout" | "failed";
   /** Set when the app opened on the checklist after a restart. */
   resume: SetupResumeView | null;
@@ -105,11 +105,13 @@ export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-g
 }
 
 /** The progress line while waiting for Docker's engine, and how the wait ended. */
-export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult">): string {
+export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "checkFailed">): string {
   let text = "";
   let tone = "";
   if (model.waiting !== null) {
     text = `Waiting for Docker's engine to start: ${Math.min(model.waiting, START_LIMIT_SECONDS)} s of ${START_LIMIT_SECONDS / 60} min.`;
+  } else if (model.checkFailed && (model.waitResult === "answered" || model.waitResult === "checklist-answered")) {
+    text = "CashPilot connected to Docker Desktop earlier.";
   } else if (model.waitResult === "answered") {
     text = "Docker's engine answered.";
     tone = "ok";
@@ -210,11 +212,14 @@ function resumeBanner(resume: SetupResumeView | null): string {
 }
 
 function summary(model: GuideModel): string {
+  if (model.checkFailed) {
+    return `<p class="docker-guide-summary">Docker Desktop's current status is unknown.</p>`;
+  }
   if (model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
     return `<p class="docker-guide-summary ok">Docker Desktop is ready on this PC.</p>`;
   }
   if (!model.steps) {
-    return model.checkFailed ? "" : `<p class="docker-guide-summary">Checking this PC…</p>`;
+    return `<p class="docker-guide-summary">Checking this PC…</p>`;
   }
   // A note is advice that blocks nothing, so it is not a step to finish.
   const steps = model.steps.filter((s) => s.state !== "note");

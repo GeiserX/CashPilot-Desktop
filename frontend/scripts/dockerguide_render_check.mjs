@@ -276,7 +276,8 @@ for (const rejects of [false, true]) {
   const outcome = rejects ? "the checklist rejects" : "the running row is unknown";
   const message = text(waitLine(g.model));
   check(`RULE 8 (wiring): the first pipe answer ends the wait when ${outcome}`, d.now() === 3000 && reads === 1 && g.model.waiting === null);
-  check(`RULE 8 (wiring): the pipe answer is shown when ${outcome}`, message.includes("Docker's engine answered") && !message.includes("did not answer"), message);
+  const confirmation = rejects ? "CashPilot connected to Docker Desktop earlier." : "Docker's engine answered.";
+  check(`RULE 8 (wiring): the pipe answer is shown when ${outcome}`, message.includes(confirmation) && !message.includes("did not answer"), message);
   if (rejects) {
     check("RULE 8 (wiring): a rejected checklist read is reported separately", reported === error && text(h.innerHTML).includes("could not refresh the Docker checklist"), text(h.innerHTML));
     await g.check();
@@ -297,23 +298,45 @@ for (const rejects of [false, true]) {
   check("RULE 8 (wiring): the full checklist is read once after a timeout", calls.hostCheck === 1, `${calls.hostCheck} HostCheck calls`);
 }
 
-{
+for (const retryFails of [true, false]) {
   const confirmation = "Docker's engine answered during the checklist check.";
-  const running = { ...steps.find((step) => step.id === "a6"), state: "done", text: "Docker Desktop is running." };
+  const readySummary = "Docker Desktop is ready on this PC.";
+  const running = { id: "a6", title: "Docker Desktop running", state: "done", text: "Docker's engine answers.", action: none };
+  const linux = { id: "a9", title: "Linux containers", state: "done", text: "Docker runs Linux containers.", action: none };
+  const stopped = { ...running, state: "needs-you", text: "Docker Desktop is not running.", action: { kind: "start-docker", label: "Start Docker Desktop" } };
+  const runtimeUp = { ...runtimeDown, available: true, reason: "running" };
+  const error = new Error("HostCheck unavailable");
   let reads = 0;
+  let reported;
   const { deps: d } = deps({
     hostCheck: async () => {
-      if (++reads === 1) return { runtime: runtimeDown, steps: [running] };
-      throw new Error("HostCheck unavailable");
+      if (++reads === 1) return { runtime: runtimeUp, steps: [running, linux] };
+      if (retryFails) throw error;
+      return { runtime: runtimeDown, steps: [stopped] };
     },
+    failed: (err) => { reported = err; },
   });
   const h = holder();
   const g = new DockerGuide(h, d, { runtime: runtimeDown, resume: null, result: { runtime: runtimeDown, steps } });
   await g.startDocker();
-  check("RULE 8 (wiring): the deadline checklist can confirm the engine answered", d.now() === START_LIMIT_SECONDS * 1000 && text(h.innerHTML).includes(confirmation), text(h.innerHTML));
+  const beforeRetry = text(h.innerHTML);
+  check("RULE 8 (wiring): the deadline checklist can confirm readiness",
+    d.now() === START_LIMIT_SECONDS * 1000 && beforeRetry.includes(confirmation) && beforeRetry.includes(readySummary), beforeRetry);
   await g.check();
   const message = text(h.innerHTML);
-  check("RULE 8 (wiring): failed Check again keeps the deadline confirmation and reports the read error", reads === 2 && message.includes(confirmation) && message.includes("could not refresh the Docker checklist") && !message.includes("may show its terms"), message);
+  const runningRow = rows(h.innerHTML).find((row) => row.id === "a6");
+  const currentReadiness = message.includes(readySummary) || h.innerHTML.includes('class="docker-guide-wait ok"') || runningRow?.state === "done";
+  if (retryFails) {
+    check("RULE 8 (wiring): after readiness, a failed retry shows unknown status and an earlier connection",
+      reads === 2 && reported === error && message.includes("Docker Desktop's current status is unknown.") &&
+      message.includes("CashPilot connected to Docker Desktop earlier.") && message.includes("could not refresh the Docker checklist") &&
+      !message.includes(confirmation) && !message.includes("may show its terms") && !currentReadiness, message);
+  } else {
+    check("RULE 8 (wiring): after readiness, a retry that finds Docker stopped clears the confirmation",
+      reads === 2 && runningRow?.state === "needs-you" && rowLabel(runningRow) === "Needs you" &&
+      message.includes("Docker Desktop is not running.") && !message.includes(confirmation) &&
+      !message.includes("could not refresh the Docker checklist") && !currentReadiness, message);
+  }
 }
 
 {
