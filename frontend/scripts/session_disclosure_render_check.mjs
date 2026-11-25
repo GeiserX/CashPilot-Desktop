@@ -24,6 +24,7 @@
 //   9. THE WIRING GATES THE ACCEPT (src/render/session_wire.ts), run against the real
 //      markup in a small element tree: the button waits for the tick, a click with no
 //      tick does nothing, and accept sends the version of the variant shown.
+//  10. CONSENT CALLS RUN ONE AT A TIME, so an older answer never lands last.
 //
 //   node scripts/session_disclosure_render_check.mjs      # against ./.harness-build
 
@@ -38,7 +39,7 @@ import {
   renderSessionSlot,
   sessionDisclosureVersion,
 } from "../.harness-build/render/session.js";
-import { wireSessionConsent } from "../.harness-build/render/session_wire.js";
+import { oneAtATime, wireSessionConsent } from "../.harness-build/render/session_wire.js";
 
 // The SHA-256 of the visible disclosure text, per version (RULE 7). Add a line when
 // you bump SESSION_DISCLOSURE_VERSION; never change the hash of a version that
@@ -329,6 +330,29 @@ function wired(html) {
   const settings = wired(renderSessionConsentCard({ wipter: current, gone: older }, catalog));
   settings.dom.querySelector('[data-session-revoke="gone"]').fire("click");
   check("RULE 9: Withdraw in Settings withdraws that app, one the catalog dropped included", JSON.stringify(settings.calls.revoke) === JSON.stringify(["gone"]), JSON.stringify(settings.calls));
+}
+
+// ---------------------------------------------------------------------------
+// RULE 10: consent calls run one at a time.
+// ---------------------------------------------------------------------------
+{
+  const queue = oneAtATime();
+  const log = [];
+  let releaseFirst;
+  const first = queue(() => new Promise((resolve) => { log.push("first starts"); releaseFirst = () => { log.push("first ends"); resolve(); }; }));
+  const second = queue(async () => { log.push("second starts"); });
+  await Promise.resolve();
+  await Promise.resolve();
+  check("RULE 10: the second call waits while the first is in flight", JSON.stringify(log) === JSON.stringify(["first starts"]), JSON.stringify(log));
+  releaseFirst();
+  await first;
+  await second;
+  check("RULE 10: the second call runs after the first ends", JSON.stringify(log) === JSON.stringify(["first starts", "first ends", "second starts"]), JSON.stringify(log));
+  const failing = queue(async () => { throw new Error("backend down"); });
+  const after = queue(async () => { log.push("after a failure"); });
+  await failing.catch(() => {});
+  await after.catch(() => {});
+  check("RULE 10: a failed call does not stop the next one", log.at(-1) === "after a failure", JSON.stringify(log));
 }
 
 if (failures > 0) {

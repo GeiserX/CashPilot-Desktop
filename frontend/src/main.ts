@@ -87,7 +87,7 @@ import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
 import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
-import { wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
+import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
@@ -1103,6 +1103,9 @@ async function renderSettings(current: AppState) {
     showErrorToast({scope: "restore", error: String(error)});
   }
   if (request !== settingsRequest || activeView !== "settings") return;
+  // The consents are read from the live state, not from `current`: a Withdraw
+  // during the awaits above already changed them, and drawing the older map would
+  // bring the withdrawn row back.
   root.innerHTML = `
     ${titlebar()}
     <div class="app-layout">
@@ -1145,7 +1148,7 @@ async function renderSettings(current: AppState) {
             </div>
           </section>
 
-          ${renderSessionConsentCard(current.config?.sessionConsent, current.services)}
+          ${renderSessionConsentCard((state ?? current).config?.sessionConsent, current.services)}
 
           ${renderRestoreCard(unfinished)}
 
@@ -1861,10 +1864,13 @@ function renderSetupWizard(current: AppState) {
 // would drop credentials typed in the other cards but not saved yet.
 function wireSessionConsent(scope: ParentNode) {
   wireSessionConsentGate(scope, {
-    accept: (slug, textVersion) => void acceptSessionRisk(slug, textVersion),
-    revoke: (slug) => void revokeSessionRisk(slug),
+    accept: (slug, textVersion) => queueSessionConsent(() => acceptSessionRisk(slug, textVersion)),
+    revoke: (slug) => queueSessionConsent(() => revokeSessionRisk(slug)),
   });
 }
+
+// Accept and Withdraw run one after the other (render/session_wire.ts, oneAtATime).
+const queueSessionConsent = oneAtATime();
 
 async function acceptSessionRisk(slug: string, textVersion: string) {
   try {

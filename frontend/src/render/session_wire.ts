@@ -37,3 +37,18 @@ export function wireSessionConsent(scope: ParentNode, actions: SessionConsentAct
     button.addEventListener("click", () => actions.revoke(button.dataset.sessionRevoke || ""));
   });
 }
+
+/**
+ * A queue that runs each call after the one before it has finished.
+ *
+ * Each Accept or Withdraw returns the whole consent map, and the app replaces its
+ * copy with it. Two calls in flight could answer out of order, and the older map
+ * would undo the newer change on screen. A call that fails does not stop the next.
+ */
+export function oneAtATime(): (call: () => Promise<void>) => Promise<void> {
+  let last: Promise<void> = Promise.resolve();
+  return (call) => {
+    last = last.then(call, call);
+    return last;
+  };
+}
