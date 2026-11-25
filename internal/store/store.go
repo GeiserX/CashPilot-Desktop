@@ -45,9 +45,15 @@ type Deployment struct {
 	// Instances is how many copies of the service the user asked this machine to
 	// run (1 for most). Like CustomImage, only a deploy writes it (SetInstances), so
 	// the refresh cannot reset it, and a redeploy that does not ask keeps it.
-	Instances int    `json:"instances"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	Instances int `json:"instances"`
+	// WalletAddress is the public address of the wallet a service keeps in a seed
+	// file (Sia's hostd), "" when it has none or it is not known yet. Only a deploy
+	// writes it (SetWalletAddress), as with CustomImage. The phrase that opens the
+	// wallet is never stored anywhere in Desktop; this is the address funds are sent
+	// to, which is public.
+	WalletAddress string `json:"walletAddress"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 type EarningsRecord struct {
@@ -368,6 +374,14 @@ func (s *Store) SetInstances(slug string, n int) error {
 	return err
 }
 
+// SetWalletAddress records the public address of the wallet a deploy of slug left in
+// its seed file. Like SetCustomImage it is kept with the deployment row, so the
+// refresh that rewrites every row on a timer cannot drop it.
+func (s *Store) SetWalletAddress(slug, address string) error {
+	_, err := s.execWrite(`UPDATE deployments SET wallet_address = ? WHERE slug = ?`, address, slug)
+	return err
+}
+
 func (s *Store) DeleteDeployment(slug string) error {
 	_, err := s.execWrite(`DELETE FROM deployments WHERE slug = ?`, slug)
 	return err
@@ -375,7 +389,7 @@ func (s *Store) DeleteDeployment(slug string) error {
 
 func (s *Store) GetDeployment(slug string) (Deployment, bool, error) {
 	row := s.db.QueryRow(`
-		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, instances, created_at, updated_at
+		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, instances, wallet_address, created_at, updated_at
 		FROM deployments WHERE slug = ?
 	`, slug)
 	dep, err := scanDeployment(row)
@@ -406,7 +420,7 @@ func (s *Store) Deployments() ([]Deployment, error) {
 // unless strict.
 func (s *Store) readDeployments(strict bool) ([]Deployment, error) {
 	rows, err := s.db.Query(`
-		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, instances, created_at, updated_at
+		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, instances, wallet_address, created_at, updated_at
 		FROM deployments ORDER BY slug
 	`)
 	if err != nil {
@@ -962,7 +976,7 @@ type scanner interface {
 
 func scanDeployment(row scanner) (Deployment, error) {
 	var dep Deployment
-	err := row.Scan(&dep.Slug, &dep.ContainerID, &dep.Name, &dep.Image, &dep.Status, &dep.Runtime, &dep.CPUPercent, &dep.MemoryMB, &dep.CustomImage, &dep.Instances, &dep.CreatedAt, &dep.UpdatedAt)
+	err := row.Scan(&dep.Slug, &dep.ContainerID, &dep.Name, &dep.Image, &dep.Status, &dep.Runtime, &dep.CPUPercent, &dep.MemoryMB, &dep.CustomImage, &dep.Instances, &dep.WalletAddress, &dep.CreatedAt, &dep.UpdatedAt)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -994,6 +1008,7 @@ func (s *Store) migrate() error {
 			memory_mb REAL NOT NULL DEFAULT 0,
 			custom_image TEXT NOT NULL DEFAULT '',
 			instances INTEGER NOT NULL DEFAULT 1,
+			wallet_address TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
@@ -1064,6 +1079,7 @@ func (s *Store) migrate() error {
 		{"deployments", "instances", "ALTER TABLE deployments ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"},
 		{"earnings", "error_kind", "ALTER TABLE earnings ADD COLUMN error_kind TEXT NOT NULL DEFAULT ''"},
 		{"fleet_devices", "egress_ip", "ALTER TABLE fleet_devices ADD COLUMN egress_ip TEXT NOT NULL DEFAULT ''"},
+		{"deployments", "wallet_address", "ALTER TABLE deployments ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''"},
 	} {
 		has, err := s.columnExists(col.table, col.name)
 		if err != nil {

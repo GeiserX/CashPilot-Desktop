@@ -364,11 +364,10 @@ func deviceTarget(raw string) string {
 func catalogPortKeys(raw []string) map[string]bool {
 	keys := map[string]bool{}
 	for _, mapping := range raw {
-		parts := strings.Split(mapping, ":")
-		if len(parts) != 2 || parts[1] == "" {
+		_, _, port, ok := splitPortMapping(mapping)
+		if !ok {
 			continue
 		}
-		port := parts[1]
 		if !strings.Contains(port, "/") {
 			port += "/tcp"
 		}
