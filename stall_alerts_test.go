@@ -229,3 +229,24 @@ func TestSampleUsageRunsTheStallCheck(t *testing.T) {
 		t.Fatalf("stalls = %+v, want copy 2 after a usage reading", got)
 	}
 }
+
+// Joined to a CashPilot server, the check still runs: the server gets no traffic
+// counters from this computer, so it cannot judge these copies.
+func TestStallCheckRunsWhileJoined(t *testing.T) {
+	a := newStallApp(t)
+	if err := a.cfg.Update(func(c *config.AppConfig) { c.Mode = config.ModeFollower }); err != nil {
+		t.Fatal(err)
+	}
+	if !a.joined() {
+		t.Fatal("the app is not joined; the test needs it joined")
+	}
+	sent(t, a, "honeygain", 1, stallNow, 12, 30_000_000)
+	sent(t, a, "honeygain", 2, stallNow, 12, 0)
+	a.checkStalls(listing("honeygain", 2, nil), stallNow)
+	if got := a.currentStalls(); len(got) != 1 || got[0].Copy != 2 {
+		t.Fatalf("stalls = %+v, want copy 2 while joined", got)
+	}
+	if titles := stallTitles(a); len(titles) != 1 {
+		t.Fatalf("notifications = %q, want the stall while joined", titles)
+	}
+}

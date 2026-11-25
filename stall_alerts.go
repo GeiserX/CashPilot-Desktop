@@ -44,7 +44,7 @@ var stallStopped = map[string]bool{"exited": true, "dead": true}
 //
 // It alerts only. It never restarts anything, as on the web.
 //
-// It runs while this computer is joined to a CashPilot server too. The web app
+// It runs while this computer is joined to a CashPilot server (joined) too. The web app
 // runs the check on the server, from the per-container traffic each worker
 // reports, but this computer's heartbeat carries no traffic counters
 // (upstreamPayload), so the server cannot judge these copies.
