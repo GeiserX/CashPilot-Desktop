@@ -148,4 +148,25 @@ func TestSecureVMStubLive(t *testing.T) {
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("the bootstrap ran from a data folder holding a planted file")
 	}
+
+	// A standard user made the data folder first and left it empty. As its
+	// owner they could keep a handle with WRITE_DAC open across the stub's
+	// new rules, so the stub refuses a folder it did not make.
+	seeded := filepath.Join(tmp, "seeded")
+	if err := os.Mkdir(seeded, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("icacls", seeded, "/setowner", "*S-1-5-32-545").CombinedOutput(); err != nil {
+		t.Fatalf("icacls: %v: %s", err, out)
+	}
+	_, err = stub(seeded, good, "ok")
+	if code, ok := ExitCodeOf(err); !ok || code != 1 {
+		t.Fatalf("an empty data folder owned by Users: %v (code %d), want exit 1", err, code)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the bootstrap ran from a data folder a standard user made")
+	}
+	if _, err := os.Stat(filepath.Join(seeded, "guard")); err == nil {
+		t.Fatal("the stub made the guard folder inside a data folder a standard user made")
+	}
 }
