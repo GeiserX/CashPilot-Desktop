@@ -14,7 +14,7 @@ LicenseUrl: https://github.com/GeiserX/CashPilot-Desktop/blob/main/LICENSE
 Copyright: Copyright 2026 Sergio Fernandez
 ShortDescription: Needs Docker Desktop or Podman. Deploys and monitors passive-income and DePIN services from one app.
 Description: |-
-  CashPilot Desktop needs Docker Desktop or Podman installed; the earning services run as containers there, and the setup wizard helps if neither is present.
+  CashPilot Desktop needs Docker Desktop or Podman installed; the earning services run as containers there. On first run, a checklist checks what Docker Desktop needs from this PC and guides each step; it never installs Docker for you.
   It deploys and monitors passive-income and DePIN services from one window: live earnings, service health, container stats and node uptime. It runs either as the full CashPilot dashboard or as a Worker Node that joins an existing CashPilot instance.
 Moniker: cashpilot-desktop
 Tags:

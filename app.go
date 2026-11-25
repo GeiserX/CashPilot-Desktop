@@ -52,6 +52,13 @@ type App struct {
 	// host caches the last reading of this Windows PC (host_check.go).
 	host     *hostFacts
 	hostOnce sync.Once
+	// resumeSetup is set when the app was started with --resume-setup, or a second
+	// start passed it (docker_guide.go).
+	resumeSetup atomic.Bool
+	// runOnce writes and removes the HKCU RunOnce value that reopens the
+	// checklist after a restart (docker_guide.go). Nil means the real key; tests
+	// set a fake so they never arm the real RunOnce key.
+	runOnce runOnceWriter
 	// saveDialog asks the user where to write a file and returns the chosen path,
 	// or "" when they dismissed the dialog. Zero value means the real Wails dialog;
 	// it is a field so the export path can be driven in a test, which has no window

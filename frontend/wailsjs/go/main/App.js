@@ -18,6 +18,10 @@ export function BackgroundHelperStatus() {
   return window['go']['main']['App']['BackgroundHelperStatus']();
 }
 
+export function CancelSetup() {
+  return window['go']['main']['App']['CancelSetup']();
+}
+
 export function CheckRuntime() {
   return window['go']['main']['App']['CheckRuntime']();
 }
@@ -174,6 +178,10 @@ export function ManagedRuntimePlan() {
   return window['go']['main']['App']['ManagedRuntimePlan']();
 }
 
+export function OpenWindowsUpdate() {
+  return window['go']['main']['App']['OpenWindowsUpdate']();
+}
+
 export function PlanServiceRemoval(arg1) {
   return window['go']['main']['App']['PlanServiceRemoval'](arg1);
 }
@@ -230,6 +238,10 @@ export function RestartService(arg1) {
   return window['go']['main']['App']['RestartService'](arg1);
 }
 
+export function RestartToFirmware(arg1) {
+  return window['go']['main']['App']['RestartToFirmware'](arg1);
+}
+
 export function RestoreStateBackup(arg1, arg2, arg3) {
   return window['go']['main']['App']['RestoreStateBackup'](arg1, arg2, arg3);
 }
@@ -258,8 +270,16 @@ export function SetActivityEnabled(arg1) {
   return window['go']['main']['App']['SetActivityEnabled'](arg1);
 }
 
+export function SetupResume() {
+  return window['go']['main']['App']['SetupResume']();
+}
+
 export function StartAsLead() {
   return window['go']['main']['App']['StartAsLead']();
+}
+
+export function StartDockerDesktop() {
+  return window['go']['main']['App']['StartDockerDesktop']();
 }
 
 export function StartProxiedCopy(arg1, arg2) {

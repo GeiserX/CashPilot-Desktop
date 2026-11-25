@@ -664,6 +664,39 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .runtime-card span, .runtime-card small { color: var(--text-secondary); }
 .runtime-card.compact { margin: 0; font-size: var(--fs-2); }
 
+/* The Docker checklist on Windows (render/dockerguide.ts). */
+.docker-guide { margin-top: 24px; text-align: left; display: grid; gap: 10px; }
+.docker-guide h2 { font-size: var(--fs-3); }
+.docker-guide-summary { color: var(--text-secondary); font-size: var(--fs-2); }
+.docker-guide-summary.ok { color: var(--success); }
+.docker-steps { list-style: none; margin: 0; padding: 0; display: grid; }
+.docker-step { display: grid; grid-template-columns: 24px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border-color); }
+.docker-step-number { width: 20px; height: 20px; border: 1px solid var(--border-color); border-radius: 50%; display: grid; place-items: center; font-size: var(--fs-1); color: var(--text-muted); }
+.docker-step[data-state="done"] .docker-step-number { border-color: var(--success); color: var(--success); }
+.docker-step[data-state="needs-you"] .docker-step-number { border-color: var(--warning); color: var(--warning); }
+.docker-step-body { display: grid; gap: 4px; }
+.docker-step-body p { color: var(--text-secondary); font-size: var(--fs-2); }
+.docker-step-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.docker-step-state { font-size: var(--fs-1); color: var(--text-muted); white-space: nowrap; }
+.docker-step-state.done { color: var(--success); }
+.docker-step-state.needs-you { color: var(--warning); }
+.docker-step-waits, .docker-step-soon { color: var(--text-muted); font-size: var(--fs-2); }
+.docker-step-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.docker-step-actions:empty { display: none; }
+.docker-step-help summary { cursor: pointer; color: var(--text-secondary); font-size: var(--fs-2); }
+.docker-step-help p { margin: 4px 0; }
+.docker-guide-resume { display: grid; gap: 4px; padding: 6px 0 6px 10px; border-left: 2px solid var(--success); }
+.docker-guide-resume.warn { border-left-color: var(--warning); }
+.docker-guide-resume span { color: var(--text-secondary); font-size: var(--fs-2); }
+.docker-guide-wait { color: var(--text-secondary); font-size: var(--fs-2); }
+.docker-guide-wait:empty { display: none; }
+.docker-guide-wait.ok { color: var(--success); }
+.docker-guide-wait.warn { color: var(--warning); }
+.docker-guide-confirm { display: grid; gap: 10px; }
+.docker-guide-confirm h2 { font-size: var(--fs-3); }
+button.topbar-runtime { background: none; border: 0; padding: 0; font: inherit; font-size: var(--fs-2); cursor: pointer; }
+button.topbar-runtime:hover, button.topbar-runtime.active { color: var(--text-primary); }
+
 .guide-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 0 20px; margin-top: 24px; text-align: left; }
 .guide { display: grid; gap: 4px; align-content: start; padding: 10px 0; border-top: 1px solid var(--border-color); }
 .guide p { color: var(--text-secondary); font-size: var(--fs-2); }

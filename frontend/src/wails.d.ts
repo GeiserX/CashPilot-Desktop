@@ -12,6 +12,13 @@ declare module "../wailsjs/go/main/App" {
   export function CheckRuntime(): Promise<RuntimeStatus>;
   // Reads this PC afresh (Windows only; elsewhere facts.supported is false).
   export function HostCheck(): Promise<HostCheckResult>;
+  // The Docker checklist's actions (Windows only; elsewhere they fail).
+  export function StartDockerDesktop(): Promise<void>;
+  export function OpenWindowsUpdate(): Promise<void>;
+  // Only from the confirm screen: restarts the PC now, into its BIOS.
+  export function RestartToFirmware(step: string): Promise<FirmwareRestart>;
+  export function SetupResume(): Promise<SetupResumeView>;
+  export function CancelSetup(): Promise<void>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
@@ -797,11 +804,61 @@ export interface HostFacts {
   hyperVEdition: Tri;
   wsl: "ready" | "missing" | "outdated" | "unknown";
   secureVmHost: { eligible: Tri; reason: string };
+  // Server service start type: auto, manual, disabled, absent or unknown.
+  lanmanServer: string;
+  otherHypervisors: Tri;
+  otherHypervisorNames: string[] | null;
+  manufacturer: string;
+  model: string;
+  // LastBootUpTime, RFC 3339 UTC; "" unknown.
+  lastBoot: string;
+  dockerBackend: "wsl" | "hyperv" | "unknown";
+  isVm: Tri;
+}
+
+// One row of the Docker checklist (internal/winvm/dockerguide.go).
+export type GuideStepState = "done" | "needs-you" | "blocked" | "unknown" | "note";
+export interface GuideStepAction {
+  // "" none, url, windows-update, start-docker, show-docker, firmware, or
+  // elevated (an admin change the app does not run yet).
+  kind: string;
+  label: string;
+  url?: string;
+  op?: string;
+  manual?: string;
+}
+export interface GuideStep {
+  id: string;
+  title: string;
+  state: GuideStepState;
+  text: string;
+  blockedBy?: string;
+  action: GuideStepAction;
+  help?: string;
+  helpUrl?: string;
 }
 
 export interface HostCheckResult {
   facts: HostFacts;
   runtime: RuntimeStatus;
+  // The Docker checklist; null outside Windows.
+  steps: GuideStep[] | null;
+}
+
+export interface FirmwareRestart {
+  started: boolean;
+  reopens: boolean;
+}
+
+// Whether the app opens on the checklist after a restart (internal/setupresume).
+export interface SetupResumeView {
+  active: boolean;
+  flow: string;
+  step: string;
+  restarted: "yes" | "no" | "unknown" | "";
+  exeMoved: boolean;
+  attempts: number;
+  fromRunOnce: boolean;
 }
 
 export interface InstallGuide {

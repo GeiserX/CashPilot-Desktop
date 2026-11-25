@@ -166,6 +166,26 @@ func TestArchNameIsNotGOARCH(t *testing.T) {
 	}
 }
 
+func TestVirtualMachineReadsTheFirmwareStrings(t *testing.T) {
+	cases := []struct {
+		manufacturer, model string
+		want                Tri
+	}{
+		{"Microsoft Corporation", "Virtual Machine", Yes},
+		{"VMware, Inc.", "VMware7,1", Yes},
+		{"innotek GmbH", "VirtualBox", Yes},
+		{"QEMU", "Standard PC (Q35 + ICH9, 2009)", Yes},
+		{"Microsoft Corporation", "Surface Pro 9", No},
+		{"Intel(R) Client Systems", "NUC12DCMi9", No},
+		{"", "", Unknown},
+	}
+	for _, tc := range cases {
+		if got := virtualMachine(tc.manufacturer, tc.model); got != tc.want {
+			t.Errorf("virtualMachine(%q, %q) = %s, want %s", tc.manufacturer, tc.model, got, tc.want)
+		}
+	}
+}
+
 // vmHostInput is a PC ready for the Secure VM, for each test to break one thing.
 func vmHostInput(edit func(*VMHostInput)) VMHostInput {
 	in := VMHostInput{

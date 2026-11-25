@@ -1,0 +1,262 @@
+// The Docker checklist on Windows: one row per thing Docker Desktop needs from this
+// PC, each with its state, one plain sentence, and the next safe action. First
+// run's runtime step and the app's runtime page show the same render.
+//
+// The rows come from Go (internal/winvm/dockerguide.go), derived from one reading
+// of the PC. This file only draws them, plus the screens around them: the confirm
+// before a restart into the BIOS, the fallback when that restart cannot happen,
+// and the honest "native apps only" exit.
+//
+// Rules this file holds (scripts/dockerguide_render_check.mjs):
+//   - A row is drawn in its own state, and a row that is not done never reads done.
+//   - Nothing restarts without the confirm screen, which says open apps close.
+//   - An admin action shows as coming next, with the way to do it by hand.
+//
+// Pure: takes the model, returns HTML.
+
+import type { FirmwareRestart, GuideStep, RuntimeStatus, SetupResumeView } from "../wails";
+import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+
+export type GuideView = "list" | "firmware-confirm" | "firmware-failed" | "skip";
+
+/** How long the checklist waits for Docker's engine after starting Docker Desktop. */
+export const START_LIMIT_SECONDS = 120;
+
+export interface GuideModel {
+  /** The rows; null before the first reading lands. */
+  steps: GuideStep[] | null;
+  runtime: Pick<RuntimeStatus, "available" | "reason" | "nativeServices">;
+  view: GuideView;
+  /** A reading of the PC is running. */
+  checking: boolean;
+  /** Seconds since Start Docker Desktop while waiting for its engine; null when not waiting. */
+  waiting: number | null;
+  /** How the last wait ended. */
+  waitResult: "" | "ready" | "timeout" | "failed";
+  /** Set when the app opened on the checklist after a restart. */
+  resume: SetupResumeView | null;
+  /** What the last "Restart into BIOS" answered, when the PC did not restart. */
+  firmware: FirmwareRestart | null;
+  /** The step whose "Restart into BIOS" opened the confirm screen. */
+  firmwareStep?: string;
+  /** Restart now was clicked and Go has not answered yet. */
+  restarting?: boolean;
+}
+
+export const STATE_LABEL: Record<string, string> = {
+  done: "Done",
+  "needs-you": "Needs you",
+  blocked: "Waits for an earlier step",
+  unknown: "Not known",
+  note: "Worth knowing",
+};
+
+/** "A", "A and B", "A, B and C". */
+function nameList(names: string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * Docker runs Linux containers, so a guided setup is finished: Go clears the
+ * journal on the same reading (host_check.go), and the resume banner goes.
+ */
+export function setupFinished(runtime: Pick<RuntimeStatus, "reason">): boolean {
+  return runtime.reason === "running";
+}
+
+/** The engine answers: Docker runs, in Linux or in Windows containers mode. */
+export function engineAnswers(runtime: Pick<RuntimeStatus, "available" | "reason">): boolean {
+  return runtime.reason === "running" || runtime.reason === "windows-containers" || (runtime.available && !runtime.reason);
+}
+
+/**
+ * The "Check again" button: busy and disabled while a reading runs, so a second
+ * click cannot start a second reading and the user sees that one is under way.
+ */
+export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-ghost btn-lg"): string {
+  return `<button class="${cls}" id="${escapeHtml(id)}" data-guide-check ${checking ? 'disabled aria-busy="true"' : ""}>${checking ? "Checking…" : "Check again"}</button>`;
+}
+
+/** The progress line while waiting for Docker's engine, and how the wait ended. */
+export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult">): string {
+  let text = "";
+  let tone = "";
+  if (model.waiting !== null) {
+    text = `Waiting for Docker's engine to start: ${Math.min(model.waiting, START_LIMIT_SECONDS)} s of ${START_LIMIT_SECONDS / 60} min.`;
+  } else if (model.waitResult === "ready") {
+    text = "Docker's engine is running.";
+    tone = "ok";
+  } else if (model.waitResult === "timeout") {
+    text = `Docker's engine did not answer within ${START_LIMIT_SECONDS / 60} minutes. Look at Docker Desktop's window: it may show its terms or a message. Then click Check again.`;
+    tone = "warn";
+  } else if (model.waitResult === "failed") {
+    text = "CashPilot could not start Docker Desktop. Open it from the Start menu, then click Check again.";
+    tone = "warn";
+  }
+  return `<p class="docker-guide-wait ${tone}" data-guide-wait aria-live="polite">${escapeHtml(text)}</p>`;
+}
+
+function actionHtml(step: GuideStep, model: GuideModel): string {
+  const a = step.action;
+  if (!a || !a.kind || step.state === "done" || step.state === "blocked") return "";
+  const label = escapeHtml(a.label);
+  const busy = model.waiting !== null || model.checking;
+  switch (a.kind) {
+    case "url":
+      return `<button class="btn btn-secondary btn-sm" data-guide-url="${escapeHtml(a.url)}">${label}</button>`;
+    case "windows-update":
+    case "firmware":
+      return `<button class="btn btn-secondary btn-sm" data-guide-action="${escapeHtml(a.kind)}" data-guide-step="${escapeHtml(step.id)}">${label}</button>`;
+    case "start-docker":
+    case "show-docker":
+      return `<button class="btn btn-secondary btn-sm" data-guide-action="${escapeHtml(a.kind)}" ${busy ? "disabled" : ""}>${label}</button>`;
+    case "elevated":
+      // The version after this one runs it with one admin prompt. Until then the
+      // button says so and the row says how to do it by hand.
+      return `<button class="btn btn-ghost btn-sm" disabled data-guide-elevated="${escapeHtml(a.op)}">${label}</button>
+        <small class="docker-step-soon">Coming in the next version: CashPilot will do this with one Windows admin prompt. For now: ${escapeHtml(a.manual)}</small>`;
+  }
+  return "";
+}
+
+function stepHtml(step: GuideStep, index: number, all: GuideStep[], model: GuideModel): string {
+  const state = STATE_LABEL[step.state] ? step.state : "unknown";
+  let waits = "";
+  if (state === "blocked" && step.blockedBy) {
+    const at = all.findIndex((s) => s.id === step.blockedBy);
+    const dep = all[at];
+    waits = dep ? `<small class="docker-step-waits">First finish step ${at + 1}: ${escapeHtml(dep.title)}.</small>` : "";
+  }
+  const help = step.help
+    ? `<details class="docker-step-help"><summary>Where to find it</summary><p>${escapeHtml(step.help)}</p>${
+        step.helpUrl ? `<button class="text-link" data-guide-url="${escapeHtml(step.helpUrl)}">Microsoft's guide to turning on virtualization</button>` : ""
+      }</details>`
+    : "";
+  return `<li class="docker-step" data-step="${escapeHtml(step.id)}" data-state="${state}">
+      <span class="docker-step-number">${index + 1}</span>
+      <div class="docker-step-body">
+        <div class="docker-step-head"><strong>${escapeHtml(step.title)}</strong><span class="docker-step-state ${state}">${STATE_LABEL[state]}</span></div>
+        <p>${escapeHtml(step.text)}</p>
+        ${waits}
+        ${help}
+        <div class="docker-step-actions">${actionHtml(step, model)}</div>
+      </div>
+    </li>`;
+}
+
+function resumeBanner(resume: SetupResumeView | null): string {
+  if (!resume || !resume.active) return "";
+  const stop = `<button class="btn btn-ghost btn-sm" data-guide-action="cancel-setup">Stop guiding me after restarts</button>`;
+  if (resume.restarted === "no") {
+    const again = resume.step === "a2" ? `<button class="btn btn-secondary btn-sm" data-guide-action="firmware" data-guide-step="a2">Restart into BIOS</button>` : "";
+    return `<div class="docker-guide-resume warn" data-resume="same-boot">
+        <strong>Restart to finish</strong>
+        <span>This PC has not restarted since you chose to. Restart it to finish the step you started.</span>
+        <div class="docker-step-actions">${again}${stop}</div>
+      </div>`;
+  }
+  const said = resume.restarted === "yes" ? "Welcome back. The PC restarted, and CashPilot checked every step again." : "CashPilot checked every step again.";
+  return `<div class="docker-guide-resume ok" data-resume="${resume.restarted === "yes" ? "new-boot" : "unknown"}">
+      <span>${said}</span>
+      <div class="docker-step-actions">${stop}</div>
+    </div>`;
+}
+
+function summary(model: GuideModel): string {
+  if (model.runtime.reason === "running") {
+    return `<p class="docker-guide-summary ok">Docker is ready. The apps in the catalog can run on this PC.</p>`;
+  }
+  if (!model.steps) {
+    return `<p class="docker-guide-summary">Checking this PC…</p>`;
+  }
+  // A note is advice that blocks nothing, so it is not a step to finish.
+  const steps = model.steps.filter((s) => s.state !== "note");
+  const done = steps.filter((s) => s.state === "done").length;
+  const needs = steps.filter((s) => s.state === "needs-you").length;
+  const tail = needs === 0 ? "" : needs === 1 ? " One step needs you." : ` ${needs} steps need you.`;
+  return `<p class="docker-guide-summary">${done} of ${steps.length} steps done.${tail}</p>`;
+}
+
+/** The skip screen's words: what still runs without Docker, honestly. */
+export function skipText(native: string[] | null | undefined): string {
+  const names = native ?? [];
+  if (names.length === 0) {
+    return "Without Docker, no app in the catalog runs on this computer.";
+  }
+  const runs = names.length === 1 ? `only ${escapeHtml(names[0])} runs` : `only ${escapeHtml(nameList(names))} run`;
+  return `Without Docker, ${runs} on this computer. Every other app in the catalog needs Docker and stays unavailable until it runs.`;
+}
+
+/** The confirm screen before a restart into the BIOS. busy: Restart now was clicked. */
+export function firmwareConfirm(busy = false): string {
+  return `
+    <div class="docker-guide-confirm" data-guide-view="firmware-confirm" role="alertdialog" aria-labelledby="fw-title">
+      <h2 id="fw-title">Restart into the BIOS now?</h2>
+      <ul class="mode-effects">
+        <li>Your PC restarts now, straight into its firmware settings (BIOS or UEFI).</li>
+        <li>Windows closes every open app. Save your work first: work you have not saved can be lost.</li>
+        <li>In the BIOS, turn on Intel Virtualization Technology, VT-x, AMD-V or SVM Mode, then save and exit (often F10).</li>
+        <li>When you sign in to Windows again, CashPilot opens this checklist and checks every step again.</li>
+      </ul>
+      <p class="muted compact-copy">CashPilot never changes BIOS settings itself. You make the change in the BIOS.</p>
+      <div class="gate-actions">
+        <button class="btn btn-primary" data-guide-action="firmware-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? "Restarting…" : "Restart now"}</button>
+        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>Cancel</button>
+      </div>
+    </div>`;
+}
+
+/** The fallback when Windows could not restart into the BIOS. */
+export function firmwareFailed(result: FirmwareRestart | null): string {
+  const reopen = result?.reopens
+    ? "When you sign in again, CashPilot opens this checklist by itself."
+    : "When you sign in again, open CashPilot: it picks up this checklist where you left it.";
+  return `
+    <div class="docker-guide-confirm" data-guide-view="firmware-failed" role="alert">
+      <h2>This PC could not restart into its BIOS by itself</h2>
+      <p>It may have an older BIOS, or Windows did not allow it. Nothing restarted.</p>
+      <p data-fw-fallback="advanced-startup">On a UEFI PC, Windows can open the BIOS for you. Save your work, then open Settings, System, Recovery, and click Restart now next to Advanced startup. On the blue screen, choose Troubleshoot, Advanced options, UEFI Firmware Settings, then Restart.</p>
+      <p data-fw-fallback="power-on-key">If that option is not there, restart the PC yourself and press the BIOS key as soon as it powers on: often F2 or Del, F10 or Esc on HP, F1 on some Lenovo PCs. ${reopen}</p>
+      <div class="gate-actions"><button class="btn btn-ghost" data-guide-action="back">Back to the checklist</button></div>
+    </div>`;
+}
+
+/** The skip screen. */
+export function skipScreen(native: string[] | null | undefined): string {
+  return `
+    <div class="docker-guide-confirm" data-guide-view="skip">
+      <h2>Use native apps only?</h2>
+      <p>${skipText(native)}</p>
+      <p class="muted compact-copy">You can come back to this checklist at any time: click the runtime status at the top of the app.</p>
+      <div class="gate-actions">
+        <button class="btn btn-primary" data-guide-action="skip-go">Use native apps only</button>
+        <button class="btn btn-ghost" data-guide-action="back">Back to the checklist</button>
+      </div>
+    </div>`;
+}
+
+/** The whole checklist, in the screen the model is on. */
+export function renderDockerGuide(model: GuideModel): string {
+  if (model.view === "firmware-confirm") return `<section class="docker-guide">${firmwareConfirm(!!model.restarting)}</section>`;
+  if (model.view === "firmware-failed") return `<section class="docker-guide">${firmwareFailed(model.firmware)}</section>`;
+  const native = model.runtime.nativeServices ?? [];
+  if (model.view === "skip" && native.length > 0) return `<section class="docker-guide">${skipScreen(native)}</section>`;
+  const steps = model.steps ?? [];
+  const skip = native.length > 0 && model.runtime.reason !== "running"
+    ? `<button class="btn btn-ghost btn-lg" data-guide-action="skip">Skip, use native apps only</button>`
+    : "";
+  return `
+    <section class="docker-guide" data-guide-view="list" aria-labelledby="docker-guide-title">
+      <h2 id="docker-guide-title">Set up Docker on this PC</h2>
+      <p class="muted compact-copy">CashPilot checks each thing Docker needs. It changes nothing by itself: every action waits for your click.</p>
+      ${resumeBanner(model.resume)}
+      ${summary(model)}
+      <ol class="docker-steps">${steps.map((s, i) => stepHtml(s, i, steps, model)).join("")}</ol>
+      ${waitLine(model)}
+      <div class="gate-actions">
+        ${checkAgainButton("docker-guide-check", model.checking)}
+        ${skip}
+      </div>
+    </section>`;
+}

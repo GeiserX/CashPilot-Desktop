@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/setupresume"
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
@@ -44,6 +45,9 @@ func main() {
 	fs := flag.NewFlagSet("cashpilot-desktop", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	daemon := fs.Bool("daemon", false, "run headless: supervise native earners and serve the loopback fleet API with no GUI window")
+	// --resume-setup is what Windows' RunOnce passes after a restart a guided setup
+	// asked for: the app opens on the setup checklist (docker_guide.go).
+	resume := fs.Bool(setupresume.Flag, false, "open on the setup checklist after a restart")
 	_ = fs.Parse(os.Args[1:])
 
 	if *daemon {
@@ -55,6 +59,7 @@ func main() {
 
 	app := NewApp()
 	app.trayIcon = trayIcon
+	app.resumeSetup.Store(*resume)
 
 	err := wails.Run(&options.App{
 		Title:            "CashPilot Desktop",
@@ -66,6 +71,13 @@ func main() {
 		BackgroundColour: options.NewRGB(6, 6, 15),
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+		},
+		// One window per user: RunOnce and a manual start at the same sign-in would
+		// otherwise open two windows on one store. A second start brings this
+		// window forward and passes --resume-setup through.
+		SingleInstanceLock: &options.SingleInstanceLock{
+			UniqueId:               "com.cashpilot.desktop.window",
+			OnSecondInstanceLaunch: app.onSecondInstance,
 		},
 		OnStartup:  app.Startup,
 		OnDomReady: app.DomReady,
