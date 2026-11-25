@@ -39,6 +39,8 @@ export interface GuideModel {
   firmware: FirmwareRestart | null;
   /** The step whose "Restart into BIOS" opened the confirm screen. */
   firmwareStep?: string;
+  /** Restart now was clicked and Go has not answered yet. */
+  restarting?: boolean;
 }
 
 export const STATE_LABEL: Record<string, string> = {
@@ -46,12 +48,21 @@ export const STATE_LABEL: Record<string, string> = {
   "needs-you": "Needs you",
   blocked: "Waits for an earlier step",
   unknown: "Not known",
+  note: "Worth knowing",
 };
 
 /** "A", "A and B", "A, B and C". */
 function nameList(names: string[]): string {
   if (names.length <= 1) return names.join("");
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/**
+ * Docker runs Linux containers, so a guided setup is finished: Go clears the
+ * journal on the same reading (host_check.go), and the resume banner goes.
+ */
+export function setupFinished(runtime: Pick<RuntimeStatus, "reason">): boolean {
+  return runtime.reason === "running";
 }
 
 /** The engine answers: Docker runs, in Linux or in Windows containers mode. */
@@ -159,10 +170,12 @@ function summary(model: GuideModel): string {
   if (!model.steps) {
     return `<p class="docker-guide-summary">Checking this PC…</p>`;
   }
-  const done = model.steps.filter((s) => s.state === "done").length;
-  const needs = model.steps.filter((s) => s.state === "needs-you").length;
+  // A note is advice that blocks nothing, so it is not a step to finish.
+  const steps = model.steps.filter((s) => s.state !== "note");
+  const done = steps.filter((s) => s.state === "done").length;
+  const needs = steps.filter((s) => s.state === "needs-you").length;
   const tail = needs === 0 ? "" : needs === 1 ? " One step needs you." : ` ${needs} steps need you.`;
-  return `<p class="docker-guide-summary">${done} of ${model.steps.length} steps done.${tail}</p>`;
+  return `<p class="docker-guide-summary">${done} of ${steps.length} steps done.${tail}</p>`;
 }
 
 /** The skip screen's words: what still runs without Docker, honestly. */
@@ -175,8 +188,8 @@ export function skipText(native: string[] | null | undefined): string {
   return `Without Docker, ${runs} on this computer. Every other app in the catalog needs Docker and stays unavailable until it runs.`;
 }
 
-/** The confirm screen before a restart into the BIOS. */
-export function firmwareConfirm(): string {
+/** The confirm screen before a restart into the BIOS. busy: Restart now was clicked. */
+export function firmwareConfirm(busy = false): string {
   return `
     <div class="docker-guide-confirm" data-guide-view="firmware-confirm" role="alertdialog" aria-labelledby="fw-title">
       <h2 id="fw-title">Restart into the BIOS now?</h2>
@@ -188,8 +201,8 @@ export function firmwareConfirm(): string {
       </ul>
       <p class="muted compact-copy">CashPilot never changes BIOS settings itself. You make the change in the BIOS.</p>
       <div class="gate-actions">
-        <button class="btn btn-primary" data-guide-action="firmware-go">Restart now</button>
-        <button class="btn btn-ghost" data-guide-action="back">Cancel</button>
+        <button class="btn btn-primary" data-guide-action="firmware-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? "Restarting…" : "Restart now"}</button>
+        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>Cancel</button>
       </div>
     </div>`;
 }
@@ -203,7 +216,8 @@ export function firmwareFailed(result: FirmwareRestart | null): string {
     <div class="docker-guide-confirm" data-guide-view="firmware-failed" role="alert">
       <h2>This PC could not restart into its BIOS by itself</h2>
       <p>It may have an older BIOS, or Windows did not allow it. Nothing restarted.</p>
-      <p>Restart the PC yourself, and press the BIOS key as soon as it powers on: often F2 or Del, F10 or Esc on HP, F1 on some Lenovo PCs. ${reopen}</p>
+      <p data-fw-fallback="advanced-startup">On a UEFI PC, Windows can open the BIOS for you. Save your work, then open Settings, System, Recovery, and click Restart now next to Advanced startup. On the blue screen, choose Troubleshoot, Advanced options, UEFI Firmware Settings, then Restart.</p>
+      <p data-fw-fallback="power-on-key">If that option is not there, restart the PC yourself and press the BIOS key as soon as it powers on: often F2 or Del, F10 or Esc on HP, F1 on some Lenovo PCs. ${reopen}</p>
       <div class="gate-actions"><button class="btn btn-ghost" data-guide-action="back">Back to the checklist</button></div>
     </div>`;
 }
@@ -224,7 +238,7 @@ export function skipScreen(native: string[] | null | undefined): string {
 
 /** The whole checklist, in the screen the model is on. */
 export function renderDockerGuide(model: GuideModel): string {
-  if (model.view === "firmware-confirm") return `<section class="docker-guide">${firmwareConfirm()}</section>`;
+  if (model.view === "firmware-confirm") return `<section class="docker-guide">${firmwareConfirm(!!model.restarting)}</section>`;
   if (model.view === "firmware-failed") return `<section class="docker-guide">${firmwareFailed(model.firmware)}</section>`;
   const native = model.runtime.nativeServices ?? [];
   if (model.view === "skip" && native.length > 0) return `<section class="docker-guide">${skipScreen(native)}</section>`;

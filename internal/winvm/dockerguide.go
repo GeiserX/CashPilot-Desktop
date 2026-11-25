@@ -22,6 +22,9 @@ const (
 	StepNeedsYou = "needs-you"
 	StepBlocked  = "blocked"
 	StepUnknown  = "unknown"
+	// StepNote is worth knowing but proven to block nothing: the summary does
+	// not count it as a step that needs the user.
+	StepNote = "note"
 )
 
 // Action kinds. None of them needs admin rights, except ActionElevated, which the
@@ -127,7 +130,7 @@ func DockerSteps(f HostFacts, reason string) []Step {
 		linuxContainersStep(reason),
 		otherHypervisorStep(f, engineUp),
 		virtualMachineStep(f, engineUp),
-		lanmanStep(f),
+		lanmanStep(f, engineUp),
 	)
 	return markBlocked(steps)
 }
@@ -347,7 +350,8 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 	case f.OtherHypervisors == Yes && engineUp:
 		s.State, s.Text = StepDone, names+" is installed, and Docker runs next to it."
 	case f.OtherHypervisors == Yes:
-		s.State = StepNeedsYou
+		// Nothing here proves it is what stops Docker, so it is a note, not a step.
+		s.State = StepNote
 		s.Text = names + " is installed. It works next to WSL 2 but can run slower, and old versions can stop Windows' hypervisor at boot. If Docker does not start, update " + names + " to its newest version."
 	case f.OtherHypervisors == No:
 		s.State, s.Text = StepDone, "No VirtualBox or VMware drivers are installed."
@@ -373,8 +377,15 @@ func virtualMachineStep(f HostFacts, engineUp bool) Step {
 	return s
 }
 
-func lanmanStep(f HostFacts) Step {
+func lanmanStep(f HostFacts, engineUp bool) Step {
 	s := Step{ID: "a12", Title: "Windows Server service"}
+	if engineUp && (f.LanmanServer == "manual" || f.LanmanServer == "disabled" || f.LanmanServer == "absent") {
+		// Docker runs, so the service blocks nothing now.
+		word := map[string]string{"manual": "is set to Manual", "disabled": "is turned off", "absent": "is missing"}[f.LanmanServer]
+		s.State = StepNote
+		s.Text = "Docker runs, but the Windows Server service (LanmanServer) " + word + ". If Docker stops starting after a restart, this is a place to look."
+		return s
+	}
 	switch f.LanmanServer {
 	case "auto":
 		s.State, s.Text = StepDone, "The Server service (LanmanServer) starts automatically, as Docker needs."

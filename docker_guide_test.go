@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
@@ -17,6 +19,51 @@ func (runningProvider) Status(context.Context) runtime.Status {
 	return runtime.Status{Available: true, Reason: runtime.ReasonRunning}
 }
 
+// fakeRunOnce records what the app asked of RunOnce, in place of the real key.
+type fakeRunOnce struct {
+	mu       sync.Mutex
+	armed    string
+	arms     int
+	disarms  int
+	armError error
+}
+
+func (f *fakeRunOnce) Arm(exe string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.arms++
+	if f.armError != nil {
+		return f.armError
+	}
+	f.armed = exe
+	return nil
+}
+
+func (f *fakeRunOnce) Disarm() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.disarms++
+	f.armed = ""
+	return nil
+}
+
+func (f *fakeRunOnce) state() (armed string, arms, disarms int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.armed, f.arms, f.disarms
+}
+
+// newGuideTestApp is a test App whose RunOnce is a fake. On Windows it also
+// checks that the real RunOnce value is the same after the test as before.
+func newGuideTestApp(t *testing.T, provider runtime.Provider) (*App, *fakeRunOnce) {
+	t.Helper()
+	guardRealRunOnce(t)
+	app := newRemovalTestApp(t, provider)
+	fake := &fakeRunOnce{}
+	app.runOnce = fake
+	return app, fake
+}
+
 func bootAt(boot string) *hostFacts {
 	return &hostFacts{read: func(context.Context) winvm.HostFacts {
 		return winvm.HostFacts{OS: "windows", Supported: true, LastBoot: boot}
@@ -26,7 +73,7 @@ func bootAt(boot string) *hostFacts {
 // Before a restart the journal is written with the boot time it compares
 // against, the app's path and the step; asking again counts the attempt.
 func TestBeginRestartWritesTheJournalFirst(t *testing.T) {
-	app := newRemovalTestApp(t, reasonProvider{})
+	app, fake := newGuideTestApp(t, reasonProvider{})
 	app.host = bootAt("2026-11-25T07:59:58.5Z")
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
@@ -34,6 +81,9 @@ func TestBeginRestartWritesTheJournalFirst(t *testing.T) {
 	j := app.cfg.Config().SetupJournal
 	if j == nil || j.Flow != setupresume.FlowDocker || j.Step != "a2" || j.BootTimeBefore != "2026-11-25T07:59:58.5Z" || j.ExePath == "" || j.Attempts != 1 {
 		t.Fatalf("journal %+v", j)
+	}
+	if armed, arms, _ := fake.state(); arms != 1 || armed != j.ExePath {
+		t.Fatalf("RunOnce armed %d times for %q, want once for %q", arms, armed, j.ExePath)
 	}
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
@@ -44,11 +94,32 @@ func TestBeginRestartWritesTheJournalFirst(t *testing.T) {
 	if _, err := app.beginRestart(""); err == nil {
 		t.Fatal("a restart with no step was accepted")
 	}
+	if _, arms, _ := fake.state(); arms != 2 {
+		t.Fatalf("a refused step still armed RunOnce: %d arms", arms)
+	}
+}
+
+// RunOnce refusing (a path too long, an app that moved) keeps the journal, and
+// the app says Windows will not reopen it.
+func TestBeginRestartKeepsTheJournalWhenRunOnceRefuses(t *testing.T) {
+	app, fake := newGuideTestApp(t, reasonProvider{})
+	app.host = bootAt("2026-11-25T07:59:58.5Z")
+	fake.armError = errors.New("the command is 300 characters long")
+	reopens, err := app.beginRestart("a2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopens {
+		t.Fatal("RunOnce refused, but the app says Windows reopens it")
+	}
+	if j := app.cfg.Config().SetupJournal; j == nil || j.Step != "a2" {
+		t.Fatalf("journal %+v", j)
+	}
 }
 
 // The journal survives the restart: a new App on the same data folder reads it.
 func TestSetupResumeLandsOnTheChecklistAfterTheRestart(t *testing.T) {
-	app := newRemovalTestApp(t, reasonProvider{})
+	app, fake := newGuideTestApp(t, reasonProvider{})
 	app.host = bootAt("2026-11-25T07:59:58.5Z")
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
@@ -62,12 +133,17 @@ func TestSetupResumeLandsOnTheChecklistAfterTheRestart(t *testing.T) {
 	if !v.Active || v.Restarted != setupresume.RestartedNo || v.Step != "a2" {
 		t.Fatalf("same boot: %+v", v)
 	}
+	// The restart is still to come, so RunOnce points at the app again.
+	if armed, arms, disarms := fake.state(); armed == "" || arms != 2 || disarms != 0 {
+		t.Fatalf("same boot: RunOnce %q, %d arms, %d disarms", armed, arms, disarms)
+	}
 
 	// After the restart, started by RunOnce.
 	if _, err := app.cfg.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	after := &App{cfg: app.cfg, store: app.store, catalog: app.catalog, runtime: app.runtime, services: app.services, ctx: context.Background()}
+	after.runOnce = fake
 	after.host = bootAt("2026-11-25T09:12:00Z")
 	after.resumeSetup.Store(true)
 	v, err = after.SetupResume()
@@ -77,6 +153,10 @@ func TestSetupResumeLandsOnTheChecklistAfterTheRestart(t *testing.T) {
 	if !v.Active || v.Restarted != setupresume.RestartedYes || !v.FromRunOnce {
 		t.Fatalf("after the restart: %+v", v)
 	}
+	// RunOnce ran, so its value goes.
+	if armed, _, disarms := fake.state(); armed != "" || disarms != 1 {
+		t.Fatalf("after the restart: RunOnce %q, %d disarms", armed, disarms)
+	}
 	// Landing re-runs the checks; the journal stays until the flow ends.
 	if after.cfg.Config().SetupJournal == nil {
 		t.Fatal("landing cleared the journal before the flow ended")
@@ -84,7 +164,7 @@ func TestSetupResumeLandsOnTheChecklistAfterTheRestart(t *testing.T) {
 }
 
 func TestCancelSetupClearsTheJournal(t *testing.T) {
-	app := newRemovalTestApp(t, reasonProvider{})
+	app, fake := newGuideTestApp(t, reasonProvider{})
 	app.host = bootAt("2026-11-25T07:59:58.5Z")
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
@@ -95,6 +175,9 @@ func TestCancelSetupClearsTheJournal(t *testing.T) {
 	}
 	if j := app.cfg.Config().SetupJournal; j != nil {
 		t.Fatalf("cancel left the journal: %+v", j)
+	}
+	if armed, _, _ := fake.state(); armed != "" {
+		t.Fatalf("cancel left RunOnce armed for %q", armed)
 	}
 	if v, _ := app.SetupResume(); v.Active {
 		t.Fatalf("after cancel the app still lands on the checklist: %+v", v)
@@ -108,7 +191,7 @@ func TestCancelSetupClearsTheJournal(t *testing.T) {
 // The flow finishes when a check finds Docker running: the journal goes, so the
 // next start opens the dashboard.
 func TestHostCheckEndsTheSetupWhenDockerRuns(t *testing.T) {
-	app := newRemovalTestApp(t, reasonProvider{})
+	app, fake := newGuideTestApp(t, reasonProvider{})
 	app.host = bootAt("2026-11-25T07:59:58.5Z")
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
@@ -126,6 +209,9 @@ func TestHostCheckEndsTheSetupWhenDockerRuns(t *testing.T) {
 	}
 	if app.cfg.Config().SetupJournal != nil {
 		t.Fatal("Docker runs, but the journal is still there")
+	}
+	if armed, _, _ := fake.state(); armed != "" {
+		t.Fatalf("Docker runs, but RunOnce is still armed for %q", armed)
 	}
 	if len(res.Steps) == 0 {
 		t.Fatal("HostCheck on Windows facts returned no checklist")
@@ -155,7 +241,7 @@ func TestSecondInstanceWithoutAWindow(t *testing.T) {
 
 // The journal is config, so it reaches disk and a restart.
 func TestSetupJournalIsSaved(t *testing.T) {
-	app := newRemovalTestApp(t, reasonProvider{})
+	app, fake := newGuideTestApp(t, reasonProvider{})
 	app.host = bootAt("2026-11-25T07:59:58.5Z")
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
@@ -166,5 +252,8 @@ func TestSetupJournalIsSaved(t *testing.T) {
 	}
 	if j := fresh.Config().SetupJournal; j == nil || j.Step != "a2" {
 		t.Fatalf("the saved config holds %+v", j)
+	}
+	if armed, _, _ := fake.state(); armed == "" {
+		t.Fatal("the restart did not arm RunOnce")
 	}
 }

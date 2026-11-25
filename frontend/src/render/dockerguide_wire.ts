@@ -6,7 +6,7 @@
 // it takes everything that talks to Go as deps and never imports the bindings.
 
 import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView } from "../wails";
-import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, waitLine, type GuideModel } from "./dockerguide.js";
+import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
 
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
@@ -38,15 +38,18 @@ export class DockerGuide {
     private deps: DockerGuideDeps,
     init: { runtime: RuntimeStatus; resume: SetupResumeView | null; result?: HostCheckResult | null },
   ) {
+    const runtime = init.result?.runtime ?? init.runtime;
     this.model = {
       steps: init.result?.steps ?? null,
-      runtime: init.result?.runtime ?? init.runtime,
+      runtime,
       view: "list",
       checking: false,
       waiting: null,
       waitResult: "",
-      resume: init.resume,
+      // Docker already runs: the setup a restart interrupted is finished.
+      resume: setupFinished(runtime) ? null : init.resume,
       firmware: null,
+      restarting: false,
     };
     this.render();
     if (!init.result) void this.check();
@@ -72,6 +75,8 @@ export class DockerGuide {
       const result = await this.deps.hostCheck();
       this.model.steps = result.steps ?? [];
       this.model.runtime = result.runtime;
+      // Go ended the setup on this reading (host_check.go): no "Restart to finish".
+      if (setupFinished(result.runtime)) this.model.resume = null;
       this.deps.checked?.(result);
     } catch (error) {
       this.deps.failed?.(error);
@@ -125,13 +130,22 @@ export class DockerGuide {
     if (line) line.outerHTML = waitLine(this.model);
   }
 
+  /**
+   * One restart at a time: a second click on Restart now, while Go writes the
+   * journal and asks Windows, is ignored, and the button shows it is busy.
+   */
   private async firmwareRestart(step: string): Promise<void> {
+    if (this.model.restarting) return;
+    this.model.restarting = true;
+    this.render();
     try {
       const result = await this.deps.restartToFirmware(step);
-      if (result.started) return; // Windows is restarting.
+      if (result.started) return; // Windows is restarting; the button stays busy.
+      this.model.restarting = false;
       this.model.firmware = result;
       this.model.view = "firmware-failed";
     } catch (error) {
+      this.model.restarting = false;
       this.deps.failed?.(error);
       this.model.view = "list";
     }

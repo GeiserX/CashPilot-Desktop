@@ -105,7 +105,7 @@ import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
-import { checkAgainButton } from "./render/dockerguide";
+import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
@@ -241,10 +241,18 @@ async function applySetupResume() {
   else onboardingStep = "runtime";
 }
 
+// HostCheck, plus the frontend's half of finishing a setup: a reading that finds
+// Docker running ends it in Go (host_check.go), so the resume banner goes too.
+async function hostCheck() {
+  const result = await HostCheck();
+  if (setupFinished(result.runtime)) setupResume = null;
+  return result;
+}
+
 // What the checklist needs from Go. skip and checked differ per screen.
 function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked">): DockerGuideDeps {
   return {
-    hostCheck: HostCheck,
+    hostCheck,
     checkRuntime: CheckRuntime,
     startDocker: StartDockerDesktop,
     openWindowsUpdate: OpenWindowsUpdate,
@@ -386,7 +394,7 @@ function renderOnboarding(current: AppState) {
     firstRunChecking = true;
     render();
     try {
-      firstRunHost = await HostCheck();
+      firstRunHost = await hostCheck();
       state = {...current, runtime: firstRunHost.runtime, guides: await GetRuntimeGuides()};
     } catch (error) {
       showErrorToast({scope: "runtime", error: String(error)});
@@ -427,7 +435,7 @@ async function firstRunHostCheck() {
   if (firstRunHostPending) return;
   firstRunHostPending = true;
   try {
-    firstRunHost = await HostCheck();
+    firstRunHost = await hostCheck();
     if (state) state = {...state, runtime: firstRunHost.runtime};
   } catch {
     // The card falls back to the runtime's own message.
@@ -464,7 +472,7 @@ function renderRuntimeView(current: AppState) {
   const guides = current.guides || [];
   // The checklist reads the PC when it opens; outside Windows the reading says so
   // and the install guides stay the whole page.
-  void HostCheck().then((result) => {
+  void hostCheck().then((result) => {
     if (activeView !== "runtime" || !holder?.isConnected) return;
     const checklist = !!result.facts?.supported && (result.steps?.length ?? 0) > 0;
     renderGuides(otherGuides(guides, checklist));

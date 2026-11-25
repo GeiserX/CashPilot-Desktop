@@ -817,7 +817,7 @@ export interface HostFacts {
 }
 
 // One row of the Docker checklist (internal/winvm/dockerguide.go).
-export type GuideStepState = "done" | "needs-you" | "blocked" | "unknown";
+export type GuideStepState = "done" | "needs-you" | "blocked" | "unknown" | "note";
 export interface GuideStepAction {
   // "" none, url, windows-update, start-docker, show-docker, firmware, or
   // elevated (an admin change the app does not run yet).

@@ -106,7 +106,7 @@ func TestDockerStepsGiveEachStepItsState(t *testing.T) {
 		{"a9 waits for a6", nil, runtime.ReasonNotRunning, "a9", StepBlocked, "a6", ""},
 		// A10 other hypervisors.
 		{"a10 done with none", nil, runtime.ReasonNotRunning, "a10", StepDone, "", ""},
-		{"a10 warns about VirtualBox", func(f *HostFacts) { f.OtherHypervisors, f.OtherHypervisorNames = Yes, []string{"VirtualBox"} }, runtime.ReasonNotRunning, "a10", StepNeedsYou, "", ""},
+		{"a10 notes VirtualBox, which nothing proves is the blocker", func(f *HostFacts) { f.OtherHypervisors, f.OtherHypervisorNames = Yes, []string{"VirtualBox"} }, runtime.ReasonNotRunning, "a10", StepNote, "", ""},
 		{"a10 done when Docker runs beside it", func(f *HostFacts) {
 			f.OtherHypervisors, f.OtherHypervisorNames, f.DockerDesktopRunning = Yes, []string{"VMware"}, Yes
 		}, runtime.ReasonRunning, "a10", StepDone, "", ""},
@@ -120,6 +120,9 @@ func TestDockerStepsGiveEachStepItsState(t *testing.T) {
 		{"a12 needs Automatic", func(f *HostFacts) { f.LanmanServer = "disabled" }, runtime.ReasonNotRunning, "a12", StepNeedsYou, "", ActionElevated},
 		{"a12 manual needs Automatic", func(f *HostFacts) { f.LanmanServer = "manual" }, runtime.ReasonNotRunning, "a12", StepNeedsYou, "", ActionElevated},
 		{"a12 unknown", func(f *HostFacts) { f.LanmanServer = "unknown" }, runtime.ReasonNotRunning, "a12", StepUnknown, "", ""},
+		{"a12 manual is only a note while Docker runs", func(f *HostFacts) { f.LanmanServer, f.DockerDesktopRunning = "manual", Yes }, runtime.ReasonRunning, "a12", StepNote, "", ""},
+		{"a12 off is only a note while Docker runs", func(f *HostFacts) { f.LanmanServer, f.DockerDesktopRunning = "disabled", Yes }, runtime.ReasonRunning, "a12", StepNote, "", ""},
+		{"a12 unknown stays unknown while Docker runs", func(f *HostFacts) { f.LanmanServer, f.DockerDesktopRunning = "unknown", Yes }, runtime.ReasonRunning, "a12", StepUnknown, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,5 +254,19 @@ func TestWindows10NoteShowsOnce(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("the Windows 10 note shows %d times", n)
+	}
+}
+
+// A PC where Docker runs has no step that needs the user, whatever the advice
+// rows say: VirtualBox installed and the Server service on Manual are notes.
+func TestDockerRunningLeavesNothingThatNeedsYou(t *testing.T) {
+	f := goodPC()
+	f.DockerDesktopRunning, f.LanmanServer = Yes, "manual"
+	f.OtherHypervisors, f.OtherHypervisorNames = Yes, []string{"VirtualBox"}
+	derive(&f)
+	for _, s := range DockerSteps(f, runtime.ReasonRunning) {
+		if s.State == StepNeedsYou || s.State == StepBlocked {
+			t.Errorf("Docker runs, but %s is %s: %s", s.ID, s.State, s.Text)
+		}
 	}
 }

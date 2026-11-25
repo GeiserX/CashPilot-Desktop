@@ -93,7 +93,7 @@ func (a *App) beginRestart(step string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("could not save where the setup stands before the restart: %w", err)
 	}
-	if err := setupresume.Arm(exe); err != nil {
+	if err := a.runOnceKey().Arm(exe); err != nil {
 		log.Printf("setup: Windows will not reopen CashPilot by itself: %v", err)
 		return false, nil
 	}
@@ -119,9 +119,9 @@ func (a *App) SetupResume() (setupresume.View, error) {
 	if j != nil {
 		var err error
 		if v.Rearm {
-			err = setupresume.Arm(currentExe())
+			err = a.runOnceKey().Arm(currentExe())
 		} else {
-			err = setupresume.Disarm()
+			err = a.runOnceKey().Disarm()
 		}
 		if err != nil {
 			log.Printf("setup: RunOnce: %v", err)
@@ -146,7 +146,7 @@ func (a *App) endSetup() error {
 	if a.cfg == nil || a.cfg.Config().SetupJournal == nil {
 		return nil
 	}
-	if err := setupresume.Disarm(); err != nil {
+	if err := a.runOnceKey().Disarm(); err != nil {
 		log.Printf("setup: could not remove the RunOnce value: %v", err)
 	}
 	return a.cfg.Update(func(c *config.AppConfig) { c.SetupJournal = nil })
@@ -166,6 +166,30 @@ func (a *App) onSecondInstance(data options.SecondInstanceData) {
 		a.resumeSetup.Store(true)
 		a.emitEvent("setup:resume")
 	}
+}
+
+// runOnceWriter arms and disarms the RunOnce value. The real one is
+// setupresume's, which writes HKCU\...\RunOnce on Windows and does nothing
+// elsewhere.
+type runOnceWriter interface {
+	Arm(exe string) error
+	Disarm() error
+}
+
+type realRunOnce struct{}
+
+func (realRunOnce) Arm(exe string) error { return setupresume.Arm(exe) }
+func (realRunOnce) Disarm() error        { return setupresume.Disarm() }
+
+// defaultRunOnce is what an App with no runOnce of its own uses. The package's
+// tests replace it, so no test can arm the real RunOnce key.
+var defaultRunOnce runOnceWriter = realRunOnce{}
+
+func (a *App) runOnceKey() runOnceWriter {
+	if a.runOnce != nil {
+		return a.runOnce
+	}
+	return defaultRunOnce
 }
 
 // currentExe is this app's path, with links resolved.

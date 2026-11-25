@@ -13,6 +13,7 @@ Each step has a state:
 - **Needs you**: something on your PC must change. The step says what and offers the next safe action.
 - **Waits for an earlier step**: finish the step it names first.
 - **Not known**: CashPilot could not read it. It never calls a step done unless it read it.
+- **Worth knowing**: advice that blocks nothing CashPilot can prove. The summary does not count it as a step to finish.
 
 Click **Check again** after you change something. CashPilot then reads every step again.
 
@@ -29,9 +30,9 @@ Click **Check again** after you change something. CashPilot then reads every ste
 | Docker's terms | Whether Docker Desktop was ever opened on your account, and whether its engine runs. | Bring Docker Desktop's window forward. You accept its terms there. |
 | docker-users group | Shows only when Docker refuses your account. Whether your account is in the group, and whether this sign-in carries it. | Sign out and back in, or how an administrator adds you. |
 | Linux containers | Whether Docker runs Linux containers, which the apps need. | How to switch in Docker Desktop. |
-| Other virtual machine software | The VirtualBox and VMware drivers. They can slow Docker down. | A note only. |
+| Other virtual machine software | The VirtualBox and VMware drivers. They can slow Docker down. Shown as worth knowing, because nothing proves they stop Docker. | A note only. |
 | This PC is a virtual machine | The PC's maker and model. Inside a virtual machine, Docker needs nested virtualization from the outer machine. | A note only. |
-| Windows Server service | The start type of the Server service (LanmanServer). Docker needs it set to Automatic. | How to set it as an administrator. |
+| Windows Server service | The start type of the Server service (LanmanServer). Docker needs it set to Automatic. While Docker runs, a service on Manual or turned off is only worth knowing. | How to set it as an administrator. |
 
 Steps that need an administrator show **Coming in the next version**, with the way to do them by hand.
 
@@ -44,7 +45,7 @@ Before the restart, CashPilot saves where the checklist stands. It also asks Win
 - If the PC restarted, it says so.
 - If the PC did not restart yet, it says **Restart to finish**.
 
-If your PC cannot restart into its BIOS by itself (an older BIOS, or a work policy), CashPilot says so and nothing restarts. Restart the PC yourself and press the BIOS key at power-on: often F2 or Del, F10 or Esc on HP, F1 on some Lenovo PCs.
+If your PC cannot restart into its BIOS by itself (an older BIOS, or a work policy), CashPilot says so and nothing restarts. On a UEFI PC, Windows can still open the BIOS for you: open Settings, System, Recovery, and click **Restart now** next to Advanced startup. Then choose Troubleshoot, Advanced options, UEFI Firmware Settings. If that option is not there, restart the PC yourself and press the BIOS key at power-on: often F2 or Del, F10 or Esc on HP, F1 on some Lenovo PCs.
 
 Click **Stop guiding me after restarts** to cancel. CashPilot removes what it saved, and Windows does not open it at the next sign-in.
 

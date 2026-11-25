@@ -3,7 +3,7 @@
 // wiring (src/render/dockerguide_wire.ts), against the HTML the real functions
 // return.
 //
-//   1. EACH STATE IS DRAWN AS ITSELF. done, needs you, blocked and unknown each get
+//   1. EACH STATE IS DRAWN AS ITSELF. done, needs you, blocked, unknown and note each get
 //      their own label, and no row that is not done is labelled Done.
 //   2. A BLOCKED ROW names the step to finish first and offers nothing to click.
 //   3. AN ADMIN ACTION IS "COMING NEXT": a disabled button, and the way to do it by
@@ -20,6 +20,8 @@
 //   9. RESUME AFTER A RESTART: same boot says "Restart to finish"; a new boot says
 //      the checks ran again.
 //  10. TEXT FROM GO IS ESCAPED.
+//  11. A NOTE IS ADVICE: it reads "Worth knowing", never Done or Needs you, and the
+//      summary does not count it as a step to finish.
 //
 //   node scripts/dockerguide_render_check.mjs      # against ./.harness-build
 
@@ -102,11 +104,16 @@ check("RULE 4: the confirm screen is the confirm screen", confirm === `<section 
 check("RULE 4: it says the PC restarts now", text(confirm).includes("Your PC restarts now"), text(confirm));
 check("RULE 4: it says open apps close and unsaved work can be lost", text(confirm).includes("Windows closes every open app. Save your work first: work you have not saved can be lost."), text(confirm));
 check("RULE 4: it says CashPilot never changes BIOS settings", text(confirm).includes("CashPilot never changes BIOS settings itself."), text(confirm));
+const restarting = renderDockerGuide({ ...base, view: "firmware-confirm", restarting: true });
+check("RULE 4: while the restart is asked, Restart now is busy and disabled", /<button[^>]*data-guide-action="firmware-go"[^>]*disabled[^>]*aria-busy="true"[^>]*>Restarting…</.test(restarting), restarting);
+check("RULE 4: while the restart is asked, Cancel waits too", /data-guide-action="back" disabled/.test(restarting), restarting);
 check("RULE 4: it has the restart and a way out", /data-guide-action="firmware-go"/.test(confirm) && /data-guide-action="back"/.test(confirm), confirm);
 
 // RULE 5
 const failed = firmwareFailed({ started: false, reopens: true });
 check("RULE 5: the fallback says nothing restarted", text(failed).includes("Nothing restarted."), text(failed));
+check("RULE 5: the fallback offers Windows' Advanced startup, which needs no admin", text(failed).includes("Settings, System, Recovery") && text(failed).includes("Advanced startup") && text(failed).includes("UEFI Firmware Settings"), text(failed));
+check("RULE 5: Advanced startup comes before the power-on keys", failed.indexOf("advanced-startup") < failed.indexOf("power-on-key") && failed.indexOf("advanced-startup") > 0, failed);
 check("RULE 5: the fallback names the BIOS keys", /F2 or Del/.test(text(failed)) && /F10 or Esc on HP/.test(text(failed)), text(failed));
 check("RULE 5: armed RunOnce: CashPilot opens by itself", text(failed).includes("opens this checklist by itself"), text(failed));
 check("RULE 5: no RunOnce: open CashPilot by hand", text(firmwareFailed({ started: false, reopens: false })).includes("open CashPilot"), firmwareFailed(null));
@@ -148,6 +155,14 @@ const newBoot = renderDockerGuide({ ...base, resume: { active: true, flow: "dock
 check("RULE 9: a new boot says the checks ran again", text(newBoot).includes("Welcome back. The PC restarted, and CashPilot checked every step again."), text(newBoot));
 check("RULE 9: the user can stop the guiding", /data-guide-action="cancel-setup"/.test(newBoot));
 check("RULE 9: no resume, no banner", !/data-resume/.test(list));
+
+// RULE 11
+const noted = renderDockerGuide({ ...base, steps: [...steps, { id: "a10", title: "Other virtual machine software", state: "note", text: "VirtualBox is installed.", action: none }] });
+const noteRow = rows(noted).find((r) => r.id === "a10");
+check("RULE 11: a note reads Worth knowing", rowLabel(noteRow) === "Worth knowing", noteRow?.html);
+check("RULE 11: a note is not a step to finish", text(noted).includes("1 of 6 steps done. 3 steps need you."), text(noted));
+const allNotes = renderDockerGuide({ ...base, steps: [steps[0], { id: "a12", title: "Windows Server service", state: "note", text: "Docker runs, but the Server service is set to Manual.", action: none }] });
+check("RULE 11: a note never makes the summary say a step needs you", text(allNotes).includes("1 of 1 steps done.") && !/need/.test(text(allNotes).match(/\d+ of \d+ steps done\.[^.]*\.?/)?.[0] || ""), text(allNotes));
 
 // RULE 10
 const hostile = renderDockerGuide({ ...base, steps: [{ id: "a1", title: "<b>t</b>", state: "needs-you", text: "<img src=x onerror=alert(1)>", action: { kind: "url", label: "<i>l</i>", url: '"><script>' } }] });
@@ -237,6 +252,44 @@ const deps = (over = {}) => {
   const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
   await g.startDocker();
   check("RULE 8 (wiring): a start that failed says so and waits for nothing", g.model.waitResult === "failed" && g.model.waiting === null);
+}
+
+{
+  // A double click on Restart now asks Windows once.
+  let answer;
+  const { calls, deps: d } = deps({ restartToFirmware: (step) => { calls.firmware.push(step); return new Promise((r) => { answer = r; }); } });
+  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
+  await g.act("firmware", "a2");
+  const first = g.act("firmware-go", "");
+  const second = g.act("firmware-go", "");
+  check("RULE 4 (wiring): a double click on Restart now restarts once", calls.firmware.length === 1, JSON.stringify(calls.firmware));
+  check("RULE 4 (wiring): Restart now is busy until Go answers", g.model.restarting === true);
+  answer({ started: false, reopens: false });
+  await Promise.all([first, second]);
+  check("RULE 4 (wiring): a refused restart frees the button", g.model.restarting === false && g.model.view === "firmware-failed", JSON.stringify(g.model));
+  await g.act("back", "");
+  await g.act("firmware", "a2");
+  const third = g.act("firmware-go", "");
+  check("RULE 4 (wiring): after a refusal, a new click asks again", calls.firmware.length === 2, JSON.stringify(calls.firmware));
+  answer({ started: true, reopens: true });
+  await third;
+  check("RULE 4 (wiring): a restart Windows started keeps the button busy", g.model.restarting === true);
+}
+
+{
+  // Docker came up: the setup is finished, so no "Restart to finish" stays.
+  const sameBootResume = { active: true, flow: "docker", step: "a2", restarted: "no", exeMoved: false, attempts: 1, fromRunOnce: false };
+  const running = { available: true, reason: "running", nativeServices: [] };
+  let up = false;
+  const { deps: d } = deps({ hostCheck: async () => ({ facts: { supported: true }, runtime: up ? running : runtimeDown, steps }) });
+  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: sameBootResume, result: { facts: {}, runtime: runtimeDown, steps } });
+  await g.check();
+  check("RULE 9 (wiring): Docker still down keeps the banner", g.model.resume === sameBootResume);
+  up = true;
+  await g.check();
+  check("RULE 9 (wiring): a reading that finds Docker running drops the banner", g.model.resume === null && !/data-resume/.test(renderDockerGuide(g.model)));
+  const later = new DockerGuide(holder(), d, { runtime: running, resume: sameBootResume, result: { facts: {}, runtime: running, steps } });
+  check("RULE 9 (wiring): a guide opened with Docker running draws no banner", later.model.resume === null);
 }
 
 if (failures > 0) {
