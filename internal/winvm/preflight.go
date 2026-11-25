@@ -508,8 +508,7 @@ const foreignNATRemedy = "Windows supports only one NAT network. CashPilot will 
 
 func checkHostNAT(nats []LiveNAT, recorded LiveNAT) VMHostCheck {
 	for _, nat := range nats {
-		if recorded.ID != "" && nat.ID == recorded.ID &&
-			strings.EqualFold(nat.Name, recorded.Name) && nat.Prefix.Masked() == recorded.Prefix {
+		if matchesRecordedNAT(nat, recorded) {
 			// The journal can account for at most one NAT.
 			recorded.ID = ""
 			continue

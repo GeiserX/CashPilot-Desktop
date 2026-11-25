@@ -190,11 +190,12 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		res.Removed = append(res.Removed, "the switch "+s.ID+" with its host vNIC, address and neighbour entry")
 	}
 
+	recordedNAT := LiveNAT{Name: n.NAT, ID: p.NATID, Prefix: p.Subnet}
 	for _, x := range inv.NATs {
 		if !strings.EqualFold(x.Name, n.NAT) {
 			continue
 		}
-		if !independentNATID(n.NAT, p.NATID) || p.NATID != x.ID || x.Prefix.Masked() != p.Subnet {
+		if !matchesRecordedNAT(x, recordedNAT) {
 			res.Left = append(res.Left, fmt.Sprintf("the NAT %s on %s (ownership could not be verified)", x.Name, x.Prefix))
 			continue
 		}

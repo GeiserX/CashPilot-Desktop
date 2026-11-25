@@ -192,6 +192,36 @@ func TestBuildRefusesNonOverlappingForeignNAT(t *testing.T) {
 	}
 }
 
+func TestBuildRefusesForeignNATAddedDuringPublicIPLookup(t *testing.T) {
+	f := hvfake.New()
+	d := buildDeps(t, f, t.TempDir())
+	const name = "OtherWorkload"
+	prefix := netip.MustParsePrefix("10.250.255.0/30")
+	var before []string
+	d.Echo = func(context.Context) []netip.Addr {
+		f.AddForeignNAT(name, prefix)
+		before = f.Objects()
+		f.FailNext("EnsureNAT", errors.New("live NAT check: OtherWorkload already exists"))
+		return []netip.Addr{f.PublicIP}
+	}
+
+	_, err := winvm.Build(context.Background(), d, setupParams())
+	if before == nil {
+		t.Fatalf("Setup stopped before the public IP lookup: %v", err)
+	}
+	for _, step := range []string{"EnsureSwitch", "SetBindings", "EnsureNAT"} {
+		if indexOf(f.Calls(), step) >= 0 {
+			t.Errorf("Setup reached %s with a foreign NAT present", step)
+		}
+	}
+	if got := f.Objects(); !slices.Equal(got, before) {
+		t.Errorf("Setup changed the host:\n  before: %v\n  after:  %v", before, got)
+	}
+	if !errors.Is(err, winvm.ErrNotOwned) || !strings.Contains(err.Error(), `A NAT network named "OtherWorkload" already exists on 10.250.255.0/30`) {
+		t.Errorf("Setup = %v, want the foreign NAT refusal", err)
+	}
+}
+
 // TestBuildRefusesForeignObjects: an object with the Secure VM's name that
 // this install did not make stops the build before it changes anything.
 func TestBuildRefusesForeignObjects(t *testing.T) {

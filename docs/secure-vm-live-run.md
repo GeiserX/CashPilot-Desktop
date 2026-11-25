@@ -17,6 +17,7 @@ Prefer a disposable Windows 11 Pro VM with nested virtualization. Enable `Expose
 - Stop and report any unexpected inventory change, failed read or ambiguous identity. Take read-only evidence after a stop.
 - Before CashPilot changes an existing object, match its live identity to the run's journal. Stop if an action would target an unrecorded object.
 - For manual fixture changes and cleanup, match the live identity to the fixture ledger. Never select a mutation target by name, MAC address or path pattern alone.
+- On a shared test host, record NAT coexistence as untested. Read the NAT list before each Setup. If the list has no foreign NAT, continue the run. Otherwise, keep the foreign NAT in place. Record that successful Setup is blocked. Go directly to [Verify cleanup](#verify-cleanup).
 
 ## Record the baseline
 
@@ -64,11 +65,17 @@ On a running VM's writable leaf disk, file size can grow and `LastWriteTime` can
 4. For the collision number, create an internal switch and a VM named `cpd-svm-<collision>`. These are throwaway fixtures. Put a distinct 32-hex `cashpilot-owner=` tag in the switch and VM Notes. Keep the VM off.
 5. Create a harmless disabled rule in the `cpd-svm-<collision>` firewall group and another in `cpd-svm-<collision>-proof`. Register a disabled task at `\CashPilot\VMGuard-cpd-svm-<collision>`. Use the decoy tag in their descriptions.
 6. Create a test GuestCommunicationServices key with a fresh GUID. Start its `ElementName` with `CashPilot Secure VM proof cpd-svm-<collision>.`
-7. Use a separate refusal run for the decoy NAT. Windows WinNAT supports one internal NAT prefix. If the host already has a NAT, leave it in place and report that the decoy NAT test is blocked. If the NAT list is empty, create `cpd-svm-<nat-collision>` as the decoy NAT on the decoy subnet. Keep its instance free of other name collisions. [WinNAT documentation](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/setup-nat-network)
+7. Skip this step on a shared test host. On the disposable nested guest, use a separate refusal run for the decoy NAT. Windows WinNAT supports one internal NAT prefix. [WinNAT documentation](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/setup-nat-network)
+   - If the guest already has a NAT, leave it in place. Report that the decoy NAT test is blocked.
+   - If the NAT list is empty, create `cpd-svm-<nat-collision>` as the decoy NAT on the decoy subnet. Keep its instance free of other name collisions.
 8. Save `decoys-before.json` before CashPilot touches either lab instance. Record the same fields as the host baseline for each fixture. Include all VM, switch and adapter IDs. Record the file identities and parent chains. Include the NAT provider ID, task path and XML, firewall rule IDs and filters, and registry key GUID.
 9. Run Setup for the collision number. Require refusal. Run Remove against the same instance with no ownership journal for the decoys. Require it to report the matching objects and leave them in place. Save and diff the decoy inventory after each command.
 10. If you created the decoy NAT, run Setup and Remove for its instance number. Require Setup to refuse the NAT collision. Require Remove to list the NAT. Diff the NAT inventory after both commands. Remove only the decoy NAT by its recorded provider ID at the end of this run.
-11. Save a fresh baseline for the remaining decoys. If any foreign NAT remains, run Setup once for an unused lab instance. Require Setup to refuse and name the existing NAT and its prefix. Compare the full switch, management vNIC and NAT lists before and after. Require no new switch, management vNIC or NAT. Keep the existing NAT, including its name and settings. Record that successful Setup is blocked. End the run here and go directly to [Verify cleanup](#verify-cleanup).
+11. Save a fresh baseline for the remaining decoys. If the NAT list is empty, continue to step 12.
+    - If a foreign NAT remains on a shared test host, end the run under the [shared host rule](#keep-bunker-read-only).
+    - If a foreign NAT remains on the disposable nested guest, run Setup once for an unused lab instance. Require Setup to refuse. Verify that the message gives the existing NAT's name and prefix.
+
+      Compare the full switch, management vNIC and NAT lists before and after Setup. Require no new switch, management vNIC or NAT. Keep the existing NAT, including its name and settings. Record that successful Setup is blocked. Go directly to [Verify cleanup](#verify-cleanup).
 12. Keep the remaining decoys in place through the successful Setup, Repair and final Remove. Save and diff their inventory after each operation. Stop and report any changed or missing decoy.
 
 ## Use pktmon without disturbing existing captures

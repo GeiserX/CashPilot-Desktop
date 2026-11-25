@@ -1,6 +1,7 @@
 package winvm
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -253,6 +254,18 @@ func TestCheckVMHostRefusals(t *testing.T) {
 		if r.Ready {
 			t.Errorf("%s: still ready", c.name)
 		}
+	}
+}
+
+func TestCheckVMHostRefusesReplacementNATWithNameDerivedID(t *testing.T) {
+	nat := LiveNAT{Name: "CashPilot-VM", ID: "CashPilot-VM;0", Prefix: pfx("172.31.250.0/29")}
+	r := CheckVMHost(vmHostInput(func(in *VMHostInput) {
+		in.RecordedNAT = nat
+		in.NATs = []LiveNAT{nat}
+	}))
+	got := checkOf(r, CheckNATExists)
+	if got.OK != No || !strings.Contains(got.Detail, `A NAT network named "CashPilot-VM" already exists on 172.31.250.0/29`) {
+		t.Errorf("preflight = %+v, want the foreign NAT refusal", got)
 	}
 }
 

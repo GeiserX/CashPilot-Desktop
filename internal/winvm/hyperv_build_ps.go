@@ -211,12 +211,22 @@ if ($sw.Name -ne $in.switch) {
 Write-Doc ([ordered]@{ switchId = $switchId; managementId = $managementId; ifIndex = $idx })
 `
 
+const natOwnershipPrelude = buildPrelude + `function Test-RecordedNAT($nat, $recorded) {
+  $id = [string]$recorded.id
+  if (-not $id -or [Text.Encoding]::UTF8.GetByteCount($id) -gt 260 -or $id -match '\p{Cc}') { return $false }
+  # A name or a name/store key can be reused by a replacement NAT.
+  if (($id -split ';', 2)[0] -eq $recorded.nat) { return $false }
+  return ($nat.Name -eq $recorded.nat -and [string]$nat.InstanceID -ceq $id -and
+    [string]$nat.InternalIPInterfaceAddressPrefix -eq $recorded.prefix)
+}
+`
+
 // scriptEnsureNAT checks the full inventory again just before New-NetNat.
-const scriptEnsureNAT = buildPrelude + `$n = @(Get-NetNat -ErrorAction Stop)
+const scriptEnsureNAT = natOwnershipPrelude + `$n = @(Get-NetNat -ErrorAction Stop)
 $nat = $null
 foreach ($candidate in $n) {
-  $prefix = [string]$candidate.InternalIPInterfaceAddressPrefix
-  if ($nat -or $candidate.Name -ne $in.nat -or -not $in.id -or [string]$candidate.InstanceID -cne $in.id -or $prefix -ne $in.prefix) {
+  if ($nat -or -not (Test-RecordedNAT $candidate $in)) {
+    $prefix = [string]$candidate.InternalIPInterfaceAddressPrefix
     if (-not $prefix) { $prefix = 'an unknown prefix' }
     throw ('A NAT network named "{0}" already exists on {1}. ` + foreignNATRemedy + `' -f $candidate.Name, $prefix)
   }
@@ -596,9 +606,9 @@ Write-Doc @{ kept = '' }
 `
 
 // scriptRemoveNAT removes the exact recorded provider object.
-const scriptRemoveNAT = buildPrelude + `$n = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $in.nat })
+const scriptRemoveNAT = natOwnershipPrelude + `$n = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $in.nat })
 if ($n.Count -gt 0) {
-  if ($n.Count -ne 1 -or [string]$n[0].InstanceID -cne $in.id -or [string]$n[0].InternalIPInterfaceAddressPrefix -ne $in.prefix) {
+  if ($n.Count -ne 1 -or -not (Test-RecordedNAT $n[0] $in)) {
     throw 'The NAT changed since inventory.'
   }
   if (@(Get-NetNatStaticMapping | Where-Object { $_.NatName -eq $in.nat }).Count -gt 0 -or
@@ -949,6 +959,11 @@ func independentNATID(name, id string) bool {
 	}
 	key, _, _ := strings.Cut(id, ";")
 	return !strings.EqualFold(key, name)
+}
+
+func matchesRecordedNAT(nat, recorded LiveNAT) bool {
+	return independentNATID(recorded.Name, recorded.ID) && nat.ID == recorded.ID &&
+		strings.EqualFold(nat.Name, recorded.Name) && nat.Prefix.Masked() == recorded.Prefix
 }
 
 // EnsureNAT creates or reads the NAT, returning the provider's identity.

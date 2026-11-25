@@ -553,6 +553,20 @@ function New-NetNat { [pscustomobject]@{ InstanceID = 'created-id' } }
 	}
 }
 
+func TestEnsureNATScriptRefusesReplacementNATWithNameDerivedID(t *testing.T) {
+	const mock = `
+function Get-NetNat {
+  [pscustomobject]@{ Name = 'CashPilot-VM'; InstanceID = 'CashPilot-VM;0'; InternalIPInterfaceAddressPrefix = '172.31.250.0/29'; TcpEstablishedConnectionTimeout = 42 }
+}
+function New-NetNat { throw 'would create a second NAT' }
+`
+	code, out := runOwnedScriptWithFake(t, mock, scriptEnsureNAT,
+		map[string]any{"nat": "CashPilot-VM", "id": "CashPilot-VM;0", "prefix": "172.31.250.0/29"})
+	if code == 0 || !strings.Contains(string(out), `A NAT network named "CashPilot-VM" already exists on 172.31.250.0/29`) {
+		t.Fatalf("exit = %d, output = %s, want the foreign NAT refusal", code, out)
+	}
+}
+
 func TestPktmonRejectsEmptyExport(t *testing.T) {
 	if _, err := parsePcapng(nil); err == nil {
 		t.Fatal("the empty export counted as capture evidence")

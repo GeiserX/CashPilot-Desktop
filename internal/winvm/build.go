@@ -371,8 +371,8 @@ func (b *builder) journal(ctx context.Context) error {
 	if b.inv, err = b.HV.Inventory(ctx, b.n, known, b.sp.UserSID); err != nil {
 		return err
 	}
-	if c := checkHostNAT(b.inv.NATs, b.recordedNAT()); c.OK != Yes {
-		return fmt.Errorf("%s (%s): %w", c.Detail, c.ID, ErrNotOwned)
+	if err := b.requireOwnedNATs(b.inv.NATs); err != nil {
+		return err
 	}
 	if err := b.checkOwnership(); err != nil {
 		return err
@@ -538,6 +538,13 @@ func (b *builder) recordedNAT() LiveNAT {
 	return LiveNAT{Name: b.n.NAT, ID: b.prev.NATID, Prefix: b.prev.Subnet}
 }
 
+func (b *builder) requireOwnedNATs(nats []LiveNAT) error {
+	if c := checkHostNAT(nats, b.recordedNAT()); c.OK != Yes {
+		return fmt.Errorf("%s (%s): %w", c.Detail, c.ID, ErrNotOwned)
+	}
+	return nil
+}
+
 // hostChecks runs CheckVMHost. On a Repair the VM's own memory and NAT are
 // not counted against it.
 func (b *builder) hostChecks(ctx context.Context) error {
@@ -584,6 +591,15 @@ func (b *builder) hostChecks(ctx context.Context) error {
 }
 
 func (b *builder) ensureSwitch(ctx context.Context) error {
+	// The host checks include a public IP lookup. Read the NATs again before
+	// creating a switch or configuring its management adapter.
+	inv, err := b.HV.Inventory(ctx, b.n, KnownIDs{}, "")
+	if err != nil {
+		return err
+	}
+	if err := b.requireOwnedNATs(inv.NATs); err != nil {
+		return err
+	}
 	id, managementID, ifx, err := b.HV.EnsureSwitch(ctx, b.n, b.p.Subnet, b.p.Owner, b.p.HostVNICMAC, b.p.SwitchID, b.p.ManagementAdapterID)
 	if err != nil {
 		return err
