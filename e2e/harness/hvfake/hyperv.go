@@ -1431,6 +1431,31 @@ func (f *HyperV) AddForeignVM(name string, vtpm bool) string {
 	return vm.id
 }
 
+// SetVMOwner writes an owner token into a VM's Notes, as a copy or an import
+// of the Secure VM would carry. It is not a seam call.
+func (f *HyperV) SetVMOwner(vmID, owner string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	vm.owner = owner
+	return nil
+}
+
+// AddMeterRow adds a Meter row to a VM's adapter, as resource metering does.
+// It is not a seam call.
+func (f *HyperV) AddMeterRow(vmID string, p netip.Prefix) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	return addACL(vm.adapter, "Meter", p)
+}
+
 // SetKeyProtector gives a VM a local key protector without a vTPM, as a VM
 // with only encrypted state has. It is not a seam call.
 func (f *HyperV) SetKeyProtector(vmID string) error {
