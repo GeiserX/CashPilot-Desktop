@@ -108,6 +108,11 @@ func (m *Manager) StopCopy(ctx context.Context, slug string, n int) error {
 	if err != nil {
 		return err
 	}
+	// As Stop: under the lock an automatic restart of this copy takes, and recorded,
+	// so a restart asked for before it does not undo it.
+	key := copyStopKey(slug, n)
+	defer m.stops.lock(key)()
+	m.stops.record(key)
 	if err := copier.StopCopy(ctx, slug, n, m.stopTimeout(slug)); err != nil {
 		m.store.RecordEvent(slug, "stop_error", fmt.Sprintf("copy %d: %v", n, err))
 		return err

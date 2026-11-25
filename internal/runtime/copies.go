@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	cerrdefs "github.com/containerd/errdefs"
@@ -172,6 +174,39 @@ func (p *DockerProvider) LogsCopy(ctx context.Context, slug string, n, lines int
 		return "", err
 	}
 	return stripDockerLogHeaders(raw), nil
+}
+
+// RestartCopy restarts copy n of slug in place, as Restart does the first copy, for
+// a health signal a restart clears.
+func (p *DockerProvider) RestartCopy(ctx context.Context, slug string, n, stopTimeoutSeconds int) error {
+	cli, err := dockerClient()
+	if err != nil {
+		return err
+	}
+	defer cli.Close()
+	name, err := managedCopy(ctx, cli, slug, n)
+	if err != nil {
+		return err
+	}
+	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
+	return p.startGuarded(ctx, cli, name, func() error {
+		_, err := cli.ContainerRestart(ctx, name, client.ContainerRestartOptions{Timeout: &timeout})
+		return err
+	})
+}
+
+// CopyLogsMatching is LogsMatching for copy n of slug.
+func (p *DockerProvider) CopyLogsMatching(ctx context.Context, slug string, n int, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+	cli, err := dockerClient()
+	if err != nil {
+		return "", err
+	}
+	name, err := managedCopy(ctx, cli, slug, n)
+	cli.Close()
+	if err != nil {
+		return "", err
+	}
+	return logsMatching(ctx, name, since, match, lines)
 }
 
 func (p *DockerProvider) RemoveCopy(ctx context.Context, slug string, n, stopTimeoutSeconds int) error {
