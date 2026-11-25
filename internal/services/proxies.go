@@ -642,6 +642,19 @@ func (m *Manager) ProxiedCopies() []runtime.ProxiedCopy {
 	return append([]runtime.ProxiedCopy(nil), m.proxy.last...)
 }
 
+// ReadProxiedCopies reads the proxied copies now, for the heartbeat and the usage
+// graphs. It only reads (runtime ReadProxied): starting an earner whose tunnel came
+// back stays ProxyTick's, once a minute, so these extra reads add no restarts and
+// no races between the window and the helper. A runtime that cannot run proxied
+// copies has none: nil and no error.
+func (m *Manager) ReadProxiedCopies(ctx context.Context) ([]runtime.ProxiedCopy, error) {
+	p, err := m.proxier()
+	if err != nil {
+		return nil, nil
+	}
+	return p.ReadProxied(ctx)
+}
+
 // CapNotice is a proxy whose cap holds, for the notification list.
 type CapNotice struct {
 	ProxyID int64

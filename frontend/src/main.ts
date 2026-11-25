@@ -95,6 +95,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
+import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
 import { renderEnvSetting, settingField, settingsSaveValues } from "./render/settings";
@@ -739,6 +740,7 @@ function renderDashboard(current: AppState) {
         </section>
 
         ${renderAttention(attention, upCount, containers.length)}
+        ${renderStallServerNote(current.stallsServer)}
 
         ${renderReminders(current.reminders)}
 

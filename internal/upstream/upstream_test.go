@@ -95,7 +95,7 @@ func TestSendPostsTheServerContract(t *testing.T) {
 	in := Payload{
 		Name:       "devbox",
 		ClientID:   "abc",
-		Containers: []Item{{Slug: "earnapp", Name: "EarnApp", Status: "running"}},
+		Containers: []Container{{Slug: "earnapp", Name: "EarnApp", Status: "running"}},
 		SystemInfo: SystemInfo{OS: "darwin", DeviceType: "desktop", Version: "1.2.3"},
 	}
 	resp, err := New().Send(context.Background(), srv.URL, "tok", in)

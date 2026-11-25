@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/stall"
+	"github.com/GeiserX/CashPilot-Desktop/internal/usage"
 )
 
 // StallAlert is one running copy that carries almost no traffic while the other
@@ -15,10 +17,12 @@ import (
 type StallAlert struct {
 	Slug string `json:"slug"`
 	// Service is the catalog name, Container the container's name, Copy which copy
-	// of the service it is (1 for the first).
+	// of the service it is (1 for the first). A proxied copy has ProxyID, the proxy
+	// it leaves through, and Copy 0.
 	Service   string `json:"service"`
 	Container string `json:"container"`
 	Copy      int    `json:"copy"`
+	ProxyID   int64  `json:"proxyId"`
 	// Since is the start (Unix seconds) of its first low hour, Hours how many whole
 	// low hours in a row it has had.
 	Since   int64  `json:"since"`
@@ -44,10 +48,14 @@ var stallStopped = map[string]bool{"exited": true, "dead": true}
 //
 // It alerts only. It never restarts anything, as on the web.
 //
-// It runs while this computer is joined to a CashPilot server (joined) too. The web app
-// runs the check on the server, from the per-container traffic each worker
-// reports, but this computer's heartbeat carries no traffic counters
-// (upstreamPayload), so the server cannot judge these copies.
+// The proxied copies (ProxyID) take part as copies of their service: their traffic
+// is their tunnel's, which carries every byte the earner moves (withProxiedUnits).
+//
+// While a CashPilot server judges this computer's copies (stallServer), it raises
+// their alerts, comparing them with the whole fleet, and this check raises none for
+// them and drops the ones it held. It still judges the proxied copies: the server's
+// check reads only the counters of a worker's own copies (web usage_hourly), so it
+// judges no proxied copy.
 func (a *App) checkStalls(infos []runtime.ContainerInfo, now time.Time) {
 	if a.store == nil || a.catalog == nil {
 		return
@@ -109,6 +117,7 @@ func (a *App) checkStalls(infos []runtime.ContainerInfo, now time.Time) {
 		}
 	}
 
+	server := a.stallServer(now) != ""
 	a.stallMu.Lock()
 	defer a.stallMu.Unlock()
 	if a.stalls == nil {
@@ -117,7 +126,7 @@ func (a *App) checkStalls(infos []runtime.ContainerInfo, now time.Time) {
 	raised := map[string]bool{}
 	for name, h := range stalled {
 		info, ok := listed[name]
-		if !ok || info.Status != "running" || info.Slug != h.slug {
+		if !ok || info.Status != "running" || info.Slug != h.slug || (server && info.ProxyID == 0) {
 			continue
 		}
 		a.stalls[name] = a.stallAlert(info, h.Stall)
@@ -125,6 +134,10 @@ func (a *App) checkStalls(infos []runtime.ContainerInfo, now time.Time) {
 	}
 	for name, al := range a.stalls {
 		if raised[name] {
+			continue
+		}
+		if server && al.ProxyID == 0 {
+			delete(a.stalls, name) // the server raises this copy's alert now
 			continue
 		}
 		if info, ok := listed[name]; ok && info.Slug == al.Slug && specFor(al.Slug) != nil {
@@ -145,15 +158,68 @@ func (a *App) stallAlert(info runtime.ContainerInfo, s stall.Stall) StallAlert {
 		name = svc.Name
 	}
 	copyN := max(info.Instance, 1)
+	if info.ProxyID != 0 {
+		copyN = 0
+	}
 	return StallAlert{
-		Slug: info.Slug, Service: name, Container: info.Name, Copy: copyN,
+		Slug: info.Slug, Service: name, Container: info.Name, Copy: copyN, ProxyID: info.ProxyID,
 		Since: s.Since, Hours: s.Hours,
-		Message: stallMessage(name, copyN, info.Name, s),
+		Message: stallMessage(name, stallCopyLabel(copyN), info.Name, s),
 	}
 }
 
+// stallCopyLabel names a copy in an alert: "copy 2", or "proxied copy" (Copy 0).
+func stallCopyLabel(copyN int) string {
+	if copyN == 0 {
+		return "proxied copy"
+	}
+	return fmt.Sprintf("copy %d", copyN)
+}
+
+// stallServer is the CashPilot server that judges this computer's own copies for
+// traffic stalls, or "" when this computer judges them itself. A server judges them
+// when this computer is joined to it, its last answer came within the grace
+// (stallServerGrace) and from a release whose stall check reads the counters the
+// heartbeat carries (stallsJudged), and the heartbeats come more often than hourly:
+// the server counts no traffic across a gap of over an hour (usage.MaxBaselineAge,
+// the web's too), and a real gap is the interval plus the time to send. In practice
+// the server's offline rule (serverStaleAfter) is the tighter limit: heartbeats must
+// come less than 3 minutes apart.
+func (a *App) stallServer(now time.Time) string {
+	if a.cfg == nil || !a.joined() {
+		return ""
+	}
+	cfg := a.cfg.Config()
+	serverURL := strings.TrimSpace(cfg.UpstreamURL)
+	interval := heartbeatInterval(cfg.UpstreamIntervalMinutes)
+	if serverURL == "" || interval.Seconds() >= usage.MaxBaselineAge || interval >= serverStaleAfter {
+		return ""
+	}
+	a.upstream.mu.Lock()
+	defer a.upstream.mu.Unlock()
+	if a.upstream.statusURL != serverURL || !a.upstream.stallsJudged ||
+		a.upstream.lastOK.IsZero() || now.Sub(a.upstream.lastOK) > stallServerGrace(interval) {
+		return ""
+	}
+	return strings.TrimRight(serverURL, "/")
+}
+
+// serverStaleAfter is how long a CashPilot server lets a worker stay silent before
+// it marks it offline (STALE_WORKER_SECONDS in the web app). Its stall check skips
+// offline boxes, so with heartbeats this far apart it would judge none of this
+// computer's copies, and this computer keeps judging them itself.
+const serverStaleAfter = 180 * time.Second
+
+// stallServerGrace is how long the server may stay silent before this computer
+// judges its own copies again: three heartbeats, and at least 15 minutes, three
+// usage samples. A shorter grace would raise every local alert at a short outage,
+// and the owner would get it twice, from here and from the server.
+func stallServerGrace(interval time.Duration) time.Duration {
+	return max(3*interval, 3*usageSampleInterval)
+}
+
 // stallMessage says what is wrong and what to check, in the web alert's words.
-func stallMessage(name string, copyN int, container string, s stall.Stall) string {
+func stallMessage(name, copyLabel, container string, s stall.Stall) string {
 	mb := func(rate float64) string {
 		if rate < 0.1*stall.MB {
 			return "under 0.1 MB"
@@ -164,9 +230,9 @@ func stallMessage(name string, copyN int, container string, s stall.Stall) strin
 	if s.Hours == 1 {
 		hours = "1 hour"
 	}
-	return fmt.Sprintf("%s copy %d (%s) has sent %s an hour for %s, while its other copies on this computer sent %s an hour. "+
+	return fmt.Sprintf("%s %s (%s) has sent %s an hour for %s, while its other copies on this computer sent %s an hour. "+
 		"It runs but gets almost no work. Look at its logs, and restart it if this lasts. CashPilot does not restart it by itself.",
-		name, copyN, container, mb(s.Sent), hours, mb(s.Peers))
+		name, copyLabel, container, mb(s.Sent), hours, mb(s.Peers))
 }
 
 // currentStalls is the current stall alerts, by service and copy.
@@ -192,7 +258,7 @@ func (a *App) stallNotifications() []Notification {
 	for _, al := range a.currentStalls() {
 		items = append(items, Notification{
 			Level:   "warning",
-			Title:   fmt.Sprintf("%s copy %d: almost no traffic", al.Service, al.Copy),
+			Title:   fmt.Sprintf("%s %s: almost no traffic", al.Service, stallCopyLabel(al.Copy)),
 			Message: al.Message,
 		})
 	}

@@ -125,6 +125,10 @@ type ContainerInfo struct {
 	MemoryKnown bool    `json:"-"`
 	NetRxBytes  *uint64 `json:"-"`
 	NetTxBytes  *uint64 `json:"-"`
+	// ProxyID is set on a proxied copy (ProxiedStatus) that the usage graphs and
+	// the stall check read beside the service's own copies: its counters are its
+	// tunnel's, and ContainerID is the tunnel's, the container they belong to.
+	ProxyID int64 `json:"-"`
 }
 
 type DockerProvider struct {

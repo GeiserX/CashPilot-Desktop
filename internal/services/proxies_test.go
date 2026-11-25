@@ -99,6 +99,9 @@ func (f *fakeProxyProvider) ProxiedStatus(context.Context) ([]runtime.ProxiedCop
 	}
 	return out, nil
 }
+func (f *fakeProxyProvider) ReadProxied(ctx context.Context) ([]runtime.ProxiedCopy, error) {
+	return f.ProxiedStatus(ctx)
+}
 func (f *fakeProxyProvider) TestProxy(context.Context, runtime.ProxySpec, string) (runtime.Exit, error) {
 	return runtime.Exit{IP: "203.0.113.9", Country: "DE", MS: 5}, nil
 }
