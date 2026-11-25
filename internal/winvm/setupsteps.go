@@ -77,6 +77,23 @@ const (
 	hrMemberInAlias            uint32 = 0x80070562 // ERROR_MEMBER_IN_ALIAS: already a member
 )
 
+// winget's own results for an install that touches a restart, from its return
+// code list
+// (https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md).
+// winget turns the installer's own exit code into one of these, so the Docker
+// install never ends 3010 or 1641 itself.
+const (
+	// WingetRebootToFinish is APPINSTALLER_CLI_ERROR_INSTALL_REBOOT_REQUIRED_TO_FINISH:
+	// "Restart your PC to finish installation."
+	WingetRebootToFinish uint32 = 0x8A150109
+	// WingetRebootForInstall is APPINSTALLER_CLI_ERROR_INSTALL_REBOOT_REQUIRED_FOR_INSTALL:
+	// "Installation failed. Restart your PC then try again."
+	WingetRebootForInstall uint32 = 0x8A15010A
+	// WingetRebootInitiated is APPINSTALLER_CLI_ERROR_INSTALL_REBOOT_INITIATED:
+	// "Your PC will restart to finish installation."
+	WingetRebootInitiated uint32 = 0x8A15010B
+)
+
 // wslDownloadCodes are failures of the Microsoft Store or Windows Update path
 // that WSL downloads through by default. Its --web-download switch fetches the
 // package from GitHub instead, so these get the offer to try that.
@@ -336,6 +353,8 @@ func SetupOutcome(op string, res runtime.ElevatedResult, err error, timedOut, we
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "Windows did not let CashPilot set the Server service to start automatically. A clean-up tool or a policy may hold it off."}
 	case CodeLaunchAuto:
 		return Outcome{State: OutcomeFailed, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
+	case WingetRebootForInstall:
+		return Outcome{State: OutcomeFailed, Code: hex, Text: "winget says Windows must restart before Docker Desktop can install. Restart the PC, then click Install Docker Desktop again."}
 	case CodeWingetGone:
 		return Outcome{State: OutcomeFallback, URL: DockerDownloadURL, Text: "winget, Windows' app installer, is not on this PC. CashPilot opened Docker's download page instead: download the installer, run it, then click Check again."}
 	}

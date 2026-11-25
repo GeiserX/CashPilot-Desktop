@@ -259,6 +259,7 @@ func TestSetupOutcomeReadsExitCodes(t *testing.T) {
 		{"a blocked program stops", OpWSLInstall, runtime.ElevatedResult{}, exitErr(1260), false, false, OutcomePolicy, ""},
 		{"no group", OpDockerUsers, runtime.ElevatedResult{}, exitErr(CodeGroupMissing), false, false, OutcomeFailed, ""},
 		{"no winget falls back to the page", OpDockerInstall, runtime.ElevatedResult{}, exitErr(CodeWingetGone), false, false, OutcomeFallback, ""},
+		{"winget's restart-then-retry is a failure", OpDockerInstall, runtime.ElevatedResult{}, exitErr(WingetRebootForInstall), false, false, OutcomeFailed, ""},
 		{"no PowerShell at all", OpLanmanServer, runtime.ElevatedResult{}, errors.New("exec: not found"), false, false, OutcomeFailed, ""},
 	}
 	for _, c := range cases {

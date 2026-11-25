@@ -142,10 +142,14 @@ func runSetupChange(ctx context.Context, r setupRunner, op string, webDownload b
 	return runtime.ElevatedResult{}, fmt.Errorf("%q has no runner", op)
 }
 
-// restartCodes reads a process that ended 3010 or 1641 as done with a restart
-// needed, as RunElevated does for admin scripts.
+// restartCodes reads the Docker install window's exit code, which is winget's:
+// its "restart to finish" and "your PC will restart" results are an install that
+// is done and needs a restart. winget never ends with the installer's 3010 or
+// 1641 itself (winvm's Winget* codes cite its list). Any other code stays as it
+// is: "restart, then try again" is a failure, and an unknown code is shown with
+// its number, after which Check again reads the PC.
 func restartCodes(err error) (runtime.ElevatedResult, error) {
-	if code, ok := runtime.ExitCodeOf(err); ok && (code == 3010 || code == 1641) {
+	if code, ok := runtime.ExitCodeOf(err); ok && (code == winvm.WingetRebootToFinish || code == winvm.WingetRebootInitiated) {
 		return runtime.ElevatedResult{RestartNeeded: true, ExitCode: int(code)}, nil
 	}
 	return runtime.ElevatedResult{}, err
