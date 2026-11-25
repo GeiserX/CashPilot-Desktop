@@ -19,7 +19,7 @@ func TestSnapshotReadsThisPC(t *testing.T) {
 	if took := time.Since(start); took > ProbeTimeout+5*time.Second {
 		t.Fatalf("Snapshot took %v, past its %v deadline", took, ProbeTimeout)
 	}
-	t.Logf("facts: %+v", f)
+	t.Logf("facts after %v: %+v", time.Since(start), f)
 	if !f.Supported {
 		t.Fatal("Windows reported as unsupported")
 	}
@@ -30,7 +30,7 @@ func TestSnapshotReadsThisPC(t *testing.T) {
 		t.Error("EditionID is empty")
 	}
 	if f.Arch == "unknown" {
-		t.Errorf("Win32_Processor.Architecture was not read (%v)", f.Problems["cim"])
+		t.Errorf("Win32_Processor.Architecture was not read (%v)", f.Problems["cpu"])
 	}
 	if !strings.HasPrefix(f.UserSID, "S-1-5-") {
 		t.Errorf("user SID %q (%v)", f.UserSID, f.Problems["account"])

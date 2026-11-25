@@ -16,7 +16,7 @@ import (
 // ProbeTimeout bounds one whole reading. Each probe runs on its own goroutine, and
 // a probe still running at the deadline is abandoned with its facts left Unknown,
 // so a hung PowerShell or wsl.exe never holds up the caller.
-const ProbeTimeout = 10 * time.Second
+const ProbeTimeout = 15 * time.Second
 
 // probes reads the machine. Each method returns a function that writes what it
 // read into the facts, so a probe that is abandoned at the deadline writes nothing.
@@ -24,7 +24,8 @@ type probes interface {
 	// supported is false where nothing can be read.
 	supported() bool
 	osVersion(ctx context.Context) (func(*HostFacts), error)
-	cim(ctx context.Context) (func(*HostFacts), error)
+	cpu(ctx context.Context) (func(*HostFacts), error)
+	features(ctx context.Context) (func(*HostFacts), error)
 	wsl(ctx context.Context) (func(*HostFacts), error)
 	docker(ctx context.Context) (func(*HostFacts), error)
 	account(ctx context.Context) (func(*HostFacts), error)
@@ -53,12 +54,13 @@ func snapshot(ctx context.Context, p probes, goos string, timeout time.Duration)
 		err   error
 	}
 	all := map[string]func(context.Context) (func(*HostFacts), error){
-		"os":      p.osVersion,
-		"cim":     p.cim,
-		"wsl":     p.wsl,
-		"docker":  p.docker,
-		"account": p.account,
-		"restart": p.restart,
+		"os":       p.osVersion,
+		"cpu":      p.cpu,
+		"features": p.features,
+		"wsl":      p.wsl,
+		"docker":   p.docker,
+		"account":  p.account,
+		"restart":  p.restart,
 	}
 	// Buffered for every probe, so one that answers after the deadline does not
 	// leak its goroutine on the send.
@@ -93,10 +95,13 @@ func snapshot(ctx context.Context, p probes, goos string, timeout time.Duration)
 	return f
 }
 
-// cimScript reads the CIM facts as JSON. Each block has its own try, so one class
+// cpuScript and featureScript read the CIM facts as JSON, in two processes that
+// run side by side: Win32_OptionalFeature walks every feature and can take many
+// seconds on a busy PC (it outlasted the deadline on a loaded CI runner), and it
+// must not take the CPU facts down with it. Each block has its own try, so a class
 // that cannot be read leaves only its own fields out. Values are written as CIM
 // returns them, so a null stays null and reads as Unknown.
-const cimScript = `$ErrorActionPreference = 'Stop'
+const cpuScript = `$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $o = [ordered]@{}
 try { $o.hypervisorPresent = (Get-CimInstance -ClassName Win32_ComputerSystem).HypervisorPresent } catch { }
@@ -106,6 +111,11 @@ try {
   $o.firmware = $p.VirtualizationFirmwareEnabled
   $o.slat = $p.SecondLevelAddressTranslationExtensions
 } catch { }
+$o | ConvertTo-Json -Compress`
+
+const featureScript = `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$o = [ordered]@{}
 try { $f = Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name='Microsoft-Windows-Subsystem-Linux'"; if ($f) { $o.wslFeature = $f.InstallState } else { $o.wslFeature = 3 } } catch { }
 try { $f = Get-CimInstance -ClassName Win32_OptionalFeature -Filter "Name='VirtualMachinePlatform'"; if ($f) { $o.vmpFeature = $f.InstallState } else { $o.vmpFeature = 3 } } catch { }
 $o | ConvertTo-Json -Compress`
@@ -119,21 +129,33 @@ type cimFacts struct {
 	VMPFeature        *int  `json:"vmpFeature"`
 }
 
-// parseCIM decodes cimScript's output into a function that applies it.
+// parseCIM decodes cpuScript's or featureScript's output into a function that
+// applies it. It writes only the fields the answer has, so the two answers never
+// undo each other, and a null value stays Unknown.
 func parseCIM(out []byte) (func(*HostFacts), error) {
 	var c cimFacts
 	if err := json.Unmarshal(bytes.TrimSpace(out), &c); err != nil {
 		return nil, fmt.Errorf("could not read the CIM answer: %v", err)
 	}
 	return func(f *HostFacts) {
-		f.HypervisorPresent = triPtr(c.HypervisorPresent)
-		f.Firmware = triPtr(c.Firmware)
-		f.SLAT = triPtr(c.SLAT)
+		if c.HypervisorPresent != nil {
+			f.HypervisorPresent = triPtr(c.HypervisorPresent)
+		}
+		if c.Firmware != nil {
+			f.Firmware = triPtr(c.Firmware)
+		}
+		if c.SLAT != nil {
+			f.SLAT = triPtr(c.SLAT)
+		}
 		if c.Architecture != nil {
 			f.Arch = archName(*c.Architecture)
 		}
-		f.WSLFeature = featureState(c.WSLFeature)
-		f.VMPlatformFeature = featureState(c.VMPFeature)
+		if c.WSLFeature != nil {
+			f.WSLFeature = featureState(c.WSLFeature)
+		}
+		if c.VMPFeature != nil {
+			f.VMPlatformFeature = featureState(c.VMPFeature)
+		}
 	}, nil
 }
 

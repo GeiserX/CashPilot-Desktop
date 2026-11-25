@@ -60,9 +60,17 @@ func (systemProbes) osVersion(context.Context) (func(*HostFacts), error) {
 	}, nil
 }
 
-// cim runs cimScript in an unelevated, hidden PowerShell.
-func (systemProbes) cim(ctx context.Context) (func(*HostFacts), error) {
-	cmd := hidden(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(cimScript))
+// cpu and features run their CIM scripts in an unelevated, hidden PowerShell.
+func (systemProbes) cpu(ctx context.Context) (func(*HostFacts), error) {
+	return runCIM(ctx, cpuScript)
+}
+
+func (systemProbes) features(ctx context.Context) (func(*HostFacts), error) {
+	return runCIM(ctx, featureScript)
+}
+
+func runCIM(ctx context.Context, script string) (func(*HostFacts), error) {
+	cmd := hidden(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(script))
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("PowerShell: %v", err)

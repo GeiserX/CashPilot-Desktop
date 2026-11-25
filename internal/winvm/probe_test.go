@@ -12,9 +12,9 @@ import (
 // fakeProbes answers each probe from a function; a nil one blocks until the
 // deadline, the way a hung PowerShell would.
 type fakeProbes struct {
-	unsupported                                  bool
-	osV, cimV, wslV, dockerV, accountV, restartV func(*HostFacts)
-	cimErr                                       error
+	unsupported                                         bool
+	osV, cimV, featV, wslV, dockerV, accountV, restartV func(*HostFacts)
+	cimErr                                              error
 }
 
 func block(ctx context.Context) (func(*HostFacts), error) {
@@ -33,8 +33,11 @@ func (p fakeProbes) supported() bool { return !p.unsupported }
 func (p fakeProbes) osVersion(ctx context.Context) (func(*HostFacts), error) {
 	return answer(ctx, p.osV, nil)
 }
-func (p fakeProbes) cim(ctx context.Context) (func(*HostFacts), error) {
+func (p fakeProbes) cpu(ctx context.Context) (func(*HostFacts), error) {
 	return answer(ctx, p.cimV, p.cimErr)
+}
+func (p fakeProbes) features(ctx context.Context) (func(*HostFacts), error) {
+	return answer(ctx, p.featV, nil)
 }
 func (p fakeProbes) wsl(ctx context.Context) (func(*HostFacts), error) {
 	return answer(ctx, p.wslV, nil)
@@ -52,7 +55,8 @@ func (p fakeProbes) restart(ctx context.Context) (func(*HostFacts), error) {
 func TestSnapshotAppliesEveryProbe(t *testing.T) {
 	p := fakeProbes{
 		osV:      func(f *HostFacts) { f.Build, f.EditionID = 22631, "Core" },
-		cimV:     func(f *HostFacts) { f.Arch, f.HypervisorPresent, f.Firmware, f.VMPlatformFeature = "x64", No, No, Yes },
+		cimV:     func(f *HostFacts) { f.Arch, f.HypervisorPresent, f.Firmware = "x64", No, No },
+		featV:    func(f *HostFacts) { f.VMPlatformFeature = Yes },
 		wslV:     func(f *HostFacts) { f.WSLInstalled, f.WSLVersion = Yes, "2.0.9.0" },
 		dockerV:  func(f *HostFacts) { f.DockerDesktopInstalled = No },
 		accountV: func(f *HostFacts) { f.UserSID = "S-1-5-21-1-2-3-1001" },
@@ -94,7 +98,7 @@ func TestSnapshotDegradesAHungProbeToUnknown(t *testing.T) {
 	if f.Problems["account"] != "timed out" || f.Problems["restart"] != "timed out" {
 		t.Errorf("the hung probes are not reported as timed out: %v", f.Problems)
 	}
-	if f.Problems["cim"] == "" {
+	if f.Problems["cpu"] == "" || f.Problems["features"] != "timed out" {
 		t.Errorf("the failed CIM probe is not reported: %v", f.Problems)
 	}
 	if f.DockerUsersToken != Unknown || f.RestartPending != Unknown {
@@ -105,6 +109,27 @@ func TestSnapshotDegradesAHungProbeToUnknown(t *testing.T) {
 	}
 	if f.Build != 26100 || f.DockerDesktopInstalled != Yes {
 		t.Errorf("the probes that answered were dropped: %+v", f)
+	}
+}
+
+// The CI runner showed it: Win32_OptionalFeature can outlast the deadline. A slow
+// feature read must not cost the CPU facts read beside it.
+func TestSnapshotKeepsCPUFactsWhenTheFeatureReadHangs(t *testing.T) {
+	p := fakeProbes{
+		osV:      func(f *HostFacts) { f.Build, f.EditionID = 26100, "Professional" },
+		cimV:     func(f *HostFacts) { f.Arch, f.HypervisorPresent = "x64", Yes },
+		wslV:     func(f *HostFacts) { f.WSLInstalled = No },
+		dockerV:  func(f *HostFacts) {},
+		accountV: func(f *HostFacts) {},
+		restartV: func(f *HostFacts) {},
+		// features hangs.
+	}
+	f := snapshot(context.Background(), p, "windows", 150*time.Millisecond)
+	if f.Arch != "x64" || f.Virtualization != Yes || f.SecureVMHost.Eligible != Yes {
+		t.Errorf("a hung feature read cost the CPU facts: %+v", f)
+	}
+	if f.VMPlatformFeature != Unknown || f.Problems["features"] != "timed out" {
+		t.Errorf("the hung feature read: %s, %v", f.VMPlatformFeature, f.Problems)
 	}
 }
 
@@ -136,6 +161,19 @@ func TestParseCIM(t *testing.T) {
 	apply(&f)
 	if f.HypervisorPresent != Unknown || f.Firmware != Unknown || f.Arch != "unknown" || f.WSLFeature != Unknown || f.VMPlatformFeature != Unknown {
 		t.Errorf("null or missing CIM values read as known: %+v", f)
+	}
+
+	// The two answers are applied one after the other; neither may undo the other.
+	cpu, _ := parseCIM([]byte(`{"hypervisorPresent":true,"architecture":9}`))
+	feat, _ := parseCIM([]byte(`{"wslFeature":1,"vmpFeature":1}`))
+	for _, order := range [][]func(*HostFacts){{cpu, feat}, {feat, cpu}} {
+		f = unknownFacts("windows")
+		for _, apply := range order {
+			apply(&f)
+		}
+		if f.HypervisorPresent != Yes || f.Arch != "x64" || f.WSLFeature != Yes || f.VMPlatformFeature != Yes {
+			t.Errorf("one CIM answer undid the other: %+v", f)
+		}
 	}
 
 	if _, err := parseCIM([]byte("Get-CimInstance : Access denied")); err == nil {
