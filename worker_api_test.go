@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -449,28 +452,59 @@ func TestServerCommandsKeepTheLocalDeployRules(t *testing.T) {
 	}
 }
 
-// A server that predates the seed file sends Sia's wallet seed in env. The deploy
-// runs the app's own path, so the seed is never stored, even when the deploy fails
-// after the settings are saved.
-func TestServerCommandsNeverStoreAWalletSeed(t *testing.T) {
+// An older CashPilot can still send a seed in env. A refused deploy must leave
+// both the Docker volume and Desktop's local files untouched.
+func TestServerCommandsRefuseSeedFileDeployWithoutWrites(t *testing.T) {
 	app := joinedApp(t)
 	svc, ok := app.catalog.Get(siaSlug)
 	if !ok {
 		t.Fatalf("%s is not in the catalog", siaSlug)
 	}
-	env := siaSettings()
-	env[siaSeedKey] = seedPhraseA
-	spec := map[string]any{"image": imageRepository(svc.Docker.Image) + ":1.0.0", "env": env, "instance": 1}
-	// Refused by the local rules after the settings are saved.
-	t.Setenv(services.ProxiedOnlyEnv, "true")
-	w := call(t, app, http.MethodPost, "/api/containers/"+siaSlug+"/deploy", testWorkerKey, spec)
-	if w.Code != http.StatusConflict {
-		t.Fatalf("a deploy the local rules refuse: %d %s, want 409", w.Code, w.Body.String())
+	if _, ok := svc.SeedVar(); !ok {
+		t.Fatalf("%s does not declare a seed file", siaSlug)
 	}
-	if strings.Contains(w.Body.String(), seedPhraseA) {
+	phrase := strings.Repeat("abandon ", 11) + "about" // Public BIP-39 test vector.
+	env := map[string]string{
+		siaSeedKey:           phrase,
+		"HOSTD_API_PASSWORD": t.Name(),
+		"SIA_STORAGE_DIR":    t.TempDir(),
+	}
+	spec := map[string]any{"image": imageRepository(svc.Docker.Image) + ":1.0.0", "env": env, "instance": 1}
+	appDir := os.DirFS(app.cfg.AppDir())
+	snapshot := func() map[string][]byte {
+		files := make(map[string][]byte)
+		err := fs.WalkDir(appDir, ".", func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			files[path], err = fs.ReadFile(appDir, path)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return files
+	}
+	before := snapshot()
+	w := call(t, app, http.MethodPost, "/api/containers/"+siaSlug+"/deploy", testWorkerKey, spec)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("deploy returned HTTP %d, want 403", w.Code)
+	}
+	if msg := detailText(t, w); !strings.Contains(msg, "wallet seed phrase in a file") || !strings.Contains(msg, "Open CashPilot Desktop on that computer") {
+		t.Error("the refusal does not explain where to deploy Sia")
+	}
+	if strings.Contains(w.Body.String(), phrase) {
 		t.Error("the refusal carries the seed phrase")
 	}
-	assertSeedNowhere(t, app, seedPhraseA)
+	if _, ok := app.Docker.VolumeFile(siaVolume, siaSeedFile); ok {
+		t.Error("the request wrote the wallet file into the Docker volume")
+	}
+	if len(app.Docker.Created()) != 0 {
+		t.Error("the request created a container")
+	}
+	if !maps.EqualFunc(before, snapshot(), bytes.Equal) {
+		t.Error("the request changed files in the app directory")
+	}
 }
 
 func TestServerCommandsNeverDeleteIrreplaceableData(t *testing.T) {

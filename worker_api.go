@@ -25,6 +25,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
+	"github.com/GeiserX/CashPilot-Desktop/internal/workerapi"
 )
 
 // The server-commands API: while this computer is joined to a CashPilot server, that
@@ -554,7 +555,13 @@ func (a *App) handleWorkerDeploy(w http.ResponseWriter, r *http.Request) {
 		detail(w, http.StatusUnprocessableEntity, "The deploy request is not valid JSON in the expected shape")
 		return
 	}
-	status, answer, ok := a.deployForServer(slug, spec)
+	svc, _ := a.catalog.Get(slug)
+	if err := workerapi.CheckRemoteWalletDeploy(svc); err != nil {
+		// Refuse before deploy or last-command recording can write anything.
+		detail(w, http.StatusForbidden, fmt.Sprintf("%s. Open CashPilot Desktop on that computer to deploy it. Nothing was deployed", err))
+		return
+	}
+	status, answer, ok := a.deployForServer(slug, svc, spec)
 	a.recordServerCommand("deploy", slug, ok, answer)
 	if !ok {
 		detail(w, status, answer)
@@ -565,7 +572,7 @@ func (a *App) handleWorkerDeploy(w http.ResponseWriter, r *http.Request) {
 
 // deployForServer runs one deploy the server asked for. It answers the HTTP status,
 // and the container id on success or the refusal in plain words.
-func (a *App) deployForServer(slug string, spec workerDeploySpec) (int, string, bool) {
+func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeploySpec) (int, string, bool) {
 	instance := spec.Instance
 	if instance == 0 {
 		instance = 1
@@ -573,8 +580,7 @@ func (a *App) deployForServer(slug string, spec workerDeploySpec) (int, string, 
 	if instance != 1 {
 		return http.StatusBadRequest, "CashPilot Desktop takes one copy per deploy from your CashPilot; add more copies on this computer", false
 	}
-	svc, known := a.catalog.Get(slug)
-	if !known || catalog.IsCustomSlug(slug) || svc.Custom {
+	if svc.Slug == "" || catalog.IsCustomSlug(slug) || svc.Custom {
 		return http.StatusForbidden, fmt.Sprintf("'%s' is not in this computer's catalog, so it cannot be deployed here", slug), false
 	}
 	if svc.ManualOnly {
