@@ -126,6 +126,8 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'data') | Out-Null
     Set-Content -Path (Join-Path $dataDir 'config.json') -Value '{"firstRunComplete":true}'
     Set-Content -Path (Join-Path $dataDir 'data\keep-me.txt') -Value 'user data'
+    # A fresh profile may have no RunOnce key yet; the app creates it the same way.
+    if (-not (Test-Path $runOnceKey)) { New-Item -Path $runOnceKey -Force | Out-Null }
     Set-ItemProperty -Path $runOnceKey -Name $runOnceValue -Value "`"$exe`" --resume-setup"
     $action = New-ScheduledTaskAction -Execute $exe -Argument '--daemon'
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
