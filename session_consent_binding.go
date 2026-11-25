@@ -25,7 +25,7 @@ const maxConsentVersion = 64
 // entry. It returns every consent now recorded.
 func (a *App) AcceptSessionRisk(slug, textVersion string) (map[string]config.SessionConsent, error) {
 	if a.cfg == nil || a.catalog == nil {
-		return nil, fmt.Errorf("app is still starting")
+		return nil, errStillStarting
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
@@ -49,7 +49,7 @@ func (a *App) AcceptSessionRisk(slug, textVersion string) (map[string]config.Ses
 // longer lists included, and revoking a consent that does not exist is no error.
 func (a *App) RevokeSessionRisk(slug string) (map[string]config.SessionConsent, error) {
 	if a.cfg == nil {
-		return nil, fmt.Errorf("app is still starting")
+		return nil, errStillStarting
 	}
 	return a.updateSessionConsent(func(consents map[string]config.SessionConsent) { delete(consents, slug) })
 }
