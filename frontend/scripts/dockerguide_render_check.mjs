@@ -177,12 +177,14 @@ check("a working engine elsewhere does not make the local checklist ready", text
 // The wiring, against a holder that only takes HTML.
 const holder = () => ({ innerHTML: "", querySelectorAll: () => [], querySelector: () => null });
 const deps = (over = {}) => {
-  const calls = { firmware: [], hostCheck: 0, start: 0, cancel: 0, skip: 0 };
+  let now = 0;
+  const calls = { firmware: [], hostCheck: 0, engineReady: 0, start: 0, cancel: 0, skip: 0 };
   return {
     calls,
     deps: {
       hostCheck: async () => { calls.hostCheck++; return { facts: { supported: true }, runtime: runtimeDown, steps }; },
       startDocker: async () => { calls.start++; },
+      dockerEngineReady: async () => { calls.engineReady++; return false; },
       openWindowsUpdate: async () => {},
       restartToFirmware: async (step) => { calls.firmware.push(step); return { started: false, reopens: true }; },
       cancelSetup: async () => { calls.cancel++; },
@@ -191,7 +193,8 @@ const deps = (over = {}) => {
       signOutNow: async () => { throw new Error("no sign-out in these checks"); },
       openUrl: () => {},
       skip: () => { calls.skip++; },
-      sleep: async () => {},
+      sleep: async (ms) => { now += ms; },
+      now: () => now,
       ...over,
     },
   };
@@ -236,22 +239,31 @@ const deps = (over = {}) => {
 }
 
 {
-  let reads = 0;
+  const reads = [];
   const remote = { available: true, reason: "running" };
-  const { calls, deps: d } = deps({ hostCheck: async () => ({
-    runtime: remote, steps: ++reads >= 2 ? [{ id: "a6", state: "done" }] : steps,
-  }) });
+  const { calls, deps: d } = deps({
+    dockerEngineReady: async () => reads.push("pipe") === 2,
+    hostCheck: async () => {
+      reads.push("checklist");
+      return { runtime: remote, steps: [{ id: "a6", state: "done" }] };
+    },
+  });
   const g = new DockerGuide(holder(), d, { runtime: remote, resume: null, result: { facts: {}, runtime: remote, steps } });
   await g.startDocker();
-  check("RULE 8 (wiring): the wait continues until this PC's engine answers", g.model.waitResult === "ready" && g.model.waiting === null && calls.start === 1 && reads === 2, JSON.stringify(g.model));
+  check("RULE 8 (wiring): the wait continues until this PC's engine answers", g.model.waitResult === "ready" && g.model.waiting === null && calls.start === 1, JSON.stringify(g.model));
+  check("RULE 8 (wiring): only the local pipe is checked until the engine answers", reads.join() === "pipe,pipe,checklist", reads.join());
   check("RULE 8 (wiring): the checklist shows the reading that ended the wait", g.model.steps?.[0]?.id === "a6" && g.model.steps?.[0]?.state === "done");
 }
 
 {
   const { calls, deps: d } = deps();
   const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
-  await g.startDocker();
-  check("RULE 8 (wiring): no answer in two minutes is a timeout", g.model.waitResult === "timeout" && calls.hostCheck === START_LIMIT_SECONDS / 3, `${g.model.waitResult} after ${calls.hostCheck} asks`);
+  const wait = g.startDocker();
+  await g.check();
+  await wait;
+  check("RULE 8 (wiring): no answer in two minutes is a timeout", g.model.waitResult === "timeout" && d.now() === START_LIMIT_SECONDS * 1000, `${g.model.waitResult} after ${d.now()} ms`);
+  check("RULE 8 (wiring): the local pipe is polled up to the deadline", calls.engineReady === START_LIMIT_SECONDS / 3 - 1, `${calls.engineReady} pipe checks`);
+  check("RULE 8 (wiring): the full checklist is read once after a timeout", calls.hostCheck === 1, `${calls.hostCheck} HostCheck calls`);
 }
 
 {

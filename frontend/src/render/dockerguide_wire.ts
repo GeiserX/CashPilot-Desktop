@@ -19,6 +19,7 @@ import { runLine } from "./dockersteps.js";
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
   startDocker(): Promise<void>;
+  dockerEngineReady(): Promise<boolean>;
   openWindowsUpdate(): Promise<void>;
   restartToFirmware(step: string): Promise<FirmwareRestart>;
   cancelSetup(): Promise<void>;
@@ -34,12 +35,13 @@ export interface DockerGuideDeps {
   checked?(result: HostCheckResult): void;
   /** An action failed in a way the user should hear about. */
   failed?(error: unknown): void;
-  /** Waits ms; a test can make it instant. */
+  /** A test can advance the wait clock without sleeping. */
   sleep?(ms: number): Promise<void>;
+  now?(): number;
 }
 
-/** How often the engine is asked while waiting, in seconds. */
-const POLL_EVERY = 3;
+/** How often to check Docker Desktop's engine while waiting, in milliseconds. */
+const POLL_EVERY_MS = 3000;
 
 export class DockerGuide {
   model: GuideModel;
@@ -80,16 +82,22 @@ export class DockerGuide {
 
   /** Read the PC again and redraw every row. One reading at a time. */
   async check(): Promise<void> {
-    if (this.model.checking) return;
+    if (this.model.checking || this.model.waiting !== null) return;
+    await this.readChecklist();
+  }
+
+  private async readChecklist(afterWait = false): Promise<void> {
     this.model.checking = true;
     this.render();
     try {
       const result = await this.deps.hostCheck();
+      if (afterWait && engineAnswers(result.steps)) this.model.waitResult = "ready";
       this.applyReading(result);
     } catch (error) {
       this.deps.failed?.(error);
     } finally {
       this.model.checking = false;
+      if (afterWait) this.model.waiting = null;
       this.render();
     }
   }
@@ -106,7 +114,7 @@ export class DockerGuide {
    * engine, with a line that says how long so far. A check follows either way.
    */
   async startDocker(): Promise<void> {
-    if (this.model.waiting !== null) return;
+    if (this.model.waiting !== null || this.model.checking) return;
     // Busy before the first await: a second click while Windows starts Docker
     // Desktop finds the wait under way and starts nothing.
     this.model.waitResult = "";
@@ -130,31 +138,35 @@ export class DockerGuide {
     this.model.waitResult = "";
     this.model.waiting = 0;
     this.render();
-    let result: HostCheckResult | null = null;
-    while (this.alive && this.model.waiting < START_LIMIT_SECONDS) {
-      await sleep(1000);
-      this.model.waiting++;
+    const now = this.deps.now ?? (() => performance.now());
+    const started = now();
+    const deadline = started + START_LIMIT_SECONDS * 1000;
+    let nextPoll = started + POLL_EVERY_MS;
+    while (this.alive) {
+      const remaining = deadline - now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(1000, remaining));
+      if (!this.alive) break;
+
+      const tick = now();
+      this.model.waiting = Math.floor((tick - started) / 1000);
       this.updateWaitLine();
-      if (this.model.waiting % POLL_EVERY === 0) {
-        try {
-          const started = Date.now();
-          result = await this.deps.hostCheck();
-          this.model.waiting += Math.floor((Date.now() - started) / 1000);
-          if (engineAnswers(result.steps)) break;
-        } catch {
-          // A failed ask is one missed poll; the next one tries again.
-        }
+      if (tick >= deadline) break;
+      if (tick < nextPoll) continue;
+
+      nextPoll = tick + POLL_EVERY_MS;
+      try {
+        if (await this.deps.dockerEngineReady()) break;
+      } catch {
+        // A failed probe can be retried at the next poll.
       }
     }
-    this.model.waiting = null;
-    if (!this.alive) return;
-    this.model.waitResult = result && engineAnswers(result.steps) ? "ready" : "timeout";
-    if (result) {
-      this.applyReading(result);
-      this.render();
-    } else {
-      await this.check();
+    if (!this.alive) {
+      this.model.waiting = null;
+      return;
     }
+    this.model.waitResult = "timeout";
+    await this.readChecklist(true);
   }
 
   private sleeper(): (ms: number) => Promise<void> {

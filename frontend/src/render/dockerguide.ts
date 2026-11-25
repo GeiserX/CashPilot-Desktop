@@ -303,7 +303,7 @@ export function renderDockerGuide(model: GuideModel): string {
       <ol class="docker-steps">${steps.map((s, i) => stepHtml(s, i, steps, model)).join("")}</ol>
       ${waitLine(model)}
       <div class="gate-actions">
-        ${checkAgainButton("docker-guide-check", model.checking)}
+        ${checkAgainButton("docker-guide-check", model.checking || model.waiting !== null)}
         ${skip}
       </div>
     </section>`;

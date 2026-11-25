@@ -81,6 +81,7 @@ import {
   StartAsLead,
   SwitchToLead,
   StartDockerDesktop,
+  DockerDesktopEngineReady,
   OpenWindowsUpdate,
   RestartToFirmware,
   SetupResume,
@@ -299,6 +300,7 @@ function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked"> & Partial<Pi
   return {
     hostCheck,
     startDocker: StartDockerDesktop,
+    dockerEngineReady: DockerDesktopEngineReady,
     openWindowsUpdate: OpenWindowsUpdate,
     restartToFirmware: RestartToFirmware,
     runSetupStep: RunSetupStep,

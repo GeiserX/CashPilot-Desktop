@@ -106,7 +106,7 @@ const deps = (over = {}) => {
     calls,
     deps: {
       hostCheck: async () => { calls.hostCheck++; return { facts: { supported: true }, runtime: runtimeDown, steps }; },
-      checkRuntime: async () => ({ available: false, reason: "not-running" }),
+      dockerEngineReady: async () => false,
       startDocker: async () => {},
       openWindowsUpdate: async () => {},
       restartToFirmware: async () => ({ started: false, reopens: false }),

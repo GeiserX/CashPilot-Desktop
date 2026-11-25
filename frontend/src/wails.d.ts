@@ -15,6 +15,8 @@ declare module "../wailsjs/go/main/App" {
   export function CheckRuntime(): Promise<RuntimeStatus>;
   // Reads this PC afresh (Windows only; elsewhere facts.supported is false).
   export function HostCheck(): Promise<HostCheckResult>;
+  // Checks the local Docker Desktop pipes without reading the full checklist.
+  export function DockerDesktopEngineReady(): Promise<boolean>;
   // The Docker checklist's actions (Windows only; elsewhere they fail).
   export function StartDockerDesktop(): Promise<void>;
   export function OpenWindowsUpdate(): Promise<void>;
