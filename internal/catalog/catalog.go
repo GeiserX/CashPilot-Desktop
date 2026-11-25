@@ -107,9 +107,8 @@ type Service struct {
 	Rating Rating `json:"-" yaml:"rating"`
 	// Obligations are the web catalog's reminders before a provider writes off money:
 	// a claim window, a balance that expires, a dormancy clock (services/_schema.yml
-	// `obligations:`). Desktop reads them and does not act on them yet; they are
-	// declared so the vendored key is read rather than silently dropped. Like the
-	// rating block, they never reach the frontend until something there uses them.
+	// `obligations:`). internal/obligations evaluates them into the dashboard's Money
+	// waiting panel; the raw rules never reach the frontend, only the reminders due.
 	Obligations []Obligation `json:"-" yaml:"obligations"`
 	// RatingResult is the grade computed from services/_ratings.yml, or "not rated".
 	// Nil for a custom service, which nobody has reviewed. Never read from YAML.
@@ -208,9 +207,8 @@ type Payout struct {
 	Notes       string       `json:"notes" yaml:"notes"`
 }
 
-// Obligation is one reminder from the web catalog. The web app evaluates it
-// (app/obligations.py) into its dashboard's "Money waiting" panel and pushes; Desktop
-// carries it unread until it ports that behaviour.
+// Obligation is one reminder from the web catalog. internal/obligations evaluates it
+// into the dashboard's "Money waiting" panel, as the web app's app/obligations.py does.
 type Obligation struct {
 	// ID is kebab-case and unique in its file; the web app keys done state on it.
 	ID string `json:"id" yaml:"id"`

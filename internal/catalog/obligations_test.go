@@ -2,9 +2,9 @@ package catalog
 
 import "testing"
 
-// The web catalog's reminders (`obligations:`) are carried, not acted on, until
-// Desktop ports the behaviour. This guards that they parse into the struct the port
-// will read, so a field that stops decoding is noticed now rather than then.
+// The web catalog's reminders (`obligations:`) feed internal/obligations. This
+// guards that they parse into the struct it reads, so a field that stops decoding
+// is noticed here rather than as a reminder that silently never shows.
 func TestObligationsParse(t *testing.T) {
 	cat := realCatalog(t)
 

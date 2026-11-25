@@ -1055,6 +1055,9 @@ func (s *Store) migrate() error {
 	if _, err = s.execWrite(pendingDeviceLinksDDL); err != nil {
 		return err
 	}
+	if _, err = s.execWrite(obligationStateDDL); err != nil {
+		return err
+	}
 	if err := s.migrateUsage(); err != nil {
 		return err
 	}

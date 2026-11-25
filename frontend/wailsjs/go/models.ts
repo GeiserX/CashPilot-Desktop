@@ -210,6 +210,22 @@ export namespace catalog {
 	        this.cpuShares = source["cpuShares"];
 	    }
 	}
+	export class TrafficStall {
+	    share?: number;
+	    peerMinMbPerHour?: number;
+	    hours?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TrafficStall(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.share = source["share"];
+	        this.peerMinMbPerHour = source["peerMinMbPerHour"];
+	        this.hours = source["hours"];
+	    }
+	}
 	export class HealthSignal {
 	    pattern: string;
 	    means: string;
@@ -329,6 +345,7 @@ export namespace catalog {
 	    devices: string[];
 	    healthSignals: HealthSignal[];
 	    healthProbe?: Record<string, any>;
+	    trafficStall?: TrafficStall;
 	    advertisedAddressEnv: string;
 	    privileged: boolean;
 	    stopTimeout: number;
@@ -362,6 +379,7 @@ export namespace catalog {
 	        this.devices = source["devices"];
 	        this.healthSignals = this.convertValues(source["healthSignals"], HealthSignal);
 	        this.healthProbe = source["healthProbe"];
+	        this.trafficStall = this.convertValues(source["trafficStall"], TrafficStall);
 	        this.advertisedAddressEnv = source["advertisedAddressEnv"];
 	        this.privileged = source["privileged"];
 	        this.stopTimeout = source["stopTimeout"];
@@ -471,6 +489,77 @@ export namespace catalog {
 		}
 	}
 	
+	
+	export class ObligationWhen {
+	    date?: string;
+	    every?: string;
+	    on?: number;
+	    dueDays?: number;
+	    since?: string;
+	    days?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ObligationWhen(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.every = source["every"];
+	        this.on = source["on"];
+	        this.dueDays = source["dueDays"];
+	        this.since = source["since"];
+	        this.days = source["days"];
+	    }
+	}
+	export class Obligation {
+	    id: string;
+	    action: string;
+	    title: string;
+	    loss: string;
+	    how?: string;
+	    url?: string;
+	    when: ObligationWhen;
+	    warnDays?: number[];
+	    source: string;
+	    checked: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Obligation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.action = source["action"];
+	        this.title = source["title"];
+	        this.loss = source["loss"];
+	        this.how = source["how"];
+	        this.url = source["url"];
+	        this.when = this.convertValues(source["when"], ObligationWhen);
+	        this.warnDays = source["warnDays"];
+	        this.source = source["source"];
+	        this.checked = source["checked"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class Payment {
 	    methods: string[];
@@ -839,6 +928,7 @@ export namespace catalog {
 		    return a;
 		}
 	}
+	
 	
 
 }
@@ -1342,6 +1432,44 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class RemindersView {
+	    joined: boolean;
+	    serverUrl: string;
+	    unknown: boolean;
+	    items: obligations.Item[];
+	    muted: obligations.Muted[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RemindersView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.joined = source["joined"];
+	        this.serverUrl = source["serverUrl"];
+	        this.unknown = source["unknown"];
+	        this.items = this.convertValues(source["items"], obligations.Item);
+	        this.muted = this.convertValues(source["muted"], obligations.Muted);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RouteProxy {
 	    id: number;
 	    name: string;
@@ -1657,6 +1785,7 @@ export namespace main {
 	    drift: Record<string, Array<string>>;
 	    isolation?: runtime.FenceStatus;
 	    route: RouteState;
+	    reminders: RemindersView;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -1688,6 +1817,7 @@ export namespace main {
 	        this.drift = source["drift"];
 	        this.isolation = this.convertValues(source["isolation"], runtime.FenceStatus);
 	        this.route = this.convertValues(source["route"], RouteState);
+	        this.reminders = this.convertValues(source["reminders"], RemindersView);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1976,6 +2106,7 @@ export namespace main {
 		}
 	}
 	
+	
 	export class RestoreVolume {
 	    target: string;
 	    volume: string;
@@ -2100,6 +2231,81 @@ export namespace main {
 	        this.service = source["service"];
 	        this.volumes = source["volumes"];
 	        this.startedAt = source["startedAt"];
+	    }
+	}
+
+}
+
+export namespace obligations {
+	
+	export class Item {
+	    slug: string;
+	    name: string;
+	    rule: string;
+	    kind: string;
+	    action: string;
+	    title: string;
+	    loss: string;
+	    occurrence: string;
+	    stage: string;
+	    due: string;
+	    daysLeft?: number;
+	    censored: boolean;
+	    how: string;
+	    url: string;
+	    source: string;
+	    checked: string;
+	    canDone: boolean;
+	    canSnooze: boolean;
+	    balance?: number;
+	    currency?: string;
+	    balanceUsd?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Item(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.rule = source["rule"];
+	        this.kind = source["kind"];
+	        this.action = source["action"];
+	        this.title = source["title"];
+	        this.loss = source["loss"];
+	        this.occurrence = source["occurrence"];
+	        this.stage = source["stage"];
+	        this.due = source["due"];
+	        this.daysLeft = source["daysLeft"];
+	        this.censored = source["censored"];
+	        this.how = source["how"];
+	        this.url = source["url"];
+	        this.source = source["source"];
+	        this.checked = source["checked"];
+	        this.canDone = source["canDone"];
+	        this.canSnooze = source["canSnooze"];
+	        this.balance = source["balance"];
+	        this.currency = source["currency"];
+	        this.balanceUsd = source["balanceUsd"];
+	    }
+	}
+	export class Muted {
+	    slug: string;
+	    rule: string;
+	    name: string;
+	    title: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Muted(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.rule = source["rule"];
+	        this.name = source["name"];
+	        this.title = source["title"];
 	    }
 	}
 
