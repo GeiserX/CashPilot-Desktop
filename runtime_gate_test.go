@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
@@ -33,7 +34,7 @@ func (p *engineProvider) Deploy(_ context.Context, spec runtime.DeploySpec, _ fu
 }
 
 // gateApp is an App on the real catalog with provider as its only runtime.
-func gateApp(t *testing.T, provider *engineProvider) *App {
+func gateApp(t *testing.T, provider runtime.Provider) *App {
 	t.Helper()
 	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
 	cfg, err := config.NewManager()
@@ -284,4 +285,69 @@ func configured(t *testing.T, app *App, slug string) bool {
 	}
 	t.Fatalf("%s is not in Settings' collector list", slug)
 	return false
+}
+
+type heldEngineProvider struct {
+	engineProvider
+	entered, release chan struct{}
+}
+
+func (p *heldEngineProvider) Deploy(ctx context.Context, spec runtime.DeploySpec, progress func(string)) (runtime.ContainerInfo, error) {
+	close(p.entered)
+	<-p.release
+	return p.engineProvider.Deploy(ctx, spec, progress)
+}
+
+func TestExplicitSaveSurvivesADeployAlreadyInProgress(t *testing.T) {
+	for _, tc := range []struct {
+		name, saved string
+	}{
+		{name: "replace", saved: "explicit-save"},
+		{name: "clear"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &heldEngineProvider{
+				engineProvider: engineProvider{status: runtime.Status{Available: true, Reason: runtime.ReasonRunning}},
+				entered:        make(chan struct{}), release: make(chan struct{}),
+			}
+			app := gateApp(t, provider)
+			done := make(chan error, 1)
+			go func() {
+				_, err := app.DeployService("earnfm", map[string]string{"EARNFM_TOKEN": "deploy"}, nil, nil)
+				done <- err
+			}()
+			select {
+			case <-provider.entered:
+			case err := <-done:
+				t.Fatalf("deploy finished before it reached the runtime: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("deploy did not reach the runtime")
+			}
+			saved := make(chan error, 1)
+			go func() { saved <- app.SaveCredentials("earnfm", map[string]string{"EARNFM_TOKEN": tc.saved}) }()
+			var saveErr error
+			select {
+			case saveErr = <-saved:
+			case <-time.After(5 * time.Second):
+				close(provider.release)
+				<-done
+				<-saved
+				t.Fatal("Save Credentials waited for the deploy")
+			}
+			close(provider.release)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			if saveErr != nil {
+				t.Fatal(saveErr)
+			}
+			got, err := app.GetCredentials("earnfm")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got["EARNFM_TOKEN"] != tc.saved {
+				t.Error("the deploy overwrote the later Save Credentials")
+			}
+		})
+	}
 }

@@ -104,7 +104,7 @@ type App struct {
 	customPending atomic.Bool
 
 	// Keep a service's deploy and its credential write in the same order.
-	deployCredentialsLocks sync.Map // service slug -> *sync.Mutex
+	deployCredentialsLocks sync.Map // service slug -> *deployCredentialsLock
 
 	collecting  atomic.Bool
 	schedMu     sync.Mutex
@@ -1483,7 +1483,14 @@ func (a *App) SaveCredentials(slug string, values map[string]string) error {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	return a.saveCredentials(slug, values)
+	lock := a.deployCredentialsLock(slug)
+	lock.writes.Lock()
+	defer lock.writes.Unlock()
+	if err := a.saveCredentials(slug, values); err != nil {
+		return err
+	}
+	lock.explicitSaves++
+	return nil
 }
 
 // saveCredentials stores values for slug. A wallet seed is never among them
@@ -1551,18 +1558,35 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 	return deployment, err
 }
 
-func (a *App) lockDeployCredentials(slug string) func() {
-	if _, ok := a.catalog.Get(slug); !ok {
-		return func() {}
-	}
-	entry, _ := a.deployCredentialsLocks.LoadOrStore(slug, &sync.Mutex{})
-	lock := entry.(*sync.Mutex)
-	lock.Lock()
-	return lock.Unlock
+type deployCredentialsLock struct {
+	deploy        sync.Mutex
+	writes        sync.Mutex
+	explicitSaves uint64 // guarded by writes
 }
 
-func (a *App) saveDeployedCredentials(slug string, values map[string]string) bool {
+func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
+	if _, ok := a.catalog.Get(slug); !ok {
+		return &deployCredentialsLock{}
+	}
+	entry, _ := a.deployCredentialsLocks.LoadOrStore(slug, &deployCredentialsLock{})
+	return entry.(*deployCredentialsLock)
+}
+
+func (l *deployCredentialsLock) startDeploy() uint64 {
+	l.deploy.Lock()
+	l.writes.Lock()
+	defer l.writes.Unlock()
+	return l.explicitSaves
+}
+
+func (a *App) saveDeployedCredentials(slug string, values map[string]string, lock *deployCredentialsLock, startSaves uint64) bool {
 	if len(values) == 0 {
+		return true
+	}
+	lock.writes.Lock()
+	defer lock.writes.Unlock()
+	// Save Credentials can succeed while the runtime is still deploying.
+	if lock.explicitSaves != startSaves {
 		return true
 	}
 	if err := a.saveCredentials(slug, values); err != nil {
@@ -1578,7 +1602,9 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 		return store.Deployment{}, nil, err
 	}
 	a.retryCustom()
-	defer a.lockDeployCredentials(slug)()
+	lock := a.deployCredentialsLock(slug)
+	startSaves := lock.startDeploy()
+	defer lock.deploy.Unlock()
 	// A custom service deploys its saved definition; the form has no credentials for
 	// it, and nothing typed there or stored under its slug is read, stored or sent
 	// (services.DeployWith).
@@ -1614,7 +1640,7 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
 	}
-	saved := a.saveDeployedCredentials(slug, values)
+	saved := a.saveDeployedCredentials(slug, values, lock, startSaves)
 	a.emitEvent("deployment:changed", deployment)
 	a.registerDevice(slug, creds)
 	// Collect this service's balance right away so the dashboard shows a figure
@@ -1633,7 +1659,9 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	if err := a.ready(); err != nil {
 		return services.ProxiedResult{}, err
 	}
-	defer a.lockDeployCredentials(slug)()
+	lock := a.deployCredentialsLock(slug)
+	startSaves := lock.startDeploy()
+	defer lock.deploy.Unlock()
 	creds := values
 	if len(creds) == 0 {
 		stored, err := a.store.GetCredentials(slug)
@@ -1654,7 +1682,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 		a.emitError("deploy", err)
 		return services.ProxiedResult{}, err
 	}
-	a.saveDeployedCredentials(slug, values)
+	a.saveDeployedCredentials(slug, values, lock, startSaves)
 	a.emitEvent("deployment:changed", slug)
 	a.registerDevice(slug, creds)
 	return result, nil
