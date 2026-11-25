@@ -184,6 +184,13 @@ func TestServerCommandsListenOnPrivateAddressesOnly(t *testing.T) {
 		{Iface: "docker0", Up: true, Addr: netip.MustParseAddr("172.17.0.1")},
 		{Iface: "br-1234", Up: true, Addr: netip.MustParseAddr("172.18.0.1")},
 		{Iface: "vEthernet (WSL)", Up: true, Addr: netip.MustParseAddr("172.29.0.1")},
+		// The Secure VM's own switch, beside the fenced earner VM (internal/winvm/names.go).
+		{Iface: "vEthernet (CashPilot-VM)", Up: true, Addr: netip.MustParseAddr("172.30.0.1")},
+		{Iface: "vEthernet (cpd-svm-2)", Up: true, Addr: netip.MustParseAddr("172.31.0.1")},
+		// An External switch's host vNIC carries this computer's own LAN address.
+		{Iface: "vEthernet (LAN)", Up: true, Addr: netip.MustParseAddr("192.168.1.40")},
+		{Iface: "vEthernet (nat)", Up: true, Addr: netip.MustParseAddr("172.24.0.1")},
+		{Iface: "veth1a2b3c", Up: true, Addr: netip.MustParseAddr("172.19.0.1")},
 		{Iface: "en5", Up: false, Addr: netip.MustParseAddr("10.0.0.5")},
 		{Iface: "en6", Up: true, Addr: netip.MustParseAddr("0.0.0.0")},
 	}
@@ -191,6 +198,7 @@ func TestServerCommandsListenOnPrivateAddressesOnly(t *testing.T) {
 	want := []netip.Addr{
 		netip.MustParseAddr("100.101.102.103"),
 		netip.MustParseAddr("192.168.1.30"),
+		netip.MustParseAddr("192.168.1.40"),
 		netip.MustParseAddr("fd7a:115c:a1e0::5"),
 	}
 	if !slices.Equal(got, want) {
@@ -247,7 +255,14 @@ func TestServerCommandsRunWhileJoinedAndStopOnLeave(t *testing.T) {
 	t.Cleanup(func() { runFirewallScript = oldRun })
 	var scripts []string
 	runFirewallScript = func(s string) error { scripts = append(scripts, s); return nil }
-	if err := app.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsFirewallRule = serverCommandsRuleName() }); err != nil {
+	program, err := thisProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.cfg.Update(func(c *config.AppConfig) {
+		c.ServerCommandsFirewallRule = serverCommandsRuleName()
+		c.ServerCommandsFirewallProgram = program
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -432,6 +447,30 @@ func TestServerCommandsKeepTheLocalDeployRules(t *testing.T) {
 	}
 }
 
+// A server that predates the seed file sends Sia's wallet seed in env. The deploy
+// runs the app's own path, so the seed is never stored, even when the deploy fails
+// after the settings are saved.
+func TestServerCommandsNeverStoreAWalletSeed(t *testing.T) {
+	app := joinedApp(t)
+	svc, ok := app.catalog.Get(siaSlug)
+	if !ok {
+		t.Fatalf("%s is not in the catalog", siaSlug)
+	}
+	env := siaSettings()
+	env[siaSeedKey] = seedPhraseA
+	spec := map[string]any{"image": imageRepository(svc.Docker.Image) + ":1.0.0", "env": env, "instance": 1}
+	// Refused by the local rules after the settings are saved.
+	t.Setenv(services.ProxiedOnlyEnv, "true")
+	w := call(t, app, http.MethodPost, "/api/containers/"+siaSlug+"/deploy", testWorkerKey, spec)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("a deploy the local rules refuse: %d %s, want 409", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), seedPhraseA) {
+		t.Error("the refusal carries the seed phrase")
+	}
+	assertSeedNowhere(t, app, seedPhraseA)
+}
+
 func TestServerCommandsNeverDeleteIrreplaceableData(t *testing.T) {
 	app := joinedApp(t)
 	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, honeygainSpec(t, app)); w.Code != http.StatusOK {
@@ -522,6 +561,50 @@ func TestServerCommandsWaitForTheFirewallRuleOnWindows(t *testing.T) {
 	}
 	if got := app.workerAPIURL(app.cfg.Config().UpstreamURL); got != "http://192.168.1.30:8086" {
 		t.Errorf("the heartbeat reports %q after the rule", got)
+	}
+}
+
+// A rule made for another path allows nothing to this program: the portable exe
+// moved or was replaced. Nothing listens, the button shows again, and pressing it
+// replaces the rule for the new path.
+func TestServerCommandsNeedTheRuleForThisProgram(t *testing.T) {
+	f := useAddrs(t, "192.168.1.30")
+	app := joinedApp(t)
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	oldNeeded, oldRun, oldProgram := firewallRuleNeeded, runFirewallScript, thisProgram
+	t.Cleanup(func() { firewallRuleNeeded, runFirewallScript, thisProgram = oldNeeded, oldRun, oldProgram })
+	firewallRuleNeeded = true
+	var scripts []string
+	runFirewallScript = func(s string) error { scripts = append(scripts, s); return nil }
+	program := `C:\Users\someone\Downloads\CashPilot.exe`
+	thisProgram = func() (string, error) { return program, nil }
+
+	if _, err := app.AllowServerCommandsThroughFirewall(); err != nil {
+		t.Fatal(err)
+	}
+	if n := listening(app); n != 1 {
+		t.Fatalf("%d listeners with the rule for this program, want 1", n)
+	}
+
+	program = `C:\Users\someone\Desktop\CashPilot.exe`
+	app.syncWorkerAPI()
+	if n := listening(app); n != 0 {
+		t.Fatalf("%d listeners with a rule for another path, want 0", n)
+	}
+	if state := app.serverCommandsState(); state.FirewallRule || state.Listening {
+		t.Fatalf("the card counts a rule for another path: %+v", state)
+	}
+
+	asked := len(f.asked)
+	state, err := app.AllowServerCommandsThroughFirewall()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) != 2 || !strings.Contains(scripts[1], `-Program 'C:\Users\someone\Desktop\CashPilot.exe'`) {
+		t.Fatalf("the rule was not made again for the new path: %v", scripts)
+	}
+	if n := listening(app); n != 1 || !state.FirewallRule || len(f.asked) == asked {
+		t.Fatalf("after the new rule: %d listeners, state %+v", n, state)
 	}
 }
 

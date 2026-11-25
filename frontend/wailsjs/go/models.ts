@@ -1134,6 +1134,7 @@ export namespace config {
 	    setupJournal?: SetupJournal;
 	    serverCommandsOff?: boolean;
 	    serverCommandsFirewallRule?: string;
+	    serverCommandsFirewallProgram?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1167,6 +1168,7 @@ export namespace config {
 	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
 	        this.serverCommandsOff = source["serverCommandsOff"];
 	        this.serverCommandsFirewallRule = source["serverCommandsFirewallRule"];
+	        this.serverCommandsFirewallProgram = source["serverCommandsFirewallProgram"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

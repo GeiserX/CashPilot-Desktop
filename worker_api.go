@@ -586,20 +586,14 @@ func (a *App) deployForServer(slug string, spec workerDeploySpec) (int, string, 
 	if err := a.services.ValidateDeploy(slug, spec.Env); err != nil {
 		return http.StatusBadRequest, oneLine(err.Error()), false
 	}
-	if err := a.store.SaveCredentials(slug, spec.Env); err != nil {
-		return http.StatusInternalServerError, "Container deployment failed", false
-	}
-	// "" is the catalog's image, with this computer's digest pin.
+	// The app's own deploy path, as the Deploy button runs it, so every local rule
+	// stays in one place: what is stored (never a wallet seed), digest pins, fences,
+	// routes. "" is the catalog's image, with this computer's digest pin.
 	catalogOnly := ""
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	dep, err := a.services.DeployWith(ctx, slug, spec.Env, services.DeployOptions{Image: &catalogOnly})
+	dep, _, err := a.deployService(slug, spec.Env, &catalogOnly, nil, false, nil)
 	if err != nil {
 		return http.StatusConflict, oneLine(err.Error()), false
 	}
-	a.emitEvent("deployment:changed", dep)
 	id := dep.ContainerID
 	if len(id) > 12 {
 		id = id[:12]
@@ -856,7 +850,7 @@ func (a *App) serverCommandsState() ServerCommandsState {
 		Listening:      listening,
 		Problem:        problem,
 		FirewallNeeded: firewallRuleNeeded,
-		FirewallRule:   strings.TrimSpace(cfg.ServerCommandsFirewallRule) != "",
+		FirewallRule:   a.firewallRuleMade(),
 		Opens:          fmt.Sprintf("incoming TCP port %d to CashPilot only, on networks Windows calls private, from %s", workerAPIPort, strings.Join(privateSubnets(), ", ")),
 		Last:           a.lastServerCommand(),
 	}

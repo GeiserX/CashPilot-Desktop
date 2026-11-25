@@ -134,6 +134,9 @@ type AppConfig struct {
 	// ServerCommandsFirewallRule is the Windows Firewall rule CashPilot made for that
 	// API, "" when it made none. Leaving the server removes it.
 	ServerCommandsFirewallRule string `json:"serverCommandsFirewallRule,omitempty"`
+	// ServerCommandsFirewallProgram is the program path that rule allows. A rule made
+	// for another path (the program moved or was replaced) does not count.
+	ServerCommandsFirewallProgram string `json:"serverCommandsFirewallProgram,omitempty"`
 }
 
 // SetupJournal says where a guided setup stood before a restart. It only says

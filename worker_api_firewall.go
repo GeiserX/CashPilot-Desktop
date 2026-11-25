@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	stdruntime "runtime"
 	"strings"
 
@@ -71,9 +72,29 @@ func removeRuleScript(name string) string {
 var firewallRuleNeeded = stdruntime.GOOS == "windows"
 
 // firewallReady reports whether the API may listen: no rule is needed here, or
-// CashPilot made it.
+// CashPilot made it for this program.
 func (a *App) firewallReady() bool {
-	return !firewallRuleNeeded || strings.TrimSpace(a.cfg.Config().ServerCommandsFirewallRule) != ""
+	return !firewallRuleNeeded || a.firewallRuleMade()
+}
+
+// thisProgram is this program's path. A var so tests can move the program.
+var thisProgram = os.Executable
+
+// firewallRuleMade reports whether CashPilot made the rule for the program running
+// now. A rule made for another path allows nothing to this one: listening anyway
+// would make Windows show its own prompt, the case the rule exists to avoid. The
+// button then shows again, and pressing it replaces the rule.
+func (a *App) firewallRuleMade() bool {
+	cfg := a.cfg.Config()
+	if strings.TrimSpace(cfg.ServerCommandsFirewallRule) == "" {
+		return false
+	}
+	program, err := thisProgram()
+	if err != nil || strings.TrimSpace(cfg.ServerCommandsFirewallProgram) == "" {
+		return false
+	}
+	// Windows paths ignore case.
+	return strings.EqualFold(filepath.Clean(cfg.ServerCommandsFirewallProgram), filepath.Clean(program))
 }
 
 // runFirewallScript runs an admin script. A var so tests never raise a prompt.
@@ -94,7 +115,7 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	if !a.joined() {
 		return a.serverCommandsState(), errors.New("this computer is not joined to a CashPilot")
 	}
-	program, err := os.Executable()
+	program, err := thisProgram()
 	if err != nil {
 		return a.serverCommandsState(), fmt.Errorf("could not find this program's path: %w", err)
 	}
@@ -102,7 +123,10 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	if err := runFirewallScript(addRuleScript(name, program)); err != nil {
 		return a.serverCommandsState(), fmt.Errorf("the firewall rule was not made: %w", err)
 	}
-	if err := a.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsFirewallRule = name }); err != nil {
+	if err := a.cfg.Update(func(c *config.AppConfig) {
+		c.ServerCommandsFirewallRule = name
+		c.ServerCommandsFirewallProgram = program
+	}); err != nil {
 		return a.serverCommandsState(), err
 	}
 	// The rule exists, so the API listens now, and the next heartbeat, sent now,
@@ -124,5 +148,8 @@ func (a *App) removeServerCommandsRule() error {
 	if err := runFirewallScript(removeRuleScript(name)); err != nil {
 		return fmt.Errorf("the firewall rule %q was not removed: %w", name, err)
 	}
-	return a.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsFirewallRule = "" })
+	return a.cfg.Update(func(c *config.AppConfig) {
+		c.ServerCommandsFirewallRule = ""
+		c.ServerCommandsFirewallProgram = ""
+	})
 }

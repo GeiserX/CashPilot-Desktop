@@ -54,9 +54,24 @@ func isPrivateAddr(ip netip.Addr) bool {
 // or local VMs sit on. Their addresses are private, but listening there would put the
 // API next to the earners, which are code we do not trust. The key still guards the
 // API; this keeps it off their network as well.
+//
+// A Hyper-V host vNIC is named "vEthernet (<switch>)". Most are not skipped: on a PC
+// with an External switch, the host's own LAN address sits on that switch's vNIC,
+// and the server reaches this computer there. Only the switches that carry VMs are
+// skipped: WSL's, the Default Switch, Docker's and Windows containers' NAT switches,
+// and the Secure VM's own switch and its lab copies (internal/winvm/names.go), the
+// host side of the fenced earner VM.
 func skippedInterface(name string) bool {
 	lower := strings.ToLower(name)
-	for _, prefix := range []string{"docker", "br-", "veth", "cni", "podman", "virbr", "vmnet", "bridge1", "vethernet (wsl", "vethernet (default switch)"} {
+	if strings.HasPrefix(lower, "vethernet (") {
+		for _, prefix := range []string{"vethernet (wsl", "vethernet (default switch)", "vethernet (dockernat)", "vethernet (nat)", "vethernet (cashpilot-vm)", "vethernet (cpd-svm-"} {
+			if strings.HasPrefix(lower, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, prefix := range []string{"docker", "br-", "veth", "cni", "podman", "virbr", "vmnet", "bridge1"} {
 		if strings.HasPrefix(lower, prefix) {
 			return true
 		}
