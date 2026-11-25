@@ -301,16 +301,24 @@ const deps = (over = {}) => {
   // Docker came up: the setup is finished, so no "Restart to finish" stays.
   const sameBootResume = { active: true, flow: "docker", step: "a2", restarted: "no", exeMoved: false, attempts: 1, fromRunOnce: false };
   const running = { available: true, reason: "running", nativeServices: [] };
+  // up: an engine answers in Linux mode; local: Go found it is this PC's own
+  // Docker Desktop and ended the setup (host_check.go setupFinished).
   let up = false;
-  const { deps: d } = deps({ hostCheck: async () => ({ facts: { supported: true }, runtime: up ? running : runtimeDown, steps }) });
-  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: sameBootResume, result: { facts: {}, runtime: runtimeDown, steps } });
+  let local = false;
+  const { deps: d } = deps({ hostCheck: async () => ({ facts: { supported: true }, runtime: up ? running : runtimeDown, steps, setupFinished: up && local }) });
+  const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: sameBootResume, result: { facts: {}, runtime: runtimeDown, steps, setupFinished: false } });
   await g.check();
   check("RULE 9 (wiring): Docker still down keeps the banner", g.model.resume === sameBootResume);
   up = true;
   await g.check();
-  check("RULE 9 (wiring): a reading that finds Docker running drops the banner", g.model.resume === null && !/data-resume/.test(renderDockerGuide(g.model)));
-  const later = new DockerGuide(holder(), d, { runtime: running, resume: sameBootResume, result: { facts: {}, runtime: running, steps } });
-  check("RULE 9 (wiring): a guide opened with Docker running draws no banner", later.model.resume === null);
+  check("RULE 9 (wiring): an engine elsewhere answering keeps the banner, as Go keeps the journal", g.model.resume === sameBootResume);
+  local = true;
+  await g.check();
+  check("RULE 9 (wiring): a reading that finds this PC's Docker running drops the banner", g.model.resume === null && !/data-resume/.test(renderDockerGuide(g.model)));
+  const later = new DockerGuide(holder(), d, { runtime: running, resume: sameBootResume, result: { facts: {}, runtime: running, steps, setupFinished: true } });
+  check("RULE 9 (wiring): a guide opened with this PC's Docker running draws no banner", later.model.resume === null);
+  const remote = new DockerGuide(holder(), d, { runtime: running, resume: sameBootResume, result: { facts: {}, runtime: running, steps, setupFinished: false } });
+  check("RULE 9 (wiring): a guide opened with an engine elsewhere answering keeps the banner", remote.model.resume === sameBootResume);
 }
 
 if (failures > 0) {

@@ -119,9 +119,9 @@ func DockerSteps(f HostFacts, reason string, local bool) []Step {
 	// elsewhere.
 	proven := engineUp && local && f.DockerDesktopRunning == Yes
 	// Windows containers run without WSL, and Docker's Windows engine answers
-	// without virtualization, so only Linux containers prove the WSL rows and the
-	// virtualization row.
-	linuxProven := proven && reason == runtime.ReasonRunning
+	// without virtualization, so only Linux containers prove the WSL rows, the
+	// virtualization row and the advice rows (a10 to a12).
+	linuxProven := LocalLinuxEngine(f, reason, local)
 	wslBackend := f.DockerBackend != BackendHyperV
 
 	steps := []Step{windowsStep(f, proven), virtualizationStep(f, linuxProven)}
@@ -138,11 +138,20 @@ func DockerSteps(f HostFacts, reason string, local bool) []Step {
 	}
 	steps = append(steps,
 		linuxContainersStep(reason),
-		otherHypervisorStep(f, engineUp),
-		virtualMachineStep(f, engineUp),
-		lanmanStep(f, engineUp),
+		otherHypervisorStep(f, linuxProven),
+		virtualMachineStep(f, linuxProven),
+		lanmanStep(f, linuxProven),
 	)
 	return markBlocked(steps)
+}
+
+// LocalLinuxEngine says this PC's own Docker Desktop runs Linux containers: the
+// engine answers in Linux mode, it is this PC's Docker Desktop that answers
+// (local, from runtime.LocalDockerDesktop), and Docker Desktop is seen running
+// here. Only then does the engine prove facts about this PC, and only then is a
+// guided setup finished.
+func LocalLinuxEngine(f HostFacts, reason string, local bool) bool {
+	return reason == runtime.ReasonRunning && local && f.DockerDesktopRunning == Yes
 }
 
 // markBlocked turns a step that is not done into "blocked" when an earlier step
@@ -360,14 +369,14 @@ func linuxContainersStep(reason string) Step {
 	return s
 }
 
-func otherHypervisorStep(f HostFacts, engineUp bool) Step {
+func otherHypervisorStep(f HostFacts, linuxUp bool) Step {
 	s := Step{ID: "a10", Title: "Other virtual machine software"}
 	names := strings.Join(f.OtherHypervisorNames, " and ")
 	if names == "" {
 		names = "Other virtual machine software"
 	}
 	switch {
-	case f.OtherHypervisors == Yes && engineUp:
+	case f.OtherHypervisors == Yes && linuxUp:
 		s.State, s.Text = StepDone, names+" is installed, and Docker runs next to it."
 	case f.OtherHypervisors == Yes && hypervisorOffAtBoot(f):
 		// The boot option itself needs admin rights to read, so this row cannot say
@@ -397,10 +406,10 @@ func hypervisorOffAtBoot(f HostFacts) bool {
 		f.RestartPending == No && f.IsVM != Yes
 }
 
-func virtualMachineStep(f HostFacts, engineUp bool) Step {
+func virtualMachineStep(f HostFacts, linuxUp bool) Step {
 	s := Step{ID: "a11", Title: "This PC is a virtual machine"}
 	switch {
-	case f.IsVM == Yes && engineUp:
+	case f.IsVM == Yes && linuxUp:
 		s.State, s.Text = StepDone, "This PC is a virtual machine, and Docker runs in it."
 	case f.IsVM == Yes:
 		s.State = StepNeedsYou
@@ -413,9 +422,9 @@ func virtualMachineStep(f HostFacts, engineUp bool) Step {
 	return s
 }
 
-func lanmanStep(f HostFacts, engineUp bool) Step {
+func lanmanStep(f HostFacts, linuxUp bool) Step {
 	s := Step{ID: "a12", Title: "Windows Server service"}
-	if engineUp && (f.LanmanServer == "manual" || f.LanmanServer == "disabled" || f.LanmanServer == "absent") {
+	if linuxUp && (f.LanmanServer == "manual" || f.LanmanServer == "disabled" || f.LanmanServer == "absent") {
 		// Docker runs, so the service blocks nothing now.
 		word := map[string]string{"manual": "is set to Manual", "disabled": "is turned off", "absent": "is missing"}[f.LanmanServer]
 		s.State = StepNote

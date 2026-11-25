@@ -850,6 +850,9 @@ export interface HostCheckResult {
   runtime: RuntimeStatus;
   // The Docker checklist; null outside Windows.
   steps: GuideStep[] | null;
+  // This reading ended the guided setup: this PC's own Docker Desktop runs
+  // Linux containers (host_check.go).
+  setupFinished: boolean;
 }
 
 export interface FirmwareRestart {
