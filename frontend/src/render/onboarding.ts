@@ -1,4 +1,4 @@
-// The runtime card on first run's second step.
+// The runtime card on first run's runtime step (after How it runs, and Join on the follower path).
 //
 // It must never call this machine ready when nothing useful runs. The native
 // runtime is always there, but it runs only the few apps that ship a native

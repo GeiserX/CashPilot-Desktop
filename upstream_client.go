@@ -162,7 +162,12 @@ func (a *App) startUpstream(ctx context.Context) {
 					// The other process (the window or the helper) left or moved
 					// this server. Sending now would keep this computer online on
 					// the server's Fleet page, and a refused key would enrol it
-					// again after the user removed it there.
+					// again after the user removed it there. The fleet's exits
+					// belong to that server too: drop them now, not at the next
+					// config sync, so the fence never uses another server's list.
+					a.upstream.mu.Lock()
+					a.upstream.fleetExits, a.upstream.fleetExitsKnown = nil, false
+					a.upstream.mu.Unlock()
 					return
 				}
 				a.sendUpstream(loopCtx, client, serverURL, enrol)

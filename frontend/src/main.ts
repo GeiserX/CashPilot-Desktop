@@ -1328,7 +1328,9 @@ function wireModeCard() {
         button.disabled = false;
         return;
       }
-      redrawModeCard();
+      // Redraw the whole page, not only the card: the Environment Variables form
+      // below still holds the server address and hub setting from before the leave.
+      render();
     });
   });
   if (modeCardView === "join") {
@@ -1468,6 +1470,7 @@ async function saveSettingsFromForm() {
     readOnly: input.readOnly,
     secret: input.hasAttribute("data-secret"),
     clear: input.dataset.clear === "true",
+    initial: input.dataset.initial,
   }));
   const values = settingsSaveValues(fields);
   try {
