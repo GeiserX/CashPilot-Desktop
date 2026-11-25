@@ -132,6 +132,10 @@ func TestWhatAWorkerCannotRunIsRefused(t *testing.T) {
 		"manual":  func(s *catalog.Service) { s.ManualOnly = true },
 		"noimage": func(s *catalog.Service) { s.Docker.Image = "" },
 		"retired": func(s *catalog.Service) { s.Status = "dead" },
+		// A wallet seed kept in a file never travels to a worker, stored or typed.
+		"seedfile": func(s *catalog.Service) {
+			s.Docker.Env = append(s.Docker.Env, catalog.EnvVar{Key: "SEED", Secret: true, SeedFile: &catalog.SeedFile{Path: "/data/seed.yml", Key: "phrase"}})
+		},
 	} {
 		svc := service()
 		edit(&svc)
