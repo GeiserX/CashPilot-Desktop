@@ -202,6 +202,29 @@ code { color: var(--text-primary); }
 .traffic.minimise { background: #febc2e; }
 .traffic.maximise { background: #28c840; }
 
+/* Windows and Linux: the title at the left, Minimise, Maximise and Close at the
+   top right, each 46x32 as Windows draws them. The bar touches the window's top
+   and right edges, so the focus ring sits inside the button, where it shows. */
+.titlebar.titlebar-win { justify-content: flex-start; padding-left: 12px; }
+.window-controls {
+  --wails-draggable: no-drag;
+  position: absolute;
+  top: 0; right: 0;
+  height: var(--titlebar-height);
+  display: flex;
+}
+.win-ctl {
+  --wails-draggable: no-drag;
+  width: 46px; height: var(--titlebar-height);
+  padding: 0; border: 0; border-radius: 0;
+  display: inline-grid; place-items: center;
+  background: transparent; color: var(--text-secondary);
+}
+.win-ctl svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; pointer-events: none; }
+.win-ctl:hover { background: var(--bg-hover); color: var(--text-primary); }
+.win-ctl.close:hover { background: #c42b1c; color: #ffffff; }
+.win-ctl:focus-visible { outline-offset: -2px; color: var(--text-primary); }
+
 /* ----- App shell: one bar, no sidebar ----- */
 .app-layout { min-height: 100vh; padding-top: var(--titlebar-height); display: flex; flex-direction: column; }
 .main-content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -499,6 +522,10 @@ path.usage-line-main, path.usage-line-alt { fill: none; }
 .breakdown-table tbody tr:hover, .catalog-table tbody tr:hover { background: var(--bg-hover); }
 .catalog-table .group-row th { padding: 14px 0 6px; color: var(--text-primary); font-weight: 600; font-size: var(--fs-3); }
 .catalog-table .group-row:hover { background: none; }
+/* A catalog row opens its service's setup card: it looks and acts clickable. */
+.catalog-table tr.catalog-row { cursor: pointer; }
+.svc-open { background: none; border: 0; padding: 0; font: inherit; font-weight: 600; text-align: left; cursor: pointer; }
+.catalog-row:hover .svc-open { text-decoration: underline; text-underline-offset: 2px; }
 .catalog-table td.cell-sub-wrap { color: var(--text-secondary); font-size: var(--fs-2); max-width: 32ch; }
 
 /* Figures are right-aligned mono; the row actions hug the right edge. */
@@ -785,12 +812,17 @@ button.topbar-runtime:hover, button.topbar-runtime.active { color: var(--text-pr
 .switch-thumb { width: 14px; height: 14px; border-radius: 1px; background: var(--text-secondary); transition: transform var(--transition); }
 .switch input:checked + .switch-track { background: var(--success-strong); border-color: var(--success); }
 .switch input:checked + .switch-track .switch-thumb { transform: translateX(16px); background: #fff; }
-.switch input:focus-visible + .switch-track { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.switch input:focus-visible + .switch-track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .switch input:disabled + .switch-track { opacity: 0.5; }
 .bg-toggle-status strong { display: block; font-weight: 600; }
 .bg-toggle-status small { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--fs-2); }
 .bg-toggle-status.is-on strong { color: var(--success); }
 .bg-toggle-status.is-unavailable strong { color: var(--warning); }
+/* Settings > Save Variables: the note next to the button (render/savenote.ts). */
+.save-row { display: flex; align-items: center; gap: 12px; }
+.save-note { font-size: var(--fs-2); color: var(--text-secondary); }
+.save-note-ok { color: var(--success); }
+.save-note-fail { color: var(--error); }
 
 /* ----- Fleet ----- */
 .connection-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 24px; margin: 8px 0; }
