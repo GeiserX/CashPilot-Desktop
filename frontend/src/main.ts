@@ -110,6 +110,7 @@ import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
+import { guidesBesideChecklist, loadRuntimePage } from "./render/runtimepage";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
@@ -118,7 +119,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -275,10 +276,6 @@ function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked">): DockerGuid
   };
 }
 
-// The guide cards under the checklist: the checklist covers Docker Desktop.
-function otherGuides(guides: InstallGuide[], checklist: boolean): InstallGuide[] {
-  return checklist ? guides.filter((g) => g.id !== "docker-desktop-windows") : guides;
-}
 
 async function onBackendEvent() {
   if (eventRefreshInFlight) return;
@@ -431,7 +428,7 @@ function renderOnboarding(current: AppState) {
       },
     }), {runtime, resume: setupResume, result: firstRunHost});
   }
-  renderGuides(otherGuides(current.guides || [], checklist));
+  renderGuides(guidesBesideChecklist(current.guides || [], checklist));
 }
 
 // First run's first reading of this PC. It lands after the first draw, so the
@@ -476,32 +473,32 @@ function renderRuntimeView(current: AppState) {
   maybeResetScroll();
   const holder = document.querySelector<HTMLDivElement>("#docker-guide");
   const guides = current.guides || [];
-  // The checklist reads the PC when it opens; outside Windows the reading says so
-  // and the install guides stay the whole page.
-  void hostCheck().then((result) => {
-    if (activeView !== "runtime" || !holder?.isConnected) return;
-    const checklist = !!result.facts?.supported && (result.steps?.length ?? 0) > 0;
-    renderGuides(otherGuides(guides, checklist));
-    if (!checklist) {
-      holder.innerHTML = "";
-      return;
-    }
-    dockerGuide = new DockerGuide(holder, guideDeps({
-      skip: () => {
-        activeView = "dashboard";
-        render();
-      },
-      checked: (res) => {
-        if (state) state = {...state, runtime: res.runtime};
-        const slot = document.querySelector("#runtime-card-slot");
-        if (slot) slot.innerHTML = runtimeCard(res.runtime).html;
-      },
-    }), {runtime: result.runtime, resume: setupResume, result});
+  const showRuntime = (runtime: RuntimeStatus) => {
+    if (state) state = {...state, runtime};
     const slot = document.querySelector("#runtime-card-slot");
-    if (slot) slot.innerHTML = runtimeCard(result.runtime).html;
-  }).catch(() => {
-    if (holder) holder.innerHTML = "";
-    renderGuides(guides);
+    if (slot) slot.innerHTML = runtimeCard(runtime).html;
+  };
+  // The checklist reads the PC when it opens; outside Windows the reading says so
+  // and the install guides stay the whole page (render/runtimepage.ts).
+  void loadRuntimePage(hostCheck, guides, {
+    current: () => activeView === "runtime" && !!holder?.isConnected,
+    setRuntime: showRuntime,
+    showGuides: renderGuides,
+    showHolder: (html) => {
+      if (!holder) return;
+      holder.innerHTML = html;
+      holder.querySelector("[data-runtime-recheck]")?.addEventListener("click", () => render());
+    },
+    showChecklist: (result) => {
+      if (!holder) return;
+      dockerGuide = new DockerGuide(holder, guideDeps({
+        skip: () => {
+          activeView = "dashboard";
+          render();
+        },
+        checked: (res) => showRuntime(res.runtime),
+      }), {runtime: result.runtime, resume: setupResume, result});
+    },
   });
 }
 
