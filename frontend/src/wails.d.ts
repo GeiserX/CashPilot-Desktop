@@ -5,6 +5,9 @@ declare module "../wailsjs/go/main/App" {
   export function GetFleetState(): Promise<FleetState>;
   export function AddFleetDevice(values: Record<string, string>): Promise<FleetState>;
   export function RemoveFleetDevice(id: number): Promise<FleetState>;
+  // A lead's commands to the CashPilot Docker workers that report to it (lead_workers.go).
+  export function DeployToWorker(slug: string, req: WorkerDeployRequest): Promise<WorkerDeployResult>;
+  export function CommandWorkerCopy(workerId: number, slug: string, command: string, instance: number): Promise<string>;
   export function CompleteOnboarding(): Promise<void>;
   export function InstallBackgroundHelper(): Promise<void>;
   export function RemoveBackgroundHelper(): Promise<void>;
@@ -372,6 +375,52 @@ export interface AppState {
   // The CashPilot server that raises the stall alerts of this computer's own
   // copies while joined to it; "" while this computer raises them.
   stallsServer?: string;
+  // The Docker workers the deploy form's Where box offers; null when this computer
+  // sends workers no commands (joined, or not accepting workers).
+  workerTargets?: WorkerTarget[] | null;
+}
+
+// WorkerTarget mirrors the Go WorkerTarget (lead_workers.go).
+export interface WorkerTarget {
+  id: number;
+  name: string;
+  online: boolean;
+  // Why this worker cannot take commands now; "" when it can.
+  reason: string;
+  services: string[] | null;
+}
+
+// WorkerDeployRequest mirrors the Go WorkerDeployRequest (lead_workers.go).
+export interface WorkerDeployRequest {
+  workerId: number;
+  values: Record<string, string>;
+  image: string;
+  confirmed: boolean;
+  allowSharedIdentity: boolean;
+}
+
+// WorkerDeployResult mirrors the Go WorkerDeployResult. With ask set nothing was
+// deployed: the owner answers message, and a yes sends the deploy again.
+export interface WorkerDeployResult {
+  ask: string;
+  message: string;
+  worker: string;
+  containerId: string;
+  notes: string[] | null;
+}
+
+// WorkerCopy mirrors store.FleetContainer: one copy a worker's heartbeat listed.
+export interface WorkerCopy {
+  slug: string;
+  status: string;
+  instance: number;
+  managed: boolean;
+}
+
+// WorkerCommandsView mirrors the Go WorkerCommandsView.
+export interface WorkerCommandsView {
+  reason: string;
+  copies: WorkerCopy[] | null;
 }
 
 // RemindersView mirrors the Go RemindersView (reminders_app.go).
@@ -788,6 +837,8 @@ export interface FleetState {
   apiListening: boolean;
   workerSnippet: string;
   mobileSnippet: string;
+  // Per worker id, its copies and why it takes no commands now.
+  workerCommands?: Record<string, WorkerCommandsView> | null;
 }
 
 export interface RuntimeStatus {
