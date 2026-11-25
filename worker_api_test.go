@@ -282,6 +282,11 @@ func TestServerCommandsRunWhileJoinedAndStopOnLeave(t *testing.T) {
 
 func TestServerCommandsSwitchOffMeansNoListener(t *testing.T) {
 	useAddrs(t, "192.168.1.30")
+	// The switch, not the firewall: on Windows nothing listens before the rule
+	// exists (TestServerCommandsWaitForTheFirewallRuleOnWindows).
+	oldNeeded := firewallRuleNeeded
+	t.Cleanup(func() { firewallRuleNeeded = oldNeeded })
+	firewallRuleNeeded = false
 	app := joinedApp(t)
 	t.Cleanup(func() { app.closeWorkerListeners(nil) })
 	app.syncWorkerAPI()
