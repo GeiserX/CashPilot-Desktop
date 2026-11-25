@@ -2,15 +2,19 @@ package winvm
 
 import (
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// xmlSpecial is every character the answer file must escape.
+const xmlSpecial = "<&>\"'"
 
 func testAnswer() AnswerFile {
 	return AnswerFile{
 		ImageIndex: 6, ComputerName: "CASHPILOT-VM", GuestMACDash: "00-15-5D-0A-00-02", HostMACDash: "00-15-5D-00-00-02",
 		GuestIP: netip.MustParseAddr("172.31.250.2"), Gateway: netip.MustParseAddr("172.31.250.1"), PrefixLen: 29,
-		AdminPassword: fakePassword(`Adm1n<&>"'`), EarnerPassword: fakePassword("Earn3r"),
+		AdminPassword: testPassword(1) + xmlSpecial, EarnerPassword: testPassword(2),
 	}
 }
 
@@ -23,19 +27,19 @@ func TestAnswerFileEscapesAndChecks(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := string(b)
-	for _, want := range []string{`Adm1n&lt;&amp;&gt;&#34;&#39;-Pass-01`, "<NextHopAddress>172.31.250.1</NextHopAddress>",
+	for _, want := range []string{testPassword(1) + "&lt;&amp;&gt;&#34;&#39;", "<NextHopAddress>172.31.250.1</NextHopAddress>",
 		"-IPAddress 172.31.250.1 -LinkLayerAddress 00-15-5D-00-00-02", "<ComputerName>CASHPILOT-VM</ComputerName>"} {
 		if !strings.Contains(x, want) {
 			t.Errorf("the answer file lacks %q", want)
 		}
 	}
-	if strings.Contains(x, `Adm1n<&>`) {
+	if strings.Contains(x, testPassword(1)+"<&>") {
 		t.Fatal("a password went in unescaped")
 	}
 	bad := map[string]func(*AnswerFile){
 		"image index 0":      func(a *AnswerFile) { a.ImageIndex = 0 },
-		"short password":     func(a *AnswerFile) { a.AdminPassword = "short" },
-		"space in password":  func(a *AnswerFile) { a.EarnerPassword = strings.ReplaceAll(fakePassword("Earn3r"), "-", " ") },
+		"short password":     func(a *AnswerFile) { a.AdminPassword = strings.Repeat("s", 5) },
+		"space in password":  func(a *AnswerFile) { a.EarnerPassword = strings.Replace(testPassword(2), "Q", " ", 1) },
 		"lowercase name":     func(a *AnswerFile) { a.ComputerName = "cashpilot" },
 		"colon MAC":          func(a *AnswerFile) { a.GuestMACDash = "00:15:5D:0A:00:02" },
 		"IPv6 guest":         func(a *AnswerFile) { a.GuestIP = netip.MustParseAddr("fe80::1") },
@@ -51,6 +55,6 @@ func TestAnswerFileEscapesAndChecks(t *testing.T) {
 	}
 }
 
-// fakePassword is a made-up guest password for tests, built at run time so
-// that no password-shaped literal sits in the source.
-func fakePassword(tag string) string { return tag + "-Pass-" + "0123456789" }
+// testPassword is a made-up guest password for tests, built at run time from
+// its number so that no password-shaped literal sits in the source.
+func testPassword(n int) string { return "t" + strconv.Itoa(n) + strings.Repeat("Qz7", 6) }

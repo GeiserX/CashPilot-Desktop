@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +23,7 @@ const testUserSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 func setupParams() winvm.SetupParams {
 	return winvm.SetupParams{
 		Version: winvm.SetupParamsVersion, VHDXDir: `D:\VMs`, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
-		AdminPassword: fakePassword("Adm1n"), EarnerPassword: fakePassword("Earn3r"),
+		AdminPassword: testPassword(1), EarnerPassword: testPassword(2),
 		UserSID: testUserSID, ApproveNetwork: true,
 	}
 }
@@ -296,9 +297,9 @@ func TestBuildResumesAfterEachStep(t *testing.T) {
 	}
 }
 
-// fakePassword is a made-up guest password for tests, built at run time so
-// that no password-shaped literal sits in the source.
-func fakePassword(tag string) string { return tag + "-Pass-" + "0123456789" }
+// testPassword is a made-up guest password for tests, built at run time from
+// its number so that no password-shaped literal sits in the source.
+func testPassword(n int) string { return "t" + strconv.Itoa(n) + strings.Repeat("Qz7", 6) }
 
 // TestBuildRepairFindsRenamedObjects: after the user renames the VM and the
 // switch, Repair keeps both by their recorded IDs (it makes no second VM or

@@ -86,7 +86,7 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 			var out struct {
 				OK bool `json:"ok"`
 			}
-			err := b.Guest(ctx, tVMID, Cred{User: "cpadmin", Password: fakePassword("Adm1n")}, scriptGuestPing, map[string]any{}, &out)
+			err := b.Guest(ctx, tVMID, Cred{User: "cpadmin", Password: testPassword(1)}, scriptGuestPing, map[string]any{}, &out)
 			if err == nil && !out.OK {
 				t.Error("guest answer not read")
 			}
@@ -165,10 +165,10 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 		"empty answer file":  func(b psBuilder) error { return b.WriteAnswerISO(ctx, `C:\a.iso`, nil) },
 		"guard exe relative": func(b psBuilder) error { return b.RegisterGuardTask(ctx, n, `guard.exe`, tOwner) },
 		"guest script unknown": func(b psBuilder) error {
-			return b.Guest(ctx, tVMID, Cred{User: "cpadmin", Password: fakePassword("Adm1n")}, GuestScript{Name: "x", Text: "Remove-Item C:\\"}, nil, nil)
+			return b.Guest(ctx, tVMID, Cred{User: "cpadmin", Password: testPassword(1)}, GuestScript{Name: "x", Text: "Remove-Item C:\\"}, nil, nil)
 		},
 		"guest user not admin": func(b psBuilder) error {
-			return b.Guest(ctx, tVMID, Cred{User: "earner", Password: fakePassword("Adm1n")}, scriptGuestPing, nil, nil)
+			return b.Guest(ctx, tVMID, Cred{User: "earner", Password: testPassword(1)}, scriptGuestPing, nil, nil)
 		},
 		"remove VM not a GUID":  func(b psBuilder) error { _, err := b.RemoveVM(ctx, "*", `D:\VMs`); return err },
 		"remove switch by name": func(b psBuilder) error { return b.RemoveSwitch(ctx, "CashPilot-VM") },

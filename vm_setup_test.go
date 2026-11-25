@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ func writeParamsIn(t *testing.T, dir string, edit func(*winvm.SetupParams)) stri
 	t.Helper()
 	sp := winvm.SetupParams{
 		Version: winvm.SetupParamsVersion, VHDXDir: `D:\VMs`, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
-		AdminPassword: fakePassword("Adm1n"), EarnerPassword: fakePassword("Earn3r"),
+		AdminPassword: testPassword(1), EarnerPassword: testPassword(2),
 		UserSID: "S-1-5-21-1-2-3-1001", ApproveNetwork: true,
 	}
 	if edit != nil {
@@ -60,7 +61,7 @@ func TestRunVMSetupBuildsAndDeletesTheParams(t *testing.T) {
 		t.Fatal("the params file, which holds the passwords, is still there")
 	}
 	log, _ := os.ReadFile(filepath.Join(dir, setupLogFile))
-	if strings.Contains(string(log), "Adm1n-Pass") || strings.Contains(out.String(), "Adm1n-Pass") {
+	if strings.Contains(string(log), testPassword(1)) || strings.Contains(out.String(), testPassword(1)) {
 		t.Fatal("a password reached the log")
 	}
 	var rout bytes.Buffer
@@ -123,6 +124,6 @@ func TestRunVMSetupRefusesParamsOutsideTheGuardFolder(t *testing.T) {
 	}
 }
 
-// fakePassword is a made-up guest password for tests, built at run time so
-// that no password-shaped literal sits in the source.
-func fakePassword(tag string) string { return tag + "-Pass-" + "0123456789" }
+// testPassword is a made-up guest password for tests, built at run time from
+// its number so that no password-shaped literal sits in the source.
+func testPassword(n int) string { return "t" + strconv.Itoa(n) + strings.Repeat("Qz7", 6) }
