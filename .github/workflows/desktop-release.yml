@@ -236,6 +236,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          # The release notes list the commits since the last tag.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.11'
+          cache: false
 
       - uses: actions/download-artifact@v8
         with:
@@ -260,6 +267,23 @@ jobs:
         with:
           subject-path: artifacts/desktop-*/*
 
+      # The release notes are written for people who install the app: which file
+      # to take, the two Windows warnings and what to click, then only the changes a
+      # user can reach, and every commit last in a collapsed block
+      # (cmd/releasenotes). GitHub's generated notes were the commit list alone.
+      # The build signs the Windows files exactly when WINDOWS_SIGN_CERT is set (it
+      # fails the job if signtool fails), so the notes explain the unsigned-file
+      # warnings only when that secret is missing.
+      - name: Write the release notes
+        env:
+          TAG: ${{ inputs.version || github.ref_name }}
+          WINDOWS_SIGNED: ${{ secrets.WINDOWS_SIGN_CERT != '' }}
+        run: |
+          set -euo pipefail
+          go run ./cmd/releasenotes -tag "$TAG" -repo "$GITHUB_REPOSITORY" -windows-signed="$WINDOWS_SIGNED" artifacts/desktop-*/* artifacts/SHA256SUMS > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
       # The tag is created HERE, with the release, and only after every platform
       # built and passed its tests. auto-tag used to push the tag first, so a
       # failed build left a version tag with no release behind it. For a
@@ -272,19 +296,7 @@ jobs:
           files: |
             artifacts/desktop-*/*
             artifacts/SHA256SUMS
-          generate_release_notes: true
-          # Put above the generated notes.
-          body: |
-            ## Download
-
-            - **CashPilot Desktop for Windows** (x64)
-              - `CashPilot-Desktop-windows-amd64-setup.exe` is the installer. Use this one. It installs for your Windows account, with no admin prompt, and adds CashPilot Desktop to Settings > Apps > Installed apps, where you can uninstall it.
-              - `CashPilot-Desktop-windows-amd64.exe` is the portable app. It runs from any folder and installs nothing.
-              - Both files are not code-signed yet, so SmartScreen may warn. Click More info, then Run anyway. Both use the same data, so you can switch from one to the other.
-            - **CashPilot Desktop for macOS** (Apple silicon): `CashPilot-Desktop-darwin-arm64.zip`. Signed and notarized.
-            - **CashPilot Desktop for Linux** (x64): `CashPilot-Desktop-linux-amd64.tar.gz`.
-
-            To check a download: `sha256sum -c SHA256SUMS --ignore-missing`, or `gh attestation verify <file> -R GeiserX/CashPilot-Desktop`.
+          body_path: ${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

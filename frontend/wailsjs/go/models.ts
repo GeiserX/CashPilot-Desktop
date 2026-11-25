@@ -856,6 +856,7 @@ export namespace catalog {
 	    code: string;
 	    program?: boolean;
 	    bonus: ReferralBonus;
+	    account?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Referral(source);
@@ -867,6 +868,7 @@ export namespace catalog {
 	        this.code = source["code"];
 	        this.program = source["program"];
 	        this.bonus = this.convertValues(source["bonus"], ReferralBonus);
+	        this.account = source["account"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1551,6 +1553,26 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class WorkerTarget {
+	    id: number;
+	    name: string;
+	    online: boolean;
+	    reason: string;
+	    services: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkerTarget(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.online = source["online"];
+	        this.reason = source["reason"];
+	        this.services = source["services"];
+	    }
+	}
 	export class StallAlert {
 	    slug: string;
 	    service: string;
@@ -1954,6 +1976,7 @@ export namespace main {
 	    reminders: RemindersView;
 	    stalls: StallAlert[];
 	    stallsServer: string;
+	    workerTargets: WorkerTarget[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -1989,6 +2012,7 @@ export namespace main {
 	        this.reminders = this.convertValues(source["reminders"], RemindersView);
 	        this.stalls = this.convertValues(source["stalls"], StallAlert);
 	        this.stallsServer = source["stallsServer"];
+	        this.workerTargets = this.convertValues(source["workerTargets"], WorkerTarget);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2090,6 +2114,38 @@ export namespace main {
 	        this.restartPending = source["restartPending"];
 	    }
 	}
+	export class WorkerCommandsView {
+	    reason: string;
+	    copies: store.FleetContainer[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkerCommandsView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reason = source["reason"];
+	        this.copies = this.convertValues(source["copies"], store.FleetContainer);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class FleetState {
 	    workers: number;
 	    mobiles: number;
@@ -2103,6 +2159,7 @@ export namespace main {
 	    apiListening: boolean;
 	    workerSnippet: string;
 	    mobileSnippet: string;
+	    workerCommands: Record<string, WorkerCommandsView>;
 	
 	    static createFrom(source: any = {}) {
 	        return new FleetState(source);
@@ -2122,6 +2179,7 @@ export namespace main {
 	        this.apiListening = source["apiListening"];
 	        this.workerSnippet = source["workerSnippet"];
 	        this.mobileSnippet = source["mobileSnippet"];
+	        this.workerCommands = this.convertValues(source["workerCommands"], WorkerCommandsView, true);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2665,6 +2723,48 @@ export namespace main {
 		    }
 		    return a;
 		}
+	}
+	
+	
+	export class WorkerDeployRequest {
+	    workerId: number;
+	    values: Record<string, string>;
+	    image: string;
+	    confirmed: boolean;
+	    allowSharedIdentity: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkerDeployRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.workerId = source["workerId"];
+	        this.values = source["values"];
+	        this.image = source["image"];
+	        this.confirmed = source["confirmed"];
+	        this.allowSharedIdentity = source["allowSharedIdentity"];
+	    }
+	}
+	export class WorkerDeployResult {
+	    ask: string;
+	    message: string;
+	    worker: string;
+	    containerId: string;
+	    notes: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WorkerDeployResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ask = source["ask"];
+	        this.message = source["message"];
+	        this.worker = source["worker"];
+	        this.containerId = source["containerId"];
+	        this.notes = source["notes"];
+	    }
 	}
 	
 
@@ -3576,6 +3676,24 @@ export namespace store {
 	        this.error = source["error"];
 	        this.errorKind = source["errorKind"];
 	        this.createdAt = source["createdAt"];
+	    }
+	}
+	export class FleetContainer {
+	    slug: string;
+	    status: string;
+	    instance: number;
+	    managed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetContainer(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.status = source["status"];
+	        this.instance = source["instance"];
+	        this.managed = source["managed"];
 	    }
 	}
 	export class FleetDevice {
