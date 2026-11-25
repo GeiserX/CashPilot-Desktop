@@ -64,3 +64,21 @@ func TestGuestProbeOverPowerShellDirect(t *testing.T) {
 		t.Fatalf("a refused probe reached the guest: %v", f.Calls()[m:])
 	}
 }
+
+func TestGuestHVSockRejectsInconclusiveResults(t *testing.T) {
+	ctx := context.Background()
+	f := hvfake.New()
+	dir := t.TempDir()
+	if _, err := winvm.Build(ctx, buildDeps(t, f, dir), setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	g := winvm.NewGuestProbe(f, readPlan(t, dir).VMID, winvm.Cred{User: "cpadmin", Password: setupParams().AdminPassword})
+	for _, result := range []string{"timeout", "refused:10049", "socket-error:10060", ""} {
+		t.Run(result, func(t *testing.T) {
+			f.GuestAnswers = map[string]any{"probe-hvsock": map[string]any{"connected": false, "result": result}}
+			if _, err := g.HVSock(ctx, "0000AAAA-FACB-11E6-BD58-64006A7986D3", "cpd-1"); err == nil {
+				t.Fatalf("the guest result %q counted as an explicit refusal", result)
+			}
+		})
+	}
+}

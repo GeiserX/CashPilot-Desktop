@@ -1041,13 +1041,13 @@ func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepR
 			e2.Arrived = append(e2.Arrived, "hvsock:"+k)
 		}
 	}
+	if err := closeL(ctx); err != nil {
+		e2.Err = joinErr(e2.Err, "could not remove the test listener: "+err.Error())
+	}
 	if got := l.Received(); len(got) > seen {
 		for _, tok := range got[seen:] {
 			e2.Arrived = append(e2.Arrived, "hvsock listener:"+tok)
 		}
-	}
-	if err := closeL(ctx); err != nil {
-		e2.Err = joinErr(e2.Err, "could not remove the test listener: "+err.Error())
 	}
 	return append(results, Judge(green, e2)), nil
 }

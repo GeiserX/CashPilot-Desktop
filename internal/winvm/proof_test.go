@@ -365,3 +365,47 @@ func TestProofVMBusGreenReadsTheHostListener(t *testing.T) {
 		t.Fatal("the proof passed with a guest that hides its hv_sock connection")
 	}
 }
+
+type delayedObservation struct{ winvm.Prober }
+
+type delayedListener struct {
+	winvm.HVListener
+	baseline []string
+	closing  bool
+	closed   bool
+}
+
+func (l *delayedListener) Unregister() error {
+	l.baseline = l.HVListener.Received()
+	l.closing = true
+	return nil // Keep the registration to simulate the leak.
+}
+func (l *delayedListener) Received() []string {
+	if l.closing && !l.closed {
+		return l.baseline
+	}
+	return l.HVListener.Received()
+}
+func (l *delayedListener) Close() error {
+	l.closed = true
+	return l.HVListener.Close()
+}
+func (p delayedObservation) HVListener(ctx context.Context, vm, service string, register bool) (winvm.HVListener, error) {
+	l, err := p.Prober.HVListener(ctx, vm, service, register)
+	if err != nil {
+		return nil, err
+	}
+	return &delayedListener{HVListener: l}, nil
+}
+
+func TestProofVMBusReadsThroughListenerClose(t *testing.T) {
+	_, p, r, h, tg := proofRig(t)
+	r.P, r.G = delayedObservation{r.P}, lyingGuest{r.G}
+	rs, _ := r.Run(context.Background(), p, h, tg)
+	for _, s := range rs {
+		if s.ID == winvm.StepVMBusGreen && s.Outcome == winvm.Leak {
+			return
+		}
+	}
+	t.Fatal("the proof missed a connection reported when the listener closed")
+}

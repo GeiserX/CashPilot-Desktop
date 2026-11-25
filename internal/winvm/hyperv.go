@@ -187,6 +187,7 @@ type GuestProbe interface {
 	UDP(ctx context.Context, to netip.AddrPort, token string, n int) error
 	DNS(ctx context.Context, server netip.Addr, name string) ([]netip.Addr, error)
 	Neighbor(ctx context.Context, ip netip.Addr, mac string) error
+	// HVSock returns false without an error only for an explicit refusal.
 	HVSock(ctx context.Context, service, token string) (connected bool, err error)
 	Egress(ctx context.Context) (netip.Addr, error)
 	// RawFrame returns ErrUnsupported in the product guest.
@@ -256,6 +257,7 @@ type Capture interface {
 
 // HVListener is an hv_sock listener on the host.
 type HVListener interface {
+	// Received includes every accepted connection, even one without a token.
 	Received() []string
 	// Unregister deletes the GuestCommunicationServices key the listener
 	// made and keeps the socket bound, so a probe after it shows that the

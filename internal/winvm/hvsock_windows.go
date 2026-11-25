@@ -43,6 +43,8 @@ type hvListener struct {
 	mu       sync.Mutex
 	received []string
 	once     sync.Once
+	readers  sync.WaitGroup
+	closeErr error
 	done     chan struct{}
 }
 
@@ -115,7 +117,15 @@ func (l *hvListener) serve() {
 		if c == windows.InvalidHandle {
 			return
 		}
-		go func() {
+		l.mu.Lock()
+		slot := len(l.received)
+		l.received = append(l.received, "connected")
+		l.mu.Unlock()
+		if err := windows.SetsockoptInt(c, windows.SOL_SOCKET, windows.SO_RCVTIMEO, 1000); err != nil {
+			windows.Closesocket(c)
+			continue
+		}
+		l.readers.Go(func() {
 			defer windows.Closesocket(c)
 			buf := make([]byte, tokenRead)
 			got, _, _ := procRecv.Call(uintptr(c), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0)
@@ -126,9 +136,9 @@ func (l *hvListener) serve() {
 				}
 			}
 			l.mu.Lock()
-			l.received = append(l.received, tok)
+			l.received[slot] = tok
 			l.mu.Unlock()
-		}()
+		})
 	}
 }
 
@@ -153,11 +163,10 @@ func (l *hvListener) Unregister() error {
 }
 
 func (l *hvListener) Close() error {
-	var err error
 	l.once.Do(func() {
-		err = windows.Closesocket(l.s)
+		l.closeErr = windows.Closesocket(l.s)
 		<-l.done
-		err = errors.Join(err, l.Unregister())
+		l.readers.Wait()
 	})
-	return err
+	return errors.Join(l.closeErr, l.Unregister())
 }

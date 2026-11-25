@@ -123,10 +123,14 @@ public static class CpdHv {
       s = new Socket((AddressFamily)34, SocketType.Stream, (ProtocolType)1);
       var ar = s.BeginConnect(new CpdHvEP(new Guid("a42e7cda-d03f-480c-9cc2-a4de20abb878"), svc), null, null);
       if (!ar.AsyncWaitHandle.WaitOne(3000)) { return "timeout"; }
-      s.EndConnect(ar);
+      try { s.EndConnect(ar); }
+      catch (SocketException e) {
+        if (e.SocketErrorCode == SocketError.ConnectionRefused) { return "refused"; }
+        throw;
+      }
       s.Send(Encoding.ASCII.GetBytes(token));
       return "connected";
-    } catch (SocketException e) { return "refused:" + e.ErrorCode; }
+    } catch (SocketException e) { return "socket-error:" + e.ErrorCode; }
     finally { if (s != null) { try { s.Close(); } catch { } } }
   }
 }
@@ -247,7 +251,14 @@ func (g psDirectProbe) HVSock(ctx context.Context, service, token string) (bool,
 	if err := g.hv.Guest(ctx, g.vmID, g.cred, scriptGuestHVSock, map[string]any{"service": service, "token": token}, &out); err != nil {
 		return false, err
 	}
-	return out.Connected, nil
+	switch {
+	case out.Connected && out.Result == "connected":
+		return true, nil
+	case !out.Connected && out.Result == "refused":
+		return false, nil
+	default:
+		return false, fmt.Errorf("hv_sock did not return a connection or explicit refusal: %q", out.Result)
+	}
 }
 
 func (g psDirectProbe) Egress(ctx context.Context) (netip.Addr, error) {
