@@ -17,6 +17,7 @@ package obligations
 
 import (
 	"errors"
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -362,6 +363,60 @@ func validWhen(w catalog.ObligationWhen) bool {
 	return forms == 1 && ok
 }
 
+// validRule is the rest of the web loader's check that the engine needs: a link
+// must be https on the service's own domain (fake claim sites exist for exactly
+// the services that have claim windows), and warn_days, when set, must be a
+// descending list of whole days, 0 or more.
+func validRule(svc catalog.Service, rule catalog.Obligation) bool {
+	if rule.ID == "" || !validWhen(rule.When) {
+		return false
+	}
+	if rule.URL != "" {
+		domain := registrableDomain(rule.URL)
+		if domain == "" {
+			return false
+		}
+		own := false
+		for _, u := range []string{svc.Website, svc.Cashout.DashboardURL, svc.Referral.SignupURL} {
+			if d := registrableDomain(u); d != "" && d == domain {
+				own = true
+			}
+		}
+		if !own {
+			return false
+		}
+	}
+	for i, w := range rule.WarnDays {
+		if w < 0 || (i > 0 && w >= rule.WarnDays[i-1]) {
+			return false
+		}
+	}
+	return true
+}
+
+// registrableDomain is the last two labels of an https URL's host, "" when the
+// URL is not https or has no such host. Two labels, as on the web: a co.uk site
+// reads as co.uk and matches nothing, so it fails closed.
+func registrableDomain(raw string) string {
+	if !strings.HasPrefix(raw, "https://") {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	var labels []string
+	for _, l := range strings.Split(strings.TrimRight(strings.ToLower(u.Hostname()), "."), ".") {
+		if l != "" {
+			labels = append(labels, l)
+		}
+	}
+	if len(labels) < 2 {
+		return ""
+	}
+	return strings.Join(labels[len(labels)-2:], ".")
+}
+
 func isMuted(state map[Key]State, slug, rule string) bool {
 	return state[Key{slug, WholeService}].Muted || state[Key{slug, rule}].Muted
 }
@@ -423,7 +478,7 @@ func ruleItems(svc catalog.Service, f Facts, state map[Key]State, today time.Tim
 	slug, name := svc.Slug, serviceName(svc)
 	var items []Item
 	for _, rule := range svc.Obligations {
-		if rule.ID == "" || !validWhen(rule.When) {
+		if !validRule(svc, rule) {
 			continue
 		}
 		warn := rule.WarnDays

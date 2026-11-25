@@ -30,11 +30,18 @@ type RemindersView struct {
 	Muted   []obligations.Muted `json:"muted"`
 }
 
-// remindersServer is the CashPilot server this computer is joined to, "" when it
-// runs on its own. Joined means a server URL is set: the server collects the
-// earnings then, so it is the one that knows the balances the reminders read.
-func (a *App) remindersServer() string {
-	return strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/")
+// remindersServer reports whether this computer is joined to a CashPilot server,
+// and that server's URL. Joined is a.joined() (Mode follower): the server collects the
+// earnings then, so it is the one that knows the balances the reminders read. It
+// reads the saved config again first, so a join or a switch that the other
+// process (the window or the background helper) saved holds here too. The URL is
+// only for the panel's note.
+func (a *App) remindersServer() (joined bool, serverURL string) {
+	a.refreshConfig()
+	if !a.joined() {
+		return false, ""
+	}
+	return true, strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/")
 }
 
 // reminders evaluates the panel for GetAppState. An error is logged and shown as
@@ -49,7 +56,7 @@ func (a *App) reminders() RemindersView {
 
 func (a *App) remindersView() (RemindersView, error) {
 	view := RemindersView{Items: []obligations.Item{}, Muted: []obligations.Muted{}}
-	if server := a.remindersServer(); server != "" {
+	if joined, server := a.remindersServer(); joined {
 		view.Joined, view.ServerURL = true, server
 		return view, nil
 	}
@@ -77,7 +84,7 @@ func (a *App) ReminderAction(slug, rule, action, occurrence string, days int) (R
 	if err := a.ready(); err != nil {
 		return RemindersView{}, err
 	}
-	if server := a.remindersServer(); server != "" {
+	if joined, _ := a.remindersServer(); joined {
 		return RemindersView{}, errors.New("your CashPilot server keeps the reminders while this computer is joined to it; act on them there")
 	}
 	svc, ok := a.catalog.Get(slug)
@@ -132,11 +139,25 @@ func (a *App) evaluateReminders(now time.Time) (obligations.Evaluation, map[obli
 // computer and is online, or holding a balance above 0, even after it was
 // removed, because an inactivity clock starts when it stops.
 func (a *App) reminderFacts() (map[string]obligations.Facts, error) {
+	// The strict reads: a failed read is "could not check", never "nothing due".
+	deployments, err := a.store.Deployments()
+	if err != nil {
+		return nil, err
+	}
+	devices, err := a.store.FleetDevices()
+	if err != nil {
+		return nil, err
+	}
+	balances, err := a.store.DailyBalances(a.retentionDays() + 1)
+	if err != nil {
+		return nil, err
+	}
+
 	inUse := map[string]bool{}
-	for _, d := range a.store.ListDeployments() {
+	for _, d := range deployments {
 		inUse[d.Slug] = true
 	}
-	for _, d := range a.store.ListFleetDevices() {
+	for _, d := range devices {
 		if store.EffectiveFleetStatus(d.Status, d.LastSeen, fleetOfflineAfterFor(d.Kind)) != "online" {
 			continue
 		}
@@ -147,7 +168,7 @@ func (a *App) reminderFacts() (map[string]obligations.Facts, error) {
 
 	// One reading per day per platform, oldest first, from successful reads only.
 	byPlatform := map[string][]store.DailyBalance{}
-	for _, b := range a.store.ListDailyBalances(a.retentionDays() + 1) {
+	for _, b := range balances {
 		byPlatform[b.Platform] = append(byPlatform[b.Platform], b)
 	}
 	for slug, days := range byPlatform {

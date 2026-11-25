@@ -87,3 +87,51 @@ func TestObligationAnchorAndActionsKeepEachOther(t *testing.T) {
 		t.Fatalf("got %+v", rows)
 	}
 }
+
+// The reminders read what is set up with the strict reads, so a failed read is
+// "could not check", never "nothing due". The lenient reads keep answering nil.
+func TestStrictReadsReturnTheReadError(t *testing.T) {
+	s := openTestStore(t)
+	if err := s.UpsertDeployment(Deployment{Slug: "grass", ContainerID: "c1", Name: "cashpilot-grass", Image: "img", Status: "running", Runtime: "existing-docker"}); err != nil {
+		t.Fatal(err)
+	}
+	if deps, err := s.Deployments(); err != nil || len(deps) != 1 {
+		t.Fatalf("Deployments() = %+v, %v", deps, err)
+	}
+	if _, err := s.DailyBalances(30); err != nil {
+		t.Fatalf("DailyBalances() error on a readable store: %v", err)
+	}
+
+	// A row that does not scan: the strict reads fail, the lenient ones skip it.
+	if _, err := s.db.Exec(`UPDATE deployments SET cpu_percent = 'not a number'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO earnings(platform, balance, currency, created_at) VALUES('grass', 'not a number', 'USD', datetime('now'))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Deployments(); err == nil {
+		t.Fatal("Deployments() hid a row that does not read")
+	}
+	if _, err := s.DailyBalances(30); err == nil {
+		t.Fatal("DailyBalances() hid a row that does not read")
+	}
+	if len(s.ListDeployments()) != 0 || len(s.ListDailyBalances(30)) != 0 {
+		t.Fatal("the lenient reads skip a row that does not read")
+	}
+
+	// A query that fails.
+	for _, table := range []string{"deployments", "earnings"} {
+		if _, err := s.db.Exec("DROP TABLE " + table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.Deployments(); err == nil {
+		t.Fatal("Deployments() hid a failed read")
+	}
+	if _, err := s.DailyBalances(30); err == nil {
+		t.Fatal("DailyBalances() hid a failed read")
+	}
+	if s.ListDeployments() != nil || s.ListDailyBalances(30) != nil {
+		t.Fatal("the lenient reads must still answer nil")
+	}
+}

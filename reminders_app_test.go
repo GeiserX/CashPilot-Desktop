@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -49,11 +50,23 @@ func TestRemindersOnlyForServicesSetUp(t *testing.T) {
 }
 
 // While joined, the server owns the reminders: none are evaluated, shown or
-// acted on here.
+// acted on here. Joined is Mode follower, and a join or a switch that the other
+// process (the window or the background helper) saved holds at the next read.
 func TestRemindersSkippedWhileJoined(t *testing.T) {
 	app := newPayloadTestApp(t, []store.Deployment{grassDeployment()})
 	pinReminderDay(t, grassWarnDay)
-	setFleetUpstreamURL(t, app, "https://hub.example/")
+	if view, _ := app.GetReminders(); view.Joined || len(view.Items) != 1 {
+		t.Fatalf("a lead shows its reminders, got %+v", view)
+	}
+
+	// The other process joins, on its own Manager of the same config file.
+	other, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Update(func(c *config.AppConfig) { c.Mode = config.ModeFollower; c.UpstreamURL = "https://hub.example/" }); err != nil {
+		t.Fatal(err)
+	}
 
 	view, err := app.GetReminders()
 	if err != nil {
@@ -69,10 +82,64 @@ func TestRemindersSkippedWhileJoined(t *testing.T) {
 		t.Fatalf("nothing may be stored while joined, got %+v", rows)
 	}
 
-	// Leaving the server brings the local reminders back.
-	setFleetUpstreamURL(t, app, "")
+	// Switching back to lead brings the local reminders back.
+	if err := other.Update(func(c *config.AppConfig) { c.Mode = config.ModeLead; c.UpstreamURL = "" }); err != nil {
+		t.Fatal(err)
+	}
 	if view, _ := app.GetReminders(); view.Joined || len(view.Items) != 1 {
 		t.Fatalf("got %+v", view)
+	}
+}
+
+// Joined is the mode, not a saved server address: a lead keeps its reminders.
+func TestRemindersFollowTheModeNotTheServerAddress(t *testing.T) {
+	app := newPayloadTestApp(t, []store.Deployment{grassDeployment()})
+	pinReminderDay(t, grassWarnDay)
+	if err := app.cfg.Update(func(c *config.AppConfig) { c.Mode = config.ModeLead; c.UpstreamURL = "https://hub.example" }); err != nil {
+		t.Fatal(err)
+	}
+	if view, _ := app.GetReminders(); view.Joined || len(view.Items) != 1 {
+		t.Fatalf("a lead shows its reminders, got %+v", view)
+	}
+}
+
+// A service that an online worker reporting here runs is in use. One that only
+// an offline worker runs is not.
+func TestRemindersForServicesAnOnlineWorkerRuns(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	pinReminderDay(t, grassWarnDay)
+	seen := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := app.store.UpsertFleetDevice(store.FleetDevice{Name: "pc-online", Kind: "worker", Status: "online", LastSeen: seen, Services: []string{"grass"}}); err != nil {
+		t.Fatal(err)
+	}
+	offline, err := app.store.UpsertFleetDevice(store.FleetDevice{Name: "pc-offline", Kind: "worker", Status: "offline", LastSeen: seen, Services: []string{"mysterium"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := app.GetReminders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Items) != 1 || view.Items[0].Slug != "grass" {
+		t.Fatalf("want only the online worker's grass, got %+v", view.Items)
+	}
+
+	// The same worker online again: its service gets its reminder.
+	offline.Status = "online"
+	if _, err := app.store.UpsertFleetDevice(offline); err != nil {
+		t.Fatal(err)
+	}
+	view, err = app.GetReminders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	slugs := map[string]bool{}
+	for _, it := range view.Items {
+		slugs[it.Slug] = true
+	}
+	if !slugs["grass"] || !slugs["mysterium"] {
+		t.Fatalf("want grass and mysterium once both workers are online, got %+v", view.Items)
 	}
 }
 

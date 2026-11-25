@@ -389,27 +389,47 @@ func (s *Store) GetDeployment(slug string) (Deployment, bool, error) {
 }
 
 func (s *Store) ListDeployments() []Deployment {
+	out, err := s.readDeployments(false)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// Deployments is ListDeployments for a check that must not mistake a failed read
+// for nothing deployed: it returns the error of the query, of any row, and of the read.
+func (s *Store) Deployments() ([]Deployment, error) {
+	return s.readDeployments(true)
+}
+
+// readDeployments reads every deployment. A row that does not scan is skipped,
+// unless strict.
+func (s *Store) readDeployments(strict bool) ([]Deployment, error) {
 	rows, err := s.db.Query(`
 		SELECT slug, container_id, name, image, status, runtime, cpu_percent, memory_mb, custom_image, instances, created_at, updated_at
 		FROM deployments ORDER BY slug
 	`)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []Deployment
 	for rows.Next() {
 		dep, err := scanDeployment(rows)
-		if err == nil {
-			out = append(out, dep)
+		if err != nil {
+			if strict {
+				return nil, err
+			}
+			continue
 		}
+		out = append(out, dep)
 	}
 	// Fail closed on a truncated read rather than returning a partial list. Mirrors
 	// HealthScores' rows.Err() handling.
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 func (s *Store) RecordEvent(slug, event, detail string) {
@@ -473,6 +493,23 @@ func (s *Store) ListLatestEarnings() []EarningsRecord {
 // because 'Z' > '.'), so the monotonic AUTOINCREMENT id is the deterministic
 // "last written wins" key.
 func (s *Store) ListDailyBalances(daysBack int) []DailyBalance {
+	out, err := s.readDailyBalances(daysBack, false)
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// DailyBalances is ListDailyBalances for a check that must not mistake a failed
+// read for no earnings history: it returns the error of the query, of any row, and
+// of the read.
+func (s *Store) DailyBalances(daysBack int) ([]DailyBalance, error) {
+	return s.readDailyBalances(daysBack, true)
+}
+
+// readDailyBalances reads the series. A row that does not scan is skipped, unless
+// strict.
+func (s *Store) readDailyBalances(daysBack int, strict bool) ([]DailyBalance, error) {
 	rows, err := s.db.Query(`
 		SELECT e.platform, e.currency, date(e.created_at) AS day, e.balance
 		FROM earnings e
@@ -487,22 +524,26 @@ func (s *Store) ListDailyBalances(daysBack int) []DailyBalance {
 		ORDER BY day, e.platform
 	`, fmt.Sprintf("-%d days", daysBack))
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer rows.Close()
 	var out []DailyBalance
 	for rows.Next() {
 		var record DailyBalance
-		if err := rows.Scan(&record.Platform, &record.Currency, &record.Day, &record.Balance); err == nil {
-			out = append(out, record)
+		if err := rows.Scan(&record.Platform, &record.Currency, &record.Day, &record.Balance); err != nil {
+			if strict {
+				return nil, err
+			}
+			continue
 		}
+		out = append(out, record)
 	}
 	// Fail closed on a truncated read rather than returning a partial series. Mirrors
 	// HealthScores' rows.Err() handling.
 	if err := rows.Err(); err != nil {
-		return nil
+		return nil, err
 	}
-	return out
+	return out, nil
 }
 
 // HealthScores computes a 0-100 health score per service from the runtime_events

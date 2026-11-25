@@ -284,6 +284,27 @@ func TestRealCatalogSaladWarnsOnItsEarningClock(t *testing.T) {
 	}
 }
 
+// The engine's port of the web loader's checks keeps every rule the vendored
+// catalog ships: a catalog sync that adds a rule the web would drop fails here.
+func TestRealCatalogRulesAllPassTheLoaderChecks(t *testing.T) {
+	cat, err := catalog.LoadEmbedded(os.DirFS(filepath.Join("..", "..")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := 0
+	for _, s := range cat.List() {
+		for _, r := range s.Obligations {
+			rules++
+			if !validRule(s, r) {
+				t.Errorf("%s/%s fails the loader checks (url %q, warn_days %v)", s.Slug, r.ID, r.URL, r.WarnDays)
+			}
+		}
+	}
+	if rules == 0 {
+		t.Fatal("no obligations in the catalog: the check above checked nothing")
+	}
+}
+
 func TestStageIsOnlyTheCurrentWarning(t *testing.T) {
 	for daysLeft, want := range map[int]string{200: "", 90: "d90", 31: "d90", 30: "d30", 8: "d30", 7: "d7", 0: "d7", -1: "overdue"} {
 		if got := StageFor(daysLeft, []int{90, 30, 7}); got != want {
@@ -302,6 +323,34 @@ func TestAMalformedRuleIsSkipped(t *testing.T) {
 	f := facts(readings(ago(300), 1.0, ago(1), 3.0))
 	if ev := run(t, []catalog.Service{svc("acme", bad...)}, map[string]Facts{"acme": f}, nil, today); len(ev.Items) != 0 {
 		t.Fatalf("a rule the web loader would drop was evaluated: %+v", ev.Items)
+	}
+}
+
+// The web loader also drops a link off the service's own domain, and bad
+// warn_days. A rule the loader keeps still shows.
+func TestARuleWithABadLinkOrWarnDaysIsSkipped(t *testing.T) {
+	withURL := func(id, u string) catalog.Obligation {
+		r := rule(id, "claim", catalog.ObligationWhen{Date: "2027-01-22"}, 60)
+		r.URL = u
+		return r
+	}
+	for _, r := range []catalog.Obligation{
+		withURL("fake-site", "https://acme-claim.example.net/claim"),
+		withURL("plain-http", "http://app.acme.example/claim"),
+		withURL("look-alike", "https://acme.example.evil.io/claim"),
+		rule("ascending", "claim", catalog.ObligationWhen{Date: "2027-01-22"}, 7, 60),
+		rule("repeated", "claim", catalog.ObligationWhen{Date: "2027-01-22"}, 60, 60),
+		rule("negative", "claim", catalog.ObligationWhen{Date: "2027-01-22"}, 60, -1),
+	} {
+		if ev := run(t, []catalog.Service{svc("acme", r)}, map[string]Facts{"acme": {}}, nil, today); len(ev.Items) != 0 {
+			t.Errorf("%s: a rule the web loader would drop was evaluated: %+v", r.ID, ev.Items)
+		}
+	}
+	s := svc("acme", withURL("own-site", "https://claims.acme.example/now"), withURL("signup", "https://join.acme-ref.example/x"))
+	s.Referral.SignupURL = "https://acme-ref.example/?ref=1"
+	ev := run(t, []catalog.Service{s}, map[string]Facts{"acme": {}}, nil, today)
+	if len(ev.Items) != 2 {
+		t.Fatalf("links on the website, dashboard or signup domain are kept, got %+v", ev.Items)
 	}
 }
 
@@ -335,6 +384,18 @@ func TestARealEventMovesAStoredActivityClockForward(t *testing.T) {
 	ev := run(t, []catalog.Service{svc("acme", r)}, map[string]Facts{"acme": f}, state, today)
 	if one(t, ev).Occurrence != iso(ago(50)) || !reflect.DeepEqual(ev.Anchors, []Anchor{{Slug: "acme", Rule: "keep", At: iso(ago(50))}}) {
 		t.Fatalf("got %+v", ev)
+	}
+}
+
+// A real start stored earlier and later than the real start the history shows
+// wins: the clock never moves back to an older event.
+func TestALaterStoredRealStartWinsOverAnOlderLiveOne(t *testing.T) {
+	r := rule("keep", "keep-active", catalog.ObligationWhen{Since: "last_activity", Days: 180}, 180)
+	f := facts(readings(ago(100), 1.0, ago(50), 2.0, ago(1), 2.0))
+	state := map[Key]State{{"acme", "keep"}: {AnchorAt: iso(ago(20))}}
+	ev := run(t, []catalog.Service{svc("acme", r)}, map[string]Facts{"acme": f}, state, today)
+	if it := one(t, ev); it.Occurrence != iso(ago(20)) || it.Censored || left(it) != 160 {
+		t.Fatalf("got %+v", it)
 	}
 }
 
@@ -552,10 +613,12 @@ func TestOnlyServicesInUseGetReminders(t *testing.T) {
 }
 
 func TestOverdueComesFirst(t *testing.T) {
-	soon := rule("soon", "claim", catalog.ObligationWhen{Date: iso(addDays(today, 20))})
+	// "aaa" is due in 3 days (group 1): it sorts before the overdue "zzz" by name
+	// alone, so only the overdue group puts "zzz" first.
+	soon := rule("soon", "claim", catalog.ObligationWhen{Date: iso(addDays(today, 3))}, 7)
 	f := facts(readings(ago(200), 1.0, ago(190), 2.0, ago(1), 2.0))
 	ev := run(t, []catalog.Service{svc("aaa", soon), svc("zzz", keep)}, map[string]Facts{"aaa": {}, "zzz": f}, nil, today)
-	if len(ev.Items) != 2 || ev.Items[0].Stage != "overdue" {
+	if len(ev.Items) != 2 || ev.Items[0].Stage != "overdue" || ev.Items[1].Slug != "aaa" || left(ev.Items[1]) != 3 {
 		t.Fatalf("got %+v", ev.Items)
 	}
 }
