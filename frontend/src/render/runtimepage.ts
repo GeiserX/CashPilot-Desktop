@@ -10,7 +10,7 @@
 //
 // Pure apart from the deps it is given.
 
-import type { AppState, HostCheckResult, InstallGuide, NotificationItem, RuntimeStatus } from "../wails";
+import type { AppState, HostCheckResult, InstallGuide, NotificationItem, RuntimeStatus, SetupResumeView } from "../wails";
 import { escapeHtml } from "./format.js";
 
 export interface RuntimePageDeps {
@@ -22,8 +22,10 @@ export interface RuntimePageDeps {
   showGuides(guides: InstallGuide[]): void;
   /** HTML for the checklist's slot; "" empties it. */
   showHolder(html: string): void;
-  /** This PC has a checklist: mount it with the reading. */
-  showChecklist(result: HostCheckResult): void;
+  /** A setup step may have written the restart journal since the last visit. */
+  readResume(): Promise<SetupResumeView>;
+  /** This PC has a checklist: mount it with the reading and pending restart. */
+  showChecklist(result: HostCheckResult, resume: SetupResumeView | null): void;
 }
 
 export const unknownRuntime: RuntimeStatus = {
@@ -90,5 +92,6 @@ export async function loadRuntimePage(check: () => Promise<HostCheckResult>, gui
     deps.showHolder("");
     return;
   }
-  deps.showChecklist(result);
+  const resume = result.setupFinished ? null : await deps.readResume().catch(() => null);
+  if (deps.current()) deps.showChecklist(result, resume?.active ? resume : null);
 }

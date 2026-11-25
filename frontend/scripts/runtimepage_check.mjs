@@ -12,6 +12,8 @@
 
 import { loadRuntimePage, readRuntimeSnapshot, withRuntimeReading } from "../.harness-build/render/runtimepage.js";
 
+import { renderDockerGuide } from "../.harness-build/render/dockerguide.js";
+
 let failures = 0;
 let checks = 0;
 
@@ -33,6 +35,7 @@ const page = (current = true) => {
       setRuntime: (r, alert) => { seen.runtime.push(r); seen.alerts.push(alert); },
       showGuides: (g) => { seen.guides = g; },
       showHolder: (h) => { seen.holder = h; },
+      readResume: async () => null,
       showChecklist: (r) => { seen.checklist = r; },
     },
   };
@@ -86,6 +89,24 @@ const page = (current = true) => {
   check("a failed refresh keeps native capability and unrelated alerts, and drops stale Docker status", failed.runtime.nativeAvailable && failed.runtime.reason === "" && failed.notifications[0]?.title === "Docker status unknown" && failed.notifications[1] === otherAlert && !failed.notifications.includes(oldAlert));
   const recovered = withRuntimeReading(failed, fresh, null);
   check("a runtime check clears only the runtime alert when Docker recovers", recovered.runtime === fresh && recovered.notifications.length === 1 && recovered.notifications[0] === otherAlert);
+}
+
+{
+  const { deps } = page();
+  const journal = { active: true, flow: "docker", step: "a3", restarted: "no", finish: "restart" };
+  let html;
+  deps.readResume = async () => journal;
+  deps.showChecklist = (result, resume) => {
+    html = renderDockerGuide({ ...result, resume, view: "list", waiting: null });
+  };
+  const result = {
+    facts: { supported: true }, runtime: { available: false },
+    steps: [{ id: "a3", title: "WSL", state: "needs-you", text: "WSL needs a restart.", action: {} }],
+  };
+  await loadRuntimePage(async () => result, guides, deps);
+  check("reopening the checklist restores Restart to finish from the journal", html?.includes('data-resume="same-boot"') && html.includes("Restart to finish"));
+  await loadRuntimePage(async () => ({ ...result, setupFinished: true }), guides, deps);
+  check("a check that finished setup leaves the restart banner off", !html?.includes("data-resume"));
 }
 
 if (failures > 0) {

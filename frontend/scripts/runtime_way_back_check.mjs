@@ -147,6 +147,7 @@ for (const [os, guides] of [["macOS", [{ id: "docker-desktop-macos" }, { id: "co
     setRuntime: (rt) => { seen.runtime = rt; },
     showGuides: (g) => { seen.guides = g; },
     showHolder: (html) => { seen.holder = html; },
+    readResume: async () => null,
     showChecklist: () => { seen.checklist = true; },
   });
   check(`RULE 4 (${os}): Set up Docker lands on the install guides`, seen.guides?.length === guides.length && !seen.checklist, JSON.stringify(seen));

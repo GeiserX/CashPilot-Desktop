@@ -523,7 +523,8 @@ function renderRuntimeView(current: AppState) {
       holder.innerHTML = html;
       holder.querySelector("[data-runtime-recheck]")?.addEventListener("click", () => render());
     },
-    showChecklist: (result) => {
+    readResume: SetupResume,
+    showChecklist: (result, resume) => {
       if (!holder) return;
       dockerGuide = new DockerGuide(holder, guideDeps({
         skip: () => showView("dashboard"),
@@ -536,7 +537,7 @@ function renderRuntimeView(current: AppState) {
             throw error;
           }
         },
-      }), {runtime: result.runtime, resume: setupResume, result});
+      }), {runtime: result.runtime, resume, result});
     },
   });
 }
