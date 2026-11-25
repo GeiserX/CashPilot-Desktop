@@ -44,7 +44,10 @@ func TestClassifyGivesEachDockerStateItsOwnReason(t *testing.T) {
 		}), ReasonNotInstalled, "not installed"},
 		{"a CLI on PATH is not 'not installed'", winDown(func(ev *dockerEvidence) {
 			ev.host.DockerInstalled = HintNo
-		}), ReasonNotRunning, "not running"},
+		}), ReasonNotRunning, "no Docker engine answers"},
+		{"Docker Desktop.exe runs before its pipe exists, install unread", winDown(func(ev *dockerEvidence) {
+			ev.tools, ev.host.DockerInstalled, ev.host.DockerRunning = false, "unknown", HintYes
+		}), ReasonNotRunning, "engine is not running yet"},
 		{"installed, engine not running", winDown(nil), ReasonNotRunning, "Open Docker Desktop"},
 		{"Docker Desktop open, engine still starting", winDown(func(ev *dockerEvidence) {
 			ev.host.DockerRunning = HintYes
@@ -94,5 +97,11 @@ func TestClassifyNeverCallsAMissingRuntimeInstalled(t *testing.T) {
 	_, message := classify(ev)
 	if strings.Contains(message, "is installed") {
 		t.Errorf("a PC without Docker is told %q", message)
+	}
+	// A docker CLI on PATH without Docker Desktop must not be told Docker
+	// Desktop is installed either.
+	ev = winDown(func(ev *dockerEvidence) { ev.host.DockerInstalled = HintNo })
+	if _, message = classify(ev); strings.Contains(message, "Docker Desktop is installed") {
+		t.Errorf("a PC with only a docker CLI is told %q", message)
 	}
 }

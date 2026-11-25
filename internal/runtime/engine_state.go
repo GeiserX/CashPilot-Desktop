@@ -115,13 +115,18 @@ func classify(ev dockerEvidence) (string, string) {
 	case h.DockerRunning == HintYes:
 		return ReasonNotRunning, "Docker Desktop is open, but its engine is not running yet. It can take a minute or two. If Docker Desktop shows its terms or asks you to sign in, finish that first, then click Check again." + restart
 	}
+	if h.DockerInstalled == HintNo {
+		// A docker CLI is on PATH (scoop, a manual install) but Docker Desktop is not.
+		return ReasonNotRunning, "A docker command is on this PC, but no Docker engine answers. Start your Docker engine, then click Check again." + restart
+	}
 	return ReasonNotRunning, "Docker Desktop is installed, but its engine is not running. Open Docker Desktop, wait until it says the engine is running, then click Check again." + restart
 }
 
 // notInstalled is true only when nothing suggests a runtime exists: no CLI on
 // PATH, nothing at the engine's endpoint and, on Windows, no Docker Desktop. On
 // Windows an unread Docker Desktop hint does not count as "not installed" unless
-// the endpoint is proven absent too.
+// the endpoint is proven absent too, and a running Docker Desktop app always means
+// it is installed (its engine pipe appears only once the engine starts).
 func notInstalled(ev dockerEvidence) bool {
 	if ev.tools || ev.install {
 		return false
@@ -131,6 +136,9 @@ func notInstalled(ev dockerEvidence) bool {
 		return false
 	}
 	if ev.goos == "windows" {
+		if ev.host.DockerRunning == HintYes {
+			return false
+		}
 		switch ev.host.DockerInstalled {
 		case HintYes:
 			return false
