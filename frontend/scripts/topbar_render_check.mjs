@@ -76,6 +76,10 @@ const running = catalogRow(honeygain, { slug: "honeygain", status: "running" }, 
 check("RULE 4: a running service keeps Manage", JSON.stringify(actions(running)) === JSON.stringify([["honeygain", "Manage"]]), running);
 const manual = catalogRow({ ...honeygain, manualOnly: true }, undefined, false);
 check("CONTROL: a manual-only service has no Add, only Visit", actions(manual).length === 0 && />Visit</.test(manual), manual);
+check("a catalog row offers Sign up for a provider with an account", />Sign up</.test(fresh), fresh);
+const noAccount = catalogRow({ ...honeygain, referral: { ...honeygain.referral, account: false } }, undefined, false);
+check("a provider with no account to sign up for gets Visit, not Sign up, on the same link",
+  !/Sign up/.test(noAccount) && />Visit</.test(noAccount) && noAccount.includes('data-url="https://join.honeygain.com/X"'), noAccount);
 
 if (failures) {
   console.error(`\n${failures} of ${checks} top bar checks failed.`);

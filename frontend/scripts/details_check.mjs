@@ -31,6 +31,7 @@ import {
   referralNote,
   signupButton,
 } from "../.harness-build/render/details.js";
+import { readFileSync } from "node:fs";
 
 let failures = 0;
 let checks = 0;
@@ -113,6 +114,42 @@ check(
 check(
   "a service with neither renders no button at all, rather than a dead one",
   signupButton({...honeygain, referral: {signupUrl: "", code: ""}, website: ""}) === "",
+);
+
+// ---------------------------------------------------------------------------
+// A provider with no account to sign up for never offers "Create account".
+// Anyone Protocol's card said "No account is needed at all" next to a Create
+// account button. The catalog now says referral.account: false, read here from
+// the vendored entry itself, and the button reads "Visit site" on the same URL.
+// ---------------------------------------------------------------------------
+const anyoneYaml = readFileSync(new URL("../../services/depin/anyone-protocol.yml", import.meta.url), "utf8");
+const anyoneReferral = anyoneYaml.split(/^referral:\n/m)[1].split(/^\S/m)[0];
+const anyone = {
+  ...honeygain,
+  slug: "anyone-protocol",
+  name: "Anyone Protocol",
+  website: "https://anyone.io",
+  referral: {
+    signupUrl: anyoneReferral.match(/signup_url: "([^"]+)"/)[1],
+    code: "",
+    account: /^\s+account: false$/m.test(anyoneReferral) ? false : null,
+  },
+};
+check("the vendored Anyone Protocol entry says it has no account", anyone.referral.account === false, anyoneReferral);
+check(
+  "no account: the button says Visit site, not Create account",
+  signupButton(anyone).includes(">Visit site<") && !/create account|sign up/i.test(signupButton(anyone)),
+  signupButton(anyone),
+);
+check(
+  "no account: the button still opens the catalog's link",
+  signupButton(anyone).includes(`data-url="${anyone.referral.signupUrl}"`),
+  signupButton(anyone),
+);
+check(
+  "CONTROL: a provider with an account keeps Create account",
+  signupButton({...honeygain, referral: {...honeygain.referral, account: null}}).includes(">Create account<") && button.includes(">Create account<"),
+  button,
 );
 
 // ---------------------------------------------------------------------------
