@@ -61,17 +61,25 @@ type Provider interface {
 
 type Status struct {
 	Available bool `json:"available"`
-	// NativeAvailable reports whether the always-on native process runtime is
-	// registered (and therefore available: it has no external dependency, no daemon
-	// or socket to reach). It is an ADDITIVE signal set by the app layer from the
-	// services manager — Available keeps its Docker-only meaning, which other code
-	// still reads — so onboarding can proceed on Docker OR native.
-	NativeAvailable bool              `json:"nativeAvailable"`
-	Kind            string            `json:"kind"`
-	Message         string            `json:"message"`
-	Version         string            `json:"version"`
-	Context         string            `json:"context"`
-	Tools           map[string]string `json:"tools"`
+	// NativeAvailable reports whether the native process runtime is registered AND
+	// can run at least one catalog service on this machine. It is an ADDITIVE signal
+	// set by the app layer from the services manager — Available keeps its
+	// Docker-only meaning, which other code still reads — so onboarding can proceed
+	// on Docker OR native.
+	NativeAvailable bool `json:"nativeAvailable"`
+	// NativeServices names the catalog services the native runtime can run on this
+	// machine. Set by the app layer next to NativeAvailable. When Docker is not
+	// available these are the only apps that can run, so first run says so instead
+	// of calling the machine ready.
+	NativeServices []string `json:"nativeServices"`
+	Kind           string   `json:"kind"`
+	// Reason is why the engine is or is not ready, one of the Reason* codes in
+	// engine_state.go, and Message says it in plain words.
+	Reason  string            `json:"reason"`
+	Message string            `json:"message"`
+	Version string            `json:"version"`
+	Context string            `json:"context"`
+	Tools   map[string]string `json:"tools"`
 }
 
 type InstallGuide struct {
@@ -130,6 +138,9 @@ type DockerProvider struct {
 	// so recovery never takes a replacement a deploy has made and not yet started.
 	// Always taken after fence.reconcileMu, never before.
 	replacing sync.Map
+	// hostHints reads facts about this PC that tell apart why the engine does not
+	// answer (engine_state.go). Unset, Status knows only what Docker says.
+	hostHints hostHintsFn
 }
 
 // lockReplacing takes name's replacement lock (replacing) and returns its release.
@@ -208,31 +219,42 @@ func (p *DockerProvider) EnableFence(ctx context.Context) (FenceStatus, error) {
 
 func (p *DockerProvider) Status(ctx context.Context) Status {
 	tools := detectTools()
+	ev := dockerEvidence{
+		goos:    goruntime.GOOS,
+		tools:   len(tools) > 0,
+		hostSet: os.Getenv("DOCKER_HOST") != "",
+	}
+	// A client is built without connecting, so building one fails only on a
+	// malformed DOCKER_HOST. Whether a runtime is installed is decided below, from
+	// what dialling its endpoint says.
 	cli, err := dockerClient()
 	if err != nil {
-		return Status{
-			Available: false,
-			Kind:      "existing-docker",
-			Message:   friendlyRuntimeMessage(tools),
-			Tools:     tools,
-		}
+		ev.host = p.hostHintsNow()
+		ev.install = knownInstallPath()
+		reason, message := classify(ev)
+		return Status{Kind: "existing-docker", Reason: reason, Message: message, Tools: tools}
 	}
 	defer cli.Close()
 
 	ping, err := cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 	if err != nil {
-		return Status{
-			Available: false,
-			Kind:      "existing-docker",
-			Message:   "A container runtime is installed, but it is not running yet. Start your runtime and try again.",
-			Tools:     tools,
-		}
+		ev.endpoint = probeEndpoint(ctx, cli.DaemonHost())
+		ev.host = p.hostHintsNow()
+		ev.install = knownInstallPath()
+		reason, message := classify(ev)
+		return Status{Kind: "existing-docker", Reason: reason, Message: message, Tools: tools}
 	}
+	ev.pingOK = true
+	ev.osType = ping.OSType
+	reason, message := classify(ev)
 	version, _ := cli.ServerVersion(ctx, client.ServerVersionOptions{})
 	return Status{
-		Available: true,
+		// A daemon in Windows-containers mode answers, but no catalog image runs
+		// there, so it does not count as available.
+		Available: reason == ReasonRunning,
 		Kind:      "existing-docker",
-		Message:   "Connected to a Docker-compatible runtime.",
+		Reason:    reason,
+		Message:   message,
 		Version:   ping.APIVersion + " / " + version.Version,
 		Context:   dockerContext(),
 		Tools:     tools,
@@ -1896,13 +1918,6 @@ func dockerContext() string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
-}
-
-func friendlyRuntimeMessage(tools map[string]string) string {
-	if _, ok := tools["docker"]; ok {
-		return "Docker is installed, but the engine is not reachable yet. Start your runtime and try again."
-	}
-	return "Choose one of the supported runtimes below so CashPilot can run earning services on this machine."
 }
 
 func stripDockerLogHeaders(raw []byte) string {

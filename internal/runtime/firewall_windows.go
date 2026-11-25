@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -24,7 +25,8 @@ func powerShell(args ...string) ([]byte, error) {
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return out, fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.String()))
+		// %w keeps the *exec.ExitError reachable, so RunElevated can read the exit code.
+		return out, fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return out, nil
 }
@@ -37,21 +39,45 @@ func readFirewallRule(name string) (firewallState, error) {
 	return parseFirewallState(out)
 }
 
-// runElevated runs a script with admin rights. An elevated app runs it directly;
+// RunElevated runs a script with admin rights. An elevated app runs it directly;
 // otherwise Windows shows its admin prompt, and a "no" there fails the call. The
 // wrapper stops on error: Start-Process reports a declined prompt, or a session with
 // no desktop to show one on, as a non-terminating error, after which $p is null and
 // a bare "exit $p.ExitCode" would exit 0.
-func runElevated(script string) error {
-	enc := psEncode(script)
-	var err error
+//
+// The script gets $CashPilotUserSid (UserSIDVariable): the SID of the account
+// signed in to the app, read here before the prompt, because the elevated script
+// may run as a different account. An exit code of 3010 or 1641 returns
+// RestartNeeded with no error.
+func RunElevated(script string) (ElevatedResult, error) {
+	sid, err := currentUserSID()
+	if err != nil {
+		return ElevatedResult{}, fmt.Errorf("could not read which Windows account is signed in: %w", err)
+	}
+	full, err := elevatedScript(script, sid)
+	if err != nil {
+		return ElevatedResult{}, err
+	}
+	enc := psEncode(full)
 	if windows.GetCurrentProcessToken().IsElevated() {
 		_, err = powerShell("-EncodedCommand", enc)
 	} else {
 		_, err = powerShell("-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; $p = Start-Process -FilePath powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru "+
 			"-ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','"+enc+"'; if ($null -eq $p) { exit 1 }; exit $p.ExitCode")
 	}
-	return err
+	return elevatedOutcome(err)
+}
+
+// currentUserSID is the SID of the account this process runs as.
+func currentUserSID() (string, error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	if user.User.Sid == nil {
+		return "", errors.New("the process token names no user")
+	}
+	return user.User.Sid.String(), nil
 }
 
 // ensureFirewallBlock makes sure the outbound block rule for program and nets is in
@@ -74,7 +100,7 @@ func ensureFirewallBlock(slug, program string, nets []string) error {
 	if st.matches(program, nets) {
 		return nil
 	}
-	if err := runElevated(firewallCreateScript(name, program, nets)); err != nil {
+	if _, err := RunElevated(firewallCreateScript(name, program, nets)); err != nil {
 		return fmt.Errorf("%s, and creating it failed (approve the Windows admin prompt and try again): %v", what, err)
 	}
 	st, err = readFirewallRule(name)
@@ -102,7 +128,7 @@ func removeFirewallBlock(slug, program string) error {
 	if !st.Found {
 		return nil
 	}
-	if err := runElevated(firewallRemoveScript(name)); err != nil {
+	if _, err := RunElevated(firewallRemoveScript(name)); err != nil {
 		return fmt.Errorf("the Windows Firewall rule %q is still there (approve the Windows admin prompt and remove again, or delete it yourself with Remove-NetFirewallRule -DisplayName %s): %v", name, psQuote(name), err)
 	}
 	return nil
