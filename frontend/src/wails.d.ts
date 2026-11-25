@@ -399,6 +399,7 @@ export interface WorkerDeployRequest {
   image: string;
   confirmed: boolean;
   allowSharedIdentity: boolean;
+  replaceExisting: boolean;
 }
 
 // WorkerDeployResult mirrors the Go WorkerDeployResult. With ask set nothing was

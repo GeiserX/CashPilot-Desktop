@@ -42,7 +42,8 @@ type Resources struct {
 }
 
 // DeploySpec is the body of POST /api/containers/{slug}/deploy, field for field
-// what the web app's _deploy sends. A port binding is a host port (int), or
+// what the web app's _deploy sends, with optional replacement approval.
+// A port binding is a host port (int), or
 // [address, port] for a bind to one interface, or a list of those pairs.
 type DeploySpec struct {
 	Image       string            `json:"image"`
@@ -60,6 +61,8 @@ type DeploySpec struct {
 	// Approval is the signed note that the owner confirmed this exact spec on a
 	// service that keeps a wallet or node identity (see Sign and DeployTarget).
 	Approval string `json:"approval,omitempty"`
+	// ReplaceExisting is sent only after the owner has approved a replacement.
+	ReplaceExisting bool `json:"replace_existing,omitempty"`
 }
 
 // KeptMount is one mount the worker kept where the running container has it.
@@ -94,6 +97,8 @@ type Error struct {
 	Code    string
 	Message string
 	Unknown bool
+
+	missingEndpoint bool
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -128,6 +133,52 @@ func ValidBaseURL(raw string) (string, error) {
 func (c *Client) Deploy(ctx context.Context, slug string, spec DeploySpec, timeout time.Duration) (DeployResult, error) {
 	var out DeployResult
 	err := c.do(ctx, http.MethodPost, "/api/containers/"+url.PathEscape(slug)+"/deploy", nil, spec, spec.Env, timeout, &out)
+	return out, err
+}
+
+const checkedDeploySuffix = "/deploy-checked"
+
+// DeployState reports whether the worker supports checked deploys, and if so
+// whether the actual Docker name to be deployed already exists.
+func (c *Client) DeployState(ctx context.Context, slug string) (supported, exists bool, err error) {
+	var out struct {
+		Exists *bool `json:"exists"`
+	}
+	err = c.do(ctx, http.MethodGet, "/api/containers/"+url.PathEscape(slug)+checkedDeploySuffix, nil, nil, nil, 0, &out)
+	if err != nil {
+		var refusal *Error
+		if errors.As(err, &refusal) && refusal.missingEndpoint {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	if out.Exists == nil {
+		return false, false, errors.New("the worker did not answer the container lookup")
+	}
+	return true, *out.Exists, nil
+}
+
+// LegacyDeployTargetExists checks the worker's inventory. It can show an
+// existing container, but a cached inventory cannot prove one is absent.
+func (c *Client) LegacyDeployTargetExists(ctx context.Context, slug string) (bool, error) {
+	var out []struct {
+		Name string `json:"name"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/containers", nil, nil, nil, 0, &out); err != nil {
+		return false, err
+	}
+	for _, container := range out {
+		if container.Name == "cashpilot-"+slug {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// DeployChecked makes the worker enforce replacement approval under its deploy lock.
+func (c *Client) DeployChecked(ctx context.Context, slug string, spec DeploySpec, timeout time.Duration) (DeployResult, error) {
+	var out DeployResult
+	err := c.do(ctx, http.MethodPost, "/api/containers/"+url.PathEscape(slug)+checkedDeploySuffix, nil, spec, spec.Env, timeout, &out)
 	return out, err
 }
 
@@ -240,6 +291,7 @@ var forwardableCodes = map[string]bool{
 	"isolation_check_unavailable": true,
 	"critical_volume_mount":       true,
 	"step_up_required":            true,
+	"replace_existing":            true,
 	"step_up_rejected":            true,
 	"restore_unfinished":          true,
 	"restore_cleared":             true,
@@ -287,7 +339,10 @@ func refusal(status int, raw []byte, sentEnv map[string]string) *Error {
 			}
 		}
 		var text string
-		if forwardableTextStatuses[status] && json.Unmarshal(envelope.Detail, &text) == nil && text != "Not Found" {
+		if forwardableTextStatuses[status] && json.Unmarshal(envelope.Detail, &text) == nil {
+			if text == "Not Found" {
+				return &Error{Status: status, Message: failureText(status), missingEndpoint: status == http.StatusNotFound}
+			}
 			if cleaned := clean(text, sentEnv); cleaned != "" {
 				return &Error{Status: status, Message: cleaned}
 			}

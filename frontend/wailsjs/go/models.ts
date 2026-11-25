@@ -2736,6 +2736,7 @@ export namespace main {
 	    image: string;
 	    confirmed: boolean;
 	    allowSharedIdentity: boolean;
+	    replaceExisting: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployRequest(source);
@@ -2748,6 +2749,7 @@ export namespace main {
 	        this.image = source["image"];
 	        this.confirmed = source["confirmed"];
 	        this.allowSharedIdentity = source["allowSharedIdentity"];
+	        this.replaceExisting = source["replaceExisting"];
 	    }
 	}
 	export class WorkerDeployResult {

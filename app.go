@@ -118,6 +118,9 @@ type App struct {
 	// a reap/delete landing mid-sequence could blank a confirmed device's key. Reap
 	// and manual delete take the same lock so they cannot interleave with a heartbeat.
 	fleetMu sync.Mutex
+	// workerDeployMu serializes live replacement checks and deploys, including
+	// shared identity checks across workers.
+	workerDeployMu sync.Mutex
 	// fleetLimiter throttles the heartbeat/enrollment endpoint per client IP as
 	// defense-in-depth against floods, mass enrollment (DB growth), and racing the
 	// enrollment window. Initialised in startFleetAPI.
