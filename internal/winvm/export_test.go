@@ -24,3 +24,16 @@ func (l *guardLoop) Boot(ctx context.Context) Status { return l.boot(ctx) }
 
 // Tick is one of Run's passes after Boot.
 func (l *guardLoop) Tick(ctx context.Context) Status { return l.tick(ctx) }
+
+// OwnerSpy is a Prober that records the owner token Build hands its proof
+// Prober, the way the product's Prober takes it for its canary rules and
+// hv_sock test key.
+type OwnerSpy struct {
+	Prober
+	Got *string
+}
+
+func (s OwnerSpy) forOwner(owner string) Prober {
+	*s.Got = owner
+	return s.Prober
+}

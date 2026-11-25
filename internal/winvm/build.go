@@ -383,7 +383,11 @@ func (b *builder) journal(ctx context.Context) error {
 	// key and a pktmon session. Clear them, and list the host again when
 	// something went, so the key never enters the GCS baseline and the next
 	// capture can start.
-	cleared, err := b.HV.ClearProof(ctx, b.n)
+	owner := ""
+	if prev != nil {
+		owner = prev.Owner
+	}
+	cleared, err := b.HV.ClearProof(ctx, b.n, owner)
 	if err != nil {
 		return fmt.Errorf("could not clear what an earlier proof left: %w", err)
 	}
@@ -953,7 +957,13 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	if g == nil {
 		g = NewGuestProbe(b.HV, b.p.VMID, Cred{User: guestUser, Password: b.sp.AdminPassword})
 	}
-	run := Runner{B: b.HV, P: b.Probe, G: g, Clock: b.Now, Sleep: b.Sleep, Dir: b.Dir, Rand: b.Rand, Logf: b.Logf, Wait: b.ProofWait}
+	// Every canary rule and hv_sock test key the proof makes carries the
+	// owner token, so ClearProof can find this install's and only those.
+	pr := b.Probe
+	if o, ok := pr.(interface{ forOwner(string) Prober }); ok {
+		pr = o.forOwner(b.p.Owner)
+	}
+	run := Runner{B: b.HV, P: pr, G: g, Clock: b.Now, Sleep: b.Sleep, Dir: b.Dir, Rand: b.Rand, Logf: b.Logf, Wait: b.ProofWait}
 	t := Targets(h, b.p.SwitchID, b.own, live.VNICIfIndex)
 	rs, runErr := run.Run(ctx, b.p, h, t)
 	res.Proof = rs

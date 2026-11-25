@@ -99,14 +99,18 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"RemoveFirewall", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.RemoveFirewall(ctx, n, tOwner) }},
 		{"RemoveGuardian", ok, []string{`{}`}, func(b psBuilder) error { return b.RemoveGuardian(ctx) }},
 		{"RemoveHyperVAdmin", ok, []string{`"sid":"S-1-5-21-1-2-3-1001"`}, func(b psBuilder) error { return b.RemoveHyperVAdmin(ctx, "S-1-5-21-1-2-3-1001") }},
-		{"ClearProof", `{"cleared":["the proof pktmon session"]}`, []string{`"group":"CashPilotVM-proof"`, `"element":"CashPilot Secure VM proof CashPilot-VM"`, `"dir":"C:\\ProgramData\\CashPilot\\proof\\"`, `"desc":"CashPilot Secure VM proof canary"`},
+		{"ClearProof", `{"cleared":["the proof pktmon session"]}`, []string{`"group":"CashPilotVM-proof"`, `"element":"CashPilot Secure VM proof CashPilot-VM. cashpilot-owner=` + tOwner + `"`, `"dir":"C:\\ProgramData\\CashPilot\\proof\\"`, `"desc":"CashPilot Secure VM proof canary. cashpilot-owner=` + tOwner + `"`},
 			func(b psBuilder) error {
-				got, err := b.ClearProof(ctx, n)
+				got, err := b.ClearProof(ctx, n, tOwner)
 				if err == nil && len(got) != 1 {
 					t.Errorf("cleared %v", got)
 				}
 				return err
 			}},
+		// With no owner token (a first build) no rule and no key can be
+		// ours: the script gets nothing to match them by.
+		{"ClearProof", `{"cleared":[]}`, []string{`"desc":""`, `"element":""`},
+			func(b psBuilder) error { _, err := b.ClearProof(ctx, n, ""); return err }},
 	}
 	seen := map[string]bool{}
 	for _, c := range cases {
@@ -282,7 +286,7 @@ func TestProberSeam(t *testing.T) {
 	ok := `{"ok":true}`
 	h, r, _ := newSeam()
 	var ln net.Listener
-	p := &psProber{h: h, n: n, program: n.GuardExe(), tmp: t.TempDir(), listen: func(string, string) (net.Listener, error) {
+	p := &psProber{h: h, n: n, program: n.GuardExe(), tmp: t.TempDir(), owner: tOwner, listen: func(string, string) (net.Listener, error) {
 		var err error
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		return ln, err
@@ -305,6 +309,15 @@ func TestProberSeam(t *testing.T) {
 			}
 			if a := r.args[len(r.args)-1]; !strings.Contains(a, `"remote":"192.0.2.11/32"`) {
 				t.Errorf("the canary rule does not take only the guest's address: %s", a)
+			}
+			if a := r.args[len(r.args)-1]; !strings.Contains(a, `"desc":"CashPilot Secure VM proof canary. cashpilot-owner=`+tOwner+`"`) {
+				t.Errorf("the canary rule does not carry the owner token: %s", a)
+			}
+			if _, err := p.forOwner("").Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45002, netip.MustParsePrefix("192.0.2.11/32")); err == nil {
+				t.Error("a canary with no owner token was opened")
+			}
+			if _, err := p.forOwner("").HVListener(ctx, tVMID, tVMID, true); err == nil {
+				t.Error("an hv_sock test key with no owner token was registered")
 			}
 			if _, err := p.Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45001, netip.Prefix{}); err == nil {
 				t.Error("a canary with no guest address was opened")

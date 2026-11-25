@@ -116,12 +116,14 @@ type Builder interface {
 	RemoveGuardian(ctx context.Context) error
 	RemoveHyperVAdmin(ctx context.Context, sid string) error
 	// ClearProof removes what a proof that was killed can leave behind: the
-	// canary rules of the instance's proof firewall group, the hv_sock test
-	// key named ProofElementName(n), and a pktmon session that writes under
-	// DataDir\proof. It lists what it removed. Setup runs it before it lists
+	// canary rules of the instance's proof firewall group whose description
+	// carries owner, the hv_sock test key named ProofElementName(n, owner),
+	// and a pktmon session that writes under DataDir\proof. A rule or key
+	// without the token is never touched; with owner "" only the pktmon
+	// session goes. It lists what it removed. Setup runs it before it lists
 	// the host, so a stale key never enters the GCS baseline; Remove VM runs
 	// it too.
-	ClearProof(ctx context.Context, n Names) (cleared []string, err error)
+	ClearProof(ctx context.Context, n Names, owner string) (cleared []string, err error)
 }
 
 // KnownIDs are the VM and switch IDs desired.json records, "" for none.

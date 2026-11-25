@@ -360,7 +360,7 @@ func TestBuildRepairClearsProofLeftovers(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := readPlan(t, dir).GCSBaseline
-	f.LeaveProofLeftovers(winvm.ProductNames())
+	f.LeaveProofLeftovers(winvm.ProductNames(), readPlan(t, dir).Owner)
 	if err := os.MkdirAll(filepath.Join(dir, "proof", "pktmon-3"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestBuildRepairClearsProofLeftovers(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "proof", "pktmon-3")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the old capture folder survived Repair: %v", err)
 	}
-	f.LeaveProofLeftovers(winvm.ProductNames())
+	f.LeaveProofLeftovers(winvm.ProductNames(), readPlan(t, dir).Owner)
 	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {
 		t.Fatal(err)
 	}

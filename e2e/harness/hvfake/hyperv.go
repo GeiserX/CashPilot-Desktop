@@ -1496,24 +1496,45 @@ func (f *HyperV) RenameSwitch(switchID, name string) error {
 }
 
 // LeaveProofLeftovers leaves what a proof killed in the middle leaves: a
-// canary rule in the instance's proof group, the hv_sock test key, and a
-// pktmon session still running. It is not a seam call.
-func (f *HyperV) LeaveProofLeftovers(n winvm.Names) {
+// canary rule in the instance's proof group, the hv_sock test key, both
+// carrying the owner token, and a pktmon session still running. It is not a
+// seam call.
+func (f *HyperV) LeaveProofLeftovers(n winvm.Names, owner string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	g := n.FirewallGroup + "-proof"
-	f.firewall[g] = append(f.firewall[g], &fakeRule{name: g + "-40001", desc: "CashPilot Secure VM proof canary", enabled: true})
+	f.firewall[g] = append(f.firewall[g], &fakeRule{name: g + "-40001", desc: "CashPilot Secure VM proof canary. cashpilot-owner=" + owner, enabled: true})
 	key := "12345678-1234-1234-1234-123456789ABC"
 	f.gcs = winvm.GCSBaseline(append(slices.Clone(f.gcs), key))
 	if f.gcsName == nil {
 		f.gcsName = map[string]string{}
 	}
-	f.gcsName[key] = winvm.ProofElementName(n)
+	f.gcsName[key] = winvm.ProofElementName(n, owner)
 	f.capture = &fakeCapture{f: f, from: len(f.records), leftover: n.VM}
 }
 
-// ClearProof removes what a killed proof of instance n left.
-func (f *HyperV) ClearProof(_ context.Context, n winvm.Names) ([]string, error) {
+// AddForeignProofObjects adds a rule to the instance's proof group with the
+// canary's description but no owner token, and a GCS key with the proof's
+// ElementName but no owner token, as another tool or an older build could.
+// It returns the key. It is not a seam call.
+func (f *HyperV) AddForeignProofObjects(n winvm.Names) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	g := n.FirewallGroup + "-proof"
+	f.firewall[g] = append(f.firewall[g], &fakeRule{name: g + "-40002", desc: "CashPilot Secure VM proof canary", enabled: true})
+	key := "87654321-4321-4321-4321-CBA987654321"
+	f.gcs = winvm.GCSBaseline(append(slices.Clone(f.gcs), key))
+	if f.gcsName == nil {
+		f.gcsName = map[string]string{}
+	}
+	f.gcsName[key] = "CashPilot Secure VM proof " + n.VM
+	return key
+}
+
+// ClearProof removes what a killed proof of instance n, made by the install
+// with the owner token, left. Like the script it matches the rule's
+// description and the key's ElementName exactly.
+func (f *HyperV) ClearProof(_ context.Context, n winvm.Names, owner string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("ClearProof"); err != nil {
@@ -1523,7 +1544,7 @@ func (f *HyperV) ClearProof(_ context.Context, n winvm.Names) ([]string, error) 
 	g := n.FirewallGroup + "-proof"
 	keep := f.firewall[g][:0]
 	for _, r := range f.firewall[g] {
-		if r.desc == "CashPilot Secure VM proof canary" {
+		if owner != "" && r.desc == "CashPilot Secure VM proof canary. cashpilot-owner="+owner {
 			done = append(done, "the proof firewall rule "+r.name)
 			continue
 		}
@@ -1535,7 +1556,7 @@ func (f *HyperV) ClearProof(_ context.Context, n winvm.Names) ([]string, error) 
 		f.firewall[g] = keep
 	}
 	f.gcs = slices.DeleteFunc(f.gcs, func(k string) bool {
-		if f.gcsName[k] == winvm.ProofElementName(n) {
+		if owner != "" && f.gcsName[k] == winvm.ProofElementName(n, owner) {
 			done = append(done, "the proof hv_sock key "+k)
 			delete(f.gcsName, k)
 			return true

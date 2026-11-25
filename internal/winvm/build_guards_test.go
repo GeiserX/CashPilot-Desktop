@@ -198,3 +198,54 @@ func TestRemoveKeepsTheDataWhenAStepFails(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildTagsTheProofWithTheOwner: Build hands the proof's Prober this
+// install's owner token, so every canary rule and hv_sock test key it makes
+// carries the token ClearProof matches.
+func TestBuildTagsTheProofWithTheOwner(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	got := ""
+	d.Probe = winvm.OwnerSpy{Prober: f, Got: &got}
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	if want := readPlan(t, dir).Owner; got != want || got == "" {
+		t.Fatalf("the proof's Prober got owner %q, want %q", got, want)
+	}
+}
+
+// TestClearProofKeepsObjectsWithoutOurToken: a rule in the proof group with
+// the canary's text, and a GCS key with the proof's name, but neither with
+// this install's owner token, are not ours. Repair and Remove VM leave them,
+// and still clear what this install's killed proof left.
+func TestClearProofKeepsObjectsWithoutOurToken(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	n := winvm.ProductNames()
+	owner := readPlan(t, dir).Owner
+	key := f.AddForeignProofObjects(n)
+	check := func(when string) {
+		t.Helper()
+		objs := strings.Join(f.Objects(), "\n")
+		if !strings.Contains(objs, "-proof-40002 ") || !strings.Contains(objs, key) {
+			t.Fatalf("%s took out a proof object without our token:\n%s", when, objs)
+		}
+		if strings.Contains(objs, "-proof-40001 ") || strings.Contains(objs, "12345678-1234-1234-1234-123456789ABC") {
+			t.Fatalf("%s kept what our own killed proof left:\n%s", when, objs)
+		}
+	}
+	f.LeaveProofLeftovers(n, owner)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	check("Repair")
+	f.LeaveProofLeftovers(n, owner)
+	remove(t, f, dir)
+	check("Remove VM")
+}

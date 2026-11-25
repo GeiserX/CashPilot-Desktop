@@ -401,15 +401,17 @@ Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptClearProof removes what a killed proof left: the canary rules of the
-// proof group (by group and description), the hv_sock test key (by its
-// ElementName), and a pktmon session whose file lies under DataDir\proof\.
+// proof group whose description carries this install's owner token, the
+// hv_sock test key whose ElementName carries it, and a pktmon session whose
+// file lies under DataDir\proof\. With no token (a first build) it touches
+// no rule and no key.
 const scriptClearProof = buildPrelude + `$done = @()
-foreach ($r in @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { [string]$_.Description -eq $in.desc })) {
+if ($in.desc) { foreach ($r in @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { [string]$_.Description -eq $in.desc })) {
   Remove-NetFirewallRule -Name $r.Name
   $done += 'the proof firewall rule ' + [string]$r.Name
-}
+} }
 $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices'
-if (Test-Path -LiteralPath $k) {
+if ($in.element -and (Test-Path -LiteralPath $k)) {
   foreach ($c in @(Get-ChildItem -LiteralPath $k)) {
     if ([string]$c.GetValue('ElementName') -eq $in.element) {
       Remove-Item -LiteralPath $c.PSPath -Recurse -Force
@@ -1038,10 +1040,18 @@ func (b psBuilder) RemoveHyperVAdmin(ctx context.Context, sid string) error {
 	return b.ok(ctx, scriptRemoveHyperVAdmin, map[string]string{"sid": sid})
 }
 
-// ClearProof removes what a killed proof left on the host.
-func (b psBuilder) ClearProof(ctx context.Context, n Names) ([]string, error) {
+// ClearProof removes what a killed proof of the install with the owner token
+// left on the host. With owner "" it clears only the pktmon session.
+func (b psBuilder) ClearProof(ctx context.Context, n Names, owner string) ([]string, error) {
 	if err := n.Validate(); err != nil {
 		return nil, err
+	}
+	desc, element := "", ""
+	if owner != "" {
+		if !ownerRe.MatchString(owner) {
+			return nil, fmt.Errorf("owner %q is not 32 lower-case hex digits", owner)
+		}
+		desc, element = proofCanaryDesc(owner), ProofElementName(n, owner)
 	}
 	if err := checkWinPath("data folder", n.DataDir); err != nil {
 		return nil, err
@@ -1049,8 +1059,8 @@ func (b psBuilder) ClearProof(ctx context.Context, n Names) ([]string, error) {
 	var w struct {
 		Cleared []string `json:"cleared"`
 	}
-	arg := map[string]string{"group": n.FirewallGroup + proofGroupSuffix, "desc": proofCanaryDesc,
-		"element": ProofElementName(n), "dir": strings.TrimRight(n.DataDir, `\`) + `\proof\`}
+	arg := map[string]string{"group": n.FirewallGroup + proofGroupSuffix, "desc": desc,
+		"element": element, "dir": strings.TrimRight(n.DataDir, `\`) + `\proof\`}
 	if err := b.call(ctx, scriptClearProof, arg, &w); err != nil {
 		return nil, err
 	}

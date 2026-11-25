@@ -31,10 +31,8 @@ func NewProber(n Names) Prober {
 		h:       &psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx},
 		n:       n,
 		program: exe,
-		hv: func(ctx context.Context, bindVMID, service string, register bool) (HVListener, error) {
-			return openHVListener(ctx, bindVMID, service, register, ProofElementName(n))
-		},
-		tmp: filepath.Join(n.DataDir, proofDir),
+		hv:      openHVListener,
+		tmp:     filepath.Join(n.DataDir, proofDir),
 	}
 }
 

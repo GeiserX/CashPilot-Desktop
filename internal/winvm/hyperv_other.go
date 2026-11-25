@@ -47,7 +47,9 @@ func (unsupported) RemoveDeny(context.Context, string, []netip.Prefix) error {
 	return ErrUnsupported
 }
 
-func (unsupported) ClearProof(context.Context, Names) ([]string, error) { return nil, ErrUnsupported }
+func (unsupported) ClearProof(context.Context, Names, string) ([]string, error) {
+	return nil, ErrUnsupported
+}
 func (unsupported) Inventory(context.Context, Names, KnownIDs, string) (Inventory, error) {
 	return Inventory{}, ErrUnsupported
 }

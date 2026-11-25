@@ -24,13 +24,19 @@ import (
 // proofGroupSuffix names the firewall group of the canaries' Allow rules.
 const proofGroupSuffix = "-proof"
 
-// proofCanaryDesc is the description of every canary rule, so ClearProof
-// removes only those in the instance's proof group.
-const proofCanaryDesc = "CashPilot Secure VM proof canary"
+// proofCanaryDesc is the description of every canary rule. It carries this
+// install's owner token, so ClearProof removes only the rules this install's
+// proof made, never one matched by its group or a fixed text alone.
+func proofCanaryDesc(owner string) string {
+	return "CashPilot Secure VM proof canary. " + ownerTag + owner
+}
 
 // ProofElementName is the ElementName of the proof's hv_sock test key for
-// instance n, so ClearProof finds a key a killed proof left, and only that.
-func ProofElementName(n Names) string { return "CashPilot Secure VM proof " + n.VM }
+// instance n. It carries this install's owner token, so ClearProof finds a
+// key this install's killed proof left, and only that.
+func ProofElementName(n Names, owner string) string {
+	return "CashPilot Secure VM proof " + n.VM + ". " + ownerTag + owner
+}
 
 // scriptSetL3 turns the rules of our group on or off.
 const scriptSetL3 = buildPrelude + `$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)
@@ -139,8 +145,12 @@ type psProber struct {
 	program string
 	// listen opens the canary's listener; net.Listen when nil.
 	listen func(network, addr string) (net.Listener, error)
-	// hv opens an hv_sock listener; nil where there is none.
-	hv func(ctx context.Context, bindVMID, service string, register bool) (HVListener, error)
+	// hv opens an hv_sock listener whose registration carries the ElementName
+	// element; nil where there is none.
+	hv func(ctx context.Context, bindVMID, service string, register bool, element string) (HVListener, error)
+	// owner is this install's owner token, written into every object the
+	// proof makes. Build sets it from desired.json (see forOwner).
+	owner string
 	// tmp holds pktmon's capture files.
 	tmp string
 
@@ -149,6 +159,21 @@ type psProber struct {
 }
 
 var _ Prober = (*psProber)(nil)
+
+// forOwner is this Prober for the install with the owner token, so every
+// canary rule and hv_sock test key it makes carries the token.
+func (p *psProber) forOwner(owner string) Prober {
+	return &psProber{h: p.h, n: p.n, program: p.program, listen: p.listen, hv: p.hv, tmp: p.tmp, owner: owner}
+}
+
+// checkOwner refuses to make a proof object without a valid owner token:
+// ClearProof could never tell it apart.
+func (p *psProber) checkOwner() error {
+	if !ownerRe.MatchString(p.owner) {
+		return errors.New("the proof has no owner token for the objects it makes")
+	}
+	return nil
+}
 
 // SetL3 turns our group's firewall rule on or off.
 func (p *psProber) SetL3(ctx context.Context, n Names, on bool) error {
@@ -242,7 +267,10 @@ func (p *psProber) HVListener(ctx context.Context, bindVMID, service string, reg
 	if p.hv == nil {
 		return nil, ErrUnsupported
 	}
-	return p.hv(ctx, bindVMID, service, register)
+	if err := p.checkOwner(); err != nil {
+		return nil, err
+	}
+	return p.hv(ctx, bindVMID, service, register, ProofElementName(p.n, p.owner))
 }
 
 // tokenRead caps what a canary reads from one connection.
@@ -314,9 +342,12 @@ func (p *psProber) Canary(ctx context.Context, ip netip.Addr, port uint16, from 
 	if err := checkWinPath("program", p.program); err != nil {
 		return nil, err
 	}
+	if err := p.checkOwner(); err != nil {
+		return nil, err
+	}
 	group := p.n.FirewallGroup + proofGroupSuffix
 	rule := func(ctx context.Context, add bool) error {
-		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "port": port, "remote": from.Masked().String(), "program": p.program, "add": add, "desc": proofCanaryDesc})
+		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "port": port, "remote": from.Masked().String(), "program": p.program, "add": add, "desc": proofCanaryDesc(p.owner)})
 	}
 	if err := rule(ctx, true); err != nil {
 		return nil, err

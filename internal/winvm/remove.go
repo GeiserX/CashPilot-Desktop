@@ -114,7 +114,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 		}
 	}
 
-	if cleared, err := d.HV.ClearProof(ctx, n); err != nil {
+	if cleared, err := d.HV.ClearProof(ctx, n, p.Owner); err != nil {
 		fail("what an earlier proof left", err)
 	} else {
 		res.Removed = append(res.Removed, cleared...)
