@@ -6,8 +6,8 @@
 //   1. EACH STATE IS DRAWN AS ITSELF. done, needs you, blocked, unknown and note each get
 //      their own label, and no row that is not done is labelled Done.
 //   2. A BLOCKED ROW names the step to finish first and offers nothing to click.
-//   3. AN ADMIN ACTION IS "COMING NEXT": a disabled button, and the way to do it by
-//      hand.
+//   3. A CHANGE OPENS ITS CONFIRM SCREEN: the row's button names the change, and the
+//      list itself never holds the button that runs it (dockersteps_render_check).
 //   4. NOTHING RESTARTS WITHOUT THE CONFIRM SCREEN. The list has no restart button;
 //      the confirm screen says open apps close and unsaved work can be lost, and
 //      that CashPilot never changes BIOS settings. The wiring ignores a restart
@@ -91,9 +91,8 @@ const blockedWithAction = rows(renderDockerGuide({ ...base, steps: [{ ...steps[4
 check("RULE 2: even an action Go left on a blocked row is not drawn", !/data-guide-action/.test(blockedWithAction.html), blockedWithAction.html);
 
 // RULE 3
-check("RULE 3: the admin action is a disabled button", /<button[^>]*disabled[^>]*data-guide-elevated="lanmanserver-auto"/.test(byId.a12.html), byId.a12.html);
-check("RULE 3: it says it comes in the next version", text(byId.a12.html).includes("Coming in the next version"), text(byId.a12.html));
-check("RULE 3: it says how to do it by hand", text(byId.a12.html).includes("Set-Service LanmanServer -StartupType Automatic"), text(byId.a12.html));
+check("RULE 3: the admin action opens its confirm screen", /<button[^>]*data-guide-action="step" data-guide-op="lanmanserver-auto" data-guide-step="a12"/.test(byId.a12.html) && !/<button[^>]*disabled/.test(byId.a12.html), byId.a12.html);
+check("RULE 3: the list never holds the button that runs a change", !/step-go|restart-go|signout-go/.test(list));
 
 // RULE 4
 check("RULE 4: the BIOS row opens the confirm screen", /data-guide-action="firmware" data-guide-step="a2"/.test(byId.a2.html), byId.a2.html);
@@ -185,6 +184,9 @@ const deps = (over = {}) => {
       openWindowsUpdate: async () => {},
       restartToFirmware: async (step) => { calls.firmware.push(step); return { started: false, reopens: true }; },
       cancelSetup: async () => { calls.cancel++; },
+      runSetupStep: async () => { throw new Error("no change may run in these checks"); },
+      restartNow: async () => { throw new Error("no restart in these checks"); },
+      signOutNow: async () => { throw new Error("no sign-out in these checks"); },
       openUrl: () => {},
       skip: () => { calls.skip++; },
       sleep: async () => {},

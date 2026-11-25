@@ -5,19 +5,29 @@
 // The rows come from Go (internal/winvm/dockerguide.go), derived from one reading
 // of the PC. This file only draws them, plus the screens around them: the confirm
 // before a restart into the BIOS, the fallback when that restart cannot happen,
-// and the honest "native apps only" exit.
+// the honest "native apps only" exit, and (from render/dockersteps.ts) the
+// confirm, progress, restart and sign-out screens of each change.
 //
 // Rules this file holds (scripts/dockerguide_render_check.mjs):
 //   - A row is drawn in its own state, and a row that is not done never reads done.
 //   - Nothing restarts without the confirm screen, which says open apps close.
-//   - An admin action shows as coming next, with the way to do it by hand.
+//   - A change (admin or not) opens its confirm screen; it never runs from the list.
 //
 // Pure: takes the model, returns HTML.
 
-import type { FirmwareRestart, GuideStep, RuntimeStatus, SetupResumeView } from "../wails";
+import type { FirmwareRestart, GuideStep, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { outcomeHtml, stepConfirm, stepRestart, stepRunning, stepSignOut } from "./dockersteps.js";
 
-export type GuideView = "list" | "firmware-confirm" | "firmware-failed" | "skip";
+export type GuideView =
+  | "list"
+  | "firmware-confirm"
+  | "firmware-failed"
+  | "skip"
+  | "step-confirm"
+  | "step-running"
+  | "step-restart"
+  | "step-signout";
 
 /** How long the checklist waits for Docker's engine after starting Docker Desktop. */
 export const START_LIMIT_SECONDS = 120;
@@ -41,6 +51,18 @@ export interface GuideModel {
   firmwareStep?: string;
   /** Restart now was clicked and Go has not answered yet. */
   restarting?: boolean;
+  /** The change the step-* screens are about: its op, its row, and whether it uses --web-download. */
+  stepOp?: string;
+  stepId?: string;
+  stepWeb?: boolean;
+  /** Seconds since the change started, while it runs; null otherwise. */
+  running?: number | null;
+  /** How the last change ended. */
+  result?: SetupStepResult | null;
+  /** Per row, why its last change did not finish. */
+  outcomes?: Record<string, SetupStepResult>;
+  /** Restart now or Sign out now was clicked and Go has not answered yet. */
+  finishing?: boolean;
 }
 
 export const STATE_LABEL: Record<string, string> = {
@@ -101,7 +123,7 @@ function actionHtml(step: GuideStep, model: GuideModel): string {
   const a = step.action;
   if (!a || !a.kind || step.state === "done" || step.state === "blocked") return "";
   const label = escapeHtml(a.label);
-  const busy = model.waiting !== null || model.checking;
+  const busy = model.waiting !== null || model.checking || model.running != null;
   switch (a.kind) {
     case "url":
       return `<button class="btn btn-secondary btn-sm" data-guide-url="${escapeHtml(a.url)}">${label}</button>`;
@@ -112,10 +134,11 @@ function actionHtml(step: GuideStep, model: GuideModel): string {
     case "show-docker":
       return `<button class="btn btn-secondary btn-sm" data-guide-action="${escapeHtml(a.kind)}" ${busy ? "disabled" : ""}>${label}</button>`;
     case "elevated":
-      // The version after this one runs it with one admin prompt. Until then the
-      // button says so and the row says how to do it by hand.
-      return `<button class="btn btn-ghost btn-sm" disabled data-guide-elevated="${escapeHtml(a.op)}">${label}</button>
-        <small class="docker-step-soon">Coming in the next version: CashPilot will do this with one Windows admin prompt. For now: ${escapeHtml(a.manual)}</small>`;
+    case "run": {
+      // The button opens the change's confirm screen; nothing runs from here.
+      const page = a.url ? `<button class="btn btn-ghost btn-sm" data-guide-url="${escapeHtml(a.url)}">Open the download page</button>` : "";
+      return `<button class="btn btn-secondary btn-sm" data-guide-action="step" data-guide-op="${escapeHtml(a.op)}" data-guide-step="${escapeHtml(step.id)}" ${busy ? "disabled" : ""}>${label}</button>${page}`;
+    }
   }
   return "";
 }
@@ -139,6 +162,7 @@ function stepHtml(step: GuideStep, index: number, all: GuideStep[], model: Guide
         <div class="docker-step-head"><strong>${escapeHtml(step.title)}</strong><span class="docker-step-state ${state}">${STATE_LABEL[state]}</span></div>
         <p>${escapeHtml(step.text)}</p>
         ${waits}
+        ${state === "done" ? "" : outcomeHtml(model.outcomes?.[step.id], step.id)}
         ${help}
         <div class="docker-step-actions">${actionHtml(step, model)}</div>
       </div>
@@ -148,16 +172,28 @@ function stepHtml(step: GuideStep, index: number, all: GuideStep[], model: Guide
 function resumeBanner(resume: SetupResumeView | null): string {
   if (!resume || !resume.active) return "";
   const stop = `<button class="btn btn-ghost btn-sm" data-guide-action="cancel-setup">Stop guiding me after restarts</button>`;
-  if (resume.restarted === "no") {
-    const again = resume.step === "a2" ? `<button class="btn btn-secondary btn-sm" data-guide-action="firmware" data-guide-step="a2">Restart into BIOS</button>` : "";
+  if (resume.finish === "signout" && resume.restarted === "no" && !resume.fromRunOnce) {
+    return `<div class="docker-guide-resume warn" data-resume="sign-out">
+        <strong>Sign out to finish</strong>
+        <span>Your account joined the docker-users group. Windows applies it after you sign out and back in.</span>
+        <div class="docker-step-actions"><button class="btn btn-secondary btn-sm" data-guide-action="finish-signout">Sign out…</button>${stop}</div>
+      </div>`;
+  }
+  if (resume.restarted === "no" && !(resume.finish === "signout" && resume.fromRunOnce)) {
+    const again = resume.step === "a2"
+      ? `<button class="btn btn-secondary btn-sm" data-guide-action="firmware" data-guide-step="a2">Restart into BIOS</button>`
+      : `<button class="btn btn-secondary btn-sm" data-guide-action="finish-restart">Restart…</button>`;
     return `<div class="docker-guide-resume warn" data-resume="same-boot">
         <strong>Restart to finish</strong>
         <span>This PC has not restarted since you chose to. Restart it to finish the step you started.</span>
         <div class="docker-step-actions">${again}${stop}</div>
       </div>`;
   }
-  const said = resume.restarted === "yes" ? "Welcome back. The PC restarted, and CashPilot checked every step again." : "CashPilot checked every step again.";
-  return `<div class="docker-guide-resume ok" data-resume="${resume.restarted === "yes" ? "new-boot" : "unknown"}">
+  const signedIn = resume.finish === "signout" && resume.restarted === "no";
+  const said = resume.restarted === "yes"
+    ? "Welcome back. The PC restarted, and CashPilot checked every step again."
+    : signedIn ? "Welcome back. You signed in again, and CashPilot checked every step again." : "CashPilot checked every step again.";
+  return `<div class="docker-guide-resume ok" data-resume="${resume.restarted === "yes" ? "new-boot" : signedIn ? "signed-in" : "unknown"}">
       <span>${said}</span>
       <div class="docker-step-actions">${stop}</div>
     </div>`;
@@ -240,6 +276,13 @@ export function skipScreen(native: string[] | null | undefined): string {
 export function renderDockerGuide(model: GuideModel): string {
   if (model.view === "firmware-confirm") return `<section class="docker-guide">${firmwareConfirm(!!model.restarting)}</section>`;
   if (model.view === "firmware-failed") return `<section class="docker-guide">${firmwareFailed(model.firmware)}</section>`;
+  if (model.view === "step-confirm" && model.stepOp) return `<section class="docker-guide">${stepConfirm(model.stepOp, !!model.stepWeb)}</section>`;
+  if (model.view === "step-running" && model.stepOp) {
+    const elevated = (model.steps ?? []).find((s) => s.id === model.stepId)?.action?.kind === "elevated";
+    return `<section class="docker-guide">${stepRunning(model.stepOp, model.running ?? 0, elevated)}</section>`;
+  }
+  if (model.view === "step-restart") return `<section class="docker-guide">${stepRestart(model.result ?? null, !!model.finishing)}</section>`;
+  if (model.view === "step-signout") return `<section class="docker-guide">${stepSignOut(model.result ?? null, !!model.finishing)}</section>`;
   const native = model.runtime.nativeServices ?? [];
   if (model.view === "skip" && native.length > 0) return `<section class="docker-guide">${skipScreen(native)}</section>`;
   const steps = model.steps ?? [];

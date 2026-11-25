@@ -12,9 +12,9 @@ import (
 // Every step is derived from the facts of one reading and the runtime's reason
 // code. A step whose fact is unknown says so and is never done.
 //
-// This PR offers only actions that need no admin rights. An action that needs
-// them has the kind ActionElevated and names its change in Op; the app shows it
-// as coming next, with the way to do it by hand, until the version that runs it.
+// An action that changes the PC names its change in Op and runs only from its
+// confirm screen: ActionElevated with one Windows admin prompt (RunElevated),
+// ActionRun as the user. setupsteps.go builds each change and reads how it ended.
 
 // Step states.
 const (
@@ -27,8 +27,7 @@ const (
 	StepNote = "note"
 )
 
-// Action kinds. None of them needs admin rights, except ActionElevated, which the
-// app does not run yet.
+// Action kinds. Only ActionElevated needs admin rights.
 const (
 	ActionNone          = ""
 	ActionURL           = "url"            // open URL in the browser
@@ -36,15 +35,19 @@ const (
 	ActionStartDocker   = "start-docker"   // open Docker Desktop, then wait for its engine
 	ActionShowDocker    = "show-docker"    // bring Docker Desktop's window forward
 	ActionFirmware      = "firmware"       // restart into the BIOS, after a confirm screen
-	ActionElevated      = "elevated"       // an admin change, coming next
+	ActionElevated      = "elevated"       // an admin change, after its confirm screen
+	ActionRun           = "run"            // a change made as the user, after its confirm screen
 )
 
-// The admin changes an ActionElevated step asks for, for the version that runs them.
+// The changes an ActionElevated or ActionRun step asks for (setupsteps.go).
 const (
-	OpWSLInstall   = "wsl-install"
-	OpWSLUpdate    = "wsl-update"
-	OpDockerUsers  = "docker-users"
-	OpLanmanServer = "lanmanserver-auto"
+	OpWSLInstall       = "wsl-install"
+	OpWSLUpdate        = "wsl-update"
+	OpDockerUsers      = "docker-users"
+	OpLanmanServer     = "lanmanserver-auto"
+	OpDockerInstall    = "docker-install"
+	OpLinuxEngine      = "linux-engine"
+	OpHypervisorLaunch = "hypervisor-launch"
 )
 
 // DockerDownloadURL is Docker Desktop's download page.
@@ -72,9 +75,9 @@ type StepAction struct {
 	Kind  string `json:"kind"`
 	Label string `json:"label"`
 	URL   string `json:"url,omitempty"`
-	// Op names the admin change of an ActionElevated step.
+	// Op names the change of an ActionElevated or ActionRun step.
 	Op string `json:"op,omitempty"`
-	// Manual says how to make that change by hand until the app runs it.
+	// Manual says how to make that change by hand, for a PC where the app cannot.
 	Manual string `json:"manual,omitempty"`
 }
 
@@ -262,8 +265,10 @@ func installedStep(f HostFacts, proven bool) Step {
 		s.State, s.Text = StepDone, "Docker Desktop is installed."
 	case f.DockerDesktopInstalled == No:
 		s.State = StepNeedsYou
-		s.Text = "Docker Desktop is not installed, and CashPilot runs most apps inside it. Download it, run the installer, then click Check again. The installer may ask you to restart."
-		s.Action = StepAction{Kind: ActionURL, Label: "Open the Docker download page", URL: DockerDownloadURL}
+		s.Text = "Docker Desktop is not installed, and CashPilot runs most apps inside it. CashPilot can install it with winget, Windows' app installer, or you can download it yourself. The installer may ask you to restart."
+		// URL is the download page: the second button, and the fallback when
+		// this PC has no winget.
+		s.Action = StepAction{Kind: ActionRun, Op: OpDockerInstall, Label: "Install Docker Desktop", URL: DockerDownloadURL}
 	default:
 		s.State, s.Text = StepUnknown, "CashPilot could not read whether Docker Desktop is installed."
 	}
@@ -319,6 +324,12 @@ func dockerUsersStep(f HostFacts) Step {
 		s.Text = "Your account is in the docker-users group, but Windows applies a new group only after you sign in again. Save your work, sign out and back in, then click Check again."
 		return s
 	}
+	if f.DockerUsersToken == Yes {
+		// This session carries the group, so the group is not what refuses it:
+		// adding the account again would change nothing.
+		s.Text = "Your account is in the docker-users group, and this session carries it, yet Docker still refuses it. Restart Docker Desktop; if that does not help, reinstall it."
+		return s
+	}
 	s.Text = "Docker runs, but your Windows account may not use it. This happens when another account installed Docker Desktop. Your account must join the docker-users group, then sign out and back in."
 	s.Action = StepAction{Kind: ActionElevated, Op: OpDockerUsers, Label: "Add my account to docker-users",
 		Manual: "Ask an administrator of this PC to add your account to the docker-users group, then sign out and back in."}
@@ -333,7 +344,9 @@ func linuxContainersStep(reason string) Step {
 	case runtime.ReasonWindowsContainers:
 		// Switching affects the user's other Docker work, so the user does it.
 		s.State = StepNeedsYou
-		s.Text = "Docker Desktop is set to Windows containers, and the apps CashPilot runs are Linux containers. Right-click the Docker icon next to the clock, choose Switch to Linux containers, then click Check again."
+		s.Text = "Docker Desktop is set to Windows containers, and the apps CashPilot runs are Linux containers."
+		s.Action = StepAction{Kind: ActionRun, Op: OpLinuxEngine, Label: "Switch to Linux containers",
+			Manual: "Right-click the Docker icon next to the clock, choose Switch to Linux containers, then click Check again."}
 	default:
 		s.State, s.Text = StepUnknown, "CashPilot reads this once Docker's engine runs."
 	}
@@ -349,6 +362,11 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 	switch {
 	case f.OtherHypervisors == Yes && engineUp:
 		s.State, s.Text = StepDone, names+" is installed, and Docker runs next to it."
+	case f.OtherHypervisors == Yes && hypervisorOffAtBoot(f):
+		s.State = StepNeedsYou
+		s.Text = names + " is installed, and Windows' hypervisor did not start at boot, although virtualization and the Virtual Machine Platform feature are on. Older versions of " + names + " turn it off at boot, and Docker needs it."
+		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: "Turn Windows' hypervisor back on",
+			Manual: "Open PowerShell as administrator, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
 	case f.OtherHypervisors == Yes:
 		// Nothing here proves it is what stops Docker, so it is a note, not a step.
 		s.State = StepNote
@@ -359,6 +377,15 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 		s.State, s.Text = StepUnknown, "CashPilot could not read whether VirtualBox or VMware is installed."
 	}
 	return s
+}
+
+// hypervisorOffAtBoot is the one case the hypervisor fix is for: no hypervisor
+// runs, yet the firmware flag (meaningful only when none runs) says virtualization
+// is on, the Virtual Machine Platform feature is on, and no restart is pending
+// that would start it anyway. Inside a VM the facts describe the outer machine.
+func hypervisorOffAtBoot(f HostFacts) bool {
+	return f.HypervisorPresent == No && f.Firmware == Yes && f.VMPlatformFeature == Yes &&
+		f.RestartPending == No && f.IsVM != Yes
 }
 
 func virtualMachineStep(f HostFacts, engineUp bool) Step {

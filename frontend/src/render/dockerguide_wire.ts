@@ -2,11 +2,19 @@
 // wait for Docker's engine, and the screens around it. First run's runtime step
 // and the app's runtime page both mount it.
 //
+// A change runs only as: row button, its confirm screen, Go ahead. Cancel there
+// runs nothing. While it runs, a progress line counts the seconds. A failure
+// goes back to the list with the reason on its row. A change that needs a
+// restart or a sign-out shows that screen only after Go answered, which is when
+// Go has written the journal and RunOnce; the restart or sign-out itself runs
+// only from that screen's button.
+//
 // It lives in src/render so the harness compiles it, but it touches elements, so
 // it takes everything that talks to Go as deps and never imports the bindings.
 
-import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView } from "../wails";
+import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
 import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
+import { runLine } from "./dockersteps.js";
 
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
@@ -15,6 +23,11 @@ export interface DockerGuideDeps {
   openWindowsUpdate(): Promise<void>;
   restartToFirmware(step: string): Promise<FirmwareRestart>;
   cancelSetup(): Promise<void>;
+  /** Makes a change, from its confirm screen only. */
+  runSetupStep(op: string, webDownload: boolean): Promise<SetupStepResult>;
+  /** Restarts or signs out, from their own screen only. */
+  restartNow(): Promise<void>;
+  signOutNow(): Promise<void>;
   openUrl(url: string): void;
   /** The user chose native apps only, on the skip screen. */
   skip(): void | Promise<void>;
@@ -101,7 +114,13 @@ export class DockerGuide {
       this.deps.failed?.(error);
       return;
     }
-    const sleep = this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    await this.waitForEngine();
+  }
+
+  /** Wait up to two minutes for Docker's engine, then read the PC again. */
+  private async waitForEngine(): Promise<void> {
+    const sleep = this.sleeper();
+    this.model.waitResult = "";
     this.model.waiting = 0;
     this.render();
     let up = false;
@@ -123,6 +142,84 @@ export class DockerGuide {
     this.model.waiting = null;
     this.model.waitResult = up ? "ready" : "timeout";
     await this.check();
+  }
+
+  private sleeper(): (ms: number) => Promise<void> {
+    return this.deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  }
+
+  /**
+   * Run the change the confirm screen is about. One at a time, and only from
+   * that screen.
+   */
+  private async runStep(): Promise<void> {
+    if (this.model.view !== "step-confirm" || this.model.running != null || !this.model.stepOp || !this.model.stepId) return;
+    const op = this.model.stepOp;
+    const step = this.model.stepId;
+    const web = !!this.model.stepWeb;
+    this.model.view = "step-running";
+    this.model.running = 0;
+    this.render();
+    const sleep = this.sleeper();
+    let done = false;
+    void (async () => {
+      while (!done && this.alive) {
+        await sleep(1000);
+        if (done) return;
+        this.model.running = (this.model.running ?? 0) + 1;
+        const line = this.holder.querySelector("[data-guide-run]");
+        if (line) line.outerHTML = runLine(op, this.model.running);
+      }
+    })();
+    let result: SetupStepResult;
+    try {
+      result = await this.deps.runSetupStep(op, web);
+    } catch (error) {
+      result = { step, op, state: "failed", text: `CashPilot could not run this change: ${String(error)}`, reopens: false };
+    }
+    done = true;
+    this.model.running = null;
+    this.model.result = result;
+    const outcomes = { ...(this.model.outcomes ?? {}) };
+    delete outcomes[step];
+    if (result.state === "restart" || result.state === "signout") {
+      // Go wrote the journal and RunOnce before it answered.
+      this.model.outcomes = outcomes;
+      this.model.resume = {
+        active: true, flow: "docker", step, restarted: "no", exeMoved: false, attempts: 1, fromRunOnce: false,
+        finish: result.state === "signout" ? "signout" : "restart",
+      };
+      this.model.view = result.state === "restart" ? "step-restart" : "step-signout";
+      this.render();
+      return;
+    }
+    if (result.state === "fallback" && result.url) this.deps.openUrl(result.url);
+    if (result.state !== "done") outcomes[step] = result;
+    this.model.outcomes = outcomes;
+    this.model.view = "list";
+    if (op === "linux-engine" && result.state === "done") {
+      await this.waitForEngine();
+      return;
+    }
+    await this.check();
+  }
+
+  /** Restart now, or Sign out now: only from their own screen, one click at a time. */
+  private async finish(how: "restart" | "signout"): Promise<void> {
+    const from = this.model.view;
+    if (this.model.finishing) return;
+    if (how === "restart" && from !== "step-restart" && from !== "step-signout") return;
+    if (how === "signout" && from !== "step-signout") return;
+    this.model.finishing = true;
+    this.render();
+    try {
+      await (how === "restart" ? this.deps.restartNow() : this.deps.signOutNow());
+      return; // Windows is closing the session; the button stays busy.
+    } catch (error) {
+      this.deps.failed?.(error);
+    }
+    this.model.finishing = false;
+    this.render();
   }
 
   private updateWaitLine(): void {
@@ -159,12 +256,37 @@ export class DockerGuide {
     );
     h.querySelectorAll<HTMLButtonElement>("[data-guide-check]").forEach((b) => b.addEventListener("click", () => void this.check()));
     h.querySelectorAll<HTMLButtonElement>("[data-guide-action]").forEach((b) =>
-      b.addEventListener("click", () => void this.act(b.dataset.guideAction || "", b.dataset.guideStep || "")),
+      b.addEventListener("click", () => void this.act(b.dataset.guideAction || "", b.dataset.guideStep || "", b.dataset)),
     );
   }
 
-  private async act(action: string, step: string): Promise<void> {
+  private async act(action: string, step: string, data: DOMStringMap = {}): Promise<void> {
     switch (action) {
+      case "step":
+        // A row's change, or its direct-download retry: its confirm screen first.
+        if (this.model.running != null || this.model.waiting !== null || !data.guideOp || !step) return;
+        this.model.view = "step-confirm";
+        this.model.stepOp = data.guideOp;
+        this.model.stepId = step;
+        this.model.stepWeb = data.guideWeb === "1";
+        break;
+      case "step-go":
+        await this.runStep();
+        return;
+      case "restart-go":
+        await this.finish("restart");
+        return;
+      case "signout-go":
+        await this.finish("signout");
+        return;
+      case "finish-restart":
+        this.model.result = null;
+        this.model.view = "step-restart";
+        break;
+      case "finish-signout":
+        this.model.result = null;
+        this.model.view = "step-signout";
+        break;
       case "windows-update":
         await this.deps.openWindowsUpdate().catch((e) => this.deps.failed?.(e));
         return;

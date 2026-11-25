@@ -680,7 +680,9 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .docker-step-state { font-size: var(--fs-1); color: var(--text-muted); white-space: nowrap; }
 .docker-step-state.done { color: var(--success); }
 .docker-step-state.needs-you { color: var(--warning); }
-.docker-step-waits, .docker-step-soon { color: var(--text-muted); font-size: var(--fs-2); }
+.docker-step-waits { color: var(--text-muted); font-size: var(--fs-2); }
+.docker-step-body p.docker-step-reason { color: var(--text-primary); }
+.docker-step-body p.docker-step-reason.warn { color: var(--warning); }
 .docker-step-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .docker-step-actions:empty { display: none; }
 .docker-step-help summary { cursor: pointer; color: var(--text-secondary); font-size: var(--fs-2); }

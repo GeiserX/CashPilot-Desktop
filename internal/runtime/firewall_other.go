@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -23,5 +24,11 @@ func removeFirewallBlock(slug, program string) error {
 // RunElevated runs admin scripts only on Windows.
 func RunElevated(script string) (ElevatedResult, error) {
 	_ = script
+	return ElevatedResult{}, errors.New("admin scripts run only on Windows")
+}
+
+// RunElevatedContext runs admin scripts only on Windows.
+func RunElevatedContext(ctx context.Context, script string) (ElevatedResult, error) {
+	_, _ = ctx, script
 	return ElevatedResult{}, errors.New("admin scripts run only on Windows")
 }

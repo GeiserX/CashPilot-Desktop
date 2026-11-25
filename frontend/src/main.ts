@@ -82,6 +82,9 @@ import {
   RestartToFirmware,
   SetupResume,
   CancelSetup,
+  RunSetupStep,
+  RestartNow,
+  SignOutNow,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
@@ -259,6 +262,9 @@ function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked">): DockerGuid
     startDocker: StartDockerDesktop,
     openWindowsUpdate: OpenWindowsUpdate,
     restartToFirmware: RestartToFirmware,
+    runSetupStep: RunSetupStep,
+    restartNow: RestartNow,
+    signOutNow: SignOutNow,
     cancelSetup: async () => {
       await CancelSetup();
       setupResume = null;

@@ -25,6 +25,14 @@ func goodPC() HostFacts {
 	return f
 }
 
+// hypervisorOff is goodPC with VirtualBox installed and Windows' hypervisor not
+// started at boot, though the firmware and the feature are on.
+func hypervisorOff(f *HostFacts) {
+	f.OtherHypervisors, f.OtherHypervisorNames = Yes, []string{"VirtualBox"}
+	f.HypervisorPresent, f.Firmware, f.SLAT = No, Yes, Yes
+	f.RestartPending = No
+}
+
 func stepOf(t *testing.T, steps []Step, id string) Step {
 	t.Helper()
 	for _, s := range steps {
@@ -80,7 +88,7 @@ func TestDockerStepsGiveEachStepItsState(t *testing.T) {
 		{"a4 waits for a3", func(f *HostFacts) { f.VMPlatformFeature = No }, runtime.ReasonWSLMissing, "a4", StepBlocked, "a3", ""},
 		// A5 Docker installed.
 		{"a5 done", nil, runtime.ReasonNotRunning, "a5", StepDone, "", ""},
-		{"a5 needs the download", func(f *HostFacts) { f.DockerDesktopInstalled = No }, runtime.ReasonNotInstalled, "a5", StepNeedsYou, "", ActionURL},
+		{"a5 offers the install", func(f *HostFacts) { f.DockerDesktopInstalled = No }, runtime.ReasonNotInstalled, "a5", StepNeedsYou, "", ActionRun},
 		{"a5 unknown", func(f *HostFacts) { f.DockerDesktopInstalled = Unknown }, runtime.ReasonNotRunning, "a5", StepUnknown, "", ""},
 		{"a5 waits for a1", func(f *HostFacts) { f.Build, f.DockerDesktopInstalled = 22000, No }, runtime.ReasonNotInstalled, "a5", StepBlocked, "a1", ""},
 		// A6 Docker running.
@@ -99,9 +107,10 @@ func TestDockerStepsGiveEachStepItsState(t *testing.T) {
 		// A8 docker-users, only on access denied.
 		{"a8 needs the group", func(f *HostFacts) { f.DockerUsersListed, f.DockerUsersToken = No, No }, runtime.ReasonAccessDenied, "a8", StepNeedsYou, "", ActionElevated},
 		{"a8 needs a sign-out when listed", func(f *HostFacts) { f.DockerUsersListed, f.DockerUsersToken = Yes, No }, runtime.ReasonAccessDenied, "a8", StepNeedsYou, "", ""},
+		{"a8 offers no second add when the token carries the group", func(f *HostFacts) { f.DockerUsersListed, f.DockerUsersToken = Yes, Yes }, runtime.ReasonAccessDenied, "a8", StepNeedsYou, "", ""},
 		// A9 Linux containers.
 		{"a9 done", func(f *HostFacts) { f.DockerDesktopRunning = Yes }, runtime.ReasonRunning, "a9", StepDone, "", ""},
-		{"a9 needs a switch", func(f *HostFacts) { f.DockerDesktopRunning = Yes }, runtime.ReasonWindowsContainers, "a9", StepNeedsYou, "", ""},
+		{"a9 offers the switch", func(f *HostFacts) { f.DockerDesktopRunning = Yes }, runtime.ReasonWindowsContainers, "a9", StepNeedsYou, "", ActionRun},
 		{"a9 unknown until the engine runs", func(f *HostFacts) { f.DockerDesktopRunning = Unknown }, runtime.ReasonNotRunning, "a9", StepUnknown, "", ""},
 		{"a9 waits for a6", nil, runtime.ReasonNotRunning, "a9", StepBlocked, "a6", ""},
 		// A10 other hypervisors.
@@ -111,6 +120,11 @@ func TestDockerStepsGiveEachStepItsState(t *testing.T) {
 			f.OtherHypervisors, f.OtherHypervisorNames, f.DockerDesktopRunning = Yes, []string{"VMware"}, Yes
 		}, runtime.ReasonRunning, "a10", StepDone, "", ""},
 		{"a10 unknown", func(f *HostFacts) { f.OtherHypervisors = Unknown }, runtime.ReasonNotRunning, "a10", StepUnknown, "", ""},
+		{"a10 offers the hypervisor fix when it was turned off at boot", hypervisorOff, runtime.ReasonNotRunning, "a10", StepNeedsYou, "", ActionElevated},
+		{"a10 is only a note when a restart is pending", func(f *HostFacts) { hypervisorOff(f); f.RestartPending = Yes }, runtime.ReasonNotRunning, "a10", StepNote, "", ""},
+		{"a10 is only a note when the feature is off", func(f *HostFacts) { hypervisorOff(f); f.VMPlatformFeature = No }, runtime.ReasonWSLMissing, "a10", StepNote, "", ""},
+		{"a10 is only a note when the BIOS is the cause", func(f *HostFacts) { hypervisorOff(f); f.Firmware = No }, runtime.ReasonVirtualizationOff, "a10", StepNote, "", ""},
+		{"a10 is only a note when no other hypervisor is there", func(f *HostFacts) { hypervisorOff(f); f.OtherHypervisors, f.OtherHypervisorNames = No, nil }, runtime.ReasonNotRunning, "a10", StepDone, "", ""},
 		// A11 this PC is a VM.
 		{"a11 done on a physical PC", nil, runtime.ReasonNotRunning, "a11", StepDone, "", ""},
 		{"a11 needs nesting in a VM", func(f *HostFacts) { f.Manufacturer, f.Model = "QEMU", "Standard PC (Q35 + ICH9, 2009)" }, runtime.ReasonNotRunning, "a11", StepNeedsYou, "", ""},
