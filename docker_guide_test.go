@@ -305,6 +305,7 @@ func TestCancelSetupKeepsTheJournalWhenRunOnceStays(t *testing.T) {
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
 	}
+	app.resumeSetup.Store(true) // the app was opened by RunOnce
 	fake.mu.Lock()
 	fake.disarmError = errors.New("access is denied")
 	fake.mu.Unlock()
@@ -314,14 +315,17 @@ func TestCancelSetupKeepsTheJournalWhenRunOnceStays(t *testing.T) {
 	if app.cfg.Config().SetupJournal == nil {
 		t.Fatal("RunOnce stayed armed, but the journal is gone, so a retry has nothing to cancel")
 	}
+	if !app.resumeSetup.Load() {
+		t.Fatal("RunOnce stayed armed, but the resume flag is gone, so the kept journal is only half kept")
+	}
 	fake.mu.Lock()
 	fake.disarmError = nil
 	fake.mu.Unlock()
 	if err := app.CancelSetup(); err != nil {
 		t.Fatal(err)
 	}
-	if armed, _, _ := fake.state(); armed != "" || app.cfg.Config().SetupJournal != nil {
-		t.Fatalf("the retried cancel left RunOnce %q and journal %+v", armed, app.cfg.Config().SetupJournal)
+	if armed, _, _ := fake.state(); armed != "" || app.cfg.Config().SetupJournal != nil || app.resumeSetup.Load() {
+		t.Fatalf("the retried cancel left RunOnce %q, journal %+v, resume flag %v", armed, app.cfg.Config().SetupJournal, app.resumeSetup.Load())
 	}
 }
 
