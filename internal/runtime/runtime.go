@@ -866,12 +866,17 @@ func containerLogs(ctx context.Context, name string, lines int) (string, error) 
 // `match`. The window is streamed and filtered here, so megabytes of a chatty
 // service's logs are never held at once.
 func (p *DockerProvider) LogsMatching(ctx context.Context, slug string, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+	return logsMatching(ctx, containerName(slug), since, match, lines)
+}
+
+// logsMatching is LogsMatching for the container called name.
+func logsMatching(ctx context.Context, name string, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
 	cli, err := dockerClient()
 	if err != nil {
 		return "", err
 	}
 	defer cli.Close()
-	reader, err := cli.ContainerLogs(ctx, containerName(slug), client.ContainerLogsOptions{
+	reader, err := cli.ContainerLogs(ctx, name, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Since:      strconv.FormatInt(time.Now().Add(-since).Unix(), 10),
