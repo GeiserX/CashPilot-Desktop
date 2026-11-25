@@ -64,10 +64,10 @@ Write-Doc ([ordered]@{ addrs = @($ll) })
 `
 
 // scriptCanaryRule adds or removes the inbound Allow for one canary port, for
-// this program only.
+// this program and the guest's address only.
 const scriptCanaryRule = buildPrelude + `$name = $in.group + '-' + [string]$in.port
 Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
-if ($in.add) { New-NetFirewallRule -Name $name -DisplayName $name -Group $in.group -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$in.port) -Program $in.program -Description $in.desc | Out-Null }
+if ($in.add) { New-NetFirewallRule -Name $name -DisplayName $name -Group $in.group -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$in.port) -RemoteAddress ([string]$in.remote) -Program $in.program -Description $in.desc | Out-Null }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -301,18 +301,22 @@ func (c *goCanary) Close() error {
 }
 
 // Canary listens on a host address and port, behind a firewall Allow for this
-// program and that port, and records every connection: the token it sent, or
-// "connected". Any arrival counts, whatever it carries.
-func (p *psProber) Canary(ctx context.Context, ip netip.Addr, port uint16, token string) (Canary, error) {
+// program, that port and the guest's prefix from, and records every
+// connection: the token it sent, or "connected". The proof decides which
+// arrivals count.
+func (p *psProber) Canary(ctx context.Context, ip netip.Addr, port uint16, from netip.Prefix) (Canary, error) {
 	if !ip.IsValid() || port == 0 {
 		return nil, fmt.Errorf("canary %v:%d is not an address and port", ip, port)
+	}
+	if !from.IsValid() {
+		return nil, errors.New("canary: no guest address to take connections from")
 	}
 	if err := checkWinPath("program", p.program); err != nil {
 		return nil, err
 	}
 	group := p.n.FirewallGroup + proofGroupSuffix
 	rule := func(ctx context.Context, add bool) error {
-		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "port": port, "program": p.program, "add": add, "desc": proofCanaryDesc})
+		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "port": port, "remote": from.Masked().String(), "program": p.program, "add": add, "desc": proofCanaryDesc})
 	}
 	if err := rule(ctx, true); err != nil {
 		return nil, err

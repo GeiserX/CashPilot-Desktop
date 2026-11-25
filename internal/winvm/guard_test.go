@@ -180,7 +180,7 @@ func (r *rig) probeFence() error {
 	var canaries []winvm.Canary
 	var filters []winvm.PktFilter
 	for _, to := range targets {
-		c, err := f.Canary(ctx, to.Addr(), to.Port(), "tok")
+		c, err := f.Canary(ctx, to.Addr(), to.Port(), netip.MustParsePrefix("192.0.2.11/32"))
 		if err != nil {
 			return err
 		}

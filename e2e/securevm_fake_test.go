@@ -60,7 +60,7 @@ func fenceHolds(t *testing.T, f *hvfake.HyperV, p winvm.Plan) error {
 	var canaries []winvm.Canary
 	var filters []winvm.PktFilter
 	for _, to := range targets {
-		c, err := f.Canary(ctx, to.Addr(), to.Port(), "tok")
+		c, err := f.Canary(ctx, to.Addr(), to.Port(), netip.MustParsePrefix("192.0.2.11/32"))
 		if err != nil {
 			return err
 		}
@@ -172,7 +172,7 @@ func TestFakeHyperVRedSteps(t *testing.T) {
 
 	// Red 4: L2 and L3 both open for the gateway, and the canary hears it.
 	// With L3 back on, the same probe is stopped by the host firewall alone.
-	c, _ := f.Canary(ctx, p.Gateway, 40010, "red4")
+	c, _ := f.Canary(ctx, p.Gateway, 40010, netip.PrefixFrom(p.GuestIP, 32))
 	defer c.Close()
 	if err := f.AddAllow(ctx, p.VMID, gw); err != nil {
 		t.Fatal(err)
@@ -238,7 +238,7 @@ func TestFakeHyperVIPv6Stack(t *testing.T) {
 	p := buildFenced(t, f)
 	ll := f.VNICLinkLocal(p.Names.Switch)
 	to := netip.AddrPortFrom(ll, 40020)
-	c, _ := f.Canary(ctx, ll, to.Port(), "v6")
+	c, _ := f.Canary(ctx, ll, to.Port(), netip.MustParsePrefix("fe80::/10"))
 	defer c.Close()
 	live, _ := f.ReadLive(ctx, p.Names, p.VMID)
 	f.TCP(ctx, to, "v6")

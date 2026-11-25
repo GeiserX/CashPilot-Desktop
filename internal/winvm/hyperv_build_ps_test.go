@@ -299,9 +299,15 @@ func TestProberSeam(t *testing.T) {
 		{"Allow", []string{`{"allow":[]}`}, func() error { return p.RemoveAllow(ctx, tVMID, q) }},
 		{"LinkLocal", []string{`{"addrs":["fe80::1"]}`}, func() error { _, err := p.LinkLocal(ctx, 20); return err }},
 		{"CanaryRule", []string{ok, ok}, func() error {
-			c, err := p.Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45000, "")
+			c, err := p.Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45000, netip.MustParsePrefix("192.0.2.11/32"))
 			if err != nil {
 				return err
+			}
+			if a := r.args[len(r.args)-1]; !strings.Contains(a, `"remote":"192.0.2.11/32"`) {
+				t.Errorf("the canary rule does not take only the guest's address: %s", a)
+			}
+			if _, err := p.Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45001, netip.Prefix{}); err == nil {
+				t.Error("a canary with no guest address was opened")
 			}
 			conn, err := net.Dial("tcp", ln.Addr().String())
 			if err != nil {

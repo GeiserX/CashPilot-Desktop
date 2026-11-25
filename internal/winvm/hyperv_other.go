@@ -96,7 +96,7 @@ func (unsupported) LinkLocal(context.Context, int) (netip.Addr, error) {
 	return netip.Addr{}, ErrUnsupported
 }
 
-func (unsupported) Canary(context.Context, netip.Addr, uint16, string) (Canary, error) {
+func (unsupported) Canary(context.Context, netip.Addr, uint16, netip.Prefix) (Canary, error) {
 	return nil, ErrUnsupported
 }
 func (unsupported) Pktmon(context.Context, []PktFilter) (Capture, error) {

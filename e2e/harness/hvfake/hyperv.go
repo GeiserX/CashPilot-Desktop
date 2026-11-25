@@ -1605,7 +1605,7 @@ type fakeCanary struct {
 	f       *HyperV
 	ip      netip.Addr
 	port    uint16
-	token   string
+	from    netip.Prefix
 	arrived []string
 }
 
@@ -1622,14 +1622,15 @@ func (c *fakeCanary) Close() error {
 	return nil
 }
 
-// Canary listens on a host address and port for a token.
-func (f *HyperV) Canary(_ context.Context, ip netip.Addr, port uint16, token string) (winvm.Canary, error) {
+// Canary listens on a host address and port for a token. The guest is the
+// only sender in the fake, so from is kept, not checked.
+func (f *HyperV) Canary(_ context.Context, ip netip.Addr, port uint16, from netip.Prefix) (winvm.Canary, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Canary"); err != nil {
 		return nil, err
 	}
-	c := &fakeCanary{f: f, ip: ip, port: port, token: token}
+	c := &fakeCanary{f: f, ip: ip, port: port, from: from}
 	f.canaries = append(f.canaries, c)
 	return c, nil
 }
@@ -1748,6 +1749,20 @@ func (l *fakeListener) Received() []string {
 	l.f.mu.Lock()
 	defer l.f.mu.Unlock()
 	return slices.Clone(l.received)
+}
+
+// Unregister deletes the registration it made and keeps listening.
+func (l *fakeListener) Unregister() error {
+	l.f.mu.Lock()
+	defer l.f.mu.Unlock()
+	if err := l.f.enter("Unregister"); err != nil {
+		return err
+	}
+	if l.registered {
+		l.f.gcs = slices.DeleteFunc(l.f.gcs, func(k string) bool { return k == l.svc })
+		l.registered = false
+	}
+	return nil
 }
 
 // Close stops listening and deletes the registration it made.

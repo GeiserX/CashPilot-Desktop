@@ -162,7 +162,9 @@ type OwnedObject struct {
 
 // Prober opens the holes the proof needs and watches the host for arrivals.
 type Prober interface {
-	Canary(ctx context.Context, ip netip.Addr, port uint16, token string) (Canary, error)
+	// Canary listens on ip and port behind a firewall Allow that takes only
+	// connections from the prefix from: the guest's address.
+	Canary(ctx context.Context, ip netip.Addr, port uint16, from netip.Prefix) (Canary, error)
 	// Pktmon refuses when a pktmon session already runs.
 	Pktmon(ctx context.Context, f []PktFilter) (Capture, error)
 	SetL3(ctx context.Context, n Names, on bool) error
@@ -253,5 +255,9 @@ type Capture interface {
 // HVListener is an hv_sock listener on the host.
 type HVListener interface {
 	Received() []string
+	// Unregister deletes the GuestCommunicationServices key the listener
+	// made and keeps the socket bound, so a probe after it shows that the
+	// deleted registration alone stops the guest.
+	Unregister() error
 	Close() error
 }

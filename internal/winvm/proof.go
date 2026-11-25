@@ -92,7 +92,10 @@ type StepSpec struct {
 
 // Evidence is what the host saw during one step.
 type Evidence struct {
-	Arrived   []string    `json:"arrived"`   // tokens a canary or hv_sock listener received
+	Arrived []string `json:"arrived"` // tokens a canary or hv_sock listener received
+	// Stray is what a canary heard that did not carry the step's token. A
+	// green step counts it as a leak; a red step never counts it as red.
+	Stray     []string    `json:"stray,omitempty"`
 	Left      []PktRecord `json:"left"`      // packets past the fence: out of a host NIC, or of a class pktmon could not place
 	Delivered bool        `json:"delivered"` // the frame got past the port to the host's vNIC
 	DropDelta uint64      `json:"dropDelta"` // FailedSecurityPolicy drops during the step, out + in
@@ -281,7 +284,7 @@ func Judge(s StepSpec, e Evidence) StepResult {
 		return r
 	}
 	escaped := func(green bool) bool {
-		return len(e.Arrived) > 0 || slices.ContainsFunc(e.Left, func(p PktRecord) bool { return passedFence(p, green) })
+		return len(e.Arrived) > 0 || (green && len(e.Stray) > 0) || slices.ContainsFunc(e.Left, func(p PktRecord) bool { return passedFence(p, green) })
 	}
 	switch s.Kind {
 	case Red:
@@ -645,6 +648,7 @@ func (r *proofRun) l3Off(ctx context.Context) error {
 // probeSet is the canaries, the capture and the counter around one step.
 type probeSet struct {
 	r        *proofRun
+	tok      string // the step's token: a canary arrival without it is stray
 	canaries []Canary
 	ext      []Canary // canaries the step keeps open past collect
 	extFrom  []int    // arrivals each one had when the step started
@@ -661,10 +665,10 @@ func (ps *probeSet) alsoWatch(c Canary) *probeSet {
 	return ps
 }
 
-func (r *proofRun) watch(ctx context.Context, canaries []netip.AddrPort, filters []PktFilter) *probeSet {
-	ps := &probeSet{r: r}
+func (r *proofRun) watch(ctx context.Context, tok string, canaries []netip.AddrPort, filters []PktFilter) *probeSet {
+	ps := &probeSet{r: r, tok: tok}
 	for _, c := range canaries {
-		cn, err := r.P.Canary(ctx, c.Addr(), c.Port(), "")
+		cn, err := r.P.Canary(ctx, c.Addr(), c.Port(), netip.PrefixFrom(r.p.GuestIP, 32))
 		if err != nil {
 			ps.errs = append(ps.errs, "canary: "+err.Error())
 			continue
@@ -714,13 +718,22 @@ func (ps *probeSet) collect(ctx context.Context, e *Evidence) {
 			e.DropDelta = t.Add(s)
 		}
 	}
+	split := func(got []string) {
+		for _, a := range got {
+			if a == ps.tok {
+				e.Arrived = append(e.Arrived, a)
+			} else {
+				e.Stray = append(e.Stray, a)
+			}
+		}
+	}
 	for _, c := range ps.canaries {
-		e.Arrived = append(e.Arrived, c.Arrived()...)
+		split(c.Arrived())
 		c.Close()
 	}
 	for i, c := range ps.ext {
 		if got := c.Arrived(); len(got) > ps.extFrom[i] {
-			e.Arrived = append(e.Arrived, got[ps.extFrom[i]:]...)
+			split(got[ps.extFrom[i]:])
 		}
 	}
 	if len(ps.errs) > 0 && e.Err == "" {
@@ -768,7 +781,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 		if s.ID == StepRed1LAN {
 			canaries = append(canaries, to)
 		}
-		ps := r.watch(ctx, canaries, []PktFilter{{Addr: target, Proto: "TCP", Port: to.Port()}})
+		ps := r.watch(ctx, tok, canaries, []PktFilter{{Addr: target, Proto: "TCP", Port: to.Port()}})
 		r.tcp(ctx, to, tok, &e)
 		ps.collect(ctx, &e)
 	case StepL3Alone, StepL2Alone, StepRed4Gateway:
@@ -783,7 +796,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 			}
 		}
 		to := netip.AddrPortFrom(r.p.Gateway, r.port())
-		ps := r.watch(ctx, []netip.AddrPort{to}, []PktFilter{{Addr: r.p.Gateway, Proto: "TCP", Port: to.Port()}})
+		ps := r.watch(ctx, tok, []netip.AddrPort{to}, []PktFilter{{Addr: r.p.Gateway, Proto: "TCP", Port: to.Port()}})
 		r.tcp(ctx, to, tok, &e)
 		ps.collect(ctx, &e)
 	case StepIPv6Red:
@@ -792,7 +805,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 		if err := r.openAllow(ctx, magicDNS); err != nil {
 			return fail(err), nil
 		}
-		ps := r.watch(ctx, nil, []PktFilter{{Addr: magicDNS, Proto: "UDP", Port: 53}})
+		ps := r.watch(ctx, tok, nil, []PktFilter{{Addr: magicDNS, Proto: "UDP", Port: 53}})
 		name := r.t.MagicDNSName
 		if name == "" {
 			name = "example.com"
@@ -856,7 +869,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 		for _, to := range targets {
 			filters = append(filters, PktFilter{Addr: to.Addr(), Proto: "TCP", Port: to.Port()})
 		}
-		ps := r.watch(ctx, canaries, filters)
+		ps := r.watch(ctx, tok, canaries, filters)
 		for _, to := range targets {
 			r.tcp(ctx, to, tok, &e)
 		}
@@ -922,12 +935,14 @@ func (r *proofRun) ipv6(ctx context.Context, red StepSpec, tok string) ([]StepRe
 	}
 	to := netip.AddrPortFrom(ll, r.port())
 	// One canary for both steps, opened while the address exists.
-	cn, err := r.P.Canary(ctx, ll.WithZone(strconv.Itoa(ifx)), to.Port(), "")
+	// The guest's link-local address is its own; any fe80:: source reaches
+	// this vNIC only from our switch.
+	cn, err := r.P.Canary(ctx, ll.WithZone(strconv.Itoa(ifx)), to.Port(), netip.MustParsePrefix("fe80::/10"))
 	if err != nil {
 		return both(fmt.Errorf("canary: %w", err)), nil
 	}
 	r.holes.push("IPv6 canary", func(context.Context) error { cn.Close(); return nil })
-	ps := r.watch(ctx, nil, []PktFilter{{Addr: ll, Proto: "TCP", Port: to.Port()}}).alsoWatch(cn)
+	ps := r.watch(ctx, tok, nil, []PktFilter{{Addr: ll, Proto: "TCP", Port: to.Port()}}).alsoWatch(cn)
 	r.tcp(ctx, to, tok, &e)
 	ps.collect(ctx, &e)
 	results := []StepResult{Judge(red, e)}
@@ -943,8 +958,9 @@ func (r *proofRun) ipv6(ctx context.Context, red StepSpec, tok string) ([]StepRe
 		e2.Err = "the guest could not add its neighbour entry: " + err.Error()
 		return append(results, Judge(off, e2)), nil
 	}
-	ps2 := r.watch(ctx, nil, []PktFilter{{Addr: ll}}).alsoWatch(cn)
-	r.tcp(ctx, to, r.token(), &e2)
+	tok2 := r.token()
+	ps2 := r.watch(ctx, tok2, nil, []PktFilter{{Addr: ll}}).alsoWatch(cn)
+	r.tcp(ctx, to, tok2, &e2)
 	ps2.collect(ctx, &e2)
 	return append(results, Judge(off, e2)), nil
 }
@@ -953,8 +969,8 @@ func (r *proofRun) ipv6(ctx context.Context, red StepSpec, tok string) ([]StepRe
 const hvWildcard = "00000000-0000-0000-0000-000000000000"
 
 // vmbus runs the hv_sock red control, then the green step: every service in
-// the setup baseline, and the test service once its registration is gone,
-// must refuse the guest.
+// the setup baseline, and the test service once its registration is gone
+// while its listener stays bound, must refuse the guest.
 func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepResult, error) {
 	var green StepSpec
 	for _, s := range Steps(r.p, r.h, r.t) {
@@ -1004,8 +1020,8 @@ func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepR
 		}
 	}
 	results := []StepResult{Judge(red, e)}
-	if err := closeL(ctx); err != nil {
-		e2.Err = "could not remove the test listener: " + err.Error()
+	if err := l.Unregister(); err != nil {
+		e2.Err = "could not delete the test service's registration: " + err.Error()
 		return append(results, Judge(green, e2)), nil
 	}
 	if err := r.sleep(ctx, r.wait()); err != nil {
@@ -1020,6 +1036,9 @@ func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepR
 		case ok:
 			e2.Arrived = append(e2.Arrived, "hvsock:"+k)
 		}
+	}
+	if err := closeL(ctx); err != nil {
+		e2.Err = joinErr(e2.Err, "could not remove the test listener: "+err.Error())
 	}
 	return append(results, Judge(green, e2)), nil
 }

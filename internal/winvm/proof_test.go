@@ -31,6 +31,8 @@ func TestJudgeOutcomes(t *testing.T) {
 		{"red with an arrival", spec(winvm.StepRed1LAN, winvm.Red, ""), winvm.Evidence{Arrived: []string{"t"}}, winvm.WentRed},
 		{"red with a packet out", spec(winvm.StepRed2Router, winvm.Red, ""), winvm.Evidence{Left: []winvm.PktRecord{out}}, winvm.WentRed},
 		{"red with nothing", spec(winvm.StepRed2Router, winvm.Red, ""), winvm.Evidence{}, winvm.Broken},
+		{"red with only a stray connection", spec(winvm.StepRed1LAN, winvm.Red, ""), winvm.Evidence{Stray: []string{"connected"}}, winvm.Broken},
+		{"green with a stray connection", spec(winvm.StepGreen, winvm.Green, winvm.WitnessDrops), winvm.Evidence{Stray: []string{"connected"}, DropDelta: 3}, winvm.Leak},
 		{"red with an error", spec(winvm.StepRed2Router, winvm.Red, ""), winvm.Evidence{Err: "no guest"}, winvm.Broken},
 		{"red: an unplaced record proves nothing", spec(winvm.StepRed2Router, winvm.Red, ""), winvm.Evidence{Left: []winvm.PktRecord{odd}}, winvm.Broken},
 		{"green with an arrival", spec(winvm.StepGreen, winvm.Green, winvm.WitnessDrops), winvm.Evidence{Arrived: []string{"t"}, DropDelta: 3}, winvm.Leak},
@@ -186,7 +188,7 @@ func TestProofMutantLeaks(t *testing.T) {
 // failed, and that the verdict is not green when a needed call failed.
 func TestProofRestoresAfterEachFailure(t *testing.T) {
 	methods := []string{"ReadLive", "AddAllow", "RemoveAllow", "RemoveDeny", "AddDeny", "SetL3", "SetBinding",
-		"LinkLocal", "Canary", "Pktmon", "DropCounters", "HVListener", "TCP", "Neighbor", "HVSock", "DNS", "Egress"}
+		"LinkLocal", "Canary", "Pktmon", "DropCounters", "HVListener", "Unregister", "TCP", "Neighbor", "HVSock", "DNS", "Egress"}
 	for _, m := range methods {
 		for _, nth := range []int{1, 2} {
 			t.Run(m+"#"+string(rune('0'+nth)), func(t *testing.T) {
@@ -250,5 +252,90 @@ func TestProofRenewsItsLock(t *testing.T) {
 	}
 	if !winvm.ProofLockValid(last, now) {
 		t.Fatalf("the lock of the last step (%v) does not hold at %v", last, now)
+	}
+}
+
+// strayProbe adds a connection from somewhere else on the LAN to every
+// canary, as a host that found the open port would.
+type strayProbe struct{ winvm.Prober }
+
+type strayCanary struct{ winvm.Canary }
+
+func (c strayCanary) Arrived() []string { return append([]string{"connected"}, c.Canary.Arrived()...) }
+
+func (s strayProbe) Canary(ctx context.Context, ip netip.Addr, port uint16, from netip.Prefix) (winvm.Canary, error) {
+	c, err := s.Prober.Canary(ctx, ip, port, from)
+	if err != nil {
+		return nil, err
+	}
+	return strayCanary{c}, nil
+}
+
+// lostGuest reports every TCP probe sent, but none leaves the guest.
+type lostGuest struct{ winvm.GuestProbe }
+
+func (lostGuest) TCP(context.Context, netip.AddrPort, string) (bool, error) { return true, nil }
+
+// TestProofCountsOnlyTheStepsToken: a red step whose own probe never arrived
+// is broken, even when another host connected to the canary. A green step
+// counts any connection as a leak.
+func TestProofCountsOnlyTheStepsToken(t *testing.T) {
+	outcome := func(rs []winvm.StepResult, id winvm.StepID) winvm.StepResult {
+		i := slices.IndexFunc(rs, func(r winvm.StepResult) bool { return r.ID == id })
+		if i < 0 {
+			t.Fatalf("no result for %s", id)
+		}
+		return rs[i]
+	}
+	t.Run("red", func(t *testing.T) {
+		_, p, r, h, tg := proofRig(t)
+		r.P, r.G = strayProbe{r.P}, lostGuest{r.G}
+		rs, _ := r.Run(context.Background(), p, h, tg)
+		for _, id := range []winvm.StepID{winvm.StepRed1LAN, winvm.StepRed4Gateway} {
+			if got := outcome(rs, id); got.Outcome != winvm.Broken || len(got.Evidence.Stray) == 0 {
+				t.Errorf("%s with only a stray connection = %s (stray %v), want broken", id, got.Outcome, got.Evidence.Stray)
+			}
+		}
+	})
+	t.Run("green", func(t *testing.T) {
+		_, p, r, h, tg := proofRig(t)
+		r.P = strayProbe{r.P}
+		rs, _ := r.Run(context.Background(), p, h, tg)
+		if got := outcome(rs, winvm.StepGreen); got.Outcome != winvm.Leak {
+			t.Errorf("green with a stray connection = %s, want leak", got.Outcome)
+		}
+		if ok, _ := winvm.Verdict(rs); ok {
+			t.Error("the proof passed with a stray connection on a green step")
+		}
+	})
+}
+
+// keptRegistration is a host where deleting the hv_sock registration does
+// not take: the key stays until the listener closes.
+type keptRegistration struct{ winvm.Prober }
+
+type keptListener struct{ winvm.HVListener }
+
+func (keptListener) Unregister() error { return nil }
+
+func (k keptRegistration) HVListener(ctx context.Context, bindVMID, service string, register bool) (winvm.HVListener, error) {
+	l, err := k.Prober.HVListener(ctx, bindVMID, service, register)
+	if err != nil {
+		return nil, err
+	}
+	return keptListener{l}, nil
+}
+
+// TestProofVMBusGreenKeepsTheListenerBound is the positive control for the
+// VMBus green step: it probes the test service while its listener is still
+// bound, so a registration that was not deleted shows as a leak, not as a
+// refusal from a closed listener.
+func TestProofVMBusGreenKeepsTheListenerBound(t *testing.T) {
+	_, p, r, h, tg := proofRig(t)
+	r.P = keptRegistration{r.P}
+	rs, _ := r.Run(context.Background(), p, h, tg)
+	i := slices.IndexFunc(rs, func(r winvm.StepResult) bool { return r.ID == winvm.StepVMBusGreen })
+	if i < 0 || rs[i].Outcome != winvm.Leak {
+		t.Fatalf("VMBus green with the registration kept = %+v, want leak", rs[i])
 	}
 }
