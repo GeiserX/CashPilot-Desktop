@@ -39,6 +39,12 @@ declare module "../wailsjs/go/main/App" {
   // switch of a routed service back to this machine's own IP.
   export function DeployServiceRouted(slug: string, values: Record<string, string>, proxyId: number): Promise<ProxiedResult>;
   export function DeployServiceLeavingRoute(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
+  // DeployService for a service that keeps its wallet seed in a file (Sia's hostd),
+  // with the owner's wallet choice (wallet_app.go).
+  export function DeployServiceWallet(slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice): Promise<WalletDeployResult>;
+  // Reads the wallet seed phrase back from the node's data volume. Go checks the
+  // typed name and limits the tries; every reveal goes into the service's history.
+  export function RevealWalletSeed(slug: string, typedName: string): Promise<string>;
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
   export function RestartService(slug: string): Promise<void>;
@@ -201,6 +207,9 @@ export interface FenceStatus {
   error: string;
   // Running earners that can reach the LAN; a redeploy moves them.
   outside: string[] | null;
+  // Running earners behind the fence: on the fenced network and no other. Set only
+  // while the mode is on.
+  inside: string[] | null;
   // Stopped earners outside the fence, left alone until their next deploy.
   outsideStopped: string[] | null;
   // Fence-gated earners that are down and that CashPilot starts itself once the
@@ -799,6 +808,22 @@ export interface FleetDevice {
   createdAt: string;
 }
 
+// FleetReach mirrors main.FleetReach (fleet_reach.go): whether another machine can
+// report to this Desktop's fleet API now, and why not.
+export interface FleetReach {
+  open: boolean;
+  // Accept workers (hub mode) is off, so heartbeats are refused.
+  hubOff: boolean;
+  // The API listens on a loopback address, which only this PC reaches.
+  thisPcOnly: boolean;
+  // The API did not start (its port was taken, for instance).
+  notListening: boolean;
+  // The address the API listens on now, "" when it does not.
+  listen: string;
+  // A saved bind address or port waits for a restart.
+  restartPending: boolean;
+}
+
 export interface FleetState {
   workers: number;
   mobiles: number;
@@ -807,6 +832,7 @@ export interface FleetState {
   devices: FleetDevice[];
   uiUrl: string;
   localApiUrl: string;
+  reach: FleetReach;
   apiKey: string;
   apiListening: boolean;
   workerSnippet: string;
@@ -1097,6 +1123,40 @@ export interface EnvVar {
   pattern?: string;
   /** "start:end" with 1 <= start <= end <= 65535, checked by the Go side. */
   portRange?: boolean;
+  /**
+   * Set when the value is a wallet seed phrase that lives in a file in the service's
+   * own volume (catalog.SeedFile): never a form field, never stored, never sent.
+   */
+  seedFile?: SeedFile;
+}
+
+export interface SeedFile {
+  path: string;
+  key: string;
+  words: number;
+  generate: string[];
+  phrasePattern: string;
+  addressPattern: string;
+}
+
+// The deploy form's wallet choice (wallet_app.go WalletChoice).
+export interface WalletChoice {
+  mode: "generate" | "import" | "keep";
+  phrase: string;
+}
+
+// What the deploy did with the wallet. phrase is set only for a wallet made on this
+// deploy: shown once, checked back, then dropped.
+export interface WalletOutcome {
+  created: boolean;
+  migrated: boolean;
+  address: string;
+  phrase?: string;
+}
+
+export interface WalletDeployResult {
+  deployment: Deployment;
+  wallet: WalletOutcome | null;
 }
 
 // PreflightFinding is one thing that could stop a service earning on this machine,
@@ -1134,6 +1194,8 @@ export interface Deployment {
   customImage: string;
   // How many copies of the service this machine runs; this entry is the first.
   instances: number;
+  // The public address of the wallet a seed-file service keeps (Sia), "" when none.
+  walletAddress?: string;
 }
 
 export interface EarningsRecord {

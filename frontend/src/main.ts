@@ -32,6 +32,8 @@ import {
   DeployService,
   DeployServiceLeavingRoute,
   DeployServiceRouted,
+  DeployServiceWallet,
+  RevealWalletSeed,
   EnableIsolation,
   ExportCompose,
   ExportStateBackup,
@@ -91,7 +93,9 @@ import {
 import { renderFleetSection } from "./render/fleet";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
-import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, type Mode, type ModeCardView } from "./render/mode";
+import { bootWhenReady, renderFailed, renderStarting, wireBootRetry } from "./render/boot";
+import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, renderWelcome as welcomePanel, type Mode, type ModeCardView } from "./render/mode";
+import { gatePage, withChrome } from "./render/chrome";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
@@ -109,6 +113,7 @@ import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
+import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
 import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
@@ -122,11 +127,13 @@ import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
 import { copyCommandQuestion, workerCopiesSection } from "./render/workercopies";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
+import { renderFleetConnect } from "./render/fleet_reach";
+import { renderFenceStatusLine } from "./render/fence_status";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -219,22 +226,36 @@ let settingsRequest = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
+// The window can load before the Go side has finished starting (render/boot.ts):
+// wait for it on a calm page, and keep a Try again on the failed page.
 async function boot() {
-  try {
-    state = await GetAppState();
-    await applySetupResume();
-    render();
-    wireBackendEvents();
-  } catch (error) {
-    renderError(error);
-  }
+  await bootWhenReady({
+    load: async () => {
+      state = await GetAppState();
+      await applySetupResume();
+      render();
+      wireBackendEvents();
+    },
+    showStarting: () => {
+      root.innerHTML = withChrome(renderStarting(""));
+      wireChrome();
+    },
+    showFailed: renderError,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    now: () => Date.now(),
+  });
 }
+
+let backendEventsWired = false;
 
 let eventRefreshInFlight = false;
 
 // The Go backend emits these after background collection cycles and deployment
 // changes. Refresh state so passive earnings appear without the user navigating.
 function wireBackendEvents() {
+  // Once: a Try again after a failed start runs boot again.
+  if (backendEventsWired) return;
+  backendEventsWired = true;
   EventsOn("earnings:changed", () => void onBackendEvent());
   EventsOn("deployment:changed", () => void onBackendEvent());
   // Background/startup failures the Go side reports via app:error had no listener,
@@ -308,6 +329,9 @@ function render() {
   // Whatever was on screen is replaced: a checklist there stops drawing.
   dockerGuide?.dispose();
   dockerGuide = null;
+  // A seed phrase on screen goes with the view it was shown in.
+  if (activeView !== "dashboard") hideRevealedSeed();
+  if (activeView !== "wizard") dropNewWalletPhrase();
   if (!state.config.firstRunComplete) {
     renderOnboarding(state);
     return;
@@ -374,12 +398,7 @@ function renderOnboarding(current: AppState) {
   // least one catalog app here. Native-only is never called ready: the card says
   // most apps need Docker and points at its guide (render/onboarding.ts).
   const card = runtimeCard(runtime, {checking});
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel gate-panel-wide">
+  root.innerHTML = gatePage(gateBar(), `
           ${renderGateSteps(firstRunSteps(firstRunPath), "runtime")}
           <h1 class="gate-title">Put your idle machine to work</h1>
           <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
@@ -390,10 +409,7 @@ function renderOnboarding(current: AppState) {
           </div>
           <div id="docker-guide"></div>
           <div id="install-guides" class="guide-grid"></div>
-        </section>
-      </main>
-    </div>
-  `;
+  `, {wide: true});
   wireChrome();
   document.querySelector("#continue-btn")?.addEventListener("click", async () => {
     await CompleteOnboarding();
@@ -463,8 +479,7 @@ async function firstRunHostCheck() {
 // elsewhere the install guides. The runtime status in the top bar opens it.
 function renderRuntimeView(current: AppState) {
   const card = runtimeCard(current.runtime);
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("runtime", current)}
@@ -477,7 +492,7 @@ function renderRuntimeView(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -519,18 +534,10 @@ function gateBar() {
 
 // First run, step 2: Run everything here, or Join my CashPilot.
 function renderModeStep() {
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel gate-panel-wide">
-          ${renderGateSteps(firstRunSteps(firstRunPath), "mode")}
-          ${renderModeChoice()}
-        </section>
-      </main>
-    </div>
-  `;
+  root.innerHTML = gatePage(gateBar(), `
+    ${renderGateSteps(firstRunSteps(firstRunPath), "mode")}
+    ${renderModeChoice()}
+  `, {wide: true});
   wireChrome();
   document.querySelectorAll<HTMLButtonElement>("[data-mode-choice]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -556,19 +563,11 @@ function renderModeStep() {
 
 // First run, the join step of Join my CashPilot.
 function renderJoinStep() {
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel gate-panel-wide">
-          ${renderGateSteps(firstRunSteps(firstRunPath), "join")}
-          <h1 class="gate-title">Join my CashPilot</h1>
-          ${renderJoinForm()}
-        </section>
-      </main>
-    </div>
-  `;
+  root.innerHTML = gatePage(gateBar(), `
+    ${renderGateSteps(firstRunSteps(firstRunPath), "join")}
+    <h1 class="gate-title">Join my CashPilot</h1>
+    ${renderJoinForm()}
+  `, {wide: true});
   wireChrome();
   wireJoinForm(document, () => {
     firstRunPath = "";
@@ -618,22 +617,10 @@ function wireJoinForm(scope: ParentNode, onBack: () => void, onContinue: () => v
 }
 
 function renderWelcome() {
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel">
-          ${renderGateSteps(firstRunSteps(firstRunPath), "welcome")}
-          <h1 class="gate-title">Welcome to CashPilot</h1>
-          <p class="gate-lede">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
-          <div class="gate-actions">
-            <button class="btn btn-primary btn-lg" id="get-started">Get started</button>
-          </div>
-        </section>
-      </main>
-    </div>
-  `;
+  root.innerHTML = gatePage(gateBar(), `
+    ${renderGateSteps(firstRunSteps(firstRunPath), "welcome")}
+    ${welcomePanel()}
+  `);
   wireChrome();
   document.querySelector("#get-started")?.addEventListener("click", () => {
     onboardingStep = "mode";
@@ -711,8 +698,7 @@ function renderDashboard(current: AppState) {
     isolation: current.isolation,
   }).concat(stallItems(current.stalls)), current.reminders);
 
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("dashboard", current)}
@@ -746,6 +732,7 @@ function renderDashboard(current: AppState) {
           </div>
         </section>
 
+        ${renderFenceStatusLine(current.isolation)}
         ${renderAttention(attention, upCount, containers.length)}
         ${renderStallServerNote(current.stallsServer)}
 
@@ -802,7 +789,7 @@ function renderDashboard(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -841,6 +828,7 @@ function renderDashboard(current: AppState) {
     });
   });
   wireStateBackups();
+  wireWalletDetails();
   document.querySelectorAll<HTMLButtonElement>("[data-reminder-action]").forEach((button) => {
     button.addEventListener("click", () => void runReminderAction(button.dataset));
   });
@@ -1068,8 +1056,7 @@ function renderCatalog(current: AppState) {
   // The open editor's typed values live only in the DOM. Search, the filter tabs and
   // any refresh redraw this page, so the live form is put back over the redrawn copy.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-custom-editor]");
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("catalog", current)}
@@ -1092,7 +1079,7 @@ function renderCatalog(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -1258,8 +1245,7 @@ function renderImportIfShown() {
 
 function renderImport(current: AppState) {
   const keep = renderedImportPreview === importPreview ? readImportForm() : null;
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("settings", current)}
@@ -1272,7 +1258,7 @@ function renderImport(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   renderedImportPreview = importPreview;
   if (keep) restoreImportForm(keep);
   wireChrome();
@@ -1438,8 +1424,7 @@ async function renderSettings(current: AppState) {
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
   // bring the withdrawn row back.
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("settings", current)}
@@ -1455,7 +1440,7 @@ async function renderSettings(current: AppState) {
               <button class="primary compact-btn" id="save-settings">Save Variables</button>
             </div>
             <div class="settings-list">
-              ${settings.environment.map(renderEnvSetting).join("")}
+              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, "small") : "")).join("")}
             </div>
           </section>
 
@@ -1490,7 +1475,7 @@ async function renderSettings(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -1770,8 +1755,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   }
   if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
   activityShown = data;
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("activity", current)}
@@ -1782,7 +1766,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -1894,8 +1878,7 @@ async function renderFleet(current: AppState) {
   proxiesState = proxies;
   // The open proxy editor's typed values live only in the DOM; see keepsLiveProxyEditor.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("fleet", current)}
@@ -1912,14 +1895,7 @@ async function renderFleet(current: AppState) {
             <div class="card-header">
               <span class="card-title">Add Worker or Mobile</span>
             </div>
-            <p class="muted">Point CashPilot workers, mobile companions, or another machine on your LAN at this desktop API. The API listens for authenticated heartbeats and registers devices automatically.</p>
-            <div class="connection-grid">
-              ${detailStat("UI URL", fleet.uiUrl)}
-              ${detailStat("Local API", fleet.localApiUrl)}
-              ${detailStat("API Key", fleet.apiKey ? "Generated" : "Missing")}
-              ${detailStat("Listener", fleet.apiListening ? "Listening" : "Offline")}
-            </div>
-            ${renderFleetSnippets(fleet)}
+            ${renderFleetConnect(fleet, renderFleetSnippets(fleet))}
             <div class="fleet-form">
               <input id="fleet-name" placeholder="Device name" />
               <select id="fleet-kind">
@@ -1946,7 +1922,7 @@ async function renderFleet(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -2137,15 +2113,6 @@ function renderPointsSection(points: PointsBalance[]) {
   `;
 }
 
-function detailStat(label: string, value: string) {
-  return `
-    <div class="detail-stat">
-      <span>${escapeHtml(label)}</span>
-      <strong>${escapeHtml(value)}</strong>
-    </div>
-  `;
-}
-
 function openWizard(input?: string | Event) {
   const slug = typeof input === "string" ? input : "";
   activeView = "wizard";
@@ -2166,8 +2133,7 @@ function renderSetupWizard(current: AppState) {
   }
   const filtered = services.filter((svc) => wizardCategories.includes(svc.category));
   const selectedServices = services.filter((svc) => wizardSelected.includes(svc.slug));
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("wizard", current)}
@@ -2189,7 +2155,7 @@ function renderSetupWizard(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -2270,6 +2236,8 @@ function renderSetupWizard(current: AppState) {
     });
   });
   wireSessionConsent(document);
+  wireWalletChoices();
+  fillNewWalletPanel();
   selectedServices.forEach((service) => void hydrateWizardForm(service));
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
   selectedServices.forEach((service) => void hydratePayouts(service));
@@ -2444,7 +2412,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, state?.workerTargets, wizardWhereDrafts[service.slug])).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug])).join("")}
     </div>
   `;
 }
@@ -2492,6 +2460,7 @@ function readWizardWhere(slug: string): number | null {
 }
 
 function closeWizard() {
+  dropNewWalletPhrase();
   activeView = "dashboard";
   wizardStep = 1;
   wizardRouteDrafts = {};
@@ -2578,6 +2547,11 @@ async function runWizardAction(slug: string, action: string) {
         return;
       }
       if (output) output.textContent = "Deploying...";
+      const seedService = state?.services?.find((service) => service.slug === slug && seedFileVar(service));
+      if (seedService) {
+        await runWalletDeploy(slug, values, output);
+        return;
+      }
       // A custom service has no credentials: it runs its saved definition.
       const custom = state?.services?.some((service) => service.slug === slug && service.custom);
       const image = readWizardImage(slug);
@@ -2628,6 +2602,208 @@ async function runWizardAction(slug: string, action: string) {
   } catch (error) {
     if (output) output.textContent = String(error);
   }
+}
+
+// A wallet seed kept in a file (Sia's hostd; render/wallet.ts). The phrase is in this
+// file's memory only while a panel shows it: newWallet from the deploy that made a
+// wallet until its three words are checked back or the panel is closed, revealed for
+// up to a minute after a reveal. Never in storage, a toast, the console or an error.
+let newWallet: (PhrasePanelView & { words: string[] }) | null = null;
+// token marks the reveal request a busy view waits on: an answer that arrives
+// after a Cancel, another reveal or leaving the dashboard finds it gone and drops
+// the phrase instead of drawing it.
+let revealed: { slug: string; view: RevealView; timer: number | null; token?: object } | null = null;
+const REVEAL_MS = 60_000;
+
+function dropNewWalletPhrase() {
+  if (!newWallet) return;
+  newWallet.words.fill("");
+  newWallet = null;
+}
+
+function hideRevealedSeed() {
+  if (!revealed) return;
+  if (revealed.timer !== null) window.clearTimeout(revealed.timer);
+  if (revealed.view.kind === "shown") revealed.view.words.fill("");
+  revealed = null;
+}
+
+// The deploy card's wallet choice: the phrase box shows only for "Use a wallet I
+// already have".
+function wireWalletChoices() {
+  document.querySelectorAll<HTMLFieldSetElement>("[data-wallet-choice]").forEach((box) => {
+    const sync = () => {
+      const mode = box.querySelector<HTMLInputElement>("[data-wallet-mode]:checked")?.value;
+      const phraseBox = box.querySelector<HTMLElement>("[data-wallet-phrase-box]");
+      if (phraseBox) phraseBox.hidden = mode !== "import";
+    };
+    box.querySelectorAll<HTMLInputElement>("[data-wallet-mode]").forEach((radio) => radio.addEventListener("change", sync));
+    sync();
+  });
+}
+
+// The choice in slug's card, with the typed phrase read once and cleared from the box.
+function readWalletChoice(slug: string): WalletChoice {
+  const box = document.querySelector<HTMLElement>(`[data-wallet-choice="${slug}"]`);
+  const mode = (box?.querySelector<HTMLInputElement>("[data-wallet-mode]:checked")?.value || "keep") as WalletChoice["mode"];
+  const input = box?.querySelector<HTMLInputElement>("[data-wallet-phrase]");
+  const phrase = mode === "import" ? input?.value || "" : "";
+  if (input) input.value = "";
+  return { mode, phrase };
+}
+
+async function runWalletDeploy(slug: string, values: Record<string, string>, output: HTMLPreElement | null) {
+  const choice = readWalletChoice(slug);
+  if (choice.mode === "import" && phraseWords(choice.phrase).length === 0) {
+    if (output) output.textContent = "Type the seed phrase of the wallet to use, or choose another option.";
+    return;
+  }
+  if (choice.mode === "generate" && output) output.textContent = "Deploying, and creating a new wallet...";
+  let result: WalletDeployResult;
+  try {
+    await SaveCredentials(slug, values);
+    result = await DeployServiceWallet(slug, values, readWizardImage(slug), readWizardInstances(slug), choice);
+  } finally {
+    choice.phrase = "";
+  }
+  const wallet = result.wallet;
+  dropNewWalletPhrase();
+  if (wallet?.phrase) {
+    newWallet = { slug, words: phraseWords(wallet.phrase), address: wallet.address || "", step: "show", positions: [], error: "" };
+    wallet.phrase = "";
+  }
+  state = await GetAppState();
+  let text = "Deployed.";
+  if (newWallet) text = "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once.";
+  else if (wallet?.migrated) text = "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume.";
+  else if (wallet?.created) text = "Deployed with the wallet you typed. CashPilot kept no copy of it.";
+  else if (wallet) text = "Deployed. The node kept its wallet.";
+  if (output) output.textContent = text;
+  fillNewWalletPanel();
+}
+
+// Draws the one-time panel in its card, and wires it. Called after every wizard draw.
+function fillNewWalletPanel() {
+  document.querySelectorAll<HTMLElement>("[data-wallet-panel]").forEach((slot) => {
+    slot.innerHTML = newWallet && newWallet.slug === slot.dataset.walletPanel ? renderPhrasePanel(newWallet) : "";
+  });
+  if (!newWallet) return;
+  const panel = document.querySelector<HTMLElement>(`[data-wallet-panel="${newWallet.slug}"]`);
+  if (!panel) return;
+  panel.querySelector("[data-wallet-written]")?.addEventListener("click", () => {
+    if (!newWallet) return;
+    newWallet.step = "check";
+    newWallet.positions = pickPositions(newWallet.words.length, 3, Math.random);
+    newWallet.error = "";
+    fillNewWalletPanel();
+  });
+  panel.querySelector("[data-wallet-back]")?.addEventListener("click", () => {
+    if (!newWallet) return;
+    newWallet.step = "show";
+    newWallet.error = "";
+    fillNewWalletPanel();
+  });
+  panel.querySelector("[data-wallet-dismiss]")?.addEventListener("click", () => {
+    if (!confirm("Close without checking the words? CashPilot keeps no copy. You can show the phrase again from the dashboard.")) return;
+    dropNewWalletPhrase();
+    fillNewWalletPanel();
+  });
+  panel.querySelector("[data-wallet-finish]")?.addEventListener("click", () => {
+    if (!newWallet) return;
+    const inputs = [...panel.querySelectorAll<HTMLInputElement>("[data-wallet-word]")];
+    const typed = newWallet.positions.map((position) => inputs.find((input) => input.dataset.walletWord === String(position))?.value || "");
+    inputs.forEach((input) => { input.value = ""; });
+    if (!wordsMatch(newWallet.words, newWallet.positions, typed)) {
+      newWallet.error = "One of the words does not match. Check what you wrote down.";
+      fillNewWalletPanel();
+      return;
+    }
+    const { slug, address } = newWallet;
+    dropNewWalletPhrase();
+    panel.innerHTML = renderPhrasePanel({ slug, words: [], address, step: "done", positions: [], error: "" });
+    wireWalletCopy(panel);
+  });
+  wireWalletCopy(panel);
+}
+
+function wireWalletCopy(scope: ParentNode) {
+  scope.querySelectorAll<HTMLButtonElement>("[data-wallet-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(button.dataset.walletCopy || "");
+        flashCopied(button);
+      } catch (error) {
+        showErrorToast({scope: "clipboard", error: String(error)});
+      }
+    });
+  });
+}
+
+// The dashboard's wallet line: the address's Copy button and the reveal. Called after
+// every dashboard draw, so a redraw keeps a reveal that is still within its minute.
+function wireWalletDetails() {
+  wireWalletCopy(document);
+  document.querySelectorAll<HTMLElement>("[data-wallet-reveal-slot]").forEach((slot) => drawReveal(slot));
+  if (revealed && !document.querySelector(`[data-wallet-reveal-slot="${revealed.slug}"]`)) hideRevealedSeed();
+}
+
+function drawReveal(slot: HTMLElement) {
+  const slug = slot.dataset.walletRevealSlot || "";
+  const name = state?.services?.find((service) => service.slug === slug)?.name || slug;
+  const view: RevealView = revealed && revealed.slug === slug ? revealed.view : { kind: "idle" };
+  slot.innerHTML = renderRevealPanel(slug, name, view);
+  slot.querySelector("[data-wallet-reveal-start]")?.addEventListener("click", () => {
+    hideRevealedSeed();
+    revealed = { slug, view: { kind: "ask" }, timer: null };
+    drawReveal(slot);
+    slot.querySelector<HTMLInputElement>("[data-wallet-reveal-name]")?.focus();
+  });
+  slot.querySelector("[data-wallet-reveal-hide]")?.addEventListener("click", () => {
+    hideRevealedSeed();
+    drawReveal(slot);
+  });
+  const show = async () => {
+    // One request at a time, and none for an empty box: each try counts against
+    // the three the backend allows in ten minutes.
+    if (revealed?.slug === slug && revealed.view.kind === "ask" && revealed.view.busy) return;
+    const input = slot.querySelector<HTMLInputElement>("[data-wallet-reveal-name]");
+    const typed = input?.value || "";
+    if (!typed.trim()) {
+      input?.focus();
+      return;
+    }
+    const token = {};
+    revealed = { slug, view: { kind: "ask", busy: true }, timer: null, token };
+    drawReveal(slot);
+    const stale = () => revealed?.token !== token || activeView !== "dashboard";
+    try {
+      const phrase = await RevealWalletSeed(slug, typed);
+      if (stale()) {
+        phraseWords(phrase).fill("");
+        return;
+      }
+      hideRevealedSeed();
+      const timer = window.setTimeout(() => {
+        hideRevealedSeed();
+        const current = document.querySelector<HTMLElement>(`[data-wallet-reveal-slot="${slug}"]`);
+        if (current) drawReveal(current);
+      }, REVEAL_MS);
+      revealed = { slug, view: { kind: "shown", words: phraseWords(phrase) }, timer };
+    } catch (error) {
+      if (stale()) return;
+      revealed = { slug, view: { kind: "ask", error: String(error) }, timer: null };
+    }
+    const current = document.querySelector<HTMLElement>(`[data-wallet-reveal-slot="${slug}"]`);
+    if (current) drawReveal(current);
+  };
+  slot.querySelector("[data-wallet-reveal-show]")?.addEventListener("click", () => void show());
+  slot.querySelector<HTMLInputElement>("[data-wallet-reveal-name]")?.addEventListener("keydown", (event) => {
+    // A held Enter on the button that opened this box repeats into it once it has
+    // focus: only a fresh press, outside an IME composition, asks.
+    if (event.key !== "Enter" || event.repeat || event.isComposing) return;
+    event.preventDefault();
+    void show();
+  });
 }
 
 // Save a compose file for one service. The backend generates it, asks where to put
@@ -2828,21 +3004,9 @@ function showInfoToast(payload: {scope?: string; message?: string} | string) {
 }
 
 function renderError(error: unknown) {
-  root.innerHTML = `${titlebar()}<main class="center"><section class="panel"><h1>CashPilot failed to start</h1><pre>${escapeHtml(String(error))}</pre></section></main>`;
+  root.innerHTML = withChrome(renderFailed("", error));
   wireChrome();
-}
-
-function titlebar() {
-  return `
-    <div class="titlebar">
-      <div class="traffic-lights">
-        <button class="traffic close" data-window-action="close" aria-label="Close"></button>
-        <button class="traffic minimise" data-window-action="minimise" aria-label="Minimise"></button>
-        <button class="traffic maximise" data-window-action="maximise" aria-label="Maximise"></button>
-      </div>
-      <span>CashPilot Desktop</span>
-    </div>
-  `;
+  wireBootRetry(root, () => void boot());
 }
 
 function wireChrome() {

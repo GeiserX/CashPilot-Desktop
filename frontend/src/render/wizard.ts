@@ -28,6 +28,7 @@ import { routeChoiceSection } from "./route.js";
 import { whereChoiceSection } from "./where.js";
 import { renderCustomServiceCard } from "./custom.js";
 import { needsSessionConsent, renderSessionSlot } from "./session.js";
+import { walletChoiceSection } from "./wallet.js";
 
 /**
  * Render the setup card for one service.
@@ -50,6 +51,9 @@ import { needsSessionConsent, renderSessionSlot } from "./session.js";
  * (render/session.ts). A manual-only desktop app shows the disclosure in place of
  * its install tip and setup guide until the user accepts the current text.
  *
+ * `deployed` says whether this machine runs the service now. A service that keeps
+ * its wallet seed in a file (render/wallet.ts) then defaults to keeping its wallet.
+ *
  * `workerTargets` are the Docker workers a lead can deploy to (the Where box;
  * absent or empty, no box) and `whereDraft` the owner's pick from before a redraw.
  */
@@ -64,6 +68,7 @@ export function renderWizardServiceSetup(
   route?: RouteState | null,
   routeDraft?: number | null,
   sessionConsent?: Record<string, SessionConsent> | null,
+  deployed?: boolean,
   workerTargets?: WorkerTarget[] | null,
   whereDraft?: number | null,
 ): string {
@@ -105,6 +110,7 @@ export function renderWizardServiceSetup(
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
+      ${walletChoiceSection(service, Boolean(deployed))}
       ${instancesSection(service, scaling, instances)}
       ${whereChoiceSection(service, workerTargets, whereDraft)}
       ${routeChoiceSection(service, route, routeDraft)}
@@ -118,6 +124,7 @@ export function renderWizardServiceSetup(
       ${composeExportControl(service)}
       ${serviceFacts(service, balance)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
+      <div data-wallet-panel="${escapeHtml(service.slug)}"></div>
     </article>
   `;
 }

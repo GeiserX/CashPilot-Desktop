@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ const (
 var (
 	sha256Re  = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 	assetRe   = regexp.MustCompile(`releases/download/[^/"'\s]+/(CashPilot-Desktop-[^"'\s]+)`)
-	distRe    = regexp.MustCompile(`dist[/\\]CashPilot-Desktop-\$\{\{ matrix\.platform \}\}\.([a-z.]+)`)
+	distRe    = regexp.MustCompile(`dist[/\\]CashPilot-Desktop-\$\{\{ matrix\.platform \}\}((?:-setup)?\.[a-z.]+)`)
 	runnerOS  = map[string]string{"macos": "macOS", "ubuntu": "Linux", "windows": "Windows"}
 	runnerIf  = regexp.MustCompile(`runner\.os == '(\w+)'`)
 	urlVerRe  = regexp.MustCompile(`releases/download/v([^/]+)/`)
@@ -45,8 +46,13 @@ func read(t *testing.T, path string) string {
 	return string(b)
 }
 
+// downloadOnly are published assets no package installs: the portable Windows exe.
+// winget installs the installer instead.
+var downloadOnly = map[string]bool{"CashPilot-Desktop-windows-amd64.exe": true}
+
 // publishedAssets returns the asset file names desktop-release.yml uploads, built from
-// its matrix and the dist/ names in its per-OS packaging steps.
+// its matrix and the dist/ names in its per-OS packaging steps. Windows publishes
+// two: the installer (-setup.exe) and the portable exe.
 func publishedAssets(t *testing.T, workflow string) []string {
 	t.Helper()
 	var wf struct {
@@ -67,26 +73,29 @@ func publishedAssets(t *testing.T, workflow string) []string {
 	if err := yaml.Unmarshal([]byte(workflow), &wf); err != nil {
 		t.Fatal(err)
 	}
-	extByOS := map[string]string{}
+	extByOS := map[string]map[string]bool{}
 	for _, s := range wf.Jobs.Build.Steps {
-		m := distRe.FindStringSubmatch(s.Run)
-		if m == nil {
-			continue
+		for _, m := range distRe.FindAllStringSubmatch(s.Run, -1) {
+			osm := runnerIf.FindStringSubmatch(s.If)
+			if osm == nil {
+				t.Fatalf("packaging step writing %q has no runner.os condition", m[0])
+			}
+			if extByOS[osm[1]] == nil {
+				extByOS[osm[1]] = map[string]bool{}
+			}
+			extByOS[osm[1]][m[1]] = true
 		}
-		osm := runnerIf.FindStringSubmatch(s.If)
-		if osm == nil {
-			t.Fatalf("packaging step writing %q has no runner.os condition", m[0])
-		}
-		extByOS[osm[1]] = m[1]
 	}
 	var out []string
 	for _, inc := range wf.Jobs.Build.Strategy.Matrix.Include {
 		osName := runnerOS[strings.SplitN(inc.Runner, "-", 2)[0]]
-		ext, ok := extByOS[osName]
+		exts, ok := extByOS[osName]
 		if !ok {
 			t.Fatalf("matrix platform %s (runner %s) has no packaging step", inc.Platform, inc.Runner)
 		}
-		out = append(out, "CashPilot-Desktop-"+inc.Platform+"."+ext)
+		for ext := range exts {
+			out = append(out, "CashPilot-Desktop-"+inc.Platform+ext)
+		}
 	}
 	if len(out) == 0 {
 		t.Fatal("found no published assets in the release workflow")
@@ -147,9 +156,77 @@ func TestPackagesPointAtPublishedAssets(t *testing.T) {
 		seen[asset] = true
 	}
 	for _, a := range want {
-		if !seen[a] {
+		if !seen[a] && !downloadOnly[a] {
 			t.Errorf("no package installs the published asset %q", a)
 		}
+	}
+	for a := range downloadOnly {
+		if i := sort.SearchStrings(want, a); i == len(want) || want[i] != a {
+			t.Errorf("download-only asset %q is not published any more; drop it from downloadOnly", a)
+		}
+	}
+}
+
+// labelLineRe reads one "file|label" line of the release's labelling step.
+var labelLineRe = regexp.MustCompile(`(?m)^\s*(?:labels=')?((?:CashPilot-Desktop-|SHA256SUMS)[^|'\s]*)\|([^'\n]+)'?$`)
+
+// TestEveryPublishedAssetHasALabel checks the release's "Label the release files"
+// step names every file the release publishes, and only those, under a label that
+// says which system it is for. Without it, a new file would make that step fail
+// after the release was already out.
+func TestEveryPublishedAssetHasALabel(t *testing.T) {
+	workflow := read(t, workflowPath)
+	var wf struct {
+		Jobs struct {
+			Publish struct {
+				Steps []struct{ Name, Run string }
+			}
+		}
+	}
+	if err := yaml.Unmarshal([]byte(workflow), &wf); err != nil {
+		t.Fatal(err)
+	}
+	labels := map[string]string{}
+	for _, step := range wf.Jobs.Publish.Steps {
+		if step.Name != "Label the release files" {
+			continue
+		}
+		for _, m := range labelLineRe.FindAllStringSubmatch(step.Run, -1) {
+			labels[m[1]] = m[2]
+		}
+	}
+	if len(labels) == 0 {
+		t.Fatal(`found no "Label the release files" step with file|label lines in the publish job`)
+	}
+	want := append(publishedAssets(t, workflow), "SHA256SUMS")
+	for _, a := range want {
+		label, ok := labels[a]
+		if !ok {
+			t.Errorf("the published file %q has no label", a)
+			continue
+		}
+		var system string
+		switch {
+		case strings.Contains(a, "-windows-"):
+			system = "Windows"
+		case strings.Contains(a, "-darwin-"):
+			system = "macOS"
+		case strings.Contains(a, "-linux-"):
+			system = "Linux"
+		default:
+			continue
+		}
+		if !strings.HasPrefix(label, "CashPilot Desktop for "+system+" ") {
+			t.Errorf("%s is labelled %q; want it to start with \"CashPilot Desktop for %s\"", a, label, system)
+		}
+	}
+	for a := range labels {
+		if !slices.Contains(want, a) {
+			t.Errorf("label for %q, which the release does not publish", a)
+		}
+	}
+	if !strings.Contains(labels["CashPilot-Desktop-windows-amd64-setup.exe"], "installer") {
+		t.Errorf("the Windows installer's label does not say installer: %q", labels["CashPilot-Desktop-windows-amd64-setup.exe"])
 	}
 }
 

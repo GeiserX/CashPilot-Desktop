@@ -46,7 +46,7 @@ const targets = [
   check("RULE 1: the box says the worker keeps no credentials", box.includes("keeps none of them"), box);
   const picked = whereChoiceSection(honeygain, targets, 5);
   check("RULE 1: a pick survives a redraw", /<option value="5" selected>/.test(picked), picked);
-  const card = renderWizardServiceSetup(honeygain, {}, "box", null, "", null, null, null, undefined, null, targets, 5);
+  const card = renderWizardServiceSetup(honeygain, {}, "box", null, "", null, null, null, undefined, null, false, targets, 5);
   check("RULE 1: the setup card carries the box and the pick", /<option value="5" selected>/.test(card), card);
   check("RULE 1: the setup card has no box without workers", !renderWizardServiceSetup(honeygain, {}, "box").includes("data-wizard-where"));
   check("RULE 1: a worker id is sent", whereChoice("5") === 5);

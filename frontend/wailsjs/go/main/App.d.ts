@@ -49,6 +49,8 @@ export function DeployServiceLeavingRoute(arg1:string,arg2:Record<string, string
 
 export function DeployServiceRouted(arg1:string,arg2:Record<string, string>,arg3:number):Promise<services.ProxiedResult>;
 
+export function DeployServiceWallet(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any,arg5:main.WalletChoice):Promise<main.WalletDeployResult>;
+
 export function DeployToWorker(arg1:string,arg2:main.WorkerDeployRequest):Promise<main.WorkerDeployResult>;
 
 export function DiscardPartialRestore(arg1:string):Promise<void>;
@@ -140,6 +142,8 @@ export function RestartService(arg1:string):Promise<void>;
 export function RestartToFirmware(arg1:string):Promise<main.FirmwareRestart>;
 
 export function RestoreStateBackup(arg1:string,arg2:string,arg3:string):Promise<runtime.RestoreResult>;
+
+export function RevealWalletSeed(arg1:string,arg2:string):Promise<string>;
 
 export function RevokeSessionRisk(arg1:string):Promise<Record<string, config.SessionConsent>>;
 

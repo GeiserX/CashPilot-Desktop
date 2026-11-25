@@ -110,6 +110,48 @@ func TestOutsideFence(t *testing.T) {
 	}
 }
 
+// The dashboard says how many earners sit behind the fence: running, on the fenced
+// network and no other. Host networking, a tunnel sidecar, a copy that shares its
+// network, a stopped earner and one also on a second network are not behind it.
+func TestInsideFence(t *testing.T) {
+	tunnel := earner("honeygain-tunnel", true, FenceNetwork, map[string]string{FenceNetwork: "n"})
+	tunnel.Tunnel = true
+	earners := []fenceEarner{
+		earner("earnapp", true, FenceNetwork, map[string]string{FenceNetwork: "n"}),
+		earner("earnapp", true, FenceNetwork, map[string]string{FenceNetwork: "n"}),
+		earner("bitping", true, FenceNetwork, map[string]string{FenceNetwork: "n"}),
+		earner("urnetwork", false, FenceNetwork, map[string]string{FenceNetwork: "n"}),
+		earner("repocket", true, FenceNetwork, map[string]string{FenceNetwork: "n", "lan": "l"}),
+		earner("honeygain", true, "bridge", map[string]string{"bridge": "b"}),
+		earner("mysterium", true, "host", map[string]string{"host": "h"}),
+		earner("sidecar", true, "container:abc", nil),
+		tunnel,
+	}
+	if got := insideFence(earners, FenceNetwork); !slices.Equal(got, []string{"bitping", "earnapp"}) {
+		t.Errorf("inside = %v, want [bitping earnapp]", got)
+	}
+	if got := insideFence(nil, FenceNetwork); len(got) != 0 {
+		t.Errorf("no earners, inside = %v", got)
+	}
+}
+
+// Status carries Inside only while the mode is on: an upgraded install on the
+// default bridge has nothing behind a fence.
+func TestSetOutsideCountsInsideOnlyWhenOn(t *testing.T) {
+	earners := []fenceEarner{earner("earnapp", true, FenceNetwork, map[string]string{FenceNetwork: "n"})}
+	f := &fence{}
+	f.setOutside(FenceModeOn, earners)
+	if got := f.Status().Inside; !slices.Equal(got, []string{"earnapp"}) {
+		t.Errorf("mode on: inside = %v", got)
+	}
+	for _, mode := range []string{FenceModeLegacy, FenceModeOff, FenceModeUnsupported} {
+		f.setOutside(mode, earners)
+		if got := f.Status().Inside; len(got) != 0 {
+			t.Errorf("mode %s: inside = %v, want none", mode, got)
+		}
+	}
+}
+
 // THE RULE: an earner the removed network stopped is started only after the table is
 // written, and not at all when the apply fails.
 func TestReattachRunsOnlyAfterTheFence(t *testing.T) {

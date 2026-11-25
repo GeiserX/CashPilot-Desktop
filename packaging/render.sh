@@ -3,7 +3,7 @@
 #
 #   packaging/render.sh v0.32.0
 #
-# Downloads the three release assets and the tagged icon, checks the file names the
+# Downloads the release assets the packages install and the tagged icon, checks the file names the
 # packages rely on are inside the archives, then writes the version and the sha256 of
 # each asset into packaging/. Run it before copying a package to its store.
 set -euo pipefail
@@ -35,7 +35,8 @@ fetch() {
 
 fetch "$base/CashPilot-Desktop-darwin-arm64.zip" mac.zip
 fetch "$base/CashPilot-Desktop-linux-amd64.tar.gz" linux.tar.gz
-fetch "$base/CashPilot-Desktop-windows-amd64.exe" windows.exe
+# winget installs the NSIS installer (InstallerType nullsoft), not the portable exe.
+fetch "$base/CashPilot-Desktop-windows-amd64-setup.exe" windows-setup.exe
 fetch "https://raw.githubusercontent.com/$repo/$tag/build/appicon.png" icon.png
 
 # The cask installs "cashpilot-desktop.app" and the PKGBUILD installs the file
@@ -51,7 +52,7 @@ grep -qx 'CashPilot Desktop' <<<"$linux_list" \
 
 mac_sha="$(sha256 "$tmp/mac.zip")"
 linux_sha="$(sha256 "$tmp/linux.tar.gz")"
-win_sha="$(sha256 "$tmp/windows.exe" | tr 'a-f' 'A-F')"
+win_sha="$(sha256 "$tmp/windows-setup.exe" | tr 'a-f' 'A-F')"
 icon_sha="$(sha256 "$tmp/icon.png")"
 desktop_sha="$(sha256 "$aur/cashpilot-desktop.desktop")"
 
@@ -109,5 +110,5 @@ V="$ver" T="$tag" S="$win_sha" perl -pi -e '
 echo "Rendered $tag:"
 echo "  darwin-arm64.zip     $mac_sha"
 echo "  linux-amd64.tar.gz   $linux_sha"
-echo "  windows-amd64.exe    $win_sha"
+echo "  windows-amd64-setup.exe $win_sha"
 echo "  appicon.png          $icon_sha"
