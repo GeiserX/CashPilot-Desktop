@@ -137,6 +137,11 @@ type Referral struct {
 	// checked. Collapsing nil into false would turn "unknown" into "nothing to do".
 	Program *bool         `json:"program" yaml:"program"`
 	Bonus   ReferralBonus `json:"bonus" yaml:"bonus"`
+	// Account is false when the provider has no account to sign up for (a
+	// permissionless node, an identity that is only a wallet). The UI then labels
+	// SignupURL "Visit", never "Create account" or "Sign up". nil means an account
+	// is needed.
+	Account *bool `json:"account" yaml:"account"`
 }
 
 // CodeAttributesURL reports whether a referral code is ANCHORED in a signup URL,

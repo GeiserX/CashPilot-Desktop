@@ -1080,6 +1080,9 @@ func (s *Store) migrate() error {
 		{"earnings", "error_kind", "ALTER TABLE earnings ADD COLUMN error_kind TEXT NOT NULL DEFAULT ''"},
 		{"fleet_devices", "egress_ip", "ALTER TABLE fleet_devices ADD COLUMN egress_ip TEXT NOT NULL DEFAULT ''"},
 		{"deployments", "wallet_address", "ALTER TABLE deployments ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''"},
+		// What a lead needs to command a worker (fleet_commands.go).
+		{"fleet_devices", "api_key_enc", "ALTER TABLE fleet_devices ADD COLUMN api_key_enc TEXT NOT NULL DEFAULT ''"},
+		{"fleet_devices", "report", "ALTER TABLE fleet_devices ADD COLUMN report TEXT NOT NULL DEFAULT ''"},
 	} {
 		has, err := s.columnExists(col.table, col.name)
 		if err != nil {

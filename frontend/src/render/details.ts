@@ -142,11 +142,21 @@ function text(value: string | undefined | null): string {
  * website still opens the provider's page, still lets the user sign up, and quietly
  * earns nothing forever. The provider's own site is the fallback only when the
  * catalog has no signup link at all.
+ *
+ * A provider with no account to sign up for (referral.account: false, such as a
+ * relay that needs only a wallet) gets "Visit site" instead: "Create account" sent
+ * people looking for an account form that does not exist. The web app does the same.
  */
 export function signupButton(service: Service, label = "Create account"): string {
   const url = (service.referral?.signupUrl || "").trim() || (service.website || "").trim();
   if (!url) return "";
-  return `<button class="primary" data-url="${escapeHtml(url)}">${escapeHtml(label)}</button>`;
+  const text = hasAccount(service) ? label : "Visit site";
+  return `<button class="primary" data-url="${escapeHtml(url)}">${escapeHtml(text)}</button>`;
+}
+
+/** False only when the catalog says the provider has no account to sign up for. */
+export function hasAccount(service: Pick<Service, "referral">): boolean {
+  return service.referral?.account !== false;
 }
 
 /**
