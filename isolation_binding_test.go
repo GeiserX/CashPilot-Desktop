@@ -17,6 +17,12 @@ type deployCountingProvider struct {
 	fail     map[string]error
 }
 
+// Status says an engine answers: this fake takes deploys, and a deploy is refused
+// while no engine answers (runtime_gate.go).
+func (d *deployCountingProvider) Status(context.Context) runtime.Status {
+	return runtime.Status{Available: true, Reason: runtime.ReasonRunning}
+}
+
 func (d *deployCountingProvider) Deploy(_ context.Context, spec runtime.DeploySpec, _ func(string)) (runtime.ContainerInfo, error) {
 	if err := d.fail[spec.Slug]; err != nil {
 		return runtime.ContainerInfo{}, err

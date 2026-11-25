@@ -11,9 +11,10 @@
 import { deployNotice, type DeployStatus } from "./deploy_consent.js";
 import type { FenceStatus, HealthScore, ProducerReport, ServiceCopy } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { runtimeAttention, type RuntimeInput } from "./runtime_state.js";
 
 export interface AttentionInput {
-  runtime: { available: boolean; nativeAvailable: boolean; message: string };
+  runtime: RuntimeInput;
   services: { slug: string; name: string; supportUrl?: string }[];
   deployments: { slug: string; name: string; status: string; runtime?: string }[];
   copies?: Record<string, ServiceCopy[]> | null;
@@ -64,25 +65,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   const nameOf = (slug: string) => input.services.find((s) => s.slug === slug)?.name || slug;
   const known = (slug: string) => input.services.some((s) => s.slug === slug);
 
-  if (!input.runtime.available && !input.runtime.nativeAvailable) {
-    items.push({
-      level: "fail",
-      tag: "Offline",
-      what: "Runtime",
-      why: `${escapeHtml(input.runtime.message || "Neither Docker nor the native runtime can run anything.")} Services cannot start until it is back.`,
-      actions: "",
-    });
-  } else if (!input.runtime.available && input.deployments.some((dep) => dep.runtime && dep.runtime !== "native")) {
-    // Native services still run, so this is not the whole app being down, but
-    // every container service is.
-    items.push({
-      level: "fail",
-      tag: "Offline",
-      what: "Container runtime",
-      why: `${escapeHtml(input.runtime.message || "Docker is not reachable.")} Container services cannot start until it is back; native ones keep running.`,
-      actions: "",
-    });
-  }
+  // No Docker engine answers: always a row, with the way to the Docker setup
+  // (render/runtime_state.ts), so "Nothing needs you" never shows then.
+  const runtime = runtimeAttention(input.runtime, input.deployments.some((dep) => dep.runtime && dep.runtime !== "native"));
+  if (runtime) items.push(runtime);
 
   // A provider that disabled the account is ONE cause for the stopped container, its
   // copies, its crashes and the missing balance. Each of those rows would point at a

@@ -236,6 +236,12 @@ func (s *Store) SaveCredentials(slug string, values map[string]string) error {
 	return err
 }
 
+// DeleteCredentials removes what is stored for slug. Nothing stored is not an error.
+func (s *Store) DeleteCredentials(slug string) error {
+	_, err := s.execWrite(`DELETE FROM credentials WHERE slug = ?`, slug)
+	return err
+}
+
 func (s *Store) GetCredentials(slug string) (map[string]string, error) {
 	var encrypted string
 	err := s.db.QueryRow(`SELECT value FROM credentials WHERE slug = ?`, slug).Scan(&encrypted)

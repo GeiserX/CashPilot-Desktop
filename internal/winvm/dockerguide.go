@@ -113,15 +113,10 @@ func DockerSteps(f HostFacts, reason string, local bool) []Step {
 	if !f.Supported || f.OS != "windows" {
 		return nil
 	}
-	engineUp := reason == runtime.ReasonRunning || reason == runtime.ReasonWindowsContainers
-	// The engine answering proves the rest only when it is this PC's Docker
-	// Desktop that answers, not an engine DOCKER_HOST or a Docker context names
-	// elsewhere.
-	proven := engineUp && local && f.DockerDesktopRunning == Yes
-	// Windows containers run without WSL, and Docker's Windows engine answers
-	// without virtualization, so only Linux containers prove the WSL rows, the
-	// virtualization row and the advice rows (a10 to a12).
-	linuxProven := LocalLinuxEngine(f, reason, local)
+	reason = desktopReason(f, reason, local)
+	proven := reason == runtime.ReasonRunning || reason == runtime.ReasonWindowsContainers
+	// Windows containers do not prove the virtualization or WSL rows.
+	linuxProven := reason == runtime.ReasonRunning
 	wslBackend := f.DockerBackend != BackendHyperV
 
 	steps := []Step{windowsStep(f, proven), virtualizationStep(f, linuxProven)}
@@ -130,8 +125,8 @@ func DockerSteps(f HostFacts, reason string, local bool) []Step {
 	}
 	steps = append(steps,
 		installedStep(f, proven),
-		runningStep(f, engineUp),
-		termsStep(f, reason, engineUp),
+		runningStep(f, proven),
+		termsStep(f, reason, proven),
 	)
 	if reason == runtime.ReasonAccessDenied {
 		steps = append(steps, dockerUsersStep(f))
@@ -151,7 +146,18 @@ func DockerSteps(f HostFacts, reason string, local bool) []Step {
 // here. Only then does the engine prove facts about this PC, and only then is a
 // guided setup finished.
 func LocalLinuxEngine(f HostFacts, reason string, local bool) bool {
-	return reason == runtime.ReasonRunning && local && f.DockerDesktopRunning == Yes
+	return desktopReason(f, reason, local) == runtime.ReasonRunning
+}
+
+// desktopReason separates the setup checklist from the engine used for deploys.
+func desktopReason(f HostFacts, reason string, local bool) string {
+	if f.desktopEngineReason != "" {
+		return f.desktopEngineReason
+	}
+	if !local || ((reason == runtime.ReasonRunning || reason == runtime.ReasonWindowsContainers) && f.DockerDesktopRunning != Yes) {
+		return ""
+	}
+	return reason
 }
 
 // markBlocked turns a step that is not done into "blocked" when an earlier step

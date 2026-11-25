@@ -102,8 +102,9 @@ check("with no fence-gated node waiting the fence-down row names none", !!plainD
 // The fence's state in one line, on the dashboard and beside the setting: the
 // setting, whether the fence is in place now, and how many running earners are
 // behind it.
-const line = (over) => renderFenceStatusLine(fence(over));
-check("no Docker runtime: no line", renderFenceStatusLine(null) === "" && renderFenceStatusLine(undefined) === "");
+const ready = { available: true, reason: "running" };
+const line = (over, runtime = ready) => renderFenceStatusLine(fence(over), runtime);
+check("no Docker runtime: no line", renderFenceStatusLine(null, ready) === "" && renderFenceStatusLine(undefined, ready) === "");
 const on3 = line({ mode: "on", state: "applied", inside: ["bitping", "earnapp", "honeygain"] });
 check("in place: says so with the setting", on3.includes("setting: auto") && on3.includes("In place: 3 running earners behind it."), on3);
 check("in place: nobody outside, no outside note", !on3.includes("outside it"), on3);
@@ -111,7 +112,7 @@ const on1 = line({ mode: "on", state: "applied", inside: ["earnapp"], outside: [
 check("in place with one outside: counts both", on1.includes("1 running earner behind it") && on1.includes("1 running earner is still outside it"), on1);
 const empty = line({ mode: "on", state: "applied", inside: [], outside: [] });
 check("in place, nothing running: says nothing is behind it", empty.includes("In place. No earner runs yet"), empty);
-const noDocker = line({ mode: "", state: "n/a", setting: "auto" });
+const noDocker = line({ mode: "", state: "n/a", setting: "auto" }, { available: false, reason: "not-running" });
 check("Docker down: no earner runs, set up on the first deploy", noDocker.includes("No container earner runs now") && noDocker.includes("at the latest on the first deploy"), noDocker);
 const unchecked = line({ mode: "", state: "" });
 check("not checked yet: says when it is checked", unchecked.includes("Not checked yet"), unchecked);
@@ -129,7 +130,7 @@ const evil = line({ mode: "on", state: "applied", setting: '<img src=x onerror=1
 check("the setting is escaped", !evil.includes("<img"), evil);
 
 // Settings › LAN isolation: the line sits in the row, as inline content of its label.
-const row = renderEnvSetting({ key: "CASHPILOT_ISOLATION", label: "LAN isolation", value: "auto", source: "Config", help: "auto (default), on or off.", readOnly: false, secret: false }, renderFenceStatusLine(fence({ mode: "on", state: "applied", inside: ["earnapp"] }), "small"));
+const row = renderEnvSetting({ key: "CASHPILOT_ISOLATION", label: "LAN isolation", value: "auto", source: "Config", help: "auto (default), on or off.", readOnly: false, secret: false }, renderFenceStatusLine(fence({ mode: "on", state: "applied", inside: ["earnapp"] }), ready, "small"));
 check("Settings row: shows the fence now under the help", row.includes("<small class=\"muted compact-copy\" data-fence-status=\"on\">") && row.includes("1 running earner behind it") && row.indexOf("auto (default)") < row.indexOf("LAN fence now"), row);
 check("Settings row: no block element inside the label", !/<label[\s\S]*<p[\s>][\s\S]*<\/label>/.test(row), row);
 

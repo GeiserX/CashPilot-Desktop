@@ -1,23 +1,24 @@
 // The pre-deploy reality check, shown in the wizard right above the Deploy button.
 //
 // It answers one question: what, on THIS machine, will stop this service earning?
-// The backend (internal/preflight) decides; this file only puts the answer on
-// screen. Three rules hold it together, and each has a check in
+// The backend assesses the service (internal/preflight). The app's latest
+// Docker reading says whether a local deploy can run. Three rules hold it together, with checks in
 // scripts/preflight_render_check.mjs:
 //
 //   1. It never blocks. Even "this will earn nothing here" renders as a panel the
 //      user reads and then deploys anyway if they want to. Nothing here disables
-//      the Deploy button, and nothing here is a modal.
+//      the Deploy button, and nothing here is a modal. The one exception is not a
+//      verdict: a Docker app without a ready runtime says so and offers Set up
+//      Docker, because the deploy itself is refused.
 //   2. What was NOT checked is always shown. A clean result that hides the list
 //      reads as a guarantee about things nobody looked at.
-//   3. Nothing renders at all until there is an answer. A blank panel with a
-//      reassuring heading, drawn while the check is still running, is a claim we
-//      have not earned yet.
+//   3. The service findings appear only after the backend answers.
 //
 // Pure: takes a report (or null) and returns an HTML string.
 
-import type { PreflightReport } from "../wails";
+import type { PreflightReport, RuntimeStatus, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { runtimeState, setupDockerButton } from "./runtime_state.js";
 
 /** The four verdicts, in the same vocabulary the Go side and the web app use. */
 const TONES: Record<string, { label: string; color: string; tint: string }> = {
@@ -34,17 +35,32 @@ function tone(verdict: string) {
   return TONES[verdict] || NEUTRAL;
 }
 
+/** Why a local Docker deploy cannot proceed, or "" if Docker is ready or unneeded. */
+export function localDockerGap(service: Service | undefined, runtime: RuntimeStatus): string {
+  if (runtime.available || !service?.docker?.image?.trim()) return "";
+  if (!service.custom && runtime.nativeServices?.includes(service.name)) return "";
+  switch (runtimeState(runtime).kind) {
+    case "unknown":
+      return "Docker status is unknown. Check Docker before deploying on this computer.";
+    case "not-installed":
+      return `Docker is not set up on this computer yet, so ${service.name} cannot run here.`;
+    default:
+      return `Docker is not ready on this computer yet, so ${service.name} cannot run here.`;
+  }
+}
+
 /**
- * Render the pre-deploy check for one service.
+ * Render the pre-deploy check for a service on this computer.
  *
  * `report` is null while the check is still running, or when it failed — both
  * render nothing rather than an empty panel that implies an answer.
  */
-export function renderPreflight(report: PreflightReport | null | undefined): string {
-  if (!report || !report.summary) return "";
-  const verdict = tone(report.verdict);
-  const findings = report.findings || [];
-  const notChecked = report.notChecked || [];
+export function renderPreflight(report: PreflightReport | null | undefined, workerId: number | null = null, dockerGap = ""): string {
+  const summary = dockerGap || report?.summary;
+  if (workerId !== null || !summary) return "";
+  const verdict = tone(dockerGap ? "will_earn_nothing" : report?.verdict ?? "");
+  const findings = report?.findings || [];
+  const notChecked = report?.notChecked || [];
 
   const badge = verdict.label
     ? `<span class="badge" style="text-transform: none; color: ${verdict.color}; background: ${verdict.tint}; border-color: ${verdict.color};">${escapeHtml(verdict.label)}</span>`
@@ -73,7 +89,8 @@ export function renderPreflight(report: PreflightReport | null | undefined): str
         <strong>Before you deploy</strong>
         ${badge}
       </div>
-      <p class="preflight-summary">${escapeHtml(report.summary)}</p>
+      <p class="preflight-summary">${escapeHtml(summary)}</p>
+      ${dockerGap || report?.blocking ? `<p class="preflight-blocked" data-preflight-blocked>Deploy is refused until then. ${setupDockerButton()}</p>` : ""}
       ${list}
       ${unchecked}
     </section>

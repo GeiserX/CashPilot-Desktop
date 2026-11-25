@@ -14,6 +14,7 @@
 
 import type { RuntimeStatus } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { runtimeState } from "./runtime_state.js";
 
 export interface RuntimeCard {
   /** "ok" only when Docker answers with Linux containers. */
@@ -25,6 +26,7 @@ export interface RuntimeCard {
 
 type CardInput = Pick<RuntimeStatus, "available" | "message" | "context"> & {
   nativeServices?: string[] | null;
+  reason?: string;
 };
 
 /** "A", "A and B", "A, B and C". */
@@ -35,6 +37,7 @@ function nameList(names: string[]): string {
 
 export function runtimeCard(runtime: CardInput, opts: { checking?: boolean } = {}): RuntimeCard {
   const native = runtime.nativeServices ?? [];
+  const unknown = runtime.reason !== undefined && runtimeState(runtime).kind === "unknown";
   let tone: RuntimeCard["tone"] = "warn";
   let title: string;
   let body: string;
@@ -50,10 +53,10 @@ export function runtimeCard(runtime: CardInput, opts: { checking?: boolean } = {
     // The title says most apps need Docker; the body says it once more, at most,
     // in the reason's own words, never in three sentences.
     const next = runtime.message ? escapeHtml(runtime.message) : "Set up Docker with the guide below, then click Check again.";
-    title = "Docker needed for most apps";
+    title = unknown ? "Docker status unknown" : "Docker needed for most apps";
     body = `Without Docker, ${only} on this computer. ${next}`;
   } else {
-    title = "Runtime setup needed";
+    title = unknown ? "Docker status unknown" : "Runtime setup needed";
     body = escapeHtml(runtime.message);
   }
   const html = `<div class="runtime-card ${tone}">

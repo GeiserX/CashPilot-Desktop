@@ -180,6 +180,7 @@ export function renderCustomServiceCard(
       <p class="tip">${escapeHtml(UNTRUSTED_TEXT)} Its image and variables are changed by editing it under Catalog, Your custom services.</p>
       ${restrictionsNote()}
       ${instancesSection(service, scaling, instances)}
+      <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}">Deploy</button>
       </div>
