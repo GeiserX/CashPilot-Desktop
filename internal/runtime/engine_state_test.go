@@ -62,6 +62,15 @@ func TestClassifyGivesEachDockerStateItsOwnReason(t *testing.T) {
 		{"WSL too old", winDown(func(ev *dockerEvidence) {
 			ev.host.WSL, ev.host.WSLVersion = "outdated", "2.0.14.0"
 		}), ReasonWSLOutdated, "version 2.0.14.0"},
+		{"Hyper-V backend is never told to install WSL", winDown(func(ev *dockerEvidence) {
+			ev.host.DockerBackend, ev.host.WSL = "hyperv", "missing"
+		}), ReasonNotRunning, "Open Docker Desktop"},
+		{"Hyper-V backend is never told to update WSL", winDown(func(ev *dockerEvidence) {
+			ev.host.DockerBackend, ev.host.WSL, ev.host.WSLVersion = "hyperv", "outdated", "2.0.9.0"
+		}), ReasonNotRunning, "Open Docker Desktop"},
+		{"an unread backend still hears about WSL", winDown(func(ev *dockerEvidence) {
+			ev.host.DockerBackend, ev.host.WSL = "", "missing"
+		}), ReasonWSLMissing, "wsl --install"},
 		{"virtualization off", winDown(func(ev *dockerEvidence) { ev.host.Virtualization = HintNo }), ReasonVirtualizationOff, "VT-x"},
 		{"virtualization off wins over WSL", winDown(func(ev *dockerEvidence) {
 			ev.host.Virtualization, ev.host.WSL = HintNo, "missing"

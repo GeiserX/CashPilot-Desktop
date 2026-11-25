@@ -11,6 +11,7 @@ import {usage} from '../models';
 import {preflight} from '../models';
 import {importers} from '../models';
 import {proxies} from '../models';
+import {setupresume} from '../models';
 
 export function AcceptSessionRisk(arg1:string,arg2:string):Promise<Record<string, config.SessionConsent>>;
 
@@ -19,6 +20,8 @@ export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetSt
 export function ApplyImport(arg1:main.ImportApplyRequest):Promise<main.ImportResult>;
 
 export function BackgroundHelperStatus():Promise<bgservice.Status>;
+
+export function CancelSetup():Promise<void>;
 
 export function CheckRuntime():Promise<runtime.Status>;
 
@@ -96,6 +99,8 @@ export function ListServices():Promise<Array<catalog.Service>>;
 
 export function ManagedRuntimePlan():Promise<runtime.ManagedRuntimePlan>;
 
+export function OpenWindowsUpdate():Promise<void>;
+
 export function PlanServiceRemoval(arg1:string):Promise<runtime.RemovalPlan>;
 
 export function PreflightService(arg1:string):Promise<preflight.Report>;
@@ -122,6 +127,8 @@ export function ResetProxyUsage(arg1:number):Promise<Array<string>>;
 
 export function RestartService(arg1:string):Promise<void>;
 
+export function RestartToFirmware(arg1:string):Promise<main.FirmwareRestart>;
+
 export function RestoreStateBackup(arg1:string,arg2:string,arg3:string):Promise<runtime.RestoreResult>;
 
 export function RevokeSessionRisk(arg1:string):Promise<Record<string, config.SessionConsent>>;
@@ -136,7 +143,11 @@ export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsS
 
 export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
 
+export function SetupResume():Promise<setupresume.View>;
+
 export function StartAsLead():Promise<void>;
+
+export function StartDockerDesktop():Promise<void>;
 
 export function StartProxiedCopy(arg1:string,arg2:number):Promise<void>;
 

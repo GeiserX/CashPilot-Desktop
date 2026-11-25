@@ -12,11 +12,12 @@ import (
 )
 
 // HostCheckResult is what the HostCheck binding returns: the facts about this PC,
-// and the runtime status read with them, whose Reason says why Docker is or is not
-// ready.
+// the runtime status read with them, whose Reason says why Docker is or is not
+// ready, and the Docker checklist derived from both (Windows only).
 type HostCheckResult struct {
 	Facts   winvm.HostFacts `json:"facts"`
 	Runtime runtime.Status  `json:"runtime"`
+	Steps   []winvm.Step    `json:"steps"`
 }
 
 // HostCheck reads this PC afresh (Windows edition, build and CPU, virtualization,
@@ -28,7 +29,12 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 		return HostCheckResult{}, err
 	}
 	facts := a.hostCache().refresh(a.ctx)
-	return HostCheckResult{Facts: facts, Runtime: a.runtimeStatus(a.catalog.ListVisible())}, nil
+	status := a.runtimeStatus(a.catalog.ListVisible())
+	if status.Reason == runtime.ReasonRunning {
+		// Docker runs: a guided setup that waited for a restart is finished.
+		a.endSetup()
+	}
+	return HostCheckResult{Facts: facts, Runtime: status, Steps: winvm.DockerSteps(facts, status.Reason)}, nil
 }
 
 // runtimeStatus is the Docker status with the native runtime's part added: which
@@ -92,6 +98,13 @@ func (h *hostFacts) refresh(ctx context.Context) winvm.HostFacts {
 	return f
 }
 
+// cached returns the last reading, or an empty one before the first.
+func (h *hostFacts) cached() winvm.HostFacts {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.facts
+}
+
 // hints returns the cached reading as runtime hints at once, and starts one
 // background reading when the cache is empty or stale.
 func (h *hostFacts) hints(ctx context.Context) runtime.HostHints {
@@ -124,6 +137,7 @@ func hostHints(f winvm.HostFacts) runtime.HostHints {
 		Virtualization:    string(f.Virtualization),
 		WSL:               f.WSL,
 		WSLVersion:        f.WSLVersion,
+		DockerBackend:     f.DockerBackend,
 		DockerUsersListed: string(f.DockerUsersListed),
 		DockerUsersToken:  string(f.DockerUsersToken),
 		RestartPending:    string(f.RestartPending),

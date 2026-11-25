@@ -16,6 +16,7 @@ import (
 type fakeProbes struct {
 	unsupported                                                bool
 	osV, procV, cimV, featV, wslV, dockerV, accountV, restartV func(*HostFacts)
+	servicesV                                                  func(*HostFacts)
 	cimErr                                                     error
 }
 
@@ -59,6 +60,9 @@ func (p fakeProbes) account(ctx context.Context) (func(*HostFacts), error) {
 func (p fakeProbes) restart(ctx context.Context) (func(*HostFacts), error) {
 	return answer(ctx, p.restartV, nil)
 }
+func (p fakeProbes) services(ctx context.Context) (func(*HostFacts), error) {
+	return answer(ctx, p.servicesV, nil)
+}
 
 func TestSnapshotAppliesEveryProbe(t *testing.T) {
 	p := fakeProbes{
@@ -69,8 +73,14 @@ func TestSnapshotAppliesEveryProbe(t *testing.T) {
 		dockerV:  func(f *HostFacts) { f.DockerDesktopInstalled = No },
 		accountV: func(f *HostFacts) { f.UserSID = "S-1-5-21-1-2-3-1001" },
 		restartV: func(f *HostFacts) { f.RestartPending, f.RestartReasons = Yes, []string{"cbs"} },
+		servicesV: func(f *HostFacts) {
+			f.LanmanServer, f.OtherHypervisors, f.OtherHypervisorNames = "manual", Yes, []string{"VirtualBox"}
+		},
 	}
 	f := snapshot(context.Background(), p, "windows", time.Second)
+	if f.LanmanServer != "manual" || f.OtherHypervisors != Yes {
+		t.Errorf("the services probe was not applied: %+v", f)
+	}
 	if !f.Supported || f.Build != 22631 || f.Arch != "x64" || f.UserSID == "" || f.RestartPending != Yes {
 		t.Fatalf("a probe's answer was not applied: %+v", f)
 	}
@@ -179,13 +189,14 @@ func TestMachineArch(t *testing.T) {
 // collector. Whichever side wins, the probe is reported as timed out.
 func TestSnapshotCallsADeadlineErrorTimedOut(t *testing.T) {
 	p := fakeProbes{
-		osV:      func(f *HostFacts) {},
-		cimErr:   fmt.Errorf("powershell: %w", context.DeadlineExceeded),
-		featV:    func(f *HostFacts) {},
-		wslV:     func(f *HostFacts) {},
-		dockerV:  func(f *HostFacts) {},
-		accountV: func(f *HostFacts) {},
-		restartV: func(f *HostFacts) {},
+		osV:       func(f *HostFacts) {},
+		cimErr:    fmt.Errorf("powershell: %w", context.DeadlineExceeded),
+		featV:     func(f *HostFacts) {},
+		wslV:      func(f *HostFacts) {},
+		dockerV:   func(f *HostFacts) {},
+		accountV:  func(f *HostFacts) {},
+		restartV:  func(f *HostFacts) {},
+		servicesV: func(f *HostFacts) {},
 	}
 	f := snapshot(context.Background(), p, "windows", time.Second)
 	if f.Problems["cpu"] != "timed out" {
@@ -295,5 +306,102 @@ func TestPSEncodeIsUTF16LEBase64(t *testing.T) {
 	}
 	if string(raw) != string(utf16le("exit 3")) {
 		t.Errorf("decoded %q", raw)
+	}
+}
+
+// A routine file rename left by an installer never says "restart first": only
+// Component Based Servicing and Windows Update do.
+func TestRestartPendingIgnoresFileRenamesAlone(t *testing.T) {
+	cases := []struct {
+		reasons []string
+		certain bool
+		want    Tri
+	}{
+		{[]string{"file-rename"}, true, No},
+		{[]string{"file-rename"}, false, Unknown},
+		{[]string{"cbs"}, true, Yes},
+		{[]string{"file-rename", "windows-update"}, true, Yes},
+		{nil, true, No},
+		{nil, false, Unknown},
+	}
+	for _, tc := range cases {
+		if got := restartPending(tc.reasons, tc.certain); got != tc.want {
+			t.Errorf("restartPending(%v, %v) = %s, want %s", tc.reasons, tc.certain, got, tc.want)
+		}
+	}
+}
+
+// A PowerShell killed at the deadline reports as timed out, not as a failed exit.
+func TestCIMErrorKeepsTheDeadline(t *testing.T) {
+	exit := errors.New("exit status 1")
+	err := cimError(context.DeadlineExceeded, exit)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a timed-out CIM read lost the deadline: %v", err)
+	}
+	err = cimError(nil, exit)
+	if !errors.Is(err, exit) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a failed CIM read: %v", err)
+	}
+	// And the collector then calls it what it is.
+	p := fakeProbes{osV: func(*HostFacts) {}, cimErr: cimError(context.DeadlineExceeded, exit), featV: func(*HostFacts) {},
+		wslV: func(*HostFacts) {}, dockerV: func(*HostFacts) {}, accountV: func(*HostFacts) {}, restartV: func(*HostFacts) {}, servicesV: func(*HostFacts) {}}
+	if f := snapshot(context.Background(), p, "windows", time.Second); f.Problems["cpu"] != "timed out" {
+		t.Fatalf("a killed PowerShell reads %q", f.Problems["cpu"])
+	}
+}
+
+func TestStartTypeName(t *testing.T) {
+	for in, want := range map[uint32]string{0: "auto", 1: "auto", 2: "auto", 3: "manual", 4: "disabled", 9: "unknown"} {
+		if got := startTypeName(in); got != want {
+			t.Errorf("startTypeName(%d) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestOtherHypervisors(t *testing.T) {
+	if got, names := otherHypervisors(Yes, No); got != Yes || len(names) != 1 || names[0] != "VirtualBox" {
+		t.Errorf("VirtualBox alone: %s %v", got, names)
+	}
+	if got, names := otherHypervisors(Yes, Yes); got != Yes || len(names) != 2 {
+		t.Errorf("both: %s %v", got, names)
+	}
+	if got, _ := otherHypervisors(No, No); got != No {
+		t.Errorf("neither: %s", got)
+	}
+	if got, _ := otherHypervisors(No, Unknown); got != Unknown {
+		t.Errorf("one unread is not proof of none: %s", got)
+	}
+}
+
+// Both settings files are read: the older settings.json in camelCase and the
+// newer settings-store.json in PascalCase.
+func TestDockerBackendReadsEitherSettingsFile(t *testing.T) {
+	cases := map[string]string{
+		`{"wslEngineEnabled": true}`:  BackendWSL,
+		`{"WslEngineEnabled": true}`:  BackendWSL,
+		`{"WslEngineEnabled": false}`: BackendHyperV,
+		`{"AutoStart": true}`:         BackendUnknown,
+		`not json`:                    BackendUnknown,
+	}
+	for in, want := range cases {
+		if got := dockerBackend([]byte(in)); got != want {
+			t.Errorf("dockerBackend(%s) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestParseCIMReadsTheMachineAndTheBoot(t *testing.T) {
+	apply, err := parseCIM([]byte(`{"manufacturer":"Microsoft Corporation","model":"Virtual Machine","lastBoot":"2026-11-25T07:59:58.5000000Z"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := unknownFacts("windows")
+	apply(&f)
+	derive(&f)
+	if f.IsVM != Yes || f.LastBoot != "2026-11-25T07:59:58.5Z" {
+		t.Fatalf("machine and boot: vm %s boot %q", f.IsVM, f.LastBoot)
+	}
+	if bootTime("25/11/2026 8:00:00") != "" {
+		t.Fatal("a localized date was read as a boot time")
 	}
 }

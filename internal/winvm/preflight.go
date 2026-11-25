@@ -121,12 +121,36 @@ type HostFacts struct {
 	DockerUsersListed Tri    `json:"dockerUsersListed"`
 	DockerUsersToken  Tri    `json:"dockerUsersToken"`
 
-	// RestartPending is whether Windows waits for a restart, and RestartReasons
-	// which marker said so: cbs (Component Based Servicing\RebootPending),
-	// windows-update (WindowsUpdate\Auto Update\RebootRequired) or file-rename
-	// (Session Manager\PendingFileRenameOperations).
+	// RestartPending is whether Windows waits for a restart before a change can
+	// take effect, and RestartReasons which marker said so: cbs (Component Based
+	// Servicing\RebootPending), windows-update (WindowsUpdate\Auto
+	// Update\RebootRequired) or file-rename (Session
+	// Manager\PendingFileRenameOperations). Only cbs and windows-update make it Yes:
+	// installers and updaters leave file renames behind all the time, and those
+	// alone never stop Docker, so a PC with only file-rename reads No and keeps the
+	// reason for a support report (restartPending).
 	RestartPending Tri      `json:"restartPending"`
 	RestartReasons []string `json:"restartReasons"`
+
+	// LanmanServer is the start type of the Server service, which Docker Desktop
+	// needs set to Automatic: auto, manual, disabled, absent or unknown.
+	LanmanServer string `json:"lanmanServer"`
+	// OtherHypervisors is whether another hypervisor's driver service is installed,
+	// VBoxSup (VirtualBox) or vmx86 (VMware Workstation), and OtherHypervisorNames
+	// names the ones found.
+	OtherHypervisors     Tri      `json:"otherHypervisors"`
+	OtherHypervisorNames []string `json:"otherHypervisorNames"`
+	// Manufacturer and Model are Win32_ComputerSystem's, copied from the firmware
+	// tables (SMBIOS), which Windows never translates. IsVM below is read from them.
+	Manufacturer string `json:"manufacturer"`
+	Model        string `json:"model"`
+	// LastBoot is Win32_OperatingSystem.LastBootUpTime in UTC, RFC 3339; "" is
+	// unknown. It is the same for every reading in one boot, so a setup that asks
+	// for a restart compares it to prove the restart happened.
+	LastBoot string `json:"lastBoot"`
+	// DockerBackend is the engine Docker Desktop's own settings file chooses: wsl
+	// (the WSL 2 backend), hyperv, or unknown when no settings file says.
+	DockerBackend string `json:"dockerBackend"`
 
 	// Problems names each probe that failed or timed out, with why. It is for a
 	// support report only; no decision reads it.
@@ -140,7 +164,18 @@ type HostFacts struct {
 	HyperVEdition  Tri         `json:"hyperVEdition"`
 	WSL            string      `json:"wsl"`
 	SecureVMHost   HostVerdict `json:"secureVmHost"`
+	// IsVM is whether this PC is itself a virtual machine, from Manufacturer and
+	// Model. Inside a VM, HypervisorPresent describes the outer hypervisor, so it
+	// does not prove that virtualization reaches this PC.
+	IsVM Tri `json:"isVm"`
 }
+
+// Docker Desktop backends, as DockerBackend reads them.
+const (
+	BackendWSL     = "wsl"
+	BackendHyperV  = "hyperv"
+	BackendUnknown = "unknown"
+)
 
 // HostVerdict says whether this PC can host the Secure VM, and when it cannot,
 // why, as one of the Host* reasons.
@@ -181,7 +216,12 @@ func unknownFacts(goos string) HostFacts {
 		DockerUsersToken:       Unknown,
 		RestartPending:         Unknown,
 		RestartReasons:         []string{},
+		LanmanServer:           "unknown",
+		OtherHypervisors:       Unknown,
+		OtherHypervisorNames:   []string{},
+		DockerBackend:          BackendUnknown,
 		Problems:               map[string]string{},
+		IsVM:                   Unknown,
 	}
 }
 
@@ -191,6 +231,29 @@ func derive(f *HostFacts) {
 	f.HyperVEdition = HyperVEdition(f.EditionID)
 	f.WSL = wslState(*f)
 	f.SecureVMHost = secureVMHost(*f)
+	f.IsVM = virtualMachine(f.Manufacturer, f.Model)
+}
+
+// vmMarkers are words the firmware tables of common hypervisors put in the
+// manufacturer or model: Hyper-V ("Microsoft Corporation", "Virtual Machine"),
+// VMware, VirtualBox ("innotek GmbH", "VirtualBox"), QEMU and KVM, Xen, Parallels,
+// Bochs, and the Amazon and Google clouds. They are vendor strings, never
+// translated.
+var vmMarkers = []string{"virtual machine", "vmware", "virtualbox", "innotek", "qemu", "kvm", "xen", "parallels", "bochs", "amazon ec2", "google compute engine"}
+
+// virtualMachine says whether a manufacturer and model name a virtual machine.
+// Nothing read is Unknown; a read that names no hypervisor is No.
+func virtualMachine(manufacturer, model string) Tri {
+	text := strings.ToLower(strings.TrimSpace(manufacturer) + " " + strings.TrimSpace(model))
+	if strings.TrimSpace(text) == "" {
+		return Unknown
+	}
+	for _, m := range vmMarkers {
+		if strings.Contains(text, m) {
+			return Yes
+		}
+	}
+	return No
 }
 
 // virtualizationOn reads HypervisorPresent first. A running hypervisor proves

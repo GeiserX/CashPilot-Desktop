@@ -48,6 +48,12 @@ func TestSnapshotReadsThisPC(t *testing.T) {
 	if f.DockerService == "unknown" {
 		t.Error("the service manager was not read")
 	}
+	if f.LanmanServer == "unknown" {
+		t.Errorf("the Server service's start type was not read (%v)", f.Problems["services"])
+	}
+	if f.OtherHypervisors == Unknown {
+		t.Errorf("the VirtualBox and VMware services were not read (%v)", f.Problems["services"])
+	}
 }
 
 // The CIM scripts must run and parse on real Windows. WMI on a loaded CI runner can
@@ -67,6 +73,9 @@ func TestCIMScriptsOnThisPC(t *testing.T) {
 	t.Logf("CPU script took %v: hypervisor %s, arch %s", time.Since(start), f.HypervisorPresent, f.Arch)
 	if f.HypervisorPresent == Unknown || f.Arch == "unknown" {
 		t.Errorf("the CPU script answered without HypervisorPresent or Architecture: %+v", f)
+	}
+	if f.LastBoot == "" || f.Model == "" {
+		t.Errorf("the CPU script answered without the boot time or the machine: boot %q, maker %q, model %q", f.LastBoot, f.Manufacturer, f.Model)
 	}
 
 	start = time.Now()

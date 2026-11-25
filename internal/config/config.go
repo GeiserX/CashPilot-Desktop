@@ -123,6 +123,27 @@ type AppConfig struct {
 	// An install from before this field gets it once, from its saved state
 	// (inferMode), and never sees the first run again.
 	Mode string `json:"mode,omitempty"`
+	// SetupJournal is a guided setup a restart interrupts: where the app lands when
+	// it opens again. It is written before the restart and cleared when the flow
+	// finishes or the user cancels it. nil when no setup is under way.
+	SetupJournal *SetupJournal `json:"setupJournal,omitempty"`
+}
+
+// SetupJournal says where a guided setup stood before a restart. It only says
+// where to land: every check runs again on resume, because the machine is the
+// truth, not the journal (internal/setupresume).
+type SetupJournal struct {
+	// Flow is the guided setup: "docker" today.
+	Flow string `json:"flow"`
+	// Step is the checklist step that asked for the restart.
+	Step string `json:"step"`
+	// BootTimeBefore is the PC's last boot time when the journal was written,
+	// RFC 3339; "" when it could not be read. A later boot time proves the restart.
+	BootTimeBefore string `json:"bootTimeBefore"`
+	// ExePath is the app that asked Windows to reopen it after the restart.
+	ExePath string `json:"exePath"`
+	// Attempts counts how many times this step asked for a restart.
+	Attempts int `json:"attempts"`
 }
 
 // The two values of AppConfig.Mode.
