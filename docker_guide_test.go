@@ -337,6 +337,14 @@ func TestHostCheckEndsTheSetupOnlyForThisPCsLinuxEngine(t *testing.T) {
 	app.runtime = windowsContainersProvider{}
 	stays("Windows containers")
 	app.runtime = runningProvider{}
+	// RunOnce cannot be removed: the journal stays, so the setup is not finished.
+	fake.mu.Lock()
+	fake.disarmError = errors.New("access denied")
+	fake.mu.Unlock()
+	stays("this PC's Docker runs, but RunOnce stays")
+	fake.mu.Lock()
+	fake.disarmError = nil
+	fake.mu.Unlock()
 	res, err := app.HostCheck()
 	if err != nil {
 		t.Fatal(err)

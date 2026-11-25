@@ -21,7 +21,8 @@ type HostCheckResult struct {
 	Runtime runtime.Status  `json:"runtime"`
 	Steps   []winvm.Step    `json:"steps"`
 	// SetupFinished is true when this reading ended the guided setup: this PC's
-	// own Docker Desktop runs Linux containers (winvm.LocalLinuxEngine).
+	// own Docker Desktop runs Linux containers (winvm.LocalLinuxEngine), and the
+	// journal and RunOnce value are gone.
 	SetupFinished bool `json:"setupFinished"`
 }
 
@@ -39,9 +40,11 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 	if finished {
 		// This PC's Docker Desktop runs Linux containers: a guided setup that
 		// waited for a restart is finished. An engine elsewhere, or Windows
-		// containers, finishes nothing here.
+		// containers, finishes nothing here. A setup whose journal could not be
+		// cleared is not finished: the banner stays with it.
 		if err := a.endSetup(); err != nil {
 			log.Printf("setup: %v", err)
+			finished = false
 		}
 	}
 	return HostCheckResult{Facts: facts, Runtime: status, Steps: dockerSteps(facts, status), SetupFinished: finished}, nil
