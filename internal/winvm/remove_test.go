@@ -287,3 +287,49 @@ func TestRemoveDeletesALeftoverProofFolder(t *testing.T) {
 		t.Fatalf("the proof folder is still there: %v", err)
 	}
 }
+
+// TestRemoveDeletesSetupLeftovers: a setup killed while it wrote the answer
+// ISO, a file, or ran the exe leaves the ISO's staging folder and temp image,
+// writeAtomic's temp files and setup.ps1's params copy. Remove VM deletes
+// them. A file setup never makes stays and is listed, so DataDir is never
+// kept without a word.
+func TestRemoveDeletesSetupLeftovers(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	write := func(rel string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	made := []string{
+		filepath.Join("answer.iso.stage", "autounattend.xml"), "answer.iso.tmp",
+		"." + winvm.StateFile + ".123456.tmp", "." + winvm.PlanFile + ".42.tmp",
+		filepath.Join("guard", "setup-params.json"), filepath.Join("guard", "."+winvm.StateFile+".7.tmp"),
+	}
+	for _, rel := range made {
+		write(rel)
+	}
+	write(filepath.Join("guard", "CashPilot-guard.exe")) // remove.ps1 deletes it
+	write("notes.txt")
+	res := remove(t, f, dir)
+	for _, rel := range append(made, "answer.iso.stage") {
+		if _, err := os.Lstat(filepath.Join(dir, rel)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there after Remove (%v)", rel, err)
+		}
+	}
+	left := strings.Join(res.Left, "\n")
+	if !strings.Contains(left, "notes.txt") {
+		t.Errorf("Remove did not list the file it kept: %v", res.Left)
+	}
+	if strings.Contains(left, "CashPilot-guard.exe") {
+		t.Errorf("Remove listed the exe copy remove.ps1 deletes: %v", res.Left)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err != nil {
+		t.Errorf("Remove deleted a file setup never makes: %v", err)
+	}
+}
