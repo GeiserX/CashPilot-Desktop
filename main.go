@@ -48,7 +48,14 @@ func main() {
 	// --resume-setup is what Windows' RunOnce passes after a restart a guided setup
 	// asked for: the app opens on the setup checklist (docker_guide.go).
 	resume := fs.Bool(setupresume.Flag, false, "open on the setup checklist after a restart")
+	// --vm-inspect <desired.json> prints the Secure VM's live Hyper-V state and its
+	// drift as JSON, reads only, and exits (vm_inspect.go).
+	inspect := fs.String(vmInspectFlag, "", "print the Secure VM's live state and drift from this desired.json, as JSON; changes nothing")
 	_ = fs.Parse(os.Args[1:])
+
+	if *inspect != "" {
+		os.Exit(runVMInspectMain(*inspect))
+	}
 
 	if *daemon {
 		if err := runDaemon(); err != nil {
