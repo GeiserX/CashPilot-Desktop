@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
@@ -59,9 +60,14 @@ type CopyRestarter interface {
 // signal that only warns would cost hours of logs to learn nothing. Reads and
 // restarts run in the background; it returns at once.
 func CheckCopies(reader CopyWindowReader, services ServiceLookup, copies []Copy) {
-	if reader == nil || services == nil || len(copies) == 0 {
+	if reader == nil || services == nil {
 		return
 	}
+	listed := make(map[string]bool, len(copies))
+	for _, cp := range copies {
+		listed[cp.key()] = true
+	}
+	windows.forgetUnlisted(listed)
 	listedAt := time.Now()
 	restarter, canRestart := reader.(CopyRestarter)
 	for _, cp := range copies {
@@ -83,6 +89,29 @@ func CheckCopies(reader CopyWindowReader, services ServiceLookup, copies []Copy)
 		windows.hitsOf(copyTarget(reader, restarter, canRestart, cp), signals, listedAt)
 	}
 }
+
+// forgetUnlisted drops what the cache holds for a copy that is no longer listed
+// at all (a removed copy, a deleted proxy), so neither map grows for the life of
+// the process. A first copy's entries, keyed by slug, are Collect's and stay. A
+// copy's wait between two restarts goes only once it is over: until then it
+// still decides, in case a listing missed the copy for one pass.
+func (c *windowCache) forgetUnlisted(listed map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, e := range c.entries {
+		if isCopyKey(key) && !listed[key] && !e.running {
+			delete(c.entries, key)
+		}
+	}
+	for key, at := range c.restarted {
+		if isCopyKey(key) && !listed[key] && c.now().Sub(at) >= restartEvery {
+			delete(c.restarted, key)
+		}
+	}
+}
+
+// isCopyKey reports a cache key of Copy.key's form, which no slug has.
+func isCopyKey(key string) bool { return strings.ContainsAny(key, "#@") }
 
 // restartSignals are the windowed signals that restart the copy they hold for.
 func restartSignals(signals []catalog.HealthSignal) []catalog.HealthSignal {
