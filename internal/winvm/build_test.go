@@ -211,16 +211,16 @@ func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.P
 	return id, ifx, err
 }
 
-func (w *failAfter) CreateVM(ctx context.Context, p winvm.Plan, iso, answer string) (string, string, winvm.OwnedDisk, error) {
-	vm, ad, disk, err := w.HyperV.CreateVM(ctx, p, iso, answer)
+func (w *failAfter) CreateVM(ctx context.Context, p winvm.Plan, iso, answer string) (string, string, winvm.OwnedDisk, []winvm.OwnedDVD, error) {
+	vm, ad, disk, dvds, err := w.HyperV.CreateVM(ctx, p, iso, answer)
 	if err == nil && w.hit("CreateVM") {
-		return "", "", winvm.OwnedDisk{}, errAfter
+		return "", "", winvm.OwnedDisk{}, nil, errAfter
 	}
-	return vm, ad, disk, err
+	return vm, ad, disk, dvds, err
 }
 
-func (w *failAfter) Guest(ctx context.Context, vmID string, c winvm.Cred, s winvm.GuestScript, arg, out any) error {
-	err := w.HyperV.Guest(ctx, vmID, c, s, arg, out)
+func (w *failAfter) Guest(ctx context.Context, vmID, owner string, c winvm.Cred, s winvm.GuestScript, arg, out any) error {
+	err := w.HyperV.Guest(ctx, vmID, owner, c, s, arg, out)
 	if err == nil && s.Name == "first-session" && w.hit("Guest") {
 		return errAfter
 	}
@@ -268,6 +268,12 @@ func TestBuildResumesAfterEachStep(t *testing.T) {
 				}
 				d.HV = f
 				res, err := winvm.Build(context.Background(), d, setupParams())
+				if after && (m == "EnsureSwitch" || m == "CreateVM") {
+					if !errors.Is(err, winvm.ErrNotOwned) {
+						t.Fatalf("repair without a recorded ID returned %v", err)
+					}
+					return
+				}
 				if err != nil {
 					t.Fatalf("the resumed build failed: %v (first: %v)", err, err1)
 				}
@@ -374,8 +380,8 @@ func TestBuildRepairClearsProofLeftovers(t *testing.T) {
 	if strings.Contains(objs, "-proof ") || strings.Contains(objs, "pktmon=true") {
 		t.Fatalf("proof leftovers survived Repair:\n%s", objs)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "proof", "pktmon-3")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the old capture folder survived Repair: %v", err)
+	if _, err := os.Stat(filepath.Join(dir, "proof", "pktmon-3")); err != nil {
+		t.Fatalf("Repair changed an unverified capture folder: %v", err)
 	}
 	f.LeaveProofLeftovers(winvm.ProductNames(), readPlan(t, dir).Owner)
 	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {

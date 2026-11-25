@@ -25,7 +25,7 @@ func TestGuestProbeOverPowerShellDirect(t *testing.T) {
 		"probe-egress": map[string]any{"ip": "203.0.113.7"},
 		"probe-hvsock": map[string]any{"connected": false, "result": "refused"},
 	}
-	g := winvm.NewGuestProbe(f, p.VMID, winvm.Cred{User: "cpadmin", Password: setupParams().AdminPassword})
+	g := winvm.NewGuestProbe(f, p.VMID, p.Owner, winvm.Cred{User: "cpadmin", Password: setupParams().AdminPassword})
 	ctx := context.Background()
 	if sent, err := g.TCP(ctx, netip.MustParseAddrPort("192.0.2.10:45000"), "cpd-0123456789abcdef"); err != nil || !sent {
 		t.Fatalf("TCP: %v %v", sent, err)
@@ -72,7 +72,7 @@ func TestGuestHVSockRejectsInconclusiveResults(t *testing.T) {
 	if _, err := winvm.Build(ctx, buildDeps(t, f, dir), setupParams()); err != nil {
 		t.Fatal(err)
 	}
-	g := winvm.NewGuestProbe(f, readPlan(t, dir).VMID, winvm.Cred{User: "cpadmin", Password: setupParams().AdminPassword})
+	g := winvm.NewGuestProbe(f, readPlan(t, dir).VMID, readPlan(t, dir).Owner, winvm.Cred{User: "cpadmin", Password: setupParams().AdminPassword})
 	for _, result := range []string{"timeout", "refused:10049", "socket-error:10060", ""} {
 		t.Run(result, func(t *testing.T) {
 			f.GuestAnswers = map[string]any{"probe-hvsock": map[string]any{"connected": false, "result": result}}

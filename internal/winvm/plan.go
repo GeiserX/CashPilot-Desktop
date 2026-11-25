@@ -140,8 +140,9 @@ func overlapsAny(p netip.Prefix, set []netip.Prefix) bool { return overlapping(p
 // Repair, and compared by the guard on every pass.
 // OwnedDisk records the file returned by setup's disk creation.
 type OwnedDisk struct {
-	Path string `json:"path"`
-	ID   string `json:"id"`
+	Path     string `json:"path"`
+	ID       string `json:"id"`
+	FolderID string `json:"folderId,omitempty"`
 }
 
 var diskIDRE = regexp.MustCompile(`^[0-9a-f]{48}$`)
@@ -153,18 +154,29 @@ func (d OwnedDisk) validate() error {
 	if !strings.HasSuffix(strings.ToLower(d.Path), ".vhdx") || !diskIDRE.MatchString(d.ID) {
 		return errors.New("the VM disk needs a VHDX path and a recorded file ID")
 	}
+	if d.FolderID != "" && !diskIDRE.MatchString(d.FolderID) {
+		return errors.New("the VM disk folder needs a recorded file ID")
+	}
 	return nil
 }
 
+// OwnedDVD identifies an attachment returned by Hyper-V during setup.
+type OwnedDVD struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
 type Plan struct {
-	Version   int        `json:"version"`
-	Names     Names      `json:"names"`
-	VHDXDir   string     `json:"vhdxDir"`
-	VMID      string     `json:"vmId"`
-	AdapterID string     `json:"adapterId"` // the GUID after `\` in Get-VMNetworkAdapter .Id
-	SwitchID  string     `json:"switchId"`
-	NATID     string     `json:"natId,omitempty"`
-	Disk      *OwnedDisk `json:"disk,omitempty"`
+	Version     int        `json:"version"`
+	Names       Names      `json:"names"`
+	VHDXDir     string     `json:"vhdxDir"`
+	VMID        string     `json:"vmId"`
+	AdapterID   string     `json:"adapterId"` // the GUID after `\` in Get-VMNetworkAdapter .Id
+	GuardTaskID string     `json:"guardTaskId,omitempty"`
+	SwitchID    string     `json:"switchId"`
+	NATID       string     `json:"natId,omitempty"`
+	Disk        *OwnedDisk `json:"disk,omitempty"`
+	DVDs        []OwnedDVD `json:"dvds,omitempty"`
 
 	Subnet      netip.Prefix `json:"subnet"` // a free /29 in 172.16/12
 	Gateway     netip.Addr   `json:"gateway"`
@@ -197,6 +209,7 @@ type Plan struct {
 	// off. It is written once and carried over by every Repair, so removal can put
 	// it back.
 	EnhancedSessionOriginal *bool `json:"enhancedSessionOriginal"`
+	EnhancedSessionChanged  bool  `json:"enhancedSessionChanged,omitempty"`
 	// CreatedGuardian is whether setup created the vTPM's UntrustedGuardian.
 	// Removal deletes it only then: other VMs may share it.
 	CreatedGuardian bool   `json:"createdGuardian"`
@@ -212,6 +225,7 @@ type Plan struct {
 	AdminGrantsTracked bool     `json:"adminGrantsTracked,omitempty"`
 	AddedAdminSIDs     []string `json:"addedAdminSids"`
 	PendingAdminSIDs   []string `json:"pendingAdminSids,omitempty"`
+	RevokedAdminSIDs   []string `json:"revokedAdminSids,omitempty"`
 
 	GCSBaseline []string  `json:"gcsBaseline"` // GuestCommunicationServices keys at setup, upper case
 	HostBuild   string    `json:"hostBuild"`   // CurrentBuild.UBR, for the re-proof trigger
@@ -378,6 +392,8 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 			return Plan{}, fmt.Errorf("the earlier plan belongs to %q, not %q", prev.Names.VM, o.Names.VM)
 		}
 		p.VMID, p.AdapterID, p.SwitchID = prev.VMID, prev.AdapterID, prev.SwitchID
+		p.DVDs = slices.Clone(prev.DVDs)
+		p.GuardTaskID = prev.GuardTaskID
 		if prev.Disk != nil {
 			disk := *prev.Disk
 			p.Disk = &disk
@@ -388,6 +404,8 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 		p.AdminGrantsTracked = prev.AdminGrantsTracked
 		p.AddedAdminSIDs = append([]string{}, prev.AddedAdminSIDs...)
 		p.PendingAdminSIDs = slices.Clone(prev.PendingAdminSIDs)
+		p.RevokedAdminSIDs = slices.Clone(prev.RevokedAdminSIDs)
+		p.EnhancedSessionChanged = prev.EnhancedSessionChanged
 		if prev.EnhancedSessionOriginal != nil {
 			v := *prev.EnhancedSessionOriginal
 			p.EnhancedSessionOriginal = &v
@@ -586,6 +604,9 @@ func (p Plan) validate() error {
 			return fmt.Errorf("plan: ID %q is not a GUID", id)
 		}
 	}
+	if p.GuardTaskID != "" && p.GuardTaskID != p.Names.GuardTask {
+		return errors.New("plan: invalid scheduled task identity")
+	}
 	if p.NATID != "" && !validNATID(p.NATID) {
 		return errors.New("plan: invalid NAT identity")
 	}
@@ -597,13 +618,24 @@ func (p Plan) validate() error {
 			return err
 		}
 	}
+	if len(p.DVDs) > 2 {
+		return errors.New("plan: too many recorded DVD drives")
+	}
+	for _, dvd := range p.DVDs {
+		if dvd.ID == "" || len(dvd.ID) > 512 || dvd.Path == "" || len(dvd.Path) > 512 {
+			return errors.New("plan: invalid DVD attachment")
+		}
+	}
+	if p.EnhancedSessionChanged && (p.EnhancedSession != ESOff || p.EnhancedSessionOriginal == nil || !*p.EnhancedSessionOriginal) {
+		return errors.New("plan: confirmed Enhanced Session change requires the original enabled value")
+	}
 	if p.EnhancedSession == ESKeep && p.EnhancedSessionOriginal != nil {
 		return errors.New("plan: a keep policy never records an original Enhanced Session value")
 	}
 	if p.Owner != "" && !ownerRe.MatchString(p.Owner) {
 		return fmt.Errorf("plan: owner %q is not 32 lower-case hex digits", p.Owner)
 	}
-	sids := append(slices.Clone(p.AddedAdminSIDs), p.PendingAdminSIDs...)
+	sids := slices.Concat(p.AddedAdminSIDs, p.PendingAdminSIDs, p.RevokedAdminSIDs)
 	for i, sid := range sids {
 		if !sidRe.MatchString(sid) {
 			return fmt.Errorf("plan: %q is not a Windows account SID", sid)

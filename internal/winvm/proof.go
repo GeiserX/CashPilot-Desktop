@@ -467,7 +467,7 @@ type proofRun struct {
 
 // RemoveProofLock releases the proof lock.
 func RemoveProofLock(dir string) error {
-	err := os.Remove(filepath.Join(dir, LockFile))
+	err := removeJournaledFile(filepath.Join(dir, LockFile))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
@@ -562,7 +562,7 @@ func (r *proofRun) ready(ctx context.Context) error {
 		}
 	}
 	if live.VMState != "Running" {
-		if err := r.B.Start(ctx, r.p.VMID); err != nil {
+		if err := r.B.Start(ctx, r.p.VMID, r.p.Owner); err != nil {
 			return fmt.Errorf("could not start the VM for the proof: %w", err)
 		}
 	}
@@ -618,11 +618,11 @@ func (r *proofRun) openAllow(ctx context.Context, a netip.Addr) error {
 	}
 	for _, x := range live.ACLs {
 		if strings.EqualFold(x.Action, "Deny") && x.Remote.Masked() == q {
-			if err := r.B.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{q}); err != nil {
+			if err := r.B.RemoveDeny(ctx, r.p.VMID, r.p.Owner, []netip.Prefix{q}); err != nil {
 				return err
 			}
 			r.holes.push("Deny "+q.String()+" removed", func(ctx context.Context) error {
-				return r.B.AddDeny(ctx, r.p.VMID, []netip.Prefix{q})
+				return r.B.AddDeny(ctx, r.p.VMID, r.p.Owner, []netip.Prefix{q})
 			})
 			break
 		}

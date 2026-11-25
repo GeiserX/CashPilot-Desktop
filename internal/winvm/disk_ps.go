@@ -24,9 +24,10 @@ public static class CpdDisk {
   [DllImport("kernel32.dll", SetLastError=true)]
   private static extern bool SetFileInformationByHandle(SafeFileHandle file, int kind, ref byte info, uint size);
 
-  public static string Identify(string path) { return Inspect(path, null); }
-  public static bool DeleteOwned(string path, string id) { return Inspect(path, id) != null; }
-  private static string Inspect(string path, string want) {
+  public static string Identify(string path) { return Inspect(path, null, true); }
+  public static string IdentifyTarget(string path) { return Inspect(path, null, false); }
+  public static bool DeleteOwned(string path, string id) { return Inspect(path, id, true) != null; }
+  private static string Inspect(string path, string want, bool exactPath) {
     string full = Path.GetFullPath(path);
     bool deleting = want != null;
     const uint readAttributes = 0x80, delete = 0x10000, openExisting = 3;
@@ -40,7 +41,7 @@ public static class CpdDisk {
       var resolved = new StringBuilder(32768);
       uint size = GetFinalPathNameByHandle(file, resolved, (uint)resolved.Capacity, 0);
       if (size == 0 || size >= resolved.Capacity) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
-      if (!String.Equals(resolved.ToString(), @"\\?\" + full, StringComparison.OrdinalIgnoreCase)) { return null; }
+      if (exactPath && !String.Equals(resolved.ToString(), @"\\?\" + full, StringComparison.OrdinalIgnoreCase)) { return null; }
       FileId id;
       if (!GetFileInformationByHandleEx(file, 18, out id, 24)) { throw new Win32Exception(Marshal.GetLastWin32Error()); }
       string found = id.Volume.ToString("x16") + id.High.ToString("x16") + id.Low.ToString("x16");
@@ -54,12 +55,34 @@ public static class CpdDisk {
   }
 }
 '@
-function Test-DiskInUse([string]$path) {
-  foreach ($v in @(Get-VM)) {
-    if (@(Get-VMHardDiskDrive -VM $v | Where-Object { $_.Path -and [IO.Path]::GetFullPath($_.Path) -eq $path }).Count -gt 0) {
-      return $true
+function Get-DiskIdentity([string]$path) { [CpdDisk]::IdentifyTarget($path) }
+function Test-DiskInUse([string]$id) {
+  try {
+    foreach ($v in @(Get-VM -ErrorAction Stop)) {
+      $drives = @(Get-VMHardDiskDrive -VM $v -ErrorAction Stop)
+      foreach ($checkpoint in @(Get-VMSnapshot -VM $v -ErrorAction Stop)) {
+        $drives += @(Get-VMHardDiskDrive -VMSnapshot $checkpoint -ErrorAction Stop)
+      }
+      foreach ($drive in $drives) {
+        $current = [string]$drive.Path
+        if (-not $current) { return $true }
+        $visited = @{}
+        while ($current) {
+          $found = Get-DiskIdentity $current
+          if (-not $found -or $found -ceq $id -or $visited.ContainsKey($found)) { return $true }
+          $visited[$found] = $true
+          $vhd = Get-VHD -Path $current -ErrorAction Stop
+          if (-not $vhd) { return $true }
+          if ([string]$vhd.VhdType -eq 'Differencing') {
+            $current = [string]$vhd.ParentPath
+            if (-not $current) { return $true }
+          } elseif ([string]$vhd.VhdType -in @('Dynamic', 'Fixed')) {
+            $current = ''
+          } else { return $true }
+        }
+      }
     }
-  }
-  return $false
+    return $false
+  } catch { return $true }
 }
 `

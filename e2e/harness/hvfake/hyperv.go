@@ -456,7 +456,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 		return winvm.Plan{}, err
 	}
 	var disk winvm.OwnedDisk
-	if p.VMID, p.AdapterID, disk, err = f.CreateVM(ctx, p, "", ""); err != nil {
+	if p.VMID, p.AdapterID, disk, p.DVDs, err = f.CreateVM(ctx, p, "", ""); err != nil {
 		return winvm.Plan{}, err
 	}
 	p.Disk = &disk
@@ -465,10 +465,12 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 		return winvm.Plan{}, err
 	}
 	steps := []func() error{
-		func() error { return f.SetIntegration(ctx, p.VMID, p.Integration) },
-		func() error { return f.SetBindings(ctx, live.VNICIfIndex, p.BindingsOff) },
-		func() error { return f.EnsureFirewall(ctx, n, live.VNICIfIndex, owner) },
-		func() error { return f.SetHostNeighbor(ctx, live.VNICIfIndex, p.GuestIP, p.GuestMAC) },
+		func() error { return f.SetIntegration(ctx, p.VMID, p.Owner, p.Integration) },
+		func() error { return f.SetBindings(ctx, live.VNICIfIndex, p.SwitchID, p.Owner, p.BindingsOff) },
+		func() error { return f.EnsureFirewall(ctx, n, live.VNICIfIndex, p.SwitchID, owner) },
+		func() error {
+			return f.SetHostNeighbor(ctx, live.VNICIfIndex, p.SwitchID, p.Owner, p.GuestIP, p.GuestMAC)
+		},
 	}
 	if staticARP {
 		steps = append(steps, func() error { return f.Neighbor(ctx, p.Gateway, p.HostVNICMAC) })
@@ -492,7 +494,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	for _, a := range p.WantACLs(d) {
 		deny = append(deny, a.Remote)
 	}
-	if err := f.AddDeny(ctx, p.VMID, deny); err != nil {
+	if err := f.AddDeny(ctx, p.VMID, p.Owner, deny); err != nil {
 		return winvm.Plan{}, err
 	}
 	p.SetGCSBaseline(live.GCS)
@@ -500,7 +502,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	if err := f.Connect(ctx, p.VMID, p.SwitchID, p.Owner); err != nil {
 		return winvm.Plan{}, err
 	}
-	return p, f.Start(ctx, p.VMID)
+	return p, f.Start(ctx, p.VMID, p.Owner)
 }
 
 // ---- Reader ----
@@ -671,7 +673,7 @@ func (f *HyperV) Usage(_ context.Context, vmID string) (winvm.Usage, error) {
 // ---- Guarder ----
 
 // Disconnect takes every adapter of the VM off its switch.
-func (f *HyperV) Disconnect(_ context.Context, vmID string) error {
+func (f *HyperV) Disconnect(_ context.Context, vmID, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Disconnect"); err != nil {
@@ -712,7 +714,7 @@ func (f *HyperV) Connect(_ context.Context, vmID, switchID, owner string) error 
 }
 
 // Start runs the VM.
-func (f *HyperV) Start(_ context.Context, vmID string) error {
+func (f *HyperV) Start(_ context.Context, vmID, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Start"); err != nil {
@@ -731,7 +733,7 @@ func (f *HyperV) Start(_ context.Context, vmID string) error {
 
 // AddDeny adds one Deny Both row per prefix. A prefix that already has a row
 // fails as Hyper-V does.
-func (f *HyperV) AddDeny(_ context.Context, vmID string, ps []netip.Prefix) error {
+func (f *HyperV) AddDeny(_ context.Context, vmID, owner string, ps []netip.Prefix) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("AddDeny"); err != nil {
@@ -750,7 +752,7 @@ func (f *HyperV) AddDeny(_ context.Context, vmID string, ps []netip.Prefix) erro
 }
 
 // RemoveDeny removes the Deny row of each prefix.
-func (f *HyperV) RemoveDeny(_ context.Context, vmID string, ps []netip.Prefix) error {
+func (f *HyperV) RemoveDeny(_ context.Context, vmID, owner string, ps []netip.Prefix) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveDeny"); err != nil {
@@ -958,19 +960,19 @@ func (f *HyperV) EnsureNAT(_ context.Context, n winvm.Names, sub netip.Prefix, i
 // services (all on but the Guest Service Interface). Each ISO counts as a DVD
 // drive. The answer ISO's file is applied at the first start, as Windows Setup
 // does: the two accounts and the guest's static entry for the gateway.
-func (f *HyperV) CreateVM(_ context.Context, p winvm.Plan, iso, answerISO string) (string, string, winvm.OwnedDisk, error) {
+func (f *HyperV) CreateVM(_ context.Context, p winvm.Plan, iso, answerISO string) (string, string, winvm.OwnedDisk, []winvm.OwnedDVD, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("CreateVM"); err != nil {
-		return "", "", winvm.OwnedDisk{}, err
+		return "", "", winvm.OwnedDisk{}, nil, err
 	}
 	for _, vm := range f.vms {
 		if vm.name == p.Names.VM {
-			return "", "", winvm.OwnedDisk{}, fmt.Errorf("fake Hyper-V: a VM named %q exists", p.Names.VM)
+			return "", "", winvm.OwnedDisk{}, nil, fmt.Errorf("fake Hyper-V: a VM named %q exists", p.Names.VM)
 		}
 	}
 	if _, ok := f.switches[strings.ToLower(p.SwitchID)]; !ok {
-		return "", "", winvm.OwnedDisk{}, fmt.Errorf("fake Hyper-V: no switch %q", p.Names.Switch)
+		return "", "", winvm.OwnedDisk{}, nil, fmt.Errorf("fake Hyper-V: no switch %q", p.Names.Switch)
 	}
 	vm := &fakeVM{
 		id: f.newID(), name: p.Names.VM, state: "Off", owner: p.Owner, vtpm: true,
@@ -986,26 +988,28 @@ func (f *HyperV) CreateVM(_ context.Context, p winvm.Plan, iso, answerISO string
 		disks:    1,
 		accounts: map[string]string{},
 	}
+	var dvds []winvm.OwnedDVD
 	for _, x := range []string{iso, answerISO} {
 		if x != "" {
 			vm.dvds++
+			dvds = append(dvds, winvm.OwnedDVD{ID: f.newID(), Path: x})
 		}
 	}
 	if answerISO != "" {
 		b, ok := f.isos[answerISO]
 		if !ok {
-			return "", "", winvm.OwnedDisk{}, fmt.Errorf("fake Hyper-V: no ISO at %s", answerISO)
+			return "", "", winvm.OwnedDisk{}, nil, fmt.Errorf("fake Hyper-V: no ISO at %s", answerISO)
 		}
 		vm.answer = b
 	}
 	f.vms[vm.id] = vm
 	f.seq++
 	vm.diskID = fmt.Sprintf("%048x", f.seq)
-	return vm.id, vm.adapter.id, winvm.OwnedDisk{Path: vm.vhdx, ID: vm.diskID}, nil
+	return vm.id, vm.adapter.id, winvm.OwnedDisk{Path: vm.vhdx, ID: vm.diskID}, dvds, nil
 }
 
 // SetIntegration sets integration services by ID.
-func (f *HyperV) SetIntegration(_ context.Context, vmID string, want map[string]bool) error {
+func (f *HyperV) SetIntegration(_ context.Context, vmID, owner string, want map[string]bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("SetIntegration"); err != nil {
@@ -1022,7 +1026,7 @@ func (f *HyperV) SetIntegration(_ context.Context, vmID string, want map[string]
 }
 
 // SetBindings turns components off on a vNIC.
-func (f *HyperV) SetBindings(_ context.Context, ifIndex int, off []string) error {
+func (f *HyperV) SetBindings(_ context.Context, ifIndex int, switchID, owner string, off []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("SetBindings"); err != nil {
@@ -1041,7 +1045,7 @@ func (f *HyperV) SetBindings(_ context.Context, ifIndex int, off []string) error
 // EnsureFirewall creates the group's one inbound Block rule on the vNIC, with
 // the owner token, or puts the one there back on the vNIC. It refuses a group
 // with a rule that does not carry the token.
-func (f *HyperV) EnsureFirewall(_ context.Context, n winvm.Names, ifIndex int, owner string) error {
+func (f *HyperV) EnsureFirewall(_ context.Context, n winvm.Names, ifIndex int, switchID, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EnsureFirewall"); err != nil {
@@ -1057,13 +1061,13 @@ func (f *HyperV) EnsureFirewall(_ context.Context, n winvm.Names, ifIndex int, o
 		rs[0].enabled, rs[0].ifIndex = true, ifIndex
 		return nil
 	}
-	f.firewall[n.FirewallGroup] = []*fakeRule{{name: n.FirewallGroup + "-block-in", owner: owner, enabled: true, ifIndex: ifIndex}}
+	f.firewall[n.FirewallGroup] = []*fakeRule{{name: n.FirewallGroup + "-block-in-" + owner, owner: owner, enabled: true, ifIndex: ifIndex}}
 	return nil
 }
 
 // SetHostNeighbor adds the host's static entry for the guest, in place of any
 // other entry on the vNIC.
-func (f *HyperV) SetHostNeighbor(_ context.Context, ifIndex int, ip netip.Addr, mac string) error {
+func (f *HyperV) SetHostNeighbor(_ context.Context, ifIndex int, switchID, owner string, ip netip.Addr, mac string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("SetHostNeighbor"); err != nil {
@@ -1153,7 +1157,7 @@ func (f *HyperV) WriteAnswerISO(_ context.Context, path string, xml []byte) erro
 }
 
 // BootKeys is the Gen 2 boot keypress.
-func (f *HyperV) BootKeys(_ context.Context, vmID string) error {
+func (f *HyperV) BootKeys(_ context.Context, vmID, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("BootKeys"); err != nil {
@@ -1164,7 +1168,7 @@ func (f *HyperV) BootKeys(_ context.Context, vmID string) error {
 }
 
 // EjectDVDs removes the VM's DVD drives.
-func (f *HyperV) EjectDVDs(_ context.Context, vmID string) error {
+func (f *HyperV) EjectDVDs(_ context.Context, vmID, owner string, dvds []winvm.OwnedDVD) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EjectDVDs"); err != nil {
@@ -1174,7 +1178,10 @@ func (f *HyperV) EjectDVDs(_ context.Context, vmID string) error {
 	if err != nil {
 		return err
 	}
-	vm.dvds = 0
+	vm.dvds = max(0, vm.dvds-len(dvds))
+	if vm.dvds != 0 {
+		return errors.New("unverified DVD drives were left on the VM")
+	}
 	return nil
 }
 
@@ -1285,7 +1292,7 @@ const (
 // first-session script sets both passwords and deletes the Panther copies, as
 // the real one does; every other script returns its canned answer, through
 // JSON and the 64 KB cap.
-func (f *HyperV) Guest(_ context.Context, vmID string, cred winvm.Cred, s winvm.GuestScript, arg, out any) error {
+func (f *HyperV) Guest(_ context.Context, vmID, owner string, cred winvm.Cred, s winvm.GuestScript, arg, out any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Guest"); err != nil {

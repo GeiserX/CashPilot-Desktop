@@ -64,7 +64,7 @@ func TestSecureVMStubRefusesBadValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"'" + strings.Repeat("AB", 32) + "'", "-Exe 'C:\\Program Files\\CashPilot\\CashPilot.exe'", "exit 13", "ReparsePoint", "O:BAD:PAI"} {
+	for _, want := range []string{"'" + strings.Repeat("AB", 32) + "'", "-Exe 'C:\\Program Files\\CashPilot\\CashPilot.exe'", "exit 13", "ReparsePoint", "O:BAD:P"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the stub lacks %q", want)
 		}

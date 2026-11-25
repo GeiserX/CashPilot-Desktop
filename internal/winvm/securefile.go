@@ -31,18 +31,36 @@ const (
 // renamed over path. A reader sees the old file or the new one, never half of
 // one, and never a moment with a looser access rule.
 func writeAtomic(path string, b []byte, a fileAccess) error {
-	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	artifactMu.Lock()
+	defer artifactMu.Unlock()
+	dir, target := filepath.Dir(path), filepath.Base(path)
+	j, err := openArtifactLog(dir, true)
 	if err != nil {
 		return err
 	}
-	tmp := f.Name()
-	done := false
+	defer j.file.Close()
+	if err := j.verify(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	rel := randomArtifactName("."+target+".", ".tmp")
+	if err := j.record(rel, ""); err != nil {
+		return err
+	}
+	tmp := filepath.Join(dir, rel)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	id, err := j.note(rel)
 	defer func() {
-		if !done {
-			f.Close()
-			os.Remove(tmp)
+		f.Close()
+		if id != "" {
+			_ = removeRecorded(dir, j.root, rel, []string{id})
 		}
 	}()
+	if err != nil {
+		return err
+	}
 	if err := protect(tmp, a); err != nil {
 		return fmt.Errorf("set the access rule on %s: %w", filepath.Base(path), err)
 	}
@@ -53,6 +71,14 @@ func writeAtomic(path string, b []byte, a fileAccess) error {
 		return err
 	}
 	if err := f.Close(); err != nil {
+		return err
+	}
+	// Record the ID under its destination before the rename. Either
+	// path can be verified if setup stops during the move.
+	if err := j.record(target, id); err != nil {
+		return err
+	}
+	if err := j.verify(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	// On Windows a reader that holds the file open can make the rename fail for
@@ -67,7 +93,6 @@ func writeAtomic(path string, b []byte, a fileAccess) error {
 	if err != nil {
 		return err
 	}
-	done = true
 	return nil
 }
 
@@ -107,37 +132,39 @@ func readCapped(path string, max int64, trusted bool) ([]byte, error) {
 	return b, nil
 }
 
-// OpenAppend opens path for appending, for the guard's log. A file it makes
-// gets the usersRead rule. A file already there must be a regular file owned by
-// SYSTEM, Administrators or this account; anything else (a file a standard user
-// made first, a link) is removed and made again, so no user can choose what the
-// SYSTEM guard's log says.
+// OpenAppend creates a recorded log or appends to a previously recorded one.
 func OpenAppend(path string) (*os.File, error) {
-	if fi, err := os.Lstat(path); err == nil {
-		if fi.Mode().IsRegular() {
-			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-			if err == nil {
-				if ownedByAdmin(f) == nil {
-					return f, nil
-				}
-				f.Close()
-			}
-		}
-		if err := os.Remove(path); err != nil {
-			return nil, err
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	artifactMu.Lock()
+	defer artifactMu.Unlock()
+	dir, rel := filepath.Dir(path), filepath.Base(path)
+	j, err := openArtifactLog(dir, true)
+	if err != nil {
+		return nil, err
+	}
+	defer j.file.Close()
+	err = j.verify(rel)
+	if err == nil {
+		return os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	if err := j.record(rel, ""); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, err
 	}
-	// A file that did not get its access rule goes again: left in place it
-	// would keep the rule it inherited, and the next call would accept it.
-	if err := protectFile(path, usersRead); err != nil {
+	id, err := j.note(rel)
+	if err == nil {
+		err = protectFile(path, usersRead)
+	}
+	if err != nil {
 		f.Close()
-		os.Remove(path)
+		if id != "" {
+			_ = removeRecorded(dir, j.root, rel, []string{id})
+		}
 		return nil, err
 	}
 	return f, nil

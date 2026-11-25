@@ -1,10 +1,13 @@
 package winvm
 
 import (
+	"bytes"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"strings"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // The two bootstrap scripts the admin stub runs (DESKTOP-VM §4, "the elevated
@@ -26,6 +29,8 @@ type Bootstrap struct {
 }
 
 func bootstrap(name string, b []byte) Bootstrap {
+	const marker = "$ErrorActionPreference = 'Stop'\n"
+	b = bytes.Replace(b, []byte(marker), []byte(marker+runtime.SecureVMFilesPS), 1)
 	s := sha256.Sum256(b)
 	return Bootstrap{Name: name, Text: b, SHA256: strings.ToUpper(hex.EncodeToString(s[:]))}
 }

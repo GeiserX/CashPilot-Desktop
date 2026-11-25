@@ -45,12 +45,12 @@ type Reader interface {
 // make on its own.
 type Guarder interface {
 	Reader
-	Disconnect(ctx context.Context, vmID string) error
+	Disconnect(ctx context.Context, vmID, owner string) error
 	// Connect matches both recorded IDs and both live owner tags.
 	Connect(ctx context.Context, vmID, switchID, owner string) error
-	Start(ctx context.Context, vmID string) error
-	AddDeny(ctx context.Context, vmID string, p []netip.Prefix) error
-	RemoveDeny(ctx context.Context, vmID string, p []netip.Prefix) error
+	Start(ctx context.Context, vmID, owner string) error
+	AddDeny(ctx context.Context, vmID, owner string, p []netip.Prefix) error
+	RemoveDeny(ctx context.Context, vmID, owner string, p []netip.Prefix) error
 }
 
 // Builder is what the elevated setup, Repair and Remove need. Every write is
@@ -75,12 +75,12 @@ type Builder interface {
 	// shape, one disconnected adapter with its static MAC and port guards
 	// (only the proof and the guard ever connect it), and the two ISOs as DVD
 	// drives, the Windows ISO first to boot.
-	CreateVM(ctx context.Context, p Plan, iso, answerISO string) (vmID, adapterID string, disk OwnedDisk, err error)
+	CreateVM(ctx context.Context, p Plan, iso, answerISO string) (vmID, adapterID string, disk OwnedDisk, dvds []OwnedDVD, err error)
 	// SetIntegration runs before the first Start-VM.
-	SetIntegration(ctx context.Context, vmID string, want map[string]bool) error
-	SetBindings(ctx context.Context, vnicIfIndex int, off []string) error
-	EnsureFirewall(ctx context.Context, n Names, vnicIfIndex int, owner string) error
-	SetHostNeighbor(ctx context.Context, vnicIfIndex int, ip netip.Addr, mac string) error
+	SetIntegration(ctx context.Context, vmID, owner string, want map[string]bool) error
+	SetBindings(ctx context.Context, vnicIfIndex int, switchID, owner string, off []string) error
+	EnsureFirewall(ctx context.Context, n Names, vnicIfIndex int, switchID, owner string) error
+	SetHostNeighbor(ctx context.Context, vnicIfIndex int, switchID, owner string, ip netip.Addr, mac string) error
 	SetEnhancedSession(ctx context.Context, on bool) (was bool, err error)
 	EnsureGuardian(ctx context.Context) (createdID string, err error)
 	// AddHyperVAdmin adds the account to Hyper-V Administrators (S-1-5-32-578)
@@ -90,9 +90,9 @@ type Builder interface {
 	WriteAnswerISO(ctx context.Context, path string, xml []byte) error
 	// BootKeys presses a key once a second for 10 seconds, for the Gen 2
 	// "press any key to boot from CD" prompt.
-	BootKeys(ctx context.Context, vmID string) error
-	// EjectDVDs removes every DVD drive of the VM.
-	EjectDVDs(ctx context.Context, vmID string) error
+	BootKeys(ctx context.Context, vmID, owner string) error
+	// EjectDVDs removes the attachments setup recorded.
+	EjectDVDs(ctx context.Context, vmID, owner string, dvds []OwnedDVD) error
 	// RegisterGuardTask stops the guard task if it runs, then registers it with
 	// the owner token in its description. It triggers at startup, on resume
 	// (Power-Troubleshooter 1) and every 5 minutes from ProofLockTTL on, with
@@ -101,7 +101,7 @@ type Builder interface {
 	StartGuardTask(ctx context.Context, n Names, owner string) error
 	// Guest runs one fixed script over PowerShell Direct with one JSON
 	// argument, and decodes its answer, capped at 64 KB, into out.
-	Guest(ctx context.Context, vmID string, cred Cred, s GuestScript, arg, out any) error
+	Guest(ctx context.Context, vmID, owner string, cred Cred, s GuestScript, arg, out any) error
 
 	// The removal side. Each one is a no-op when the object is already gone.
 	UnregisterGuardTask(ctx context.Context, n Names, owner string) error

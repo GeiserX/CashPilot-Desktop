@@ -271,69 +271,41 @@ func TestRemoveFindsRenamedObjects(t *testing.T) {
 
 // TestRemoveDeletesALeftoverProofFolder: a proof killed in the middle of a
 // capture leaves DataDir\proof\pktmon-N; Remove VM still finishes.
-func TestRemoveDeletesALeftoverProofFolder(t *testing.T) {
+func TestRemoveKeepsUnverifiedFilesAndReplacements(t *testing.T) {
 	f := hvfake.New()
 	before := f.Objects()
 	dir := build(t, f)
-	left := filepath.Join(dir, "proof", "pktmon-1")
-	if err := os.MkdirAll(left, 0o700); err != nil {
+	status := filepath.Join(dir, winvm.StatusFile)
+	if err := os.Rename(status, status+".previous"); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(left, "capture.etl"), []byte("etl"), 0o600); err != nil {
-		t.Fatal(err)
+	files := []string{
+		".status.json.123.tmp",
+		filepath.Join("proof", "pktmon-123", "capture.etl"),
+		filepath.Join("answer.iso.stage", "autounattend.xml"),
+		filepath.Join("guard", "CashPilot-guard.exe"),
+		winvm.StatusFile,
 	}
-	remove(t, f, dir)
-	diffObjects(t, before, f.Objects())
-	if _, err := os.Stat(filepath.Join(dir, "proof")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the proof folder is still there: %v", err)
-	}
-}
-
-// TestRemoveDeletesSetupLeftovers: a setup killed while it wrote the answer
-// ISO, a file, or ran the exe leaves the ISO's staging folder and temp image,
-// writeAtomic's temp files and setup.ps1's params copy. Remove VM deletes
-// them. A file setup never makes stays and is listed, so DataDir is never
-// kept without a word.
-func TestRemoveDeletesSetupLeftovers(t *testing.T) {
-	f := hvfake.New()
-	dir := build(t, f)
-	write := func(rel string) {
-		t.Helper()
-		p := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+	for _, rel := range files {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte("independent file"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	made := []string{
-		filepath.Join("answer.iso.stage", "autounattend.xml"), "answer.iso.tmp",
-		"." + winvm.StateFile + ".123456.tmp", "." + winvm.PlanFile + ".42.tmp",
-		filepath.Join("guard", "setup-params.json"),
-	}
-	for _, rel := range made {
-		write(rel)
-	}
-	write(filepath.Join("guard", "CashPilot-guard.exe")) // remove.ps1 deletes it
-	write(filepath.Join("guard", "."+winvm.StateFile+".7.tmp"))
-	write(filepath.Join("proof", "pktmon-1", "private.txt"))
-	write("notes.txt")
 	res := remove(t, f, dir)
-	for _, rel := range append(made, "answer.iso.stage") {
-		if _, err := os.Lstat(filepath.Join(dir, rel)); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("%s is still there after Remove (%v)", rel, err)
+	diffObjects(t, before, f.Objects())
+	for _, rel := range files {
+		path := filepath.Join(dir, rel)
+		b, err := os.ReadFile(path)
+		if string(b) != "independent file" || err != nil {
+			t.Errorf("independent file %s changed: %q, %v", rel, b, err)
 		}
-	}
-	left := strings.Join(res.Left, "\n")
-	if !strings.Contains(left, "notes.txt") || !strings.Contains(left, "private.txt") || !strings.Contains(left, "."+winvm.StateFile+".7.tmp") {
-		t.Errorf("Remove did not list the file it kept: %v", res.Left)
-	}
-	if strings.Contains(left, "CashPilot-guard.exe") {
-		t.Errorf("Remove listed the exe copy remove.ps1 deletes: %v", res.Left)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err != nil {
-		t.Errorf("Remove deleted a file setup never makes: %v", err)
+		if !strings.Contains(strings.Join(res.Left, "\n"), path) {
+			t.Errorf("removal did not report %s", rel)
+		}
 	}
 }
 
@@ -424,5 +396,33 @@ func TestRemoveKeepsAnUnrecordedDiskUnderTheVHDXRoot(t *testing.T) {
 	res := remove(t, f, dir)
 	if !strings.Contains(strings.Join(res.Left, "\n"), path) {
 		t.Fatalf("Remove did not list the foreign disk it should keep: %+v", res)
+	}
+}
+
+func TestRemoveRetryPreservesIndependentAdminGrant(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	sid := setupParams().UserSID
+	f.FailNext("RemoveFirewall", errors.New("interrupted removal"))
+	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir}, winvm.ProductNames()); err == nil {
+		t.Fatal("expected an incomplete removal")
+	}
+	if added, err := f.AddHyperVAdmin(context.Background(), sid); err != nil || !added {
+		t.Fatalf("could not restore independent grant: %v, %v", added, err)
+	}
+	remove(t, f, dir)
+	if !strings.Contains(strings.Join(f.Objects(), "\n"), sid) {
+		t.Fatal("retry revoked the independent grant")
+	}
+}
+
+func TestRemoveLeavesEnhancedSessionEnabledAfterBuild(t *testing.T) {
+	f := hvfake.New()
+	f.SetEnhanced(false)
+	dir := build(t, f)
+	f.SetEnhanced(true)
+	remove(t, f, dir)
+	if !strings.Contains(strings.Join(f.Objects(), "\n"), "enhancedSession=true") {
+		t.Fatal("removal turned off Enhanced Session without a setup change")
 	}
 }

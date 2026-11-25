@@ -23,15 +23,15 @@ func TestEmbeddedScriptPins(t *testing.T) {
 		want string
 	}{
 		"autounattend.tpl.xml": {[]byte(answerTemplate), "7313f82b46a37e34169b0cab8fec2f39f5e564c42de024e9822024e235de5475"},
-		"setup.ps1":            {setupPS1, "7a4cf116b3cdc1e5cc62268924befbd030bdeb09cedbcfd7635d1c2fb8fcb1a4"},
-		"remove.ps1":           {removePS1, "8adbdf5550197b5bfaee711d71354cd94501c2fbb2f332414b0fd7033d1920f3"},
+		"setup.ps1":            {setupPS1, "a6e54415bad424eb6c02e62d7854e4e762ead5a13310b84e2dc5571382352960"},
+		"remove.ps1":           {removePS1, "e71a880a409fdf270b62b2d8ef179015a601457212413a25e8872ebb5158f25f"},
 	} {
 		s := sha256.Sum256(c.b)
 		if got := hex.EncodeToString(s[:]); got != c.want {
 			t.Errorf("%s changed: sha256 %s, pinned %s", name, got, c.want)
 		}
 	}
-	if b := SetupBootstrap(); b.SHA256 != "7A4CF116B3CDC1E5CC62268924BEFBD030BDEB09CEDBCFD7635D1C2FB8FCB1A4" || b.Name != "setup.ps1" {
+	if b := SetupBootstrap(); b.SHA256 != "6A54AFE44B26D1F44A0F31C1696513C19B2B990FC1D40AD2872ED4BDB3B2DB7C" || b.Name != "setup.ps1" {
 		t.Errorf("SetupBootstrap = %s %s", b.Name, b.SHA256)
 	}
 }
@@ -63,6 +63,29 @@ function Start-Process {
   if ($Mode -eq 'rejected-params') { return [pscustomobject]@{ ExitCode = 2 } }
   throw 'injected launch failure'
 }
+# Simulate file identities for these cross-platform task and rollback tests.
+$known = @{}
+$guardPath = Join-Path $Dir 'guard' 'CashPilot-guard.exe'
+$known[$guardPath] = (Get-FileHash -LiteralPath $guardPath).Hash
+function Open-CPDFileJournal($root) { return $root }
+function Write-CPDFileRecord($root, $rel, $id) {
+  $known[(Join-Path $root $rel)] = $id
+}
+function Get-CPDFileID($root, $rel) {
+  $p = Join-Path $root $rel
+  if (Test-Path -LiteralPath $p) { return (Get-FileHash -LiteralPath $p).Hash }
+}
+function Copy-CPDFile($root, $rel, $src) {
+  $p = Join-Path $root $rel
+  Copy-Item -LiteralPath $src -Destination $p
+  return (Get-FileHash -LiteralPath $p).Hash
+}
+function Remove-CPDFile($root, $rel, $id) {
+  $p = Join-Path $root $rel
+  if ($id -and (Test-Path -LiteralPath $p) -and (Get-FileHash -LiteralPath $p).Hash -eq $id) {
+    Remove-Item -LiteralPath $p -Force
+  }
+}
 $exe = Join-Path $Dir 'new.exe'
 $params = Join-Path $Dir 'original.json'
 $a = @{
@@ -86,7 +109,7 @@ exit $LASTEXITCODE
 		touched string
 	}{
 		{"setup foreign task", SetupBootstrap(), "foreign", 1, ""},
-		{"remove foreign task", RemoveBootstrap(), "foreign", 1, ""},
+		{"remove bootstrap leaves task checks to Go", bootstrap("remove.ps1", removePS1), "foreign", 1, ""},
 		{"setup bad parameters", SetupBootstrap(), "bad-params", 13, ""},
 		{"remove bad executable", RemoveBootstrap(), "bad-exe", 13, ""},
 		{"setup failure after replacement", SetupBootstrap(), "launch-failure", 1, "stop\nstart"},
@@ -100,7 +123,7 @@ exit $LASTEXITCODE
 			}
 			plan, err := json.Marshal(map[string]any{
 				"names": map[string]string{"dataDir": dir, "guardTask": ProductNames().GuardTask},
-				"owner": tOwner,
+				"owner": tOwner, "guardTaskId": ProductNames().GuardTask,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -108,7 +131,7 @@ exit $LASTEXITCODE
 			boot := filepath.Join(dir, tc.boot.Name)
 			oldExe := filepath.Join(guard, "CashPilot-guard.exe")
 			for path, data := range map[string][]byte{
-				boot: tc.boot.Text, oldExe: []byte("working copy"),
+				boot: map[string][]byte{"setup.ps1": setupPS1, "remove.ps1": removePS1}[tc.boot.Name], oldExe: []byte("working copy"),
 				filepath.Join(dir, "new.exe"):       []byte("replacement"),
 				filepath.Join(dir, "original.json"): []byte("{}"),
 				filepath.Join(dir, PlanFile):        plan,

@@ -154,14 +154,15 @@ func GuestScripts() []GuestScript { return guestScripts }
 // psDirectProbe is the product's GuestProbe: each probe is one fixed guest
 // script over PowerShell Direct as cpadmin.
 type psDirectProbe struct {
-	hv   Builder
-	vmID string
-	cred Cred
+	hv    Builder
+	vmID  string
+	owner string
+	cred  Cred
 }
 
 // NewGuestProbe is the product GuestProbe for one VM.
-func NewGuestProbe(hv Builder, vmID string, cred Cred) GuestProbe {
-	return psDirectProbe{hv: hv, vmID: vmID, cred: cred}
+func NewGuestProbe(hv Builder, vmID, owner string, cred Cred) GuestProbe {
+	return psDirectProbe{hv: hv, vmID: vmID, owner: owner, cred: cred}
 }
 
 var tokenRe = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
@@ -185,7 +186,7 @@ func (g psDirectProbe) TCP(ctx context.Context, to netip.AddrPort, token string)
 		Result string `json:"result"`
 	}
 	arg := map[string]any{"ip": to.Addr().String(), "port": to.Port(), "token": token}
-	if err := g.hv.Guest(ctx, g.vmID, g.cred, scriptGuestTCP, arg, &out); err != nil {
+	if err := g.hv.Guest(ctx, g.vmID, g.owner, g.cred, scriptGuestTCP, arg, &out); err != nil {
 		return false, err
 	}
 	return out.Sent, nil
@@ -202,7 +203,7 @@ func (g psDirectProbe) UDP(ctx context.Context, to netip.AddrPort, token string,
 		Sent int `json:"sent"`
 	}
 	arg := map[string]any{"ip": to.Addr().String(), "port": to.Port(), "token": token, "n": n}
-	return g.hv.Guest(ctx, g.vmID, g.cred, scriptGuestUDP, arg, &out)
+	return g.hv.Guest(ctx, g.vmID, g.owner, g.cred, scriptGuestUDP, arg, &out)
 }
 
 var dnsNameRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,62}\.)*[A-Za-z0-9-]{1,63}\.?$`)
@@ -214,7 +215,7 @@ func (g psDirectProbe) DNS(ctx context.Context, server netip.Addr, name string) 
 	var out struct {
 		Answers []string `json:"answers"`
 	}
-	if err := g.hv.Guest(ctx, g.vmID, g.cred, scriptGuestDNS, map[string]any{"server": server.String(), "name": name}, &out); err != nil {
+	if err := g.hv.Guest(ctx, g.vmID, g.owner, g.cred, scriptGuestDNS, map[string]any{"server": server.String(), "name": name}, &out); err != nil {
 		return nil, err
 	}
 	var as []netip.Addr
@@ -237,7 +238,7 @@ func (g psDirectProbe) Neighbor(ctx context.Context, ip netip.Addr, mac string) 
 	var out struct {
 		OK bool `json:"ok"`
 	}
-	return g.hv.Guest(ctx, g.vmID, g.cred, scriptGuestNeighbor, map[string]any{"ip": ip.String(), "mac": macDash(m)}, &out)
+	return g.hv.Guest(ctx, g.vmID, g.owner, g.cred, scriptGuestNeighbor, map[string]any{"ip": ip.String(), "mac": macDash(m)}, &out)
 }
 
 func (g psDirectProbe) HVSock(ctx context.Context, service, token string) (bool, error) {
@@ -248,7 +249,7 @@ func (g psDirectProbe) HVSock(ctx context.Context, service, token string) (bool,
 		Connected bool   `json:"connected"`
 		Result    string `json:"result"`
 	}
-	if err := g.hv.Guest(ctx, g.vmID, g.cred, scriptGuestHVSock, map[string]any{"service": service, "token": token}, &out); err != nil {
+	if err := g.hv.Guest(ctx, g.vmID, g.owner, g.cred, scriptGuestHVSock, map[string]any{"service": service, "token": token}, &out); err != nil {
 		return false, err
 	}
 	switch {
@@ -265,7 +266,7 @@ func (g psDirectProbe) Egress(ctx context.Context) (netip.Addr, error) {
 	var out struct {
 		IP string `json:"ip"`
 	}
-	if err := g.hv.Guest(ctx, g.vmID, g.cred, scriptGuestEgress, map[string]any{}, &out); err != nil {
+	if err := g.hv.Guest(ctx, g.vmID, g.owner, g.cred, scriptGuestEgress, map[string]any{}, &out); err != nil {
 		return netip.Addr{}, err
 	}
 	return netip.ParseAddr(out.IP)

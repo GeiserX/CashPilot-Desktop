@@ -267,6 +267,11 @@ func Build(ctx context.Context, d BuildDeps, sp SetupParams) (res BuildResult, e
 	if err != nil {
 		return BuildResult{}, err
 	}
+	unlock, err := lockMutation(ctx, n)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	defer unlock()
 	b := &builder{BuildDeps: d, sp: sp, n: n, opts: opts, minRAM: minRAM}
 	// setup.ps1 stopped the guard task before this ran. A build that fails
 	// before proveAndBoot runs the guard's boot routine and starts the task
@@ -319,14 +324,18 @@ func Build(ctx context.Context, d BuildDeps, sp SetupParams) (res BuildResult, e
 
 // save writes the journal.
 func (b *builder) save() error {
-	raw, err := b.p.Marshal()
+	return savePlanFile(b.Dir, b.p)
+}
+
+func savePlanFile(dir string, p Plan) error {
+	raw, err := p.Marshal()
 	if err != nil {
 		return err
 	}
 	if _, err := LoadPlan(raw); err != nil {
 		return fmt.Errorf("the plan would not load again: %w", err)
 	}
-	return writeAtomic(filepath.Join(b.Dir, PlanFile), raw, adminOnly)
+	return writeAtomic(filepath.Join(dir, PlanFile), raw, adminOnly)
 }
 
 // loadPrev reads the journal of an earlier run, if any.
@@ -368,7 +377,7 @@ func (b *builder) journal(ctx context.Context) error {
 	if err := b.checkOwnership(); err != nil {
 		return err
 	}
-	if prev != nil && b.inv.Task != nil && b.inv.Task.Owner == prev.Owner {
+	if prev != nil && b.inv.Task != nil && ownedBy(*b.inv.Task, prev.GuardTaskID, prev.Owner) {
 		b.guardOwner = prev.Owner
 	}
 	// A Repair changes the fence, so the VM goes off the network before the
@@ -376,15 +385,13 @@ func (b *builder) journal(ctx context.Context) error {
 	// routine finds an exact match.
 	if prev != nil {
 		if id := adopt(b.inv.VMs, prev.VMID, prev.Owner); id != "" {
-			if err := b.HV.Disconnect(ctx, id); err != nil {
+			if err := b.HV.Disconnect(ctx, id, prev.Owner); err != nil {
 				return fmt.Errorf("could not take the VM off the network before the Repair: %w", err)
 			}
 		}
 	}
-	// A proof killed in the middle can leave a canary rule, its hv_sock test
-	// key and a pktmon session. Clear them, and list the host again when
-	// something went, so the key never enters the GCS baseline and the next
-	// capture can start.
+	// Refuse to baseline a fence while earlier proof artifacts are left
+	// without a verifiable identity.
 	owner := ""
 	if prev != nil {
 		owner = prev.Owner
@@ -396,19 +403,12 @@ func (b *builder) journal(ctx context.Context) error {
 	for _, c := range proofCleanup.Cleared {
 		b.logf("setup: removed %s, left by an earlier proof", c)
 	}
-	for _, c := range proofCleanup.Left {
-		b.logf("setup left %s", c)
+	if len(proofCleanup.Left) > 0 {
+		return fmt.Errorf("verify the earlier proof artifacts before running Repair: %s", strings.Join(proofCleanup.Left, ", "))
 	}
 	if len(proofCleanup.Cleared) > 0 {
 		if b.inv, err = b.HV.Inventory(ctx, b.n, known, b.sp.UserSID); err != nil {
 			return err
-		}
-	}
-	if prev != nil && prev.Owner != "" && !proofCleanup.UnverifiedCapture {
-		var cleanupErr error
-		cleanupData(b.Dir, proofDir, prev.Owner, false, func(_ string, err error) { cleanupErr = errors.Join(cleanupErr, err) })
-		if cleanupErr != nil {
-			return cleanupErr
 		}
 	}
 	o := b.opts
@@ -444,9 +444,7 @@ func (b *builder) journal(ctx context.Context) error {
 	if p.Owner == "" {
 		p.Owner = hex.EncodeToString(b.random(16))
 	}
-	// Adopt what an earlier run made but did not get to record: it carries our
-	// token. An ID recorded for an object that is gone is dropped, so the step
-	// makes it again.
+	// Keep the identity only when the live object still matches the journal.
 	p.VMID = adopt(b.inv.VMs, p.VMID, p.Owner)
 	if p.VMID == "" {
 		p.AdapterID = ""
@@ -474,7 +472,7 @@ func adopt(objs []OwnedObject, id, owner string) string {
 }
 
 func ownedBy(o OwnedObject, id, owner string) bool {
-	return owner != "" && o.Owner == owner && (id == "" || strings.EqualFold(o.ID, id))
+	return id != "" && owner != "" && o.Owner == owner && strings.EqualFold(o.ID, id)
 }
 
 // checkOwnership refuses any object with our names that the earlier plan does
@@ -516,11 +514,11 @@ func (b *builder) checkOwnership() error {
 		}
 	}
 	for _, r := range b.inv.Firewall {
-		if owner == "" || r.Owner != owner {
+		if owner == "" || r.Owner != owner || r.ID != blockFirewallID(b.n, owner) {
 			bad = append(bad, "the firewall rule "+r.ID)
 		}
 	}
-	if t := b.inv.Task; t != nil && (owner == "" || t.Owner != owner) {
+	if t := b.inv.Task; t != nil && (b.prev == nil || !ownedBy(*t, b.prev.GuardTaskID, owner)) {
 		bad = append(bad, "the scheduled task "+t.ID)
 	}
 	if len(bad) > 0 {
@@ -606,15 +604,15 @@ func (b *builder) ensureNAT(ctx context.Context) error {
 }
 
 func (b *builder) bindings(ctx context.Context) error {
-	return b.HV.SetBindings(ctx, b.vnicIf, b.p.BindingsOff)
+	return b.HV.SetBindings(ctx, b.vnicIf, b.p.SwitchID, b.p.Owner, b.p.BindingsOff)
 }
 
 func (b *builder) firewall(ctx context.Context) error {
-	return b.HV.EnsureFirewall(ctx, b.n, b.vnicIf, b.p.Owner)
+	return b.HV.EnsureFirewall(ctx, b.n, b.vnicIf, b.p.SwitchID, b.p.Owner)
 }
 
 func (b *builder) neighbor(ctx context.Context) error {
-	return b.HV.SetHostNeighbor(ctx, b.vnicIf, b.p.GuestIP, b.p.GuestMAC)
+	return b.HV.SetHostNeighbor(ctx, b.vnicIf, b.p.SwitchID, b.p.Owner, b.p.GuestIP, b.p.GuestMAC)
 }
 
 // guardian journals the certificate fingerprint from a confirmed creation.
@@ -693,22 +691,37 @@ func (b *builder) vm(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := b.HV.WriteAnswerISO(ctx, b.answerPath(), xml); err != nil {
+	journal, err := openArtifactLog(b.Dir, true)
+	if err != nil {
 		return err
 	}
-	vmID, adapterID, disk, err := b.HV.CreateVM(ctx, b.p, b.sp.ISO, b.answerPath())
+	defer journal.file.Close()
+	if err := journal.verify(answerISOFile); errors.Is(err, fs.ErrNotExist) {
+		if err := journal.record(answerISOFile, ""); err != nil {
+			return err
+		}
+		if err := b.HV.WriteAnswerISO(ctx, b.answerPath(), xml); err != nil {
+			return err
+		}
+		if _, err := journal.note(answerISOFile); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	vmID, adapterID, disk, dvds, err := b.HV.CreateVM(ctx, b.p, b.sp.ISO, b.answerPath())
 	if err != nil {
 		return err
 	}
 	if !guidRe.MatchString(vmID) || !guidRe.MatchString(adapterID) {
 		return fmt.Errorf("the VM came back without a VM or adapter ID (%q, %q)", vmID, adapterID)
 	}
-	b.p.VMID, b.p.AdapterID, b.p.Disk = vmID, strings.ToUpper(adapterID), &disk
+	b.p.VMID, b.p.AdapterID, b.p.Disk, b.p.DVDs = vmID, strings.ToUpper(adapterID), &disk, dvds
 	return b.save()
 }
 
 func (b *builder) integration(ctx context.Context) error {
-	return b.HV.SetIntegration(ctx, b.p.VMID, b.p.Integration)
+	return b.HV.SetIntegration(ctx, b.p.VMID, b.p.Owner, b.p.Integration)
 }
 
 // dynamic is the Denies of this host now: its addresses, its physical
@@ -760,7 +773,7 @@ func (b *builder) acls(ctx context.Context) error {
 	if len(extra) > 0 {
 		slices.SortFunc(extra, func(x, y netip.Prefix) int { return x.Addr().Compare(y.Addr()) })
 		extra = slices.Compact(extra)
-		if err := b.HV.RemoveDeny(ctx, b.p.VMID, extra); err != nil {
+		if err := b.HV.RemoveDeny(ctx, b.p.VMID, b.p.Owner, extra); err != nil {
 			return err
 		}
 	}
@@ -771,26 +784,24 @@ func (b *builder) acls(ctx context.Context) error {
 	}
 	sortPrefixes(add)
 	if len(add) > 0 {
-		return b.HV.AddDeny(ctx, b.p.VMID, add)
+		return b.HV.AddDeny(ctx, b.p.VMID, b.p.Owner, add)
 	}
 	return nil
 }
 
-// enhancedSession turns Enhanced Session off under ESOff, after recording the
-// host's value once (read before any change, so a stop in between never
-// records the value setup itself wrote). Under ESKeep it is never touched.
+// enhancedSession records a change only when the host step confirms it turned
+// the setting off.
 func (b *builder) enhancedSession(ctx context.Context) error {
 	if b.p.EnhancedSession != ESOff {
 		return nil
 	}
-	if b.p.EnhancedSessionOriginal == nil {
-		b.p.RecordEnhancedSession(b.inv.Enhanced)
-		if err := b.save(); err != nil {
-			return err
-		}
+	was, err := b.HV.SetEnhancedSession(ctx, false)
+	if err != nil || !was {
+		return err
 	}
-	_, err := b.HV.SetEnhancedSession(ctx, false)
-	return err
+	b.p.EnhancedSessionChanged = true
+	b.p.EnhancedSessionOriginal = &was
+	return b.save()
 }
 
 // hyperVAdmin journals intent before the host call and confirms a grant
@@ -809,6 +820,9 @@ func (b *builder) hyperVAdmin(ctx context.Context) error {
 	}
 	sid := b.sp.UserSID
 	isSID := func(s string) bool { return strings.EqualFold(s, sid) }
+	if slices.ContainsFunc(b.p.RevokedAdminSIDs, isSID) {
+		return errors.New("a removal already consumed this account's Hyper-V Administrators grant")
+	}
 	b.p.AddedAdminSIDs = slices.DeleteFunc(b.p.AddedAdminSIDs, isSID)
 	if !slices.ContainsFunc(b.p.PendingAdminSIDs, isSID) {
 		b.p.PendingAdminSIDs = append(b.p.PendingAdminSIDs, sid)
@@ -841,11 +855,11 @@ func (b *builder) install(ctx context.Context) error {
 		return err
 	}
 	if live.VMState != "Running" {
-		if err := b.HV.Start(ctx, b.p.VMID); err != nil {
+		if err := b.HV.Start(ctx, b.p.VMID, b.p.Owner); err != nil {
 			return err
 		}
 		if st != nil && live.DVDs > 0 {
-			if err := b.HV.BootKeys(ctx, b.p.VMID); err != nil {
+			if err := b.HV.BootKeys(ctx, b.p.VMID, b.p.Owner); err != nil {
 				return err
 			}
 		}
@@ -865,7 +879,7 @@ func (b *builder) install(ctx context.Context) error {
 			var out struct {
 				OK bool `json:"ok"`
 			}
-			if last = b.HV.Guest(ctx, b.p.VMID, c, scriptGuestPing, map[string]any{}, &out); last == nil && out.OK {
+			if last = b.HV.Guest(ctx, b.p.VMID, b.p.Owner, c, scriptGuestPing, map[string]any{}, &out); last == nil && out.OK {
 				return nil
 			}
 		}
@@ -898,9 +912,9 @@ func (b *builder) firstSession(ctx context.Context) error {
 		}
 		// The temporary password works until the session ran; after a stop
 		// in the middle, the real one does.
-		err := b.HV.Guest(ctx, b.p.VMID, Cred{User: guestUser, Password: st.Admin}, scriptFirstSession, arg, &out)
+		err := b.HV.Guest(ctx, b.p.VMID, b.p.Owner, Cred{User: guestUser, Password: st.Admin}, scriptFirstSession, arg, &out)
 		if err != nil {
-			err = b.HV.Guest(ctx, b.p.VMID, Cred{User: guestUser, Password: b.sp.AdminPassword}, scriptFirstSession, arg, &out)
+			err = b.HV.Guest(ctx, b.p.VMID, b.p.Owner, Cred{User: guestUser, Password: b.sp.AdminPassword}, scriptFirstSession, arg, &out)
 		}
 		if err != nil {
 			return err
@@ -914,12 +928,12 @@ func (b *builder) firstSession(ctx context.Context) error {
 		return err
 	}
 	if live.DVDs > 0 {
-		if err := b.HV.EjectDVDs(ctx, b.p.VMID); err != nil {
+		if err := b.HV.EjectDVDs(ctx, b.p.VMID, b.p.Owner, b.p.DVDs); err != nil {
 			return err
 		}
 	}
 	for _, f := range []string{b.answerPath(), b.installPath()} {
-		if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := removeJournaledFile(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -958,6 +972,10 @@ func (b *builder) guardTask(ctx context.Context) error {
 	if err := b.HV.RegisterGuardTask(ctx, b.n, b.Exe, b.p.Owner); err != nil {
 		return err
 	}
+	b.p.GuardTaskID = b.n.GuardTask
+	if err := b.save(); err != nil {
+		return err
+	}
 	b.guardOwner = b.p.Owner
 	return nil
 }
@@ -989,7 +1007,7 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	}
 	g := b.Guest
 	if g == nil {
-		g = NewGuestProbe(b.HV, b.p.VMID, Cred{User: guestUser, Password: b.sp.AdminPassword})
+		g = NewGuestProbe(b.HV, b.p.VMID, b.p.Owner, Cred{User: guestUser, Password: b.sp.AdminPassword})
 	}
 	// Every canary rule and hv_sock test key the proof makes carries the
 	// owner token, so ClearProof can find this install's and only those.

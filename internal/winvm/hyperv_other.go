@@ -39,11 +39,13 @@ func (unsupported) DropCounters(context.Context, string, string) (DropSample, er
 }
 func (unsupported) Usage(context.Context, string) (Usage, error) { return Usage{}, ErrUnsupported }
 
-func (unsupported) Disconnect(context.Context, string) error              { return ErrUnsupported }
+func (unsupported) Disconnect(context.Context, string, string) error      { return ErrUnsupported }
 func (unsupported) Connect(context.Context, string, string, string) error { return ErrUnsupported }
-func (unsupported) Start(context.Context, string) error                   { return ErrUnsupported }
-func (unsupported) AddDeny(context.Context, string, []netip.Prefix) error { return ErrUnsupported }
-func (unsupported) RemoveDeny(context.Context, string, []netip.Prefix) error {
+func (unsupported) Start(context.Context, string, string) error           { return ErrUnsupported }
+func (unsupported) AddDeny(context.Context, string, string, []netip.Prefix) error {
+	return ErrUnsupported
+}
+func (unsupported) RemoveDeny(context.Context, string, string, []netip.Prefix) error {
 	return ErrUnsupported
 }
 
@@ -59,15 +61,19 @@ func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, st
 func (unsupported) EnsureNAT(context.Context, Names, netip.Prefix, string) (string, error) {
 	return "", ErrUnsupported
 }
-func (unsupported) CreateVM(context.Context, Plan, string, string) (string, string, OwnedDisk, error) {
-	return "", "", OwnedDisk{}, ErrUnsupported
+func (unsupported) CreateVM(context.Context, Plan, string, string) (string, string, OwnedDisk, []OwnedDVD, error) {
+	return "", "", OwnedDisk{}, nil, ErrUnsupported
 }
-func (unsupported) SetIntegration(context.Context, string, map[string]bool) error {
+func (unsupported) SetIntegration(context.Context, string, string, map[string]bool) error {
 	return ErrUnsupported
 }
-func (unsupported) SetBindings(context.Context, int, []string) error         { return ErrUnsupported }
-func (unsupported) EnsureFirewall(context.Context, Names, int, string) error { return ErrUnsupported }
-func (unsupported) SetHostNeighbor(context.Context, int, netip.Addr, string) error {
+func (unsupported) SetBindings(context.Context, int, string, string, []string) error {
+	return ErrUnsupported
+}
+func (unsupported) EnsureFirewall(context.Context, Names, int, string, string) error {
+	return ErrUnsupported
+}
+func (unsupported) SetHostNeighbor(context.Context, int, string, string, netip.Addr, string) error {
 	return ErrUnsupported
 }
 func (unsupported) SetEnhancedSession(context.Context, bool) (bool, error) {
@@ -78,13 +84,15 @@ func (unsupported) AddHyperVAdmin(context.Context, string) (bool, error) {
 	return false, ErrUnsupported
 }
 func (unsupported) WriteAnswerISO(context.Context, string, []byte) error { return ErrUnsupported }
-func (unsupported) BootKeys(context.Context, string) error               { return ErrUnsupported }
-func (unsupported) EjectDVDs(context.Context, string) error              { return ErrUnsupported }
+func (unsupported) BootKeys(context.Context, string, string) error       { return ErrUnsupported }
+func (unsupported) EjectDVDs(context.Context, string, string, []OwnedDVD) error {
+	return ErrUnsupported
+}
 func (unsupported) RegisterGuardTask(context.Context, Names, string, string) error {
 	return ErrUnsupported
 }
 func (unsupported) StartGuardTask(context.Context, Names, string) error { return ErrUnsupported }
-func (unsupported) Guest(context.Context, string, Cred, GuestScript, any, any) error {
+func (unsupported) Guest(context.Context, string, string, Cred, GuestScript, any, any) error {
 	return ErrUnsupported
 }
 func (unsupported) UnregisterGuardTask(context.Context, Names, string) error { return ErrUnsupported }

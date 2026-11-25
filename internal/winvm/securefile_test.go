@@ -9,7 +9,7 @@ import (
 )
 
 // OpenAppend appends to a log it made, and never writes through a link that
-// someone put in the log's place: the link goes and a new file is made.
+// someone put in the log's place.
 func TestOpenAppend(t *testing.T) {
 	dir := t.TempDir()
 	log := filepath.Join(dir, "guard.log")
@@ -33,16 +33,15 @@ func TestOpenAppend(t *testing.T) {
 	if err := os.Symlink(victim, log); err != nil {
 		t.Skipf("no symlinks here: %v", err)
 	}
-	write("y")
+	if f, err := OpenAppend(log); err == nil {
+		f.Close()
+		t.Fatal("OpenAppend accepted a replacement link")
+	}
 	if b, _ := os.ReadFile(victim); string(b) != "x" {
 		t.Fatalf("the log wrote through the link: victim %q", b)
 	}
-	fi, err := os.Lstat(log)
-	if err != nil || !fi.Mode().IsRegular() {
-		t.Fatalf("guard.log is not a new regular file: %v %v", fi, err)
-	}
-	if b, _ := os.ReadFile(log); string(b) != "y" {
-		t.Fatalf("guard.log %q, want y", b)
+	if fi, err := os.Lstat(log); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the independent link changed: %v %v", fi, err)
 	}
 }
 

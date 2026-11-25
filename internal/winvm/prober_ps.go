@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -40,24 +40,24 @@ func ProofElementName(n Names, owner string) string {
 
 // scriptSetL3 turns only this install's tagged rule on or off.
 const scriptSetL3 = buildPrelude + `$desc = 'CashPilot Secure VM. cashpilot-owner=' + $in.owner
-$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { $_.Description -ceq $desc })
+$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq $in.id -and $_.Description -ceq $desc })
 if ($rs.Count -ne 1) { throw 'The owned firewall rule was not found exactly once.' }
 $rs | Set-NetFirewallRule -Enabled ($(if ($in.on) { 'True' } else { 'False' }))
 Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptSetBinding binds or unbinds one component on the host vNIC.
-const scriptSetBinding = buildPrelude + `$na = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.ifIndex -eq [int]$in.ifIndex })
-if ($na.Count -ne 1) { throw 'The host vNIC was not found.' }
-if ($in.on) { Enable-NetAdapterBinding -Name $na[0].Name -ComponentID $in.component -IncludeHidden -AllBindings } else { Disable-NetAdapterBinding -Name $na[0].Name -ComponentID $in.component -IncludeHidden -AllBindings }
+const scriptSetBinding = buildPrelude + `$b = @(Get-HostBinding $in.component)
+if ($b.Count -ne 1) { throw 'The host vNIC binding was not found.' }
+$null = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+if ($in.on) { Enable-NetAdapterBinding -InputObject $b[0] } else { Disable-NetAdapterBinding -InputObject $b[0] }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptAllow adds or removes one Allow Both row on the VM's one adapter, then
 // lists the Allow rows.
-const scriptAllow = buildPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
+const scriptAllow = buildPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+$a = @(Get-VMNetworkAdapter -VM $vm)
 if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
 $r = ([string]$in.remote) -replace '/(32|128)$', ''
 if ($in.add) { Add-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] -RemoteIPAddress $r -Direction Both -Action Allow }
@@ -72,13 +72,19 @@ Write-Doc ([ordered]@{ addrs = @($ll) })
 
 // scriptCanaryRule adds or removes the inbound Allow for one canary port, for
 // this program and the guest's address only.
-const scriptCanaryRule = buildPrelude + `$name = $in.group + '-' + [string]$in.port
+const scriptCanaryRule = buildPrelude + `$name = $in.id
 $matches = @(Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue)
 $owned = @($matches | Where-Object { $_.Group -eq $in.group -and $_.Description -ceq $in.desc })
-if ($in.add -and $matches.Count -ne $owned.Count) { throw 'A canary rule with this name is foreign.' }
-$owned | Remove-NetFirewallRule
+if ($in.add -and $matches.Count -ne 0) { throw 'A canary rule with this identity already exists.' }
+if (-not $in.add -and $owned.Count -eq 1) { Remove-NetFirewallRule -InputObject $owned[0] }
 if ($in.add) { New-NetFirewallRule -Name $name -DisplayName $name -Group $in.group -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$in.port) -RemoteAddress ([string]$in.remote) -Program $in.program -Description $in.desc | Out-Null }
 Write-Doc ([ordered]@{ ok = $true })
+`
+
+const scriptPktmonList = buildPrelude + `$pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
+$list = (& $pm list --json) -join [Environment]::NewLine
+if ($LASTEXITCODE -ne 0) { throw ('pktmon list failed: ' + $LASTEXITCODE) }
+Write-Doc ([ordered]@{ list = $list })
 `
 
 // Pktmon filters are shared across the host. Capture without changing them,
@@ -94,16 +100,13 @@ Write-Doc ([ordered]@{ ok = $true })
 // PktMon ETW event 20 describes a component, while 100 and 110
 // describe IPv4 and IPv6 packet filters. These event IDs are independent of
 // the Windows display language.
-const scriptPktmonStop = buildPrelude + `$s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
-if ($s.Count -ne 1 -or [string]$s[0].LocalFilePath -ne $in.etl) { throw 'The running pktmon capture is not the one this proof started.' }
+const scriptPktmonStop = buildPrelude + diskIdentityPrelude + `$s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
+if ($s.Count -ne 1 -or [string]$s[0].LocalFilePath -ne $in.etl -or [CpdDisk]::Identify($in.etl) -cne $in.etlId) { throw 'The running pktmon capture is not the one this proof started.' }
 $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
 & $pm stop | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
 $metadata = @(Get-WinEvent -FilterHashtable @{ Path = $in.etl; ProviderName = 'Microsoft-Windows-PktMon'; Id = @(20, 100, 110) } -Oldest -ErrorAction Stop)
-$list = (& $pm list --json) -join "` + "`n" + `"
-if ($LASTEXITCODE -ne 0) { throw ('pktmon list failed: ' + $LASTEXITCODE) }
 Write-Doc ([ordered]@{
-  list = $list
   metadata = [bool]($metadata | Where-Object { $_.Id -eq 20 } | Select-Object -First 1)
   filtered = [bool]($metadata | Where-Object { $_.Id -eq 100 -or $_.Id -eq 110 } | Select-Object -First 1)
 })
@@ -115,6 +118,7 @@ const scriptPktmonExport = buildPrelude + `$pm = Join-Path $env:SystemRoot 'Syst
 $out = @()
 foreach ($c in @($in.components)) {
   $p = Join-Path $in.dir ('c' + [string]$c + '.pcapng')
+  if (Test-Path -LiteralPath $p) { throw ('A pktmon export already exists: ' + $p) }
   & $pm etl2pcap $in.etl --out $p --component-id ([int]$c) | Out-Null
   if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $p)) { $out += [ordered]@{ id = [int]$c; path = $p } }
 }
@@ -127,6 +131,7 @@ var proberScripts = map[string]string{
 	"Allow":        scriptAllow,
 	"LinkLocal":    scriptLinkLocal,
 	"CanaryRule":   scriptCanaryRule,
+	"PktmonList":   scriptPktmonList,
 	"PktmonStart":  scriptPktmonStart,
 	"PktmonStop":   scriptPktmonStop,
 	"PktmonExport": scriptPktmonExport,
@@ -181,7 +186,7 @@ func (p *psProber) SetL3(ctx context.Context, n Names, owner string, on bool) er
 	if err := p.checkOwner(); err != nil {
 		return err
 	}
-	return p.h.ok(ctx, scriptSetL3, map[string]any{"group": n.FirewallGroup, "owner": owner, "on": on})
+	return p.h.ok(ctx, scriptSetL3, map[string]any{"group": n.FirewallGroup, "id": blockFirewallID(n, owner), "owner": owner, "on": on})
 }
 
 // SetBinding binds or unbinds ms_tcpip6 on the host vNIC: the only component
@@ -193,7 +198,13 @@ func (p *psProber) SetBinding(ctx context.Context, ifIndex int, component string
 	if component != "ms_tcpip6" {
 		return fmt.Errorf("the proof never changes %q", component)
 	}
-	return p.h.ok(ctx, scriptSetBinding, map[string]any{"ifIndex": ifIndex, "component": component, "on": on})
+	if err := p.checkOwner(); err != nil {
+		return err
+	}
+	if err := checkVMID("switch ID", p.switchID); err != nil {
+		return err
+	}
+	return p.h.ok(ctx, scriptSetBinding, map[string]any{"ifIndex": ifIndex, "switchId": p.switchID, "owner": p.owner, "component": component, "on": on})
 }
 
 // checkAllow accepts one host address: the proof opens holes one address at a
@@ -209,6 +220,9 @@ func (p *psProber) allow(ctx context.Context, vmID string, q netip.Prefix, add b
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
+	if err := p.checkOwner(); err != nil {
+		return err
+	}
 	r, err := checkAllow(q)
 	if err != nil {
 		return err
@@ -216,7 +230,7 @@ func (p *psProber) allow(ctx context.Context, vmID string, q netip.Prefix, add b
 	var w struct {
 		Allow []string `json:"allow"`
 	}
-	if err := p.h.call(ctx, scriptAllow, map[string]any{"vm": vmID, "remote": r, "add": add}, &w); err != nil {
+	if err := p.h.call(ctx, scriptAllow, map[string]any{"vm": vmID, "owner": p.owner, "remote": r, "add": add}, &w); err != nil {
 		return err
 	}
 	has := false
@@ -353,8 +367,9 @@ func (p *psProber) Canary(ctx context.Context, ip netip.Addr, port uint16, from 
 		return nil, err
 	}
 	group := p.n.FirewallGroup + proofGroupSuffix
+	id := randomArtifactName(group+"-", "")
 	rule := func(ctx context.Context, add bool) error {
-		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "port": port, "remote": from.Masked().String(), "program": p.program, "add": add, "desc": proofCanaryDesc(p.owner)})
+		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "id": id, "port": port, "remote": from.Masked().String(), "program": p.program, "add": add, "desc": proofCanaryDesc(p.owner)})
 	}
 	if err := rule(ctx, true); err != nil {
 		return nil, err
@@ -379,70 +394,113 @@ func (p *psProber) Canary(ctx context.Context, ip netip.Addr, port uint16, from 
 
 // Pktmon starts a capture on every NIC. The proof filters the exported
 // packets in Go and leaves the host's filters alone.
-func (p *psProber) Pktmon(ctx context.Context, fs []PktFilter) (Capture, error) {
-	if len(fs) == 0 || len(fs) > 32 {
-		return nil, fmt.Errorf("%d pktmon filters; 1 to 32", len(fs))
+func (p *psProber) Pktmon(ctx context.Context, filters []PktFilter) (Capture, error) {
+	if len(filters) == 0 || len(filters) > 32 {
+		return nil, fmt.Errorf("%d pktmon filters; 1 to 32", len(filters))
 	}
 	if err := p.checkOwner(); err != nil {
 		return nil, err
 	}
-	for _, f := range fs {
+	for _, f := range filters {
 		if !f.Addr.IsValid() || (f.Proto != "" && f.Proto != "TCP" && f.Proto != "UDP") {
 			return nil, fmt.Errorf("pktmon filter %+v is not allowed", f)
 		}
 	}
-	if err := os.MkdirAll(p.tmp, 0o700); err != nil {
+	if err := checkVMID("proof switch ID", p.switchID); err != nil {
 		return nil, err
 	}
-	dir, err := os.MkdirTemp(p.tmp, "pktmon-"+p.owner+"-")
+	var inventory struct {
+		List string `json:"list"`
+	}
+	if err := p.h.call(ctx, scriptPktmonList, nil, &inventory); err != nil {
+		return nil, err
+	}
+	comps, err := parsePktmonComponents([]byte(inventory.List))
 	if err != nil {
 		return nil, err
 	}
-	etl := filepath.Join(dir, "capture.etl")
+	host, err := p.h.ReadHostNet(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	root, proof := filepath.Dir(p.tmp), filepath.Base(p.tmp)
+	j, err := openArtifactLog(root, true)
+	if err != nil {
+		return nil, err
+	}
+	defer j.file.Close()
+	if err = j.verify(proof); errors.Is(err, fs.ErrNotExist) {
+		err = j.makeDir(proof)
+	}
+	if err != nil {
+		return nil, err
+	}
+	rel := filepath.Join(proof, randomArtifactName("pktmon-"+p.owner+"-", ""))
+	if err := j.makeDir(rel); err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(root, rel)
+	etlRel := filepath.Join(rel, "capture.etl")
+	etl := filepath.Join(root, etlRel)
+	if err := j.record(etlRel, ""); err != nil {
+		return nil, err
+	}
 	if err := p.h.ok(ctx, scriptPktmonStart, map[string]string{"etl": etl}); err != nil {
 		return nil, err
 	}
-	return &psCapture{p: p, dir: dir, etl: etl, filters: fs}, nil
+	id, err := j.note(etlRel)
+	if err != nil {
+		return nil, err
+	}
+	return &psCapture{p: p, dir: dir, etl: etl, etlID: id, root: root, rel: rel, filters: filters, comps: comps, host: host}, nil
 }
 
 type psCapture struct {
 	p       *psProber
 	dir     string
 	etl     string
+	etlID   string
+	root    string
+	rel     string
 	filters []PktFilter
+	comps   map[int]pktComp
+	host    HostNet
 }
 
 // Stop stops the capture, classifies each NIC component by the host's view of
 // its interface, and reads the packets each one saw.
 func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	var lw struct {
-		List     string `json:"list"`
-		Metadata bool   `json:"metadata"`
-		Filtered bool   `json:"filtered"`
+		Metadata bool `json:"metadata"`
+		Filtered bool `json:"filtered"`
 	}
-	if err := c.p.h.call(ctx, scriptPktmonStop, map[string]string{"etl": c.etl}, &lw); err != nil {
+	if err := c.p.h.call(ctx, scriptPktmonStop, map[string]string{"etl": c.etl, "etlId": c.etlID}, &lw); err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(c.dir)
+	j, err := openArtifactLog(c.root, false)
+	if err != nil {
+		return nil, err
+	}
+	defer j.file.Close()
+	etlRel := filepath.Join(c.rel, "capture.etl")
+	defer func() {
+		_ = j.remove(etlRel)
+		_ = j.remove(c.rel)
+	}()
 	if !lw.Metadata || lw.Filtered {
 		return nil, errors.New("pktmon did not prove it captured without host filters")
 	}
-	comps, err := parsePktmonComponents([]byte(lw.List))
-	if err != nil {
-		return nil, err
-	}
-	h, err := c.p.h.ReadHostNet(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	if err := checkVMID("proof switch ID", c.p.switchID); err != nil {
-		return nil, err
-	}
+	comps := c.comps
 	want := []int{}
 	for id := range comps {
 		want = append(want, id)
 	}
 	slices.Sort(want)
+	for _, id := range want {
+		if err := j.record(filepath.Join(c.rel, "c"+strconv.Itoa(id)+".pcapng"), ""); err != nil {
+			return nil, err
+		}
+	}
 	var w struct {
 		Files []struct {
 			ID   int    `json:"id"`
@@ -458,6 +516,11 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		if _, ok := comps[f.ID]; !ok || f.Path != expected || files[f.ID] != "" {
 			return nil, fmt.Errorf("unexpected export for pktmon component %d", f.ID)
 		}
+		rel := filepath.Join(c.rel, filepath.Base(f.Path))
+		if _, err := j.note(rel); err != nil {
+			return nil, err
+		}
+		defer func() { _ = j.remove(rel) }()
 		files[f.ID] = f.Path
 	}
 	var out []PktRecord
@@ -467,7 +530,10 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 			return nil, fmt.Errorf("pktmon did not export component %d (%s)", id, comps[id].Name)
 		}
 		cp := comps[id]
-		class := componentClass(h, c.p.switchID, cp.IfIndex)
+		class := componentClass(c.host, c.p.switchID, cp.IfIndex)
+		if err := j.verify(filepath.Join(c.rel, filepath.Base(path))); err != nil {
+			return nil, err
+		}
 		b, err := readCapped(path, 64<<20, true)
 		if err != nil {
 			return nil, err

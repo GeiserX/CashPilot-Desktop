@@ -227,6 +227,9 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 		names, vmID, owner := gs.Names, gs.VMID, gs.Owner
 		if plan != nil {
 			names, vmID, owner = &plan.Names, plan.VMID, plan.Owner
+			if vmID == "" && gs.Names != nil && *gs.Names == plan.Names && gs.Owner == owner {
+				vmID = gs.VMID
+			}
 		}
 		st.Fence, st.Network = FenceCut, NetConnected
 		var owned string
@@ -247,7 +250,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 			return
 		}
 		vmID = owned
-		if err := d.HV.Disconnect(ctx, vmID); err != nil {
+		if err := d.HV.Disconnect(ctx, vmID, owner); err != nil {
 			d.logf("disconnect failed: %v", err)
 		} else {
 			st.Network = NetDisconnected
@@ -298,7 +301,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 
 	connected := true // unknown until read: assume the worst
 	disconnect := func() {
-		if err := d.HV.Disconnect(ctx, p.VMID); err != nil {
+		if err := d.HV.Disconnect(ctx, p.VMID, p.Owner); err != nil {
 			d.logf("disconnect failed: %v", err)
 			return
 		}
@@ -568,7 +571,7 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 	off := func() bool {
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
 		defer cancel()
-		if err := d.HV.Disconnect(uctx, p.VMID); err != nil {
+		if err := d.HV.Disconnect(uctx, p.VMID, p.Owner); err != nil {
 			d.logf("disconnect failed: %v", err)
 			return true
 		}
@@ -591,7 +594,7 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 	}
 	d.logf("connected: the fence matches the proven one")
 	if start && live.VMState != "Running" {
-		if err := d.HV.Start(ctx, p.VMID); err != nil {
+		if err := d.HV.Start(ctx, p.VMID, p.Owner); err != nil {
 			// A start that failed (often too little free memory) is a stop to
 			// retry, not a VM that is up. The VM goes off the network again and
 			// the routine reports it off, so Run's next tick runs the whole boot
@@ -654,7 +657,7 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 	// Add before remove, so a wider new Deny is in place before the narrower
 	// ones it covers go. When the add fails, nothing is removed in this pass.
 	if len(add) > 0 {
-		if err := d.HV.AddDeny(ctx, p.VMID, add); err != nil {
+		if err := d.HV.AddDeny(ctx, p.VMID, p.Owner, add); err != nil {
 			d.logf("add Deny %v failed: %v", add, err)
 			notAdded = add
 		} else {
@@ -670,7 +673,7 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 		case notAdded != nil:
 			notRemoved = remove
 		default:
-			if err := d.HV.RemoveDeny(ctx, p.VMID, remove); err != nil {
+			if err := d.HV.RemoveDeny(ctx, p.VMID, p.Owner, remove); err != nil {
 				d.logf("remove Deny %v failed: %v", remove, err)
 				notRemoved = remove
 			} else {

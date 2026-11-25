@@ -160,13 +160,13 @@ func TestFakeHyperVRedSteps(t *testing.T) {
 
 	// The own-IP Deny must go before an Allow on the same prefix.
 	gw := netip.PrefixFrom(p.Gateway, 32)
-	if err := f.AddDeny(ctx, p.VMID, []netip.Prefix{gw}); err != nil {
+	if err := f.AddDeny(ctx, p.VMID, p.Owner, []netip.Prefix{gw}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.AddAllow(ctx, p.VMID, gw); err == nil || !strings.Contains(err.Error(), "0x800700B7") {
 		t.Fatalf("an Allow beside a Deny on one prefix: %v", err)
 	}
-	if err := f.RemoveDeny(ctx, p.VMID, []netip.Prefix{gw}); err != nil {
+	if err := f.RemoveDeny(ctx, p.VMID, p.Owner, []netip.Prefix{gw}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -245,7 +245,7 @@ func TestFakeHyperVIPv6Stack(t *testing.T) {
 	if len(c.Arrived()) != 0 {
 		t.Fatal("the planned fence let IPv6 reach the host")
 	}
-	f.RemoveDeny(ctx, p.VMID, []netip.Prefix{netip.MustParsePrefix("::/0")})
+	f.RemoveDeny(ctx, p.VMID, p.Owner, []netip.Prefix{netip.MustParsePrefix("::/0")})
 	f.SetL3(ctx, p.Names, p.Owner, false)
 	f.SetBinding(ctx, live.VNICIfIndex, "ms_tcpip6", true)
 	f.TCP(ctx, to, "v6")
@@ -321,7 +321,7 @@ func TestFakeHyperVFaultHooks(t *testing.T) {
 	if !slices.ContainsFunc(diffNow(t, f, p), func(c winvm.Change) bool { return c.Field == "acl" }) {
 		t.Fatal("SetRoute: a new tunnel route did not ask for a Deny")
 	}
-	f.AddDeny(ctx, p.VMID, []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
+	f.AddDeny(ctx, p.VMID, p.Owner, []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
 	if cs := diffNow(t, f, p); len(cs) != 0 {
 		t.Fatalf("with the tunnel Deny added: %+v", cs)
 	}
@@ -343,7 +343,7 @@ func TestFakeHyperVFaultHooks(t *testing.T) {
 	}
 
 	// Disconnect and the switch-port count Diff expects.
-	f.Disconnect(ctx, p.VMID)
+	f.Disconnect(ctx, p.VMID, p.Owner)
 	if cs := diffNow(t, f, p); len(cs) != 0 {
 		t.Fatalf("a disconnected VM with the right config: %+v", cs)
 	}

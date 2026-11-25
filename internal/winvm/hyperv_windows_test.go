@@ -18,7 +18,7 @@ import (
 // parseScript runs PowerShell's own parser over a script and prints how many
 // parse errors it found. It never runs the script.
 const parseScript = `$ErrorActionPreference = 'Stop'
-$t = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:CPD_PARSE))
+$t = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()))
 $tokens = $null
 $errs = $null
 [void][System.Management.Automation.Language.Parser]::ParseInput($t, [ref]$tokens, [ref]$errs)
@@ -35,7 +35,7 @@ func parseErrors(t *testing.T, script string) (int, string) {
 	defer cancel()
 	cmd := hidden(ctx, filepath.Join(sys, "WindowsPowerShell", "v1.0", "powershell.exe"),
 		"-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(parseScript))
-	cmd.Env = append(os.Environ(), "CPD_PARSE="+base64.StdEncoding.EncodeToString([]byte(script)))
+	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(script)))
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

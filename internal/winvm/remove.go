@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 )
@@ -34,114 +33,21 @@ type RemoveResult struct {
 	Left    []string `json:"left"`
 }
 
-// proofDir holds pktmon's capture files while a proof runs. A proof that was
-// killed leaves files in it, so it is removed with what it holds.
 const proofDir = "proof"
-
-// dataFiles names files setup and the guard write in DataDir.
-var dataFiles = []string{
-	installFile, answerISOFile, answerISOFile + ".tmp", StateFile, StatusFile, LockFile,
-	ProofFile, PrefsFile, "setup.log", "guard.log", "guard.log.1",
-}
-
 const guardDir = "guard"
-
-var guardFiles = []string{"CashPilot-guard.exe", "remove.ps1", "setup.ps1"}
-var atomicTargets = []string{PlanFile, installFile, StateFile, StatusFile, LockFile, ProofFile, PrefsFile}
-var atomicSuffix = regexp.MustCompile(`^[0-9]+\.tmp$`)
-var bootstrapTemp = regexp.MustCompile(`^\.(bootstrap|setup-exe|setup-params|guard-backup|params-backup|guard-discard|lab-params)\.[0-9a-f]{32}\.tmp$`)
-var captureDir = regexp.MustCompile(`^pktmon-([0-9a-f]{32}-)?[0-9]+$`)
-var captureFile = regexp.MustCompile(`^c[0-9]+\.pcapng$`)
-
-// generatedData identifies only the paths setup writes. The plan and the
-// running bootstrap are cleaned up separately.
-func generatedData(rel string, d fs.DirEntry, owner string) bool {
-	parts := strings.Split(rel, string(filepath.Separator))
-	if d.IsDir() {
-		return len(parts) == 1 && (rel == proofDir || rel == answerISOFile+".stage") ||
-			len(parts) == 2 && parts[0] == proofDir && ownedCaptureDir(parts[1], owner)
-	}
-	if !d.Type().IsRegular() {
-		return false
-	}
-	switch len(parts) {
-	case 1:
-		if slices.Contains(dataFiles, rel) {
-			return true
-		}
-		for _, name := range atomicTargets {
-			if suffix, ok := strings.CutPrefix(rel, "."+name+"."); ok && atomicSuffix.MatchString(suffix) {
-				return true
-			}
-		}
-	case 2:
-		return parts[0] == guardDir && (parts[1] == "setup-params.json" || bootstrapTemp.MatchString(parts[1])) ||
-			parts[0] == answerISOFile+".stage" && parts[1] == "autounattend.xml"
-	case 3:
-		return parts[0] == proofDir && ownedCaptureDir(parts[1], owner) &&
-			(parts[2] == "capture.etl" || captureFile.MatchString(parts[2]))
-	}
-	return false
-}
-
-func ownedCaptureDir(name, owner string) bool {
-	if !captureDir.MatchString(name) {
-		return false
-	}
-	suffix := strings.TrimPrefix(name, "pktmon-")
-	if strings.Contains(suffix, "-") {
-		return owner != "" && strings.HasPrefix(suffix, owner+"-")
-	}
-	return true // legacy, untagged capture names
-}
-
-// cleanupData removes generated files and empty generated directories. It
-// also serves Repair, which only clears stale proof captures.
-func cleanupData(dir, under, owner string, unverifiedCapture bool, report func(string, error)) {
-	var dirs []string
-	root := filepath.Join(dir, under)
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		if unverifiedCapture && rel == proofDir && d.IsDir() {
-			return filepath.SkipDir
-		}
-		if generatedData(rel, d, owner) {
-			if d.IsDir() {
-				dirs = append(dirs, path)
-			} else {
-				report(rel, os.Remove(path))
-			}
-		} else if d.IsDir() && rel != "." && rel != guardDir {
-			return filepath.SkipDir
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		report(under, err)
-	}
-	for i := len(dirs) - 1; i >= 0; i-- {
-		path := dirs[i]
-		ents, err := os.ReadDir(path)
-		if err == nil && len(ents) == 0 {
-			rel, _ := filepath.Rel(dir, path)
-			report(rel, os.Remove(path))
-		}
-	}
-}
 
 // Remove takes the Secure VM off this PC. n must be the instance desired.json
 // belongs to. Without desired.json nothing on the host is touched: this
 // install cannot tell its objects apart, so they are only listed.
 func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retErr error) {
+	unlock, err := lockMutation(ctx, n)
+	if err != nil {
+		return res, err
+	}
+	defer unlock()
 	owner := ""
 	defer func() {
-		res.Left = append(res.Left, unknownData(d.Dir, owner)...)
+		res.Left = append(res.Left, unknownData(d.Dir)...)
 	}()
 	logf := func(format string, args ...any) {
 		if d.Logf != nil {
@@ -178,9 +84,10 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 
 	// The guard first, so it never acts on a VM that is going.
 	if t := inv.Task; t != nil {
-		if p.Owner != "" && t.Owner == p.Owner {
+		if ownedBy(*t, p.GuardTaskID, p.Owner) {
 			if err := d.HV.UnregisterGuardTask(ctx, n, p.Owner); err != nil {
 				fail("guard task", err)
+				return res, errors.Join(errs...)
 			} else {
 				res.Removed = append(res.Removed, "the guard task "+t.ID)
 			}
@@ -206,7 +113,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		left, err := d.HV.RemoveVM(ctx, v.ID, p)
 		if err != nil {
 			fail("VM", err)
-			continue
+			return res, errors.Join(errs...)
 		}
 		ourVM = v.ID
 		res.Removed = append(res.Removed, "the VM "+v.ID)
@@ -265,7 +172,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 
 	mine := 0
 	for _, r := range inv.Firewall {
-		if p.Owner != "" && r.Owner == p.Owner {
+		if p.Owner != "" && r.Owner == p.Owner && r.ID == blockFirewallID(n, p.Owner) {
 			mine++
 		} else {
 			res.Left = append(res.Left, "the firewall rule "+r.ID+" (not made by this install)")
@@ -279,14 +186,14 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		}
 	}
 
-	if p.EnhancedSession == ESOff && p.EnhancedSessionOriginal != nil {
-		want := *p.EnhancedSessionOriginal
-		if inv.Enhanced != want {
-			if _, err := d.HV.SetEnhancedSession(ctx, want); err != nil {
-				fail("Enhanced Session", err)
-			} else {
-				res.Removed = append(res.Removed, fmt.Sprintf("Enhanced Session put back to %v", want))
-			}
+	if p.EnhancedSession == ESOff && p.EnhancedSessionChanged && p.EnhancedSessionOriginal != nil && *p.EnhancedSessionOriginal {
+		p.EnhancedSessionChanged = false
+		if err := savePlanFile(d.Dir, p); err != nil {
+			fail("record Enhanced Session restore", err)
+		} else if was, err := d.HV.SetEnhancedSession(ctx, true); err != nil {
+			fail("Enhanced Session", err)
+		} else if !was {
+			res.Removed = append(res.Removed, "Enhanced Session put back to true")
 		}
 	}
 
@@ -319,8 +226,17 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		res.Left = append(res.Left, "the account "+sid+" (Hyper-V Administrators grant unconfirmed)")
 	}
 	for _, sid := range confirmed {
+		// A grant has no independent identity. Consume the right to revoke
+		// before the call, including when it fails or this process stops.
+		p.AddedAdminSIDs = slices.DeleteFunc(slices.Clone(p.AddedAdminSIDs), func(s string) bool { return s == sid })
+		p.RevokedAdminSIDs = append(p.RevokedAdminSIDs, sid)
+		if err := savePlanFile(d.Dir, p); err != nil {
+			fail("record Hyper-V Administrators revocation", err)
+			break
+		}
 		if err := d.HV.RemoveHyperVAdmin(ctx, sid); err != nil {
 			fail("Hyper-V Administrators", err)
+			res.Left = append(res.Left, "the account "+sid+" (revocation unconfirmed)")
 		} else {
 			res.Removed = append(res.Removed, "the account "+sid+" setup added to Hyper-V Administrators")
 		}
@@ -332,7 +248,10 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	if owner == "" {
 		return res, nil
 	}
-	cleanupData(d.Dir, "", owner, proof.UnverifiedCapture, func(path string, err error) {
+	cleanupArtifacts(d.Dir, proof.UnverifiedCapture, func(path string, err error) {
+		if errors.Is(err, errUntrackedFile) {
+			return // unknownData lists the replacement.
+		}
 		if err != nil {
 			fail(path, err)
 		} else {
@@ -342,33 +261,29 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	if len(errs) > 0 {
 		return res, fmt.Errorf("Remove VM did not finish; run it again: %w", errors.Join(errs...))
 	}
-	if err := os.Remove(filepath.Join(d.Dir, PlanFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	removed, err := finishArtifactRemoval(d.Dir)
+	if err != nil {
 		return res, err
 	}
-	res.Removed = append(res.Removed, PlanFile)
+	if removed {
+		res.Removed = append(res.Removed, PlanFile)
+	}
 	return res, nil
 }
 
 // unknownData lists unrecognized paths even if Remove cannot read a plan
 // or a host operation fails.
-func unknownData(dir, owner string) []string {
+func unknownData(dir string) []string {
 	var out []string
 	exe, _ := os.Executable()
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || path == dir {
 			return err
 		}
-		rel, err := filepath.Rel(dir, path)
-		if err != nil {
-			return err
-		}
-		if strings.EqualFold(path, exe) ||
-			owner != "" && (generatedData(rel, d, owner) || rel == PlanFile ||
-				rel == guardDir && d.IsDir() ||
-				filepath.Dir(rel) == guardDir && d.Type().IsRegular() && slices.Contains(guardFiles, d.Name())) {
+		if strings.EqualFold(path, exe) {
 			return nil
 		}
-		out = append(out, path+" (not made by setup, so not deleted)")
+		out = append(out, path+" (left on disk)")
 		return nil
 	})
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

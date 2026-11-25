@@ -66,6 +66,11 @@ type psHost struct {
 
 var _ Host = (*psHost)(nil)
 
+// hostScriptLauncher reads the fixed script through the child process pipe.
+const hostScriptLauncher = `$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()))
+& ([scriptblock]::Create($source))
+exit $LASTEXITCODE`
+
 // hvPrelude starts every script. It stops on the first error, reads the one
 // argument, and defines Write-Doc, which prints the answer as base64 of UTF-8
 // JSON so the console's code page cannot change a byte of it.
@@ -82,6 +87,19 @@ function Get-Owner([string]$s) {
   return ''
 }
 function Find-OurVM($id) { Get-VM | Where-Object { $_.Id.ToString() -eq $id } }
+function Get-OwnedVM([string]$id, [string]$owner) {
+  $vm = @(Find-OurVM $id)
+  if (-not $owner -or $vm.Count -ne 1 -or (Get-Owner ([string]$vm[0].Notes)) -cne $owner) { throw 'The owned VM was not found.' }
+  $vm[0]
+}
+function Find-ManagementAdapter($mo) {
+  $dev = ([string]$mo.DeviceId).Trim('{}')
+  $guid = ([string]$mo.InterfaceGuid).Trim('{}')
+  @(Get-NetAdapter -IncludeHidden | Where-Object {
+    ($dev -and (([string]$_.DeviceId).Trim('{}') -eq $dev -or ([string]$_.InterfaceGuid).Trim('{}') -eq $dev)) -or
+    ($guid -and ([string]$_.InterfaceGuid).Trim('{}') -eq $guid)
+  })
+}
 `
 
 // scriptReadLive reads everything Diff compares. Each part has its own try, so a
@@ -146,12 +164,7 @@ try {
     $o.switchPorts = @(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw.Id) }).Count
     $mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
     if ($mo.Count -eq 1) {
-      $dev = ([string]$mo[0].DeviceId).Trim('{}')
-      $na = @(Get-NetAdapter -IncludeHidden | Where-Object { ([string]$_.DeviceID).Trim('{}') -eq $dev })
-      if ($na.Count -ne 1) {
-        $mac = ([string]$mo[0].MacAddress).ToUpper()
-        $na = @(Get-NetAdapter -IncludeHidden | Where-Object { (([string]$_.MacAddress) -replace '-', '').ToUpper() -eq $mac })
-      }
+      $na = @(Find-ManagementAdapter $mo[0])
       if ($na.Count -eq 1) {
         $idx = [int]$na[0].ifIndex
         $o.vnicIfIndex = $idx
@@ -162,7 +175,7 @@ try {
 } catch { }
 if ($idx -ne 0) {
   try {
-    $na = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.ifIndex -eq $idx })[0]
+    $na = @(Find-ManagementAdapter $mo[0])[0]
     $b = @(Get-NetAdapterBinding -Name $na.Name -IncludeHidden -AllBindings)
     $bm = @{}
     foreach ($x in $b) { $bm[([string]$x.ComponentID).ToLower()] = [bool]$x.Enabled }
@@ -213,13 +226,12 @@ $o.physical = $phys
 $physG = @{}
 foreach ($a in @(Get-NetAdapter -Physical)) { $physG[([string]$a.InterfaceGuid).Trim('{}').ToLower()] = $true }
 $mos = @{}
-$mosMac = @{}
 $sws = @{}
 try {
   foreach ($m in @(Get-VMNetworkAdapter -ManagementOS)) {
     if ($m.SwitchId) {
-      $mos[([string]$m.DeviceId).Trim('{}').ToLower()] = $m.SwitchId.ToString()
-      $mosMac[([string]$m.MacAddress).ToUpper()] = $m.SwitchId.ToString()
+      $na = @(Find-ManagementAdapter $m)
+      if ($na.Count -eq 1) { $mos[[int]$na[0].ifIndex] = $m.SwitchId.ToString() }
     }
   }
   foreach ($s in @(Get-VMSwitch)) { $sws[$s.Id.ToString()] = $s }
@@ -238,9 +250,7 @@ foreach ($a in @(Get-NetAdapter -IncludeHidden)) {
   $sid = ''
   $st = ''
   $ext = $false
-  $k = ([string]$a.DeviceID).Trim('{}').ToLower()
-  $km = (([string]$a.MacAddress) -replace '-', '').ToUpper()
-  if ($mos.ContainsKey($k)) { $sid = $mos[$k] } elseif ($mosMac.ContainsKey($km)) { $sid = $mosMac[$km] }
+  if ($mos.ContainsKey([int]$a.ifIndex)) { $sid = $mos[[int]$a.ifIndex] }
   if ($sid) {
     if ($sws.ContainsKey($sid)) {
       $s = $sws[$sid]
@@ -347,11 +357,13 @@ Write-Doc $o
 
 // scriptDisconnect disconnects every adapter of the VM and reports how many
 // still have a switch.
-const scriptDisconnect = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
-foreach ($x in $a) { Disconnect-VMNetworkAdapter -VMNetworkAdapter $x }
-$left = @(Get-VMNetworkAdapter -VM $vm[0] | Where-Object { $_.SwitchName }).Count
+const scriptDisconnect = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+$a = @(Get-VMNetworkAdapter -VM $vm)
+foreach ($x in $a) {
+  $null = Get-OwnedVM $in.vm $in.owner
+  Disconnect-VMNetworkAdapter -VMNetworkAdapter $x
+}
+$left = @(Get-VMNetworkAdapter -VM $vm | Where-Object { $_.SwitchName }).Count
 Write-Doc ([ordered]@{ adapters = $a.Count; connected = $left })
 `
 
@@ -370,32 +382,32 @@ Write-Doc ([ordered]@{ switchId = $sw[0].Id.ToString() })
 `
 
 // scriptStart starts the VM unless it already runs, and reports its state.
-const scriptStart = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-if ($vm[0].State.ToString() -ne 'Running') { Start-VM -VM $vm[0] }
-$vm = @(Find-OurVM $in.vm)
-Write-Doc ([ordered]@{ state = $vm[0].State.ToString() })
+const scriptStart = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+if ($vm.State.ToString() -ne 'Running') { Start-VM -VM $vm }
+$vm = Get-OwnedVM $in.vm $in.owner
+Write-Doc ([ordered]@{ state = $vm.State.ToString() })
 `
 
 // scriptAddDeny adds one Deny Both row per remote on the VM's one adapter, then
 // lists the adapter's Deny rows so Go can check that each one is there.
-const scriptAddDeny = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
+const scriptAddDeny = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+$a = @(Get-VMNetworkAdapter -VM $vm)
 if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-foreach ($r in @($in.remotes)) { Add-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] -RemoteIPAddress $r -Direction Both -Action Deny }
+foreach ($r in @($in.remotes)) { $null = Get-OwnedVM $in.vm $in.owner; Add-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] -RemoteIPAddress $r -Direction Both -Action Deny }
 Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
 `
 
 // scriptRemoveDeny removes the Deny rows of each remote from the VM's one
 // adapter, both directions, then lists the Deny rows left. A /32 matches
 // whether Hyper-V lists it bare or with its /32.
-const scriptRemoveDeny = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
+const scriptRemoveDeny = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+$a = @(Get-VMNetworkAdapter -VM $vm)
 if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
 $rs = @($in.remotes | ForEach-Object { ([string]$_) -replace '/32$', '' })
-@(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Deny') -and ($rs -contains (([string]$_.RemoteAddress) -replace '/32$', '')) }) | Remove-VMNetworkAdapterAcl
+@(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Deny') -and ($rs -contains (([string]$_.RemoteAddress) -replace '/32$', '')) }) | ForEach-Object {
+  $null = Get-OwnedVM $in.vm $in.owner
+  Remove-VMNetworkAdapterAcl -VMNetworkAdapterAcl $_
+}
 Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
 `
 
@@ -972,7 +984,7 @@ func (h *psHost) Usage(ctx context.Context, vmID string) (Usage, error) {
 }
 
 // Disconnect takes every adapter of the VM off its switch.
-func (h *psHost) Disconnect(ctx context.Context, vmID string) error {
+func (h *psHost) Disconnect(ctx context.Context, vmID, owner string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
@@ -980,9 +992,10 @@ func (h *psHost) Disconnect(ctx context.Context, vmID string) error {
 		Adapters  int `json:"adapters"`
 		Connected int `json:"connected"`
 	}
-	arg := struct {
-		VM string `json:"vm"`
-	}{vmID}
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
+	arg := map[string]string{"vm": vmID, "owner": owner}
 	if err := h.call(ctx, scriptDisconnect, arg, &w); err != nil {
 		return err
 	}
@@ -1017,16 +1030,17 @@ func (h *psHost) Connect(ctx context.Context, vmID, switchID, owner string) erro
 }
 
 // Start starts the VM and checks that it runs.
-func (h *psHost) Start(ctx context.Context, vmID string) error {
+func (h *psHost) Start(ctx context.Context, vmID, owner string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
 	var w struct {
 		State string `json:"state"`
 	}
-	arg := struct {
-		VM string `json:"vm"`
-	}{vmID}
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
+	arg := map[string]string{"vm": vmID, "owner": owner}
 	if err := h.call(ctx, scriptStart, arg, &w); err != nil {
 		return err
 	}
@@ -1112,14 +1126,15 @@ func (w denyWire) hasBoth(remote netip.Prefix) (in, out bool) {
 
 // denyBatches runs script once per batch of at most maxDenyRows prefixes, and
 // hands each batch and the rows listed after it to check.
-func (h *psHost) denyBatches(ctx context.Context, script, vmID string, ps []netip.Prefix, rs []string, check func([]netip.Prefix, denyWire) error) error {
+func (h *psHost) denyBatches(ctx context.Context, script, vmID, owner string, ps []netip.Prefix, rs []string, check func([]netip.Prefix, denyWire) error) error {
 	for i := 0; i < len(ps); i += maxDenyRows {
 		j := min(i+maxDenyRows, len(ps))
 		var w denyWire
 		arg := struct {
 			VM      string   `json:"vm"`
+			Owner   string   `json:"owner"`
 			Remotes []string `json:"remotes"`
-		}{vmID, rs[i:j]}
+		}{vmID, owner, rs[i:j]}
 		if err := h.call(ctx, script, arg, &w); err != nil {
 			return err
 		}
@@ -1132,15 +1147,18 @@ func (h *psHost) denyBatches(ctx context.Context, script, vmID string, ps []neti
 
 // AddDeny adds a Deny Both row for each prefix and checks that each one is
 // there afterwards.
-func (h *psHost) AddDeny(ctx context.Context, vmID string, ps []netip.Prefix) error {
+func (h *psHost) AddDeny(ctx context.Context, vmID, owner string, ps []netip.Prefix) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
 		return err
 	}
 	rs, err := checkDenies(ps)
 	if err != nil {
 		return err
 	}
-	return h.denyBatches(ctx, scriptAddDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
+	return h.denyBatches(ctx, scriptAddDeny, vmID, owner, ps, rs, func(batch []netip.Prefix, w denyWire) error {
 		for _, p := range batch {
 			if in, out := w.hasBoth(p); !in || !out {
 				return fmt.Errorf("the Deny for %s is not in place after the add", aclArg(p))
@@ -1153,8 +1171,11 @@ func (h *psHost) AddDeny(ctx context.Context, vmID string, ps []netip.Prefix) er
 // RemoveDeny removes the Deny rows of each prefix and checks that none is left.
 // It refuses a static Deny: only the guard's own rows ever go, and a static row
 // gone is drift that only Repair puts back.
-func (h *psHost) RemoveDeny(ctx context.Context, vmID string, ps []netip.Prefix) error {
+func (h *psHost) RemoveDeny(ctx context.Context, vmID, owner string, ps []netip.Prefix) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
 		return err
 	}
 	rs, err := checkDenies(ps)
@@ -1166,7 +1187,7 @@ func (h *psHost) RemoveDeny(ctx context.Context, vmID string, ps []netip.Prefix)
 			return fmt.Errorf("the static Deny %v is never removed", p)
 		}
 	}
-	return h.denyBatches(ctx, scriptRemoveDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
+	return h.denyBatches(ctx, scriptRemoveDeny, vmID, owner, ps, rs, func(batch []netip.Prefix, w denyWire) error {
 		for _, p := range batch {
 			if in, out := w.hasBoth(p); in || out {
 				return fmt.Errorf("a Deny for %s is still there after the remove", aclArg(p))

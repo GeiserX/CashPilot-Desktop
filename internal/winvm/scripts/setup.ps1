@@ -15,20 +15,23 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 trap { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
-$guard = Join-Path $DataDir 'guard'
-$copy = Join-Path $guard 'CashPilot-guard.exe'
-$pcopy = Join-Path $guard 'setup-params.json'
+$journal = Open-CPDFileJournal $DataDir
 $nonce = [guid]::NewGuid().ToString('N')
-$stagedExe = Join-Path $guard ('.setup-exe.' + $nonce + '.tmp')
-$stagedParams = Join-Path $guard ('.setup-params.' + $nonce + '.tmp')
-$exeBackup = Join-Path $guard ('.guard-backup.' + $nonce + '.tmp')
-$paramsBackup = Join-Path $guard ('.params-backup.' + $nonce + '.tmp')
-$discard = Join-Path $guard ('.guard-discard.' + $nonce + '.tmp')
+$exeRel = 'guard\CashPilot-guard.exe'
+$stagedExeRel = 'guard\.setup-exe.' + $nonce + '.tmp'
+$paramsRel = 'guard\.setup-params.' + $nonce + '.json'
+$backupRel = 'guard\.guard-backup.' + $nonce + '.tmp'
+$copy = Join-Path $DataDir $exeRel
+$pcopy = Join-Path $DataDir $paramsRel
+$stagedExe = Join-Path $DataDir $stagedExeRel
+$exeBackup = Join-Path $DataDir $backupRel
 $description = ''
 $stopped = $false
-$exePublished = $false
-$paramsPublished = $false
+$published = $false
 $launched = $false
+$exeId = $null
+$paramsId = $null
+$oldId = $null
 
 function Get-OwnedTask {
   $t = @(Get-ScheduledTask -TaskPath $TaskPath -TaskName $TaskName -ErrorAction SilentlyContinue)
@@ -38,25 +41,21 @@ function Get-OwnedTask {
   }
   $t[0]
 }
-function Publish($from, $to, $backup) {
-  if ([IO.File]::Exists($to)) { [IO.File]::Replace($from, $to, $backup) }
-  else { [IO.File]::Move($from, $to) }
-}
-
 try {
-  Copy-Item -LiteralPath $Exe -Destination $stagedExe
-  Copy-Item -LiteralPath $Params -Destination $stagedParams
+  $exeId = Copy-CPDFile $journal $stagedExeRel $Exe
+  $paramsId = Copy-CPDFile $journal $paramsRel $Params
   if ((Get-FileHash -LiteralPath $stagedExe -Algorithm SHA256).Hash -ne $ExeHash.ToUpper() -or
-      (Get-FileHash -LiteralPath $stagedParams -Algorithm SHA256).Hash -ne $ParamsHash.ToUpper()) { exit 13 }
+      (Get-FileHash -LiteralPath $pcopy -Algorithm SHA256).Hash -ne $ParamsHash.ToUpper()) { exit 13 }
 
-  $journal = Join-Path $DataDir 'desired.json'
-  if (Test-Path -LiteralPath $journal -PathType Leaf) {
-    $plan = Get-Content -LiteralPath $journal -Raw | ConvertFrom-Json
-    if ($plan.owner -cmatch '^[0-9a-f]{32}$' -and $plan.names.dataDir -eq $DataDir -and
+  $planPath = Join-Path $DataDir 'desired.json'
+  if (Test-Path -LiteralPath $planPath -PathType Leaf) {
+    $plan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+    if ($plan.guardTaskId -ceq ($TaskPath + $TaskName) -and $plan.owner -cmatch '^[0-9a-f]{32}$' -and $plan.names.dataDir -eq $DataDir -and
         $plan.names.guardTask -eq ($TaskPath + $TaskName)) {
       $description = 'CashPilot Secure VM guard. cashpilot-owner=' + $plan.owner
     }
   }
+  $oldId = Get-CPDFileID $journal $exeRel
   $task = Get-OwnedTask
   if ($task -and $task.State.ToString() -eq 'Running') {
     Stop-ScheduledTask -InputObject $task | Out-Null
@@ -69,36 +68,35 @@ try {
     if ($task -and $task.State.ToString() -eq 'Running') { throw 'The guard task did not stop.' }
   }
 
-  Publish $stagedParams $pcopy $paramsBackup
-  $paramsPublished = $true
-  Publish $stagedExe $copy $exeBackup
-  $exePublished = $true
+  Write-CPDFileRecord $journal $exeRel $exeId
+  if ($oldId) {
+    Write-CPDFileRecord $journal $backupRel $oldId
+    if ((Get-CPDFileID $journal $exeRel) -cne $oldId) { throw 'The guard executable changed.' }
+    [IO.File]::Replace($stagedExe, $copy, $exeBackup)
+  } else { [IO.File]::Move($stagedExe, $copy) }
+  $published = $true
   # -Wait matters for a GUI-subsystem exe.
   $p = Start-Process -FilePath $copy -ArgumentList @('--vm-setup', ('"' + $pcopy + '"')) -Wait -PassThru -WindowStyle Hidden
   $code = $p.ExitCode
   # Exit 2 rejects the input before the setup role changes the journal.
   $launched = $code -ne 2
 } finally {
-  if (-not $launched -and $exePublished) {
-    if ([IO.File]::Exists($exeBackup)) { Publish $exeBackup $copy $discard }
-    else { [IO.File]::Delete($copy) }
+  if (-not $launched -and $published) {
+    Remove-CPDFile $journal $exeRel $exeId
+    if ($oldId -and (Get-CPDFileID $journal $backupRel) -ceq $oldId) {
+      [IO.File]::Move($exeBackup, $copy)
+    }
   }
-  if ($paramsPublished) {
-    if (-not $launched -and [IO.File]::Exists($paramsBackup)) { Publish $paramsBackup $pcopy $stagedParams }
-    else { [IO.File]::Delete($pcopy) }
-  }
+  Remove-CPDFile $journal $paramsRel $paramsId
   if ($stopped -and (-not $launched -or $code -ne 0)) {
     $task = Get-OwnedTask
     if ($task -and $task.State.ToString() -ne 'Running') { Start-ScheduledTask -InputObject $task | Out-Null }
   }
-  $cleanup = @($stagedExe, $stagedParams, $paramsBackup, $discard)
+  Remove-CPDFile $journal $stagedExeRel $exeId
   if (-not $launched -or $code -eq 0 -or $code -eq 3) {
-    $cleanup += $exeBackup
-  } elseif ([IO.File]::Exists($exeBackup)) {
+    Remove-CPDFile $journal $backupRel $oldId
+  } elseif ($oldId) {
     Write-Output ('kept: ' + $exeBackup + ' (previous guard copy)')
-  }
-  foreach ($f in $cleanup) {
-    Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
   }
 }
 exit $code

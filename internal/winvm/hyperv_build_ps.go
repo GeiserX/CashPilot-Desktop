@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // The write side of the PowerShell seam (the Builder): setup, Repair and
@@ -37,8 +39,27 @@ var guardianIDRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 const hvAdmins = "S-1-5-32-578"
 
 // buildPrelude adds the helpers the build scripts share to hvPrelude.
-const buildPrelude = hvPrelude + `function Get-AdapterByMac([string]$mac) {
-  @(Get-NetAdapter -IncludeHidden | Where-Object { (([string]$_.MacAddress) -replace '-', '').ToUpper() -eq $mac })
+const buildPrelude = hvPrelude + `function Get-OwnedSwitch([string]$id, [string]$owner) {
+  $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $id })
+  if (-not $owner -or $sw.Count -ne 1 -or (Get-Owner ([string]$sw[0].Notes)) -cne $owner -or $sw[0].SwitchType.ToString() -ne 'Internal') {
+    throw 'The owned Internal switch was not found.'
+  }
+  $sw[0]
+}
+function Get-HostVNIC([string]$id, [string]$owner, [int]$index = 0) {
+  $sw = Get-OwnedSwitch $id $owner
+  $mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
+  if ($mo.Count -ne 1) { throw 'The switch does not have exactly one host vNIC.' }
+  $na = @(Find-ManagementAdapter $mo[0])
+  if ($na.Count -ne 1 -or ($index -and $na[0].ifIndex -ne $index)) { throw 'The host vNIC identity could not be verified.' }
+  $na[0]
+}
+function Get-HostBinding([string]$component) {
+  $na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+  $name = [System.Management.Automation.WildcardPattern]::Escape($na.Name)
+  $b = @(Get-NetAdapterBinding -Name $name -IncludeHidden -AllBindings | Where-Object { $_.ComponentID -eq $component -and $_.Name -eq $na.Name })
+  if ($b.Count -gt 1) { throw 'The host vNIC binding could not be identified.' }
+  $b
 }
 function Get-GroupSids([string]$sid) {
   $g = Get-LocalGroup -SID $sid
@@ -109,35 +130,41 @@ if ($in.switchId) { $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $
 if (-not $in.switchId) {
   $sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
   if ($sw.Count -gt 1) { throw 'More than one switch has this name.' }
-  if ($sw.Count -eq 1 -and (Get-Owner ([string]$sw[0].Notes)) -ne $in.owner) { throw 'A switch with this name exists and was not made by this install.' }
+  if ($sw.Count -eq 1) { throw 'A switch with this name exists without a recorded ID.' }
 }
 if ($sw.Count -eq 1) {
-  $sw = $sw[0]
-  if ((Get-Owner ([string]$sw.Notes)) -cne $in.owner) { throw 'The switch was not made by this install.' }
+  $sw = Get-OwnedSwitch $in.switchId $in.owner
   if ($sw.Name -ne $in.switch) {
     if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'Another switch has this name.' }
-    Rename-VMSwitch -VMSwitch $sw -NewName $in.switch
+    Rename-VMSwitch -VMSwitch (Get-OwnedSwitch $in.switchId $in.owner) -NewName $in.switch
   }
 } else {
   if ($in.switchId) { throw 'The recorded switch was not found.' }
   $sw = New-VMSwitch -Name $in.switch -SwitchType Internal -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
 }
+$switchId = $sw.Id.ToString()
+$sw = Get-OwnedSwitch $switchId $in.owner
 $mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
 if ($mo.Count -ne 1) { throw 'The switch does not have exactly one host vNIC.' }
 if ((([string]$mo[0].MacAddress) -replace '-', '').ToUpper() -ne $in.mac) {
+  $null = Get-OwnedSwitch $switchId $in.owner
   Set-VMNetworkAdapter -VMNetworkAdapter $mo[0] -StaticMacAddress $in.mac
 }
-$na = @()
-for ($i = 0; $i -lt 30 -and $na.Count -ne 1; $i++) {
-  $na = @(Get-AdapterByMac $in.mac)
-  if ($na.Count -ne 1) { Start-Sleep -Seconds 1 }
+$na = $null
+for ($i = 0; $i -lt 30; $i++) {
+  $null = Get-OwnedSwitch $switchId $in.owner
+  $match = @(Find-ManagementAdapter $mo[0])
+  if ($match.Count -eq 1) { $na = $match[0]; break }
+  Start-Sleep -Seconds 1
 }
-if ($na.Count -ne 1) { throw 'The host vNIC did not appear with its MAC.' }
-$idx = [int]$na[0].ifIndex
-$have = @(Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue)
-if (-not ($have | Where-Object { ([string]$_.IPAddress -eq $in.gateway) -and ([int]$_.PrefixLength -eq [int]$in.prefixLen) })) {
-  $have | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-  New-NetIPAddress -InterfaceIndex $idx -IPAddress $in.gateway -PrefixLength ([int]$in.prefixLen) | Out-Null
+if (-not $na) { throw 'The host vNIC did not appear with its device identity.' }
+$idx = [int]$na.ifIndex
+$have = @(Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $in.gateway })
+if ($have.Count -eq 0) {
+  $na = Get-HostVNIC $switchId $in.owner $idx
+  New-NetIPAddress -InterfaceIndex $na.ifIndex -IPAddress $in.gateway -PrefixLength ([int]$in.prefixLen) | Out-Null
+} elseif ($have.Count -ne 1 -or [int]$have[0].PrefixLength -ne [int]$in.prefixLen) {
+  throw 'The existing gateway address has a different prefix and was left in place.'
 }
 Write-Doc ([ordered]@{ switchId = $sw.Id.ToString(); ifIndex = $idx })
 `
@@ -159,88 +186,113 @@ Write-Doc ([ordered]@{ id = [string]$nat.InstanceID })
 // proof and the guard ever connect it. Gen 2, Secure Boot, a vTPM with a local
 // key protector, static memory, the plan's processor shape, no checkpoints,
 // no automatic start, the owner tag in its Notes, and the two ISOs.
-const scriptCreateVM = buildPrelude + diskIdentityPrelude + `if (@(Get-VM | Where-Object { $_.Name -eq $in.vm }).Count -gt 0) { throw 'A VM with this name exists.' }
-$disk = [IO.Path]::GetFullPath((Join-Path $in.vhdxDir ($in.vm + '.vhdx')))
-for ($dir = [IO.DirectoryInfo]::new($in.vhdxDir); $dir; $dir = $dir.Parent) {
-  if ($dir.Exists -and ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('A junction in the VM disk path: ' + $dir.FullName) }
-}
-if (Test-Path -LiteralPath $disk) { throw 'The VM disk already exists.' }
-New-Item -ItemType Directory -Force -Path $in.vhdxDir | Out-Null
+var scriptCreateVM = buildPrelude + diskIdentityPrelude + runtime.SecureVMDirectoryPS + scriptCreateVMBody
+
+const scriptCreateVMBody = `if (@(Get-VM | Where-Object { $_.Name -eq $in.vm }).Count -gt 0) { throw 'A VM with this name exists.' }
+$dataLease = Open-CPDDirectory $in.dataDir $false 'cashpilot-data'
+$folderLease = $null
+try {
+$folder = Join-Path $in.dataDir ('vm-' + [guid]::NewGuid().ToString('N'))
+$folderLease = Open-CPDDirectory $folder $true $in.owner
+$disk = Join-Path $folder ($in.vm + '.vhdx')
 $vm = $null
 $createdDisk = New-VHD -Path $disk -Dynamic -SizeBytes ([uint64]$in.diskBytes)
 if (-not $createdDisk -or [IO.Path]::GetFullPath($createdDisk.Path) -ne $disk) { throw 'The disk creation did not return the requested file.' }
 $diskID = [CpdDisk]::Identify($disk)
 if (-not $diskID) { throw 'Could not verify the created disk.' }
 try {
-  $vm = New-VM -Name $in.vm -Generation 2 -MemoryStartupBytes ([uint64]$in.memory) -VHDPath $disk -Path $in.vhdxDir
+  $vm = New-VM -Name $in.vm -Generation 2 -MemoryStartupBytes ([uint64]$in.memory) -VHDPath $disk -Path $folder
   # The owner tag first, in its own call: it is what makes a rerun adopt the VM.
   Set-VM -VM $vm -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
-  Set-VM -VM $vm -ProcessorCount ([int]$in.procCount) -StaticMemory -CheckpointType Disabled -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
-  Set-VMProcessor -VM $vm -Maximum ([int]$in.procMax) -RelativeWeight ([int]$in.procWeight) -ExposeVirtualizationExtensions $false
+  $id = $vm.Id.ToString()
+  Set-VM -VM (Get-OwnedVM $id $in.owner) -ProcessorCount ([int]$in.procCount) -StaticMemory -CheckpointType Disabled -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
+  Set-VMProcessor -VM (Get-OwnedVM $id $in.owner) -Maximum ([int]$in.procMax) -RelativeWeight ([int]$in.procWeight) -ExposeVirtualizationExtensions $false
   $a = @(Get-VMNetworkAdapter -VM $vm)
   if ($a.Count -ne 1) { throw 'The new VM does not have exactly one network adapter.' }
-  if ($a[0].SwitchName) { Disconnect-VMNetworkAdapter -VMNetworkAdapter $a[0] }
+  if ($a[0].SwitchName) { $null = Get-OwnedVM $id $in.owner; Disconnect-VMNetworkAdapter -VMNetworkAdapter $a[0] }
+  $null = Get-OwnedVM $id $in.owner
   Set-VMNetworkAdapter -VMNetworkAdapter $a[0] -StaticMacAddress $in.mac -DhcpGuard On -RouterGuard On -MacAddressSpoofing Off -DeviceNaming Off
-  Set-VMFirmware -VM $vm -EnableSecureBoot On -SecureBootTemplate MicrosoftWindows
-  Set-VMKeyProtector -VM $vm -NewLocalKeyProtector
-  Enable-VMTPM -VM $vm
-  Add-VMDvdDrive -VM $vm -Path $in.iso
-  Add-VMDvdDrive -VM $vm -Path $in.answer
-  $dvd = @(Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $in.iso })
-  Set-VMFirmware -VM $vm -FirstBootDevice $dvd[0]
+  Set-VMFirmware -VM (Get-OwnedVM $id $in.owner) -EnableSecureBoot On -SecureBootTemplate MicrosoftWindows
+  Set-VMKeyProtector -VM (Get-OwnedVM $id $in.owner) -NewLocalKeyProtector
+  Enable-VMTPM -VM (Get-OwnedVM $id $in.owner)
+  $boot = Add-VMDvdDrive -VM (Get-OwnedVM ($vm.Id.ToString()) $in.owner) -Path $in.iso -Passthru
+  $answer = Add-VMDvdDrive -VM (Get-OwnedVM ($vm.Id.ToString()) $in.owner) -Path $in.answer -Passthru
+  $dvds = @(foreach ($d in @($boot, $answer)) {
+    if (-not $d.Id -or -not $d.Path) { throw 'The attached DVD did not return an identity.' }
+    @{ id = [string]$d.Id; path = [string]$d.Path }
+  })
+  Set-VMFirmware -VM (Get-OwnedVM ($vm.Id.ToString()) $in.owner) -FirstBootDevice $boot
 } catch {
   if ($vm) {
-    Stop-VM -VM $vm -TurnOff -Force -ErrorAction SilentlyContinue
-    Remove-VM -VM $vm -Force -ErrorAction SilentlyContinue
-    if (-not (Test-DiskInUse $disk)) { [CpdDisk]::DeleteOwned($disk, $diskID) | Out-Null }
+    $id = $vm.Id.ToString()
+    Stop-VM -VM (Get-OwnedVM $id $in.owner) -TurnOff -Force -ErrorAction SilentlyContinue
+    Remove-VM -VM (Get-OwnedVM $id $in.owner) -Force -ErrorAction SilentlyContinue
+    if (-not (Test-DiskInUse $diskID)) { [CpdDisk]::DeleteOwned($disk, $diskID) | Out-Null }
   }
   throw
 }
-Write-Doc ([ordered]@{ vmId = $vm.Id.ToString(); adapterId = ($a[0].Id -split '\\')[-1]; disk = @{ path = $disk; id = $diskID } })
+Write-Doc ([ordered]@{ vmId = $vm.Id.ToString(); adapterId = ($a[0].Id -split '\\')[-1]; disk = @{ path = $disk; id = $diskID; folderId = $folderLease.Id }; dvds = $dvds })
+} finally {
+  if ($folderLease) { $folderLease.Dispose() }
+  $dataLease.Dispose()
+}
 `
 
 // scriptSetIntegration sets integration services by ID.
-const scriptSetIntegration = buildPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
+const scriptSetIntegration = buildPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
 foreach ($p in $in.want.PSObject.Properties) {
-  $s = @(Get-VMIntegrationService -VM $vm[0] | Where-Object { (($_.Id -split '\\')[-1]).ToUpper() -eq $p.Name })
-  foreach ($x in $s) { if ($p.Value) { Enable-VMIntegrationService -VMIntegrationService $x } else { Disable-VMIntegrationService -VMIntegrationService $x } }
+  $s = @(Get-VMIntegrationService -VM $vm | Where-Object { (($_.Id -split '\\')[-1]).ToUpper() -eq $p.Name })
+  foreach ($x in $s) { $null = Get-OwnedVM $in.vm $in.owner; if ($p.Value) { Enable-VMIntegrationService -VMIntegrationService $x } else { Disable-VMIntegrationService -VMIntegrationService $x } }
 }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptSetBindings unbinds components from the host vNIC by component ID.
-const scriptSetBindings = buildPrelude + `$na = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.ifIndex -eq [int]$in.ifIndex })
-if ($na.Count -ne 1) { throw 'The host vNIC was not found.' }
-foreach ($c in @($in.off)) {
-  $b = @(Get-NetAdapterBinding -Name $na[0].Name -IncludeHidden -AllBindings | Where-Object { ([string]$_.ComponentID).ToLower() -eq $c })
-  foreach ($x in $b) { if ($x.Enabled) { Disable-NetAdapterBinding -Name $na[0].Name -ComponentID $x.ComponentID -IncludeHidden -AllBindings } }
+const scriptSetBindings = buildPrelude + `foreach ($c in @($in.off)) {
+  $b = @(Get-HostBinding $c)
+  if ($b.Count -eq 1 -and $b[0].Enabled) {
+    $null = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+    Disable-NetAdapterBinding -InputObject $b[0]
+  }
 }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptEnsureFirewall makes the group's one rule: inbound, block, on the host
-// vNIC, with the owner tag. It refuses a group with a rule that does not carry
-// the tag.
-const scriptEnsureFirewall = buildPrelude + `$na = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.ifIndex -eq [int]$in.ifIndex })
-if ($na.Count -ne 1) { throw 'The host vNIC was not found.' }
-$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)
-foreach ($r in $rs) { if ((Get-Owner ([string]$r.Description)) -ne $in.owner) { throw 'A firewall rule in this group was not made by this install.' } }
-$rs | Remove-NetFirewallRule -ErrorAction SilentlyContinue
-New-NetFirewallRule -Name ($in.group + '-block-in') -DisplayName ($in.group + ' block inbound') -Group $in.group -Direction Inbound -Action Block -InterfaceAlias $na[0].Name -Enabled True -Description ('CashPilot Secure VM. cashpilot-owner=' + $in.owner) | Out-Null
+func blockFirewallID(n Names, owner string) string { return n.FirewallGroup + "-block-in-" + owner }
+
+// scriptEnsureFirewall matches the rule's recorded name and live owner tag.
+const scriptEnsureFirewall = buildPrelude + `$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)
+foreach ($r in $rs) {
+  if ($r.Name -cne $in.id -or (Get-Owner ([string]$r.Description)) -cne $in.owner) {
+    throw 'A firewall rule in this group has no matching recorded identity.'
+  }
+}
+$na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+if ($rs.Count -eq 0) {
+  New-NetFirewallRule -Name $in.id -DisplayName ($in.group + ' block inbound') -Group $in.group -Direction Inbound -Action Block -InterfaceAlias $na.Name -Enabled True -Description ('CashPilot Secure VM. cashpilot-owner=' + $in.owner) | Out-Null
+} elseif ($rs.Count -eq 1) {
+  Set-NetFirewallRule -InputObject $rs[0] -Direction Inbound -Action Block -InterfaceAlias $na.Name -Enabled True
+} else { throw 'More than one firewall rule has the recorded identity.' }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptSetHostNeighbor gives the host one static entry for the guest on the
-// vNIC, in place of any other static entry there.
-const scriptSetHostNeighbor = buildPrelude + `Get-NetNeighbor -InterfaceIndex ([int]$in.ifIndex) -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.State.ToString() -eq 'Permanent' } | Remove-NetNeighbor -Confirm:$false
-New-NetNeighbor -InterfaceIndex ([int]$in.ifIndex) -IPAddress $in.ip -LinkLayerAddress $in.mac -State Permanent | Out-Null
+// scriptSetHostNeighbor adds the guest's entry only when the address is free.
+const scriptSetHostNeighbor = buildPrelude + `$na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+$have = @(Get-NetNeighbor -InterfaceIndex ([int]$na.ifIndex) -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $in.ip })
+if ($have.Count -eq 0) {
+  $na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+  New-NetNeighbor -InterfaceIndex ([int]$na.ifIndex) -IPAddress $in.ip -LinkLayerAddress $in.mac -State Permanent | Out-Null
+} elseif ($have.Count -ne 1 -or $have[0].State.ToString() -ne 'Permanent' -or $have[0].LinkLayerAddress -ne $in.mac) {
+  throw 'The existing neighbour entry conflicts with setup and was left in place.'
+}
 Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptSetEnhancedSession sets the host-wide setting and returns the old
 // value.
-const scriptSetEnhancedSession = buildPrelude + `$was = [bool](Get-VMHost).EnableEnhancedSessionMode
+const scriptSetEnhancedSession = buildPrelude + `$config = @(Get-VMHost)
+if ($config.Count -ne 1 -or $config[0].EnableEnhancedSessionMode -isnot [bool]) { throw 'Could not read the current Enhanced Session setting.' }
+$was = $config[0].EnableEnhancedSessionMode
 if ($was -ne [bool]$in.on) { Set-VMHost -EnableEnhancedSessionMode ([bool]$in.on) }
 Write-Doc ([ordered]@{ was = $was })
 `
@@ -265,40 +317,44 @@ Write-Doc ([ordered]@{ added = $added })
 
 // scriptWriteAnswerISO writes autounattend.xml onto a new ISO through IMAPI2,
 // from a staging folder next to the ISO that it deletes again.
-const scriptWriteAnswerISO = buildPrelude + `if (-not ('CpdIso' -as [type])) { Add-Type -TypeDefinition @'
+var scriptWriteAnswerISO = buildPrelude + runtime.SecureVMDirectoryPS + runtime.SecureVMFilesPS + `if (-not ('CpdIso' -as [type])) { Add-Type -TypeDefinition @'
 using System; using System.IO; using System.Runtime.InteropServices; using System.Runtime.InteropServices.ComTypes;
 public static class CpdIso { public static void Write(object stream, string path) {
-  IStream s = (IStream)stream; using (var f = File.Create(path)) { byte[] buf = new byte[65536]; IntPtr p = Marshal.AllocHGlobal(4);
+  IStream s = (IStream)stream; using (var f = new FileStream(path, FileMode.CreateNew, FileAccess.Write)) { byte[] buf = new byte[65536]; IntPtr p = Marshal.AllocHGlobal(4);
   try { while (true) { s.Read(buf, buf.Length, p); int n = Marshal.ReadInt32(p); if (n <= 0) break; f.Write(buf, 0, n); } } finally { Marshal.FreeHGlobal(p); } } } }
 '@ }
-$stage = $in.path + '.stage'
-$answer = Join-Path $stage 'autounattend.xml'
-if (Test-Path -LiteralPath $stage) {
-  $d = Get-Item -LiteralPath $stage -Force
-  if (-not $d.PSIsContainer -or ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The answer folder is not a plain directory.' }
-  foreach ($f in @(Get-ChildItem -LiteralPath $stage -Force)) {
-    if ($f.Name -cne 'autounattend.xml' -or $f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-      throw ('Unknown file in the answer folder: ' + $f.FullName)
-    }
-  }
-} else { New-Item -ItemType Directory -Path $stage | Out-Null }
+$root = [IO.Path]::GetDirectoryName($in.path)
+$lease = Open-CPDDirectory $root $false 'cashpilot-data'
 try {
-  [IO.File]::WriteAllBytes($answer, [Convert]::FromBase64String($in.xml))
-  $fs = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
-  $fs.FileSystemsToCreate = 3
-  $fs.VolumeName = 'CPDANSWER'
-  $fs.Root.AddTree($stage, $false)
-  $tmp = $in.path + '.tmp'
-  if (Test-Path -LiteralPath $tmp) {
-    $f = Get-Item -LiteralPath $tmp -Force
-    if ($f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The temporary answer ISO is not a plain file.' }
+  $j = Open-CPDFileJournal $root
+  $stageRel = '.answer-stage.' + [guid]::NewGuid().ToString('N')
+  $stage = Join-Path $root $stageRel
+  Write-CPDFileRecord $j $stageRel ''
+  $stageLease = Open-CPDDirectory $stage $true 'cashpilot-answer'
+  $stageID = $stageLease.Id
+  $markerID = [CpdDirectory]::FileID((Join-Path $stage '.cashpilot-directory'))
+  $answerRel = Join-Path $stageRel 'autounattend.xml'
+  $answerID = $null
+  try {
+    Write-CPDFileRecord $j $stageRel $stageID
+    Write-CPDFileRecord $j (Join-Path $stageRel '.cashpilot-directory') $markerID
+    $answerID = Write-CPDNewFile $j $answerRel ([Convert]::FromBase64String($in.xml))
+    $fs = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
+    $fs.FileSystemsToCreate = 3
+    $fs.VolumeName = 'CPDANSWER'
+    # AddTree includes every file, so remove the private marker first.
+    Remove-CPDFile $j (Join-Path $stageRel '.cashpilot-directory') $markerID
+    $fs.Root.AddTree($stage, $false)
+    $rel = [IO.Path]::GetFileName($in.path)
+    Write-CPDFileRecord $j $rel ''
+    [CpdIso]::Write($fs.CreateResultImage().ImageStream, $in.path)
+    Write-CPDFileRecord $j $rel ([CpdDirectory]::FileID($in.path))
+  } finally {
+    Remove-CPDFile $j $answerRel $answerID
+    $stageLease.Dispose()
+    Remove-CPDFile $j $stageRel $stageID
   }
-  [CpdIso]::Write($fs.CreateResultImage().ImageStream, $tmp)
-  Move-Item -LiteralPath $tmp -Destination $in.path -Force
-} finally {
-  Remove-Item -LiteralPath $answer -Force -ErrorAction SilentlyContinue
-  if (@(Get-ChildItem -LiteralPath $stage -Force).Count -eq 0) { [IO.Directory]::Delete($stage) }
-}
+} finally { $lease.Dispose() }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -307,15 +363,21 @@ Write-Doc ([ordered]@{ ok = $true })
 const scriptBootKeys = buildPrelude + `$cs = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter ("Name='" + $in.vm + "'")
 if (-not $cs) { throw 'The VM was not found.' }
 $kb = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_Keyboard
-for ($i = 0; $i -lt 10; $i++) { try { Invoke-CimMethod -InputObject $kb -MethodName TypeKey -Arguments @{ keyCode = [uint32]13 } | Out-Null } catch { }; Start-Sleep -Seconds 1 }
+for ($i = 0; $i -lt 10; $i++) { $null = Get-OwnedVM $in.vm $in.owner; try { Invoke-CimMethod -InputObject $kb -MethodName TypeKey -Arguments @{ keyCode = [uint32]13 } | Out-Null } catch { }; Start-Sleep -Seconds 1 }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptEjectDVDs removes every DVD drive of the VM.
-const scriptEjectDVDs = buildPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-Get-VMDvdDrive -VM $vm[0] | Remove-VMDvdDrive
-Write-Doc ([ordered]@{ left = @(Get-VMDvdDrive -VM $vm[0]).Count })
+// scriptEjectDVDs removes only the journaled attachments on the owned VM.
+const scriptEjectDVDs = buildPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+foreach ($d in @($in.dvds)) {
+  $vm = Get-OwnedVM $in.vm $in.owner
+  $matched = @(Get-VMDvdDrive -VM $vm | Where-Object { [string]$_.Id -eq $d.id -and [string]$_.Path -eq $d.path })
+  if ($matched.Count -eq 1) {
+    $null = Get-OwnedVM $in.vm $in.owner
+    Remove-VMDvdDrive -VMDvdDrive $matched[0]
+  }
+}
+Write-Doc ([ordered]@{ left = @(Get-VMDvdDrive -VM $vm).Count })
 `
 
 // scriptRegisterGuardTask registers the guard task as SYSTEM, after stopping a
@@ -343,6 +405,12 @@ $resume.Subscription = '<QueryList><Query Id="0" Path="System"><Select Path="Sys
 $set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 $pr = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
 $replace = $t.Count -eq 1
+if ($replace) {
+  $live = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
+  if ($live.Count -ne 1 -or $live[0].Description -cne ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner) -or $live[0].State.ToString() -eq 'Running') {
+    throw 'The guard task changed before registration.'
+  }
+}
 Register-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -Action $action -Trigger @($boot, $rep, $resume) -Settings $set -Principal $pr -Description ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner) -Force:$replace | Out-Null
 Write-Doc ([ordered]@{ ok = $true })
 `
@@ -356,37 +424,62 @@ Start-ScheduledTask -InputObject $t[0] | Out-Null
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptUnregisterGuardTask stops and deletes the guard task when it carries
-// the owner tag, then deletes its folder when nothing else is in it.
-const scriptUnregisterGuardTask = buildPrelude + `$t = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
-if ($t.Count -gt 1) { throw 'More than one scheduled task matched.' }
-if ($t.Count -eq 1) {
-  if ($t[0].Description -cne ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner)) { throw 'The scheduled task was not made by this install.' }
-  Stop-ScheduledTask -InputObject $t[0] -ErrorAction SilentlyContinue | Out-Null
-  Unregister-ScheduledTask -InputObject $t[0] -Confirm:$false
+// scriptUnregisterGuardTask stops and removes the recorded task.
+const scriptUnregisterGuardTask = buildPrelude + `function Get-OwnedGuardTask {
+  $t = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
+  if ($t.Count -eq 0) { return }
+  if ($t.Count -ne 1 -or $t[0].Description -cne ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner)) {
+    throw 'The scheduled task was not made by this install.'
+  }
+  return $t[0]
+}
+$t = Get-OwnedGuardTask
+if ($t -and $t.State.ToString() -eq 'Running') {
+  Stop-ScheduledTask -InputObject $t | Out-Null
+  for ($i = 0; $i -lt 30; $i++) {
+    $t = Get-OwnedGuardTask
+    if (-not $t -or $t.State.ToString() -ne 'Running') { break }
+    Start-Sleep -Seconds 1
+  }
+}
+$t = Get-OwnedGuardTask
+if ($t) {
+  if ($t.State.ToString() -eq 'Running') { throw 'The guard task did not stop.' }
+  Unregister-ScheduledTask -InputObject $t -Confirm:$false
 }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptRemoveVM removes the owned VM and the recorded disk file. Any
 // other attached VHDX is reported and kept.
-const scriptRemoveVM = buildPrelude + diskIdentityPrelude + `$vm = @()
+var scriptRemoveVM = buildPrelude + diskIdentityPrelude + runtime.SecureVMDirectoryPS + `$vm = @()
 if ($in.vm) { $vm = @(Find-OurVM $in.vm) }
 if ($vm.Count -gt 1) { throw 'More than one VM has the recorded ID.' }
 $disks = @()
 if ($vm.Count -eq 1) {
   $vm = $vm[0]
   if ((Get-Owner ([string]$vm.Notes)) -cne $in.owner) { throw 'The VM was not made by this install.' }
+  if (@(Get-VMSnapshot -VM $vm -ErrorAction Stop).Count -ne 0) { throw 'The VM has checkpoints, so it was left in place.' }
   $disks = @(Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path } | ForEach-Object { [string]$_.Path })
-  if ($vm.State.ToString() -ne 'Off') { Stop-VM -VM $vm -TurnOff -Force }
-  Remove-VM -VM $vm -Force
+  if ($vm.State.ToString() -ne 'Off') { Stop-VM -VM (Get-OwnedVM $in.vm $in.owner) -TurnOff -Force }
+  Remove-VM -VM (Get-OwnedVM $in.vm $in.owner) -Force
 }
 $left = @()
 if ($in.disk) {
   $path = $in.disk.path
-  if (-not (Test-DiskInUse $path) -and [CpdDisk]::DeleteOwned($path, $in.disk.id)) {
-    $disks = @($disks | Where-Object { $_ -ne $path })
-  } elseif (Test-Path -LiteralPath $path) { $disks += $path }
+  $deleted = $false
+  $lease = $null
+  if ($in.disk.folderId -and (Test-Path -LiteralPath $path)) {
+    try {
+      $lease = Open-CPDDirectory ([IO.Path]::GetDirectoryName($path)) $false $in.owner
+      if ($lease.Id -ceq $in.disk.folderId -and -not (Test-DiskInUse $in.disk.id)) {
+        $deleted = [CpdDisk]::DeleteOwned($path, $in.disk.id)
+      }
+    } catch { $deleted = $false }
+    finally { if ($lease) { $lease.Dispose() } }
+  }
+  if ($deleted) { $disks = @($disks | Where-Object { $_ -ne $path }) }
+  elseif (Test-Path -LiteralPath $path) { $disks += $path }
 }
 $left = @($disks | Select-Object -Unique)
 Write-Doc ([ordered]@{ left = @($left) })
@@ -416,7 +509,7 @@ Write-Doc ([ordered]@{ ok = $true })
 
 // scriptRemoveFirewall removes the rules of the group that carry the owner
 // tag.
-const scriptRemoveFirewall = buildPrelude + `@(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { (Get-Owner ([string]$_.Description)) -eq $in.owner }) | Remove-NetFirewallRule
+const scriptRemoveFirewall = buildPrelude + `@(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq $in.id -and (Get-Owner ([string]$_.Description)) -ceq $in.owner }) | Remove-NetFirewallRule
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -435,44 +528,26 @@ const scriptRemoveHyperVAdmin = buildPrelude + `if ((Get-GroupSids 'S-1-5-32-578
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptClearProof matches the owner tag on rules and registry keys and
-// the full instance-specific path of a pktmon session.
-const scriptClearProof = buildPrelude + `$done = @()
-$left = @()
-$unverifiedCapture = $false
+// scriptClearProof inventories leftovers. An interrupted proof has no live
+// handles for its rules, registrations or trace session.
+const scriptClearProof = buildPrelude + `$left = @()
 foreach ($r in @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)) {
-  if ($in.desc -and [string]$r.Description -ceq $in.desc) {
-    Remove-NetFirewallRule -InputObject $r
-    $done += 'the proof firewall rule ' + [string]$r.Name
-  } else { $left += 'the unverified proof firewall rule ' + [string]$r.Name }
+  $left += 'the proof firewall rule ' + [string]$r.Name + ' (ownership could not be verified)'
 }
 $k = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices'
 if (Test-Path -LiteralPath $k) {
   foreach ($c in @(Get-ChildItem -LiteralPath $k)) {
     $element = [string]$c.GetValue('ElementName')
-    if ($in.element -and $element -ceq $in.element -and $c.SubKeyCount -eq 0) {
-      Remove-Item -LiteralPath $c.PSPath -Force
-      $done += 'the proof hv_sock key ' + [string]$c.PSChildName
-    } elseif ($element.StartsWith($in.elementPrefix, [StringComparison]::Ordinal)) {
+    if ($element.StartsWith($in.elementPrefix, [StringComparison]::Ordinal)) {
       $left += 'the unverified proof hv_sock key ' + [string]$c.PSChildName
     }
   }
 }
 $s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
 if ($s.Count -gt 0) {
-  $path = [string]$s[0].LocalFilePath
-  $pattern = '^' + [regex]::Escape($in.dir + 'pktmon-' + $in.owner + '-') + '[0-9]+\\capture\.etl$'
-  if ($s.Count -eq 1 -and $in.owner -and $path -match $pattern) {
-    $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
-    & $pm stop | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
-    $done += 'the proof pktmon session'
-  } else {
-    $unverifiedCapture = $true
-    $left += 'the running pktmon session (ownership could not be verified)'
-  }
+  $left += 'the running pktmon session at ' + [string]$s[0].LocalFilePath + ' (ownership could not be verified)'
 }
-Write-Doc ([ordered]@{ cleared = @($done); left = @($left); unverifiedCapture = $unverifiedCapture })
+Write-Doc ([ordered]@{ cleared = @(); left = @($left); unverifiedCapture = ($s.Count -gt 0) })
 `
 
 // scriptGuest runs one guest script over PowerShell Direct as the given
@@ -481,6 +556,7 @@ Write-Doc ([ordered]@{ cleared = @($done); left = @($left); unverifiedCapture = 
 // in its scope. What the guest printed comes back as one string.
 const scriptGuest = buildPrelude + `$pw = ConvertTo-SecureString ([string]$in.password) -AsPlainText -Force
 $cred = New-Object Management.Automation.PSCredential ([string]$in.user, $pw)
+$null = Get-OwnedVM $in.vm $in.owner
 $out = Invoke-Command -VMId $in.vm -Credential $cred -ErrorAction Stop -ArgumentList ([string]$in.arg), ([string]$in.text) -ScriptBlock {
   param($j, $t)
   $a = $j | ConvertFrom-Json
@@ -795,43 +871,47 @@ func (b psBuilder) EnsureNAT(ctx context.Context, n Names, sub netip.Prefix, kno
 }
 
 // CreateVM creates the VM off, with one disconnected adapter.
-func (b psBuilder) CreateVM(ctx context.Context, p Plan, iso, answerISO string) (string, string, OwnedDisk, error) {
+func (b psBuilder) CreateVM(ctx context.Context, p Plan, iso, answerISO string) (string, string, OwnedDisk, []OwnedDVD, error) {
 	if err := p.Names.Validate(); err != nil {
-		return "", "", OwnedDisk{}, err
+		return "", "", OwnedDisk{}, nil, err
 	}
 	if err := checkOwner(p.Owner); err != nil {
-		return "", "", OwnedDisk{}, err
+		return "", "", OwnedDisk{}, nil, err
 	}
 	for what, path := range map[string]string{"VHDX folder": p.VHDXDir, "ISO": iso, "answer ISO": answerISO} {
 		if err := checkWinPath(what, path); err != nil {
-			return "", "", OwnedDisk{}, err
+			return "", "", OwnedDisk{}, nil, err
 		}
 	}
 	if _, err := NormalizeMAC(p.GuestMAC); err != nil {
-		return "", "", OwnedDisk{}, err
+		return "", "", OwnedDisk{}, nil, err
 	}
 	arg := map[string]any{
-		"vm": p.Names.VM, "owner": p.Owner, "vhdxDir": p.VHDXDir, "memory": p.MemoryBytes, "diskBytes": uint64(guestDiskBytes),
+		"vm": p.Names.VM, "owner": p.Owner, "dataDir": p.Names.DataDir, "memory": p.MemoryBytes, "diskBytes": uint64(guestDiskBytes),
 		"procCount": p.ProcCount, "procMax": p.ProcMax, "procWeight": p.ProcWeight, "mac": p.GuestMAC,
 		"iso": iso, "answer": answerISO,
 	}
 	var w struct {
-		VMID      string    `json:"vmId"`
-		AdapterID string    `json:"adapterId"`
-		Disk      OwnedDisk `json:"disk"`
+		VMID      string     `json:"vmId"`
+		AdapterID string     `json:"adapterId"`
+		Disk      OwnedDisk  `json:"disk"`
+		DVDs      []OwnedDVD `json:"dvds"`
 	}
 	if err := b.call(ctx, scriptCreateVM, arg, &w); err != nil {
-		return "", "", OwnedDisk{}, err
+		return "", "", OwnedDisk{}, nil, err
 	}
 	if err := w.Disk.validate(); err != nil {
-		return "", "", OwnedDisk{}, err
+		return "", "", OwnedDisk{}, nil, err
 	}
-	return w.VMID, w.AdapterID, w.Disk, nil
+	return w.VMID, w.AdapterID, w.Disk, w.DVDs, nil
 }
 
 // SetIntegration sets integration services by ID.
-func (b psBuilder) SetIntegration(ctx context.Context, vmID string, want map[string]bool) error {
+func (b psBuilder) SetIntegration(ctx context.Context, vmID, owner string, want map[string]bool) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
 		return err
 	}
 	ids := map[string]bool{}
@@ -841,12 +921,18 @@ func (b psBuilder) SetIntegration(ctx context.Context, vmID string, want map[str
 		}
 		ids[strings.ToUpper(id)] = on
 	}
-	return b.ok(ctx, scriptSetIntegration, map[string]any{"vm": vmID, "want": ids})
+	return b.ok(ctx, scriptSetIntegration, map[string]any{"vm": vmID, "owner": owner, "want": ids})
 }
 
 // SetBindings unbinds components from the host vNIC. Only the planned
 // components may go.
-func (b psBuilder) SetBindings(ctx context.Context, ifIndex int, off []string) error {
+func (b psBuilder) SetBindings(ctx context.Context, ifIndex int, switchID, owner string, off []string) error {
+	if err := checkVMID("switch ID", switchID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
 	if err := checkIfIndex(ifIndex); err != nil {
 		return err
 	}
@@ -855,12 +941,18 @@ func (b psBuilder) SetBindings(ctx context.Context, ifIndex int, off []string) e
 			return fmt.Errorf("component %q is not one setup unbinds", c)
 		}
 	}
-	return b.ok(ctx, scriptSetBindings, map[string]any{"ifIndex": ifIndex, "off": off})
+	return b.ok(ctx, scriptSetBindings, map[string]any{"ifIndex": ifIndex, "switchId": switchID, "owner": owner, "off": off})
 }
 
 // EnsureFirewall makes the group's one inbound Block rule on the vNIC.
-func (b psBuilder) EnsureFirewall(ctx context.Context, n Names, ifIndex int, owner string) error {
+func (b psBuilder) EnsureFirewall(ctx context.Context, n Names, ifIndex int, switchID, owner string) error {
 	if err := n.Validate(); err != nil {
+		return err
+	}
+	if err := checkVMID("switch ID", switchID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
 		return err
 	}
 	if err := checkIfIndex(ifIndex); err != nil {
@@ -869,11 +961,17 @@ func (b psBuilder) EnsureFirewall(ctx context.Context, n Names, ifIndex int, own
 	if err := checkOwner(owner); err != nil {
 		return err
 	}
-	return b.ok(ctx, scriptEnsureFirewall, map[string]any{"group": n.FirewallGroup, "ifIndex": ifIndex, "owner": owner})
+	return b.ok(ctx, scriptEnsureFirewall, map[string]any{"group": n.FirewallGroup, "id": blockFirewallID(n, owner), "ifIndex": ifIndex, "switchId": switchID, "owner": owner})
 }
 
 // SetHostNeighbor gives the host its static entry for the guest.
-func (b psBuilder) SetHostNeighbor(ctx context.Context, ifIndex int, ip netip.Addr, mac string) error {
+func (b psBuilder) SetHostNeighbor(ctx context.Context, ifIndex int, switchID, owner string, ip netip.Addr, mac string) error {
+	if err := checkVMID("switch ID", switchID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
 	if err := checkIfIndex(ifIndex); err != nil {
 		return err
 	}
@@ -884,7 +982,7 @@ func (b psBuilder) SetHostNeighbor(ctx context.Context, ifIndex int, ip netip.Ad
 	if err != nil {
 		return err
 	}
-	return b.ok(ctx, scriptSetHostNeighbor, map[string]any{"ifIndex": ifIndex, "ip": ip.String(), "mac": macDash(m)})
+	return b.ok(ctx, scriptSetHostNeighbor, map[string]any{"ifIndex": ifIndex, "switchId": switchID, "owner": owner, "ip": ip.String(), "mac": macDash(m)})
 }
 
 // SetEnhancedSession sets the host-wide setting.
@@ -935,26 +1033,32 @@ func (b psBuilder) WriteAnswerISO(ctx context.Context, path string, xml []byte) 
 }
 
 // BootKeys presses Enter once a second for 10 seconds.
-func (b psBuilder) BootKeys(ctx context.Context, vmID string) error {
+func (b psBuilder) BootKeys(ctx context.Context, vmID, owner string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
-	return b.ok(ctx, scriptBootKeys, map[string]string{"vm": vmID})
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
+	return b.ok(ctx, scriptBootKeys, map[string]string{"vm": vmID, "owner": owner})
 }
 
 // EjectDVDs removes every DVD drive.
-func (b psBuilder) EjectDVDs(ctx context.Context, vmID string) error {
+func (b psBuilder) EjectDVDs(ctx context.Context, vmID, owner string, dvds []OwnedDVD) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
 		return err
 	}
 	var w struct {
 		Left int `json:"left"`
 	}
-	if err := b.call(ctx, scriptEjectDVDs, map[string]string{"vm": vmID}, &w); err != nil {
+	if err := b.call(ctx, scriptEjectDVDs, map[string]any{"vm": vmID, "owner": owner, "dvds": dvds}, &w); err != nil {
 		return err
 	}
 	if w.Left != 0 {
-		return fmt.Errorf("%d DVD drives are still on the VM", w.Left)
+		return fmt.Errorf("%d unverified DVD drives were left on the VM", w.Left)
 	}
 	return nil
 }
@@ -1026,8 +1130,11 @@ func jsonString(v any) (string, error) {
 const maxGuestOut = 64 << 10
 
 // Guest runs one fixed guest script over PowerShell Direct.
-func (b psBuilder) Guest(ctx context.Context, vmID string, cred Cred, s GuestScript, arg, out any) error {
+func (b psBuilder) Guest(ctx context.Context, vmID, owner string, cred Cred, s GuestScript, arg, out any) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
 		return err
 	}
 	if !slices.ContainsFunc(guestScripts, func(g GuestScript) bool { return g == s }) {
@@ -1046,7 +1153,7 @@ func (b psBuilder) Guest(ctx context.Context, vmID string, cred Cred, s GuestScr
 	var w struct {
 		Out string `json:"out"`
 	}
-	if err := b.call(ctx, scriptGuest, map[string]string{"vm": vmID, "user": cred.User, "password": cred.Password, "arg": a, "text": s.Text}, &w); err != nil {
+	if err := b.call(ctx, scriptGuest, map[string]string{"vm": vmID, "owner": owner, "user": cred.User, "password": cred.Password, "arg": a, "text": s.Text}, &w); err != nil {
 		return err
 	}
 	if len(w.Out) > maxGuestOut {
@@ -1122,7 +1229,7 @@ func (b psBuilder) RemoveFirewall(ctx context.Context, n Names, owner string) er
 	if err := checkOwner(owner); err != nil {
 		return err
 	}
-	return b.ok(ctx, scriptRemoveFirewall, map[string]string{"group": n.FirewallGroup, "owner": owner})
+	return b.ok(ctx, scriptRemoveFirewall, map[string]string{"group": n.FirewallGroup, "id": blockFirewallID(n, owner), "owner": owner})
 }
 
 // RemoveGuardian deletes the guardian.
@@ -1141,25 +1248,13 @@ func (b psBuilder) RemoveHyperVAdmin(ctx context.Context, sid string) error {
 	return b.ok(ctx, scriptRemoveHyperVAdmin, map[string]string{"sid": sid})
 }
 
-// ClearProof clears earlier owned proof artifacts and lists unverified ones.
+// ClearProof reports earlier proof artifacts that have no live identity.
 func (b psBuilder) ClearProof(ctx context.Context, n Names, owner string) (ProofCleanup, error) {
 	if err := n.Validate(); err != nil {
 		return ProofCleanup{}, err
 	}
-	desc, element := "", ""
-	if owner != "" {
-		if err := checkOwner(owner); err != nil {
-			return ProofCleanup{}, err
-		}
-		desc, element = proofCanaryDesc(owner), ProofElementName(n, owner)
-	}
-	if err := checkWinPath("data folder", n.DataDir); err != nil {
-		return ProofCleanup{}, err
-	}
 	var w ProofCleanup
-	arg := map[string]string{"group": n.FirewallGroup + proofGroupSuffix, "desc": desc,
-		"element": element, "elementPrefix": "CashPilot Secure VM proof " + n.VM,
-		"owner": owner, "dir": strings.TrimRight(n.DataDir, `\`) + `\proof\`}
+	arg := map[string]string{"group": n.FirewallGroup + proofGroupSuffix, "elementPrefix": "CashPilot Secure VM proof " + n.VM + "."}
 	err := b.call(ctx, scriptClearProof, arg, &w)
 	return w, err
 }

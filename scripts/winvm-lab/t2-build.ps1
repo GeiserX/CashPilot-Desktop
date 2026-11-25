@@ -4,16 +4,10 @@
   setup chain, and prove its fence.
 
 .DESCRIPTION
-  Runs elevated on the lab host. It does what the app's admin stub does: makes
-  the instance's data folder and its guard folder admin-only, copies setup.ps1
-  there and checks its SHA-256, then runs it with a lab build of CashPilot
-  (go build -tags winvmlab). setup.ps1 copies the exe, checks it, and runs
-  --vm-setup, which builds the VM, runs the fence proof and starts the guard.
-
-  The guest passwords are made here once per instance and kept DPAPI-protected
-  for this account under %LOCALAPPDATA%\cpd-lab, so a second run (Repair) uses
-  the same ones. No host name, address or VM name is written here: everything
-  comes in as a parameter, and the instance's names are cpd-svm-<n>.
+  Runs elevated on the lab host. It creates private directories and holds
+  them open while setup runs. Guest passwords are kept under the lab
+  instance's data directory and protected with DPAPI for this account.
+  Setup stores the VM under the same private data directory.
 
 .EXAMPLE
   .\t2-build.ps1 -Instance 1 -Exe .\CashPilot-Desktop-lab.exe -Repo C:\src\CashPilot-Desktop -Iso D:\iso\windows.iso -ImageIndex 6 -VhdxDir D:\cpd-lab -GuestMemoryGB 4 -MinHostRamGB 8 -KeepEnhancedSession
@@ -33,37 +27,19 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $name = 'cpd-svm-' + $Instance
-$data = Join-Path $env:ProgramData ('CashPilot\lab\' + $name)
+$common = [Environment]::GetFolderPath('CommonApplicationData')
+$data = Join-Path $common ('CashPilot\lab\' + $name)
 $guard = Join-Path $data 'guard'
 $taskPath = '\CashPilot\'
 $taskName = 'VMGuard-' + $name
 
-# As the app's stub does: a folder that exists must already be owned by
-# SYSTEM or Administrators, and a new one gets its rules as it is made.
-function Lock-Dir([string]$p) {
-  for ($d = [IO.DirectoryInfo]::new($p); $d; $d = $d.Parent) {
-    if ($d.Exists -and ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('a link in the data path: ' + $d.FullName) }
-  }
-  $acl = New-Object Security.AccessControl.DirectorySecurity
-  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
-  if (-not (Test-Path -LiteralPath $p)) { [IO.Directory]::CreateDirectory($p, $acl) | Out-Null }
-  $i = Get-Item -LiteralPath $p -Force
-  if (-not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('not a plain folder: ' + $p) }
-  $o = (Get-Acl -LiteralPath $p).GetOwner([Security.Principal.SecurityIdentifier]).Value
-  if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator, so not used: ' + $p + '. Delete it and try again.') }
-  Set-Acl -LiteralPath $p -AclObject $acl
-}
-
-# As the app's stub does: refuse a link, or anything not owned by SYSTEM or
-# Administrators, inside the data folder.
-function Test-Tree([string]$p) {
-  foreach ($c in @(Get-ChildItem -LiteralPath $p -Force)) {
-    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('a link inside the data folder: ' + $c.FullName) }
-    $o = (Get-Acl -LiteralPath $c.FullName).GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator: ' + $c.FullName) }
-    if ($c.PSIsContainer) { Test-Tree $c.FullName }
-  }
-}
+. (Join-Path $Repo 'internal\runtime\scripts\secure-vm-directory.ps1')
+. (Join-Path $Repo 'internal\runtime\scripts\secure-vm-files.ps1')
+$base = Open-CPDDirectory (Join-Path $common 'CashPilot') $true 'cashpilot-data'
+$lab = Open-CPDDirectory (Join-Path $common 'CashPilot\lab') $true 'cashpilot-lab'
+$instanceLease = Open-CPDDirectory $data $true 'cashpilot-data'
+$guardLease = Open-CPDDirectory $guard $true 'cashpilot-guard'
+$journal = Open-CPDFileJournal $data
 
 function New-LabPassword {
   $set = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
@@ -72,16 +48,17 @@ function New-LabPassword {
   'Cp9!' + (-join ($b | ForEach-Object { $set[$_ % $set.Length] }))
 }
 
-# The passwords: made once per instance, kept for this account only.
-$credDir = Join-Path $env:LOCALAPPDATA 'cpd-lab'
-New-Item -ItemType Directory -Force -Path $credDir | Out-Null
-$credFile = Join-Path $credDir ($name + '.cred')
-if (-not (Test-Path -LiteralPath $credFile)) {
+$credRel = 'lab-guest.cred'
+$credFile = Join-Path $data $credRel
+if (-not (Get-CPDFileID $journal $credRel)) {
   $pair = [ordered]@{ admin = (New-LabPassword); earner = (New-LabPassword) }
-  ConvertTo-SecureString ($pair | ConvertTo-Json -Compress) -AsPlainText -Force | ConvertFrom-SecureString | Set-Content -LiteralPath $credFile
+  $protected = ConvertTo-SecureString ($pair | ConvertTo-Json -Compress) -AsPlainText -Force | ConvertFrom-SecureString
+  $null = Write-CPDNewFile $journal $credRel ([Text.Encoding]::ASCII.GetBytes($protected))
 }
-$sec = Get-Content -LiteralPath $credFile | ConvertTo-SecureString
-$pair = [Runtime.InteropServices.Marshal]::PtrToStringBSTR([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)) | ConvertFrom-Json
+$sec = [IO.File]::ReadAllText($credFile) | ConvertTo-SecureString
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+try { $pair = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) | ConvertFrom-Json }
+finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $params = [ordered]@{
@@ -89,31 +66,24 @@ $params = [ordered]@{
   adminPassword = $pair.admin; earnerPassword = $pair.earner; userSid = $sid; extraExits = @(); approveNetwork = [bool]$ApproveNetwork
   lab = [ordered]@{ minHostRam = [uint64]$MinHostRamGB * 1GB; guestMemory = [uint64]$GuestMemoryGB * 1GB; keepEnhancedSession = [bool]$KeepEnhancedSession; instance = $Instance }
 }
-Lock-Dir (Join-Path $env:ProgramData 'CashPilot')
-Lock-Dir (Join-Path $env:ProgramData 'CashPilot\lab')
-Lock-Dir $data
-Lock-Dir $guard
-Test-Tree $data
 $src = Join-Path $Repo 'internal\winvm\scripts\setup.ps1'
-$dst = Join-Path $guard 'setup.ps1'
-if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
-Copy-Item -LiteralPath $src -Destination $dst
-if ((Get-FileHash -LiteralPath $dst).Hash -ne (Get-FileHash -LiteralPath $src).Hash) { throw 'setup.ps1 changed while it was copied' }
+$setup = [scriptblock]::Create([IO.File]::ReadAllText($src))
 $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
-$ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
 $started = Get-Date
-# Run Windows PowerShell with only its own modules, even from PowerShell 7.
-$env:PSModulePath = $env:ProgramFiles + '\WindowsPowerShell\Modules;' + [Environment]::SystemDirectory + '\WindowsPowerShell\v1.0\Modules'
-# Keep the temporary plaintext in the protected folder. This elevated
-# process never deletes a file from the user's profile.
-$paramsFile = Join-Path $guard ('.lab-params.' + [guid]::NewGuid().ToString('N') + '.tmp')
+$paramsRel = 'guard\.lab-params.' + [guid]::NewGuid().ToString('N') + '.tmp'
+$paramsFile = Join-Path $data $paramsRel
+$paramsId = $null
 try {
-  [IO.File]::WriteAllText($paramsFile, ($params | ConvertTo-Json -Compress -Depth 4), (New-Object Text.UTF8Encoding $false))
+  $paramsId = Write-CPDNewFile $journal $paramsRel ([Text.Encoding]::UTF8.GetBytes(($params | ConvertTo-Json -Compress -Depth 4)))
   $paramsHash = (Get-FileHash -LiteralPath $paramsFile -Algorithm SHA256).Hash
-  & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile -ParamsHash $paramsHash
+  & $setup -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile -ParamsHash $paramsHash
   $code = $LASTEXITCODE
 } finally {
-  Remove-Item -LiteralPath $paramsFile -Force -ErrorAction SilentlyContinue
+  Remove-CPDFile $journal $paramsRel $paramsId
+  $guardLease.Dispose()
+  $instanceLease.Dispose()
+  $lab.Dispose()
+  $base.Dispose()
 }
 'setup exit code: ' + $code + ' after ' + [int]((Get-Date) - $started).TotalMinutes + ' min'
 $log = Join-Path $data 'setup.log'

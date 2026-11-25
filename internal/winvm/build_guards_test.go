@@ -257,8 +257,8 @@ func TestClearProofKeepsObjectsWithoutOurToken(t *testing.T) {
 		}
 	}
 	f.LeaveProofLeftovers(n, owner)
-	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
-		t.Fatalf("Repair: %v", err)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err == nil || !strings.Contains(err.Error(), key) {
+		t.Fatalf("Repair did not report the unverified proof object: %v", err)
 	}
 	check("Repair")
 	f.LeaveProofLeftovers(n, owner)

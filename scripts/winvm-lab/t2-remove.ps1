@@ -4,56 +4,37 @@
   chain, then check that nothing with its names is left.
 
 .DESCRIPTION
-  Runs elevated on the lab host. Like the app's admin stub, it copies
-  remove.ps1 into the instance's admin-only guard folder and runs it with a
-  lab build of CashPilot; remove.ps1 runs --vm-remove, then deletes the exe
-  copy and the folders when they are empty. Afterwards it lists every object
-  that still carries the instance's names, and exits 1 if there is one.
-  Run with only -Instance and -ForgetPasswords in a regular PowerShell window
-  to delete the saved guest passwords.
+  Runs elevated on the lab host. It opens the recorded private directories
+  and runs the removal bootstrap from the checkout.
 
 .EXAMPLE
   .\t2-remove.ps1 -Instance 1 -Exe .\CashPilot-Desktop-lab.exe -Repo C:\src\CashPilot-Desktop
 #>
 param(
   [Parameter(Mandatory = $true)][ValidateRange(1, 9)][int]$Instance,
-  [Parameter(Mandatory = $true, ParameterSetName = 'Remove')][string]$Exe,
-  [Parameter(Mandatory = $true, ParameterSetName = 'Remove')][string]$Repo,
-  [Parameter(Mandatory = $true, ParameterSetName = 'Passwords')][switch]$ForgetPasswords
+  [Parameter(Mandatory = $true)][string]$Exe,
+  [Parameter(Mandatory = $true)][string]$Repo
 )
 $ErrorActionPreference = 'Stop'
 $name = 'cpd-svm-' + $Instance
-if ($ForgetPasswords) {
-  $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
-  if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run -ForgetPasswords in a regular PowerShell window.' }
-  Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA ('cpd-lab\' + $name + '.cred')) -Force -ErrorAction SilentlyContinue
-  exit 0
-}
-$data = Join-Path $env:ProgramData ('CashPilot\lab\' + $name)
+$common = [Environment]::GetFolderPath('CommonApplicationData')
+$data = Join-Path $common ('CashPilot\lab\' + $name)
 $guard = Join-Path $data 'guard'
 $taskPath = '\CashPilot\'
 $taskName = 'VMGuard-' + $name
-if (-not (Test-Path -LiteralPath $guard)) { throw ('no guard folder at ' + $guard + '; nothing was built here') }
-$src = Join-Path $Repo 'internal\winvm\scripts\remove.ps1'
-for ($d = [IO.DirectoryInfo]::new($guard); $d; $d = $d.Parent) {
-  if ($d.Exists -and ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('a link in the data path: ' + $d.FullName) }
-}
-foreach ($path in @($data, $guard)) {
-  $owner = (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value
-  if ($owner -ne 'S-1-5-18' -and $owner -ne 'S-1-5-32-544') { throw ('Untrusted owner for ' + $path) }
-}
-$dst = Join-Path $guard 'remove.ps1'
-if (Test-Path -LiteralPath $dst) {
-  $item = Get-Item -LiteralPath $dst -Force
-  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The bootstrap path is not a plain file.' }
-}
-Copy-Item -LiteralPath $src -Destination $dst -Force
-$exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
-$ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-# Run Windows PowerShell with only its own modules, even from PowerShell 7.
-$env:PSModulePath = $env:ProgramFiles + '\WindowsPowerShell\Modules;' + [Environment]::SystemDirectory + '\WindowsPowerShell\v1.0\Modules'
-& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName
-$code = $LASTEXITCODE
+. (Join-Path $Repo 'internal\runtime\scripts\secure-vm-directory.ps1')
+. (Join-Path $Repo 'internal\runtime\scripts\secure-vm-files.ps1')
+$instanceLease = Open-CPDDirectory $data $false 'cashpilot-data'
+try {
+  $guardLease = Open-CPDDirectory $guard $false 'cashpilot-guard'
+  try {
+    $src = Join-Path $Repo 'internal\winvm\scripts\remove.ps1'
+    $remove = [scriptblock]::Create([IO.File]::ReadAllText($src))
+    $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
+    & $remove -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName
+    $code = $LASTEXITCODE
+  } finally { $guardLease.Dispose() }
+} finally { $instanceLease.Dispose() }
 'remove exit code: ' + $code
 
 $left = @()
@@ -63,7 +44,6 @@ $left += @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq
 $left += @(Get-NetFirewallRule -Group $name -ErrorAction SilentlyContinue | ForEach-Object { 'rule ' + $_.Name })
 $left += @(Get-NetFirewallRule -Group ($name + '-proof') -ErrorAction SilentlyContinue | ForEach-Object { 'proof rule ' + $_.Name })
 $left += @(Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue | ForEach-Object { 'task ' + $_.TaskName })
-if (Test-Path -LiteralPath $data) { $left += @('folder ' + $data) }
 $left | ForEach-Object { 'left: ' + $_ }
 if ($code -ne 0 -or $left.Count -gt 0) { exit 1 }
 exit 0

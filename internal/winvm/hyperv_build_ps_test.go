@@ -55,14 +55,14 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"EnsureNAT", `{"id":"` + tSwitchID + `"}`, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { _, err := b.EnsureNAT(ctx, n, sub, ""); return err }},
 		{"CreateVM", `{"vmId":"` + tVMID + `","adapterId":"` + tAdapterID + `","disk":{"path":"D:\\VMs\\CashPilot-VM.vhdx","id":"` + strings.Repeat("1", 48) + `"}}`, []string{`"iso":"D:\\iso\\w.iso"`, `"owner":"` + tOwner + `"`},
 			func(b psBuilder) error {
-				_, _, _, err := b.CreateVM(ctx, p, `D:\iso\w.iso`, `C:\ProgramData\CashPilot\answer.iso`)
+				_, _, _, _, err := b.CreateVM(ctx, p, `D:\iso\w.iso`, `C:\ProgramData\CashPilot\answer.iso`)
 				return err
 			}},
-		{"SetIntegration", ok, []string{`"want":{`}, func(b psBuilder) error { return b.SetIntegration(ctx, tVMID, Integration()) }},
-		{"SetBindings", ok, []string{`"off":["ms_tcpip6"`}, func(b psBuilder) error { return b.SetBindings(ctx, 20, BindingsOff()) }},
-		{"EnsureFirewall", ok, []string{`"group":"CashPilotVM"`, `"ifIndex":20`}, func(b psBuilder) error { return b.EnsureFirewall(ctx, n, 20, tOwner) }},
+		{"SetIntegration", ok, []string{`"want":{`}, func(b psBuilder) error { return b.SetIntegration(ctx, tVMID, tOwner, Integration()) }},
+		{"SetBindings", ok, []string{`"off":["ms_tcpip6"`}, func(b psBuilder) error { return b.SetBindings(ctx, 20, tSwitchID, tOwner, BindingsOff()) }},
+		{"EnsureFirewall", ok, []string{`"group":"CashPilotVM"`, `"ifIndex":20`}, func(b psBuilder) error { return b.EnsureFirewall(ctx, n, 20, tSwitchID, tOwner) }},
 		{"SetHostNeighbor", ok, []string{`"mac":"00-15-5D-0A-00-02"`}, func(b psBuilder) error {
-			return b.SetHostNeighbor(ctx, 20, netip.MustParseAddr("172.31.250.2"), "00155D0A0002")
+			return b.SetHostNeighbor(ctx, 20, tSwitchID, tOwner, netip.MustParseAddr("172.31.250.2"), "00155D0A0002")
 		}},
 		{"SetEnhancedSession", `{"was":true}`, []string{`"on":false`}, func(b psBuilder) error {
 			was, err := b.SetEnhancedSession(ctx, false)
@@ -79,8 +79,8 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"WriteAnswerISO", ok, []string{`"xml":"PHg+"`}, func(b psBuilder) error {
 			return b.WriteAnswerISO(ctx, `C:\ProgramData\CashPilot\answer.iso`, []byte("<x>"))
 		}},
-		{"BootKeys", ok, []string{tVMID}, func(b psBuilder) error { return b.BootKeys(ctx, tVMID) }},
-		{"EjectDVDs", `{"left":0}`, []string{tVMID}, func(b psBuilder) error { return b.EjectDVDs(ctx, tVMID) }},
+		{"BootKeys", ok, []string{tVMID}, func(b psBuilder) error { return b.BootKeys(ctx, tVMID, tOwner) }},
+		{"EjectDVDs", `{"left":0}`, []string{tVMID}, func(b psBuilder) error { return b.EjectDVDs(ctx, tVMID, tOwner, nil) }},
 		{"RegisterGuardTask", ok, []string{`"exe":"C:\\ProgramData\\CashPilot\\guard\\CashPilot-guard.exe"`, `"delay":900`, `"dir":"C:\\ProgramData\\CashPilot"`},
 			func(b psBuilder) error { return b.RegisterGuardTask(ctx, n, n.GuardExe(), tOwner) }},
 		{"StartGuardTask", ok, []string{`"taskName":"VMGuard"`}, func(b psBuilder) error { return b.StartGuardTask(ctx, n, tOwner) }},
@@ -88,7 +88,7 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 			var out struct {
 				OK bool `json:"ok"`
 			}
-			err := b.Guest(ctx, tVMID, Cred{User: "cpadmin", Password: testPassword(1)}, scriptGuestPing, map[string]any{}, &out)
+			err := b.Guest(ctx, tVMID, tOwner, Cred{User: "cpadmin", Password: testPassword(1)}, scriptGuestPing, map[string]any{}, &out)
 			if err == nil && !out.OK {
 				t.Error("guest answer not read")
 			}
@@ -101,18 +101,14 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"RemoveFirewall", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.RemoveFirewall(ctx, n, tOwner) }},
 		{"RemoveGuardian", ok, nil, func(b psBuilder) error { return b.RemoveGuardian(ctx, strings.Repeat("1", 64)) }},
 		{"RemoveHyperVAdmin", ok, []string{`"sid":"S-1-5-21-1-2-3-1001"`}, func(b psBuilder) error { return b.RemoveHyperVAdmin(ctx, "S-1-5-21-1-2-3-1001") }},
-		{"ClearProof", `{"cleared":["the proof pktmon session"]}`, []string{`"group":"CashPilotVM-proof"`, `"element":"CashPilot Secure VM proof CashPilot-VM. cashpilot-owner=` + tOwner + `"`, `"dir":"C:\\ProgramData\\CashPilot\\proof\\"`, `"desc":"CashPilot Secure VM proof canary. cashpilot-owner=` + tOwner + `"`},
+		{"ClearProof", `{"left":["the proof pktmon session"]}`, []string{`"group":"CashPilotVM-proof"`, `"elementPrefix":"CashPilot Secure VM proof CashPilot-VM."`},
 			func(b psBuilder) error {
 				got, err := b.ClearProof(ctx, n, tOwner)
-				if err == nil && len(got.Cleared) != 1 {
-					t.Errorf("cleared %v", got)
+				if err == nil && len(got.Left) != 1 {
+					t.Errorf("left %v", got)
 				}
 				return err
 			}},
-		// With no owner token (a first build) no rule and no key can be
-		// ours: the script gets nothing to match them by.
-		{"ClearProof", `{"cleared":[]}`, []string{`"desc":""`, `"element":""`},
-			func(b psBuilder) error { _, err := b.ClearProof(ctx, n, ""); return err }},
 	}
 	seen := map[string]bool{}
 	for _, c := range cases {
@@ -159,23 +155,23 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 			return err
 		},
 		"ISO path with a quote": func(b psBuilder) error {
-			_, _, _, err := b.CreateVM(ctx, p, `D:\iso\w'.iso`, `C:\a.iso`)
+			_, _, _, _, err := b.CreateVM(ctx, p, `D:\iso\w'.iso`, `C:\a.iso`)
 			return err
 		},
-		"relative ISO path":    func(b psBuilder) error { _, _, _, err := b.CreateVM(ctx, p, `w.iso`, `C:\a.iso`); return err },
-		"integration not GUID": func(b psBuilder) error { return b.SetIntegration(ctx, tVMID, map[string]bool{"x": true}) },
-		"binding not planned":  func(b psBuilder) error { return b.SetBindings(ctx, 20, []string{"ms_tcpip"}) },
+		"relative ISO path":    func(b psBuilder) error { _, _, _, _, err := b.CreateVM(ctx, p, `w.iso`, `C:\a.iso`); return err },
+		"integration not GUID": func(b psBuilder) error { return b.SetIntegration(ctx, tVMID, tOwner, map[string]bool{"x": true}) },
+		"binding not planned":  func(b psBuilder) error { return b.SetBindings(ctx, 20, tSwitchID, tOwner, []string{"ms_tcpip"}) },
 		"public guest address": func(b psBuilder) error {
-			return b.SetHostNeighbor(ctx, 20, netip.MustParseAddr("8.8.8.8"), "00155D0A0002")
+			return b.SetHostNeighbor(ctx, 20, tSwitchID, tOwner, netip.MustParseAddr("8.8.8.8"), "00155D0A0002")
 		},
 		"SID not a SID":      func(b psBuilder) error { _, err := b.AddHyperVAdmin(ctx, "Everyone"); return err },
 		"empty answer file":  func(b psBuilder) error { return b.WriteAnswerISO(ctx, `C:\a.iso`, nil) },
 		"guard exe relative": func(b psBuilder) error { return b.RegisterGuardTask(ctx, n, `guard.exe`, tOwner) },
 		"guest script unknown": func(b psBuilder) error {
-			return b.Guest(ctx, tVMID, Cred{User: "cpadmin", Password: testPassword(1)}, GuestScript{Name: "x", Text: "Remove-Item C:\\"}, nil, nil)
+			return b.Guest(ctx, tVMID, tOwner, Cred{User: "cpadmin", Password: testPassword(1)}, GuestScript{Name: "x", Text: "Remove-Item C:\\"}, nil, nil)
 		},
 		"guest user not admin": func(b psBuilder) error {
-			return b.Guest(ctx, tVMID, Cred{User: "earner", Password: testPassword(1)}, scriptGuestPing, nil, nil)
+			return b.Guest(ctx, tVMID, tOwner, Cred{User: "earner", Password: testPassword(1)}, scriptGuestPing, nil, nil)
 		},
 		"remove VM not a GUID":  func(b psBuilder) error { _, err := b.RemoveVM(ctx, "*", p); return err },
 		"remove switch by name": func(b psBuilder) error { return b.RemoveSwitch(ctx, "CashPilot-VM", tOwner) },
@@ -289,7 +285,7 @@ func TestProberSeam(t *testing.T) {
 	ok := `{"ok":true}`
 	h, r, _ := newSeam()
 	var ln net.Listener
-	p := &psProber{h: h, n: n, program: n.GuardExe(), tmp: t.TempDir(), owner: tOwner, switchID: tSwitchID, listen: func(string, string) (net.Listener, error) {
+	p := &psProber{h: h, n: n, program: n.GuardExe(), tmp: filepath.Join(t.TempDir(), proofDir), owner: tOwner, switchID: tSwitchID, listen: func(string, string) (net.Listener, error) {
 		var err error
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		return ln, err
@@ -352,9 +348,11 @@ func TestProberSeam(t *testing.T) {
 			}
 		}
 	}
-	// pktmon: start, then stop, list, read the host, export.
+	// The component and host snapshots must precede the capture.
+	mockCaptureStart(h, r)
 	dst := netip.MustParseAddr("198.51.100.7")
-	r.answers = append(r.answers, ok)
+	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
+	r.answers = append(r.answers, `{"list":`+jsonQuote(list)+`}`, cannedHostNet, ok)
 	c, err := p.Pktmon(ctx, []PktFilter{{Addr: dst, Proto: "TCP", Port: 45000}})
 	if err != nil {
 		t.Fatal(err)
@@ -364,8 +362,7 @@ func TestProberSeam(t *testing.T) {
 	vnic := filepath.Join(dir, "c9.pcapng")
 	os.WriteFile(out, pcapng(ipv4TCP(netip.MustParseAddr("192.0.2.10"), dst, 45000), ipv4TCP(netip.MustParseAddr("192.0.2.10"), dst, 1)), 0o600)
 	os.WriteFile(vnic, pcapng(ipv4TCP(netip.MustParseAddr("172.31.250.2"), dst, 45000)), 0o600)
-	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
-	r.answers = append(r.answers, `{"metadata":true,"list":`+jsonQuote(list)+`}`, cannedHostNet,
+	r.answers = append(r.answers, `{"metadata":true}`,
 		`{"files":[{"id":4,"path":`+jsonQuote(out)+`},{"id":9,"path":`+jsonQuote(vnic)+`}]}`)
 	recs, err := c.Stop(ctx)
 	if err != nil {
@@ -411,17 +408,40 @@ func jsonQuote(s string) string {
 	return b.String()
 }
 
+func mockCaptureStart(h *psHost, r *fakeRun) {
+	h.run = func(ctx context.Context, script string, arg []byte) ([]byte, error) {
+		if script == scriptPktmonStart {
+			var in map[string]string
+			if err := json.Unmarshal(arg, &in); err != nil {
+				return nil, err
+			}
+			if err := os.WriteFile(in["etl"], []byte("test capture"), 0o600); err != nil {
+				return nil, err
+			}
+		}
+		return r.run(ctx, script, arg)
+	}
+}
+
 func TestPktmonRefusesMissingComponentExport(t *testing.T) {
-	dir := t.TempDir()
+	ctx := context.Background()
+	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
+	h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true}`)
+	mockCaptureStart(h, r)
+	p := &psProber{h: h, owner: tOwner, switchID: tSwitchID, tmp: filepath.Join(t.TempDir(), proofDir)}
+	capture, err := p.Pktmon(ctx, []PktFilter{{Addr: netip.MustParseAddr("192.0.2.50")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := capture.(*psCapture).dir
 	out := filepath.Join(dir, "c4.pcapng")
 	if err := os.WriteFile(out, pcapng(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
-	h, _, _ := newSeam(`{"metadata":true,"list":`+jsonQuote(list)+`}`, cannedHostNet,
-		`{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
-	c := psCapture{p: &psProber{h: h, switchID: tSwitchID}, dir: dir}
-	if _, err := c.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "component 9") {
+	// Stop does not supply a new inventory. A capture with the component
+	// present at start must fail if that component has no export.
+	r.answers = append(r.answers, `{"metadata":true}`, `{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
+	if _, err := capture.Stop(ctx); err == nil || !strings.Contains(err.Error(), "component 9") {
 		t.Fatalf("Stop = %v, want a missing export error for component 9", err)
 	}
 }
@@ -456,7 +476,7 @@ function Set-NetFirewallRule {
 		{"teardown", scriptCanaryRule, "CashPilotVM-proof", proofCanaryDesc(tOwner), map[string]any{"add": false, "port": 42000}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tc.arg["group"], tc.arg["desc"], tc.arg["owner"] = tc.group, tc.desc, tOwner
+			tc.arg["group"], tc.arg["desc"], tc.arg["owner"], tc.arg["id"] = tc.group, tc.desc, tOwner, "owned"
 			s := "param($g, $desc)\n" + mock
 			if code, out := runOwnedScriptWithFake(t, s, tc.script, tc.arg, tc.group, tc.desc); code != 0 {
 				t.Fatalf("exit %d: %s", code, out)
@@ -488,4 +508,159 @@ func runOwnedScriptWithFake(t *testing.T, mock, script string, arg map[string]an
 	}
 	return runFakePowerShell(t,
 		mock+"\n$env:CPD_HV_ARG = '"+base64.StdEncoding.EncodeToString(raw)+"'\n"+script, args...)
+}
+
+func TestPktmonRejectsEmptyExport(t *testing.T) {
+	if _, err := parsePcapng(nil); err == nil {
+		t.Fatal("the empty export counted as capture evidence")
+	}
+}
+
+func TestDiskUseIncludesDifferencingParents(t *testing.T) {
+	const mock = `
+function Get-VM { [pscustomobject]@{ Name = 'other-vm' } }
+function Get-VMSnapshot { 'checkpoint' }
+function Get-VMHardDiskDrive {
+  param($VM, $VMSnapshot)
+  if ($VMSnapshot) { [pscustomobject]@{ Path = '/checkpoint.avhdx' } }
+  else { [pscustomobject]@{ Path = '/child.vhdx' } }
+}
+function Get-VHD {
+  param($Path)
+  if ($Path -eq '/checkpoint.avhdx') {
+    [pscustomobject]@{ VhdType = 'Differencing'; ParentPath = '/parent-alias.vhdx' }
+  } else { [pscustomobject]@{ VhdType = 'Dynamic' } }
+}
+`
+	code, out := runOwnedScriptWithFake(t, mock, hvPrelude+diskIdentityPrelude+`
+function Get-DiskIdentity([string]$path) {
+  if ($path -like '*parent*') { return 'parent-id' }
+  return $path
+}
+if (-not (Test-DiskInUse 'parent-id')) { exit 23 }
+`, nil)
+	if code != 0 {
+		t.Fatalf("did not protect the recorded disk behind a checkpoint child: exit %d: %s", code, out)
+	}
+}
+
+func TestSwitchGatewayUsesManagementAdapterIdentity(t *testing.T) {
+	const mock = `
+function Get-VMSwitch { [pscustomobject]@{ Id = $fakeSwitch; Name = 'CashPilot-VM'; SwitchType = 'Internal'; Notes = ('cashpilot-owner=' + $owner) } }
+function Get-VMNetworkAdapter {
+  param([switch]$ManagementOS)
+  [pscustomobject]@{ SwitchId = $fakeSwitch; DeviceId = 'management-device'; MacAddress = '00155D000002' }
+}
+function Get-NetAdapter {
+  param([switch]$IncludeHidden)
+  [pscustomobject]@{ DeviceId = 'foreign-device'; ifIndex = 7; MacAddress = '00-15-5D-00-00-02' }
+  [pscustomobject]@{ DeviceId = 'management-device'; ifIndex = 20; MacAddress = '00-15-5D-00-00-03' }
+}
+function Get-NetIPAddress {
+  param($InterfaceIndex, $AddressFamily, $ErrorAction)
+  [pscustomobject]@{ IPAddress = '192.0.2.19'; PrefixLength = 24 }
+}
+function Remove-NetIPAddress { throw 'removed an independently configured address' }
+function New-NetIPAddress {
+  param($InterfaceIndex, $IPAddress, $PrefixLength)
+  if ($InterfaceIndex -ne 20) { throw 'address written to a foreign adapter' }
+}
+`
+	args := map[string]any{"switch": "CashPilot-VM", "switchId": tSwitchID, "owner": tOwner, "mac": "00155D000002", "gateway": "172.31.250.1", "prefixLen": 29}
+	code, out := runOwnedScriptWithFake(t, "param($fakeSwitch, $owner)\n"+mock, scriptEnsureSwitch, args, tSwitchID, tOwner)
+	if code != 0 {
+		t.Fatalf("could not configure the owned adapter without touching other addresses: exit %d: %s", code, out)
+	}
+}
+
+func TestVMStartAndDisconnectRecheckOwner(t *testing.T) {
+	const mock = `
+function Get-VM { [pscustomobject]@{ Id = $id; Notes = 'foreign'; State = 'Off' } }
+function Get-VMNetworkAdapter { 'foreign-adapter' }
+function Start-VM { throw 'mutated foreign VM' }
+function Disconnect-VMNetworkAdapter { throw 'mutated foreign VM' }
+`
+	for name, script := range map[string]string{"start": scriptStart, "disconnect": scriptDisconnect} {
+		t.Run(name, func(t *testing.T) {
+			code, out := runOwnedScriptWithFake(t, "param($id)\n"+mock, script, map[string]any{"vm": tVMID, "owner": tOwner}, tVMID)
+			if code == 0 || strings.Contains(string(out), "mutated foreign VM") || !strings.Contains(string(out), "owned VM") {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+		})
+	}
+}
+
+func TestVMFilesRequirePrivateDirectoryLease(t *testing.T) {
+	const mock = `
+param($root, $public)
+function Get-VM {}
+function Open-CPDDirectory($path, $create, $tag) {
+  if ($path -ne $root -and -not $path.StartsWith((Join-Path $root 'vm-'))) {
+    throw 'asked to use a public directory'
+  }
+  $script:lease = $path
+  [IO.MemoryStream]::new()
+}
+function New-VHD($Path, [switch]$Dynamic, $SizeBytes) {
+  if (-not $script:lease -or (Split-Path -Parent $Path) -ne $script:lease) {
+    throw 'disk used a path without the private directory lease'
+  }
+  throw 'reached disk creation under the private directory lease'
+}
+`
+	root, public := t.TempDir(), t.TempDir()
+	code, out := runOwnedScriptWithFake(t, mock, buildPrelude+scriptCreateVMBody,
+		map[string]any{"dataDir": root, "vhdxDir": public, "vm": "CashPilot-VM", "owner": tOwner, "diskBytes": 1}, root, public)
+	if code == 0 || !strings.Contains(string(out), "reached disk creation under the private directory lease") {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+}
+
+func TestEjectLeavesUnrecordedDVDDrives(t *testing.T) {
+	const mock = `
+param($vmId, $owner)
+function Get-VM { [pscustomobject]@{ Id = $vmId; Notes = ('cashpilot-owner=' + $owner) } }
+$script:drives = @(
+  [pscustomobject]@{ Id = 'recorded'; Path = 'windows.iso' },
+  [pscustomobject]@{ Id = 'foreign'; Path = 'other.iso' }
+)
+function Get-VMDvdDrive { return $script:drives }
+function Remove-VMDvdDrive {
+  [CmdletBinding()]
+  param([Parameter(ValueFromPipeline)]$VMDvdDrive)
+  process {
+    if ($VMDvdDrive.Id -ne 'recorded') { throw 'removed an unrecorded drive' }
+    $script:drives = @($script:drives | Where-Object { $_.Id -ne $VMDvdDrive.Id })
+  }
+}
+`
+	code, out := runOwnedScriptWithFake(t, mock, scriptEjectDVDs,
+		map[string]any{"vm": tVMID, "owner": tOwner, "dvds": []OwnedDVD{{ID: "recorded", Path: "windows.iso"}}}, tVMID, tOwner)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+	if err != nil || string(raw) != `{"left":1}` {
+		t.Fatalf("want one left, got %s: %v", raw, err)
+	}
+}
+
+func TestRepairKeepsIndependentPermanentNeighbors(t *testing.T) {
+	const mock = `
+param($fakeSwitch, $owner)
+function Get-VMSwitch { [pscustomobject]@{ Id = $fakeSwitch; SwitchType = 'Internal'; Notes = ('cashpilot-owner=' + $owner) } }
+function Get-VMNetworkAdapter { [pscustomobject]@{ SwitchId = $fakeSwitch; DeviceId = 'device' } }
+function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'device'; ifIndex = 20 } }
+function Get-NetNeighbor { [pscustomobject]@{ IPAddress = '172.31.250.3'; State = 'Permanent' } }
+function Remove-NetNeighbor { throw 'removed an independently configured entry' }
+function New-NetNeighbor {
+  param($InterfaceIndex, $IPAddress, $LinkLayerAddress, $State)
+  if ($InterfaceIndex -ne 20 -or $IPAddress -ne '172.31.250.2') { throw 'wrote the wrong entry' }
+}
+`
+	code, out := runOwnedScriptWithFake(t, mock, scriptSetHostNeighbor,
+		map[string]any{"switchId": tSwitchID, "owner": tOwner, "ifIndex": 20, "ip": "172.31.250.2", "mac": "00-15-5D-00-00-02"}, tSwitchID, tOwner)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
 }

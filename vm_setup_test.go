@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -37,14 +36,14 @@ func writeParamsIn(t *testing.T, dir string, edit func(*winvm.SetupParams)) stri
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	p := filepath.Join(dir, "setup-params.json")
+	p := filepath.Join(dir, ".setup-params."+strings.Repeat("a", 32)+".json")
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
-func TestRunVMSetupBuildsAndDeletesTheParams(t *testing.T) {
+func TestRunVMSetupBuildsWithBootstrapParams(t *testing.T) {
 	f := hvfake.New()
 	dir := canonicalTempDir(t)
 	mk := func(winvm.Names) winvm.BuildDeps {
@@ -57,8 +56,8 @@ func TestRunVMSetupBuildsAndDeletesTheParams(t *testing.T) {
 	if code := runVMSetupFor(context.Background(), params, winvm.ProductNames(), dir, nil, mk, &out); code != vmExitOK {
 		t.Fatalf("exit %d:\n%s", code, out.String())
 	}
-	if _, err := os.Stat(params); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("the params file, which holds the passwords, is still there")
+	if _, err := os.Stat(params); err != nil {
+		t.Fatal("the setup role changed the bootstrap's params file")
 	}
 	log, _ := os.ReadFile(filepath.Join(dir, setupLogFile))
 	if strings.Contains(string(log), testPassword(1)) || strings.Contains(out.String(), testPassword(1)) {

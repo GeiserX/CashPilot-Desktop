@@ -78,7 +78,7 @@ func TestVMInspectReadsOnly(t *testing.T) {
 // A changed fence shows in the report's changes.
 func TestVMInspectShowsDrift(t *testing.T) {
 	f, p, path := inspectFixture(t)
-	if err := f.RemoveDeny(context.Background(), p.VMID, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}); err != nil {
+	if err := f.RemoveDeny(context.Background(), p.VMID, p.Owner, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}); err != nil {
 		t.Fatal(err)
 	}
 	code, rep, _ := inspect(t, f, path)

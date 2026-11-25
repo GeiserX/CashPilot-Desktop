@@ -124,6 +124,12 @@ const (
 // parsePcapng reads the IPv4 and IPv6 TCP and UDP packets of a pcapng file,
 // in either byte order. It skips any other packet and refuses a broken file.
 func parsePcapng(b []byte) ([]pktInfo, error) {
+	if len(b) == 0 {
+		return nil, errors.New("empty capture export")
+	}
+	if len(b) < 28 || binary.LittleEndian.Uint32(b) != pcapSHB {
+		return nil, errors.New("missing capture section header")
+	}
 	var out []pktInfo
 	var bo binary.ByteOrder = binary.LittleEndian
 	var links []uint16
@@ -145,6 +151,9 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 		typ, ln := bo.Uint32(b), int(bo.Uint32(b[4:]))
 		if ln < 12 || ln%4 != 0 || ln > len(b) {
 			return nil, errors.New("the capture has a broken block")
+		}
+		if bo.Uint32(b[ln-4:]) != uint32(ln) || (typ == pcapSHB && ln < 28) {
+			return nil, errors.New("the capture has an invalid block length")
 		}
 		body := b[8 : ln-4]
 		switch typ {

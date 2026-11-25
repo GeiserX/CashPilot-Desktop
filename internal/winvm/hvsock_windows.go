@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -23,10 +24,11 @@ const (
 )
 
 var (
-	ws2      = windows.NewLazySystemDLL("ws2_32.dll")
-	procBind = ws2.NewProc("bind")
-	procAcc  = ws2.NewProc("accept")
-	procRecv = ws2.NewProc("recv")
+	ws2       = windows.NewLazySystemDLL("ws2_32.dll")
+	procBind  = ws2.NewProc("bind")
+	procAcc   = ws2.NewProc("accept")
+	procRecv  = ws2.NewProc("recv")
+	procIoctl = ws2.NewProc("ioctlsocket")
 )
 
 // sockaddrHV is SOCKADDR_HV.
@@ -46,6 +48,8 @@ type hvListener struct {
 	once     sync.Once
 	readers  sync.WaitGroup
 	closeErr error
+	serveErr error // published by closing done
+	stop     chan struct{}
 	done     chan struct{}
 }
 
@@ -62,7 +66,7 @@ func openHVListener(_ context.Context, bindVMID, service string, register bool, 
 	if err != nil {
 		return nil, err
 	}
-	l := &hvListener{done: make(chan struct{})}
+	l := &hvListener{done: make(chan struct{}), stop: make(chan struct{})}
 	if register {
 		name := gcsKey + `\` + strings.ToUpper(service)
 		k, existed, err := registry.CreateKey(registry.LOCAL_MACHINE, name, registry.SET_VALUE)
@@ -97,43 +101,63 @@ func openHVListener(_ context.Context, bindVMID, service string, register bool, 
 		l.Unregister()
 		return nil, err
 	}
+	if err := hvNonblocking(s, 1); err != nil {
+		windows.Closesocket(s)
+		l.Unregister()
+		return nil, err
+	}
 	go l.serve()
 	return l, nil
 }
 
+func hvNonblocking(s windows.Handle, enable uint32) error {
+	const fionbio = 0x8004667e
+	if r, _, err := procIoctl.Call(uintptr(s), fionbio, uintptr(unsafe.Pointer(&enable))); r != 0 {
+		return err
+	}
+	return nil
+}
+
 func (l *hvListener) serve() {
 	defer close(l.done)
-	for {
-		var sa sockaddrHV
-		n := int32(unsafe.Sizeof(sa))
-		r, _, _ := procAcc.Call(uintptr(l.s), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&n)))
-		c := windows.Handle(r)
-		if c == windows.InvalidHandle {
-			return
+	l.serveErr = hvAcceptLoop(l.stop, l.poll, func() error { return windows.Closesocket(l.s) })
+	l.readers.Wait()
+}
+
+func (l *hvListener) poll() (bool, error) {
+	var sa sockaddrHV
+	n := int32(unsafe.Sizeof(sa))
+	r, _, err := procAcc.Call(uintptr(l.s), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&n)))
+	c := windows.Handle(r)
+	if c == windows.InvalidHandle {
+		if errors.Is(err, windows.WSAEWOULDBLOCK) {
+			return false, nil
+		}
+		return false, err
+	}
+	l.mu.Lock()
+	slot := len(l.received)
+	l.received = append(l.received, "connected")
+	l.mu.Unlock()
+	if hvNonblocking(c, 0) != nil || windows.SetsockoptInt(c, windows.SOL_SOCKET, windows.SO_RCVTIMEO, 1000) != nil {
+		windows.Closesocket(c)
+		return true, nil
+	}
+	l.readers.Go(func() {
+		defer windows.Closesocket(c)
+		buf := make([]byte, tokenRead)
+		got, _, _ := procRecv.Call(uintptr(c), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0)
+		tok := "connected"
+		if int32(got) > 0 {
+			if t := strings.TrimSpace(string(buf[:int32(got)])); canaryToken.MatchString(t) {
+				tok = t
+			}
 		}
 		l.mu.Lock()
-		slot := len(l.received)
-		l.received = append(l.received, "connected")
+		l.received[slot] = tok
 		l.mu.Unlock()
-		if err := windows.SetsockoptInt(c, windows.SOL_SOCKET, windows.SO_RCVTIMEO, 1000); err != nil {
-			windows.Closesocket(c)
-			continue
-		}
-		l.readers.Go(func() {
-			defer windows.Closesocket(c)
-			buf := make([]byte, tokenRead)
-			got, _, _ := procRecv.Call(uintptr(c), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), 0)
-			tok := "connected"
-			if int32(got) > 0 {
-				if t := strings.TrimSpace(string(buf[:int32(got)])); canaryToken.MatchString(t) {
-					tok = t
-				}
-			}
-			l.mu.Lock()
-			l.received[slot] = tok
-			l.mu.Unlock()
-		})
-	}
+	})
+	return true, nil
 }
 
 func (l *hvListener) Received() []string {
@@ -171,9 +195,11 @@ func (l *hvListener) Unregister() error {
 
 func (l *hvListener) Close() error {
 	l.once.Do(func() {
-		l.closeErr = windows.Closesocket(l.s)
-		<-l.done
-		l.readers.Wait()
+		close(l.stop)
+		l.closeErr = waitHVShutdown(l.done, 2*time.Second)
+		if l.closeErr == nil {
+			l.closeErr = l.serveErr
+		}
 	})
 	return errors.Join(l.closeErr, l.Unregister())
 }

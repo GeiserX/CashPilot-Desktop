@@ -138,32 +138,12 @@ func elevatedOutcome(err error) (ElevatedResult, error) {
 	return ElevatedResult{}, err
 }
 
-// SecureVMStub is what the app hands RunElevated to set up or remove the
-// Secure VM. The stub is short and travels inside the command line, so no
-// user can change it. It:
-//
-//  1. makes DataDir and DataDir\guard folders only SYSTEM and Administrators
-//     can write, owned by Administrators, with no inherited rule, refusing a
-//     path that is a link or a file, and refusing (exit 1) a folder that
-//     exists and is owned by anyone but SYSTEM or Administrators: its owner
-//     may hold an open handle with WRITE_DAC, which keeps working after the
-//     stub resets the rules. A new folder is made with its rules in the same
-//     call, so it never exists with ProgramData's inherited ones;
-//  2. then refuses (exit 1) when anything inside DataDir is a link, or is
-//     owned by anyone but SYSTEM or Administrators. Users may create folders
-//     in ProgramData, so a standard user could have made DataDir first and
-//     put a file there with a rule that lets them write it; a folder ACL does
-//     not reach that file's own rules, and its owner can always change them;
-//  3. deletes any earlier copy, then copies the bootstrap the app wrote
-//     (Script, in a folder the user can write) into the guard folder as a new
-//     file that takes the folder's admin-only rules, and checks the copy's
-//     SHA-256 against ScriptSHA256, exiting ExitBadHash when it differs, so a
-//     script changed after the app wrote it never runs;
-//  3. runs the copy with the given arguments and exits with its exit code.
+// SecureVMStub verifies the bootstrap bytes in memory and runs them while
+// holding leases on the recorded data and guard directories.
 type SecureVMStub struct {
 	DataDir      string
 	Script       string // where the app wrote the bootstrap
-	ScriptName   string // the copy's file name: setup.ps1 or remove.ps1
+	ScriptName   string // setup.ps1 or remove.ps1
 	ScriptSHA256 string // uppercase hex
 	// Args are the bootstrap's named parameters, in order.
 	Args [][2]string
@@ -210,53 +190,19 @@ func (s SecureVMStub) Build() (string, error) {
 		// and Windows PowerShell then loads PowerShell 7's Security module and
 		// fails on its type data. Use only Windows PowerShell's own modules.
 		"$env:PSModulePath = $env:ProgramFiles + '\\WindowsPowerShell\\Modules;' + [Environment]::SystemDirectory + '\\WindowsPowerShell\\v1.0\\Modules'",
-		// Owners by SID: account names are translated.
-		"function Test-Owner([string]$p) {",
-		"  $o = (Get-Acl -LiteralPath $p).GetOwner([Security.Principal.SecurityIdentifier]).Value",
-		"  if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator, so not used: ' + $p + '. Delete it and try again.') }",
-		"}",
-		// The folder must be owned by SYSTEM or Administrators before its
-		// rules are reset: its owner could hold a handle with WRITE_DAC that
-		// outlives any new rules. A new folder gets its rules as it is made,
-		// and the check runs after that too, so a folder or junction a user
-		// made in between is refused.
-		"function Test-Parents([string]$p) {",
-		"  for ($d = [IO.DirectoryInfo]::new($p); $d; $d = $d.Parent) {",
-		"    if ($d.Exists -and ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('a link in the data path: ' + $d.FullName) }",
-		"  }",
-		"}",
-		"function Lock-Dir([string]$p) {",
-		"  Test-Parents $p",
-		"  $acl = New-Object Security.AccessControl.DirectorySecurity",
-		"  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')",
-		"  if (-not (Test-Path -LiteralPath $p)) { [IO.Directory]::CreateDirectory($p, $acl) | Out-Null }",
-		"  $i = Get-Item -LiteralPath $p -Force",
-		"  if (-not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('not a plain folder: ' + $p) }",
-		"  Test-Owner $p",
-		"  Set-Acl -LiteralPath $p -AclObject $acl",
-		"}",
-		"function Test-Tree([string]$p) {",
-		"  foreach ($c in @(Get-ChildItem -LiteralPath $p -Force)) {",
-		"    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('a link inside the data folder: ' + $c.FullName) }",
-		"    Test-Owner $c.FullName",
-		"    if ($c.PSIsContainer) { Test-Tree $c.FullName }",
-		"  }",
-		"}",
+		SecureVMDirectoryPS,
+		"$bytes = [IO.File]::ReadAllBytes('" + s.Script + "')",
+		"$sha = [Security.Cryptography.SHA256]::Create()",
+		"try { $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '') } finally { $sha.Dispose() }",
+		"if ($hash -cne '" + s.ScriptSHA256 + "') { exit " + fmt.Sprint(ExitBadHash) + " }",
+		"$command = [scriptblock]::Create([Text.Encoding]::UTF8.GetString($bytes))",
 		"$data = '" + s.DataDir + "'",
-		"$guard = Join-Path $data 'guard'",
-		"Lock-Dir $data",
-		"Lock-Dir $guard",
-		"Test-Tree $data",
-		"$dst = Join-Path $guard '" + s.ScriptName + "'",
-		"$stage = Join-Path $guard ('.bootstrap.' + [guid]::NewGuid().ToString('N') + '.tmp')",
+		"$create = $" + fmt.Sprint(s.ScriptName != "remove.ps1"),
+		"$root = Open-CPDDirectory $data $create 'cashpilot-data'",
 		"try {",
-		"  Copy-Item -LiteralPath '" + s.Script + "' -Destination $stage",
-		"  if ((Get-FileHash -LiteralPath $stage -Algorithm SHA256).Hash -ne '" + s.ScriptSHA256 + "') { exit " + fmt.Sprint(ExitBadHash) + " }",
-		"  if ([IO.File]::Exists($dst)) { Move-Item -LiteralPath $stage -Destination $dst -Force }",
-		"  else { [IO.File]::Move($stage, $dst) }",
-		"} finally { Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue }",
-		"$ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\\v1.0\\powershell.exe'",
-		"& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst " + strings.Join(args, " "),
+		"  $guard = Open-CPDDirectory (Join-Path $data 'guard') $create 'cashpilot-guard'",
+		"  try { & $command " + strings.Join(args, " ") + " } finally { $guard.Dispose() }",
+		"} finally { $root.Dispose() }",
 		"exit $LASTEXITCODE",
 	}, "\n"), nil
 }

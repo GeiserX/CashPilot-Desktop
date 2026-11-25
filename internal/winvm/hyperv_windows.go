@@ -4,6 +4,7 @@ package winvm
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,17 +38,20 @@ func NewProber(n Names) Prober {
 }
 
 // runPowerShell runs one fixed script in a hidden Windows PowerShell 5.1, found
-// by full path so PATH cannot point elsewhere. The script text goes in as
-// -EncodedCommand and never changes; the argument goes in through the
-// environment as base64 JSON. Output and error text are capped.
+// by full path so PATH cannot point elsewhere. It reads the fixed script
+// from stdin to keep its size out of the Windows command line. The argument
+// travels in the environment as base64 JSON.
 func runPowerShell(ctx context.Context, script string, arg []byte) ([]byte, error) {
 	sys, err := windows.GetSystemDirectory()
 	if err != nil {
 		return nil, err
 	}
 	exe := filepath.Join(sys, "WindowsPowerShell", "v1.0", "powershell.exe")
-	cmd := hidden(ctx, exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(script))
-	cmd.Env = append(os.Environ(), hvArg(arg))
+	cmd := hidden(ctx, exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(hostScriptLauncher))
+	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(script)))
+	modules := filepath.Join(os.Getenv("ProgramFiles"), "WindowsPowerShell", "Modules") + ";" +
+		filepath.Join(sys, "WindowsPowerShell", "v1.0", "Modules")
+	cmd.Env = append(os.Environ(), hvArg(arg), "PSModulePath="+modules)
 	stdout := &cappedBuffer{max: maxHVRaw}
 	stderr := &cappedBuffer{max: 4 << 10}
 	cmd.Stdout, cmd.Stderr = stdout, stderr

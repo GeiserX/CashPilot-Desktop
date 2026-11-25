@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -65,6 +66,15 @@ func vmSetupMain(params, dir string, parseErr error) int {
 		defer cancel()
 		return runVMSetup(ctx, params, exe, productBuildDeps, os.Stderr)
 	}
+	n, err := namesForDir(dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vm-remove:", err)
+		return vmExitUsage
+	}
+	if err := winvm.CheckCreatedDirectory(n.DataDir); err != nil {
+		fmt.Fprintln(os.Stderr, "vm-remove:", err)
+		return vmExitUsage
+	}
 	return runVMRemove(ctx, dir, func(n winvm.Names) winvm.RemoveDeps {
 		return winvm.RemoveDeps{HV: winvm.NewBuilder()}
 	}, os.Stderr)
@@ -116,14 +126,21 @@ func runVMSetup(ctx context.Context, params, exe string, mk func(winvm.Names) wi
 		fmt.Fprintln(errOut, "vm-setup: run the guard copy from the Secure VM data folder")
 		return vmExitUsage
 	}
-	return runVMSetupFor(ctx, params, n, n.DataDir, winvm.CheckSetupAccess, mk, errOut)
+	return runVMSetupFor(ctx, params, n, n.DataDir, func(paths ...string) error {
+		if err := winvm.CheckCreatedDirectory(n.DataDir); err != nil {
+			return err
+		}
+		return winvm.CheckSetupAccess(paths...)
+	}, mk, errOut)
 }
+
+var setupParamsName = regexp.MustCompile(`^\.setup-params\.[0-9a-f]{32}\.json$`)
 
 func runVMSetupFor(ctx context.Context, params string, n winvm.Names, dir string, checkAccess func(...string) error, mk func(winvm.Names) winvm.BuildDeps, errOut io.Writer) int {
 	guard := filepath.Join(dir, "guard")
-	expected := filepath.Join(guard, "setup-params.json")
-	if !strings.EqualFold(filepath.Clean(params), expected) {
-		fmt.Fprintf(errOut, "vm-setup: the params file must be %s\n", expected)
+	expected := filepath.Clean(params)
+	if !strings.EqualFold(filepath.Dir(expected), guard) || !setupParamsName.MatchString(filepath.Base(expected)) {
+		fmt.Fprintln(errOut, "vm-setup: the params file must be the bootstrap's temporary copy in", guard)
 		return vmExitUsage
 	}
 	resolved, err := filepath.EvalSymlinks(expected)
@@ -133,6 +150,10 @@ func runVMSetupFor(ctx context.Context, params string, n winvm.Names, dir string
 	}
 	if checkAccess != nil {
 		if err := checkAccess(dir, guard, expected); err != nil {
+			fmt.Fprintln(errOut, "vm-setup:", err)
+			return vmExitUsage
+		}
+		if err := winvm.CheckJournaledFile(dir, expected); err != nil {
 			fmt.Fprintln(errOut, "vm-setup:", err)
 			return vmExitUsage
 		}
@@ -156,7 +177,6 @@ func runVMSetupFor(ctx context.Context, params string, n winvm.Names, dir string
 	}
 	d := mk(n)
 	d.Dir = dir
-	defer os.Remove(params)
 	logger := log.New(errOut, "", log.LstdFlags)
 	if f, err := winvm.OpenAppend(filepath.Join(d.Dir, setupLogFile)); err == nil {
 		defer f.Close()

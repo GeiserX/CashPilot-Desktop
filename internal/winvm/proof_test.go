@@ -122,7 +122,7 @@ func proofRig(t *testing.T) (*hvfake.HyperV, winvm.Plan, winvm.Runner, winvm.Hos
 	}
 	// The guard places the own-IP Deny at its first pass; the fake build
 	// leaves it out.
-	if err := f.AddDeny(context.Background(), p.VMID, []netip.Prefix{netip.PrefixFrom(f.PublicIP, 32)}); err != nil {
+	if err := f.AddDeny(context.Background(), p.VMID, p.Owner, []netip.Prefix{netip.PrefixFrom(f.PublicIP, 32)}); err != nil {
 		t.Fatal(err)
 	}
 	h, err := f.ReadHostNet(context.Background(), winvm.EgressSamples)
