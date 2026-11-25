@@ -9,7 +9,9 @@
 //     restart or sign-out follows, and how to undo the change.
 //   - A restart or sign-out happens only from its own screen, which says open
 //     apps close and unsaved work can be lost.
-//   - The Docker install says CashPilot never accepts Docker's terms.
+//   - The Docker install says CashPilot never accepts Docker's terms, and what
+//     to pick in Docker's installer: the WSL 2 backend and Linux containers,
+//     which the checklist's later steps expect.
 //
 // Pure: takes the model, returns HTML.
 
@@ -27,6 +29,8 @@ export interface StepConsent {
   after: string;
   /** How to undo the change. */
   undo: string;
+  /** What to pick when the installer asks, when it asks anything. */
+  choices?: string;
   /** The progress line's words while it runs. */
   running: string;
   /** The button that starts it. */
@@ -67,6 +71,8 @@ export const CONSENT: Record<string, StepConsent> = {
       "The Docker Desktop installer asks Windows for permission itself, so that prompt names Docker Desktop Installer, not CashPilot. If this PC has no winget, CashPilot opens Docker's download page instead.",
     after: "The installer may ask you to restart or sign out. CashPilot does not restart anything itself.",
     undo: "To undo, open Settings, Apps, Installed apps, find Docker Desktop and click Uninstall.",
+    choices:
+      "When Docker's installer asks how to install, keep the recommended Per-user installation with WSL 2: CashPilot's checklist expects the WSL 2 backend. Leave Allow Windows Containers off: the apps run as Linux containers.",
     running: "Docker Desktop is installing in winget's window. Finish there; CashPilot waits",
     go: "Open the installer",
   },
@@ -139,6 +145,7 @@ export function stepConfirm(op: string, web: boolean, busy = false): string {
       <h2 id="step-title">${escapeHtml(c.title)}</h2>
       <ul class="mode-effects">
         <li data-consent="changes">${escapeHtml(c.changes)}</li>
+        ${c.choices ? `<li data-consent="choices">${escapeHtml(c.choices)}</li>` : ""}
         ${retry}
         <li data-consent="prompt">${escapeHtml(c.prompt)}</li>
         <li data-consent="after">${escapeHtml(c.after)}</li>

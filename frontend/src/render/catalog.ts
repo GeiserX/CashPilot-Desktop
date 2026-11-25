@@ -88,10 +88,12 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
     customImageBadge(deployment?.customImage),
     outdated ? outdatedBadge(service) : "",
   ].filter(Boolean).join(" ");
+  // The whole row opens the service's setup card (render/catalog_open.ts). Its
+  // name is a real button, so Tab reaches it and Enter or Space opens it too.
   return `
-    <tr>
+    <tr class="catalog-row" data-catalog-open="${escapeHtml(service.slug)}">
       <td class="c-name">
-        <span class="svc-name">${deployment ? statusDot(deployment.status) : ""}${escapeHtml(service.name)}</span>
+        <button type="button" class="svc-name svc-open" data-catalog-open-name title="Open ${escapeHtml(service.name)}'s setup">${deployment ? statusDot(deployment.status) : ""}${escapeHtml(service.name)}</button>
         <div class="cell-sub">${escapeHtml(service.shortDescription || service.description)}</div>
         ${tags ? `<div class="cell-tags">${tags}</div>` : ""}
       </td>
