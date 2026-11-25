@@ -11,6 +11,7 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/setupresume"
+	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -126,17 +127,19 @@ func (a *App) SetupResume() (setupresume.View, error) {
 	if err := a.ready(); err != nil {
 		return setupresume.View{}, err
 	}
-	boot := ""
+	var facts winvm.HostFacts
 	if a.cfg.Config().SetupJournal != nil {
-		boot = a.hostCache().cached().LastBoot
-		if boot == "" {
-			boot = a.hostCache().refresh(a.ctx).LastBoot
+		facts = a.hostCache().cached()
+		if facts.LastBoot == "" {
+			facts = a.hostCache().refresh(a.ctx)
 		}
 	}
 	journalMu.Lock()
 	defer journalMu.Unlock()
 	j := a.cfg.Config().SetupJournal
-	v := setupresume.Decide(j, boot, a.resumeSetup.Load(), fileExists)
+	// This app's token carrying docker-users proves a sign-in since the group was
+	// added, even when the app was opened by hand rather than by RunOnce.
+	v := setupresume.Decide(j, facts.LastBoot, a.resumeSetup.Load(), facts.DockerUsersToken == winvm.Yes, fileExists)
 	if j != nil {
 		var err error
 		if v.Rearm {

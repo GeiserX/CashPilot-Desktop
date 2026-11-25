@@ -246,6 +246,8 @@ const rowHtml = (html, id) => (html.match(new RegExp(`<li class="docker-step" da
   check("RULE 7: Sign out now on its screen signs out once", calls.signOut === 1 && calls.restart === 0);
   const back = renderDockerGuide({ ...g.model, view: "list", resume: { active: true, flow: "docker", step: "a8", restarted: "no", exeMoved: false, attempts: 1, fromRunOnce: true, finish: "signout" } });
   check("RULE 8: after the sign-in RunOnce brought back, it welcomes back", /data-resume="signed-in"/.test(back) && !/Restart to finish/.test(text(back)), text(back).slice(0, 300));
+  const byHand = renderDockerGuide({ ...g.model, view: "list", resume: { active: true, flow: "docker", step: "a8", restarted: "no", exeMoved: false, attempts: 1, fromRunOnce: false, finish: "signout", signedIn: true } });
+  check("RULE 8: opened by hand with the group in the token, it asks for no sign-out", /data-resume="signed-in"/.test(byHand) && !/finish-signout/.test(byHand) && !/Restart to finish/.test(text(byHand)), text(byHand).slice(0, 300));
   const failing = deps({ runSetupStep: async (op) => ({ step: "a8", op, state: "signout", text: "x", reopens: false }), signOutNow: async () => { throw new Error("refused"); } });
   const g2 = open(failing.deps);
   await g2.act("step", "a8", { guideOp: "docker-users" });

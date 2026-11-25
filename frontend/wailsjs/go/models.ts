@@ -3144,6 +3144,7 @@ export namespace setupresume {
 	    attempts: number;
 	    fromRunOnce: boolean;
 	    finish: string;
+	    signedIn: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new View(source);
@@ -3159,6 +3160,7 @@ export namespace setupresume {
 	        this.attempts = source["attempts"];
 	        this.fromRunOnce = source["fromRunOnce"];
 	        this.finish = source["finish"];
+	        this.signedIn = source["signedIn"];
 	    }
 	}
 

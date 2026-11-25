@@ -368,3 +368,37 @@ func TestEndSetupAndARestartDoNotRace(t *testing.T) {
 		t.Fatalf("the restart noted after the cancel is lost: journal %+v", j)
 	}
 }
+
+// The app opened by hand after the sign-out: its token carries docker-users, so
+// it does not ask for the sign-out again, and RunOnce is not armed again.
+func TestSetupResumeSeesASignInByTheToken(t *testing.T) {
+	app, fake := newGuideTestApp(t, reasonProvider{})
+	token := winvm.No
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, LastBoot: "2026-11-25T07:59:58.5Z", DockerUsersToken: token}
+	}}
+	if _, err := app.beginFinish("a8", setupresume.FinishSignOut); err != nil {
+		t.Fatal(err)
+	}
+	v, err := app.SetupResume()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.SignedIn || v.Finish != setupresume.FinishSignOut {
+		t.Fatalf("before the sign-out: %+v", v)
+	}
+	_, arms, _ := fake.state()
+
+	token = winvm.Yes
+	app.host.refresh(context.Background())
+	v, err = app.SetupResume()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.SignedIn || v.Restarted != setupresume.RestartedNo {
+		t.Fatalf("the token carries the group, but the view still waits for a sign-out: %+v", v)
+	}
+	if armed, again, _ := fake.state(); armed != "" || again != arms {
+		t.Fatalf("after the sign-in RunOnce is %q, armed %d times (was %d)", armed, again, arms)
+	}
+}
