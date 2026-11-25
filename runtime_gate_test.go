@@ -188,8 +188,8 @@ func TestAFailedDeployWithEmptyBoxesStoresNothingAndIsNotConfigured(t *testing.T
 		t.Fatal("Settings shows MystNodes Configured after a failed deploy with empty boxes")
 	}
 
-	// Saving every box empty also clears what was stored, as replacing it with the
-	// blanks did.
+	// A blank password keeps the saved secret. Clearing the public login
+	// still leaves the collector unconfigured.
 	if err := app.SaveCredentials("mysterium", map[string]string{"MYSTNODES_EMAIL": "a@b.c", "MYSTNODES_PASSWORD": "pw"}); err != nil {
 		t.Fatalf("SaveCredentials: %v", err)
 	}
@@ -199,8 +199,11 @@ func TestAFailedDeployWithEmptyBoxesStoresNothingAndIsNotConfigured(t *testing.T
 	if err := app.SaveCredentials("mysterium", blanks); err != nil {
 		t.Fatalf("SaveCredentials: %v", err)
 	}
-	if got, _ := app.store.GetCredentials("mysterium"); len(got) != 0 {
-		t.Fatalf("emptying every box kept %v", got)
+	if got, err := app.store.GetCredentials("mysterium"); err != nil || got["MYSTNODES_PASSWORD"] != "pw" || got["MYSTNODES_EMAIL"] != "" {
+		t.Fatalf("blank save did not preserve the password and clear the email: %v", err)
+	}
+	if configured(t, app, "mysterium") {
+		t.Fatal("Settings shows MystNodes Configured without an email")
 	}
 }
 
@@ -213,7 +216,7 @@ func TestFailedDeployKeepsPreviouslySavedCredentials(t *testing.T) {
 	if _, err := app.DeployService("mysterium", values, nil, nil); err == nil {
 		t.Fatal("the deploy was meant to fail")
 	}
-	if got, _ := app.GetCredentials("mysterium"); len(got) != 0 {
+	if got, _ := app.store.GetCredentials("mysterium"); len(got) != 0 {
 		t.Errorf("failed deploy stored defaults without a login: %v", got)
 	}
 	if slugs := app.store.ListCredentialSlugs(); len(slugs) != 0 {
@@ -227,7 +230,7 @@ func TestFailedDeployKeepsPreviouslySavedCredentials(t *testing.T) {
 	if _, err := app.DeployService("earnfm", typed, nil, nil); err == nil {
 		t.Fatal("the direct deploy was meant to fail")
 	}
-	if got, _ := app.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "saved" {
+	if got, _ := app.store.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "saved" {
 		t.Errorf("failed direct deploy replaced saved credentials: %v", got)
 	}
 
@@ -237,7 +240,7 @@ func TestFailedDeployKeepsPreviouslySavedCredentials(t *testing.T) {
 	if _, err := app.DeployServiceRouted("earnfm", typed, -1); err == nil {
 		t.Fatal("the routed deploy was meant to fail")
 	}
-	if got, _ := app.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "saved" {
+	if got, _ := app.store.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "saved" {
 		t.Errorf("failed routed deploy replaced saved credentials: %v", got)
 	}
 
@@ -245,7 +248,7 @@ func TestFailedDeployKeepsPreviouslySavedCredentials(t *testing.T) {
 	if _, err := app.DeployService("earnfm", typed, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := app.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "submitted" {
+	if got, _ := app.store.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "submitted" {
 		t.Errorf("successful deploy did not store the submitted values: %v", got)
 	}
 }
@@ -301,10 +304,10 @@ func (p *heldEngineProvider) Deploy(ctx context.Context, spec runtime.DeploySpec
 
 func TestExplicitSaveSurvivesADeployAlreadyInProgress(t *testing.T) {
 	for _, tc := range []struct {
-		name, saved string
+		name, saved, want string
 	}{
-		{name: "replace", saved: "explicit-save"},
-		{name: "clear"},
+		{name: "replace", saved: "explicit-save", want: "explicit-save"},
+		{name: "keep saved secret", want: "original"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &heldEngineProvider{
@@ -312,6 +315,9 @@ func TestExplicitSaveSurvivesADeployAlreadyInProgress(t *testing.T) {
 				entered:        make(chan struct{}), release: make(chan struct{}),
 			}
 			app := gateApp(t, provider)
+			if err := app.SaveCredentials("earnfm", map[string]string{"EARNFM_TOKEN": "original"}); err != nil {
+				t.Fatal(err)
+			}
 			done := make(chan error, 1)
 			go func() {
 				_, err := app.DeployService("earnfm", map[string]string{"EARNFM_TOKEN": "deploy"}, nil, nil)
@@ -342,11 +348,11 @@ func TestExplicitSaveSurvivesADeployAlreadyInProgress(t *testing.T) {
 			if saveErr != nil {
 				t.Fatal(saveErr)
 			}
-			got, err := app.GetCredentials("earnfm")
+			got, err := app.store.GetCredentials("earnfm")
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got["EARNFM_TOKEN"] != tc.saved {
+			if got["EARNFM_TOKEN"] != tc.want {
 				t.Error("the deploy overwrote the later Save Credentials")
 			}
 		})

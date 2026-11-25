@@ -69,7 +69,6 @@ function recorder(answer) {
   return {
     log,
     calls: {
-      save: async () => { log.push("save"); },
       confirm: () => { log.push("confirm"); return answer; },
       routed: async (id) => { log.push(`routed ${id}`); return { exitIp: "203.0.113.7" }; },
       direct: async (leave) => { log.push(`direct ${leave}`); return { slug: "honeygain" }; },

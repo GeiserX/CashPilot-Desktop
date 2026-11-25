@@ -39,7 +39,7 @@ const OFF_COMPUTER_PLATFORMS = ["android", "ios", "hardware"];
 
 /** Whether the service's card must ask for consent before its install steps. */
 export function needsSessionConsent(service: Service): boolean {
-  if (!service.manualOnly || service.custom) return false;
+  if (!service.manualOnly || service.custom || service.collector?.accrual === "pool") return false;
   const platforms = service.platforms || [];
   return platforms.length === 0 || !platforms.every((p) => OFF_COMPUTER_PLATFORMS.includes(String(p).trim().toLowerCase()));
 }

@@ -104,9 +104,10 @@ func main() {
 			UniqueId:               "com.cashpilot.desktop.window",
 			OnSecondInstanceLaunch: app.onSecondInstance,
 		},
-		OnStartup:  app.Startup,
-		OnDomReady: app.DomReady,
-		OnShutdown: app.Shutdown,
+		OnStartup:      app.Startup,
+		OnDomReady:     app.DomReady,
+		OnShutdown:     app.Shutdown,
+		ErrorFormatter: formatBindingError,
 		Mac: &mac.Options{
 			Appearance: mac.NSAppearanceNameDarkAqua,
 			About: &mac.AboutInfo{

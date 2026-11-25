@@ -124,6 +124,12 @@ jobs:
         working-directory: frontend
         run: npx vite build
 
+      - name: Wizard deploy checks in Chrome
+        working-directory: frontend
+        env:
+          CHROME_BIN: google-chrome
+        run: npm run test:dom
+
   # The Windows installer and uninstaller, end to end, on every PR: build the app
   # and its NSIS installer, install it silently, check the files, shortcuts and
   # Apps & Features entry, seed what the app itself creates, uninstall silently
@@ -151,9 +157,27 @@ jobs:
       - name: Install NSIS
         shell: pwsh
         run: |
+          if (Get-Command makensis.exe -CommandType Application -ErrorAction SilentlyContinue) { return }
           $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS'
-          if (-not (Test-Path (Join-Path $nsis 'makensis.exe'))) { choco install nsis -y --no-progress }
-          if (-not (Test-Path (Join-Path $nsis 'makensis.exe'))) { Write-Error "makensis.exe is not in $nsis"; exit 1 }
+          $makensis = Join-Path $nsis 'makensis.exe'
+          if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) {
+            $version = '3.13'
+            $filename = "nsis-$version-setup.exe"
+            $url = "https://downloads.sourceforge.net/project/nsis/NSIS%203/$version/$filename"
+            $installer = Join-Path $env:RUNNER_TEMP $filename
+            $expectedHash = 'db9a1038bbc0e53fef24f423fd609979bd578e942f1be1198db186d1c42652a3'
+
+            curl.exe --fail --silent --show-error --location --proto-redir '=https' `
+              --retry 3 --retry-all-errors --connect-timeout 15 --max-time 60 --output $installer $url
+            if ($LASTEXITCODE -ne 0) { throw "NSIS $version download failed (curl exit code $LASTEXITCODE)" }
+
+            $actualHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+            if ($actualHash -ne $expectedHash) { throw "NSIS $version SHA-256 mismatch: expected $expectedHash, got $actualHash" }
+
+            $setup = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru
+            if ($setup.ExitCode -ne 0) { throw "NSIS $version setup failed (exit code $($setup.ExitCode))" }
+          }
+          if (-not (Test-Path -LiteralPath $makensis -PathType Leaf)) { throw "makensis.exe is not in $nsis" }
           Add-Content -Path $env:GITHUB_PATH -Value $nsis
 
       - name: Install frontend dependencies

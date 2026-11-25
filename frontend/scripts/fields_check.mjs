@@ -16,7 +16,7 @@
 //
 //   node scripts/fields_check.mjs      # against ./.harness-build
 
-import { serviceFormFields, stripHtml } from "../.harness-build/render/fields.js";
+import { fieldMark, serviceFormFields, stripHtml } from "../.harness-build/render/fields.js";
 
 let failures = 0;
 let checks = 0;
@@ -35,6 +35,11 @@ function service(slug, env) {
 function envVar(key, extra = {}) {
   return { key, label: key, required: true, secret: false, description: key, default: "", ...extra };
 }
+
+const [storage] = serviceFormFields(service("storj", [
+  envVar("STORAGE", { label: "Storage allocation", default: "1TB" }),
+]));
+check("Storj's default storage allocation has no asterisk", fieldMark(storage) === "", JSON.stringify(fieldMark(storage)));
 
 const repocket = service("repocket", [
   envVar("RP_EMAIL", { label: "Email" }),

@@ -58,6 +58,10 @@ export function DeleteProxy(arg1) {
   return window['go']['main']['App']['DeleteProxy'](arg1);
 }
 
+export function DeployAdminStep(arg1) {
+  return window['go']['main']['App']['DeployAdminStep'](arg1);
+}
+
 export function DeployProxiedCopy(arg1, arg2) {
   return window['go']['main']['App']['DeployProxiedCopy'](arg1, arg2);
 }
@@ -76,6 +80,10 @@ export function DeployServiceRouted(arg1, arg2, arg3) {
 
 export function DeployServiceWallet(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['DeployServiceWallet'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function DeployServiceWithAdminApproval(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['DeployServiceWithAdminApproval'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function DeployToWorker(arg1, arg2) {

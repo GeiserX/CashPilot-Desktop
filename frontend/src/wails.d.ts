@@ -31,7 +31,7 @@ declare module "../wailsjs/go/main/App" {
   export function SignOutNow(): Promise<void>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
-  export function GetCredentials(slug: string): Promise<Record<string, string>>;
+  export function GetCredentials(slug: string): Promise<CredentialView>;
   export function PreflightService(slug: string): Promise<PreflightReport>;
   // image: null keeps the image the deployment already uses, "" goes back to the
   // catalog's, anything else runs that image instead. instances: null keeps the number
@@ -41,6 +41,9 @@ declare module "../wailsjs/go/main/App" {
   // switch of a routed service back to this machine's own IP.
   export function DeployServiceRouted(slug: string, values: Record<string, string>, proxyId: number): Promise<ProxiedResult>;
   export function DeployServiceLeavingRoute(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
+  // Whether a deploy of slug makes Windows show its admin prompt, and what for. Reads only.
+  export function DeployAdminStep(slug: string): Promise<AdminStep>;
+  export function DeployServiceWithAdminApproval(slug: string, values: Record<string, string>, image: string | null, instances: number | null, leaveRoute: boolean, approval: AdminStep): Promise<Deployment>;
   // DeployService for a service that keeps its wallet seed in a file (Sia's hostd),
   // with the owner's wallet choice (wallet_app.go).
   export function DeployServiceWallet(slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice): Promise<WalletDeployResult>;
@@ -404,7 +407,13 @@ export interface WorkerDeployRequest {
 
 // WorkerDeployResult mirrors the Go WorkerDeployResult. With ask set nothing was
 // deployed: the owner answers message, and a yes sends the deploy again.
+export interface CredentialView {
+  values: Record<string, string>;
+  savedSecrets: Record<string, boolean>;
+}
+
 export interface WorkerDeployResult {
+  credentialWarning?: string;
   ask: string;
   message: string;
   worker: string;
@@ -964,6 +973,18 @@ export interface SetupResumeView {
   signedIn?: boolean;
 }
 
+// What a deploy's Windows admin prompt is for (internal/runtime/firewall_consent.go).
+export interface AdminStep {
+  needed: boolean;
+  // "firewall-rule" when needed.
+  kind?: string;
+  ruleName?: string;
+  replaceRule?: boolean;
+  program?: string;
+  networks?: string[];
+  removeRuleName?: string;
+}
+
 // How a change of the checklist ended (docker_setup.go).
 export interface SetupStepResult {
   step: string;
@@ -988,6 +1009,7 @@ export interface InstallGuide {
 }
 
 export interface Service {
+  native?: { env?: EnvVar[] };
   name: string;
   slug: string;
   category: string;
@@ -1034,7 +1056,7 @@ export interface Service {
   earnings: { monthlyLow: number; monthlyHigh: number; currency: string; per: string; notes: string };
   cashout: { method: string; dashboardUrl: string; minAmount: number; currency: string; notes: string };
   platforms: string[];
-  collector: { type: string; notes: string; credentialHint: string; perNodeEarnings: boolean };
+  collector: { type: string; notes: string; credentialHint: string; perNodeEarnings: boolean; accrual?: string };
   payout: {
     model: string;
     chain: string;

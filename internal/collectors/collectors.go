@@ -104,6 +104,7 @@ var collectorDispatch = map[string]collectorFunc{
 	"grass":           (*Registry).collectGrass,
 	"iproyal":         (*Registry).collectIPRoyal,
 	"mysterium":       (*Registry).collectMystNodes,
+	"ocean":           (*Registry).collectOcean,
 	"packetstream":    (*Registry).collectPacketStream,
 	"proxyrack":       (*Registry).collectProxyRack,
 	"repocket":        (*Registry).collectRepocket,
@@ -133,9 +134,13 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 		result = Result{Platform: slug, Balance: 0, Currency: "USD", Error: err.Error()}
 	}
 	var unread unreadError
+	var classified collectorError
 	kind := ""
-	if errors.As(err, &unread) {
+	switch {
+	case errors.As(err, &unread):
 		kind = KindUnread
+	case errors.As(err, &classified):
+		kind = classified.kind
 	}
 	record := store.EarningsRecord{
 		Platform:  result.Platform,

@@ -74,8 +74,6 @@ export interface WorkerDeployCalls {
   confirm(message: string): boolean;
   /** One deploy, with the owner's yes so far. */
   deploy(yes: { confirmed: boolean; allowSharedIdentity: boolean; replaceExisting: boolean }): Promise<WorkerDeployResult>;
-  /** Saves the typed credentials, after the deploy ran. */
-  save(): Promise<void>;
 }
 
 /**
@@ -123,7 +121,6 @@ export async function runWorkerDeploy(
       continue;
     }
     if (result.ask) return { kind: "refused", message: `${result.message} Nothing was deployed.` };
-    await calls.save();
     return { kind: "deployed", result };
   }
   return { kind: "refused", message: "The deploy kept asking the same question. Nothing was deployed." };
@@ -132,5 +129,5 @@ export async function runWorkerDeploy(
 /** What the setup card says after a deploy to a worker. */
 export function workerDeployText(result: Partial<WorkerDeployResult>): string {
   const notes = (result.notes || []).map((n) => `Kept: ${n}.`);
-  return [`Deployed to ${result.worker || "the worker"}. The Fleet page shows it after the worker's next check-in.`, ...notes].join("\n\n");
+  return [`Deployed to ${result.worker || "the worker"}. The Fleet page shows it after the worker's next check-in.`, ...notes, result.credentialWarning].filter(Boolean).join("\n\n");
 }

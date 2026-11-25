@@ -17,7 +17,7 @@ func TestQueuedDeployCredentials(t *testing.T) {
 		saved, want string
 	}{
 		{name: "replace", save: true, saved: "explicit", want: "explicit"},
-		{name: "clear", save: true},
+		{name: "keep saved secret", save: true, want: "original"},
 		{name: "deploys only", want: "second"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -27,6 +27,9 @@ func TestQueuedDeployCredentials(t *testing.T) {
 				release:        make(chan struct{}),
 			}
 			app := gateApp(t, provider)
+			if err := app.SaveCredentials("earnfm", map[string]string{"EARNFM_TOKEN": "original"}); err != nil {
+				t.Fatal(err)
+			}
 			var once sync.Once
 			release := func() { once.Do(func() { close(provider.release) }) }
 			defer release()
@@ -84,7 +87,7 @@ func TestQueuedDeployCredentials(t *testing.T) {
 					t.Fatal("deploy did not finish")
 				}
 			}
-			got, err := app.GetCredentials("earnfm")
+			got, err := app.store.GetCredentials("earnfm")
 			if err != nil {
 				t.Fatal(err)
 			}

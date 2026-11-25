@@ -12,27 +12,48 @@ import (
 	"time"
 )
 
-// firewallCalls records what the provider asked of the firewall seams.
+// firewallCalls records what the provider asked of the firewall seams. It acts
+// like the real rule: missing until created, and created only when the admin
+// prompt may show.
 type firewallCalls struct {
 	ensured  [][]string // slug, program, then the networks, one per call
+	elevate  []bool     // mayElevate, one per ensure call
 	removed  []string   // "slug program", one per call
 	ensureFn func() error
 	removeFn func() error
+	inPlace  bool // the rule exists
 }
 
 func (f *firewallCalls) install(p *NativeProcessProvider) {
-	p.ensureFirewall = func(slug, program string, nets []string) error {
+	p.ensureFirewall = func(slug, program string, nets []string, mayElevate bool) error {
 		f.ensured = append(f.ensured, append([]string{slug, program}, nets...))
+		f.elevate = append(f.elevate, mayElevate)
 		if f.ensureFn != nil {
 			return f.ensureFn()
 		}
+		if f.inPlace {
+			return nil
+		}
+		if !mayElevate {
+			return &AdminApprovalNeeded{Slug: slug}
+		}
+		f.inPlace = true
 		return nil
 	}
-	p.removeFirewall = func(slug, program string) error {
+	p.firewallReady = func(string, string, []string) (bool, bool, error) { return f.inPlace, f.inPlace, nil }
+	p.firewallExists = func(string, string) (bool, error) { return f.inPlace, nil }
+	p.removeFirewall = func(slug, program string, mayElevate bool) error {
+		if !f.inPlace {
+			return nil
+		}
+		if !mayElevate {
+			return &AdminApprovalNeeded{Slug: slug}
+		}
 		f.removed = append(f.removed, slug+" "+program)
 		if f.removeFn != nil {
 			return f.removeFn()
 		}
+		f.inPlace = false
 		return nil
 	}
 }
@@ -54,7 +75,7 @@ func TestNativeBinaryArgsComeFirstAndFirewallRuleFollowsTheService(t *testing.T)
 	svc.Native.Binaries[0].Args = "--userspace"
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10", "169.254.0.0/16"}
 
-	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
+	if _, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}), nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
 	e := p.readRegistry().Entries["fwsvc"]
@@ -103,7 +124,7 @@ func TestNativeRefusesToStartWithoutItsFirewallRule(t *testing.T) {
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
 
-	_, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}, nil)
+	_, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}), nil)
 	if err == nil || !strings.Contains(err.Error(), "declined") {
 		t.Fatalf("Deploy err = %v, want the firewall error", err)
 	}
@@ -126,7 +147,7 @@ func TestNativeRemoveKeepsTheEntryWhileTheRuleStays(t *testing.T) {
 	url := serveArtifact(t, p, art)
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
-	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}, nil); err != nil {
+	if _, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}), nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
 
@@ -288,7 +309,7 @@ func TestNativeRedeployWithoutFirewallBlockDeletesTheOldRule(t *testing.T) {
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
 	spec := DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}
-	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+	if _, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, spec), nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
 	binPath := p.readRegistry().Entries["fwsvc"].BinPath
@@ -302,8 +323,20 @@ func TestNativeRedeployWithoutFirewallBlockDeletesTheOldRule(t *testing.T) {
 	}
 
 	spec.Service.Native.Binaries[0].FirewallBlock = nil
+	running := p.readRegistry().Entries["fwsvc"].PID
+	step, err := p.AdminStep(spec.Service, spec.Slug)
+	if err != nil || !step.Needed || step.RemoveRuleName != firewallRuleName(spec.Slug, binPath) || step.RuleName != "" {
+		t.Errorf("old firewall rule: AdminStep = %+v, %v, want approval for removal only", step, err)
+	}
+	if _, err := p.Deploy(context.Background(), spec, nil); !errors.As(err, new(*AdminApprovalNeeded)) {
+		t.Errorf("unapproved removal: err = %v, want AdminApprovalNeeded", err)
+	}
+	if entry := p.readRegistry().Entries["fwsvc"]; entry.PID != running || len(fw.removed) != 0 || !p.slugAlive("fwsvc") {
+		t.Fatalf("unapproved removal reached the firewall or stopped the node: %+v, removed %v", entry, fw.removed)
+	}
+	spec.AdminApproval = &step
 	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
-		t.Fatalf("redeploy without firewall_block: %v", err)
+		t.Fatalf("approved redeploy without firewall_block: %v", err)
 	}
 	if !slices.Equal(fw.removed, []string{"fwsvc " + binPath}) {
 		t.Fatalf("firewall removals = %q, want the old rule for %s", fw.removed, binPath)

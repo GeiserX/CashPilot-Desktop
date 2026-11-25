@@ -733,6 +733,19 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .docker-guide-wait.warn { color: var(--warning); }
 .docker-guide-confirm { display: grid; gap: 10px; }
 .docker-guide-confirm h2 { font-size: var(--fs-3); }
+/* What a Deploy click did, next to the button (render/deploy_consent.ts). */
+.deploy-panel:empty { display: none; }
+.deploy-panel { margin-top: 10px; }
+[data-drift-deploy-status] { grid-column: 1 / -1; }
+[data-drift-deploy-status]:empty { display: none; }
+.drift-deploy-results { display: grid; gap: 6px; margin-top: 8px; }
+.deploy-notice { padding: 8px 12px; border-left: 2px solid var(--border-strong); font-size: var(--fs-2); white-space: pre-line; }
+.deploy-notice p { margin: 0; }
+.deploy-notice ul { margin: 6px 0 0; padding-left: 20px; }
+.deploy-notice.ok { border-left-color: var(--success); }
+.deploy-notice.warn { border-left-color: var(--warning); background: var(--warning-soft); }
+.deploy-notice.error { border-left-color: var(--error); background: var(--error-soft); }
+.credential-grid input[aria-invalid="true"] { border-color: var(--error); }
 button.topbar-runtime { background: none; border: 0; padding: 0; font: inherit; font-size: var(--fs-2); cursor: pointer; }
 button.topbar-runtime:hover, button.topbar-runtime.active { color: var(--text-primary); }
 
