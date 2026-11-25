@@ -126,19 +126,21 @@ func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate boo
 	}
 	// The firewall can be switched off while the admin prompt waits.
 	if why := st.notEnforced(); why != "" {
-		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
+		return firewallNotEnforced(what, why)
 	}
 	return nil
 }
 
-// firewallReady reports whether the rule for program and nets is in place and
-// enforced, reading it without admin rights.
+// firewallReady reports whether the rule for program and nets is in place,
+// reading it without admin rights. A firewall that would ignore the rule is an
+// error, not "missing": no admin prompt can fix it, so the app must say what can.
 func firewallReady(slug, program string, nets []string) (bool, error) {
+	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
 	st, err := readFirewallRule(firewallRuleName(slug, program))
 	if err != nil {
-		return false, fmt.Errorf("could not read the Windows Firewall: %v", err)
+		return false, fmt.Errorf("%s, and CashPilot could not read the Windows Firewall: %v", what, err)
 	}
-	return st.matches(program, nets) && st.notEnforced() == "", nil
+	return firewallReadiness(st, program, nets, what)
 }
 
 // removeFirewallBlock deletes the rule for this program, asking for admin rights

@@ -3,15 +3,18 @@
 // (src/render/deploy_consent.ts) and on the slot the setup card gives it.
 //
 //   1. A FIELD MARKED * THAT IS EMPTY STOPS THE DEPLOY BEFORE ANY CALL: no admin
-//      step asked, no approval, no deploy. The note names every empty field,
-//      collector logins included, and says Windows was not asked for anything.
-//   2. A FIELD WITH A DEFAULT IS NEVER MISSING; ONE OF ONLY SPACES IS.
+//      step asked, no approval, no deploy. The note names every empty field and
+//      says nothing was deployed, on any OS.
+//   2. A FIELD WITH A DEFAULT IS NEVER MISSING; ONE OF ONLY SPACES IS. A LOGIN
+//      ONLY THE EARNINGS COLLECTOR READS IS NEVER MISSING: the deploy does not
+//      read it, so the card marks it "(for earnings)", not *.
 //   3. WHEN WINDOWS WILL SHOW ITS ADMIN PROMPT, CASHPILOT'S SCREEN COMES FIRST:
 //      Cancel approves nothing and deploys nothing; Continue approves, then deploys.
 //   4. THE SCREEN says what changes, what Windows asks (Windows PowerShell by its
 //      full path), what follows and how to undo it, with Continue and Cancel.
-//   5. A DEPLOY THROUGH A PROXY asks no admin step; a step that cannot be read
-//      shows no screen and approves nothing.
+//   5. A DEPLOY THROUGH A PROXY asks no admin step. A step that cannot be read
+//      (Windows Firewall off, or not readable) shows no screen, approves nothing,
+//      deploys nothing, and its reason reaches the card.
 //   6. A REJECTED DEPLOY REACHES THE CARD: the reason, as an alert, never empty.
 //   7. THE SETUP CARD has the slot right under its Deploy button, above the facts.
 //
@@ -40,7 +43,7 @@ function check(name, condition, detail = "") {
 }
 
 // MystNodes as the walk saw it: two container settings with defaults, and the two
-// logins the collector needs, marked *.
+// logins the collector needs (marked * in v1.6.0, though the deploy never read them).
 const myst = {
   slug: "mysterium",
   name: "MystNodes",
@@ -82,17 +85,34 @@ function calls({ adminStep = async () => step, consent = true, deploy = async ()
   };
 }
 
+// A service whose container needs two values typed in (Honeygain's shape).
+const hg = {
+  slug: "honeygain",
+  name: "Honeygain",
+  description: "",
+  docker: {
+    image: "honeygain/honeygain:0.8.1",
+    env: [
+      { key: "HG_EMAIL", label: "Email", required: true },
+      { key: "HG_PASSWORD", label: "Password", required: true, secret: true },
+      { key: "HG_DEVICE", label: "Device name", required: true, default: "cashpilot-{hostname}" },
+    ],
+  },
+};
+const hgFields = serviceFormFields(hg, {});
+
 // RULE 1
 {
   const c = calls();
-  const outcome = await runCheckedDeploy(fields, empty, true, c);
-  check("RULE 1: empty logins stop the deploy", outcome.kind === "missing", JSON.stringify(outcome));
-  check("RULE 1: no call at all, so no admin prompt", c.log.length === 0, c.log.join(","));
+  const outcome = await runCheckedDeploy(hgFields, { HG_EMAIL: "", HG_PASSWORD: " ", HG_DEVICE: "" }, true, c);
+  check("RULE 1: empty container values stop the deploy", outcome.kind === "missing", JSON.stringify(outcome));
+  check("RULE 1: no call at all, so no admin prompt and no deploy", c.log.length === 0, c.log.join(","));
   const names = (outcome.missing || []).map((f) => f.label);
-  check("RULE 1: both logins are named", names.join("|") === "MystNodes email|MystNodes password", names.join("|"));
+  check("RULE 1: both are named, the one with a default is not", names.join("|") === "Email|Password", names.join("|"));
   const note = missingFieldsNotice(outcome.missing);
-  check("RULE 1: the note names each field", note.includes('data-missing-field="MYSTNODES_EMAIL"') && note.includes("MystNodes password"), note);
-  check("RULE 1: the note says nothing ran", note.includes("Nothing was deployed") && note.includes("Windows was not asked"), note);
+  check("RULE 1: the note names each field", note.includes('data-missing-field="HG_EMAIL"') && note.includes("Password"), note);
+  check("RULE 1: the note says nothing ran", note.includes("Nothing was deployed"), note);
+  check("RULE 1: the note does not talk about Windows, which macOS and Linux never ask", !note.includes("Windows"), note);
   check("RULE 1: the note is an alert", note.includes('role="alert"'), note);
   check("RULE 1: labels are escaped", missingFieldsNotice([{ key: "k", label: "<b>x</b>" }]).includes("&lt;b&gt;x&lt;/b&gt;"));
 }
@@ -103,6 +123,11 @@ function calls({ adminStep = async () => step, consent = true, deploy = async ()
   const missing = missingRequiredFields(withDefault, { A: "", B: "   " });
   check("RULE 2: a default is never missing; spaces are", missing.map((f) => f.key).join() === "B", JSON.stringify(missing));
   check("RULE 2: an optional empty field is never missing", missingRequiredFields([{ key: "C", label: "C" }], {}).length === 0);
+  check("RULE 2: the collector logins come marked as for earnings", fields.filter((f) => f.earnings).map((f) => f.key).join() === "MYSTNODES_EMAIL,MYSTNODES_PASSWORD", JSON.stringify(fields));
+  check("RULE 2: empty collector logins are never missing", missingRequiredFields(fields, empty).length === 0);
+  const c = calls();
+  const outcome = await runCheckedDeploy(fields, empty, true, c);
+  check("RULE 2: so MystNodes with its logins empty goes on to the admin-step screen", outcome.kind === "done" && c.log.join(",") === "adminStep,askConsent:firewall-rule,approve,deploy", c.log.join(","));
 }
 
 // RULE 3
@@ -147,9 +172,13 @@ function calls({ adminStep = async () => step, consent = true, deploy = async ()
   await runCheckedDeploy(fields, full, false, routed);
   check("RULE 5: a deploy through a proxy asks no admin step", routed.log.join(",") === "deploy", routed.log.join(","));
 
-  const unreadable = calls({ adminStep: async () => { throw new Error("runtime down"); } });
+  const off = "mysterium was not started: it needs a Windows Firewall rule that blocks it from 100.64.0.0/10, and Windows Firewall is off for the network this computer is on, so the rule would do nothing and Windows was not asked for anything. Fix that, then click Deploy again";
+  const unreadable = calls({ adminStep: () => Promise.reject(off) });
   const outcome = await runCheckedDeploy(fields, full, true, unreadable);
-  check("RULE 5: an unreadable step shows no screen and approves nothing", outcome.kind === "done" && unreadable.log.join(",") === "adminStep,deploy", unreadable.log.join(","));
+  check("RULE 5: an unreadable step stops with its reason", outcome.kind === "blocked" && outcome.message === off, JSON.stringify(outcome));
+  check("RULE 5: and shows no screen, approves nothing, deploys nothing", unreadable.log.join(",") === "adminStep", unreadable.log.join(","));
+  const silent = await runCheckedDeploy(fields, full, true, calls({ adminStep: () => Promise.reject(new Error("")) }));
+  check("RULE 5: an empty reason still says something", silent.kind === "blocked" && silent.message.length > 20, JSON.stringify(silent));
 }
 
 // RULE 6
@@ -180,7 +209,7 @@ function calls({ adminStep = async () => step, consent = true, deploy = async ()
   const facts = card.indexOf('data-output-slug="mysterium"');
   check("RULE 7: the card has the slot", slot > 0, card);
   check("RULE 7: the slot sits under Deploy and above the facts and output", deploy > 0 && slot > deploy && slot < facts, `${deploy} ${slot} ${facts}`);
-  check("RULE 7: the logins show *", card.includes("MystNodes email *") && card.includes("MystNodes password *"));
+  check("RULE 7: the logins say they are for earnings, not *", card.includes("MystNodes email (for earnings)") && card.includes("MystNodes password (for earnings)") && !card.includes("MystNodes email *"), card);
 }
 
 if (failures) {

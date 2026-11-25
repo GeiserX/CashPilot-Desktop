@@ -13,10 +13,11 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
-// newFormFieldsTestApp runs a catalog with a service whose setup card marks a
-// collector login with * (mysterium: MystNodes email and password) and one whose
-// container needs a value (req), on a runtime that counts deploys.
-func newFormFieldsTestApp(t *testing.T) (*App, *deployCountingProvider) {
+// newFormFieldsTestApp runs a catalog with a service whose card asks for the
+// earnings collector's login but whose container needs nothing typed (mysterium:
+// MystNodes email and password), and one whose container needs a value (req), on a
+// runtime that counts deploys.
+func newFormFieldsTestApp(t *testing.T, files fstest.MapFS) (*App, *deployCountingProvider) {
 	t.Helper()
 	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
 	cfg, err := config.NewManager()
@@ -28,14 +29,7 @@ func newFormFieldsTestApp(t *testing.T) (*App, *deployCountingProvider) {
 		t.Fatalf("store.Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	cat, err := catalog.LoadEmbedded(fstest.MapFS{
-		"services/bandwidth/mysterium.yml": {Data: []byte(
-			"name: MystNodes\nslug: mysterium\ncategory: bandwidth\nstatus: active\ndocker:\n  image: myst/image:1.0.0\n  env:\n" +
-				"    - key: UI_ADDRESS\n      label: WebUI address\n      required: false\n      default: \"127.0.0.1\"\n")},
-		"services/bandwidth/req.yml": {Data: []byte(
-			"name: Req\nslug: req\ncategory: bandwidth\nstatus: active\ndocker:\n  image: req/image:1.0.0\n  env:\n" +
-				"    - key: TOKEN\n      label: Token\n      required: true\n    - key: NAME\n      label: Device name\n      required: true\n      default: desktop\n")},
-	})
+	cat, err := catalog.LoadEmbedded(files)
 	if err != nil {
 		t.Fatalf("catalog.LoadEmbedded: %v", err)
 	}
@@ -50,42 +44,82 @@ func newFormFieldsTestApp(t *testing.T) (*App, *deployCountingProvider) {
 	}, provider
 }
 
-// THE RULE: a deploy from the setup card with a field marked * left empty starts
-// nothing (no runtime call, so no admin prompt and no container) and saves
-// nothing, and the message names every empty field. It holds for the logins the
-// earnings collector needs as well as for the container's own settings, because
-// the card marks both the same way.
-func TestDeployFromTheCardRefusesEmptyRequiredFields(t *testing.T) {
-	app, provider := newFormFieldsTestApp(t)
+var formFieldsCatalog = fstest.MapFS{
+	"services/bandwidth/mysterium.yml": {Data: []byte(
+		"name: MystNodes\nslug: mysterium\ncategory: bandwidth\nstatus: active\ndocker:\n  image: myst/image:1.0.0\n  env:\n" +
+			"    - key: UI_ADDRESS\n      label: WebUI address\n      required: false\n      default: \"127.0.0.1\"\n")},
+	"services/bandwidth/req.yml": {Data: []byte(
+		"name: Req\nslug: req\ncategory: bandwidth\nstatus: active\ndocker:\n  image: req/image:1.0.0\n  env:\n" +
+			"    - key: TOKEN\n      label: Token\n      required: true\n    - key: NAME\n      label: Device name\n      required: true\n      default: desktop\n")},
+}
 
-	empty := map[string]string{"UI_ADDRESS": "127.0.0.1", "MYSTNODES_EMAIL": "", "MYSTNODES_PASSWORD": " "}
-	_, err := app.DeployService("mysterium", empty, nil, nil)
-	if err == nil || !strings.Contains(err.Error(), "MystNodes email, MystNodes password") || !strings.Contains(err.Error(), "nothing was deployed") {
-		t.Fatalf("DeployService with empty logins: err = %v, want both fields named", err)
-	}
-	if _, err := app.DeployServiceRouted("mysterium", empty, 1); err == nil || !strings.Contains(err.Error(), "MystNodes email") {
-		t.Fatalf("DeployServiceRouted with empty logins: err = %v", err)
-	}
+// THE RULE: the app refuses a deploy only for what the deploy itself needs, the
+// container's required settings, and it refuses before any runtime call (so no
+// admin prompt and no container) and before anything is saved. The earnings
+// collector's login is not part of the deploy: leaving it empty still deploys,
+// from the card and from any other caller (a command from a joined CashPilot sends
+// only the container's settings).
+func TestDeployChecksOnlyWhatTheDeployNeeds(t *testing.T) {
+	app, provider := newFormFieldsTestApp(t, formFieldsCatalog)
+
 	if _, err := app.DeployService("req", map[string]string{"TOKEN": "", "NAME": ""}, nil, nil); err == nil ||
-		!strings.Contains(err.Error(), ": Token") || strings.Contains(err.Error(), "Device name") {
-		t.Fatalf("DeployService with an empty container value: err = %v, want Token only (Device name has a default)", err)
+		!strings.Contains(err.Error(), "Token") || strings.Contains(err.Error(), "Device name") {
+		t.Fatalf("DeployService with an empty container value: err = %v, want Token named (Device name has a default)", err)
 	}
 	if len(provider.deployed) != 0 {
-		t.Fatalf("the runtime was asked to deploy %v with required fields empty", provider.deployed)
+		t.Fatalf("the runtime was asked to deploy %v with a required container value empty", provider.deployed)
 	}
-	if got, _ := app.store.GetCredentials("mysterium"); len(got) != 0 {
+	if got, _ := app.store.GetCredentials("req"); len(got) != 0 {
 		t.Fatalf("a refused deploy saved %v", got)
 	}
 
-	full := map[string]string{"UI_ADDRESS": "127.0.0.1", "MYSTNODES_EMAIL": "a@example.com", "MYSTNODES_PASSWORD": "pw"}
-	if _, err := app.DeployService("mysterium", full, nil, nil); err != nil {
-		t.Fatalf("DeployService with every field: %v", err)
+	noLogin := map[string]string{"UI_ADDRESS": "127.0.0.1", "MYSTNODES_EMAIL": "", "MYSTNODES_PASSWORD": ""}
+	if _, err := app.DeployService("mysterium", noLogin, nil, nil); err != nil {
+		t.Fatalf("DeployService with the collector login empty: %v, want it deployed", err)
 	}
-	// A redeploy sends no values and uses what is saved: not a form, not checked here.
-	if _, err := app.DeployService("mysterium", map[string]string{}, nil, nil); err != nil {
-		t.Fatalf("redeploy with no values: %v", err)
+	if !slices.Equal(provider.deployed, []string{"mysterium"}) {
+		t.Fatalf("deployed %v, want mysterium", provider.deployed)
 	}
-	if !slices.Equal(provider.deployed, []string{"mysterium", "mysterium"}) {
-		t.Fatalf("deployed %v, want mysterium twice", provider.deployed)
+}
+
+// THE RULE: a wallet seed is never a field (it lives in its file), so a Sia deploy
+// with every other field filled and no seed value passes the deploy check.
+func TestASiaDeployWithoutASeedValuePassesTheFieldCheck(t *testing.T) {
+	cat, err := catalog.LoadEmbedded(serviceFiles)
+	if err != nil {
+		t.Fatalf("catalog.LoadEmbedded: %v", err)
 	}
+	svc, ok := cat.Get("sia-hostd")
+	if !ok {
+		t.Fatal("sia-hostd is not in the catalog")
+	}
+	values := map[string]string{}
+	seeds := 0
+	for _, item := range svc.Docker.Env {
+		if item.SeedFile != nil {
+			seeds++
+			continue
+		}
+		values[item.Key] = "x"
+		if item.Default != "" {
+			values[item.Key] = item.Default
+		}
+	}
+	if seeds == 0 {
+		t.Fatal("sia-hostd declares no seed field; this test no longer covers one")
+	}
+	m := services.NewManager(&deployCountingProvider{}, cat, newFormFieldsStore(t))
+	if err := m.ValidateDeploy("sia-hostd", values); err != nil {
+		t.Fatalf("ValidateDeploy(sia-hostd) with no seed value: %v", err)
+	}
+}
+
+func newFormFieldsStore(t *testing.T) *store.Store {
+	t.Helper()
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
 }

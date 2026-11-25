@@ -1558,10 +1558,6 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	// Validate BEFORE persisting, so a rejected deploy never leaves invalid/blank creds
 	// lingering — they could never deploy, yet they would linger and light the
 	// "Configured" badge for a service that cannot actually start.
-	if err := a.checkFormFields(slug, values); err != nil {
-		a.emitError("deploy", err)
-		return store.Deployment{}, nil, err
-	}
 	if err := a.services.ValidateDeploy(slug, creds); err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
@@ -1607,10 +1603,6 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 			return services.ProxiedResult{}, err
 		}
 		creds = stored
-	}
-	if err := a.checkFormFields(slug, values); err != nil {
-		a.emitError("deploy", err)
-		return services.ProxiedResult{}, err
 	}
 	if err := a.services.ValidateDeploy(slug, creds); err != nil {
 		a.emitError("deploy", err)

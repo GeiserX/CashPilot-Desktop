@@ -2485,7 +2485,15 @@ async function runWizardAction(slug: string, action: string) {
     return;
   }
   const values = readWizardForm(slug);
-  if (action === "deploy" && !(await wizardDeployChecks(slug, values))) return;
+  // Every in-app question comes before the admin-step approval, so a Cancel here
+  // never leaves an approval behind.
+  if (action === "deploy") {
+    if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
+      sayDeploy(slug, "cancelled", "Nothing was deployed.");
+      return;
+    }
+    if (!(await wizardDeployChecks(slug, values))) return;
+  }
   try {
     if (action === "save") {
       await SaveCredentials(slug, values);
@@ -2493,10 +2501,6 @@ async function runWizardAction(slug: string, action: string) {
       return;
     }
     if (action === "deploy") {
-      if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
-        sayDeploy(slug, "cancelled", "Nothing was deployed.");
-        return;
-      }
       if (output) output.textContent = "Deploying...";
       const seedService = state?.services?.find((service) => service.slug === slug && seedFileVar(service));
       if (seedService) {
@@ -2610,6 +2614,10 @@ async function wizardDeployChecks(slug: string, values: Record<string, string>):
   }
   if (outcome.kind === "cancelled") {
     sayDeploy(slug, "cancelled", CANCELLED_TEXT);
+    return false;
+  }
+  if (outcome.kind === "blocked") {
+    sayDeploy(slug, "failed", outcome.message);
     return false;
   }
   sayDeploy(slug, "busy", `Deploying ${name}...`);

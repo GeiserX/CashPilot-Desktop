@@ -238,8 +238,8 @@ check("RULE 3: and a null hostname does the same", !renderWizardServiceSetup(hon
 check("RULE 4: a required field is marked with an asterisk", labelOf(hg, "HONEYGAIN_EMAIL") === "Email *", hg);
 check("RULE 4: so is a required secret", labelOf(hg, "HONEYGAIN_PASSWORD") === "Password *", hg);
 check(
-  "RULE 4: a required collector field is marked too",
-  labelOf(rp, "REPOCKET_PASSWORD") === "Repocket account password *",
+  "RULE 4: a required collector-only field says it is for earnings, not *: the deploy does not wait for it",
+  labelOf(rp, "REPOCKET_PASSWORD") === "Repocket account password (for earnings)",
   rp,
 );
 check(

@@ -17,7 +17,26 @@
 
 import type { CollectorField, Service } from "../wails";
 
-export type ServiceField = CollectorField & { default?: string };
+/**
+ * earnings marks a field only the earnings collector reads. The deploy never
+ * needs it, so the card never marks it * and Deploy never waits for it.
+ */
+export type ServiceField = CollectorField & { default?: string; earnings?: boolean };
+
+/** Whether Deploy needs this field filled: required by the container, no default. */
+export function deployNeeds(field: ServiceField): boolean {
+  return Boolean(field.required) && !field.earnings && !field.default;
+}
+
+/**
+ * The mark after a field's label: * for what the deploy needs, "(for earnings)"
+ * for a login only the earnings collector needs. A * the deploy does not wait for
+ * would promise a check that never comes.
+ */
+export function fieldMark(field: ServiceField): string {
+  if (!field.required) return "";
+  return field.earnings ? " (for earnings)" : " *";
+}
 
 /** Strip HTML tags from a catalog description before it goes into a placeholder. */
 export function stripHtml(value: string): string {
@@ -27,7 +46,8 @@ export function stripHtml(value: string): string {
 /**
  * serviceFormFields returns the inputs to render for a service, in order: every
  * docker.env variable the container declares, then every collector-only field the
- * backend declares for that slug which docker.env does not already cover.
+ * backend declares for that slug which docker.env does not already cover. A
+ * collector-only field carries earnings: the deploy does not read it.
  *
  * docker.env wins on a shared key because it carries the deploy-time extras (a
  * default value, the container's own label) and saving one value under one key is
@@ -50,5 +70,5 @@ export function serviceFormFields(
   }));
   const envKeys = new Set(env.map((item) => item.key));
   const collector = (collectorFields || {})[service.slug] || [];
-  return [...env, ...collector.filter((item) => !envKeys.has(item.key))];
+  return [...env, ...collector.filter((item) => !envKeys.has(item.key)).map((item) => ({ ...item, earnings: true }))];
 }

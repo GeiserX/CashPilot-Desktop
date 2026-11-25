@@ -118,6 +118,7 @@ func TestNativeRefusesToStartWithoutItsFirewallRule(t *testing.T) {
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
 
+	p.ApproveAdminStep("fwsvc")
 	_, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}, nil)
 	if err == nil || !strings.Contains(err.Error(), "declined") {
 		t.Fatalf("Deploy err = %v, want the firewall error", err)

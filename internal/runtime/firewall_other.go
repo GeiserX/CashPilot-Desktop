@@ -21,10 +21,10 @@ func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate boo
 	return ensureFirewallBlock(slug, program, nets)
 }
 
-// firewallReady: outside Windows there is no rule to read, and no prompt either.
+// firewallReady refuses outside Windows, as ensureFirewallBlock does: there is no
+// rule to read, and no admin prompt either.
 func firewallReady(slug, program string, nets []string) (bool, error) {
-	_, _, _ = slug, program, nets
-	return false, nil
+	return false, ensureFirewallBlock(slug, program, nets)
 }
 
 // removeFirewallBlock has nothing to remove outside Windows.

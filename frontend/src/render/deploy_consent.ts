@@ -2,9 +2,11 @@
 // setup card, extracted so it can be TESTED (scripts/deploy_consent_check.mjs).
 //
 // Rules this file holds:
-//   - A field the card marks with * that is empty stops the deploy before any
-//     call: nothing is saved, no admin prompt, no container. The card names
-//     every empty field. The backend checks the same (deploy_fields.go).
+//   - A field the card marks with * (one the deploy needs) that is empty stops
+//     the deploy before any call: nothing is saved, no admin prompt, no
+//     container. The card names every empty field. The backend checks the same
+//     (ValidateDeploy). A login only the earnings collector reads is marked
+//     "(for earnings)" and never stops a deploy.
 //   - When the deploy would make Windows show its admin prompt (a native
 //     program's firewall rule, internal/runtime/firewall_consent.go), CashPilot
 //     first shows its own screen: what changes, what Windows will ask, what
@@ -17,25 +19,27 @@
 // bindings and the DOM.
 
 import type { AdminStep } from "../wails";
-import type { ServiceField } from "./fields.js";
+import { deployNeeds, type ServiceField } from "./fields.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 /** The program Windows names in its permission prompt. */
 export const POWERSHELL_PATH = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 
 /**
- * The fields the card marks required that values leaves empty, in the card's
- * order. A field with a default is never missing: the deploy uses the default.
+ * The fields the deploy needs that values leaves empty, in the card's order. A
+ * field with a default is never missing: the deploy uses the default. A login
+ * only the earnings collector reads is never missing either: the deploy does not
+ * read it.
  */
 export function missingRequiredFields(fields: ServiceField[], values: Record<string, string>): ServiceField[] {
-  return fields.filter((field) => field.required && !field.default && !(values[field.key] || "").trim());
+  return fields.filter((field) => deployNeeds(field) && !(values[field.key] || "").trim());
 }
 
 /** The note next to Deploy when fields marked * are empty. */
 export function missingFieldsNotice(missing: ServiceField[]): string {
   return `
     <div class="deploy-notice warn" data-deploy-notice="missing" role="alert">
-      <p><strong>Fill in every field marked * first.</strong> Nothing was deployed, and Windows was not asked for anything.</p>
+      <p><strong>Fill in every field marked * first.</strong> Nothing was deployed.</p>
       <ul>${missing.map((field) => `<li data-missing-field="${escapeHtml(field.key)}">${escapeHtml(field.label)}</li>`).join("")}</ul>
     </div>`;
 }
@@ -120,12 +124,16 @@ export function deployErrorText(error: unknown): string {
 /** What a checked deploy did. */
 export type CheckedDeployOutcome<T> =
   | { kind: "missing"; missing: ServiceField[] }
+  | { kind: "blocked"; message: string }
   | { kind: "cancelled" }
   | { kind: "done"; result: T };
 
 /** The calls a checked deploy makes; main.ts passes the Wails bindings and the DOM. */
 export interface CheckedDeployCalls<T> {
-  /** DeployAdminStep. A failure to answer is treated as "no screen": the backend still refuses an unapproved prompt. */
+  /**
+   * DeployAdminStep. A failure to answer stops here with its reason: a deploy
+   * that went on would only meet the backend's refusal, with no way forward.
+   */
   adminStep(): Promise<AdminStep | null>;
   /** Shows adminConsentScreen and resolves true on Continue, false on Cancel. */
   askConsent(step: AdminStep): Promise<boolean>;
@@ -137,8 +145,9 @@ export interface CheckedDeployCalls<T> {
 /**
  * Deploy from the setup card: the field check, then the admin-step screen when
  * Windows will ask, then the deploy. direct is false for a deploy through a
- * proxy, which runs in a container and needs no admin prompt. An error from the
- * deploy reaches the caller, which writes it next to Deploy.
+ * proxy, which runs in a container and needs no admin prompt. A step that cannot
+ * be read (Windows Firewall off, or not readable) is "blocked" with its reason.
+ * An error from the deploy reaches the caller, which writes it next to Deploy.
  */
 export async function runCheckedDeploy<T>(
   fields: ServiceField[],
@@ -149,7 +158,12 @@ export async function runCheckedDeploy<T>(
   const missing = missingRequiredFields(fields, values);
   if (missing.length) return { kind: "missing", missing };
   if (direct) {
-    const step = await calls.adminStep().catch(() => null);
+    let step: AdminStep | null;
+    try {
+      step = await calls.adminStep();
+    } catch (error) {
+      return { kind: "blocked", message: deployErrorText(error) };
+    }
     if (step?.needed) {
       if (!(await calls.askConsent(step))) return { kind: "cancelled" };
       await calls.approve();

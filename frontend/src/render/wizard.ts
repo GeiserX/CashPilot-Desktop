@@ -19,7 +19,7 @@
 
 import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning, SessionConsent } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
-import { serviceFormFields } from "./fields.js";
+import { fieldMark, serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
 import { ratingBlock } from "./rating.js";
 import { imageChoiceSection } from "./image.js";
@@ -99,7 +99,7 @@ export function renderWizardServiceSetup(
       <div class="credential-grid">
         ${fields.map((item) => `
           <label>
-            <span>${escapeHtml(item.label)}${item.required ? " *" : ""}</span>
+            <span>${escapeHtml(item.label)}${fieldMark(item)}</span>
             <input data-wizard-env="${escapeHtml(item.key)}" type="${item.secret ? "password" : "text"}"${item.secret ? ' autocomplete="new-password"' : ""}${item.pattern ? ` pattern="${escapeHtml(item.pattern)}"` : ""} placeholder="${escapeHtml(item.description)}" value="${escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}

@@ -298,6 +298,24 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 
 	// Replace any prior instance (a managed child from this session or an orphan pid
 	// from a previous one) before starting the new one, so redeploy never doubles up.
+	// A rule that is missing and whose admin prompt nobody approved stops the deploy
+	// here, before the running instance is stopped: refusing later, in
+	// launchProcess, would leave the node down (a drift redeploy, or a catalog
+	// change to the networks).
+	if len(bin.FirewallBlock) > 0 && !p.hasApproval(spec.Slug) {
+		nets, err := validFirewallNetworks(bin.FirewallBlock)
+		if err != nil {
+			return ContainerInfo{}, err
+		}
+		ready, err := p.firewallReady(spec.Slug, binPath, nets)
+		if err != nil {
+			return ContainerInfo{}, err
+		}
+		if !ready {
+			return ContainerInfo{}, &AdminApprovalNeeded{Slug: spec.Slug}
+		}
+	}
+
 	prev := p.readRegistry().Entries[spec.Slug]
 	p.stopInternal(spec.Slug, false, p.graceFor(StopTimeoutSeconds(spec.Service)))
 	// A rule the previous deploy made and this one no longer wants is deleted now:

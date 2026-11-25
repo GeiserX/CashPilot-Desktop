@@ -34,8 +34,8 @@ func TestNativeDeployNeverRaisesTheAdminPromptUnapproved(t *testing.T) {
 	if !errors.As(err, &need) || need.Slug != "fwsvc" {
 		t.Fatalf("Deploy with no approval: err = %v, want AdminApprovalNeeded", err)
 	}
-	if !slices.Equal(fw.elevate, []bool{false}) {
-		t.Fatalf("mayElevate per firewall request = %v, want one false", fw.elevate)
+	if len(fw.elevate) != 0 {
+		t.Fatalf("mayElevate per firewall request = %v, want no request: the deploy stops on the read", fw.elevate)
 	}
 	time.Sleep(300 * time.Millisecond)
 	if _, statErr := os.Stat(marker); statErr == nil {
@@ -49,15 +49,29 @@ func TestNativeDeployNeverRaisesTheAdminPromptUnapproved(t *testing.T) {
 	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
 		t.Fatalf("Deploy after approval: %v", err)
 	}
-	if !slices.Equal(fw.elevate, []bool{false, true}) {
-		t.Fatalf("mayElevate per firewall request = %v, want false then true", fw.elevate)
+	if !slices.Equal(fw.elevate, []bool{true}) {
+		t.Fatalf("mayElevate per firewall request = %v, want one true", fw.elevate)
+	}
+	running := p.readRegistry().Entries["fwsvc"]
+	if running == nil || running.PID == 0 {
+		t.Fatalf("registry entry after the approved deploy = %+v, want a running pid", running)
 	}
 
-	// The approval is used up: with the rule gone, a Start may not raise the prompt.
+	// The approval is used up. With the rule gone (a catalog change to the
+	// networks makes it differ), a redeploy with no new approval is refused before
+	// it stops the running node, so the node keeps running.
+	fw.inPlace = false
+	if _, err := p.Deploy(context.Background(), spec, nil); !errors.As(err, &need) {
+		t.Fatalf("redeploy with the rule gone and no new approval: err = %v, want AdminApprovalNeeded", err)
+	}
+	if e := p.readRegistry().Entries["fwsvc"]; e == nil || e.PID != running.PID || !p.slugAlive("fwsvc") {
+		t.Fatalf("a refused redeploy stopped the running node: entry = %+v", e)
+	}
+
+	// A Start may not raise the prompt either.
 	if err := p.Stop(context.Background(), "fwsvc", 0); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	fw.inPlace = false
 	if err := p.Start(context.Background(), "fwsvc"); !errors.As(err, &need) {
 		t.Fatalf("Start with the rule gone and no new approval: err = %v, want AdminApprovalNeeded", err)
 	}
@@ -113,6 +127,19 @@ func TestAdminStepNamesTheRuleTheLaunchWouldCreate(t *testing.T) {
 		t.Fatalf("with the rule in place: step = %+v, err = %v, want none", step, err)
 	}
 
+	// A firewall that would ignore the rule is no admin step: no prompt can fix
+	// it, so the card shows the reason instead of its consent screen.
+	p.firewallReady = func(slug, program string, nets []string) (bool, error) {
+		return false, firewallNotEnforced("mysterium was not started", firewallState{FirewallOff: true}.notEnforced())
+	}
+	if step, err := p.AdminStep(svc, "mysterium"); err == nil || step.Needed || !strings.Contains(err.Error(), "Windows Firewall is off") {
+		t.Fatalf("firewall off: step = %+v, err = %v, want the reason and no step", step, err)
+	}
+	p.firewallReady = func(slug, program string, nets []string) (bool, error) {
+		reads = append(reads, program)
+		return ready, nil
+	}
+
 	// macOS and Linux binaries declare no rule: no step, and nothing is read.
 	reads = nil
 	p.goos = "linux"
@@ -141,9 +168,25 @@ func TestFirewallNextAsksBeforeCreating(t *testing.T) {
 	if create, err := firewallNext(good, "mysterium", prog, nets, false, "w"); create || err != nil {
 		t.Fatalf("rule in place: create=%v err=%v, want nothing to do", create, err)
 	}
+	// The read AdminStep makes: missing, in place, or a firewall that would
+	// ignore it (an error, so the card says so and shows no consent screen).
+	if ready, err := firewallReadiness(missing, prog, nets, "w"); ready || err != nil {
+		t.Fatalf("readiness, missing rule: ready=%v err=%v, want not ready", ready, err)
+	}
+	if ready, err := firewallReadiness(good, prog, nets, "w"); !ready || err != nil {
+		t.Fatalf("readiness, rule in place: ready=%v err=%v, want ready", ready, err)
+	}
+	ignored := good
+	ignored.LocalIgnored = true
+	if ready, err := firewallReadiness(ignored, prog, nets, "w"); ready || err == nil || !strings.Contains(err.Error(), "group policy") {
+		t.Fatalf("readiness, rule ignored: ready=%v err=%v, want the reason", ready, err)
+	}
 	off := firewallState{FirewallOff: true}
 	if create, err := firewallNext(off, "mysterium", prog, nets, true, "w"); create || err == nil || errors.As(err, new(*AdminApprovalNeeded)) {
 		t.Fatalf("firewall off: create=%v err=%v, want a refusal without a prompt", create, err)
+	} else if strings.Contains(err.Error(), "Docker") || !strings.Contains(err.Error(), "Windows Firewall is off") {
+		// A program that runs natively on Windows has no Docker route from the card.
+		t.Fatalf("firewall off: %q, want the reason and no Docker advice", err)
 	}
 }
 
@@ -161,4 +204,12 @@ func TestFirewallCreateFailedNamesTheDeclinedPrompt(t *testing.T) {
 	if strings.Contains(failed, "chose No") || !strings.Contains(failed, "creating it failed") || !strings.Contains(failed, "access denied") {
 		t.Errorf("failed: %q", failed)
 	}
+}
+
+// slugAlive reports whether slug's managed child is alive.
+func (p *NativeProcessProvider) slugAlive(slug string) bool {
+	p.mu.Lock()
+	mp := p.procs[slug]
+	p.mu.Unlock()
+	return mp != nil && p.procAlive(mp)
 }

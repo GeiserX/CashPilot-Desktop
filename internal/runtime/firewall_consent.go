@@ -106,7 +106,7 @@ func (p *NativeProcessProvider) takeApproval(slug string) bool {
 // the launch, and a missing rule stops it too unless the admin prompt may show.
 func firewallNext(st firewallState, slug, program string, nets []string, mayElevate bool, what string) (bool, error) {
 	if why := st.notEnforced(); why != "" {
-		return false, fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
+		return false, firewallNotEnforced(what, why)
 	}
 	if st.matches(program, nets) {
 		return false, nil
@@ -115,6 +115,31 @@ func firewallNext(st firewallState, slug, program string, nets []string, mayElev
 		return false, &AdminApprovalNeeded{Slug: slug}
 	}
 	return true, nil
+}
+
+// firewallReadiness is firewallReady once the rule is read: whether it is in
+// place, or why no admin prompt could make it count.
+func firewallReadiness(st firewallState, program string, nets []string, what string) (bool, error) {
+	if why := st.notEnforced(); why != "" {
+		return false, firewallNotEnforced(what, why)
+	}
+	return st.matches(program, nets), nil
+}
+
+// firewallNotEnforced is the refusal when Windows Firewall would ignore the rule.
+// It names the fix and nothing else: the service runs as a program on Windows,
+// so there is no other way to run it from this card.
+func firewallNotEnforced(what, why string) error {
+	return fmt.Errorf("%s, and %s, so the rule would do nothing and Windows was not asked for anything. Fix that, then click Deploy again", what, why)
+}
+
+// hasApproval reports whether slug has an approval that is still good, without
+// using it up.
+func (p *NativeProcessProvider) hasApproval(slug string) bool {
+	p.approvalMu.Lock()
+	defer p.approvalMu.Unlock()
+	until, ok := p.approvals[slug]
+	return ok && time.Now().Before(until)
 }
 
 // firewallCreateFailed says why creating the rule failed. A No at the Windows
