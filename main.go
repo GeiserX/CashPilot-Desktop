@@ -60,6 +60,12 @@ func main() {
 	// elevated setup and removal, run by the admin bootstraps (vm_setup.go).
 	setup := fs.String(vmSetupFlag, "", "build or repair the Secure VM from this params file and prove its fence; admin only, no window")
 	remove := fs.String(vmRemoveFlag, "", "remove the Secure VM of this data folder; admin only, no window")
+	// --uninstall-cleanup is what the Windows uninstaller runs before it deletes the
+	// files: it removes the background helper, the RunOnce value and, when asked,
+	// the earning containers and the user's data (uninstall.go). No window.
+	uninstall := fs.Bool(uninstallFlag, false, "remove what the app set up on this computer, for the uninstaller; no window")
+	removeEarners := fs.Bool(removeEarnersFlag, false, "with --uninstall-cleanup: also stop and remove the earners CashPilot Desktop deployed")
+	deleteData := fs.Bool(deleteDataFlag, false, "with --uninstall-cleanup: also delete the settings, database, logs and saved keys")
 	parseErr := fs.Parse(os.Args[1:])
 
 	if *inspect != "" {
@@ -70,6 +76,10 @@ func main() {
 	}
 	if *setup != "" || *remove != "" {
 		os.Exit(vmSetupMain(*setup, *remove, parseErr))
+	}
+
+	if *uninstall {
+		os.Exit(runUninstallMain(*removeEarners, *deleteData, parseErr))
 	}
 
 	if *daemon {

@@ -357,6 +357,8 @@ func (a *App) DomReady(ctx context.Context) {
 	wailsruntime.WindowShow(ctx)
 	PositionMainWindowOnPrimaryScreen()
 	InstallTrayIcon(a.trayIcon)
+	// A helper registered by another copy of the app follows this one (helper_follow.go).
+	go a.keepHelperOnThisCopy()
 }
 
 func (a *App) Shutdown(_ context.Context) {
