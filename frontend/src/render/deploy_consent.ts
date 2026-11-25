@@ -119,6 +119,7 @@ export function adminConsentScreen(serviceName: string, step: AdminStep): string
 export interface DeployAnswer {
   kind: "ok" | "cancelled" | "failed";
   text: string;
+  followUp?: { failure: string; run(): Promise<string | void> };
 }
 
 /** The note next to Deploy while it runs, or once it answered. */
@@ -195,6 +196,18 @@ export async function runDeployWithStatus(
     answer = { kind: "failed", text: deployErrorText(error) };
   }
   say(answer.kind, answer.text);
+  if (answer.kind === "ok" && answer.followUp) {
+    let detail: string | void;
+    try {
+      detail = await answer.followUp.run();
+    } catch (error) {
+      detail = `${answer.followUp.failure} ${deployErrorText(error)}`;
+    }
+    if (detail) {
+      answer = { kind: "ok", text: `${answer.text}\n\n${detail}` };
+      say(answer.kind, answer.text);
+    }
+  }
   return answer;
 }
 

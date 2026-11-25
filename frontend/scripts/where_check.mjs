@@ -83,7 +83,9 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   }
   const c = calls([ok], []);
   const out = await runWorkerDeploy("honeygain", targets[1], null, 1, c);
-  check("RULE 3: one copy from the worker's own IP deploys and saves", out.kind === "deployed" && c.log.deploys.length === 1 && c.log.saved === 1, JSON.stringify(c.log));
+  check("RULE 3: one copy from the worker's own IP deploys before saving", out.kind === "deployed" && c.log.deploys.length === 1 && c.log.saved === 0, JSON.stringify(c.log));
+  if (out.kind === "deployed") await out.save();
+  check("RULE 3: the deploy result lets the card save afterwards", c.log.saved === 1, JSON.stringify(c.log));
 }
 
 {

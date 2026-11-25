@@ -62,14 +62,14 @@ export function whereChoice(value: string | null | undefined): number | null {
 export type WorkerDeployOutcome =
   | { kind: "refused"; message: string }
   | { kind: "cancelled" }
-  | { kind: "deployed"; result: WorkerDeployResult };
+  | { kind: "deployed"; result: WorkerDeployResult; save(): Promise<void> };
 
 /** The calls a deploy to a worker makes; main.ts passes the Wails bindings and window.confirm. */
 export interface WorkerDeployCalls {
   confirm(message: string): boolean;
   /** One deploy, with the owner's yes so far. */
   deploy(yes: { confirmed: boolean; allowSharedIdentity: boolean }): Promise<WorkerDeployResult>;
-  /** Saves the typed credentials, after the deploy ran. */
+  /** Saves the typed credentials after the caller shows the deploy result. */
   save(): Promise<void>;
 }
 
@@ -112,8 +112,7 @@ export async function runWorkerDeploy(
       continue;
     }
     if (result.ask) return { kind: "refused", message: `${result.message} Nothing was deployed.` };
-    await calls.save();
-    return { kind: "deployed", result };
+    return { kind: "deployed", result, save: calls.save };
   }
   return { kind: "refused", message: "The deploy kept asking the same question. Nothing was deployed." };
 }

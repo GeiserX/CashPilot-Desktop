@@ -2699,10 +2699,16 @@ async function deployFromCard(
         if (typed.length) await SaveCredentials(slug, { ...await GetCredentials(slug), ...Object.fromEntries(typed) });
       },
     });
-    if (outcome.kind === "deployed") return { kind: "ok", text: workerDeployText(outcome.result) };
+    if (outcome.kind === "deployed") {
+      return {
+        kind: "ok",
+        text: workerDeployText(outcome.result),
+        followUp: { failure: "CashPilot could not save the credentials on this computer.", run: outcome.save },
+      };
+    }
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
-  if (state?.services?.some((service) => service.slug === slug && seedFileVar(service))) return runWalletDeploy(slug, values);
+  if (state?.services?.some((service) => service.slug === slug && seedFileVar(service))) return runWalletDeploy(slug, values, image, instances);
   // A custom service has no credentials: it runs its saved definition.
   const custom = state?.services?.some((service) => service.slug === slug && service.custom);
   const outcome = await runRouteDeploy(slug, proxyId, image, instances, state?.route, {
@@ -2719,13 +2725,17 @@ async function deployFromCard(
   if (outcome.kind === "refused" || outcome.kind === "cancelled") {
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
+  const followUp = {
+    failure: "CashPilot could not refresh the app.",
+    run: async () => {
+      state = await GetAppState();
+      return deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+    },
+  };
   if (outcome.kind === "routed") {
-    state = await GetAppState();
-    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-    return { kind: "ok", text: routedDeployText(outcome.result, link) };
+    return { kind: "ok", text: routedDeployText(outcome.result, ""), followUp };
   }
   const deployment = outcome.deployment;
-  state = await GetAppState();
   // The box now holds what runs, so a second Deploy without an edit keeps it.
   const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
   if (imageInput) {
@@ -2737,8 +2747,7 @@ async function deployFromCard(
     instancesInput.value = String(deployment.instances || 1);
     instancesInput.dataset.initial = String(deployment.instances || 1);
   }
-  const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-  return { kind: "ok", text: link ? `Deployed.\n\n${link}` : "Deployed." };
+  return { kind: "ok", text: "Deployed.", followUp };
 }
 
 // A wallet seed kept in a file (Sia's hostd; render/wallet.ts). The phrase is in this
@@ -2789,7 +2798,9 @@ function readWalletChoice(slug: string): WalletChoice {
   return { mode, phrase };
 }
 
-async function runWalletDeploy(slug: string, values: Record<string, string>): Promise<DeployAnswer> {
+async function runWalletDeploy(
+  slug: string, values: Record<string, string>, image: string | null, instances: number | null,
+): Promise<DeployAnswer> {
   const choice = readWalletChoice(slug);
   const refusal = walletChoiceRefusal(choice);
   if (refusal) return refusal;
@@ -2797,7 +2808,7 @@ async function runWalletDeploy(slug: string, values: Record<string, string>): Pr
   let result: WalletDeployResult;
   try {
     await SaveCredentials(slug, values);
-    result = await DeployServiceWallet(slug, values, readWizardImage(slug), readWizardInstances(slug), choice);
+    result = await DeployServiceWallet(slug, values, image, instances, choice);
   } finally {
     choice.phrase = "";
   }
@@ -2807,9 +2818,14 @@ async function runWalletDeploy(slug: string, values: Record<string, string>): Pr
     newWallet = { slug, words: phraseWords(wallet.phrase), address: wallet.address || "", step: "show", positions: [], error: "" };
     wallet.phrase = "";
   }
-  state = await GetAppState();
   fillNewWalletPanel();
-  return walletDeployAnswer(wallet, newWallet !== null);
+  return {
+    ...walletDeployAnswer(wallet, newWallet !== null),
+    followUp: {
+      failure: "CashPilot could not refresh the app.",
+      run: async () => { state = await GetAppState(); },
+    },
+  };
 }
 
 // Draws the one-time panel in its card, and wires it. Called after every wizard draw.

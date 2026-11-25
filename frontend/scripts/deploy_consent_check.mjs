@@ -34,6 +34,7 @@ import {
   missingFieldsNotice,
   missingRequiredFields,
   runCheckedDeploy,
+  runDeployWithStatus,
 } from "../.harness-build/render/deploy_consent.js";
 import { runWorkerDeploy } from "../.harness-build/render/where.js";
 import { walletChoiceRefusal, walletDeployAnswer } from "../.harness-build/render/wallet.js";
@@ -353,6 +354,44 @@ for (const continueImport of [false, true]) {
     : ["import confirmation"];
   check(`Import confirmation ${continueImport} precedes the firewall check and any deploy`,
     JSON.stringify(trace) === JSON.stringify(expected), JSON.stringify(trace));
+}
+
+{
+  const trace = [];
+  const say = (kind, text) => trace.push([kind, text]);
+  const answer = await runDeployWithStatus(BUSY, say, async () => ({
+    ...walletDeployAnswer({ created: true }, true),
+    followUp: {
+      failure: "CashPilot could not refresh the app.",
+      run: async () => {
+        check("the new-wallet result is visible when refresh starts", trace[1]?.[0] === "ok" && trace[1][1].includes("seed phrase"), JSON.stringify(trace));
+        throw new Error("state unavailable");
+      },
+    },
+  }));
+  check("a refresh failure keeps the Sia success and seed notice",
+    answer.kind === "ok" && answer.text.includes("seed phrase") && answer.text.includes("state unavailable"), JSON.stringify(trace));
+}
+
+{
+  const trace = [];
+  const answer = await runDeployWithStatus(BUSY, (kind, text) => trace.push([kind, text]), async () => {
+    const deployed = await runWorkerDeploy("honeygain", { id: 2, name: "attic", online: true, reason: "", services: [] }, null, null, {
+      confirm: () => false,
+      deploy: async () => ({ ask: "", worker: "attic" }),
+      save: async () => {
+        check("the worker success is visible when local saving starts", trace[1]?.[0] === "ok", JSON.stringify(trace));
+        throw new Error("local credentials unavailable");
+      },
+    });
+    return {
+      kind: "ok",
+      text: "Deployed to attic.",
+      followUp: { failure: "CashPilot could not save the credentials on this computer.", run: deployed.save },
+    };
+  });
+  check("a local save failure keeps the worker success",
+    answer.kind === "ok" && answer.text.includes("Deployed to attic.") && answer.text.includes("local credentials unavailable"), JSON.stringify(trace));
 }
 
 if (failures) {
