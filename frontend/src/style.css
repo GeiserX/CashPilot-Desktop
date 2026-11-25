@@ -408,6 +408,16 @@ section { margin-bottom: 28px; }
 .attn-clear { display: flex; align-items: center; gap: 8px; padding: 8px 0; color: var(--text-secondary); }
 .attn-clear::before { content: ""; width: 10px; height: 10px; background: var(--success); }
 .attention-quiet .block-head { border-bottom: none; }
+/* Money waiting: reminder rows reuse the attention rows. */
+.mw-intro, .mw-note { color: var(--text-secondary); margin: 6px 0 8px; max-width: 80ch; }
+.mw-why { display: flex; flex-direction: column; gap: 2px; }
+.mw-title { color: var(--text-primary); }
+.mw-when { font-size: var(--fs-2); }
+.mw-loss { font-size: var(--fs-2); color: var(--text-muted); }
+.mw-how summary, .mw-more summary { cursor: pointer; }
+.mw-more { position: relative; }
+.mw-menu { position: absolute; right: 0; z-index: 5; display: flex; flex-direction: column; gap: 4px; padding: 6px; background: var(--bg-secondary); border: 1px solid var(--border-color); }
+.mw-foot { padding: 8px 0; font-size: var(--fs-2); color: var(--text-secondary); }
 /* Back these up: the attention rows, plus the volumes each one holds. */
 .backup-intro { color: var(--text-secondary); margin: 6px 0 8px; max-width: 80ch; }
 .backup-ok { border-left-color: var(--success); }

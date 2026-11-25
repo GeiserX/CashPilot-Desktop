@@ -72,6 +72,7 @@ import {
   DiscardPartialRestore,
   AcceptSessionRisk,
   RevokeSessionRisk,
+  ReminderAction,
   GetModeState,
   JoinCashPilot,
   StartAsLead,
@@ -87,6 +88,8 @@ import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, rend
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
+import { renderReminders, withReminders } from "./render/reminders";
+import { stallItems } from "./render/stall";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
 import { renderEnvSetting, settingsSaveValues } from "./render/settings";
@@ -674,7 +677,7 @@ function renderDashboard(current: AppState) {
   const containers = [...deployments, ...Object.values(copies).flat()];
   const upCount = containers.filter((item) => item.status === "running").length;
   const points = summary?.points || [];
-  const attention = attentionItems({
+  const attention = withReminders(attentionItems({
     runtime: current.runtime,
     services,
     deployments,
@@ -685,7 +688,7 @@ function renderDashboard(current: AppState) {
     drift: current.drift,
     producerStates: current.producerStates,
     isolation: current.isolation,
-  });
+  }).concat(stallItems(current.stalls)), current.reminders);
 
   root.innerHTML = `
     ${titlebar()}
@@ -723,6 +726,8 @@ function renderDashboard(current: AppState) {
         </section>
 
         ${renderAttention(attention, upCount, containers.length)}
+
+        ${renderReminders(current.reminders)}
 
         ${renderStateBackups(current.stateBackups)}
 
@@ -814,6 +819,19 @@ function renderDashboard(current: AppState) {
     });
   });
   wireStateBackups();
+  document.querySelectorAll<HTMLButtonElement>("[data-reminder-action]").forEach((button) => {
+    button.addEventListener("click", () => void runReminderAction(button.dataset));
+  });
+}
+
+// Money waiting: Done, Snooze, Not for me and Unmute, then redraw from the backend.
+async function runReminderAction(data: DOMStringMap) {
+  try {
+    await ReminderAction(data.slug || "", data.rule || "", data.reminderAction || "", data.occurrence || "", Number(data.days || "0"));
+    await refreshState();
+  } catch (error) {
+    setOutput(String(error));
+  }
 }
 
 // The "Back these up" card: confirm, undo, and the export form under a row.

@@ -102,3 +102,22 @@ rating:
     kind: our_experience
     source: https://github.com/GeiserX/CashPilot/blob/main/services/depin/wipter.yml
     checked_on: "2026-11-13"
+
+# --- Desktop-only (catalog-overlay/append/depin/wipter.yml) -----------------
+# Secure VM: Wipter may run inside the fenced Windows VM
+# (docs/design/secure-windows-vm.md). It earned under Hyper-V behind the fence in
+# the lab. Installed with /S /allusers it goes to C:\Program Files\Wipter; started
+# in the earner's session, it needs no admin. The publisher is the signer of the
+# official Windows installer (1.25.1039). Wipter.exe inside it carries no
+# signature of its own, so a later signer check reads the installer, not the
+# running process.
+# vm_stance: the terms do not mention VMs; they allow use only on devices and
+#   connections the user owns or may use, and pay hosting IPs at their own rate.
+#   https://wipter.com/en/terms-and-conditions-of-use and https://wipter.com/en,
+#   read 2026-11-25.
+guest:
+  windows:
+    process: "Wipter.exe"
+    publisher: "CN=ByteCrafted LLC, O=ByteCrafted LLC, L=Wilmington, S=Delaware, C=US, SERIALNUMBER=2866135, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US"
+    download_page: "https://wipter.com/en"
+    signin: console
