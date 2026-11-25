@@ -43,6 +43,17 @@ export function renderGateSteps(steps: FirstRunStep[], activeId: string): string
   return `<ol class="gate-steps" aria-label="Step ${active + 1} of ${steps.length}">${items}</ol>`;
 }
 
+/** First run, step 1. "Get started" is the screen's only control. */
+export function renderWelcome(): string {
+  return `
+    <h1 class="gate-title">Welcome to CashPilot</h1>
+    <p class="gate-lede">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
+    <div class="gate-actions">
+      <button class="btn btn-primary btn-lg" id="get-started">Get started</button>
+    </div>
+  `;
+}
+
 export const LEAD_TITLE = "Run everything here";
 export const FOLLOWER_TITLE = "Join my CashPilot";
 
