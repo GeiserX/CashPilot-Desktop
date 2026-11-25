@@ -192,6 +192,7 @@ let importDeployed: string[] = [];
 let importLinks: Record<string, string> = {};
 let importDeploys: Record<string, DeployStatus> = {};
 const driftDeploys: Record<string, DeployStatus> = {};
+let proxyDeployStatus: DeployStatus | undefined;
 let importDeploying = new Set<string>();
 // Bumped by each preview, so a slower earlier one cannot land over a later one.
 let importPreviewSeq = 0;
@@ -1940,7 +1941,7 @@ async function renderFleet(current: AppState) {
             </div>
           </section>
 
-          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing) : ""}
+          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing, proxyDeployStatus) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -2035,11 +2036,27 @@ function wireProxies() {
     await RemoveProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyRemove));
   });
   on("[data-proxy-run-deploy]", async () => {
+    if (proxyDeployStatus?.kind === "busy") return;
     const slug = valueOf("[data-proxy-run-service]");
     const id = Number(valueOf("[data-proxy-run-proxy]"));
-    if (!slug || !id) return;
-    const result = await DeployProxiedCopy(slug, id);
-    showInfoToast({scope: "proxy", message: `Running through the proxy, exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`});
+    const say = (kind: DeployStatus["kind"], text: string) => {
+      proxyDeployStatus = { kind, text };
+      const slot = document.querySelector<HTMLElement>("[data-proxy-deploy-status]");
+      if (slot) slot.innerHTML = deployNotice(kind, text);
+    };
+    if (!slug || !id) {
+      say("cancelled", "Choose a service and a proxy first. Nothing was deployed.");
+      return;
+    }
+    const service = proxiesState?.candidates.find((item) => item.slug === slug)?.name || slug;
+    const proxy = proxyById(id)?.name || "the selected proxy";
+    await runDeployWithStatus(`Deploying ${service} through ${proxy}...`, say, async () => {
+      const result = await DeployProxiedCopy(slug, id);
+      return {
+        kind: "ok",
+        text: `${service} is running through ${proxy}. Exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`,
+      };
+    });
   });
 }
 
