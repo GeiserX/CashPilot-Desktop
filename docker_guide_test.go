@@ -257,3 +257,29 @@ func TestSetupJournalIsSaved(t *testing.T) {
 		t.Fatal("the restart did not arm RunOnce")
 	}
 }
+
+// HostCheck hands DOCKER_HOST to the checklist: an engine it names elsewhere
+// proves nothing about this PC, even with Docker Desktop open here.
+func TestHostCheckTrustsNoEngineDockerHostNames(t *testing.T) {
+	app, _ := newGuideTestApp(t, runningProvider{})
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, Build: 26100, DockerDesktopRunning: winvm.Yes,
+			HypervisorPresent: winvm.Unknown, Firmware: winvm.Unknown, Virtualization: winvm.Unknown, DockerDesktopInstalled: winvm.Yes}
+	}}
+	a2 := func() string {
+		res, err := app.HostCheck()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, _ := findStep(res.Steps, "a2")
+		return s.State
+	}
+	t.Setenv("DOCKER_HOST", "")
+	if got := a2(); got != winvm.StepDone {
+		t.Fatalf("this PC's Docker Desktop answers, but a2 is %s", got)
+	}
+	t.Setenv("DOCKER_HOST", "tcp://192.168.10.100:2375")
+	if got := a2(); got != winvm.StepUnknown {
+		t.Fatalf("an engine DOCKER_HOST names elsewhere answered, but a2 is %s", got)
+	}
+}

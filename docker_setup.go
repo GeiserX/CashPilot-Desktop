@@ -84,7 +84,7 @@ func (a *App) RunSetupStep(op string, webDownload bool) (SetupStepResult, error)
 	// The machine is the truth: the row must still ask for this change.
 	facts := a.hostCache().refresh(a.ctx)
 	status := a.runtimeStatus(a.catalog.ListVisible())
-	row, found := findStep(winvm.DockerSteps(facts, status.Reason), stepID)
+	row, found := findStep(dockerSteps(facts, status), stepID)
 	if !found || row.State != winvm.StepNeedsYou || row.Action.Op != op {
 		result.State = winvm.OutcomeFailed
 		result.Text = "Nothing ran: CashPilot read this PC again, and this step no longer asks for this change. The list below shows where it stands now."

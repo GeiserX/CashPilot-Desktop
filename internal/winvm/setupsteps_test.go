@@ -307,7 +307,7 @@ func TestEveryChangeIsOfferedByItsOwnRow(t *testing.T) {
 		f := goodPC()
 		c.mutate(&f)
 		derive(&f)
-		s := stepOf(t, DockerSteps(f, c.reason), SetupStepFor[op])
+		s := stepOf(t, DockerSteps(f, c.reason, true), SetupStepFor[op])
 		if s.State != StepNeedsYou || s.Action.Op != op {
 			t.Errorf("%s: row %s is %q with op %q", op, s.ID, s.State, s.Action.Op)
 		}
@@ -321,7 +321,7 @@ func TestEveryChangeIsOfferedByItsOwnRow(t *testing.T) {
 	// docker-users is offered only on access denied.
 	f := goodPC()
 	f.DockerUsersListed, f.DockerUsersToken = No, No
-	if hasStep(DockerSteps(f, runtime.ReasonNotRunning), "a8") {
+	if hasStep(DockerSteps(f, runtime.ReasonNotRunning, true), "a8") {
 		t.Error("docker-users is offered when nothing proved it is needed")
 	}
 }

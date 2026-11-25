@@ -106,20 +106,26 @@ var stepAfter = map[string][]string{
 }
 
 // DockerSteps derives the checklist from one reading of this PC and the runtime's
-// reason code. Outside Windows it returns nothing.
-func DockerSteps(f HostFacts, reason string) []Step {
+// reason code. local says the engine the app reached is this PC's own Docker
+// Desktop (runtime.LocalDockerDesktop): no DOCKER_HOST and no Docker context that
+// names another engine. Outside Windows it returns nothing.
+func DockerSteps(f HostFacts, reason string, local bool) []Step {
 	if !f.Supported || f.OS != "windows" {
 		return nil
 	}
 	engineUp := reason == runtime.ReasonRunning || reason == runtime.ReasonWindowsContainers
 	// The engine answering proves the rest only when it is this PC's Docker
-	// Desktop that answers, not an engine DOCKER_HOST names elsewhere.
-	proven := engineUp && f.DockerDesktopRunning == Yes
+	// Desktop that answers, not an engine DOCKER_HOST or a Docker context names
+	// elsewhere.
+	proven := engineUp && local && f.DockerDesktopRunning == Yes
+	// Windows containers run without WSL, so only Linux containers prove the WSL
+	// rows.
+	wslProven := proven && reason == runtime.ReasonRunning
 	wslBackend := f.DockerBackend != BackendHyperV
 
 	steps := []Step{windowsStep(f, proven), virtualizationStep(f, proven)}
 	if wslBackend {
-		steps = append(steps, wslFeatureStep(f, proven), wslVersionStep(f, proven))
+		steps = append(steps, wslFeatureStep(f, wslProven), wslVersionStep(f, wslProven))
 	}
 	steps = append(steps,
 		installedStep(f, proven),
