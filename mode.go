@@ -253,18 +253,30 @@ type LeaveResult struct {
 	FirewallError string `json:"firewallError"`
 }
 
-// closeServerCommands runs on every way out of joined mode, after the mode changed:
-// the server no longer commands this computer, so its API closes and the firewall
-// rule made for it is removed. A rule that stays (the admin prompt was refused) is
-// returned, so the user can delete it in Windows Defender Firewall; nothing listens
-// behind it any more.
-func (a *App) closeServerCommands() error {
+// updateConfigForServerCommands saves the mode change and invalidates any pending
+// firewall consent under the same lock. On leave, it closes the API before asking
+// to remove a recorded firewall rule. The caller shows a cleanup error separately.
+func (a *App) updateConfigForServerCommands(update func(*config.AppConfig)) (firewallErr, configErr error) {
+	a.workerFirewall.mu.Lock()
+	defer a.workerFirewall.mu.Unlock()
+	left := false
+	if err := a.cfg.Update(func(c *config.AppConfig) {
+		wasJoined := c.Mode == config.ModeFollower
+		update(c)
+		left = wasJoined && c.Mode != config.ModeFollower
+	}); err != nil {
+		return nil, err
+	}
+	if !left {
+		return nil, nil
+	}
+	a.workerFirewall.generation++
 	a.syncWorkerAPI()
 	if err := a.removeServerCommandsRule(); err != nil {
 		log.Printf("server commands: %v", err)
-		return err
+		return err, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // SwitchToLead makes a joined computer run everything itself again. It stops the
@@ -292,14 +304,15 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 	a.upstream.mu.Lock()
 	a.upstream.workerKey, a.upstream.statusURL = "", ""
 	a.upstream.mu.Unlock()
-	if err := a.cfg.Update(func(c *config.AppConfig) {
+	firewallErr, err := a.updateConfigForServerCommands(func(c *config.AppConfig) {
 		c.UpstreamURL = ""
 		c.Mode = config.ModeLead
-	}); err != nil {
+	})
+	if err != nil {
 		return LeaveResult{}, err
 	}
-	if err := a.closeServerCommands(); err != nil {
-		out.FirewallError = err.Error()
+	if firewallErr != nil {
+		out.FirewallError = firewallErr.Error()
 	}
 	// Collect now rather than at the next tick, which can be an hour away.
 	if a.ctx != nil {

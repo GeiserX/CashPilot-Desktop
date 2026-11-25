@@ -137,6 +137,8 @@ type App struct {
 	// workerAPI is the API a joined CashPilot server commands this computer through
 	// (worker_api.go).
 	workerAPI workerAPIState
+	// workerFirewall coordinates firewall consent with leaving the server.
+	workerFirewall workerFirewallState
 }
 
 // fenceController is the slice of the Docker provider that keeps earners off the LAN.
@@ -1292,8 +1294,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// whole-snapshot Save would put back what background work changed since the
 	// snapshot above, such as the fence recording that isolation is on, and the
 	// keyring writes above make that window real.
-	left := false
-	if err := a.cfg.Update(func(cur *config.AppConfig) {
+	firewallErr, err := a.updateConfigForServerCommands(func(cur *config.AppConfig) {
 		cur.DisplayCurrency = cfg.DisplayCurrency
 		cur.HostnamePrefix = cfg.HostnamePrefix
 		cur.Timezone = cfg.Timezone
@@ -1304,7 +1305,6 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 				cur.Mode = config.ModeFollower
 				cfg.FleetServerEnabled = false
 			} else {
-				left = cur.Mode == config.ModeFollower
 				cur.Mode = config.ModeLead
 			}
 		}
@@ -1318,14 +1318,13 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		cur.FleetBindAddress = cfg.FleetBindAddress
 		cur.CollectIntervalMinutes = cfg.CollectIntervalMinutes
 		cur.FleetPort = cfg.FleetPort
-	}); err != nil {
+	})
+	if err != nil {
 		return SettingsState{}, err
 	}
 	// Clearing the address leaves the server, so it cleans up as Leave does.
-	if left {
-		if err := a.closeServerCommands(); err != nil {
-			a.emitNotice("server-commands", err.Error()+". Nothing listens behind it now. You can delete it in Windows Defender Firewall.")
-		}
+	if firewallErr != nil {
+		a.emitNotice("server-commands", firewallErr.Error()+". Nothing listens behind it now. You can delete it in Windows Defender Firewall.")
 	}
 	// If the collection cadence changed, restart the ticker so the new interval
 	// takes effect immediately instead of waiting for the next app launch.

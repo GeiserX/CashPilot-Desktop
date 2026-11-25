@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	stdruntime "runtime"
 	"strings"
+	"sync"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -140,6 +141,14 @@ var runFirewallScript = func(script string) error {
 	return err
 }
 
+type workerFirewallState struct {
+	mu         sync.Mutex
+	generation uint64
+	// Only one Allow may run through elevation or rollback at a time, so a stale
+	// Allow cannot remove the rule that a newer Allow just installed.
+	allowing bool
+}
+
 // AllowServerCommandsThroughFirewall makes the rule, after the user pressed the button
 // that names what it opens. It is refused unless this computer is joined.
 func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) {
@@ -149,34 +158,67 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	if !firewallRuleNeeded {
 		return a.serverCommandsState(), errors.New("this computer needs no firewall rule for it")
 	}
-	if !a.joined() {
-		return a.serverCommandsState(), errors.New("this computer is not joined to a CashPilot")
-	}
 	program, err := thisProgram()
 	if err != nil {
 		return a.serverCommandsState(), fmt.Errorf("could not find this program's path: %w", err)
 	}
+	firewall := &a.workerFirewall
+	firewall.mu.Lock()
+	if !a.joined() {
+		firewall.mu.Unlock()
+		return a.serverCommandsState(), errors.New("this computer is not joined to a CashPilot")
+	}
+	if firewall.allowing {
+		firewall.mu.Unlock()
+		return a.serverCommandsState(), errors.New("a firewall rule request is already in progress")
+	}
+	generation := firewall.generation
+	firewall.allowing = true
+	firewall.mu.Unlock()
+	defer func() {
+		firewall.mu.Lock()
+		firewall.allowing = false
+		firewall.mu.Unlock()
+	}()
+
 	name := serverCommandsRuleName()
 	if err := runFirewallScript(addRuleScript(name, program)); err != nil {
 		return a.serverCommandsState(), fmt.Errorf("the firewall rule was not made: %w", err)
 	}
-	if err := a.cfg.Update(func(c *config.AppConfig) {
-		c.ServerCommandsFirewallRule = name
-		c.ServerCommandsFirewallProgram = program
-	}); err != nil {
+	if err := a.finishServerCommandsAllow(generation, name, program); err != nil {
 		return a.serverCommandsState(), err
 	}
-	// The rule exists, so the API listens now, and the next heartbeat, sent now,
-	// reports its URL.
-	a.syncWorkerAPI()
+	// Tell the server about the listener without waiting for the next heartbeat.
 	if a.ctx != nil {
 		a.startUpstream(a.ctx)
 	}
 	return a.serverCommandsState(), nil
 }
 
+func (a *App) finishServerCommandsAllow(generation uint64, name, program string) error {
+	firewall := &a.workerFirewall
+	firewall.mu.Lock()
+	if generation != firewall.generation || !a.joined() {
+		firewall.mu.Unlock()
+		if err := runFirewallScript(removeRuleScript()); err != nil {
+			return fmt.Errorf("the pairing changed and the firewall rule %q could not be removed: %w", name, err)
+		}
+		return errors.New("the pairing changed before the firewall rule was ready. Allow the rule again while joined")
+	}
+	defer firewall.mu.Unlock()
+	if err := a.cfg.Update(func(c *config.AppConfig) {
+		c.ServerCommandsFirewallRule = name
+		c.ServerCommandsFirewallProgram = program
+	}); err != nil {
+		return err
+	}
+	a.syncWorkerAPI()
+	return nil
+}
+
 // removeServerCommandsRule removes the rule CashPilot made, if any. A failure keeps
 // the rule's name saved and is reported to the user, who can delete it by that name.
+// The caller holds workerFirewall.mu.
 func (a *App) removeServerCommandsRule() error {
 	name := strings.TrimSpace(a.cfg.Config().ServerCommandsFirewallRule)
 	if name == "" {
