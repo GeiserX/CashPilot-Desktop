@@ -67,6 +67,7 @@ const (
 	CodeNotAdded     uint32 = 0x20000005 // the account is still not in docker-users
 	CodeService      uint32 = 0x20000006 // the Server service could not be set or started
 	CodeWingetGone   uint32 = 0x20000007 // winget is not on this PC
+	CodeLaunchAuto   uint32 = 0x20000008 // hypervisorlaunchtype is already auto: nothing to change
 )
 
 // Windows codes the endings read.
@@ -141,7 +142,7 @@ func SetupScript(op string, webDownload bool) (string, error) {
 	case OpLanmanServer:
 		return prelude() + fmt.Sprintf(lanmanScript, CodeService, CodeService, CodeService), nil
 	case OpHypervisorLaunch:
-		return prelude() + fmt.Sprintf(hypervisorScript, CodeToolMissing, toolLimit(op)), nil
+		return prelude() + fmt.Sprintf(hypervisorScript, CodeToolMissing, psCode(CodeLaunchAuto), toolLimit(op)), nil
 	}
 	return "", fmt.Errorf("%q is not a change CashPilot makes with admin rights", op)
 }
@@ -204,10 +205,28 @@ exit 0
 `
 
 // hypervisorScript sets the boot entry Windows starts from to launch its
-// hypervisor again. It only ever sets "auto". The change takes effect at the
-// next start, so success is 3010.
+// hypervisor again. It first reads the entry's hypervisorlaunchtype as a number
+// through the BCD WMI provider, not bcdedit's translated text: element
+// 0x250000F0 (BcdOSLoaderInteger_HypervisorLaunchType) of {current}, whose fixed
+// GUID is {fa926493-6f1c-4193-a414-58f0b2456d1e}; 1 is Auto
+// (https://learn.microsoft.com/en-us/previous-versions/windows/desktop/bcd/bcdosloaderelementtypes).
+// Already Auto ends CodeLaunchAuto and changes nothing. A read that fails goes on
+// to the change. It only ever sets "auto". The change takes effect at the next
+// start, so success is 3010.
 const hypervisorScript = `$bcd = Join-Path ([Environment]::SystemDirectory) 'bcdedit.exe'
 if (-not (Test-Path -LiteralPath $bcd)) { exit %d }
+$launch = $null
+try {
+  $opened = ([wmiclass]'\\.\root\WMI:BcdStore').OpenStore('')
+  if ($opened.ReturnValue) {
+    $entry = $opened.Store.OpenObject('{fa926493-6f1c-4193-a414-58f0b2456d1e}')
+    if ($entry.ReturnValue) {
+      $element = $entry.Object.GetElement(0x250000F0)
+      if ($element.ReturnValue) { $launch = [int64]$element.Element.Integer }
+    }
+  }
+} catch { $launch = $null }
+if ($launch -eq 1) { exit %s }
 $code = Bounded $bcd @('/set','{current}','hypervisorlaunchtype','auto') %d
 if ($code -ne 0) { exit $code }
 exit 3010
@@ -310,6 +329,8 @@ func SetupOutcome(op string, res runtime.ElevatedResult, err error, timedOut, we
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "CashPilot could not add your account to docker-users. Ask an administrator of this PC to add it, then sign out and back in."}
 	case CodeService:
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "Windows did not let CashPilot set the Server service to start automatically. A clean-up tool or a policy may hold it off."}
+	case CodeLaunchAuto:
+		return Outcome{State: OutcomeFailed, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
 	case CodeWingetGone:
 		return Outcome{State: OutcomeFallback, URL: DockerDownloadURL, Text: "winget, Windows' app installer, is not on this PC. CashPilot opened Docker's download page instead: download the installer, run it, then click Check again."}
 	}

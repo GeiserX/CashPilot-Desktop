@@ -369,10 +369,12 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 	case f.OtherHypervisors == Yes && engineUp:
 		s.State, s.Text = StepDone, names+" is installed, and Docker runs next to it."
 	case f.OtherHypervisors == Yes && hypervisorOffAtBoot(f):
+		// The boot option itself needs admin rights to read, so this row cannot say
+		// it is off: the change reads it first and changes nothing when it is auto.
 		s.State = StepNeedsYou
-		s.Text = names + " is installed, and Windows' hypervisor did not start at boot, although virtualization and the Virtual Machine Platform feature are on. Older versions of " + names + " turn it off at boot, and Docker needs it."
-		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: "Turn Windows' hypervisor back on",
-			Manual: "Open PowerShell as administrator, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
+		s.Text = names + " is installed, and Windows' hypervisor is not running, although virtualization and the Virtual Machine Platform feature are on. Older versions of " + names + " may have turned it off at boot, and Docker needs it. CashPilot reads that boot option first and changes it only when it is not set to start the hypervisor."
+		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: "Check and turn Windows' hypervisor back on",
+			Manual: "Open PowerShell as administrator and run bcdedit /enum {current}. If hypervisorlaunchtype is not Auto, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
 	case f.OtherHypervisors == Yes:
 		// Nothing here proves it is what stops Docker, so it is a note, not a step.
 		s.State = StepNote
@@ -385,7 +387,7 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 	return s
 }
 
-// hypervisorOffAtBoot is the one case the hypervisor fix is for: no hypervisor
+// hypervisorOffAtBoot is the one case the hypervisor fix may be for: no hypervisor
 // runs, yet the firmware flag (meaningful only when none runs) says virtualization
 // is on, the Virtual Machine Platform feature is on, and no restart is pending
 // that would start it anyway. Inside a VM the facts describe the outer machine.

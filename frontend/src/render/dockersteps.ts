@@ -93,7 +93,7 @@ export const CONSENT: Record<string, StepConsent> = {
   "hypervisor-launch": {
     title: "Turn Windows' hypervisor back on?",
     changes:
-      "Windows sets its boot option hypervisorlaunchtype to auto (with bcdedit), so its hypervisor starts at boot, as WSL 2 and Docker need. Older VirtualBox, VMware or Android emulator versions turned it off. Once it is on, they run on top of it and may be slower, and very old versions may not start their machines: update them to their newest versions.",
+      "CashPilot first reads Windows' boot option hypervisorlaunchtype. If it is already auto, nothing changes and no restart follows. Otherwise Windows sets it to auto (with bcdedit), so its hypervisor starts at boot, as WSL 2 and Docker need. Older VirtualBox, VMware or Android emulator versions may have turned it off. Once it is on, they run on top of it and may be slower, and very old versions may not start their machines: update them to their newest versions.",
     prompt: ELEVATED_PROMPT,
     after: RESTART_AFTER,
     undo: "To undo, open PowerShell as administrator, run bcdedit /set hypervisorlaunchtype off, and restart. WSL 2 and Docker then stop working again.",

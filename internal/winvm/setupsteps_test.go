@@ -325,3 +325,25 @@ func TestEveryChangeIsOfferedByItsOwnRow(t *testing.T) {
 		t.Error("docker-users is offered when nothing proved it is needed")
 	}
 }
+
+// The hypervisor change reads the launch type as a number first and changes
+// nothing when it is already Auto; that ending says so and asks for no restart.
+func TestHypervisorChangeReadsTheLaunchTypeFirst(t *testing.T) {
+	s, err := SetupScript(OpHypervisorLaunch, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := strings.Index(s, "GetElement(0x250000F0)")
+	skip := strings.Index(s, "if ($launch -eq 1) { exit "+psCode(CodeLaunchAuto)+" }")
+	set := strings.Index(s, "'hypervisorlaunchtype','auto'")
+	if read < 0 || skip < 0 || set < 0 || !(read < skip && skip < set) {
+		t.Fatalf("the script does not read the launch type, then stop when it is Auto, before it sets it:\n%s", s)
+	}
+	if !strings.Contains(s, "{fa926493-6f1c-4193-a414-58f0b2456d1e}") {
+		t.Errorf("the script does not read {current}")
+	}
+	o := SetupOutcome(OpHypervisorLaunch, runtime.ElevatedResult{}, exitErr(CodeLaunchAuto), false, false)
+	if o.State == OutcomeRestart || o.State == OutcomeDone || !strings.Contains(o.Text, "already set to start at boot") {
+		t.Errorf("already Auto ended %+v", o)
+	}
+}

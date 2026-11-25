@@ -227,6 +227,31 @@ func TestWindowsContainersDoNotProveWSL(t *testing.T) {
 	}
 }
 
+// The boot option needs admin rights to read, so the row never says the
+// hypervisor was turned off at boot: it says it may have been, and that the
+// change reads the option first.
+func TestHypervisorRowNeverClaimsWhatItDidNotRead(t *testing.T) {
+	f := goodPC()
+	hypervisorOff(&f)
+	derive(&f)
+	s := stepOf(t, DockerSteps(f, runtime.ReasonNotRunning, true), "a10")
+	if s.State != StepNeedsYou || s.Action.Op != OpHypervisorLaunch {
+		t.Fatalf("a10 is %s with %+v", s.State, s.Action)
+	}
+	low := strings.ToLower(s.Text)
+	for _, claim := range []string{"did not start at boot", "versions of virtualbox turn it off"} {
+		if strings.Contains(low, claim) {
+			t.Errorf("a10 claims %q without reading the boot option: %s", claim, s.Text)
+		}
+	}
+	if !strings.Contains(low, "may have turned it off at boot") || !strings.Contains(low, "reads that boot option first") {
+		t.Errorf("a10 does not say it may be off and is read first: %s", s.Text)
+	}
+	if !strings.Contains(s.Action.Manual, "bcdedit /enum {current}") {
+		t.Errorf("the manual way does not check first: %s", s.Action.Manual)
+	}
+}
+
 // Docker on its Hyper-V backend never hears that it needs WSL.
 func TestDockerStepsSkipWSLOnTheHyperVBackend(t *testing.T) {
 	f := goodPC()
