@@ -15,9 +15,7 @@
 //   - Every outcome, a refusal or an error included, is written next to the
 //     Deploy button, never only below the card. Once the deploy call ends, the
 //     note there is its answer, never "Deploying..." any more.
-//   - A Continue serves the one deploy it was given for: when that deploy ends,
-//     however it ended, the approval is withdrawn, so a later question's Cancel
-//     leaves nothing another path could use to raise the prompt.
+//   - Continue passes the approved firewall change only to the deploy that asked.
 //
 // Pure: takes the model, returns HTML or an outcome. main.ts passes the Wails
 // bindings and the DOM.
@@ -148,14 +146,10 @@ export interface CheckedDeployCalls {
   adminStep(): Promise<AdminStep | null>;
   /** Shows adminConsentScreen and resolves true on Continue, false on Cancel. */
   askConsent(step: AdminStep): Promise<boolean>;
-  /** ApproveDeployAdminStep. */
-  approve(): Promise<void>;
-  /** RevokeDeployAdminStep: withdraws an approval the deploy did not use. */
-  revoke(): Promise<void>;
   /** Writes the note next to Deploy. */
   say(kind: "busy" | DeployAnswer["kind"], text: string): void;
   /** The deploy itself, with every question it still asks; it says what happened. */
-  deploy(): Promise<DeployAnswer>;
+  deploy(approval: AdminStep | null): Promise<DeployAnswer>;
 }
 
 /**
@@ -165,7 +159,7 @@ export interface CheckedDeployCalls {
  * step that cannot be read (Windows Firewall off, or not readable) is "blocked"
  * with its reason. While the deploy runs the note says busyText; once it ends,
  * the note is its answer, and a rejection is a "failed" answer with the reason.
- * An approval given for this deploy is withdrawn when it ends.
+ * An approval is sent with the deploy call itself.
  */
 export async function runCheckedDeploy(
   fields: ServiceField[],
@@ -176,7 +170,7 @@ export async function runCheckedDeploy(
 ): Promise<CheckedDeployOutcome> {
   const missing = missingRequiredFields(fields, values);
   if (missing.length) return { kind: "missing", missing };
-  let approved = false;
+  let approval: AdminStep | null = null;
   if (direct) {
     let step: AdminStep | null;
     try {
@@ -186,20 +180,15 @@ export async function runCheckedDeploy(
     }
     if (step?.needed) {
       if (!(await calls.askConsent(step))) return { kind: "cancelled" };
-      await calls.approve();
-      approved = true;
+      approval = step;
     }
   }
   let answer: DeployAnswer;
   try {
     calls.say("busy", busyText);
-    answer = await calls.deploy();
+    answer = await calls.deploy(approval);
   } catch (error) {
     answer = { kind: "failed", text: deployErrorText(error) };
-  } finally {
-    // A withdrawal that fails leaves an approval that lapses on its own
-    // (internal/runtime adminApprovalTTL); the deploy's answer still shows.
-    if (approved) await calls.revoke().catch(() => undefined);
   }
   calls.say(answer.kind, answer.text);
   return { kind: "done", answer };

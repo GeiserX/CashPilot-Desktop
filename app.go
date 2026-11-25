@@ -1536,11 +1536,11 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, false, nil)
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances})
 	return deployment, err
 }
 
-func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest) (store.Deployment, *runtime.WalletResult, error) {
+func (a *App) deployService(slug string, values map[string]string, opts services.DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, nil, err
 	}
@@ -1569,8 +1569,8 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
 	}
-	if image != nil {
-		if err := services.ValidateImage(*image); err != nil {
+	if opts.Image != nil {
+		if err := services.ValidateImage(*opts.Image); err != nil {
 			a.emitError("deploy", err)
 			return store.Deployment{}, nil, err
 		}
@@ -1580,7 +1580,7 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 			return store.Deployment{}, nil, err
 		}
 	}
-	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute, Wallet: wallet})
+	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, opts)
 	if err != nil {
 		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
@@ -1634,7 +1634,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 // the owner confirmed it runs from this machine's own IP from now on. Its routed copy
 // is removed first.
 func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, true, nil)
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: true})
 	return deployment, err
 }
 

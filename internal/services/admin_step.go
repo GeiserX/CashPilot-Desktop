@@ -8,11 +8,9 @@ import (
 )
 
 // adminStepper is a runtime whose deploy can need the Windows admin prompt
-// (runtime.NativeProcessProvider): it says when, and takes the person's approval.
+// (runtime.NativeProcessProvider).
 type adminStepper interface {
 	AdminStep(svc catalog.Service, slug string) (runtime.AdminStep, error)
-	ApproveAdminStep(slug string)
-	RevokeAdminStep(slug string)
 }
 
 // AdminStepFor reports whether deploying slug now makes Windows show its admin
@@ -24,32 +22,6 @@ func (m *Manager) AdminStepFor(slug string) (runtime.AdminStep, error) {
 		return runtime.AdminStep{}, err
 	}
 	return stepper.AdminStep(svc, slug)
-}
-
-// ApproveAdminStep records the person's Continue on the app's screen for slug's
-// admin step, so its next deploy may raise the prompt once.
-func (m *Manager) ApproveAdminStep(slug string) error {
-	stepper, _, err := m.adminStepper(slug)
-	if err != nil {
-		return err
-	}
-	if stepper != nil {
-		stepper.ApproveAdminStep(slug)
-	}
-	return nil
-}
-
-// RevokeAdminStep withdraws slug's approval once the deploy it was given for has
-// ended, so a Continue serves that one deploy and nothing after it.
-func (m *Manager) RevokeAdminStep(slug string) error {
-	stepper, _, err := m.adminStepper(slug)
-	if err != nil {
-		return err
-	}
-	if stepper != nil {
-		stepper.RevokeAdminStep(slug)
-	}
-	return nil
 }
 
 // namedAdminApproval gives an AdminApprovalNeeded from slug's runtime the

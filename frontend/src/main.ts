@@ -78,8 +78,7 @@ import {
   RevokeSessionRisk,
   ReminderAction,
   DeployAdminStep,
-  ApproveDeployAdminStep,
-  RevokeDeployAdminStep,
+  DeployServiceWithAdminApproval,
   GetModeState,
   JoinCashPilot,
   StartAsLead,
@@ -138,7 +137,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult, WorkerTarget } from "./wails";
+import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult, WorkerTarget } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -2560,8 +2559,7 @@ function sayDeploy(slug: string, kind: "busy" | DeployAnswer["kind"], text: stri
 
 // A deploy from the card: every field marked * is filled, and when Windows will
 // show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
-// answer replaces "Deploying..." next to Deploy however it ends, and the approval
-// that screen gave is withdrawn (runCheckedDeploy).
+// answer replaces "Deploying..." next to Deploy however it ends.
 async function wizardDeploy(slug: string, values: Record<string, string>) {
   const service = state?.services?.find((item) => item.slug === slug);
   const name = service?.name || slug;
@@ -2584,10 +2582,8 @@ async function wizardDeploy(slug: string, values: Record<string, string>) {
         button.addEventListener("click", () => resolve(button.dataset.deployConsent === "go"), { once: true });
       });
     }),
-    approve: () => ApproveDeployAdminStep(slug),
-    revoke: () => RevokeDeployAdminStep(slug),
     say: (kind, text) => sayDeploy(slug, kind, text),
-    deploy: () => deployFromCard(slug, values, worker),
+    deploy: (approval) => deployFromCard(slug, values, worker, approval),
   }).catch((error) => {
     sayDeploy(slug, "failed", deployErrorText(error));
     return null;
@@ -2612,7 +2608,7 @@ async function wizardDeploy(slug: string, values: Record<string, string>) {
 // The deploy itself, once the card's checks passed: to a worker, with a wallet
 // seed (Sia's hostd), or on this computer, directly or through a proxy. Every path
 // answers with what the note next to Deploy says.
-async function deployFromCard(slug: string, values: Record<string, string>, worker: WorkerTarget | undefined): Promise<DeployAnswer> {
+async function deployFromCard(slug: string, values: Record<string, string>, worker: WorkerTarget | undefined, approval: AdminStep | null): Promise<DeployAnswer> {
   if (worker) {
     const image = readWizardImage(slug) || "";
     const outcome = await runWorkerDeploy(slug, worker, readWizardRoute(slug), readWizardInstances(slug), {
@@ -2634,9 +2630,10 @@ async function deployFromCard(slug: string, values: Record<string, string>, work
     },
     confirm: (message) => confirm(message),
     routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
-    direct: (leaveRoute) => leaveRoute
-      ? DeployServiceLeavingRoute(slug, values, image, instances)
-      : DeployService(slug, values, image, instances),
+    direct: (leaveRoute) => {
+      if (approval) return DeployServiceWithAdminApproval(slug, values, image, instances, leaveRoute, approval);
+      return leaveRoute ? DeployServiceLeavingRoute(slug, values, image, instances) : DeployService(slug, values, image, instances);
+    },
   });
   if (outcome.kind === "refused" || outcome.kind === "cancelled") {
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };

@@ -68,8 +68,7 @@ func TestNativeBinaryArgsComeFirstAndFirewallRuleFollowsTheService(t *testing.T)
 	svc.Native.Binaries[0].Args = "--userspace"
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10", "169.254.0.0/16"}
 
-	p.ApproveAdminStep("fwsvc")
-	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
+	if _, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}), nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
 	e := p.readRegistry().Entries["fwsvc"]
@@ -118,8 +117,7 @@ func TestNativeRefusesToStartWithoutItsFirewallRule(t *testing.T) {
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
 
-	p.ApproveAdminStep("fwsvc")
-	_, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}, nil)
+	_, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}), nil)
 	if err == nil || !strings.Contains(err.Error(), "declined") {
 		t.Fatalf("Deploy err = %v, want the firewall error", err)
 	}
@@ -142,8 +140,7 @@ func TestNativeRemoveKeepsTheEntryWhileTheRuleStays(t *testing.T) {
 	url := serveArtifact(t, p, art)
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
-	p.ApproveAdminStep("fwsvc")
-	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}, nil); err != nil {
+	if _, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}), nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
 
@@ -305,8 +302,7 @@ func TestNativeRedeployWithoutFirewallBlockDeletesTheOldRule(t *testing.T) {
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
 	spec := DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}
-	p.ApproveAdminStep("fwsvc")
-	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+	if _, err := p.Deploy(context.Background(), approveNativeDeploy(t, p, spec), nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
 	binPath := p.readRegistry().Entries["fwsvc"].BinPath

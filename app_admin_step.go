@@ -1,6 +1,10 @@
 package main
 
-import "github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+import (
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
+	"github.com/GeiserX/CashPilot-Desktop/internal/store"
+)
 
 // DeployAdminStep reports whether deploying slug now makes Windows show its
 // admin prompt, and what that prompt changes. The setup card asks it before a
@@ -12,23 +16,11 @@ func (a *App) DeployAdminStep(slug string) (runtime.AdminStep, error) {
 	return a.services.AdminStepFor(slug)
 }
 
-// ApproveDeployAdminStep is the Continue button of that screen: the next deploy
-// of slug may raise the admin prompt, once. Without it a deploy that needs the
-// prompt stops and says so, and Windows shows nothing.
-func (a *App) ApproveDeployAdminStep(slug string) error {
-	if err := a.ready(); err != nil {
-		return err
-	}
-	return a.services.ApproveAdminStep(slug)
-}
-
-// RevokeDeployAdminStep withdraws that approval once the card's deploy has ended,
-// however it ended. A deploy that used it is unchanged; one that stopped first (a
-// later question was cancelled) leaves no approval another path could use to
-// raise the prompt with no screen first.
-func (a *App) RevokeDeployAdminStep(slug string) error {
-	if err := a.ready(); err != nil {
-		return err
-	}
-	return a.services.RevokeAdminStep(slug)
+// DeployServiceWithAdminApproval deploys with the firewall change the person
+// approved on the card. The approval is scoped to this call.
+func (a *App) DeployServiceWithAdminApproval(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, approval runtime.AdminStep) (store.Deployment, error) {
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{
+		Image: image, Instances: instances, LeaveRoute: leaveRoute, AdminApproval: &approval,
+	})
+	return deployment, err
 }

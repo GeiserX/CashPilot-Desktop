@@ -260,7 +260,8 @@ type DeployOptions struct {
 	// Wallet is the owner's wallet choice for a service that keeps its wallet seed in
 	// a file (wallet.go). nil keeps the wallet the node has, moving a seed stored
 	// before the file existed into it.
-	Wallet *runtime.WalletRequest
+	Wallet        *runtime.WalletRequest
+	AdminApproval *runtime.AdminStep
 }
 
 // DeployWith deploys slug with the given options. The first copy is deployed exactly
@@ -402,7 +403,7 @@ func (m *Manager) deployWith(ctx context.Context, slug string, credentials map[s
 		}
 	}
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
-	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet}, func(message string) {
+	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet, AdminApproval: opts.AdminApproval}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
 	})
 	if err != nil {

@@ -83,7 +83,7 @@ const step = {
 
 // Records every call, in order, and every note written next to Deploy.
 const DEPLOYED = { kind: "ok", text: "Deployed." };
-function calls({ adminStep = async () => step, consent = true, deploy = async () => DEPLOYED, revoke = async () => {} } = {}) {
+function calls({ adminStep = async () => step, consent = true, deploy = async () => DEPLOYED } = {}) {
   const log = [];
   const said = [];
   return {
@@ -91,10 +91,8 @@ function calls({ adminStep = async () => step, consent = true, deploy = async ()
     said,
     adminStep: () => { log.push("adminStep"); return adminStep(); },
     askConsent: async (s) => { log.push(`askConsent:${s.kind}`); return consent; },
-    approve: async () => { log.push("approve"); },
-    revoke: () => { log.push("revoke"); return revoke(); },
     say: (kind, text) => { log.push(`say:${kind}`); said.push({ kind, text }); },
-    deploy: () => { log.push("deploy"); return deploy(); },
+    deploy: (approval) => { log.push(approval ? "deploy:approved" : "deploy"); return deploy(approval); },
   };
 }
 const BUSY = "Deploying MystNodes...";
@@ -141,7 +139,7 @@ const hgFields = serviceFormFields(hg, {});
   check("RULE 2: empty collector logins are never missing", missingRequiredFields(fields, empty).length === 0);
   const c = calls();
   const outcome = await runCheckedDeploy(fields, empty, true, BUSY, c);
-  check("RULE 2: so MystNodes with its logins empty goes on to the admin-step screen", outcome.kind === "done" && c.log.join(",") === "adminStep,askConsent:firewall-rule,approve,say:busy,deploy,revoke,say:ok", c.log.join(","));
+  check("RULE 2: so MystNodes with its logins empty goes on to the admin-step screen", outcome.kind === "done" && c.log.join(",") === "adminStep,askConsent:firewall-rule,say:busy,deploy:approved,say:ok", c.log.join(","));
 }
 
 // RULE 3
@@ -154,7 +152,7 @@ const hgFields = serviceFormFields(hg, {});
   const go = calls();
   const done = await runCheckedDeploy(fields, full, true, BUSY, go);
   check("RULE 3: Continue deploys", done.kind === "done" && done.answer === DEPLOYED, JSON.stringify(done));
-  check("RULE 3: the screen, then the approval, then the deploy", go.log.join(",") === "adminStep,askConsent:firewall-rule,approve,say:busy,deploy,revoke,say:ok", go.log.join(","));
+  check("RULE 3: the screen, then the approval, then the deploy", go.log.join(",") === "adminStep,askConsent:firewall-rule,say:busy,deploy:approved,say:ok", go.log.join(","));
 
   const none = calls({ adminStep: async () => ({ needed: false }) });
   await runCheckedDeploy(fields, full, true, BUSY, none);
@@ -266,25 +264,16 @@ const hgFields = serviceFormFields(hg, {});
 
 // RULE 9
 {
-  for (const [name, deploy] of [
-    ["deployed", async () => DEPLOYED],
-    ["a later confirm cancelled", async () => ({ kind: "cancelled", text: "Nothing was deployed." })],
-    ["rejected", () => Promise.reject(new Error("boom"))],
-  ]) {
-    const c = calls({ deploy });
-    await runCheckedDeploy(fields, full, true, BUSY, c);
-    const at = (entry) => c.log.indexOf(entry);
-    check(`RULE 9 (${name}): the approval is withdrawn once the deploy ended`, at("approve") >= 0 && at("revoke") > at("deploy") && c.log.filter((e) => e === "revoke").length === 1, c.log.join(","));
-  }
+  let received;
+  const c = calls({ deploy: async (approval) => { received = approval; return DEPLOYED; } });
+  await runCheckedDeploy(fields, full, true, BUSY, c);
+  check("RULE 9: only the deploy call receives the firewall change from Continue", received === step, JSON.stringify(received));
   const noStep = calls({ adminStep: async () => ({ needed: false }) });
   await runCheckedDeploy(fields, full, true, BUSY, noStep);
-  check("RULE 9: no approval given, nothing to withdraw", !noStep.log.includes("revoke"), noStep.log.join(","));
+  check("RULE 9: a deploy that needs no step receives no approval", noStep.log.includes("deploy") && !noStep.log.includes("deploy:approved"), noStep.log.join(","));
   const cancelled = calls({ consent: false });
   await runCheckedDeploy(fields, full, true, BUSY, cancelled);
-  check("RULE 9: Cancel on the screen approves nothing, so withdraws nothing", !cancelled.log.includes("revoke") && !cancelled.log.includes("approve"), cancelled.log.join(","));
-  const stuck = calls({ revoke: () => Promise.reject(new Error("not ready")) });
-  const outcome = await runCheckedDeploy(fields, full, true, BUSY, stuck);
-  check("RULE 9: a failed withdrawal still shows the deploy's answer", outcome.kind === "done" && stuck.said.at(-1)?.kind === "ok", JSON.stringify(stuck.said));
+  check("RULE 9: Cancel on the screen sends no deploy", !cancelled.log.some((entry) => entry.startsWith("deploy")), cancelled.log.join(","));
 }
 
 if (failures) {

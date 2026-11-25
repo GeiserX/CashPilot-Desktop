@@ -43,16 +43,6 @@ func TestNativeDeployNeverRaisesTheAdminPromptUnapproved(t *testing.T) {
 		t.Fatalf("mayElevate per firewall request = %v, want no request: the deploy stops on the read", fw.elevate)
 	}
 
-	// A Continue the card withdrew (a later question was cancelled) lets no
-	// deploy raise the prompt.
-	p.ApproveAdminStep("fwsvc")
-	p.RevokeAdminStep("fwsvc")
-	if _, err := p.Deploy(context.Background(), spec, nil); !errors.As(err, &need) {
-		t.Fatalf("Deploy after a revoked approval: err = %v, want AdminApprovalNeeded", err)
-	}
-	if len(fw.elevate) != 0 {
-		t.Fatalf("mayElevate per firewall request = %v, want no request: the deploy stops on the read", fw.elevate)
-	}
 	time.Sleep(300 * time.Millisecond)
 	if _, statErr := os.Stat(marker); statErr == nil {
 		t.Fatal("the binary ran without its firewall rule")
@@ -61,8 +51,8 @@ func TestNativeDeployNeverRaisesTheAdminPromptUnapproved(t *testing.T) {
 		t.Fatal("a launch stopped for approval was recorded as deployed")
 	}
 
-	p.ApproveAdminStep("fwsvc")
-	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
+	approved := approveNativeDeploy(t, p, spec)
+	if _, err := p.Deploy(context.Background(), approved, nil); err != nil {
 		t.Fatalf("Deploy after approval: %v", err)
 	}
 	if !slices.Equal(fw.elevate, []bool{true}) {
@@ -88,36 +78,27 @@ func TestNativeDeployNeverRaisesTheAdminPromptUnapproved(t *testing.T) {
 	if err := p.Stop(context.Background(), "fwsvc", 0); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
+	approved = approveNativeDeploy(t, p, spec) // Continue applies to the pending Deploy.
 	if err := p.Start(context.Background(), "fwsvc"); !errors.As(err, &need) {
-		t.Fatalf("Start with the rule gone and no new approval: err = %v, want AdminApprovalNeeded", err)
+		t.Fatalf("Start with the rule gone and approval for another call: err = %v, want AdminApprovalNeeded", err)
+	}
+	if !slices.Equal(fw.elevate, []bool{true, false}) {
+		t.Fatalf("mayElevate per firewall request = %v, want Deploy true, Start false", fw.elevate)
+	}
+	if _, err := p.Deploy(context.Background(), approved, nil); err != nil {
+		t.Fatalf("approved deploy after separate Start: %v", err)
 	}
 	_ = p.Remove(context.Background(), "fwsvc", RemoveOptions{})
 }
 
-func TestAdminApprovalExpires(t *testing.T) {
-	p := newTestNativeProvider(t)
-	p.ApproveAdminStep("a")
-	p.approvals["a"] = time.Now().Add(-time.Second)
-	if p.takeApproval("a") {
-		t.Fatal("an expired approval was taken")
+func approveNativeDeploy(t *testing.T, p *NativeProcessProvider, spec DeploySpec) DeploySpec {
+	t.Helper()
+	step, err := p.AdminStep(spec.Service, spec.Slug)
+	if err != nil || !step.Needed {
+		t.Fatalf("AdminStep = %+v, %v, want approval", step, err)
 	}
-	p.ApproveAdminStep("b")
-	if p.takeApproval("a") {
-		t.Fatal("one slug's approval served another")
-	}
-	if !p.takeApproval("b") || p.takeApproval("b") {
-		t.Fatal("an approval must serve exactly one launch")
-	}
-	p.ApproveAdminStep("c")
-	p.ApproveAdminStep("d")
-	p.RevokeAdminStep("c")
-	if p.takeApproval("c") {
-		t.Fatal("a revoked approval was taken")
-	}
-	if !p.takeApproval("d") {
-		t.Fatal("revoking one slug withdrew another's approval")
-	}
-	p.RevokeAdminStep("never-approved") // nothing to withdraw: no panic
+	spec.AdminApproval = &step
+	return spec
 }
 
 // THE RULE: AdminStep says the prompt is coming exactly when the launch would

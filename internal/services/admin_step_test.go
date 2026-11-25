@@ -16,9 +16,7 @@ import (
 // stepProvider is a native runtime whose deploy needs the admin prompt.
 type stepProvider struct {
 	fakeProvider
-	asked    []string
-	approved []string
-	revoked  []string
+	asked []string
 }
 
 func (s *stepProvider) AdminStep(_ catalog.Service, slug string) (runtime.AdminStep, error) {
@@ -26,12 +24,6 @@ func (s *stepProvider) AdminStep(_ catalog.Service, slug string) (runtime.AdminS
 	return runtime.AdminStep{Needed: true, Kind: runtime.AdminStepFirewallRule}, nil
 }
 
-func (s *stepProvider) ApproveAdminStep(slug string) { s.approved = append(s.approved, slug) }
-
-func (s *stepProvider) RevokeAdminStep(slug string) { s.revoked = append(s.revoked, slug) }
-
-// THE RULE: the admin step is asked of, and approved on, the runtime that would
-// deploy the service, and only that one. A Docker service needs none.
 func TestAdminStepAsksTheRuntimeThatWouldDeploy(t *testing.T) {
 	cat, err := catalog.LoadEmbedded(fstest.MapFS{
 		"services/bandwidth/example.yml": {Data: []byte(exampleServiceYAML)},
@@ -51,26 +43,11 @@ func TestAdminStepAsksTheRuntimeThatWouldDeploy(t *testing.T) {
 	if step, err := m.AdminStepFor("nat"); err != nil || !step.Needed {
 		t.Fatalf("native service: step = %+v, err = %v, want the runtime's step", step, err)
 	}
-	if err := m.ApproveAdminStep("nat"); err != nil {
-		t.Fatal(err)
-	}
 	if step, err := m.AdminStepFor("example"); err != nil || step.Needed {
 		t.Fatalf("Docker service: step = %+v, err = %v, want none", step, err)
 	}
-	if err := m.ApproveAdminStep("example"); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.RevokeAdminStep("nat"); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.RevokeAdminStep("example"); err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Equal(native.asked, []string{"nat"}) || !slices.Equal(native.approved, []string{"nat"}) || !slices.Equal(native.revoked, []string{"nat"}) {
-		t.Fatalf("native runtime asked %v, approved %v, revoked %v, want nat only", native.asked, native.approved, native.revoked)
-	}
-	if err := m.RevokeAdminStep("nope"); err == nil {
-		t.Fatal("an unknown service was revoked")
+	if !slices.Equal(native.asked, []string{"nat"}) {
+		t.Fatalf("native runtime asked %v, want nat only", native.asked)
 	}
 
 	// A start or restart the runtime refuses for want of approval names the

@@ -4,26 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
-	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 )
 
-// A native binary's firewall_block rule is created with admin rights, so Windows
-// shows its permission prompt. CashPilot never lets that prompt appear first: the
-// app asks AdminStep before a deploy, shows its own screen saying what the prompt
-// is for, and only after the person clicks Continue does it call ApproveAdminStep.
-// A launch with no approval that would need the prompt stops with
-// AdminApprovalNeeded instead of raising it, whichever path started it.
-
-// AdminStepFirewallRule is the one admin step a deploy can need today: the
-// outbound Windows Firewall rule of a native binary's firewall_block.
+// AdminStepFirewallRule is the Windows Firewall change a native deploy can need.
 const AdminStepFirewallRule = "firewall-rule"
-
-// adminApprovalTTL bounds how long a Continue click stays good. It covers the
-// binary's download, which comes before the rule.
-const adminApprovalTTL = 15 * time.Minute
 
 // AdminStep says whether deploying a service now makes Windows show its admin
 // prompt, and what that prompt changes.
@@ -101,33 +89,12 @@ func (p *NativeProcessProvider) AdminStep(svc catalog.Service, slug string) (Adm
 	}, nil
 }
 
-// ApproveAdminStep records that the person clicked Continue on the app's screen
-// for slug's admin step. The next launch of slug may then raise the prompt, once.
-func (p *NativeProcessProvider) ApproveAdminStep(slug string) {
-	p.approvalMu.Lock()
-	defer p.approvalMu.Unlock()
-	if p.approvals == nil {
-		p.approvals = map[string]time.Time{}
-	}
-	p.approvals[slug] = time.Now().Add(adminApprovalTTL)
-}
-
-// RevokeAdminStep withdraws slug's approval when the deploy it was given for ends
-// without using it (a later question was cancelled, or the deploy stopped before
-// its launch). No other path may then raise the prompt on that Continue.
-func (p *NativeProcessProvider) RevokeAdminStep(slug string) {
-	p.approvalMu.Lock()
-	defer p.approvalMu.Unlock()
-	delete(p.approvals, slug)
-}
-
-// takeApproval uses up slug's approval, reporting whether one was still good.
-func (p *NativeProcessProvider) takeApproval(slug string) bool {
-	p.approvalMu.Lock()
-	defer p.approvalMu.Unlock()
-	until, ok := p.approvals[slug]
-	delete(p.approvals, slug)
-	return ok && time.Now().Before(until)
+// approvedBy compares the change explained on the setup card with the change
+// this deploy needs now. A changed binary or set of networks needs a new approval.
+func (step AdminStep) approvedBy(approval *AdminStep) bool {
+	return approval != nil && step.Needed && approval.Needed &&
+		step.Kind == approval.Kind && step.RuleName == approval.RuleName &&
+		step.Program == approval.Program && slices.Equal(step.Networks, approval.Networks)
 }
 
 // firewallNext is what ensureFirewallBlock does once it has read the rule: create
@@ -160,15 +127,6 @@ func firewallReadiness(st firewallState, program string, nets []string, what str
 // so there is no other way to run it from this card.
 func firewallNotEnforced(what, why string) error {
 	return fmt.Errorf("%s, and %s, so the rule would do nothing and Windows was not asked for anything. Fix that, then click Deploy again", what, why)
-}
-
-// hasApproval reports whether slug has an approval that is still good, without
-// using it up.
-func (p *NativeProcessProvider) hasApproval(slug string) bool {
-	p.approvalMu.Lock()
-	defer p.approvalMu.Unlock()
-	until, ok := p.approvals[slug]
-	return ok && time.Now().Before(until)
 }
 
 // firewallCreateFailed says why creating the rule failed. A No at the Windows

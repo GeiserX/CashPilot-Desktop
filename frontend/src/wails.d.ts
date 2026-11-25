@@ -41,11 +41,7 @@ declare module "../wailsjs/go/main/App" {
   export function DeployServiceLeavingRoute(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
   // Whether a deploy of slug makes Windows show its admin prompt, and what for. Reads only.
   export function DeployAdminStep(slug: string): Promise<AdminStep>;
-  // Only from the setup card's admin-step screen: the next deploy may raise the prompt, once.
-  export function ApproveDeployAdminStep(slug: string): Promise<void>;
-  // Withdraws that approval once the card's deploy ended, however it ended, so a
-  // Continue serves that one deploy and nothing after it.
-  export function RevokeDeployAdminStep(slug: string): Promise<void>;
+  export function DeployServiceWithAdminApproval(slug: string, values: Record<string, string>, image: string | null, instances: number | null, leaveRoute: boolean, approval: AdminStep): Promise<Deployment>;
   // DeployService for a service that keeps its wallet seed in a file (Sia's hostd),
   // with the owner's wallet choice (wallet_app.go).
   export function DeployServiceWallet(slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice): Promise<WalletDeployResult>;
