@@ -125,6 +125,9 @@ const failed = renderImportSaved({ saved: ["honeygain"], kept: {} }, preview, []
 check("a failed import deploy renders its escaped alert beside its own button",
   /data-import-deploy="honeygain"[^]*?role="alert"[^]*?Could not start &lt;node&gt;/.test(failed));
 
+check("an Import row has an inline slot for firewall consent",
+  /data-import-deploy="honeygain"[\s\S]*data-import-deploy-panel="honeygain"/.test(saved), saved);
+
 if (failures) {
   console.error(`\n${failures} of ${checks} import checks failed`);
   process.exit(1);

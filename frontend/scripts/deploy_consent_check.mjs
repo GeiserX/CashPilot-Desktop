@@ -332,6 +332,29 @@ const hgFields = serviceFormFields(hg, {});
     JSON.stringify(replacement));
 }
 
+for (const continueImport of [false, true]) {
+  const trace = [];
+  await runCheckedDeploy(fields, full, true, BUSY, {
+    confirmReplace: async () => {
+      await Promise.resolve();
+      trace.push("import confirmation");
+      return continueImport;
+    },
+    adminStep: async () => { trace.push("firewall check"); return step; },
+    askConsent: async () => { trace.push("CashPilot consent"); return true; },
+    say() {},
+    deploy: async (approval) => {
+      trace.push(approval === step ? "deploy with approval" : "unapproved deploy");
+      return { kind: "ok", text: "Deployed." };
+    },
+  }, { localReplacement: "Deploy this imported service?" });
+  const expected = continueImport
+    ? ["import confirmation", "firewall check", "CashPilot consent", "deploy with approval"]
+    : ["import confirmation"];
+  check(`Import confirmation ${continueImport} precedes the firewall check and any deploy`,
+    JSON.stringify(trace) === JSON.stringify(expected), JSON.stringify(trace));
+}
+
 if (failures) {
   console.error(`\n${failures} of ${checks} deploy-consent checks failed`);
   process.exit(1);

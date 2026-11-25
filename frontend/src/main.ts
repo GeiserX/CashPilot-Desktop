@@ -103,7 +103,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
-import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
+import { adminConsentScreen, CANCELLED_TEXT, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
 import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
@@ -190,7 +190,7 @@ let importResult: ImportResult | null = null;
 let importDeployed: string[] = [];
 // The device-link step of each deployed import, shown under it (slug -> text).
 let importLinks: Record<string, string> = {};
-let importDeploys: Record<string, DeployStatus> = {};
+let importDeploys: Record<string, DeployFeedback> = {};
 const driftDeploys: Record<string, DeployStatus> = {};
 let proxyDeployStatus: DeployStatus | undefined;
 let importDeploying = new Set<string>();
@@ -1380,25 +1380,38 @@ async function runImportDeploy(slug: string) {
   if (!slug || importDeploying.has(slug)) return;
   importDeploying.add(slug);
   const statuses = importDeploys;
-  const say = (kind: DeployStatus["kind"], text: string) => {
-    statuses[slug] = { kind, text };
+  const setFeedback = (status: DeployFeedback) => {
+    statuses[slug] = status;
     if (statuses === importDeploys) renderImportIfShown();
   };
   try {
     const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
-    const report = await PreflightService(slug).catch(() => null);
-    if (statuses !== importDeploys) return;
-    const preflight = report?.summary ? `\n\n${report.summary}` : "";
-    if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) {
-      say("cancelled", "Nothing was deployed.");
-      return;
-    }
-    const answer = await runDeployWithStatus(`Deploying ${name}...`, say, async () => {
-      await DeployService(slug, {}, null, null);
-      if (statuses === importDeploys) importDeployed = [...importDeployed, slug];
-      return { kind: "ok", text: "Deployed." };
+    const service = state?.services?.find((item) => item.slug === slug);
+    const fields = service ? serviceFormFields(service, state?.collectorFields) : [];
+    const saved = await GetCredentials(slug);
+    if (statuses !== importDeploys || activeView !== "import") return;
+    const outcome = await runCheckedDeploy(fields, saved, true, `Deploying ${name}...`, {
+      confirmReplace: async (message) => {
+        const report = await PreflightService(slug).catch(() => null);
+        if (statuses !== importDeploys || activeView !== "import") return false;
+        return confirm(report?.summary ? `${message}\n\n${report.summary}` : message);
+      },
+      adminStep: () => DeployAdminStep(slug),
+      askConsent: (step) => askDeployConsent(document.querySelector(`[data-import-deploy-panel="${CSS.escape(slug)}"]`), name, step),
+      say: (kind, text) => setFeedback({ kind, text }),
+      deploy: async (approval) => {
+        if (approval) await DeployServiceWithAdminApproval(slug, {}, null, null, false, approval);
+        else await DeployService(slug, {}, null, null);
+        if (statuses === importDeploys) importDeployed = [...importDeployed, slug];
+        return { kind: "ok", text: "Deployed." };
+      },
+    }, {
+      localReplacement: `Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.`,
     });
-    if (answer.kind !== "ok" || statuses !== importDeploys) return;
+    if (outcome.kind === "missing") setFeedback(outcome);
+    else if (outcome.kind === "blocked") setFeedback({ kind: "failed", text: outcome.message });
+    else if (outcome.kind === "cancelled") setFeedback({ kind: "cancelled", text: CANCELLED_TEXT });
+    if (outcome.kind !== "done" || outcome.answer.kind !== "ok" || statuses !== importDeploys) return;
     state = await GetAppState().catch(() => state);
     const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
     const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
@@ -1406,6 +1419,8 @@ async function runImportDeploy(slug: string) {
       importLinks = { ...importLinks, [slug]: link };
       renderImportIfShown();
     }
+  } catch (error) {
+    setFeedback({ kind: "failed", text: deployErrorText(error) });
   } finally {
     importDeploying.delete(slug);
   }
@@ -2599,6 +2614,27 @@ function sayDeploy(slug: string, kind: DeployStatus["kind"], text: string) {
   setWizardDeployFeedback(slug, { kind, text });
 }
 
+// A redraw or navigation can remove the screen while it waits for an answer.
+function askDeployConsent(panel: HTMLElement | null, name: string, step: AdminStep): Promise<boolean> {
+  if (!panel?.isConnected) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const finish = (approved: boolean) => {
+      observer.disconnect();
+      resolve(approved);
+    };
+    const observer = new MutationObserver(() => {
+      if (!panel.isConnected) finish(false);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    panel.innerHTML = adminConsentScreen(name, step);
+    panel.scrollIntoView({ block: "nearest" });
+    panel.querySelectorAll<HTMLButtonElement>("[data-deploy-consent]").forEach((button) => {
+      button.addEventListener("click", () => finish(panel.isConnected && button.dataset.deployConsent === "go"), { once: true });
+    });
+    panel.querySelector<HTMLButtonElement>('[data-deploy-consent="go"]')?.focus();
+  });
+}
+
 // A deploy from the card: every field marked * is filled, and when Windows will
 // show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
 // answer replaces "Deploying..." next to Deploy however it ends.
@@ -2616,18 +2652,7 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
   const outcome = await runCheckedDeploy(fields, values, proxyId === null, `Deploying ${name}...`, {
     confirmReplace: (message) => confirm(message),
     adminStep: () => DeployAdminStep(slug),
-    askConsent: (step) => new Promise<boolean>((resolve) => {
-      if (!panel) {
-        const c = adminConsentText(name, step);
-        return resolve(confirm([c.title, c.changes, c.prompt, c.after, c.undo].join("\n\n")));
-      }
-      panel.innerHTML = adminConsentScreen(name, step);
-      panel.scrollIntoView({ block: "nearest" });
-      panel.querySelector<HTMLButtonElement>('[data-deploy-consent="go"]')?.focus();
-      panel.querySelectorAll<HTMLButtonElement>("[data-deploy-consent]").forEach((button) => {
-        button.addEventListener("click", () => resolve(button.dataset.deployConsent === "go"), { once: true });
-      });
-    }),
+    askConsent: (step) => askDeployConsent(panel, name, step),
     say: (kind, text) => sayDeploy(slug, kind, text),
     deploy: (approval, worker) => deployFromCard(slug, values, worker, approval, proxyId, image, instances),
   }, {

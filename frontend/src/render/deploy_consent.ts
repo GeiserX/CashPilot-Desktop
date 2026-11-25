@@ -158,7 +158,7 @@ export interface CheckedDeployCalls {
   say(kind: "busy" | DeployAnswer["kind"], text: string): void;
   /** The deploy itself, with every question it still asks; it says what happened. */
   deploy(approval: AdminStep | null, worker?: WorkerTarget): Promise<DeployAnswer>;
-  confirmReplace?(message: string): boolean;
+  confirmReplace?(message: string): boolean | Promise<boolean>;
 }
 
 interface CheckedDeployTarget {
@@ -220,7 +220,7 @@ export async function runCheckedDeploy(
     }
     const missing = missingRequiredFields(fields, values);
     if (missing.length) return { kind: "missing", missing };
-    if (target.localReplacement && !calls.confirmReplace?.(target.localReplacement)) {
+    if (target.localReplacement && !(await calls.confirmReplace?.(target.localReplacement))) {
       const answer = { kind: "cancelled" as const, text: "Nothing was deployed." };
       calls.say(answer.kind, answer.text);
       return { kind: "done", answer };
