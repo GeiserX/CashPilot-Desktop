@@ -241,7 +241,7 @@ Section "uninstall"
     RMDir "$INSTDIR"
 
     Delete "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk"
-    Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
+    # Delete "$DESKTOP\${INFO_PRODUCTNAME}.lnk"
 
     # WebView2 keeps its cache in %APPDATA%\<exe name>. The app stores nothing
     # there, so the installed copy's cache always goes. The portable copy's goes
