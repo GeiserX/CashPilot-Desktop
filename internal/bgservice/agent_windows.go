@@ -110,7 +110,11 @@ func (a *windowsAgent) RegisteredCommand() (string, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} // CREATE_NO_WINDOW
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("read the scheduled task %s: %w", a.taskName, err)
+		var detail string
+		if ee, ok := err.(*exec.ExitError); ok {
+			detail = ": " + strings.TrimSpace(string(ee.Stderr))
+		}
+		return "", fmt.Errorf("read the scheduled task %s: %w%s", a.taskName, err, detail)
 	}
 	return parseTaskCommand(string(out)), nil
 }
