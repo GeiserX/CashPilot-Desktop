@@ -825,7 +825,7 @@ func TestGuardWithoutAPlan(t *testing.T) {
 				vmID := r.p.VMID
 				if c.drop {
 					r.f.Disconnect(ctx, vmID)
-					r.f.RemoveVM(ctx, vmID, r.p.VHDXDir, r.p.Owner)
+					r.f.RemoveVM(ctx, vmID, r.p)
 				}
 				if c.foreign {
 					r.f.AddForeignVM(r.p.Names.VM, false)

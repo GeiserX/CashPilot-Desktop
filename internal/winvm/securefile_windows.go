@@ -4,7 +4,9 @@ package winvm
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -62,4 +64,41 @@ func ownedByAdmin(f *os.File) error {
 		return nil
 	}
 	return errNotAdminOwned
+}
+
+// CheckSetupAccess checks the protected setup paths before the elevated role
+// opens the password file. Only SYSTEM and Administrators may have access.
+func CheckSetupAccess(paths ...string) error {
+	isAdmin := func(sid *windows.SID) bool {
+		return sid.IsWellKnown(windows.WinLocalSystemSid) || sid.IsWellKnown(windows.WinBuiltinAdministratorsSid)
+	}
+	for _, path := range paths {
+		sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+			windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+		if err != nil {
+			return err
+		}
+		owner, _, err := sd.Owner()
+		if err != nil {
+			return err
+		}
+		dacl, _, err := sd.DACL()
+		if err != nil {
+			return err
+		}
+		if !isAdmin(owner) || dacl == nil || dacl.AceCount == 0 {
+			return fmt.Errorf("setup path has untrusted permissions: %s", path)
+		}
+		for i := uint32(0); i < uint32(dacl.AceCount); i++ {
+			var ace *windows.ACCESS_ALLOWED_ACE
+			if err := windows.GetAce(dacl, i, &ace); err != nil {
+				return err
+			}
+			if ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE ||
+				!isAdmin((*windows.SID)(unsafe.Pointer(&ace.SidStart))) {
+				return fmt.Errorf("setup path has untrusted permissions: %s", path)
+			}
+		}
+	}
+	return nil
 }

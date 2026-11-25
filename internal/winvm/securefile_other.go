@@ -19,3 +19,6 @@ func protect(path string, a fileAccess) error {
 
 // ownedByAdmin has no owner rule to check outside Windows.
 func ownedByAdmin(*os.File) error { return nil }
+
+// CheckSetupAccess is only used by the Windows setup role.
+func CheckSetupAccess(...string) error { return ErrUnsupported }

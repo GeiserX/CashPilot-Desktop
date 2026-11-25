@@ -75,7 +75,7 @@ type Builder interface {
 	// shape, one disconnected adapter with its static MAC and port guards
 	// (only the proof and the guard ever connect it), and the two ISOs as DVD
 	// drives, the Windows ISO first to boot.
-	CreateVM(ctx context.Context, p Plan, iso, answerISO string) (vmID, adapterID string, err error)
+	CreateVM(ctx context.Context, p Plan, iso, answerISO string) (vmID, adapterID string, disk OwnedDisk, err error)
 	// SetIntegration runs before the first Start-VM.
 	SetIntegration(ctx context.Context, vmID string, want map[string]bool) error
 	SetBindings(ctx context.Context, vnicIfIndex int, off []string) error
@@ -105,9 +105,9 @@ type Builder interface {
 
 	// The removal side. Each one is a no-op when the object is already gone.
 	UnregisterGuardTask(ctx context.Context, n Names, owner string) error
-	// RemoveVM turns the VM off, removes it, and deletes its disks that lie in
-	// vhdxDir. It lists the disks it left because they lie elsewhere.
-	RemoveVM(ctx context.Context, vmID, vhdxDir, owner string) (left []string, err error)
+	// RemoveVM turns off and removes the owned VM, then deletes the
+	// recorded disk if its full path and file ID still match.
+	RemoveVM(ctx context.Context, vmID string, p Plan) (left []string, err error)
 	RemoveSwitch(ctx context.Context, switchID, owner string) error
 	RemoveNAT(ctx context.Context, n Names, sub netip.Prefix) error
 	// RemoveFirewall removes the rules of our group that carry the owner token.

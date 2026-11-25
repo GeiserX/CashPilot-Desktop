@@ -111,6 +111,34 @@ func readParamsFile(path string) ([]byte, error) {
 // and the key: it must be setup.ps1's copy in the guard folder, and it is
 // deleted once setup ends.
 func runVMSetup(ctx context.Context, params, exe string, mk func(winvm.Names) winvm.BuildDeps, errOut io.Writer) int {
+	n, err := namesForDir(filepath.Dir(filepath.Dir(exe)))
+	if err != nil || !strings.EqualFold(filepath.Clean(exe), n.GuardExe()) {
+		fmt.Fprintln(errOut, "vm-setup: run the guard copy from the Secure VM data folder")
+		return vmExitUsage
+	}
+	return runVMSetupFor(ctx, params, n, n.DataDir, winvm.CheckSetupAccess, mk, errOut)
+}
+
+func runVMSetupFor(ctx context.Context, params string, n winvm.Names, dir string, checkAccess func(...string) error, mk func(winvm.Names) winvm.BuildDeps, errOut io.Writer) int {
+	guard := filepath.Join(dir, "guard")
+	expected := filepath.Join(guard, "setup-params.json")
+	if !strings.EqualFold(filepath.Clean(params), expected) {
+		fmt.Fprintf(errOut, "vm-setup: the params file must be %s\n", expected)
+		return vmExitUsage
+	}
+	resolved, err := filepath.EvalSymlinks(expected)
+	if err != nil || !strings.EqualFold(resolved, expected) {
+		fmt.Fprintln(errOut, "vm-setup: the params path must exist without links or junctions")
+		return vmExitUsage
+	}
+	if checkAccess != nil {
+		if err := checkAccess(dir, guard, expected); err != nil {
+			fmt.Fprintln(errOut, "vm-setup:", err)
+			return vmExitUsage
+		}
+	}
+	// Read the same canonical path that was checked above.
+	params = expected
 	raw, err := readParamsFile(params)
 	if err != nil {
 		fmt.Fprintln(errOut, "vm-setup:", err)
@@ -121,26 +149,13 @@ func runVMSetup(ctx context.Context, params, exe string, mk func(winvm.Names) wi
 		fmt.Fprintln(errOut, "vm-setup:", err)
 		return vmExitUsage
 	}
-	n, _, _, err := winvm.SetupNames(sp)
-	if err != nil {
-		fmt.Fprintln(errOut, "vm-setup:", err)
-		return vmExitUsage
-	}
-	if !strings.EqualFold(filepath.Clean(exe), filepath.Clean(n.GuardExe())) {
-		fmt.Fprintf(errOut, "vm-setup: must run as %s, not %s\n", n.GuardExe(), exe)
+	names, _, _, err := winvm.SetupNames(sp)
+	if err != nil || names != n {
+		fmt.Fprintln(errOut, "vm-setup: the params do not identify this Secure VM instance")
 		return vmExitUsage
 	}
 	d := mk(n)
-	if d.Dir == "" {
-		d.Dir = n.DataDir // a test points it elsewhere
-	}
-	// setup.ps1 hands over the hash-checked copy it made in the admin-only
-	// guard folder. A params file anywhere else lies where a user could swap
-	// it or link its folder, so it is neither used nor deleted as admin.
-	if !strings.EqualFold(filepath.Dir(filepath.Clean(params)), filepath.Join(d.Dir, "guard")) {
-		fmt.Fprintf(errOut, "vm-setup: the params file must be the copy in %s\n", filepath.Join(d.Dir, "guard"))
-		return vmExitUsage
-	}
+	d.Dir = dir
 	defer os.Remove(params)
 	logger := log.New(errOut, "", log.LstdFlags)
 	if f, err := winvm.OpenAppend(filepath.Join(d.Dir, setupLogFile)); err == nil {

@@ -138,13 +138,32 @@ func overlapsAny(p netip.Prefix, set []netip.Prefix) bool { return overlapping(p
 
 // Plan is the desired state, written as desired.json by the elevated setup or
 // Repair, and compared by the guard on every pass.
+// OwnedDisk records the file returned by setup's disk creation.
+type OwnedDisk struct {
+	Path string `json:"path"`
+	ID   string `json:"id"`
+}
+
+var diskIDRE = regexp.MustCompile(`^[0-9a-f]{48}$`)
+
+func (d OwnedDisk) validate() error {
+	if err := checkWinPath("disk path", d.Path); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(strings.ToLower(d.Path), ".vhdx") || !diskIDRE.MatchString(d.ID) {
+		return errors.New("the VM disk needs a VHDX path and a recorded file ID")
+	}
+	return nil
+}
+
 type Plan struct {
-	Version   int    `json:"version"`
-	Names     Names  `json:"names"`
-	VHDXDir   string `json:"vhdxDir"`
-	VMID      string `json:"vmId"`
-	AdapterID string `json:"adapterId"` // the GUID after `\` in Get-VMNetworkAdapter .Id
-	SwitchID  string `json:"switchId"`
+	Version   int        `json:"version"`
+	Names     Names      `json:"names"`
+	VHDXDir   string     `json:"vhdxDir"`
+	VMID      string     `json:"vmId"`
+	AdapterID string     `json:"adapterId"` // the GUID after `\` in Get-VMNetworkAdapter .Id
+	SwitchID  string     `json:"switchId"`
+	Disk      *OwnedDisk `json:"disk,omitempty"`
 
 	Subnet      netip.Prefix `json:"subnet"` // a free /29 in 172.16/12
 	Gateway     netip.Addr   `json:"gateway"`
@@ -357,6 +376,10 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 			return Plan{}, fmt.Errorf("the earlier plan belongs to %q, not %q", prev.Names.VM, o.Names.VM)
 		}
 		p.VMID, p.AdapterID, p.SwitchID = prev.VMID, prev.AdapterID, prev.SwitchID
+		if prev.Disk != nil {
+			disk := *prev.Disk
+			p.Disk = &disk
+		}
 		p.CreatedGuardian = prev.CreatedGuardian
 		p.Owner = prev.Owner
 		p.AdminGrantsTracked = prev.AdminGrantsTracked
@@ -558,6 +581,11 @@ func (p Plan) validate() error {
 	for _, id := range []string{p.VMID, p.AdapterID, p.SwitchID} {
 		if id != "" && !guidRe.MatchString(id) {
 			return fmt.Errorf("plan: ID %q is not a GUID", id)
+		}
+	}
+	if p.Disk != nil {
+		if err := p.Disk.validate(); err != nil {
+			return err
 		}
 	}
 	if p.EnhancedSession == ESKeep && p.EnhancedSessionOriginal != nil {

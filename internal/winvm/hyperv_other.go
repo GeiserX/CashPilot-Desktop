@@ -57,8 +57,8 @@ func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, st
 	return "", 0, ErrUnsupported
 }
 func (unsupported) EnsureNAT(context.Context, Names, netip.Prefix) error { return ErrUnsupported }
-func (unsupported) CreateVM(context.Context, Plan, string, string) (string, string, error) {
-	return "", "", ErrUnsupported
+func (unsupported) CreateVM(context.Context, Plan, string, string) (string, string, OwnedDisk, error) {
+	return "", "", OwnedDisk{}, ErrUnsupported
 }
 func (unsupported) SetIntegration(context.Context, string, map[string]bool) error {
 	return ErrUnsupported
@@ -86,7 +86,7 @@ func (unsupported) Guest(context.Context, string, Cred, GuestScript, any, any) e
 	return ErrUnsupported
 }
 func (unsupported) UnregisterGuardTask(context.Context, Names, string) error { return ErrUnsupported }
-func (unsupported) RemoveVM(context.Context, string, string, string) ([]string, error) {
+func (unsupported) RemoveVM(context.Context, string, Plan) ([]string, error) {
 	return nil, ErrUnsupported
 }
 func (unsupported) RemoveSwitch(context.Context, string, string) error   { return ErrUnsupported }

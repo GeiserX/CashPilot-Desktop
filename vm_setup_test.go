@@ -46,7 +46,7 @@ func writeParamsIn(t *testing.T, dir string, edit func(*winvm.SetupParams)) stri
 
 func TestRunVMSetupBuildsAndDeletesTheParams(t *testing.T) {
 	f := hvfake.New()
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	mk := func(winvm.Names) winvm.BuildDeps {
 		return winvm.BuildDeps{HV: f, Probe: f, Guest: f, Dir: dir,
 			Echo:  func(context.Context) []netip.Addr { return []netip.Addr{f.PublicIP} },
@@ -54,7 +54,7 @@ func TestRunVMSetupBuildsAndDeletesTheParams(t *testing.T) {
 	}
 	params := writeParamsIn(t, filepath.Join(dir, "guard"), nil)
 	var out bytes.Buffer
-	if code := runVMSetup(context.Background(), params, winvm.ProductNames().GuardExe(), mk, &out); code != vmExitOK {
+	if code := runVMSetupFor(context.Background(), params, winvm.ProductNames(), dir, nil, mk, &out); code != vmExitOK {
 		t.Fatalf("exit %d:\n%s", code, out.String())
 	}
 	if _, err := os.Stat(params); !errors.Is(err, os.ErrNotExist) {
@@ -78,23 +78,23 @@ func TestRunVMSetupRefuses(t *testing.T) {
 		t.Fatal("refused setup reached the build")
 		return winvm.BuildDeps{}
 	}
-	guard := winvm.ProductNames().GuardExe()
-	cases := map[string]struct {
-		params string
-		exe    string
-	}{
-		"not the guard copy": {writeParams(t, nil), `C:\Users\u\Downloads\CashPilot.exe`},
-		"bad params":         {writeParams(t, func(sp *winvm.SetupParams) { sp.UserSID = "nobody" }), guard},
-		"Everyone as user":   {writeParams(t, func(sp *winvm.SetupParams) { sp.UserSID = "S-1-1-0" }), guard},
-		"Users as user":      {writeParams(t, func(sp *winvm.SetupParams) { sp.UserSID = "S-1-5-32-545" }), guard},
-		"lab settings":       {writeParams(t, func(sp *winvm.SetupParams) { sp.Lab = &winvm.LabOverrides{Instance: 1} }), guard},
-		"no file":            {filepath.Join(t.TempDir(), "missing.json"), guard},
+	for name, edit := range map[string]func(*winvm.SetupParams){
+		"bad params":       func(sp *winvm.SetupParams) { sp.UserSID = "nobody" },
+		"Everyone as user": func(sp *winvm.SetupParams) { sp.UserSID = "S-1-1-0" },
+		"Users as user":    func(sp *winvm.SetupParams) { sp.UserSID = "S-1-5-32-545" },
+		"lab settings":     func(sp *winvm.SetupParams) { sp.Lab = &winvm.LabOverrides{Instance: 1} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := canonicalTempDir(t)
+			params := writeParamsIn(t, filepath.Join(dir, "guard"), edit)
+			var out bytes.Buffer
+			if code := runVMSetupFor(context.Background(), params, winvm.ProductNames(), dir, nil, mk, &out); code != vmExitUsage {
+				t.Errorf("exit %d, want %d: %s", code, vmExitUsage, &out)
+			}
+		})
 	}
-	for name, c := range cases {
-		var out bytes.Buffer
-		if code := runVMSetup(context.Background(), c.params, c.exe, mk, &out); code != vmExitUsage {
-			t.Errorf("%s: exit %d, want %d", name, code, vmExitUsage)
-		}
+	if code := runVMSetup(context.Background(), writeParams(t, nil), `C:\Users\u\Downloads\CashPilot.exe`, mk, &bytes.Buffer{}); code != vmExitUsage {
+		t.Errorf("setup with an exe outside the guard folder returned %d", code)
 	}
 	if code := runVMRemove(context.Background(), `C:\Users\u\elsewhere`, nil, &bytes.Buffer{}); code != vmExitUsage {
 		t.Errorf("remove of a folder that is not the data folder: exit %d", code)
@@ -108,14 +108,14 @@ func TestRunVMSetupRefuses(t *testing.T) {
 // only setup.ps1's copy in the admin-only guard folder. A params file in a
 // folder the user can write is neither used nor deleted.
 func TestRunVMSetupRefusesParamsOutsideTheGuardFolder(t *testing.T) {
-	dir := t.TempDir()
+	dir := canonicalTempDir(t)
 	mk := func(winvm.Names) winvm.BuildDeps { return winvm.BuildDeps{Dir: dir} }
 	for name, params := range map[string]string{
 		"a user folder":   writeParams(t, nil),
 		"the data folder": writeParamsIn(t, dir, nil),
 	} {
 		var out bytes.Buffer
-		if code := runVMSetup(context.Background(), params, winvm.ProductNames().GuardExe(), mk, &out); code != vmExitUsage {
+		if code := runVMSetupFor(context.Background(), params, winvm.ProductNames(), dir, nil, mk, &out); code != vmExitUsage {
 			t.Errorf("%s: exit %d, want %d:\n%s", name, code, vmExitUsage, out.String())
 		}
 		if _, err := os.Stat(params); err != nil {
@@ -127,3 +127,39 @@ func TestRunVMSetupRefusesParamsOutsideTheGuardFolder(t *testing.T) {
 // testPassword is a made-up guest password for tests, built at run time from
 // its number so that no password-shaped literal sits in the source.
 func testPassword(n int) string { return "t" + strconv.Itoa(n) + strings.Repeat("Qz7", 6) }
+
+func TestRunVMSetupRejectsLinkedGuardFolder(t *testing.T) {
+	dir := canonicalTempDir(t)
+	outside := t.TempDir()
+	original := writeParamsIn(t, outside, nil)
+	guard := filepath.Join(dir, "guard")
+	if err := os.Symlink(outside, guard); err != nil {
+		t.Skipf("cannot create test link: %v", err)
+	}
+	f := hvfake.New()
+	mk := func(winvm.Names) winvm.BuildDeps {
+		return winvm.BuildDeps{HV: f, Probe: f, Guest: f, Dir: dir,
+			Echo:  func(context.Context) []netip.Addr { return []netip.Addr{f.PublicIP} },
+			Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() }, ProofWait: time.Millisecond}
+	}
+	var out bytes.Buffer
+	params := filepath.Join(guard, filepath.Base(original))
+	if code := runVMSetupFor(context.Background(), params, winvm.ProductNames(), dir, nil, mk, &out); code != vmExitUsage {
+		t.Fatalf("linked guard folder returned exit %d:\n%s", code, &out)
+	}
+	if _, err := os.Stat(original); err != nil {
+		t.Fatalf("params outside the trusted guard folder were changed: %v", err)
+	}
+	if len(f.Calls()) > 0 {
+		t.Fatalf("setup reached Hyper-V: %v", f.Calls())
+	}
+}
+
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}

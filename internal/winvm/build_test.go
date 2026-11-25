@@ -211,12 +211,12 @@ func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.P
 	return id, ifx, err
 }
 
-func (w *failAfter) CreateVM(ctx context.Context, p winvm.Plan, iso, answer string) (string, string, error) {
-	vm, ad, err := w.HyperV.CreateVM(ctx, p, iso, answer)
+func (w *failAfter) CreateVM(ctx context.Context, p winvm.Plan, iso, answer string) (string, string, winvm.OwnedDisk, error) {
+	vm, ad, disk, err := w.HyperV.CreateVM(ctx, p, iso, answer)
 	if err == nil && w.hit("CreateVM") {
-		return "", "", errAfter
+		return "", "", winvm.OwnedDisk{}, errAfter
 	}
-	return vm, ad, err
+	return vm, ad, disk, err
 }
 
 func (w *failAfter) Guest(ctx context.Context, vmID string, c winvm.Cred, s winvm.GuestScript, arg, out any) error {

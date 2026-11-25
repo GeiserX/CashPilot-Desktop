@@ -112,6 +112,7 @@ type fakeTask struct {
 type fakeVM struct {
 	id, name, state, owner            string
 	vhdx                              string
+	diskID                            string
 	vtpm, keyProtector                bool
 	answer                            []byte // the answer file of the ISO it boots with, applied at the first start
 	accounts                          map[string]string
@@ -454,9 +455,11 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	if err := f.EnsureNAT(ctx, n, sub); err != nil {
 		return winvm.Plan{}, err
 	}
-	if p.VMID, p.AdapterID, err = f.CreateVM(ctx, p, "", ""); err != nil {
+	var disk winvm.OwnedDisk
+	if p.VMID, p.AdapterID, disk, err = f.CreateVM(ctx, p, "", ""); err != nil {
 		return winvm.Plan{}, err
 	}
+	p.Disk = &disk
 	live, err := f.ReadLive(ctx, n, p.VMID, p.SwitchID)
 	if err != nil {
 		return winvm.Plan{}, err
@@ -948,19 +951,19 @@ func (f *HyperV) EnsureNAT(_ context.Context, n winvm.Names, sub netip.Prefix) e
 // services (all on but the Guest Service Interface). Each ISO counts as a DVD
 // drive. The answer ISO's file is applied at the first start, as Windows Setup
 // does: the two accounts and the guest's static entry for the gateway.
-func (f *HyperV) CreateVM(_ context.Context, p winvm.Plan, iso, answerISO string) (string, string, error) {
+func (f *HyperV) CreateVM(_ context.Context, p winvm.Plan, iso, answerISO string) (string, string, winvm.OwnedDisk, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("CreateVM"); err != nil {
-		return "", "", err
+		return "", "", winvm.OwnedDisk{}, err
 	}
 	for _, vm := range f.vms {
 		if vm.name == p.Names.VM {
-			return "", "", fmt.Errorf("fake Hyper-V: a VM named %q exists", p.Names.VM)
+			return "", "", winvm.OwnedDisk{}, fmt.Errorf("fake Hyper-V: a VM named %q exists", p.Names.VM)
 		}
 	}
-	if _, ok := f.switchByName(p.Names.Switch); !ok {
-		return "", "", fmt.Errorf("fake Hyper-V: no switch %q", p.Names.Switch)
+	if _, ok := f.switches[strings.ToLower(p.SwitchID)]; !ok {
+		return "", "", winvm.OwnedDisk{}, fmt.Errorf("fake Hyper-V: no switch %q", p.Names.Switch)
 	}
 	vm := &fakeVM{
 		id: f.newID(), name: p.Names.VM, state: "Off", owner: p.Owner, vtpm: true,
@@ -984,12 +987,14 @@ func (f *HyperV) CreateVM(_ context.Context, p winvm.Plan, iso, answerISO string
 	if answerISO != "" {
 		b, ok := f.isos[answerISO]
 		if !ok {
-			return "", "", fmt.Errorf("fake Hyper-V: no ISO at %s", answerISO)
+			return "", "", winvm.OwnedDisk{}, fmt.Errorf("fake Hyper-V: no ISO at %s", answerISO)
 		}
 		vm.answer = b
 	}
 	f.vms[vm.id] = vm
-	return vm.id, vm.adapter.id, nil
+	f.seq++
+	vm.diskID = fmt.Sprintf("%048x", f.seq)
+	return vm.id, vm.adapter.id, winvm.OwnedDisk{Path: vm.vhdx, ID: vm.diskID}, nil
 }
 
 // SetIntegration sets integration services by ID.
@@ -1334,8 +1339,8 @@ func (f *HyperV) UnregisterGuardTask(_ context.Context, n winvm.Names, owner str
 	return nil
 }
 
-// RemoveVM removes the VM and its disk when the disk lies in vhdxDir.
-func (f *HyperV) RemoveVM(_ context.Context, vmID, vhdxDir, owner string) ([]string, error) {
+// RemoveVM removes the VM and its disk when its identity matches.
+func (f *HyperV) RemoveVM(_ context.Context, vmID string, p winvm.Plan) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveVM"); err != nil {
@@ -1345,11 +1350,11 @@ func (f *HyperV) RemoveVM(_ context.Context, vmID, vhdxDir, owner string) ([]str
 	if !ok {
 		return nil, nil
 	}
-	if err := f.notOwned("VM", vm.name, vm.owner, owner); err != nil {
+	if err := f.notOwned("VM", vm.name, vm.owner, p.Owner); err != nil {
 		return nil, err
 	}
 	delete(f.vms, vm.id)
-	if !strings.HasPrefix(strings.ToLower(vm.vhdx), strings.ToLower(strings.TrimRight(vhdxDir, `\`)+`\`)) {
+	if vm.vhdx != "" && (p.Disk == nil || !strings.EqualFold(p.Disk.Path, vm.vhdx) || p.Disk.ID != vm.diskID) {
 		return []string{vm.vhdx}, nil
 	}
 	return nil, nil
@@ -2117,3 +2122,10 @@ var (
 	_ winvm.Prober     = (*HyperV)(nil)
 	_ winvm.GuestProbe = (*HyperV)(nil)
 )
+
+// SetDiskPath changes the attachment as Hyper-V Manager can.
+func (f *HyperV) SetDiskPath(vmID, path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.vms[strings.ToLower(vmID)].vhdx = path
+}

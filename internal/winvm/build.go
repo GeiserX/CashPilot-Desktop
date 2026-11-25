@@ -401,8 +401,12 @@ func (b *builder) journal(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := os.RemoveAll(filepath.Join(b.Dir, proofDir)); err != nil {
-		return err
+	if prev != nil && prev.Owner != "" {
+		var cleanupErr error
+		cleanupData(b.Dir, proofDir, func(_ string, err error) { cleanupErr = errors.Join(cleanupErr, err) })
+		if cleanupErr != nil {
+			return cleanupErr
+		}
 	}
 	o := b.opts
 	if prev != nil {
@@ -687,14 +691,14 @@ func (b *builder) vm(ctx context.Context) error {
 	if err := b.HV.WriteAnswerISO(ctx, b.answerPath(), xml); err != nil {
 		return err
 	}
-	vmID, adapterID, err := b.HV.CreateVM(ctx, b.p, b.sp.ISO, b.answerPath())
+	vmID, adapterID, disk, err := b.HV.CreateVM(ctx, b.p, b.sp.ISO, b.answerPath())
 	if err != nil {
 		return err
 	}
 	if !guidRe.MatchString(vmID) || !guidRe.MatchString(adapterID) {
 		return fmt.Errorf("the VM came back without a VM or adapter ID (%q, %q)", vmID, adapterID)
 	}
-	b.p.VMID, b.p.AdapterID = vmID, strings.ToUpper(adapterID)
+	b.p.VMID, b.p.AdapterID, b.p.Disk = vmID, strings.ToUpper(adapterID), &disk
 	return b.save()
 }
 

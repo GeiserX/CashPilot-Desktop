@@ -51,9 +51,9 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 				return err
 			}},
 		{"EnsureNAT", ok, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { return b.EnsureNAT(ctx, n, sub) }},
-		{"CreateVM", `{"vmId":"` + tVMID + `","adapterId":"` + tAdapterID + `"}`, []string{`"iso":"D:\\iso\\w.iso"`, `"owner":"` + tOwner + `"`},
+		{"CreateVM", `{"vmId":"` + tVMID + `","adapterId":"` + tAdapterID + `","disk":{"path":"D:\\VMs\\CashPilot-VM.vhdx","id":"` + strings.Repeat("1", 48) + `"}}`, []string{`"iso":"D:\\iso\\w.iso"`, `"owner":"` + tOwner + `"`},
 			func(b psBuilder) error {
-				_, _, err := b.CreateVM(ctx, p, `D:\iso\w.iso`, `C:\ProgramData\CashPilot\answer.iso`)
+				_, _, _, err := b.CreateVM(ctx, p, `D:\iso\w.iso`, `C:\ProgramData\CashPilot\answer.iso`)
 				return err
 			}},
 		{"SetIntegration", ok, []string{`"want":{`}, func(b psBuilder) error { return b.SetIntegration(ctx, tVMID, Integration()) }},
@@ -93,7 +93,7 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 			return err
 		}},
 		{"UnregisterGuardTask", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.UnregisterGuardTask(ctx, n, tOwner) }},
-		{"RemoveVM", `{"left":[]}`, []string{`"vhdxDir":"D:\\VMs"`}, func(b psBuilder) error { _, err := b.RemoveVM(ctx, tVMID, `D:\VMs`, tOwner); return err }},
+		{"RemoveVM", `{"left":[]}`, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { _, err := b.RemoveVM(ctx, tVMID, p); return err }},
 		{"RemoveSwitch", ok, []string{tSwitchID}, func(b psBuilder) error { return b.RemoveSwitch(ctx, tSwitchID, tOwner) }},
 		{"RemoveNAT", ok, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { return b.RemoveNAT(ctx, n, sub) }},
 		{"RemoveFirewall", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.RemoveFirewall(ctx, n, tOwner) }},
@@ -156,10 +156,10 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 			return b.EnsureNAT(ctx, m, sub)
 		},
 		"ISO path with a quote": func(b psBuilder) error {
-			_, _, err := b.CreateVM(ctx, p, `D:\iso\w'.iso`, `C:\a.iso`)
+			_, _, _, err := b.CreateVM(ctx, p, `D:\iso\w'.iso`, `C:\a.iso`)
 			return err
 		},
-		"relative ISO path":    func(b psBuilder) error { _, _, err := b.CreateVM(ctx, p, `w.iso`, `C:\a.iso`); return err },
+		"relative ISO path":    func(b psBuilder) error { _, _, _, err := b.CreateVM(ctx, p, `w.iso`, `C:\a.iso`); return err },
 		"integration not GUID": func(b psBuilder) error { return b.SetIntegration(ctx, tVMID, map[string]bool{"x": true}) },
 		"binding not planned":  func(b psBuilder) error { return b.SetBindings(ctx, 20, []string{"ms_tcpip"}) },
 		"public guest address": func(b psBuilder) error {
@@ -174,7 +174,7 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 		"guest user not admin": func(b psBuilder) error {
 			return b.Guest(ctx, tVMID, Cred{User: "earner", Password: testPassword(1)}, scriptGuestPing, nil, nil)
 		},
-		"remove VM not a GUID":  func(b psBuilder) error { _, err := b.RemoveVM(ctx, "*", `D:\VMs`, tOwner); return err },
+		"remove VM not a GUID":  func(b psBuilder) error { _, err := b.RemoveVM(ctx, "*", p); return err },
 		"remove switch by name": func(b psBuilder) error { return b.RemoveSwitch(ctx, "CashPilot-VM", tOwner) },
 		"remove firewall no owner": func(b psBuilder) error {
 			return b.RemoveFirewall(ctx, n, "")

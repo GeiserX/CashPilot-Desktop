@@ -41,6 +41,9 @@ $taskName = 'VMGuard-' + $name
 # As the app's stub does: a folder that exists must already be owned by
 # SYSTEM or Administrators, and a new one gets its rules as it is made.
 function Lock-Dir([string]$p) {
+  for ($d = [IO.DirectoryInfo]::new($p); $d; $d = $d.Parent) {
+    if ($d.Exists -and ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('a link in the data path: ' + $d.FullName) }
+  }
   $acl = New-Object Security.AccessControl.DirectorySecurity
   $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
   if (-not (Test-Path -LiteralPath $p)) { [IO.Directory]::CreateDirectory($p, $acl) | Out-Null }
@@ -86,11 +89,8 @@ $params = [ordered]@{
   adminPassword = $pair.admin; earnerPassword = $pair.earner; userSid = $sid; extraExits = @(); approveNetwork = [bool]$ApproveNetwork
   lab = [ordered]@{ minHostRam = [uint64]$MinHostRamGB * 1GB; guestMemory = [uint64]$GuestMemoryGB * 1GB; keepEnhancedSession = [bool]$KeepEnhancedSession; instance = $Instance }
 }
-$paramsFile = Join-Path $credDir ($name + '.params.json')
-[IO.File]::WriteAllText($paramsFile, ($params | ConvertTo-Json -Compress -Depth 4), (New-Object Text.UTF8Encoding $false))
-
 Lock-Dir (Join-Path $env:ProgramData 'CashPilot')
-New-Item -ItemType Directory -Force -Path (Join-Path $env:ProgramData 'CashPilot\lab') | Out-Null
+Lock-Dir (Join-Path $env:ProgramData 'CashPilot\lab')
 Lock-Dir $data
 Lock-Dir $guard
 Test-Tree $data
@@ -100,14 +100,21 @@ if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
 Copy-Item -LiteralPath $src -Destination $dst
 if ((Get-FileHash -LiteralPath $dst).Hash -ne (Get-FileHash -LiteralPath $src).Hash) { throw 'setup.ps1 changed while it was copied' }
 $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
-$paramsHash = (Get-FileHash -LiteralPath $paramsFile -Algorithm SHA256).Hash
 $ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
 $started = Get-Date
 # Run Windows PowerShell with only its own modules, even from PowerShell 7.
 $env:PSModulePath = $env:ProgramFiles + '\WindowsPowerShell\Modules;' + [Environment]::SystemDirectory + '\WindowsPowerShell\v1.0\Modules'
-& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile -ParamsHash $paramsHash
-$code = $LASTEXITCODE
-Remove-Item -LiteralPath $paramsFile -Force -ErrorAction SilentlyContinue
+# Keep the temporary plaintext in the protected folder. This elevated
+# process never deletes a file from the user's profile.
+$paramsFile = Join-Path $guard ('.lab-params.' + [guid]::NewGuid().ToString('N') + '.tmp')
+try {
+  [IO.File]::WriteAllText($paramsFile, ($params | ConvertTo-Json -Compress -Depth 4), (New-Object Text.UTF8Encoding $false))
+  $paramsHash = (Get-FileHash -LiteralPath $paramsFile -Algorithm SHA256).Hash
+  & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile -ParamsHash $paramsHash
+  $code = $LASTEXITCODE
+} finally {
+  Remove-Item -LiteralPath $paramsFile -Force -ErrorAction SilentlyContinue
+}
 'setup exit code: ' + $code + ' after ' + [int]((Get-Date) - $started).TotalMinutes + ' min'
 $log = Join-Path $data 'setup.log'
 if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 60 }

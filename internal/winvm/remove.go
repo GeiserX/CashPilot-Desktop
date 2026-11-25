@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -37,40 +38,97 @@ type RemoveResult struct {
 // killed leaves files in it, so it is removed with what it holds.
 const proofDir = "proof"
 
-// dataFiles are the files in DataDir that setup and the guard write, deleted
-// by exact name. desired.json is not in the list: it goes last, on its own.
+// dataFiles names files setup and the guard write in DataDir.
 var dataFiles = []string{
-	installFile, answerISOFile, StateFile, StatusFile, LockFile, ProofFile, PrefsFile, proofDir, "setup.log",
-	"guard.log", "guard.log.1",
-	// A setup stopped while it wrote the answer ISO leaves its staging folder
-	// and the half-written image.
-	answerISOFile + ".stage", answerISOFile + ".tmp",
+	installFile, answerISOFile, answerISOFile + ".tmp", StateFile, StatusFile, LockFile,
+	ProofFile, PrefsFile, "setup.log", "guard.log", "guard.log.1",
 }
 
-// guardDir is the admin-only folder of the guard's exe copy. remove.ps1
-// deletes the copy and the two scripts after Remove VM, and the folder when
-// it is empty.
 const guardDir = "guard"
 
-// guardFiles are the files remove.ps1 deletes itself.
 var guardFiles = []string{"CashPilot-guard.exe", "remove.ps1", "setup.ps1"}
+var atomicTargets = []string{PlanFile, installFile, StateFile, StatusFile, LockFile, ProofFile, PrefsFile}
+var atomicSuffix = regexp.MustCompile(`^[0-9]+\.tmp$`)
+var bootstrapTemp = regexp.MustCompile(`^\.(bootstrap|setup-exe|setup-params|guard-backup|params-backup|guard-discard|lab-params)\.[0-9a-f]{32}\.tmp$`)
+var captureDir = regexp.MustCompile(`^pktmon-[0-9]+$`)
+var captureFile = regexp.MustCompile(`^c[0-9]+\.pcapng$`)
 
-// paramsCopy is setup.ps1's copy of the params file, with the guest
-// passwords. setup.ps1 deletes it when the exe ends; a setup that was killed
-// leaves it.
-const paramsCopy = "setup-params.json"
+// generatedData identifies only the paths setup writes. The plan and the
+// running bootstrap are cleaned up separately.
+func generatedData(rel string, d fs.DirEntry) bool {
+	parts := strings.Split(rel, string(filepath.Separator))
+	if d.IsDir() {
+		return len(parts) == 1 && (rel == proofDir || rel == answerISOFile+".stage") ||
+			len(parts) == 2 && parts[0] == proofDir && captureDir.MatchString(parts[1])
+	}
+	if !d.Type().IsRegular() {
+		return false
+	}
+	switch len(parts) {
+	case 1:
+		if slices.Contains(dataFiles, rel) {
+			return true
+		}
+		for _, name := range atomicTargets {
+			if suffix, ok := strings.CutPrefix(rel, "."+name+"."); ok && atomicSuffix.MatchString(suffix) {
+				return true
+			}
+		}
+	case 2:
+		return parts[0] == guardDir && (parts[1] == "setup-params.json" || bootstrapTemp.MatchString(parts[1])) ||
+			parts[0] == answerISOFile+".stage" && parts[1] == "autounattend.xml"
+	case 3:
+		return parts[0] == proofDir && captureDir.MatchString(parts[1]) &&
+			(parts[2] == "capture.etl" || captureFile.MatchString(parts[2]))
+	}
+	return false
+}
 
-// isAtomicTemp is a temp file writeAtomic makes next to its target
-// (".<name>.<random>.tmp"); one is left when the writer was killed.
-func isAtomicTemp(name string) bool {
-	return strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".tmp") && len(name) > len("..tmp")
+// cleanupData removes generated files and empty generated directories. It
+// also serves Repair, which only clears stale proof captures.
+func cleanupData(dir, under string, report func(string, error)) {
+	var dirs []string
+	root := filepath.Join(dir, under)
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if generatedData(rel, d) {
+			if d.IsDir() {
+				dirs = append(dirs, path)
+			} else {
+				report(rel, os.Remove(path))
+			}
+		} else if d.IsDir() && rel != "." && rel != guardDir {
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		report(under, err)
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		path := dirs[i]
+		ents, err := os.ReadDir(path)
+		if err == nil && len(ents) == 0 {
+			rel, _ := filepath.Rel(dir, path)
+			report(rel, os.Remove(path))
+		}
+	}
 }
 
 // Remove takes the Secure VM off this PC. n must be the instance desired.json
 // belongs to. Without desired.json nothing on the host is touched: this
 // install cannot tell its objects apart, so they are only listed.
-func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
-	var res RemoveResult
+func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retErr error) {
+	knownPlan := false
+	defer func() {
+		res.Left = append(res.Left, unknownData(d.Dir, knownPlan)...)
+	}()
 	logf := func(format string, args ...any) {
 		if d.Logf != nil {
 			d.Logf(format, args...)
@@ -82,7 +140,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 		if ierr != nil {
 			return res, ierr
 		}
-		res.Left = listInventory(inv, n)
+		res.Left = append(res.Left, listInventory(inv, n)...)
 		return res, nil
 	}
 	if err != nil {
@@ -91,6 +149,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 	if p.Names != n {
 		return res, fmt.Errorf("desired.json belongs to %q, not %q", p.Names.VM, n.VM)
 	}
+	knownPlan = p.Owner != ""
 	inv, err := d.HV.Inventory(ctx, n, KnownIDs{VM: p.VMID, Switch: p.SwitchID}, "")
 	if err != nil {
 		return res, err
@@ -127,15 +186,25 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 			res.Left = append(res.Left, "the VM "+v.ID+" (not made by this install)")
 			continue
 		}
-		left, err := d.HV.RemoveVM(ctx, v.ID, p.VHDXDir, p.Owner)
+		left, err := d.HV.RemoveVM(ctx, v.ID, p)
 		if err != nil {
 			fail("VM", err)
 			continue
 		}
 		ourVM = v.ID
-		res.Removed = append(res.Removed, "the VM "+v.ID+" and its disk")
+		res.Removed = append(res.Removed, "the VM "+v.ID)
 		for _, f := range left {
-			res.Left = append(res.Left, f+" (outside the VM folder, so not deleted)")
+			res.Left = append(res.Left, f+" (disk ownership or use prevented deletion)")
+		}
+	}
+
+	if len(inv.VMs) == 0 && p.Disk != nil && p.Owner != "" {
+		left, err := d.HV.RemoveVM(ctx, "", p)
+		if err != nil {
+			fail("VM disk", err)
+		}
+		for _, f := range left {
+			res.Left = append(res.Left, f+" (disk ownership or use prevented deletion)")
 		}
 	}
 
@@ -241,34 +310,19 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 	if len(errs) > 0 {
 		return res, fmt.Errorf("Remove VM did not finish; run it again: %w", errors.Join(errs...))
 	}
-	for _, f := range dataFiles {
-		path := filepath.Join(d.Dir, f)
-		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		rm := os.Remove
-		if f == proofDir || f == answerISOFile+".stage" {
-			rm = os.RemoveAll
-		}
-		if err := rm(path); err != nil {
-			fail(f, err)
-		} else {
-			res.Removed = append(res.Removed, f)
-		}
+	if !knownPlan {
+		return res, nil
 	}
-	for _, f := range leftovers(d.Dir) {
-		if err := os.Remove(filepath.Join(d.Dir, f)); err != nil {
-			fail(f, err)
+	cleanupData(d.Dir, "", func(path string, err error) {
+		if err != nil {
+			fail(path, err)
 		} else {
-			res.Removed = append(res.Removed, f)
+			res.Removed = append(res.Removed, path)
 		}
-	}
+	})
 	if len(errs) > 0 {
 		return res, fmt.Errorf("Remove VM did not finish; run it again: %w", errors.Join(errs...))
 	}
-	// Anything else in DataDir was not made by setup: it stays, and is listed
-	// so the folder is never kept without a word.
-	res.Left = append(res.Left, unknownData(d.Dir)...)
 	if err := os.Remove(filepath.Join(d.Dir, PlanFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return res, err
 	}
@@ -276,42 +330,30 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 	return res, nil
 }
 
-// leftovers are the files a killed setup or guard leaves in DataDir and in
-// the guard folder: writeAtomic's temp files and setup.ps1's params copy.
-// Only regular files match.
-func leftovers(dir string) []string {
+// unknownData lists unrecognized paths even if Remove cannot read a plan
+// or a host operation fails.
+func unknownData(dir string, knownPlan bool) []string {
 	var out []string
-	for _, sub := range []string{"", guardDir} {
-		ents, _ := os.ReadDir(filepath.Join(dir, sub))
-		for _, e := range ents {
-			if !e.Type().IsRegular() {
-				continue
-			}
-			if isAtomicTemp(e.Name()) || (sub == guardDir && e.Name() == paramsCopy) {
-				out = append(out, filepath.Join(sub, e.Name()))
-			}
+	exe, _ := os.Executable()
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || path == dir {
+			return err
 		}
-	}
-	return out
-}
-
-// unknownData lists what is left in DataDir and the guard folder that setup
-// did not make, besides desired.json, which goes last, and the files
-// remove.ps1 deletes itself.
-func unknownData(dir string) []string {
-	var out []string
-	for _, sub := range []string{"", guardDir} {
-		ents, _ := os.ReadDir(filepath.Join(dir, sub))
-		for _, e := range ents {
-			name := e.Name()
-			switch {
-			case sub == "" && (name == PlanFile || (name == guardDir && e.IsDir())):
-				continue
-			case sub == guardDir && slices.Contains(guardFiles, name):
-				continue
-			}
-			out = append(out, filepath.Join(dir, sub, name)+" (not made by setup, so not deleted)")
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
 		}
+		if strings.EqualFold(path, exe) ||
+			knownPlan && (generatedData(rel, d) || rel == PlanFile ||
+				rel == guardDir && d.IsDir() ||
+				filepath.Dir(rel) == guardDir && d.Type().IsRegular() && slices.Contains(guardFiles, d.Name())) {
+			return nil
+		}
+		out = append(out, path+" (not made by setup, so not deleted)")
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		out = append(out, "could not list "+dir+": "+err.Error())
 	}
 	return out
 }

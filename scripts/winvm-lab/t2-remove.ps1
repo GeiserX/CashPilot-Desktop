@@ -9,26 +9,44 @@
   lab build of CashPilot; remove.ps1 runs --vm-remove, then deletes the exe
   copy and the folders when they are empty. Afterwards it lists every object
   that still carries the instance's names, and exits 1 if there is one.
-  With -ForgetPasswords it also deletes the instance's saved guest passwords.
+  Run with only -Instance and -ForgetPasswords in a regular PowerShell window
+  to delete the saved guest passwords.
 
 .EXAMPLE
   .\t2-remove.ps1 -Instance 1 -Exe .\CashPilot-Desktop-lab.exe -Repo C:\src\CashPilot-Desktop
 #>
 param(
   [Parameter(Mandatory = $true)][ValidateRange(1, 9)][int]$Instance,
-  [Parameter(Mandatory = $true)][string]$Exe,
-  [Parameter(Mandatory = $true)][string]$Repo,
-  [switch]$ForgetPasswords
+  [Parameter(Mandatory = $true, ParameterSetName = 'Remove')][string]$Exe,
+  [Parameter(Mandatory = $true, ParameterSetName = 'Remove')][string]$Repo,
+  [Parameter(Mandatory = $true, ParameterSetName = 'Passwords')][switch]$ForgetPasswords
 )
 $ErrorActionPreference = 'Stop'
 $name = 'cpd-svm-' + $Instance
+if ($ForgetPasswords) {
+  $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+  if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run -ForgetPasswords in a regular PowerShell window.' }
+  Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA ('cpd-lab\' + $name + '.cred')) -Force -ErrorAction SilentlyContinue
+  exit 0
+}
 $data = Join-Path $env:ProgramData ('CashPilot\lab\' + $name)
 $guard = Join-Path $data 'guard'
 $taskPath = '\CashPilot\'
 $taskName = 'VMGuard-' + $name
 if (-not (Test-Path -LiteralPath $guard)) { throw ('no guard folder at ' + $guard + '; nothing was built here') }
 $src = Join-Path $Repo 'internal\winvm\scripts\remove.ps1'
+for ($d = [IO.DirectoryInfo]::new($guard); $d; $d = $d.Parent) {
+  if ($d.Exists -and ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('a link in the data path: ' + $d.FullName) }
+}
+foreach ($path in @($data, $guard)) {
+  $owner = (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value
+  if ($owner -ne 'S-1-5-18' -and $owner -ne 'S-1-5-32-544') { throw ('Untrusted owner for ' + $path) }
+}
 $dst = Join-Path $guard 'remove.ps1'
+if (Test-Path -LiteralPath $dst) {
+  $item = Get-Item -LiteralPath $dst -Force
+  if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The bootstrap path is not a plain file.' }
+}
 Copy-Item -LiteralPath $src -Destination $dst -Force
 $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
 $ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
@@ -47,6 +65,5 @@ $left += @(Get-NetFirewallRule -Group ($name + '-proof') -ErrorAction SilentlyCo
 $left += @(Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue | ForEach-Object { 'task ' + $_.TaskName })
 if (Test-Path -LiteralPath $data) { $left += @('folder ' + $data) }
 $left | ForEach-Object { 'left: ' + $_ }
-if ($ForgetPasswords) { Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA ('cpd-lab\' + $name + '.cred')) -Force -ErrorAction SilentlyContinue }
 if ($code -ne 0 -or $left.Count -gt 0) { exit 1 }
 exit 0

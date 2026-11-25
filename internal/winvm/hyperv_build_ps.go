@@ -144,13 +144,20 @@ Write-Doc ([ordered]@{ ok = $true })
 // proof and the guard ever connect it. Gen 2, Secure Boot, a vTPM with a local
 // key protector, static memory, the plan's processor shape, no checkpoints,
 // no automatic start, the owner tag in its Notes, and the two ISOs.
-const scriptCreateVM = buildPrelude + `if (@(Get-VM | Where-Object { $_.Name -eq $in.vm }).Count -gt 0) { throw 'A VM with this name exists.' }
-$disk = Join-Path $in.vhdxDir ($in.vm + '.vhdx')
+const scriptCreateVM = buildPrelude + diskIdentityPrelude + `if (@(Get-VM | Where-Object { $_.Name -eq $in.vm }).Count -gt 0) { throw 'A VM with this name exists.' }
+$disk = [IO.Path]::GetFullPath((Join-Path $in.vhdxDir ($in.vm + '.vhdx')))
+for ($dir = [IO.DirectoryInfo]::new($in.vhdxDir); $dir; $dir = $dir.Parent) {
+  if ($dir.Exists -and ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('A junction in the VM disk path: ' + $dir.FullName) }
+}
 if (Test-Path -LiteralPath $disk) { throw 'The VM disk already exists.' }
 New-Item -ItemType Directory -Force -Path $in.vhdxDir | Out-Null
 $vm = $null
+$createdDisk = New-VHD -Path $disk -Dynamic -SizeBytes ([uint64]$in.diskBytes)
+if (-not $createdDisk -or [IO.Path]::GetFullPath($createdDisk.Path) -ne $disk) { throw 'The disk creation did not return the requested file.' }
+$diskID = [CpdDisk]::Identify($disk)
+if (-not $diskID) { throw 'Could not verify the created disk.' }
 try {
-  $vm = New-VM -Name $in.vm -Generation 2 -MemoryStartupBytes ([uint64]$in.memory) -NewVHDPath $disk -NewVHDSizeBytes ([uint64]$in.diskBytes) -Path $in.vhdxDir
+  $vm = New-VM -Name $in.vm -Generation 2 -MemoryStartupBytes ([uint64]$in.memory) -VHDPath $disk -Path $in.vhdxDir
   # The owner tag first, in its own call: it is what makes a rerun adopt the VM.
   Set-VM -VM $vm -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
   Set-VM -VM $vm -ProcessorCount ([int]$in.procCount) -StaticMemory -CheckpointType Disabled -AutomaticStartAction Nothing -AutomaticStopAction ShutDown
@@ -170,10 +177,11 @@ try {
   if ($vm) {
     Stop-VM -VM $vm -TurnOff -Force -ErrorAction SilentlyContinue
     Remove-VM -VM $vm -Force -ErrorAction SilentlyContinue
+    if (-not (Test-DiskInUse $disk)) { [CpdDisk]::DeleteOwned($disk, $diskID) | Out-Null }
   }
   throw
 }
-Write-Doc ([ordered]@{ vmId = $vm.Id.ToString(); adapterId = ($a[0].Id -split '\\')[-1] })
+Write-Doc ([ordered]@{ vmId = $vm.Id.ToString(); adapterId = ($a[0].Id -split '\\')[-1]; disk = @{ path = $disk; id = $diskID } })
 `
 
 // scriptSetIntegration sets integration services by ID.
@@ -244,18 +252,33 @@ public static class CpdIso { public static void Write(object stream, string path
   try { while (true) { s.Read(buf, buf.Length, p); int n = Marshal.ReadInt32(p); if (n <= 0) break; f.Write(buf, 0, n); } } finally { Marshal.FreeHGlobal(p); } } } }
 '@ }
 $stage = $in.path + '.stage'
-if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
-New-Item -ItemType Directory -Path $stage | Out-Null
+$answer = Join-Path $stage 'autounattend.xml'
+if (Test-Path -LiteralPath $stage) {
+  $d = Get-Item -LiteralPath $stage -Force
+  if (-not $d.PSIsContainer -or ($d.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The answer folder is not a plain directory.' }
+  foreach ($f in @(Get-ChildItem -LiteralPath $stage -Force)) {
+    if ($f.Name -cne 'autounattend.xml' -or $f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+      throw ('Unknown file in the answer folder: ' + $f.FullName)
+    }
+  }
+} else { New-Item -ItemType Directory -Path $stage | Out-Null }
 try {
-  [IO.File]::WriteAllBytes((Join-Path $stage 'autounattend.xml'), [Convert]::FromBase64String($in.xml))
+  [IO.File]::WriteAllBytes($answer, [Convert]::FromBase64String($in.xml))
   $fs = New-Object -ComObject IMAPI2FS.MsftFileSystemImage
   $fs.FileSystemsToCreate = 3
   $fs.VolumeName = 'CPDANSWER'
   $fs.Root.AddTree($stage, $false)
   $tmp = $in.path + '.tmp'
+  if (Test-Path -LiteralPath $tmp) {
+    $f = Get-Item -LiteralPath $tmp -Force
+    if ($f.PSIsContainer -or ($f.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'The temporary answer ISO is not a plain file.' }
+  }
   [CpdIso]::Write($fs.CreateResultImage().ImageStream, $tmp)
   Move-Item -LiteralPath $tmp -Destination $in.path -Force
-} finally { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
+} finally {
+  Remove-Item -LiteralPath $answer -Force -ErrorAction SilentlyContinue
+  if (@(Get-ChildItem -LiteralPath $stage -Force).Count -eq 0) { [IO.Directory]::Delete($stage) }
+}
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -324,29 +347,27 @@ if ($t.Count -eq 1) {
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptRemoveVM turns the VM off, removes it, deletes its disks that lie in
-// vhdxDir and the empty folders New-VM left there, and lists the disks it
-// left.
-const scriptRemoveVM = buildPrelude + `$vm = @(Find-OurVM $in.vm)
-$left = @()
+// scriptRemoveVM removes the owned VM and the recorded disk file. Any
+// other attached VHDX is reported and kept.
+const scriptRemoveVM = buildPrelude + diskIdentityPrelude + `$vm = @()
+if ($in.vm) { $vm = @(Find-OurVM $in.vm) }
+if ($vm.Count -gt 1) { throw 'More than one VM has the recorded ID.' }
+$disks = @()
 if ($vm.Count -eq 1) {
   $vm = $vm[0]
   if ((Get-Owner ([string]$vm.Notes)) -cne $in.owner) { throw 'The VM was not made by this install.' }
-  $root = ([IO.Path]::GetFullPath($in.vhdxDir)).TrimEnd('\') + '\'
   $disks = @(Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path } | ForEach-Object { [string]$_.Path })
-  $folder = Join-Path $in.vhdxDir $vm.Name
   if ($vm.State.ToString() -ne 'Off') { Stop-VM -VM $vm -TurnOff -Force }
   Remove-VM -VM $vm -Force
-  foreach ($d in $disks) {
-    $full = [IO.Path]::GetFullPath($d)
-    if ($full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue }
-    if (Test-Path -LiteralPath $full) { $left += $full }
-  }
-  if (Test-Path -LiteralPath $folder) {
-    Get-ChildItem -LiteralPath $folder -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending | Where-Object { @(Get-ChildItem -LiteralPath $_.FullName -Force).Count -eq 0 } | Remove-Item -Force -ErrorAction SilentlyContinue
-    if (@(Get-ChildItem -LiteralPath $folder -Force).Count -eq 0) { Remove-Item -LiteralPath $folder -Force -ErrorAction SilentlyContinue }
-  }
 }
+$left = @()
+if ($in.disk) {
+  $path = $in.disk.path
+  if (-not (Test-DiskInUse $path) -and [CpdDisk]::DeleteOwned($path, $in.disk.id)) {
+    $disks = @($disks | Where-Object { $_ -ne $path })
+  } elseif (Test-Path -LiteralPath $path) { $disks += $path }
+}
+$left = @($disks | Select-Object -Unique)
 Write-Doc ([ordered]@{ left = @($left) })
 `
 
@@ -703,20 +724,20 @@ func (b psBuilder) EnsureNAT(ctx context.Context, n Names, sub netip.Prefix) err
 }
 
 // CreateVM creates the VM off, with one disconnected adapter.
-func (b psBuilder) CreateVM(ctx context.Context, p Plan, iso, answerISO string) (string, string, error) {
+func (b psBuilder) CreateVM(ctx context.Context, p Plan, iso, answerISO string) (string, string, OwnedDisk, error) {
 	if err := p.Names.Validate(); err != nil {
-		return "", "", err
+		return "", "", OwnedDisk{}, err
 	}
 	if err := checkOwner(p.Owner); err != nil {
-		return "", "", err
+		return "", "", OwnedDisk{}, err
 	}
 	for what, path := range map[string]string{"VHDX folder": p.VHDXDir, "ISO": iso, "answer ISO": answerISO} {
 		if err := checkWinPath(what, path); err != nil {
-			return "", "", err
+			return "", "", OwnedDisk{}, err
 		}
 	}
 	if _, err := NormalizeMAC(p.GuestMAC); err != nil {
-		return "", "", err
+		return "", "", OwnedDisk{}, err
 	}
 	arg := map[string]any{
 		"vm": p.Names.VM, "owner": p.Owner, "vhdxDir": p.VHDXDir, "memory": p.MemoryBytes, "diskBytes": uint64(guestDiskBytes),
@@ -724,13 +745,17 @@ func (b psBuilder) CreateVM(ctx context.Context, p Plan, iso, answerISO string) 
 		"iso": iso, "answer": answerISO,
 	}
 	var w struct {
-		VMID      string `json:"vmId"`
-		AdapterID string `json:"adapterId"`
+		VMID      string    `json:"vmId"`
+		AdapterID string    `json:"adapterId"`
+		Disk      OwnedDisk `json:"disk"`
 	}
 	if err := b.call(ctx, scriptCreateVM, arg, &w); err != nil {
-		return "", "", err
+		return "", "", OwnedDisk{}, err
 	}
-	return w.VMID, w.AdapterID, nil
+	if err := w.Disk.validate(); err != nil {
+		return "", "", OwnedDisk{}, err
+	}
+	return w.VMID, w.AdapterID, w.Disk, nil
 }
 
 // SetIntegration sets integration services by ID.
@@ -968,21 +993,25 @@ func (b psBuilder) UnregisterGuardTask(ctx context.Context, n Names, owner strin
 	return b.ok(ctx, scriptUnregisterGuardTask, a)
 }
 
-// RemoveVM removes the VM and its disks in vhdxDir.
-func (b psBuilder) RemoveVM(ctx context.Context, vmID, vhdxDir, owner string) ([]string, error) {
-	if err := checkVMID("VM ID", vmID); err != nil {
+// RemoveVM removes the VM and the exact disk setup recorded.
+func (b psBuilder) RemoveVM(ctx context.Context, vmID string, p Plan) ([]string, error) {
+	if vmID != "" {
+		if err := checkVMID("VM ID", vmID); err != nil {
+			return nil, err
+		}
+	}
+	if err := checkOwner(p.Owner); err != nil {
 		return nil, err
 	}
-	if err := checkWinPath("VHDX folder", vhdxDir); err != nil {
-		return nil, err
-	}
-	if err := checkOwner(owner); err != nil {
-		return nil, err
+	if p.Disk != nil {
+		if err := p.Disk.validate(); err != nil {
+			return nil, err
+		}
 	}
 	var w struct {
 		Left []string `json:"left"`
 	}
-	err := b.call(ctx, scriptRemoveVM, map[string]string{"vm": vmID, "vhdxDir": vhdxDir, "owner": owner}, &w)
+	err := b.call(ctx, scriptRemoveVM, map[string]any{"vm": vmID, "owner": p.Owner, "disk": p.Disk}, &w)
 	return w.Left, err
 }
 

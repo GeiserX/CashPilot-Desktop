@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -309,12 +310,14 @@ func TestRemoveDeletesSetupLeftovers(t *testing.T) {
 	made := []string{
 		filepath.Join("answer.iso.stage", "autounattend.xml"), "answer.iso.tmp",
 		"." + winvm.StateFile + ".123456.tmp", "." + winvm.PlanFile + ".42.tmp",
-		filepath.Join("guard", "setup-params.json"), filepath.Join("guard", "."+winvm.StateFile+".7.tmp"),
+		filepath.Join("guard", "setup-params.json"),
 	}
 	for _, rel := range made {
 		write(rel)
 	}
 	write(filepath.Join("guard", "CashPilot-guard.exe")) // remove.ps1 deletes it
+	write(filepath.Join("guard", "."+winvm.StateFile+".7.tmp"))
+	write(filepath.Join("proof", "pktmon-1", "private.txt"))
 	write("notes.txt")
 	res := remove(t, f, dir)
 	for _, rel := range append(made, "answer.iso.stage") {
@@ -323,7 +326,7 @@ func TestRemoveDeletesSetupLeftovers(t *testing.T) {
 		}
 	}
 	left := strings.Join(res.Left, "\n")
-	if !strings.Contains(left, "notes.txt") {
+	if !strings.Contains(left, "notes.txt") || !strings.Contains(left, "private.txt") || !strings.Contains(left, "."+winvm.StateFile+".7.tmp") {
 		t.Errorf("Remove did not list the file it kept: %v", res.Left)
 	}
 	if strings.Contains(left, "CashPilot-guard.exe") {
@@ -386,5 +389,40 @@ func TestRemoveLeavesBothVMsWhenRecoveryIsAmbiguous(t *testing.T) {
 			!strings.Contains(strings.Join(res.Left, "\n"), id) {
 			t.Fatalf("Remove did not keep and list VM %s: %+v", id, res)
 		}
+	}
+}
+
+func TestRemoveListsAndKeepsUnknownTemps(t *testing.T) {
+	for _, withPlan := range []bool{true, false} {
+		t.Run(strconv.FormatBool(withPlan), func(t *testing.T) {
+			f := hvfake.New()
+			dir := t.TempDir()
+			if withPlan {
+				dir = build(t, f)
+			}
+			name := filepath.Join(dir, ".somebody-elses-file.123.tmp")
+			if err := os.WriteFile(name, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			res := remove(t, f, dir)
+			if _, err := os.Stat(name); err != nil {
+				t.Fatalf("unknown temp was removed: %v", err)
+			}
+			if !strings.Contains(strings.Join(res.Left, "\n"), name) {
+				t.Fatalf("unknown temp was not listed: %v", res.Left)
+			}
+		})
+	}
+}
+
+func TestRemoveKeepsAnUnrecordedDiskUnderTheVHDXRoot(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	p := readPlan(t, dir)
+	path := p.VHDXDir + `\foreign.vhdx`
+	f.SetDiskPath(p.VMID, path)
+	res := remove(t, f, dir)
+	if !strings.Contains(strings.Join(res.Left, "\n"), path) {
+		t.Fatalf("Remove did not list the foreign disk it should keep: %+v", res)
 	}
 }
