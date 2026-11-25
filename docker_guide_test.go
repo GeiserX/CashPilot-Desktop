@@ -291,7 +291,7 @@ func TestHostCheckTrustsNoEngineDockerHostNames(t *testing.T) {
 	if got := a2(); got != winvm.StepDone {
 		t.Fatalf("this PC's Docker Desktop answers, but a2 is %s", got)
 	}
-	t.Setenv("DOCKER_HOST", "tcp://192.168.10.100:2375")
+	t.Setenv("DOCKER_HOST", "tcp://203.0.113.10:2375")
 	if got := a2(); got != winvm.StepUnknown {
 		t.Fatalf("an engine DOCKER_HOST names elsewhere answered, but a2 is %s", got)
 	}

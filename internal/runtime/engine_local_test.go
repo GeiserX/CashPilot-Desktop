@@ -14,7 +14,7 @@ func TestLocalDockerDesktop(t *testing.T) {
 		{"", "Desktop-Windows", true},
 		{"npipe:////./pipe/docker_engine", "default", true},
 		{"npipe:////./pipe/dockerDesktopLinuxEngine", "desktop-linux", true},
-		{"tcp://192.168.10.100:2375", "", false},
+		{"tcp://203.0.113.10:2375", "", false},
 		{"ssh://me@nas", "default", false},
 		{"npipe:////nas/pipe/docker_engine", "", false},
 		{"npipe:////./pipe/podman-machine-default", "", false},
