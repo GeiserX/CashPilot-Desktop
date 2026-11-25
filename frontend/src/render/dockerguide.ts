@@ -89,9 +89,9 @@ export function setupFinished(result: Pick<HostCheckResult, "setupFinished">): b
   return result.setupFinished === true;
 }
 
-/** The engine answers: Docker runs, in Linux or in Windows containers mode. */
-export function engineAnswers(runtime: Pick<RuntimeStatus, "available" | "reason">): boolean {
-  return runtime.reason === "running" || runtime.reason === "windows-containers" || (runtime.available && !runtime.reason);
+/** Docker Desktop's own engine answers, in either container mode. */
+export function engineAnswers(steps: GuideStep[] | null): boolean {
+  return steps?.some((step) => step.id === "a6" && step.state === "done") ?? false;
 }
 
 /**
@@ -205,8 +205,8 @@ function resumeBanner(resume: SetupResumeView | null): string {
 }
 
 function summary(model: GuideModel): string {
-  if (model.runtime.reason === "running") {
-    return `<p class="docker-guide-summary ok">Docker is ready. The apps in the catalog can run on this PC.</p>`;
+  if (model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
+    return `<p class="docker-guide-summary ok">Docker Desktop is ready on this PC.</p>`;
   }
   if (!model.steps) {
     return `<p class="docker-guide-summary">Checking this PC…</p>`;

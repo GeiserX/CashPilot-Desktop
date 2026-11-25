@@ -419,3 +419,18 @@ func TestOnlyALocalLinuxEngineProvesTheAdviceRows(t *testing.T) {
 		t.Error("an engine answers with Docker Desktop not seen running here, and it counts")
 	}
 }
+
+func TestDesktopPipeProvesLocalSetupWithAConfiguredEngineElsewhere(t *testing.T) {
+	f := goodPC()
+	f.DockerDesktopRunning = Yes
+	f.desktopEngineReason = runtime.ReasonRunning
+	steps := DockerSteps(f, runtime.ReasonUnreachable, false)
+	for _, id := range []string{"a6", "a7", "a9"} {
+		if step := stepOf(t, steps, id); step.State != StepDone {
+			t.Errorf("%s is %s when the local Docker Desktop engine answers", id, step.State)
+		}
+	}
+	if !LocalLinuxEngine(f, runtime.ReasonUnreachable, false) {
+		t.Fatal("the configured endpoint hid the local Docker Desktop engine")
+	}
+}

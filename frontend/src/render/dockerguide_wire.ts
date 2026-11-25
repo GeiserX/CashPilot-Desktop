@@ -18,7 +18,6 @@ import { runLine } from "./dockersteps.js";
 
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
-  checkRuntime(): Promise<RuntimeStatus>;
   startDocker(): Promise<void>;
   openWindowsUpdate(): Promise<void>;
   restartToFirmware(step: string): Promise<FirmwareRestart>;
@@ -86,17 +85,20 @@ export class DockerGuide {
     this.render();
     try {
       const result = await this.deps.hostCheck();
-      this.model.steps = result.steps ?? [];
-      this.model.runtime = result.runtime;
-      // Go ended the setup on this reading (host_check.go): no "Restart to finish".
-      if (setupFinished(result)) this.model.resume = null;
-      this.deps.checked?.(result);
+      this.applyReading(result);
     } catch (error) {
       this.deps.failed?.(error);
     } finally {
       this.model.checking = false;
       this.render();
     }
+  }
+
+  private applyReading(result: HostCheckResult): void {
+    this.model.steps = result.steps ?? [];
+    this.model.runtime = result.runtime;
+    if (setupFinished(result)) this.model.resume = null;
+    this.deps.checked?.(result);
   }
 
   /**
@@ -128,25 +130,31 @@ export class DockerGuide {
     this.model.waitResult = "";
     this.model.waiting = 0;
     this.render();
-    let up = false;
+    let result: HostCheckResult | null = null;
     while (this.alive && this.model.waiting < START_LIMIT_SECONDS) {
       await sleep(1000);
       this.model.waiting++;
       this.updateWaitLine();
       if (this.model.waiting % POLL_EVERY === 0) {
         try {
-          if (engineAnswers(await this.deps.checkRuntime())) {
-            up = true;
-            break;
-          }
+          const started = Date.now();
+          result = await this.deps.hostCheck();
+          this.model.waiting += Math.floor((Date.now() - started) / 1000);
+          if (engineAnswers(result.steps)) break;
         } catch {
           // A failed ask is one missed poll; the next one tries again.
         }
       }
     }
     this.model.waiting = null;
-    this.model.waitResult = up ? "ready" : "timeout";
-    await this.check();
+    if (!this.alive) return;
+    this.model.waitResult = result && engineAnswers(result.steps) ? "ready" : "timeout";
+    if (result) {
+      this.applyReading(result);
+      this.render();
+    } else {
+      await this.check();
+    }
   }
 
   private sleeper(): (ms: number) => Promise<void> {

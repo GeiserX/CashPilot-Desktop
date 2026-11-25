@@ -116,6 +116,38 @@ func TestRemoteEngineKeepsLocalDockerSetupInAlerts(t *testing.T) {
 	}
 }
 
+func TestRemoteEngineCannotHideStoppedDockerDesktop(t *testing.T) {
+	app := gateApp(t, &engineProvider{status: runtime.Status{Available: true, Reason: runtime.ReasonRunning}})
+	t.Setenv("DOCKER_HOST", "tcp://192.0.2.1:2375")
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{
+			OS: "windows", Supported: true, Build: 26100, Virtualization: winvm.Yes,
+			WSL: winvm.WSLReady, WSLVersion: "2.3.0", VMPlatformFeature: winvm.Yes,
+			DockerDesktopInstalled: winvm.Yes, DockerDesktopRunning: winvm.No, DockerDesktopStarted: winvm.No,
+		}
+	}}
+	res, err := app.HostCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := make(map[string]string)
+	for _, step := range res.Steps {
+		rows[step.ID] = step.State
+	}
+	if rows["a6"] != winvm.StepNeedsYou || rows["a7"] != winvm.StepNeedsYou || rows["a9"] != winvm.StepBlocked {
+		t.Errorf("running, terms and Linux containers rows = %q, %q, %q", rows["a6"], rows["a7"], rows["a9"])
+	}
+	if !res.Runtime.Available || res.SetupFinished || !strings.Contains(res.Runtime.SetupTask, "Docker Desktop is not running") {
+		t.Errorf("remote engine availability or local setup is wrong: %+v", res)
+	}
+	if res.RuntimeNotice == nil || !strings.Contains(res.RuntimeNotice.Message, "Docker Desktop is not running") {
+		t.Errorf("Alerts omit the stopped desktop: %+v", res.RuntimeNotice)
+	}
+	if _, err := app.DeployService("earnfm", map[string]string{"EARNFM_TOKEN": "token"}, nil, nil); err != nil {
+		t.Fatalf("working remote engine should still deploy: %v", err)
+	}
+}
+
 // CheckRuntime runs after every deploy, stop, restart and remove (refreshState),
 // so it must answer from the cache and never start a host reading of its own.
 func TestCheckRuntimeNeverReadsTheHost(t *testing.T) {

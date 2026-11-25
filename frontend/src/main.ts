@@ -21,7 +21,6 @@ import {
   ApplyImport,
   PreviewImport,
   RemoveBackgroundHelper,
-  CheckRuntime,
   ChooseRestoreFile,
   CollectService,
   CompleteOnboarding,
@@ -289,7 +288,6 @@ async function hostCheck() {
 function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked"> & Partial<Pick<DockerGuideDeps, "hostCheck">>): DockerGuideDeps {
   return {
     hostCheck,
-    checkRuntime: CheckRuntime,
     startDocker: StartDockerDesktop,
     openWindowsUpdate: OpenWindowsUpdate,
     restartToFirmware: RestartToFirmware,
