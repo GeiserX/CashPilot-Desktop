@@ -146,7 +146,25 @@ type workerFirewallState struct {
 	generation uint64
 	// Only one Allow may run through elevation or rollback at a time, so a stale
 	// Allow cannot remove the rule that a newer Allow just installed.
-	allowing bool
+	allowing          bool
+	leftWhileAllowing bool
+}
+
+type serverCommandsRule struct {
+	name    string
+	program string
+}
+
+func (a *App) savedServerCommandsRule() serverCommandsRule {
+	cfg := a.cfg.Config()
+	return serverCommandsRule{strings.TrimSpace(cfg.ServerCommandsFirewallRule), cfg.ServerCommandsFirewallProgram}
+}
+
+func (a *App) saveServerCommandsRule(rule serverCommandsRule) error {
+	return a.cfg.Update(func(c *config.AppConfig) {
+		c.ServerCommandsFirewallRule = rule.name
+		c.ServerCommandsFirewallProgram = rule.program
+	})
 }
 
 // AllowServerCommandsThroughFirewall makes the rule, after the user pressed the button
@@ -172,8 +190,19 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 		firewall.mu.Unlock()
 		return a.serverCommandsState(), errors.New("a firewall rule request is already in progress")
 	}
+	previous := a.savedServerCommandsRule()
+	// The replacement and the old rule share an ID. Retire its saved path
+	// before changing Windows so rollback can delete the rule even if config
+	// writes fail after the change.
+	if previous != (serverCommandsRule{}) {
+		if err := a.saveServerCommandsRule(serverCommandsRule{}); err != nil {
+			firewall.mu.Unlock()
+			return a.serverCommandsState(), fmt.Errorf("could not clear the previous firewall record: %w", err)
+		}
+	}
 	generation := firewall.generation
 	firewall.allowing = true
+	firewall.leftWhileAllowing = false
 	firewall.mu.Unlock()
 	defer func() {
 		firewall.mu.Lock()
@@ -181,11 +210,9 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 		firewall.mu.Unlock()
 	}()
 
-	name := serverCommandsRuleName()
-	if err := runFirewallScript(addRuleScript(name, program)); err != nil {
-		return a.serverCommandsState(), fmt.Errorf("the firewall rule was not made: %w", err)
-	}
-	if err := a.finishServerCommandsAllow(generation, name, program); err != nil {
+	rule := serverCommandsRule{serverCommandsRuleName(), program}
+	addErr := runFirewallScript(addRuleScript(rule.name, rule.program))
+	if err := a.finishServerCommandsAllow(generation, previous, rule, addErr); err != nil {
 		return a.serverCommandsState(), err
 	}
 	// Tell the server about the listener without waiting for the next heartbeat.
@@ -195,46 +222,62 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	return a.serverCommandsState(), nil
 }
 
-func (a *App) finishServerCommandsAllow(generation uint64, name, program string) error {
+func (a *App) finishServerCommandsAllow(generation uint64, previous, rule serverCommandsRule, addErr error) error {
 	firewall := &a.workerFirewall
 	firewall.mu.Lock()
-	if generation != firewall.generation || !a.joined() {
-		firewall.mu.Unlock()
-		if err := runFirewallScript(removeRuleScript()); err != nil {
-			return fmt.Errorf("the pairing changed and the firewall rule %q could not be removed: %w", name, err)
+	var rollbackErr error
+	switch {
+	case addErr != nil:
+		rollbackErr = fmt.Errorf("the firewall rule was not made: %w", addErr)
+		if previous.name == "" || !firewall.leftWhileAllowing {
+			if previous.name != "" {
+				rollbackErr = errors.Join(rollbackErr, a.restoreServerCommandsRule(previous))
+			}
+			firewall.mu.Unlock()
+			return rollbackErr
 		}
-		return errors.New("the pairing changed before the firewall rule was ready. Allow the rule again while joined")
-	}
-	if err := a.cfg.Update(func(c *config.AppConfig) {
-		c.ServerCommandsFirewallRule = name
-		c.ServerCommandsFirewallProgram = program
-	}); err != nil {
-		firewall.mu.Unlock()
-		saveErr := fmt.Errorf("could not save the firewall rule: %w", err)
-		// Leave cannot clean up a rule whose name was never recorded.
-		if err := runFirewallScript(removeRuleScript()); err != nil {
-			return fmt.Errorf("%w. The firewall rule %q could not be removed: %w", saveErr, name, err)
+		// Leave deferred removal to this request. Windows still has the old rule.
+		rule = previous
+	case generation != firewall.generation || !a.joined():
+		rollbackErr = errors.New("the pairing changed before the firewall rule was ready. Allow the rule again while joined")
+	default:
+		if err := a.saveServerCommandsRule(rule); err != nil {
+			rollbackErr = fmt.Errorf("could not save the firewall rule: %w", err)
+		} else {
+			a.syncWorkerAPI()
+			firewall.mu.Unlock()
+			return nil
 		}
-		return saveErr
 	}
-	a.syncWorkerAPI()
 	firewall.mu.Unlock()
+	return errors.Join(rollbackErr, a.deleteUnrecordedServerCommandsRule(rule))
+}
+
+// removeServerCommandsRule removes the rule CashPilot made. The caller holds
+// workerFirewall.mu. An in-flight Allow owns cleanup of the rule it is replacing.
+func (a *App) removeServerCommandsRule() error {
+	rule := a.savedServerCommandsRule()
+	if rule.name == "" {
+		a.workerFirewall.leftWhileAllowing = a.workerFirewall.allowing
+		return nil
+	}
+	if err := a.saveServerCommandsRule(serverCommandsRule{}); err != nil {
+		return fmt.Errorf("could not clear the record for firewall rule %q: %w", rule.name, err)
+	}
+	return a.deleteUnrecordedServerCommandsRule(rule)
+}
+
+// deleteUnrecordedServerCommandsRule restores the record if Windows keeps the rule.
+func (a *App) deleteUnrecordedServerCommandsRule(rule serverCommandsRule) error {
+	if err := runFirewallScript(removeRuleScript()); err != nil {
+		return errors.Join(fmt.Errorf("the firewall rule %q could not be removed: %w", rule.name, err), a.restoreServerCommandsRule(rule))
+	}
 	return nil
 }
 
-// removeServerCommandsRule removes the rule CashPilot made, if any. A failure keeps
-// the rule's name saved and is reported to the user, who can delete it by that name.
-// The caller holds workerFirewall.mu.
-func (a *App) removeServerCommandsRule() error {
-	name := strings.TrimSpace(a.cfg.Config().ServerCommandsFirewallRule)
-	if name == "" {
-		return nil
+func (a *App) restoreServerCommandsRule(rule serverCommandsRule) error {
+	if err := a.saveServerCommandsRule(rule); err != nil {
+		return fmt.Errorf("could not record the installed firewall rule %q: %w", rule.name, err)
 	}
-	if err := runFirewallScript(removeRuleScript()); err != nil {
-		return fmt.Errorf("the firewall rule %q was not removed: %w", name, err)
-	}
-	return a.cfg.Update(func(c *config.AppConfig) {
-		c.ServerCommandsFirewallRule = ""
-		c.ServerCommandsFirewallProgram = ""
-	})
+	return nil
 }

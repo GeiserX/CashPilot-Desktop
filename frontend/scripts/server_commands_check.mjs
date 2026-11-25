@@ -15,6 +15,9 @@
 //
 //   node scripts/server_commands_check.mjs      # against ./.harness-build
 
+import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
+import { build } from "vite";
 import { lastCommandLine, renderServerCommands } from "../.harness-build/render/server_commands.js";
 
 import { wireServerCommandsFirewall } from "../.harness-build/render/server_commands_wire.js";
@@ -121,6 +124,65 @@ for (const leavePath of ["Leave button", "clear address"]) {
       notices.length === 1 && notices[0].page === pageAfterLeave && notices[0].message.includes(rule),
       `notices: ${JSON.stringify(notices)}, Dashboard output: ${JSON.stringify(output)}`);
   }
+}
+
+// 7. Boot the real Dashboard so the check covers how it wires the notice.
+{
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const { output } = await build({
+    root,
+    logLevel: "silent",
+    build: {
+      write: false,
+      minify: false,
+      rolldownOptions: {
+        input: fileURLToPath(new URL("../src/main.ts", import.meta.url)),
+        output: { format: "iife" },
+      },
+    },
+  });
+  const app = { innerHTML: "" };
+  const pageOutput = { textContent: "" };
+  const button = new EventTarget();
+  const toasts = [];
+  let toastStack;
+  const document = {
+    querySelector(selector) {
+      if (selector === "#app") return app;
+      if (selector === "#toast-stack") return toastStack;
+      if (selector === "#service-output" && app.innerHTML.includes('id="service-output"')) return pageOutput;
+      if (selector === "[data-server-commands-firewall]" && app.innerHTML.includes("data-server-commands-firewall")) return button;
+      return null;
+    },
+    querySelectorAll: () => [],
+    createElement: () => ({ style: {}, appendChild: (toast) => toasts.push(toast.innerHTML) }),
+    head: { appendChild: () => {} },
+    body: { appendChild: (stack) => { toastStack = stack; } },
+  };
+  const error = "Windows could not remove the firewall rule";
+  runInNewContext(output.find((file) => file.type === "chunk").code, {
+    document,
+    navigator: { userAgent: "Windows" },
+    setTimeout: () => {},
+    window: {
+      runtime: { EventsOnMultiple: () => {} },
+      go: { main: { App: {
+        GetAppState: async () => ({
+          config: { firstRunComplete: true },
+          runtime: { available: true },
+          serverCommands: { ...base, firewallNeeded: true },
+        }),
+        SetupResume: async () => null,
+        AllowServerCommandsThroughFirewall: async () => { throw error; },
+      } } },
+    },
+  });
+  await new Promise(setImmediate);
+  button.dispatchEvent(new Event("click"));
+  await new Promise(setImmediate);
+  check("the Dashboard shows a firewall error in the toast stack",
+    toasts.length === 1 && text(toasts[0]).includes(error) && !pageOutput.textContent.includes(error),
+    `toasts: ${JSON.stringify(toasts)}, Dashboard output: ${pageOutput.textContent}`);
 }
 
 if (failures) {

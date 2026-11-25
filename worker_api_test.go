@@ -149,6 +149,51 @@ func TestServerCommandsTakeOnlyThisComputersOwnKey(t *testing.T) {
 	}
 }
 
+func TestServerCommandsUseTheKeySavedByARejoin(t *testing.T) {
+	useAddrs(t)
+	helper := joinedApp(t)
+	const newKey = "new-key-issued-at-rejoin"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "worker_id": 2, "worker_key": newKey})
+	}))
+	t.Cleanup(server.Close)
+	if err := helper.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = server.URL }); err != nil {
+		t.Fatal(err)
+	}
+	windowConfig, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := &App{cfg: windowConfig, store: helper.store, catalog: helper.catalog, runtime: helper.runtime, services: helper.services}
+	if w := call(t, helper, http.MethodGet, "/api/status", testWorkerKey, nil); w.Code != http.StatusOK {
+		t.Fatalf("status before rejoin: got %d, want 200", w.Code)
+	}
+	if _, err := window.SwitchToLead(); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := window.JoinCashPilot(JoinRequest{URL: server.URL, Key: testSharedKey}); err != nil || !result.OK {
+		t.Fatalf("rejoin: %+v, %v", result, err)
+	}
+
+	for _, tc := range []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodGet, "/api/status", nil},
+		{http.MethodPost, "/api/containers/honeygain/deploy", honeygainSpec(t, helper)},
+	} {
+		if w := call(t, helper, tc.method, tc.path, testWorkerKey, tc.body); w.Code != http.StatusUnauthorized {
+			t.Errorf("%s with the previous key: got %d, want 401", tc.path, w.Code)
+		}
+	}
+	if w := call(t, helper, http.MethodGet, "/api/status", newKey, nil); w.Code != http.StatusOK {
+		t.Errorf("status with the current key: got %d, want 200", w.Code)
+	}
+	if w := call(t, helper, http.MethodPost, "/api/containers/honeygain/deploy", newKey, honeygainSpec(t, helper)); w.Code != http.StatusOK {
+		t.Errorf("deploy with the current key: got %d, want 200", w.Code)
+	}
+}
+
 func TestServerCommandsRefuseAPublicSource(t *testing.T) {
 	app := joinedApp(t)
 	for _, peer := range []string{"203.0.113.5:4000", "[2001:db8::1]:4000", "[::ffff:8.8.8.8]:4000"} {
@@ -170,7 +215,6 @@ func TestServerCommandsRefuseAPublicSource(t *testing.T) {
 
 func TestServerCommandsWithoutAnIssuedKeyFailClosed(t *testing.T) {
 	app := joinedApp(t)
-	app.upstream.workerKey = ""
 	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -631,6 +675,7 @@ func TestServerCommandsNeedTheRuleForThisProgram(t *testing.T) {
 		t.Fatalf("%d listeners with the rule for this program, want 1", n)
 	}
 
+	previousProgram := program
 	program = `C:\Users\someone\Desktop\CashPilot.exe`
 	app.syncWorkerAPI()
 	if n := listening(app); n != 0 {
@@ -638,6 +683,20 @@ func TestServerCommandsNeedTheRuleForThisProgram(t *testing.T) {
 	}
 	if state := app.serverCommandsState(); state.FirewallRule || state.Listening {
 		t.Fatalf("the card counts a rule for another path: %+v", state)
+	}
+
+	add := runFirewallScript
+	runFirewallScript = func(string) error { return errors.New("administrator declined replacement") }
+	if _, err := app.AllowServerCommandsThroughFirewall(); err == nil {
+		t.Fatal("Allow succeeded after Windows declined the replacement")
+	}
+	runFirewallScript = add
+	saved, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg := saved.Config(); cfg.ServerCommandsFirewallRule != serverCommandsRuleName() || cfg.ServerCommandsFirewallProgram != previousProgram {
+		t.Errorf("declined replacement left rule %q for %q, want the old rule for %q", cfg.ServerCommandsFirewallRule, cfg.ServerCommandsFirewallProgram, previousProgram)
 	}
 
 	asked := len(f.asked)
@@ -776,28 +835,40 @@ func TestPairingChangesRollBackAnInFlightFirewallAllow(t *testing.T) {
 		change     func(*App) error
 		wantJoined bool
 		wantCancel bool
+		replace    bool
 	}{
-		{"Leave button", leave, false, true},
-		{"clear address", clear, false, true},
-		{"Leave button and rejoin", rejoin(leave), true, true},
-		{"clear address and rejoin", rejoin(clear), true, true},
-		{"replace address and key", save(map[string]string{"upstreamUrl": "http://127.0.0.1:2", "upstreamKey": "other-test-key"}), true, true},
-		{"replace address only", repoint, true, true},
-		{"replace and restore address", rejoin(repoint), true, true},
-		{"replace key only", save(map[string]string{"upstreamKey": "other-test-key"}), true, true},
-		{"remove key only", save(map[string]string{"upstreamKey": ""}), true, true},
-		{"save the same key", save(map[string]string{"upstreamKey": testSharedKey}), true, false},
-		{"save unrelated settings", save(map[string]string{"timezone": "Europe/Madrid"}), true, false},
+		{"Leave button", leave, false, true, false},
+		{"clear address", clear, false, true, false},
+		{"Leave button and rejoin", rejoin(leave), true, true, false},
+		{"clear address and rejoin", rejoin(clear), true, true, false},
+		{"replace address and key", save(map[string]string{"upstreamUrl": "http://127.0.0.1:2", "upstreamKey": "other-test-key"}), true, true, false},
+		{"replace address only", repoint, true, true, false},
+		{"replace and restore address", rejoin(repoint), true, true, false},
+		{"replace key only", save(map[string]string{"upstreamKey": "other-test-key"}), true, true, false},
+		{"remove key only", save(map[string]string{"upstreamKey": ""}), true, true, false},
+		{"save the same key", save(map[string]string{"upstreamKey": testSharedKey}), true, false, false},
+		{"save unrelated settings", save(map[string]string{"timezone": "Europe/Madrid"}), true, false, false},
+		{"replace address while replacing the rule", repoint, true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useAddrs(t)
 			app := joinedApp(t)
 			app.ctx = nil // This test changes the saved pairing without sending heartbeats.
-			oldNeeded, oldRun := firewallRuleNeeded, runFirewallScript
-			t.Cleanup(func() { firewallRuleNeeded, runFirewallScript = oldNeeded, oldRun })
+			oldNeeded, oldRun, oldProgram := firewallRuleNeeded, runFirewallScript, thisProgram
+			t.Cleanup(func() { firewallRuleNeeded, runFirewallScript, thisProgram = oldNeeded, oldRun, oldProgram })
 			firewallRuleNeeded = true
 
 			var installed atomic.Bool
+			const previousProgram = `C:\Old\CashPilot.exe`
+			if tc.replace {
+				installed.Store(true)
+				if err := app.cfg.Update(func(c *config.AppConfig) {
+					c.ServerCommandsFirewallRule = serverCommandsRuleName()
+					c.ServerCommandsFirewallProgram = previousProgram
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			adding, resume := make(chan struct{}), make(chan struct{})
 			release := sync.OnceFunc(func() { close(resume) })
 			runFirewallScript = func(script string) error {
@@ -848,7 +919,18 @@ func TestPairingChangesRollBackAnInFlightFirewallAllow(t *testing.T) {
 			if installed.Load() == tc.wantCancel {
 				t.Errorf("rule installed: %v, want %v", installed.Load(), !tc.wantCancel)
 			}
-			cfg := app.cfg.Config()
+			calls.Wait()
+			if tc.replace {
+				thisProgram = func() (string, error) { return previousProgram, nil }
+				if app.firewallReady() {
+					t.Error("the old executable is firewall-ready after the rule was removed")
+				}
+			}
+			saved, err := config.NewManager()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg := saved.Config()
 			if (cfg.ServerCommandsFirewallRule != "") == tc.wantCancel || (cfg.ServerCommandsFirewallProgram != "") == tc.wantCancel {
 				t.Errorf("rule fields after Allow: %q, %q, want recorded %v", cfg.ServerCommandsFirewallRule, cfg.ServerCommandsFirewallProgram, !tc.wantCancel)
 			}
@@ -860,9 +942,11 @@ func TestFirewallAllowRollsBackWhenConfigSaveFails(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		decline bool
+		replace bool
 	}{
-		{"remove the rule", false},
-		{"name the rule when removal is declined", true},
+		{"remove the rule", false, false},
+		{"name the rule when removal is declined", true, false},
+		{"remove the replacement rule", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useAddrs(t)
@@ -875,7 +959,15 @@ func TestFirewallAllowRollsBackWhenConfigSaveFails(t *testing.T) {
 			// A directory at the config path makes the atomic save fail on every OS.
 			configPath := filepath.Join(app.cfg.AppDir(), "config.json")
 			savedPath := configPath + ".saved"
-			installed, removals := false, 0
+			installed, removals := tc.replace, 0
+			if tc.replace {
+				if err := app.cfg.Update(func(c *config.AppConfig) {
+					c.ServerCommandsFirewallRule = serverCommandsRuleName()
+					c.ServerCommandsFirewallProgram = `C:\Old\CashPilot.exe`
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			runFirewallScript = func(script string) error {
 				if strings.Contains(script, "New-NetFirewallRule") {
 					if err := os.Rename(configPath, savedPath); err != nil {

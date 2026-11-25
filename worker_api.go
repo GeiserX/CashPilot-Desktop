@@ -74,9 +74,6 @@ type workerAPIState struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	limiter *fleetRateLimiter
-	// keyReadAt limits how often a key that does not match makes the API read the
-	// saved key again, so a stream of wrong keys cannot hammer the keychain.
-	keyReadAt time.Time
 }
 
 // ServerCommand is the last command the server sent, for the dashboard.
@@ -287,13 +284,11 @@ func (a *App) otherProcessServes(ip netip.Addr) bool {
 	return subtle.ConstantTimeCompare([]byte(body.ID), []byte(want)) == 1
 }
 
-// currentWorkerKey is the key the server issued to this computer, "" when none.
+// currentWorkerKey reads the saved key. The window can replace it while the
+// helper is still running, even if the server address stays the same.
 func (a *App) currentWorkerKey() string {
-	a.upstream.mu.Lock()
-	key := a.upstream.workerKey
-	a.upstream.mu.Unlock()
-	if strings.TrimSpace(key) != "" || a.cfg == nil {
-		return strings.TrimSpace(key)
+	if a.cfg == nil {
+		return ""
 	}
 	saved, err := config.UpstreamWorkerKey(a.cfg.AppDir())
 	if err != nil {
@@ -404,34 +399,13 @@ func (a *App) guard(next http.HandlerFunc) http.HandlerFunc {
 			detail(w, http.StatusServiceUnavailable, "This computer has no key from your CashPilot yet")
 			return
 		}
-		auth := r.Header.Get("Authorization")
-		if !keyMatches(auth, key) && !a.keyMatchesSaved(auth) {
+		if !keyMatches(r.Header.Get("Authorization"), key) {
 			detail(w, http.StatusUnauthorized, "Invalid API key")
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, workerAPIBodyLimit)
 		next(w, r)
 	}
-}
-
-// keyMatchesSaved reads the saved key again, at most every 10 seconds, for the case
-// where the other process got a new key from the server since this one read it.
-func (a *App) keyMatchesSaved(auth string) bool {
-	a.workerAPI.mu.Lock()
-	if time.Since(a.workerAPI.keyReadAt) < 10*time.Second {
-		a.workerAPI.mu.Unlock()
-		return false
-	}
-	a.workerAPI.keyReadAt = time.Now()
-	a.workerAPI.mu.Unlock()
-	saved, err := config.UpstreamWorkerKey(a.cfg.AppDir())
-	if err != nil || !keyMatches(auth, saved) {
-		return false
-	}
-	a.upstream.mu.Lock()
-	a.upstream.workerKey = strings.TrimSpace(saved)
-	a.upstream.mu.Unlock()
-	return true
 }
 
 func (a *App) handleWorkerHealth(w http.ResponseWriter, r *http.Request) {
