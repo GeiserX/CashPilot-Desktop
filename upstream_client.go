@@ -40,6 +40,13 @@ import (
 
 // upstreamState is the pairing loop's stop handle plus the cached credential.
 type upstreamState struct {
+	// run serialises startUpstream and stopUpstream, so the config sync and a
+	// join or a Settings save that restart the loop at the same moment cannot
+	// leave two loops running.
+	run sync.Mutex
+	// linkURL is the address startUpstream last ran for ("" when it found none),
+	// so syncConfig can tell when the saved address moved under it.
+	linkURL   string
 	mu        sync.Mutex
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -94,10 +101,15 @@ func (a *App) recordPairing(serverURL string, failure upstream.Failure) {
 // previous loop first, so changing the URL cannot leave two loops reporting
 // under the same identity.
 func (a *App) startUpstream(ctx context.Context) {
-	a.stopUpstream()
+	a.upstream.run.Lock()
+	defer a.upstream.run.Unlock()
+	a.stopUpstreamLocked()
 
 	cfg := a.cfg.Config()
 	serverURL := strings.TrimSpace(cfg.UpstreamURL)
+	a.upstream.mu.Lock()
+	a.upstream.linkURL = serverURL
+	a.upstream.mu.Unlock()
 	if serverURL == "" {
 		return // standalone — the default
 	}
@@ -146,6 +158,13 @@ func (a *App) startUpstream(ctx context.Context) {
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
+				if !a.linkStillSaved(serverURL) {
+					// The other process (the window or the helper) left or moved
+					// this server. Sending now would keep this computer online on
+					// the server's Fleet page, and a refused key would enrol it
+					// again after the user removed it there.
+					return
+				}
 				a.sendUpstream(loopCtx, client, serverURL, enrol)
 			}
 		}
@@ -154,6 +173,60 @@ func (a *App) startUpstream(ctx context.Context) {
 
 // stopUpstream cancels the pairing loop and waits for it to exit. Idempotent.
 func (a *App) stopUpstream() {
+	a.upstream.run.Lock()
+	defer a.upstream.run.Unlock()
+	a.stopUpstreamLocked()
+}
+
+// linkStillSaved reads the config file again and reports whether it still names
+// serverURL. The window and the helper each run this loop from their own copy
+// of the config, so a join or a switch made in one reaches the other only from
+// the file.
+func (a *App) linkStillSaved(serverURL string) bool {
+	a.refreshConfig()
+	return strings.TrimSpace(a.cfg.Config().UpstreamURL) == serverURL
+}
+
+// configSyncInterval is how often syncConfig looks for a change the other
+// process saved. A var so tests can shorten it.
+var configSyncInterval = time.Minute
+
+// startConfigSync keeps this process in step with a join or a switch saved by
+// the other one: the window and the background helper (--daemon) each run the
+// collection scheduler and the pairing loop from their own copy of the config.
+func (a *App) startConfigSync(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(configSyncInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				a.syncConfig(ctx)
+			}
+		}
+	}()
+}
+
+// syncConfig reads the config file again and, when the saved server address no
+// longer matches the one the pairing loop runs for, starts or stops the loop to
+// match. Collection needs nothing more: collectAll reads the file at each tick.
+func (a *App) syncConfig(ctx context.Context) {
+	if a.cfg == nil || ctx.Err() != nil {
+		return
+	}
+	a.refreshConfig()
+	want := strings.TrimSpace(a.cfg.Config().UpstreamURL)
+	a.upstream.mu.Lock()
+	have := a.upstream.linkURL
+	a.upstream.mu.Unlock()
+	if want != have {
+		a.startUpstream(ctx)
+	}
+}
+
+func (a *App) stopUpstreamLocked() {
 	a.upstream.mu.Lock()
 	cancel, done := a.upstream.cancel, a.upstream.done
 	a.upstream.cancel, a.upstream.done = nil, nil

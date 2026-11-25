@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 )
@@ -396,5 +397,112 @@ func TestModeTypesKeepTheirJSONNames(t *testing.T) {
 		if !strings.Contains(string(raw), `"`+k+`"`) {
 			t.Errorf("ModeState lacks %q: %s", k, raw)
 		}
+	}
+}
+
+// TestTheHelperFollowsAJoinAndALeaveMadeInTheWindow: the background helper
+// (--daemon) runs the collection scheduler and the pairing loop from its own
+// copy of the config. A join made in the window must stop the helper logging in
+// to the provider accounts and start its heartbeats; a leave must stop its
+// heartbeats, so the computer does not stay online on the server, or enrol
+// again after the user removed it there, and start its collection again.
+func TestTheHelperFollowsAJoinAndALeaveMadeInTheWindow(t *testing.T) {
+	window := newPayloadTestApp(t, []store.Deployment{{Slug: "svc-a", Status: "running"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	window.ctx = ctx
+	t.Cleanup(window.stopScheduler)
+	t.Cleanup(window.stopUpstream)
+
+	// A second process on the same config file: its own Manager, read now, while
+	// this computer still runs everything itself.
+	helperCfg, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperFake := newFakeCollector([]string{"svc-a"}, nil)
+	helper := &App{cfg: helperCfg, store: window.store, catalog: window.catalog, collectors: helperFake, ctx: ctx}
+	helper.startUpstream(ctx) // a lead: no loop
+	t.Cleanup(helper.stopUpstream)
+
+	stub := newJoinStub(t, http.StatusOK, `{"status":"ok","worker_id":9,"worker_key":"own"}`)
+	if res, err := window.JoinCashPilot(JoinRequest{URL: stub.URL, Key: "fleet-key"}); err != nil || !res.OK {
+		t.Fatalf("join: %+v %v", res, err)
+	}
+	window.stopUpstream() // only the helper's heartbeats are counted below
+
+	helper.collectAll(ctx)
+	if c := helperFake.counts(); len(c) != 0 {
+		t.Fatalf("the helper logged in to the provider accounts after the window joined: %v", c)
+	}
+
+	before := stub.count()
+	helper.syncConfig(ctx)
+	waitFor(t, "the helper's first heartbeat after the join", func() bool { return stub.count() > before })
+	stub.mu.Lock()
+	token := stub.tokens[len(stub.tokens)-1]
+	stub.mu.Unlock()
+	if token != "own" {
+		t.Fatalf("the helper heartbeat used %q, want the key the server issued at the join", token)
+	}
+
+	if _, err := window.SwitchToLead(); err != nil {
+		t.Fatalf("SwitchToLead: %v", err)
+	}
+	if helper.linkStillSaved(stub.URL) {
+		t.Fatal("the helper's loop still sees the server after the window left it")
+	}
+	// The user removes the computer on the server: its key is refused from now on.
+	stub.set(http.StatusUnauthorized, `{"detail":"Invalid API key"}`)
+	helper.syncConfig(ctx)
+	beats := stub.count()
+	time.Sleep(50 * time.Millisecond)
+	if stub.count() != beats {
+		t.Fatal("the helper kept sending heartbeats after the window left the server")
+	}
+	helper.upstream.mu.Lock()
+	running := helper.upstream.cancel != nil
+	helper.upstream.mu.Unlock()
+	if running {
+		t.Fatal("the helper's pairing loop still runs after the window left the server")
+	}
+
+	helper.collectAll(ctx)
+	if c := helperFake.counts(); c["svc-a"] != 1 {
+		t.Fatalf("the helper did not collect again after the window left: %v", c)
+	}
+}
+
+// TestCollectorErrorsAreHiddenWhileJoined: the collector errors and the
+// "device not on your account" notices come from the last local collection.
+// While joined there is none, so they would stay on screen for good.
+func TestCollectorErrorsAreHiddenWhileJoined(t *testing.T) {
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	devices := &fakeDevices{
+		fakeCollector: newFakeCollector(nil, nil),
+		unlinked:      map[string][]string{"linked": {"dev-1"}},
+	}
+	app := &App{cfg: cfg, catalog: deviceLinkCatalog(t), collectors: devices}
+	earnings := []store.EarningsRecord{{Platform: "honeygain", Error: "login failed"}}
+	deps := []store.Deployment{{Slug: "linked"}}
+	stale := func() (collector, device bool) {
+		for _, it := range app.notifications(runtime.Status{Available: true}, earnings, deps) {
+			collector = collector || strings.HasSuffix(it.Title, " collector")
+			device = device || strings.Contains(it.Title, "not on your account")
+		}
+		return collector, device
+	}
+	if c, d := stale(); !c || !d {
+		t.Fatalf("a lead should see both notices: collector %v device %v", c, d)
+	}
+	if err := cfg.Update(func(c *config.AppConfig) { c.Mode = config.ModeFollower; c.UpstreamURL = "http://192.168.1.10:8080" }); err != nil {
+		t.Fatal(err)
+	}
+	if c, d := stale(); c || d {
+		t.Fatalf("a joined computer still shows notices from before the join: collector %v device %v", c, d)
 	}
 }

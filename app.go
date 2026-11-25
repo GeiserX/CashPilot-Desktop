@@ -286,6 +286,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// Optional, and a no-op unless the user paired this Desktop with a
 	// CashPilot server. Standalone is the default and unaffected.
 	a.startUpstream(ctx)
+	// The window and the background helper each run the steps above from their
+	// own copy of the config: follow a join or a switch the other one saved.
+	a.startConfigSync(ctx)
 	// The LAN fence: put the table back at startup and every few minutes, so a
 	// reboot or a firewall reload leaves the earners offline only briefly, never on
 	// the LAN.
@@ -1728,6 +1731,7 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 	if err := a.ready(); err != nil {
 		return store.EarningsRecord{}, err
 	}
+	a.refreshConfig()
 	if a.joined() {
 		return store.EarningsRecord{}, errJoinedNoCollect
 	}
@@ -1749,6 +1753,7 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 // fetch: a collector failure is already persisted as an error record (surfaced by
 // notifications()), so only store/transport errors are reported here.
 func (a *App) collectOne(ctx context.Context, slug string) {
+	a.refreshConfig()
 	if a.store == nil || a.collectors == nil || a.joined() {
 		return
 	}
@@ -1808,7 +1813,9 @@ func (a *App) collectAll(ctx context.Context) {
 	}
 	// While joined, the CashPilot server logs in to the vendor accounts and this
 	// computer does not, so the two never sign in to the same accounts. The health,
-	// purge and fleet steps below still run.
+	// purge and fleet steps below still run. The file is read first: the join may
+	// have been made in the other process (the window, while this is the helper).
+	a.refreshConfig()
 	if !a.joined() {
 		for _, dep := range a.store.ListDeployments() {
 			add(dep.Slug)
@@ -2051,12 +2058,17 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 			Message: "The provider changed this service's image. Re-deploy it from the catalog so it keeps earning.",
 		})
 	}
-	for _, record := range earnings {
-		if record.Error != "" {
-			items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
+	// Both come from the last local collection. While joined there is none, so
+	// they would stay on screen from before the join, naming errors this computer
+	// will never retry: your CashPilot reports them instead.
+	if !a.joined() {
+		for _, record := range earnings {
+			if record.Error != "" {
+				items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
+			}
 		}
+		items = append(items, a.unlinkedDeviceNotifications(deployments)...)
 	}
-	items = append(items, a.unlinkedDeviceNotifications(deployments)...)
 	items = append(items, a.deviceLinkGaveUpNotifications()...)
 	items = append(items, a.proxyNotifications()...)
 	items = append(items, a.activityNotifications()...)

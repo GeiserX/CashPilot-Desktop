@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -26,6 +27,18 @@ const joinTimeout = 20 * time.Second
 
 // errJoinedNoCollect is what a manual Collect answers while joined.
 var errJoinedNoCollect = errors.New("this computer is joined to your CashPilot, which reads the earnings; this computer does not log in to the provider accounts while joined")
+
+// refreshConfig reads the config file again if the other process (the window
+// or the background helper) saved a change, so a join or a switch made in one
+// holds in both. A file that cannot be read leaves the config as it was.
+func (a *App) refreshConfig() {
+	if a.cfg == nil {
+		return
+	}
+	if _, err := a.cfg.Reload(); err != nil {
+		log.Printf("config: could not read the saved config again: %v", err)
+	}
+}
 
 // joined reports whether this computer runs as a follower of a CashPilot server.
 func (a *App) joined() bool {
