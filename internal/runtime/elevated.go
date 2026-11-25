@@ -196,6 +196,10 @@ func (s SecureVMStub) Build() (string, error) {
 		"$ErrorActionPreference = 'Stop'",
 		"$ProgressPreference = 'SilentlyContinue'",
 		"trap { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+		// A parent PowerShell 7 leaves its own module folders in PSModulePath,
+		// and Windows PowerShell then loads PowerShell 7's Security module and
+		// fails on its type data. Use only Windows PowerShell's own modules.
+		"$env:PSModulePath = $env:ProgramFiles + '\\WindowsPowerShell\\Modules;' + [Environment]::SystemDirectory + '\\WindowsPowerShell\\v1.0\\Modules'",
 		"function Lock-Dir([string]$p) {",
 		"  if (Test-Path -LiteralPath $p) {",
 		"    $i = Get-Item -LiteralPath $p -Force",

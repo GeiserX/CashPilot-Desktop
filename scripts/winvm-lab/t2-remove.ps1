@@ -32,6 +32,8 @@ $dst = Join-Path $guard 'remove.ps1'
 Copy-Item -LiteralPath $src -Destination $dst -Force
 $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
 $ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+# Run Windows PowerShell with only its own modules, even from PowerShell 7.
+$env:PSModulePath = $env:ProgramFiles + '\WindowsPowerShell\Modules;' + [Environment]::SystemDirectory + '\WindowsPowerShell\v1.0\Modules'
 & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName
 $code = $LASTEXITCODE
 'remove exit code: ' + $code
