@@ -1976,6 +1976,28 @@ export namespace main {
 	        this.reopens = source["reopens"];
 	    }
 	}
+	export class FleetReach {
+	    open: boolean;
+	    hubOff: boolean;
+	    thisPcOnly: boolean;
+	    notListening: boolean;
+	    listen: string;
+	    restartPending: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FleetReach(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.open = source["open"];
+	        this.hubOff = source["hubOff"];
+	        this.thisPcOnly = source["thisPcOnly"];
+	        this.notListening = source["notListening"];
+	        this.listen = source["listen"];
+	        this.restartPending = source["restartPending"];
+	    }
+	}
 	export class FleetState {
 	    workers: number;
 	    mobiles: number;
@@ -1984,6 +2006,7 @@ export namespace main {
 	    devices: store.FleetDevice[];
 	    uiUrl: string;
 	    localApiUrl: string;
+	    reach: FleetReach;
 	    apiKey: string;
 	    apiListening: boolean;
 	    workerSnippet: string;
@@ -2002,6 +2025,7 @@ export namespace main {
 	        this.devices = this.convertValues(source["devices"], store.FleetDevice);
 	        this.uiUrl = source["uiUrl"];
 	        this.localApiUrl = source["localApiUrl"];
+	        this.reach = this.convertValues(source["reach"], FleetReach);
 	        this.apiKey = source["apiKey"];
 	        this.apiListening = source["apiListening"];
 	        this.workerSnippet = source["workerSnippet"];
@@ -2811,6 +2835,7 @@ export namespace runtime {
 	    backend: string;
 	    error: string;
 	    outside: string[];
+	    inside: string[];
 	    outsideStopped: string[];
 	    waiting: string[];
 	
@@ -2826,6 +2851,7 @@ export namespace runtime {
 	        this.backend = source["backend"];
 	        this.error = source["error"];
 	        this.outside = source["outside"];
+	        this.inside = source["inside"];
 	        this.outsideStopped = source["outsideStopped"];
 	        this.waiting = source["waiting"];
 	    }

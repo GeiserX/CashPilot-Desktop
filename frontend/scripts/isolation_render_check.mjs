@@ -9,6 +9,8 @@
 //   node scripts/isolation_render_check.mjs      # against ./.harness-build
 
 import { attentionItems, renderAttention } from "../.harness-build/render/attention.js";
+import { renderFenceStatusLine } from "../.harness-build/render/fence_status.js";
+import { renderEnvSetting } from "../.harness-build/render/settings.js";
 
 let failures = 0;
 let checks = 0;
@@ -96,6 +98,40 @@ check("the fence-down row keeps the isolation-off advice for other earners", !!g
 check("the fence-down row says a fence-gated node would not start with isolation off", !!gatedDown?.why.includes("MystNodes runs only behind the fence") && gatedDown.why.includes("would not start it"), gatedDown?.why);
 const plainDown = rows(fence({ mode: "on", state: "failed", error: "x" })).find((i) => i.tag === "Fence down");
 check("with no fence-gated node waiting the fence-down row names none", !!plainDown && !plainDown.why.includes("only behind the fence"), plainDown?.why);
+
+// The fence's state in one line, on the dashboard and beside the setting: the
+// setting, whether the fence is in place now, and how many running earners are
+// behind it.
+const line = (over) => renderFenceStatusLine(fence(over));
+check("no Docker runtime: no line", renderFenceStatusLine(null) === "" && renderFenceStatusLine(undefined) === "");
+const on3 = line({ mode: "on", state: "applied", inside: ["bitping", "earnapp", "honeygain"] });
+check("in place: says so with the setting", on3.includes("setting: auto") && on3.includes("In place: 3 running earners behind it."), on3);
+check("in place: nobody outside, no outside note", !on3.includes("outside it"), on3);
+const on1 = line({ mode: "on", state: "applied", inside: ["earnapp"], outside: ["honeygain"] });
+check("in place with one outside: counts both", on1.includes("1 running earner behind it") && on1.includes("1 running earner is still outside it"), on1);
+const empty = line({ mode: "on", state: "applied", inside: [], outside: [] });
+check("in place, nothing running: says nothing is behind it", empty.includes("In place. No earner runs yet"), empty);
+const noDocker = line({ mode: "", state: "n/a", setting: "auto" });
+check("Docker down: no earner runs, set up on the first deploy", noDocker.includes("No container earner runs now") && noDocker.includes("at the latest on the first deploy"), noDocker);
+const unchecked = line({ mode: "", state: "" });
+check("not checked yet: says when it is checked", unchecked.includes("Not checked yet"), unchecked);
+const fenceDown = line({ mode: "on", state: "failed", error: "x" });
+check("fence down: says deploys are refused", fenceDown.includes("Down:") && fenceDown.includes("refused"), fenceDown);
+const off = line({ mode: "off", setting: "off", state: "n/a" });
+check("off: says earners can reach the LAN", off.includes("setting: off") && off.includes("Off:") && off.includes("can reach your LAN"), off);
+const leg = line({ mode: "legacy", outside: ["honeygain", "repocket"] });
+check("legacy: not in place, counts the exposed earners", leg.includes("Not in place: 2 running earners can reach your LAN"), leg);
+const legNone = line({ mode: "legacy", outside: [] });
+check("legacy with none running: says how to fence the next deploy", legNone.includes("Not in place") && legNone.includes("Set LAN isolation to on"), legNone);
+const pod = line({ mode: "unsupported", state: "unsupported" });
+check("Podman: not fenced", pod.includes("Not fenced"), pod);
+const evil = line({ mode: "on", state: "applied", setting: '<img src=x onerror=1>' });
+check("the setting is escaped", !evil.includes("<img"), evil);
+
+// Settings › LAN isolation: the line sits in the row, as inline content of its label.
+const row = renderEnvSetting({ key: "CASHPILOT_ISOLATION", label: "LAN isolation", value: "auto", source: "Config", help: "auto (default), on or off.", readOnly: false, secret: false }, renderFenceStatusLine(fence({ mode: "on", state: "applied", inside: ["earnapp"] }), "small"));
+check("Settings row: shows the fence now under the help", row.includes("<small class=\"muted compact-copy\" data-fence-status=\"on\">") && row.includes("1 running earner behind it") && row.indexOf("auto (default)") < row.indexOf("LAN fence now"), row);
+check("Settings row: no block element inside the label", !/<label[\s\S]*<p[\s>][\s\S]*<\/label>/.test(row), row);
 
 if (failures) {
   console.error(`\n${failures} of ${checks} isolation checks failed`);
