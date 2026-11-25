@@ -15,6 +15,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 trap { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+Import-Module Microsoft.PowerShell.Utility
 $journal = Open-CPDFileJournal $DataDir
 $nonce = [guid]::NewGuid().ToString('N')
 $exeRel = 'guard\CashPilot-guard.exe'

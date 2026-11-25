@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/windows"
 )
 
 // parseScript runs PowerShell's own parser over a script and prints how many
@@ -27,14 +25,12 @@ foreach ($e in $errs) { [Console]::Error.WriteLine([string]$e.Extent.StartLineNu
 
 func parseErrors(t *testing.T, script string) (int, string) {
 	t.Helper()
-	sys, err := windows.GetSystemDirectory()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd, err := hostPowerShellCommand(ctx, "-EncodedCommand", psEncode(parseScript))
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	cmd := hidden(ctx, filepath.Join(sys, "WindowsPowerShell", "v1.0", "powershell.exe"),
-		"-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(parseScript))
 	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(script)))
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -54,7 +50,7 @@ func parseErrors(t *testing.T, script string) (int, string) {
 // runner has no Hyper-V, so nothing is run. A quoting mistake like the one that
 // made the first lab run report a false green fails here.
 func TestScriptsParse(t *testing.T) {
-	all := map[string]string{"cpuScript": cpuScript, "featureScript": featureScript}
+	all := map[string]string{"cpuScript": cpuScript, "featureScript": featureScript, "hostScriptLauncher": hostScriptLauncher}
 	for name, s := range hvScripts {
 		all[name] = s
 	}

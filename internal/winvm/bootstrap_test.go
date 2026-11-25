@@ -23,15 +23,15 @@ func TestEmbeddedScriptPins(t *testing.T) {
 		want string
 	}{
 		"autounattend.tpl.xml": {[]byte(answerTemplate), "7313f82b46a37e34169b0cab8fec2f39f5e564c42de024e9822024e235de5475"},
-		"setup.ps1":            {setupPS1, "a6e54415bad424eb6c02e62d7854e4e762ead5a13310b84e2dc5571382352960"},
-		"remove.ps1":           {removePS1, "e71a880a409fdf270b62b2d8ef179015a601457212413a25e8872ebb5158f25f"},
+		"setup.ps1":            {setupPS1, "4a78fd10e3166d2901760767dfee813116bbe75203566741bd371ca18b7bf49a"},
+		"remove.ps1":           {removePS1, "86bbff0cdd377b44a88ced46de51ed18190cf927cdd3f747c57ba61764cc2570"},
 	} {
 		s := sha256.Sum256(c.b)
 		if got := hex.EncodeToString(s[:]); got != c.want {
 			t.Errorf("%s changed: sha256 %s, pinned %s", name, got, c.want)
 		}
 	}
-	if b := SetupBootstrap(); b.SHA256 != "6A54AFE44B26D1F44A0F31C1696513C19B2B990FC1D40AD2872ED4BDB3B2DB7C" || b.Name != "setup.ps1" {
+	if b := SetupBootstrap(); b.SHA256 != "A694FF3C19A2E61368B128B206CC7B7BD61F4AAB21BEA0779CE5F9F6C821FD4C" || b.Name != "setup.ps1" {
 		t.Errorf("SetupBootstrap = %s %s", b.Name, b.SHA256)
 	}
 }
@@ -41,6 +41,8 @@ func TestEmbeddedScriptPins(t *testing.T) {
 func TestBootstrapsPreserveGuard(t *testing.T) {
 	const fakeTask = `
 param($Bootstrap, $Dir, $Mode, $Owner)
+$ErrorActionPreference = 'Stop'
+Import-Module Microsoft.PowerShell.Utility
 $env:CPD_TEST_MARKER = Join-Path $Dir 'task-touched'
 $script:stopped = $false
 function Get-ScheduledTask {
@@ -65,7 +67,7 @@ function Start-Process {
 }
 # Simulate file identities for these cross-platform task and rollback tests.
 $known = @{}
-$guardPath = Join-Path $Dir 'guard' 'CashPilot-guard.exe'
+$guardPath = Join-Path (Join-Path $Dir 'guard') 'CashPilot-guard.exe'
 $known[$guardPath] = (Get-FileHash -LiteralPath $guardPath).Hash
 function Open-CPDFileJournal($root) { return $root }
 function Write-CPDFileRecord($root, $rel, $id) {
@@ -153,23 +155,13 @@ exit $LASTEXITCODE
 
 func runFakePowerShell(t *testing.T, script string, args ...string) (int, []byte) {
 	t.Helper()
-	ps := os.Getenv("CPD_TEST_POWERSHELL")
-	if ps == "" {
-		ps, _ = exec.LookPath("powershell.exe")
-	}
-	if ps == "" {
-		ps, _ = exec.LookPath("pwsh")
-	}
-	if ps == "" {
-		t.Skip("PowerShell is unavailable")
-	}
 	path := filepath.Join(t.TempDir(), "fake.ps1")
 	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, ps, append([]string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path}, args...)...)
+	cmd := fakePowerShellCommand(t, ctx, append([]string{"-ExecutionPolicy", "Bypass", "-File", path}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		return 0, out

@@ -7,10 +7,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"golang.org/x/sys/windows"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // NewHost is the real Hyper-V, read and guarded through PowerShell, with the
@@ -42,16 +43,12 @@ func NewProber(n Names) Prober {
 // from stdin to keep its size out of the Windows command line. The argument
 // travels in the environment as base64 JSON.
 func runPowerShell(ctx context.Context, script string, arg []byte) ([]byte, error) {
-	sys, err := windows.GetSystemDirectory()
+	cmd, err := hostPowerShellCommand(ctx, "-EncodedCommand", psEncode(hostScriptLauncher))
 	if err != nil {
 		return nil, err
 	}
-	exe := filepath.Join(sys, "WindowsPowerShell", "v1.0", "powershell.exe")
-	cmd := hidden(ctx, exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(hostScriptLauncher))
 	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(script)))
-	modules := filepath.Join(os.Getenv("ProgramFiles"), "WindowsPowerShell", "Modules") + ";" +
-		filepath.Join(sys, "WindowsPowerShell", "v1.0", "Modules")
-	cmd.Env = append(os.Environ(), hvArg(arg), "PSModulePath="+modules)
+	cmd.Env = append(cmd.Env, hvArg(arg))
 	stdout := &cappedBuffer{max: maxHVRaw}
 	stderr := &cappedBuffer{max: 4 << 10}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -65,4 +62,17 @@ func runPowerShell(ctx context.Context, script string, arg []byte) ([]byte, erro
 		return nil, fmt.Errorf("the script printed more than %d bytes", maxHVRaw)
 	}
 	return decodeOutput(stdout.buf.Bytes())
+}
+
+func hostPowerShellCommand(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	exe, err := runtime.PowerShellExe()
+	if err != nil {
+		return nil, err
+	}
+	cmd := hidden(ctx, exe, append([]string{"-NoProfile", "-NonInteractive"}, args...)...)
+	// A parent pwsh can leave PowerShell 7 modules on the inherited path.
+	modules := filepath.Join(os.Getenv("ProgramFiles"), "WindowsPowerShell", "Modules") + ";" +
+		filepath.Join(filepath.Dir(exe), "Modules")
+	cmd.Env = append(cmd.Environ(), "PSModulePath="+modules)
+	return cmd, nil
 }
