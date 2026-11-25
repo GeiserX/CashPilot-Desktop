@@ -86,7 +86,8 @@ import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
-import { SESSION_DISCLOSURE_VERSION, renderSessionConsentCard, renderSessionSlot } from "./render/session";
+import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
+import { wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
@@ -1854,31 +1855,20 @@ function renderSetupWizard(current: AppState) {
   selectedServices.forEach((service) => void hydratePayouts(service));
 }
 
-// The desktop-app risk disclosure (render/session.ts). The tickbox enables the
-// accept button. Accept and Withdraw record the choice in the config, then redraw
-// only that app's slot and the Settings card, never the whole page, which would drop
-// credentials typed in the other cards but not saved yet.
+// The desktop-app risk disclosure (render/session.ts). The tickbox gate itself is in
+// render/session_wire.ts. Accept and Withdraw record the choice in the config, then
+// redraw only that app's slot and the Settings card, never the whole page, which
+// would drop credentials typed in the other cards but not saved yet.
 function wireSessionConsent(scope: ParentNode) {
-  scope.querySelectorAll<HTMLInputElement>("[data-session-tick]").forEach((tick) => {
-    tick.addEventListener("change", () => {
-      const slug = tick.dataset.sessionTick || "";
-      const button = document.querySelector<HTMLButtonElement>(`[data-session-accept="${CSS.escape(slug)}"]`);
-      if (button) button.disabled = !tick.checked;
-    });
-  });
-  scope.querySelectorAll<HTMLButtonElement>("[data-session-accept]").forEach((button) => {
-    button.addEventListener("click", () => void acceptSessionRisk(button.dataset.sessionAccept || ""));
-  });
-  scope.querySelectorAll<HTMLButtonElement>("[data-session-revoke]").forEach((button) => {
-    button.addEventListener("click", () => void revokeSessionRisk(button.dataset.sessionRevoke || ""));
+  wireSessionConsentGate(scope, {
+    accept: (slug, textVersion) => void acceptSessionRisk(slug, textVersion),
+    revoke: (slug) => void revokeSessionRisk(slug),
   });
 }
 
-async function acceptSessionRisk(slug: string) {
-  // The button is disabled until the tick, but the tick is the consent: check it again.
-  if (!document.querySelector<HTMLInputElement>(`[data-session-tick="${CSS.escape(slug)}"]`)?.checked) return;
+async function acceptSessionRisk(slug: string, textVersion: string) {
   try {
-    applySessionConsents(await AcceptSessionRisk(slug, SESSION_DISCLOSURE_VERSION), slug);
+    applySessionConsents(await AcceptSessionRisk(slug, textVersion), slug);
   } catch (error) {
     showErrorToast({scope: "consent", error: String(error)});
   }

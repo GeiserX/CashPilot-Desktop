@@ -83,9 +83,7 @@ type App struct {
 	// addedDevices is, per slug, the device id the last deploy added to the user's
 	// account through the provider's API, so the deploy output can say so instead of
 	// asking the user to do it. Guarded by addedMu.
-	addedMu sync.Mutex
-	// driftMu serialises IgnoreDrift's read-modify-write of the config.
-	driftMu      sync.Mutex
+	addedMu      sync.Mutex
 	addedDevices map[string]string
 
 	// customPending is true while the custom services could not be loaded into the
@@ -740,18 +738,18 @@ func (a *App) IgnoreDrift(slug string) error {
 	if !ok {
 		return fmt.Errorf("unknown service: %s", slug)
 	}
-	// The map is read, extended and written back whole; two Ignores at once must
-	// not drop one.
-	a.driftMu.Lock()
-	defer a.driftMu.Unlock()
-	cfg := a.cfg.Config()
-	ignored := make(map[string]string, len(cfg.DriftIgnored)+1)
-	for k, v := range cfg.DriftIgnored {
-		ignored[k] = v
-	}
-	ignored[slug] = runtime.ShapeFingerprint(svc)
-	cfg.DriftIgnored = ignored
-	return a.cfg.Save(cfg)
+	// One read-modify-write under the config lock: two Ignores at once must not drop
+	// one, and a field another writer changes meanwhile (a session consent) must not
+	// be put back. The map is copied, because Config() hands out the stored one.
+	fingerprint := runtime.ShapeFingerprint(svc)
+	return a.cfg.Update(func(cfg *config.AppConfig) {
+		ignored := make(map[string]string, len(cfg.DriftIgnored)+1)
+		for k, v := range cfg.DriftIgnored {
+			ignored[k] = v
+		}
+		ignored[slug] = fingerprint
+		cfg.DriftIgnored = ignored
+	})
 }
 
 func (a *App) addedDeviceIDs() map[string]string {
@@ -1376,9 +1374,7 @@ func (a *App) CompleteOnboarding() error {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	cfg := a.cfg.Config()
-	cfg.FirstRunComplete = true
-	return a.cfg.Save(cfg)
+	return a.cfg.Update(func(cfg *config.AppConfig) { cfg.FirstRunComplete = true })
 }
 
 func (a *App) CheckRuntime() (runtime.Status, error) {

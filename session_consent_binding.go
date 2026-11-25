@@ -34,6 +34,9 @@ func (a *App) AcceptSessionRisk(slug, textVersion string) (map[string]config.Ses
 	if !svc.ManualOnly {
 		return nil, fmt.Errorf("%s runs in a container that CashPilot manages, so it has no desktop app to accept", svc.Name)
 	}
+	if offComputer(svc.Platforms) {
+		return nil, fmt.Errorf("%s runs only on a phone or its own hardware, so it has no desktop app to accept", svc.Name)
+	}
 	if err := checkConsentVersion(textVersion); err != nil {
 		return nil, err
 	}
@@ -76,6 +79,25 @@ func (a *App) updateSessionConsent(change func(map[string]config.SessionConsent)
 		out[k] = v
 	}
 	return out, nil
+}
+
+// offComputerPlatforms are the platforms whose app never runs on this computer.
+// The frontend's needsSessionConsent (render/session.ts) asks every manual-only app
+// unless its list is non-empty and holds only these; this is the same rule.
+var offComputerPlatforms = map[string]bool{"android": true, "ios": true, "hardware": true}
+
+// offComputer reports whether a catalog platform list says the app never runs on
+// this computer. An empty list says nothing, so it is false: the gate fails closed.
+func offComputer(platforms []string) bool {
+	if len(platforms) == 0 {
+		return false
+	}
+	for _, p := range platforms {
+		if !offComputerPlatforms[strings.ToLower(strings.TrimSpace(p))] {
+			return false
+		}
+	}
+	return true
 }
 
 func checkConsentVersion(version string) error {

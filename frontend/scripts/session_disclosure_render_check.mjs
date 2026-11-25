@@ -9,15 +9,25 @@
 //      shows the disclosure and no install tip and no setup guide. A consent to the
 //      current text shows the install tip, the guide and a way to withdraw.
 //   3. THE HYPER-V LINE APPEARS ONLY WHEN A SECURE VM EXISTS.
-//   4. ONLY A DESKTOP APP IS ASKED. A phone app, a browser extension, a hardware
-//      hotspot, a container service and a custom service are not.
+//   4. THE GATE FAILS CLOSED. Every manual-only app is asked unless its catalog list
+//      is non-empty and names only phones or hardware. A browser extension, an empty
+//      list and a missing list are asked, because the lists are not reliable. A
+//      container service and a custom service are not asked.
 //   5. THE ISOLATION CARD lists every consent with its date and version, marks one to
 //      an older text, keeps a withdraw button for a service the catalog dropped, and
 //      says so when there is none.
 //   6. CATALOG TEXT IS ESCAPED: a name and a slug land in an innerHTML sink.
+//   7. THE TEXT CANNOT CHANGE WITHOUT A NEW VERSION. The visible text of each variant
+//      is hashed and compared with the hash recorded for its version below.
+//   8. THE SECURE VM VARIANT HAS ITS OWN VERSION. A consent given before the Secure VM
+//      existed does not cover its extra risk; a consent to it covers the plain text.
+//   9. THE WIRING GATES THE ACCEPT (src/render/session_wire.ts), run against the real
+//      markup in a small element tree: the button waits for the tick, a click with no
+//      tick does nothing, and accept sends the version of the variant shown.
 //
 //   node scripts/session_disclosure_render_check.mjs      # against ./.harness-build
 
+import { createHash } from "node:crypto";
 import {
   SESSION_DISCLOSURE_VERSION,
   consentDay,
@@ -26,7 +36,17 @@ import {
   renderSessionConsentCard,
   renderSessionDisclosure,
   renderSessionSlot,
+  sessionDisclosureVersion,
 } from "../.harness-build/render/session.js";
+import { wireSessionConsent } from "../.harness-build/render/session_wire.js";
+
+// The SHA-256 of the visible disclosure text, per version (RULE 7). Add a line when
+// you bump SESSION_DISCLOSURE_VERSION; never change the hash of a version that
+// shipped, because users accepted exactly that text.
+const TEXT_SHA256 = {
+  "2026-11-24": "f4661263a583656da0b79b472478769db19bf187bff8534108dc35da60bf8c12",
+  "2026-11-24+vm": "8fdeabedbab2a4f63b0efe51de97d5c8282fddccca9c96e509fa0ad94a064e86",
+};
 
 let failures = 0;
 let checks = 0;
@@ -112,10 +132,18 @@ check("RULE 4: a manual-only desktop app is asked", needsSessionConsent(wipter))
 check("RULE 4: a Windows-only app is asked", needsSessionConsent(service({ platforms: ["windows"] })));
 check("RULE 4: a Linux-only app is asked", needsSessionConsent(service({ platforms: ["linux"] })));
 check("RULE 4: a phone-only app is not", !needsSessionConsent(service({ platforms: ["ios", "android"] })));
-check("RULE 4: a browser extension is not", !needsSessionConsent(service({ platforms: ["browser-extension"] })));
-check("RULE 4: a hardware hotspot (no platforms) is not", !needsSessionConsent(service({ platforms: [] })));
-check("RULE 4: a missing platform list is not", !needsSessionConsent(service({ platforms: null })));
+check("RULE 4: an Android-only app is not", !needsSessionConsent(service({ platforms: ["android"] })));
+check("RULE 4: a hardware device the catalog marks as hardware is not", !needsSessionConsent(service({ platforms: ["hardware"] })));
+check("RULE 4: the platform names are read in any case", !needsSessionConsent(service({ platforms: ["Android", "iOS"] })));
+// The real catalog: Teneo and UpRock ship a Windows app but list only these.
+check("RULE 4: a browser extension is asked (Teneo's list)", needsSessionConsent(service({ slug: "teneo", platforms: ["browser-extension"] })));
+check("RULE 4: a browser extension with a phone app is asked (UpRock's list)", needsSessionConsent(service({ slug: "uprock", platforms: ["browser-extension", "android"] })));
+check("RULE 4: a phone app with any other platform is asked", needsSessionConsent(service({ platforms: ["android", "windows"] })));
+check("RULE 4: an empty platform list is asked", needsSessionConsent(service({ platforms: [] })));
+check("RULE 4: a missing platform list is asked", needsSessionConsent(service({ platforms: null })) && needsSessionConsent(service({ platforms: undefined })));
+check("RULE 4: an unknown platform is asked", needsSessionConsent(service({ platforms: ["toaster"] })));
 check("RULE 4: a container service is not", !needsSessionConsent(service({ manualOnly: false })));
+check("RULE 4: a container service with no platforms is not", !needsSessionConsent(service({ manualOnly: false, platforms: [] })));
 check("RULE 4: a custom service is not", !needsSessionConsent(service({ custom: true })));
 
 // ---------------------------------------------------------------------------
@@ -154,6 +182,154 @@ for (const [what, html] of [
   check(`RULE 6: a hostile slug in the ${what} cannot leave its attribute`, !html.includes('onfocus="alert'), html);
 }
 check("RULE 6: a hostile version is escaped", !renderSessionConsentCard({ x: { textVersion: "<b>v</b>", acceptedAt: "" } }, []).includes("<b>"));
+
+// ---------------------------------------------------------------------------
+// RULE 7: the text cannot change without a new version.
+// ---------------------------------------------------------------------------
+// Only the words count, so a change of markup or class does not ask everyone again.
+const visibleText = (html) => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+const sha256 = (text) => createHash("sha256").update(text).digest("hex");
+for (const secureVM of [false, true]) {
+  const version = sessionDisclosureVersion(secureVM);
+  const hash = sha256(visibleText(renderSessionDisclosure(wipter, secureVM)));
+  check(
+    `RULE 7: the ${secureVM ? "Secure VM" : "plain"} text matches the hash recorded for version ${version}`,
+    TEXT_SHA256[version] === hash,
+    TEXT_SHA256[version]
+      ? `The disclosure text changed, but SESSION_DISCLOSURE_VERSION did not. Bump it in src/render/session.ts, then add "${version.replace(SESSION_DISCLOSURE_VERSION, "<new version>")}": "${hash}" to TEXT_SHA256 here.`
+      : `No hash is recorded for version ${version}. Add "${version}": "${hash}" to TEXT_SHA256 here.`,
+  );
+}
+check("CONTROL: the hash sees a one-word change", sha256(visibleText(renderSessionDisclosure(wipter).replace("hostile", "unfriendly"))) !== sha256(visibleText(renderSessionDisclosure(wipter))));
+check("CONTROL: the hash ignores markup", sha256(visibleText(renderSessionDisclosure(wipter).replace('class="session-risk"', 'class="other"'))) === sha256(visibleText(renderSessionDisclosure(wipter))));
+const recorded = Object.values(TEXT_SHA256);
+check("RULE 7: no two versions record the same text", new Set(recorded).size === recorded.length, JSON.stringify(TEXT_SHA256));
+
+// ---------------------------------------------------------------------------
+// RULE 8: the Secure VM variant has its own version.
+// ---------------------------------------------------------------------------
+const vmVersion = sessionDisclosureVersion(true);
+const atVM = { textVersion: vmVersion, acceptedAt: current.acceptedAt };
+check("RULE 8: the plain version is the text version", sessionDisclosureVersion(false) === SESSION_DISCLOSURE_VERSION && sessionDisclosureVersion() === SESSION_DISCLOSURE_VERSION);
+check("RULE 8: the Secure VM version differs from the plain one", vmVersion !== SESSION_DISCLOSURE_VERSION && vmVersion.startsWith(SESSION_DISCLOSURE_VERSION), vmVersion);
+check("RULE 8: a plain consent does not cover the Secure VM text", !consentIsCurrent(current, true));
+check("RULE 8: so the slot asks again once a Secure VM exists", renderSessionSlot(wipter, current, true).includes('data-session-disclosure="wipter"') && !renderSessionSlot(wipter, current, true).includes("Install this provider's native app"));
+check("RULE 8: a Secure VM consent covers the Secure VM text", consentIsCurrent(atVM, true) && !renderSessionSlot(wipter, atVM, true).includes("data-session-disclosure"));
+check("RULE 8: a Secure VM consent covers the plain text too", consentIsCurrent(atVM, false) && consentIsCurrent(atVM));
+check("RULE 8: a Secure VM consent to an older text does not count", !consentIsCurrent({ textVersion: "2020-01-01+vm", acceptedAt: current.acceptedAt }, true));
+check("RULE 8: the Isolation card marks a plain consent once a Secure VM exists", renderSessionConsentCard({ wipter: current }, catalog, true).includes("text changed"));
+check("RULE 8: and not before", !renderSessionConsentCard({ wipter: current }, catalog).includes("text changed"));
+check("RULE 8: the plain accept button carries the plain version", acceptOf(text)?.[0].includes(`data-session-version="${SESSION_DISCLOSURE_VERSION}"`), acceptOf(text)?.[0]);
+check("RULE 8: the Secure VM accept button carries its version", acceptOf(withVM)?.[0].includes(`data-session-version="${vmVersion}"`), acceptOf(withVM)?.[0]);
+
+// ---------------------------------------------------------------------------
+// RULE 9: the wiring gates the accept, on the real markup.
+// ---------------------------------------------------------------------------
+// A small element tree built from the rendered HTML: enough of the DOM for
+// session_wire.ts (attribute selectors, closest, dataset, listeners).
+const VOID = new Set(["input", "br", "img", "hr", "meta", "link"]);
+function parse(html) {
+  const root = element("root", {});
+  let at = root;
+  for (const [, close, tag, rest] of html.matchAll(/<(\/?)([a-zA-Z][\w-]*)([^>]*)>/g)) {
+    if (close) {
+      at = at.parent || root;
+      continue;
+    }
+    const attrs = {};
+    for (const [, name, value] of rest.matchAll(/([\w-]+)(?:="([^"]*)")?/g)) attrs[name] = value ?? "";
+    const child = element(tag.toLowerCase(), attrs);
+    child.parent = at;
+    at.children.push(child);
+    if (!VOID.has(child.tag)) at = child;
+  }
+  return root;
+}
+function element(tag, attrs) {
+  const dataset = {};
+  for (const [name, value] of Object.entries(attrs)) {
+    if (name.startsWith("data-")) dataset[name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = value;
+  }
+  const el = {
+    tag, attrs, dataset, children: [], parent: null, listeners: {},
+    checked: "checked" in attrs, disabled: "disabled" in attrs,
+    matches(selector) {
+      const m = selector.match(/^\[([\w-]+)(?:="([^"]*)")?\]$/);
+      if (!m) throw new Error(`the test DOM does not support the selector ${selector}`);
+      return m[1] in attrs && (m[2] === undefined || attrs[m[1]] === m[2]);
+    },
+    querySelectorAll(selector) {
+      const out = [];
+      const walk = (node) => node.children.forEach((c) => { if (c.matches(selector)) out.push(c); walk(c); });
+      walk(el);
+      return out;
+    },
+    querySelector(selector) { return el.querySelectorAll(selector)[0] || null; },
+    closest(selector) {
+      for (let node = el; node && node.tag !== "root"; node = node.parent) if (node.matches(selector)) return node;
+      return null;
+    },
+    addEventListener(type, fn) { (el.listeners[type] ||= []).push(fn); },
+    // Unlike a browser, this fires on a disabled button too: that is the case the
+    // second check in the click handler is for.
+    fire(type) { (el.listeners[type] || []).forEach((fn) => fn()); },
+  };
+  return el;
+}
+function wired(html) {
+  const calls = { accept: [], revoke: [] };
+  const dom = parse(html);
+  wireSessionConsent(dom, { accept: (slug, version) => calls.accept.push([slug, version]), revoke: (slug) => calls.revoke.push(slug) });
+  return { dom, calls };
+}
+
+{
+  const { dom, calls } = wired(renderSessionSlot(wipter, undefined));
+  const tickEl = dom.querySelector('[data-session-tick="wipter"]');
+  const acceptEl = dom.querySelector('[data-session-accept="wipter"]');
+  check("CONTROL: the test DOM finds the tickbox and the accept button", !!tickEl && !!acceptEl);
+  check("RULE 9: the accept button starts disabled", acceptEl?.disabled === true);
+  tickEl.checked = true;
+  tickEl.fire("change");
+  check("RULE 9: the tick enables the accept button", acceptEl.disabled === false);
+  tickEl.checked = false;
+  tickEl.fire("change");
+  check("RULE 9: unticking disables it again", acceptEl.disabled === true);
+  acceptEl.fire("click");
+  check("RULE 9: a click with no tick records nothing", calls.accept.length === 0, JSON.stringify(calls));
+  tickEl.checked = true;
+  tickEl.fire("change");
+  acceptEl.fire("click");
+  check("RULE 9: a click after the tick records the consent for this app at the plain version", JSON.stringify(calls.accept) === JSON.stringify([["wipter", SESSION_DISCLOSURE_VERSION]]), JSON.stringify(calls));
+  check("RULE 9: the disclosure offers nothing to withdraw", calls.revoke.length === 0);
+}
+{
+  const { dom, calls } = wired(renderSessionSlot(wipter, current, true));
+  const tickEl = dom.querySelector('[data-session-tick="wipter"]');
+  tickEl.checked = true;
+  tickEl.fire("change");
+  dom.querySelector('[data-session-accept="wipter"]').fire("click");
+  check("RULE 9: with a Secure VM the accept records the Secure VM version", JSON.stringify(calls.accept) === JSON.stringify([["wipter", vmVersion]]), JSON.stringify(calls));
+}
+{
+  // Two cards on one page: the wizard lists every selected service.
+  const { dom, calls } = wired(renderSessionSlot(wipter, undefined) + renderSessionSlot(service({ name: "PassiveApp", slug: "passiveapp" }), undefined));
+  const wipterTick = dom.querySelector('[data-session-tick="wipter"]');
+  wipterTick.checked = true;
+  wipterTick.fire("change");
+  const otherAccept = dom.querySelector('[data-session-accept="passiveapp"]');
+  check("RULE 9: ticking one app does not enable another app's button", otherAccept.disabled === true && dom.querySelector('[data-session-accept="wipter"]').disabled === false);
+  otherAccept.fire("click");
+  check("RULE 9: one app's tick does not accept another app", calls.accept.length === 0, JSON.stringify(calls));
+}
+{
+  const { dom, calls } = wired(renderSessionSlot(wipter, current));
+  dom.querySelector('[data-session-revoke="wipter"]').fire("click");
+  check("RULE 9: Withdraw on the card withdraws that app", JSON.stringify(calls.revoke) === JSON.stringify(["wipter"]), JSON.stringify(calls));
+  const settings = wired(renderSessionConsentCard({ wipter: current, gone: older }, catalog));
+  settings.dom.querySelector('[data-session-revoke="gone"]').fire("click");
+  check("RULE 9: Withdraw in Settings withdraws that app, one the catalog dropped included", JSON.stringify(settings.calls.revoke) === JSON.stringify(["gone"]), JSON.stringify(settings.calls));
+}
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} session disclosure render checks FAILED`);

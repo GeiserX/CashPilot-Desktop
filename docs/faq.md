@@ -28,7 +28,7 @@ Some providers, such as Wipter and PassiveApp, have no Docker image. You install
 
 For this reason, the setup card of a desktop app shows these risks first. The card shows the install steps and the setup guide only after you tick the box and click **Run in my session**. You accept once for each app, and CashPilot records the text version and the date in its config. When the text changes, the card asks again. To withdraw your consent, click **Withdraw** on the card or in Settings > Isolation. Withdrawing hides the install steps again. It does not uninstall the app.
 
-A phone app, a browser extension or a hardware device does not run on this computer, so its card does not ask.
+A phone app does not run on this computer, so its card does not ask. Every other app without a Docker image asks, even when its catalog entry lists only a browser extension or no platform at all. Some of these lists are wrong: Teneo and UpRock, for example, list a browser extension but ship a Windows app.
 
 Do not turn off antivirus scanning for the folder of an app, even if the app asks you to. With every earning app, other people's traffic leaves through your internet address. Your internet provider may forbid this, and abuse by a buyer is traced to your address.
 

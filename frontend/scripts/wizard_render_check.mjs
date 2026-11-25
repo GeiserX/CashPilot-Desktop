@@ -366,6 +366,12 @@ check("RULE 7: a consent to an older text asks again", oldText.includes('data-se
 const phoneApp = renderWizardServiceSetup(service({ slug: "nodle", name: "Nodle", manualOnly: true, platforms: ["ios", "android"], docker: { env: [] } }), {}, "devbox");
 check("RULE 7: a phone-only manual app keeps the plain install tip", phoneApp.includes("Install this provider's native app") && !phoneApp.includes("data-session-"), phoneApp);
 check("RULE 7: and its setup guide", phoneApp.includes('data-url="https://geiserx.github.io/CashPilot/guides/nodle/"'), phoneApp);
+// Teneo ships a Windows app, but its catalog entry lists only a browser extension.
+// The gate fails closed, so its card asks too.
+const teneo = renderWizardServiceSetup(service({ slug: "teneo", name: "Teneo", manualOnly: true, platforms: ["browser-extension"], docker: { env: [] } }), {}, "devbox");
+check("RULE 7: a manual app listed as a browser extension asks first (Teneo)", teneo.includes('data-session-disclosure="teneo"') && !teneo.includes("Install this provider's native app") && !teneo.includes("/guides/teneo/"), teneo);
+const noList = renderWizardServiceSetup(service({ slug: "mystery", name: "Mystery", manualOnly: true, platforms: null, docker: { env: [] } }), {}, "devbox");
+check("RULE 7: a manual app with no platform list asks first", noList.includes('data-session-disclosure="mystery"') && !noList.includes("Install this provider's native app"), noList);
 check("RULE 7: a container service shows no disclosure", !hg.includes("data-session-") && hg.includes('data-url="https://geiserx.github.io/CashPilot/guides/honeygain/"'), hg);
 
 // ---------------------------------------------------------------------------

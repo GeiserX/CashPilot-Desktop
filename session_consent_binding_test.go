@@ -26,6 +26,16 @@ func newConsentTestApp(t *testing.T) *App {
 		"services/bandwidth/keeper.yml": {Data: []byte(
 			"name: Identity Keeper\nslug: keeper\ncategory: bandwidth\nstatus: active\n" +
 				"docker:\n  image: keeper/image:1.0.0\n")},
+		"services/depin/nodle.yml": {Data: []byte(
+			"name: Nodle\nslug: nodle\ncategory: depin\nstatus: active\nplatforms: [ios, android]\n" +
+				"docker:\n  image: \"\"\n")},
+		// Teneo ships a Windows app; the catalog lists only a browser extension.
+		"services/depin/teneo.yml": {Data: []byte(
+			"name: Teneo\nslug: teneo\ncategory: depin\nstatus: active\nplatforms: [browser-extension]\n" +
+				"docker:\n  image: \"\"\n")},
+		"services/depin/unlisted.yml": {Data: []byte(
+			"name: Unlisted\nslug: unlisted\ncategory: depin\nstatus: active\nplatforms: []\n" +
+				"docker:\n  image: \"\"\n")},
 	})
 	if err != nil {
 		t.Fatalf("catalog.LoadEmbedded: %v", err)
@@ -78,6 +88,7 @@ func TestAcceptSessionRiskRefusesWhatItCannotMean(t *testing.T) {
 	cases := map[string][2]string{
 		"unknown service":    {"nope", "2026-11-24"},
 		"container service":  {"keeper", "2026-11-24"},
+		"phone-only app":     {"nodle", "2026-11-24"},
 		"missing version":    {"wipter", "  "},
 		"oversized version":  {"wipter", strings.Repeat("v", maxConsentVersion+1)},
 		"control in version": {"wipter", "2026\n11"},
@@ -90,6 +101,38 @@ func TestAcceptSessionRiskRefusesWhatItCannotMean(t *testing.T) {
 	}
 	if n := len(app.cfg.Config().SessionConsent); n != 0 {
 		t.Errorf("refused accepts still recorded %d consents: %+v", n, app.cfg.Config().SessionConsent)
+	}
+}
+
+// The same fail-closed rule as the frontend's needsSessionConsent: an app is
+// accepted unless its catalog list is non-empty and names only phones or hardware.
+// A browser extension and an empty list can hide a desktop app, so they are accepted.
+func TestAcceptSessionRiskFollowsTheFrontendGate(t *testing.T) {
+	app := newConsentTestApp(t)
+	for _, slug := range []string{"teneo", "unlisted"} {
+		if _, err := app.AcceptSessionRisk(slug, "2026-11-24"); err != nil {
+			t.Errorf("AcceptSessionRisk(%q): %v; the card asks this app, so the consent must record", slug, err)
+		}
+	}
+	cases := []struct {
+		platforms []string
+		off       bool
+	}{
+		{nil, false},
+		{[]string{}, false},
+		{[]string{"android"}, true},
+		{[]string{"ios", "android"}, true},
+		{[]string{"hardware"}, true},
+		{[]string{" Android ", "IOS"}, true},
+		{[]string{"browser-extension"}, false},
+		{[]string{"browser-extension", "android"}, false},
+		{[]string{"android", "windows"}, false},
+		{[]string{"linux"}, false},
+	}
+	for _, c := range cases {
+		if got := offComputer(c.platforms); got != c.off {
+			t.Errorf("offComputer(%q) = %v, want %v", c.platforms, got, c.off)
+		}
 	}
 }
 

@@ -15,22 +15,42 @@
 import type { SessionConsent, Service } from "../wails";
 import { escapeHtml } from "./format.js";
 
-/** The version of the text below. Bump it with every change to the text. */
+/**
+ * The version of the text below. Bump it with every change to the text.
+ * scripts/session_disclosure_render_check.mjs holds a hash of the text per version
+ * and fails when the text changes and this version does not.
+ */
 export const SESSION_DISCLOSURE_VERSION = "2026-11-24";
 
-// The platforms whose app runs in the user's desktop session. A phone app, a browser
-// extension or a hardware hotspot is not installed on this computer, and this text
-// does not describe it.
-const DESKTOP_PLATFORMS = ["windows", "macos", "linux"];
+/**
+ * The version stored with a consent to the text shown. The Secure VM variant adds a
+ * risk, so it has its own version: a consent given before the Secure VM existed does
+ * not cover it, and the card asks again once the VM is set up.
+ */
+export function sessionDisclosureVersion(secureVM = false): string {
+  return secureVM ? `${SESSION_DISCLOSURE_VERSION}+vm` : SESSION_DISCLOSURE_VERSION;
+}
+
+// The platforms whose app never runs on this computer. The gate fails closed: a
+// manual-only app is asked unless its catalog list is non-empty and holds only these.
+// The lists are not reliable. Teneo and UpRock list a browser extension and ship a
+// Windows app, and a missing list says nothing about where the app runs.
+const OFF_COMPUTER_PLATFORMS = ["android", "ios", "hardware"];
 
 /** Whether the service's card must ask for consent before its install steps. */
 export function needsSessionConsent(service: Service): boolean {
-  return !!service.manualOnly && !service.custom && (service.platforms || []).some((p) => DESKTOP_PLATFORMS.includes(p));
+  if (!service.manualOnly || service.custom) return false;
+  const platforms = service.platforms || [];
+  return platforms.length === 0 || !platforms.every((p) => OFF_COMPUTER_PLATFORMS.includes(String(p).trim().toLowerCase()));
 }
 
-/** Whether a stored consent covers the text the app shows now. */
-export function consentIsCurrent(consent: SessionConsent | null | undefined): boolean {
-  return !!consent && consent.textVersion === SESSION_DISCLOSURE_VERSION;
+/**
+ * Whether a stored consent covers the text the app shows now. A consent to the
+ * Secure VM variant also covers the plain text, which is the same text less one risk.
+ */
+export function consentIsCurrent(consent: SessionConsent | null | undefined, secureVM = false): boolean {
+  if (!consent) return false;
+  return consent.textVersion === sessionDisclosureVersion(true) || (!secureVM && consent.textVersion === sessionDisclosureVersion(false));
 }
 
 /** The day a consent was given, as YYYY-MM-DD (UTC), or "an unknown date". */
@@ -45,7 +65,9 @@ export function consentDay(consent: SessionConsent): string {
  * `secureVM` is true only when a Secure VM exists on this computer. The Hyper-V
  * paragraph applies only then: setting the VM up gave this Windows account full
  * control of Hyper-V, so an app in this session can change the VM's fence. There is
- * no Secure VM yet, so every caller passes false today.
+ * no Secure VM yet, so every caller passes false today. The accept button carries
+ * the version of the variant shown (sessionDisclosureVersion), and that is the
+ * version the consent stores.
  */
 export function renderSessionDisclosure(service: Service, secureVM = false): string {
   const name = escapeHtml(service.name);
@@ -66,7 +88,7 @@ export function renderSessionDisclosure(service: Service, secureVM = false): str
       <p>Wherever an earning app runs, other people's traffic leaves through your internet address. Your internet provider may forbid this. If a buyer uses your connection for abuse, the abuse is traced to your address.</p>
       <div class="session-accept">
         <label class="session-tick"><input type="checkbox" data-session-tick="${slug}" /> I understand these risks for ${name}.</label>
-        <button class="primary compact-btn" data-session-accept="${slug}" disabled>Run in my session</button>
+        <button class="primary compact-btn" data-session-accept="${slug}" data-session-version="${escapeHtml(sessionDisclosureVersion(secureVM))}" disabled>Run in my session</button>
       </div>
     </div>
   `;
@@ -80,7 +102,7 @@ export function renderSessionDisclosure(service: Service, secureVM = false): str
 export function renderSessionSlot(service: Service, consent: SessionConsent | null | undefined, secureVM = false): string {
   const name = escapeHtml(service.name);
   const slug = escapeHtml(service.slug);
-  if (!consentIsCurrent(consent)) {
+  if (!consentIsCurrent(consent, secureVM)) {
     const stale = consent
       ? `<p class="tip" data-session-stale>You accepted an older version of this text on ${escapeHtml(consentDay(consent))}. The text changed, so read it again before you install ${name}.</p>`
       : "";
@@ -105,6 +127,7 @@ export function renderSessionSlot(service: Service, consent: SessionConsent | nu
 export function renderSessionConsentCard(
   consents: Record<string, SessionConsent> | null | undefined,
   services: Service[] | null | undefined,
+  secureVM = false,
 ): string {
   const entries = Object.entries(consents || {}).sort(([a], [b]) => a.localeCompare(b));
   const nameOf = (slug: string) => (services || []).find((svc) => svc.slug === slug)?.name || slug;
@@ -112,7 +135,7 @@ export function renderSessionConsentCard(
     <div class="row session-consent-row" data-session-consent="${escapeHtml(slug)}">
       <div>
         <strong>${escapeHtml(nameOf(slug))}</strong>
-        <p class="muted compact-copy">Accepted on ${escapeHtml(consentDay(consent))}, text version ${escapeHtml(consent.textVersion)}.${consentIsCurrent(consent) ? "" : " The text changed since then, so the setup card asks again."}</p>
+        <p class="muted compact-copy">Accepted on ${escapeHtml(consentDay(consent))}, text version ${escapeHtml(consent.textVersion)}.${consentIsCurrent(consent, secureVM) ? "" : " The text changed since then, so the setup card asks again."}</p>
       </div>
       <button class="danger compact-btn" data-session-revoke="${escapeHtml(slug)}">Withdraw</button>
     </div>
