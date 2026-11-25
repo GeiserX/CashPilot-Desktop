@@ -1,0 +1,140 @@
+package main
+
+import (
+	"context"
+	goruntime "runtime"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
+)
+
+// THE RULE: a registered native runtime is not "ready" by itself. It counts only
+// when it can run a catalog service on this machine, and the status names those
+// services, so first run can say "only Mysterium runs without Docker" instead of
+// "ready".
+func TestRuntimeStatusCountsNativeOnlyWhenItRunsSomething(t *testing.T) {
+	app := newRemovalTestApp(t, stubProvider{})
+	nativeHere := catalog.Service{Name: "Mysterium", Slug: "mysterium", Native: catalog.NativeConfig{Binaries: []catalog.NativeBinary{{OS: goruntime.GOOS, Arch: goruntime.GOARCH}}}}
+	imageOnly := catalog.Service{Name: "Honeygain", Slug: "honeygain"}
+
+	app.services.Register(runtime.NativeRuntimeKind, stubProvider{})
+	st := app.runtimeStatus([]catalog.Service{imageOnly})
+	if st.NativeAvailable || len(st.NativeServices) != 0 {
+		t.Fatalf("a native runtime that runs no catalog service counted as available: %+v", st)
+	}
+	st = app.runtimeStatus([]catalog.Service{imageOnly, nativeHere})
+	if !st.NativeAvailable || len(st.NativeServices) != 1 || st.NativeServices[0] != "Mysterium" {
+		t.Fatalf("the native runtime that runs Mysterium: %+v", st)
+	}
+}
+
+func TestHostFactsHintsNeverWaitAndRefreshInTheBackground(t *testing.T) {
+	var reads atomic.Int32
+	release := make(chan struct{})
+	h := &hostFacts{read: func(context.Context) winvm.HostFacts {
+		reads.Add(1)
+		<-release
+		f := winvm.HostFacts{Virtualization: winvm.No, WSL: winvm.WSLOutdated, WSLVersion: "2.0.9.0", DockerDesktopInstalled: winvm.Yes}
+		return f
+	}}
+	start := time.Now()
+	if got := h.hints(context.Background()); got != (runtime.HostHints{}) {
+		t.Fatalf("an empty cache returned hints: %+v", got)
+	}
+	_ = h.hints(context.Background()) // a second call while reading starts no second read
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("hints waited %v for the reading", took)
+	}
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	var got runtime.HostHints
+	for time.Now().Before(deadline) {
+		if got = h.hints(context.Background()); got.WSL != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got.Virtualization != runtime.HintNo || got.WSL != "outdated" || got.WSLVersion != "2.0.9.0" || got.DockerInstalled != runtime.HintYes {
+		t.Fatalf("the background reading did not reach the hints: %+v", got)
+	}
+	if n := reads.Load(); n != 1 {
+		t.Fatalf("%d readings started, want 1", n)
+	}
+}
+
+func TestHostCheckReturnsFactsAndTheRuntimeReason(t *testing.T) {
+	app := newRemovalTestApp(t, reasonProvider{})
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, Build: 26100}
+	}}
+	res, err := app.HostCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Facts.Build != 26100 || res.Runtime.Reason != runtime.ReasonWSLMissing {
+		t.Fatalf("HostCheck returned %+v", res)
+	}
+}
+
+// CheckRuntime runs after every deploy, stop, restart and remove (refreshState),
+// so it must answer from the cache and never start a host reading of its own.
+func TestCheckRuntimeNeverReadsTheHost(t *testing.T) {
+	app := newRemovalTestApp(t, reasonProvider{})
+	var reads atomic.Int32
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		reads.Add(1)
+		return winvm.HostFacts{}
+	}}
+	st, err := app.CheckRuntime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Reason != runtime.ReasonWSLMissing {
+		t.Fatalf("CheckRuntime returned %+v", st)
+	}
+	if n := reads.Load(); n != 0 {
+		t.Fatalf("CheckRuntime read the host %d times, want 0", n)
+	}
+}
+
+// A background reading that started first and ends last must not overwrite the
+// reading HostCheck made after it.
+func TestHostFactsKeepTheNewerReading(t *testing.T) {
+	var calls atomic.Int32
+	releaseOld := make(chan struct{})
+	h := &hostFacts{read: func(context.Context) winvm.HostFacts {
+		if calls.Add(1) == 1 {
+			<-releaseOld
+			return winvm.HostFacts{Build: 1}
+		}
+		return winvm.HostFacts{Build: 2}
+	}}
+	oldDone := make(chan winvm.HostFacts)
+	go func() { oldDone <- h.refresh(context.Background()) }()
+	for calls.Load() < 1 {
+		time.Sleep(time.Millisecond)
+	}
+	if got := h.refresh(context.Background()); got.Build != 2 {
+		t.Fatalf("the newer reading returned build %d", got.Build)
+	}
+	close(releaseOld)
+	if got := <-oldDone; got.Build != 1 {
+		t.Fatalf("the older reading returned build %d, want its own reading", got.Build)
+	}
+	h.mu.Lock()
+	build := h.facts.Build
+	h.mu.Unlock()
+	if build != 2 {
+		t.Fatalf("the older reading overwrote the newer one: cached build %d, want 2", build)
+	}
+}
+
+type reasonProvider struct{ stubProvider }
+
+func (reasonProvider) Status(context.Context) runtime.Status {
+	return runtime.Status{Reason: runtime.ReasonWSLMissing}
+}
