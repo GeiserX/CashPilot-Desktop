@@ -68,6 +68,7 @@ func (a *App) sampleUsage(ctx context.Context, list func(context.Context) ([]run
 		a.emitError("usage", err)
 		return
 	}
+	a.checkStalls(infos, now)
 	if err := a.store.PurgeUsage(now); err != nil {
 		a.emitError("usage", err)
 	}
