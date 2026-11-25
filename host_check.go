@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"os"
 	goruntime "runtime"
 	"sync"
@@ -33,7 +34,9 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 	status := a.runtimeStatus(a.catalog.ListVisible())
 	if status.Reason == runtime.ReasonRunning {
 		// Docker runs: a guided setup that waited for a restart is finished.
-		a.endSetup()
+		if err := a.endSetup(); err != nil {
+			log.Printf("setup: %v", err)
+		}
 	}
 	return HostCheckResult{Facts: facts, Runtime: status, Steps: dockerSteps(facts, status)}, nil
 }

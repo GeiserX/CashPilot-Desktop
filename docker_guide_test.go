@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -26,6 +27,10 @@ type fakeRunOnce struct {
 	arms     int
 	disarms  int
 	armError error
+	// disarmError fails Disarm; duringDisarm runs inside Disarm, after the value
+	// is gone, with the fake's lock free.
+	disarmError  error
+	duringDisarm func()
 }
 
 func (f *fakeRunOnce) Arm(exe string) error {
@@ -41,9 +46,17 @@ func (f *fakeRunOnce) Arm(exe string) error {
 
 func (f *fakeRunOnce) Disarm() error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.disarms++
+	if err := f.disarmError; err != nil {
+		f.mu.Unlock()
+		return err
+	}
 	f.armed = ""
+	during := f.duringDisarm
+	f.mu.Unlock()
+	if during != nil {
+		during()
+	}
 	return nil
 }
 
@@ -281,5 +294,77 @@ func TestHostCheckTrustsNoEngineDockerHostNames(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://192.168.10.100:2375")
 	if got := a2(); got != winvm.StepUnknown {
 		t.Fatalf("an engine DOCKER_HOST names elsewhere answered, but a2 is %s", got)
+	}
+}
+
+// A cancel whose RunOnce value could not be removed keeps the journal and says
+// so, so the user can cancel again and nothing reopens the app with no journal.
+func TestCancelSetupKeepsTheJournalWhenRunOnceStays(t *testing.T) {
+	app, fake := newGuideTestApp(t, reasonProvider{})
+	app.host = bootAt("2026-11-25T07:59:58.5Z")
+	if _, err := app.beginRestart("a2"); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.disarmError = errors.New("access is denied")
+	fake.mu.Unlock()
+	if err := app.CancelSetup(); err == nil {
+		t.Fatal("RunOnce stayed armed, but the cancel reported success")
+	}
+	if app.cfg.Config().SetupJournal == nil {
+		t.Fatal("RunOnce stayed armed, but the journal is gone, so a retry has nothing to cancel")
+	}
+	fake.mu.Lock()
+	fake.disarmError = nil
+	fake.mu.Unlock()
+	if err := app.CancelSetup(); err != nil {
+		t.Fatal(err)
+	}
+	if armed, _, _ := fake.state(); armed != "" || app.cfg.Config().SetupJournal != nil {
+		t.Fatalf("the retried cancel left RunOnce %q and journal %+v", armed, app.cfg.Config().SetupJournal)
+	}
+}
+
+// A check that ends the setup while a change notes its restart leaves RunOnce
+// and the journal in step: either both or neither, never RunOnce alone.
+func TestEndSetupAndARestartDoNotRace(t *testing.T) {
+	app, fake := newGuideTestApp(t, reasonProvider{})
+	app.host = bootAt("2026-11-25T07:59:58.5Z")
+	if _, err := app.beginRestart("a2"); err != nil {
+		t.Fatal(err)
+	}
+	inDisarm := make(chan struct{})
+	release := make(chan struct{})
+	fake.mu.Lock()
+	fake.duringDisarm = func() {
+		close(inDisarm)
+		<-release
+	}
+	fake.mu.Unlock()
+
+	ended := make(chan error, 1)
+	go func() { ended <- app.endSetup() }()
+	<-inDisarm
+	noted := make(chan error, 1)
+	go func() {
+		_, err := app.beginFinish("a3", setupresume.FinishRestart)
+		noted <- err
+	}()
+	// Without the lock the restart's note lands now, inside the cancel.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	if err := <-ended; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-noted; err != nil {
+		t.Fatal(err)
+	}
+	armed, _, _ := fake.state()
+	j := app.cfg.Config().SetupJournal
+	if (armed != "") != (j != nil) {
+		t.Fatalf("RunOnce %q and journal %+v are out of step", armed, j)
+	}
+	if j == nil || j.Step != "a3" {
+		t.Fatalf("the restart noted after the cancel is lost: journal %+v", j)
 	}
 }

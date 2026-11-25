@@ -190,6 +190,8 @@ func (a *App) SignOutNow() error {
 // armForFinish checks that a setup step waits (for a sign-out, when finish says
 // so) and points RunOnce at this app again, in case a start in between removed it.
 func (a *App) armForFinish(finish string) error {
+	journalMu.Lock()
+	defer journalMu.Unlock()
 	j := a.cfg.Config().SetupJournal
 	if j == nil {
 		return errors.New("no setup step waits for a restart")
