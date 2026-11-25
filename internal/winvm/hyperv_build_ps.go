@@ -137,7 +137,7 @@ $o.switches = @(Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -or ($in.
   $ports = @(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw.Id) } | ForEach-Object { $_.VMId.ToString() } | Select-Object -Unique)
   [ordered]@{ id = $sw.Id.ToString(); owner = (Get-Owner ([string]$sw.Notes)); ports = @($ports) }
 })
-$o.nats = @(Get-NetNat -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ id = [string]$_.InstanceID; name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } })
+$o.nats = @(Get-NetNat -ErrorAction Stop | ForEach-Object { [ordered]@{ id = [string]$_.InstanceID; name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } })
 $o.firewall = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ id = [string]$_.Name; owner = (Get-Owner ([string]$_.Description)) } })
 $t = @(Get-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -ErrorAction SilentlyContinue)
 $o.task = $null
@@ -211,14 +211,18 @@ if ($sw.Name -ne $in.switch) {
 Write-Doc ([ordered]@{ switchId = $switchId; managementId = $managementId; ifIndex = $idx })
 `
 
-// scriptEnsureNAT returns the provider identity of the new or recorded NAT.
-const scriptEnsureNAT = buildPrelude + `$n = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $in.nat })
-if ($n.Count -gt 0) {
-  if ($n.Count -ne 1 -or -not $in.id -or [string]$n[0].InstanceID -cne $in.id -or [string]$n[0].InternalIPInterfaceAddressPrefix -ne $in.prefix) {
-    throw 'A NAT with this name exists and its identity does not match the journal.'
+// scriptEnsureNAT checks the full inventory again just before New-NetNat.
+const scriptEnsureNAT = buildPrelude + `$n = @(Get-NetNat -ErrorAction Stop)
+$nat = $null
+foreach ($candidate in $n) {
+  $prefix = [string]$candidate.InternalIPInterfaceAddressPrefix
+  if ($nat -or $candidate.Name -ne $in.nat -or -not $in.id -or [string]$candidate.InstanceID -cne $in.id -or $prefix -ne $in.prefix) {
+    if (-not $prefix) { $prefix = 'an unknown prefix' }
+    throw ('A NAT network named "{0}" already exists on {1}. ` + foreignNATRemedy + `' -f $candidate.Name, $prefix)
   }
-  $nat = $n[0]
-} else {
+  $nat = $candidate
+}
+if (-not $nat) {
   $nat = New-NetNat -Name $in.nat -InternalIPInterfaceAddressPrefix $in.prefix
 }
 Write-Doc ([ordered]@{ id = [string]$nat.InstanceID })
@@ -886,10 +890,8 @@ func (h *psHost) Inventory(ctx context.Context, n Names, known KnownIDs, sid str
 		inv.GuardianVMs = append(inv.GuardianVMs, id)
 	}
 	for _, x := range w.NATs {
-		p, err := netip.ParsePrefix(x.Prefix)
-		if err != nil {
-			continue // a NAT on IPv6 or a range Hyper-V cannot read is not ours
-		}
+		// Keep the NAT in inventory even if the provider did not return a usable prefix.
+		p, _ := netip.ParsePrefix(x.Prefix)
 		inv.NATs = append(inv.NATs, LiveNAT{ID: x.ID, Name: x.Name, Prefix: p})
 	}
 	return inv, nil

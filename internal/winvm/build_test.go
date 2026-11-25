@@ -158,6 +158,40 @@ func TestBuildRepairKeepsThePlan(t *testing.T) {
 	}
 }
 
+func TestBuildRefusesNonOverlappingForeignNAT(t *testing.T) {
+	for _, operation := range []string{"Setup", "Repair"} {
+		t.Run(operation, func(t *testing.T) {
+			f := hvfake.New()
+			dir := t.TempDir()
+			d := buildDeps(t, f, dir)
+			if operation == "Repair" {
+				if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+					t.Fatalf("initial Setup: %v", err)
+				}
+			}
+			// This range is outside every /29 that Secure VM can choose.
+			f.AddForeignNAT("OtherWorkload", netip.MustParsePrefix("10.250.255.0/30"))
+			before, callsBefore := f.Objects(), len(f.Calls())
+
+			_, err := winvm.Build(context.Background(), d, setupParams())
+			for _, step := range []string{"EnsureSwitch", "SetBindings", "EnsureNAT"} {
+				if indexOf(f.Calls()[callsBefore:], step) >= 0 {
+					t.Errorf("%s reached %s with a foreign NAT present", operation, step)
+				}
+			}
+			if got := f.Objects(); !slices.Equal(got, before) {
+				t.Errorf("%s changed the host:\n  before: %v\n  after:  %v", operation, before, got)
+			}
+			for _, want := range []string{"OtherWorkload", "10.250.255.0/30", "Windows supports only one",
+				"CashPilot will not change or remove it", "remove it yourself", "keep it and skip Secure VM"} {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("%s = %v, want a NAT refusal containing %q", operation, err, want)
+				}
+			}
+		})
+	}
+}
+
 // TestBuildRefusesForeignObjects: an object with the Secure VM's name that
 // this install did not make stops the build before it changes anything.
 func TestBuildRefusesForeignObjects(t *testing.T) {

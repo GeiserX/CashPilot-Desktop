@@ -4,19 +4,15 @@ package winvm
 
 import (
 	"context"
-	"crypto/sha256"
-	"fmt"
 	"runtime"
-	"strings"
 
 	"golang.org/x/sys/windows"
 )
 
-// A setup and a removal must not change the same journal concurrently.
+// Serialize Setup and Remove across instances because WinNAT is host-wide.
 // Windows mutex ownership belongs to the thread that acquired it.
-func lockMutation(ctx context.Context, n Names) (func(), error) {
-	sum := sha256.Sum256([]byte(strings.ToLower(n.DataDir)))
-	name := windows.StringToUTF16Ptr(fmt.Sprintf("Global\\CashPilotVM-%x", sum[:16]))
+func lockMutation(ctx context.Context) (func(), error) {
+	name := windows.StringToUTF16Ptr("Global\\CashPilotVM-Mutation")
 	h, err := windows.CreateMutex(nil, false, name)
 	if err != nil && err != windows.ERROR_ALREADY_EXISTS {
 		return nil, err

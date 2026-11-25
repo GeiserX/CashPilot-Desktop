@@ -513,6 +513,46 @@ func runOwnedScriptWithFake(t *testing.T, mock, script string, arg map[string]an
 		mock+"\n$env:CPD_HV_ARG = '"+base64.StdEncoding.EncodeToString(raw)+"'\n"+script, args...)
 }
 
+func TestEnsureNATScriptChecksCurrentInventory(t *testing.T) {
+	const mock = `
+param($mine, $foreign, $unreadable)
+function Get-NetNat {
+  [CmdletBinding()] param()
+  if ($unreadable) { Write-Error 'NAT inventory unavailable' }
+  if ($mine) { [pscustomobject]@{ Name = 'CashPilot-VM'; InstanceID = 'owned-id'; InternalIPInterfaceAddressPrefix = '172.31.250.0/29' } }
+  if ($foreign) { [pscustomobject]@{ Name = 'OtherWorkload'; InstanceID = 'foreign-id'; InternalIPInterfaceAddressPrefix = '10.250.255.0/30' } }
+}
+function New-NetNat { [pscustomobject]@{ InstanceID = 'created-id' } }
+`
+	for _, tc := range []struct {
+		name, mine, foreign, unreadable string
+		want                            string
+		ok                              bool
+	}{
+		{name: "empty inventory", want: "created-id", ok: true},
+		{name: "owned NAT", mine: "yes", want: "owned-id", ok: true},
+		{name: "foreign NAT", foreign: "yes", want: "OtherWorkload"},
+		{name: "owned and foreign NATs", mine: "yes", foreign: "yes", want: "OtherWorkload"},
+		{name: "unreadable inventory", unreadable: "yes", want: "NAT inventory unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := runOwnedScriptWithFake(t, mock, scriptEnsureNAT,
+				map[string]any{"nat": "CashPilot-VM", "prefix": "172.31.250.0/29", "id": "owned-id"},
+				tc.mine, tc.foreign, tc.unreadable)
+			if tc.ok && code == 0 {
+				decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+				if err != nil {
+					t.Fatalf("decode NAT identity: %v", err)
+				}
+				out = decoded
+			}
+			if (code == 0) != tc.ok || !strings.Contains(string(out), tc.want) {
+				t.Fatalf("exit = %d, output = %s, want success = %t and %q", code, out, tc.ok, tc.want)
+			}
+		})
+	}
+}
+
 func TestPktmonRejectsEmptyExport(t *testing.T) {
 	if _, err := parsePcapng(nil); err == nil {
 		t.Fatal("the empty export counted as capture evidence")

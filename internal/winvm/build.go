@@ -206,9 +206,8 @@ func (d BuildDeps) newPassword() string {
 	return string(out)
 }
 
-// ErrNotOwned is a host object with the Secure VM's name that this install did
-// not make. Build stops; Remove leaves it.
-var ErrNotOwned = errors.New("a host object with the Secure VM's name was not made by this install")
+// ErrNotOwned means CashPilot could not match a host object to this install.
+var ErrNotOwned = errors.New("CashPilot could not verify ownership of a host object")
 
 // installFile holds the temporary answer-file passwords until the first
 // PowerShell Direct session has replaced them. While it exists, the first
@@ -266,7 +265,7 @@ func Build(ctx context.Context, d BuildDeps, sp SetupParams) (res BuildResult, e
 	if err != nil {
 		return BuildResult{}, err
 	}
-	unlock, err := lockMutation(ctx, n)
+	unlock, err := lockMutation(ctx)
 	if err != nil {
 		return BuildResult{}, err
 	}
@@ -372,6 +371,9 @@ func (b *builder) journal(ctx context.Context) error {
 	if b.inv, err = b.HV.Inventory(ctx, b.n, known, b.sp.UserSID); err != nil {
 		return err
 	}
+	if c := checkHostNAT(b.inv.NATs, b.recordedNAT()); c.OK != Yes {
+		return fmt.Errorf("%s (%s): %w", c.Detail, c.ID, ErrNotOwned)
+	}
 	if err := b.checkOwnership(); err != nil {
 		return err
 	}
@@ -424,9 +426,6 @@ func (b *builder) journal(ctx context.Context) error {
 		o.Subnet, o.HostVNICMAC, o.GuestMAC = prev.Subnet, prev.HostVNICMAC, prev.GuestMAC
 	} else {
 		var inUse []netip.Prefix
-		for _, x := range b.inv.NATs {
-			inUse = append(inUse, x.Prefix)
-		}
 		h, err := b.HV.ReadHostNet(ctx, EgressSamples)
 		if err != nil {
 			return err
@@ -491,9 +490,8 @@ func ownedBy(o OwnedObject, id, owner string) bool {
 func (b *builder) checkOwnership() error {
 	var id func(kind string) string
 	owner := ""
-	var sub netip.Prefix
 	if b.prev != nil {
-		owner, sub = b.prev.Owner, b.prev.Subnet
+		owner = b.prev.Owner
 		id = func(kind string) string {
 			if kind == "vm" {
 				return b.prev.VMID
@@ -519,11 +517,6 @@ func (b *builder) checkOwnership() error {
 	}
 	count("vm", b.inv.VMs)
 	count("switch", b.inv.Switches)
-	for _, x := range b.inv.NATs {
-		if strings.EqualFold(x.Name, b.n.NAT) && (b.prev == nil || b.prev.NATID == "" || x.ID != b.prev.NATID || x.Prefix.Masked() != sub) {
-			bad = append(bad, fmt.Sprintf("the NAT %s on %s", x.Name, x.Prefix))
-		}
-	}
 	for _, r := range b.inv.Firewall {
 		if owner == "" || r.Owner != owner || r.ID != blockFirewallID(b.n, owner) {
 			bad = append(bad, "the firewall rule "+r.ID)
@@ -538,6 +531,13 @@ func (b *builder) checkOwnership() error {
 	return nil
 }
 
+func (b *builder) recordedNAT() LiveNAT {
+	if b.prev == nil {
+		return LiveNAT{}
+	}
+	return LiveNAT{Name: b.n.NAT, ID: b.prev.NATID, Prefix: b.prev.Subnet}
+}
+
 // hostChecks runs CheckVMHost. On a Repair the VM's own memory and NAT are
 // not counted against it.
 func (b *builder) hostChecks(ctx context.Context) error {
@@ -550,14 +550,8 @@ func (b *builder) hostChecks(ctx context.Context) error {
 		cur = CurrentNetwork{}
 	}
 	b.h = h
-	var nats []netip.Prefix
-	for _, x := range b.inv.NATs {
-		if !strings.EqualFold(x.Name, b.n.NAT) {
-			nats = append(nats, x.Prefix)
-		}
-	}
 	in := VMHostInput{
-		NATs: nats, Subnet: b.p.Subnet, Net: h, OurSwitchID: b.p.SwitchID, Network: cur,
+		NATs: b.inv.NATs, RecordedNAT: b.recordedNAT(), Net: h, OurSwitchID: b.p.SwitchID, Network: cur,
 		InstalledRAM: b.inv.InstalledRAM, FreeRAM: b.inv.FreeRAM,
 		GuestMemory: b.p.MemoryBytes, MinHostRAM: b.minRAM, GCS: b.inv.GCS,
 	}

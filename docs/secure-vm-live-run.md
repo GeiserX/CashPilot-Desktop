@@ -2,14 +2,19 @@
 
 Use a Windows 11 Pro Hyper-V host with HGS tooling and NTFS. Run the candidate against throwaway resources.
 
+## Choose the test host
+
+Prefer a disposable Windows 11 Pro VM with nested virtualization. Enable `ExposeVirtualizationExtensions` on that VM. Use an image with `UntrustedGuardian` already present. Take a checkpoint before the run and roll back the test VM after cleanup. Run Setup and every decoy and collision case on the test host, which must carry no other workloads. Take only read-only before and after inventories of the outer host.
+
 ## Keep `bunker` read-only
 
 - Use read-only queries for `bunker` and its resources. Never create an object named `bunker`.
 - Never rename, start, stop, save, checkpoint, move or reconfigure `bunker`. Leave its switch, adapters, disks, guardian and checkpoints untouched.
-- Leave all guardians in place. Never swap a guardian or replace `UntrustedGuardian`. If Setup would create it, stop and report.
-- Keep the host running. Reboot and sleep tests require separate owner approval and guards. Never roll back or restore a host image.
-- Check the owner's RDP session and its network path before each stage. Confirm the session ID and the interface that carries its traffic. Stop and report if any step could disrupt that session.
-- Stop and report any change to the `bunker` inventory, any failed read or any ambiguous identity. Take read-only evidence after a stop.
+- Leave all guardians in place. Never swap a guardian or replace `UntrustedGuardian`. Before every Setup, run `Get-HgsGuardian -Name UntrustedGuardian`. Require exactly one result with fingerprints that match `before.json`. Otherwise stop before Setup and report.
+- Keep the host running. Reboot and sleep tests require separate owner approval and guards. Reserve rollback for the disposable test VM.
+- Run every command from an SSH session as the admin account. Never sign in over RDP or at the console. Never open VMConnect or run `logoff`, `tsdiscon`, `shutdown` or `Restart-Computer`.
+- If the test host has an owner's RDP session, check it and its network path before each stage. Use only `qwinsta` and `Get-NetTCPConnection -LocalPort 3389` to read the session. Confirm the session ID and the interface that carries its traffic. Stop and report if any step could disrupt that session.
+- Stop and report any unexpected inventory change, failed read or ambiguous identity. Take read-only evidence after a stop.
 - Before CashPilot changes an existing object, match its live identity to the run's journal. Stop if an action would target an unrecorded object.
 - For manual fixture changes and cleanup, match the live identity to the fixture ledger. Never select a mutation target by name, MAC address or path pattern alone.
 
@@ -19,22 +24,26 @@ Use a Windows 11 Pro Hyper-V host with HGS tooling and NTFS. Run the candidate a
 2. Save `before.json` before any fixture creation or Setup. Use the inventory below. Keep it in a private evidence directory outside CashPilot's data.
 3. Read Enhanced Session policy with `Get-VMHost`. If Setup requires the policy off and it is on, stop and ask the owner. Leave the policy untouched.
 4. Check for a real CashPilot install under `C:\ProgramData\CashPilot`. Run product-name Setup only if that directory is free of production data.
-5. Confirm that the owner approves the test account and the network paths used by proof. Verify there is enough free RAM and disk space for the guest.
+5. Confirm that the owner approves the test account and the network paths used by proof.
+6. To calculate the required free RAM, start with the guest memory plus 1 GiB. Add `MemoryMaximum` minus `MemoryAssigned` for each running VM that uses Dynamic Memory. Stop if free RAM is below the total.
+7. The volume that `t2-build.ps1` prints must have room for the 128 GiB guest disk plus 20 GiB. If `bunker` has disks on that volume, also reserve room for each of its dynamic disks to grow to full size. Stop if the volume has less free space than the total.
 
 ### Read-only inventory
 
-Use `Get-VM -Name bunker` for the first lookup. Require exactly one result. Record its VM ID and use that ID for every later sample.
+On the host that runs `bunker`, use `Get-VM -Name bunker` for the first lookup. Require exactly one result. Record its VM ID and use that ID for every later sample.
+
+Record every other VM that exists before the run. Include its ID, name, state and Notes. For each adapter, record its ID, switch ID and MAC. Stop if any of these fields changes. A VM in the Saved state must stay Saved.
 
 | Scope | Fields to record |
 | --- | --- |
-| VM | Record ID, name, state, uptime, sample time in UTC, Notes, generation, version, configuration path, checkpoint type and `AutomaticStartAction`. |
+| VM | Record ID, name, state, uptime, sample time in UTC, Notes, generation, version, configuration path, checkpoint type and `AutomaticStartAction`. Record `DynamicMemoryEnabled`, `MemoryStartup`, `MemoryMinimum`, `MemoryMaximum` and `ProcessorCount`. |
 | VM adapters | Use `Get-VMNetworkAdapter` on the VM. Record adapter IDs, MAC addresses, dynamic MAC settings, switch IDs and adapter guard settings. |
 | Port ACLs | Use `Get-VMNetworkAdapterAcl` and `Get-VMNetworkAdapterExtendedAcl`. Use `Get-VMSwitchExtensionPortFeature` on each adapter for feature ID `998BEF4A-5D55-492A-9C43-8B2F5EAE9F2B`, including their setting IDs and values. |
 | VM and checkpoint media | Use `Get-VMHardDiskDrive` on the VM and on its `Get-VMSnapshot` results. Record each attachment ID, controller and path. Use `Get-VHD` to walk each parent chain to its base. Record each path, disk type, virtual size and file size. Record the file's last write time in UTC. Record the volume serial and NTFS file ID, for example with `fsutil file queryfileid` for the ID. Record DVD IDs and media paths with `Get-VMDvdDrive`. |
 | Checkpoints | Record checkpoint IDs, names, types, creation times and parent IDs. |
 | VM security | Record `Get-VMSecurity` settings, including TPM, shielding and encryption. Record the length and SHA-256 of the bytes from `Get-VMKeyProtector`. Record the signing and encryption certificate fingerprints of the guardian used by `bunker` and of `UntrustedGuardian`, if present. Keep protector bytes and private keys out of the evidence. |
 | Integration services | Use `Get-VMIntegrationService` on the VM. Record service IDs, names, enabled state and status. |
-| VM switches and host vNICs | Use `Get-VMSwitch` for the full switch list. Record IDs, names, types, Notes and physical interface GUIDs. For `bunker`'s switch IDs, record the switch ports and any host vNIC's port ID, interface GUID, MAC, addresses, routes and bindings. |
+| VM switches and host vNICs | Use `Get-VMSwitch` for the full switch list. Record IDs, names, types, Notes and physical interface GUIDs. For `bunker`'s switch IDs, record the switch ports and any host vNIC's port ID, interface GUID, MAC, addresses, routes and bindings. Leave out address lifetimes and addresses with `SuffixOrigin` `Random`. |
 | Host policy and packet monitor | Record `EnableEnhancedSessionMode` from `Get-VMHost`. Save the filter list from `pktmon filter list` and the session configuration from `pktmon status` and `Get-EtwTraceSession -Name PktMon`. Record filter names and clauses, session state and trace path. |
 | NAT | Use `Get-NetNat` for the full list. Record names, provider instance IDs, prefixes, settings, static mappings and external addresses. |
 | Hyper-V Administrators | Record the member SIDs of local group `S-1-5-32-578`. |
@@ -43,7 +52,9 @@ Use `Get-VM -Name bunker` for the first lookup. Require exactly one result. Reco
 
 Use the same fields and ordering for every JSON file. Sort arrays by provider ID or by stable field values when the provider has no ID. Serialize selected fields with `ConvertTo-Json -Depth 32`. Compare the JSON with `git diff --no-index -- before.json after.json` or another JSON diff tool.
 
-Save and compare `bunker`'s inventory after each test stage. For a running VM, compare the uptime increase with elapsed time at the provider's reporting precision. Keep both raw uptime readings. Treat any other uptime change or any change to another field as a failure.
+Save and compare the inventory of every VM that existed before the run after each test stage. For a running VM, compare the uptime increase with elapsed time at the provider's reporting precision. Keep both raw uptime readings.
+
+On a running VM's writable leaf disk, file size can grow and `LastWriteTime` can advance. Keep both raw size and time readings. Require an exact match for the path, volume serial, file ID, disk type, virtual size and parent chain. Require an exact match for every field of a parent disk. Stop and report any other difference.
 
 ## Create the decoys
 
@@ -53,12 +64,12 @@ Save and compare `bunker`'s inventory after each test stage. For a running VM, c
 4. For the collision number, create an internal switch and a VM named `cpd-svm-<collision>`. These are throwaway fixtures. Put a distinct 32-hex `cashpilot-owner=` tag in the switch and VM Notes. Keep the VM off.
 5. Create a harmless disabled rule in the `cpd-svm-<collision>` firewall group and another in `cpd-svm-<collision>-proof`. Register a disabled task at `\CashPilot\VMGuard-cpd-svm-<collision>`. Use the decoy tag in their descriptions.
 6. Create a test GuestCommunicationServices key with a fresh GUID. Start its `ElementName` with `CashPilot Secure VM proof cpd-svm-<collision>.`
-7. Use a separate refusal run for the decoy NAT. Windows WinNAT supports one internal NAT prefix. If the host already has a NAT, leave it in place and report the blocked NAT test. If the NAT list is empty, create `cpd-svm-<nat-collision>` as the decoy NAT on the decoy subnet. Keep its instance free of other name collisions. [WinNAT documentation](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/setup-nat-network)
+7. Use a separate refusal run for the decoy NAT. Windows WinNAT supports one internal NAT prefix. If the host already has a NAT, leave it in place and report that the decoy NAT test is blocked. If the NAT list is empty, create `cpd-svm-<nat-collision>` as the decoy NAT on the decoy subnet. Keep its instance free of other name collisions. [WinNAT documentation](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/setup-nat-network)
 8. Save `decoys-before.json` before CashPilot touches either lab instance. Record the same fields as the host baseline for each fixture. Include all VM, switch and adapter IDs. Record the file identities and parent chains. Include the NAT provider ID, task path and XML, firewall rule IDs and filters, and registry key GUID.
 9. Run Setup for the collision number. Require refusal. Run Remove against the same instance with no ownership journal for the decoys. Require it to report the matching objects and leave them in place. Save and diff the decoy inventory after each command.
 10. If you created the decoy NAT, run Setup and Remove for its instance number. Require Setup to refuse the NAT collision. Require Remove to list the NAT. Diff the NAT inventory after both commands. Remove only the decoy NAT by its recorded provider ID at the end of this run.
-11. If any NAT remains, stop and report that successful Setup is blocked. Record that NAT coexistence is untested.
-12. Save a fresh baseline for the remaining decoys. Keep them in place through the successful Setup, Repair and final Remove. Save and diff their inventory after each operation. Stop and report any changed or missing decoy.
+11. Save a fresh baseline for the remaining decoys. If any foreign NAT remains, run Setup once for an unused lab instance. Require Setup to refuse and name the existing NAT and its prefix. Compare the full switch, management vNIC and NAT lists before and after. Require no new switch, management vNIC or NAT. Keep the existing NAT, including its name and settings. Record that successful Setup is blocked. End the run here and go directly to [Verify cleanup](#verify-cleanup).
+12. Keep the remaining decoys in place through the successful Setup, Repair and final Remove. Save and diff their inventory after each operation. Stop and report any changed or missing decoy.
 
 ## Use pktmon without disturbing existing captures
 
@@ -98,10 +109,10 @@ Before each Remove, compare the test vNIC's routes, DNS and forwarding settings 
 
 ## Verify cleanup
 
-1. After the final Remove, save `decoys-after.json` and diff it against the relevant decoy baseline. Keep the diffs from Setup and Repair with this result.
+1. Save `decoys-after.json` after the final Remove or when an earlier refusal ends the run. Compare it with the relevant decoy baseline. Keep the diffs from any Setup or Repair with this result.
 2. Remove the test fixtures using the ledger. Re-read each ID before deletion. Remove the scheduled task by its exact path and name after matching its registered XML. Match firewall rules by instance ID, the proof key by GUID and disk files by volume and NTFS file ID. Remove the recorded decoy VMs before deleting their disks. Delete disk children before their parents. Confirm the recorded ports are gone before removing each decoy switch. Stop if any recorded identity or dependency cannot be verified.
 3. If Setup added a test account to Hyper-V Administrators, remove only that recorded test grant after verifying its SID and the original membership. Leave all other memberships alone.
-4. Verify pktmon cleanup against the recorded state. Save a fresh `after.json` with the same fields as `before.json`. Diff both files. Stop and report any `bunker` or host setting difference. Verify that every decoy ID is absent.
+4. Verify pktmon cleanup against the recorded state. Save a fresh `after.json` with the same fields as `before.json`. Diff both files. Apply the inventory comparison rules above. Stop and report any unexpected VM or host setting difference. Verify that every decoy ID is absent.
 5. Keep credentials, owner tokens and packet traces out of the report. Report each blocked case and retain the redacted inventory diffs with the proof results.
 
 The scope excludes copies made by an administrator who transfers the private owner token or swaps in a byte-identical object between steps.

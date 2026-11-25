@@ -40,7 +40,7 @@ const guardDir = "guard"
 // belongs to. Without desired.json nothing on the host is touched: this
 // install cannot tell its objects apart, so they are only listed.
 func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retErr error) {
-	unlock, err := lockMutation(ctx, n)
+	unlock, err := lockMutation(ctx)
 	if err != nil {
 		return res, err
 	}

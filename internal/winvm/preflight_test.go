@@ -1,7 +1,6 @@
 package winvm
 
 import (
-	"net/netip"
 	"testing"
 )
 
@@ -189,8 +188,6 @@ func TestVirtualMachineReadsTheFirmwareStrings(t *testing.T) {
 // vmHostInput is a PC ready for the Secure VM, for each test to break one thing.
 func vmHostInput(edit func(*VMHostInput)) VMHostInput {
 	in := VMHostInput{
-		NATs:         []netip.Prefix{pfx("10.99.0.0/30")},
-		Subnet:       testSubnet,
 		Net:          testHost(),
 		Network:      CurrentNetwork{ID: NetworkID{GatewayMAC: "00-11-22-33-44-55", ProfileID: "{6F1C2D3E-0000-4000-8000-000000000001}"}},
 		InstalledRAM: 32 * GiB,
@@ -231,8 +228,12 @@ func TestCheckVMHostRefusals(t *testing.T) {
 		want     Tri
 		edit     func(*VMHostInput)
 	}{
-		{"NAT overlaps our /29", CheckNATOverlap, No, func(in *VMHostInput) { in.NATs = append(in.NATs, pfx("172.20.0.0/24")) }},
-		{"no subnet chosen", CheckNATOverlap, Unknown, func(in *VMHostInput) { in.Subnet = netip.Prefix{} }},
+		{"foreign NAT", CheckNATExists, No, func(in *VMHostInput) {
+			in.NATs = []LiveNAT{{Name: "OtherWorkload", Prefix: pfx("10.99.0.0/30")}}
+		}},
+		{"NAT with unknown prefix", CheckNATExists, No, func(in *VMHostInput) {
+			in.NATs = []LiveNAT{{Name: "OtherWorkload"}}
+		}},
 		{"default route through a VPN", CheckDefaultRoute, No, func(in *VMHostInput) { in.Net.Egress = egressAll(ifWireGuard) }},
 		{"routes not read", CheckDefaultRoute, Unknown, func(in *VMHostInput) { in.Net = HostNet{} }},
 		{"routes read but no lookups", CheckDefaultRoute, No, func(in *VMHostInput) { in.Net.Egress = nil }},
