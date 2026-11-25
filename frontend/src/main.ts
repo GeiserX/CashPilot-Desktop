@@ -86,7 +86,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
-import { renderEnvSetting, settingsSaveValues } from "./render/settings";
+import { renderEnvSetting, settingField, settingsSaveValues } from "./render/settings";
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
@@ -1466,14 +1466,7 @@ function renderCollectorSetting(item: SettingsState["collectors"][number]) {
 }
 
 async function saveSettingsFromForm() {
-  const fields = Array.from(document.querySelectorAll<HTMLInputElement>("[data-setting]")).map((input) => ({
-    name: input.dataset.setting || "",
-    value: input.value,
-    readOnly: input.readOnly,
-    secret: input.hasAttribute("data-secret"),
-    clear: input.dataset.clear === "true",
-    initial: input.dataset.initial,
-  }));
+  const fields = Array.from(document.querySelectorAll<HTMLInputElement>("[data-setting]")).map(settingField);
   const values = settingsSaveValues(fields);
   try {
     await SaveSettings(values);
