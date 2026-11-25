@@ -242,3 +242,40 @@ func TestSendReachesAServerOnLocalhost(t *testing.T) {
 		t.Fatalf("a server on localhost was refused: %v", err)
 	}
 }
+
+// THE RULE (web worker_api._apply_fleet_exits_reply): a list is the fleet's exits, null
+// keeps the list held, and no key is a server from before the list.
+func TestParseFleetExitsTellsTheThreeAnswersApart(t *testing.T) {
+	for _, tc := range []struct {
+		body     string
+		ips      []string
+		ok, sent bool
+	}{
+		{`{"status":"ok","fleet_exits":["198.51.100.4",7,"203.0.113.7"]}`, []string{"198.51.100.4", "203.0.113.7"}, true, true},
+		{`{"status":"ok","fleet_exits":[]}`, []string{}, true, true},
+		{`{"status":"ok","fleet_exits":null}`, nil, false, true},
+		{`{"status":"ok","fleet_exits":"198.51.100.4"}`, nil, false, true},
+		{`{"status":"ok"}`, nil, false, false},
+	} {
+		var resp Response
+		if err := json.Unmarshal([]byte(tc.body), &resp); err != nil {
+			t.Fatalf("%s: %v", tc.body, err)
+		}
+		ips, ok, sent := ParseFleetExits(resp.FleetExits)
+		if ok != tc.ok || sent != tc.sent || (tc.ips == nil) != (ips == nil) || strings.Join(ips, ",") != strings.Join(tc.ips, ",") {
+			t.Errorf("%s: ips %v ok %v sent %v, want %v %v %v", tc.body, ips, ok, sent, tc.ips, tc.ok, tc.sent)
+		}
+	}
+}
+
+// The heartbeat names this machine's exit, and leaves the key out when it is unknown.
+func TestSystemInfoCarriesTheEgressIPOnlyWhenKnown(t *testing.T) {
+	raw, _ := json.Marshal(SystemInfo{OS: "linux", EgressIP: "203.0.113.7"})
+	if !strings.Contains(string(raw), `"egress_ip":"203.0.113.7"`) {
+		t.Errorf("%s", raw)
+	}
+	raw, _ = json.Marshal(SystemInfo{OS: "linux"})
+	if strings.Contains(string(raw), "egress_ip") {
+		t.Errorf("an unknown exit went out: %s", raw)
+	}
+}

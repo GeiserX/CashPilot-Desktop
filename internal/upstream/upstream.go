@@ -72,6 +72,11 @@ type SystemInfo struct {
 	Hostname   string `json:"hostname,omitempty"`
 	DeviceType string `json:"device_type,omitempty"`
 	Version    string `json:"version,omitempty"`
+	// EgressIP is this machine's public IPv4. The server hands it to the fleet's other
+	// boxes as fleet_exits, and each of their LAN fences drops it, so an earner there
+	// cannot reach this line's port forwards. Omitted when unknown: the server then
+	// keeps the last address it had.
+	EgressIP string `json:"egress_ip,omitempty"`
 }
 
 // Response is what the server sends back.
@@ -85,6 +90,36 @@ type Response struct {
 	WorkerID  int64           `json:"worker_id"`
 	WorkerKey string          `json:"worker_key"`
 	Earnings  json.RawMessage `json:"earnings,omitempty"`
+	// FleetExits is the public IPv4 of every box of the fleet, read by ParseFleetExits.
+	FleetExits json.RawMessage `json:"fleet_exits,omitempty"`
+}
+
+// ParseFleetExits reads the fleet_exits a heartbeat response carried: the public IPv4
+// exits of every box of the fleet (CashPilot v2.10.0, web main._fleet_exits), which
+// this machine's LAN fence drops as it drops its own.
+//
+// It tells three answers apart, as the web worker does (worker_api._apply_fleet_exits_reply):
+//
+//   - a list: the fleet's exits now. ok is true. Entries that are not strings are left out.
+//   - null, or anything but a list: the server could not read its fleet this time.
+//     ok is false and sent is true: keep the list held, unknown after a start.
+//   - no key: a server from before the list. sent is false: no other exits.
+func ParseFleetExits(raw json.RawMessage) (ips []string, ok, sent bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, false, false
+	}
+	var items []any
+	if trimmed[0] != '[' || json.Unmarshal(trimmed, &items) != nil {
+		return nil, false, true
+	}
+	ips = []string{}
+	for _, item := range items {
+		if s, isString := item.(string); isString {
+			ips = append(ips, s)
+		}
+	}
+	return ips, true, true
 }
 
 // FleetEarnings is what the server reports back about the platforms THIS

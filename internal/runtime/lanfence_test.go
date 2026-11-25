@@ -221,7 +221,7 @@ func TestCheckFenceNetworkRefusesAnotherInterfaceName(t *testing.T) {
 
 // THE RULE: the helper gets NET_ADMIN in the host's namespace and nothing else.
 func TestFenceHelperSpecIsConfined(t *testing.T) {
-	cfg, host := fenceHelperSpec("apply", "172.30.0.0/16", "", true)
+	cfg, host := fenceHelperSpec("apply", "172.30.0.0/16", fenceExits{Complete: true}, true)
 	if host.NetworkMode != "host" {
 		t.Errorf("network mode %q: the table must land in the daemon's namespace", host.NetworkMode)
 	}
@@ -241,11 +241,11 @@ func TestFenceHelperSpecIsConfined(t *testing.T) {
 		!slices.Contains(cfg.Env, "FENCE_SUBNET=172.30.0.0/16") || !slices.Contains(cfg.Env, "FENCE_FILTER=1") {
 		t.Errorf("cmd %v env %v", cfg.Cmd, cfg.Env)
 	}
-	_, reduced := fenceHelperSpec("apply", "172.30.0.0/16", "", false)
+	_, reduced := fenceHelperSpec("apply", "172.30.0.0/16", fenceExits{Complete: true}, false)
 	if reduced.NetworkMode != "host" {
 		t.Error("the reduced helper is not on the host namespace")
 	}
-	cfgReduced, _ := fenceHelperSpec("apply", "172.30.0.0/16", "", false)
+	cfgReduced, _ := fenceHelperSpec("apply", "172.30.0.0/16", fenceExits{Complete: true}, false)
 	if !slices.Contains(cfgReduced.Env, "FENCE_FILTER=0") {
 		t.Errorf("reduce does not ask for the masquerade only: %v", cfgReduced.Env)
 	}
@@ -644,7 +644,7 @@ func TestTheHelperCleanupRemovesOnlyAnIdleHelperOfOurs(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer cli.Close()
-		if _, err := runHelper(context.Background(), cli, "apply", "172.30.0.0/16", "", true); err != nil {
+		if _, err := runHelper(context.Background(), cli, "apply", "172.30.0.0/16", fenceExits{Complete: true}, true); err != nil {
 			t.Fatalf("runHelper: %v (calls %v)", err, fake.recorded())
 		}
 	}

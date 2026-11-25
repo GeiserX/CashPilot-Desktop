@@ -548,6 +548,10 @@ type tunnelDocker interface {
 	// sidecarNetwork is the network a tunnel joins: the fenced one when LAN isolation
 	// is on, "" for the default bridge. An error means the fence could not be applied.
 	sidecarNetwork(ctx context.Context) (string, error)
+	// tunnelStarted applies the fence again for a tunnel that just started, so it gets
+	// its exception to a proxy or exit node on one of the owner's other lines now
+	// (lanfence_exits.go). Readiness polling retries a failed apply.
+	tunnelStarted(ctx context.Context) error
 }
 
 type liveTunnelDocker struct {
@@ -560,6 +564,11 @@ func (d liveTunnelDocker) sidecarNetwork(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	return d.fence.networkForDeploy(ctx, d.cli, false)
+}
+
+func (d liveTunnelDocker) tunnelStarted(ctx context.Context) error {
+	_, err := d.sidecarNetwork(ctx)
+	return err
 }
 
 func (d liveTunnelDocker) facts(ctx context.Context) daemonInfo { return daemonFacts(ctx, d.cli) }
@@ -674,9 +683,13 @@ func parseReady(out string) (Exit, bool) {
 	return e, true
 }
 
-func waitReady(ctx context.Context, d tunnelDocker, id string, timeout time.Duration) (Exit, error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+func waitReady(parent context.Context, d tunnelDocker, id string, timeout time.Duration) (Exit, error) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	fenced := false
+	var fencedAt string
+	var fenceErr error
+	for ctx.Err() == nil {
 		ins, found, err := d.inspect(ctx, id)
 		if err != nil || !found || ins.State == nil {
 			break
@@ -686,17 +699,31 @@ func waitReady(ctx context.Context, d tunnelDocker, id string, timeout time.Dura
 			break
 		}
 		if status == "running" {
-			if out, err := d.readFile(ctx, id, tunnelReadyFile); err == nil {
-				if e, ok := parseReady(out); ok {
-					return e, nil
+			if !fenced || fencedAt != ins.State.StartedAt {
+				// Its address on the fenced network exists only now, and a proxy on
+				// one of the owner's exits answers it only once its exception is in
+				// the table: the five-minute recheck would come after it gave up.
+				fenceErr = d.tunnelStarted(ctx)
+				fenced, fencedAt = fenceErr == nil, ins.State.StartedAt
+			}
+			if fenced {
+				if out, err := d.readFile(ctx, id, tunnelReadyFile); err == nil {
+					if e, ok := parseReady(out); ok {
+						return e, nil
+					}
 				}
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return Exit{}, ctx.Err()
 		case <-time.After(readyPoll):
 		}
+	}
+	if err := parent.Err(); err != nil {
+		return Exit{}, err
+	}
+	if fenceErr != nil {
+		return Exit{}, proxyErr("Could not apply the LAN fence for the tunnel: %v", fenceErr)
 	}
 	tail := strings.Join(strings.Fields(d.logsTail(context.Background(), id, 5)), " ")
 	if len(tail) > 300 {

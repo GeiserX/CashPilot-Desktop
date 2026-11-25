@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"archive/tar"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -71,6 +73,9 @@ type fakeDocker struct {
 	helperConflicts int
 	// helperCreates counts helper creates.
 	helperCreates int
+	// tunnelFiles are the secret files each container's archive answers, by
+	// container ID; a container or file not here answers 404.
+	tunnelFiles map[string]map[string]string
 }
 
 const fenceAppliedOutput = `{"backend":"nft","ok":true,"changed":true,"error":"","present":true,"matches":true,"counters":{"host":0}}`
@@ -149,6 +154,26 @@ func (f *fakeDocker) serveFence(w http.ResponseWriter, r *http.Request, path str
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
+		return true
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/containers/") && strings.HasSuffix(path, "/archive"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/archive")
+		name := strings.TrimPrefix(r.URL.Query().Get("path"), tunnelSecretDir+"/")
+		f.record("GET " + path + " " + name)
+		f.mu.Lock()
+		content, ok := f.tunnelFiles[id][name]
+		f.mu.Unlock()
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]string{"message": "Could not find the file"})
+			return true
+		}
+		stat, _ := json.Marshal(map[string]any{"name": name, "size": len(content), "mode": 0o400})
+		w.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(stat))
+		w.Header().Set("Content-Type", "application/x-tar")
+		tw := tar.NewWriter(w)
+		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o400, Size: int64(len(content))})
+		_, _ = tw.Write([]byte(content))
+		_ = tw.Close()
 		return true
 	case r.Method == http.MethodGet && path == "/version" && f.podman:
 		f.record("GET /version")

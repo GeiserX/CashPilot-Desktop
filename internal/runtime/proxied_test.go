@@ -78,6 +78,11 @@ type fakeTunnelDocker struct {
 	stopErr map[string]error
 	// imageEntrypoint, when set, is the ENTRYPOINT the earner image reports.
 	imageEntrypoint []string
+	// tunnelFences counts the fence applies asked for after a tunnel started, and
+	// runningAtFence how many tunnels were running at each.
+	tunnelFences   int
+	runningAtFence []int
+	tunnelFenceErr func(attempt int) error
 }
 
 func newFakeTunnelDocker() *fakeTunnelDocker {
@@ -254,6 +259,22 @@ func (f *fakeTunnelDocker) readFile(_ context.Context, id, path string) (string,
 		return "", errors.New("no such file")
 	}
 	return f.exit + "\n", nil
+}
+func (f *fakeTunnelDocker) tunnelStarted(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	running := 0
+	for _, c := range f.containers {
+		if c.state == "running" && c.opts.Config.Labels[LabelRole] == RoleTunnel {
+			running++
+		}
+	}
+	f.tunnelFences++
+	f.runningAtFence = append(f.runningAtFence, running)
+	if f.tunnelFenceErr != nil {
+		return f.tunnelFenceErr(f.tunnelFences)
+	}
+	return nil
 }
 func (f *fakeTunnelDocker) sidecarNetwork(context.Context) (string, error) {
 	return f.network, f.networkErr
@@ -1075,5 +1096,38 @@ func TestAStopThatFailsHalfwayIsNotUndoneByTheStatusRead(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// THE RULE: once a tunnel runs it has its address on the fenced network, and the
+// fence is applied again for it then, so a proxy on one of the owner's other lines
+// answers it before it gives up (web proxy_tunnel._wait_ready). Once per start.
+func TestTheFenceIsAppliedOnceTheTunnelRuns(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	f.network = FenceNetwork
+	if _, err := deployProxied(context.Background(), f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if f.tunnelFences != 1 || !slices.Equal(f.runningAtFence, []int{1}) {
+		t.Fatalf("fence applies %d, tunnels running at each %v; want one, with the tunnel up", f.tunnelFences, f.runningAtFence)
+	}
+}
+
+func TestTunnelStartupRetriesTheFenceBeforeStartingTheEarner(t *testing.T) {
+	withTestTunnel(t)
+	f := newFakeTunnelDocker()
+	f.network = FenceNetwork
+	f.tunnelFenceErr = func(attempt int) error {
+		if attempt == 1 {
+			return errors.New("daemon temporarily unavailable")
+		}
+		return nil
+	}
+	if _, err := deployProxied(context.Background(), f, deployRequest()); err != nil {
+		t.Fatal(err)
+	}
+	if f.tunnelFences != 2 {
+		t.Errorf("tunnel fence attempts = %d, want 2", f.tunnelFences)
 	}
 }

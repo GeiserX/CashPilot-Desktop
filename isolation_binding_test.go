@@ -30,6 +30,7 @@ type fakeFence struct {
 	enableErr  error
 	outside    []string
 	reconciled int
+	egress     string
 }
 
 func (f *fakeFence) FenceStatus() runtime.FenceStatus {
@@ -37,6 +38,7 @@ func (f *fakeFence) FenceStatus() runtime.FenceStatus {
 }
 func (f *fakeFence) ReconcileFence(context.Context)  { f.reconciled++ }
 func (f *fakeFence) GuardFenceGated(context.Context) {}
+func (f *fakeFence) EgressIP(context.Context) string { return f.egress }
 func (f *fakeFence) EnableFence(context.Context) (runtime.FenceStatus, error) {
 	return runtime.FenceStatus{Mode: runtime.FenceModeOn, Outside: f.outside}, f.enableErr
 }

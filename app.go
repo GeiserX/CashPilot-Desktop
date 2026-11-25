@@ -126,6 +126,8 @@ type fenceController interface {
 	EnableFence(ctx context.Context) (runtime.FenceStatus, error)
 	// GuardFenceGated starts a fence-gated earner that is down, behind the fence.
 	GuardFenceGated(ctx context.Context)
+	// EgressIP is this machine's public IPv4 as the fence reads it, "" when unknown.
+	EgressIP(ctx context.Context) string
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
@@ -210,6 +212,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// rather than every five minutes. Docker's own evidence still counts meanwhile.
 	var memoryFailing atomic.Bool
 	docker.SetEgressLookup(runtime.LookupPublicIP)
+	// The owner's other lines: the fleet's exits, from the server and from the workers
+	// that report here (fenceOtherExits).
+	docker.SetOtherExits(a.fenceOtherExits)
 	// Which fence-gated earners the user stopped, so CashPilot does not start them
 	// again. A file, read on every check, so the window and the daemon share it.
 	docker.SetGatedStoppedFile(filepath.Join(cfg.DataDir(), "fence_gated_stopped"))
