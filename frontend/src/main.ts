@@ -73,6 +73,8 @@ import {
   AcceptSessionRisk,
   RevokeSessionRisk,
   ReminderAction,
+  DeployAdminStep,
+  ApproveDeployAdminStep,
   GetModeState,
   JoinCashPilot,
   StartAsLead,
@@ -97,6 +99,8 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
+import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, missingFieldsNotice, runCheckedDeploy } from "./render/deploy_consent";
+import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
@@ -2484,6 +2488,7 @@ async function runWizardAction(slug: string, action: string) {
     return;
   }
   const values = readWizardForm(slug);
+  if (action === "deploy" && !(await wizardDeployChecks(slug, values))) return;
   try {
     if (action === "save") {
       await SaveCredentials(slug, values);
@@ -2492,6 +2497,7 @@ async function runWizardAction(slug: string, action: string) {
     }
     if (action === "deploy") {
       if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
+        sayDeploy(slug, "cancelled", "Nothing was deployed.");
         return;
       }
       if (output) output.textContent = "Deploying...";
@@ -2510,13 +2516,13 @@ async function runWizardAction(slug: string, action: string) {
           : DeployService(slug, values, image, instances),
       });
       if (outcome.kind === "refused" || outcome.kind === "cancelled") {
-        if (output) output.textContent = outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
+        sayDeploy(slug, "cancelled", outcome.kind === "refused" ? outcome.message : "Nothing was deployed.");
         return;
       }
       if (outcome.kind === "routed") {
         state = await GetAppState();
         const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-        if (output) output.textContent = routedDeployText(outcome.result, link);
+        sayDeploy(slug, "ok", routedDeployText(outcome.result, link));
         return;
       }
       const deployment = outcome.deployment;
@@ -2533,7 +2539,7 @@ async function runWizardAction(slug: string, action: string) {
         instancesInput.dataset.initial = String(deployment.instances || 1);
       }
       const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-      if (output) output.textContent = link ? `Deployed.\n\n${link}` : "Deployed.";
+      sayDeploy(slug, "ok", link ? `Deployed.\n\n${link}` : "Deployed.");
       return;
     }
     if (action === "collect") {
@@ -2543,8 +2549,69 @@ async function runWizardAction(slug: string, action: string) {
       state = await GetAppState();
     }
   } catch (error) {
-    if (output) output.textContent = String(error);
+    if (action === "deploy") sayDeploy(slug, "failed", deployErrorText(error));
+    else if (output) output.textContent = String(error);
   }
+}
+
+// Deploy's answer goes next to the Deploy button (render/deploy_consent.ts); a card
+// without that slot (a custom service) keeps its output line.
+function sayDeploy(slug: string, kind: "busy" | "ok" | "cancelled" | "failed", text: string) {
+  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
+  const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
+  if (output) output.textContent = panel ? "" : text;
+  if (!panel) return;
+  panel.innerHTML = deployNotice(kind, text);
+  panel.scrollIntoView({ block: "nearest" });
+}
+
+// Before a deploy from the card: every field marked * is filled, and when Windows
+// will show its admin prompt, CashPilot's own screen comes first. False: stop here,
+// with the reason next to Deploy.
+async function wizardDeployChecks(slug: string, values: Record<string, string>): Promise<boolean> {
+  const service = state?.services?.find((item) => item.slug === slug);
+  const name = service?.name || slug;
+  const fields = service && !service.custom ? serviceFormFields(service, state?.collectorFields) : [];
+  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
+  const outcome = await runCheckedDeploy(fields, values, readWizardRoute(slug) === null, {
+    adminStep: () => DeployAdminStep(slug),
+    askConsent: (step) => new Promise<boolean>((resolve) => {
+      if (!panel) {
+        const c = adminConsentText(name, step);
+        return resolve(confirm([c.title, c.changes, c.prompt, c.after, c.undo].join("\n\n")));
+      }
+      panel.innerHTML = adminConsentScreen(name, step);
+      panel.scrollIntoView({ block: "nearest" });
+      panel.querySelector<HTMLButtonElement>('[data-deploy-consent="go"]')?.focus();
+      panel.querySelectorAll<HTMLButtonElement>("[data-deploy-consent]").forEach((button) => {
+        button.addEventListener("click", () => resolve(button.dataset.deployConsent === "go"), { once: true });
+      });
+    }),
+    approve: () => ApproveDeployAdminStep(slug),
+    deploy: async () => true,
+  }).catch((error) => {
+    sayDeploy(slug, "failed", deployErrorText(error));
+    return null;
+  });
+  const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
+  form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
+  if (!outcome) return false;
+  if (outcome.kind === "missing") {
+    const keys = new Set(outcome.missing.map((field) => field.key));
+    form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => {
+      if (keys.has(input.dataset.wizardEnv || "")) input.setAttribute("aria-invalid", "true");
+    });
+    if (panel) panel.innerHTML = missingFieldsNotice(outcome.missing);
+    else sayDeploy(slug, "cancelled", `Fill in every field marked * first: ${outcome.missing.map((field) => field.label).join(", ")}. Nothing was deployed.`);
+    form?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
+    return false;
+  }
+  if (outcome.kind === "cancelled") {
+    sayDeploy(slug, "cancelled", CANCELLED_TEXT);
+    return false;
+  }
+  sayDeploy(slug, "busy", `Deploying ${name}...`);
+  return true;
 }
 
 // Save a compose file for one service. The backend generates it, asks where to put

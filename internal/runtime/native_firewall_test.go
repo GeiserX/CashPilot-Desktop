@@ -12,27 +12,41 @@ import (
 	"time"
 )
 
-// firewallCalls records what the provider asked of the firewall seams.
+// firewallCalls records what the provider asked of the firewall seams. It acts
+// like the real rule: missing until created, and created only when the admin
+// prompt may show.
 type firewallCalls struct {
 	ensured  [][]string // slug, program, then the networks, one per call
+	elevate  []bool     // mayElevate, one per ensure call
 	removed  []string   // "slug program", one per call
 	ensureFn func() error
 	removeFn func() error
+	inPlace  bool // the rule exists
 }
 
 func (f *firewallCalls) install(p *NativeProcessProvider) {
-	p.ensureFirewall = func(slug, program string, nets []string) error {
+	p.ensureFirewall = func(slug, program string, nets []string, mayElevate bool) error {
 		f.ensured = append(f.ensured, append([]string{slug, program}, nets...))
+		f.elevate = append(f.elevate, mayElevate)
 		if f.ensureFn != nil {
 			return f.ensureFn()
 		}
+		if f.inPlace {
+			return nil
+		}
+		if !mayElevate {
+			return &AdminApprovalNeeded{Slug: slug}
+		}
+		f.inPlace = true
 		return nil
 	}
+	p.firewallReady = func(string, string, []string) (bool, error) { return f.inPlace, nil }
 	p.removeFirewall = func(slug, program string) error {
 		f.removed = append(f.removed, slug+" "+program)
 		if f.removeFn != nil {
 			return f.removeFn()
 		}
+		f.inPlace = false
 		return nil
 	}
 }
@@ -54,6 +68,7 @@ func TestNativeBinaryArgsComeFirstAndFirewallRuleFollowsTheService(t *testing.T)
 	svc.Native.Binaries[0].Args = "--userspace"
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10", "169.254.0.0/16"}
 
+	p.ApproveAdminStep("fwsvc")
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
@@ -126,6 +141,7 @@ func TestNativeRemoveKeepsTheEntryWhileTheRuleStays(t *testing.T) {
 	url := serveArtifact(t, p, art)
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
+	p.ApproveAdminStep("fwsvc")
 	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}
@@ -288,6 +304,7 @@ func TestNativeRedeployWithoutFirewallBlockDeletesTheOldRule(t *testing.T) {
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
 	spec := DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(filepath.Join(t.TempDir(), "m"))}
+	p.ApproveAdminStep("fwsvc")
 	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
 		t.Fatalf("Deploy: %v", err)
 	}

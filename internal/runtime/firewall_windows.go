@@ -93,6 +93,13 @@ func currentUserSID() (string, error) {
 // place, asking for admin rights only when it is missing or differs. It fails when
 // the rule cannot be confirmed, so the caller never starts the binary without it.
 func ensureFirewallBlock(slug, program string, nets []string) error {
+	return ensureFirewallBlockWith(slug, program, nets, true)
+}
+
+// ensureFirewallBlockWith is ensureFirewallBlock that raises the admin prompt only
+// when mayElevate is set (the person approved it in the app). Otherwise a missing
+// rule fails with AdminApprovalNeeded and Windows shows nothing.
+func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate bool) error {
 	nets, err := validFirewallNetworks(nets)
 	if err != nil {
 		return err
@@ -103,14 +110,12 @@ func ensureFirewallBlock(slug, program string, nets []string) error {
 	if err != nil {
 		return fmt.Errorf("%s, and %v", what, err)
 	}
-	if why := st.notEnforced(); why != "" {
-		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
-	}
-	if st.matches(program, nets) {
-		return nil
+	create, err := firewallNext(st, slug, program, nets, mayElevate, what)
+	if err != nil || !create {
+		return err
 	}
 	if _, err := RunElevated(firewallCreateScript(name, program, nets)); err != nil {
-		return fmt.Errorf("%s, and creating it failed (approve the Windows admin prompt and try again): %v", what, err)
+		return firewallCreateFailed(slug, nets, what, err)
 	}
 	st, err = readFirewallRule(name)
 	if err != nil {
@@ -124,6 +129,16 @@ func ensureFirewallBlock(slug, program string, nets []string) error {
 		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
 	}
 	return nil
+}
+
+// firewallReady reports whether the rule for program and nets is in place and
+// enforced, reading it without admin rights.
+func firewallReady(slug, program string, nets []string) (bool, error) {
+	st, err := readFirewallRule(firewallRuleName(slug, program))
+	if err != nil {
+		return false, fmt.Errorf("could not read the Windows Firewall: %v", err)
+	}
+	return st.matches(program, nets) && st.notEnforced() == "", nil
 }
 
 // removeFirewallBlock deletes the rule for this program, asking for admin rights

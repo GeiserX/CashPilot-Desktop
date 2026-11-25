@@ -125,11 +125,17 @@ type NativeProcessProvider struct {
 
 	logCap int64
 
-	// ensureFirewall and removeFirewall keep a binary's firewall_block rule; they
-	// default to ensureFirewallBlock/removeFirewallBlock and are seams for tests, which
-	// must never run PowerShell or raise an admin prompt.
-	ensureFirewall func(slug, program string, nets []string) error
+	// ensureFirewall and removeFirewall keep a binary's firewall_block rule, and
+	// firewallReady reads it; they default to ensureFirewallBlockWith,
+	// removeFirewallBlock and firewallReady and are seams for tests, which must never
+	// run PowerShell or raise an admin prompt. ensureFirewall may raise the prompt
+	// only when mayElevate is set: the person approved it (ApproveAdminStep).
+	ensureFirewall func(slug, program string, nets []string, mayElevate bool) error
 	removeFirewall func(slug, program string) error
+	firewallReady  func(slug, program string, nets []string) (bool, error)
+
+	approvalMu sync.Mutex           // guards approvals
+	approvals  map[string]time.Time // slug -> until when its admin prompt is approved
 
 	// maxDownload bounds a single artifact download and maxExtract bounds one archive's
 	// total extracted bytes. They default to maxDownloadBytes/maxExtractedBytes and are
@@ -164,8 +170,9 @@ func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 		maxDownload:     maxDownloadBytes,
 		maxExtract:      maxExtractedBytes,
 		procs:           make(map[string]*managedProcess),
-		ensureFirewall:  ensureFirewallBlock,
+		ensureFirewall:  ensureFirewallBlockWith,
 		removeFirewall:  removeFirewallBlock,
+		firewallReady:   firewallReady,
 	}
 	// statFn is a bound method so it can read p.cpuStatInterval; still a field so tests can
 	// swap in a stub sampler.
@@ -492,9 +499,10 @@ type registryDesc struct {
 // fail fast if the binary cannot exec; the supervisor thereafter owns Wait + respawn.
 func (p *NativeProcessProvider) launchProcess(slug, binPath string, args, svcEnv []string, res catalog.ResourceLimits, desc registryDesc) (*managedProcess, error) {
 	// Fail closed: a binary that declares firewall_block never runs without its rule.
-	// The supervisor's respawns skip this, since the rule outlives the process.
+	// The supervisor's respawns skip this, since the rule outlives the process. The
+	// admin prompt shows only after the person approved it in the app.
 	if len(desc.FirewallBlock) > 0 {
-		if err := p.ensureFirewall(slug, binPath, desc.FirewallBlock); err != nil {
+		if err := p.ensureFirewall(slug, binPath, desc.FirewallBlock, p.takeApproval(slug)); err != nil {
 			return nil, err
 		}
 	}

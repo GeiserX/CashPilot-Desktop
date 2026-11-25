@@ -19,6 +19,8 @@ export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetSt
 
 export function ApplyImport(arg1:main.ImportApplyRequest):Promise<main.ImportResult>;
 
+export function ApproveDeployAdminStep(arg1:string):Promise<void>;
+
 export function BackgroundHelperStatus():Promise<bgservice.Status>;
 
 export function CancelSetup():Promise<void>;
@@ -38,6 +40,8 @@ export function DeleteActivityData():Promise<main.ActivityView>;
 export function DeleteCustomService(arg1:string):Promise<void>;
 
 export function DeleteProxy(arg1:number):Promise<void>;
+
+export function DeployAdminStep(arg1:string):Promise<runtime.AdminStep>;
 
 export function DeployProxiedCopy(arg1:string,arg2:number):Promise<services.ProxiedResult>;
 

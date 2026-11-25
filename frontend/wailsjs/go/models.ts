@@ -2758,6 +2758,26 @@ export namespace proxies {
 
 export namespace runtime {
 	
+	export class AdminStep {
+	    needed: boolean;
+	    kind?: string;
+	    ruleName?: string;
+	    program?: string;
+	    networks?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AdminStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.needed = source["needed"];
+	        this.kind = source["kind"];
+	        this.ruleName = source["ruleName"];
+	        this.program = source["program"];
+	        this.networks = source["networks"];
+	    }
+	}
 	export class ContainerInfo {
 	    slug: string;
 	    containerId: string;

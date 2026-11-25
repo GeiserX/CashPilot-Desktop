@@ -108,6 +108,7 @@ export function renderWizardServiceSetup(
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
         <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">Collect Earnings</button>
       </div>
+      <div class="deploy-panel" data-deploy-panel="${escapeHtml(service.slug)}" aria-live="polite"></div>
       ${composeExportControl(service)}
       ${serviceFacts(service, balance)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>

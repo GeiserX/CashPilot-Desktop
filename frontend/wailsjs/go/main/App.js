@@ -14,6 +14,10 @@ export function ApplyImport(arg1) {
   return window['go']['main']['App']['ApplyImport'](arg1);
 }
 
+export function ApproveDeployAdminStep(arg1) {
+  return window['go']['main']['App']['ApproveDeployAdminStep'](arg1);
+}
+
 export function BackgroundHelperStatus() {
   return window['go']['main']['App']['BackgroundHelperStatus']();
 }
@@ -52,6 +56,10 @@ export function DeleteCustomService(arg1) {
 
 export function DeleteProxy(arg1) {
   return window['go']['main']['App']['DeleteProxy'](arg1);
+}
+
+export function DeployAdminStep(arg1) {
+  return window['go']['main']['App']['DeployAdminStep'](arg1);
 }
 
 export function DeployProxiedCopy(arg1, arg2) {

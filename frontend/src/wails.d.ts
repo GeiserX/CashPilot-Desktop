@@ -36,6 +36,10 @@ declare module "../wailsjs/go/main/App" {
   // switch of a routed service back to this machine's own IP.
   export function DeployServiceRouted(slug: string, values: Record<string, string>, proxyId: number): Promise<ProxiedResult>;
   export function DeployServiceLeavingRoute(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
+  // Whether a deploy of slug makes Windows show its admin prompt, and what for. Reads only.
+  export function DeployAdminStep(slug: string): Promise<AdminStep>;
+  // Only from the setup card's admin-step screen: the next deploy may raise the prompt, once.
+  export function ApproveDeployAdminStep(slug: string): Promise<void>;
   export function StartService(slug: string): Promise<void>;
   export function StopService(slug: string): Promise<void>;
   export function RestartService(slug: string): Promise<void>;
@@ -879,6 +883,16 @@ export interface SetupResumeView {
   // The sign-out a step waited for happened: RunOnce opened the app, or this
   // session's token already carries docker-users.
   signedIn?: boolean;
+}
+
+// What a deploy's Windows admin prompt is for (internal/runtime/firewall_consent.go).
+export interface AdminStep {
+  needed: boolean;
+  // "firewall-rule" when needed.
+  kind?: string;
+  ruleName?: string;
+  program?: string;
+  networks?: string[];
 }
 
 // How a change of the checklist ended (docker_setup.go).
