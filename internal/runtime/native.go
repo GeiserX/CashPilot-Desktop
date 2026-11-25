@@ -758,7 +758,8 @@ func buildNativeEnv(svc catalog.Service, overrides map[string]string) map[string
 			env[item.Key] = item.Default
 		}
 	}
-	for key, value := range overrides {
+	// A wallet seed never reaches a process's environment either (seedfile.go).
+	for key, value := range StripSeedVars(svc, overrides) {
 		env[key] = value
 	}
 	// Expand {hostname} to the real hostname on both defaults and overrides (an unedited

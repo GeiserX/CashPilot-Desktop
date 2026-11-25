@@ -133,7 +133,7 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 	}
 	result := ImportResult{Saved: []string{}, Kept: map[string][]string{}}
 	for _, p := range todo {
-		if err := a.store.SaveCredentials(p.slug, p.values); err != nil {
+		if err := a.saveCredentials(p.slug, p.values); err != nil {
 			// Each service is its own write, so say which ones are already saved.
 			done := "nothing was saved"
 			if len(result.Saved) > 0 {

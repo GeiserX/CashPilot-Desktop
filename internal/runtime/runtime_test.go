@@ -933,10 +933,20 @@ func TestBuildPortsParsesAndRejects(t *testing.T) {
 
 	// A typo must fail the deploy, not quietly publish nothing. Before, anything
 	// without exactly one colon was skipped and the container started portless.
-	for _, bad := range []string{"8080:notaport", "8080", "127.0.0.1:8080:9090", ""} {
+	// "ip:host:container" is the schema's other form (Sia's loopback dashboard), so
+	// only a front part that is not an address is a typo.
+	for _, bad := range []string{"8080:notaport", "8080", "localhost:8080:9090", "1:2:3:4", ""} {
 		if _, _, err := buildPorts([]string{bad}); err == nil {
 			t.Fatalf("expected an error for the port mapping %q", bad)
 		}
+	}
+	_, addressed, err := buildPorts([]string{"127.0.0.1:8080:9090"})
+	if err != nil {
+		t.Fatalf("an addressed port was refused: %v", err)
+	}
+	tcp9090, _ := network.ParsePort("9090/tcp")
+	if got := addressed[tcp9090]; len(got) != 1 || got[0].HostPort != "8080" || got[0].HostIP.String() != "127.0.0.1" {
+		t.Fatalf("127.0.0.1:8080:9090 bound to %v, want 127.0.0.1:8080", got)
 	}
 }
 
