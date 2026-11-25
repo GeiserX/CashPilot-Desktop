@@ -856,6 +856,7 @@ export namespace catalog {
 	    code: string;
 	    program?: boolean;
 	    bonus: ReferralBonus;
+	    account?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Referral(source);
@@ -867,6 +868,7 @@ export namespace catalog {
 	        this.code = source["code"];
 	        this.program = source["program"];
 	        this.bonus = this.convertValues(source["bonus"], ReferralBonus);
+	        this.account = source["account"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
