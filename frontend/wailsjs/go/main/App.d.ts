@@ -29,6 +29,8 @@ export function ChooseRestoreFile():Promise<main.RestorePreview>;
 
 export function CollectService(arg1:string):Promise<store.EarningsRecord>;
 
+export function CommandWorkerCopy(arg1:number,arg2:string,arg3:string,arg4:number):Promise<string>;
+
 export function CompleteOnboarding():Promise<void>;
 
 export function ConfirmStateBackup(arg1:string):Promise<void>;
@@ -46,6 +48,8 @@ export function DeployService(arg1:string,arg2:Record<string, string>,arg3:any,a
 export function DeployServiceLeavingRoute(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any):Promise<store.Deployment>;
 
 export function DeployServiceRouted(arg1:string,arg2:Record<string, string>,arg3:number):Promise<services.ProxiedResult>;
+
+export function DeployToWorker(arg1:string,arg2:main.WorkerDeployRequest):Promise<main.WorkerDeployResult>;
 
 export function DiscardPartialRestore(arg1:string):Promise<void>;
 

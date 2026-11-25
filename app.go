@@ -451,6 +451,9 @@ type AppState struct {
 	// computer's own copies while joined to it, "" when this computer raises them
 	// (stallServer). The proxied copies' alerts stay here.
 	StallsServer string `json:"stallsServer"`
+	// WorkerTargets are the Docker workers the deploy form's Where box offers
+	// (lead_workers.go); nil when this computer sends workers no commands.
+	WorkerTargets []WorkerTarget `json:"workerTargets"`
 }
 
 // RouteState is what the deploy form needs to offer a route.
@@ -597,6 +600,9 @@ type FleetState struct {
 	APIListening  bool                `json:"apiListening"`
 	WorkerSnippet string              `json:"workerSnippet"`
 	MobileSnippet string              `json:"mobileSnippet"`
+	// WorkerCommands is, per worker id, its copies and why it takes no commands
+	// now (lead_workers.go).
+	WorkerCommands map[string]WorkerCommandsView `json:"workerCommands"`
 }
 
 // Fleet device lifecycle tunables, matching production CashPilot. A worker/mobile that
@@ -663,6 +669,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Reminders:        a.reminders(),
 		Stalls:           a.currentStalls(),
 		StallsServer:     a.stallServer(time.Now()),
+		WorkerTargets:    a.workerTargets(),
 	}, nil
 }
 
@@ -1357,7 +1364,7 @@ func (a *App) GetFleetState() (FleetState, error) {
 	services := len(a.catalog.ListVisible())
 	uiURL := a.fleetUIURL()
 	localAPIURL := fmt.Sprintf("http://127.0.0.1:%d", cfg.FleetPort)
-	return FleetState{
+	return a.withWorkerCommands(FleetState{
 		Workers:       workers,
 		Mobiles:       mobiles,
 		Online:        online,
@@ -1369,7 +1376,7 @@ func (a *App) GetFleetState() (FleetState, error) {
 		APIListening:  a.fleetAPI != nil,
 		WorkerSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nCASHPILOT_WORKER_NAME=%s-worker\nCASHPILOT_WORKER_URL=http://<worker-lan-ip>:8081", uiURL, a.fleetKey, cfg.HostnamePrefix),
 		MobileSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nDevice type: mobile", uiURL, a.fleetKey),
-	}, nil
+	}), nil
 }
 
 func (a *App) AddFleetDevice(values map[string]string) (FleetState, error) {

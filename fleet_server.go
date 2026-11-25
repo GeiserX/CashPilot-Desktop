@@ -34,6 +34,11 @@ type workerHeartbeat struct {
 type workerContainer struct {
 	Slug   string `json:"slug"`
 	Status string `json:"status"`
+	// Instance is which copy this is (1 when absent); DeployedBy is "external" for
+	// a container the worker found by its image but did not deploy. Both are kept
+	// so a lead can command one copy (lead_workers.go).
+	Instance   int    `json:"instance"`
+	DeployedBy string `json:"deployed_by"`
 }
 
 // workerApp is one entry of an Android heartbeat's "apps" list. Android sends
@@ -70,6 +75,10 @@ type workerSystemInfo struct {
 	// EgressIP is the worker's public IP. Kept per device, it goes back to every
 	// worker as fleet_exits, so each LAN fence drops the owner's other lines.
 	EgressIP any `json:"egress_ip"`
+	// Features are what the worker can do that an older one cannot ("fence_gated",
+	// "instances"). Read loosely: a list entry that is not a string is skipped
+	// rather than failing the heartbeat.
+	Features []any `json:"features"`
 }
 
 // deviceTypeDesktop is what internal/upstream sends when this app reports to a
@@ -331,6 +340,13 @@ func (a *App) recordWorkerHeartbeat(w http.ResponseWriter, body workerHeartbeat,
 		return nil
 	}
 
+	if kind != "mobile" {
+		// What a lead's commands read: the copies and what the worker can do. A
+		// failed write costs the commands one heartbeat, not the heartbeat.
+		if err := a.store.SetFleetReport(kind, name, heartbeatReport(body)); err != nil {
+			a.emitError("fleet-heartbeat", err)
+		}
+	}
 	resp := map[string]any{"status": "ok", "worker_id": device.ID}
 	switch action {
 	case fleetAuthIssue:
@@ -338,7 +354,9 @@ func (a *App) recordWorkerHeartbeat(w http.ResponseWriter, body workerHeartbeat,
 		// on the shared key): mint a key, store its hash, and hand it back once.
 		key, err := newFleetKey()
 		if err == nil {
-			err = a.store.SetFleetDeviceKey(kind, name, store.HashFleetKey(key))
+			// The key itself is kept too, encrypted: a lead sends it with every
+			// command to this worker (lead_workers.go).
+			err = a.store.SetFleetDeviceIssuedKey(kind, name, key)
 		}
 		if err != nil {
 			a.emitError("fleet-heartbeat", err)
@@ -480,6 +498,29 @@ func heartbeatServices(body workerHeartbeat) []string {
 		}
 	}
 	return out
+}
+
+// heartbeatReport is the part of a worker heartbeat a lead's commands read.
+func heartbeatReport(body workerHeartbeat) store.FleetReport {
+	report := store.FleetReport{ClientID: strings.TrimSpace(body.ClientID), Containers: []store.FleetContainer{}, Features: []string{}}
+	for _, c := range body.Containers {
+		slug := strings.TrimSpace(c.Slug)
+		if slug == "" {
+			continue
+		}
+		report.Containers = append(report.Containers, store.FleetContainer{
+			Slug:     slug,
+			Status:   c.Status,
+			Instance: max(c.Instance, 1),
+			Managed:  c.DeployedBy != "external",
+		})
+	}
+	for _, f := range body.SystemInfo.Features {
+		if name, ok := f.(string); ok {
+			report.Features = append(report.Features, name)
+		}
+	}
+	return report
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

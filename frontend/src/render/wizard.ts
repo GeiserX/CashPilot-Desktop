@@ -17,7 +17,7 @@
 // backend's collector-field map, this machine's hostname and the earnings
 // breakdown the facts strip shows a balance from) and returns HTML.
 
-import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning, SessionConsent } from "../wails";
+import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning, SessionConsent, WorkerTarget } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
@@ -25,6 +25,7 @@ import { ratingBlock } from "./rating.js";
 import { imageChoiceSection } from "./image.js";
 import { instancesSection } from "./instances.js";
 import { routeChoiceSection } from "./route.js";
+import { whereChoiceSection } from "./where.js";
 import { renderCustomServiceCard } from "./custom.js";
 import { needsSessionConsent, renderSessionSlot } from "./session.js";
 
@@ -48,6 +49,9 @@ import { needsSessionConsent, renderSessionSlot } from "./session.js";
  * `sessionConsent` is the desktop-app risk disclosures the user accepted, per slug
  * (render/session.ts). A manual-only desktop app shows the disclosure in place of
  * its install tip and setup guide until the user accepts the current text.
+ *
+ * `workerTargets` are the Docker workers a lead can deploy to (the Where box;
+ * absent or empty, no box) and `whereDraft` the owner's pick from before a redraw.
  */
 export function renderWizardServiceSetup(
   service: Service,
@@ -60,6 +64,8 @@ export function renderWizardServiceSetup(
   route?: RouteState | null,
   routeDraft?: number | null,
   sessionConsent?: Record<string, SessionConsent> | null,
+  workerTargets?: WorkerTarget[] | null,
+  whereDraft?: number | null,
 ): string {
   // A custom service runs its saved definition: no credentials, no Image box.
   if (service.custom) return renderCustomServiceCard(service, scaling, instances);
@@ -100,6 +106,7 @@ export function renderWizardServiceSetup(
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
       ${instancesSection(service, scaling, instances)}
+      ${whereChoiceSection(service, workerTargets, whereDraft)}
       ${routeChoiceSection(service, route, routeDraft)}
       ${imageChoiceSection(service, customImage)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>

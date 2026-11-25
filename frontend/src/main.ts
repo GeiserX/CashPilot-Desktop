@@ -8,6 +8,8 @@ import {
 } from "../wailsjs/runtime/runtime";
 import {
   AddFleetDevice,
+  CommandWorkerCopy,
+  DeployToWorker,
   BackgroundHelperStatus,
   DeleteActivityData,
   GetActivity,
@@ -116,6 +118,8 @@ import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
 import { guidesBesideChecklist, loadRuntimePage } from "./render/runtimepage";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
+import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
+import { copyCommandQuestion, workerCopiesSection } from "./render/workercopies";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
@@ -156,6 +160,9 @@ let wizardSelected: string[] = [];
 // a redraw of the wizard does not put an unsaved proxy choice back to Direct. Cleared
 // when the wizard opens or closes, and on a tab or Add service click (wizardAfterNav).
 let wizardRouteDrafts: Record<string, number | null> = {};
+// The Where box's pick per slug (a worker id, null for this computer), kept and
+// cleared as the Route box's picks are (render/where.ts).
+let wizardWhereDrafts: Record<string, number | null> = {};
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -1030,6 +1037,7 @@ function wireShellNav() {
       if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import" || next === "runtime") {
         activeView = next;
         ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav(next, wizardStep));
+        wizardWhereDrafts = {};
         resetScrollAfterRender = true;
         render();
       }
@@ -1929,7 +1937,7 @@ async function renderFleet(current: AppState) {
               <span class="card-title">Devices</span>
             </div>
             <div class="fleet-list">
-              ${fleet.devices.map(renderFleetDevice).join("")}
+              ${fleet.devices.map((device) => renderFleetDevice(device) + (device.kind === "worker" ? workerCopiesSection(device.id, fleet.workerCommands?.[String(device.id)]) : "")).join("")}
             </div>
           </section>
 
@@ -1945,6 +1953,9 @@ async function renderFleet(current: AppState) {
   document.querySelector("#add-fleet-device")?.addEventListener("click", () => void addFleetDevice());
   document.querySelectorAll<HTMLButtonElement>("[data-remove-device]").forEach((button) => {
     button.addEventListener("click", () => void removeFleetDevice(Number(button.dataset.removeDevice || 0)));
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-worker-copy]").forEach((button) => {
+    button.addEventListener("click", () => void commandWorkerCopy(button, fleet));
   });
   wireProxies();
   const freshEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
@@ -2059,6 +2070,25 @@ async function addFleetDevice() {
   }
 }
 
+// One command to one copy on a worker (render/workercopies.ts). Only Remove asks first.
+async function commandWorkerCopy(button: HTMLButtonElement, fleet: FleetState) {
+  const workerId = Number(button.dataset.workerId || 0);
+  const slug = button.dataset.slug || "";
+  const command = button.dataset.workerCopy || "";
+  const instance = Number(button.dataset.instance || 1);
+  const worker = fleet.devices.find((device) => device.id === workerId);
+  const question = copyCommandQuestion(command, slug, instance, worker?.name || "this worker", fleet.workerCommands?.[String(workerId)]?.copies || []);
+  if (question && !confirm(question)) return;
+  button.disabled = true;
+  try {
+    showInfoToast({scope: "worker", message: await CommandWorkerCopy(workerId, slug, command, instance)});
+    render();
+  } catch (error) {
+    showErrorToast({scope: "worker", error: String(error)});
+    button.disabled = false;
+  }
+}
+
 async function removeFleetDevice(id: number) {
   if (!confirm("Remove this fleet device from CashPilot Desktop?")) return;
   try {
@@ -2122,6 +2152,7 @@ function openWizard(input?: string | Event) {
   wizardStep = slug ? 3 : 1;
   wizardSelected = slug ? [slug] : [];
   wizardRouteDrafts = {};
+  wizardWhereDrafts = {};
   const service = state?.services.find((svc) => svc.slug === slug);
   wizardCategories = service ? [service.category] : [];
   render();
@@ -2204,6 +2235,11 @@ function renderSetupWizard(current: AppState) {
   document.querySelectorAll<HTMLSelectElement>("[data-wizard-route]").forEach((select) => {
     select.addEventListener("change", () => {
       wizardRouteDrafts[select.dataset.wizardRoute || ""] = routeChoice(select.value);
+    });
+  });
+  document.querySelectorAll<HTMLSelectElement>("[data-wizard-where]").forEach((select) => {
+    select.addEventListener("change", () => {
+      wizardWhereDrafts[select.dataset.wizardWhere || ""] = whereChoice(select.value);
     });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-wizard-action]").forEach((button) => {
@@ -2408,7 +2444,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent)).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, state?.workerTargets, wizardWhereDrafts[service.slug])).join("")}
     </div>
   `;
 }
@@ -2449,10 +2485,17 @@ function readWizardRoute(slug: string): number | null {
   return select ? routeChoice(select.value) : null;
 }
 
+// The Where box's answer: a worker id, or null for this computer.
+function readWizardWhere(slug: string): number | null {
+  const select = document.querySelector<HTMLSelectElement>(`[data-form-slug="${slug}"] [data-wizard-where]`);
+  return select ? whereChoice(select.value) : null;
+}
+
 function closeWizard() {
   activeView = "dashboard";
   wizardStep = 1;
   wizardRouteDrafts = {};
+  wizardWhereDrafts = {};
   render();
 }
 
@@ -2516,6 +2559,18 @@ async function runWizardAction(slug: string, action: string) {
     if (action === "save") {
       await SaveCredentials(slug, values);
       if (output) output.textContent = "Credentials saved.";
+      return;
+    }
+    const worker = action === "deploy" ? state?.workerTargets?.find((target) => target.id === readWizardWhere(slug)) : undefined;
+    if (worker) {
+      if (output) output.textContent = `Deploying to ${worker.name}...`;
+      const image = readWizardImage(slug) || "";
+      const outcome = await runWorkerDeploy(slug, worker, readWizardRoute(slug), readWizardInstances(slug), {
+        confirm: (message) => confirm(message),
+        deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image, ...yes}),
+        save: () => SaveCredentials(slug, values),
+      });
+      if (output) output.textContent = outcome.kind === "deployed" ? workerDeployText(outcome.result) : outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
       return;
     }
     if (action === "deploy") {
