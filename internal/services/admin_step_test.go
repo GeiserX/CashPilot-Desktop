@@ -1,9 +1,11 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	goruntime "runtime"
 	"slices"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -16,6 +18,7 @@ type stepProvider struct {
 	fakeProvider
 	asked    []string
 	approved []string
+	revoked  []string
 }
 
 func (s *stepProvider) AdminStep(_ catalog.Service, slug string) (runtime.AdminStep, error) {
@@ -24,6 +27,8 @@ func (s *stepProvider) AdminStep(_ catalog.Service, slug string) (runtime.AdminS
 }
 
 func (s *stepProvider) ApproveAdminStep(slug string) { s.approved = append(s.approved, slug) }
+
+func (s *stepProvider) RevokeAdminStep(slug string) { s.revoked = append(s.revoked, slug) }
 
 // THE RULE: the admin step is asked of, and approved on, the runtime that would
 // deploy the service, and only that one. A Docker service needs none.
@@ -39,7 +44,8 @@ func TestAdminStepAsksTheRuntimeThatWouldDeploy(t *testing.T) {
 		t.Fatalf("LoadEmbedded: %v", err)
 	}
 	native := &stepProvider{}
-	m := NewManager(&fakeProvider{}, cat, newTestStore(t))
+	docker := &fakeProvider{}
+	m := NewManager(docker, cat, newTestStore(t))
 	m.Register(runtime.NativeRuntimeKind, native)
 
 	if step, err := m.AdminStepFor("nat"); err != nil || !step.Needed {
@@ -54,8 +60,28 @@ func TestAdminStepAsksTheRuntimeThatWouldDeploy(t *testing.T) {
 	if err := m.ApproveAdminStep("example"); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(native.asked, []string{"nat"}) || !slices.Equal(native.approved, []string{"nat"}) {
-		t.Fatalf("native runtime asked %v, approved %v, want nat only", native.asked, native.approved)
+	if err := m.RevokeAdminStep("nat"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RevokeAdminStep("example"); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(native.asked, []string{"nat"}) || !slices.Equal(native.approved, []string{"nat"}) || !slices.Equal(native.revoked, []string{"nat"}) {
+		t.Fatalf("native runtime asked %v, approved %v, revoked %v, want nat only", native.asked, native.approved, native.revoked)
+	}
+	if err := m.RevokeAdminStep("nope"); err == nil {
+		t.Fatal("an unknown service was revoked")
+	}
+
+	// A start or restart the runtime refuses for want of approval names the
+	// service as Catalog shows it, not by its slug.
+	docker.startErr = &runtime.AdminApprovalNeeded{Slug: "nat"}
+	docker.restartErr = &runtime.AdminApprovalNeeded{Slug: "nat"}
+	if err := m.Start(context.Background(), "nat"); err == nil || !strings.Contains(err.Error(), "open Nat in Catalog") || strings.Contains(err.Error(), "nat ") {
+		t.Fatalf("Start refused for approval: %v, want the Catalog name", err)
+	}
+	if err := m.Restart(context.Background(), "nat"); err == nil || !strings.Contains(err.Error(), "open Nat in Catalog") {
+		t.Fatalf("Restart refused for approval: %v, want the Catalog name", err)
 	}
 	if _, err := m.AdminStepFor("nope"); err == nil {
 		t.Fatal("an unknown service was answered")

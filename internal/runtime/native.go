@@ -312,7 +312,7 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 			return ContainerInfo{}, err
 		}
 		if !ready {
-			return ContainerInfo{}, &AdminApprovalNeeded{Slug: spec.Slug}
+			return ContainerInfo{}, &AdminApprovalNeeded{Slug: spec.Slug, Name: svc.Name}
 		}
 	}
 
@@ -331,7 +331,7 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 	}
 	mp, err := p.launchProcess(spec.Slug, binPath, args, envSlice(env), svc.Docker.Resources, registryDesc{URL: bin.URL, SHA256: bin.SHA256, Archive: bin.Archive, FirewallBlock: bin.FirewallBlock})
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerInfo{}, NameAdminApproval(err, svc.Name)
 	}
 
 	pid := 0

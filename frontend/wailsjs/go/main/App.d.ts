@@ -149,6 +149,8 @@ export function RestoreStateBackup(arg1:string,arg2:string,arg3:string):Promise<
 
 export function RevealWalletSeed(arg1:string,arg2:string):Promise<string>;
 
+export function RevokeDeployAdminStep(arg1:string):Promise<void>;
+
 export function RevokeSessionRisk(arg1:string):Promise<Record<string, config.SessionConsent>>;
 
 export function RunSetupStep(arg1:string,arg2:boolean):Promise<main.SetupStepResult>;

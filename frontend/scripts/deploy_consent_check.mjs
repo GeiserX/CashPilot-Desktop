@@ -17,6 +17,13 @@
 //      deploys nothing, and its reason reaches the card.
 //   6. A REJECTED DEPLOY REACHES THE CARD: the reason, as an alert, never empty.
 //   7. THE SETUP CARD has the slot right under its Deploy button, above the facts.
+//   8. THE SLOT NEVER STAYS ON "Deploying..." ONCE THE CALL ENDED: a deploy, a
+//      question the deploy asks later and Cancel, a refusal, a rejection and a
+//      Sia wallet deploy (its seed notice and its no-phrase refusal) all end with
+//      their own answer there.
+//   9. A CONTINUE SERVES ONE DEPLOY: when the deploy it was given for ends, however
+//      it ended (deployed, a later confirm cancelled, rejected), the approval is
+//      withdrawn. No approval given, nothing to withdraw.
 //
 //   node scripts/deploy_consent_check.mjs      # against ./.harness-build
 
@@ -30,6 +37,7 @@ import {
   missingRequiredFields,
   runCheckedDeploy,
 } from "../.harness-build/render/deploy_consent.js";
+import { walletChoiceRefusal, walletDeployAnswer } from "../.harness-build/render/wallet.js";
 import { serviceFormFields } from "../.harness-build/render/fields.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 
@@ -73,17 +81,23 @@ const step = {
   networks: ["100.64.0.0/10", "169.254.0.0/16"],
 };
 
-// Records every call, in order.
-function calls({ adminStep = async () => step, consent = true, deploy = async () => "deployed" } = {}) {
+// Records every call, in order, and every note written next to Deploy.
+const DEPLOYED = { kind: "ok", text: "Deployed." };
+function calls({ adminStep = async () => step, consent = true, deploy = async () => DEPLOYED, revoke = async () => {} } = {}) {
   const log = [];
+  const said = [];
   return {
     log,
+    said,
     adminStep: () => { log.push("adminStep"); return adminStep(); },
     askConsent: async (s) => { log.push(`askConsent:${s.kind}`); return consent; },
     approve: async () => { log.push("approve"); },
+    revoke: () => { log.push("revoke"); return revoke(); },
+    say: (kind, text) => { log.push(`say:${kind}`); said.push({ kind, text }); },
     deploy: () => { log.push("deploy"); return deploy(); },
   };
 }
+const BUSY = "Deploying MystNodes...";
 
 // A service whose container needs two values typed in (Honeygain's shape).
 const hg = {
@@ -104,7 +118,7 @@ const hgFields = serviceFormFields(hg, {});
 // RULE 1
 {
   const c = calls();
-  const outcome = await runCheckedDeploy(hgFields, { HG_EMAIL: "", HG_PASSWORD: " ", HG_DEVICE: "" }, true, c);
+  const outcome = await runCheckedDeploy(hgFields, { HG_EMAIL: "", HG_PASSWORD: " ", HG_DEVICE: "" }, true, BUSY, c);
   check("RULE 1: empty container values stop the deploy", outcome.kind === "missing", JSON.stringify(outcome));
   check("RULE 1: no call at all, so no admin prompt and no deploy", c.log.length === 0, c.log.join(","));
   const names = (outcome.missing || []).map((f) => f.label);
@@ -126,25 +140,25 @@ const hgFields = serviceFormFields(hg, {});
   check("RULE 2: the collector logins come marked as for earnings", fields.filter((f) => f.earnings).map((f) => f.key).join() === "MYSTNODES_EMAIL,MYSTNODES_PASSWORD", JSON.stringify(fields));
   check("RULE 2: empty collector logins are never missing", missingRequiredFields(fields, empty).length === 0);
   const c = calls();
-  const outcome = await runCheckedDeploy(fields, empty, true, c);
-  check("RULE 2: so MystNodes with its logins empty goes on to the admin-step screen", outcome.kind === "done" && c.log.join(",") === "adminStep,askConsent:firewall-rule,approve,deploy", c.log.join(","));
+  const outcome = await runCheckedDeploy(fields, empty, true, BUSY, c);
+  check("RULE 2: so MystNodes with its logins empty goes on to the admin-step screen", outcome.kind === "done" && c.log.join(",") === "adminStep,askConsent:firewall-rule,approve,say:busy,deploy,revoke,say:ok", c.log.join(","));
 }
 
 // RULE 3
 {
   const cancel = calls({ consent: false });
-  const outcome = await runCheckedDeploy(fields, full, true, cancel);
+  const outcome = await runCheckedDeploy(fields, full, true, BUSY, cancel);
   check("RULE 3: Cancel deploys nothing", outcome.kind === "cancelled", JSON.stringify(outcome));
   check("RULE 3: Cancel approves nothing", cancel.log.join(",") === "adminStep,askConsent:firewall-rule", cancel.log.join(","));
 
   const go = calls();
-  const done = await runCheckedDeploy(fields, full, true, go);
-  check("RULE 3: Continue deploys", done.kind === "done" && done.result === "deployed", JSON.stringify(done));
-  check("RULE 3: the screen, then the approval, then the deploy", go.log.join(",") === "adminStep,askConsent:firewall-rule,approve,deploy", go.log.join(","));
+  const done = await runCheckedDeploy(fields, full, true, BUSY, go);
+  check("RULE 3: Continue deploys", done.kind === "done" && done.answer === DEPLOYED, JSON.stringify(done));
+  check("RULE 3: the screen, then the approval, then the deploy", go.log.join(",") === "adminStep,askConsent:firewall-rule,approve,say:busy,deploy,revoke,say:ok", go.log.join(","));
 
   const none = calls({ adminStep: async () => ({ needed: false }) });
-  await runCheckedDeploy(fields, full, true, none);
-  check("RULE 3: no step, no screen", none.log.join(",") === "adminStep,deploy", none.log.join(","));
+  await runCheckedDeploy(fields, full, true, BUSY, none);
+  check("RULE 3: no step, no screen", none.log.join(",") === "adminStep,say:busy,deploy,say:ok", none.log.join(","));
 }
 
 // RULE 4
@@ -153,7 +167,11 @@ const hgFields = serviceFormFields(hg, {});
   const text = adminConsentText("MystNodes", step);
   check("RULE 4: the full PowerShell path", POWERSHELL_PATH === "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" && text.prompt.includes(POWERSHELL_PATH), text.prompt);
   check("RULE 4: it says Windows shows a permission prompt naming Windows PowerShell", text.prompt.includes("permission prompt") && text.prompt.includes("Windows PowerShell"), text.prompt);
-  check("RULE 4: it says what No does", text.prompt.includes("If you choose No"), text.prompt);
+  check("RULE 4: it says what No does", text.prompt.includes("If you choose No") && text.prompt.includes("CashPilot adds no rule and MystNodes does not run"), text.prompt);
+  // A redeploy stops the running node before the prompt shows, so No does change
+  // something: the screen says so and never promises that nothing changes.
+  check("RULE 4: No never promises that nothing changes", !/nothing changes/i.test(text.prompt), text.prompt);
+  check("RULE 4: No says a running node stays stopped", text.prompt.includes("If MystNodes was running, the deploy stopped it before the prompt, and it stays stopped"), text.prompt);
   check("RULE 4: what changes names the rule, the program and the ranges", text.changes.includes(step.ruleName) && text.changes.includes(step.program) && text.changes.includes("100.64.0.0/10") && text.changes.includes("169.254.0.0/16"), text.changes);
   check("RULE 4: what follows", /restart/i.test(text.after), text.after);
   check("RULE 4: how to undo", text.undo.includes("Removing MystNodes") && text.undo.includes("Outbound Rules"), text.undo);
@@ -169,31 +187,27 @@ const hgFields = serviceFormFields(hg, {});
 // RULE 5
 {
   const routed = calls();
-  await runCheckedDeploy(fields, full, false, routed);
-  check("RULE 5: a deploy through a proxy asks no admin step", routed.log.join(",") === "deploy", routed.log.join(","));
+  await runCheckedDeploy(fields, full, false, BUSY, routed);
+  check("RULE 5: a deploy through a proxy asks no admin step", routed.log.join(",") === "say:busy,deploy,say:ok", routed.log.join(","));
 
   const off = "mysterium was not started: it needs a Windows Firewall rule that blocks it from 100.64.0.0/10, and Windows Firewall is off for the network this computer is on, so the rule would do nothing and Windows was not asked for anything. Fix that, then click Deploy again";
   const unreadable = calls({ adminStep: () => Promise.reject(off) });
-  const outcome = await runCheckedDeploy(fields, full, true, unreadable);
+  const outcome = await runCheckedDeploy(fields, full, true, BUSY, unreadable);
   check("RULE 5: an unreadable step stops with its reason", outcome.kind === "blocked" && outcome.message === off, JSON.stringify(outcome));
   check("RULE 5: and shows no screen, approves nothing, deploys nothing", unreadable.log.join(",") === "adminStep", unreadable.log.join(","));
-  const silent = await runCheckedDeploy(fields, full, true, calls({ adminStep: () => Promise.reject(new Error("")) }));
+  const silent = await runCheckedDeploy(fields, full, true, BUSY, calls({ adminStep: () => Promise.reject(new Error("")) }));
   check("RULE 5: an empty reason still says something", silent.kind === "blocked" && silent.message.length > 20, JSON.stringify(silent));
 }
 
 // RULE 6
 {
   // What the Go binding rejects with after a No at the Windows prompt.
-  const declined = "mysterium is not running: you chose No at the Windows permission prompt, so CashPilot did not add the Windows Firewall rule that blocks it from 100.64.0.0/10, 169.254.0.0/16, and it never runs without that rule. Nothing else changed on this PC. To run it, click Deploy again and choose Yes at the prompt";
+  const declined = "mysterium is not running: you chose No at the Windows permission prompt, so CashPilot did not add the Windows Firewall rule that blocks it from 100.64.0.0/10, 169.254.0.0/16, and it never runs without that rule. If it was running before this deploy, CashPilot stopped it for the deploy, and it stays stopped. To run it, click Deploy again and choose Yes at the prompt";
   const rejected = calls({ deploy: () => Promise.reject(declined) });
-  let caught = null;
-  try {
-    await runCheckedDeploy(fields, full, true, rejected);
-  } catch (error) {
-    caught = error;
-  }
-  check("RULE 6: the rejection reaches the caller", caught === declined, String(caught));
-  const note = deployNotice("failed", deployErrorText(caught));
+  const outcome = await runCheckedDeploy(fields, full, true, BUSY, rejected);
+  const last = rejected.said.at(-1);
+  check("RULE 6: the rejection reaches the slot as a failure, with its reason", outcome.kind === "done" && last?.kind === "failed" && last.text === declined, JSON.stringify(rejected.said));
+  const note = deployNotice("failed", last?.text);
   check("RULE 6: the note carries the reason", note.includes("you chose No at the Windows permission prompt") && note.includes("click Deploy again"), note);
   check("RULE 6: the note is an alert", note.includes('role="alert"') && note.includes("did not finish"), note);
   check("RULE 6: an Error's message is used", deployErrorText(new Error("boom")) === "boom");
@@ -210,6 +224,67 @@ const hgFields = serviceFormFields(hg, {});
   check("RULE 7: the card has the slot", slot > 0, card);
   check("RULE 7: the slot sits under Deploy and above the facts and output", deploy > 0 && slot > deploy && slot < facts, `${deploy} ${slot} ${facts}`);
   check("RULE 7: the logins say they are for earnings, not *", card.includes("MystNodes email (for earnings)") && card.includes("MystNodes password (for earnings)") && !card.includes("MystNodes email *"), card);
+}
+
+// RULE 8
+{
+  const ends = {
+    deployed: async () => DEPLOYED,
+    "a later confirm cancelled": async () => ({ kind: "cancelled", text: "Nothing was deployed." }),
+    refused: async () => ({ kind: "cancelled", text: "A deploy to a worker runs one copy. Nothing was deployed." }),
+    rejected: () => Promise.reject(new Error("boom")),
+    // Sia's hostd: what runWalletDeploy answers (render/wallet.ts).
+    "a new Sia wallet": async () => walletDeployAnswer({ created: true, migrated: false, address: "a", phrase: "" }, true),
+    "Sia with no phrase typed": async () => walletChoiceRefusal({ mode: "import", phrase: "  " }),
+  };
+  for (const [name, deploy] of Object.entries(ends)) {
+    for (const direct of [true, false]) {
+      const c = calls({ deploy });
+      await runCheckedDeploy(fields, full, direct, BUSY, c);
+      const first = c.said[0];
+      const last = c.said.at(-1);
+      check(`RULE 8 (${name}, ${direct ? "direct" : "routed"}): "Deploying..." shows while it runs`, first?.kind === "busy" && first.text === BUSY, JSON.stringify(c.said));
+      check(`RULE 8 (${name}, ${direct ? "direct" : "routed"}): the slot ends on the answer, not "Deploying..."`, c.said.length >= 2 && last.kind !== "busy" && last.text && last.text !== BUSY, JSON.stringify(c.said));
+    }
+  }
+  const seed = calls({ deploy: ends["a new Sia wallet"] });
+  await runCheckedDeploy(fields, full, true, BUSY, seed);
+  check("RULE 8: the one-time seed notice is the slot's last word", seed.said.at(-1)?.kind === "ok" && seed.said.at(-1).text.includes("Write its seed phrase down now"), JSON.stringify(seed.said));
+  const noPhrase = calls({ deploy: ends["Sia with no phrase typed"] });
+  await runCheckedDeploy(fields, full, true, BUSY, noPhrase);
+  check("RULE 8: the no-phrase refusal is the slot's last word, and says nothing ran", noPhrase.said.at(-1)?.kind === "cancelled" && noPhrase.said.at(-1).text.includes("Type the seed phrase") && noPhrase.said.at(-1).text.includes("Nothing was deployed"), JSON.stringify(noPhrase.said));
+  check("RULE 8: a phrase typed is no refusal", walletChoiceRefusal({ mode: "import", phrase: "abandon about" }) === null && walletChoiceRefusal({ mode: "generate", phrase: "" }) === null && walletChoiceRefusal({ mode: "keep", phrase: "" }) === null);
+  const answers = [
+    walletDeployAnswer({ created: false, migrated: true, address: "" }, false).text,
+    walletDeployAnswer({ created: true, migrated: false, address: "" }, false).text,
+    walletDeployAnswer({ created: false, migrated: false, address: "" }, false).text,
+    walletDeployAnswer(null, false).text,
+  ];
+  check("RULE 8: each wallet outcome says its own thing", new Set(answers).size === 4 && answers[0].includes("data volume") && answers[1].includes("kept no copy") && answers[2].includes("kept its wallet") && answers[3] === "Deployed.", JSON.stringify(answers));
+  check("RULE 8: every wallet answer is a success", walletDeployAnswer(null, true).kind === "ok" && walletDeployAnswer({ created: true }, false).kind === "ok");
+}
+
+// RULE 9
+{
+  for (const [name, deploy] of [
+    ["deployed", async () => DEPLOYED],
+    ["a later confirm cancelled", async () => ({ kind: "cancelled", text: "Nothing was deployed." })],
+    ["rejected", () => Promise.reject(new Error("boom"))],
+  ]) {
+    const c = calls({ deploy });
+    await runCheckedDeploy(fields, full, true, BUSY, c);
+    const at = (entry) => c.log.indexOf(entry);
+    check(`RULE 9 (${name}): the approval is withdrawn once the deploy ended`, at("approve") >= 0 && at("revoke") > at("deploy") && c.log.filter((e) => e === "revoke").length === 1, c.log.join(","));
+  }
+  const noStep = calls({ adminStep: async () => ({ needed: false }) });
+  await runCheckedDeploy(fields, full, true, BUSY, noStep);
+  check("RULE 9: no approval given, nothing to withdraw", !noStep.log.includes("revoke"), noStep.log.join(","));
+  const cancelled = calls({ consent: false });
+  await runCheckedDeploy(fields, full, true, BUSY, cancelled);
+  check("RULE 9: Cancel on the screen approves nothing, so withdraws nothing", !cancelled.log.includes("revoke") && !cancelled.log.includes("approve"), cancelled.log.join(","));
+  const stuck = calls({ revoke: () => Promise.reject(new Error("not ready")) });
+  const outcome = await runCheckedDeploy(fields, full, true, BUSY, stuck);
+  check("RULE 9: a failed withdrawal still shows the deploy's answer", outcome.kind === "done" && stuck.said.at(-1)?.kind === "ok", JSON.stringify(stuck.said));
 }
 
 if (failures) {

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -39,11 +40,30 @@ type AdminStep struct {
 }
 
 // AdminApprovalNeeded is the error of a launch whose firewall rule is missing
-// and whose admin prompt nobody approved in the app.
-type AdminApprovalNeeded struct{ Slug string }
+// and whose admin prompt nobody approved in the app. Name is the service's
+// display name, the one Catalog shows; the slug stands in until a caller that
+// knows the name fills it.
+type AdminApprovalNeeded struct {
+	Slug string
+	Name string
+}
 
 func (e *AdminApprovalNeeded) Error() string {
-	return fmt.Sprintf("%s was not started: it needs a Windows Firewall rule, and adding that rule makes Windows ask for admin rights. CashPilot explains that prompt before it shows: open %s in Catalog and click Deploy", e.Slug, e.Slug)
+	name := e.Name
+	if name == "" {
+		name = e.Slug
+	}
+	return fmt.Sprintf("%s was not started: it needs a Windows Firewall rule, and adding that rule makes Windows ask for admin rights. CashPilot explains that prompt before it shows: open %s in Catalog and click Deploy", name, name)
+}
+
+// NameAdminApproval gives an AdminApprovalNeeded in err the display name, so its
+// message points at what Catalog shows. Any other error comes back as it was.
+func NameAdminApproval(err error, name string) error {
+	var need *AdminApprovalNeeded
+	if name != "" && errors.As(err, &need) && need.Name == "" {
+		need.Name = name
+	}
+	return err
 }
 
 // AdminStep reports whether deploying svc as slug on this machine would need the
@@ -90,6 +110,15 @@ func (p *NativeProcessProvider) ApproveAdminStep(slug string) {
 		p.approvals = map[string]time.Time{}
 	}
 	p.approvals[slug] = time.Now().Add(adminApprovalTTL)
+}
+
+// RevokeAdminStep withdraws slug's approval when the deploy it was given for ends
+// without using it (a later question was cancelled, or the deploy stopped before
+// its launch). No other path may then raise the prompt on that Continue.
+func (p *NativeProcessProvider) RevokeAdminStep(slug string) {
+	p.approvalMu.Lock()
+	defer p.approvalMu.Unlock()
+	delete(p.approvals, slug)
 }
 
 // takeApproval uses up slug's approval, reporting whether one was still good.
@@ -143,11 +172,12 @@ func (p *NativeProcessProvider) hasApproval(slug string) bool {
 }
 
 // firewallCreateFailed says why creating the rule failed. A No at the Windows
-// prompt (ExitCancelled) is the person's choice, not a fault: it says so, that
-// nothing else changed, and how to go ahead.
+// prompt (ExitCancelled) is the person's choice, not a fault: it says so, what it
+// left stopped, and how to go ahead. The prompt shows after a redeploy stopped
+// the running instance, so the text never claims nothing changed.
 func firewallCreateFailed(slug string, nets []string, what string, err error) error {
 	if code, ok := ExitCodeOf(err); ok && code == ExitCancelled {
-		return fmt.Errorf("%s is not running: you chose No at the Windows permission prompt, so CashPilot did not add the Windows Firewall rule that blocks it from %s, and it never runs without that rule. Nothing else changed on this PC. To run it, click Deploy again and choose Yes at the prompt", slug, strings.Join(nets, ", "))
+		return fmt.Errorf("%s is not running: you chose No at the Windows permission prompt, so CashPilot did not add the Windows Firewall rule that blocks it from %s, and it never runs without that rule. If it was running before this deploy, CashPilot stopped it for the deploy, and it stays stopped. To run it, click Deploy again and choose Yes at the prompt", slug, strings.Join(nets, ", "))
 	}
 	return fmt.Errorf("%s, and creating it failed (approve the Windows admin prompt and try again): %v", what, err)
 }

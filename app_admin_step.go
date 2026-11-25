@@ -21,3 +21,14 @@ func (a *App) ApproveDeployAdminStep(slug string) error {
 	}
 	return a.services.ApproveAdminStep(slug)
 }
+
+// RevokeDeployAdminStep withdraws that approval once the card's deploy has ended,
+// however it ended. A deploy that used it is unchanged; one that stopped first (a
+// later question was cancelled) leaves no approval another path could use to
+// raise the prompt with no screen first.
+func (a *App) RevokeDeployAdminStep(slug string) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	return a.services.RevokeAdminStep(slug)
+}

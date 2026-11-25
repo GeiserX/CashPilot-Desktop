@@ -13,7 +13,11 @@
 //     follows, and how to undo it, with Continue and Cancel. Only Continue
 //     approves the prompt; the backend refuses to raise it otherwise.
 //   - Every outcome, a refusal or an error included, is written next to the
-//     Deploy button, never only below the card.
+//     Deploy button, never only below the card. Once the deploy call ends, the
+//     note there is its answer, never "Deploying..." any more.
+//   - A Continue serves the one deploy it was given for: when that deploy ends,
+//     however it ended, the approval is withdrawn, so a later question's Cancel
+//     leaves nothing another path could use to raise the prompt.
 //
 // Pure: takes the model, returns HTML or an outcome. main.ts passes the Wails
 // bindings and the DOM.
@@ -76,7 +80,8 @@ export function adminConsentText(serviceName: string, step: AdminStep): AdminCon
     prompt:
       `Windows then shows a permission prompt. It names Windows PowerShell (${POWERSHELL_PATH}), because CashPilot adds the rule through it. ` +
       "If your account is not an administrator, an administrator types their password there. " +
-      `Choose Yes to go ahead. If you choose No, ${serviceName} does not run and nothing changes.`,
+      `Choose Yes to go ahead. If you choose No, CashPilot adds no rule and ${serviceName} does not run. ` +
+      `If ${serviceName} was running, the deploy stopped it before the prompt, and it stays stopped until you deploy again and choose Yes.`,
     after: `No restart. The prompt comes once: the rule stays while ${serviceName} is deployed, so later starts need no prompt.`,
     undo:
       `Removing ${serviceName} in CashPilot deletes the rule, with one more permission prompt. ` +
@@ -104,8 +109,14 @@ export function adminConsentScreen(serviceName: string, step: AdminStep): string
     </div>`;
 }
 
+/** What a deploy that ran says next to Deploy once it ended. */
+export interface DeployAnswer {
+  kind: "ok" | "cancelled" | "failed";
+  text: string;
+}
+
 /** The note next to Deploy while it runs, or once it answered. */
-export function deployNotice(kind: "busy" | "ok" | "cancelled" | "failed", text: string): string {
+export function deployNotice(kind: "busy" | DeployAnswer["kind"], text: string): string {
   const tone = kind === "failed" ? "error" : kind === "cancelled" ? "warn" : kind === "ok" ? "ok" : "";
   const role = kind === "failed" ? "alert" : "status";
   const lead = kind === "failed" ? "<strong>The deploy did not finish.</strong> " : "";
@@ -122,14 +133,14 @@ export function deployErrorText(error: unknown): string {
 }
 
 /** What a checked deploy did. */
-export type CheckedDeployOutcome<T> =
+export type CheckedDeployOutcome =
   | { kind: "missing"; missing: ServiceField[] }
   | { kind: "blocked"; message: string }
   | { kind: "cancelled" }
-  | { kind: "done"; result: T };
+  | { kind: "done"; answer: DeployAnswer };
 
 /** The calls a checked deploy makes; main.ts passes the Wails bindings and the DOM. */
-export interface CheckedDeployCalls<T> {
+export interface CheckedDeployCalls {
   /**
    * DeployAdminStep. A failure to answer stops here with its reason: a deploy
    * that went on would only meet the backend's refusal, with no way forward.
@@ -139,24 +150,33 @@ export interface CheckedDeployCalls<T> {
   askConsent(step: AdminStep): Promise<boolean>;
   /** ApproveDeployAdminStep. */
   approve(): Promise<void>;
-  deploy(): Promise<T>;
+  /** RevokeDeployAdminStep: withdraws an approval the deploy did not use. */
+  revoke(): Promise<void>;
+  /** Writes the note next to Deploy. */
+  say(kind: "busy" | DeployAnswer["kind"], text: string): void;
+  /** The deploy itself, with every question it still asks; it says what happened. */
+  deploy(): Promise<DeployAnswer>;
 }
 
 /**
  * Deploy from the setup card: the field check, then the admin-step screen when
  * Windows will ask, then the deploy. direct is false for a deploy through a
- * proxy, which runs in a container and needs no admin prompt. A step that cannot
- * be read (Windows Firewall off, or not readable) is "blocked" with its reason.
- * An error from the deploy reaches the caller, which writes it next to Deploy.
+ * proxy or to a worker, which runs in a container and needs no admin prompt. A
+ * step that cannot be read (Windows Firewall off, or not readable) is "blocked"
+ * with its reason. While the deploy runs the note says busyText; once it ends,
+ * the note is its answer, and a rejection is a "failed" answer with the reason.
+ * An approval given for this deploy is withdrawn when it ends.
  */
-export async function runCheckedDeploy<T>(
+export async function runCheckedDeploy(
   fields: ServiceField[],
   values: Record<string, string>,
   direct: boolean,
-  calls: CheckedDeployCalls<T>,
-): Promise<CheckedDeployOutcome<T>> {
+  busyText: string,
+  calls: CheckedDeployCalls,
+): Promise<CheckedDeployOutcome> {
   const missing = missingRequiredFields(fields, values);
   if (missing.length) return { kind: "missing", missing };
+  let approved = false;
   if (direct) {
     let step: AdminStep | null;
     try {
@@ -167,7 +187,20 @@ export async function runCheckedDeploy<T>(
     if (step?.needed) {
       if (!(await calls.askConsent(step))) return { kind: "cancelled" };
       await calls.approve();
+      approved = true;
     }
   }
-  return { kind: "done", result: await calls.deploy() };
+  let answer: DeployAnswer;
+  try {
+    calls.say("busy", busyText);
+    answer = await calls.deploy();
+  } catch (error) {
+    answer = { kind: "failed", text: deployErrorText(error) };
+  } finally {
+    // A withdrawal that fails leaves an approval that lapses on its own
+    // (internal/runtime adminApprovalTTL); the deploy's answer still shows.
+    if (approved) await calls.revoke().catch(() => undefined);
+  }
+  calls.say(answer.kind, answer.text);
+  return { kind: "done", answer };
 }

@@ -504,6 +504,7 @@ func (m *Manager) Start(ctx context.Context, slug string) error {
 		return err
 	}
 	if err := m.providerForSlug(slug).Start(ctx, slug); err != nil {
+		err = m.namedAdminApproval(slug, err)
 		m.store.RecordEvent(slug, "start_error", err.Error())
 		return err
 	}
@@ -528,6 +529,7 @@ func (m *Manager) Restart(ctx context.Context, slug string) error {
 		return err
 	}
 	if err := m.providerForSlug(slug).Restart(ctx, slug, m.stopTimeout(slug)); err != nil {
+		err = m.namedAdminApproval(slug, err)
 		m.store.RecordEvent(slug, "restart_error", err.Error())
 		return err
 	}

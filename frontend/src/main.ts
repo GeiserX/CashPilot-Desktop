@@ -79,6 +79,7 @@ import {
   ReminderAction,
   DeployAdminStep,
   ApproveDeployAdminStep,
+  RevokeDeployAdminStep,
   GetModeState,
   JoinCashPilot,
   StartAsLead,
@@ -103,7 +104,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
-import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, missingFieldsNotice, runCheckedDeploy } from "./render/deploy_consent";
+import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, missingFieldsNotice, runCheckedDeploy, type DeployAnswer } from "./render/deploy_consent";
 import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
@@ -117,7 +118,7 @@ import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
-import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
+import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, walletChoiceRefusal, walletDeployAnswer, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
 import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
@@ -137,7 +138,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult, WorkerTarget } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -2528,79 +2529,18 @@ async function runWizardAction(slug: string, action: string) {
     return;
   }
   const values = readWizardForm(slug);
-  // Every in-app question comes before the admin-step approval, so a Cancel here
-  // never leaves an approval behind.
   if (action === "deploy") {
     if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
       sayDeploy(slug, "cancelled", "Nothing was deployed.");
       return;
     }
-    if (!(await wizardDeployChecks(slug, values))) return;
+    await wizardDeploy(slug, values);
+    return;
   }
   try {
     if (action === "save") {
       await SaveCredentials(slug, values);
       if (output) output.textContent = "Credentials saved.";
-      return;
-    }
-    const worker = action === "deploy" ? state?.workerTargets?.find((target) => target.id === readWizardWhere(slug)) : undefined;
-    if (worker) {
-      if (output) output.textContent = `Deploying to ${worker.name}...`;
-      const image = readWizardImage(slug) || "";
-      const outcome = await runWorkerDeploy(slug, worker, readWizardRoute(slug), readWizardInstances(slug), {
-        confirm: (message) => confirm(message),
-        deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image, ...yes}),
-        save: () => SaveCredentials(slug, values),
-      });
-      if (output) output.textContent = outcome.kind === "deployed" ? workerDeployText(outcome.result) : outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
-      return;
-    }
-    if (action === "deploy") {
-      if (output) output.textContent = "Deploying...";
-      const seedService = state?.services?.find((service) => service.slug === slug && seedFileVar(service));
-      if (seedService) {
-        await runWalletDeploy(slug, values, output);
-        return;
-      }
-      // A custom service has no credentials: it runs its saved definition.
-      const custom = state?.services?.some((service) => service.slug === slug && service.custom);
-      const image = readWizardImage(slug);
-      const instances = readWizardInstances(slug);
-      const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
-        save: async () => {
-          if (!custom) await SaveCredentials(slug, values);
-        },
-        confirm: (message) => confirm(message),
-        routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
-        direct: (leaveRoute) => leaveRoute
-          ? DeployServiceLeavingRoute(slug, values, image, instances)
-          : DeployService(slug, values, image, instances),
-      });
-      if (outcome.kind === "refused" || outcome.kind === "cancelled") {
-        sayDeploy(slug, "cancelled", outcome.kind === "refused" ? outcome.message : "Nothing was deployed.");
-        return;
-      }
-      if (outcome.kind === "routed") {
-        state = await GetAppState();
-        const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-        sayDeploy(slug, "ok", routedDeployText(outcome.result, link));
-        return;
-      }
-      const deployment = outcome.deployment;
-      state = await GetAppState();
-      // The box now holds what runs, so a second Deploy without an edit keeps it.
-      const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
-      if (imageInput) {
-        imageInput.value = deployment.customImage || "";
-        imageInput.dataset.initial = deployment.customImage || "";
-      }
-      const instancesInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
-      if (instancesInput) {
-        instancesInput.value = String(deployment.instances || 1);
-        instancesInput.dataset.initial = String(deployment.instances || 1);
-      }
-      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-      sayDeploy(slug, "ok", link ? `Deployed.\n\n${link}` : "Deployed.");
       return;
     }
     if (action === "collect") {
@@ -2610,14 +2550,13 @@ async function runWizardAction(slug: string, action: string) {
       state = await GetAppState();
     }
   } catch (error) {
-    if (action === "deploy") sayDeploy(slug, "failed", deployErrorText(error));
-    else if (output) output.textContent = String(error);
+    if (output) output.textContent = String(error);
   }
 }
 
 // Deploy's answer goes next to the Deploy button (render/deploy_consent.ts); a card
 // without that slot (a custom service) keeps its output line.
-function sayDeploy(slug: string, kind: "busy" | "ok" | "cancelled" | "failed", text: string) {
+function sayDeploy(slug: string, kind: "busy" | DeployAnswer["kind"], text: string) {
   const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
   const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
   if (output) output.textContent = panel ? "" : text;
@@ -2626,15 +2565,19 @@ function sayDeploy(slug: string, kind: "busy" | "ok" | "cancelled" | "failed", t
   panel.scrollIntoView({ block: "nearest" });
 }
 
-// Before a deploy from the card: every field marked * is filled, and when Windows
-// will show its admin prompt, CashPilot's own screen comes first. False: stop here,
-// with the reason next to Deploy.
-async function wizardDeployChecks(slug: string, values: Record<string, string>): Promise<boolean> {
+// A deploy from the card: every field marked * is filled, and when Windows will
+// show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
+// answer replaces "Deploying..." next to Deploy however it ends, and the approval
+// that screen gave is withdrawn (runCheckedDeploy).
+async function wizardDeploy(slug: string, values: Record<string, string>) {
   const service = state?.services?.find((item) => item.slug === slug);
   const name = service?.name || slug;
   const fields = service && !service.custom ? serviceFormFields(service, state?.collectorFields) : [];
   const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
-  const outcome = await runCheckedDeploy(fields, values, readWizardRoute(slug) === null, {
+  // A worker runs the service in its own Docker: nothing here asks Windows.
+  const worker = state?.workerTargets?.find((target) => target.id === readWizardWhere(slug));
+  const direct = readWizardRoute(slug) === null && !worker;
+  const outcome = await runCheckedDeploy(fields, values, direct, worker ? `Deploying ${name} to ${worker.name}...` : `Deploying ${name}...`, {
     adminStep: () => DeployAdminStep(slug),
     askConsent: (step) => new Promise<boolean>((resolve) => {
       if (!panel) {
@@ -2649,14 +2592,16 @@ async function wizardDeployChecks(slug: string, values: Record<string, string>):
       });
     }),
     approve: () => ApproveDeployAdminStep(slug),
-    deploy: async () => true,
+    revoke: () => RevokeDeployAdminStep(slug),
+    say: (kind, text) => sayDeploy(slug, kind, text),
+    deploy: () => deployFromCard(slug, values, worker),
   }).catch((error) => {
     sayDeploy(slug, "failed", deployErrorText(error));
     return null;
   });
   const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
   form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
-  if (!outcome) return false;
+  if (!outcome || outcome.kind === "done") return;
   if (outcome.kind === "missing") {
     const keys = new Set(outcome.missing.map((field) => field.key));
     form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => {
@@ -2665,18 +2610,64 @@ async function wizardDeployChecks(slug: string, values: Record<string, string>):
     if (panel) panel.innerHTML = missingFieldsNotice(outcome.missing);
     else sayDeploy(slug, "cancelled", `Fill in every field marked * first: ${outcome.missing.map((field) => field.label).join(", ")}. Nothing was deployed.`);
     form?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
-    return false;
+    return;
   }
-  if (outcome.kind === "cancelled") {
-    sayDeploy(slug, "cancelled", CANCELLED_TEXT);
-    return false;
+  if (outcome.kind === "cancelled") sayDeploy(slug, "cancelled", CANCELLED_TEXT);
+  else sayDeploy(slug, "failed", outcome.message);
+}
+
+// The deploy itself, once the card's checks passed: to a worker, with a wallet
+// seed (Sia's hostd), or on this computer, directly or through a proxy. Every path
+// answers with what the note next to Deploy says.
+async function deployFromCard(slug: string, values: Record<string, string>, worker: WorkerTarget | undefined): Promise<DeployAnswer> {
+  if (worker) {
+    const image = readWizardImage(slug) || "";
+    const outcome = await runWorkerDeploy(slug, worker, readWizardRoute(slug), readWizardInstances(slug), {
+      confirm: (message) => confirm(message),
+      deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image, ...yes}),
+      save: () => SaveCredentials(slug, values),
+    });
+    if (outcome.kind === "deployed") return { kind: "ok", text: workerDeployText(outcome.result) };
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
-  if (outcome.kind === "blocked") {
-    sayDeploy(slug, "failed", outcome.message);
-    return false;
+  if (state?.services?.some((service) => service.slug === slug && seedFileVar(service))) return runWalletDeploy(slug, values);
+  // A custom service has no credentials: it runs its saved definition.
+  const custom = state?.services?.some((service) => service.slug === slug && service.custom);
+  const image = readWizardImage(slug);
+  const instances = readWizardInstances(slug);
+  const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
+    save: async () => {
+      if (!custom) await SaveCredentials(slug, values);
+    },
+    confirm: (message) => confirm(message),
+    routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
+    direct: (leaveRoute) => leaveRoute
+      ? DeployServiceLeavingRoute(slug, values, image, instances)
+      : DeployService(slug, values, image, instances),
+  });
+  if (outcome.kind === "refused" || outcome.kind === "cancelled") {
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
-  sayDeploy(slug, "busy", `Deploying ${name}...`);
-  return true;
+  if (outcome.kind === "routed") {
+    state = await GetAppState();
+    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+    return { kind: "ok", text: routedDeployText(outcome.result, link) };
+  }
+  const deployment = outcome.deployment;
+  state = await GetAppState();
+  // The box now holds what runs, so a second Deploy without an edit keeps it.
+  const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
+  if (imageInput) {
+    imageInput.value = deployment.customImage || "";
+    imageInput.dataset.initial = deployment.customImage || "";
+  }
+  const instancesInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
+  if (instancesInput) {
+    instancesInput.value = String(deployment.instances || 1);
+    instancesInput.dataset.initial = String(deployment.instances || 1);
+  }
+  const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+  return { kind: "ok", text: link ? `Deployed.\n\n${link}` : "Deployed." };
 }
 
 // A wallet seed kept in a file (Sia's hostd; render/wallet.ts). The phrase is in this
@@ -2727,13 +2718,11 @@ function readWalletChoice(slug: string): WalletChoice {
   return { mode, phrase };
 }
 
-async function runWalletDeploy(slug: string, values: Record<string, string>, output: HTMLPreElement | null) {
+async function runWalletDeploy(slug: string, values: Record<string, string>): Promise<DeployAnswer> {
   const choice = readWalletChoice(slug);
-  if (choice.mode === "import" && phraseWords(choice.phrase).length === 0) {
-    if (output) output.textContent = "Type the seed phrase of the wallet to use, or choose another option.";
-    return;
-  }
-  if (choice.mode === "generate" && output) output.textContent = "Deploying, and creating a new wallet...";
+  const refusal = walletChoiceRefusal(choice);
+  if (refusal) return refusal;
+  if (choice.mode === "generate") sayDeploy(slug, "busy", "Deploying, and creating a new wallet...");
   let result: WalletDeployResult;
   try {
     await SaveCredentials(slug, values);
@@ -2748,13 +2737,8 @@ async function runWalletDeploy(slug: string, values: Record<string, string>, out
     wallet.phrase = "";
   }
   state = await GetAppState();
-  let text = "Deployed.";
-  if (newWallet) text = "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once.";
-  else if (wallet?.migrated) text = "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume.";
-  else if (wallet?.created) text = "Deployed with the wallet you typed. CashPilot kept no copy of it.";
-  else if (wallet) text = "Deployed. The node kept its wallet.";
-  if (output) output.textContent = text;
   fillNewWalletPanel();
+  return walletDeployAnswer(wallet, newWallet !== null);
 }
 
 // Draws the one-time panel in its card, and wires it. Called after every wizard draw.

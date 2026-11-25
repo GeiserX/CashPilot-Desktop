@@ -12,6 +12,7 @@ import (
 type adminStepper interface {
 	AdminStep(svc catalog.Service, slug string) (runtime.AdminStep, error)
 	ApproveAdminStep(slug string)
+	RevokeAdminStep(slug string)
 }
 
 // AdminStepFor reports whether deploying slug now makes Windows show its admin
@@ -36,6 +37,28 @@ func (m *Manager) ApproveAdminStep(slug string) error {
 		stepper.ApproveAdminStep(slug)
 	}
 	return nil
+}
+
+// RevokeAdminStep withdraws slug's approval once the deploy it was given for has
+// ended, so a Continue serves that one deploy and nothing after it.
+func (m *Manager) RevokeAdminStep(slug string) error {
+	stepper, _, err := m.adminStepper(slug)
+	if err != nil {
+		return err
+	}
+	if stepper != nil {
+		stepper.RevokeAdminStep(slug)
+	}
+	return nil
+}
+
+// namedAdminApproval gives an AdminApprovalNeeded from slug's runtime the
+// Catalog name, for the starts that carry only the slug.
+func (m *Manager) namedAdminApproval(slug string, err error) error {
+	if svc, ok := m.catalog.Get(slug); ok {
+		return runtime.NameAdminApproval(err, svc.Name)
+	}
+	return err
 }
 
 // adminStepper is the runtime that would deploy slug, when it is one that can

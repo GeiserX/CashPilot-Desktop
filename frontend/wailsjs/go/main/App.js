@@ -274,6 +274,10 @@ export function RevealWalletSeed(arg1, arg2) {
   return window['go']['main']['App']['RevealWalletSeed'](arg1, arg2);
 }
 
+export function RevokeDeployAdminStep(arg1) {
+  return window['go']['main']['App']['RevokeDeployAdminStep'](arg1);
+}
+
 export function RevokeSessionRisk(arg1) {
   return window['go']['main']['App']['RevokeSessionRisk'](arg1);
 }

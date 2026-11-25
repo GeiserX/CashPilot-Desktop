@@ -27,12 +27,28 @@ func TestNativeDeployNeverRaisesTheAdminPromptUnapproved(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker")
 	svc := nativeService("fwsvc", url, sha256hex(art), "tar.gz")
 	svc.Native.Binaries[0].FirewallBlock = []string{"100.64.0.0/10"}
+	svc.Name = "Firewall Service"
 	spec := DeploySpec{Slug: "fwsvc", Service: svc, Env: stubEnv(marker)}
 
 	_, err := p.Deploy(context.Background(), spec, nil)
 	var need *AdminApprovalNeeded
 	if !errors.As(err, &need) || need.Slug != "fwsvc" {
 		t.Fatalf("Deploy with no approval: err = %v, want AdminApprovalNeeded", err)
+	}
+	// It points at what Catalog shows: the display name, never the slug.
+	if msg := err.Error(); !strings.HasPrefix(msg, "Firewall Service was not started") || !strings.Contains(msg, "open Firewall Service in Catalog") || strings.Contains(msg, "fwsvc") {
+		t.Fatalf("AdminApprovalNeeded = %q, want the display name and not the slug", msg)
+	}
+	if len(fw.elevate) != 0 {
+		t.Fatalf("mayElevate per firewall request = %v, want no request: the deploy stops on the read", fw.elevate)
+	}
+
+	// A Continue the card withdrew (a later question was cancelled) lets no
+	// deploy raise the prompt.
+	p.ApproveAdminStep("fwsvc")
+	p.RevokeAdminStep("fwsvc")
+	if _, err := p.Deploy(context.Background(), spec, nil); !errors.As(err, &need) {
+		t.Fatalf("Deploy after a revoked approval: err = %v, want AdminApprovalNeeded", err)
 	}
 	if len(fw.elevate) != 0 {
 		t.Fatalf("mayElevate per firewall request = %v, want no request: the deploy stops on the read", fw.elevate)
@@ -92,6 +108,16 @@ func TestAdminApprovalExpires(t *testing.T) {
 	if !p.takeApproval("b") || p.takeApproval("b") {
 		t.Fatal("an approval must serve exactly one launch")
 	}
+	p.ApproveAdminStep("c")
+	p.ApproveAdminStep("d")
+	p.RevokeAdminStep("c")
+	if p.takeApproval("c") {
+		t.Fatal("a revoked approval was taken")
+	}
+	if !p.takeApproval("d") {
+		t.Fatal("revoking one slug withdrew another's approval")
+	}
+	p.RevokeAdminStep("never-approved") // nothing to withdraw: no panic
 }
 
 // THE RULE: AdminStep says the prompt is coming exactly when the launch would
@@ -195,10 +221,15 @@ func TestFirewallNextAsksBeforeCreating(t *testing.T) {
 func TestFirewallCreateFailedNamesTheDeclinedPrompt(t *testing.T) {
 	nets := []string{"100.64.0.0/10", "169.254.0.0/16"}
 	declined := firewallCreateFailed("mysterium", nets, "w", fmt.Errorf("%w: ", exitErr(ExitCancelled))).Error()
-	for _, want := range []string{"mysterium is not running", "you chose No at the Windows permission prompt", "100.64.0.0/10, 169.254.0.0/16", "Nothing else changed", "click Deploy again and choose Yes"} {
+	for _, want := range []string{"mysterium is not running", "you chose No at the Windows permission prompt", "100.64.0.0/10, 169.254.0.0/16", "If it was running before this deploy, CashPilot stopped it for the deploy, and it stays stopped", "click Deploy again and choose Yes"} {
 		if !strings.Contains(declined, want) {
 			t.Errorf("declined: %q lacks %q", declined, want)
 		}
+	}
+	// The prompt shows after a redeploy stopped the running node, so a No did
+	// change something: the text never says otherwise.
+	if strings.Contains(declined, "Nothing else changed") || strings.Contains(declined, "nothing changed") {
+		t.Errorf("declined: %q claims nothing changed, but a redeploy stopped the running node first", declined)
 	}
 	failed := firewallCreateFailed("mysterium", nets, "mysterium was not started", fmt.Errorf("%w: access denied", exitErr(1))).Error()
 	if strings.Contains(failed, "chose No") || !strings.Contains(failed, "creating it failed") || !strings.Contains(failed, "access denied") {
