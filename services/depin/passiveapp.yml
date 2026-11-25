@@ -99,3 +99,21 @@ rating:
     kind: terms
     source: https://www.passiveapp.com/
     checked_on: "2026-11-04"
+
+# --- Desktop-only (catalog-overlay/append/depin/passiveapp.yml) -------------
+# Secure VM: PassiveApp may run inside the fenced Windows VM
+# (docs/design/secure-windows-vm.md). It earned under Hyper-V behind the fence in
+# the lab. It installs per user into %LOCALAPPDATA%\Programs\PassiveApp Desktop,
+# so it must be installed and first started in the earner's session. The
+# publisher is the signer of the official installer (1.0.15); the installed
+# PassiveApp Desktop.exe carries the same signer.
+# vm_stance: the terms do not mention VMs; they allow use only on devices the user
+#   personally owns, and forbid connecting more devices than allowed.
+#   https://www.passiveapp.com/terms-of-use (last updated 10.12.2024), read
+#   2026-11-25.
+guest:
+  windows:
+    process: "PassiveApp Desktop.exe"
+    publisher: "CN=Rngde, O=Rngde, L=Fontana, S=California, C=US"
+    download_page: "https://www.passiveapp.com/download"
+    signin: console

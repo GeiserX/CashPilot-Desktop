@@ -68,7 +68,8 @@ the entry on its own, which is how a Desktop-only service would be carried.
 | --- | --- | --- |
 | 14 image digest pins | `image-pins.yml` | Desktop's digest-pin rule; the web catalog ships floating references. |
 | `native:` block on mysterium | `append/bandwidth/mysterium.yml` | Desktop can run a service as a supervised native process with no container runtime. The web app deploys through Docker on a worker and has no such runtime. |
-| `native:` schema documentation | `append/_schema.yml` | Documents the field above. |
+| `guest:` block on wipter and passiveapp | `append/depin/wipter.yml`, `append/depin/passiveapp.yml` | Marks the desktop-only apps that may run inside the Secure VM (`docs/design/secure-windows-vm.md`). The web app has no Secure VM. |
+| `native:` and `guest:` schema documentation | `append/_schema.yml` | Documents the fields above. |
 
 ## Fields Desktop reads differently
 

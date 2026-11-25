@@ -462,7 +462,7 @@
 
 # --- Desktop-only (catalog-overlay/append/_schema.yml) -----------------------
 # Everything above comes from the web catalog's schema. The block below documents
-# the one field only Desktop understands.
+# the fields only Desktop understands.
 
 # native:  (optional, additive — how to run this service as a supervised NATIVE child
 #           process with no container runtime. A service may declare docker:, native:,
@@ -487,3 +487,15 @@
 #   command: ""  (arg template for the binary; tokenized then ${VAR}-substituted with
 #                 env, argv-only/no-shell — same safe path as docker.command)
 #   env: []  (same shape as docker.env; resolved + passed to the process environment)
+
+# guest:  (optional — marks a desktop-only app that may run inside the Secure VM,
+#          docs/design/secure-windows-vm.md. Nil means the app is never offered there.)
+#          Desktop-only: the web app has no Secure VM, so it ignores this block.
+#          A service with requirements.container_prohibited never carries one.
+#   windows:
+#     process: "Wipter.exe"       # executable name the guest read matches
+#     publisher: "CN=..."         # expected Authenticode subject of the official
+#                                 # installer, as Windows prints it; MANDATORY
+#     download_page: "https://..."  # the vendor's official page; MUST be HTTPS
+#     signin: console             # console (by hand in the VM window) | none
+#   # vm_stance: <what the vendor says about VMs>, <URL>, read <date>  (a comment)
