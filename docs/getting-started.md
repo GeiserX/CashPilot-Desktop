@@ -31,9 +31,9 @@ Download the latest release for your platform:
 ## Quick start
 
 1. **Download and open** CashPilot Desktop for your platform (table above)
-2. **Launch the app** -- the setup wizard detects Docker/Podman and guides you through installation if needed
-3. **Choose how it runs** -- Run everything here, or Join my CashPilot
-4. **If you join** -- on your CashPilot, open Fleet, then Add a box, press Reveal API Key, then Copy, and paste the block into the app (or type the address and key). The app sends one heartbeat and saves the link only if your CashPilot accepts it. The computer then appears on your CashPilot's Fleet page
+2. **Choose how it runs** -- after Welcome, pick Run everything here, or Join my CashPilot
+3. **If you join** -- on your CashPilot, open Fleet, then Add a box, press Reveal API Key, then Copy, and paste the block into the app (or type the address and key). The app sends one heartbeat and saves the link only if your CashPilot accepts it. The computer then appears on your CashPilot's Fleet page
+4. **Set up the runtime** -- the setup wizard detects Docker/Podman and guides you through installation if needed
 5. **Start earning** -- browse the service catalog, deploy containers, and monitor earnings from the system tray
 
 ## CashPilot Desktop vs Web

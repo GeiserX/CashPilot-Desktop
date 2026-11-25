@@ -70,7 +70,11 @@ Limits:
 - Joining: the earning apps keep running; this computer's earnings history is copied to the server once; this computer stops collecting earnings, because the server logs in to the provider accounts; and the hub (**Accept workers**) turns off, with a list of the workers and phones to point at the server instead.
 - Leaving: the earning apps keep running; the address and both keys are cleared; local collection starts again at once. The server keeps this computer's row until you remove it on its Fleet page.
 
-While joined, the dashboard says the earnings are on the server, and shows the last heartbeat and the last error in plain words.
+While joined, the dashboard says the earnings are on the server, and shows the last heartbeat and the last error in plain words. Collector errors from before the join are not shown, because this computer no longer collects.
+
+An install that was upgraded as a `follower` keeps **Accept workers** as it was, so its workers keep reporting. The Settings card lists them until you point them at the server and turn the switch off.
+
+The background helper (Keep earning in the background) reads `config.json` again at each collection and each heartbeat, and checks it every minute. A join or a switch made in the window reaches it within a minute, so the helper stops or starts collecting and reporting too.
 
 The join screen takes the block that the server's Fleet page copies under Add a box, or the address and key in two fields. It sends one heartbeat and saves nothing unless the server accepts it. The advanced way is to enter the address (`upstreamUrl`) and the pairing key, which is that server's `CASHPILOT_API_KEY`, in the settings list; the mode follows the address. The app uses it once to enrol and then keeps the per-worker key the server issues. The app sends a heartbeat every minute by default (`upstreamIntervalMinutes`), the same interval a CashPilot worker uses. Leaving the address empty keeps the app standalone. The address must be https, or plain http to this machine, a private or Tailscale address, a single-label name or a `.local`, `.lan`, `.home.arpa`, `.internal` or `.ts.net` name, the same rule the Android app uses; anything else is refused when you save it, because the pairing key would cross the internet in clear text. An address saved before this rule existed is not checked again when you save other settings; the app logs the refusal on each heartbeat instead.
 
