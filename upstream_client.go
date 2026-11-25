@@ -338,9 +338,13 @@ func historyReadings(balances []store.DailyBalance) []upstream.ImportReading {
 // applyFleetExits takes the fleet's exits from a heartbeat reply. It reports whether
 // the list the fence drops changed, so the fence must be applied again.
 //
-// A null list comes from a server that could not read its fleet this time: the list
-// stays as it is, unknown after a start, so the table keeps its drops. A reply without
-// the key comes from a server that predates it: no other exits.
+// The rule is the web worker's (worker_api._apply_fleet_exits_reply). A null list comes
+// from a server that could not read its fleet this time: the list stays as it is,
+// unknown after a start, so the table keeps its drops. A reply without the key comes
+// from a server that predates the list: no other exits while nothing is held. Once a
+// list is held, a missing key keeps it. Only a server rolled back to before the list
+// sends that, and clearing would let every earner reach the owner's other lines again,
+// while keeping costs at most a stale drop until the next start or a new list.
 func (a *App) applyFleetExits(raw json.RawMessage) bool {
 	ips, ok, sent := upstream.ParseFleetExits(raw)
 	a.upstream.mu.Lock()
@@ -349,6 +353,9 @@ func (a *App) applyFleetExits(raw json.RawMessage) bool {
 	case ok:
 		ips = runtime.ExitTargets(ips)
 	case !sent:
+		if a.upstream.fleetExitsKnown {
+			return false
+		}
 		ips = nil
 	default:
 		return false

@@ -369,6 +369,42 @@ func TestSavingThePairingKeyStoresItOutsideConfigJson(t *testing.T) {
 	}
 }
 
+// TestASaveWithoutThePairingKeyKeepsIt: the settings form never shows the saved
+// key and leaves it out of a save when its box is blank. The backend must read
+// that absence as "keep", or saving any other setting would unpair the machine.
+func TestASaveWithoutThePairingKeyKeepsIt(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	if _, err := app.SaveSettings(map[string]string{"upstreamKey": "shared-enrolment-token"}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	if _, err := app.SaveSettings(map[string]string{"hostnamePrefix": "box"}); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	if got, _ := config.UpstreamEnrolmentKey(app.cfg.AppDir()); got != "shared-enrolment-token" {
+		t.Fatalf("enrolment key = %q after a save that did not send it", got)
+	}
+}
+
+// TestTheFleetKeyRowIsASecretTheFormCannotEdit: SaveSettings has no branch for
+// the fleet key, so an editable box for it would drop whatever the user typed.
+// The form shows it as saved and offers Copy instead.
+func TestTheFleetKeyRowIsASecretTheFormCannotEdit(t *testing.T) {
+	app := newPayloadTestApp(t, nil)
+	state, err := app.GetSettingsState()
+	if err != nil {
+		t.Fatalf("GetSettingsState: %v", err)
+	}
+	for _, e := range state.Environment {
+		if e.Key == "CASHPILOT_API_KEY" {
+			if !e.Secret || !e.ReadOnly {
+				t.Fatalf("fleet key Secret=%v ReadOnly=%v, want both true", e.Secret, e.ReadOnly)
+			}
+			return
+		}
+	}
+	t.Fatal("no fleet key row")
+}
+
 // TestARemovedDesktopEnrolsAgainAfterA401 pins clients-3. When the owner
 // removes this machine from the server's fleet page, the server answers 401
 // to its own key. The Desktop kept sending that dead key forever; it must fall

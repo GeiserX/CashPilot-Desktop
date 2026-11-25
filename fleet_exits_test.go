@@ -147,7 +147,7 @@ func TestHubOnlyLooksUpItsExitForAuthenticatedWorkers(t *testing.T) {
 
 // THE RULE: as a worker, Desktop reports its own exit, takes the fleet's exits from
 // the reply and has the fence applied again when they change. A null list keeps what
-// it holds; a server from before the list means no other exits.
+// it holds; so does a reply without the key.
 func TestPairedDesktopReportsItsExitAndTakesTheFleets(t *testing.T) {
 	var mu sync.Mutex
 	reply := `{"status":"ok","worker_id":2,"fleet_exits":["198.51.100.10","203.0.113.1","10.0.0.4"]}`
@@ -227,24 +227,62 @@ func TestPairedDesktopReportsItsExitAndTakesTheFleets(t *testing.T) {
 	}
 }
 
-// A server from before fleet_exits sends no key: there are no other exits, and the
-// list is complete, so a fence does not keep drops for good waiting on it.
-func TestAServerWithoutFleetExitsMeansNone(t *testing.T) {
+// THE RULE (web worker_api._apply_fleet_exits_reply): a list is taken, null keeps what
+// is held, and a reply with no fleet_exits key means no other exits only while nothing
+// is held. Once a list is held, a missing key keeps it: only a UI rolled back to before
+// the list sends that, and clearing would let every earner reach the owner's other lines.
+func TestAReplyWithoutFleetExitsKeepsAHeldList(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
 	app.upstream.cancel = func() {}
 	setFleetUpstreamURL(t, app, "https://hub.example")
+
+	// Unknown, then no key: a server from before the list. No other exits, and the
+	// list is complete, so a fence does not keep drops for good waiting on it.
 	if !app.applyFleetExits(nil) {
 		t.Error("the first reply without the key did not settle the list")
 	}
 	if ips, complete := app.fenceOtherExits(); len(ips) != 0 || !complete {
-		t.Errorf("other exits %v complete %v", ips, complete)
+		t.Errorf("unknown then no key: other exits %v complete %v", ips, complete)
 	}
-	if !app.applyFleetExits(json.RawMessage(`["198.51.100.4"]`)) || !app.applyFleetExits(nil) {
-		t.Error("a reply without the key did not replace the previously held list")
+
+	// A list is taken.
+	if !app.applyFleetExits(json.RawMessage(`["198.51.100.4"]`)) {
+		t.Error("a list did not replace the empty one")
+	}
+	if ips, complete := app.fenceOtherExits(); !slices.Equal(ips, []string{"198.51.100.4"}) || !complete {
+		t.Errorf("after a list: other exits %v complete %v", ips, complete)
+	}
+
+	// A list, then no key: kept, and nothing to apply again.
+	if app.applyFleetExits(nil) {
+		t.Error("a reply without the key changed a held list")
+	}
+	if ips, complete := app.fenceOtherExits(); !slices.Equal(ips, []string{"198.51.100.4"}) || !complete {
+		t.Errorf("after a reply without the key: other exits %v complete %v", ips, complete)
+	}
+
+	// A list, then null: kept.
+	if app.applyFleetExits(json.RawMessage("null")) {
+		t.Error("null changed a held list")
+	}
+	if ips, complete := app.fenceOtherExits(); !slices.Equal(ips, []string{"198.51.100.4"}) || !complete {
+		t.Errorf("after null: other exits %v complete %v", ips, complete)
+	}
+
+	// Unpairing resets to unknown, so the next server's missing key settles an
+	// empty list again rather than keeping the old server's.
+	app.stopUpstream()
+	app.upstream.cancel = func() {}
+	if ips, complete := app.fenceOtherExits(); len(ips) != 0 || complete {
+		t.Errorf("after unpairing: other exits %v complete %v", ips, complete)
+	}
+	if !app.applyFleetExits(nil) {
+		t.Error("after unpairing, a reply without the key did not settle the list")
 	}
 	if ips, complete := app.fenceOtherExits(); len(ips) != 0 || !complete {
-		t.Errorf("after receiving a reply without the key: other exits %v complete %v", ips, complete)
+		t.Errorf("after unpairing then no key: other exits %v complete %v", ips, complete)
 	}
+
 	// null before any list: still unknown.
 	fresh := newPayloadTestApp(t, nil)
 	fresh.upstream.cancel = func() {}

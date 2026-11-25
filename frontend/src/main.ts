@@ -79,6 +79,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
+import { renderEnvSetting, settingsSaveValues } from "./render/settings";
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
@@ -1150,6 +1151,7 @@ async function renderSettings(current: AppState) {
   wireShellNav();
   maybeResetScroll();
   document.querySelector("#save-settings")?.addEventListener("click", () => void saveSettingsFromForm());
+  wireSecretSettings(settings.environment);
   document.querySelector<HTMLInputElement>("#bg-helper-toggle")?.addEventListener("change", (event) => void toggleBackgroundHelper(event));
   wireRestore();
   wireSessionConsent(document);
@@ -1224,18 +1226,49 @@ function wireRestoreForm(form: HTMLFormElement | null, needsName: boolean) {
   });
 }
 
-function renderEnvSetting(item: SettingsState["environment"][number]) {
-  const editableKey = envInputName(item.key);
-  return `
-    <label class="setting-row">
-      <span>
-        <strong>${escapeHtml(item.label)}</strong>
-        <small>${escapeHtml(item.key)} · ${escapeHtml(item.source)}</small>
-      </span>
-      <input data-setting="${editableKey}" value="${escapeHtml(item.value)}" ${item.readOnly ? "readonly" : ""} />
-      <small>${escapeHtml(item.help)}</small>
-    </label>
-  `;
+// The Secret rows of Settings (render/settings.ts) carry no stored value in the
+// page. Show reveals what the user types, Remove marks the saved value for
+// deletion on Save, and Copy reads a read-only secret from memory.
+function wireSecretSettings(environment: SettingsState["environment"]) {
+  const stored = new Map(environment.filter((item) => item.secret).map((item) => [item.key, item.value]));
+  document.querySelectorAll<HTMLButtonElement>("[data-secret-toggle]").forEach((button) => {
+    const input = button.parentElement?.querySelector<HTMLInputElement>("input");
+    button.addEventListener("click", () => {
+      if (!input) return;
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.textContent = show ? "Hide" : "Show";
+      button.setAttribute("aria-pressed", String(show));
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-secret-clear]").forEach((button) => {
+    const input = button.parentElement?.querySelector<HTMLInputElement>("input[data-secret]");
+    if (!input) return;
+    const savedPlaceholder = input.placeholder;
+    button.addEventListener("click", () => {
+      const clear = input.dataset.clear !== "true";
+      if (clear) {
+        input.value = "";
+        input.dataset.clear = "true";
+        input.placeholder = "Removed when you save.";
+      } else {
+        delete input.dataset.clear;
+        input.placeholder = savedPlaceholder;
+      }
+      button.textContent = clear ? "Keep" : "Remove";
+      button.setAttribute("aria-pressed", String(clear));
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-secret-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(stored.get(button.dataset.secretCopy || "") || "");
+        button.textContent = "Copied";
+      } catch (error) {
+        showErrorToast({scope: "clipboard", error: String(error)});
+      }
+    });
+  });
 }
 
 function renderCollectorSetting(item: SettingsState["collectors"][number]) {
@@ -1249,10 +1282,14 @@ function renderCollectorSetting(item: SettingsState["collectors"][number]) {
 }
 
 async function saveSettingsFromForm() {
-  const values: Record<string, string> = {};
-  document.querySelectorAll<HTMLInputElement>("[data-setting]").forEach((input) => {
-    if (!input.readOnly) values[input.dataset.setting || ""] = input.value;
-  });
+  const fields = Array.from(document.querySelectorAll<HTMLInputElement>("[data-setting]")).map((input) => ({
+    name: input.dataset.setting || "",
+    value: input.value,
+    readOnly: input.readOnly,
+    secret: input.hasAttribute("data-secret"),
+    clear: input.dataset.clear === "true",
+  }));
+  const values = settingsSaveValues(fields);
   try {
     await SaveSettings(values);
     state = await GetAppState();
@@ -1330,23 +1367,6 @@ async function toggleBackgroundHelper(event: Event) {
     input.disabled = false;
     showErrorToast({scope: "background", error: String(error)});
   }
-}
-
-function envInputName(key: string) {
-  const names: Record<string, string> = {
-    CASHPILOT_HOSTNAME_PREFIX: "hostnamePrefix",
-    CASHPILOT_COLLECT_INTERVAL: "collectIntervalMinutes",
-    CASHPILOT_DISPLAY_CURRENCY: "displayCurrency",
-    CASHPILOT_FLEET_BIND: "fleetBindAddress",
-    CASHPILOT_FLEET_PORT: "fleetPort",
-    CASHPILOT_FLEET_SERVER: "fleetServerEnabled",
-    CASHPILOT_DRIFT_WARNINGS: "driftWarnings",
-    CASHPILOT_ISOLATION: "isolation",
-    CASHPILOT_UPSTREAM_URL: "upstreamUrl",
-    CASHPILOT_UPSTREAM_KEY: "upstreamKey",
-    TZ: "timezone",
-  };
-  return names[key] || key;
 }
 
 async function renderActivity(current: AppState, view?: ActivityView) {
