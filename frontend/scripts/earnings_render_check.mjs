@@ -66,6 +66,17 @@ function primary(html) {
 
 const cell = (item) => balanceCell(item, undefined, "EUR");
 
+const ocean = earning({
+  platform: "ocean",
+  currency: "BTC",
+  balance: 0.00012345,
+  balanceDisplay: 0,
+  cashout: { minAmount: 0.01048576, currency: "BTC", percent: 1, comparable: true },
+});
+check("OCEAN retains every satoshi in the native balance", cell(ocean).includes("0.00012345 BTC"), cell(ocean));
+check("OCEAN shows its full automatic payout threshold", payoutCell(ocean).includes("0.01048576 BTC"), payoutCell(ocean));
+
+
 // ---------------------------------------------------------------------------
 // THE RULE.
 // ---------------------------------------------------------------------------

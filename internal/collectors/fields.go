@@ -55,6 +55,9 @@ var collectorFields = map[string][]Field{
 		{Key: "MYSTNODES_EMAIL", Label: "MystNodes email", Description: "Email used for my.mystnodes.com", Required: true},
 		{Key: "MYSTNODES_PASSWORD", Label: "MystNodes password", Description: "Password used for my.mystnodes.com", Secret: true, Required: true},
 	},
+	"ocean": {
+		{Key: "OCEAN_ADDRESS", Label: "BTC payout address", Required: true},
+	},
 	"packetstream": {
 		{Key: "PACKETSTREAM_AUTH_TOKEN", Label: "PacketStream auth cookie", Description: "auth cookie from app.packetstream.io", Secret: true, Required: true},
 	},
