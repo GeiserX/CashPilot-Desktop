@@ -11,6 +11,8 @@
 //      rate converted it.
 //   3. A platform CashPilot reads but does not run here keeps its row.
 //   4. The catalog keeps the sign-up (referral) link on every row that has one.
+//   5. A mining service is labelled Mining and gets its own catalog tab and wizard
+//      card, instead of showing only under All with the raw word "mining".
 //
 // It drives the REAL functions and asserts on the HTML they return, never on
 // source text.
@@ -20,7 +22,7 @@
 import { attentionItems, renderAttention } from "../.harness-build/render/attention.js";
 import { chartWindow, niceMax, renderEarningsBars } from "../.harness-build/render/chart.js";
 import { renderServicesTable, SERVICE_COLUMNS } from "../.harness-build/render/services.js";
-import { catalogRow, estimateText, renderCatalogTable } from "../.harness-build/render/catalog.js";
+import { catalogFilterTabs, catalogRow, estimateText, renderCatalogTable, wizardCategoryChoices, wizardCategoryCopy } from "../.harness-build/render/catalog.js";
 
 let failures = 0;
 let checks = 0;
@@ -160,6 +162,32 @@ check("the estimate reads like the web one", estimateText(svc("x")) === "$0-5 / 
 const stoppedHere = renderCatalogTable([svc("delta")], [dep("delta", "exited")], []);
 check("a deployed but stopped service is not marked running", !stoppedHere.includes("status-dot running") && stoppedHere.includes("status-dot stopped"), stoppedHere);
 check("text from the catalog is escaped", !catalogRow(svc("<b>x</b>"), undefined, false).includes("<b>x</b>"));
+
+// ---------------------------------------------------------------------------
+// RULE 5: mining services have their own kind, tab and wizard card
+// ---------------------------------------------------------------------------
+const kindCell = (html) => (html.match(/<\/td>\s*<td>([^<]*)<\/td>/) || [])[1];
+const pool = svc("ocean", { category: "mining" });
+check("RULE 5: a mining row's kind reads Mining", kindCell(catalogRow(pool, undefined, false)) === "Mining", catalogRow(pool, undefined, false));
+check("CONTROL: a bandwidth row's kind reads Bandwidth", kindCell(catalogRow(svc("alpha"), undefined, false)) === "Bandwidth");
+check("RULE 5: a catalog with a mining service has a Mining tab after Compute",
+  JSON.stringify(catalogFilterTabs([svc("alpha"), pool])) === JSON.stringify(["all", "bandwidth", "depin", "storage", "compute", "mining"]),
+  JSON.stringify(catalogFilterTabs([svc("alpha"), pool])));
+check("RULE 5: no mining service means no empty Mining tab",
+  JSON.stringify(catalogFilterTabs([svc("alpha")])) === JSON.stringify(["all", "bandwidth", "depin", "storage", "compute"]),
+  JSON.stringify(catalogFilterTabs([svc("alpha")])));
+check("CONTROL: Custom still comes last, after Mining",
+  JSON.stringify(catalogFilterTabs([pool, svc("mine", { category: "custom", custom: true })]).slice(-2)) === JSON.stringify(["mining", "custom"]),
+  JSON.stringify(catalogFilterTabs([pool, svc("mine", { category: "custom", custom: true })])));
+check("RULE 5: the wizard offers Mining when a mining service exists",
+  JSON.stringify(wizardCategoryChoices([svc("alpha"), pool])) === JSON.stringify(["bandwidth", "mining"]),
+  JSON.stringify(wizardCategoryChoices([svc("alpha"), pool])));
+check("CONTROL: the wizard offers no category without a service",
+  JSON.stringify(wizardCategoryChoices([svc("alpha")])) === JSON.stringify(["bandwidth"]),
+  JSON.stringify(wizardCategoryChoices([svc("alpha")])));
+check("RULE 5: the Mining wizard card says what mining means here",
+  wizardCategoryCopy("mining") === "Mine with your own hardware, or track a pool you already mine on",
+  wizardCategoryCopy("mining"));
 
 // ---------------------------------------------------------------------------
 // The provider disabled the account: one card, no Start, no Fix credentials.
