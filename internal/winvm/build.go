@@ -247,16 +247,37 @@ type builder struct {
 	vnicIf int
 	h      HostNet
 	own    []netip.Addr
+	// guardOurs is whether the guard task on the host is this install's.
+	// setup.ps1 stopped it before the exe ran, so a build that fails starts
+	// it again (see Build).
+	guardOurs bool
+	// booted is whether proveAndBoot reached the guard's boot routine.
+	booted bool
 }
 
 // Build builds the Secure VM, or repairs it, and proves its fence. It returns
 // the plan as written. Run it again after any failure: it resumes.
-func Build(ctx context.Context, d BuildDeps, sp SetupParams) (BuildResult, error) {
+func Build(ctx context.Context, d BuildDeps, sp SetupParams) (res BuildResult, err error) {
 	n, opts, minRAM, err := SetupNames(sp)
 	if err != nil {
 		return BuildResult{}, err
 	}
 	b := &builder{BuildDeps: d, sp: sp, n: n, opts: opts, minRAM: minRAM}
+	// setup.ps1 stopped the guard task before this ran. A build that fails
+	// before proveAndBoot runs the guard's boot routine and starts the task
+	// again, so the guard never stays off: on the unproven plan the journal
+	// wrote, the boot routine keeps the VM off the network.
+	defer func() {
+		if err == nil || b.booted || !b.guardOurs {
+			return
+		}
+		bg := context.WithoutCancel(ctx)
+		gd := GuardDeps{HV: b.HV, Echo: b.Echo, Now: b.Now, Dir: b.Dir, Logf: b.Logf}
+		res.Status = gd.Boot(bg)
+		if serr := b.HV.StartGuardTask(bg, b.n); serr != nil {
+			err = errors.Join(err, fmt.Errorf("the guard task did not start: %w", serr))
+		}
+	}()
 	steps := []struct {
 		name string
 		run  func(context.Context) error
@@ -341,6 +362,23 @@ func (b *builder) journal(ctx context.Context) error {
 	}
 	if err := b.checkOwnership(); err != nil {
 		return err
+	}
+	b.guardOurs = prev != nil && b.inv.Task != nil && b.inv.Task.Owner == prev.Owner
+	// Setup records the one account it adds to Hyper-V Administrators, so
+	// Remove VM can take it out again. A Repair from another account that is
+	// not a member would add an account nobody recorded.
+	if prev != nil && prev.AddedAdminSID != "" && !strings.EqualFold(prev.AddedAdminSID, b.sp.UserSID) && !b.inv.HyperVAdmin {
+		return errors.New("this Secure VM was set up from another Windows account; run Repair from that account, or Remove VM and set it up again")
+	}
+	// A Repair changes the fence, so the VM goes off the network before the
+	// first change and stays off until the proof passes and the guard's boot
+	// routine finds an exact match.
+	if prev != nil {
+		if id := adopt(b.inv.VMs, prev.VMID, prev.Owner); id != "" {
+			if err := b.HV.Disconnect(ctx, id); err != nil {
+				return fmt.Errorf("could not take the VM off the network before the Repair: %w", err)
+			}
+		}
 	}
 	// A proof killed in the middle can leave a canary rule, its hv_sock test
 	// key and a pktmon session. Clear them, and list the host again when
@@ -878,7 +916,11 @@ func (b *builder) prefs(ctx context.Context) error {
 
 // guardTask registers the guard task, stopping a running guard first.
 func (b *builder) guardTask(ctx context.Context) error {
-	return b.HV.RegisterGuardTask(ctx, b.n, b.Exe, b.p.Owner)
+	if err := b.HV.RegisterGuardTask(ctx, b.n, b.Exe, b.p.Owner); err != nil {
+		return err
+	}
+	b.guardOurs = true
+	return nil
 }
 
 // proveAndBoot checks the build reached the plan, seeds the guard's state,
@@ -933,6 +975,7 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 		}
 	}
 	res.Plan = b.p
+	b.booted = true
 	gd := GuardDeps{HV: b.HV, Echo: b.Echo, Now: b.Now, Dir: b.Dir, Logf: b.Logf}
 	res.Status = gd.Boot(context.WithoutCancel(ctx))
 	if err := b.HV.StartGuardTask(context.WithoutCancel(ctx), b.n); err != nil {

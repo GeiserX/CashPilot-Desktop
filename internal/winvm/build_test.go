@@ -453,3 +453,148 @@ func TestBuildWithAFailedProof(t *testing.T) {
 		t.Fatal("the guard task does not run after a failed proof")
 	}
 }
+
+// adapterSwitch is the switch any adapter of the Secure VM is on, "" for none.
+func adapterSwitch(t *testing.T, f *hvfake.HyperV, p winvm.Plan) string {
+	t.Helper()
+	live, err := f.ReadLive(context.Background(), p.Names, p.VMID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range live.Adapters {
+		if a.SwitchID != "" {
+			return a.SwitchID
+		}
+	}
+	return ""
+}
+
+// TestBuildRepairThatFailsKeepsTheVMOff: Repair changes the fence, so it
+// takes the VM off the network before its first change. setup.ps1 stopped the
+// guard task before the exe ran, so a Repair that fails part way starts it
+// again; the plan is no longer proven, so the guard keeps the VM off until a
+// Repair passes.
+func TestBuildRepairThatFailsKeepsTheVMOff(t *testing.T) {
+	cases := map[string]func(t *testing.T, f *hvfake.HyperV, p winvm.Plan){
+		"host checks": func(t *testing.T, f *hvfake.HyperV, p winvm.Plan) {
+			net, _ := f.ReadNetwork(context.Background())
+			net.Metered = true
+			f.SetNetwork(net)
+		},
+		"firewall": func(t *testing.T, f *hvfake.HyperV, p winvm.Plan) {
+			f.FailNext("EnsureFirewall", errors.New("injected"))
+		},
+		"planned state": func(t *testing.T, f *hvfake.HyperV, p winvm.Plan) {
+			if err := f.AddAdapter(p.VMID, p.Names.Switch); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, breakIt := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := hvfake.New()
+			dir := t.TempDir()
+			d := buildDeps(t, f, dir)
+			if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+				t.Fatal(err)
+			}
+			p := readPlan(t, dir)
+			if adapterSwitch(t, f, p) == "" {
+				t.Fatal("the build did not connect the VM, so this case tests nothing")
+			}
+			f.StopTask(p.Names.GuardTask)
+			breakIt(t, f, p)
+			m := len(f.Calls())
+			if _, err := winvm.Build(context.Background(), d, setupParams()); err == nil {
+				t.Fatal("the broken Repair passed")
+			}
+			calls := f.Calls()[m:]
+			dc := indexOf(calls, "Disconnect")
+			if dc < 0 {
+				t.Fatalf("Repair never took the VM off the network; calls: %v", calls)
+			}
+			for _, w := range []string{"EnsureSwitch", "EnsureNAT", "SetBindings", "EnsureFirewall", "SetHostNeighbor", "AddDeny", "RemoveDeny"} {
+				if i := indexOf(calls, w); i >= 0 && i < dc {
+					t.Fatalf("Repair called %s with the VM on the network; calls: %v", w, calls)
+				}
+			}
+			if sw := adapterSwitch(t, f, p); sw != "" {
+				t.Fatalf("after the failed Repair the VM is on switch %s", sw)
+			}
+			if !readPlan(t, dir).ProvedAt.IsZero() {
+				t.Fatal("the failed Repair left the plan proven")
+			}
+			if !f.TaskRunning(p.Names.GuardTask) {
+				t.Fatal("the guard task does not run after the failed Repair")
+			}
+		})
+	}
+}
+
+// TestBuildRepairWithAFailedProofIsNotProven: a Repair whose proof fails
+// never keeps the earlier ProvedAt, so the guard keeps the VM off.
+func TestBuildRepairWithAFailedProofIsNotProven(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	if readPlan(t, dir).ProvedAt.IsZero() {
+		t.Fatal("the first build is not proven, so this case tests nothing")
+	}
+	f.SetMutant(true)
+	res, err := winvm.Build(context.Background(), d, setupParams())
+	if !errors.Is(err, winvm.ErrProofFailed) {
+		t.Fatalf("Repair = %v, want ErrProofFailed", err)
+	}
+	p := readPlan(t, dir)
+	if !p.ProvedAt.IsZero() {
+		t.Fatalf("ProvedAt = %v after a Repair whose proof failed", p.ProvedAt)
+	}
+	if res.Status.Network == winvm.NetConnected {
+		t.Fatalf("the guard connected after a failed proof: %s", res.Status.Reason)
+	}
+	if sw := adapterSwitch(t, f, p); sw != "" {
+		t.Fatalf("the VM is on switch %s after a Repair whose proof failed", sw)
+	}
+}
+
+// TestBuildRepairFromAnotherAccount: setup records the one account it adds
+// to Hyper-V Administrators, so Remove VM can take it out again. A Repair
+// from a second account that is not a member would add an account nobody
+// recorded, so it is refused before anything changes. A second account that
+// is already a member adds nothing, so it may run Repair.
+func TestBuildRepairFromAnotherAccount(t *testing.T) {
+	const other = "S-1-5-21-1111111111-2222222222-3333333333-1002"
+	f := hvfake.New()
+	before := f.Objects()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPlan(t, dir).AddedAdminSID; got != testUserSID {
+		t.Fatalf("AddedAdminSID = %q, want %q", got, testUserSID)
+	}
+	sp := setupParams()
+	sp.UserSID = other
+	if _, err := winvm.Build(context.Background(), d, sp); err == nil {
+		t.Fatal("a Repair from a second account that is not a member passed")
+	}
+	if strings.Contains(strings.Join(f.Objects(), "\n"), "hyperv-admin "+other) {
+		t.Fatal("the refused Repair added the second account to Hyper-V Administrators")
+	}
+	f.SetHyperVAdmin(other, true)
+	if _, err := winvm.Build(context.Background(), d, sp); err != nil {
+		t.Fatalf("Repair from a second account that is a member: %v", err)
+	}
+	if got := readPlan(t, dir).AddedAdminSID; got != testUserSID {
+		t.Fatalf("AddedAdminSID = %q after the second account's Repair, want %q", got, testUserSID)
+	}
+	f.SetHyperVAdmin(other, false)
+	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {
+		t.Fatal(err)
+	}
+	diffObjects(t, before, f.Objects())
+}

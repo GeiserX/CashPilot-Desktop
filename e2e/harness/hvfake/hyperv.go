@@ -1194,6 +1194,16 @@ func (f *HyperV) StartGuardTask(_ context.Context, n winvm.Names) error {
 	return nil
 }
 
+// StopTask stops the guard task, as setup.ps1 and remove.ps1 do before they
+// run the exe. It is not a seam call.
+func (f *HyperV) StopTask(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if t, ok := f.tasks[name]; ok {
+		t.running = false
+	}
+}
+
 // TaskRunning is whether the guard task runs. It is not a seam call.
 func (f *HyperV) TaskRunning(name string) bool {
 	f.mu.Lock()
