@@ -22,6 +22,7 @@ import { rowButton } from "./actions.js";
 import { containerState } from "./attention.js";
 import { customBadge } from "./custom.js";
 import { outdatedBadge } from "./catalog.js";
+import { walletDetail } from "./wallet.js";
 
 export const SERVICE_COLUMNS = 8;
 
@@ -121,7 +122,7 @@ export function renderServicesTable(input: ServicesTableInput): string {
     const running = deployment.status === "running";
     // The provider refuses the client: starting it again cannot help.
     const disabledAccount = input.producerStates?.[slug]?.state === "account_disabled";
-    const nodeDetail = slug === "mysterium" ? renderMystNodes(input.serviceDetails?.["mysterium"]) : "";
+    const nodeDetail = slug === "mysterium" ? renderMystNodes(input.serviceDetails?.["mysterium"]) : walletDetail(service, deployment);
     const tags = [
       renderProducerBadge(input.producerStates?.[slug], deployment.status),
       customBadge(service),

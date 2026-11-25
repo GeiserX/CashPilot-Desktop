@@ -27,6 +27,7 @@ import { instancesSection } from "./instances.js";
 import { routeChoiceSection } from "./route.js";
 import { renderCustomServiceCard } from "./custom.js";
 import { needsSessionConsent, renderSessionSlot } from "./session.js";
+import { walletChoiceSection } from "./wallet.js";
 
 /**
  * Render the setup card for one service.
@@ -48,6 +49,9 @@ import { needsSessionConsent, renderSessionSlot } from "./session.js";
  * `sessionConsent` is the desktop-app risk disclosures the user accepted, per slug
  * (render/session.ts). A manual-only desktop app shows the disclosure in place of
  * its install tip and setup guide until the user accepts the current text.
+ *
+ * `deployed` says whether this machine runs the service now. A service that keeps
+ * its wallet seed in a file (render/wallet.ts) then defaults to keeping its wallet.
  */
 export function renderWizardServiceSetup(
   service: Service,
@@ -60,6 +64,7 @@ export function renderWizardServiceSetup(
   route?: RouteState | null,
   routeDraft?: number | null,
   sessionConsent?: Record<string, SessionConsent> | null,
+  deployed?: boolean,
 ): string {
   // A custom service runs its saved definition: no credentials, no Image box.
   if (service.custom) return renderCustomServiceCard(service, scaling, instances);
@@ -99,6 +104,7 @@ export function renderWizardServiceSetup(
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
+      ${walletChoiceSection(service, Boolean(deployed))}
       ${instancesSection(service, scaling, instances)}
       ${routeChoiceSection(service, route, routeDraft)}
       ${imageChoiceSection(service, customImage)}
@@ -111,6 +117,7 @@ export function renderWizardServiceSetup(
       ${composeExportControl(service)}
       ${serviceFacts(service, balance)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
+      <div data-wallet-panel="${escapeHtml(service.slug)}"></div>
     </article>
   `;
 }

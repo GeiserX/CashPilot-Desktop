@@ -257,51 +257,78 @@ type DeployOptions struct {
 	// (routes.go) runs from this machine's own IP from now on. Its routed copy is
 	// removed first, since both would run the same device.
 	LeaveRoute bool
+	// Wallet is the owner's wallet choice for a service that keeps its wallet seed in
+	// a file (wallet.go). nil keeps the wallet the node has, moving a seed stored
+	// before the file existed into it.
+	Wallet *runtime.WalletRequest
 }
 
 // DeployWith deploys slug with the given options. The first copy is deployed exactly
 // as a single-copy service always was; copies 2..N follow it, and copies above N that
 // are still running are removed, highest first.
 func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, error) {
+	deployment, _, err := m.DeployWallet(ctx, slug, credentials, opts)
+	return deployment, err
+}
+
+// DeployWallet is DeployWith that also returns what the deploy did with the service's
+// wallet seed file: nil for a service with none. A new wallet's phrase is in it, for
+// the caller to show once and drop; it is stored nowhere.
+func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
+	deployment, wallet, err := m.deployWith(ctx, slug, credentials, opts)
+	if err != nil {
+		return store.Deployment{}, nil, err
+	}
+	return deployment, wallet, nil
+}
+
+func (m *Manager) deployWith(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
 	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
-		return store.Deployment{}, fmt.Errorf("unknown service: %s", slug)
+		return store.Deployment{}, nil, fmt.Errorf("unknown service: %s", slug)
 	}
 	if svc.ManualOnly {
-		return store.Deployment{}, fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+		return store.Deployment{}, nil, fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
 	}
 	if err := refuseRetired(svc); err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	if svc.Custom {
 		// A custom service runs its saved definition: the image and the variables are
 		// changed by editing it, never in the deploy form, so neither the Image box nor
 		// typed credentials reach the container.
 		if opts.Image != nil && strings.TrimSpace(*opts.Image) != "" {
-			return store.Deployment{}, errors.New("a custom service's image is changed by editing the service, not in the deploy form")
+			return store.Deployment{}, nil, errors.New("a custom service's image is changed by editing the service, not in the deploy form")
 		}
 		empty := ""
 		opts.Image = &empty
 		credentials = nil
 		revealed, release, err := m.holdCustom(slug)
 		if err != nil {
-			return store.Deployment{}, err
+			return store.Deployment{}, nil, err
 		}
 		defer release()
 		svc = revealed
 	}
 	if err := validateRequired(svc, credentials); err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
+	}
+	// The wallet seed leaves the credentials here, before anything is touched: it
+	// reaches the runtime only as the wallet request, which writes it into its file.
+	wallet, credentials, err := m.walletFor(svc, slug, credentials, opts.Wallet)
+	if err != nil {
+		m.store.RecordEvent(slug, "deploy_refused", err.Error())
+		return store.Deployment{}, nil, err
 	}
 	if err := m.refuseHeld(slug, "deployed"); err != nil {
 		m.store.RecordEvent(slug, "deploy_refused", err.Error())
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	leaving, routed, err := m.directAllowed(svc, slug, opts.LeaveRoute)
 	if err != nil {
 		m.store.RecordEvent(slug, "deploy_refused", err.Error())
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	recorded, recordedCopies := "", 1
 	if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
@@ -310,18 +337,18 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	}
 	custom, err := customImage(opts.Image, recorded)
 	if err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	instances := recordedCopies
 	if opts.Instances != nil {
 		instances = *opts.Instances
 	}
 	if instances < 1 || instances > MaxInstances {
-		return store.Deployment{}, fmt.Errorf("instances must be between 1 and %d", MaxInstances)
+		return store.Deployment{}, nil, fmt.Errorf("instances must be between 1 and %d", MaxInstances)
 	}
 	if limit := m.ScalingLimit(svc); instances > limit.Max {
 		if opts.Instances != nil {
-			return store.Deployment{}, errors.New(limit.Reason)
+			return store.Deployment{}, nil, errors.New(limit.Reason)
 		}
 		// The recorded count is no longer allowed (the catalog changed since). A
 		// redeploy that did not ask for a count runs what is allowed, and the
@@ -338,7 +365,7 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	if custom != "" && svc.Docker.FenceGated {
 		// It holds NET_ADMIN in its own namespace, so it runs only the image the
 		// catalog pins (web app/main.py _fence_gated_spec).
-		return store.Deployment{}, fmt.Errorf("%s runs only the image the catalog pins, since it holds NET_ADMIN; clear the Image box to deploy it", svc.Name)
+		return store.Deployment{}, nil, fmt.Errorf("%s runs only the image the catalog pins, since it holds NET_ADMIN; clear the Image box to deploy it", svc.Name)
 	}
 	if custom != "" {
 		// The chosen image replaces the catalog's and every per-architecture
@@ -351,19 +378,19 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 	provider, runtimeKind := m.resolveProvider(kind)
 	if runtimeKind != nativeRuntimeKind {
 		if err := checkPublished(svc, credentials); err != nil {
-			return store.Deployment{}, refusedDeploy(svc, err)
+			return store.Deployment{}, nil, refusedDeploy(svc, err)
 		}
 	}
 	// Copies are read only when copies are involved, so a plain deploy asks the
 	// runtime nothing it did not ask before.
 	copier, _ := provider.(runtime.CopyProvider)
 	if instances > 1 && copier == nil {
-		return store.Deployment{}, fmt.Errorf("%s cannot run more than once on the %s runtime", svc.Name, runtimeKind)
+		return store.Deployment{}, nil, fmt.Errorf("%s cannot run more than once on the %s runtime", svc.Name, runtimeKind)
 	}
 	var running []int
 	if copier != nil && (opts.Instances != nil || recordedCopies > 1) {
 		if running, err = copier.Copies(ctx, slug); err != nil {
-			return store.Deployment{}, err
+			return store.Deployment{}, nil, err
 		}
 	}
 
@@ -371,16 +398,16 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		// The routed copy runs the same device ids, so it goes before the service
 		// runs from this machine's own IP; a copy that cannot go stops the switch.
 		if err := m.removeProxied(ctx, slug, leaving); err != nil {
-			return store.Deployment{}, fmt.Errorf("the copy of %s through proxy %d could not be removed first, so nothing was deployed: %w", svc.Name, leaving, err)
+			return store.Deployment{}, nil, fmt.Errorf("the copy of %s through proxy %d could not be removed first, so nothing was deployed: %w", svc.Name, leaving, err)
 		}
 	}
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
-	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials}, func(message string) {
+	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
 	})
 	if err != nil {
 		m.store.RecordEvent(slug, "deploy_error", err.Error())
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 
 	deployment := store.Deployment{
@@ -394,18 +421,22 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		MemoryMB:    info.MemoryMB,
 	}
 	if err := m.store.UpsertDeployment(deployment); err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	if err := m.store.SetCustomImage(slug, custom); err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	deployment.CustomImage = custom
 	// The count is recorded before the extra copies start: if one fails, the next
 	// redeploy still knows how many this machine should run and tries again.
 	if err := m.store.SetInstances(slug, instances); err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	deployment.Instances = instances
+	m.afterWallet(slug, svc, info.Wallet)
+	if info.Wallet != nil {
+		deployment.WalletAddress = info.Wallet.Address
+	}
 	m.store.RecordEvent(slug, "deployed", info.ContainerID)
 	if routed {
 		// It runs from this machine's own IP now, as the owner confirmed.
@@ -423,7 +454,7 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 		if err != nil {
 			m.store.RecordEvent(slug, "deploy_error", fmt.Sprintf("copy %d: %v", n, err))
 			m.setCopies(slug, copies)
-			return store.Deployment{}, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
+			return store.Deployment{}, nil, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
 		}
 		copies = append(copies, copyInfo)
 	}
@@ -432,13 +463,13 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 			if err := copier.RemoveCopy(ctx, slug, n, m.stopTimeout(slug)); err != nil {
 				m.store.RecordEvent(slug, "remove_error", fmt.Sprintf("copy %d: %v", n, err))
 				m.setCopies(slug, copies)
-				return store.Deployment{}, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
+				return store.Deployment{}, nil, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
 			}
 			m.store.RecordEvent(slug, "removed", fmt.Sprintf("copy %d", n))
 		}
 	}
 	m.setCopies(slug, copies)
-	return deployment, nil
+	return deployment, info.Wallet, nil
 }
 
 func (m *Manager) Stop(ctx context.Context, slug string) error {
@@ -832,6 +863,11 @@ func deploySource(ctx context.Context, provider runtime.Provider, svc catalog.Se
 func validateRequired(svc catalog.Service, credentials map[string]string) error {
 	for _, list := range [][]catalog.EnvVar{svc.Docker.Env, svc.Native.Env} {
 		for _, item := range list {
+			// A wallet seed is never a credential here: the deploy's wallet choice
+			// makes, takes or keeps it in its file (wallet.go).
+			if item.SeedFile != nil {
+				continue
+			}
 			label := item.Label
 			if label == "" {
 				label = item.Key
