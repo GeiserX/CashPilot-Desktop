@@ -30,7 +30,7 @@ export function renderEnvSetting(item: EnvSetting) {
         <strong>${escapeHtml(item.label)}</strong>
         <small>${escapeHtml(item.key)} · ${escapeHtml(item.source)}</small>
       </span>
-      ${item.secret ? secretInput(item) : `<input data-setting="${escapeHtml(envInputName(item.key))}" value="${escapeHtml(item.value)}" ${item.readOnly ? "readonly" : ""} />`}
+      ${item.secret ? secretInput(item) : `<input data-setting="${escapeHtml(envInputName(item.key))}" value="${escapeHtml(item.value)}" data-initial="${escapeHtml(item.value)}" ${item.readOnly ? "readonly" : ""} />`}
       <small>${escapeHtml(item.help)}</small>
     </label>
   `;
@@ -56,18 +56,26 @@ function secretInput(item: EnvSetting): string {
       </span>`;
 }
 
-/** One input of the settings form, as saveSettingsFromForm reads it. */
-export interface SettingField { name: string; value: string; readOnly: boolean; secret: boolean; clear: boolean }
+/**
+ * One input of the settings form, as saveSettingsFromForm reads it. `initial` is
+ * the value a plain field was drawn with; secrets have none.
+ */
+export interface SettingField { name: string; value: string; readOnly: boolean; secret: boolean; clear: boolean; initial?: string }
 
 /**
  * What Save sends to SaveSettings. A secret box left blank is left out, so the
  * backend keeps the saved value; only Remove sends it empty, which unpairs.
+ * A plain field still holding the value it was drawn with is left out too: the
+ * backend keeps every key Save does not send. So a form drawn before a join or
+ * a leave in the "How this computer runs" card cannot put the old server address
+ * or hub setting back.
  */
 export function settingsSaveValues(fields: SettingField[]): Record<string, string> {
   const values: Record<string, string> = {};
   for (const f of fields) {
     if (f.readOnly) continue;
     if (f.secret && f.value === "" && !f.clear) continue;
+    if (!f.secret && f.initial !== undefined && f.value === f.initial) continue;
     values[f.name] = f.value;
   }
   return values;

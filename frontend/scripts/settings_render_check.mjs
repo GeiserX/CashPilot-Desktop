@@ -68,6 +68,22 @@ check("a removed secret is sent empty", settingsSaveValues([field({clear: true})
 check("a read-only field is not sent", !("x" in settingsSaveValues([field({name: "x", value: "v", readOnly: true})])));
 check("an empty plain field is still sent", settingsSaveValues([field({name: "upstreamUrl", secret: false})]).upstreamUrl === "");
 
+// A plain field is drawn with the value it holds, and Save leaves it out while it
+// still holds that value. Otherwise a form drawn before a leave in the "How this
+// computer runs" card sends the old server address back, which joins the server
+// again with no key and stops collection.
+check("a plain setting records the value it was drawn with", plain.includes('data-initial="cashpilot"'), plain);
+const plainField = (overrides) => field({name: "upstreamUrl", secret: false, ...overrides});
+check("leave, then Save: the stale server address is not sent",
+  !("upstreamUrl" in settingsSaveValues([plainField({value: "http://old.example:8080", initial: "http://old.example:8080"})])));
+check("join, then Save before Continue: the empty address and the hub are not sent", (() => {
+  const v = settingsSaveValues([plainField({value: "", initial: ""}), plainField({name: "fleetServerEnabled", value: "true", initial: "true"})]);
+  return !("upstreamUrl" in v) && !("fleetServerEnabled" in v);
+})());
+check("an edited plain field is sent", settingsSaveValues([plainField({value: "http://new.example:8080", initial: "http://old.example:8080"})]).upstreamUrl === "http://new.example:8080");
+check("a plain field cleared by hand is sent empty", settingsSaveValues([plainField({value: "", initial: "http://old.example:8080"})]).upstreamUrl === "");
+check("an untouched secret is still left out next to an untouched plain field", Object.keys(settingsSaveValues([field({}), plainField({value: "a", initial: "a"})])).length === 0);
+
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} settings checks FAILED`);
   process.exit(1);

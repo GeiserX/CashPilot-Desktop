@@ -38,4 +38,4 @@ Docker containers continue running independently -- they don't stop when CashPil
 
 **Can I run CashPilot Desktop on multiple machines?**
 
-Yes. Use **Worker Node** mode on additional machines -- they connect to your main CashPilot instance (either Desktop or Docker) and appear in the fleet dashboard. Each worker runs its own set of services and reports status back.
+Yes. Pick **Join my CashPilot** on the other machines -- they join your CashPilot server and appear on its Fleet page. Each one runs its own set of services and reports what runs there; the server collects and shows the earnings. A Desktop cannot join another Desktop.
