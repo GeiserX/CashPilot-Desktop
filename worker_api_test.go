@@ -13,7 +13,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 )
@@ -445,6 +447,10 @@ func TestServerCommandsFirewallRuleIsScoped(t *testing.T) {
 		"-Direction Inbound", "-Protocol TCP", "-LocalPort 8086", "-Profile Private",
 		"'10.0.0.0/8'", "'172.16.0.0/12'", "'192.168.0.0/16'", "'100.64.0.0/10'", "'fc00::/7'",
 		`-Program 'C:\Program Files\CashPilot\it''s.exe'`,
+		// The Block rules Windows made for this program (a Cancel on its own prompt)
+		// beat an Allow rule, so they go, and only inbound Block rules of this program.
+		`Get-NetFirewallApplicationFilter -Program 'C:\Program Files\CashPilot\it''s.exe'`,
+		"$_.Direction -eq 'Inbound' -and $_.Action -eq 'Block'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the rule script lacks %q:\n%s", want, script)
@@ -471,5 +477,97 @@ func TestServerCommandsFirewallRuleNeedsTheUsersYes(t *testing.T) {
 	state, err := app.AllowServerCommandsThroughFirewall()
 	if err != nil || !state.FirewallRule {
 		t.Fatalf("allow: %+v, %v", state, err)
+	}
+}
+
+func TestServerCommandsWaitForTheFirewallRuleOnWindows(t *testing.T) {
+	f := useAddrs(t, "192.168.1.30")
+	app := joinedApp(t)
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	oldNeeded, oldRun := firewallRuleNeeded, runFirewallScript
+	t.Cleanup(func() { firewallRuleNeeded, runFirewallScript = oldNeeded, oldRun })
+	firewallRuleNeeded = true
+	var scripts []string
+	runFirewallScript = func(s string) error { scripts = append(scripts, s); return nil }
+
+	// Joined, the switch on, no rule yet: nothing listens, so Windows never shows its
+	// own prompt, and the heartbeat reports no URL the server would deploy to.
+	app.syncWorkerAPI()
+	if n := listening(app); n != 0 || len(f.asked) != 0 {
+		t.Fatalf("listened before the firewall rule exists: %d listeners, asked %v", n, f.asked)
+	}
+	if got := app.workerAPIURL(app.cfg.Config().UpstreamURL); got != "" {
+		t.Fatalf("the heartbeat reports %q before the firewall rule exists", got)
+	}
+	state := app.serverCommandsState()
+	if state.Listening || !strings.Contains(state.Problem, "Waiting for the Windows Firewall rule") {
+		t.Fatalf("the card does not say it waits for the rule: %+v", state)
+	}
+
+	// The user's yes makes the rule first; only then does it listen.
+	state, err := app.AllowServerCommandsThroughFirewall()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) != 1 || !strings.Contains(scripts[0], "New-NetFirewallRule") {
+		t.Fatalf("the rule script did not run once: %v", scripts)
+	}
+	if n := listening(app); n != 1 || !state.Listening {
+		t.Fatalf("after the rule: %d listeners, state %+v", n, state)
+	}
+	if got := app.workerAPIURL(app.cfg.Config().UpstreamURL); got != "http://192.168.1.30:8086" {
+		t.Errorf("the heartbeat reports %q after the rule", got)
+	}
+}
+
+func TestServerCommandsAnswerActionsAsAWorkerDoes(t *testing.T) {
+	app := joinedApp(t)
+	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, honeygainSpec(t, app)); w.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", w.Code, w.Body.String())
+	}
+
+	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/stop?instance=3", testWorkerKey, nil); w.Code != http.StatusNotFound {
+		t.Errorf("stop of a copy that is not here: %d %s, want 404", w.Code, w.Body.String())
+	}
+
+	app.Docker.SetDown(true)
+	w := call(t, app, http.MethodPost, "/api/containers/honeygain/stop", testWorkerKey, nil)
+	app.Docker.SetDown(false)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("stop with Docker unreachable: %d %s, want 503", w.Code, w.Body.String())
+	}
+
+	// The route rule: a computer set to run services only through a proxy refuses to
+	// start one on its own IP, with the code the web worker sends.
+	t.Setenv(services.ProxiedOnlyEnv, "true")
+	w = call(t, app, http.MethodPost, "/api/containers/honeygain/restart", testWorkerKey, nil)
+	if w.Code != http.StatusForbidden || !strings.Contains(detailText(t, w), `"error":"proxied_only"`) {
+		t.Errorf("a restart the route rule refuses: %d %s, want 403 proxied_only", w.Code, w.Body.String())
+	}
+}
+
+func TestServerCommandsRefuseToDeleteACriticalVolume(t *testing.T) {
+	app := joinedApp(t)
+	cat, err := catalog.LoadEmbedded(fstest.MapFS{
+		"services/bandwidth/keeper.yml": {Data: []byte(
+			"name: Identity Keeper\nslug: keeper\ncategory: bandwidth\nstatus: active\n" +
+				"docker:\n  image: keeper/image:1.0.0\n  volumes:\n    - \"keeper-data:/var/lib/keeper\"\n" +
+				"  critical_volumes:\n    - target: \"/var/lib/keeper\"\n      holds: \"Node identity keystore.\"\n")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.catalog = cat
+	app.services = services.NewManager(app.runtime, cat, app.store)
+	spec := map[string]any{"image": "keeper/image:1.0.0", "env": map[string]string{}}
+	if w := call(t, app, http.MethodPost, "/api/containers/keeper/deploy", testWorkerKey, spec); w.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", w.Code, w.Body.String())
+	}
+	w := call(t, app, http.MethodDelete, "/api/containers/keeper?delete_volumes=true", testWorkerKey, nil)
+	if w.Code != http.StatusConflict || !strings.Contains(detailText(t, w), `"error":"critical_volume"`) {
+		t.Fatalf("a delete of a critical volume: %d %s, want 409 critical_volume", w.Code, w.Body.String())
+	}
+	if _, ok := app.Docker.Container("cashpilot-keeper"); !ok {
+		t.Fatal("the refused delete removed the container")
 	}
 }

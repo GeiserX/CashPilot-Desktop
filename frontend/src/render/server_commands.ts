@@ -45,7 +45,7 @@ function firewallLine(state: ServerCommandsState): string {
   if (state.firewallRule) {
     return `<p class="pairing-line" data-server-firewall>Windows Firewall lets it in: ${escapeHtml(state.opens)}. Switching to Run everything here removes this rule.</p>`;
   }
-  return `<p class="pairing-line warn" data-server-firewall>Windows Firewall blocks it until you allow it. Allowing opens ${escapeHtml(state.opens)}. Windows asks for an administrator first.</p>
+  return `<p class="pairing-line warn" data-server-firewall>CashPilot does not listen until Windows Firewall lets it in, so Windows shows no prompt of its own for it. Allowing opens ${escapeHtml(state.opens)}. If Windows already blocks CashPilot (Windows makes such a rule when someone presses Cancel on its own firewall prompt), allowing removes that block too, because a block wins over an allow. Windows asks for an administrator first.</p>
     <div class="gate-actions"><button class="btn btn-ghost btn-sm" data-server-commands-firewall>Allow through Windows Firewall</button></div>`;
 }
 

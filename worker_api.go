@@ -156,14 +156,22 @@ func (a *App) workerAPIWanted() bool {
 // the ones the API should no longer have.
 func (a *App) syncWorkerAPI() {
 	var want []netip.Addr
-	if a.workerAPIWanted() {
+	wanted := a.workerAPIWanted()
+	// On Windows nothing listens before the scoped firewall rule exists: a first
+	// listen with no rule makes Windows ask on its own, and either answer there
+	// makes a rule wider (Allow) or stronger (Block) than the one the user agrees to.
+	waitingForRule := wanted && !a.firewallReady()
+	if wanted && !waitingForRule {
 		want = listenAddrs(machineAddrs())
 	}
 	a.closeWorkerListeners(want)
 	if len(want) == 0 {
 		a.workerAPI.mu.Lock()
 		a.workerAPI.elsewhere, a.workerAPI.problem = nil, ""
-		if a.workerAPIWanted() {
+		switch {
+		case waitingForRule:
+			a.workerAPI.problem = "Waiting for the Windows Firewall rule. Until you allow it below, this computer does not listen, and your CashPilot cannot reach it."
+		case wanted:
 			a.workerAPI.problem = "This computer has no private network or Tailscale address, so your CashPilot cannot reach it."
 		}
 		a.workerAPI.mu.Unlock()
@@ -660,13 +668,35 @@ func (a *App) handleWorkerAction(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err != nil {
+		status, body := a.actionRefusal(ctx, slug, n, err)
 		a.recordServerCommand(action, slug, false, oneLine(err.Error()))
-		detail(w, http.StatusConflict, oneLine(err.Error()))
+		detail(w, status, body)
 		return
 	}
 	a.emitEvent("deployment:changed", slug)
 	a.recordServerCommand(action, slug, true, done)
 	writeJSON(w, http.StatusOK, map[string]string{"status": done})
+}
+
+// actionRefusal maps a failed start, stop or restart to the web worker's answer: 403
+// with a code when the route rule refuses it, 404 for a copy that is not here, 503
+// when Docker is not reachable, and 409 for any other refusal.
+func (a *App) actionRefusal(ctx context.Context, slug string, n int, err error) (int, any) {
+	var route *services.RouteError
+	if errors.As(err, &route) {
+		return http.StatusForbidden, map[string]string{"error": route.Code, "message": route.Message}
+	}
+	if !a.runtime.Status(ctx).Available {
+		return http.StatusServiceUnavailable, "Docker is not reachable on this computer: " + oneLine(err.Error())
+	}
+	if n > 1 {
+		if list, lerr := a.listForServer(ctx); lerr == nil && !slices.ContainsFunc(list, func(c workerAPIContainer) bool {
+			return c.Slug == slug && c.Instance == n
+		}) {
+			return http.StatusNotFound, fmt.Sprintf("Copy %d of %s is not on this computer", n, slug)
+		}
+	}
+	return http.StatusConflict, oneLine(err.Error())
 }
 
 func (a *App) handleWorkerRemove(w http.ResponseWriter, r *http.Request) {

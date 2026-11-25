@@ -85,6 +85,8 @@ const base = {
   const t = text(need);
   check("says what it opens before the button", t.indexOf("incoming TCP port 8086") >= 0 && t.indexOf("incoming TCP port 8086") < t.indexOf("Allow through Windows Firewall"), t);
   check("says Windows asks for an administrator", t.includes("asks for an administrator"));
+  check("says it removes a Windows block rule, before the button", t.indexOf("removes that block too") >= 0 && t.indexOf("removes that block too") < t.indexOf("Allow through Windows Firewall"), t);
+  check("says nothing listens until then", t.includes("does not listen until Windows Firewall lets it in"), t);
   const made = renderServerCommands({ ...base, firewallNeeded: true, firewallRule: true }, now);
   check("no button once the rule exists", !made.includes("data-server-commands-firewall") && text(made).includes("removes this rule"), text(made));
   check("no button while off", !renderServerCommands({ ...base, firewallNeeded: true, on: false }, now).includes("data-server-commands-firewall"));

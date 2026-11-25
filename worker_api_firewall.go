@@ -13,10 +13,13 @@ import (
 
 // The Windows Firewall rule for the server-commands API (worker_api.go). Windows
 // blocks inbound connections to an app that has no rule, so the server cannot reach
-// the API until one exists. CashPilot makes the rule only when the user presses the
-// button that says what it opens, through the Windows admin prompt. The rule is
-// inbound TCP on workerAPIPort, for this program only, on the Private profile only,
-// from the private LAN and Tailscale ranges only. Leaving the server removes it.
+// the API until one exists. On Windows the API does not listen at all before then:
+// a first listen with no rule makes Windows show its own prompt, whose Allow makes a
+// rule for every port and every address, and whose Cancel makes a Block rule that
+// beats ours. CashPilot makes the rule only when the user presses the button that
+// says what it opens, through the Windows admin prompt. The rule is inbound TCP on
+// workerAPIPort, for this program only, on the Private profile only, from the
+// private LAN and Tailscale ranges only. Leaving the server removes it.
 // Other systems need no rule.
 
 // serverCommandsRuleName is the rule's display name.
@@ -31,6 +34,10 @@ func psLiteral(s string) string {
 }
 
 // addRuleScript replaces any rule of that name with one scoped as described above.
+// It also removes the inbound Block rules Windows holds for this program, which
+// Windows makes when someone presses Cancel on its own prompt: in Windows Firewall a
+// Block rule wins over an Allow rule, so the scoped rule would do nothing beside one.
+// The button that runs this says so before the user presses it.
 func addRuleScript(name, program string) string {
 	subnets := make([]string, 0, len(privateNets))
 	for _, s := range privateSubnets() {
@@ -43,6 +50,9 @@ func addRuleScript(name, program string) string {
 			" -Direction Inbound -Action Allow -Protocol TCP -LocalPort " + fmt.Sprint(workerAPIPort) +
 			" -Profile Private -RemoteAddress @(" + strings.Join(subnets, ",") + ")" +
 			" -Program " + psLiteral(program) + " | Out-Null",
+		"Get-NetFirewallApplicationFilter -Program " + psLiteral(program) + " -ErrorAction SilentlyContinue |" +
+			" Get-NetFirewallRule -ErrorAction SilentlyContinue |" +
+			" Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } | Remove-NetFirewallRule",
 		"exit 0",
 	}, "\n")
 }
@@ -59,6 +69,12 @@ func removeRuleScript(name string) string {
 // firewallRuleNeeded is true where the API needs a firewall rule. A var so tests
 // can drive the Windows path on any system.
 var firewallRuleNeeded = stdruntime.GOOS == "windows"
+
+// firewallReady reports whether the API may listen: no rule is needed here, or
+// CashPilot made it.
+func (a *App) firewallReady() bool {
+	return !firewallRuleNeeded || strings.TrimSpace(a.cfg.Config().ServerCommandsFirewallRule) != ""
+}
 
 // runFirewallScript runs an admin script. A var so tests never raise a prompt.
 var runFirewallScript = func(script string) error {
@@ -88,6 +104,12 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	}
 	if err := a.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsFirewallRule = name }); err != nil {
 		return a.serverCommandsState(), err
+	}
+	// The rule exists, so the API listens now, and the next heartbeat, sent now,
+	// reports its URL.
+	a.syncWorkerAPI()
+	if a.ctx != nil {
+		a.startUpstream(a.ctx)
 	}
 	return a.serverCommandsState(), nil
 }
