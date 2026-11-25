@@ -850,7 +850,7 @@ export interface RuntimeStatus {
   nativeServices: string[] | null;
   setupTask?: string;
   kind: string;
-  // Why Docker is or is not ready: running, not-installed, not-running,
+  // Why Docker is or is not ready: running, not-installed, not-running, unreachable,
   // windows-containers, access-denied, wsl-missing, wsl-outdated,
   // virtualization-off or first-start-pending. message says it in plain words.
   reason: string;

@@ -44,8 +44,9 @@ export function runtimeState(runtime: RuntimeInput): RuntimeState {
     case "not-running":
     case "first-start-pending":
       return { kind: "not-running", label: "Docker is installed but not running" };
+    case "unreachable":
     case "":
-      return { kind: "unknown", label: "Unknown: CashPilot could not tell whether Docker is installed" };
+      return { kind: "unknown", label: "Unknown whether Docker is installed" };
   }
   // windows-containers, access-denied, wsl-missing, wsl-outdated, virtualization-off
   return { kind: "not-ready", label: "Docker cannot run yet" };
@@ -122,12 +123,12 @@ export function runtimeAttention(runtime: RuntimeInput, containers: boolean): Ru
   // Nothing that ran has stopped, so this is not an outage: it is the setup a
   // person skipped on first run, and most apps wait for it.
   const state = runtimeState(runtime);
-  const what = state.kind === "not-installed" || state.kind === "unknown" ? "Docker is not set up yet." : "Docker is not ready yet.";
+  const why = state.kind === "not-installed" ? "Docker is not set up yet." : runtime.message || `${state.label}.`;
   return {
     level: "warn",
     tag: "Set up",
     what: "Docker",
-    why: `${what} Most apps need it. ${withoutDocker(runtime)}`.trim(),
+    why: `${escapeHtml(why)} Most apps need Docker. ${withoutDocker(runtime)}`.trim(),
     actions,
   };
 }

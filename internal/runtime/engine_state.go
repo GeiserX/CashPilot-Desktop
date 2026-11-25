@@ -12,6 +12,7 @@ const (
 	ReasonRunning           = "running"
 	ReasonNotInstalled      = "not-installed"
 	ReasonNotRunning        = "not-running"
+	ReasonUnreachable       = "unreachable"
 	ReasonWindowsContainers = "windows-containers"
 	ReasonAccessDenied      = "access-denied"
 	ReasonWSLMissing        = "wsl-missing"
@@ -85,18 +86,21 @@ func classify(ev dockerEvidence) (string, string) {
 	if ev.endpoint == endpointDenied {
 		return ReasonAccessDenied, accessDeniedMessage(win, h)
 	}
-	local := !ev.hostSet
-	if local && notInstalled(ev) {
+	if ev.hostSet {
+		return ReasonUnreachable, "CashPilot cannot reach the Docker engine that DOCKER_HOST names. Check that it is running and reachable, then click Check again."
+	}
+	if notInstalled(ev) {
 		if win {
 			return ReasonNotInstalled, "Docker Desktop is not installed. Install it with the guide below, then click Check again."
 		}
 		return ReasonNotInstalled, "Choose one of the supported runtimes below so CashPilot can run earning services on this machine."
 	}
-	if !win || !local {
-		if ev.hostSet {
-			return ReasonNotRunning, "CashPilot cannot reach the Docker engine that DOCKER_HOST names. Check that it is running, then click Check again."
+	const unreachable = "CashPilot cannot reach a Docker-compatible engine on this computer."
+	if !win {
+		if ev.install || ev.endpoint == endpointRefused {
+			return ReasonNotRunning, "A container runtime is installed, but it is not running yet. Start your runtime and try again."
 		}
-		return ReasonNotRunning, "A container runtime is installed, but it is not running yet. Start your runtime and try again."
+		return ReasonUnreachable, unreachable
 	}
 	// RestartPending is yes only for Windows Update and component servicing, never
 	// for routine file renames alone (internal/winvm restartPending).
@@ -123,7 +127,10 @@ func classify(ev dockerEvidence) (string, string) {
 	}
 	if h.DockerInstalled == HintNo {
 		// A docker CLI is on PATH (scoop, a manual install) but Docker Desktop is not.
-		return ReasonNotRunning, "A docker command is on this PC, but no Docker engine answers. Start your Docker engine, then click Check again." + restart
+		return ReasonUnreachable, "Docker Desktop is not installed and no Docker engine answers. If you use another runtime, start it, then click Check again." + restart
+	}
+	if h.DockerInstalled != HintYes {
+		return ReasonUnreachable, unreachable + restart
 	}
 	return ReasonNotRunning, "Docker Desktop is installed, but its engine is not running. Open Docker Desktop, wait until it says the engine is running, then click Check again." + restart
 }
@@ -151,9 +158,8 @@ func notInstalled(ev dockerEvidence) bool {
 		case HintNo:
 			return true
 		}
-		return ev.endpoint == endpointAbsent
 	}
-	return true
+	return ev.endpoint == endpointAbsent
 }
 
 func accessDeniedMessage(win bool, h HostHints) string {

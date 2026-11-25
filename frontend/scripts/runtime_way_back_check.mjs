@@ -73,7 +73,11 @@ check("Settings keeps Set up Docker for unfinished local setup with a working en
 const fresh = dashboard(states.notInstalled).items[0];
 check("RULE 1: native only is a warning, not an outage", fresh?.level === "warn" && fresh.tag !== "Offline", JSON.stringify(fresh));
 check("RULE 1: it says Docker is not set up, and what still runs", /Docker is not set up yet/.test(fresh?.why) && /only MystNodes can run here/.test(fresh?.why), fresh?.why);
-check("RULE 1: installed but stopped says not ready, not not set up", /Docker is not ready yet/.test(dashboard(states.notRunning).items[0]?.why || ""), dashboard(states.notRunning).items[0]?.why);
+check("native-only Dashboard explains when Docker is stopped", /engine is not running/.test(dashboard(states.notRunning).items[0]?.why || ""), dashboard(states.notRunning).items[0]?.why);
+check("native-only Dashboard explains when WSL is missing", /needs WSL/.test(dashboard(states.wsl).items[0]?.why || ""), dashboard(states.wsl).items[0]?.why);
+const unreachable = { ...states.unknown, reason: "unreachable", message: "CashPilot cannot reach the Docker engine that DOCKER_HOST names." };
+const unreachableSettings = renderRuntimeSettings(unreachable);
+check("an unreachable endpoint leaves install status Unknown", unreachableSettings.includes("Docker: Unknown") && unreachableSettings.includes("DOCKER_HOST") && !unreachableSettings.includes("Docker is installed but not running"), unreachableSettings);
 const nothing = dashboard(states.nothing).items[0];
 check("RULE 1: nothing able to run is an outage, with Set up Docker", nothing?.level === "fail" && nothing.tag === "Offline" && SETUP.test(nothing.actions), JSON.stringify(nothing));
 const stopped = dashboard(states.notRunning, [{ slug: "earnfm", name: "cashpilot-earnfm", status: "exited", runtime: "docker" }]);
