@@ -206,7 +206,7 @@ func TestDockerStepsTrustNoRemoteEngine(t *testing.T) {
 }
 
 // Windows containers run without WSL, so an engine in that mode does not prove
-// the WSL rows. It still proves the rows before them.
+// the WSL rows. It still proves the Windows version row.
 func TestWindowsContainersDoNotProveWSL(t *testing.T) {
 	f := goodPC()
 	f.DockerDesktopRunning = Yes
@@ -224,6 +224,26 @@ func TestWindowsContainersDoNotProveWSL(t *testing.T) {
 	}
 	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning, true), "a3"); s.State != StepDone {
 		t.Errorf("Linux containers run here, but a3 is %s", s.State)
+	}
+}
+
+// Docker's Windows engine answers without virtualization, so an engine in
+// Windows containers mode does not prove the virtualization row: a reading of
+// No still asks for the BIOS change.
+func TestWindowsContainersDoNotProveVirtualization(t *testing.T) {
+	f := goodPC()
+	f.DockerDesktopRunning = Yes
+	f.HypervisorPresent, f.Firmware = No, No
+	derive(&f)
+	if f.Virtualization != No {
+		t.Fatalf("the fixture reads virtualization as %v", f.Virtualization)
+	}
+	s := stepOf(t, DockerSteps(f, runtime.ReasonWindowsContainers, true), "a2")
+	if s.State != StepNeedsYou || s.Action.Kind != ActionFirmware {
+		t.Errorf("Windows containers answer with virtualization off, but a2 is %s (%s)", s.State, s.Text)
+	}
+	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning, true), "a2"); s.State != StepDone {
+		t.Errorf("Linux containers run here, but a2 is %s", s.State)
 	}
 }
 

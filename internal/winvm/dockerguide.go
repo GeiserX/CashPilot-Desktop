@@ -118,14 +118,15 @@ func DockerSteps(f HostFacts, reason string, local bool) []Step {
 	// Desktop that answers, not an engine DOCKER_HOST or a Docker context names
 	// elsewhere.
 	proven := engineUp && local && f.DockerDesktopRunning == Yes
-	// Windows containers run without WSL, so only Linux containers prove the WSL
-	// rows.
-	wslProven := proven && reason == runtime.ReasonRunning
+	// Windows containers run without WSL, and Docker's Windows engine answers
+	// without virtualization, so only Linux containers prove the WSL rows and the
+	// virtualization row.
+	linuxProven := proven && reason == runtime.ReasonRunning
 	wslBackend := f.DockerBackend != BackendHyperV
 
-	steps := []Step{windowsStep(f, proven), virtualizationStep(f, proven)}
+	steps := []Step{windowsStep(f, proven), virtualizationStep(f, linuxProven)}
 	if wslBackend {
-		steps = append(steps, wslFeatureStep(f, wslProven), wslVersionStep(f, wslProven))
+		steps = append(steps, wslFeatureStep(f, linuxProven), wslVersionStep(f, linuxProven))
 	}
 	steps = append(steps,
 		installedStep(f, proven),
