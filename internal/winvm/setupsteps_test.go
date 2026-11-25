@@ -355,6 +355,18 @@ func TestHypervisorChangeReadsTheLaunchTypeFirst(t *testing.T) {
 	}
 }
 
+// Already Auto is not a failure: the read worked and nothing needed changing, so
+// the ending is a note with no error code.
+func TestHypervisorAlreadyAutoIsANoteNotAFailure(t *testing.T) {
+	o := SetupOutcome(OpHypervisorLaunch, runtime.ElevatedResult{}, exitErr(CodeLaunchAuto), false, false)
+	if o.State != OutcomeNote || o.Code != "" {
+		t.Errorf("already Auto ended %s with code %q, want %s and no code", o.State, o.Code, OutcomeNote)
+	}
+	if low := strings.ToLower(o.Text); !strings.Contains(low, "already") || !strings.Contains(low, "changed nothing") {
+		t.Errorf("already Auto does not say it was already on and nothing changed: %s", o.Text)
+	}
+}
+
 // The launch type read, which a live test runs alone on Windows, only reads: no
 // bcdedit, no BCD method that sets or deletes, no exit.
 func TestHypervisorReadChangesNothing(t *testing.T) {

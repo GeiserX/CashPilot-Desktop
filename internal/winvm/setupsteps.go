@@ -296,6 +296,7 @@ const (
 	OutcomeCancelled = "cancelled" // the user said no at the Windows prompt
 	OutcomePolicy    = "policy"    // a policy on this PC blocks it; stop and explain
 	OutcomeFallback  = "fallback"  // the app cannot do it here; Text says how by hand
+	OutcomeNote      = "note"      // nothing needed changing; Text says why
 )
 
 // RetryWebDownload is the retry a WSL change offers after a Store failure.
@@ -362,7 +363,7 @@ func SetupOutcome(op string, res runtime.ElevatedResult, err error, timedOut, we
 	case CodeService:
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "Windows did not let CashPilot set the Server service to start automatically. A clean-up tool or a policy may hold it off."}
 	case CodeLaunchAuto:
-		return Outcome{State: OutcomeFailed, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
+		return Outcome{State: OutcomeNote, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
 	case WingetRebootForInstall:
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "winget says Windows must restart before Docker Desktop can install. Restart the PC, then click Install Docker Desktop again."}
 	case CodeWingetGone:

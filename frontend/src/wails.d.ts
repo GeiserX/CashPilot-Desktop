@@ -880,7 +880,7 @@ export interface SetupResumeView {
 export interface SetupStepResult {
   step: string;
   op: string;
-  state: "done" | "restart" | "signout" | "failed" | "timeout" | "cancelled" | "policy" | "fallback";
+  state: "done" | "restart" | "signout" | "failed" | "timeout" | "cancelled" | "policy" | "fallback" | "note";
   text: string;
   code?: string;
   // "web-download": a WSL change may work through a direct download.
