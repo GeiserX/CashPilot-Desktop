@@ -374,7 +374,7 @@ func otherHypervisorStep(f HostFacts, engineUp bool) Step {
 		s.State = StepNeedsYou
 		s.Text = names + " is installed, and Windows' hypervisor is not running, although virtualization and the Virtual Machine Platform feature are on. Older versions of " + names + " may have turned it off at boot, and Docker needs it. CashPilot reads that boot option first and changes it only when it is not set to start the hypervisor."
 		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: "Check and turn Windows' hypervisor back on",
-			Manual: "Open PowerShell as administrator and run bcdedit /enum {current}. If hypervisorlaunchtype is not Auto, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
+			Manual: "Open PowerShell as administrator and run bcdedit /enum \"{current}\" (PowerShell needs the quotes). If hypervisorlaunchtype is not Auto, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
 	case f.OtherHypervisors == Yes:
 		// Nothing here proves it is what stops Docker, so it is a note, not a step.
 		s.State = StepNote

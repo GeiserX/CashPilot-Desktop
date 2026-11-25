@@ -247,7 +247,7 @@ func TestHypervisorRowNeverClaimsWhatItDidNotRead(t *testing.T) {
 	if !strings.Contains(low, "may have turned it off at boot") || !strings.Contains(low, "reads that boot option first") {
 		t.Errorf("a10 does not say it may be off and is read first: %s", s.Text)
 	}
-	if !strings.Contains(s.Action.Manual, "bcdedit /enum {current}") {
+	if !strings.Contains(s.Action.Manual, `bcdedit /enum "{current}"`) {
 		t.Errorf("the manual way does not check first: %s", s.Action.Manual)
 	}
 }
