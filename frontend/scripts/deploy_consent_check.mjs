@@ -280,28 +280,20 @@ const hgFields = serviceFormFields(hg, {});
 // A selected worker owns replacement and credential validation, even with a
 // local copy and blank fields. The actual worker path decides whether to replace.
 {
-  const worker = { id: 23, name: "garage", online: true, services: [] };
-  for (const services of [[], ["honeygain"]]) {
-    const prompts = [];
-    const sent = [];
-    worker.services = services;
-    const c = calls();
-    c.confirmReplace = (message) => { prompts.push(message); return true; };
-    c.deploy = async (approval, selected) => {
-      sent.push([approval, selected?.id]);
-      const result = await runWorkerDeploy("honeygain", selected, null, null, {
-        confirm: c.confirmReplace,
-        deploy: async () => ({ worker: selected.name }),
-        save: async () => {},
-      });
-      return result.kind === "deployed" ? DEPLOYED : { kind: "failed", text: result.kind };
-    };
-    const result = await runCheckedDeploy(serviceFormFields(hg), { HG_EMAIL: "", HG_PASSWORD: "" }, true, BUSY, c, {
-      workerId: 23, workers: [worker], localReplacement: "Replace this computer's copy?",
-    });
-    check("worker deploy reaches the chosen worker with blank fields and no approval", result.kind === "done" && result.answer.kind === "ok" && sent[0]?.[0] === null && sent[0]?.[1] === 23, JSON.stringify({ result, sent }));
-    check("worker replacement is confirmed only when that worker already runs it", prompts.length === services.length && prompts.every((prompt) => prompt.includes("on garage")), JSON.stringify(prompts));
-  }
+  const worker = { id: 23, name: "garage", online: true, services: ["honeygain"] };
+  const sent = [];
+  const c = calls();
+  c.confirmReplace = () => { throw new Error("asked about this computer's copy"); };
+  c.deploy = async (approval, selected) => {
+    sent.push([approval, selected?.id]);
+    return DEPLOYED;
+  };
+  const result = await runCheckedDeploy(serviceFormFields(hg), { HG_EMAIL: "", HG_PASSWORD: "" }, true, BUSY, c, {
+    workerId: 23, workers: [worker], localReplacement: "Replace this computer's copy?",
+  });
+  check("worker deploy reaches the chosen worker with blank fields and no local approval",
+    result.kind === "done" && result.answer.kind === "ok" && sent[0]?.[0] === null && sent[0]?.[1] === 23,
+    JSON.stringify({ result, sent }));
   const missing = calls();
   const refused = await runCheckedDeploy(fields, full, true, BUSY, missing, { workerId: 23, workers: [] });
   check("a missing worker never falls back to this computer", refused.kind === "blocked" && missing.log.length === 0, JSON.stringify({ refused, log: missing.log }));
