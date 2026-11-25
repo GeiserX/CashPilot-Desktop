@@ -145,7 +145,7 @@ func TestDockerStepsGiveEachStepItsState(t *testing.T) {
 				tc.mutate(&f)
 				derive(&f)
 			}
-			s := stepOf(t, DockerSteps(f, tc.reason), tc.step)
+			s := stepOf(t, DockerSteps(f, tc.reason, true), tc.step)
 			if s.State != tc.want || s.BlockedBy != tc.blockedBy || s.Action.Kind != tc.kind {
 				t.Fatalf("%s: state %q blockedBy %q action %q, want %q %q %q\n%s", tc.step, s.State, s.BlockedBy, s.Action.Kind, tc.want, tc.blockedBy, tc.kind, s.Text)
 			}
@@ -163,7 +163,7 @@ func TestDockerStepsNeverClaimDoneOnUnknown(t *testing.T) {
 	f.Supported = true
 	derive(&f)
 	for _, reason := range []string{runtime.ReasonNotRunning, runtime.ReasonNotInstalled, runtime.ReasonFirstStart, runtime.ReasonAccessDenied, ""} {
-		for _, s := range DockerSteps(f, reason) {
+		for _, s := range DockerSteps(f, reason, true) {
 			if s.State == StepDone {
 				t.Errorf("reason %q: %s claims done with nothing known: %s", reason, s.ID, s.Text)
 			}
@@ -179,12 +179,96 @@ func TestDockerStepsTrustTheEngineOnlyWhenItIsThisPCs(t *testing.T) {
 	f.HypervisorPresent, f.Firmware = Unknown, Unknown
 	f.DockerDesktopRunning = Yes
 	derive(&f)
-	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning), "a2"); s.State != StepDone {
+	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning, true), "a2"); s.State != StepDone {
 		t.Fatalf("Docker Desktop's engine runs here, but a2 is %s", s.State)
 	}
 	f.DockerDesktopRunning = No
-	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning), "a2"); s.State != StepUnknown {
+	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning, true), "a2"); s.State != StepUnknown {
 		t.Fatalf("a remote engine answered, but a2 is %s", s.State)
+	}
+}
+
+// Docker Desktop runs here, but the engine that answered is one DOCKER_HOST or
+// a Docker context names elsewhere: it proves nothing about this PC.
+func TestDockerStepsTrustNoRemoteEngine(t *testing.T) {
+	f := goodPC()
+	f.HypervisorPresent, f.Firmware = Unknown, Unknown
+	f.DockerDesktopRunning = Yes
+	f.WSLInstalled, f.WSLVersion = No, ""
+	derive(&f)
+	steps := DockerSteps(f, runtime.ReasonRunning, false)
+	if s := stepOf(t, steps, "a2"); s.State != StepUnknown {
+		t.Errorf("a remote engine answered, but a2 is %s", s.State)
+	}
+	if s := stepOf(t, steps, "a4"); s.State == StepDone {
+		t.Errorf("a remote engine answered, and a4 claims done with WSL missing: %s", s.Text)
+	}
+}
+
+// Windows containers run without WSL, so an engine in that mode does not prove
+// the WSL rows. It still proves the Windows version row.
+func TestWindowsContainersDoNotProveWSL(t *testing.T) {
+	f := goodPC()
+	f.DockerDesktopRunning = Yes
+	f.VMPlatformFeature, f.WSLFeature, f.WSLInstalled, f.WSLVersion = No, No, No, ""
+	derive(&f)
+	steps := DockerSteps(f, runtime.ReasonWindowsContainers, true)
+	if s := stepOf(t, steps, "a3"); s.State != StepNeedsYou {
+		t.Errorf("Windows containers with WSL missing: a3 is %s (%s)", s.State, s.Text)
+	}
+	if s := stepOf(t, steps, "a4"); s.State == StepDone {
+		t.Errorf("Windows containers with WSL missing: a4 claims done (%s)", s.Text)
+	}
+	if s := stepOf(t, steps, "a5"); s.State != StepDone {
+		t.Errorf("Windows containers run, but a5 is %s", s.State)
+	}
+	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning, true), "a3"); s.State != StepDone {
+		t.Errorf("Linux containers run here, but a3 is %s", s.State)
+	}
+}
+
+// Docker's Windows engine answers without virtualization, so an engine in
+// Windows containers mode does not prove the virtualization row: a reading of
+// No still asks for the BIOS change.
+func TestWindowsContainersDoNotProveVirtualization(t *testing.T) {
+	f := goodPC()
+	f.DockerDesktopRunning = Yes
+	f.HypervisorPresent, f.Firmware = No, No
+	derive(&f)
+	if f.Virtualization != No {
+		t.Fatalf("the fixture reads virtualization as %v", f.Virtualization)
+	}
+	s := stepOf(t, DockerSteps(f, runtime.ReasonWindowsContainers, true), "a2")
+	if s.State != StepNeedsYou || s.Action.Kind != ActionFirmware {
+		t.Errorf("Windows containers answer with virtualization off, but a2 is %s (%s)", s.State, s.Text)
+	}
+	if s := stepOf(t, DockerSteps(f, runtime.ReasonRunning, true), "a2"); s.State != StepDone {
+		t.Errorf("Linux containers run here, but a2 is %s", s.State)
+	}
+}
+
+// The boot option needs admin rights to read, so the row never says the
+// hypervisor was turned off at boot: it says it may have been, and that the
+// change reads the option first.
+func TestHypervisorRowNeverClaimsWhatItDidNotRead(t *testing.T) {
+	f := goodPC()
+	hypervisorOff(&f)
+	derive(&f)
+	s := stepOf(t, DockerSteps(f, runtime.ReasonNotRunning, true), "a10")
+	if s.State != StepNeedsYou || s.Action.Op != OpHypervisorLaunch {
+		t.Fatalf("a10 is %s with %+v", s.State, s.Action)
+	}
+	low := strings.ToLower(s.Text)
+	for _, claim := range []string{"did not start at boot", "versions of virtualbox turn it off"} {
+		if strings.Contains(low, claim) {
+			t.Errorf("a10 claims %q without reading the boot option: %s", claim, s.Text)
+		}
+	}
+	if !strings.Contains(low, "may have turned it off at boot") || !strings.Contains(low, "reads that boot option first") {
+		t.Errorf("a10 does not say it may be off and is read first: %s", s.Text)
+	}
+	if !strings.Contains(s.Action.Manual, `bcdedit /enum "{current}"`) {
+		t.Errorf("the manual way does not check first: %s", s.Action.Manual)
 	}
 }
 
@@ -194,7 +278,7 @@ func TestDockerStepsSkipWSLOnTheHyperVBackend(t *testing.T) {
 	f.DockerBackend = BackendHyperV
 	f.VMPlatformFeature, f.WSLInstalled = No, No
 	derive(&f)
-	steps := DockerSteps(f, runtime.ReasonNotRunning)
+	steps := DockerSteps(f, runtime.ReasonNotRunning, true)
 	if hasStep(steps, "a3") || hasStep(steps, "a4") {
 		t.Fatalf("the Hyper-V backend got WSL steps: %+v", steps)
 	}
@@ -203,7 +287,7 @@ func TestDockerStepsSkipWSLOnTheHyperVBackend(t *testing.T) {
 	}
 	// An unread backend keeps the WSL steps, named for the WSL 2 backend.
 	f.DockerBackend = BackendUnknown
-	steps = DockerSteps(f, runtime.ReasonNotRunning)
+	steps = DockerSteps(f, runtime.ReasonNotRunning, true)
 	if s := stepOf(t, steps, "a3"); !strings.HasPrefix(s.Title, "WSL 2 backend") {
 		t.Fatalf("a3 title %q does not name the WSL 2 backend", s.Title)
 	}
@@ -219,15 +303,15 @@ func TestDockerStepsOrderAndScope(t *testing.T) {
 		}
 		return strings.Join(out, " ")
 	}
-	if got := ids(DockerSteps(goodPC(), runtime.ReasonNotRunning)); got != "a1 a2 a3 a4 a5 a6 a7 a9 a10 a11 a12" {
+	if got := ids(DockerSteps(goodPC(), runtime.ReasonNotRunning, true)); got != "a1 a2 a3 a4 a5 a6 a7 a9 a10 a11 a12" {
 		t.Fatalf("steps %s", got)
 	}
-	if got := ids(DockerSteps(goodPC(), runtime.ReasonAccessDenied)); got != "a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12" {
+	if got := ids(DockerSteps(goodPC(), runtime.ReasonAccessDenied, true)); got != "a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12" {
 		t.Fatalf("steps on access denied %s", got)
 	}
 	mac := unknownFacts("darwin")
 	derive(&mac)
-	if steps := DockerSteps(mac, runtime.ReasonNotRunning); steps != nil {
+	if steps := DockerSteps(mac, runtime.ReasonNotRunning, true); steps != nil {
 		t.Fatalf("macOS got a Windows checklist: %+v", steps)
 	}
 }
@@ -237,7 +321,7 @@ func TestBlockedStepsOfferNoAction(t *testing.T) {
 	f := goodPC()
 	f.DockerDesktopInstalled = No
 	derive(&f)
-	for _, s := range DockerSteps(f, runtime.ReasonNotInstalled) {
+	for _, s := range DockerSteps(f, runtime.ReasonNotInstalled, true) {
 		if s.State == StepBlocked && s.Action.Kind != ActionNone {
 			t.Errorf("blocked %s offers %q", s.ID, s.Action.Kind)
 		}
@@ -249,7 +333,7 @@ func TestTermsStepCarriesTheLicenceSentence(t *testing.T) {
 	f := goodPC()
 	f.DockerDesktopStarted = No
 	derive(&f)
-	s := stepOf(t, DockerSteps(f, runtime.ReasonFirstStart), "a7")
+	s := stepOf(t, DockerSteps(f, runtime.ReasonFirstStart, true), "a7")
 	if !strings.Contains(s.Text, "never accepts them for you") || !strings.Contains(s.Text, "250 staff") {
 		t.Fatalf("a7 text: %s", s.Text)
 	}
@@ -261,7 +345,7 @@ func TestWindows10NoteShowsOnce(t *testing.T) {
 	f.Build = 19045
 	derive(&f)
 	n := 0
-	for _, s := range DockerSteps(f, runtime.ReasonNotRunning) {
+	for _, s := range DockerSteps(f, runtime.ReasonNotRunning, true) {
 		if strings.Contains(s.Text, "security updates") {
 			n++
 		}
@@ -278,7 +362,7 @@ func TestDockerRunningLeavesNothingThatNeedsYou(t *testing.T) {
 	f.DockerDesktopRunning, f.LanmanServer = Yes, "manual"
 	f.OtherHypervisors, f.OtherHypervisorNames = Yes, []string{"VirtualBox"}
 	derive(&f)
-	for _, s := range DockerSteps(f, runtime.ReasonRunning) {
+	for _, s := range DockerSteps(f, runtime.ReasonRunning, true) {
 		if s.State == StepNeedsYou || s.State == StepBlocked {
 			t.Errorf("Docker runs, but %s is %s: %s", s.ID, s.State, s.Text)
 		}

@@ -106,6 +106,11 @@ type View struct {
 	FromRunOnce bool `json:"fromRunOnce"`
 	// Finish is what the step waits for: FinishRestart or FinishSignOut.
 	Finish string `json:"finish"`
+	// SignedIn is true for a step that waits for a sign-out when, in the same
+	// boot, the sign-in is proven: RunOnce started the app, or this session's
+	// token already carries the group the step added. Nothing then asks for a
+	// sign-out that already happened.
+	SignedIn bool `json:"signedIn"`
 	// Rearm is true while the restart is still to come: RunOnce must point at this
 	// app again, so the restart reopens it. Otherwise the value is removed: it ran,
 	// or it points at a path that is gone and would fail at every sign-in.
@@ -113,8 +118,10 @@ type View struct {
 }
 
 // Decide reads the journal against the boot time now. flag is whether the app
-// was started with --resume-setup; exists says whether a file is there.
-func Decide(j *config.SetupJournal, bootNow string, flag bool, exists func(string) bool) View {
+// was started with --resume-setup; tokenHasGroup whether this session's token
+// carries docker-users (winvm's DockerUsersToken); exists says whether a file is
+// there.
+func Decide(j *config.SetupJournal, bootNow string, flag, tokenHasGroup bool, exists func(string) bool) View {
 	if j == nil {
 		if !flag {
 			return View{}
@@ -135,9 +142,11 @@ func Decide(j *config.SetupJournal, bootNow string, flag bool, exists func(strin
 	}
 	v.ExeMoved = j.ExePath != "" && exists != nil && !exists(j.ExePath)
 	// RunOnce runs at the next sign-in. A sign-out keeps the boot time, so for a
-	// step that waits for one, a start by RunOnce in the same boot is the proof
-	// that the sign-in happened: the value ran and is not armed again.
-	v.Rearm = v.Restarted == RestartedNo && !(v.Finish == FinishSignOut && flag)
+	// step that waits for one, the proof that the sign-in happened is a start by
+	// RunOnce in the same boot, or a token that already carries the group (the
+	// app opened by hand after signing in again). Then RunOnce is not armed again.
+	v.SignedIn = v.Finish == FinishSignOut && v.Restarted == RestartedNo && (flag || tokenHasGroup)
+	v.Rearm = v.Restarted == RestartedNo && !v.SignedIn
 	return v
 }
 

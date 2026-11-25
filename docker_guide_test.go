@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -26,6 +27,10 @@ type fakeRunOnce struct {
 	arms     int
 	disarms  int
 	armError error
+	// disarmError fails Disarm; duringDisarm runs inside Disarm, after the value
+	// is gone, with the fake's lock free.
+	disarmError  error
+	duringDisarm func()
 }
 
 func (f *fakeRunOnce) Arm(exe string) error {
@@ -41,9 +46,17 @@ func (f *fakeRunOnce) Arm(exe string) error {
 
 func (f *fakeRunOnce) Disarm() error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.disarms++
+	if err := f.disarmError; err != nil {
+		f.mu.Unlock()
+		return err
+	}
 	f.armed = ""
+	during := f.duringDisarm
+	f.mu.Unlock()
+	if during != nil {
+		during()
+	}
 	return nil
 }
 
@@ -255,5 +268,141 @@ func TestSetupJournalIsSaved(t *testing.T) {
 	}
 	if armed, _, _ := fake.state(); armed == "" {
 		t.Fatal("the restart did not arm RunOnce")
+	}
+}
+
+// HostCheck hands DOCKER_HOST to the checklist: an engine it names elsewhere
+// proves nothing about this PC, even with Docker Desktop open here.
+func TestHostCheckTrustsNoEngineDockerHostNames(t *testing.T) {
+	app, _ := newGuideTestApp(t, runningProvider{})
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, Build: 26100, DockerDesktopRunning: winvm.Yes,
+			HypervisorPresent: winvm.Unknown, Firmware: winvm.Unknown, Virtualization: winvm.Unknown, DockerDesktopInstalled: winvm.Yes}
+	}}
+	a2 := func() string {
+		res, err := app.HostCheck()
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, _ := findStep(res.Steps, "a2")
+		return s.State
+	}
+	t.Setenv("DOCKER_HOST", "")
+	if got := a2(); got != winvm.StepDone {
+		t.Fatalf("this PC's Docker Desktop answers, but a2 is %s", got)
+	}
+	t.Setenv("DOCKER_HOST", "tcp://203.0.113.10:2375")
+	if got := a2(); got != winvm.StepUnknown {
+		t.Fatalf("an engine DOCKER_HOST names elsewhere answered, but a2 is %s", got)
+	}
+}
+
+// A cancel whose RunOnce value could not be removed keeps the journal and says
+// so, so the user can cancel again and nothing reopens the app with no journal.
+func TestCancelSetupKeepsTheJournalWhenRunOnceStays(t *testing.T) {
+	app, fake := newGuideTestApp(t, reasonProvider{})
+	app.host = bootAt("2026-11-25T07:59:58.5Z")
+	if _, err := app.beginRestart("a2"); err != nil {
+		t.Fatal(err)
+	}
+	app.resumeSetup.Store(true) // the app was opened by RunOnce
+	fake.mu.Lock()
+	fake.disarmError = errors.New("access is denied")
+	fake.mu.Unlock()
+	if err := app.CancelSetup(); err == nil {
+		t.Fatal("RunOnce stayed armed, but the cancel reported success")
+	}
+	if app.cfg.Config().SetupJournal == nil {
+		t.Fatal("RunOnce stayed armed, but the journal is gone, so a retry has nothing to cancel")
+	}
+	if !app.resumeSetup.Load() {
+		t.Fatal("RunOnce stayed armed, but the resume flag is gone, so the kept journal is only half kept")
+	}
+	fake.mu.Lock()
+	fake.disarmError = nil
+	fake.mu.Unlock()
+	if err := app.CancelSetup(); err != nil {
+		t.Fatal(err)
+	}
+	if armed, _, _ := fake.state(); armed != "" || app.cfg.Config().SetupJournal != nil || app.resumeSetup.Load() {
+		t.Fatalf("the retried cancel left RunOnce %q, journal %+v, resume flag %v", armed, app.cfg.Config().SetupJournal, app.resumeSetup.Load())
+	}
+}
+
+// A check that ends the setup while a change notes its restart leaves RunOnce
+// and the journal in step: either both or neither, never RunOnce alone.
+func TestEndSetupAndARestartDoNotRace(t *testing.T) {
+	app, fake := newGuideTestApp(t, reasonProvider{})
+	app.host = bootAt("2026-11-25T07:59:58.5Z")
+	if _, err := app.beginRestart("a2"); err != nil {
+		t.Fatal(err)
+	}
+	inDisarm := make(chan struct{})
+	release := make(chan struct{})
+	fake.mu.Lock()
+	fake.duringDisarm = func() {
+		close(inDisarm)
+		<-release
+	}
+	fake.mu.Unlock()
+
+	ended := make(chan error, 1)
+	go func() { ended <- app.endSetup() }()
+	<-inDisarm
+	noted := make(chan error, 1)
+	go func() {
+		_, err := app.beginFinish("a3", setupresume.FinishRestart)
+		noted <- err
+	}()
+	// Without the lock the restart's note lands now, inside the cancel.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	if err := <-ended; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-noted; err != nil {
+		t.Fatal(err)
+	}
+	armed, _, _ := fake.state()
+	j := app.cfg.Config().SetupJournal
+	if (armed != "") != (j != nil) {
+		t.Fatalf("RunOnce %q and journal %+v are out of step", armed, j)
+	}
+	if j == nil || j.Step != "a3" {
+		t.Fatalf("the restart noted after the cancel is lost: journal %+v", j)
+	}
+}
+
+// The app opened by hand after the sign-out: its token carries docker-users, so
+// it does not ask for the sign-out again, and RunOnce is not armed again.
+func TestSetupResumeSeesASignInByTheToken(t *testing.T) {
+	app, fake := newGuideTestApp(t, reasonProvider{})
+	token := winvm.No
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, LastBoot: "2026-11-25T07:59:58.5Z", DockerUsersToken: token}
+	}}
+	if _, err := app.beginFinish("a8", setupresume.FinishSignOut); err != nil {
+		t.Fatal(err)
+	}
+	v, err := app.SetupResume()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.SignedIn || v.Finish != setupresume.FinishSignOut {
+		t.Fatalf("before the sign-out: %+v", v)
+	}
+	_, arms, _ := fake.state()
+
+	token = winvm.Yes
+	app.host.refresh(context.Background())
+	v, err = app.SetupResume()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.SignedIn || v.Restarted != setupresume.RestartedNo {
+		t.Fatalf("the token carries the group, but the view still waits for a sign-out: %+v", v)
+	}
+	if armed, again, _ := fake.state(); armed != "" || again != arms {
+		t.Fatalf("after the sign-in RunOnce is %q, armed %d times (was %d)", armed, again, arms)
 	}
 }

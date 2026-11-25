@@ -327,8 +327,13 @@ func TestRestartCodesFromTheInstallWindow(t *testing.T) {
 		failed  bool
 	}{
 		{nil, false, false},
-		{codeErr(3010), true, false},
-		{codeErr(1641), true, false},
+		{codeErr(winvm.WingetRebootToFinish), true, false},
+		{codeErr(winvm.WingetRebootInitiated), true, false},
+		// "Restart your PC then try again": nothing was installed.
+		{codeErr(winvm.WingetRebootForInstall), false, true},
+		// winget never passes the installer's own codes through.
+		{codeErr(3010), false, true},
+		{codeErr(1641), false, true},
 		{codeErr(1), false, true},
 		{errors.New("no exit code"), false, true},
 	} {

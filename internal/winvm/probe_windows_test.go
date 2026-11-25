@@ -5,9 +5,12 @@ package winvm
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestSnapshotReadsThisPC runs the real probes on the Windows machine running the
@@ -89,5 +92,22 @@ func TestCIMScriptsOnThisPC(t *testing.T) {
 	t.Logf("feature script took %v: %s", time.Since(start), raw)
 	if f.WSLFeature == Unknown || f.VMPlatformFeature == Unknown {
 		t.Errorf("the feature script answered without the feature states: %s", raw)
+	}
+}
+
+// The CIM reads run System32's Windows PowerShell by its full path, never the
+// bare name PATH would resolve.
+func TestCIMRunsPowerShellByItsFullPath(t *testing.T) {
+	cmd, err := cimCommand(context.Background(), "exit 0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := windows.GetSystemDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "WindowsPowerShell", "v1.0", "powershell.exe")
+	if !filepath.IsAbs(cmd.Path) || !strings.EqualFold(cmd.Path, want) {
+		t.Fatalf("the CIM reads run %q, want %q", cmd.Path, want)
 	}
 }

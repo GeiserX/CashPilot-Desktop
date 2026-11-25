@@ -67,6 +67,7 @@ const (
 	CodeNotAdded     uint32 = 0x20000005 // the account is still not in docker-users
 	CodeService      uint32 = 0x20000006 // the Server service could not be set or started
 	CodeWingetGone   uint32 = 0x20000007 // winget is not on this PC
+	CodeLaunchAuto   uint32 = 0x20000008 // hypervisorlaunchtype is already auto: nothing to change
 )
 
 // Windows codes the endings read.
@@ -74,6 +75,23 @@ const (
 	codeAccessDisabledByPolicy uint32 = 1260       // ERROR_ACCESS_DISABLED_BY_POLICY
 	hrAccessDisabledByPolicy   uint32 = 0x800704EC // the same, as an HRESULT
 	hrMemberInAlias            uint32 = 0x80070562 // ERROR_MEMBER_IN_ALIAS: already a member
+)
+
+// winget's own results for an install that touches a restart, from its return
+// code list
+// (https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md).
+// winget turns the installer's own exit code into one of these, so the Docker
+// install never ends 3010 or 1641 itself.
+const (
+	// WingetRebootToFinish is APPINSTALLER_CLI_ERROR_INSTALL_REBOOT_REQUIRED_TO_FINISH:
+	// "Restart your PC to finish installation."
+	WingetRebootToFinish uint32 = 0x8A150109
+	// WingetRebootForInstall is APPINSTALLER_CLI_ERROR_INSTALL_REBOOT_REQUIRED_FOR_INSTALL:
+	// "Installation failed. Restart your PC then try again."
+	WingetRebootForInstall uint32 = 0x8A15010A
+	// WingetRebootInitiated is APPINSTALLER_CLI_ERROR_INSTALL_REBOOT_INITIATED:
+	// "Your PC will restart to finish installation."
+	WingetRebootInitiated uint32 = 0x8A15010B
 )
 
 // wslDownloadCodes are failures of the Microsoft Store or Windows Update path
@@ -141,16 +159,19 @@ func SetupScript(op string, webDownload bool) (string, error) {
 	case OpLanmanServer:
 		return prelude() + fmt.Sprintf(lanmanScript, CodeService, CodeService, CodeService), nil
 	case OpHypervisorLaunch:
-		return prelude() + fmt.Sprintf(hypervisorScript, CodeToolMissing, toolLimit(op)), nil
+		return prelude() + fmt.Sprintf(hypervisorScript, CodeToolMissing, psCode(CodeLaunchAuto), toolLimit(op)), nil
 	}
 	return "", fmt.Errorf("%q is not a change CashPilot makes with admin rights", op)
 }
 
 // wslScript runs System32's wsl.exe with args. The install first reads the WSL
 // policy (HKLM\SOFTWARE\Policies\WSL, AllowWSL 0 is "WSL is not allowed"), so a
-// managed PC stops with CodePolicy before anything runs. After the tool, a
-// pending Component Based Servicing restart turns success into 3010.
-func wslScript(args []string, webDownload bool, seconds int, checkPolicy bool) string {
+// managed PC stops with CodePolicy before anything runs. After the install, a
+// pending Component Based Servicing restart turns success into 3010: the install
+// turns on Windows features, which finish at the next start. The update turns on
+// nothing, so a pending restart there belongs to something else (often Windows
+// Update) and is not the update's: only wsl.exe's own 3010 or 1641 asks for one.
+func wslScript(args []string, webDownload bool, seconds int, install bool) string {
 	if webDownload {
 		args = append(args, "--web-download")
 	}
@@ -160,7 +181,7 @@ func wslScript(args []string, webDownload bool, seconds int, checkPolicy bool) s
 	}
 	var b strings.Builder
 	b.WriteString(prelude())
-	if checkPolicy {
+	if install {
 		fmt.Fprintf(&b, `$policy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\WSL' -Name AllowWSL -ErrorAction SilentlyContinue
 if ($policy -and $policy.AllowWSL -eq 0) { exit %s }
 `, psCode(CodePolicy))
@@ -169,9 +190,11 @@ if ($policy -and $policy.AllowWSL -eq 0) { exit %s }
 if (-not (Test-Path -LiteralPath $wsl)) { exit %s }
 $code = Bounded $wsl @(%s) %d
 if ($code -ne 0) { exit $code }
-if (RebootPending) { exit 3010 }
-exit 0
 `, psCode(CodeToolMissing), strings.Join(quoted, ","), seconds)
+	if install {
+		b.WriteString("if (RebootPending) { exit 3010 }\n")
+	}
+	b.WriteString("exit 0\n")
 	return b.String()
 }
 
@@ -204,10 +227,35 @@ exit 0
 `
 
 // hypervisorScript sets the boot entry Windows starts from to launch its
-// hypervisor again. It only ever sets "auto". The change takes effect at the
-// next start, so success is 3010.
+// hypervisor again. It first reads the entry's hypervisorlaunchtype as a number
+// through the BCD WMI provider, not bcdedit's translated text: element
+// 0x250000F0 (BcdOSLoaderInteger_HypervisorLaunchType) of {current}, whose fixed
+// GUID is {fa926493-6f1c-4193-a414-58f0b2456d1e}; 1 is Auto
+// (https://learn.microsoft.com/en-us/previous-versions/windows/desktop/bcd/bcdosloaderelementtypes).
+// The connection enables the token's privileges (Backup and Restore) before it
+// opens the store, as Microsoft's BCD WMI samples do with
+// {impersonationlevel=Impersonate,(Backup,Restore)}: the scope's options are set
+// before it connects, so they apply.
+// Already Auto ends CodeLaunchAuto and changes nothing. A read that fails goes on
+// to the change. It only ever sets "auto". The change takes effect at the next
+// start, so success is 3010.
 const hypervisorScript = `$bcd = Join-Path ([Environment]::SystemDirectory) 'bcdedit.exe'
 if (-not (Test-Path -LiteralPath $bcd)) { exit %d }
+$launch = $null
+try {
+  $scope = New-Object System.Management.ManagementScope('\\.\root\WMI')
+  $scope.Options.EnablePrivileges = $true
+  $store = New-Object System.Management.ManagementClass($scope, (New-Object System.Management.ManagementPath('BcdStore')), $null)
+  $opened = $store.OpenStore('')
+  if ($opened.ReturnValue) {
+    $entry = $opened.Store.OpenObject('{fa926493-6f1c-4193-a414-58f0b2456d1e}')
+    if ($entry.ReturnValue) {
+      $element = $entry.Object.GetElement(0x250000F0)
+      if ($element.ReturnValue) { $launch = [int64]$element.Element.Integer }
+    }
+  }
+} catch { $launch = $null }
+if ($launch -eq 1) { exit %s }
 $code = Bounded $bcd @('/set','{current}','hypervisorlaunchtype','auto') %d
 if ($code -ne 0) { exit $code }
 exit 3010
@@ -310,6 +358,10 @@ func SetupOutcome(op string, res runtime.ElevatedResult, err error, timedOut, we
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "CashPilot could not add your account to docker-users. Ask an administrator of this PC to add it, then sign out and back in."}
 	case CodeService:
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "Windows did not let CashPilot set the Server service to start automatically. A clean-up tool or a policy may hold it off."}
+	case CodeLaunchAuto:
+		return Outcome{State: OutcomeFailed, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
+	case WingetRebootForInstall:
+		return Outcome{State: OutcomeFailed, Code: hex, Text: "winget says Windows must restart before Docker Desktop can install. Restart the PC, then click Install Docker Desktop again."}
 	case CodeWingetGone:
 		return Outcome{State: OutcomeFallback, URL: DockerDownloadURL, Text: "winget, Windows' app installer, is not on this PC. CashPilot opened Docker's download page instead: download the installer, run it, then click Check again."}
 	}

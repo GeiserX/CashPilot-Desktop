@@ -95,32 +95,38 @@ func TestDecide(t *testing.T) {
 		j         *config.SetupJournal
 		boot      string
 		flag      bool
+		token     bool
 		exists    func(string) bool
 		active    bool
 		restarted string
 		rearm     bool
 		moved     bool
 	}{
-		{"no journal, no flag: nothing to do", nil, "2026-11-25T08:00:00Z", false, there, false, "", false, false},
-		{"the flag alone lands on the checklist", nil, "2026-11-25T08:00:00Z", true, there, true, RestartedUnknown, false, false},
-		{"same boot: restart to finish", journal, "2026-11-25T07:59:58.5Z", false, there, true, RestartedNo, true, false},
-		{"same boot within rounding", journal, "2026-11-25T07:59:59Z", false, there, true, RestartedNo, true, false},
-		{"new boot: the restart happened", journal, "2026-11-25T08:30:00Z", true, there, true, RestartedYes, false, false},
-		{"boot unread: unknown, never 'restart to finish'", journal, "", true, there, true, RestartedUnknown, false, false},
-		{"a boot time that went back is unknown", journal, "2026-11-24T08:00:00Z", false, there, true, RestartedUnknown, false, false},
-		{"exe moved: still lands, and says so", journal, "2026-11-25T08:30:00Z", false, gone, true, RestartedYes, false, true},
-		{"exe moved before the restart: rearm at the new path", journal, "2026-11-25T07:59:58.5Z", false, gone, true, RestartedNo, true, true},
-		{"sign-out step, same boot, opened by hand: still to come", signOut, "2026-11-25T07:59:58.5Z", false, there, true, RestartedNo, true, false},
-		{"sign-out step, same boot, opened by RunOnce: the sign-in happened", signOut, "2026-11-25T07:59:58.5Z", true, there, true, RestartedNo, false, false},
-		{"sign-out step after a restart instead", signOut, "2026-11-25T08:30:00Z", true, there, true, RestartedYes, false, false},
+		{"no journal, no flag: nothing to do", nil, "2026-11-25T08:00:00Z", false, false, there, false, "", false, false},
+		{"the flag alone lands on the checklist", nil, "2026-11-25T08:00:00Z", true, false, there, true, RestartedUnknown, false, false},
+		{"same boot: restart to finish", journal, "2026-11-25T07:59:58.5Z", false, false, there, true, RestartedNo, true, false},
+		{"same boot within rounding", journal, "2026-11-25T07:59:59Z", false, false, there, true, RestartedNo, true, false},
+		{"new boot: the restart happened", journal, "2026-11-25T08:30:00Z", true, false, there, true, RestartedYes, false, false},
+		{"boot unread: unknown, never 'restart to finish'", journal, "", true, false, there, true, RestartedUnknown, false, false},
+		{"a boot time that went back is unknown", journal, "2026-11-24T08:00:00Z", false, false, there, true, RestartedUnknown, false, false},
+		{"exe moved: still lands, and says so", journal, "2026-11-25T08:30:00Z", false, false, gone, true, RestartedYes, false, true},
+		{"exe moved before the restart: rearm at the new path", journal, "2026-11-25T07:59:58.5Z", false, false, gone, true, RestartedNo, true, true},
+		{"sign-out step, same boot, opened by hand: still to come", signOut, "2026-11-25T07:59:58.5Z", false, false, there, true, RestartedNo, true, false},
+		{"sign-out step, same boot, opened by RunOnce: the sign-in happened", signOut, "2026-11-25T07:59:58.5Z", true, false, there, true, RestartedNo, false, false},
+		{"sign-out step after a restart instead", signOut, "2026-11-25T08:30:00Z", true, false, there, true, RestartedYes, false, false},
+		{"sign-out step, same boot, opened by hand, the token carries the group: the sign-in happened", signOut, "2026-11-25T07:59:58.5Z", false, true, there, true, RestartedNo, false, false},
+		{"restart step, same boot, the token carries the group: the restart is still to come", journal, "2026-11-25T07:59:58.5Z", false, true, there, true, RestartedNo, true, false},
 	}
 	for _, tc := range cases {
-		v := Decide(tc.j, tc.boot, tc.flag, tc.exists)
+		v := Decide(tc.j, tc.boot, tc.flag, tc.token, tc.exists)
 		if v.Active != tc.active || v.Restarted != tc.restarted || v.Rearm != tc.rearm || v.ExeMoved != tc.moved {
 			t.Errorf("%s: %+v", tc.name, v)
 		}
 		if tc.j != nil && (v.Step != tc.j.Step || v.Attempts != tc.j.Attempts) {
 			t.Errorf("%s: the view lost the journal's step: %+v", tc.name, v)
+		}
+		if want := tc.j == signOut && tc.restarted == RestartedNo && (tc.flag || tc.token); v.SignedIn != want {
+			t.Errorf("%s: signed in %v, want %v", tc.name, v.SignedIn, want)
 		}
 		if want := map[bool]string{true: FinishSignOut, false: FinishRestart}[tc.j == signOut]; tc.j != nil && v.Finish != want {
 			t.Errorf("%s: finish %q, want %q", tc.name, v.Finish, want)

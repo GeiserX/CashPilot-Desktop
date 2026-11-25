@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"log"
+	"os"
 	goruntime "runtime"
 	"sync"
 	"time"
@@ -32,9 +34,18 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 	status := a.runtimeStatus(a.catalog.ListVisible())
 	if status.Reason == runtime.ReasonRunning {
 		// Docker runs: a guided setup that waited for a restart is finished.
-		a.endSetup()
+		if err := a.endSetup(); err != nil {
+			log.Printf("setup: %v", err)
+		}
 	}
-	return HostCheckResult{Facts: facts, Runtime: status, Steps: winvm.DockerSteps(facts, status.Reason)}, nil
+	return HostCheckResult{Facts: facts, Runtime: status, Steps: dockerSteps(facts, status)}, nil
+}
+
+// dockerSteps is the checklist for one reading. The engine answering proves the
+// rows only when it is this PC's own Docker Desktop, so DOCKER_HOST and the
+// Docker context go in with it.
+func dockerSteps(facts winvm.HostFacts, status runtime.Status) []winvm.Step {
+	return winvm.DockerSteps(facts, status.Reason, runtime.LocalDockerDesktop(os.Getenv("DOCKER_HOST"), status.Context))
 }
 
 // runtimeStatus is the Docker status with the native runtime's part added: which

@@ -868,6 +868,9 @@ export interface SetupResumeView {
   fromRunOnce: boolean;
   // What the step waits for: a restart, or a sign-out and back in.
   finish?: "restart" | "signout" | "";
+  // The sign-out a step waited for happened: RunOnce opened the app, or this
+  // session's token already carries docker-users.
+  signedIn?: boolean;
 }
 
 // How a change of the checklist ended (docker_setup.go).
