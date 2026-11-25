@@ -49,6 +49,9 @@ type App struct {
 	exchange   *exchange.Service
 	trayIcon   []byte
 	fleetAPI   *fleetAPIServer
+	// host caches the last reading of this Windows PC (host_check.go).
+	host     *hostFacts
+	hostOnce sync.Once
 	// saveDialog asks the user where to write a file and returns the chosen path,
 	// or "" when they dismissed the dialog. Zero value means the real Wails dialog;
 	// it is a field so the export path can be driven in a test, which has no window
@@ -231,6 +234,7 @@ func (a *App) startCore(ctx context.Context) error {
 			memoryFailing.Store(false)
 		},
 	)
+	a.wireHostFacts(ctx, docker)
 	a.runtime = docker
 	a.fence = docker
 	native := runtime.NewNativeProcessProvider(cfg.AppDir())
@@ -601,17 +605,15 @@ func (a *App) GetAppState() (AppState, error) {
 		return AppState{}, err
 	}
 	a.retryCustom()
-	runtimeStatus := a.runtime.Status(a.ctx)
-	// Surface the always-on native runtime alongside Docker's status so the frontend
-	// can proceed (and message honestly) on Docker OR native. Available keeps its
-	// Docker-only meaning; this is purely additive.
-	runtimeStatus.NativeAvailable = a.services.HasNativeRuntime()
 	// Fetch these once and thread them into the helpers below instead of letting
 	// each helper re-run its own full-table scan (they were each queried up to 3x
 	// per GetAppState call before this).
 	deployments := a.store.ListDeployments()
 	earnings := a.store.ListLatestEarnings()
 	visible := a.catalog.ListVisible()
+	// Docker's status with the native runtime's part added (host_check.go), so the
+	// frontend can proceed, and say honestly what runs, on Docker OR native.
+	runtimeStatus := a.runtimeStatus(visible)
 	return AppState{
 		Config:           a.cfg.Config(),
 		Runtime:          runtimeStatus,
@@ -1392,12 +1394,11 @@ func (a *App) CheckRuntime() (runtime.Status, error) {
 	if err := a.ready(); err != nil {
 		return runtime.Status{}, err
 	}
-	status := a.runtime.Status(a.ctx)
-	// Report native availability alongside Docker so onboarding's "Check Again" can
-	// unblock on the always-on native runtime, not only on Docker. Additive only —
+	// Cache-only: refreshState calls this after every service action, so it must
+	// never wait for a host reading. "Check again" on first run calls HostCheck,
+	// which reads the PC afresh. Native availability rides alongside Docker;
 	// Available still reflects Docker.
-	status.NativeAvailable = a.services.HasNativeRuntime()
-	return status, nil
+	return a.runtimeStatus(a.catalog.ListVisible()), nil
 }
 
 func (a *App) GetRuntimeGuides() []runtime.InstallGuide {

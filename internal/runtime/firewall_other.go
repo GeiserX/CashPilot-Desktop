@@ -2,7 +2,10 @@
 
 package runtime
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // ensureFirewallBlock refuses outside Windows: firewall_block is a Windows Firewall
 // rule, and a binary that asks for one must not start without it.
@@ -15,4 +18,10 @@ func ensureFirewallBlock(slug, program string, nets []string) error {
 func removeFirewallBlock(slug, program string) error {
 	_, _ = slug, program
 	return nil
+}
+
+// RunElevated runs admin scripts only on Windows.
+func RunElevated(script string) (ElevatedResult, error) {
+	_ = script
+	return ElevatedResult{}, errors.New("admin scripts run only on Windows")
 }
