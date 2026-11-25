@@ -78,6 +78,7 @@ import {
   SwitchToLead,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, type Mode, type ModeCardView } from "./render/mode";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
@@ -1714,16 +1715,7 @@ async function renderFleet(current: AppState) {
               ${detailStat("API Key", fleet.apiKey ? "Generated" : "Missing")}
               ${detailStat("Listener", fleet.apiListening ? "Listening" : "Offline")}
             </div>
-            <div class="fleet-snippets">
-              <div>
-                <div class="snippet-header"><strong>Docker worker</strong><button class="secondary compact-btn" data-copy="${escapeHtml(fleet.workerSnippet)}">Copy</button></div>
-                <code>${escapeHtml(fleet.workerSnippet)}</code>
-              </div>
-              <div>
-                <div class="snippet-header"><strong>Mobile / companion</strong><button class="secondary compact-btn" data-copy="${escapeHtml(fleet.mobileSnippet)}">Copy</button></div>
-                <code>${escapeHtml(fleet.mobileSnippet)}</code>
-              </div>
-            </div>
+            ${renderFleetSnippets(fleet)}
             <div class="fleet-form">
               <input id="fleet-name" placeholder="Device name" />
               <select id="fleet-kind">
@@ -1763,10 +1755,12 @@ async function renderFleet(current: AppState) {
   if (liveEditor && freshEditor && keepsLiveProxyEditor(liveEditor.dataset.proxyEditor, freshEditor.dataset.proxyEditor)) {
     freshEditor.replaceWith(liveEditor);
   }
-  document.querySelectorAll<HTMLButtonElement>("[data-copy]").forEach((button) => {
+  // The page shows the snippets with the key masked; the real ones stay in memory.
+  const snippets: Record<FleetSnippet, string> = {worker: fleet.workerSnippet, mobile: fleet.mobileSnippet};
+  document.querySelectorAll<HTMLButtonElement>("[data-fleet-copy]").forEach((button) => {
     button.addEventListener("click", async () => {
       try {
-        await navigator.clipboard.writeText(button.dataset.copy || "");
+        await navigator.clipboard.writeText(snippets[button.dataset.fleetCopy as FleetSnippet] || "");
         button.textContent = "Copied";
       } catch (error) {
         showErrorToast({scope: "clipboard", error: String(error)});
