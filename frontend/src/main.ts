@@ -110,6 +110,7 @@ import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
 import { renderCatalogTable } from "./render/catalog";
 import { wireCatalogRows } from "./render/catalog_open";
+import { wireOpenLinks } from "./render/open_links";
 import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
@@ -801,12 +802,6 @@ function renderDashboard(current: AppState) {
   document.querySelectorAll<HTMLButtonElement>("[data-isolation-action]").forEach((button) => {
     button.addEventListener("click", () => void runEnableIsolation());
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
-    });
-  });
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {
       const slug = button.dataset.slug || "";
@@ -1018,12 +1013,7 @@ function wireShellNav() {
       }
     });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
-    });
-  });
+  wireOpenLinks(document, BrowserOpenURL);
   document.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
     const currency = (event.target as HTMLSelectElement).value;
     await SaveSettings({displayCurrency: currency});
@@ -1089,12 +1079,6 @@ function renderCatalog(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.service));
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
-    });
   });
   wireCatalogRows(document, (slug) => openWizard(slug));
   wireCustomServices();
@@ -2201,12 +2185,6 @@ function renderSetupWizard(current: AppState) {
       const slugs = (button.dataset.composeExportSelection || "").split(" ").filter(Boolean);
       const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="selection"]`)?.value || "";
       void exportCompose(slugs, arch, "compose-selection");
-    });
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
     });
   });
   wireSessionConsent(document);
