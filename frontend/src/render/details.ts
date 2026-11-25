@@ -203,23 +203,25 @@ export function deviceLinkText(service: Service | undefined, values: Record<stri
 /** One block of label/value rows. */
 function factList(title: string, facts: Fact[]): string {
   return `
-    <div class="detail-block">
-      <strong class="detail-title">${escapeHtml(title)}</strong>
-      <dl class="detail-facts">
-        ${facts
-          .map((fact) => `<div class="detail-fact"><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`)
-          .join("")}
-      </dl>
-    </div>
+    <strong class="detail-title">${escapeHtml(title)}</strong>
+    <dl class="detail-facts">
+      ${facts
+        .map((fact) => `<div class="detail-fact"><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`)
+        .join("")}
+    </dl>
   `;
+}
+
+export function renderPayoutFacts(service: Service, balance?: Balance | null): string {
+  return factList("Getting paid", payoutFacts(service, balance));
 }
 
 /** Payout and disclosure together, as they appear under a service's setup card. */
 export function serviceFacts(service: Service, balance?: Balance | null): string {
   return `
     <div class="service-details">
-      ${factList("Getting paid", payoutFacts(service, balance))}
-      ${factList("What it does with your machine", disclosureFacts(service))}
+      <div class="detail-block" data-payout-facts>${renderPayoutFacts(service, balance)}</div>
+      <div class="detail-block">${factList("What it does with your machine", disclosureFacts(service))}</div>
       <div class="detail-block payout-ledger" data-payouts-slug="${escapeHtml(service.slug)}">${payoutLedger(service, undefined)}</div>
     </div>
   `;

@@ -125,7 +125,7 @@ import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
 import { copyCommandQuestion, workerCopiesSection } from "./render/workercopies";
-import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
+import { composeSelectionExport, deviceLinkText, payoutLedger, renderPayoutFacts } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { renderFleetConnect } from "./render/fleet_reach";
 import { renderFenceStatusLine } from "./render/fence_status";
@@ -2587,10 +2587,27 @@ async function runWizardAction(slug: string, action: string) {
       return;
     }
     if (action === "collect") {
-      await SaveCredentials(slug, values);
-      const record = await CollectService(slug);
-      if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
-      state = await GetAppState();
+      const pool = state?.services?.find((service) => service.slug === slug && service.collector?.accrual === "pool");
+      const card = pool ? output?.closest(".wizard-setup-card") : null;
+      const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
+      const button = card?.querySelector<HTMLButtonElement>('[data-wizard-action="collect"]');
+      if (button) button.disabled = true;
+      if (pool && facts) facts.innerHTML = renderPayoutFacts(pool);
+      try {
+        await SaveCredentials(slug, values);
+        const record = await CollectService(slug);
+        if (pool && facts) {
+          const balance = record.error ? null : { amount: record.balance, currency: record.currency };
+          facts.innerHTML = renderPayoutFacts(pool, balance);
+        }
+        if (output) {
+          const success = facts ? "Pool balance updated." : `Collected ${formatBalance(record.balance, record.currency)}`;
+          output.textContent = record.error || success;
+        }
+        state = await GetAppState();
+      } finally {
+        if (button) button.disabled = false;
+      }
     }
   } catch (error) {
     if (output) output.textContent = String(error);
