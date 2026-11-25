@@ -108,6 +108,13 @@ Check $isAdmin 'this runner is elevated, so the firewall rule of round 2 can be 
 # Containers: one CashPilot Desktop made, one a CashPilot worker made (managed,
 # no cashpilot.runtime), and one nothing of ours made. Windows containers, since
 # the runner's Docker runs those; they are only created, never started.
+# Some runners boot with the Docker service not started yet, so start it and wait
+# for its pipe before the first docker command.
+$dockerService = Get-Service -Name docker -ErrorAction SilentlyContinue
+if ($dockerService -and $dockerService.Status -ne 'Running') { Start-Service -Name docker }
+$deadline = (Get-Date).AddMinutes(3)
+while (-not (Test-Path '\\.\pipe\docker_engine') -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+Check (Test-Path '\\.\pipe\docker_engine') 'the Docker engine answers on its pipe'
 $build = [Environment]::OSVersion.Version.Build
 $image = if ($build -ge 26100) { 'mcr.microsoft.com/windows/nanoserver:ltsc2025' } else { 'mcr.microsoft.com/windows/nanoserver:ltsc2022' }
 docker pull $image | Out-Null
