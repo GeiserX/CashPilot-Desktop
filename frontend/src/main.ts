@@ -43,6 +43,7 @@ import {
   GetRuntimeGuides,
   GetSettingsState,
   GetUsage,
+  HostCheck,
   IgnoreDrift,
   ListPayouts,
   PreflightService,
@@ -92,6 +93,7 @@ import { renderWizardServiceSetup } from "./render/wizard";
 import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
+import { runtimeCard } from "./render/onboarding";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
@@ -249,21 +251,10 @@ function renderOnboarding(current: AppState) {
     return;
   }
   const runtime = current.runtime;
-  // Onboarding proceeds on EITHER runtime: Docker (runs every service) OR the
-  // always-on native runtime (runs services that ship a native app, no Docker
-  // needed). Native-only is a READY state, not a warning — only "neither" warns.
-  const dockerReady = runtime.available;
-  const runtimeReady = runtime.available || runtime.nativeAvailable;
-  const runtimeTitle = dockerReady
-    ? "Runtime ready"
-    : runtime.nativeAvailable
-      ? "Native mode ready — no Docker needed"
-      : "Runtime setup needed";
-  // Docker/neither show the backend's (Docker-centric) message, escaped; native-only
-  // shows honest static copy instead of the alarming "choose a runtime" Docker text.
-  const runtimeBody = !dockerReady && runtime.nativeAvailable
-    ? "You can run services that ship a native app right away. A few container-only services would additionally need Docker."
-    : escapeHtml(runtime.message);
+  // Onboarding proceeds when Docker answers, or when the native runtime can run at
+  // least one catalog app here. Native-only is never called ready: the card says
+  // most apps need Docker and points at its guide (render/onboarding.ts).
+  const card = runtimeCard(runtime);
   root.innerHTML = `
     ${titlebar()}
     <div class="gate">
@@ -273,13 +264,9 @@ function renderOnboarding(current: AppState) {
           ${gateSteps(2)}
           <h1 class="gate-title">Put your idle machine to work</h1>
           <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
-          <div class="runtime-card ${runtimeReady ? "ok" : "warn"}">
-            <strong>${runtimeTitle}</strong>
-            <span>${runtimeBody}</span>
-            ${runtime.context ? `<small>Docker context: ${escapeHtml(runtime.context)}</small>` : ""}
-          </div>
+          ${card.html}
           <div class="gate-actions">
-            <button class="btn btn-primary btn-lg" id="continue-btn" ${runtimeReady ? "" : "disabled"}>Open the dashboard</button>
+            <button class="btn btn-primary btn-lg" id="continue-btn" ${card.canContinue ? "" : "disabled"}>Open the dashboard</button>
             <button class="btn btn-ghost btn-lg" id="refresh-runtime">Check again</button>
           </div>
           <div id="install-guides" class="guide-grid"></div>
@@ -294,7 +281,8 @@ function renderOnboarding(current: AppState) {
     render();
   });
   document.querySelector("#refresh-runtime")?.addEventListener("click", async () => {
-    const updated = await CheckRuntime();
+    // HostCheck reads this PC afresh, so a fix the user just made shows at once.
+    const updated = (await HostCheck()).runtime;
     state = {...current, runtime: updated, guides: await GetRuntimeGuides()};
     render();
   });

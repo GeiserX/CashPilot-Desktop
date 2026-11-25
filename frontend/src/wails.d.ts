@@ -10,6 +10,8 @@ declare module "../wailsjs/go/main/App" {
   export function RemoveBackgroundHelper(): Promise<void>;
   export function BackgroundHelperStatus(): Promise<BackgroundStatus>;
   export function CheckRuntime(): Promise<RuntimeStatus>;
+  // Reads this PC afresh (Windows only; elsewhere facts.supported is false).
+  export function HostCheck(): Promise<HostCheckResult>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
   export function GetCredentials(slug: string): Promise<Record<string, string>>;
@@ -685,12 +687,59 @@ export interface FleetState {
 
 export interface RuntimeStatus {
   available: boolean;
+  // The native runtime is registered AND can run at least one catalog app here.
   nativeAvailable: boolean;
+  // The catalog apps the native runtime can run on this machine.
+  nativeServices: string[] | null;
   kind: string;
+  // Why Docker is or is not ready: running, not-installed, not-running,
+  // windows-containers, access-denied, wsl-missing, wsl-outdated,
+  // virtualization-off or first-start-pending. message says it in plain words.
+  reason: string;
   message: string;
   version: string;
   context: string;
   tools: Record<string, string> | null;
+}
+
+// "yes", "no" or "unknown": a probe that failed or timed out leaves "unknown".
+export type Tri = "yes" | "no" | "unknown";
+
+// One reading of this Windows PC (internal/winvm). Nothing here is localized text.
+export interface HostFacts {
+  os: string;
+  supported: boolean;
+  build: number;
+  ubr: number;
+  editionId: string;
+  arch: string;
+  hypervisorPresent: Tri;
+  virtualizationFirmware: Tri;
+  slat: Tri;
+  wslFeature: Tri;
+  vmPlatformFeature: Tri;
+  wslInstalled: Tri;
+  wslVersion: string;
+  dockerDesktopInstalled: Tri;
+  dockerDesktopRunning: Tri;
+  dockerDesktopStarted: Tri;
+  dockerService: string;
+  userSid: string;
+  dockerUsersGroup: Tri;
+  dockerUsersListed: Tri;
+  dockerUsersToken: Tri;
+  restartPending: Tri;
+  restartReasons: string[] | null;
+  problems: Record<string, string> | null;
+  virtualization: Tri;
+  hyperVEdition: Tri;
+  wsl: "ready" | "missing" | "outdated" | "unknown";
+  secureVmHost: { eligible: Tri; reason: string };
+}
+
+export interface HostCheckResult {
+  facts: HostFacts;
+  runtime: RuntimeStatus;
 }
 
 export interface InstallGuide {

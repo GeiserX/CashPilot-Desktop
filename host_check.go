@@ -1,0 +1,142 @@
+package main
+
+import (
+	"context"
+	goruntime "runtime"
+	"sync"
+	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
+)
+
+// HostCheckResult is what the HostCheck binding returns: the facts about this PC,
+// and the runtime status read with them, whose Reason says why Docker is or is not
+// ready.
+type HostCheckResult struct {
+	Facts   winvm.HostFacts `json:"facts"`
+	Runtime runtime.Status  `json:"runtime"`
+}
+
+// HostCheck reads this PC afresh (Windows edition, build and CPU, virtualization,
+// WSL, Docker Desktop, docker-users, a pending restart) and the runtime status. It
+// returns within winvm.ProbeTimeout; a probe that does not answer in time leaves
+// its facts unknown. Outside Windows the facts say Supported false.
+func (a *App) HostCheck() (HostCheckResult, error) {
+	if err := a.ready(); err != nil {
+		return HostCheckResult{}, err
+	}
+	facts := a.hostCache().refresh(a.ctx)
+	return HostCheckResult{Facts: facts, Runtime: a.runtimeStatus(a.catalog.ListVisible())}, nil
+}
+
+// runtimeStatus is the Docker status with the native runtime's part added: which
+// catalog services it can run here, and NativeAvailable only when that is at least
+// one. Native registration alone used to count as ready, which told a Windows user
+// with no Docker that the machine was ready when only one app could run.
+func (a *App) runtimeStatus(visible []catalog.Service) runtime.Status {
+	status := a.runtime.Status(a.ctx)
+	status.NativeServices = a.services.NativeServices(visible)
+	status.NativeAvailable = a.services.HasNativeRuntime() && len(status.NativeServices) > 0
+	return status
+}
+
+// hostFactsTTL is how long a background reading serves Status. "Check again" and
+// HostCheck read afresh, so this only bounds how often an idle app with no Docker
+// starts PowerShell on its own.
+const hostFactsTTL = 10 * time.Minute
+
+// hostFacts caches the last reading of this PC for Status, which runs on every
+// refresh and must never wait for PowerShell.
+type hostFacts struct {
+	mu         sync.Mutex
+	facts      winvm.HostFacts
+	at         time.Time
+	refreshing bool
+	read       func(context.Context) winvm.HostFacts
+	// started numbers each reading as it begins; stored is the number of the
+	// reading in facts. A reading that started earlier never replaces a newer one.
+	started, stored uint64
+}
+
+func newHostFacts() *hostFacts {
+	return &hostFacts{read: winvm.Snapshot}
+}
+
+// hostCache returns the app's cache, creating it on first use so an App built in a
+// test works without Startup.
+func (a *App) hostCache() *hostFacts {
+	a.hostOnce.Do(func() {
+		if a.host == nil {
+			a.host = newHostFacts()
+		}
+	})
+	return a.host
+}
+
+// refresh reads the PC now and returns the reading. It stores it only when no
+// reading that started later has been stored already: a slow background reading
+// must not overwrite what HostCheck just read.
+func (h *hostFacts) refresh(ctx context.Context) winvm.HostFacts {
+	h.mu.Lock()
+	h.started++
+	n := h.started
+	h.mu.Unlock()
+	f := h.read(ctx)
+	h.mu.Lock()
+	if n > h.stored {
+		h.facts, h.at, h.stored = f, time.Now(), n
+	}
+	h.mu.Unlock()
+	return f
+}
+
+// hints returns the cached reading as runtime hints at once, and starts one
+// background reading when the cache is empty or stale.
+func (h *hostFacts) hints(ctx context.Context) runtime.HostHints {
+	h.mu.Lock()
+	f, at := h.facts, h.at
+	stale := at.IsZero() || time.Since(at) > hostFactsTTL
+	if stale && !h.refreshing {
+		h.refreshing = true
+		go func() {
+			h.refresh(ctx)
+			h.mu.Lock()
+			h.refreshing = false
+			h.mu.Unlock()
+		}()
+	}
+	h.mu.Unlock()
+	if at.IsZero() {
+		return runtime.HostHints{}
+	}
+	return hostHints(f)
+}
+
+// hostHints copies the facts Status needs. The Tri values are the same words the
+// runtime package uses ("yes", "no", "unknown").
+func hostHints(f winvm.HostFacts) runtime.HostHints {
+	return runtime.HostHints{
+		DockerInstalled:   string(f.DockerDesktopInstalled),
+		DockerStarted:     string(f.DockerDesktopStarted),
+		DockerRunning:     string(f.DockerDesktopRunning),
+		Virtualization:    string(f.Virtualization),
+		WSL:               f.WSL,
+		WSLVersion:        f.WSLVersion,
+		DockerUsersListed: string(f.DockerUsersListed),
+		DockerUsersToken:  string(f.DockerUsersToken),
+		RestartPending:    string(f.RestartPending),
+	}
+}
+
+// wireHostFacts hands the Docker provider the cached host facts on Windows and
+// starts the first reading, so it is usually done before first run asks.
+func (a *App) wireHostFacts(ctx context.Context, docker *runtime.DockerProvider) {
+	if goruntime.GOOS != "windows" {
+		return
+	}
+	h := a.hostCache()
+	docker.SetHostHints(func() runtime.HostHints { return h.hints(ctx) })
+	h.hints(ctx) // the cache is empty, so this starts the first reading
+}

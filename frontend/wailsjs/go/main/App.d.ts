@@ -80,6 +80,8 @@ export function GetSettingsState():Promise<main.SettingsState>;
 
 export function GetUsage(arg1:number,arg2:string):Promise<usage.View>;
 
+export function HostCheck():Promise<main.HostCheckResult>;
+
 export function IgnoreDrift(arg1:string):Promise<void>;
 
 export function InstallBackgroundHelper():Promise<void>;
