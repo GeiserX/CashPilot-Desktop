@@ -306,6 +306,16 @@ const hgFields = serviceFormFields(hg, {});
   check("a missing worker never falls back to this computer", refused.kind === "blocked" && missing.log.length === 0, JSON.stringify({ refused, log: missing.log }));
 }
 
+// Declining an ordinary replacement says only what happened to the deploy.
+{
+  const c = calls();
+  c.confirmReplace = () => false;
+  await runCheckedDeploy(fields, full, true, BUSY, c, { localReplacement: "Replace this computer's copy?" });
+  check("declining a replacement writes a cancellation without any Windows message",
+    c.said.at(-1)?.kind === "cancelled" && c.said.at(-1)?.text === "Nothing was deployed." && !c.log.includes("adminStep"),
+    JSON.stringify(c.said));
+}
+
 // An invalid wizard value replaces any previous status beside Deploy.
 {
   const c = calls();

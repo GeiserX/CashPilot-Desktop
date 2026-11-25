@@ -691,6 +691,9 @@ function renderDashboard(current: AppState) {
   const containers = [...deployments, ...Object.values(copies).flat()];
   const upCount = containers.filter((item) => item.status === "running").length;
   const points = summary?.points || [];
+  const completedDriftDeploys = Object.entries(driftDeploys)
+    .filter(([slug, result]) => result.kind === "ok" && !current.drift?.[slug]?.length)
+    .map(([, result]) => result);
   const attention = withReminders(attentionItems({
     runtime: current.runtime,
     services,
@@ -740,7 +743,7 @@ function renderDashboard(current: AppState) {
         </section>
 
         ${renderFenceStatusLine(current.isolation)}
-        ${renderAttention(attention, upCount, containers.length)}
+        ${renderAttention(attention, upCount, containers.length, completedDriftDeploys)}
         ${renderStallServerNote(current.stallsServer)}
 
         ${renderReminders(current.reminders)}

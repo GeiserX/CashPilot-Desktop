@@ -45,6 +45,9 @@ check("only the drifting service gets a row", items.filter((i) => i.tag === "Nee
 
 const quiet = attentionItems({ runtime: runtimeOk, services, deployments, earnings: [], drift: null });
 check("no drift, no row", !quiet.some((i) => i.tag === "Needs fixing"), JSON.stringify(quiet));
+const resolved = renderAttention(quiet, 2, 2, [{ kind: "ok", text: "Bitping redeployed." }]);
+check("a successful redeploy stays visible when the drift row clears",
+  resolved.includes('role="status"') && resolved.includes("Bitping redeployed.") && resolved.includes("Nothing needs you."));
 const empty = attentionItems({ runtime: runtimeOk, services, deployments, earnings: [], drift: { bitping: [] } });
 check("an empty finding list is no row", !empty.some((i) => i.tag === "Needs fixing"), JSON.stringify(empty));
 

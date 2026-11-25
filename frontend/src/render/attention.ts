@@ -269,7 +269,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
  * The whole block. `up` and `total` are the container counts for the all-clear
  * line, so a quiet list still says what it checked.
  */
-export function renderAttention(items: AttentionItem[], up: number, total: number): string {
+export function renderAttention(items: AttentionItem[], up: number, total: number, completedDeploys: DeployStatus[] = []): string {
   const rows = items.map((i) => `
     <div class="attn-row attn-${i.level}">
       <span class="attn-tag">${escapeHtml(i.tag)}</span>
@@ -286,6 +286,7 @@ export function renderAttention(items: AttentionItem[], up: number, total: numbe
       ${items.length
         ? `<div class="attn-list">${rows}</div>`
         : `<p class="attn-clear">Nothing needs you. ${up} of ${total} container${total === 1 ? "" : "s"} up.</p>`}
+      ${completedDeploys.length ? `<div class="drift-deploy-results">${completedDeploys.map((result) => deployNotice(result.kind, result.text)).join("")}</div>` : ""}
     </section>
   `;
 }

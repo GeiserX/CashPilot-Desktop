@@ -206,7 +206,11 @@ export async function runCheckedDeploy(
     }
     const missing = missingRequiredFields(fields, values);
     if (missing.length) return { kind: "missing", missing };
-    if (target.localReplacement && !calls.confirmReplace?.(target.localReplacement)) return { kind: "cancelled" };
+    if (target.localReplacement && !calls.confirmReplace?.(target.localReplacement)) {
+      const answer = { kind: "cancelled" as const, text: "Nothing was deployed." };
+      calls.say(answer.kind, answer.text);
+      return { kind: "done", answer };
+    }
   }
   let approval: AdminStep | null = null;
   if (direct && !worker) {
