@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -142,11 +143,33 @@ func TestRestartStuckProxiedCopyLeavesACappedProxy(t *testing.T) {
 	}
 }
 
+// The runtime refuses a copy that is down or whose tunnel is stopped (a
+// *runtime.ProxyError): the copy is left as it is, which is not a failed restart.
 func TestARefusedProxiedRestartRecordsNoRestart(t *testing.T) {
 	m, p, dir, id := newRestartingProxyManager(t)
-	p.err = errors.New("the tunnel is not running, so it was left as it was")
+	p.err = &runtime.ProxyError{}
 	if err := m.RestartStuckCopy(context.Background(), "example", 0, id, time.Now(), "stuck"); err == nil {
 		t.Fatal("a refused restart reported success")
+	}
+	if _, ok := eventDetail(t, dir, "example", "auto_restarted"); ok {
+		t.Fatal("recorded an automatic restart that did not happen")
+	}
+	if got, ok := eventDetail(t, dir, "example", "restart_error"); ok {
+		t.Fatalf("a refusal was recorded as a failed restart: %q", got)
+	}
+}
+
+// Any other failure is a failed restart, recorded under the copy's name as the
+// copy-N path does.
+func TestAFailedProxiedRestartIsRecordedForThatCopy(t *testing.T) {
+	m, p, dir, id := newRestartingProxyManager(t)
+	p.err = errors.New("Docker could not restart the container")
+	if err := m.RestartStuckCopy(context.Background(), "example", 0, id, time.Now(), "stuck"); err == nil {
+		t.Fatal("a failed restart reported success")
+	}
+	want := fmt.Sprintf("copy through proxy %d: Docker could not restart the container", id)
+	if got, ok := eventDetail(t, dir, "example", "restart_error"); !ok || got != want {
+		t.Fatalf("restart_error event = %q (found %v), want %q", got, ok, want)
 	}
 	if _, ok := eventDetail(t, dir, "example", "auto_restarted"); ok {
 		t.Fatal("recorded an automatic restart that did not happen")
