@@ -99,6 +99,7 @@ export namespace catalog {
 	    }
 	}
 	export class CollectorMetadata {
+	    accrual?: string;
 	    type: string;
 	    notes: string;
 	    credentialHint: string;
@@ -112,6 +113,7 @@ export namespace catalog {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accrual = source["accrual"];
 	        this.type = source["type"];
 	        this.notes = source["notes"];
 	        this.credentialHint = source["credentialHint"];
