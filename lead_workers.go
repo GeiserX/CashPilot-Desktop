@@ -59,11 +59,12 @@ type WorkerDeployRequest struct {
 // the owner must answer Message first, and the form sends the deploy again with the
 // matching approval for the image, identity, or replacement.
 type WorkerDeployResult struct {
-	Ask         string   `json:"ask"`
-	Message     string   `json:"message"`
-	Worker      string   `json:"worker"`
-	ContainerID string   `json:"containerId"`
-	Notes       []string `json:"notes"`
+	Ask               string   `json:"ask"`
+	Message           string   `json:"message"`
+	Worker            string   `json:"worker"`
+	ContainerID       string   `json:"containerId"`
+	Notes             []string `json:"notes"`
+	CredentialWarning string   `json:"credentialWarning,omitempty"`
 }
 
 const (
@@ -371,6 +372,10 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	if err := a.store.MarkFleetCopy(target.device.ID, slug, 1, "running"); err != nil {
 		a.emitError("worker-deploy", err)
+	}
+	if err := a.saveWorkerCredentials(slug, req.Values); err != nil {
+		result.CredentialWarning = "CashPilot could not save the credentials on this computer."
+		a.emitError("credentials", err)
 	}
 	return result, nil
 }

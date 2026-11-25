@@ -73,10 +73,10 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 	if err != nil {
 		return ImportResult{}, err
 	}
-	// One import at a time from read to write, so two overlapping saves cannot
-	// both merge onto the same stored values and the later drop the earlier's.
-	a.importMu.Lock()
-	defer a.importMu.Unlock()
+	// Keep the read and write together so overlapping credential saves cannot
+	// replace each other's changes with an older snapshot.
+	a.credentialsMu.Lock()
+	defer a.credentialsMu.Unlock()
 	bySlug := map[string]importers.Row{}
 	for _, row := range preview.Rows {
 		bySlug[row.Slug] = row

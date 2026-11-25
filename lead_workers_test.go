@@ -32,7 +32,7 @@ type workerCall struct {
 }
 
 // fakeDockerWorker is a CashPilot Docker worker's API: it records each call and
-// answers with reply (status 200 and {"status":"ok"} by default).
+// answers with reply (a successful deploy by default).
 type fakeDockerWorker struct {
 	srv    *httptest.Server
 	mu     sync.Mutex
@@ -61,7 +61,7 @@ func newFakeDockerWorker(t *testing.T) *fakeDockerWorker {
 		f.calls = append(f.calls, call)
 		reply := f.reply
 		f.mu.Unlock()
-		status, body := 200, `{"status":"ok","container_id":"c0ffee"}`
+		status, body := 200, `{"status":"deployed","container_id":"c0ffee"}`
 		if reply != nil {
 			status, body = reply(call)
 		}
@@ -519,6 +519,27 @@ func TestAWorkerThatHasNotUsedItsKeyYetGetsTheSharedKey(t *testing.T) {
 	}
 }
 
+func TestWorkerDeploySavesTypedCredentialsAndKeepsOmittedSettings(t *testing.T) {
+	app := newLeadApp(t)
+	worker := newFakeDockerWorker(t)
+	enrolWorker(t, app, "garage", worker.srv.URL, nil)
+	if err := app.store.SaveCredentials("plain", map[string]string{
+		"TOKEN": "previous-token", "DEVICE_NAME": "my-worker",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.DeployToWorker("plain", WorkerDeployRequest{
+		WorkerID: workerID(t, app, "garage"), Values: map[string]string{"TOKEN": "replacement-token"},
+	})
+	if err != nil || result.ContainerID == "" || result.CredentialWarning != "" {
+		t.Fatalf("worker deploy failed: %v", err)
+	}
+	saved, err := app.store.GetCredentials("plain")
+	if err != nil || saved["TOKEN"] != "replacement-token" || saved["DEVICE_NAME"] != "my-worker" {
+		t.Fatalf("the worker deploy did not save the new token and keep the device name: %v", err)
+	}
+}
+
 func TestWorkerDeployAsksAfterDelayedEmptyHeartbeat(t *testing.T) {
 	app := newLeadApp(t)
 	worker := newFakeDockerWorker(t)
@@ -571,7 +592,7 @@ func TestWorkerDeployAsksWhenDockerLogsAreUnavailable(t *testing.T) {
 			_, _ = io.WriteString(w, `[{"slug":"plain","name":"cashpilot-plain","deployed_by":"worker","instance":1,"status":"running"}]`)
 		case "/api/containers/plain/deploy":
 			deploys.Add(1)
-			_, _ = io.WriteString(w, `{"container_id":"unexpected"}`)
+			_, _ = io.WriteString(w, `{"status":"deployed","container_id":"unexpected"}`)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -630,7 +651,7 @@ func TestWorkerDeployRetryAfterDroppedReplyNeedsApproval(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&spec); err != nil || !spec.ReplaceExisting {
 				t.Errorf("legacy retry lacks explicit replacement approval: %v", err)
 			}
-			_, _ = io.WriteString(w, `{"container_id":"replaced"}`)
+			_, _ = io.WriteString(w, `{"status":"deployed","container_id":"replaced"}`)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -667,7 +688,7 @@ func TestWorkerDeployAsksWhenTheWorkerFindsACopyDuringDeploy(t *testing.T) {
 		if call.Body["replace_existing"] != true {
 			return http.StatusConflict, `{"detail":{"error":"replace_existing","message":"A container already exists."}}`
 		}
-		return http.StatusOK, `{"container_id":"approved"}`
+		return http.StatusOK, `{"status":"deployed","container_id":"approved"}`
 	}
 	enrolWorker(t, app, "garage", worker.srv.URL, nil)
 	req := WorkerDeployRequest{WorkerID: workerID(t, app, "garage"), Values: map[string]string{"TOKEN": "typed"}}
@@ -678,5 +699,86 @@ func TestWorkerDeployAsksWhenTheWorkerFindsACopyDuringDeploy(t *testing.T) {
 	req.ReplaceExisting = true
 	if result, err = app.DeployToWorker("plain", req); err != nil || result.ContainerID != "approved" || worker.count() != 2 {
 		t.Fatalf("approved deploy = %+v, %v, requests = %d", result, err, worker.count())
+	}
+}
+
+func TestWorkerDeployRequiresACompleteSuccessReplyBeforeSaving(t *testing.T) {
+	const success = `{"status":"deployed","container_id":"new-copy"}`
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		cut    bool
+	}{
+		{name: "refusal", status: http.StatusServiceUnavailable, body: "worker busy"},
+		{name: "gateway-timeout", status: http.StatusGatewayTimeout},
+		{name: "truncated-no-body", status: http.StatusOK, cut: true},
+		{name: "truncated-after-json", status: http.StatusOK, body: success, cut: true},
+		{name: "empty", status: http.StatusOK},
+		{name: "invalid-json", status: http.StatusOK, body: `{"status":"deployed"`},
+		{name: "null", status: http.StatusOK, body: "null"},
+		{name: "missing-status", status: http.StatusOK, body: `{"container_id":"new-copy"}`},
+		{name: "missing-container", status: http.StatusOK, body: `{"status":"deployed"}`},
+		{name: "failure-status", status: http.StatusOK, body: `{"status":"failed","container_id":"new-copy"}`},
+		{name: "redirect", status: http.StatusTemporaryRedirect, body: success},
+		{name: "oversized", status: http.StatusOK, body: success + strings.Repeat(" ", 1<<20)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app := newLeadApp(t)
+			gotRequest := make(chan string, 1)
+			worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet {
+					_, _ = io.WriteString(w, `{"exists":false}`)
+					return
+				}
+				var request workerapi.DeploySpec
+				_ = json.NewDecoder(r.Body).Decode(&request)
+				gotRequest <- request.Env["TOKEN"]
+				if tc.cut {
+					w.Header().Set("Content-Length", "100")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+				if tc.cut {
+					w.(http.Flusher).Flush()
+				}
+			}))
+			defer worker.Close()
+			enrolWorker(t, app, "garage", worker.URL, nil)
+			const saved = "previous-token"
+			const replacement = "replacement-token"
+			if err := app.SaveCredentials("plain", map[string]string{"TOKEN": saved}); err != nil {
+				t.Fatal(err)
+			}
+			id := workerID(t, app, "garage")
+			result, err := app.DeployToWorker("plain", WorkerDeployRequest{WorkerID: id, Values: map[string]string{"TOKEN": replacement}})
+			select {
+			case token := <-gotRequest:
+				if token != replacement {
+					t.Error("worker did not receive the replacement")
+				}
+			default:
+				t.Fatal("worker did not receive a deploy")
+			}
+			var replyErr *workerapi.Error
+			unknown := tc.status != http.StatusServiceUnavailable
+			if !errors.As(err, &replyErr) || replyErr.Unknown != unknown || result.ContainerID != "" ||
+				(unknown && !strings.Contains(err.Error(), "outcome is unknown")) {
+				t.Errorf("deploy result = %+v, error = %v, want unknown outcome = %t", result, err, unknown)
+			}
+			stored, err := app.store.GetCredentials("plain")
+			if err != nil || stored["TOKEN"] != saved {
+				t.Errorf("failed worker deploy changed saved credentials: %v", err)
+			}
+			reports, err := app.store.FleetReports()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range reports[id].Containers {
+				if c.Slug == "plain" && c.Status == "running" {
+					t.Error("failed worker deploy marked the copy running")
+				}
+			}
+		})
 	}
 }

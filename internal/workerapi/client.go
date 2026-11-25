@@ -236,14 +236,36 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if c.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Key)
 	}
+	deploy, isDeploy := out.(*DeployResult)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return transportError(err, timeout)
+		failure := transportError(err, timeout)
+		if isDeploy && failure.Unknown {
+			failure.Message = "The worker deploy outcome is unknown. " + failure.Message
+		}
+		return failure
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	const maxReplyBytes = 1 << 20
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes+1))
+	if isDeploy && (readErr != nil || len(raw) > maxReplyBytes) {
+		return unknownDeployReply(resp.StatusCode)
+	}
 	if resp.StatusCode >= 400 {
-		return refusal(resp.StatusCode, raw, sentEnv)
+		failure := refusal(resp.StatusCode, raw, sentEnv)
+		if isDeploy && failure.Unknown {
+			return unknownDeployReply(resp.StatusCode)
+		}
+		return failure
+	}
+	if isDeploy {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 ||
+			json.Unmarshal(raw, deploy) != nil || deploy.Status != "deployed" ||
+			strings.TrimSpace(deploy.ContainerID) == "" {
+			*deploy = DeployResult{}
+			return unknownDeployReply(resp.StatusCode)
+		}
+		return nil
 	}
 	if out == nil || len(bytes.TrimSpace(raw)) == 0 {
 		return nil
@@ -252,6 +274,13 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return &Error{Status: resp.StatusCode, Message: "The worker answered, but not in a form this app reads; update the worker"}
 	}
 	return nil
+}
+
+func unknownDeployReply(status int) *Error {
+	return &Error{
+		Status: status, Unknown: true,
+		Message: "The worker deploy outcome is unknown. CashPilot did not get a complete success reply. Check the worker before trying again.",
+	}
 }
 
 func (c *Client) httpClient() *http.Client {

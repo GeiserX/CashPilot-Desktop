@@ -19,7 +19,7 @@ import (
 //     values) is kept only until a deploy has written it into the file, then deleted.
 //     Saving the form without it does not delete it early, so no deploy can lose
 //     the only copy Desktop had.
-//   - The seed is never sent to the window: CredentialsForWindow drops it.
+//   - The seed is never sent to the window: App.GetCredentials omits it.
 
 // seedKey is the name of svc's seed-file variable, or "".
 func seedKey(svc catalog.Service) string {
@@ -56,16 +56,6 @@ func (m *Manager) CredentialsToSave(slug string, values map[string]string) (map[
 		out[key] = legacy
 	}
 	return out, nil
-}
-
-// CredentialsForWindow is creds without slug's wallet seed, for anything shown in or
-// sent to the window.
-func (m *Manager) CredentialsForWindow(slug string, creds map[string]string) map[string]string {
-	svc, ok := m.catalog.Get(slug)
-	if !ok {
-		return creds
-	}
-	return runtime.StripSeedVars(svc, creds)
 }
 
 func copyMap(in map[string]string) map[string]string {

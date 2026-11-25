@@ -93,52 +93,52 @@ func currentUserSID() (string, error) {
 // place, asking for admin rights only when it is missing or differs. It fails when
 // the rule cannot be confirmed, so the caller never starts the binary without it.
 func ensureFirewallBlock(slug, program string, nets []string) error {
+	return ensureFirewallBlockWith(slug, program, nets, true)
+}
+
+// ensureFirewallBlockWith is ensureFirewallBlock that raises the admin prompt only
+// when mayElevate is set (the person approved it in the app). Otherwise a missing
+// rule fails with AdminApprovalNeeded and Windows shows nothing.
+func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate bool) error {
 	nets, err := validFirewallNetworks(nets)
 	if err != nil {
 		return err
 	}
-	name := firewallRuleName(slug, program)
-	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
-	st, err := readFirewallRule(name)
-	if err != nil {
-		return fmt.Errorf("%s, and %v", what, err)
-	}
-	if why := st.notEnforced(); why != "" {
-		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
-	}
-	if st.matches(program, nets) {
-		return nil
-	}
-	if _, err := RunElevated(firewallCreateScript(name, program, nets)); err != nil {
-		return fmt.Errorf("%s, and creating it failed (approve the Windows admin prompt and try again): %v", what, err)
-	}
-	st, err = readFirewallRule(name)
-	if err != nil {
-		return fmt.Errorf("%s, and %v", what, err)
-	}
-	if !st.matches(program, nets) {
-		return fmt.Errorf("%s, and the rule is still not in place after creating it", what)
-	}
-	// The firewall can be switched off while the admin prompt waits.
-	if why := st.notEnforced(); why != "" {
-		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
-	}
-	return nil
+	return ensureFirewallRule(slug, program, nets, mayElevate, readFirewallRule, RunElevated)
 }
 
-// removeFirewallBlock deletes the rule for this program, asking for admin rights
-// only when it exists.
-func removeFirewallBlock(slug, program string) error {
-	name := firewallRuleName(slug, program)
-	st, err := readFirewallRule(name)
+// firewallReady reports whether the rule matches and whether it exists,
+// reading it without admin rights. A firewall that would ignore the rule is an
+// error, not "missing": no admin prompt can fix it, so the app must say what can.
+func firewallReady(slug, program string, nets []string) (ready, found bool, err error) {
+	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
+	st, err := readFirewallRule(firewallRuleName(slug, program))
 	if err != nil {
+		return false, false, fmt.Errorf("%s. CashPilot could not read the rule before the admin step: %w", what, err)
+	}
+	ready, err = firewallReadiness(st, program, nets, what)
+	return ready, st.Found, err
+}
+
+// firewallBlockExists reads whether CashPilot's rule exists for the old binary.
+func firewallBlockExists(slug, program string) (bool, error) {
+	state, err := readFirewallRule(firewallRuleName(slug, program))
+	return state.Found, err
+}
+
+// removeFirewallBlock deletes the rule for this program if it exists and this
+// operation can ask for admin rights.
+func removeFirewallBlock(slug, program string, mayElevate bool) error {
+	exists, err := firewallBlockExists(slug, program)
+	if err != nil || !exists {
 		return err
 	}
-	if !st.Found {
-		return nil
+	if !mayElevate {
+		return &AdminApprovalNeeded{Slug: slug}
 	}
+	name := firewallRuleName(slug, program)
 	if _, err := RunElevated(firewallRemoveScript(name)); err != nil {
-		return fmt.Errorf("the Windows Firewall rule %q is still there (approve the Windows admin prompt and remove again, or delete it yourself with Remove-NetFirewallRule -DisplayName %s): %v", name, psQuote(name), err)
+		return firewallRemoveFailed(name, err)
 	}
 	return nil
 }

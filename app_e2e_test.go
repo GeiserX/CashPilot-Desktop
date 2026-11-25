@@ -124,7 +124,7 @@ func TestTheAppRunsAnEarnerEndToEnd(t *testing.T) {
 
 	// Deploying saves the credentials, so the user is not asked again.
 	saved, err := app.GetCredentials("honeygain")
-	if err != nil || saved["HONEYGAIN_EMAIL"] != creds["HONEYGAIN_EMAIL"] {
+	if err != nil || saved.Values["HONEYGAIN_EMAIL"] != creds["HONEYGAIN_EMAIL"] {
 		t.Errorf("the credentials were not kept: %v (err=%v)", saved, err)
 	}
 
@@ -228,7 +228,7 @@ func TestTheAppRefusesAServiceItCannotRun(t *testing.T) {
 	if calls := app.Docker.Calls(); len(calls) > 0 {
 		t.Errorf("a refused deploy still talked to the runtime: %v", calls)
 	}
-	if saved, _ := app.GetCredentials("honeygain"); len(saved) > 0 {
+	if saved, _ := app.GetCredentials("honeygain"); len(saved.Values)+len(saved.SavedSecrets) > 0 {
 		t.Errorf("a refused deploy left credentials behind: %v", saved)
 	}
 }

@@ -11,6 +11,7 @@
 //   - an exit IP nobody has seen yet renders as an em dash, never as an address.
 
 import type { ProxiesState, ProxyCopyView, ProxyView } from "../wails";
+import { deployNotice, type DeployStatus } from "./deploy_consent.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 const GB = 1_000_000_000;
@@ -188,7 +189,7 @@ export function keepsLiveProxyEditor(liveId: string | null | undefined, freshId:
 }
 
 /** The whole section. editing is the proxy open in the editor, "new", or null. */
-export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "new" | null): string {
+export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "new" | null, deployStatus?: DeployStatus): string {
   const proxies = state.proxies || [];
   const candidates = state.candidates || [];
   const editor = editing === "new" ? renderProxyEditor(null) : editing ? renderProxyEditor(editing) : "";
@@ -201,7 +202,7 @@ export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "
       <div class="fleet-form" data-proxy-run>
         <select data-proxy-run-service>${options}</select>
         <select data-proxy-run-proxy>${proxyOptions}</select>
-        <button class="primary compact-btn" data-proxy-run-deploy>Run a copy through this proxy</button>
+        <button class="primary compact-btn" data-proxy-run-deploy${deployStatus?.kind === "busy" ? " disabled" : ""}>Run a copy through this proxy</button>
       </div>`
     : `<p class="muted compact-copy">${proxies.length ? "Deploy a service that can run behind a proxy first; the copy runs with its settings." : "Add a proxy to run copies through it."}</p>`;
   return `
@@ -214,6 +215,7 @@ export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "
       ${state.tunnelImageError ? `<p class="tip">${escapeHtml(state.tunnelImageError)}</p>` : ""}
       ${editor}
       ${runForm}
+      <div class="deploy-panel" data-proxy-deploy-status aria-live="polite">${deployStatus ? deployNotice(deployStatus.kind, deployStatus.text) : ""}</div>
       <div class="fleet-list">${proxies.map(renderProxyCard).join("")}</div>
     </section>`;
 }

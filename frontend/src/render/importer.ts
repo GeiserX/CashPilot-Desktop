@@ -11,6 +11,7 @@
 //
 // Pure: takes plain data, returns HTML strings or values.
 
+import { renderDeployFeedback, type DeployFeedback } from "./deploy_consent.js";
 import type { ImportField, ImportFile, ImportPreview, ImportResult, ImportRow } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
@@ -155,7 +156,7 @@ export function importChoices(
 }
 
 /** Step 3: what was saved, each with a Deploy button that runs the normal deploy. */
-export function renderImportSaved(result: ImportResult, preview: ImportPreview | null, deployed: string[], links: Record<string, string> = {}): string {
+export function renderImportSaved(result: ImportResult, preview: ImportPreview | null, deployed: string[], links: Record<string, string> = {}, statuses: Record<string, DeployFeedback> = {}): string {
   const names: Record<string, string> = {};
   const labels: Record<string, Record<string, string>> = {};
   for (const row of preview?.rows || []) {
@@ -168,9 +169,11 @@ export function renderImportSaved(result: ImportResult, preview: ImportPreview |
       ? `<div class="muted">Already set here and left as it was: ${escapeHtml(kept.join(", "))}.</div>`
       : "";
     const done = deployed.includes(slug);
+    const status = statuses[slug];
     return `<li>
       <strong>${escapeHtml(names[slug] || slug)}</strong>
-      ${done ? `<span class="muted">deployed</span>` : `<button class="compact-btn" data-import-deploy="${escapeHtml(slug)}">Deploy</button>`}
+      ${done ? (status ? "" : `<span class="muted">deployed</span>`) : `<button class="compact-btn" data-import-deploy="${escapeHtml(slug)}"${status?.kind === "busy" ? " disabled" : ""}>Deploy</button>`}
+      <div class="deploy-panel" data-import-deploy-panel="${escapeHtml(slug)}" aria-live="polite">${renderDeployFeedback(status)}</div>
       ${keptNote}
       ${done && links[slug] ? `<pre class="muted device-link-text">${escapeHtml(links[slug])}</pre>` : ""}
     </li>`;
