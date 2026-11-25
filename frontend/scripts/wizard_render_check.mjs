@@ -238,8 +238,8 @@ check("RULE 3: and a null hostname does the same", !renderWizardServiceSetup(hon
 check("RULE 4: a required field is marked with an asterisk", labelOf(hg, "HONEYGAIN_EMAIL") === "Email *", hg);
 check("RULE 4: so is a required secret", labelOf(hg, "HONEYGAIN_PASSWORD") === "Password *", hg);
 check(
-  "RULE 4: a required collector field is marked too",
-  labelOf(rp, "REPOCKET_PASSWORD") === "Repocket account password *",
+  "RULE 4: a required collector-only field says it is for earnings, not *: the deploy does not wait for it",
+  labelOf(rp, "REPOCKET_PASSWORD") === "Repocket account password (for earnings)",
   rp,
 );
 check(
@@ -258,15 +258,17 @@ check(
     .map((input) => `${input.env}=${JSON.stringify(input.value)}`)
     .join(", "),
 );
-// A saved credential reaches the input through hydrateWizardForm(), which sets
-// input.value on the live node. If the render ever learned to pre-fill instead, the
-// secret would be written into a value attribute -- into the page source, into any
-// innerHTML dump, into a screenshot of the DOM inspector. So a stray value on a field
-// object must stay out of the markup.
+// Only ordinary settings are used to fill inputs during hydration. Even a
+// secret with a catalog default must start with an empty input.
 const carrier = renderWizardServiceSetup(repocket, {
   repocket: [{ key: "REPOCKET_PASSWORD", label: "Password", description: "pw", secret: true, value: "hunter2-SECRET" }],
 }, "devbox");
 check("RULE 5: a value riding on a field object never reaches the markup", !carrier.includes("hunter2-SECRET"), carrier);
+const secretDefault = renderWizardServiceSetup(service({
+  docker: { env: [envVar("API_KEY", { secret: true, default: "secret-default" })] },
+}), null, "devbox");
+check("RULE 5: a secret input starts blank even with a catalog default",
+  inputs(secretDefault).find((input) => input.env === "API_KEY")?.value === "", secretDefault);
 check(
   "a default that would break out of its value attribute is escaped",
   !renderWizardServiceSetup(
@@ -413,6 +415,17 @@ check("RULE 6: a non-secret field carries no autocomplete hint", field(rp, "RP_E
 const none = renderWizardServiceSetup(service({ slug: "quiet", docker: { env: [] } }), {}, "devbox");
 check("a service with no credentials renders none", inputs(none).length === 0, none);
 check("and says so in words", none.includes("No credentials are required by the catalog"), none);
+
+for (const setup of [service({ slug: "quiet" }), service({ slug: "quiet", custom: true })]) {
+  for (const status of [{ kind: "busy", text: "Deploying quiet..." }, { kind: "ok", text: "Deployed quiet." },
+    { kind: "failed", text: "Worker refused." }, { kind: "missing", missing: [{ key: "TOKEN", label: "Token" }] }]) {
+    const redrawn = renderWizardServiceSetup(setup, {}, "devbox", null, null, null, null, null, undefined, null, false, null, null, status);
+    const text = status.text || "Fill in every field marked *";
+    check(`a redrawn ${setup.custom ? "custom" : "catalog"} Deploy card still shows ${status.kind} beside its button`,
+      redrawn.indexOf('data-wizard-action="deploy"') < redrawn.indexOf(`data-deploy-notice="${status.kind}"`)
+        && redrawn.includes(text), redrawn);
+  }
+}
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} wizard render checks FAILED`);

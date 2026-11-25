@@ -273,7 +273,7 @@ func TestLegacyDeployInventoryLooksForTheExactContainerName(t *testing.T) {
 }
 
 func TestCheckedDeployCarriesOnlyExplicitReplacementApproval(t *testing.T) {
-	srv, seen := newFakeWorker(t, 200, `{"container_id":"new"}`)
+	srv, seen := newFakeWorker(t, 200, `{"status":"deployed","container_id":"new"}`)
 	c := &Client{BaseURL: srv.URL, Key: "own-key"}
 	for _, approved := range []bool{false, true} {
 		res, err := c.DeployChecked(context.Background(), "honeygain", DeploySpec{Image: "img", ReplaceExisting: approved}, time.Second)

@@ -77,6 +77,8 @@ import {
   AcceptSessionRisk,
   RevokeSessionRisk,
   ReminderAction,
+  DeployAdminStep,
+  DeployServiceWithAdminApproval,
   GetModeState,
   JoinCashPilot,
   StartAsLead,
@@ -102,6 +104,8 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
+import { adminConsentScreen, CANCELLED_TEXT, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
+import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
@@ -117,7 +121,7 @@ import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
-import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
+import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, walletChoiceRefusal, walletDeployAnswer, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
 import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
@@ -137,7 +141,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
+import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RouteState, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WorkerTarget } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -174,6 +178,8 @@ let wizardRouteDrafts: Record<string, number | null> = {};
 // The Where box's pick per slug (a worker id, null for this computer), kept and
 // cleared as the Route box's picks are (render/where.ts).
 let wizardWhereDrafts: Record<string, number | null> = {};
+const wizardDeployFeedback: Record<string, DeployFeedback> = {};
+const wizardDeploying = new Map<string, WizardDeploySettings>();
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -188,6 +194,9 @@ let importResult: ImportResult | null = null;
 let importDeployed: string[] = [];
 // The device-link step of each deployed import, shown under it (slug -> text).
 let importLinks: Record<string, string> = {};
+let importDeploys: Record<string, DeployFeedback> = {};
+const driftDeploys: Record<string, DeployStatus> = {};
+let proxyDeployStatus: DeployStatus | undefined;
 let importDeploying = new Set<string>();
 // Bumped by each preview, so a slower earlier one cannot land over a later one.
 let importPreviewSeq = 0;
@@ -338,6 +347,7 @@ function render() {
   // A seed phrase on screen goes with the view it was shown in.
   if (activeView !== "dashboard") hideRevealedSeed();
   if (activeView !== "wizard") dropNewWalletPhrase();
+  if (activeView !== "wizard" || wizardStep !== 3) closeWizardDeployDrafts();
   if (!state.config.firstRunComplete) {
     renderOnboarding(state);
     return;
@@ -681,6 +691,9 @@ function renderDashboard(current: AppState) {
   const containers = [...deployments, ...Object.values(copies).flat()];
   const upCount = containers.filter((item) => item.status === "running").length;
   const points = summary?.points || [];
+  const completedDriftDeploys = Object.entries(driftDeploys)
+    .filter(([slug, result]) => result.kind === "ok" && !current.drift?.[slug]?.length)
+    .map(([, result]) => result);
   const attention = withReminders(attentionItems({
     runtime: current.runtime,
     services,
@@ -690,6 +703,7 @@ function renderDashboard(current: AppState) {
     outdated: current.outdatedServices,
     health: current.health,
     drift: current.drift,
+    driftDeploys,
     producerStates: current.producerStates,
     isolation: current.isolation,
   }).concat(stallItems(current.stalls)), current.reminders);
@@ -729,7 +743,7 @@ function renderDashboard(current: AppState) {
         </section>
 
         ${renderFenceStatusLine(current.isolation)}
-        ${renderAttention(attention, upCount, containers.length)}
+        ${renderAttention(attention, upCount, containers.length, completedDriftDeploys)}
         ${renderStallServerNote(current.stallsServer)}
 
         ${renderReminders(current.reminders)}
@@ -1232,7 +1246,7 @@ function renderImport(current: AppState) {
           ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
           ${renderImportInput(importSource)}
           ${importPreview ? renderImportPreview(importPreview) : ""}
-          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks) : ""}
+          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks, importDeploys) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -1302,6 +1316,7 @@ async function runImportPreview() {
     importResult = null;
     importDeployed = [];
     importLinks = {};
+    importDeploys = {};
     renderImportIfShown();
   } catch (error) {
     showErrorToast({ scope: "import", error: String(error) });
@@ -1334,6 +1349,7 @@ async function runImportApply() {
     importDeployed = [];
     state = await GetAppState();
     importLinks = {};
+    importDeploys = {};
     showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
     renderImportIfShown();
   } catch (error) {
@@ -1342,25 +1358,51 @@ async function runImportApply() {
 }
 
 async function runImportDeploy(slug: string) {
-  // A second click while this deploy runs does nothing.
   if (!slug || importDeploying.has(slug)) return;
   importDeploying.add(slug);
+  const statuses = importDeploys;
+  const setFeedback = (status: DeployFeedback) => {
+    statuses[slug] = status;
+    if (statuses === importDeploys) renderImportIfShown();
+  };
   try {
     const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
-    // The same pre-flight report the wizard shows, when there is one.
-    const report = await PreflightService(slug).catch(() => null);
-    const preflight = report?.summary ? `\n\n${report.summary}` : "";
-    if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) return;
-    await DeployService(slug, {}, null, null);
-    importDeployed = [...importDeployed, slug];
-    state = await GetAppState();
-    // The saved values hold the device id; the step is the one the wizard shows.
-    const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
-    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-    if (link) importLinks = { ...importLinks, [slug]: link };
-    renderImportIfShown();
+    const service = state?.services?.find((item) => item.slug === slug);
+    const fields = service ? serviceFormFields(service, state?.collectorFields) : [];
+    const saved = await GetCredentials(slug);
+    if (statuses !== importDeploys || activeView !== "import") return;
+    const outcome = await runCheckedDeploy(fields, saved.values, true, `Deploying ${name}...`, {
+      confirmReplace: async (message) => {
+        const report = await PreflightService(slug).catch(() => null);
+        if (statuses !== importDeploys || activeView !== "import") return false;
+        return confirm(report?.summary ? `${message}\n\n${report.summary}` : message);
+      },
+      adminStep: () => DeployAdminStep(slug),
+      askConsent: (step) => askDeployConsent(document.querySelector(`[data-import-deploy-panel="${CSS.escape(slug)}"]`), name, step),
+      say: (kind, text) => setFeedback({ kind, text }),
+      deploy: async (approval) => {
+        if (approval) await DeployServiceWithAdminApproval(slug, {}, null, null, false, approval);
+        else await DeployService(slug, {}, null, null);
+        if (statuses === importDeploys) importDeployed = [...importDeployed, slug];
+        return { kind: "ok", text: "Deployed." };
+      },
+    }, {
+      savedSecrets: saved.savedSecrets,
+      localReplacement: `Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.`,
+    });
+    if (outcome.kind === "missing") setFeedback(outcome);
+    else if (outcome.kind === "blocked") setFeedback({ kind: "failed", text: outcome.message });
+    else if (outcome.kind === "cancelled") setFeedback({ kind: "cancelled", text: CANCELLED_TEXT });
+    if (outcome.kind !== "done" || outcome.answer.kind !== "ok" || statuses !== importDeploys) return;
+    state = await GetAppState().catch(() => state);
+    const creds = await GetCredentials(slug).catch(() => null);
+    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds?.values || {}, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+    if (link && statuses === importDeploys) {
+      importLinks = { ...importLinks, [slug]: link };
+      renderImportIfShown();
+    }
   } catch (error) {
-    showErrorToast({ scope: "deploy", error: String(error) });
+    setFeedback({ kind: "failed", text: deployErrorText(error) });
   } finally {
     importDeploying.delete(slug);
   }
@@ -1910,7 +1952,7 @@ async function renderFleet(current: AppState) {
             </div>
           </section>
 
-          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing) : ""}
+          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing, proxyDeployStatus) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -2005,11 +2047,27 @@ function wireProxies() {
     await RemoveProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyRemove));
   });
   on("[data-proxy-run-deploy]", async () => {
+    if (proxyDeployStatus?.kind === "busy") return;
     const slug = valueOf("[data-proxy-run-service]");
     const id = Number(valueOf("[data-proxy-run-proxy]"));
-    if (!slug || !id) return;
-    const result = await DeployProxiedCopy(slug, id);
-    showInfoToast({scope: "proxy", message: `Running through the proxy, exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`});
+    const say = (kind: DeployStatus["kind"], text: string) => {
+      proxyDeployStatus = { kind, text };
+      const slot = document.querySelector<HTMLElement>("[data-proxy-deploy-status]");
+      if (slot) slot.innerHTML = deployNotice(kind, text);
+    };
+    if (!slug || !id) {
+      say("cancelled", "Choose a service and a proxy first. Nothing was deployed.");
+      return;
+    }
+    const service = proxiesState?.candidates.find((item) => item.slug === slug)?.name || slug;
+    const proxy = proxyById(id)?.name || "the selected proxy";
+    await runDeployWithStatus(`Deploying ${service} through ${proxy}...`, say, async () => {
+      const result = await DeployProxiedCopy(slug, id);
+      return {
+        kind: "ok",
+        text: `${service} is running through ${proxy}. Exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`,
+      };
+    });
   });
 }
 
@@ -2107,6 +2165,7 @@ function renderPointsSection(points: PointsBalance[]) {
 }
 
 function openWizard(input?: string | Event) {
+  closeWizardDeployDrafts();
   const slug = typeof input === "string" ? input : "";
   activeView = "wizard";
   wizardStep = slug ? 3 : 1;
@@ -2119,6 +2178,10 @@ function openWizard(input?: string | Event) {
 }
 
 function renderSetupWizard(current: AppState) {
+  // Reuse only the edits from cards that stay open during this redraw.
+  const secretDrafts = new Map([...root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')]
+    .filter((input) => input.value)
+    .map((input) => [wizardSecretInputKey(input), input.value]));
   const services = current.services || [];
   const categories = wizardCategoryChoices(services);
   if (wizardCategories.length === 0 && categories.length > 0) {
@@ -2232,6 +2295,9 @@ function renderSetupWizard(current: AppState) {
   });
   wireSessionConsent(document);
   wireWalletChoices();
+  for (const input of root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')) {
+    input.value = secretDrafts.get(wizardSecretInputKey(input)) || "";
+  }
   fillNewWalletPanel();
   selectedServices.forEach((service) => void hydrateWizardForm(service));
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
@@ -2401,7 +2467,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug])).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug], wizardDeployFeedback[service.slug])).join("")}
     </div>
   `;
 }
@@ -2462,17 +2528,51 @@ function closeWizard() {
   render();
 }
 
+function wizardSecretInputKey(input: HTMLInputElement) {
+  return JSON.stringify([input.closest<HTMLElement>("[data-form-slug]")?.dataset.formSlug, input.dataset.wizardEnv]);
+}
+
+function closeWizardDeployDrafts() {
+  for (const input of root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')) input.value = "";
+  for (const settings of wizardDeploying.values()) {
+    settings.open = false;
+    clearRequestSecrets(settings.values, settings.secretKeys, settings.wallet);
+  }
+  for (const feedback of Object.values(wizardDeployFeedback)) delete feedback.retrySecret;
+}
+
+function wizardCredentialInputs(slug: string) {
+  return document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${CSS.escape(slug)}"] [data-wizard-env]`);
+}
+
+function markWizardSecretsSaved(slug: string, keys: string[]) {
+  for (const input of wizardCredentialInputs(slug)) {
+    if (input.type === "password" && keys.includes(input.dataset.wizardEnv || "")) {
+      input.dataset.savedSecret = "true";
+      input.placeholder = "Saved";
+    }
+  }
+}
+
 async function hydrateWizardForm(service: Service) {
-  let creds: Record<string, string> = {};
+  const inputs = wizardCredentialInputs(service.slug);
   try {
-    creds = await GetCredentials(service.slug);
+    const { values, savedSecrets } = await GetCredentials(service.slug);
+    for (const input of inputs) {
+      if (!input.isConnected) continue;
+      const key = input.dataset.wizardEnv || "";
+      if (input.type === "password") {
+        if (savedSecrets[key]) {
+          input.dataset.savedSecret = "true";
+          input.placeholder = "Saved";
+        }
+      } else if (values[key]) {
+        input.value = values[key];
+      }
+    }
   } catch (error) {
     showErrorToast({scope: "credentials", error: String(error)});
   }
-  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${service.slug}"] [data-wizard-env]`).forEach((input) => {
-    const key = input.dataset.wizardEnv || "";
-    if (creds[key]) input.value = creds[key];
-  });
 }
 
 // The pre-deploy check, filled in beside the Deploy button once the backend has
@@ -2490,12 +2590,39 @@ async function hydrateWizardPreflight(service: Service) {
   }
 }
 
-function readWizardForm(slug: string): Record<string, string> {
+function readWizardForm(slug: string) {
   const values: Record<string, string> = {};
-  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env]`).forEach((input) => {
-    values[input.dataset.wizardEnv || ""] = input.value;
-  });
-  return values;
+  const savedSecrets: Record<string, boolean> = {};
+  const secretKeys: string[] = [];
+  for (const input of wizardCredentialInputs(slug)) {
+    const key = input.dataset.wizardEnv || "";
+    values[key] = input.value;
+    if (input.type === "password") {
+      if (input.dataset.savedSecret) savedSecrets[key] = true;
+      secretKeys.push(key);
+      input.value = "";
+    }
+  }
+  const typedSecrets = secretKeys.filter((key) => values[key].trim());
+  return { values, savedSecrets, secretKeys, typedSecrets };
+}
+
+function clearRequestSecrets(values: Record<string, string>, keys: string[], wallet?: WalletChoice) {
+  for (const key of keys) delete values[key];
+  if (wallet) wallet.phrase = "";
+}
+
+// Wails serializes the arguments during the call. Drop the secret fields
+// before awaiting the reply or refreshing the app.
+function sendCredentialRequest<T>(
+  values: Record<string, string>, keys: string[], send: (request: Record<string, string>) => Promise<T>,
+): Promise<T> {
+  const request = { ...values };
+  try {
+    return send(request);
+  } finally {
+    clearRequestSecrets(request, keys);
+  }
 }
 
 // A typed value the catalog constrains (the input carries its pattern) is checked
@@ -2511,112 +2638,251 @@ function firstInvalidWizardInput(slug: string): HTMLInputElement | null {
 
 async function runWizardAction(slug: string, action: string) {
   const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
-  const invalid = firstInvalidWizardInput(slug);
-  if (invalid && (action === "save" || action === "deploy")) {
+  const workerId = action === "deploy" ? readWizardWhere(slug) : null;
+  const invalid = workerId === null ? firstInvalidWizardInput(slug) : null;
+  if (invalid && action === "save") {
     invalid.reportValidity();
     if (output) output.textContent = `${invalid.dataset.wizardEnv} does not have the shape this provider expects.`;
     return;
   }
-  const values = readWizardForm(slug);
+  if (action === "deploy") {
+    invalid?.reportValidity();
+    if (wizardDeploying.has(slug)) return;
+    try {
+      await wizardDeploy(slug, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
+    } finally {
+      const settings = wizardDeploying.get(slug);
+      if (settings) clearRequestSecrets(settings.values, settings.secretKeys, settings.wallet);
+      wizardDeploying.delete(slug);
+    }
+    return;
+  }
+  if (action !== "save" && action !== "collect") return;
+  const { values, secretKeys, typedSecrets } = readWizardForm(slug);
+  const pool = action === "collect" ? state?.services?.find((service) => service.slug === slug && service.collector?.accrual === "pool") : undefined;
+  const card = pool ? output?.closest(".wizard-setup-card") : null;
+  const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
+  const button = card?.querySelector<HTMLButtonElement>('[data-wizard-action="collect"]');
   try {
-    if (action === "deploy") {
-      const refusal = missingWizardWorker(readWizardWhere(slug));
-      if (refusal) throw new Error(refusal);
+    if (button) button.disabled = true;
+    if (pool && facts) facts.innerHTML = renderPayoutFacts(pool);
+    const saved = sendCredentialRequest(values, secretKeys, (request) => SaveCredentials(slug, request));
+    clearRequestSecrets(values, secretKeys);
+    await saved;
+    markWizardSecretsSaved(slug, typedSecrets);
+    const feedback = wizardDeployFeedback[slug];
+    if (feedback?.retrySecret) {
+      delete feedback.retrySecret;
+      setWizardDeployFeedback(slug, feedback);
     }
     if (action === "save") {
-      await SaveCredentials(slug, values);
       if (output) output.textContent = "Credentials saved.";
       return;
     }
-    const worker = action === "deploy" ? state?.workerTargets?.find((target) => target.id === readWizardWhere(slug)) : undefined;
-    if (worker) {
-      if (output) output.textContent = `Deploying to ${worker.name}...`;
-      const image = readWizardImage(slug) || "";
-      const outcome = await runWorkerDeploy(slug, worker, readWizardRoute(slug), readWizardInstances(slug), {
-        confirm: (message) => confirm(message),
-        deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image, ...yes}),
-        save: () => SaveCredentials(slug, values),
-      });
-      if (output) output.textContent = outcome.kind === "deployed" ? workerDeployText(outcome.result) : outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
-      return;
+    const record = await CollectService(slug);
+    if (pool && facts) {
+      const balance = record.error ? null : { amount: record.balance, currency: record.currency };
+      facts.innerHTML = renderPayoutFacts(pool, balance);
     }
-    if (action === "deploy") {
-      if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
-        return;
-      }
-      if (output) output.textContent = "Deploying...";
-      const seedService = state?.services?.find((service) => service.slug === slug && seedFileVar(service));
-      if (seedService) {
-        await runWalletDeploy(slug, values, output);
-        return;
-      }
-      // A custom service has no credentials: it runs its saved definition.
-      const custom = state?.services?.some((service) => service.slug === slug && service.custom);
-      const image = readWizardImage(slug);
-      const instances = readWizardInstances(slug);
-      const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
-        save: async () => {
-          if (!custom) await SaveCredentials(slug, values);
-        },
-        confirm: (message) => confirm(message),
-        routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
-        direct: (leaveRoute) => leaveRoute
-          ? DeployServiceLeavingRoute(slug, values, image, instances)
-          : DeployService(slug, values, image, instances),
-      });
-      if (outcome.kind === "refused" || outcome.kind === "cancelled") {
-        if (output) output.textContent = outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
-        return;
-      }
-      if (outcome.kind === "routed") {
-        state = await GetAppState();
-        const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-        if (output) output.textContent = routedDeployText(outcome.result, link);
-        return;
-      }
-      const deployment = outcome.deployment;
-      state = await GetAppState();
-      // The box now holds what runs, so a second Deploy without an edit keeps it.
-      const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
-      if (imageInput) {
-        imageInput.value = deployment.customImage || "";
-        imageInput.dataset.initial = deployment.customImage || "";
-      }
-      const instancesInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
-      if (instancesInput) {
-        instancesInput.value = String(deployment.instances || 1);
-        instancesInput.dataset.initial = String(deployment.instances || 1);
-      }
-      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-      if (output) output.textContent = link ? `Deployed.\n\n${link}` : "Deployed.";
-      return;
+    if (output) {
+      const success = facts ? "Pool balance updated." : `Collected ${formatBalance(record.balance, record.currency)}`;
+      output.textContent = record.error || success;
     }
-    if (action === "collect") {
-      const pool = state?.services?.find((service) => service.slug === slug && service.collector?.accrual === "pool");
-      const card = pool ? output?.closest(".wizard-setup-card") : null;
-      const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
-      const button = card?.querySelector<HTMLButtonElement>('[data-wizard-action="collect"]');
-      if (button) button.disabled = true;
-      if (pool && facts) facts.innerHTML = renderPayoutFacts(pool);
-      try {
-        await SaveCredentials(slug, values);
-        const record = await CollectService(slug);
-        if (pool && facts) {
-          const balance = record.error ? null : { amount: record.balance, currency: record.currency };
-          facts.innerHTML = renderPayoutFacts(pool, balance);
-        }
-        if (output) {
-          const success = facts ? "Pool balance updated." : `Collected ${formatBalance(record.balance, record.currency)}`;
-          output.textContent = record.error || success;
-        }
-        state = await GetAppState();
-      } finally {
-        if (button) button.disabled = false;
-      }
-    }
+    state = await GetAppState();
   } catch (error) {
     if (output) output.textContent = String(error);
+  } finally {
+    if (button) button.disabled = false;
+    clearRequestSecrets(values, secretKeys);
   }
+}
+
+function setWizardDeployFeedback(slug: string, status: DeployFeedback) {
+  wizardDeployFeedback[slug] = status;
+  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${CSS.escape(slug)}"]`);
+  if (!panel) return;
+  panel.innerHTML = renderDeployFeedback(status);
+  panel.scrollIntoView({ block: "nearest" });
+}
+
+function sayDeploy(slug: string, kind: DeployStatus["kind"], text: string) {
+  setWizardDeployFeedback(slug, { kind, text });
+}
+
+// A redraw or navigation can remove the screen while it waits for an answer.
+function askDeployConsent(panel: HTMLElement | null, name: string, step: AdminStep): Promise<boolean> {
+  if (!panel?.isConnected) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const finish = (approved: boolean) => {
+      observer.disconnect();
+      resolve(approved);
+    };
+    const observer = new MutationObserver(() => {
+      if (!panel.isConnected) finish(false);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    panel.innerHTML = adminConsentScreen(name, step);
+    panel.scrollIntoView({ block: "nearest" });
+    panel.querySelectorAll<HTMLButtonElement>("[data-deploy-consent]").forEach((button) => {
+      button.addEventListener("click", () => finish(panel.isConnected && button.dataset.deployConsent === "go"), { once: true });
+    });
+    panel.querySelector<HTMLButtonElement>('[data-deploy-consent="go"]')?.focus();
+  });
+}
+
+interface WizardDeploySettings {
+  open: boolean;
+  values: Record<string, string>;
+  proxyId: number | null;
+  image: string | null;
+  instances: number | null;
+  route: RouteState | null | undefined;
+  secretKeys: string[];
+  typedSecrets: string[];
+  wallet?: WalletChoice;
+}
+
+// A deploy from the card: every field marked * is filled, and when Windows will
+// show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
+// answer replaces "Deploying..." next to Deploy however it ends.
+async function wizardDeploy(slug: string, workerId: number | null, invalidField?: string) {
+  const service = state?.services?.find((item) => item.slug === slug);
+  const name = service?.name || slug;
+  const fields = service && !service.custom ? serviceFormFields(service, state?.collectorFields) : [];
+  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
+  const { values, secretKeys, typedSecrets, savedSecrets } = readWizardForm(slug);
+  const settings: WizardDeploySettings = {
+    open: true, values, secretKeys, typedSecrets,
+    proxyId: readWizardRoute(slug),
+    image: readWizardImage(slug),
+    instances: readWizardInstances(slug),
+    route: state?.route,
+    wallet: workerId === null && seedFileVar(service) ? readWalletChoice(slug) : undefined,
+  };
+  wizardDeploying.set(slug, settings);
+  const restoreSecretEdits = () => {
+    if (!settings.open) return false;
+    let restored = false;
+    for (const input of wizardCredentialInputs(slug)) {
+      const key = input.dataset.wizardEnv || "";
+      if (input.type === "password" && typedSecrets.includes(key) && values[key] && !input.value) {
+        input.value = values[key];
+        restored = true;
+      }
+    }
+    clearRequestSecrets(values, secretKeys);
+    return restored;
+  };
+  const say = (kind: DeployStatus["kind"], text: string) => {
+    if (kind === "partial") {
+      markWizardSecretsSaved(slug, typedSecrets);
+      clearRequestSecrets(values, secretKeys);
+    }
+    const retrySecret = (kind === "failed" || kind === "cancelled") && restoreSecretEdits();
+    setWizardDeployFeedback(slug, { kind, text, retrySecret, worker: workerId !== null });
+  };
+  const { proxyId, route } = settings;
+  const replacesLocal = proxyId === null
+    ? state?.deployments?.some((deployment) => deployment.slug === slug)
+    : route?.recorded?.[slug] === proxyId;
+  const outcome = await runCheckedDeploy(fields, values, proxyId === null, `Deploying ${name}...`, {
+    confirmReplace: (message) => confirm(message),
+    adminStep: () => DeployAdminStep(slug),
+    askConsent: (step) => askDeployConsent(panel, name, step),
+    say,
+    deploy: async (approval, worker) => {
+      if (!settings.open) return { kind: "cancelled", text: "Setup was closed. Nothing was deployed." };
+      const answer = await deployFromCard(slug, settings, worker, approval);
+      if (answer.kind === "ok") clearRequestSecrets(values, secretKeys);
+      return answer;
+    },
+  }, {
+    workerId,
+    workers: state?.workerTargets,
+    workerBusyText: (worker) => `Deploying ${name} to ${worker.name}...`,
+    invalidField,
+    savedSecrets,
+    localReplacement: replacesLocal
+      ? `Redeploy ${name} ${proxyId === null ? "on this computer" : "through this proxy"}? The existing node will be replaced. Its saved data is kept.`
+      : undefined,
+  }).catch((error) => {
+    say("failed", deployErrorText(error));
+    return null;
+  });
+  const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
+  form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
+  if (!outcome || outcome.kind === "done") return;
+  if (outcome.kind === "missing") {
+    const keys = new Set(outcome.missing.map((field) => field.key));
+    form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => {
+      if (keys.has(input.dataset.wizardEnv || "")) input.setAttribute("aria-invalid", "true");
+    });
+    setWizardDeployFeedback(slug, { kind: "missing", missing: outcome.missing, retrySecret: restoreSecretEdits() });
+    form?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
+    return;
+  }
+  if (outcome.kind === "cancelled") say("cancelled", CANCELLED_TEXT);
+  else say("failed", outcome.message);
+}
+
+// The deploy itself, once the card's checks passed: to a worker, with a wallet
+// seed (Sia's hostd), or on this computer, directly or through a proxy. Every path
+// answers with what the note next to Deploy says.
+async function deployFromCard(
+  slug: string, settings: WizardDeploySettings, worker: WorkerTarget | undefined, approval: AdminStep | null,
+): Promise<DeployAnswer> {
+  const { values, proxyId, image, instances, route, secretKeys, typedSecrets, wallet } = settings;
+  if (worker) {
+    const outcome = await runWorkerDeploy(slug, worker, proxyId, instances, {
+      confirm: (message) => settings.open && confirm(message),
+      deploy: (yes) => sendCredentialRequest(values, secretKeys, (request) =>
+        DeployToWorker(slug, { workerId: worker.id, values: request, image: image || "", ...yes }),
+      ),
+    });
+    if (outcome.kind === "deployed") {
+      if (!outcome.result.credentialWarning) markWizardSecretsSaved(slug, typedSecrets);
+      return { kind: "ok", text: workerDeployText(outcome.result) };
+    }
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
+  }
+  if (wallet) return runWalletDeploy(slug, values, image, instances, wallet, secretKeys, typedSecrets);
+  const outcome = await runRouteDeploy(slug, proxyId, image, instances, route, {
+    confirm: (message) => confirm(message),
+    routed: (proxyId) => sendCredentialRequest(values, secretKeys, (request) =>
+      DeployServiceRouted(slug, request, proxyId),
+    ),
+    direct: (leaveRoute) => sendCredentialRequest(values, secretKeys, (request) => {
+      if (approval) return DeployServiceWithAdminApproval(slug, request, image, instances, leaveRoute, approval);
+      return leaveRoute ? DeployServiceLeavingRoute(slug, request, image, instances) : DeployService(slug, request, image, instances);
+    }),
+  });
+  if (outcome.kind === "refused" || outcome.kind === "cancelled") {
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
+  }
+  markWizardSecretsSaved(slug, typedSecrets);
+  const followUp = {
+    failure: "CashPilot could not refresh the app.",
+    run: async () => {
+      state = await GetAppState();
+      return deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+    },
+  };
+  if (outcome.kind === "routed") {
+    return { kind: "ok", text: routedDeployText(outcome.result, ""), followUp };
+  }
+  const deployment = outcome.deployment;
+  // The box now holds what runs, so a second Deploy without an edit keeps it.
+  const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
+  if (imageInput) {
+    imageInput.value = deployment.customImage || "";
+    imageInput.dataset.initial = deployment.customImage || "";
+  }
+  const instancesInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
+  if (instancesInput) {
+    instancesInput.value = String(deployment.instances || 1);
+    instancesInput.dataset.initial = String(deployment.instances || 1);
+  }
+  return { kind: "ok", text: "Deployed.", followUp };
 }
 
 // A wallet seed kept in a file (Sia's hostd; render/wallet.ts). The phrase is in this
@@ -2667,34 +2933,37 @@ function readWalletChoice(slug: string): WalletChoice {
   return { mode, phrase };
 }
 
-async function runWalletDeploy(slug: string, values: Record<string, string>, output: HTMLPreElement | null) {
-  const choice = readWalletChoice(slug);
-  if (choice.mode === "import" && phraseWords(choice.phrase).length === 0) {
-    if (output) output.textContent = "Type the seed phrase of the wallet to use, or choose another option.";
-    return;
-  }
-  if (choice.mode === "generate" && output) output.textContent = "Deploying, and creating a new wallet...";
-  let result: WalletDeployResult;
-  try {
-    await SaveCredentials(slug, values);
-    result = await DeployServiceWallet(slug, values, readWizardImage(slug), readWizardInstances(slug), choice);
-  } finally {
+async function runWalletDeploy(
+  slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice,
+  secretKeys: string[], typedSecrets: string[],
+): Promise<DeployAnswer> {
+  const refusal = walletChoiceRefusal(choice);
+  if (refusal) return refusal;
+  if (choice.mode === "generate") sayDeploy(slug, "busy", "Deploying, and creating a new wallet...");
+  const result = await sendCredentialRequest(values, secretKeys, (request) => {
+    const requestChoice = { ...choice };
     choice.phrase = "";
-  }
+    try {
+      return DeployServiceWallet(slug, request, image, instances, requestChoice);
+    } finally {
+      requestChoice.phrase = "";
+    }
+  });
+  markWizardSecretsSaved(slug, typedSecrets);
   const wallet = result.wallet;
   dropNewWalletPhrase();
   if (wallet?.phrase) {
     newWallet = { slug, words: phraseWords(wallet.phrase), address: wallet.address || "", step: "show", positions: [], error: "" };
     wallet.phrase = "";
   }
-  state = await GetAppState();
-  let text = "Deployed.";
-  if (newWallet) text = "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once.";
-  else if (wallet?.migrated) text = "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume.";
-  else if (wallet?.created) text = "Deployed with the wallet you typed. CashPilot kept no copy of it.";
-  else if (wallet) text = "Deployed. The node kept its wallet.";
-  if (output) output.textContent = text;
   fillNewWalletPanel();
+  return {
+    ...walletDeployAnswer(wallet, newWallet !== null),
+    followUp: {
+      failure: "CashPilot could not refresh the app.",
+      run: async () => { state = await GetAppState(); },
+    },
+  };
 }
 
 // Draws the one-time panel in its card, and wires it. Called after every wizard draw.
@@ -2904,22 +3173,33 @@ async function runServiceAction(slug: string, action: string) {
 // number of copies, and rebuilds the rest from the current catalog.
 async function runDriftAction(slug: string, action: string) {
   const name = state?.services.find((svc) => svc.slug === slug)?.name || slug;
-  try {
-    if (action === "redeploy") {
-      if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) return;
-      setOutput(`Redeploying ${name}...`);
-      await DeployService(slug, {}, null, null);
-      await refreshState();
-      setOutput(`${name} redeployed.`);
+  if (driftDeploys[slug]?.kind === "busy") return;
+  if (action === "redeploy") {
+    const say = (kind: DeployStatus["kind"], text: string) => {
+      driftDeploys[slug] = { kind, text };
+      const panel = document.querySelector<HTMLElement>(`[data-drift-deploy-status="${slug}"]`);
+      if (panel) panel.innerHTML = deployNotice(kind, text);
+    };
+    if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) {
+      say("cancelled", "Nothing was deployed.");
       return;
     }
-    if (action === "ignore") {
+    const answer = await runDeployWithStatus(`Redeploying ${name}...`, say, async () => {
+      await DeployService(slug, {}, null, null);
+      return { kind: "ok", text: `${name} redeployed.` };
+    });
+    if (answer.kind === "ok") await refreshState().catch(() => undefined);
+    return;
+  }
+  if (action === "ignore") {
+    try {
       await IgnoreDrift(slug);
+      delete driftDeploys[slug];
       await refreshState();
       setOutput(`${name}: warning ignored until the catalog changes it again.`);
+    } catch (error) {
+      setOutput(String(error));
     }
-  } catch (error) {
-    setOutput(String(error));
   }
 }
 

@@ -45,11 +45,20 @@ check("only the drifting service gets a row", items.filter((i) => i.tag === "Nee
 
 const quiet = attentionItems({ runtime: runtimeOk, services, deployments, earnings: [], drift: null });
 check("no drift, no row", !quiet.some((i) => i.tag === "Needs fixing"), JSON.stringify(quiet));
+const resolved = renderAttention(quiet, 2, 2, [{ kind: "ok", text: "Bitping redeployed." }]);
+check("a successful redeploy stays visible when the drift row clears",
+  resolved.includes('role="status"') && resolved.includes("Bitping redeployed.") && resolved.includes("Nothing needs you."));
 const empty = attentionItems({ runtime: runtimeOk, services, deployments, earnings: [], drift: { bitping: [] } });
 check("an empty finding list is no row", !empty.some((i) => i.tag === "Needs fixing"), JSON.stringify(empty));
 
 const hostile = attentionItems({ runtime: runtimeOk, services, deployments, earnings: [], drift: { bitping: ["<img src=x onerror=alert(1)>"] } });
 check("a finding is escaped", !renderAttention(hostile, 2, 2).includes("<img src=x"), renderAttention(hostile, 2, 2).slice(0, 200));
+
+const failed = attentionItems({ runtime: runtimeOk, services, deployments, earnings: [], drift, driftDeploys: {
+  bitping: { kind: "failed", text: "Could not pull <image>" },
+} }).find((i) => i.tag === "Needs fixing");
+check("a failed drift redeploy renders its escaped alert beside its own button",
+  /data-drift-action="redeploy"[^]*?role="alert"[^]*?Could not pull &lt;image&gt;/.test(failed ? renderAttention([failed], 2, 2) : ""));
 
 // The badge in the services table, beside "update available".
 const table = (d) => renderServicesTable({ services, deployments, earnings: [], displayCurrency: "USD", drift: d });

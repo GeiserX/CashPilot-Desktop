@@ -53,9 +53,8 @@ func assertHistoryHoldsNoPhrase(t *testing.T, history []string) {
 	}
 }
 
-// The form never stores a typed seed, keeps a stored one until a deploy moves it,
-// and is never sent one; services with no seed file pass through untouched.
-func TestTheFormNeverSavesNorShowsASeed(t *testing.T) {
+// The form keeps a legacy seed until a deploy moves it to the file.
+func TestSavingTheFormKeepsOnlyALegacySeed(t *testing.T) {
 	st := newTestStore(t)
 	m := NewManager(&fakeProvider{}, realCatalogForWallet(t), st)
 	if !m.HasSeedFile("sia-hostd") || m.HasSeedFile("honeygain") || m.HasSeedFile("no-such-service") {
@@ -85,18 +84,12 @@ func TestTheFormNeverSavesNorShowsASeed(t *testing.T) {
 		t.Fatalf("saving the form would drop the only stored copy before a deploy moved it: %v", err)
 	}
 
-	shown := m.CredentialsForWindow("sia-hostd", legacy)
-	if _, ok := shown["HOSTD_WALLET_SEED"]; ok || shown["HOSTD_API_PASSWORD"] == "" {
-		t.Fatalf("the window would be sent the seed, or lose the settings: %v", shown)
-	}
 	plain := map[string]string{"EMAIL": "a@b.c"}
 	for _, slug := range []string{"honeygain", "no-such-service"} {
 		if got, err := m.CredentialsToSave(slug, plain); err != nil || got["EMAIL"] != "a@b.c" {
 			t.Fatalf("%s: CredentialsToSave = %v, %v", slug, got, err)
 		}
-		if got := m.CredentialsForWindow(slug, plain); got["EMAIL"] != "a@b.c" {
-			t.Fatalf("%s: CredentialsForWindow = %v", slug, got)
-		}
+
 	}
 }
 

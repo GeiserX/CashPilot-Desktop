@@ -75,8 +75,8 @@ type App struct {
 	// restoreMu.
 	restoreMu    sync.Mutex
 	restoreFiles map[string]restoreFile
-	// importMu serializes ApplyImport's read-merge-write of stored credentials.
-	importMu sync.Mutex
+	// credentialsMu serializes read-merge-write operations on saved credentials.
+	credentialsMu sync.Mutex
 	// fleetKey is the fleet bearer token held in memory for the per-request auth
 	// check. It is loaded once at Startup by ensureFleetAPIKey from the OS keychain
 	// (0600 file fallback) so the token is never persisted in config.json and the
@@ -1481,37 +1481,6 @@ func (a *App) GetService(slug string) (catalog.Service, error) {
 	return svc, nil
 }
 
-func (a *App) SaveCredentials(slug string, values map[string]string) error {
-	if err := a.ready(); err != nil {
-		return err
-	}
-	return a.saveCredentials(slug, values)
-}
-
-// saveCredentials stores values for slug. A wallet seed is never among them
-// (services.CredentialsToSave).
-func (a *App) saveCredentials(slug string, values map[string]string) error {
-	toSave, err := a.services.CredentialsToSave(slug, values)
-	if err != nil {
-		return err
-	}
-	return a.store.SaveCredentials(slug, toSave)
-}
-
-// GetCredentials is what the deploy form is filled from. A wallet seed is never
-// sent to the window: it lives in the node's data volume, and RevealWalletSeed is
-// the only way to see it.
-func (a *App) GetCredentials(slug string) (map[string]string, error) {
-	if err := a.ready(); err != nil {
-		return nil, err
-	}
-	creds, err := a.store.GetCredentials(slug)
-	if err != nil {
-		return nil, err
-	}
-	return a.services.CredentialsForWindow(slug, creds), nil
-}
-
 // PreflightService reports what could stop a service earning on THIS machine,
 // before the user deploys it: a provider that forbids containers, an image with no
 // build for this CPU, a service already running on another machine in the fleet,
@@ -1542,56 +1511,46 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, false, nil)
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances})
 	return deployment, err
 }
 
-func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest) (store.Deployment, *runtime.WalletResult, error) {
+func (a *App) deployService(slug string, values map[string]string, opts services.DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, nil, err
 	}
 	a.retryCustom()
-	// A custom service deploys its saved definition; the form has no credentials for
-	// it, and nothing typed there or stored under its slug is read, stored or sent
-	// (services.DeployWith).
-	custom := catalog.IsCustomSlug(slug)
-	if custom {
-		values = nil
-	}
-	// The credentials this deploy will use: the submitted values (which replace the
-	// stored blob) when provided, else whatever is already stored.
-	creds := values
-	if len(creds) == 0 && !custom {
-		stored, err := a.store.GetCredentials(slug)
-		if err != nil {
-			return store.Deployment{}, nil, err
-		}
-		creds = stored
-	}
-	// Validate BEFORE persisting, so a rejected deploy never leaves invalid/blank creds
-	// lingering — they could never deploy, yet they would linger and light the
-	// "Configured" badge for a service that cannot actually start.
-	if err := a.services.ValidateDeploy(slug, creds); err != nil {
-		a.emitError("deploy", err)
-		return store.Deployment{}, nil, err
-	}
-	if image != nil {
-		if err := services.ValidateImage(*image); err != nil {
-			a.emitError("deploy", err)
-			return store.Deployment{}, nil, err
-		}
-	}
-	if len(values) > 0 {
-		if err := a.saveCredentials(slug, values); err != nil {
-			return store.Deployment{}, nil, err
-		}
-	}
-	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute, Wallet: wallet})
+	creds, err := a.prepareDeployCredentials(slug, values, opts.Image)
 	if err != nil {
-		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
 	}
+	deployment, walletResult, deployErr := a.services.DeployWallet(a.ctx, slug, creds, opts)
+	if deployErr != nil && deployment.Slug == "" {
+		a.emitError("deploy", deployErr)
+		return store.Deployment{}, nil, deployErr
+	}
+	saveErr := a.saveLocalDeployCredentials(slug, values)
 	a.emitEvent("deployment:changed", deployment)
+	if saveErr != nil {
+		a.emitError("credentials", saveErr)
+	}
+	if deployErr != nil {
+		if saveErr != nil {
+			deployErr = errors.Join(deployErr, saveErr)
+		} else {
+			for key, secret := range a.credentialFields(slug) {
+				if secret && strings.TrimSpace(values[key]) != "" {
+					deployErr = savedPartialDeployError{deployErr}
+					break
+				}
+			}
+		}
+		a.emitError("deploy", deployErr)
+		return deployment, nil, deployErr
+	}
+	if saveErr != nil {
+		return deployment, walletResult, saveErr
+	}
 	a.registerDevice(slug, creds)
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
@@ -1609,29 +1568,21 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	if err := a.ready(); err != nil {
 		return services.ProxiedResult{}, err
 	}
-	creds := values
-	if len(creds) == 0 {
-		stored, err := a.store.GetCredentials(slug)
-		if err != nil {
-			return services.ProxiedResult{}, err
-		}
-		creds = stored
-	}
-	if err := a.services.ValidateDeploy(slug, creds); err != nil {
-		a.emitError("deploy", err)
+	creds, err := a.prepareDeployCredentials(slug, values, nil)
+	if err != nil {
 		return services.ProxiedResult{}, err
-	}
-	if len(values) > 0 {
-		if err := a.saveCredentials(slug, values); err != nil {
-			return services.ProxiedResult{}, err
-		}
 	}
 	result, err := a.services.DeployRouted(a.ctx, slug, creds, proxyID)
 	if err != nil {
 		a.emitError("deploy", err)
 		return services.ProxiedResult{}, err
 	}
+	saveErr := a.saveLocalDeployCredentials(slug, values)
 	a.emitEvent("deployment:changed", slug)
+	if saveErr != nil {
+		a.emitError("credentials", saveErr)
+		return result, saveErr
+	}
 	a.registerDevice(slug, creds)
 	return result, nil
 }
@@ -1640,7 +1591,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 // the owner confirmed it runs from this machine's own IP from now on. Its routed copy
 // is removed first.
 func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, true, nil)
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: true})
 	return deployment, err
 }
 

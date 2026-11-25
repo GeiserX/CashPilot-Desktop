@@ -71,7 +71,7 @@ func assertSeedNowhere(t *testing.T, app *appUnderTest, phrase string) {
 	if err != nil {
 		t.Fatalf("GetCredentials (binding): %v", err)
 	}
-	for k, v := range shown {
+	for k, v := range shown.Values {
 		if k == siaSeedKey || strings.Contains(v, phrase) {
 			t.Errorf("the window is sent the seed phrase (%s)", k)
 		}
@@ -203,11 +203,11 @@ func TestTheWindowNeverGetsTheSeedBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCredentials: %v", err)
 	}
-	if _, ok := shown[siaSeedKey]; ok {
+	if _, ok := shown.Values[siaSeedKey]; ok || shown.SavedSecrets[siaSeedKey] {
 		t.Fatalf("GetCredentials sent %s to the window", siaSeedKey)
 	}
-	if shown["HOSTD_API_PASSWORD"] == "" {
-		t.Fatalf("GetCredentials dropped the other settings: %v", keysOf(shown))
+	if !shown.SavedSecrets["HOSTD_API_PASSWORD"] || shown.Values["SIA_STORAGE_DIR"] != legacy["SIA_STORAGE_DIR"] {
+		t.Fatal("GetCredentials dropped the password status or storage directory")
 	}
 	if err := app.SaveCredentials(siaSlug, siaSettings()); err != nil {
 		t.Fatalf("SaveCredentials: %v", err)

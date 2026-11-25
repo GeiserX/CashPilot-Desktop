@@ -75,12 +75,11 @@ const targets = [
 }
 
 function calls(answers, confirms) {
-  const log = { deploys: [], saved: 0, asked: [] };
+  const log = { deploys: [], asked: [] };
   return {
     log,
     confirm: (message) => { log.asked.push(message); return confirms.shift() ?? false; },
     deploy: async (yes) => { log.deploys.push(yes); return answers.shift(); },
-    save: async () => { log.saved++; },
   };
 }
 const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: null };
@@ -89,11 +88,11 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   for (const [proxy, copies] of [[3, null], [null, 2]]) {
     const c = calls([ok], []);
     const out = await runWorkerDeploy("honeygain", targets[1], proxy, copies, c);
-    check(`RULE 3: route ${proxy} copies ${copies} is refused`, out.kind === "refused" && out.message.includes("Nothing was deployed") && c.log.deploys.length === 0 && c.log.saved === 0, JSON.stringify(out));
+    check(`RULE 3: route ${proxy} copies ${copies} is refused`, out.kind === "refused" && out.message.includes("Nothing was deployed") && c.log.deploys.length === 0, JSON.stringify(out));
   }
   const c = calls([ok], []);
   const out = await runWorkerDeploy("honeygain", targets[1], null, 1, c);
-  check("RULE 3: one copy from the worker's own IP deploys and saves", out.kind === "deployed" && c.log.deploys.length === 1 && c.log.saved === 1, JSON.stringify(c.log));
+  check("RULE 3: one copy deploys from the worker's own IP", out.kind === "deployed" && c.log.deploys.length === 1, JSON.stringify(c.log));
 }
 
 {
@@ -110,20 +109,24 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   ]), JSON.stringify(c.log.deploys));
   c = calls([stepUp], [false]);
   out = await runWorkerDeploy("vault", targets[1], null, null, c);
-  check("RULE 4: a no sends nothing more and saves nothing", out.kind === "cancelled" && c.log.deploys.length === 1 && c.log.saved === 0, JSON.stringify(c.log));
+  check("RULE 4: a no sends nothing more", out.kind === "cancelled" && c.log.deploys.length === 1, JSON.stringify(c.log));
   c = calls([stepUp, stepUp], [true]);
   out = await runWorkerDeploy("vault", targets[1], null, null, c);
-  check("RULE 4: a question asked again after a yes is refused, not looped", out.kind === "refused" && c.log.deploys.length === 2 && c.log.saved === 0, JSON.stringify(out));
+  check("RULE 4: a question asked again after a yes is refused, not looped", out.kind === "refused" && c.log.deploys.length === 2, JSON.stringify(out));
   const replace = { ...ok, ask: "replace_existing", message: "Redeploy honeygain on attic? The existing container will be replaced, but its volumes are kept." };
   c = calls([replace], [false]);
   out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
   check("RULE 4: a replacement question from the worker is shown even with a stale picker",
-    out.kind === "cancelled" && c.log.asked[0] === replace.message && c.log.deploys.length === 1 && c.log.saved === 0, JSON.stringify(c.log));
+    out.kind === "cancelled" && c.log.asked[0] === replace.message && c.log.deploys.length === 1, JSON.stringify(c.log));
   c = calls([replace, identity, stepUp, ok], [true, true, true]);
   out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
   check("RULE 4: the replacement approval is separate from the device and image approvals",
     out.kind === "deployed" && c.log.deploys[0].replaceExisting === false
       && c.log.deploys[3].replaceExisting === true && c.log.asked.length === 3, JSON.stringify(c.log));
+  c = calls([replace], [false]);
+  out = await runWorkerDeploy("honeygain", targets[0], null, null, c);
+  check("RULE 4: a redeploy on a worker that runs it asks first",
+    out.kind === "cancelled" && c.log.asked[0] === replace.message && c.log.deploys.length === 1, JSON.stringify(c.log));
   const text = workerDeployText({ worker: "attic", notes: ["/data stays on /old, where the running container keeps it, instead of /new"] });
   check("RULE 4: the result names the worker and what it kept", text.startsWith("Deployed to attic.") && text.includes("Kept: /data stays on /old"), text);
 }
