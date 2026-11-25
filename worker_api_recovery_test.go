@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -13,14 +14,22 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 	"github.com/zalando/go-keyring"
 )
 
 func reviewWindow(t *testing.T, helper *appUnderTest, url string) *App {
 	t.Helper()
-	if err := helper.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = url }); err != nil {
-		t.Fatal(err)
+	if url != helper.cfg.Config().UpstreamURL {
+		enrol, worker := storedKeys(t, helper.App)
+		p, err := helper.cfg.Pairing()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := helper.cfg.PublishPairing(p.Revision, url, false, config.PairingCredential{Enrolment: enrol, Worker: worker}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cfg, err := config.NewManager()
 	if err != nil {
@@ -36,6 +45,68 @@ func reviewRejoin(t *testing.T, window *App, url string) {
 	}
 	if result, err := window.JoinCashPilot(JoinRequest{URL: url, Key: testSharedKey}); err != nil || !result.OK {
 		t.Fatalf("rejoin: %+v, %v", result, err)
+	}
+}
+
+func TestRound7SameServerRejoinAllRoutes(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		name := "readable config"
+		if unreadable {
+			name = "unreadable config"
+		}
+		t.Run(name, func(t *testing.T) {
+			useAddrs(t)
+			helper := joinedApp(t)
+			const newKey = "round-seven-current-key"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, 200, map[string]any{"status": "ok", "worker_id": 2, "worker_key": newKey})
+			}))
+			defer server.Close()
+			window := reviewWindow(t, helper, server.URL)
+			status := func(key string) int { return call(t, helper, "GET", "/api/status", key, nil).Code }
+			if old, next := status(testWorkerKey), status(newKey); old != 200 || next != 401 {
+				t.Fatalf("before rejoin: previous/current %d/%d, want 200/401", old, next)
+			}
+			reviewRejoin(t, window, server.URL)
+			if unreadable {
+				path := filepath.Join(helper.cfg.AppDir(), "config.json")
+				if err := os.Rename(path, path+".bak"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, route := range []struct {
+				method, path string
+				body         any
+			}{
+				{"GET", "/api/status", nil},
+				{"POST", "/api/containers/honeygain/deploy", honeygainSpec(t, helper)},
+				{"GET", "/api/containers", nil},
+				{"POST", "/api/containers/honeygain/stop", nil},
+				{"POST", "/api/containers/honeygain/start", nil},
+				{"POST", "/api/containers/honeygain/restart", nil},
+				{"GET", "/api/containers/honeygain/logs", nil},
+				{"DELETE", "/api/containers/honeygain", nil},
+			} {
+				previous := call(t, helper, route.method, route.path, testWorkerKey, route.body)
+				if previous.Code != 401 {
+					t.Errorf("%s %s previous key: %d, want 401", route.method, route.path, previous.Code)
+				}
+				current := call(t, helper, route.method, route.path, newKey, route.body)
+				if current.Code != 200 {
+					t.Errorf("%s %s current key: %d, want 200: %s", route.method, route.path, current.Code, current.Body.String())
+				}
+			}
+			if unreadable {
+				keyring.MockInitWithError(errors.New("test keychain inaccessible"))
+				t.Cleanup(keyring.MockInit)
+				if old, next := status(testWorkerKey), status(newKey); old != 503 || next != 503 {
+					t.Errorf("with key store also unavailable: previous/current %d/%d, want 503/503", old, next)
+				}
+			}
+		})
 	}
 }
 
@@ -92,30 +163,28 @@ func TestRound7ReplacementKeepsCleanupDiscoverableAtAdminPrompt(t *testing.T) {
 	useAddrs(t)
 	app := joinedApp(t)
 	app.ctx = nil
-	oldNeeded, oldRun, oldProgram, oldRead := firewallRuleNeeded, runFirewallScript, thisProgram, readServerCommandsFirewallProgram
+	oldNeeded, oldRun, oldProgram, oldRead := firewallRuleNeeded, runFirewallScript, thisProgram, readServerCommandsFirewall
 	t.Cleanup(func() {
-		firewallRuleNeeded, runFirewallScript, thisProgram, readServerCommandsFirewallProgram = oldNeeded, oldRun, oldProgram, oldRead
+		firewallRuleNeeded, runFirewallScript, thisProgram, readServerCommandsFirewall = oldNeeded, oldRun, oldProgram, oldRead
 	})
 	firewallRuleNeeded = true
 	thisProgram = func() (string, error) { return `C:\Moved\CashPilot.exe`, nil }
 	const previousProgram = `C:\Old\CashPilot.exe`
-	if err := app.cfg.Update(func(c *config.AppConfig) {
-		c.ServerCommandsFirewallRule, c.ServerCommandsFirewallProgram = serverCommandsRuleName(), previousProgram
-	}); err != nil {
+	if err := setDesiredFirewall(t, app.App, previousProgram, false); err != nil {
 		t.Fatal(err)
 	}
 	var installed atomic.Bool
 	installed.Store(true)
-	readServerCommandsFirewallProgram = func() (string, error) {
+	readServerCommandsFirewall = func() (runtime.NamedFirewallRule, error) {
 		if installed.Load() {
-			return previousProgram, nil
+			return testFirewallRule(previousProgram), nil
 		}
-		return "", nil
+		return runtime.NamedFirewallRule{}, nil
 	}
 	atPrompt, resume := make(chan struct{}), make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
 	done := make(chan error, 1)
-	runFirewallScript = func(script string, _ string, _ config.FirewallChange) error {
+	runFirewallScript = func(script string, _ string, _ config.Pairing) error {
 		if script == removeRuleScript() {
 			installed.Store(false)
 			return nil
@@ -133,8 +202,8 @@ func TestRound7ReplacementKeepsCleanupDiscoverableAtAdminPrompt(t *testing.T) {
 	}
 	// A new process sees the state that would survive a crash at the admin prompt.
 	restarted := reviewWindow(t, app, app.cfg.Config().UpstreamURL)
-	pending, err := restarted.cfg.ReadFirewallChange()
-	if err != nil || pending == nil || pending.Action != "allow" || pending.OldProgram != previousProgram || pending.NewProgram != `C:\Moved\CashPilot.exe` {
+	pending, err := restarted.cfg.Pairing()
+	if err != nil || pending.FirewallProgram != `C:\Moved\CashPilot.exe` || pending.RemoveFirewall {
 		t.Fatalf("pending Allow after restart: %+v, %v", pending, err)
 	}
 	result, err := restarted.SwitchToLead()
@@ -145,6 +214,52 @@ func TestRound7ReplacementKeepsCleanupDiscoverableAtAdminPrompt(t *testing.T) {
 		t.Error("Leave from a fresh process reported success while the old Windows rule was still installed")
 	}
 }
+func TestRound7ExitAtReplacementPromptThenLeave(t *testing.T) {
+	const crashFlag = "CASHPILOT_TEST_EXIT_AT_FIREWALL_PROMPT"
+	if os.Getenv(crashFlag) == "1" {
+		cfg, err := config.NewManager()
+		if err != nil {
+			t.Fatal(err)
+		}
+		app := newAppUnderTest(t)
+		app.cfg, app.ctx = cfg, nil
+		installed := round8OldProgram
+		setupRound8Firewall(t, &installed)
+		runFirewallScript = func(string, string, config.Pairing) error {
+			os.Exit(73)
+			return nil
+		}
+		_, err = app.AllowServerCommandsThroughFirewall()
+		t.Fatalf("Allow returned before the simulated exit: %v", err)
+	}
+
+	useAddrs(t)
+	app := joinedApp(t)
+	// A separate test process cannot see the mock keychain.
+	keyring.MockInitWithError(errors.New("credential store unavailable"))
+	t.Cleanup(keyring.MockInit)
+	saveTestWorkerKey(t, app.App, testWorkerKey)
+	if err := setDesiredFirewall(t, app.App, round8OldProgram, false); err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command(os.Args[0], "-test.run=^TestRound7ExitAtReplacementPromptThenLeave$")
+	child.Env = append(os.Environ(), crashFlag+"=1")
+	output, err := child.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 73 {
+		t.Fatalf("replacement child: %v\n%s", err, output)
+	}
+
+	installed := round8OldProgram
+	setupRound8Firewall(t, &installed)
+	window := reviewWindow(t, app, app.cfg.Config().UpstreamURL)
+	window.recoverServerCommandsFirewall()
+	out, err := window.SwitchToLead()
+	if err != nil || out.FirewallError != "" || installed != "" {
+		t.Fatalf("Leave after exit at replacement prompt: %+v, %v, Windows %q", out, err, installed)
+	}
+}
+
 func TestRound7RecoveringKeychainKeepsRejoinKey(t *testing.T) {
 	useAddrs(t)
 	helper := joinedApp(t)
@@ -154,7 +269,7 @@ func TestRound7RecoveringKeychainKeepsRejoinKey(t *testing.T) {
 	}))
 	defer server.Close()
 	window := reviewWindow(t, helper, server.URL)
-	oldCredential, err := keyring.Get("CashPilot Desktop", "upstream-worker-key")
+	oldCredential, err := keyring.Get("CashPilot Desktop", "upstream-pairing")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,14 +282,19 @@ func TestRound7RecoveringKeychainKeepsRejoinKey(t *testing.T) {
 	}
 	// The mock resets its map when unlocked, so put back the unchanged credential.
 	keyring.MockInit()
-	if err := keyring.Set("CashPilot Desktop", "upstream-worker-key", oldCredential); err != nil {
+	if err := keyring.Set("CashPilot Desktop", "upstream-pairing", oldCredential); err != nil {
 		t.Fatal(err)
 	}
 	if old, next := status(testWorkerKey), status(newKey); old != 401 || next != 200 {
 		t.Errorf("after keychain unlock: previous/current %d/%d, want 401/200", old, next)
 	}
-	if _, err := os.Stat(filepath.Join(helper.cfg.AppDir(), ".upstream_worker_key")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the fallback file still exists after the keychain recovered: %v", err)
+	if _, _, err := window.cfg.ReadPairingCredential(true); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []string{".upstream-pairing", ".upstream-pairing-alt"} {
+		if _, err := os.Stat(filepath.Join(helper.cfg.AppDir(), file)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("the fallback file still exists after the window recovered the keychain: %v", err)
+		}
 	}
 	if old, next := status(testWorkerKey), status(newKey); old != 401 || next != 200 {
 		t.Errorf("after removing the fallback: previous/current %d/%d, want 401/200", old, next)
@@ -183,40 +303,33 @@ func TestRound7RecoveringKeychainKeepsRejoinKey(t *testing.T) {
 
 func TestStartupReconcilesInterruptedFirewallChanges(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		action  string
-		program string
+		name       string
+		remove     bool
+		actual     string
+		wantStatus string
 	}{
-		{"replacement already installed", "allow", `C:\Moved\CashPilot.exe`},
-		{"removal interrupted before Windows changed", "remove", `C:\Old\CashPilot.exe`},
-		{"removal already complete", "remove", ""},
+		{"replacement already installed", false, round8NewProgram, "ready"},
+		{"removal interrupted before Windows changed", true, round8OldProgram, "removal-pending"},
+		{"removal already complete", true, "", "absent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			app := joinedApp(t)
-			oldNeeded, oldRead := firewallRuleNeeded, readServerCommandsFirewallProgram
-			t.Cleanup(func() { firewallRuleNeeded, readServerCommandsFirewallProgram = oldNeeded, oldRead })
-			firewallRuleNeeded = true
-			readServerCommandsFirewallProgram = func() (string, error) { return tc.program, nil }
-			previous := serverCommandsRule{serverCommandsRuleName(), `C:\Old\CashPilot.exe`}
-			if err := app.confirmServerCommandsRule(previous); err != nil {
+			installed := tc.actual
+			setupRound8Firewall(t, &installed)
+			program := round8NewProgram
+			if tc.remove {
+				program = ""
+			}
+			if err := setDesiredFirewall(t, app.App, program, tc.remove); err != nil {
 				t.Fatal(err)
 			}
-			program := ""
-			if tc.action == "allow" {
-				program = tc.program
-			}
-			if _, err := app.beginFirewallChange(previous, program, tc.action); err != nil {
-				t.Fatal(err)
-			}
-
 			restarted := reviewWindow(t, app, app.cfg.Config().UpstreamURL)
 			restarted.recoverServerCommandsFirewall()
-			if pending, err := restarted.cfg.ReadFirewallChange(); err != nil || pending != nil {
-				t.Errorf("after recovery journal: %+v, %v", pending, err)
+			if pending, err := restarted.cfg.Pairing(); err != nil || pending.RemoveFirewall != (tc.remove && tc.actual != "") {
+				t.Errorf("after recovery: %+v, %v", pending, err)
 			}
-			rule := restarted.savedServerCommandsRule()
-			if rule.program != tc.program || (rule.name != "") != (tc.program != "") {
-				t.Errorf("after recovery record: %+v, want Windows program %q", rule, tc.program)
+			if got := restarted.serverCommandsFirewallStatus(); got != tc.wantStatus {
+				t.Errorf("status: %q, want %q", got, tc.wantStatus)
 			}
 		})
 	}

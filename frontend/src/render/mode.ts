@@ -232,11 +232,11 @@ export function renderModeCard(state: ModeState, view: ModeCardView, left: Leave
       </div>`;
   } else if (view === "left" && left) {
     body = `
-      <div class="join-outcome ok">
-        <strong>This computer runs everything here again</strong>
+      <div class="join-outcome ${left.firewallError ? "warn" : "ok"}">
+        <strong>${left.firewallError ? "Firewall cleanup is pending" : "This computer runs everything here again"}</strong>
         <span>Now remove <strong>${escapeHtml(left.name)}</strong> on the Fleet page of your CashPilot at <code>${escapeHtml(left.serverUrl)}</code>.</span>
       </div>
-      ${left.firewallError ? `<p class="pairing-line warn" data-left-firewall>${escapeHtml(left.firewallError)}. Nothing listens behind it now. You can delete it in Windows Defender Firewall.</p>` : ""}
+      ${left.firewallError ? `<p class="pairing-line warn" data-left-firewall>${escapeHtml(left.firewallError)} You can delete it in Windows Defender Firewall.</p>` : ""}
       <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="summary">OK</button></div>`;
   } else if (following) {
     body = `
@@ -249,10 +249,13 @@ export function renderModeCard(state: ModeState, view: ModeCardView, left: Leave
       <p><strong>${LEAD_TITLE}.</strong> This computer collects your earnings, shows the dashboard and runs its earning apps.</p>
       <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="confirm-join">Switch to ${FOLLOWER_TITLE}</button></div>`;
   }
+  const cleanup = state.firewallCleanup ? `
+    <p class="pairing-line warn" data-firewall-cleanup>${escapeHtml(state.firewallCleanup)}</p>
+    <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="firewall-cleanup">Retry firewall removal</button></div>` : "";
   return `
     <section class="card mode-settings" id="mode-card" data-view="${escapeHtml(view)}">
       <div class="card-header"><div><span class="card-title">How this computer runs</span></div></div>
-      <div class="mode-card-body">${body}</div>
+      <div class="mode-card-body">${body}${cleanup}</div>
     </section>
   `;
 }

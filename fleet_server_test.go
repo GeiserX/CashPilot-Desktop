@@ -27,6 +27,9 @@ import (
 // ordinary-machine tests red. RunOnce is a fake, so no test can make Windows
 // start the test binary at the next sign-in (docker_guide.go).
 func TestMain(m *testing.M) {
+	// Worker firewall tests opt in with a fake Windows rule and elevation.
+	firewallRuleNeeded = false
+
 	keyring.MockInit()
 	defaultRunOnce = &fakeRunOnce{}
 	// No heartbeat reads the real runtime unless its test says what it lists.

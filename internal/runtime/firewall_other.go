@@ -33,7 +33,7 @@ func RunElevatedContext(ctx context.Context, script string) (ElevatedResult, err
 	return ElevatedResult{}, errors.New("admin scripts run only on Windows")
 }
 
-// FirewallRuleProgram reads rules only on Windows.
-func FirewallRuleProgram(name string) (string, error) {
-	return "", errors.New("Windows Firewall rules can only be read on Windows")
+// ReadNamedFirewallRule reads rules only on Windows.
+func ReadNamedFirewallRule(name string, port int, subnets []string) (NamedFirewallRule, error) {
+	return NamedFirewallRule{}, errors.New("Windows Firewall rules can only be read on Windows")
 }

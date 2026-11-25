@@ -73,7 +73,7 @@ type AppConfig struct {
 	// Desktop keeps working exactly as before and nothing is sent anywhere.
 	//
 	// The credentials are deliberately NOT here — they live in the OS keychain
-	// (0600 file fallback) via UpstreamEnrolmentKey/UpstreamWorkerKey, the same
+	// (0600 file fallback) via the pairing credential store, the same
 	// way the fleet token does, so config.json never carries a bearer token.
 	UpstreamURL string `json:"upstreamUrl,omitempty"`
 	// UpstreamIntervalMinutes is how often to heartbeat when paired. Zero means
@@ -133,12 +133,6 @@ type AppConfig struct {
 	// services on this computer", turned off. The zero value is on, so joining a
 	// server turns the server-commands API on; joining again keeps the user's choice.
 	ServerCommandsOff bool `json:"serverCommandsOff,omitempty"`
-	// ServerCommandsFirewallRule is the Windows Firewall rule CashPilot made for that
-	// API, "" when it made none. Leaving the server removes it.
-	ServerCommandsFirewallRule string `json:"serverCommandsFirewallRule,omitempty"`
-	// ServerCommandsFirewallProgram is the program path that rule allows. A rule made
-	// for another path (the program moved or was replaced) does not count.
-	ServerCommandsFirewallProgram string `json:"serverCommandsFirewallProgram,omitempty"`
 }
 
 // SetupJournal says where a guided setup stood before a restart. It only says
@@ -204,6 +198,7 @@ type Manager struct {
 	path    string
 	mu      sync.RWMutex
 	cfg     AppConfig
+	pairing Pairing
 	// saved is the file as this Manager last read or wrote it, so Reload can tell
 	// a change another process saved (the background helper and the window each
 	// hold a Manager on the same file) from its own.
@@ -260,13 +255,22 @@ func NewManager() (*Manager, error) {
 	if err := m.load(); err != nil {
 		return nil, err
 	}
+	m.pairing, _ = m.Pairing()
 	return m, nil
 }
 
 func (m *Manager) Config() AppConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.cfg
+	cfg := m.cfg
+	if m.pairing.Revision != "" {
+		cfg.UpstreamURL = m.pairing.ServerURL
+		cfg.Mode = ModeLead
+		if cfg.UpstreamURL != "" {
+			cfg.Mode = ModeFollower
+		}
+	}
+	return cfg
 }
 
 func (m *Manager) AppDir() string {
@@ -286,6 +290,9 @@ func (m *Manager) Save(cfg AppConfig) error {
 		return err
 	}
 	defer release()
+	if m.pairing.Revision != "" {
+		cfg.Mode, cfg.UpstreamURL = m.cfg.Mode, m.cfg.UpstreamURL
+	}
 	if err := m.persist(cfg); err != nil {
 		return err
 	}
@@ -302,7 +309,17 @@ func (m *Manager) Save(cfg AppConfig) error {
 func (m *Manager) Reload() (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.reloadLocked()
+	changed, err := m.reloadLocked()
+	if err != nil {
+		return false, err
+	}
+	p, err := m.Pairing()
+	if err != nil {
+		return changed, err
+	}
+	pairingChanged := p != m.pairing
+	m.pairing = p
+	return changed || pairingChanged, nil
 }
 
 func (m *Manager) reloadLocked() (bool, error) {
@@ -539,16 +556,17 @@ func SetFleetKey(appDir, value string) error {
 	return writeSecret(appDir, keyringUserFleet, ".fleet_api_key", value)
 }
 
-// UpstreamEnrolmentKey returns the shared CashPilot token used to enrol this
-// machine, or "" when not stored. Same keychain-first, 0600-file-fallback
-// storage as FleetKey.
-func UpstreamEnrolmentKey(appDir string) (string, error) {
-	return readSecret(appDir, keyringUserUpstreamEnrol, ".upstream_enrolment_key")
-}
-
-// SetUpstreamEnrolmentKey persists the shared enrolment token.
-func SetUpstreamEnrolmentKey(appDir, value string) error {
-	return writeSecret(appDir, keyringUserUpstreamEnrol, ".upstream_enrolment_key", value)
+// LegacyEnrolmentKey reads the shared token saved before pairing revisions.
+func LegacyEnrolmentKey(appDir string) (string, error) {
+	raw, fileErr := os.ReadFile(filepath.Join(appDir, ".upstream_enrolment_key"))
+	if fileErr == nil {
+		return strings.TrimSpace(string(raw)), nil
+	}
+	value, err := keyring.Get(keyringService, keyringUserUpstreamEnrol)
+	if refuseKeyRegen(err, runtimeGOOS) {
+		return "", err
+	}
+	return strings.TrimSpace(value), nil
 }
 
 // readSecret is the shared body of the keychain-first readers.

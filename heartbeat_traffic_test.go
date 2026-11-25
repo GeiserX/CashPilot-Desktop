@@ -302,7 +302,7 @@ func TestSendUpstreamSendsTheCountersToTheServer(t *testing.T) {
 	t.Cleanup(func() { heartbeatSendLock = oldLock })
 
 	app := newPayloadTestApp(t, nil)
-	saveTestWorkerKey(t, app, "own-key")
+	publishTestPairing(t, app, srv.URL, "own-key")
 	client := &upstream.Client{HTTP: srv.Client()}
 	app.sendUpstream(t.Context(), client, srv.URL, "shared")
 	if taken != 1 || given != 1 {

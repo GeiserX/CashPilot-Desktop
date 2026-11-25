@@ -1135,8 +1135,6 @@ export namespace config {
 	    mode?: string;
 	    setupJournal?: SetupJournal;
 	    serverCommandsOff?: boolean;
-	    serverCommandsFirewallRule?: string;
-	    serverCommandsFirewallProgram?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1169,8 +1167,6 @@ export namespace config {
 	        this.mode = source["mode"];
 	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
 	        this.serverCommandsOff = source["serverCommandsOff"];
-	        this.serverCommandsFirewallRule = source["serverCommandsFirewallRule"];
-	        this.serverCommandsFirewallProgram = source["serverCommandsFirewallProgram"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1727,6 +1723,7 @@ export namespace main {
 	    problem: string;
 	    firewallNeeded: boolean;
 	    firewallRule: boolean;
+	    firewallStatus: string;
 	    opens: string;
 	    last?: ServerCommand;
 	
@@ -1743,6 +1740,7 @@ export namespace main {
 	        this.problem = source["problem"];
 	        this.firewallNeeded = source["firewallNeeded"];
 	        this.firewallRule = source["firewallRule"];
+	        this.firewallStatus = source["firewallStatus"];
 	        this.opens = source["opens"];
 	        this.last = this.convertValues(source["last"], ServerCommand);
 	    }
@@ -2494,6 +2492,7 @@ export namespace main {
 	    pairing?: PairingStatus;
 	    hubOn: boolean;
 	    hubDevices: string[];
+	    firewallCleanup: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModeState(source);
@@ -2506,6 +2505,7 @@ export namespace main {
 	        this.pairing = this.convertValues(source["pairing"], PairingStatus);
 	        this.hubOn = source["hubOn"];
 	        this.hubDevices = source["hubDevices"];
+	        this.firewallCleanup = source["firewallCleanup"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

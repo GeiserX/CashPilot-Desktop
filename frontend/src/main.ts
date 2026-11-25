@@ -18,6 +18,7 @@ import {
   SetActivityEnabled,
   SetServerCommands,
   AllowServerCommandsThroughFirewall,
+  RetryServerCommandsFirewallRemoval,
   InstallBackgroundHelper,
   ListCustomServices,
   ApplyImport,
@@ -1501,8 +1502,8 @@ function wireModeCard() {
   };
   slot.querySelectorAll<HTMLButtonElement>("[data-mode-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const action = button.dataset.modeAction as ModeCardView | "leave";
-      if (action !== "leave") {
+      const action = button.dataset.modeAction as ModeCardView | "leave" | "firewall-cleanup";
+      if (action !== "leave" && action !== "firewall-cleanup") {
         if (action === "summary") modeLeft = null;
         modeCardView = action;
         redrawModeCard();
@@ -1510,10 +1511,15 @@ function wireModeCard() {
       }
       button.disabled = true;
       try {
-        modeLeft = await SwitchToLead();
+        if (action === "firewall-cleanup") {
+          await RetryServerCommandsFirewallRemoval();
+          if (modeLeft) modeLeft = {...modeLeft, firewallError: ""};
+        } else {
+          modeLeft = await SwitchToLead();
+          modeCardView = "left";
+        }
         modeState = await GetModeState();
         state = await GetAppState();
-        modeCardView = "left";
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
         button.disabled = false;

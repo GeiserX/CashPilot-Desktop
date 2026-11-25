@@ -732,6 +732,7 @@ export interface ModeState {
   pairing?: PairingStatus | null;
   hubOn: boolean;
   hubDevices: string[] | null;
+  firewallCleanup?: string;
 }
 
 // The answer to one join (Go JoinResult). A failed connection has ok false.
@@ -773,6 +774,7 @@ export interface ServerCommandsState {
   problem: string;
   firewallNeeded: boolean;
   firewallRule: boolean;
+  firewallStatus?: string;
   opens: string;
   last: ServerCommand | null;
 }

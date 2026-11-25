@@ -145,6 +145,8 @@ export function RestartToFirmware(arg1:string):Promise<main.FirmwareRestart>;
 
 export function RestoreStateBackup(arg1:string,arg2:string,arg3:string):Promise<runtime.RestoreResult>;
 
+export function RetryServerCommandsFirewallRemoval():Promise<void>;
+
 export function RevealWalletSeed(arg1:string,arg2:string):Promise<string>;
 
 export function RevokeSessionRisk(arg1:string):Promise<Record<string, config.SessionConsent>>;

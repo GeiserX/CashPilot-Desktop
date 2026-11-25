@@ -118,27 +118,6 @@ func (a *App) startUpstream(ctx context.Context) {
 		return // standalone — the default
 	}
 
-	keychain := upstream.Failure{Code: "keychain", Message: "CashPilot cannot read the saved key from this computer's keychain. Unlock the keychain, then restart CashPilot."}
-	enrol, err := config.UpstreamEnrolmentKey(a.cfg.AppDir())
-	if err != nil {
-		// A locked keychain is NOT "no key". Re-enrolling would orphan this
-		// machine's existing worker identity on the server, so refuse and say so.
-		log.Printf("upstream: cannot read the enrolment key, not pairing: %v", err)
-		a.recordPairing(serverURL, keychain)
-		return
-	}
-	credential, err := config.ReadUpstreamWorkerCredential(a.cfg.AppDir())
-	if err != nil {
-		log.Printf("upstream: cannot read the worker key, not pairing: %v", err)
-		a.recordPairing(serverURL, keychain)
-		return
-	}
-	if upstream.AuthToken(credential.Key, enrol) == "" {
-		log.Printf("upstream: %s is configured but no key is stored; not pairing", serverURL)
-		a.recordPairing(serverURL, upstream.Failure{Code: "no-key", Message: "No key is saved for your CashPilot. In Settings, under How this computer runs, switch to Run everything here and join again."})
-		return
-	}
-
 	interval := heartbeatInterval(cfg.UpstreamIntervalMinutes)
 
 	loopCtx, cancel := context.WithCancel(ctx)
@@ -151,7 +130,7 @@ func (a *App) startUpstream(ctx context.Context) {
 
 	go func() {
 		defer close(done)
-		a.sendUpstream(loopCtx, client, serverURL, enrol)
+		a.sendUpstream(loopCtx, client, serverURL, "")
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -171,7 +150,7 @@ func (a *App) startUpstream(ctx context.Context) {
 					a.upstream.mu.Unlock()
 					return
 				}
-				a.sendUpstream(loopCtx, client, serverURL, enrol)
+				a.sendUpstream(loopCtx, client, serverURL, "")
 			}
 		}
 	}()
@@ -283,12 +262,21 @@ func (a *App) stopUpstreamLocked() {
 // sendUpstream reports to the saved pairing. Join owns the worker key, even
 // when an older server sends a key back to a periodic heartbeat.
 func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverURL, enrolKey string) {
-	credential, err := config.ReadUpstreamWorkerCredential(a.cfg.AppDir())
+	pairing, credential, err := a.cfg.ReadPairingCredential(a.window)
 	if err != nil {
-		log.Printf("upstream: cannot read the worker key: %v", err)
+		a.recordPairing(serverURL, upstream.Failure{Code: "keychain", Message: "CashPilot cannot read the saved key. Unlock the keychain or join again."})
 		return
 	}
-	if credential.ServerURL != "" && credential.ServerURL != serverURL {
+	if pairing.Revision == "" {
+		credential.Worker, err = config.LegacyWorkerKey(a.cfg.AppDir(), serverURL)
+	} else if pairing.Suspended || pairing.ServerURL != serverURL {
+		return
+	} else {
+		enrolKey = credential.Enrolment
+	}
+	token := upstream.AuthToken(credential.Worker, enrolKey)
+	if err != nil || token == "" {
+		a.recordPairing(serverURL, upstream.Failure{Code: "no-key", Message: "No key is available for your CashPilot. Enter the enrolment key in Settings or join again."})
 		return
 	}
 
@@ -298,7 +286,9 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	payload.SystemInfo.EgressIP = a.egressIP(ctx)
 	// Where the server sends its commands (worker_api.go); "" leaves this computer
 	// report-only on the server, as before.
-	payload.URL = a.workerAPIURL(serverURL)
+	if pairing.Revision != "" && credential.Worker != "" {
+		payload.URL = a.workerAPIURL(serverURL)
+	}
 	// Every copy with its traffic counters, read in this process's turn, which ends
 	// once the server answered (heartbeat_traffic.go).
 	release := func() {}
@@ -306,24 +296,23 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		list, proxied := heartbeatReads(a)
 		release = a.withLiveUnits(ctx, &payload, list, proxied)
 	}
-	resp, err := client.Send(ctx, serverURL, upstream.AuthToken(credential.Key, enrolKey), payload)
-	release()
-	if ctx.Err() != nil {
+	current, readErr := a.cfg.Pairing()
+	if readErr != nil || current.Revision != pairing.Revision || current.Suspended {
+		release()
 		return
 	}
-	generation, readErr := config.UpstreamWorkerKeyGeneration(a.cfg.AppDir())
-	if readErr != nil || generation != credential.Generation {
+	resp, err := client.Send(ctx, serverURL, token, payload)
+	release()
+	if a.suspendRefusedPairing(pairing.Revision, serverURL, err) || ctx.Err() != nil {
+		return
+	}
+	current, readErr = a.cfg.Pairing()
+	if readErr != nil || current.Revision != pairing.Revision || current.Suspended {
 		return
 	}
 	if err != nil {
-		// Never fatal: a phone or laptop is offline often, and an unreachable
-		// server must not stop Desktop from working standalone.
 		log.Printf("upstream: %v", err)
-		failure := upstream.Explain(err, upstream.Host(serverURL), payload.Name)
-		if credential.Key != "" && errors.Is(err, upstream.ErrUnauthorized) {
-			failure.Message = "Your CashPilot refused this computer's key. In Settings, switch to Run everything here and join again."
-		}
-		a.recordPairing(serverURL, failure)
+		a.recordPairing(serverURL, upstream.Explain(err, upstream.Host(serverURL), payload.Name))
 		return
 	}
 	_, _, judged := upstream.ParseFleetExits(resp.FleetExits)
@@ -351,9 +340,33 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	// Only once we are CONFIRMED: the server refuses an import from a worker
 	// still presenting the shared enrolment key, so attempting it mid-enrolment
 	// would just log a 403 every minute.
-	if upstream.Confirmed(credential.Key, resp.WorkerKey) {
-		a.pushHistoryOnce(ctx, client, serverURL, credential.Key)
+	if upstream.Confirmed(credential.Worker, resp.WorkerKey) {
+		a.pushHistoryOnce(ctx, client, serverURL, credential.Worker, pairing.Revision)
 	}
+}
+
+const refusedPairingMessage = "Your CashPilot refused this computer's key. In Settings, switch to Run everything here and join again."
+
+// A response can only suspend the revision that sent the request.
+func (a *App) suspendRefusedPairing(revision, serverURL string, err error) bool {
+	if !errors.Is(err, upstream.ErrUnauthorized) {
+		return false
+	}
+	if revision != "" {
+		if err := a.cfg.UpdatePairing(revision, func(p *config.Pairing) error {
+			p.Suspended = true
+			return nil
+		}); err != nil {
+			if errors.Is(err, config.ErrPairingChanged) {
+				return true
+			}
+			log.Printf("upstream: could not save the pairing suspension: %v", err)
+		}
+		a.syncWorkerAPI()
+		return true
+	}
+	a.recordPairing(serverURL, upstream.Failure{Code: "unauthorized", Message: refusedPairingMessage})
+	return true
 }
 
 // pushHistoryOnce hands the server the earnings this Desktop recorded before it
@@ -362,7 +375,7 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 // Nothing is deleted or moved: the local rows are read, not migrated. That is
 // what lets an unlinked Desktop still show exactly what it earned on its own,
 // and it is why re-pairing to the same server is safe.
-func (a *App) pushHistoryOnce(ctx context.Context, client *upstream.Client, serverURL, workerKey string) {
+func (a *App) pushHistoryOnce(ctx context.Context, client *upstream.Client, serverURL, workerKey, revision string) {
 	target := strings.TrimRight(strings.TrimSpace(serverURL), "/")
 	cfg := a.cfg.Config()
 	if strings.TrimRight(strings.TrimSpace(cfg.UpstreamHistoryPushedTo), "/") == target {
@@ -380,6 +393,9 @@ func (a *App) pushHistoryOnce(ctx context.Context, client *upstream.Client, serv
 	imported, skipped := 0, 0
 	for _, batch := range upstream.ChunkReadings(readings, upstream.ImportChunk) {
 		resp, err := client.Import(ctx, target, workerKey, upstream.ImportPayload{ClientID: clientID, Readings: batch})
+		if a.suspendRefusedPairing(revision, serverURL, err) {
+			return
+		}
 		if err != nil {
 			// A server without the endpoint is not a transient failure, and it
 			// is not the marker's business either -- recording the marker would
@@ -581,11 +597,15 @@ func (a *App) upstreamPayload() upstream.Payload {
 // treats the same error as a hard stop, which is where it matters -- there, a
 // locked keychain must not be mistaken for "no key" and trigger a re-enrolment.
 func (a *App) upstreamEnrolmentKey() string {
-	key, err := config.UpstreamEnrolmentKey(a.cfg.AppDir())
+	p, key, err := a.cfg.ReadPairingCredential(a.window)
 	if err != nil {
 		return ""
 	}
-	return key
+	if p.Revision == "" {
+		enrol, _ := config.LegacyEnrolmentKey(a.cfg.AppDir())
+		return enrol
+	}
+	return key.Enrolment
 }
 
 // FleetView is what the dashboard shows while this Desktop is paired: the

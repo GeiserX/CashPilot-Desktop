@@ -25,6 +25,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 )
 
@@ -53,18 +54,7 @@ func joinedApp(t *testing.T) *appUnderTest {
 	app.ctx = ctx
 	t.Cleanup(app.stopScheduler)
 	t.Cleanup(app.stopUpstream)
-	if err := config.SetUpstreamEnrolmentKey(app.cfg.AppDir(), testSharedKey); err != nil {
-		t.Fatal(err)
-	}
-	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), testWorkerKey); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.cfg.Update(func(c *config.AppConfig) {
-		c.Mode = config.ModeFollower
-		c.UpstreamURL = server.URL
-	}); err != nil {
-		t.Fatal(err)
-	}
+	publishTestPairing(t, app.App, server.URL, testWorkerKey)
 	return app
 }
 
@@ -156,14 +146,7 @@ func TestServerCommandsUseTheKeySavedByARejoin(t *testing.T) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "worker_id": 2, "worker_key": newKey})
 	}))
 	t.Cleanup(server.Close)
-	if err := helper.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = server.URL }); err != nil {
-		t.Fatal(err)
-	}
-	windowConfig, err := config.NewManager()
-	if err != nil {
-		t.Fatal(err)
-	}
-	window := &App{cfg: windowConfig, store: helper.store, catalog: helper.catalog, runtime: helper.runtime, services: helper.services}
+	window := reviewWindow(t, helper, server.URL)
 	if w := call(t, helper, http.MethodGet, "/api/status", testWorkerKey, nil); w.Code != http.StatusOK {
 		t.Fatalf("status before rejoin: got %d, want 200", w.Code)
 	}
@@ -214,9 +197,7 @@ func TestServerCommandsRefuseAPublicSource(t *testing.T) {
 
 func TestServerCommandsWithoutAnIssuedKeyFailClosed(t *testing.T) {
 	app := joinedApp(t)
-	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), ""); err != nil {
-		t.Fatal(err)
-	}
+	saveTestWorkerKey(t, app.App, "")
 	// The shared key is the only one left, and it still opens nothing.
 	if w := call(t, app, http.MethodGet, "/api/status", testSharedKey, nil); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status %d, want 503", w.Code)
@@ -302,19 +283,16 @@ func listening(app *appUnderTest) int {
 func TestServerCommandsRunWhileJoinedAndStopOnLeave(t *testing.T) {
 	f := useAddrs(t, "192.168.1.30", "8.8.8.8")
 	app := joinedApp(t)
-	oldRun := runFirewallScript
-	t.Cleanup(func() { runFirewallScript = oldRun })
-	var scripts []string
-	runFirewallScript = func(s string, _ string, _ config.FirewallChange) error { scripts = append(scripts, s); return nil }
-	program, err := thisProgram()
-	if err != nil {
+	installed := round8NewProgram
+	setupRound8Firewall(t, &installed)
+	if err := setDesiredFirewall(t, app.App, installed, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.cfg.Update(func(c *config.AppConfig) {
-		c.ServerCommandsFirewallRule = serverCommandsRuleName()
-		c.ServerCommandsFirewallProgram = program
-	}); err != nil {
-		t.Fatal(err)
+	var scripts []string
+	change := runFirewallScript
+	runFirewallScript = func(script, path string, p config.Pairing) error {
+		scripts = append(scripts, script)
+		return change(script, path, p)
 	}
 
 	app.syncWorkerAPI()
@@ -341,8 +319,8 @@ func TestServerCommandsRunWhileJoinedAndStopOnLeave(t *testing.T) {
 	if len(scripts) != 1 || !strings.Contains(scripts[0], "Remove-NetFirewallRule") {
 		t.Errorf("leaving did not remove the firewall rule: %v", scripts)
 	}
-	if rule := app.cfg.Config().ServerCommandsFirewallRule; rule != "" {
-		t.Errorf("the rule %q is still recorded after leaving", rule)
+	if p, err := app.cfg.Pairing(); err != nil || p.RemoveFirewall || installed != "" {
+		t.Errorf("cleanup after Leave: %+v, Windows %q, %v", p, installed, err)
 	}
 }
 
@@ -595,20 +573,14 @@ func TestServerCommandsFirewallRuleIsScoped(t *testing.T) {
 
 func TestServerCommandsFirewallRuleNeedsTheUsersYes(t *testing.T) {
 	app := joinedApp(t)
-	oldNeeded, oldRun, oldRead := firewallRuleNeeded, runFirewallScript, readServerCommandsFirewallProgram
-	t.Cleanup(func() {
-		firewallRuleNeeded, runFirewallScript, readServerCommandsFirewallProgram = oldNeeded, oldRun, oldRead
-	})
-	firewallRuleNeeded = true
-	readServerCommandsFirewallProgram = func() (string, error) { return "", nil }
-	runFirewallScript = func(_ string, _ string, _ config.FirewallChange) error { return errors.New("exit status 1223") }
-	if _, err := app.AllowServerCommandsThroughFirewall(); err == nil {
-		t.Fatal("a refused admin prompt reported success")
+	installed := ""
+	setupRound8Firewall(t, &installed)
+	allow := runFirewallScript
+	runFirewallScript = func(_ string, _ string, _ config.Pairing) error { return errors.New("exit status 1223") }
+	if state, err := app.AllowServerCommandsThroughFirewall(); err == nil || state.FirewallRule {
+		t.Fatalf("a refused admin prompt reported an installed rule: %+v, %v", state, err)
 	}
-	if rule := app.cfg.Config().ServerCommandsFirewallRule; rule != "" {
-		t.Fatalf("a rule that was never made is recorded: %q", rule)
-	}
-	runFirewallScript = func(_ string, _ string, _ config.FirewallChange) error { return nil }
+	runFirewallScript = allow
 	state, err := app.AllowServerCommandsThroughFirewall()
 	if err != nil || !state.FirewallRule {
 		t.Fatalf("allow: %+v, %v", state, err)
@@ -619,11 +591,14 @@ func TestServerCommandsWaitForTheFirewallRuleOnWindows(t *testing.T) {
 	f := useAddrs(t, "192.168.1.30")
 	app := joinedApp(t)
 	t.Cleanup(func() { app.closeWorkerListeners(nil) })
-	oldNeeded, oldRun := firewallRuleNeeded, runFirewallScript
-	t.Cleanup(func() { firewallRuleNeeded, runFirewallScript = oldNeeded, oldRun })
-	firewallRuleNeeded = true
+	installed := ""
+	setupRound8Firewall(t, &installed)
 	var scripts []string
-	runFirewallScript = func(s string, _ string, _ config.FirewallChange) error { scripts = append(scripts, s); return nil }
+	change := runFirewallScript
+	runFirewallScript = func(script, path string, p config.Pairing) error {
+		scripts = append(scripts, script)
+		return change(script, path, p)
+	}
 
 	// Joined, the switch on, no rule yet: nothing listens, so Windows never shows its
 	// own prompt, and the heartbeat reports no URL the server would deploy to.
@@ -662,14 +637,14 @@ func TestServerCommandsNeedTheRuleForThisProgram(t *testing.T) {
 	f := useAddrs(t, "192.168.1.30")
 	app := joinedApp(t)
 	t.Cleanup(func() { app.closeWorkerListeners(nil) })
-	oldNeeded, oldRun, oldProgram, oldRead := firewallRuleNeeded, runFirewallScript, thisProgram, readServerCommandsFirewallProgram
-	t.Cleanup(func() {
-		firewallRuleNeeded, runFirewallScript, thisProgram, readServerCommandsFirewallProgram = oldNeeded, oldRun, oldProgram, oldRead
-	})
-	firewallRuleNeeded = true
+	installed, program := "", `C:\Users\someone\Downloads\CashPilot.exe`
+	setupRound8Firewall(t, &installed)
 	var scripts []string
-	runFirewallScript = func(s string, _ string, _ config.FirewallChange) error { scripts = append(scripts, s); return nil }
-	program := `C:\Users\someone\Downloads\CashPilot.exe`
+	change := runFirewallScript
+	runFirewallScript = func(script, path string, p config.Pairing) error {
+		scripts = append(scripts, script)
+		return change(script, path, p)
+	}
 	thisProgram = func() (string, error) { return program, nil }
 
 	if _, err := app.AllowServerCommandsThroughFirewall(); err != nil {
@@ -680,7 +655,6 @@ func TestServerCommandsNeedTheRuleForThisProgram(t *testing.T) {
 	}
 
 	previousProgram := program
-	readServerCommandsFirewallProgram = func() (string, error) { return previousProgram, nil }
 	program = `C:\Users\someone\Desktop\CashPilot.exe`
 	app.syncWorkerAPI()
 	if n := listening(app); n != 0 {
@@ -691,19 +665,15 @@ func TestServerCommandsNeedTheRuleForThisProgram(t *testing.T) {
 	}
 
 	add := runFirewallScript
-	runFirewallScript = func(_ string, _ string, _ config.FirewallChange) error {
+	runFirewallScript = func(_ string, _ string, _ config.Pairing) error {
 		return errors.New("administrator declined replacement")
 	}
 	if _, err := app.AllowServerCommandsThroughFirewall(); err == nil {
 		t.Fatal("Allow succeeded after Windows declined the replacement")
 	}
 	runFirewallScript = add
-	saved, err := config.NewManager()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg := saved.Config(); cfg.ServerCommandsFirewallRule != serverCommandsRuleName() || cfg.ServerCommandsFirewallProgram != previousProgram {
-		t.Errorf("declined replacement left rule %q for %q, want the old rule for %q", cfg.ServerCommandsFirewallRule, cfg.ServerCommandsFirewallProgram, previousProgram)
+	if installed != previousProgram {
+		t.Errorf("declined replacement changed the Windows rule: %q", installed)
 	}
 
 	asked := len(f.asked)
@@ -777,20 +747,18 @@ func TestClearingTheAddressInSettingsClosesServerCommands(t *testing.T) {
 	useAddrs(t, "192.168.1.30")
 	app := joinedApp(t)
 	t.Cleanup(func() { app.closeWorkerListeners(nil) })
-	oldRun, oldProgram := runFirewallScript, thisProgram
-	t.Cleanup(func() { runFirewallScript, thisProgram = oldRun, oldProgram })
+	installed := round8NewProgram
+	setupRound8Firewall(t, &installed)
+	if err := setDesiredFirewall(t, app.App, installed, false); err != nil {
+		t.Fatal(err)
+	}
 	var scripts []string
-	runFirewallScript = func(s string, _ string, _ config.FirewallChange) error { scripts = append(scripts, s); return nil }
-	program, err := thisProgram()
-	if err != nil {
-		t.Fatal(err)
+	change := runFirewallScript
+	runFirewallScript = func(script, path string, p config.Pairing) error {
+		scripts = append(scripts, script)
+		return change(script, path, p)
 	}
-	if err := app.cfg.Update(func(c *config.AppConfig) {
-		c.ServerCommandsFirewallRule = serverCommandsRuleName()
-		c.ServerCommandsFirewallProgram = program
-	}); err != nil {
-		t.Fatal(err)
-	}
+
 	app.syncWorkerAPI()
 	if n := listening(app); n != 1 {
 		t.Fatalf("%d listeners while joined, want 1", n)
@@ -808,8 +776,8 @@ func TestClearingTheAddressInSettingsClosesServerCommands(t *testing.T) {
 	if len(scripts) != 1 || !strings.Contains(scripts[0], "Remove-NetFirewallRule") || strings.Contains(scripts[0], "New-NetFirewallRule") {
 		t.Errorf("clearing the address did not remove the firewall rule: %v", scripts)
 	}
-	if rule := app.cfg.Config().ServerCommandsFirewallRule; rule != "" {
-		t.Errorf("the rule %q is still recorded after clearing the address", rule)
+	if p, err := app.cfg.Pairing(); err != nil || p.RemoveFirewall || installed != "" {
+		t.Errorf("cleanup after clearing the address: %+v, Windows %q, %v", p, installed, err)
 	}
 
 	// A save that does not leave runs no firewall script.
@@ -821,227 +789,148 @@ func TestClearingTheAddressInSettingsClosesServerCommands(t *testing.T) {
 	}
 }
 
-func TestPairingChangesRollBackAnInFlightFirewallAllow(t *testing.T) {
-	leave := func(a *App) error { _, err := a.SwitchToLead(); return err }
-	save := func(values map[string]string) func(*App) error {
-		return func(a *App) error { _, err := a.SaveSettings(values); return err }
-	}
-	rejoin := func(change func(*App) error) func(*App) error {
-		return func(a *App) error {
-			address := a.cfg.Config().UpstreamURL
-			if err := change(a); err != nil {
-				return err
-			}
-			return save(map[string]string{"upstreamUrl": address})(a)
-		}
-	}
-	clear := save(map[string]string{"upstreamUrl": ""})
-	repoint := save(map[string]string{"upstreamUrl": "http://127.0.0.1:2"})
-	for _, tc := range []struct {
-		name       string
-		change     func(*App) error
-		wantJoined bool
-		wantCancel bool
-		replace    bool
-	}{
-		{"Leave button", leave, false, true, false},
-		{"clear address", clear, false, true, false},
-		{"Leave button and rejoin", rejoin(leave), true, true, false},
-		{"clear address and rejoin", rejoin(clear), true, true, false},
-		{"replace address and key", save(map[string]string{"upstreamUrl": "http://127.0.0.1:2", "upstreamKey": "other-test-key"}), true, true, false},
-		{"replace address only", repoint, true, true, false},
-		{"replace and restore address", rejoin(repoint), true, true, false},
-		{"replace key only", save(map[string]string{"upstreamKey": "other-test-key"}), true, true, false},
-		{"remove key only", save(map[string]string{"upstreamKey": ""}), true, true, false},
-		{"save the same key", save(map[string]string{"upstreamKey": testSharedKey}), true, false, false},
-		{"save unrelated settings", save(map[string]string{"timezone": "Europe/Madrid"}), true, false, false},
-		{"replace address while replacing the rule", repoint, true, true, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			useAddrs(t)
-			app := joinedApp(t)
-			app.ctx = nil // This test changes the saved pairing without sending heartbeats.
-			oldNeeded, oldRun, oldProgram := firewallRuleNeeded, runFirewallScript, thisProgram
-			t.Cleanup(func() { firewallRuleNeeded, runFirewallScript, thisProgram = oldNeeded, oldRun, oldProgram })
-			firewallRuleNeeded = true
-
-			var installed atomic.Bool
-			const previousProgram = `C:\Old\CashPilot.exe`
-			if tc.replace {
-				installed.Store(true)
-				if err := app.cfg.Update(func(c *config.AppConfig) {
-					c.ServerCommandsFirewallRule = serverCommandsRuleName()
-					c.ServerCommandsFirewallProgram = previousProgram
-				}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			adding, resume := make(chan struct{}), make(chan struct{})
-			release := sync.OnceFunc(func() { close(resume) })
-			runFirewallScript = func(script string, _ string, _ config.FirewallChange) error {
-				if strings.Contains(script, "New-NetFirewallRule") {
-					close(adding)
-					<-resume
-					installed.Store(true)
-				} else if script == removeRuleScript() {
-					installed.Store(false)
-				} else {
-					return errors.New("unexpected firewall script")
-				}
-				return nil
-			}
-			var calls sync.WaitGroup
-			t.Cleanup(func() { release(); calls.Wait() })
-			deadline := time.After(20 * time.Second)
-			allowDone := make(chan error, 1)
-			calls.Go(func() { _, err := app.AllowServerCommandsThroughFirewall(); allowDone <- err })
-			select {
-			case <-adding:
-			case err := <-allowDone:
-				t.Fatalf("Allow returned before it reached the firewall: %v", err)
-			case <-deadline:
-				t.Fatal("Allow did not reach the firewall")
-			}
-
-			changeDone := make(chan error, 1)
-			calls.Go(func() { changeDone <- tc.change(app.App) })
-			select {
-			case err := <-changeDone:
-				if err != nil || app.joined() != tc.wantJoined {
-					t.Fatalf("pairing save while Allow was paused: joined %v, error %v", app.joined(), err)
-				}
-			case <-deadline:
-				t.Fatal("pairing save waited for the pending Allow")
-			}
-
-			release()
-			select {
-			case err := <-allowDone:
-				if (err != nil) != tc.wantCancel {
-					t.Errorf("late Allow returned %v, want cancellation %v", err, tc.wantCancel)
-				}
-			case <-deadline:
-				t.Fatal("late Allow did not finish")
-			}
-			if installed.Load() == tc.wantCancel {
-				t.Errorf("rule installed: %v, want %v", installed.Load(), !tc.wantCancel)
-			}
-			calls.Wait()
-			if tc.replace {
-				thisProgram = func() (string, error) { return previousProgram, nil }
-				if app.firewallReady() {
-					t.Error("the old executable is firewall-ready after the rule was removed")
-				}
-			}
-			saved, err := config.NewManager()
-			if err != nil {
-				t.Fatal(err)
-			}
-			cfg := saved.Config()
-			if (cfg.ServerCommandsFirewallRule != "") == tc.wantCancel || (cfg.ServerCommandsFirewallProgram != "") == tc.wantCancel {
-				t.Errorf("rule fields after Allow: %q, %q, want recorded %v", cfg.ServerCommandsFirewallRule, cfg.ServerCommandsFirewallProgram, !tc.wantCancel)
-			}
-		})
-	}
-}
-
-func TestFirewallAllowRollsBackWhenConfigSaveFails(t *testing.T) {
+func TestPairingChangesCancelAnInFlightFirewallAllow(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		decline bool
+		save    map[string]string
+		cancel  bool
 		replace bool
 	}{
-		{"remove the rule", false, false},
-		{"name the rule when removal is declined", true, false},
-		{"remove the replacement rule", false, true},
+		{"Leave button", nil, true, false},
+		{"clear address", map[string]string{"upstreamUrl": ""}, true, false},
+		{"replace address", map[string]string{"upstreamUrl": "http://127.0.0.1:2"}, true, false},
+		{"replace key", map[string]string{"upstreamKey": "other-test-key"}, true, false},
+		{"remove key", map[string]string{"upstreamKey": ""}, true, false},
+		{"save the same key", map[string]string{"upstreamKey": testSharedKey}, false, false},
+		{"save unrelated settings", map[string]string{"timezone": "Europe/Madrid"}, false, false},
+		{"replace address while replacing the rule", map[string]string{"upstreamUrl": "http://127.0.0.1:2"}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useAddrs(t)
 			app := joinedApp(t)
 			app.ctx = nil
-			oldNeeded, oldRun, oldRead := firewallRuleNeeded, runFirewallScript, readServerCommandsFirewallProgram
-			t.Cleanup(func() {
-				firewallRuleNeeded, runFirewallScript, readServerCommandsFirewallProgram = oldNeeded, oldRun, oldRead
-			})
-			firewallRuleNeeded = true
-
-			// A directory at the config path makes the atomic save fail on every OS.
-			configPath := filepath.Join(app.cfg.AppDir(), "config.json")
-			savedPath := configPath + ".saved"
-			installed, removals := tc.replace, 0
-			readServerCommandsFirewallProgram = func() (string, error) {
-				if installed {
-					return thisProgram()
-				}
-				return "", nil
-			}
+			// Use independent Managers to exercise the shared lock.
+			window := reviewWindow(t, app, app.cfg.Config().UpstreamURL)
+			var installed atomic.Bool
+			installed.Store(tc.replace)
+			program := ""
 			if tc.replace {
-				if err := app.cfg.Update(func(c *config.AppConfig) {
-					c.ServerCommandsFirewallRule = serverCommandsRuleName()
-					c.ServerCommandsFirewallProgram = `C:\Old\CashPilot.exe`
-				}); err != nil {
+				program = round8OldProgram
+				if err := setDesiredFirewall(t, app.App, program, false); err != nil {
 					t.Fatal(err)
 				}
 			}
-			runFirewallScript = func(script string, _ string, _ config.FirewallChange) error {
-				if strings.Contains(script, "New-NetFirewallRule") {
-					if err := os.Rename(configPath, savedPath); err != nil {
-						t.Fatal(err)
+			setupRound8Firewall(t, &program)
+			readServerCommandsFirewall = func() (runtime.NamedFirewallRule, error) {
+				if installed.Load() {
+					if tc.replace {
+						return testFirewallRule(round8OldProgram), nil
 					}
-					if err := os.Mkdir(configPath, 0o700); err != nil {
-						t.Fatal(err)
-					}
-					installed = true
+					return testFirewallRule(round8NewProgram), nil
+				}
+				return runtime.NamedFirewallRule{}, nil
+			}
+			adding, resume := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			defer release()
+			runFirewallScript = func(script string, _ string, p config.Pairing) error {
+				if script == removeRuleScript() {
+					installed.Store(false)
 					return nil
 				}
-				removals++
-				if !strings.Contains(script, "Get-NetFirewallRule -Name 'CashPilot.Desktop.ServerCommands'") ||
-					!strings.Contains(script, "Remove-NetFirewallRule") {
-					t.Errorf("rollback did not remove the rule by its ID: %s", script)
-				}
-				if tc.decline && removals == 1 {
-					return errors.New("administrator declined removal")
-				}
-				installed = false
-				return nil
+				close(adding)
+				<-resume
+				// Simulate the elevated script taking the shared lock after UAC.
+				return app.cfg.UpdatePairing(p.Revision, func(current *config.Pairing) error {
+					if current.RemoveFirewall || current.FirewallProgram != p.FirewallProgram {
+						return config.ErrPairingChanged
+					}
+					installed.Store(true)
+					return nil
+				})
+			}
+			allowDone := make(chan error, 1)
+			go func() { _, err := app.AllowServerCommandsThroughFirewall(); allowDone <- err }()
+			t.Cleanup(func() { release(); <-allowDone })
+			select {
+			case <-adding:
+			case <-time.After(8 * time.Second):
+				t.Fatal("Allow did not reach the firewall prompt")
 			}
 
-			state, err := app.AllowServerCommandsThroughFirewall()
-			var saveErr *os.LinkError
-			if !errors.As(err, &saveErr) {
-				t.Errorf("Allow returned %v, want a config save error", err)
-			}
-			if removals != 1 || installed != tc.decline {
-				t.Errorf("rollback attempts %d, rule installed %v. Want one attempt and installed %v", removals, installed, tc.decline)
-			}
-			if tc.decline && (err == nil || !strings.Contains(err.Error(), serverCommandsRuleName())) {
-				t.Errorf("Allow returned %v, want the name of the rule still installed", err)
-			}
-			if state.FirewallRule {
-				t.Error("a pending firewall change made the rule ready")
-			}
-			if pending, err := app.cfg.ReadFirewallChange(); err != nil || pending == nil || pending.Action != "remove" {
-				t.Errorf("failed save lost the removal entry: %+v, %v", pending, err)
-			}
-
-			if err := os.Remove(configPath); err != nil {
+			if tc.save == nil {
+				if _, err := window.SwitchToLead(); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := window.SaveSettings(tc.save); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.Rename(savedPath, configPath); err != nil {
-				t.Fatal(err)
+			release()
+			if err := <-allowDone; (err != nil) != tc.cancel {
+				t.Errorf("late Allow returned %v, want cancellation %v", err, tc.cancel)
 			}
-			wantRemovals := removals
-			if tc.decline {
-				wantRemovals++
+			close(allowDone)
+			if tc.replace {
+				if err := window.RetryServerCommandsFirewallRemoval(); err != nil {
+					t.Fatal(err)
+				}
+				thisProgram = func() (string, error) { return round8OldProgram, nil }
+				if window.serverCommandsFirewallStatus() == "ready" {
+					t.Error("the old executable is firewall-ready after Windows removed the rule")
+				}
 			}
-			left, err := app.SwitchToLead()
-			if err != nil || left.FirewallError != "" || removals != wantRemovals || installed {
-				t.Errorf("Leave did not reconcile Windows: result %+v, error %v, installed %v, removal attempts %d, want %d", left, err, installed, removals, wantRemovals)
-			}
-			if cfg := app.cfg.Config(); cfg.ServerCommandsFirewallRule != "" || cfg.ServerCommandsFirewallProgram != "" {
-				t.Error("the record still names the removed rule after Leave")
+			if installed.Load() == tc.cancel {
+				t.Errorf("rule installed: %v, want %v", installed.Load(), !tc.cancel)
 			}
 		})
+	}
+}
+
+func TestFirewallAllowDoesNotDependOnAPostElevationConfigSave(t *testing.T) {
+	useAddrs(t)
+	app := joinedApp(t)
+	app.ctx = nil
+	installed := round8OldProgram
+	setupRound8Firewall(t, &installed)
+	if err := setDesiredFirewall(t, app.App, installed, false); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(app.cfg.AppDir(), "config.json")
+	savedPath := configPath + ".saved"
+	change := runFirewallScript
+	removals := 0
+	runFirewallScript = func(script, path string, p config.Pairing) error {
+		if strings.Contains(script, "New-NetFirewallRule") {
+			if err := os.Rename(configPath, savedPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(configPath, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			removals++
+			if removals == 1 {
+				return errors.New("administrator declined removal")
+			}
+		}
+		return change(script, path, p)
+	}
+	state, err := app.AllowServerCommandsThroughFirewall()
+	if err != nil || removals != 0 || installed != round8NewProgram || !state.FirewallRule {
+		t.Fatalf("Allow depended on a post-elevation save: %+v, %v, removals %d, Windows %q", state, err, removals, installed)
+	}
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(savedPath, configPath); err != nil {
+		t.Fatal(err)
+	}
+	left, err := app.SwitchToLead()
+	if err != nil || left.FirewallError == "" || installed == "" || removals != 1 {
+		t.Fatalf("denied removal: %+v, %v, Windows %q, attempts %d", left, err, installed, removals)
+	}
+	if err := app.RetryServerCommandsFirewallRemoval(); err != nil || installed != "" || removals != 2 {
+		t.Errorf("retry removal: %v, Windows %q, attempts %d", err, installed, removals)
 	}
 }
 

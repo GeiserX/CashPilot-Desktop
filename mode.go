@@ -64,6 +64,10 @@ func (a *App) pairingStatus() *PairingStatus {
 	}
 	serverURL := strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/")
 	out := &PairingStatus{ServerURL: serverURL}
+	if p, err := a.cfg.Pairing(); err == nil && p.Suspended {
+		out.ErrorCode, out.LastError = "unauthorized", refusedPairingMessage
+		return out
+	}
 	a.upstream.mu.Lock()
 	defer a.upstream.mu.Unlock()
 	if a.upstream.statusURL != serverURL {
@@ -91,7 +95,8 @@ type ModeState struct {
 	HubOn bool `json:"hubOn"`
 	// HubDevices are the workers and phones that report to this computer, which
 	// must be pointed at the CashPilot server once this computer joins it.
-	HubDevices []string `json:"hubDevices"`
+	HubDevices      []string `json:"hubDevices"`
+	FirewallCleanup string   `json:"firewallCleanup"`
 }
 
 // GetModeState returns the mode, the pairing status and what a switch affects.
@@ -99,13 +104,15 @@ func (a *App) GetModeState() (ModeState, error) {
 	if err := a.ready(); err != nil {
 		return ModeState{}, err
 	}
+	a.refreshConfig()
 	cfg := a.cfg.Config()
 	return ModeState{
-		Mode:       cfg.Mode,
-		Name:       a.upstreamPayload().Name,
-		Pairing:    a.pairingStatus(),
-		HubOn:      cfg.FleetServerEnabled,
-		HubDevices: a.hubDeviceNames(),
+		Mode:            cfg.Mode,
+		Name:            a.upstreamPayload().Name,
+		Pairing:         a.pairingStatus(),
+		HubOn:           cfg.FleetServerEnabled,
+		HubDevices:      a.hubDeviceNames(),
+		FirewallCleanup: a.firewallCleanupStatus(),
 	}, nil
 }
 
@@ -176,12 +183,29 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 	a.pairingMu.Lock()
 	defer a.pairingMu.Unlock()
 	a.refreshConfig()
-	if a.joined() {
+	current, key, err := a.cfg.ReadPairingCredential(false)
+	if err != nil && current.Revision == "" {
+		return JoinResult{}, err
+	}
+	if a.pairingServer(current) != "" && !current.Suspended && (current.Revision == "" || key.Worker != "") {
 		return JoinResult{}, errors.New("this computer is already joined to a CashPilot; switch to Run everything here first")
 	}
+	return a.enrolPairing(a.ctx, req, current, "")
+}
+
+// enrolPairing is the window's only enrolment entry point. An upgrade can
+// present an existing worker key to the server in place of the shared key.
+func (a *App) enrolPairing(ctx context.Context, req JoinRequest, current config.Pairing, worker string) (JoinResult, error) {
 	payload := a.upstreamPayload()
 	out := JoinResult{Name: payload.Name, HubDevices: []string{}}
-	target, err := upstream.ParseJoin(req.Block, req.URL, req.Key)
+	inputKey := req.Key
+	if worker != "" {
+		inputKey = worker
+	}
+	target, err := upstream.ParseJoin(req.Block, req.URL, inputKey)
+	if worker == "" {
+		req.Key = target.Key
+	}
 	if err != nil {
 		out.Code, out.Message = "input", err.Error()
 		return out, nil
@@ -193,7 +217,6 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 		return out, nil
 	}
 
-	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -210,31 +233,23 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 		return out, nil
 	}
 
-	// Accepted. Save the link: the key first, so a config that names a server
-	// always has its key.
-	a.stopUpstream()
 	out.HubWasOn = a.cfg.Config().FleetServerEnabled
-	if out.HubWasOn {
+	if out.HubWasOn && (current.Revision != "" || !a.joined()) {
 		out.HubDevices = a.hubDeviceNames()
-	}
-	_, err = a.updateConfigForServerCommands(func(config.AppConfig) error {
-		if err := a.savePairingKey(target.Key); err != nil {
-			return fmt.Errorf("saving the key: %w", err)
+		if err := a.cfg.Update(func(c *config.AppConfig) { c.FleetServerEnabled = false }); err != nil {
+			return JoinResult{}, err
 		}
-		// The worker key belongs to the server that issued it.
-		workerKey := strings.TrimSpace(resp.WorkerKey)
-		if err := config.SetJoinedWorkerKey(a.cfg.AppDir(), target.URL, workerKey); err != nil {
-			return fmt.Errorf("saving this computer's own key: %w", err)
-		}
-		return nil
-	}, func(c *config.AppConfig) {
-		c.UpstreamURL = target.URL
-		c.Mode = config.ModeFollower
-		c.FleetServerEnabled = false
-	})
-	if err != nil {
-		return JoinResult{}, err
 	}
+	if key := strings.TrimSpace(resp.WorkerKey); key != "" {
+		worker = key
+	}
+	if worker == req.Key {
+		worker = ""
+	}
+	if err := a.cfg.PublishPairing(current.Revision, target.URL, false, config.PairingCredential{Worker: worker, Enrolment: req.Key}); err != nil {
+		return JoinResult{}, fmt.Errorf("saving the pairing: %w", err)
+	}
+	a.stopUpstream()
 	a.recordPairing(target.URL, upstream.Failure{})
 	// Before the loop's first heartbeat, so it already reports the API's address.
 	a.syncWorkerAPI()
@@ -255,56 +270,66 @@ type LeaveResult struct {
 	FirewallError string `json:"firewallError"`
 }
 
-// savePairingKey invalidates pending consent when the saved key changes, even if
-// the following config write fails. The caller holds workerFirewall.mu.
-func (a *App) savePairingKey(key string) error {
-	appDir := a.cfg.AppDir()
-	previous, readErr := config.UpstreamEnrolmentKey(appDir)
-	if err := config.SetUpstreamEnrolmentKey(appDir, key); err != nil {
-		return err
+// Explicit changes use the durable address even if config.json could not reload.
+func (a *App) pairingServer(p config.Pairing) string {
+	if p.Revision != "" {
+		return p.ServerURL
 	}
-	if readErr != nil || key != previous {
-		a.workerFirewall.generation++
-	}
-	return nil
+	return a.cfg.Config().UpstreamURL
 }
 
-// updateConfigForServerCommands saves the pairing and invalidates pending consent
-// under the same lock. On leave, it closes the API before removing a recorded rule.
-func (a *App) updateConfigForServerCommands(saveKeys func(config.AppConfig) error, update func(*config.AppConfig)) (firewallErr, configErr error) {
-	a.workerFirewall.mu.Lock()
-	defer a.workerFirewall.mu.Unlock()
+func (a *App) saveSettingsPairing(address string, hasAddress bool, key string, hasKey bool) (bool, error) {
 	a.refreshConfig()
-	if err := saveKeys(a.cfg.Config()); err != nil {
-		return nil, err
+	current, stored, keyErr := a.cfg.ReadPairingCredential(false)
+	if keyErr != nil && current.Revision == "" {
+		return false, keyErr
 	}
-	var changed, left bool
-	if err := a.cfg.Update(func(c *config.AppConfig) {
-		mode, address := c.Mode, c.UpstreamURL
-		update(c)
-		changed = mode != c.Mode || address != c.UpstreamURL
-		left = mode == config.ModeFollower && c.Mode != config.ModeFollower
-	}); err != nil {
-		return nil, err
+	before := a.pairingServer(current)
+	if !hasAddress {
+		address = before
 	}
-	if changed {
-		a.workerFirewall.generation++
+	if address != before && address != "" {
+		if err := upstream.ValidateServerURL(address); err != nil {
+			return false, fmt.Errorf("pairing address: %w", err)
+		}
 	}
-	if !left {
-		return nil, nil
+	if address == before && !hasKey {
+		return false, nil
 	}
+	if keyErr != nil && !hasKey && address != "" && before == "" {
+		return false, keyErr
+	}
+	if current.Revision == "" {
+		stored.Enrolment, _ = config.LegacyEnrolmentKey(a.cfg.AppDir())
+	}
+	if !hasKey && before == "" {
+		key = stored.Enrolment
+	}
+	if address == before && key == stored.Enrolment && !current.Suspended && stored.Worker != "" {
+		return false, nil
+	}
+	if address != "" && key != "" {
+		out, err := a.enrolPairing(a.ctx, JoinRequest{URL: address, Key: key}, current, "")
+		if err == nil && !out.OK {
+			err = errors.New(out.Message)
+		}
+		return false, err
+	}
+	left := address == "" && before != ""
+	if left {
+		key = ""
+	}
+	if err := a.cfg.PublishPairing(current.Revision, address, left && firewallRuleNeeded, config.PairingCredential{Enrolment: key}); err != nil {
+		return false, err
+	}
+	a.stopUpstream()
+	a.recordPairing("", upstream.Failure{})
 	a.syncWorkerAPI()
-	if err := a.removeServerCommandsRule(); err != nil {
-		log.Printf("server commands: %v", err)
-		return err, nil
-	}
-	return nil, nil
+	return left, nil
 }
 
-// SwitchToLead makes a joined computer run everything itself again. It stops the
-// heartbeats, clears the address and both keys, and starts local earnings
-// collection at once. The earners keep running. The server keeps this computer's
-// row until the user removes it there: no worker route can remove it.
+// SwitchToLead stops command authorization and records firewall removal in
+// the same write. Only a Windows read can confirm the removal.
 func (a *App) SwitchToLead() (LeaveResult, error) {
 	if err := a.ready(); err != nil {
 		return LeaveResult{}, err
@@ -312,38 +337,48 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 	a.pairingMu.Lock()
 	defer a.pairingMu.Unlock()
 	a.refreshConfig()
-	if !a.joined() {
-		return a.retryServerCommandsRemoval()
-	}
-	out := LeaveResult{
-		ServerURL: strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/"),
-		Name:      a.upstreamPayload().Name,
-	}
-	a.stopUpstream()
-	firewallErr, err := a.updateConfigForServerCommands(func(config.AppConfig) error {
-		if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
-			return fmt.Errorf("clearing this computer's own key: %w", err)
-		}
-		if err := a.savePairingKey(""); err != nil {
-			return fmt.Errorf("clearing the key: %w", err)
-		}
-		a.upstream.mu.Lock()
-		a.upstream.statusURL = ""
-		a.upstream.mu.Unlock()
-		return nil
-	}, func(c *config.AppConfig) {
-		c.UpstreamURL = ""
-		c.Mode = config.ModeLead
-	})
+	p, err := a.cfg.Pairing()
 	if err != nil {
 		return LeaveResult{}, err
 	}
-	if firewallErr != nil {
-		out.FirewallError = firewallErr.Error()
+	out := LeaveResult{ServerURL: a.pairingServer(p), Name: a.upstreamPayload().Name}
+	if out.ServerURL == "" {
+		if !firewallRuleNeeded {
+			return out, errors.New("this computer already runs everything here")
+		}
+	} else if _, err := a.saveSettingsPairing("", true, "", true); err != nil {
+		return out, err
 	}
-	// Collect now rather than at the next tick, which can be an hour away.
-	if a.ctx != nil {
+	if err := a.removeServerCommandsRule(); err != nil {
+		out.FirewallError = err.Error()
+	}
+	if out.ServerURL != "" && a.ctx != nil {
 		a.runScheduler(a.ctx, a.collectInterval())
 	}
 	return out, nil
+}
+
+// enrolSavedPairing runs in the window on upgrade. The helper can report with
+// legacy credentials but cannot publish any key it receives.
+func (a *App) enrolSavedPairing(ctx context.Context) {
+	a.pairingMu.Lock()
+	defer a.pairingMu.Unlock()
+	p, _, err := a.cfg.ReadPairingCredential(true)
+	if err != nil || p.Revision != "" || !a.joined() {
+		return
+	}
+	url := a.cfg.Config().UpstreamURL
+	enrol, err := config.LegacyEnrolmentKey(a.cfg.AppDir())
+	if err != nil {
+		return
+	}
+	worker, err := config.LegacyWorkerKey(a.cfg.AppDir(), url)
+	if err != nil || (enrol == "" && worker == "") {
+		return
+	}
+	if out, err := a.enrolPairing(ctx, JoinRequest{URL: url, Key: enrol}, p, worker); err != nil {
+		a.emitError("pairing", err)
+	} else if !out.OK {
+		a.recordPairing(url, upstream.Failure{Code: out.Code, Message: out.Message})
+	}
 }

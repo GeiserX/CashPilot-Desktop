@@ -32,7 +32,6 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
-	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -138,9 +137,9 @@ type App struct {
 	// (worker_api.go).
 	workerAPI workerAPIState
 	// pairingMu orders explicit Join and Leave requests in the window.
-	pairingMu sync.Mutex
-	// workerFirewall coordinates firewall consent with pairing changes.
-	workerFirewall workerFirewallState
+	pairingMu          sync.Mutex
+	window             bool
+	stopPairingUpgrade func()
 }
 
 // fenceController is the slice of the Docker provider that keeps earners off the LAN.
@@ -184,7 +183,16 @@ func NewApp() *App {
 // startCore and leaves a.ready() failing for every binding, so — exactly as before —
 // there is nothing further for the GUI hook to do with the returned error.
 func (a *App) Startup(ctx context.Context) {
-	_ = a.startCore(ctx)
+	a.window = true
+	if a.startCore(ctx) == nil {
+		upgradeCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		a.stopPairingUpgrade = func() { cancel(); <-done }
+		go func() {
+			defer close(done)
+			a.enrolSavedPairing(upgradeCtx)
+		}()
+	}
 }
 
 // startCore initialises everything the app needs in BOTH roles: config, the local
@@ -312,7 +320,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// What each earner talks to, when the owner switched Activity on.
 	a.startActivitySampler(ctx)
 	// Resolve an interrupted Windows rule change before opening the worker API.
-	a.recoverServerCommandsFirewall()
+	if a.window {
+		a.recoverServerCommandsFirewall()
+	}
 	// Report to the server when this Desktop is paired.
 	a.startUpstream(ctx)
 	// While joined, the server deploys and stops services here (worker_api.go).
@@ -375,6 +385,9 @@ func (a *App) DomReady(ctx context.Context) {
 }
 
 func (a *App) Shutdown(_ context.Context) {
+	if a.stopPairingUpgrade != nil {
+		a.stopPairingUpgrade()
+	}
 	// Stop the collection loop before closing the store so no in-flight collect
 	// writes to a database that is about to close.
 	a.stopScheduler()
@@ -1257,50 +1270,27 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		}
 		cfg.FleetPort = port
 	}
-	// An empty address leaves the server. An empty key removes the saved key.
 	address, hasAddress := values["upstreamUrl"]
-	address = strings.TrimRight(strings.TrimSpace(address), "/")
 	key, hasKey := values["upstreamKey"]
+	left := false
 	if hasAddress || hasKey {
 		a.pairingMu.Lock()
 		defer a.pairingMu.Unlock()
+		var err error
+		left, err = a.saveSettingsPairing(strings.TrimRight(strings.TrimSpace(address), "/"), hasAddress, strings.TrimSpace(key), hasKey)
+		if err != nil {
+			return SettingsState{}, err
+		}
 	}
-	// Only the fields this form owns are written, onto the config as it is now.
-	// A whole-snapshot Save would put back changes such as the fence recording
-	// that isolation is on while the form saves keys.
-	firewallErr, err := a.updateConfigForServerCommands(func(cur config.AppConfig) error {
-		if hasAddress && address != cur.UpstreamURL {
-			// An unchanged legacy address can stay. A new address must pass validation.
-			if address != "" {
-				if err := upstream.ValidateServerURL(address); err != nil {
-					return fmt.Errorf("pairing address: %w", err)
-				}
-			}
-			// The worker key belongs to the previous server.
-			if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
-				return fmt.Errorf("clearing the previous worker key: %w", err)
-			}
-		}
-		if hasKey {
-			if err := a.savePairingKey(strings.TrimSpace(key)); err != nil {
-				return fmt.Errorf("storing the pairing key: %w", err)
-			}
-		}
-		return nil
-	}, func(cur *config.AppConfig) {
+	pairing := a.cfg.Config()
+	joined := pairing.Mode == config.ModeFollower
+	err := a.cfg.Update(func(cur *config.AppConfig) {
 		cur.DisplayCurrency = cfg.DisplayCurrency
 		cur.HostnamePrefix = cfg.HostnamePrefix
 		cur.Timezone = cfg.Timezone
-		if hasAddress && address != cur.UpstreamURL {
-			cur.UpstreamURL = address
-			if address != "" {
-				cur.Mode = config.ModeFollower
-				cfg.FleetServerEnabled = false
-			} else {
-				cur.Mode = config.ModeLead
-			}
+		if _, set := values["fleetServerEnabled"]; set || (hasAddress && joined && cfg.UpstreamURL != pairing.UpstreamURL) {
+			cur.FleetServerEnabled = cfg.FleetServerEnabled && !joined
 		}
-		cur.FleetServerEnabled = cfg.FleetServerEnabled
 		cur.DriftWarningsOff = cfg.DriftWarningsOff
 		cur.Isolation = cfg.Isolation
 		if cfg.Isolation == "off" {
@@ -1313,13 +1303,14 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	if err != nil {
 		return SettingsState{}, err
 	}
-	// Clearing the address leaves the server, so it cleans up as Leave does.
-	if firewallErr != nil {
-		a.emitNotice("server-commands", firewallErr.Error()+". Nothing listens behind it now. You can delete it in Windows Defender Firewall.")
+	if left {
+		if err := a.removeServerCommandsRule(); err != nil {
+			a.emitNotice("server-commands", err.Error())
+		}
 	}
 	// If the collection cadence changed, restart the ticker so the new interval
 	// takes effect immediately instead of waiting for the next app launch.
-	if cfg.CollectIntervalMinutes != previousInterval && a.ctx != nil {
+	if (left || cfg.CollectIntervalMinutes != previousInterval) && a.ctx != nil {
 		a.runScheduler(a.ctx, a.collectInterval())
 	}
 	// The fleet listener binds its port/address once at Startup; changing them here

@@ -2,15 +2,13 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/filelock"
@@ -113,66 +111,63 @@ func removeRuleScript() string {
 // can drive the Windows path on any system.
 var firewallRuleNeeded = stdruntime.GOOS == "windows"
 
-// firewallReady reports whether the API may listen: no rule is needed here, or
-// CashPilot made it for this program.
-func (a *App) firewallReady() bool {
-	return !firewallRuleNeeded || a.firewallRuleMade()
-}
-
 // thisProgram is this program's path. A var so tests can move the program.
 var thisProgram = os.Executable
 
-// firewallRuleMade reports whether CashPilot made the rule for the program running
-// now. A rule made for another path allows nothing to this one: listening anyway
-// would make Windows show its own prompt, the case the rule exists to avoid. The
-// button then shows again, and pressing it replaces the rule.
-func (a *App) firewallRuleMade() bool {
-	if firewallRuleNeeded {
-		// Read the confirmed fields and the journal in the same turn. A
-		// replacement could otherwise clear the journal between the two reads.
-		release, err := a.lockServerCommandsFirewall()
-		if err != nil {
-			return false
-		}
-		defer release()
-	}
-	if _, err := a.cfg.Reload(); err != nil {
-		return false
-	}
-	cfg := a.cfg.Config()
-	pending, err := a.cfg.ReadFirewallChange()
-	if err != nil || pending != nil {
-		return false
-	}
-	if strings.TrimSpace(cfg.ServerCommandsFirewallRule) == "" {
-		return false
-	}
-	program, err := thisProgram()
-	if err != nil || strings.TrimSpace(cfg.ServerCommandsFirewallProgram) == "" {
-		return false
-	}
-	// Windows paths ignore case.
-	return strings.EqualFold(filepath.Clean(cfg.ServerCommandsFirewallProgram), filepath.Clean(program))
+// Return presence independently of readiness. A disabled or edited rule is
+// still present and must be removed on Leave.
+var readServerCommandsFirewall = func() (runtime.NamedFirewallRule, error) {
+	return runtime.ReadNamedFirewallRule(serverCommandsRuleID, workerAPIPort, privateSubnets())
 }
 
-// runFirewallScript rechecks the journal under the rule lock after Windows
-// grants elevation. An admin prompt can outlive the Desktop that raised it.
-var runFirewallScript = func(script, journalPath string, change config.FirewallChange) error {
+func (a *App) serverCommandsFirewallStatus() string {
+	if !firewallRuleNeeded {
+		return ""
+	}
+	p, err := a.cfg.Pairing()
+	if err != nil {
+		return "unknown"
+	}
+	return firewallStatusFor(p)
+}
+
+func firewallStatusFor(p config.Pairing) string {
+	actual, err := readServerCommandsFirewall()
+	if err != nil {
+		return "unknown"
+	}
+	if !actual.Found {
+		return "absent"
+	}
+	if p.RemoveFirewall {
+		return "removal-pending"
+	}
+	program, err := thisProgram()
+	if err == nil && sameProgram(actual.Program, program) && sameProgram(p.FirewallProgram, program) {
+		return "ready"
+	}
+	return "different"
+}
+
+func sameProgram(a, b string) bool {
+	return a != "" && b != "" && strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+// An admin prompt can outlive the window. Take the same lock as the Go writer
+// after elevation so an outdated prompt can neither add nor remove a rule.
+var runFirewallScript = func(script, path string, p config.Pairing) error {
+	expect := "$pending.removeFirewall -eq $true"
+	if p.FirewallProgram != "" {
+		expect = "$pending.suspended -ne $true -and $pending.removeFirewall -ne $true -and $pending.firewallProgram -eq " + psLiteral(p.FirewallProgram)
+	}
 	guarded := strings.Join([]string{
 		"$ErrorActionPreference = 'Stop'",
-		"$lock = [IO.File]::Open(" + psLiteral(journalPath+".lock") + ", 'Open', 'ReadWrite', 'ReadWrite')",
+		"$lock = [IO.File]::Open(" + psLiteral(path+".lock") + ", 'Open', 'ReadWrite', 'ReadWrite')",
 		"try {",
 		"  $lock.Lock(0, 1)",
-		"  $pending = Get-Content -Raw -Encoding UTF8 -LiteralPath " + psLiteral(journalPath) + " | ConvertFrom-Json",
-		"  if ($pending.id -ne " + psLiteral(change.ID) + ") { throw 'The firewall request was superseded.' }",
+		"  $pending = Get-Content -Raw -Encoding UTF8 -LiteralPath " + psLiteral(path) + " | ConvertFrom-Json",
+		"  if ($pending.revision -cne " + psLiteral(p.Revision) + " -or -not (" + expect + ")) { throw 'The firewall request was superseded.' }",
 		strings.TrimSuffix(script, "\nexit 0"),
-		"  $rule = Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object { $_.Name -eq " + psLiteral(serverCommandsRuleID) + " }",
-		"  $program = ''",
-		"  if ($null -ne $rule) {",
-		"    $program = [string]($rule | Get-NetFirewallApplicationFilter).Program",
-		"    if ($program -eq '') { throw 'The Windows Firewall rule has no program filter.' }",
-		"  }",
-		"  if ($program -ne " + psLiteral(change.NewProgram) + ") { throw 'Windows could not confirm the firewall change.' }",
 		"} finally { $lock.Dispose() }",
 		"exit 0",
 	}, "\n")
@@ -180,108 +175,6 @@ var runFirewallScript = func(script, journalPath string, change config.FirewallC
 	return err
 }
 
-var readServerCommandsFirewallProgram = func() (string, error) {
-	return runtime.FirewallRuleProgram(serverCommandsRuleID)
-}
-
-type workerFirewallState struct {
-	mu         sync.Mutex
-	generation uint64
-	allowing   bool
-}
-
-type serverCommandsRule struct {
-	name    string
-	program string
-}
-
-func (a *App) savedServerCommandsRule() serverCommandsRule {
-	cfg := a.cfg.Config()
-	return serverCommandsRule{strings.TrimSpace(cfg.ServerCommandsFirewallRule), cfg.ServerCommandsFirewallProgram}
-}
-
-func (a *App) confirmServerCommandsRule(rule serverCommandsRule) error {
-	if err := a.cfg.Update(func(c *config.AppConfig) {
-		c.ServerCommandsFirewallRule = rule.name
-		c.ServerCommandsFirewallProgram = rule.program
-	}); err != nil {
-		return err
-	}
-	return a.cfg.SaveFirewallChange(nil)
-}
-
-func (a *App) lockServerCommandsFirewall() (func(), error) {
-	release, ok := filelock.Acquire(context.Background(), a.cfg.FirewallChangePath()+".lock", 10*time.Second)
-	if !ok {
-		return nil, errors.New("could not lock the server commands firewall record")
-	}
-	return release, nil
-}
-
-func (a *App) beginFirewallChange(previous serverCommandsRule, program, action string) (config.FirewallChange, error) {
-	name := previous.name
-	if name == "" {
-		name = serverCommandsRuleName()
-	}
-	change := config.FirewallChange{
-		ID: rand.Text(), Name: name, OldProgram: previous.program, Action: action, NewProgram: program,
-	}
-	if err := a.cfg.SaveFirewallChange(&change); err != nil {
-		return change, fmt.Errorf("could not record the pending firewall change: %w", err)
-	}
-	return change, nil
-}
-
-// reconcileServerCommandsRule records the actual rule after an interrupted
-// request. The caller holds the rule lock, so a late admin script either ran
-// before this check or sees that its request was cleared.
-func (a *App) reconcileServerCommandsRule() error {
-	pending, err := a.cfg.ReadFirewallChange()
-	if err != nil || pending == nil {
-		return err
-	}
-	program, err := readServerCommandsFirewallProgram()
-	if err != nil {
-		return fmt.Errorf("could not check firewall rule %q: %w", pending.Name, err)
-	}
-	var rule serverCommandsRule
-	if program != "" {
-		rule = serverCommandsRule{pending.Name, program}
-	}
-	if err := a.confirmServerCommandsRule(rule); err != nil {
-		return fmt.Errorf("could not reconcile firewall rule %q: %w", pending.Name, err)
-	}
-	return nil
-}
-
-func (a *App) recoverServerCommandsFirewall() {
-	if !firewallRuleNeeded {
-		return
-	}
-	pending, err := a.cfg.ReadFirewallChange()
-	if err == nil && pending != nil {
-		// The helper can start while the window is waiting for Admin. Leave
-		// the live request to its owner. A crash releases the owner lock.
-		owner, ok := filelock.Acquire(context.Background(), a.cfg.FirewallChangePath()+".active", 0)
-		if !ok {
-			return
-		}
-		defer owner()
-		release, lockErr := a.lockServerCommandsFirewall()
-		if lockErr == nil {
-			defer release()
-			err = a.reconcileServerCommandsRule()
-		} else {
-			err = lockErr
-		}
-	}
-	if err != nil {
-		a.emitError("server-commands", err)
-	}
-}
-
-// AllowServerCommandsThroughFirewall makes the rule after the user presses the
-// button that names what it opens.
 func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) {
 	if err := a.ready(); err != nil {
 		return ServerCommandsState{}, err
@@ -291,39 +184,52 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	}
 	program, err := thisProgram()
 	if err != nil {
-		return a.serverCommandsState(), fmt.Errorf("could not find this program's path: %w", err)
+		return a.serverCommandsState(), err
 	}
-	owner, ok := filelock.Acquire(context.Background(), a.cfg.FirewallChangePath()+".active", 0)
+	owner, ok := filelock.Acquire(context.Background(), a.cfg.PairingPath()+".firewall-allow", 0)
 	if !ok {
 		return a.serverCommandsState(), errors.New("a firewall rule request is already in progress")
 	}
 	defer owner()
-
-	firewall := &a.workerFirewall
-	firewall.mu.Lock()
-	a.refreshConfig()
-	if !a.joined() {
-		firewall.mu.Unlock()
-		return a.serverCommandsState(), errors.New("this computer is not joined to a CashPilot")
-	}
-	change, err := a.prepareServerCommandsAllow(program)
-	if err != nil {
-		firewall.mu.Unlock()
-		return a.serverCommandsState(), err
-	}
-	generation := firewall.generation
-	firewall.allowing = true
-	firewall.mu.Unlock()
-	a.syncWorkerAPI()
-
-	addErr := runFirewallScript(addRuleScript(change.Name, program), a.cfg.FirewallChangePath(), change)
-	firewall.mu.Lock()
-	err = a.finishServerCommandsAllow(generation, change, addErr)
-	firewall.allowing = false
-	firewall.mu.Unlock()
-	a.syncWorkerAPI()
+	p, key, err := a.cfg.ReadPairingCredential(false)
 	if err != nil {
 		return a.serverCommandsState(), err
+	}
+	if p.RemoveFirewall {
+		if _, err := a.probeFirewallRemoval(p.Revision); err != nil {
+			return a.serverCommandsState(), err
+		}
+	}
+	err = a.cfg.UpdatePairing(p.Revision, func(next *config.Pairing) error {
+		if key.Worker == "" || next.Suspended || next.RemoveFirewall {
+			return errors.New("join your CashPilot and finish any pending firewall removal before allowing the rule")
+		}
+		next.FirewallProgram = program
+		p = *next
+		return nil
+	})
+	if err != nil {
+		return a.serverCommandsState(), err
+	}
+	runErr := runFirewallScript(addRuleScript(serverCommandsRuleName(), program), a.cfg.PairingPath(), p)
+	// A successful Allow has no post-elevation save. The desired program was
+	// saved before elevation and Windows supplies the result after it.
+	err = a.cfg.UpdatePairing(p.Revision, func(next *config.Pairing) error {
+		if next.Suspended || next.RemoveFirewall || next.FirewallProgram != program {
+			return config.ErrPairingChanged
+		}
+		actual, err := readServerCommandsFirewall()
+		if err != nil {
+			return err
+		}
+		if !sameProgram(actual.Program, program) {
+			return errors.New("Windows did not confirm the rule for this program")
+		}
+		return nil
+	})
+	a.syncWorkerAPI()
+	if err != nil {
+		return a.serverCommandsState(), fmt.Errorf("could not allow firewall rule %q: %w", serverCommandsRuleName(), errors.Join(runErr, err))
 	}
 	if a.ctx != nil {
 		a.startUpstream(a.ctx)
@@ -331,131 +237,111 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	return a.serverCommandsState(), nil
 }
 
-func (a *App) prepareServerCommandsAllow(program string) (config.FirewallChange, error) {
-	release, err := a.lockServerCommandsFirewall()
-	if err != nil {
-		return config.FirewallChange{}, err
-	}
-	defer release()
-	if err := a.reconcileServerCommandsRule(); err != nil {
-		return config.FirewallChange{}, err
-	}
-	return a.beginFirewallChange(a.savedServerCommandsRule(), program, "allow")
+// probeFirewallRemoval reads Windows under the revision lock. A failed read
+// retains the removal, and only an absent rule clears it.
+func (a *App) probeFirewallRemoval(revision string) (pending bool, err error) {
+	var readErr error
+	err = a.cfg.UpdatePairing(revision, func(next *config.Pairing) error {
+		if next.ServerURL != "" && !next.RemoveFirewall {
+			return config.ErrPairingChanged
+		}
+		var actual runtime.NamedFirewallRule
+		actual, readErr = readServerCommandsFirewall()
+		pending = actual.Found || readErr != nil
+		next.RemoveFirewall = pending
+		return nil
+	})
+	return pending, errors.Join(err, readErr)
 }
 
-// finishServerCommandsAllow confirms the result or records a removal before
-// rolling it back. The caller holds workerFirewall.mu.
-func (a *App) finishServerCommandsAllow(generation uint64, change config.FirewallChange, addErr error) error {
-	release, err := a.lockServerCommandsFirewall()
+func (a *App) recoverServerCommandsFirewall() {
+	if !firewallRuleNeeded {
+		return
+	}
+	p, err := a.cfg.Pairing()
+	if err == nil && p.Revision == "" && a.cfg.Config().Mode == config.ModeLead {
+		actual, readErr := readServerCommandsFirewall()
+		if actual.Found || readErr != nil {
+			err = a.cfg.PublishPairing("", "", true, config.PairingCredential{})
+			if err == nil {
+				p, err = a.cfg.Pairing()
+			}
+		}
+	}
+	if err == nil && p.RemoveFirewall {
+		_, err = a.probeFirewallRemoval(p.Revision)
+	}
 	if err != nil {
+		log.Printf("server commands: could not recover Windows Firewall cleanup: %v", err)
+	}
+}
+
+func (a *App) firewallCleanupStatus() string {
+	if !firewallRuleNeeded {
+		return ""
+	}
+	p, err := a.cfg.Pairing()
+	if err != nil {
+		return "Windows Firewall cleanup status is unknown."
+	}
+	if p.Revision == "" || (p.ServerURL != "" && !p.RemoveFirewall) {
+		return ""
+	}
+	pending, err := a.probeFirewallRemoval(p.Revision)
+	if err != nil {
+		return "Windows Firewall could not be queried. Retry removal."
+	}
+	if pending {
+		return "The CashPilot rule is still in Windows Firewall. Approve the administrator prompt to remove it."
+	}
+	return ""
+}
+
+func (a *App) RetryServerCommandsFirewallRemoval() error {
+	if err := a.ready(); err != nil {
 		return err
 	}
-	pending, err := a.cfg.ReadFirewallChange()
-	if err != nil || pending == nil || pending.ID != change.ID {
-		release()
-		return errors.Join(err, errors.New("the firewall request was superseded"))
-	}
-	a.refreshConfig()
-	changed := generation != a.workerFirewall.generation || !a.joined()
-	rule := serverCommandsRule{change.Name, change.NewProgram}
-	switch {
-	case addErr != nil:
-		err = fmt.Errorf("the firewall rule was not made: %w", addErr)
-		probeErr := a.reconcileServerCommandsRule()
-		rule = a.savedServerCommandsRule()
-		if probeErr != nil || !changed || rule.name == "" {
-			release()
-			return errors.Join(err, probeErr)
-		}
-	case changed:
-		err = errors.New("the pairing changed before the firewall rule was ready. Allow the rule again while joined")
-	default:
-		if saveErr := a.confirmServerCommandsRule(rule); saveErr == nil {
-			release()
-			return nil
-		} else {
-			err = fmt.Errorf("could not save the firewall rule: %w", saveErr)
-		}
-	}
-	removal, recordErr := a.beginFirewallChange(rule, "", "remove")
-	release()
-	if recordErr != nil {
-		return errors.Join(err, recordErr)
-	}
-	return errors.Join(err, a.finishServerCommandsRemoval(removal))
+	a.pairingMu.Lock()
+	defer a.pairingMu.Unlock()
+	return a.removeServerCommandsRule()
 }
 
-// removeServerCommandsRule runs after the listener closes. A same-process Allow
-// does its own cleanup when the admin prompt finishes. Leave reports it pending.
 func (a *App) removeServerCommandsRule() error {
-	if a.workerFirewall.allowing {
-		return errors.New("the Windows Firewall request is still in progress")
-	}
-	if owner, ok := filelock.Acquire(context.Background(), a.cfg.FirewallChangePath()+".active", 0); ok {
-		defer owner()
-	}
-	release, err := a.lockServerCommandsFirewall()
-	if err != nil {
-		return err
-	}
-	if err := a.reconcileServerCommandsRule(); err != nil {
-		release()
-		return err
-	}
-	rule := a.savedServerCommandsRule()
-	if rule.name == "" {
-		release()
+	if !firewallRuleNeeded {
 		return nil
 	}
-	change, err := a.beginFirewallChange(rule, "", "remove")
-	release()
+	err := a.removeFirewallRule()
+	if err != nil {
+		return fmt.Errorf("removal of Windows Firewall rule %q is pending: %w", serverCommandsRuleName(), err)
+	}
+	return nil
+}
+
+func (a *App) removeFirewallRule() error {
+	p, err := a.cfg.Pairing()
 	if err != nil {
 		return err
 	}
-	return a.finishServerCommandsRemoval(change)
-}
-
-// A failed or interrupted removal can leave a record after the computer has
-// already switched modes. A repeated Leave still has work to do in that case.
-func (a *App) retryServerCommandsRemoval() (LeaveResult, error) {
-	a.workerFirewall.mu.Lock()
-	defer a.workerFirewall.mu.Unlock()
-	pending, err := a.cfg.ReadFirewallChange()
-	if err != nil {
-		return LeaveResult{}, err
-	}
-	if pending == nil && a.savedServerCommandsRule().name == "" {
-		return LeaveResult{}, errors.New("this computer already runs everything here")
-	}
-	if err := a.removeServerCommandsRule(); err != nil {
-		return LeaveResult{FirewallError: err.Error()}, nil
-	}
-	return LeaveResult{}, nil
-}
-
-func (a *App) finishServerCommandsRemoval(change config.FirewallChange) error {
-	removeErr := runFirewallScript(removeRuleScript(), a.cfg.FirewallChangePath(), change)
-	release, err := a.lockServerCommandsFirewall()
-	if err != nil {
-		return errors.Join(removeErr, err)
-	}
-	defer release()
-	pending, err := a.cfg.ReadFirewallChange()
-	if err != nil || pending == nil || pending.ID != change.ID {
-		return errors.Join(err, removeErr, errors.New("the firewall removal was superseded"))
-	}
-	if removeErr != nil {
-		removeErr = fmt.Errorf("the firewall rule %q could not be removed: %w", change.Name, removeErr)
-		if err := a.reconcileServerCommandsRule(); err != nil {
-			return errors.Join(removeErr, fmt.Errorf("could not record the installed firewall rule %q: %w", change.Name, err))
+	if p.Revision == "" && !a.joined() {
+		if err := a.cfg.PublishPairing("", "", true, config.PairingCredential{}); err != nil {
+			return err
 		}
-		if a.savedServerCommandsRule().name == "" {
-			return nil
+		p, err = a.cfg.Pairing()
+		if err != nil {
+			return err
 		}
-		return removeErr
 	}
-	if err := a.confirmServerCommandsRule(serverCommandsRule{}); err != nil {
-		return fmt.Errorf("could not save removal of firewall rule %q: %w", change.Name, err)
+	pending, err := a.probeFirewallRemoval(p.Revision)
+	if err != nil || !pending {
+		return err
 	}
-	return nil
+	runErr := runFirewallScript(removeRuleScript(), a.cfg.PairingPath(), p)
+	pending, err = a.probeFirewallRemoval(p.Revision)
+	if err == nil && !pending {
+		return nil
+	}
+	if runErr == nil && err == nil {
+		err = errors.New("Windows still has the rule")
+	}
+	return errors.Join(runErr, err)
 }

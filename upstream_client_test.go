@@ -317,16 +317,11 @@ func TestRepointingToAnotherServerDiscardsTheOldWorkerKey(t *testing.T) {
 	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://first.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
-	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "issued-by-first"); err != nil {
-		t.Fatalf("seed key: %v", err)
-	}
+	saveTestWorkerKey(t, app, "issued-by-first")
 	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://second.example"}); err != nil {
 		t.Fatalf("repair: %v", err)
 	}
-	got, err := config.UpstreamWorkerKey(app.cfg.AppDir())
-	if err != nil {
-		t.Fatalf("read key: %v", err)
-	}
+	_, got := storedKeys(t, app)
 	if got != "" {
 		t.Fatalf("the previous server's key survived a repoint: %q", got)
 	}
@@ -339,13 +334,11 @@ func TestSavingTheSameURLKeepsTheWorkerKey(t *testing.T) {
 	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://same.example"}); err != nil {
 		t.Fatalf("pair: %v", err)
 	}
-	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), "keep-me"); err != nil {
-		t.Fatalf("seed key: %v", err)
-	}
+	saveTestWorkerKey(t, app, "keep-me")
 	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://same.example"}); err != nil {
 		t.Fatalf("resave: %v", err)
 	}
-	got, _ := config.UpstreamWorkerKey(app.cfg.AppDir())
+	_, got := storedKeys(t, app)
 	if got != "keep-me" {
 		t.Fatalf("worker key was discarded on an unrelated save: %q", got)
 	}
@@ -357,10 +350,7 @@ func TestSavingThePairingKeyStoresItOutsideConfigJson(t *testing.T) {
 	if _, err := app.SaveSettings(map[string]string{"upstreamKey": "shared-enrolment-token"}); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
-	got, err := config.UpstreamEnrolmentKey(app.cfg.AppDir())
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
+	got, _ := storedKeys(t, app)
 	if got != "shared-enrolment-token" {
 		t.Fatalf("enrolment key = %q", got)
 	}
@@ -381,7 +371,7 @@ func TestASaveWithoutThePairingKeyKeepsIt(t *testing.T) {
 	if _, err := app.SaveSettings(map[string]string{"hostnamePrefix": "box"}); err != nil {
 		t.Fatalf("SaveSettings: %v", err)
 	}
-	if got, _ := config.UpstreamEnrolmentKey(app.cfg.AppDir()); got != "shared-enrolment-token" {
+	if got, _ := storedKeys(t, app); got != "shared-enrolment-token" {
 		t.Fatalf("enrolment key = %q after a save that did not send it", got)
 	}
 }
@@ -408,7 +398,16 @@ func TestTheFleetKeyRowIsASecretTheFormCannotEdit(t *testing.T) {
 
 func saveTestWorkerKey(t *testing.T, app *App, key string) {
 	t.Helper()
-	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), key); err != nil {
+	publishTestPairing(t, app, app.cfg.Config().UpstreamURL, key)
+}
+
+func publishTestPairing(t *testing.T, app *App, url, worker string) {
+	t.Helper()
+	p, err := app.cfg.Pairing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.cfg.PublishPairing(p.Revision, url, false, config.PairingCredential{Enrolment: testSharedKey, Worker: worker}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -426,15 +425,15 @@ func TestARefusedWorkerKeyRequiresRejoin(t *testing.T) {
 	defer srv.Close()
 
 	app := newPayloadTestApp(t, nil)
-	saveTestWorkerKey(t, app, "removed-key")
+	publishTestPairing(t, app, srv.URL, "removed-key")
 	app.sendUpstream(t.Context(), &upstream.Client{HTTP: srv.Client()}, srv.URL, "shared")
 	if got := requests.Load(); got != 1 {
 		t.Errorf("sent %d heartbeats after a refused key, want 1", got)
 	}
-	if got, err := config.UpstreamWorkerKey(app.cfg.AppDir()); err != nil || got != "removed-key" {
-		t.Errorf("stored worker key = %q, %v; want the key saved at Join", got, err)
+	if p, err := app.cfg.Pairing(); err != nil || !p.Suspended || app.currentWorkerKey() != "" {
+		t.Errorf("refused pairing still authorizes commands: %+v, %v", p, err)
 	}
-	if message := app.upstream.lastFailure.Message; !strings.Contains(message, "join again") {
+	if message := app.pairingStatus().LastError; !strings.Contains(message, "join again") {
 		t.Errorf("failure should explain how to rejoin, got %q", message)
 	}
 }

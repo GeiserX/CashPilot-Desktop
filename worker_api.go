@@ -102,6 +102,7 @@ type ServerCommandsState struct {
 	// FirewallRule is true once CashPilot made it. Opens says what the rule opens.
 	FirewallNeeded bool           `json:"firewallNeeded"`
 	FirewallRule   bool           `json:"firewallRule"`
+	FirewallStatus string         `json:"firewallStatus"`
 	Opens          string         `json:"opens"`
 	Last           *ServerCommand `json:"last"`
 }
@@ -153,12 +154,20 @@ func (a *App) workerAPIWanted() bool {
 // syncWorkerAPI opens a listener on each private address that has none and closes
 // the ones the API should no longer have.
 func (a *App) syncWorkerAPI() {
+	if a.cfg == nil {
+		return
+	}
 	var want []netip.Addr
-	wanted := a.workerAPIWanted()
+	p, key, err := a.cfg.ReadPairingCredential(false)
+	wanted := err == nil && a.workerAPIWanted() && !p.Suspended && p.ServerURL != "" && key.Worker != ""
 	// On Windows nothing listens before the scoped firewall rule exists: a first
 	// listen with no rule makes Windows ask on its own, and either answer there
 	// makes a rule wider (Allow) or stronger (Block) than the one the user agrees to.
-	waitingForRule := wanted && !a.firewallReady()
+	firewallStatus := ""
+	if wanted && firewallRuleNeeded {
+		firewallStatus = firewallStatusFor(p)
+	}
+	waitingForRule := wanted && firewallRuleNeeded && firewallStatus != "ready"
 	if wanted && !waitingForRule {
 		want = listenAddrs(machineAddrs())
 	}
@@ -167,6 +176,8 @@ func (a *App) syncWorkerAPI() {
 		a.workerAPI.mu.Lock()
 		a.workerAPI.elsewhere, a.workerAPI.problem = nil, ""
 		switch {
+		case firewallStatus == "unknown":
+			a.workerAPI.problem = "Windows Firewall could not be queried. This computer is not listening for server commands."
 		case waitingForRule:
 			a.workerAPI.problem = "Waiting for the Windows Firewall rule. Until you allow it below, this computer does not listen, and your CashPilot cannot reach it."
 		case wanted:
@@ -184,7 +195,15 @@ func (a *App) syncWorkerAPI() {
 		if have {
 			continue
 		}
-		err := a.listenWorkerAPI(ip)
+		err := a.cfg.UpdatePairing(p.Revision, func(current *config.Pairing) error {
+			if *current != p || !a.workerAPIWanted() {
+				return config.ErrPairingChanged
+			}
+			return a.listenWorkerAPI(ip)
+		})
+		if errors.Is(err, config.ErrPairingChanged) {
+			return
+		}
 		if err == nil {
 			continue
 		}
@@ -290,11 +309,11 @@ func (a *App) currentWorkerKey() string {
 	if a.cfg == nil {
 		return ""
 	}
-	saved, err := config.UpstreamWorkerKey(a.cfg.AppDir())
-	if err != nil {
+	p, key, err := a.cfg.ReadPairingCredential(a.window)
+	if err != nil || p.Suspended || p.ServerURL == "" {
 		return ""
 	}
-	return strings.TrimSpace(saved)
+	return strings.TrimSpace(key.Worker)
 }
 
 // workerAPIURL is the address the heartbeat reports, "" when the API is not reachable.
@@ -822,17 +841,22 @@ func (a *App) lastServerCommand() *ServerCommand {
 func (a *App) serverCommandsState() ServerCommandsState {
 	serverURL := strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/")
 	cfg := a.cfg.Config()
+	firewall := a.serverCommandsFirewallStatus()
 	a.workerAPI.mu.Lock()
 	listening := len(a.workerAPI.listeners) > 0 || len(a.workerAPI.elsewhere) > 0
 	problem := a.workerAPI.problem
 	a.workerAPI.mu.Unlock()
+	if a.currentWorkerKey() == "" || (firewallRuleNeeded && firewall != "ready") {
+		listening = false
+	}
 	out := ServerCommandsState{
 		Server:         upstream.Host(serverURL),
 		On:             !cfg.ServerCommandsOff,
 		Listening:      listening,
 		Problem:        problem,
 		FirewallNeeded: firewallRuleNeeded,
-		FirewallRule:   a.firewallRuleMade(),
+		FirewallRule:   firewall == "ready",
+		FirewallStatus: firewall,
 		Opens:          fmt.Sprintf("incoming TCP port %d to CashPilot only, on networks Windows calls private, from %s", workerAPIPort, strings.Join(privateSubnets(), ", ")),
 		Last:           a.lastServerCommand(),
 	}

@@ -62,15 +62,11 @@ func (s *joinStub) count() int {
 
 func storedKeys(t *testing.T, app *App) (enrol, worker string) {
 	t.Helper()
-	enrol, err := config.UpstreamEnrolmentKey(app.cfg.AppDir())
+	_, key, err := app.cfg.ReadPairingCredential(false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err = config.UpstreamWorkerKey(app.cfg.AppDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return enrol, worker
+	return key.Enrolment, key.Worker
 }
 
 // TestJoinSavesNothingUntilTheServerAccepts: a refused join leaves no address,

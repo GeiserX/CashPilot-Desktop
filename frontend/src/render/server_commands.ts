@@ -42,10 +42,17 @@ function reachLine(state: ServerCommandsState): string {
 /** The Windows Firewall offer, only where a rule is needed and the switch is on. */
 function firewallLine(state: ServerCommandsState): string {
   if (!state.firewallNeeded || !state.on) return "";
+  if (state.firewallStatus === "unknown") {
+    return `<p class="pairing-line warn" data-server-firewall>CashPilot could not read Windows Firewall. The rule status is unknown.</p>`;
+  }
+  if (state.firewallStatus === "removal-pending") {
+    return `<p class="pairing-line warn" data-server-firewall>Remove the old rule in Settings under How this computer runs.</p>`;
+  }
   if (state.firewallRule) {
     return `<p class="pairing-line" data-server-firewall>Windows Firewall lets it in: ${escapeHtml(state.opens)}. Switching to Run everything here removes this rule.</p>`;
   }
-  return `<p class="pairing-line warn" data-server-firewall>CashPilot does not listen until Windows Firewall lets it in, so Windows shows no prompt of its own for it. Allowing opens ${escapeHtml(state.opens)}. If Windows already blocks CashPilot (Windows makes such a rule when someone presses Cancel on its own firewall prompt), allowing removes that block too, because a block wins over an allow. Windows asks for an administrator first.</p>
+  const existing = state.firewallStatus === "different" ? "The rule in Windows does not match this installation. " : "";
+  return `<p class="pairing-line warn" data-server-firewall>${existing}CashPilot does not listen until Windows Firewall lets it in, so Windows shows no prompt of its own for it. Allowing opens ${escapeHtml(state.opens)}. If Windows already blocks CashPilot (Windows makes such a rule when someone presses Cancel on its own firewall prompt), allowing removes that block too, because a block wins over an allow. Windows asks for an administrator first.</p>
     <div class="gate-actions"><button class="btn btn-ghost btn-sm" data-server-commands-firewall>Allow through Windows Firewall</button></div>`;
 }
 

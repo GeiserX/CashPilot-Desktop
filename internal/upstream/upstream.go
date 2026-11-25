@@ -338,6 +338,9 @@ func (c *Client) Send(ctx context.Context, serverURL, token string, p Payload) (
 	// Bounded read: the response is small, and an unbounded io.ReadAll against a
 	// server that is not the one we think it is would happily consume memory.
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(raw)), JSON: json.Valid(raw)}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("upstream: reading response: %w", err)
 	}
@@ -357,7 +360,7 @@ func (c *Client) Send(ctx context.Context, serverURL, token string, p Payload) (
 // StatusError is a heartbeat the server answered with a status other than 200.
 // The join screen reads Code and Body to tell the user what went wrong in plain
 // words (Explain); a 401 also matches ErrUnauthorized, which the pairing loop
-// uses to enrol again.
+// uses to suspend the pairing.
 type StatusError struct {
 	Code int
 	Body string
