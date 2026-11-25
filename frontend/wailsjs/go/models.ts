@@ -2028,6 +2028,7 @@ export namespace main {
 	    facts: winvm.HostFacts;
 	    runtime: runtime.Status;
 	    steps: winvm.Step[];
+	    setupFinished: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new HostCheckResult(source);
@@ -2038,6 +2039,7 @@ export namespace main {
 	        this.facts = this.convertValues(source["facts"], winvm.HostFacts);
 	        this.runtime = this.convertValues(source["runtime"], runtime.Status);
 	        this.steps = this.convertValues(source["steps"], winvm.Step);
+	        this.setupFinished = source["setupFinished"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

@@ -59,8 +59,8 @@ export class DockerGuide {
       checking: false,
       waiting: null,
       waitResult: "",
-      // Docker already runs: the setup a restart interrupted is finished.
-      resume: setupFinished(runtime) ? null : init.resume,
+      // This PC's Docker already runs: the setup a restart interrupted is finished.
+      resume: init.result && setupFinished(init.result) ? null : init.resume,
       firmware: null,
       restarting: false,
     };
@@ -89,7 +89,7 @@ export class DockerGuide {
       this.model.steps = result.steps ?? [];
       this.model.runtime = result.runtime;
       // Go ended the setup on this reading (host_check.go): no "Restart to finish".
-      if (setupFinished(result.runtime)) this.model.resume = null;
+      if (setupFinished(result)) this.model.resume = null;
       this.deps.checked?.(result);
     } catch (error) {
       this.deps.failed?.(error);

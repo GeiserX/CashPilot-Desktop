@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -104,4 +105,24 @@ func TestLanmanScriptLive(t *testing.T) {
 	if res, err := runtime.RunElevated(s); err != nil || res.RestartNeeded {
 		t.Fatalf("got %+v, %v", res, err)
 	}
+}
+
+// The launch type read runs alone, with nothing after it that changes the PC. It
+// never throws, and it hands back a number or says it could not read. The Windows
+// runner is an administrator, so there it must read a number: the [wmiclass]
+// chain it replaced never could on Windows PowerShell 5.1.
+func TestHypervisorReadLive(t *testing.T) {
+	script := prelude() + hypervisorRead + "if ($null -eq $launch) { 'could not read' } else { 'launch=' + $launch }\nexit 0\n"
+	out, code, err := runPS(t, time.Minute, script)
+	if err != nil {
+		t.Fatalf("the read did not end cleanly (exit %d): %s", code, out)
+	}
+	got := strings.TrimSpace(out)
+	if got != "could not read" && !regexp.MustCompile(`^launch=[0-9]+$`).MatchString(got) {
+		t.Fatalf("the read answered %q, want launch=<number> or could not read", got)
+	}
+	if got == "could not read" && windows.GetCurrentProcessToken().IsElevated() && os.Getenv("GITHUB_ACTIONS") == "true" {
+		t.Fatal("an administrator on the Windows runner could not read hypervisorlaunchtype")
+	}
+	t.Log(got)
 }

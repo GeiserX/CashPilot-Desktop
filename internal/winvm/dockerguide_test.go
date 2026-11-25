@@ -368,3 +368,54 @@ func TestDockerRunningLeavesNothingThatNeedsYou(t *testing.T) {
 		}
 	}
 }
+
+// Only this PC's own Docker Desktop running Linux containers proves the advice
+// rows: an engine DOCKER_HOST or a context names elsewhere says nothing about
+// this PC, and Windows containers run without the hypervisor, nested
+// virtualization or the Server service those rows are about.
+func TestOnlyALocalLinuxEngineProvesTheAdviceRows(t *testing.T) {
+	f := goodPC()
+	f.DockerDesktopRunning = Yes
+	f.OtherHypervisors, f.OtherHypervisorNames = Yes, []string{"VirtualBox"}
+	f.Manufacturer, f.Model = "Microsoft Corporation", "Virtual Machine"
+	f.LanmanServer = "manual"
+	derive(&f)
+	if f.IsVM != Yes {
+		t.Fatalf("the fixture reads IsVM as %v", f.IsVM)
+	}
+	for _, c := range []struct {
+		name   string
+		reason string
+		local  bool
+	}{
+		{"a remote engine", runtime.ReasonRunning, false},
+		{"Windows containers", runtime.ReasonWindowsContainers, true},
+	} {
+		steps := DockerSteps(f, c.reason, c.local)
+		if s := stepOf(t, steps, "a10"); s.State == StepDone {
+			t.Errorf("%s: a10 claims Docker runs next to VirtualBox: %s", c.name, s.Text)
+		}
+		if s := stepOf(t, steps, "a11"); s.State != StepNeedsYou {
+			t.Errorf("%s: a11 is %s, want needs-you: %s", c.name, s.State, s.Text)
+		}
+		if s := stepOf(t, steps, "a12"); s.State != StepNeedsYou || s.Action.Op != OpLanmanServer {
+			t.Errorf("%s: a12 is %s with %+v, want needs-you with the fix: %s", c.name, s.State, s.Action, s.Text)
+		}
+		if LocalLinuxEngine(f, c.reason, c.local) {
+			t.Errorf("%s counts as this PC's Docker Desktop running Linux containers", c.name)
+		}
+	}
+	steps := DockerSteps(f, runtime.ReasonRunning, true)
+	for id, want := range map[string]string{"a10": StepDone, "a11": StepDone, "a12": StepNote} {
+		if s := stepOf(t, steps, id); s.State != want {
+			t.Errorf("this PC's Docker Desktop runs Linux containers, but %s is %s", id, s.State)
+		}
+	}
+	if !LocalLinuxEngine(f, runtime.ReasonRunning, true) {
+		t.Error("this PC's Docker Desktop runs Linux containers, but it does not count")
+	}
+	f.DockerDesktopRunning = Unknown
+	if LocalLinuxEngine(f, runtime.ReasonRunning, true) {
+		t.Error("an engine answers with Docker Desktop not seen running here, and it counts")
+	}
+}

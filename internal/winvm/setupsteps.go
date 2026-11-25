@@ -226,36 +226,39 @@ if ((Get-Service -Name LanmanServer).Status -ne 'Running') { exit %d }
 exit 0
 `
 
-// hypervisorScript sets the boot entry Windows starts from to launch its
-// hypervisor again. It first reads the entry's hypervisorlaunchtype as a number
-// through the BCD WMI provider, not bcdedit's translated text: element
-// 0x250000F0 (BcdOSLoaderInteger_HypervisorLaunchType) of {current}, whose fixed
-// GUID is {fa926493-6f1c-4193-a414-58f0b2456d1e}; 1 is Auto
+// hypervisorRead reads the hypervisorlaunchtype of the boot entry Windows
+// started from into $launch, as a number, or leaves $launch $null when it cannot
+// read it. It reads through the BCD WMI provider, not bcdedit's translated text:
+// element 0x250000F0 (BcdOSLoaderInteger_HypervisorLaunchType) of {current},
+// whose fixed GUID is {fa926493-6f1c-4193-a414-58f0b2456d1e}; 1 is Auto
 // (https://learn.microsoft.com/en-us/previous-versions/windows/desktop/bcd/bcdosloaderelementtypes).
-// The connection enables the token's privileges (Backup and Restore) before it
-// opens the store, as Microsoft's BCD WMI samples do with
-// {impersonationlevel=Impersonate,(Backup,Restore)}: the scope's options are set
-// before it connects, so they apply.
-// Already Auto ends CodeLaunchAuto and changes nothing. A read that fails goes on
-// to the change. It only ever sets "auto". The change takes effect at the next
-// start, so success is 3010.
-const hypervisorScript = `$bcd = Join-Path ([Environment]::SystemDirectory) 'bcdedit.exe'
-if (-not (Test-Path -LiteralPath $bcd)) { exit %d }
-$launch = $null
+// It goes through the CIM cmdlets, which hand back each out parameter as an
+// instance the next call can run a method on. The [wmiclass] chain handed back
+// a bare ManagementBaseObject from OpenStore, so OpenObject threw on Windows
+// PowerShell 5.1 and the read never worked. An entry that opens but has no such
+// element reads as 0: nothing in it tells Windows to start its hypervisor. It
+// only reads, and never throws.
+const hypervisorRead = `$launch = $null
 try {
-  $scope = New-Object System.Management.ManagementScope('\\.\root\WMI')
-  $scope.Options.EnablePrivileges = $true
-  $store = New-Object System.Management.ManagementClass($scope, (New-Object System.Management.ManagementPath('BcdStore')), $null)
-  $opened = $store.OpenStore('')
+  $opened = Invoke-CimMethod -Namespace root/wmi -ClassName BcdStore -MethodName OpenStore -Arguments @{ File = '' }
   if ($opened.ReturnValue) {
-    $entry = $opened.Store.OpenObject('{fa926493-6f1c-4193-a414-58f0b2456d1e}')
+    $entry = Invoke-CimMethod -InputObject $opened.Store -MethodName OpenObject -Arguments @{ Id = '{fa926493-6f1c-4193-a414-58f0b2456d1e}' }
     if ($entry.ReturnValue) {
-      $element = $entry.Object.GetElement(0x250000F0)
-      if ($element.ReturnValue) { $launch = [int64]$element.Element.Integer }
+      $element = Invoke-CimMethod -InputObject $entry.Object -MethodName GetElement -Arguments @{ Type = [uint32]0x250000F0 }
+      if ($element.ReturnValue) { $launch = [int64]$element.Element.Integer } else { $launch = 0 }
     }
   }
 } catch { $launch = $null }
-if ($launch -eq 1) { exit %s }
+`
+
+// hypervisorScript sets the boot entry Windows starts from to launch its
+// hypervisor again. It reads the entry's hypervisorlaunchtype first
+// (hypervisorRead): already Auto ends CodeLaunchAuto and changes nothing. A read
+// that fails goes on to the change. It only ever sets "auto". The change takes
+// effect at the next start, so success is 3010.
+const hypervisorScript = `$bcd = Join-Path ([Environment]::SystemDirectory) 'bcdedit.exe'
+if (-not (Test-Path -LiteralPath $bcd)) { exit %d }
+` + hypervisorRead + `if ($launch -eq 1) { exit %s }
 $code = Bounded $bcd @('/set','{current}','hypervisorlaunchtype','auto') %d
 if ($code -ne 0) { exit $code }
 exit 3010
@@ -293,6 +296,7 @@ const (
 	OutcomeCancelled = "cancelled" // the user said no at the Windows prompt
 	OutcomePolicy    = "policy"    // a policy on this PC blocks it; stop and explain
 	OutcomeFallback  = "fallback"  // the app cannot do it here; Text says how by hand
+	OutcomeNote      = "note"      // nothing needed changing; Text says why
 )
 
 // RetryWebDownload is the retry a WSL change offers after a Store failure.
@@ -359,7 +363,7 @@ func SetupOutcome(op string, res runtime.ElevatedResult, err error, timedOut, we
 	case CodeService:
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "Windows did not let CashPilot set the Server service to start automatically. A clean-up tool or a policy may hold it off."}
 	case CodeLaunchAuto:
-		return Outcome{State: OutcomeFailed, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
+		return Outcome{State: OutcomeNote, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
 	case WingetRebootForInstall:
 		return Outcome{State: OutcomeFailed, Code: hex, Text: "winget says Windows must restart before Docker Desktop can install. Restart the PC, then click Install Docker Desktop again."}
 	case CodeWingetGone:

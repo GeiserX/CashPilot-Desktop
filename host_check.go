@@ -20,6 +20,10 @@ type HostCheckResult struct {
 	Facts   winvm.HostFacts `json:"facts"`
 	Runtime runtime.Status  `json:"runtime"`
 	Steps   []winvm.Step    `json:"steps"`
+	// SetupFinished is true when this reading ended the guided setup: this PC's
+	// own Docker Desktop runs Linux containers (winvm.LocalLinuxEngine), and the
+	// journal and RunOnce value are gone.
+	SetupFinished bool `json:"setupFinished"`
 }
 
 // HostCheck reads this PC afresh (Windows edition, build and CPU, virtualization,
@@ -32,20 +36,31 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 	}
 	facts := a.hostCache().refresh(a.ctx)
 	status := a.runtimeStatus(a.catalog.ListVisible())
-	if status.Reason == runtime.ReasonRunning {
-		// Docker runs: a guided setup that waited for a restart is finished.
+	finished := winvm.LocalLinuxEngine(facts, status.Reason, localEngine(status))
+	if finished {
+		// This PC's Docker Desktop runs Linux containers: a guided setup that
+		// waited for a restart is finished. An engine elsewhere, or Windows
+		// containers, finishes nothing here. A setup whose journal could not be
+		// cleared is not finished: the banner stays with it.
 		if err := a.endSetup(); err != nil {
 			log.Printf("setup: %v", err)
+			finished = false
 		}
 	}
-	return HostCheckResult{Facts: facts, Runtime: status, Steps: dockerSteps(facts, status)}, nil
+	return HostCheckResult{Facts: facts, Runtime: status, Steps: dockerSteps(facts, status), SetupFinished: finished}, nil
 }
 
 // dockerSteps is the checklist for one reading. The engine answering proves the
 // rows only when it is this PC's own Docker Desktop, so DOCKER_HOST and the
 // Docker context go in with it.
 func dockerSteps(facts winvm.HostFacts, status runtime.Status) []winvm.Step {
-	return winvm.DockerSteps(facts, status.Reason, runtime.LocalDockerDesktop(os.Getenv("DOCKER_HOST"), status.Context))
+	return winvm.DockerSteps(facts, status.Reason, localEngine(status))
+}
+
+// localEngine says the engine status reached is this PC's own Docker Desktop,
+// read from DOCKER_HOST and the Docker context.
+func localEngine(status runtime.Status) bool {
+	return runtime.LocalDockerDesktop(os.Getenv("DOCKER_HOST"), status.Context)
 }
 
 // runtimeStatus is the Docker status with the native runtime's part added: which
