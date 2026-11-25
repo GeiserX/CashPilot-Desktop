@@ -144,7 +144,11 @@ func elevatedOutcome(err error) (ElevatedResult, error) {
 //
 //  1. makes DataDir and DataDir\guard folders only SYSTEM and Administrators
 //     can write, owned by Administrators, with no inherited rule, refusing a
-//     path that is a link or a file;
+//     path that is a link or a file, and refusing (exit 1) a folder that
+//     exists and is owned by anyone but SYSTEM or Administrators: its owner
+//     may hold an open handle with WRITE_DAC, which keeps working after the
+//     stub resets the rules. A new folder is made with its rules in the same
+//     call, so it never exists with ProgramData's inherited ones;
 //  2. then refuses (exit 1) when anything inside DataDir is a link, or is
 //     owned by anyone but SYSTEM or Administrators. Users may create folders
 //     in ProgramData, so a standard user could have made DataDir first and
@@ -206,21 +210,28 @@ func (s SecureVMStub) Build() (string, error) {
 		// and Windows PowerShell then loads PowerShell 7's Security module and
 		// fails on its type data. Use only Windows PowerShell's own modules.
 		"$env:PSModulePath = $env:ProgramFiles + '\\WindowsPowerShell\\Modules;' + [Environment]::SystemDirectory + '\\WindowsPowerShell\\v1.0\\Modules'",
+		// Owners by SID: account names are translated.
+		"function Test-Owner([string]$p) {",
+		"  $o = (Get-Acl -LiteralPath $p).GetOwner([Security.Principal.SecurityIdentifier]).Value",
+		"  if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator, so not used: ' + $p + '. Delete it and try again.') }",
+		"}",
+		// A folder that exists must already be owned by SYSTEM or
+		// Administrators: its owner could hold a handle with WRITE_DAC that
+		// outlives any new rules. A new folder gets its rules as it is made.
 		"function Lock-Dir([string]$p) {",
+		"  $acl = New-Object Security.AccessControl.DirectorySecurity",
+		"  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')",
 		"  if (Test-Path -LiteralPath $p) {",
 		"    $i = Get-Item -LiteralPath $p -Force",
 		"    if (-not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('not a plain folder: ' + $p) }",
-		"  } else { New-Item -ItemType Directory -Path $p | Out-Null }",
-		"  $acl = New-Object Security.AccessControl.DirectorySecurity",
-		"  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')",
+		"    Test-Owner $p",
+		"  } else { [IO.Directory]::CreateDirectory($p, $acl) | Out-Null }",
 		"  Set-Acl -LiteralPath $p -AclObject $acl",
 		"}",
-		// Owners by SID: account names are translated.
 		"function Test-Tree([string]$p) {",
 		"  foreach ($c in @(Get-ChildItem -LiteralPath $p -Force)) {",
 		"    if ($c.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw ('a link inside the data folder: ' + $c.FullName) }",
-		"    $o = (Get-Acl -LiteralPath $c.FullName).GetOwner([Security.Principal.SecurityIdentifier]).Value",
-		"    if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator, so not used: ' + $c.FullName + '. Delete it and try again.') }",
+		"    Test-Owner $c.FullName",
 		"    if ($c.PSIsContainer) { Test-Tree $c.FullName }",
 		"  }",
 		"}",
