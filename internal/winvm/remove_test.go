@@ -3,6 +3,7 @@ package winvm_test
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -132,6 +133,44 @@ func TestRemoveLeavesForeignObjects(t *testing.T) {
 	left := strings.Join(res.Left, "\n")
 	if !strings.Contains(left, "someone-elses-rule") || !strings.Contains(left, vm) {
 		t.Fatalf("Remove did not list what it left: %v", res.Left)
+	}
+}
+
+// TestRemoveLeavesAForeignSwitch: a second switch with our name and no owner
+// token is someone else's, so Remove VM takes out only the recorded one.
+func TestRemoveLeavesAForeignSwitch(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	sw := f.AddSwitch(winvm.ProductNames().Switch, "Internal")
+	res := remove(t, f, dir)
+	if !strings.Contains(strings.Join(f.Objects(), "\n"), "switch "+sw+" ") {
+		t.Fatalf("Remove took out a switch it did not make:\n%s", strings.Join(f.Objects(), "\n"))
+	}
+	if !strings.Contains(strings.Join(res.Left, "\n"), sw) {
+		t.Fatalf("Remove did not list the switch it left: %v", res.Left)
+	}
+}
+
+// TestRemoveLeavesAForeignNATAndTask: someone replaced our NAT with one on
+// another range and our guard task with their own, under our names. Neither
+// is ours, so Remove VM leaves both and lists them.
+func TestRemoveLeavesAForeignNATAndTask(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	n := winvm.ProductNames()
+	f.AddForeignNAT(n.NAT, netip.MustParsePrefix("10.250.250.0/29"))
+	f.AddForeignTask(n.GuardTask)
+	res := remove(t, f, dir)
+	objs := strings.Join(f.Objects(), "\n")
+	if !strings.Contains(objs, "nat "+n.NAT+" 10.250.250.0/29") {
+		t.Fatalf("Remove took out a NAT it did not make:\n%s", objs)
+	}
+	if !strings.Contains(objs, "task "+n.GuardTask+" ") {
+		t.Fatalf("Remove took out a task it did not make:\n%s", objs)
+	}
+	left := strings.Join(res.Left, "\n")
+	if !strings.Contains(left, "the NAT "+n.NAT) || !strings.Contains(left, "the scheduled task") {
+		t.Fatalf("Remove did not list the NAT and task it left: %v", res.Left)
 	}
 }
 
