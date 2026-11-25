@@ -205,14 +205,20 @@ func (a *App) finishServerCommandsAllow(generation uint64, name, program string)
 		}
 		return errors.New("the pairing changed before the firewall rule was ready. Allow the rule again while joined")
 	}
-	defer firewall.mu.Unlock()
 	if err := a.cfg.Update(func(c *config.AppConfig) {
 		c.ServerCommandsFirewallRule = name
 		c.ServerCommandsFirewallProgram = program
 	}); err != nil {
-		return err
+		firewall.mu.Unlock()
+		saveErr := fmt.Errorf("could not save the firewall rule: %w", err)
+		// Leave cannot clean up a rule whose name was never recorded.
+		if err := runFirewallScript(removeRuleScript()); err != nil {
+			return fmt.Errorf("%w. The firewall rule %q could not be removed: %w", saveErr, name, err)
+		}
+		return saveErr
 	}
 	a.syncWorkerAPI()
+	firewall.mu.Unlock()
 	return nil
 }
 

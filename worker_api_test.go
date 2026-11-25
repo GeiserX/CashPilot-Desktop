@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -850,6 +851,79 @@ func TestPairingChangesRollBackAnInFlightFirewallAllow(t *testing.T) {
 			cfg := app.cfg.Config()
 			if (cfg.ServerCommandsFirewallRule != "") == tc.wantCancel || (cfg.ServerCommandsFirewallProgram != "") == tc.wantCancel {
 				t.Errorf("rule fields after Allow: %q, %q, want recorded %v", cfg.ServerCommandsFirewallRule, cfg.ServerCommandsFirewallProgram, !tc.wantCancel)
+			}
+		})
+	}
+}
+
+func TestFirewallAllowRollsBackWhenConfigSaveFails(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		decline bool
+	}{
+		{"remove the rule", false},
+		{"name the rule when removal is declined", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useAddrs(t)
+			app := joinedApp(t)
+			app.ctx = nil
+			oldNeeded, oldRun := firewallRuleNeeded, runFirewallScript
+			t.Cleanup(func() { firewallRuleNeeded, runFirewallScript = oldNeeded, oldRun })
+			firewallRuleNeeded = true
+
+			// A directory at the config path makes the atomic save fail on every OS.
+			configPath := filepath.Join(app.cfg.AppDir(), "config.json")
+			savedPath := configPath + ".saved"
+			installed, removals := false, 0
+			runFirewallScript = func(script string) error {
+				if strings.Contains(script, "New-NetFirewallRule") {
+					if err := os.Rename(configPath, savedPath); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Mkdir(configPath, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					installed = true
+					return nil
+				}
+				removals++
+				if !strings.Contains(script, "Get-NetFirewallRule -Name 'CashPilot.Desktop.ServerCommands'") ||
+					!strings.Contains(script, "Remove-NetFirewallRule") {
+					t.Errorf("rollback did not remove the rule by its ID: %s", script)
+				}
+				if tc.decline {
+					return errors.New("administrator declined removal")
+				}
+				installed = false
+				return nil
+			}
+
+			state, err := app.AllowServerCommandsThroughFirewall()
+			var saveErr *os.LinkError
+			if !errors.As(err, &saveErr) {
+				t.Errorf("Allow returned %v, want a config save error", err)
+			}
+			if removals != 1 || installed != tc.decline {
+				t.Errorf("rollback attempts %d, rule installed %v. Want one attempt and installed %v", removals, installed, tc.decline)
+			}
+			if tc.decline && (err == nil || !strings.Contains(err.Error(), serverCommandsRuleName())) {
+				t.Errorf("Allow returned %v, want the name of the rule still installed", err)
+			}
+			if cfg := app.cfg.Config(); state.FirewallRule || cfg.ServerCommandsFirewallRule != "" || cfg.ServerCommandsFirewallProgram != "" {
+				t.Error("the failed save recorded the rule")
+			}
+
+			if err := os.Remove(configPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(savedPath, configPath); err != nil {
+				t.Fatal(err)
+			}
+			beforeLeave := removals
+			left, err := app.SwitchToLead()
+			if err != nil || left.FirewallError != "" || removals != beforeLeave {
+				t.Errorf("Leave retried cleanup or reported an error: result %+v, error %v, removal attempts %d -> %d", left, err, beforeLeave, removals)
 			}
 		})
 	}
