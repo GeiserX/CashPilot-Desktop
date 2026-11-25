@@ -74,6 +74,9 @@ var collectorFields = map[string][]Field{
 	"storj": {
 		{Key: "STORJ_API_URL", Label: "Storj API URL", Description: "Local node dashboard URL, default http://localhost:14002"},
 	},
+	"supportxmr": {
+		{Key: "SUPPORTXMR_ADDRESS", Label: "Monero payout address", Required: true},
+	},
 }
 
 // Fields returns the collector-only credential inputs for slug, or nil when the

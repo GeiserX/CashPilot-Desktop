@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -131,6 +132,25 @@ func TestRefreshAndConvert(t *testing.T) {
 	snap.Fiat["EUR"] = 999 // mutate the copy...
 	if got, ok := svc.ToUSD(10, "EUR"); !ok || !approx(got, 10.0/0.9) {
 		t.Fatalf("Snapshot mutation leaked into the cache: ToUSD(10, EUR) = (%v, %v)", got, ok)
+	}
+}
+
+func TestDefaultMoneroRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",monero,") {
+			t.Errorf("CoinGecko request did not include monero: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"monero":{"usd":200}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(0.01, "XMR"); !ok || got != 2 {
+		t.Fatalf("ToUSD(0.01, XMR) = (%v, %v), want (2, true)", got, ok)
 	}
 }
 

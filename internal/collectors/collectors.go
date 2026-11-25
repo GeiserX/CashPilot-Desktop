@@ -110,6 +110,7 @@ var collectorDispatch = map[string]collectorFunc{
 	"repocket":        (*Registry).collectRepocket,
 	"salad":           (*Registry).collectSalad,
 	"storj":           (*Registry).collectStorj,
+	"supportxmr":      (*Registry).collectSupportXMR,
 	"traffmonetizer":  (*Registry).collectTraffmonetizer,
 	"vast-ai":         (*Registry).collectVast,
 }

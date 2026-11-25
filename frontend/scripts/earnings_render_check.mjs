@@ -76,6 +76,9 @@ const ocean = earning({
 check("OCEAN retains every satoshi in the native balance", cell(ocean).includes("0.00012345 BTC"), cell(ocean));
 check("OCEAN shows its full automatic payout threshold", payoutCell(ocean).includes("0.01048576 BTC"), payoutCell(ocean));
 
+const supportxmr = earning({ platform: "supportxmr", currency: "XMR", balance: 0.000000000001, balanceDisplay: 0 });
+check("SupportXMR displays one piconero in the native balance", primary(cell(supportxmr)) === "0.000000000001 XMR", cell(supportxmr));
+
 
 // ---------------------------------------------------------------------------
 // THE RULE.
