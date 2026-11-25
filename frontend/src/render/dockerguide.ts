@@ -105,14 +105,14 @@ export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-g
 }
 
 /** The progress line while waiting for Docker's engine, and how the wait ended. */
-export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "runtime">): string {
+export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "steps">): string {
   let text = "";
   let tone = "";
   if (model.waiting !== null) {
     text = `Waiting for Docker's engine to start: ${Math.min(model.waiting, START_LIMIT_SECONDS)} s of ${START_LIMIT_SECONDS / 60} min.`;
   } else if (model.waitResult === "answered" || model.waitResult === "checklist-answered") {
     text = "CashPilot connected to Docker Desktop earlier.";
-    if (model.runtime.available) {
+    if (engineAnswers(model.steps)) {
       text = model.waitResult === "answered"
         ? "Docker's engine answered."
         : "Docker's engine answered during the checklist check.";
@@ -215,7 +215,7 @@ function summary(model: GuideModel): string {
   if (model.checkFailed) {
     return `<p class="docker-guide-summary">Docker Desktop's current status is unknown.</p>`;
   }
-  if (model.runtime.available && model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
+  if (engineAnswers(model.steps) && model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
     return `<p class="docker-guide-summary ok">Docker Desktop is ready on this PC.</p>`;
   }
   if (!model.steps) {

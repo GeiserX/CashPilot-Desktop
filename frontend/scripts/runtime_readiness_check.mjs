@@ -84,6 +84,10 @@ const answered = reading(ready, [
   { ...stoppedRow, state: "done", text: ready.message },
   { id: "a9", title: "Linux containers", state: "done", text: "Docker runs Linux containers." },
 ]);
+const emptyFleet = {
+  workers: 0, mobiles: 0, online: 0, services: 0, devices: [],
+  workerSnippet: "", mobileSnippet: "", reach: { hubOff: true },
+};
 
 async function openApp(key, initialRuntime, firstRunComplete, hostCheck, bindings = {}) {
   const root = new Element();
@@ -238,15 +242,54 @@ for (const view of ["fleet", "activity"]) {
     const unknown = { unknownBadge: true, unknownAlert: true };
     assert.deepEqual(status(), unknown, "the failed check publishes unknown before the page loads");
 
-    page.resolve(view === "fleet"
-      ? {
-        workers: 0, mobiles: 0, online: 0, services: 0, devices: [],
-        workerSnippet: "", mobileSnippet: "", reach: { hubOff: true },
-      }
-      : { days: 1, enabled: false, containers: [] });
+    page.resolve(view === "fleet" ? emptyFleet : { days: 1, enabled: false, containers: [] });
     await setImmediate();
     assert.match(root.innerHTML, view === "fleet" ? /Add Worker or Mobile/ : /Activity is off/);
     assert.deepEqual(status(), unknown, "the completed page load preserves the badge and alert");
+  });
+}
+
+for (const olderRetry of [false, true]) {
+  const name = olderRetry ? "Settings check supersedes an older Runtime retry" : "Settings check reaches Fleet after navigation";
+  await checkCase(name, async () => {
+    const settingsCheck = Promise.withResolvers();
+    const retry = Promise.withResolvers();
+    const snapshot = (runtime) => ({ config: { mode: "lead", firstRunComplete: true }, runtime, guides: [] });
+    let appReads = 0;
+    let hostReads = 0;
+    const { root } = await openApp(name, ready, true, async () => ++hostReads === 1 ? answered : retry.promise, {
+      GetAppState: async () => ++appReads === 1 ? snapshot(ready) : settingsCheck.promise,
+      GetSettingsState: async () => ({ environment: [], collectors: [] }),
+      BackgroundHelperStatus: async () => ({ supported: false }),
+      UnfinishedRestores: async () => [],
+      GetModeState: async () => null,
+      GetFleetState: async () => emptyFleet,
+      GetProxiesState: async () => null,
+    });
+    const badge = () => root.querySelector(".topbar-runtime").innerHTML;
+    if (olderRetry) {
+      root.querySelector(".topbar-runtime").click();
+      await setImmediate();
+      root.querySelector("#docker-guide").querySelector("#docker-guide-check").click();
+      assert.equal(hostReads, 2);
+    }
+    root.querySelector('[data-view="settings"]').click();
+    await setImmediate();
+    assert.equal(appReads, 2);
+    root.querySelector('[data-view="fleet"]').click();
+    await setImmediate();
+    assert.match(badge(), /Runtime ready/);
+
+    if (olderRetry) {
+      retry.reject(new Error("Host check failed"));
+      await setImmediate();
+      assert.match(badge(), /Runtime ready/, "an older check cannot publish while a newer check is pending");
+      assert.doesNotMatch(root.querySelector(".notification-menu").innerHTML, /Docker status unknown/);
+    }
+    settingsCheck.resolve(snapshot(stopped));
+    await setImmediate();
+    assert.match(badge(), /Runtime offline/);
+    assert.match(root.innerHTML, /Add Worker or Mobile/);
   });
 }
 
@@ -322,4 +365,35 @@ await checkCase("positive pipe poll followed by an inconclusive check", async ()
   assert.match(guide().innerHTML, /data-step="a6" data-state="unknown"/);
   assert.doesNotMatch(guide().innerHTML, /docker-guide-wait ok/);
   assert.match(guide().innerHTML, /connected to Docker Desktop earlier/);
+});
+
+await checkCase("remote engine readiness leaves an inconclusive local pipe answer as history", async () => {
+  const remote = { ...ready, context: "remote" };
+  const localUnknown = { ...stoppedRow, state: "unknown", text: "CashPilot could not read whether Docker Desktop is running.", action: null };
+  const locallyAnswered = reading({ ...stopped, context: "remote" }, answered.steps);
+  let checks = 0;
+  let polls = 0;
+  const results = [setup, reading(remote, [localUnknown]), locallyAnswered];
+  const { root } = await openApp("remote", stopped, true, async () => results[checks++], {
+    DockerDesktopEngineReady: async () => { polls++; return true; },
+  });
+  const guide = () => root.querySelector("#docker-guide");
+  root.querySelector(".topbar-runtime").click();
+  await setImmediate();
+  guide().querySelector('[data-guide-action="start-docker"]').click();
+  await setImmediate();
+
+  assert.equal(checks, 2);
+  assert.equal(polls, 1);
+  assert.match(root.querySelector(".topbar-runtime").innerHTML, /Runtime ready/);
+  assert.match(guide().innerHTML, /data-step="a6" data-state="unknown"/);
+  assert.doesNotMatch(guide().innerHTML, /docker-guide-wait ok|docker-guide-summary ok/);
+  assert.match(guide().innerHTML, /connected to Docker Desktop earlier/);
+
+  guide().querySelector("#docker-guide-check").click();
+  await setImmediate();
+  assert.match(root.querySelector(".topbar-runtime").innerHTML, /Runtime offline/);
+  assert.match(guide().innerHTML, /data-step="a6" data-state="done"/);
+  assert.match(guide().innerHTML, /docker-guide-wait ok/);
+  assert.match(guide().innerHTML, /Docker Desktop is ready on this PC/);
 });

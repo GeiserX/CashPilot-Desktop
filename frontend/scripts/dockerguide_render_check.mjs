@@ -171,11 +171,14 @@ check("RULE 10: Go's text is escaped", !/<img|<script|<b>t|<i>l/.test(hostile) &
 const localReady = {
   ...base,
   runtime: { ...runtimeDown, available: true, reason: "running" },
-  steps: [{ ...steps[0], id: "a9" }],
+  steps: [
+    { id: "a6", title: "Docker Desktop running", state: "done", text: "Docker's engine answers.", action: none },
+    { id: "a9", title: "Linux containers", state: "done", text: "Docker runs Linux containers.", action: none },
+  ],
 };
 check("Docker Desktop ready says so with a local Linux engine", text(renderDockerGuide(localReady)).includes("Docker Desktop is ready on this PC."));
-const localUnknown = { ...localReady, runtime: { ...runtimeDown, reason: "unreachable" } };
-check("An unknown runtime suppresses the ready summary even with a completed Linux engine row",
+const localUnknown = { ...localReady, steps: [{ ...localReady.steps[0], state: "unknown" }, localReady.steps[1]], runtime: { ...runtimeDown, reason: "unreachable" } };
+check("An inconclusive local running row suppresses the ready summary even with a completed Linux engine row",
   !renderDockerGuide(localUnknown).includes("Docker Desktop is ready on this PC."));
 check("Before the first reading it says it is checking", text(renderDockerGuide({ ...base, steps: null })).includes("Checking this PC…"));
 

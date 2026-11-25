@@ -1515,11 +1515,9 @@ async function renderSettings(current: AppState) {
     showErrorToast({scope: "mode", error: String(error)});
   }
   if (request !== settingsRequest || activeView !== "settings") return;
-  const runtimeRequest = ++runtimeSnapshotRequest;
-  const snapshot = await readRuntimeSnapshot(GetAppState, state ?? current);
+  await refreshRuntimeSnapshot();
   if (request !== settingsRequest || activeView !== "settings") return;
   current = state ?? current;
-  if (runtimeRequest === runtimeSnapshotRequest) current = state = { ...current, ...snapshot };
   const { runtime } = current;
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
