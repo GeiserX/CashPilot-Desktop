@@ -28,17 +28,31 @@ func serverCommandsRuleName() string {
 	return fmt.Sprintf("CashPilot: server commands (TCP %d)", workerAPIPort)
 }
 
-// psLiteral makes a PowerShell single-quoted literal: only ' is special inside one,
-// and it is escaped by doubling.
+// psLiteral makes a PowerShell single-quoted literal. Inside one, PowerShell ends the
+// string at ' and also at the curly quotes U+2018 to U+201B; each is escaped by
+// doubling it. A user folder such as O’Brien has one.
 func psLiteral(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		b.WriteRune(r)
+		switch r {
+		case '\'', '\u2018', '\u2019', '\u201A', '\u201B':
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 // addRuleScript replaces any rule of that name with one scoped as described above.
-// It also removes the inbound Block rules Windows holds for this program, which
-// Windows makes when someone presses Cancel on its own prompt: in Windows Firewall a
-// Block rule wins over an Allow rule, so the scoped rule would do nothing beside one.
-// The button that runs this says so before the user presses it.
+// It also removes the inbound Block rules Windows holds for this program that cover
+// TCP workerAPIPort, which Windows makes when someone presses Cancel on its own
+// prompt: in Windows Firewall a Block rule wins over an Allow rule, so the scoped
+// rule would do nothing beside one. Only a Block rule whose protocol is Any or TCP
+// and whose local ports are Any or include the port can conflict, so every other
+// Block rule for this program stays. The button that runs this says so before the
+// user presses it.
 func addRuleScript(name, program string) string {
 	subnets := make([]string, 0, len(privateNets))
 	for _, s := range privateSubnets() {
@@ -51,12 +65,29 @@ func addRuleScript(name, program string) string {
 			" -Direction Inbound -Action Allow -Protocol TCP -LocalPort " + fmt.Sprint(workerAPIPort) +
 			" -Profile Private -RemoteAddress @(" + strings.Join(subnets, ",") + ")" +
 			" -Program " + psLiteral(program) + " | Out-Null",
+		blocksPortFilter,
 		"Get-NetFirewallApplicationFilter -Program " + psLiteral(program) + " -ErrorAction SilentlyContinue |" +
 			" Get-NetFirewallRule -ErrorAction SilentlyContinue |" +
-			" Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } | Remove-NetFirewallRule",
+			" Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' -and" +
+			" (Test-CoversPort ($_ | Get-NetFirewallPortFilter) " + fmt.Sprint(workerAPIPort) + ") } | Remove-NetFirewallRule",
 		"exit 0",
 	}, "\n")
 }
+
+// blocksPortFilter defines Test-CoversPort: whether a rule's port filter covers TCP
+// on the port. Protocol is Any, TCP or its number 6; LocalPort is a list of Any, a
+// port, a range such as 8000-9000, or a keyword such as RPC, which covers no plain
+// port. These values are the firewall's own names, the same in every language.
+const blocksPortFilter = `function Test-CoversPort($pf, [int]$port) {
+  if ($null -eq $pf) { return $false }
+  if (@('Any', 'TCP', '6') -notcontains [string]$pf.Protocol) { return $false }
+  foreach ($p in @($pf.LocalPort)) {
+    $p = [string]$p
+    if ($p -eq 'Any' -or $p -eq [string]$port) { return $true }
+    if ($p -match '^(\d+)-(\d+)$' -and [int]$Matches[1] -le $port -and $port -le [int]$Matches[2]) { return $true }
+  }
+  return $false
+}`
 
 // removeRuleScript deletes the rule; a rule that is already gone is no error.
 func removeRuleScript(name string) string {

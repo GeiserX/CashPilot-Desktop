@@ -1292,6 +1292,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// whole-snapshot Save would put back what background work changed since the
 	// snapshot above, such as the fence recording that isolation is on, and the
 	// keyring writes above make that window real.
+	left := false
 	if err := a.cfg.Update(func(cur *config.AppConfig) {
 		cur.DisplayCurrency = cfg.DisplayCurrency
 		cur.HostnamePrefix = cfg.HostnamePrefix
@@ -1303,6 +1304,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 				cur.Mode = config.ModeFollower
 				cfg.FleetServerEnabled = false
 			} else {
+				left = cur.Mode == config.ModeFollower
 				cur.Mode = config.ModeLead
 			}
 		}
@@ -1318,6 +1320,12 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		cur.FleetPort = cfg.FleetPort
 	}); err != nil {
 		return SettingsState{}, err
+	}
+	// Clearing the address leaves the server, so it cleans up as Leave does.
+	if left {
+		if err := a.closeServerCommands(); err != nil {
+			a.emitNotice("server-commands", err.Error()+". Nothing listens behind it now. You can delete it in Windows Defender Firewall.")
+		}
 	}
 	// If the collection cadence changed, restart the ticker so the new interval
 	// takes effect immediately instead of waiting for the next app launch.
@@ -1546,11 +1554,14 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, false, nil)
+	deployment, _, err := a.deployService(slug, values, image, instances, false, nil, true)
 	return deployment, err
 }
 
-func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest) (store.Deployment, *runtime.WalletResult, error) {
+// register adds the device to the provider account (registerDevice). A deploy the
+// server sent leaves it out: the server registers the device itself, and a joined
+// Desktop leaves vendor contact to the server.
+func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest, register bool) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, nil, err
 	}
@@ -1596,7 +1607,9 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 		return store.Deployment{}, nil, err
 	}
 	a.emitEvent("deployment:changed", deployment)
-	a.registerDevice(slug, creds)
+	if register {
+		a.registerDevice(slug, creds)
+	}
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
 	// services with a native collector are worth kicking; the rest would merely
@@ -1644,7 +1657,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 // the owner confirmed it runs from this machine's own IP from now on. Its routed copy
 // is removed first.
 func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, true, nil)
+	deployment, _, err := a.deployService(slug, values, image, instances, true, nil, true)
 	return deployment, err
 }
 

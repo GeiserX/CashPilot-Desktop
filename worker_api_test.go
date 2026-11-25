@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ import (
 	"testing/fstest"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 )
@@ -500,8 +502,14 @@ func TestServerCommandsFirewallRuleIsScoped(t *testing.T) {
 			t.Errorf("the rule script lacks %q:\n%s", want, script)
 		}
 	}
-	if strings.Contains(script, "Any") || strings.Contains(script, "Public") || strings.Contains(script, "Domain") {
-		t.Errorf("the rule is wider than the private profile:\n%s", script)
+	var rule string
+	for _, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(line, "New-NetFirewallRule") {
+			rule = line
+		}
+	}
+	if rule == "" || strings.Contains(rule, "Any") || strings.Contains(rule, "Public") || strings.Contains(rule, "Domain") {
+		t.Errorf("the rule is wider than the private profile:\n%s", rule)
 	}
 }
 
@@ -657,5 +665,149 @@ func TestServerCommandsRefuseToDeleteACriticalVolume(t *testing.T) {
 	}
 	if _, ok := app.Docker.Container("cashpilot-keeper"); !ok {
 		t.Fatal("the refused delete removed the container")
+	}
+}
+
+// Clearing the server's address in Settings leaves the server too, so it cleans up as
+// Leave does: the API closes and the firewall rule CashPilot made is removed.
+func TestClearingTheAddressInSettingsClosesServerCommands(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	app := joinedApp(t)
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	oldRun, oldProgram := runFirewallScript, thisProgram
+	t.Cleanup(func() { runFirewallScript, thisProgram = oldRun, oldProgram })
+	var scripts []string
+	runFirewallScript = func(s string) error { scripts = append(scripts, s); return nil }
+	program, err := thisProgram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.cfg.Update(func(c *config.AppConfig) {
+		c.ServerCommandsFirewallRule = serverCommandsRuleName()
+		c.ServerCommandsFirewallProgram = program
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app.syncWorkerAPI()
+	if n := listening(app); n != 1 {
+		t.Fatalf("%d listeners while joined, want 1", n)
+	}
+
+	if _, err := app.SaveSettings(map[string]string{"upstreamUrl": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if app.joined() {
+		t.Fatal("still joined after clearing the address")
+	}
+	if n := listening(app); n != 0 {
+		t.Errorf("%d listeners after clearing the address, want 0", n)
+	}
+	if len(scripts) != 1 || !strings.Contains(scripts[0], "Remove-NetFirewallRule") || strings.Contains(scripts[0], "New-NetFirewallRule") {
+		t.Errorf("clearing the address did not remove the firewall rule: %v", scripts)
+	}
+	if rule := app.cfg.Config().ServerCommandsFirewallRule; rule != "" {
+		t.Errorf("the rule %q is still recorded after clearing the address", rule)
+	}
+
+	// A save that does not leave runs no firewall script.
+	if _, err := app.SaveSettings(map[string]string{"timezone": "Europe/Madrid"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(scripts) != 1 {
+		t.Errorf("a save that did not leave ran a firewall script: %v", scripts)
+	}
+}
+
+// The Allow button removes only the Block rules for this program that can beat the new
+// rule: inbound, TCP or any protocol, port 8086 or any port. Every other Block rule
+// stays, such as one an admin made for the hub's port.
+func TestAllowRemovesOnlyBlockRulesThatCoverThePort(t *testing.T) {
+	script := addRuleScript(serverCommandsRuleName(), `C:\CashPilot.exe`)
+	var removal string
+	for _, line := range strings.Split(script, "\n") {
+		if strings.Contains(line, "$_.Action -eq 'Block'") {
+			removal = line
+		}
+	}
+	if !strings.Contains(removal, "Test-CoversPort ($_ | Get-NetFirewallPortFilter) 8086") {
+		t.Fatalf("the Block-rule removal is not limited to rules that cover TCP 8086:\n%s", removal)
+	}
+	if !strings.Contains(script, "function Test-CoversPort") {
+		t.Fatalf("the script does not define Test-CoversPort:\n%s", script)
+	}
+
+	// The predicate itself, where PowerShell is installed (the Windows runners have it).
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh is not installed; the predicate runs on the Windows runners")
+	}
+	out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", testCoversPortScript).CombinedOutput()
+	if err != nil {
+		t.Fatalf("pwsh: %v\n%s", err, out)
+	}
+	if got := strings.Join(strings.Fields(string(out)), " "); got != testCoversPortWant {
+		t.Fatalf("Test-CoversPort answers %q, want %q", got, testCoversPortWant)
+	}
+}
+
+// testCoversPortScript asks Test-CoversPort about the port filters Windows makes and
+// some it does not: a Cancel on Windows' prompt makes TCP and UDP Block rules on any
+// port.
+var testCoversPortScript = blocksPortFilter + `
+$cases = @(
+  [pscustomobject]@{ Protocol = 'TCP'; LocalPort = @('Any') },
+  [pscustomobject]@{ Protocol = 'Any'; LocalPort = @('Any') },
+  [pscustomobject]@{ Protocol = 'TCP'; LocalPort = @('8086') },
+  [pscustomobject]@{ Protocol = '6'; LocalPort = @('80', '8000-9000') },
+  [pscustomobject]@{ Protocol = 'UDP'; LocalPort = @('Any') },
+  [pscustomobject]@{ Protocol = 'TCP'; LocalPort = @('8085') },
+  [pscustomobject]@{ Protocol = 'TCP'; LocalPort = @('8087-9000') },
+  [pscustomobject]@{ Protocol = 'TCP'; LocalPort = @('RPC') },
+  $null
+)
+foreach ($c in $cases) { if (Test-CoversPort $c 8086) { 'yes' } else { 'no' } }
+`
+
+const testCoversPortWant = "yes yes yes yes no no no no no"
+
+// PowerShell ends a single-quoted string at ' and at the curly quotes U+2018 to U+201B,
+// so each is doubled. A Windows user folder can hold a curly apostrophe.
+func TestPsLiteralEscapesEverySingleQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		`C:\Users\it's\CashPilot.exe`:    `'C:\Users\it''s\CashPilot.exe'`,
+		"C:\\Users\\O\u2019Brien\\a.exe": "'C:\\Users\\O\u2019\u2019Brien\\a.exe'",
+		"\u2018\u201A\u201B":             "'\u2018\u2018\u201A\u201A\u201B\u201B'",
+		"plain":                          "'plain'",
+	} {
+		if got := psLiteral(in); got != want {
+			t.Errorf("psLiteral(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A deploy the server sent does not register the device on the provider account: the
+// server registers it itself. The Deploy button on this computer still does.
+func TestServerDeployLeavesDeviceRegistrationToTheServer(t *testing.T) {
+	app := joinedApp(t)
+	devices := &fakeDevices{fakeCollector: newFakeCollector(nil, nil), register: collectors.RegisterAdded}
+	app.collectors = devices
+	svc, ok := app.catalog.Get("proxyrack")
+	if !ok || svc.DeviceLink == nil {
+		t.Fatal("proxyrack with a device link is not in the catalog")
+	}
+	env := map[string]string{"UUID": strings.Repeat("ab", 32), "API_KEY": "not-a-real-key"}
+	spec := map[string]any{"image": imageRepository(svc.Docker.Image) + ":1.0.0", "env": env, "instance": 1}
+	if w := call(t, app, http.MethodPost, "/api/containers/proxyrack/deploy", testWorkerKey, spec); w.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", w.Code, w.Body.String())
+	}
+	if len(devices.asked) != 0 {
+		t.Fatalf("a deploy from the server registered the device here too: %v", devices.asked)
+	}
+
+	if _, err := app.DeployService("proxyrack", env, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(devices.asked, []string{"proxyrack"}) {
+		t.Fatalf("the Deploy button did not register the device: %v", devices.asked)
 	}
 }

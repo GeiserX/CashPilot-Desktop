@@ -253,6 +253,20 @@ type LeaveResult struct {
 	FirewallError string `json:"firewallError"`
 }
 
+// closeServerCommands runs on every way out of joined mode, after the mode changed:
+// the server no longer commands this computer, so its API closes and the firewall
+// rule made for it is removed. A rule that stays (the admin prompt was refused) is
+// returned, so the user can delete it in Windows Defender Firewall; nothing listens
+// behind it any more.
+func (a *App) closeServerCommands() error {
+	a.syncWorkerAPI()
+	if err := a.removeServerCommandsRule(); err != nil {
+		log.Printf("server commands: %v", err)
+		return err
+	}
+	return nil
+}
+
 // SwitchToLead makes a joined computer run everything itself again. It stops the
 // heartbeats, clears the address and both keys, and starts local earnings
 // collection at once. The earners keep running. The server keeps this computer's
@@ -284,13 +298,7 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 	}); err != nil {
 		return LeaveResult{}, err
 	}
-	// The server no longer commands this computer: close its API, and remove the
-	// firewall rule made for it. A rule that stays (the admin prompt was refused) is
-	// reported, so the user can delete it in Windows Defender Firewall; nothing
-	// listens behind it any more.
-	a.syncWorkerAPI()
-	if err := a.removeServerCommandsRule(); err != nil {
-		log.Printf("server commands: %v", err)
+	if err := a.closeServerCommands(); err != nil {
 		out.FirewallError = err.Error()
 	}
 	// Collect now rather than at the next tick, which can be an hour away.

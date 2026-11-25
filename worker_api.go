@@ -589,8 +589,10 @@ func (a *App) deployForServer(slug string, spec workerDeploySpec) (int, string, 
 	// The app's own deploy path, as the Deploy button runs it, so every local rule
 	// stays in one place: what is stored (never a wallet seed), digest pins, fences,
 	// routes. "" is the catalog's image, with this computer's digest pin.
+	// The server registers the device on the provider account itself, so this deploy
+	// does not (decision: a joined Desktop leaves vendor contact to the server).
 	catalogOnly := ""
-	dep, _, err := a.deployService(slug, spec.Env, &catalogOnly, nil, false, nil)
+	dep, _, err := a.deployService(slug, spec.Env, &catalogOnly, nil, false, nil, false)
 	if err != nil {
 		return http.StatusConflict, oneLine(err.Error()), false
 	}
