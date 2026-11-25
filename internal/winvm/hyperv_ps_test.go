@@ -30,7 +30,6 @@ func seamPlan(t *testing.T) Plan {
 	t.Helper()
 	p, err := NewPlan(Options{
 		Names:       ProductNames(),
-		VHDXDir:     `C:\ProgramData\CashPilot\vm`,
 		Subnet:      netip.MustParsePrefix("172.31.250.0/29"),
 		HostVNICMAC: "00-15-5D-0A-00-01",
 		GuestMAC:    "00-15-5D-0A-00-02",
@@ -168,6 +167,16 @@ func newSeam(answers ...string) (*psHost, *fakeRun, *sleepRec) {
 func TestSeamScriptsAndArguments(t *testing.T) {
 	ctx := context.Background()
 	two := []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("9.9.9.9")}
+	p := Plan{VMID: tVMID, AdapterID: tAdapterID, Owner: tOwner}
+	q := netip.MustParsePrefix("203.0.113.9/32")
+	rows := []PortACL{
+		{ID: "acl-1", Name: tOwner + "-1", Direction: 1, Action: 2, Applicability: 2, Type: 2, Remote: q.Addr().String(), RemoteBits: 32},
+		{ID: "acl-2", Name: tOwner + "-2", Direction: 2, Action: 2, Applicability: 2, Type: 2, Remote: q.Addr().String(), RemoteBits: 32},
+	}
+	rowsJSON, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
 	cases := []struct {
 		name   string
 		script string
@@ -185,16 +194,16 @@ func TestSeamScriptsAndArguments(t *testing.T) {
 			func(h *psHost) (any, error) { return h.DropCounters(ctx, tVMID, tAdapterID) }},
 		{"Usage", scriptUsage, `{"vm":"` + tVMID + `"}`, cannedUsage,
 			func(h *psHost) (any, error) { return h.Usage(ctx, tVMID) }},
-		{"Disconnect", scriptDisconnect, `{"owner":"` + tOwner + `","vm":"` + tVMID + `"}`, `{"adapters":1,"connected":0}`,
-			func(h *psHost) (any, error) { return nil, h.Disconnect(ctx, tVMID, tOwner) }},
-		{"Connect", scriptConnect, `{"owner":"` + tOwner + `","switchId":"` + tSwitchID + `","vm":"` + tVMID + `"}`, `{"switchId":"` + tSwitchID + `"}`,
-			func(h *psHost) (any, error) { return nil, h.Connect(ctx, tVMID, tSwitchID, tOwner) }},
+		{"Disconnect", scriptDisconnect, `{"adapter":"` + tAdapterID + `","owner":"` + tOwner + `","vm":"` + tVMID + `"}`, `{"adapters":1,"connected":0}`,
+			func(h *psHost) (any, error) { return nil, h.Disconnect(ctx, tVMID, tOwner, tAdapterID) }},
+		{"Connect", scriptConnect, `{"adapter":"` + tAdapterID + `","owner":"` + tOwner + `","switchId":"` + tSwitchID + `","vm":"` + tVMID + `"}`, `{"switchId":"` + tSwitchID + `"}`,
+			func(h *psHost) (any, error) { return nil, h.Connect(ctx, tVMID, tSwitchID, tOwner, tAdapterID) }},
 		{"Start", scriptStart, `{"owner":"` + tOwner + `","vm":"` + tVMID + `"}`, `{"state":"Running"}`,
 			func(h *psHost) (any, error) { return nil, h.Start(ctx, tVMID, tOwner) }},
-		{"AddDeny", scriptAddDeny, `{"vm":"` + tVMID + `","owner":"` + tOwner + `","remotes":["198.51.100.0/24","203.0.113.9"]}`, cannedDenyAfterAdd,
-			func(h *psHost) (any, error) { return nil, h.AddDeny(ctx, tVMID, tOwner, twoDenies) }},
-		{"RemoveDeny", scriptRemoveDeny, `{"vm":"` + tVMID + `","owner":"` + tOwner + `","remotes":["198.51.100.0/24","203.0.113.9"]}`, cannedDenyAfterRemove,
-			func(h *psHost) (any, error) { return nil, h.RemoveDeny(ctx, tVMID, tOwner, twoDenies) }},
+		{"AddPortACLs", scriptAddPortACLs, `{"action":2,"adapter":"` + tAdapterID + `","owner":"` + tOwner + `","remotes":["203.0.113.9/32"],"vm":"` + tVMID + `"}`,
+			`{"rows":` + string(rowsJSON) + `}`, func(h *psHost) (any, error) { return h.AddPortACLs(ctx, p, "Deny", []netip.Prefix{q}) }},
+		{"RemovePortACLs", scriptRemovePortACLs, `{"adapter":"` + tAdapterID + `","owner":"` + tOwner + `","rows":` + string(rowsJSON) + `,"vm":"` + tVMID + `"}`,
+			`{"ok":true}`, func(h *psHost) (any, error) { return nil, h.RemovePortACLs(ctx, p, rows) }},
 	}
 	seen := map[string]bool{}
 	for _, c := range cases {
@@ -500,11 +509,11 @@ func TestSeamRefusesBadInput(t *testing.T) {
 			return err
 		},
 		"a braced VM ID":             func(h *psHost) error { _, err := h.Usage(ctx, "{"+tVMID+"}"); return err },
-		"an empty VM ID":             func(h *psHost) error { return h.Disconnect(ctx, "", tOwner) },
+		"an empty VM ID":             func(h *psHost) error { return h.Disconnect(ctx, "", tOwner, tAdapterID) },
 		"a bad adapter ID":           func(h *psHost) error { _, err := h.DropCounters(ctx, tVMID, "*"); return err },
-		"a switch name with a space": func(h *psHost) error { return h.Connect(ctx, tVMID, "Default Switch", tOwner) },
-		"a switch name too long":     func(h *psHost) error { return h.Connect(ctx, tVMID, strings.Repeat("a", 33), tOwner) },
-		"a switch name with a quote": func(h *psHost) error { return h.Connect(ctx, tVMID, "a'b", tOwner) },
+		"a switch name with a space": func(h *psHost) error { return h.Connect(ctx, tVMID, "Default Switch", tOwner, tAdapterID) },
+		"a switch name too long":     func(h *psHost) error { return h.Connect(ctx, tVMID, strings.Repeat("a", 33), tOwner, tAdapterID) },
+		"a switch name with a quote": func(h *psHost) error { return h.Connect(ctx, tVMID, "a'b", tOwner, tAdapterID) },
 		"an IPv6 sample": func(h *psHost) error {
 			_, err := h.ReadHostNet(ctx, []netip.Addr{netip.MustParseAddr("2001:db8::1")})
 			return err
@@ -523,33 +532,6 @@ func TestSeamRefusesBadInput(t *testing.T) {
 			return err
 		},
 		"a Start with a bad VM ID": func(h *psHost) error { return h.Start(ctx, "x", tOwner) },
-		"an AddDeny with a bad VM ID": func(h *psHost) error {
-			return h.AddDeny(ctx, "'; Remove-VM *", tOwner, twoDenies)
-		},
-		"an AddDeny with no prefix": func(h *psHost) error { return h.AddDeny(ctx, tVMID, tOwner, nil) },
-		"an AddDeny with an IPv6 prefix": func(h *psHost) error {
-			return h.AddDeny(ctx, tVMID, tOwner, []netip.Prefix{netip.MustParsePrefix("2001:db8::/32")})
-		},
-		"an AddDeny with an unmasked prefix": func(h *psHost) error {
-			return h.AddDeny(ctx, tVMID, tOwner, []netip.Prefix{netip.MustParsePrefix("198.51.100.7/24")})
-		},
-		"an AddDeny with a zero prefix": func(h *psHost) error { return h.AddDeny(ctx, tVMID, tOwner, []netip.Prefix{{}}) },
-		"an AddDeny with a repeat": func(h *psHost) error {
-			return h.AddDeny(ctx, tVMID, tOwner, []netip.Prefix{twoDenies[0], twoDenies[0]})
-		},
-		"an AddDeny over the row cap": func(h *psHost) error {
-			var ps []netip.Prefix
-			for i := range maxDenyTotal + 1 {
-				ps = append(ps, netip.PrefixFrom(netip.AddrFrom4([4]byte{203, 0, byte(i >> 8), byte(i)}), 32))
-			}
-			return h.AddDeny(ctx, tVMID, tOwner, ps)
-		},
-		"a RemoveDeny of a static Deny": func(h *psHost) error {
-			return h.RemoveDeny(ctx, tVMID, tOwner, []netip.Prefix{twoDenies[0], netip.MustParsePrefix("192.168.0.0/16")})
-		},
-		"a RemoveDeny with an IPv6 prefix": func(h *psHost) error {
-			return h.RemoveDeny(ctx, tVMID, tOwner, []netip.Prefix{netip.MustParsePrefix("::/0")})
-		},
 	}
 	for name, call := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -602,39 +584,18 @@ func TestSeamRefusesBadOutput(t *testing.T) {
 		}
 	}
 	h, _, _ := newSeam(`{"adapters":1,"connected":1}`)
-	if err := h.Disconnect(context.Background(), tVMID, tOwner); err == nil {
+	if err := h.Disconnect(context.Background(), tVMID, tOwner, tAdapterID); err == nil {
 		t.Error("a disconnect that left an adapter connected was accepted")
 	}
 	h, _, _ = newSeam(`{"switchId":""}`)
-	if err := h.Connect(context.Background(), tVMID, tSwitchID, tOwner); err == nil {
+	if err := h.Connect(context.Background(), tVMID, tSwitchID, tOwner, tAdapterID); err == nil {
 		t.Error("a connect that reported no switch was accepted")
 	}
 	h, _, _ = newSeam(`{"state":"Off"}`)
 	if err := h.Start(context.Background(), tVMID, tOwner); err == nil {
 		t.Error("a start that left the VM off was accepted")
 	}
-	// An add whose row is missing, or there one way only, failed.
-	oneWay := strings.Replace(cannedDenyAfterAdd, `{"direction":"Outbound","remote":"203.0.113.9"}`, `{"direction":"Outbound","remote":"203.0.113.10"}`, 1)
-	for name, answer := range map[string]string{"missing": cannedDenyAfterRemove, "one way only": oneWay} {
-		h, _, _ = newSeam(answer)
-		if err := h.AddDeny(context.Background(), tVMID, tOwner, twoDenies); err == nil {
-			t.Errorf("an add with its row %s was accepted", name)
-		}
-	}
-	// A remove that left a row behind failed, whether Hyper-V lists the /32
-	// bare or with its /32.
-	slash32 := strings.ReplaceAll(cannedDenyAfterAdd, `"203.0.113.9"`, `"203.0.113.9/32"`)
-	for name, answer := range map[string]string{"bare": cannedDenyAfterAdd, "with /32": slash32} {
-		h, _, _ = newSeam(answer)
-		if err := h.RemoveDeny(context.Background(), tVMID, tOwner, twoDenies); err == nil {
-			t.Errorf("a remove that left its rows (%s) was accepted", name)
-		}
-	}
-	// An add whose /32 Hyper-V lists as a.b.c.d/32 is in place.
-	h, _, _ = newSeam(slash32)
-	if err := h.AddDeny(context.Background(), tVMID, tOwner, twoDenies); err != nil {
-		t.Errorf("an add listed with /32 was refused: %v", err)
-	}
+
 }
 
 func TestParsePrefixOrAddr(t *testing.T) {
@@ -657,53 +618,5 @@ func TestNewHostOtherOS(t *testing.T) {
 	}
 	if _, err := NewHost().ReadNetwork(context.Background()); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("got %v, want ErrUnsupported", err)
-	}
-}
-
-// A list over one script's cap goes in batches: 300 Denies are two writes of
-// 256 and 44, for an add and for a remove, and each batch's rows are checked.
-func TestSeamDenyBatches(t *testing.T) {
-	ctx := context.Background()
-	var ps []netip.Prefix
-	var rows []string
-	for i := range 300 {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{203, 0, byte(i >> 8), byte(i)}), 32)
-		ps = append(ps, p)
-		for _, dir := range []string{"Inbound", "Outbound"} {
-			rows = append(rows, `{"direction":"`+dir+`","remote":"`+p.Addr().String()+`"}`)
-		}
-	}
-	listed := `{"deny":[` + strings.Join(rows, ",") + `]}`
-	sizes := func(r *fakeRun) []int {
-		var out []int
-		for _, a := range r.args {
-			var w struct {
-				Remotes []string `json:"remotes"`
-			}
-			if err := json.Unmarshal([]byte(a), &w); err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, len(w.Remotes))
-		}
-		return out
-	}
-	h, r, _ := newSeam(listed, listed)
-	if err := h.AddDeny(ctx, tVMID, tOwner, ps); err != nil {
-		t.Fatalf("an add of 300 Denies: %v", err)
-	}
-	if got := sizes(r); !slices.Equal(got, []int{256, 44}) {
-		t.Fatalf("the add wrote batches of %v, want [256 44]", got)
-	}
-	h, r, _ = newSeam(`{"deny":[]}`, `{"deny":[]}`)
-	if err := h.RemoveDeny(ctx, tVMID, tOwner, ps); err != nil {
-		t.Fatalf("a remove of 300 Denies: %v", err)
-	}
-	if got := sizes(r); !slices.Equal(got, []int{256, 44}) {
-		t.Fatalf("the remove wrote batches of %v, want [256 44]", got)
-	}
-	// A batch whose rows are not all there fails the add.
-	h, _, _ = newSeam(listed, `{"deny":[]}`)
-	if err := h.AddDeny(ctx, tVMID, tOwner, ps); err == nil {
-		t.Fatal("an add whose second batch is missing was accepted")
 	}
 }

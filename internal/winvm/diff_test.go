@@ -290,7 +290,7 @@ func TestHyperVSplitACLRowsFold(t *testing.T) {
 
 func TestEnhancedSessionUnderKeepIsNotDriftButLabelled(t *testing.T) {
 	lab, _ := LabNames(1)
-	p := testPlan(t, func(p *Plan) { p.Names = lab; p.EnhancedSession = ESKeep; p.EnhancedSessionOriginal = nil })
+	p := testPlan(t, func(p *Plan) { p.Names = lab; p.EnhancedSession = ESKeep })
 	d := testDynamic()
 	live := liveFor(p, d)
 	live.Enhanced = true

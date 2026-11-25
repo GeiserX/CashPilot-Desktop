@@ -10,7 +10,7 @@
   Setup stores the VM under the same private data directory.
 
 .EXAMPLE
-  .\t2-build.ps1 -Instance 1 -Exe .\CashPilot-Desktop-lab.exe -Repo C:\src\CashPilot-Desktop -Iso D:\iso\windows.iso -ImageIndex 6 -VhdxDir D:\cpd-lab -GuestMemoryGB 4 -MinHostRamGB 8 -KeepEnhancedSession
+  .\t2-build.ps1 -Instance 1 -Exe .\CashPilot-Desktop-lab.exe -Repo C:\src\CashPilot-Desktop -Iso D:\iso\windows.iso -ImageIndex 6 -GuestMemoryGB 4 -MinHostRamGB 8 -KeepEnhancedSession
 #>
 param(
   [Parameter(Mandatory = $true)][ValidateRange(1, 9)][int]$Instance,
@@ -19,7 +19,6 @@ param(
   [string]$Iso = '',
   [int]$ImageIndex = 1,
   [string]$ProductKey = '',
-  [Parameter(Mandatory = $true)][string]$VhdxDir,
   [ValidateRange(2, 64)][int]$GuestMemoryGB = 4,
   [ValidateRange(0, 1024)][int]$MinHostRamGB = 0,
   [switch]$KeepEnhancedSession,
@@ -28,8 +27,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $name = 'cpd-svm-' + $Instance
 $common = [Environment]::GetFolderPath('CommonApplicationData')
+if ($common -ne 'C:\ProgramData') { throw ('Secure VM Setup uses C:\ProgramData\CashPilot. This host reports ProgramData at ' + $common) }
 $data = Join-Path $common ('CashPilot\lab\' + $name)
 $guard = Join-Path $data 'guard'
+Write-Host ('VM storage volume: ' + [IO.Path]::GetPathRoot($data) + ' (private directory under ' + $data + ', 128 GiB dynamic disk)')
 $taskPath = '\CashPilot\'
 $taskName = 'VMGuard-' + $name
 
@@ -62,12 +63,11 @@ finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 
 $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $params = [ordered]@{
-  version = 1; vhdxDir = $VhdxDir; iso = $Iso; imageIndex = $ImageIndex; productKey = $ProductKey; timeZone = ''
+  version = 1; iso = $Iso; imageIndex = $ImageIndex; productKey = $ProductKey; timeZone = ''
   adminPassword = $pair.admin; earnerPassword = $pair.earner; userSid = $sid; extraExits = @(); approveNetwork = [bool]$ApproveNetwork
   lab = [ordered]@{ minHostRam = [uint64]$MinHostRamGB * 1GB; guestMemory = [uint64]$GuestMemoryGB * 1GB; keepEnhancedSession = [bool]$KeepEnhancedSession; instance = $Instance }
 }
 $src = Join-Path $Repo 'internal\winvm\scripts\setup.ps1'
-$setup = [scriptblock]::Create([IO.File]::ReadAllText($src))
 $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
 $started = Get-Date
 $paramsRel = 'guard\.lab-params.' + [guid]::NewGuid().ToString('N') + '.tmp'
@@ -76,7 +76,7 @@ $paramsId = $null
 try {
   $paramsId = Write-CPDNewFile $journal $paramsRel ([Text.Encoding]::UTF8.GetBytes(($params | ConvertTo-Json -Compress -Depth 4)))
   $paramsHash = (Get-FileHash -LiteralPath $paramsFile -Algorithm SHA256).Hash
-  & $setup -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile -ParamsHash $paramsHash
+  & $src -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile -ParamsHash $paramsHash
   $code = $LASTEXITCODE
 } finally {
   Remove-CPDFile $journal $paramsRel $paramsId

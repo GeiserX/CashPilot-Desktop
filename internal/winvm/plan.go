@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/netip"
 	"reflect"
 	"regexp"
@@ -18,7 +19,7 @@ import (
 const PlanVersion = 1
 
 // maxPlanBytes caps desired.json. A real plan is a few KB.
-const maxPlanBytes = 64 << 10
+const maxPlanBytes = 8 << 20
 
 // GiB is 2^30 bytes.
 const GiB = uint64(1) << 30
@@ -30,8 +31,7 @@ const DefaultGuestMemory = 6 * GiB
 type ESPolicy string
 
 const (
-	// ESOff turns Enhanced Session off for the whole host (decision 2). The
-	// product always uses it.
+	// ESOff requires the host owner to turn Enhanced Session off first.
 	ESOff ESPolicy = "off"
 	// ESKeep leaves the host setting alone. It is a lab flag only, for a host
 	// whose other VMs must keep their Enhanced Session window.
@@ -167,16 +167,19 @@ type OwnedDVD struct {
 }
 
 type Plan struct {
-	Version     int        `json:"version"`
-	Names       Names      `json:"names"`
-	VHDXDir     string     `json:"vhdxDir"`
-	VMID        string     `json:"vmId"`
-	AdapterID   string     `json:"adapterId"` // the GUID after `\` in Get-VMNetworkAdapter .Id
-	GuardTaskID string     `json:"guardTaskId,omitempty"`
-	SwitchID    string     `json:"switchId"`
-	NATID       string     `json:"natId,omitempty"`
-	Disk        *OwnedDisk `json:"disk,omitempty"`
-	DVDs        []OwnedDVD `json:"dvds,omitempty"`
+	Version             int             `json:"version"`
+	Names               Names           `json:"names"`
+	VMID                string          `json:"vmId"`
+	AdapterID           string          `json:"adapterId"` // the GUID after `\` in Get-VMNetworkAdapter .Id
+	PortACLs            []PortACL       `json:"portAcls,omitempty"`
+	GuardTaskID         string          `json:"guardTaskId,omitempty"`
+	SwitchID            string          `json:"switchId"`
+	ManagementAdapterID string          `json:"managementAdapterId,omitempty"`
+	ManagementBindings  map[string]bool `json:"managementBindings,omitempty"`
+	FirewallIdentity    string          `json:"firewallIdentity,omitempty"`
+	NATID               string          `json:"natId,omitempty"`
+	Disk                *OwnedDisk      `json:"disk,omitempty"`
+	DVDs                []OwnedDVD      `json:"dvds,omitempty"`
 
 	Subnet      netip.Prefix `json:"subnet"` // a free /29 in 172.16/12
 	Gateway     netip.Addr   `json:"gateway"`
@@ -205,11 +208,6 @@ type Plan struct {
 	BindingsOff []string        `json:"bindingsOff"`
 
 	EnhancedSession ESPolicy `json:"enhancedSession"`
-	// EnhancedSessionOriginal is the host's value before setup first turned it
-	// off. It is written once and carried over by every Repair, so removal can put
-	// it back.
-	EnhancedSessionOriginal *bool `json:"enhancedSessionOriginal"`
-	EnhancedSessionChanged  bool  `json:"enhancedSessionChanged,omitempty"`
 	// CreatedGuardian is whether setup created the vTPM's UntrustedGuardian.
 	// Removal deletes it only then: other VMs may share it.
 	CreatedGuardian bool   `json:"createdGuardian"`
@@ -225,7 +223,6 @@ type Plan struct {
 	AdminGrantsTracked bool     `json:"adminGrantsTracked,omitempty"`
 	AddedAdminSIDs     []string `json:"addedAdminSids"`
 	PendingAdminSIDs   []string `json:"pendingAdminSids,omitempty"`
-	RevokedAdminSIDs   []string `json:"revokedAdminSids,omitempty"`
 
 	GCSBaseline []string  `json:"gcsBaseline"` // GuestCommunicationServices keys at setup, upper case
 	HostBuild   string    `json:"hostBuild"`   // CurrentBuild.UBR, for the re-proof trigger
@@ -235,7 +232,6 @@ type Plan struct {
 // Options are the inputs setup chooses for a new plan.
 type Options struct {
 	Names           Names
-	VHDXDir         string
 	GuestMemory     uint64 // 0 means DefaultGuestMemory
 	Subnet          netip.Prefix
 	HostVNICMAC     string
@@ -276,7 +272,6 @@ var (
 	sidRe   = regexp.MustCompile(`^S-1-[0-9]+(-[0-9]+){1,15}$`)
 	macHex  = regexp.MustCompile(`^[0-9A-F]{12}$`)
 	guidRe  = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
-	vhdxDir = regexp.MustCompile(`^[A-Za-z]:\\[^"'` + "`" + `$;&|<>*?\r\n]*$`)
 )
 
 // NormalizeMAC turns 00-15-5D-0A-0B-0C, 00:15:5d:0a:0b:0c or 00155D0A0B0C into
@@ -296,14 +291,11 @@ func NormalizeMAC(s string) (string, error) {
 }
 
 // NewPlan builds the desired state. prev is the plan of an earlier run (Repair):
-// it carries the VM's identity, CreatedGuardian and EnhancedSessionOriginal,
+// it carries the VM's identity and ownership records,
 // which Repair never overwrites.
 func NewPlan(o Options, prev *Plan) (Plan, error) {
 	if err := o.Names.Validate(); err != nil {
 		return Plan{}, err
-	}
-	if !vhdxDir.MatchString(o.VHDXDir) || strings.Contains(o.VHDXDir, "..") {
-		return Plan{}, fmt.Errorf("VHDX folder %q is not an absolute Windows path", o.VHDXDir)
 	}
 	if err := checkSubnet(o.Subnet); err != nil {
 		return Plan{}, err
@@ -333,16 +325,9 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 	if es != ESOff && es != ESKeep {
 		return Plan{}, fmt.Errorf("enhanced session policy %q is unknown", es)
 	}
-	// Keep is for the lab only: the product always turns Enhanced Session off
-	// (decision 2), so a product plan with keep would be a looser fence.
+	// Keep is for the lab only. The product requires Enhanced Session off.
 	if es == ESKeep && o.Names == ProductNames() {
-		return Plan{}, errors.New("the product VM must turn Enhanced Session off; keep is a lab setting")
-	}
-	// An install that turned Enhanced Session off holds the value to put back.
-	// Switching it to keep would drop that value, and removal would then leave
-	// Enhanced Session off for good. Remove it first, or keep it on off.
-	if es == ESKeep && prev != nil && prev.EnhancedSessionOriginal != nil {
-		return Plan{}, errors.New("this install turned Enhanced Session off and must put it back; remove the VM before you build it with keep")
+		return Plan{}, errors.New("the product VM requires Enhanced Session off; keep is a lab setting")
 	}
 	var exits []netip.Addr
 	for _, a := range o.ExtraExits {
@@ -360,7 +345,6 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 	p := Plan{
 		Version:         PlanVersion,
 		Names:           o.Names,
-		VHDXDir:         o.VHDXDir,
 		Subnet:          o.Subnet,
 		Gateway:         gw,
 		GuestIP:         gw.Next(),
@@ -393,6 +377,9 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 		}
 		p.VMID, p.AdapterID, p.SwitchID = prev.VMID, prev.AdapterID, prev.SwitchID
 		p.DVDs = slices.Clone(prev.DVDs)
+		p.ManagementAdapterID = prev.ManagementAdapterID
+		p.ManagementBindings = maps.Clone(prev.ManagementBindings)
+		p.PortACLs = slices.Clone(prev.PortACLs)
 		p.GuardTaskID = prev.GuardTaskID
 		if prev.Disk != nil {
 			disk := *prev.Disk
@@ -400,29 +387,14 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 		}
 		p.CreatedGuardian, p.GuardianID = prev.CreatedGuardian, prev.GuardianID
 		p.NATID = prev.NATID
+		p.FirewallIdentity = prev.FirewallIdentity
 		p.Owner = prev.Owner
 		p.AdminGrantsTracked = prev.AdminGrantsTracked
 		p.AddedAdminSIDs = append([]string{}, prev.AddedAdminSIDs...)
 		p.PendingAdminSIDs = slices.Clone(prev.PendingAdminSIDs)
-		p.RevokedAdminSIDs = slices.Clone(prev.RevokedAdminSIDs)
-		p.EnhancedSessionChanged = prev.EnhancedSessionChanged
-		if prev.EnhancedSessionOriginal != nil {
-			v := *prev.EnhancedSessionOriginal
-			p.EnhancedSessionOriginal = &v
-		}
+
 	}
 	return p, nil
-}
-
-// RecordEnhancedSession stores the host's Enhanced Session value as read before
-// setup changes it, but only the first time. On Repair the live value is the one
-// setup itself wrote (false), and recording it would leave Enhanced Session off
-// for good after removal.
-func (p *Plan) RecordEnhancedSession(was bool) {
-	if p.EnhancedSession != ESOff || p.EnhancedSessionOriginal != nil {
-		return
-	}
-	p.EnhancedSessionOriginal = &was
 }
 
 // SetGCSBaseline records the GuestCommunicationServices keys read at setup.
@@ -553,7 +525,7 @@ func (p Plan) Marshal() ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// LoadPlan reads desired.json strictly: 64 KB at most, no unknown field, this
+// LoadPlan reads desired.json strictly: capped size, no unknown field, this
 // version only, and every fence field exactly as NewPlan writes it. A plan file
 // can only describe the one fence this code builds, never a looser one.
 func LoadPlan(b []byte) (Plan, error) {
@@ -562,13 +534,21 @@ func LoadPlan(b []byte) (Plan, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
-	var p Plan
-	if err := dec.Decode(&p); err != nil {
+	var wire struct {
+		Plan
+		// Read old plans without restoring retired host settings or using the old storage hint.
+		Storage          json.RawMessage `json:"vhdxDir"`
+		EnhancedOriginal json.RawMessage `json:"enhancedSessionOriginal"`
+		EnhancedChanged  json.RawMessage `json:"enhancedSessionChanged"`
+		RevokedGrants    json.RawMessage `json:"revokedAdminSids"`
+	}
+	if err := dec.Decode(&wire); err != nil {
 		return Plan{}, fmt.Errorf("plan: %w", err)
 	}
 	if _, err := dec.Token(); err != io.EOF {
 		return Plan{}, errors.New("plan: trailing data after the document")
 	}
+	p := wire.Plan
 	if p.Version != PlanVersion {
 		return Plan{}, fmt.Errorf("plan version %d, this code reads %d", p.Version, PlanVersion)
 	}
@@ -584,7 +564,6 @@ func LoadPlan(b []byte) (Plan, error) {
 func (p Plan) validate() error {
 	o := Options{
 		Names:           p.Names,
-		VHDXDir:         p.VHDXDir,
 		GuestMemory:     p.MemoryBytes,
 		Subnet:          p.Subnet,
 		HostVNICMAC:     p.HostVNICMAC,
@@ -607,15 +586,26 @@ func (p Plan) validate() error {
 	if p.GuardTaskID != "" && p.GuardTaskID != p.Names.GuardTask {
 		return errors.New("plan: invalid scheduled task identity")
 	}
+	if p.ManagementAdapterID != "" && !validNATID(p.ManagementAdapterID) {
+		return errors.New("plan: invalid management adapter identity")
+	}
 	if p.NATID != "" && !validNATID(p.NATID) {
 		return errors.New("plan: invalid NAT identity")
 	}
-	if p.GuardianID != "" && !guardianIDRE.MatchString(p.GuardianID) {
+	if p.FirewallIdentity != "" && !identityDigestRE.MatchString(p.FirewallIdentity) {
+		return errors.New("plan: invalid firewall identity")
+	}
+	if p.GuardianID != "" && !identityDigestRE.MatchString(p.GuardianID) {
 		return errors.New("plan: invalid guardian fingerprint")
 	}
 	if p.Disk != nil {
 		if err := p.Disk.validate(); err != nil {
 			return err
+		}
+	}
+	for _, a := range p.PortACLs {
+		if !a.valid() || a.Action != 2 || !strings.HasPrefix(a.Name, p.Owner) {
+			return errors.New("plan: invalid recorded port ACL")
 		}
 	}
 	if len(p.DVDs) > 2 {
@@ -626,16 +616,10 @@ func (p Plan) validate() error {
 			return errors.New("plan: invalid DVD attachment")
 		}
 	}
-	if p.EnhancedSessionChanged && (p.EnhancedSession != ESOff || p.EnhancedSessionOriginal == nil || !*p.EnhancedSessionOriginal) {
-		return errors.New("plan: confirmed Enhanced Session change requires the original enabled value")
-	}
-	if p.EnhancedSession == ESKeep && p.EnhancedSessionOriginal != nil {
-		return errors.New("plan: a keep policy never records an original Enhanced Session value")
-	}
 	if p.Owner != "" && !ownerRe.MatchString(p.Owner) {
 		return fmt.Errorf("plan: owner %q is not 32 lower-case hex digits", p.Owner)
 	}
-	sids := slices.Concat(p.AddedAdminSIDs, p.PendingAdminSIDs, p.RevokedAdminSIDs)
+	sids := slices.Concat(p.AddedAdminSIDs, p.PendingAdminSIDs)
 	for i, sid := range sids {
 		if !sidRe.MatchString(sid) {
 			return fmt.Errorf("plan: %q is not a Windows account SID", sid)

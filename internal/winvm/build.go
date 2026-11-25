@@ -40,7 +40,6 @@ const maxParamsBytes = 64 << 10
 // key and the passwords: --vm-setup deletes it when it is done.
 type SetupParams struct {
 	Version    int    `json:"version"`
-	VHDXDir    string `json:"vhdxDir"`
 	ISO        string `json:"iso"`        // the Windows ISO; may be "" for a Repair of a VM that exists
 	ImageIndex int    `json:"imageIndex"` // the edition's index in install.wim
 	ProductKey string `json:"productKey"` // "" for an evaluation image
@@ -122,7 +121,7 @@ func decodeStrict(b []byte, max int, out any) error {
 // refuses lab settings, so it can never lower the RAM floor, keep Enhanced
 // Session on, or use another instance's names.
 func SetupNames(sp SetupParams) (Names, Options, uint64, error) {
-	o := Options{Names: ProductNames(), VHDXDir: sp.VHDXDir, ExtraExits: sp.ExtraExits}
+	o := Options{Names: ProductNames(), ExtraExits: sp.ExtraExits}
 	if sp.Lab == nil {
 		return o.Names, o, 0, nil
 	}
@@ -295,15 +294,14 @@ func Build(ctx context.Context, d BuildDeps, sp SetupParams) (res BuildResult, e
 		{"journal", b.journal},
 		{"host checks", b.hostChecks},
 		{"switch", b.ensureSwitch},
-		{"NAT", b.ensureNAT},
 		{"bindings", b.bindings},
+		{"NAT", b.ensureNAT},
 		{"firewall", b.firewall},
 		{"host neighbour", b.neighbor},
 		{"guardian", b.guardian},
 		{"VM", b.vm},
 		{"integration services", b.integration},
 		{"port ACLs", b.acls},
-		{"Enhanced Session", b.enhancedSession},
 		{"Hyper-V Administrators", b.hyperVAdmin},
 		{"Windows install", b.install},
 		{"first session", b.firstSession},
@@ -380,13 +378,23 @@ func (b *builder) journal(ctx context.Context) error {
 	if prev != nil && b.inv.Task != nil && ownedBy(*b.inv.Task, prev.GuardTaskID, prev.Owner) {
 		b.guardOwner = prev.Owner
 	}
+	if b.opts.EnhancedSession != ESKeep && b.inv.Enhanced {
+		return errors.New("Enhanced Session is on. Turn it off in Hyper-V Settings > Enhanced Session Mode Policy, then run Setup again")
+	}
 	// A Repair changes the fence, so the VM goes off the network before the
 	// first change and stays off until the proof passes and the guard's boot
 	// routine finds an exact match.
 	if prev != nil {
 		if id := adopt(b.inv.VMs, prev.VMID, prev.Owner); id != "" {
-			if err := b.HV.Disconnect(ctx, id, prev.Owner); err != nil {
+			if err := b.HV.Disconnect(ctx, id, prev.Owner, prev.AdapterID); err != nil {
 				return fmt.Errorf("could not take the VM off the network before the Repair: %w", err)
+			}
+			live, err := b.HV.ReadLive(ctx, b.n, id, prev.SwitchID)
+			if err != nil {
+				return err
+			}
+			if err := requireRecordedAdapter(*prev, live); err != nil {
+				return err
 			}
 		}
 	}
@@ -447,9 +455,12 @@ func (b *builder) journal(ctx context.Context) error {
 	// Keep the identity only when the live object still matches the journal.
 	p.VMID = adopt(b.inv.VMs, p.VMID, p.Owner)
 	if p.VMID == "" {
-		p.AdapterID = ""
+		p.AdapterID, p.PortACLs = "", nil
 	}
 	p.SwitchID = adopt(b.inv.Switches, p.SwitchID, p.Owner)
+	if p.SwitchID == "" {
+		p.ManagementAdapterID, p.ManagementBindings = "", nil
+	}
 	p.SetGCSBaseline(b.inv.GCS)
 	p.HostBuild = b.inv.HostBuild
 	b.p = p
@@ -579,16 +590,16 @@ func (b *builder) hostChecks(ctx context.Context) error {
 }
 
 func (b *builder) ensureSwitch(ctx context.Context) error {
-	id, ifx, err := b.HV.EnsureSwitch(ctx, b.n, b.p.Subnet, b.p.Owner, b.p.HostVNICMAC, b.p.SwitchID)
+	id, managementID, ifx, err := b.HV.EnsureSwitch(ctx, b.n, b.p.Subnet, b.p.Owner, b.p.HostVNICMAC, b.p.SwitchID, b.p.ManagementAdapterID)
 	if err != nil {
 		return err
 	}
-	if !guidRe.MatchString(id) || ifx <= 0 {
+	if !guidRe.MatchString(id) || !validNATID(managementID) || ifx <= 0 {
 		return fmt.Errorf("the switch came back without an ID or a host vNIC (%q, %d)", id, ifx)
 	}
 	b.vnicIf = ifx
 	if !strings.EqualFold(b.p.SwitchID, id) {
-		b.p.SwitchID = id
+		b.p.SwitchID, b.p.ManagementAdapterID = id, managementID
 		return b.save()
 	}
 	return nil
@@ -604,15 +615,25 @@ func (b *builder) ensureNAT(ctx context.Context) error {
 }
 
 func (b *builder) bindings(ctx context.Context) error {
-	return b.HV.SetBindings(ctx, b.vnicIf, b.p.SwitchID, b.p.Owner, b.p.BindingsOff)
+	bindings, err := b.HV.SetBindings(ctx, b.p, b.vnicIf)
+	if err != nil || b.p.ManagementBindings != nil {
+		return err
+	}
+	b.p.ManagementBindings = bindings
+	return b.save()
 }
 
 func (b *builder) firewall(ctx context.Context) error {
-	return b.HV.EnsureFirewall(ctx, b.n, b.vnicIf, b.p.SwitchID, b.p.Owner)
+	id, err := b.HV.EnsureFirewall(ctx, b.p, b.vnicIf)
+	if err != nil || id == b.p.FirewallIdentity {
+		return err
+	}
+	b.p.FirewallIdentity = id
+	return b.save()
 }
 
 func (b *builder) neighbor(ctx context.Context) error {
-	return b.HV.SetHostNeighbor(ctx, b.vnicIf, b.p.SwitchID, b.p.Owner, b.p.GuestIP, b.p.GuestMAC)
+	return b.HV.SetHostNeighbor(ctx, b.vnicIf, b.p.SwitchID, b.p.Owner, b.p.ManagementAdapterID, b.p.GuestIP, b.p.GuestMAC)
 }
 
 // guardian journals the certificate fingerprint from a confirmed creation.
@@ -655,12 +676,8 @@ func (b *builder) vm(ctx context.Context) error {
 		if !live.VMExists {
 			return errors.New("the VM vanished while setup ran")
 		}
-		if b.p.AdapterID == "" && len(live.Adapters) == 1 {
-			b.p.AdapterID = strings.ToUpper(live.Adapters[0].ID)
-			return b.save()
-		}
-		if b.p.AdapterID == "" {
-			return fmt.Errorf("the VM has %d network adapters, so setup cannot tell which is ours", len(live.Adapters))
+		if err := requireRecordedAdapter(b.p, live); err != nil {
+			return err
 		}
 		return nil
 	}
@@ -734,73 +751,67 @@ func (b *builder) dynamic() Dynamic {
 	return Dynamic{HostAddrs: HostDenies(b.h, b.p.SwitchID), OwnIPs: own, Tunnels: TunnelPrefixes(b.h, b.p.SwitchID, StaticDeny())}
 }
 
-// acls makes the adapter's rows exactly the planned set: every Allow goes (one
-// left by a proof that stopped), every Deny not wanted goes, and every wanted
-// Deny missing or one-way is added.
+// acls changes only recorded Denies. An independent rule must be resolved
+// by the owner before Setup can prove the fence.
 func (b *builder) acls(ctx context.Context) error {
 	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID, b.p.SwitchID)
 	if err != nil {
 		return err
 	}
+	if err := requireRecordedAdapter(b.p, live); err != nil {
+		return err
+	}
+	gs := (GuardDeps{Dir: b.Dir, Logf: b.Logf}).loadState().forPlan(b.p)
+	recorded := slices.Concat(b.p.PortACLs, gs.PortACLs)
+	if slices.ContainsFunc(live.ACLs, func(a ACL) bool { return strings.EqualFold(a.Action, "Meter") }) {
+		return errors.New("the adapter has a Meter row. Turn off resource metering for this VM before Repair")
+	}
+	if live.PortACLs == nil {
+		return errors.New("could not verify the adapter ACL identities")
+	}
 	want := map[netip.Prefix]bool{}
 	for _, a := range b.p.WantACLs(b.dynamic()) {
 		want[a.Remote] = true
 	}
-	var rows []ACL
-	for _, a := range live.ACLs {
-		if strings.EqualFold(a.Action, "Meter") {
-			return fmt.Errorf("the adapter has a Meter row for %v; turn resource metering off for this VM and run setup again", a.Remote)
+	var keep, remove []PortACL
+	have := map[netip.Prefix]uint8{}
+	for _, a := range live.PortACLs {
+		if a.Action != 2 || !slices.Contains(recorded, a) {
+			return fmt.Errorf("an unrecorded or changed ACL for %s was left in place", a.Remote)
 		}
-		rows = append(rows, ACL{Action: a.Action, Direction: a.Direction, Remote: a.Remote.Masked()})
-	}
-	var allow, extra, add []netip.Prefix
-	have := map[netip.Prefix]bool{}
-	for _, a := range foldBoth(rows) {
-		switch {
-		case strings.EqualFold(a.Action, "Allow"):
-			allow = append(allow, a.Remote)
-		case !want[a.Remote] || a.Direction != "Both":
-			extra = append(extra, a.Remote)
-		default:
-			have[a.Remote] = true
+		q := a.prefix()
+		if want[q] {
+			keep = append(keep, a)
+			have[q] |= a.Direction
+		} else {
+			remove = append(remove, a)
 		}
 	}
-	for _, q := range allow {
-		if err := b.Probe.RemoveAllow(ctx, b.p.VMID, q); err != nil {
-			return err
-		}
-	}
-	if len(extra) > 0 {
-		slices.SortFunc(extra, func(x, y netip.Prefix) int { return x.Addr().Compare(y.Addr()) })
-		extra = slices.Compact(extra)
-		if err := b.HV.RemoveDeny(ctx, b.p.VMID, b.p.Owner, extra); err != nil {
-			return err
-		}
-	}
+	var add []netip.Prefix
 	for q := range want {
-		if !have[q] {
+		switch have[q] {
+		case 0:
 			add = append(add, q)
+		case 3:
+		default:
+			return fmt.Errorf("the recorded Deny for %s has only one direction and was left in place", q)
 		}
 	}
 	sortPrefixes(add)
 	if len(add) > 0 {
-		return b.HV.AddDeny(ctx, b.p.VMID, b.p.Owner, add)
+		rows, err := b.HV.AddPortACLs(ctx, b.p, "Deny", add)
+		keep = append(keep, rows...)
+		b.p.PortACLs = append(slices.Clone(keep), remove...)
+		if err := errors.Join(err, b.save()); err != nil {
+			return err
+		}
 	}
-	return nil
-}
-
-// enhancedSession records a change only when the host step confirms it turned
-// the setting off.
-func (b *builder) enhancedSession(ctx context.Context) error {
-	if b.p.EnhancedSession != ESOff {
-		return nil
+	if len(remove) > 0 {
+		if err := b.HV.RemovePortACLs(ctx, b.p, remove); err != nil {
+			return err
+		}
 	}
-	was, err := b.HV.SetEnhancedSession(ctx, false)
-	if err != nil || !was {
-		return err
-	}
-	b.p.EnhancedSessionChanged = true
-	b.p.EnhancedSessionOriginal = &was
+	b.p.PortACLs = keep
 	return b.save()
 }
 
@@ -820,9 +831,6 @@ func (b *builder) hyperVAdmin(ctx context.Context) error {
 	}
 	sid := b.sp.UserSID
 	isSID := func(s string) bool { return strings.EqualFold(s, sid) }
-	if slices.ContainsFunc(b.p.RevokedAdminSIDs, isSID) {
-		return errors.New("a removal already consumed this account's Hyper-V Administrators grant")
-	}
 	b.p.AddedAdminSIDs = slices.DeleteFunc(b.p.AddedAdminSIDs, isSID)
 	if !slices.ContainsFunc(b.p.PendingAdminSIDs, isSID) {
 		b.p.PendingAdminSIDs = append(b.p.PendingAdminSIDs, sid)
@@ -1017,7 +1025,7 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	}
 	run := Runner{B: b.HV, P: pr, G: g, Clock: b.Now, Sleep: b.Sleep, Dir: b.Dir, Rand: b.Rand, Logf: b.Logf, Wait: b.ProofWait}
 	t := Targets(h, b.p.SwitchID, b.own, live.VNICIfIndex)
-	rs, runErr := run.Run(ctx, b.p, h, t)
+	rs, runErr := run.run(ctx, &b.p, h, t, b.save)
 	res.Proof = rs
 	at := b.now()
 	// Only a green verdict marks the plan proven. Whatever the proof found,
@@ -1062,7 +1070,7 @@ func (b *builder) seedGuardState(dyn Dynamic) error {
 	for _, a := range b.p.WantACLs(Dynamic{}) {
 		base[a.Remote] = true
 	}
-	gs.Denied = nil
+	gs.Denied, gs.PortACLs = nil, nil
 	for _, a := range b.p.WantACLs(dyn) {
 		if !base[a.Remote] {
 			gs.Denied = append(gs.Denied, a.Remote)

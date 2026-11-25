@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Lab only (T2): remove one Secure VM lab instance through the real removal
-  chain, then check that nothing with its names is left.
+  chain, then report inventory. Use -AssertClean to require an empty inventory.
 
 .DESCRIPTION
   Runs elevated on the lab host. It opens the recorded private directories
@@ -13,7 +13,8 @@
 param(
   [Parameter(Mandatory = $true)][ValidateRange(1, 9)][int]$Instance,
   [Parameter(Mandatory = $true)][string]$Exe,
-  [Parameter(Mandatory = $true)][string]$Repo
+  [Parameter(Mandatory = $true)][string]$Repo,
+  [switch]$AssertClean
 )
 $ErrorActionPreference = 'Stop'
 $name = 'cpd-svm-' + $Instance
@@ -29,9 +30,8 @@ try {
   $guardLease = Open-CPDDirectory $guard $false 'cashpilot-guard'
   try {
     $src = Join-Path $Repo 'internal\winvm\scripts\remove.ps1'
-    $remove = [scriptblock]::Create([IO.File]::ReadAllText($src))
     $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
-    & $remove -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName
+    & $src -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName
     $code = $LASTEXITCODE
   } finally { $guardLease.Dispose() }
 } finally { $instanceLease.Dispose() }
@@ -45,5 +45,7 @@ $left += @(Get-NetFirewallRule -Group $name -ErrorAction SilentlyContinue | ForE
 $left += @(Get-NetFirewallRule -Group ($name + '-proof') -ErrorAction SilentlyContinue | ForEach-Object { 'proof rule ' + $_.Name })
 $left += @(Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue | ForEach-Object { 'task ' + $_.TaskName })
 $left | ForEach-Object { 'left: ' + $_ }
-if ($code -ne 0 -or $left.Count -gt 0) { exit 1 }
+'clean host: ' + ($left.Count -eq 0)
+if ($code -ne 0) { exit $code }
+if ($AssertClean -and $left.Count -gt 0) { exit 1 }
 exit 0

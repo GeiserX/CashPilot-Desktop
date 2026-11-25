@@ -45,12 +45,12 @@ type Reader interface {
 // make on its own.
 type Guarder interface {
 	Reader
-	Disconnect(ctx context.Context, vmID, owner string) error
+	Disconnect(ctx context.Context, vmID, owner, adapterID string) error
 	// Connect matches both recorded IDs and both live owner tags.
-	Connect(ctx context.Context, vmID, switchID, owner string) error
+	Connect(ctx context.Context, vmID, switchID, owner, adapterID string) error
 	Start(ctx context.Context, vmID, owner string) error
-	AddDeny(ctx context.Context, vmID, owner string, p []netip.Prefix) error
-	RemoveDeny(ctx context.Context, vmID, owner string, p []netip.Prefix) error
+	AddPortACLs(ctx context.Context, p Plan, action string, prefixes []netip.Prefix) ([]PortACL, error)
+	RemovePortACLs(ctx context.Context, p Plan, rows []PortACL) error
 }
 
 // Builder is what the elevated setup, Repair and Remove need. Every write is
@@ -69,7 +69,7 @@ type Builder interface {
 	// checks those on the switch already there: the one with the recorded
 	// switchID (renamed or not), else the one with our name. It refuses a
 	// switch with our name that does not carry the token.
-	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID string) (id string, vnicIfIndex int, err error)
+	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (id, managementAdapterID string, vnicIfIndex int, err error)
 	EnsureNAT(ctx context.Context, n Names, sub netip.Prefix, knownID string) (id string, err error)
 	// CreateVM creates the VM off, with p.Owner in its Notes, the plan's
 	// shape, one disconnected adapter with its static MAC and port guards
@@ -78,10 +78,10 @@ type Builder interface {
 	CreateVM(ctx context.Context, p Plan, iso, answerISO string) (vmID, adapterID string, disk OwnedDisk, dvds []OwnedDVD, err error)
 	// SetIntegration runs before the first Start-VM.
 	SetIntegration(ctx context.Context, vmID, owner string, want map[string]bool) error
-	SetBindings(ctx context.Context, vnicIfIndex int, switchID, owner string, off []string) error
-	EnsureFirewall(ctx context.Context, n Names, vnicIfIndex int, switchID, owner string) error
-	SetHostNeighbor(ctx context.Context, vnicIfIndex int, switchID, owner string, ip netip.Addr, mac string) error
-	SetEnhancedSession(ctx context.Context, on bool) (was bool, err error)
+	SetBindings(ctx context.Context, p Plan, vnicIfIndex int) (map[string]bool, error)
+	EnsureFirewall(ctx context.Context, p Plan, vnicIfIndex int) (string, error)
+	SetHostNeighbor(ctx context.Context, vnicIfIndex int, switchID, owner, managementID string, ip netip.Addr, mac string) error
+
 	EnsureGuardian(ctx context.Context) (createdID string, err error)
 	// AddHyperVAdmin adds the account to Hyper-V Administrators (S-1-5-32-578)
 	// by SID, and reports whether it was added now.
@@ -108,12 +108,12 @@ type Builder interface {
 	// RemoveVM turns off and removes the owned VM, then deletes the
 	// recorded disk if its full path and file ID still match.
 	RemoveVM(ctx context.Context, vmID string, p Plan) (left []string, err error)
-	RemoveSwitch(ctx context.Context, switchID, owner string) error
-	RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id string) error
+	RemoveSwitch(ctx context.Context, p Plan) (kept string, err error)
+	RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id string) (kept string, err error)
 	// RemoveFirewall removes the rules of our group that carry the owner token.
-	RemoveFirewall(ctx context.Context, n Names, owner string) error
+	RemoveFirewall(ctx context.Context, p Plan) (kept string, err error)
 	RemoveGuardian(ctx context.Context, id string) error
-	RemoveHyperVAdmin(ctx context.Context, sid string) error
+
 	// ClearProof removes owned artifacts from earlier proofs and lists
 	// candidates whose ownership cannot be verified.
 	ClearProof(ctx context.Context, n Names, owner string) (ProofCleanup, error)
@@ -171,8 +171,6 @@ type Prober interface {
 	Pktmon(ctx context.Context, f []PktFilter) (Capture, error)
 	SetL3(ctx context.Context, n Names, owner string, on bool) error
 	SetBinding(ctx context.Context, vnicIfIndex int, component string, on bool) error
-	AddAllow(ctx context.Context, vmID string, p netip.Prefix) error
-	RemoveAllow(ctx context.Context, vmID string, p netip.Prefix) error
 	HVListener(ctx context.Context, bindVMID, service string, register bool) (HVListener, error)
 	// LinkLocal is the host vNIC's IPv6 link-local address, without a zone.
 	// It exists only while ms_tcpip6 is bound.

@@ -36,7 +36,7 @@ var guardInterval = GuardInterval
 const resumeGap = GuardInterval + GuardInterval/2
 
 const (
-	maxStateBytes = 256 << 10
+	maxStateBytes = maxPlanBytes
 	maxLockBytes  = 4 << 10
 )
 
@@ -69,7 +69,8 @@ type GuardState struct {
 	// tunnels) that were in place. One of them gone later was removed by someone
 	// else: the guard does not put it back, so Diff sees it and the VM is cut
 	// off until Repair.
-	Denied []netip.Prefix `json:"denied"`
+	Denied   []netip.Prefix `json:"denied"`
+	PortACLs []PortACL      `json:"portAcls,omitempty"`
 	// VMID is the VM of the last plan the guard could read. When the plan cannot
 	// be read later, the guard still takes that VM off the network.
 	VMID  string `json:"vmId"`
@@ -224,11 +225,16 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	// Even without a readable plan, a prior identity is usable only when
 	// the VM still carries the saved owner tag.
 	failClosed := func(until string, plan *Plan) {
-		names, vmID, owner := gs.Names, gs.VMID, gs.Owner
+		names, vmID, owner, adapterID := gs.Names, gs.VMID, gs.Owner, gs.AdapterID
 		if plan != nil {
-			names, vmID, owner = &plan.Names, plan.VMID, plan.Owner
-			if vmID == "" && gs.Names != nil && *gs.Names == plan.Names && gs.Owner == owner {
-				vmID = gs.VMID
+			names, vmID, owner, adapterID = &plan.Names, plan.VMID, plan.Owner, plan.AdapterID
+			if gs.Names != nil && *gs.Names == plan.Names && gs.Owner == owner {
+				if vmID == "" {
+					vmID = gs.VMID
+				}
+				if adapterID == "" && strings.EqualFold(gs.VMID, vmID) {
+					adapterID = gs.AdapterID
+				}
 			}
 		}
 		st.Fence, st.Network = FenceCut, NetConnected
@@ -250,11 +256,12 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 			return
 		}
 		vmID = owned
-		if err := d.HV.Disconnect(ctx, vmID, owner); err != nil {
+		if err := d.HV.Disconnect(ctx, vmID, owner, adapterID); err != nil {
 			d.logf("disconnect failed: %v", err)
-		} else {
-			st.Network = NetDisconnected
+			st.Reason += " The guard could not disconnect the recorded adapter: " + err.Error()
+			return
 		}
+		st.Network = NetDisconnected
 		st.Reason += " The VM stays off the network until " + until + "."
 	}
 	p, err := d.loadPlan()
@@ -301,7 +308,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 
 	connected := true // unknown until read: assume the worst
 	disconnect := func() {
-		if err := d.HV.Disconnect(ctx, p.VMID, p.Owner); err != nil {
+		if err := d.HV.Disconnect(ctx, p.VMID, p.Owner, p.AdapterID); err != nil {
 			d.logf("disconnect failed: %v", err)
 			return
 		}
@@ -571,13 +578,13 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 	off := func() bool {
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
 		defer cancel()
-		if err := d.HV.Disconnect(uctx, p.VMID, p.Owner); err != nil {
+		if err := d.HV.Disconnect(uctx, p.VMID, p.Owner, p.AdapterID); err != nil {
 			d.logf("disconnect failed: %v", err)
 			return true
 		}
 		return false
 	}
-	if err := d.HV.Connect(ctx, p.VMID, p.SwitchID, p.Owner); err != nil {
+	if err := d.HV.Connect(ctx, p.VMID, p.SwitchID, p.Owner, p.AdapterID); err != nil {
 		d.logf("connect failed: %v", err)
 		return off(), false, nil, nil
 	}
@@ -615,6 +622,9 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 // placed before that is now missing stays missing: someone removed it, and
 // Diff must see that.
 func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dyn Dynamic, gs *GuardState) (changed bool, notAdded, notRemoved []netip.Prefix) {
+	if requireRecordedAdapter(p, live) != nil || live.PortACLs == nil {
+		return false, nil, nil // Diff reports the changed or unread adapter.
+	}
 	base := map[netip.Prefix]bool{}
 	for _, a := range p.WantACLs(Dynamic{}) {
 		base[a.Remote] = true
@@ -657,7 +667,9 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 	// Add before remove, so a wider new Deny is in place before the narrower
 	// ones it covers go. When the add fails, nothing is removed in this pass.
 	if len(add) > 0 {
-		if err := d.HV.AddDeny(ctx, p.VMID, p.Owner, add); err != nil {
+		rows, err := d.HV.AddPortACLs(ctx, p, "Deny", add)
+		gs.PortACLs = append(gs.PortACLs, rows...)
+		if err != nil {
 			d.logf("add Deny %v failed: %v", add, err)
 			notAdded = add
 		} else {
@@ -673,11 +685,20 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 		case notAdded != nil:
 			notRemoved = remove
 		default:
-			if err := d.HV.RemoveDeny(ctx, p.VMID, p.Owner, remove); err != nil {
+			var rows []PortACL
+			for _, a := range live.PortACLs {
+				if slices.Contains(remove, a.prefix()) && (slices.Contains(p.PortACLs, a) || slices.Contains(gs.PortACLs, a)) {
+					rows = append(rows, a)
+				}
+			}
+			if err := d.HV.RemovePortACLs(ctx, p, rows); err != nil {
 				d.logf("remove Deny %v failed: %v", remove, err)
 				notRemoved = remove
 			} else {
-				d.logf("removed expired Deny %v", remove)
+				gs.PortACLs = slices.DeleteFunc(gs.PortACLs, func(a PortACL) bool {
+					return slices.Contains(remove, a.prefix())
+				})
+				d.logf("checked expired Deny %v", remove)
 			}
 			changed = true
 		}

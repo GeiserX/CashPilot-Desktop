@@ -16,6 +16,8 @@ import (
 // SetEnhancedSession, in the build or in Remove VM.
 func TestLabBuildKeepsEnhancedSession(t *testing.T) {
 	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
+	f.SetEnhanced(true)
 	f.InstalledRAM, f.FreeRAM = 8<<30, 6<<30
 	sp := setupParams()
 	sp.Lab = &winvm.LabOverrides{Instance: 2, MinHostRAM: 8 << 30, GuestMemory: 4 << 30, KeepEnhancedSession: true}

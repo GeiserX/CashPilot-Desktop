@@ -82,6 +82,28 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		errs = append(errs, fmt.Errorf("%s: %w", what, err))
 	}
 
+	for _, sid := range slices.Concat(p.AddedAdminSIDs, p.PendingAdminSIDs) {
+		res.Kept = append(res.Kept, "the Hyper-V Administrators grant for "+sid+
+			". To remove it, run Remove-LocalGroupMember -SID "+hvAdmins+" -Member "+sid+" in elevated PowerShell")
+	}
+
+	vmID := adopt(inv.VMs, p.VMID, p.Owner)
+	if vmID != "" {
+		live, err := d.HV.ReadLive(ctx, n, vmID, p.SwitchID)
+		if err != nil {
+			return res, err
+		}
+		gs := (GuardDeps{Dir: d.Dir}).loadState().forPlan(p)
+		recorded := slices.Concat(p.PortACLs, gs.PortACLs)
+		if requireRecordedAdapter(p, live) != nil || live.PortACLs == nil || live.ExtACLs != 0 ||
+			slices.ContainsFunc(live.PortACLs, func(a PortACL) bool { return !slices.Contains(recorded, a) }) {
+			res.Left = append(res.Left, "the VM "+vmID+" because it has an unverified adapter or port ACL")
+			return res, nil
+		}
+		// The native remove verifies this inventory again before deleting the VM.
+		p.PortACLs = live.PortACLs
+	}
+
 	// The guard first, so it never acts on a VM that is going.
 	if t := inv.Task; t != nil {
 		if ownedBy(*t, p.GuardTaskID, p.Owner) {
@@ -104,7 +126,6 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	res.Left = append(res.Left, proof.Left...)
 
 	ourVM := ""
-	vmID := adopt(inv.VMs, p.VMID, p.Owner)
 	for _, v := range inv.VMs {
 		if vmID == "" || !strings.EqualFold(v.ID, vmID) {
 			res.Left = append(res.Left, "the VM "+v.ID+" (not made by this install)")
@@ -132,9 +153,13 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		}
 	}
 
+	keepNetwork := false
 	swID := adopt(inv.Switches, p.SwitchID, p.Owner)
 	for _, s := range inv.Switches {
 		if swID == "" || !strings.EqualFold(s.ID, swID) {
+			if strings.EqualFold(s.ID, p.SwitchID) {
+				keepNetwork = true
+			}
 			res.Left = append(res.Left, "the switch "+s.ID+" (not made by this install)")
 			continue
 		}
@@ -145,11 +170,21 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 			}
 		}
 		if len(others) > 0 {
+			keepNetwork = true
 			res.Kept = append(res.Kept, fmt.Sprintf("the switch %s, its address and its neighbour entry: another VM (%s) has an adapter on it", s.ID, strings.Join(others, ", ")))
 			continue
 		}
-		if err := d.HV.RemoveSwitch(ctx, s.ID, p.Owner); err != nil {
+		switchPlan := p
+		switchPlan.SwitchID = s.ID
+		kept, err := d.HV.RemoveSwitch(ctx, switchPlan)
+		if err != nil {
+			keepNetwork = true
 			fail("switch", err)
+			continue
+		}
+		if kept != "" {
+			keepNetwork = true
+			res.Kept = append(res.Kept, "the switch "+s.ID+" because "+kept)
 			continue
 		}
 		res.Removed = append(res.Removed, "the switch "+s.ID+" with its host vNIC, address and neighbour entry")
@@ -163,8 +198,18 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 			res.Left = append(res.Left, fmt.Sprintf("the NAT %s on %s (ownership could not be verified)", x.Name, x.Prefix))
 			continue
 		}
-		if err := d.HV.RemoveNAT(ctx, n, p.Subnet, p.NATID); err != nil {
+		if keepNetwork {
+			res.Kept = append(res.Kept, "the NAT "+x.Name+" because the switch remains")
+			continue
+		}
+		kept, err := d.HV.RemoveNAT(ctx, n, p.Subnet, p.NATID)
+		if err != nil {
 			fail("NAT", err)
+			continue
+		}
+		if kept != "" {
+			res.Kept = append(res.Kept, "the NAT "+x.Name+" because "+kept)
+			keepNetwork = true
 			continue
 		}
 		res.Removed = append(res.Removed, "the NAT "+x.Name)
@@ -178,22 +223,16 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 			res.Left = append(res.Left, "the firewall rule "+r.ID+" (not made by this install)")
 		}
 	}
-	if mine > 0 {
-		if err := d.HV.RemoveFirewall(ctx, n, p.Owner); err != nil {
+	if mine > 0 && keepNetwork {
+		res.Kept = append(res.Kept, "the firewall rule for the retained switch")
+	}
+	if mine > 0 && !keepNetwork {
+		if kept, err := d.HV.RemoveFirewall(ctx, p); err != nil {
 			fail("firewall", err)
+		} else if kept != "" {
+			res.Left = append(res.Left, kept)
 		} else {
 			res.Removed = append(res.Removed, fmt.Sprintf("%d firewall rule(s) in %s", mine, n.FirewallGroup))
-		}
-	}
-
-	if p.EnhancedSession == ESOff && p.EnhancedSessionChanged && p.EnhancedSessionOriginal != nil && *p.EnhancedSessionOriginal {
-		p.EnhancedSessionChanged = false
-		if err := savePlanFile(d.Dir, p); err != nil {
-			fail("record Enhanced Session restore", err)
-		} else if was, err := d.HV.SetEnhancedSession(ctx, true); err != nil {
-			fail("Enhanced Session", err)
-		} else if !was {
-			res.Removed = append(res.Removed, "Enhanced Session put back to true")
 		}
 	}
 
@@ -215,33 +254,6 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		}
 	}
 
-	// Each account setup added comes out; taking out one that is no longer a
-	// member does nothing.
-	confirmed, pending := p.AddedAdminSIDs, p.PendingAdminSIDs
-	if !p.AdminGrantsTracked {
-		pending = append(slices.Clone(pending), confirmed...)
-		confirmed = nil
-	}
-	for _, sid := range pending {
-		res.Left = append(res.Left, "the account "+sid+" (Hyper-V Administrators grant unconfirmed)")
-	}
-	for _, sid := range confirmed {
-		// A grant has no independent identity. Consume the right to revoke
-		// before the call, including when it fails or this process stops.
-		p.AddedAdminSIDs = slices.DeleteFunc(slices.Clone(p.AddedAdminSIDs), func(s string) bool { return s == sid })
-		p.RevokedAdminSIDs = append(p.RevokedAdminSIDs, sid)
-		if err := savePlanFile(d.Dir, p); err != nil {
-			fail("record Hyper-V Administrators revocation", err)
-			break
-		}
-		if err := d.HV.RemoveHyperVAdmin(ctx, sid); err != nil {
-			fail("Hyper-V Administrators", err)
-			res.Left = append(res.Left, "the account "+sid+" (revocation unconfirmed)")
-		} else {
-			res.Removed = append(res.Removed, "the account "+sid+" setup added to Hyper-V Administrators")
-		}
-	}
-
 	if len(errs) > 0 {
 		return res, fmt.Errorf("Remove VM did not finish; run it again: %w", errors.Join(errs...))
 	}
@@ -260,6 +272,9 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	})
 	if len(errs) > 0 {
 		return res, fmt.Errorf("Remove VM did not finish; run it again: %w", errors.Join(errs...))
+	}
+	if keepNetwork {
+		return res, nil // Keep the plan and journal so the owner can retry.
 	}
 	removed, err := finishArtifactRemoval(d.Dir)
 	if err != nil {

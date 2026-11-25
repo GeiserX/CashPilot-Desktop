@@ -92,6 +92,14 @@ function Get-OwnedVM([string]$id, [string]$owner) {
   if (-not $owner -or $vm.Count -ne 1 -or (Get-Owner ([string]$vm[0].Notes)) -cne $owner) { throw 'The owned VM was not found.' }
   $vm[0]
 }
+function Get-RecordedVMAdapter([string]$id, [string]$owner, [string]$adapterId, [bool]$only) {
+  $vm = Get-OwnedVM $id $owner
+  $all = @(Get-VMNetworkAdapter -VM $vm)
+  $a = @($all | Where-Object { (($_.Id -split '\\')[-1]) -eq $adapterId })
+  if (-not $adapterId -or $a.Count -ne 1) { throw 'The recorded VM adapter was not found and was left unchanged.' }
+  if ($only -and $all.Count -ne 1) { throw 'The VM has another adapter and was left unchanged.' }
+  $a[0]
+}
 function Find-ManagementAdapter($mo) {
   $dev = ([string]$mo.DeviceId).Trim('{}')
   $guid = ([string]$mo.InterfaceGuid).Trim('{}')
@@ -107,7 +115,7 @@ function Find-ManagementAdapter($mo) {
 // into a value Diff flags. Enums are written with ToString, so the answer holds
 // their English names, never numbers or translated text. Integration services
 // are keyed by their ID.
-const scriptReadLive = hvPrelude + `$o = [ordered]@{}
+const scriptReadLive = portACLPrelude + firewallIdentityPS + `$o = [ordered]@{}
 $vm = @(Find-OurVM $in.vm)
 $o.vmExists = ($vm.Count -eq 1)
 if ($vm.Count -ne 1) { Write-Doc $o; exit 0 }
@@ -124,6 +132,9 @@ try {
   $o.acls = @(Get-VMNetworkAdapterAcl -VM $vm | ForEach-Object {
     [ordered]@{ action = $_.Action.ToString(); direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress; local = [string]$_.LocalAddress }
   })
+} catch { }
+try {
+  $o.portAcls = @(Get-VMNetworkAdapter -VM $vm | ForEach-Object { Get-PortACLs $_ } | ForEach-Object { Export-PortACL $_ })
 } catch { }
 try { $o.extAcls = @(Get-VMNetworkAdapterExtendedAcl -VM $vm).Count } catch { }
 try {
@@ -167,6 +178,9 @@ try {
       $na = @(Find-ManagementAdapter $mo[0])
       if ($na.Count -eq 1) {
         $idx = [int]$na[0].ifIndex
+        $o.managementAdapterId = [string]$mo[0].Id
+        $ipif = @(Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4)
+        $o.managementDhcp = ($ipif.Count -ne 1 -or $ipif[0].Dhcp.ToString() -ne 'Disabled')
         $o.vnicIfIndex = $idx
         $o.vnicMac = [string]$na[0].MacAddress
       }
@@ -200,7 +214,7 @@ try {
         if ($na.Count -eq 1) { $fi = [int]$na[0].ifIndex }
       }
     }
-    [ordered]@{ direction = $r.Direction.ToString(); action = $r.Action.ToString(); enabled = ($r.Enabled.ToString() -eq 'True'); ifIndex = $fi }
+    [ordered]@{ direction = $r.Direction.ToString(); action = $r.Action.ToString(); enabled = ($r.Enabled.ToString() -eq 'True'); ifIndex = $fi; identity = (Get-FirewallIdentity $r) }
   })
 } catch { }
 try { $o.enhancedSession = [bool](Get-VMHost).EnableEnhancedSessionMode } catch { }
@@ -355,29 +369,23 @@ try {
 Write-Doc $o
 `
 
-// scriptDisconnect disconnects every adapter of the VM and reports how many
-// still have a switch.
-const scriptDisconnect = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
-$a = @(Get-VMNetworkAdapter -VM $vm)
-foreach ($x in $a) {
-  $null = Get-OwnedVM $in.vm $in.owner
-  Disconnect-VMNetworkAdapter -VMNetworkAdapter $x
-}
-$left = @(Get-VMNetworkAdapter -VM $vm | Where-Object { $_.SwitchName }).Count
-Write-Doc ([ordered]@{ adapters = $a.Count; connected = $left })
+// scriptDisconnect disconnects only the adapter recorded at Setup.
+const scriptDisconnect = hvPrelude + `$a = Get-RecordedVMAdapter $in.vm $in.owner $in.adapter $false
+Disconnect-VMNetworkAdapter -VMNetworkAdapter $a
+$vm = Get-OwnedVM $in.vm $in.owner
+$all = @(Get-VMNetworkAdapter -VM $vm)
+$left = @($all | Where-Object { $_.SwitchName }).Count
+Write-Doc ([ordered]@{ adapters = $all.Count; connected = $left })
 `
 
 // scriptConnect connects the VM's one adapter to the one Internal switch with
 // the recorded ID. It refuses a VM with more adapters, a missing or doubled
 // switch, and a switch of any other type.
-const scriptConnect = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1 -or (Get-Owner ([string]$vm[0].Notes)) -cne $in.owner) { throw 'The owned VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
-if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
+const scriptConnect = hvPrelude + `$a = Get-RecordedVMAdapter $in.vm $in.owner $in.adapter $true
 $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId })
 if ($sw.Count -ne 1 -or (Get-Owner ([string]$sw[0].Notes)) -cne $in.owner) { throw 'The owned switch was not found.' }
 if ($sw[0].SwitchType.ToString() -ne 'Internal') { throw 'The switch is not an Internal switch.' }
-Connect-VMNetworkAdapter -VMNetworkAdapter $a[0] -VMSwitch $sw[0]
+Connect-VMNetworkAdapter -VMNetworkAdapter $a -VMSwitch $sw[0]
 Write-Doc ([ordered]@{ switchId = $sw[0].Id.ToString() })
 `
 
@@ -388,41 +396,18 @@ $vm = Get-OwnedVM $in.vm $in.owner
 Write-Doc ([ordered]@{ state = $vm.State.ToString() })
 `
 
-// scriptAddDeny adds one Deny Both row per remote on the VM's one adapter, then
-// lists the adapter's Deny rows so Go can check that each one is there.
-const scriptAddDeny = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
-$a = @(Get-VMNetworkAdapter -VM $vm)
-if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-foreach ($r in @($in.remotes)) { $null = Get-OwnedVM $in.vm $in.owner; Add-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] -RemoteIPAddress $r -Direction Both -Action Deny }
-Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
-`
-
-// scriptRemoveDeny removes the Deny rows of each remote from the VM's one
-// adapter, both directions, then lists the Deny rows left. A /32 matches
-// whether Hyper-V lists it bare or with its /32.
-const scriptRemoveDeny = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
-$a = @(Get-VMNetworkAdapter -VM $vm)
-if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-$rs = @($in.remotes | ForEach-Object { ([string]$_) -replace '/32$', '' })
-@(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Deny') -and ($rs -contains (([string]$_.RemoteAddress) -replace '/32$', '')) }) | ForEach-Object {
-  $null = Get-OwnedVM $in.vm $in.owner
-  Remove-VMNetworkAdapterAcl -VMNetworkAdapterAcl $_
-}
-Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
-`
-
 // hvScripts is every script the seam runs, by method, for the parser test.
 var hvScripts = map[string]string{
-	"ReadLive":     scriptReadLive,
-	"ReadHostNet":  scriptReadHostNet,
-	"ReadNetwork":  scriptReadNetwork,
-	"DropCounters": scriptDropCounters,
-	"Usage":        scriptUsage,
-	"Disconnect":   scriptDisconnect,
-	"Connect":      scriptConnect,
-	"Start":        scriptStart,
-	"AddDeny":      scriptAddDeny,
-	"RemoveDeny":   scriptRemoveDeny,
+	"ReadLive":       scriptReadLive,
+	"ReadHostNet":    scriptReadHostNet,
+	"ReadNetwork":    scriptReadNetwork,
+	"DropCounters":   scriptDropCounters,
+	"Usage":          scriptUsage,
+	"Disconnect":     scriptDisconnect,
+	"Connect":        scriptConnect,
+	"AddPortACLs":    scriptAddPortACLs,
+	"RemovePortACLs": scriptRemovePortACLs,
+	"Start":          scriptStart,
 }
 
 // checkVMID accepts only a GUID.
@@ -549,35 +534,38 @@ func (h *psHost) ReadLive(ctx context.Context, n Names, vmID, switchID string) (
 // liveWire is scriptReadLive's answer. A part the script could not read is
 // absent, and live() turns it into a value Diff flags.
 type liveWire struct {
-	VMExists      *bool           `json:"vmExists"`
-	VMState       *string         `json:"vmState"`
-	Adapters      []adapterWire   `json:"adapters"`
-	ACLs          []aclWire       `json:"acls"`
-	ExtACLs       *int            `json:"extAcls"`
-	ProcCount     *int            `json:"procCount"`
-	ProcMax       *int            `json:"procMax"`
-	ProcWeight    *int            `json:"procWeight"`
-	ExposeVirt    *bool           `json:"exposeVirt"`
-	MemoryBytes   *uint64         `json:"memoryBytes"`
-	DynamicMemory *bool           `json:"dynamicMemory"`
-	Checkpoints   *string         `json:"checkpoints"`
-	AutoStart     *string         `json:"autoStart"`
-	Integration   map[string]bool `json:"integration"`
-	DVDs          *int            `json:"dvds"`
-	Disks         *int            `json:"disks"`
-	Passthrough   []string        `json:"passthrough"`
-	SwitchType    *string         `json:"switchType"`
-	SwitchPorts   *int            `json:"switchPorts"`
-	VNICIfIndex   *int            `json:"vnicIfIndex"`
-	VNICMAC       *string         `json:"vnicMac"`
-	Bindings      map[string]bool `json:"bindings"`
-	ProtocolsOn   []string        `json:"protocolsOn"`
-	Neighbors     []neighborWire  `json:"neighbors"`
-	NATs          []natWire       `json:"nats"`
-	Firewall      []LiveRule      `json:"firewall"`
-	Enhanced      *bool           `json:"enhancedSession"`
-	GCS           []string        `json:"gcs"`
-	HostBuild     *string         `json:"hostBuild"`
+	VMExists            *bool           `json:"vmExists"`
+	VMState             *string         `json:"vmState"`
+	Adapters            []adapterWire   `json:"adapters"`
+	PortACLs            []PortACL       `json:"portAcls"`
+	ACLs                []aclWire       `json:"acls"`
+	ExtACLs             *int            `json:"extAcls"`
+	ProcCount           *int            `json:"procCount"`
+	ProcMax             *int            `json:"procMax"`
+	ProcWeight          *int            `json:"procWeight"`
+	ExposeVirt          *bool           `json:"exposeVirt"`
+	MemoryBytes         *uint64         `json:"memoryBytes"`
+	DynamicMemory       *bool           `json:"dynamicMemory"`
+	Checkpoints         *string         `json:"checkpoints"`
+	AutoStart           *string         `json:"autoStart"`
+	Integration         map[string]bool `json:"integration"`
+	DVDs                *int            `json:"dvds"`
+	Disks               *int            `json:"disks"`
+	Passthrough         []string        `json:"passthrough"`
+	SwitchType          *string         `json:"switchType"`
+	SwitchPorts         *int            `json:"switchPorts"`
+	ManagementDHCP      *bool           `json:"managementDhcp"`
+	ManagementAdapterID string          `json:"managementAdapterId"`
+	VNICIfIndex         *int            `json:"vnicIfIndex"`
+	VNICMAC             *string         `json:"vnicMac"`
+	Bindings            map[string]bool `json:"bindings"`
+	ProtocolsOn         []string        `json:"protocolsOn"`
+	Neighbors           []neighborWire  `json:"neighbors"`
+	NATs                []natWire       `json:"nats"`
+	Firewall            []LiveRule      `json:"firewall"`
+	Enhanced            *bool           `json:"enhancedSession"`
+	GCS                 []string        `json:"gcs"`
+	HostBuild           *string         `json:"hostBuild"`
 }
 
 type adapterWire struct {
@@ -656,6 +644,7 @@ func (w liveWire) live() (LiveState, error) {
 		l.ACLs = append(l.ACLs, ACL{Action: a.Action, Direction: a.Direction, Remote: aclRemote(a)})
 	}
 
+	l.PortACLs = w.PortACLs
 	l.ExtACLs = intOr(w.ExtACLs, -1)
 	l.ProcCount = intOr(w.ProcCount, -1)
 	l.ProcMax = intOr(w.ProcMax, -1)
@@ -681,6 +670,8 @@ func (w liveWire) live() (LiveState, error) {
 	}
 	l.SwitchType = strOr(w.SwitchType, unread)
 	l.SwitchPorts = intOr(w.SwitchPorts, -1)
+	l.ManagementDHCP = boolOr(w.ManagementDHCP, true)
+	l.ManagementAdapterID = w.ManagementAdapterID
 	l.VNICIfIndex = intOr(w.VNICIfIndex, 0)
 	l.VNICMAC = strOr(w.VNICMAC, "")
 	if w.Bindings != nil {
@@ -984,7 +975,7 @@ func (h *psHost) Usage(ctx context.Context, vmID string) (Usage, error) {
 }
 
 // Disconnect takes every adapter of the VM off its switch.
-func (h *psHost) Disconnect(ctx context.Context, vmID, owner string) error {
+func (h *psHost) Disconnect(ctx context.Context, vmID, owner, adapterID string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
@@ -992,10 +983,13 @@ func (h *psHost) Disconnect(ctx context.Context, vmID, owner string) error {
 		Adapters  int `json:"adapters"`
 		Connected int `json:"connected"`
 	}
+	if err := checkVMID("VM adapter ID", adapterID); err != nil {
+		return err
+	}
 	if err := checkOwner(owner); err != nil {
 		return err
 	}
-	arg := map[string]string{"vm": vmID, "owner": owner}
+	arg := map[string]string{"vm": vmID, "owner": owner, "adapter": adapterID}
 	if err := h.call(ctx, scriptDisconnect, arg, &w); err != nil {
 		return err
 	}
@@ -1006,11 +1000,14 @@ func (h *psHost) Disconnect(ctx context.Context, vmID, owner string) error {
 }
 
 // Connect puts the VM's one adapter on the recorded Internal switch.
-func (h *psHost) Connect(ctx context.Context, vmID, switchID, owner string) error {
+func (h *psHost) Connect(ctx context.Context, vmID, switchID, owner, adapterID string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
 	if err := checkVMID("switch ID", switchID); err != nil {
+		return err
+	}
+	if err := checkVMID("VM adapter ID", adapterID); err != nil {
 		return err
 	}
 	if err := checkOwner(owner); err != nil {
@@ -1019,7 +1016,7 @@ func (h *psHost) Connect(ctx context.Context, vmID, switchID, owner string) erro
 	var w struct {
 		SwitchID string `json:"switchId"`
 	}
-	arg := map[string]string{"vm": vmID, "switchId": switchID, "owner": owner}
+	arg := map[string]string{"vm": vmID, "switchId": switchID, "owner": owner, "adapter": adapterID}
 	if err := h.call(ctx, scriptConnect, arg, &w); err != nil {
 		return err
 	}
@@ -1094,107 +1091,6 @@ func aclArg(p netip.Prefix) string {
 		return p.Addr().String()
 	}
 	return p.String()
-}
-
-// denyWire is the Deny rows a write script lists after it ran.
-type denyWire struct {
-	Deny []struct {
-		Direction string `json:"direction"`
-		Remote    string `json:"remote"`
-	} `json:"deny"`
-}
-
-// hasBoth is whether the rows hold remote in both directions, as one Both rule
-// is listed. Rows compare as prefixes, so a /32 listed bare or as a.b.c.d/32
-// is the same row.
-func (w denyWire) hasBoth(remote netip.Prefix) (in, out bool) {
-	for _, r := range w.Deny {
-		if p, err := parsePrefixOrAddr(r.Remote); err != nil || p.Masked() != remote {
-			continue
-		}
-		switch strings.ToLower(r.Direction) {
-		case "inbound":
-			in = true
-		case "outbound":
-			out = true
-		case "both":
-			in, out = true, true
-		}
-	}
-	return in, out
-}
-
-// denyBatches runs script once per batch of at most maxDenyRows prefixes, and
-// hands each batch and the rows listed after it to check.
-func (h *psHost) denyBatches(ctx context.Context, script, vmID, owner string, ps []netip.Prefix, rs []string, check func([]netip.Prefix, denyWire) error) error {
-	for i := 0; i < len(ps); i += maxDenyRows {
-		j := min(i+maxDenyRows, len(ps))
-		var w denyWire
-		arg := struct {
-			VM      string   `json:"vm"`
-			Owner   string   `json:"owner"`
-			Remotes []string `json:"remotes"`
-		}{vmID, owner, rs[i:j]}
-		if err := h.call(ctx, script, arg, &w); err != nil {
-			return err
-		}
-		if err := check(ps[i:j], w); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// AddDeny adds a Deny Both row for each prefix and checks that each one is
-// there afterwards.
-func (h *psHost) AddDeny(ctx context.Context, vmID, owner string, ps []netip.Prefix) error {
-	if err := checkVMID("VM ID", vmID); err != nil {
-		return err
-	}
-	if err := checkOwner(owner); err != nil {
-		return err
-	}
-	rs, err := checkDenies(ps)
-	if err != nil {
-		return err
-	}
-	return h.denyBatches(ctx, scriptAddDeny, vmID, owner, ps, rs, func(batch []netip.Prefix, w denyWire) error {
-		for _, p := range batch {
-			if in, out := w.hasBoth(p); !in || !out {
-				return fmt.Errorf("the Deny for %s is not in place after the add", aclArg(p))
-			}
-		}
-		return nil
-	})
-}
-
-// RemoveDeny removes the Deny rows of each prefix and checks that none is left.
-// It refuses a static Deny: only the guard's own rows ever go, and a static row
-// gone is drift that only Repair puts back.
-func (h *psHost) RemoveDeny(ctx context.Context, vmID, owner string, ps []netip.Prefix) error {
-	if err := checkVMID("VM ID", vmID); err != nil {
-		return err
-	}
-	if err := checkOwner(owner); err != nil {
-		return err
-	}
-	rs, err := checkDenies(ps)
-	if err != nil {
-		return err
-	}
-	for _, p := range ps {
-		if slices.Contains(StaticDeny(), p) {
-			return fmt.Errorf("the static Deny %v is never removed", p)
-		}
-	}
-	return h.denyBatches(ctx, scriptRemoveDeny, vmID, owner, ps, rs, func(batch []netip.Prefix, w denyWire) error {
-		for _, p := range batch {
-			if in, out := w.hasBoth(p); in || out {
-				return fmt.Errorf("a Deny for %s is still there after the remove", aclArg(p))
-			}
-		}
-		return nil
-	})
 }
 
 // sleepCtx waits d, or until ctx ends.

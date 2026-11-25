@@ -183,6 +183,7 @@ func runVMSetupFor(ctx context.Context, params string, n winvm.Names, dir string
 		logger = log.New(io.MultiWriter(errOut, f), "", log.LstdFlags)
 	}
 	d.Exe, d.Logf = n.GuardExe(), logger.Printf
+	logger.Printf("VM storage volume %s (private directory under %s, 128 GiB dynamic disk)", filepath.VolumeName(dir), dir)
 	res, err := winvm.Build(ctx, d, sp)
 	switch {
 	case errors.Is(err, winvm.ErrProofFailed):

@@ -2,6 +2,7 @@ package winvm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
@@ -42,6 +43,7 @@ func diffObjects(t *testing.T, before, after []string) {
 
 func TestRemoveAfterBuildLeavesTheHostAsItWas(t *testing.T) {
 	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
 	before := f.Objects()
 	dir := build(t, f)
 	res := remove(t, f, dir)
@@ -65,18 +67,6 @@ func TestRemoveAfterBuildLeavesTheHostAsItWas(t *testing.T) {
 	}
 }
 
-func TestRemoveRestoresEnhancedSession(t *testing.T) {
-	for _, was := range []bool{true, false} {
-		f := hvfake.New()
-		f.SetEnhanced(was)
-		dir := build(t, f)
-		remove(t, f, dir)
-		if got := strings.Contains(strings.Join(f.Objects(), "\n"), "enhancedSession=true"); got != was {
-			t.Fatalf("Enhanced Session was %v before the build and is %v after Remove", was, got)
-		}
-	}
-}
-
 func TestRemoveKeepsTheGuardianItDidNotMake(t *testing.T) {
 	f := hvfake.New()
 	f.SetGuardian(true)
@@ -92,6 +82,7 @@ func TestRemoveKeepsTheGuardianItDidNotMake(t *testing.T) {
 
 func TestRemoveKeepsTheGuardianAnotherVMUses(t *testing.T) {
 	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
 	dir := build(t, f)
 	other := f.AddForeignVM("someone-elses-vm", true)
 	res := remove(t, f, dir)
@@ -179,6 +170,7 @@ func TestRemoveAfterAHalfBuild(t *testing.T) {
 	for _, m := range []string{"EnsureNAT", "EnsureGuardian", "CreateVM", "Start", "RegisterGuardTask"} {
 		t.Run(m, func(t *testing.T) {
 			f := hvfake.New()
+			f.SetHyperVAdmin(testUserSID, true)
 			before := f.Objects()
 			dir := t.TempDir()
 			f.FailNext(m, errors.New("injected"))
@@ -193,6 +185,7 @@ func TestRemoveAfterAHalfBuild(t *testing.T) {
 
 func TestRemoveResumesAfterAFailure(t *testing.T) {
 	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
 	before := f.Objects()
 	dir := build(t, f)
 	f.FailNext("RemoveSwitch", errors.New("injected"))
@@ -226,6 +219,7 @@ func TestRemoveWithoutAPlanTouchesNothing(t *testing.T) {
 // and no vTPM (encrypted state only) still needs the guardian.
 func TestRemoveKeepsTheGuardianAKeyProtectorUses(t *testing.T) {
 	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
 	dir := build(t, f)
 	other := f.AddForeignVM("someone-elses-vm", false)
 	if err := f.SetKeyProtector(other); err != nil {
@@ -247,6 +241,7 @@ func TestRemoveFindsRenamedObjects(t *testing.T) {
 	for _, what := range []string{"vm", "switch", "both"} {
 		t.Run(what, func(t *testing.T) {
 			f := hvfake.New()
+			f.SetHyperVAdmin(testUserSID, true)
 			before := f.Objects()
 			dir := build(t, f)
 			p := readPlan(t, dir)
@@ -273,6 +268,7 @@ func TestRemoveFindsRenamedObjects(t *testing.T) {
 // capture leaves DataDir\proof\pktmon-N; Remove VM still finishes.
 func TestRemoveKeepsUnverifiedFilesAndReplacements(t *testing.T) {
 	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
 	before := f.Objects()
 	dir := build(t, f)
 	status := filepath.Join(dir, winvm.StatusFile)
@@ -391,7 +387,7 @@ func TestRemoveKeepsAnUnrecordedDiskUnderTheVHDXRoot(t *testing.T) {
 	f := hvfake.New()
 	dir := build(t, f)
 	p := readPlan(t, dir)
-	path := p.VHDXDir + `\foreign.vhdx`
+	path := p.Names.DataDir + `\foreign.vhdx`
 	f.SetDiskPath(p.VMID, path)
 	res := remove(t, f, dir)
 	if !strings.Contains(strings.Join(res.Left, "\n"), path) {
@@ -407,6 +403,7 @@ func TestRemoveRetryPreservesIndependentAdminGrant(t *testing.T) {
 	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir}, winvm.ProductNames()); err == nil {
 		t.Fatal("expected an incomplete removal")
 	}
+	f.SetHyperVAdmin(sid, false)
 	if added, err := f.AddHyperVAdmin(context.Background(), sid); err != nil || !added {
 		t.Fatalf("could not restore independent grant: %v, %v", added, err)
 	}
@@ -424,5 +421,87 @@ func TestRemoveLeavesEnhancedSessionEnabledAfterBuild(t *testing.T) {
 	remove(t, f, dir)
 	if !strings.Contains(strings.Join(f.Objects(), "\n"), "enhancedSession=true") {
 		t.Fatal("removal turned off Enhanced Session without a setup change")
+	}
+}
+
+func TestR6RemovePreservesGrantRecreatedBeforeFirstRemove(t *testing.T) {
+	ctx := context.Background()
+	f := hvfake.New()
+	f.SetEnhanced(false)
+	dir := build(t, f)
+	sid := setupParams().UserSID
+	if err := f.RemoveHyperVAdmin(ctx, sid); err != nil {
+		t.Fatal(err)
+	}
+	if added, err := f.AddHyperVAdmin(ctx, sid); err != nil || !added {
+		t.Fatalf("recreate grant: %v, %v", added, err)
+	}
+	res := remove(t, f, dir)
+	if !slices.Contains(f.Objects(), "hyperv-admin "+sid) {
+		t.Fatal("first Remove revoked an independently recreated grant")
+	}
+	if !strings.Contains(strings.Join(res.Kept, "\n"), sid) {
+		t.Fatalf("Remove did not report the grant: %+v", res)
+	}
+}
+
+func TestR6RemoveKeepsNATWhenAnotherVMUsesTheSwitch(t *testing.T) {
+	f := hvfake.New()
+	f.SetEnhanced(false)
+	dir := build(t, f)
+	p := readPlan(t, dir)
+	other := f.AddForeignVM("other-vm", false)
+	if err := f.SetAdapterSwitch(other, p.Names.Switch); err != nil {
+		t.Fatal(err)
+	}
+	res := remove(t, f, dir)
+	if !slices.Contains(f.Objects(), "nat "+p.Names.NAT+" "+p.Subnet.String()) ||
+		!strings.Contains(strings.Join(res.Kept, "\n"), "the NAT "+p.Names.NAT) {
+		t.Fatalf("Remove did not keep and report the NAT serving the other VM: %+v", res)
+	}
+}
+
+func TestR6RemovePreservesAdminChangedFirewallRule(t *testing.T) {
+	f := hvfake.New()
+	f.SetEnhanced(false)
+	dir := build(t, f)
+	p := readPlan(t, dir)
+	if err := f.SetL3(context.Background(), p.Names, p.Owner, false); err != nil {
+		t.Fatal(err)
+	}
+	res := remove(t, f, dir)
+	if !strings.Contains(strings.Join(f.Objects(), "\n"), "enabled=false") ||
+		!strings.Contains(strings.Join(res.Left, "\n"), "firewall rule differs from Setup") {
+		t.Fatalf("Remove did not keep and report the changed firewall rule: %+v", res)
+	}
+}
+
+func TestR6RemoveLeavesEnhancedSessionPolicyFromLegacyPlan(t *testing.T) {
+	f := hvfake.New()
+	f.SetEnhanced(false)
+	dir := build(t, f)
+	path := filepath.Join(dir, winvm.PlanFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		t.Fatal(err)
+	}
+	plan["enhancedSessionOriginal"] = true
+	plan["enhancedSessionChanged"] = true
+	raw, err = json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.SetEnhanced(true)
+	f.SetEnhanced(false)
+	remove(t, f, dir)
+	if strings.Contains(strings.Join(f.Objects(), "\n"), "enhancedSession=true") {
+		t.Fatal("Remove undid the administrator's independent Off policy")
 	}
 }

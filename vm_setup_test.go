@@ -25,7 +25,7 @@ func writeParams(t *testing.T, edit func(*winvm.SetupParams)) string {
 func writeParamsIn(t *testing.T, dir string, edit func(*winvm.SetupParams)) string {
 	t.Helper()
 	sp := winvm.SetupParams{
-		Version: winvm.SetupParamsVersion, VHDXDir: `D:\VMs`, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
+		Version: winvm.SetupParamsVersion, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
 		AdminPassword: testPassword(1), EarnerPassword: testPassword(2),
 		UserSID: "S-1-5-21-1-2-3-1001", ApproveNetwork: true,
 	}

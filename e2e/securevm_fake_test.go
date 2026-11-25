@@ -343,7 +343,7 @@ func TestFakeHyperVFaultHooks(t *testing.T) {
 	}
 
 	// Disconnect and the switch-port count Diff expects.
-	f.Disconnect(ctx, p.VMID, p.Owner)
+	f.Disconnect(ctx, p.VMID, p.Owner, p.AdapterID)
 	if cs := diffNow(t, f, p); len(cs) != 0 {
 		t.Fatalf("a disconnected VM with the right config: %+v", cs)
 	}

@@ -39,30 +39,22 @@ func ProofElementName(n Names, owner string) string {
 }
 
 // scriptSetL3 turns only this install's tagged rule on or off.
-const scriptSetL3 = buildPrelude + `$desc = 'CashPilot Secure VM. cashpilot-owner=' + $in.owner
+const scriptSetL3 = firewallPrelude + `$desc = 'CashPilot Secure VM. cashpilot-owner=' + $in.owner
 $rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq $in.id -and $_.Description -ceq $desc })
-if ($rs.Count -ne 1) { throw 'The owned firewall rule was not found exactly once.' }
-$rs | Set-NetFirewallRule -Enabled ($(if ($in.on) { 'True' } else { 'False' }))
+if ($rs.Count -ne 1 -or -not $in.identity -or (Get-FirewallIdentity $rs[0]) -cne $in.identity) {
+  throw 'The recorded firewall rule changed or could not be verified.'
+}
+$desired = if ($in.on) { 'True' } else { 'False' }
+if ($rs[0].Enabled.ToString() -ne $desired) { Set-NetFirewallRule -InputObject $rs[0] -Enabled $desired }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptSetBinding binds or unbinds one component on the host vNIC.
 const scriptSetBinding = buildPrelude + `$b = @(Get-HostBinding $in.component)
 if ($b.Count -ne 1) { throw 'The host vNIC binding was not found.' }
-$null = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+$null = Get-HostVNIC $in.switchId $in.owner $in.managementId ([int]$in.ifIndex)
 if ($in.on) { Enable-NetAdapterBinding -InputObject $b[0] } else { Disable-NetAdapterBinding -InputObject $b[0] }
 Write-Doc ([ordered]@{ ok = $true })
-`
-
-// scriptAllow adds or removes one Allow Both row on the VM's one adapter, then
-// lists the Allow rows.
-const scriptAllow = buildPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
-$a = @(Get-VMNetworkAdapter -VM $vm)
-if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-$r = ([string]$in.remote) -replace '/(32|128)$', ''
-if ($in.add) { Add-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] -RemoteIPAddress $r -Direction Both -Action Allow }
-else { @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Allow') -and ((([string]$_.RemoteAddress) -replace '/(32|128)$', '') -eq $r) }) | Remove-VMNetworkAdapterAcl }
-Write-Doc ([ordered]@{ allow = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Allow' } | ForEach-Object { [string]$_.RemoteAddress }) })
 `
 
 // scriptLinkLocal reads the host vNIC's IPv6 link-local address.
@@ -72,13 +64,21 @@ Write-Doc ([ordered]@{ addrs = @($ll) })
 
 // scriptCanaryRule adds or removes the inbound Allow for one canary port, for
 // this program and the guest's address only.
-const scriptCanaryRule = buildPrelude + `$name = $in.id
+const scriptCanaryRule = firewallPrelude + `$name = $in.id
 $matches = @(Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue)
-$owned = @($matches | Where-Object { $_.Group -eq $in.group -and $_.Description -ceq $in.desc })
-if ($in.add -and $matches.Count -ne 0) { throw 'A canary rule with this identity already exists.' }
-if (-not $in.add -and $owned.Count -eq 1) { Remove-NetFirewallRule -InputObject $owned[0] }
-if ($in.add) { New-NetFirewallRule -Name $name -DisplayName $name -Group $in.group -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$in.port) -RemoteAddress ([string]$in.remote) -Program $in.program -Description $in.desc | Out-Null }
-Write-Doc ([ordered]@{ ok = $true })
+$identity = ''
+if ($in.add) {
+  if ($matches.Count -ne 0) { throw 'A canary rule with this name already exists.' }
+  $r = New-NetFirewallRule -Name $name -DisplayName $name -Group $in.group -Direction Inbound -Action Allow -Protocol TCP -LocalPort ([int]$in.port) -RemoteAddress ([string]$in.remote) -Program $in.program -Description $in.desc
+  $identity = Get-FirewallIdentity $r
+} elseif ($matches.Count -gt 0) {
+  if ($matches.Count -ne 1 -or $matches[0].Group -ne $in.group -or $matches[0].Description -cne $in.desc -or
+      -not $in.identity -or (Get-FirewallIdentity $matches[0]) -cne $in.identity -or $matches[0].Enabled.ToString() -ne 'True') {
+    throw 'The canary firewall rule changed and was left in place.'
+  }
+  Remove-NetFirewallRule -InputObject $matches[0]
+}
+Write-Doc @{ identity = $identity }
 `
 
 const scriptPktmonList = buildPrelude + `$pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
@@ -105,9 +105,23 @@ if ($s.Count -ne 1 -or [string]$s[0].LocalFilePath -ne $in.etl -or [CpdDisk]::Id
 $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
 & $pm stop | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
-$metadata = @(Get-WinEvent -FilterHashtable @{ Path = $in.etl; ProviderName = 'Microsoft-Windows-PktMon'; Id = @(20, 100, 110) } -Oldest -ErrorAction Stop)
+$metadata = @(Get-WinEvent -FilterHashtable @{ Path = $in.etl; ProviderName = 'Microsoft-Windows-PktMon'; Id = @(20, 30, 100, 110) } -Oldest -ErrorAction Stop)
+$indices = @{}
+foreach ($event in @($metadata | Where-Object { $_.Id -eq 30 })) {
+  $p = $event.Properties
+  if ([int]$p[1].Value -ne 1) { continue } # PktMon IfIndex property
+  $id = [int]$p[0].Value
+  $value = [int]$p[2].Value
+  if ($indices.ContainsKey($id) -and $indices[$id] -ne $value) { throw 'A pktmon interface index changed during capture.' }
+  $indices[$id] = $value
+}
+$components = @(foreach ($event in @($metadata | Where-Object { $_.Id -eq 20 })) {
+  $p = $event.Properties
+  $id = [int]$p[0].Value
+  @{ id = $id; type = [int]$p[1].Value; name = [string]$p[2].Value; ifIndex = [int]$indices[$id] }
+})
 Write-Doc ([ordered]@{
-  metadata = [bool]($metadata | Where-Object { $_.Id -eq 20 } | Select-Object -First 1)
+  components = $components
   filtered = [bool]($metadata | Where-Object { $_.Id -eq 100 -or $_.Id -eq 110 } | Select-Object -First 1)
 })
 `
@@ -128,7 +142,6 @@ Write-Doc ([ordered]@{ files = @($out) })
 var proberScripts = map[string]string{
 	"SetL3":        scriptSetL3,
 	"SetBinding":   scriptSetBinding,
-	"Allow":        scriptAllow,
 	"LinkLocal":    scriptLinkLocal,
 	"CanaryRule":   scriptCanaryRule,
 	"PktmonList":   scriptPktmonList,
@@ -156,8 +169,10 @@ type psProber struct {
 	hv func(ctx context.Context, bindVMID, service string, register bool, element string) (HVListener, error)
 	// owner is this install's owner token, written into every object the
 	// proof makes. Build sets it from desired.json (see forPlan).
-	owner    string
-	switchID string
+	owner            string
+	managementID     string
+	firewallIdentity string
+	switchID         string
 	// tmp holds pktmon's capture files.
 	tmp string
 }
@@ -166,7 +181,7 @@ var _ Prober = (*psProber)(nil)
 
 // forPlan scopes the proof to the installation's owner and switch.
 func (p *psProber) forPlan(plan Plan) Prober {
-	return &psProber{h: p.h, n: p.n, program: p.program, listen: p.listen, hv: p.hv, tmp: p.tmp, owner: plan.Owner, switchID: plan.SwitchID}
+	return &psProber{h: p.h, n: p.n, program: p.program, listen: p.listen, hv: p.hv, tmp: p.tmp, owner: plan.Owner, switchID: plan.SwitchID, managementID: plan.ManagementAdapterID, firewallIdentity: plan.FirewallIdentity}
 }
 
 // checkOwner refuses to make a proof object without a valid owner token:
@@ -186,7 +201,7 @@ func (p *psProber) SetL3(ctx context.Context, n Names, owner string, on bool) er
 	if err := p.checkOwner(); err != nil {
 		return err
 	}
-	return p.h.ok(ctx, scriptSetL3, map[string]any{"group": n.FirewallGroup, "id": blockFirewallID(n, owner), "owner": owner, "on": on})
+	return p.h.ok(ctx, scriptSetL3, map[string]any{"group": n.FirewallGroup, "id": blockFirewallID(n, owner), "owner": owner, "on": on, "identity": p.firewallIdentity})
 }
 
 // SetBinding binds or unbinds ms_tcpip6 on the host vNIC: the only component
@@ -204,55 +219,7 @@ func (p *psProber) SetBinding(ctx context.Context, ifIndex int, component string
 	if err := checkVMID("switch ID", p.switchID); err != nil {
 		return err
 	}
-	return p.h.ok(ctx, scriptSetBinding, map[string]any{"ifIndex": ifIndex, "switchId": p.switchID, "owner": p.owner, "component": component, "on": on})
-}
-
-// checkAllow accepts one host address: the proof opens holes one address at a
-// time.
-func checkAllow(q netip.Prefix) (string, error) {
-	if !q.IsValid() || q.Bits() != q.Addr().BitLen() || q.Addr().Zone() != "" {
-		return "", fmt.Errorf("allow %v is not one address", q)
-	}
-	return q.Addr().String(), nil
-}
-
-func (p *psProber) allow(ctx context.Context, vmID string, q netip.Prefix, add bool) error {
-	if err := checkVMID("VM ID", vmID); err != nil {
-		return err
-	}
-	if err := p.checkOwner(); err != nil {
-		return err
-	}
-	r, err := checkAllow(q)
-	if err != nil {
-		return err
-	}
-	var w struct {
-		Allow []string `json:"allow"`
-	}
-	if err := p.h.call(ctx, scriptAllow, map[string]any{"vm": vmID, "owner": p.owner, "remote": r, "add": add}, &w); err != nil {
-		return err
-	}
-	has := false
-	for _, x := range w.Allow {
-		if y, err := parsePrefixOrAddr(x); err == nil && y.Masked() == q {
-			has = true
-		}
-	}
-	if has != add {
-		return fmt.Errorf("the Allow for %s is %s after the change", r, map[bool]string{true: "there", false: "missing"}[has])
-	}
-	return nil
-}
-
-// AddAllow opens an L2 hole for one address.
-func (p *psProber) AddAllow(ctx context.Context, vmID string, q netip.Prefix) error {
-	return p.allow(ctx, vmID, q, true)
-}
-
-// RemoveAllow closes it.
-func (p *psProber) RemoveAllow(ctx context.Context, vmID string, q netip.Prefix) error {
-	return p.allow(ctx, vmID, q, false)
+	return p.h.ok(ctx, scriptSetBinding, map[string]any{"ifIndex": ifIndex, "switchId": p.switchID, "managementId": p.managementID, "owner": p.owner, "component": component, "on": on})
 }
 
 // LinkLocal reads the host vNIC's IPv6 link-local address.
@@ -368,8 +335,22 @@ func (p *psProber) Canary(ctx context.Context, ip netip.Addr, port uint16, from 
 	}
 	group := p.n.FirewallGroup + proofGroupSuffix
 	id := randomArtifactName(group+"-", "")
+	var identity string
 	rule := func(ctx context.Context, add bool) error {
-		return p.h.ok(ctx, scriptCanaryRule, map[string]any{"group": group, "id": id, "port": port, "remote": from.Masked().String(), "program": p.program, "add": add, "desc": proofCanaryDesc(p.owner)})
+		var w struct {
+			Identity string `json:"identity"`
+		}
+		err := p.h.call(ctx, scriptCanaryRule, map[string]any{
+			"group": group, "id": id, "port": port, "remote": from.Masked().String(), "program": p.program,
+			"add": add, "desc": proofCanaryDesc(p.owner), "identity": identity,
+		}, &w)
+		if err == nil && add {
+			if !identityDigestRE.MatchString(w.Identity) {
+				return errors.New("the firewall did not return a canary rule identity")
+			}
+			identity = w.Identity
+		}
+		return err
 	}
 	if err := rule(ctx, true); err != nil {
 		return nil, err
@@ -471,8 +452,8 @@ type psCapture struct {
 // its interface, and reads the packets each one saw.
 func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	var lw struct {
-		Metadata bool `json:"metadata"`
-		Filtered bool `json:"filtered"`
+		Components []pktComp `json:"components"`
+		Filtered   bool      `json:"filtered"`
 	}
 	if err := c.p.h.call(ctx, scriptPktmonStop, map[string]string{"etl": c.etl, "etlId": c.etlID}, &lw); err != nil {
 		return nil, err
@@ -487,10 +468,13 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		_ = j.remove(etlRel)
 		_ = j.remove(c.rel)
 	}()
-	if !lw.Metadata || lw.Filtered {
+	if lw.Filtered {
 		return nil, errors.New("pktmon did not prove it captured without host filters")
 	}
 	comps := c.comps
+	if err := reconcilePktmon(comps, lw.Components); err != nil {
+		return nil, err
+	}
 	want := []int{}
 	for id := range comps {
 		want = append(want, id)

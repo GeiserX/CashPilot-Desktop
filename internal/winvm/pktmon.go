@@ -18,16 +18,40 @@ type pktComp struct {
 	ID      int
 	Name    string
 	IfIndex int
+	Type    int
 }
 
 // maxPktmonList caps the component list.
 const maxPktmonList = 1 << 20
 
-// parsePktmonComponents reads `pktmon list --json`. It does not rely on the
-// document's nesting: any object with a numeric Id and a Name is a component,
-// and its ifIndex is a field or a Properties entry whose name is ifIndex,
-// compared without case. A component with no ifIndex keeps 0, so its class is
-// unknown and a green step that sees a probe there fails closed.
+// pktmonNICType uses the types in the PktMon ETW component event.
+func pktmonNICType(v any) int {
+	if n, ok := jsonInt(v); ok {
+		return n
+	}
+	s, _ := v.(string)
+	switch strings.ToLower(strings.NewReplacer(" ", "", "-", "", "_", "").Replace(s)) {
+	case "miniport":
+		return 2
+	case "vmsvmnic":
+		return 5
+	case "vmsminiport":
+		return 6
+	case "vmsextminiport":
+		return 7
+	case "vmsprotocolnic":
+		return 8
+	case "netvscminiport":
+		return 9
+	}
+	return 0
+}
+
+func (c pktComp) isNIC() bool {
+	return c.Type == 2 || (c.Type >= 5 && c.Type <= 9)
+}
+
+// parsePktmonComponents reads the NICs in pktmon list --json.
 func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 	if len(b) > maxPktmonList {
 		return nil, fmt.Errorf("the pktmon component list is %d bytes, over the cap", len(b))
@@ -56,6 +80,8 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 					if n, ok := jsonInt(e); ok {
 						c.ID, hasID = n, true
 					}
+				case "type", "componenttype":
+					c.Type = pktmonNICType(e)
 				case "name":
 					c.Name, _ = e.(string)
 				case "ifindex":
@@ -75,7 +101,7 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 					}
 				}
 			}
-			if hasID && c.Name != "" && c.ID > 0 {
+			if hasID && c.Name != "" && c.ID > 0 && c.isNIC() {
 				out[c.ID] = c
 			}
 			for _, e := range x {
@@ -85,9 +111,31 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 	}
 	walk(doc, 0)
 	if len(out) == 0 {
-		return nil, errors.New("the pktmon component list names no component")
+		return nil, errors.New("the pktmon component list names no NIC")
 	}
 	return out, nil
+}
+
+// reconcilePktmon checks the ETL's own component metadata before any packet
+// from an export can be used as evidence.
+func reconcilePktmon(want map[int]pktComp, actual []pktComp) error {
+	seen := make(map[int]bool, len(want))
+	for _, got := range actual {
+		if !got.isNIC() {
+			continue
+		}
+		expected, ok := want[got.ID]
+		if !ok || got.Type != expected.Type || got.Name != expected.Name || got.IfIndex != expected.IfIndex {
+			return fmt.Errorf("pktmon trace NIC %d (%s) differs from the pre-capture inventory", got.ID, got.Name)
+		}
+		seen[got.ID] = true
+	}
+	for id := range want {
+		if !seen[id] {
+			return fmt.Errorf("pktmon trace is missing NIC %d (%s)", id, want[id].Name)
+		}
+	}
+	return nil
 }
 
 func jsonInt(v any) (int, bool) {
@@ -133,6 +181,7 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 	var out []pktInfo
 	var bo binary.ByteOrder = binary.LittleEndian
 	var links []uint16
+	hasInterface := false
 	for n := 0; len(b) > 0; n++ {
 		if n > maxPcapBlocks || len(b) < 12 {
 			return nil, errors.New("the capture is cut short")
@@ -161,7 +210,15 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 			if len(body) < 8 {
 				return nil, errors.New("the capture has a broken interface block")
 			}
-			links = append(links, bo.Uint16(body))
+			link := bo.Uint16(body)
+			if link != linkEthernet && link != linkRaw {
+				return nil, fmt.Errorf("unsupported capture interface link type %d", link)
+			}
+			if bo.Uint16(body[2:]) != 0 {
+				return nil, errors.New("invalid capture interface header")
+			}
+			hasInterface = true
+			links = append(links, link)
 		case pcapEPB:
 			if len(body) < 20 {
 				return nil, errors.New("the capture has a broken packet block")
@@ -182,6 +239,9 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 			}
 		}
 		b = b[ln:]
+	}
+	if !hasInterface {
+		return nil, errors.New("capture has no interface evidence")
 	}
 	return out, nil
 }

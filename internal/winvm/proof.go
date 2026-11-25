@@ -289,10 +289,10 @@ func Judge(s StepSpec, e Evidence) StepResult {
 	switch s.Kind {
 	case Red:
 		switch {
-		case escaped(false):
-			r.Outcome = WentRed
 		case e.Err != "":
 			r.Outcome, r.Detail = Broken, "the probe could not run: "+e.Err
+		case escaped(false):
+			r.Outcome = WentRed
 		default:
 			r.Outcome, r.Detail = Broken, "with the hole open nothing arrived and nothing left this PC, so this probe proves nothing"
 		}
@@ -459,7 +459,8 @@ func (h *holes) closeAll(ctx context.Context) error {
 // proofRun is one run's state.
 type proofRun struct {
 	Runner
-	p     Plan
+	p     *Plan
+	save  func() error
 	t     ProofTargets
 	h     HostNet
 	holes holes
@@ -482,10 +483,14 @@ func RemoveProofLock(dir string) error {
 // no Allow row, L3 on, ms_tcpip6 off. It returns the results so far with any
 // error.
 func (r Runner) Run(ctx context.Context, p Plan, h HostNet, t ProofTargets) (rs []StepResult, err error) {
+	return r.run(ctx, &p, h, t, nil)
+}
+
+func (r Runner) run(ctx context.Context, p *Plan, h HostNet, t ProofTargets, save func() error) (rs []StepResult, err error) {
 	if err := WriteProofLock(r.Dir, r.now()); err != nil {
 		return nil, fmt.Errorf("could not take the proof lock: %w", err)
 	}
-	run := &proofRun{Runner: r, p: p, t: t, h: h}
+	run := &proofRun{Runner: r, p: p, t: t, h: h, save: save}
 	defer func() {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), restoreTimeout)
 		defer cancel()
@@ -501,7 +506,7 @@ func (r Runner) Run(ctx context.Context, p Plan, h HostNet, t ProofTargets) (rs 
 	if err := run.ready(ctx); err != nil {
 		return nil, err
 	}
-	for _, s := range Steps(p, h, t) {
+	for _, s := range Steps(*p, h, t) {
 		if !s.Applies {
 			rs = append(rs, Judge(s, Evidence{}))
 			continue
@@ -548,7 +553,10 @@ func (r *proofRun) ready(ctx context.Context) error {
 	if !live.VMExists {
 		return errors.New("the VM is not there")
 	}
-	if err := fenceClosed(live); err != nil {
+	if err := requireRecordedAdapter(*r.p, live); err != nil {
+		return err
+	}
+	if err := fenceClosed(live, r.p.FirewallIdentity); err != nil {
 		return fmt.Errorf("the fence has a hole before the proof starts: %w", err)
 	}
 	for _, a := range live.Adapters {
@@ -557,7 +565,7 @@ func (r *proofRun) ready(ctx context.Context) error {
 		}
 	}
 	if !anyConnected(live) {
-		if err := r.B.Connect(ctx, r.p.VMID, r.p.SwitchID, r.p.Owner); err != nil {
+		if err := r.B.Connect(ctx, r.p.VMID, r.p.SwitchID, r.p.Owner, r.p.AdapterID); err != nil {
 			return fmt.Errorf("could not connect the VM for the proof: %w", err)
 		}
 	}
@@ -571,7 +579,7 @@ func (r *proofRun) ready(ctx context.Context) error {
 
 // fenceClosed checks the holes the proof opens: no Allow row, the L3 rule on,
 // ms_tcpip6 off.
-func fenceClosed(live LiveState) error {
+func fenceClosed(live LiveState, firewallIdentity string) error {
 	var why []string
 	for _, a := range live.ACLs {
 		if strings.EqualFold(a.Action, "Allow") {
@@ -582,6 +590,9 @@ func fenceClosed(live LiveState) error {
 		why = append(why, "no L3 rule")
 	}
 	for _, f := range live.Firewall {
+		if firewallIdentity != "" && f.Identity != firewallIdentity {
+			why = append(why, "the firewall rule differs from Setup")
+		}
 		if !f.Enabled {
 			why = append(why, "the L3 rule is off")
 		}
@@ -601,53 +612,57 @@ func (r *proofRun) checkRestored(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("could not read the fence after the proof: %w", err)
 	}
-	if err := fenceClosed(live); err != nil {
+	if err := requireRecordedAdapter(*r.p, live); err != nil {
+		return err
+	}
+	if err := fenceClosed(live, r.p.FirewallIdentity); err != nil {
 		return fmt.Errorf("the fence still has a hole after the proof: %w", err)
 	}
 	return nil
 }
 
-// openAllow opens an L2 hole for one address. A Deny row on exactly that
-// prefix goes first, because Hyper-V refuses an Allow and a Deny on one prefix
-// (0x800700B7); closing puts it back.
+// openAllow opens an L2 hole. Hyper-V rejects Allow and Deny at the same
+// prefix. Temporarily remove only the exact Deny identities Setup recorded.
 func (r *proofRun) openAllow(ctx context.Context, a netip.Addr) error {
 	q := netip.PrefixFrom(a.WithZone(""), a.BitLen())
 	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		return err
 	}
-	for _, x := range live.ACLs {
-		if strings.EqualFold(x.Action, "Deny") && x.Remote.Masked() == q {
-			if err := r.B.RemoveDeny(ctx, r.p.VMID, r.p.Owner, []netip.Prefix{q}); err != nil {
-				return err
+	if live.PortACLs == nil {
+		return errors.New("could not verify the adapter ACL identities")
+	}
+	var deny []PortACL
+	for _, row := range live.PortACLs {
+		if row.prefix() != q || row.Action != 2 {
+			continue
+		}
+		if !slices.Contains(r.p.PortACLs, row) {
+			return fmt.Errorf("an unrecorded or changed Deny for %s was left in place", q)
+		}
+		deny = append(deny, row)
+	}
+	if len(deny) > 0 {
+		if err := r.B.RemovePortACLs(ctx, *r.p, deny); err != nil {
+			return err
+		}
+		r.holes.push("Deny "+q.String()+" removed", func(ctx context.Context) error {
+			rows, err := r.B.AddPortACLs(ctx, *r.p, "Deny", []netip.Prefix{q})
+			r.p.PortACLs = slices.DeleteFunc(r.p.PortACLs, func(a PortACL) bool { return slices.Contains(deny, a) })
+			r.p.PortACLs = append(r.p.PortACLs, rows...)
+			if r.save != nil {
+				err = errors.Join(err, r.save())
 			}
-			r.holes.push("Deny "+q.String()+" removed", func(ctx context.Context) error {
-				return r.B.AddDeny(ctx, r.p.VMID, r.p.Owner, []netip.Prefix{q})
-			})
-			break
-		}
+			return err
+		})
 	}
-	if err := r.P.AddAllow(ctx, r.p.VMID, q); err != nil {
-		return err
+	rows, err := r.B.AddPortACLs(ctx, *r.p, "Allow", []netip.Prefix{q})
+	if len(rows) > 0 {
+		r.holes.push("Allow "+q.String(), func(ctx context.Context) error {
+			return r.B.RemovePortACLs(ctx, *r.p, rows)
+		})
 	}
-	r.holes.push("Allow "+q.String(), func(ctx context.Context) error {
-		err := r.P.RemoveAllow(ctx, r.p.VMID, q)
-		if err != nil && r.allowGone(ctx, q) {
-			return nil
-		}
-		return err
-	})
-	return nil
-}
-
-// allowGone is whether the Allow row for q is gone, so a retried close that
-// finds nothing to remove counts as done.
-func (r *proofRun) allowGone(ctx context.Context, q netip.Prefix) bool {
-	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
-	if err != nil {
-		return false
-	}
-	return !slices.ContainsFunc(live.ACLs, func(a ACL) bool { return strings.EqualFold(a.Action, "Allow") && a.Remote.Masked() == q })
+	return err
 }
 
 func (r *proofRun) l3Off(ctx context.Context) error {
@@ -856,7 +871,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 	case StepGreen:
 		live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 		if err == nil {
-			err = fenceClosed(live)
+			err = fenceClosed(live, r.p.FirewallIdentity)
 		}
 		if err != nil {
 			return fail(fmt.Errorf("the fence is not back as planned: %w", err)), nil
@@ -916,7 +931,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 // unbound again, an Allow for that address, L3 off.
 func (r *proofRun) ipv6(ctx context.Context, red StepSpec, tok string) ([]StepResult, error) {
 	var off StepSpec
-	for _, s := range Steps(r.p, r.h, r.t) {
+	for _, s := range Steps(*r.p, r.h, r.t) {
 		if s.ID == StepIPv6StackOff {
 			off = s
 		}
@@ -986,7 +1001,7 @@ const hvWildcard = "00000000-0000-0000-0000-000000000000"
 // while its listener stays bound, must refuse the guest.
 func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepResult, error) {
 	var green StepSpec
-	for _, s := range Steps(r.p, r.h, r.t) {
+	for _, s := range Steps(*r.p, r.h, r.t) {
 		if s.ID == StepVMBusGreen {
 			green = s
 		}

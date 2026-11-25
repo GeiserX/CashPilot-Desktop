@@ -2,6 +2,7 @@ package winvm_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
@@ -22,7 +23,7 @@ const testUserSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 
 func setupParams() winvm.SetupParams {
 	return winvm.SetupParams{
-		Version: winvm.SetupParamsVersion, VHDXDir: `D:\VMs`, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
+		Version: winvm.SetupParamsVersion, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
 		AdminPassword: testPassword(1), EarnerPassword: testPassword(2),
 		UserSID: testUserSID, ApproveNetwork: true,
 	}
@@ -94,8 +95,8 @@ func TestBuildProvesAndConnects(t *testing.T) {
 		}
 	}
 	calls := f.Calls()
-	order := []string{"Inventory", "EnsureSwitch", "EnsureNAT", "SetBindings", "EnsureFirewall", "SetHostNeighbor",
-		"EnsureGuardian", "WriteAnswerISO", "CreateVM", "SetIntegration", "AddDeny", "SetEnhancedSession",
+	order := []string{"Inventory", "EnsureSwitch", "SetBindings", "EnsureNAT", "EnsureFirewall", "SetHostNeighbor",
+		"EnsureGuardian", "WriteAnswerISO", "CreateVM", "SetIntegration", "AddDeny",
 		"AddHyperVAdmin", "Start", "Guest", "EjectDVDs", "RegisterGuardTask", "Canary", "StartGuardTask"}
 	last := -1
 	for _, m := range order {
@@ -124,9 +125,7 @@ func TestBuildRepairKeepsThePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := readPlan(t, dir)
-	if first.EnhancedSessionOriginal == nil || !*first.EnhancedSessionOriginal {
-		t.Fatalf("EnhancedSessionOriginal = %v, want true (the fake starts with it on)", first.EnhancedSessionOriginal)
-	}
+
 	later := buildNow.Add(48 * time.Hour)
 	d.Now = func() time.Time { return later }
 	m := len(f.Calls())
@@ -138,6 +137,11 @@ func TestBuildRepairKeepsThePlan(t *testing.T) {
 		t.Fatalf("Repair ProvedAt = %v, want %v", second.ProvedAt, later)
 	}
 	second.ProvedAt = first.ProvedAt
+	if len(first.PortACLs) != len(second.PortACLs) {
+		t.Fatal("Repair changed the number of journaled ACLs")
+	}
+	// Closing a proof step creates new provider IDs for the temporarily removed Denies.
+	first.PortACLs, second.PortACLs = nil, nil
 	a, _ := first.Marshal()
 	b, _ := second.Marshal()
 	if string(a) != string(b) {
@@ -203,12 +207,12 @@ func (w *failAfter) hit(m string) bool {
 
 var errAfter = errors.New("the call worked but its answer was lost")
 
-func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.Prefix, owner, mac, switchID string) (string, int, error) {
-	id, ifx, err := w.HyperV.EnsureSwitch(ctx, n, sub, owner, mac, switchID)
+func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.Prefix, owner, mac, switchID, managementID string) (string, string, int, error) {
+	id, managementID, ifx, err := w.HyperV.EnsureSwitch(ctx, n, sub, owner, mac, switchID, managementID)
 	if err == nil && w.hit("EnsureSwitch") {
-		return "", 0, errAfter
+		return "", "", 0, errAfter
 	}
-	return id, ifx, err
+	return id, managementID, ifx, err
 }
 
 func (w *failAfter) CreateVM(ctx context.Context, p winvm.Plan, iso, answer string) (string, string, winvm.OwnedDisk, []winvm.OwnedDVD, error) {
@@ -233,7 +237,7 @@ func (w *failAfter) Guest(ctx context.Context, vmID, owner string, c winvm.Cred,
 func TestBuildResumesAfterEachStep(t *testing.T) {
 	methods := []string{"Inventory", "ReadHostNet", "EnsureSwitch", "EnsureNAT", "SetBindings", "EnsureFirewall",
 		"SetHostNeighbor", "EnsureGuardian", "WriteAnswerISO", "CreateVM", "SetIntegration", "ReadLive", "AddDeny",
-		"SetEnhancedSession", "AddHyperVAdmin", "Start", "BootKeys", "EjectDVDs", "RegisterGuardTask",
+		"AddHyperVAdmin", "Start", "BootKeys", "EjectDVDs", "RegisterGuardTask",
 		"Connect", "Canary", "Pktmon", "AddAllow", "RemoveAllow", "SetL3", "SetBinding", "HVListener",
 		"StartGuardTask", "Disconnect"}
 	for _, m := range methods {
@@ -247,6 +251,9 @@ func TestBuildResumesAfterEachStep(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				f := hvfake.New()
+				if m != "AddHyperVAdmin" {
+					f.SetHyperVAdmin(testUserSID, true)
+				}
 				before := f.Objects()
 				dir := t.TempDir()
 				d := buildDeps(t, f, dir)
@@ -259,10 +266,9 @@ func TestBuildResumesAfterEachStep(t *testing.T) {
 				if !slices.Contains(f.Calls(), m) {
 					t.Fatalf("%s was never called, so this case tests nothing", m)
 				}
-				// A red step has two witnesses (the canary and pktmon), so one
-				// failing alone still shows the hole; the guard retries its own
-				// reads and cuts.
-				mayPass := map[string]bool{"ReadLive": true, "Disconnect": true, "Canary": true, "Pktmon": true}
+				// The guard retries some failed reads and disconnects. The proof
+				// can use pktmon when an optional listener is unavailable.
+				mayPass := map[string]bool{"ReadLive": true, "Disconnect": true}
 				if err1 == nil && !mayPass[m] {
 					t.Fatalf("the first build passed with %s failing", m)
 				}
@@ -294,6 +300,9 @@ func TestBuildResumesAfterEachStep(t *testing.T) {
 				}
 				if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {
 					t.Fatal(err)
+				}
+				if m == "AddHyperVAdmin" {
+					before = append([]string{"hyperv-admin " + testUserSID}, before...)
 				}
 				if got := f.Objects(); !slices.Equal(got, before) {
 					t.Fatalf("after Remove the host differs:\n%s\n---\n%s", strings.Join(before, "\n"), strings.Join(got, "\n"))
@@ -359,6 +368,7 @@ func TestBuildRepairFindsRenamedObjects(t *testing.T) {
 // it was.
 func TestBuildRepairClearsProofLeftovers(t *testing.T) {
 	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
 	before := f.Objects()
 	dir := t.TempDir()
 	d := buildDeps(t, f, dir)
@@ -392,36 +402,33 @@ func TestBuildRepairClearsProofLeftovers(t *testing.T) {
 	}
 }
 
-// TestBuildRepairClosesHolesAStoppedProofLeft: a proof stopped before it
-// closed its holes leaves an Allow row and the L3 rule off. Repair takes the
-// Allow away and turns L3 back on before its own proof, which refuses a fence
-// with a hole.
-func TestBuildRepairClosesHolesAStoppedProofLeft(t *testing.T) {
-	f := hvfake.New()
-	dir := t.TempDir()
-	d := buildDeps(t, f, dir)
-	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
-		t.Fatal(err)
-	}
-	p := readPlan(t, dir)
-	ctx := context.Background()
-	if err := f.AddAllow(ctx, p.VMID, netip.PrefixFrom(f.LANIP, 32)); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.SetL3(ctx, p.Names, p.Owner, false); err != nil {
-		t.Fatal(err)
-	}
-	res, err := winvm.Build(ctx, d, setupParams())
-	if err != nil {
-		t.Fatalf("Repair with an Allow row and L3 off: %v", err)
-	}
-	for _, o := range f.Objects() {
-		if strings.Contains(o, "Allow") || (strings.HasPrefix(o, "rule ") && strings.Contains(o, "enabled=false")) {
-			t.Fatalf("a hole survived Repair: %s", o)
-		}
-	}
-	if res.Status.Network != winvm.NetConnected {
-		t.Fatalf("after Repair the guard says %q: %s", res.Status.Network, res.Status.Reason)
+func TestR6RepairLeavesIndependentACLs(t *testing.T) {
+	for _, action := range []string{"Allow", "Deny"} {
+		t.Run(action, func(t *testing.T) {
+			f := hvfake.New()
+			f.SetEnhanced(false)
+			dir := build(t, f)
+			p := readPlan(t, dir)
+			ctx := context.Background()
+			q := netip.MustParsePrefix("198.51.100.203/32")
+			var err error
+			if action == "Allow" {
+				err = f.AddAllow(ctx, p.VMID, q)
+			} else {
+				err = f.AddDeny(ctx, p.VMID, p.Owner, []netip.Prefix{q})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = winvm.Build(ctx, buildDeps(t, f, dir), setupParams())
+			if err == nil || !strings.Contains(err.Error(), "ACL") {
+				t.Fatalf("Repair did not report the unrecorded %s: %v", action, err)
+			}
+			live, err := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
+			if err != nil || !slices.ContainsFunc(live.ACLs, func(a winvm.ACL) bool { return a.Action == action && a.Remote == q }) {
+				t.Fatalf("Repair removed the independent %s: %v", action, err)
+			}
+		})
 	}
 }
 
@@ -492,7 +499,7 @@ func TestBuildRepairThatFailsKeepsTheVMOff(t *testing.T) {
 			f.FailNext("EnsureFirewall", errors.New("injected"))
 		},
 		"planned state": func(t *testing.T, f *hvfake.HyperV, p winvm.Plan) {
-			if err := f.AddAdapter(p.VMID, p.Names.Switch); err != nil {
+			if err := f.AddMeterRow(p.VMID, netip.MustParsePrefix("198.51.100.0/24")); err != nil {
 				t.Fatal(err)
 			}
 		},
@@ -568,7 +575,7 @@ func TestBuildRepairWithAFailedProofIsNotProven(t *testing.T) {
 }
 
 // TestBuildRepairFromAnotherAccount: setup records every account it adds to
-// Hyper-V Administrators, so Remove VM can take each one out again. A Repair
+// Hyper-V Administrators, so Remove can report each grant. A Repair
 // from a second account that is not a member adds it and records it too. A
 // third account that is already a member is not recorded, and Remove VM
 // leaves it in the group.
@@ -603,6 +610,7 @@ func TestBuildRepairFromAnotherAccount(t *testing.T) {
 	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {
 		t.Fatal(err)
 	}
+	before = append([]string{"hyperv-admin " + testUserSID, "hyperv-admin " + other}, before...)
 	diffObjects(t, before, f.Objects())
 }
 
@@ -643,7 +651,38 @@ func TestRemoveKeepsGrantAfterLostAddReply(t *testing.T) {
 	if !slices.Contains(f.Objects(), "hyperv-admin "+testUserSID) {
 		t.Fatal("Remove revoked an unconfirmed grant")
 	}
-	if !strings.Contains(strings.Join(res.Left, "\n"), testUserSID) {
-		t.Fatalf("Remove did not list the unconfirmed grant: %v", res.Left)
+	if !strings.Contains(strings.Join(res.Kept, "\n"), testUserSID) {
+		t.Fatalf("Remove did not list the unconfirmed grant: %v", res.Kept)
+	}
+}
+
+func TestR6SetupRequiresEnhancedSessionOffWithoutChangingHost(t *testing.T) {
+	f := hvfake.New()
+	f.SetEnhanced(true)
+	_, err := winvm.Build(context.Background(), buildDeps(t, f, t.TempDir()), setupParams())
+	if err == nil || !strings.Contains(err.Error(), "Enhanced Session") {
+		t.Fatalf("expected an Enhanced Session prerequisite, got %v", err)
+	}
+	if slices.Contains(f.Calls(), "EnsureSwitch") || !strings.Contains(strings.Join(f.Objects(), "\n"), "enhancedSession=true") {
+		t.Fatal("Setup changed the host despite an unmet prerequisite")
+	}
+}
+
+func TestR6SetupRejectsUnusedStorageArgument(t *testing.T) {
+	raw, err := json.Marshal(setupParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]any
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Fatal(err)
+	}
+	params["vhdxDir"] = `D:\VMs`
+	raw, err = json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := winvm.ParseSetupParams(raw); err == nil || !strings.Contains(err.Error(), "vhdxDir") {
+		t.Fatalf("Setup accepted an unused storage setting: %v", err)
 	}
 }

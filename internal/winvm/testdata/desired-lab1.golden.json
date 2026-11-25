@@ -8,7 +8,6 @@
     "guardTask": "\\CashPilot\\VMGuard-cpd-svm-1",
     "dataDir": "C:\\ProgramData\\CashPilot\\lab\\cpd-svm-1"
   },
-  "vhdxDir": "D:\\CashPilotVM",
   "vmId": "",
   "adapterId": "",
   "switchId": "",
@@ -62,7 +61,6 @@
     "ms_implat"
   ],
   "enhancedSession": "off",
-  "enhancedSessionOriginal": null,
   "createdGuardian": false,
   "owner": "",
   "addedAdminSids": [],

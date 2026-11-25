@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"maps"
 	"net/netip"
 	"os"
 	"regexp"
@@ -48,6 +49,7 @@ type HyperV struct {
 	failNext map[string]error
 	failAt   []*failAt
 	seq      int
+	aclSeq   int
 
 	ifaces   []winvm.Interface
 	routes   []winvm.Route
@@ -85,19 +87,22 @@ type HyperV struct {
 }
 
 type fakeSwitch struct {
-	id, name, typ string
-	owner         string
-	vnicIf        int
-	vnicMAC       string
-	bindings      map[string]bool
-	subnet        netip.Prefix
-	gateway       netip.Addr
-	linkLocal     netip.Addr
-	neighbors     map[netip.Addr]string
+	id, name, typ     string
+	managementID      string
+	foreignManagement bool
+	owner             string
+	vnicIf            int
+	vnicMAC           string
+	bindings          map[string]bool
+	subnet            netip.Prefix
+	gateway           netip.Addr
+	linkLocal         netip.Addr
+	neighbors         map[netip.Addr]string
 }
 
 type fakeRule struct {
 	name, owner string
+	identity    string
 	desc        string
 	enabled     bool
 	ifIndex     int
@@ -130,6 +135,7 @@ type fakeVM struct {
 type fakeAdapter struct {
 	id, switchID, mac                   string
 	acls                                []winvm.ACL
+	portACLs                            []winvm.PortACL
 	dhcpGuard, routerGuard, macSpoofing bool
 	out, in                             uint64
 }
@@ -147,12 +153,12 @@ var protocols = []string{"ms_tcpip", "ms_tcpip6", "ms_lltdio", "ms_rspndr", "ms_
 // New returns a host on a physical Ethernet network (192.0.2.0/24, its
 // router at .1, the host at .10), with a tailnet-style tunnel adapter that
 // carries 100.64.0.0/10, an approved-looking unmetered network, and Enhanced
-// Session on.
+// Session off.
 func New() *HyperV {
 	f := &HyperV{
 		failNext:     map[string]error{},
 		build:        "26100.1000",
-		enhanced:     true,
+		enhanced:     false,
 		tasks:        map[string]*fakeTask{},
 		admins:       map[string]bool{},
 		isos:         map[string][]byte{},
@@ -443,13 +449,13 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	n := winvm.ProductNames()
 	sub := netip.MustParsePrefix("172.31.250.0/29")
 	const owner = "0123456789abcdef0123456789abcdef"
-	p, err := winvm.NewPlan(winvm.Options{Names: n, VHDXDir: `C:\ProgramData\CashPilot\vm`, Subnet: sub,
+	p, err := winvm.NewPlan(winvm.Options{Names: n, Subnet: sub,
 		HostVNICMAC: "00-15-5D-00-00-02", GuestMAC: "00-15-5D-0A-00-02"}, nil)
 	if err != nil {
 		return winvm.Plan{}, err
 	}
 	p.Owner = owner
-	if p.SwitchID, _, err = f.EnsureSwitch(ctx, n, sub, owner, p.HostVNICMAC, ""); err != nil {
+	if p.SwitchID, p.ManagementAdapterID, _, err = f.EnsureSwitch(ctx, n, sub, owner, p.HostVNICMAC, "", ""); err != nil {
 		return winvm.Plan{}, err
 	}
 	if p.NATID, err = f.EnsureNAT(ctx, n, sub, ""); err != nil {
@@ -466,10 +472,18 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	}
 	steps := []func() error{
 		func() error { return f.SetIntegration(ctx, p.VMID, p.Owner, p.Integration) },
-		func() error { return f.SetBindings(ctx, live.VNICIfIndex, p.SwitchID, p.Owner, p.BindingsOff) },
-		func() error { return f.EnsureFirewall(ctx, n, live.VNICIfIndex, p.SwitchID, owner) },
 		func() error {
-			return f.SetHostNeighbor(ctx, live.VNICIfIndex, p.SwitchID, p.Owner, p.GuestIP, p.GuestMAC)
+			bindings, err := f.SetBindings(ctx, p, live.VNICIfIndex)
+			p.ManagementBindings = bindings
+			return err
+		},
+		func() error {
+			id, err := f.EnsureFirewall(ctx, p, live.VNICIfIndex)
+			p.FirewallIdentity = id
+			return err
+		},
+		func() error {
+			return f.SetHostNeighbor(ctx, live.VNICIfIndex, p.SwitchID, p.Owner, p.ManagementAdapterID, p.GuestIP, p.GuestMAC)
 		},
 	}
 	if staticARP {
@@ -480,11 +494,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 			return winvm.Plan{}, err
 		}
 	}
-	was, err := f.SetEnhancedSession(ctx, false)
-	if err != nil {
-		return winvm.Plan{}, err
-	}
-	p.RecordEnhancedSession(was)
+	f.SetEnhanced(false)
 	h, err := f.ReadHostNet(ctx, winvm.EgressSamples)
 	if err != nil {
 		return winvm.Plan{}, err
@@ -494,12 +504,12 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	for _, a := range p.WantACLs(d) {
 		deny = append(deny, a.Remote)
 	}
-	if err := f.AddDeny(ctx, p.VMID, p.Owner, deny); err != nil {
+	if p.PortACLs, err = f.AddPortACLs(ctx, p, "Deny", deny); err != nil {
 		return winvm.Plan{}, err
 	}
 	p.SetGCSBaseline(live.GCS)
 	p.HostBuild = live.HostBuild
-	if err := f.Connect(ctx, p.VMID, p.SwitchID, p.Owner); err != nil {
+	if err := f.Connect(ctx, p.VMID, p.SwitchID, p.Owner, p.AdapterID); err != nil {
 		return winvm.Plan{}, err
 	}
 	return p, f.Start(ctx, p.VMID, p.Owner)
@@ -525,6 +535,7 @@ func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID, switchID strin
 		VMState:       vm.state,
 		Adapters:      []winvm.LiveAdapter{{ID: a.id, SwitchID: a.switchID, MAC: a.mac}},
 		ACLs:          []winvm.ACL{},
+		PortACLs:      append([]winvm.PortACL{}, a.portACLs...),
 		DhcpGuard:     a.dhcpGuard,
 		RouterGuard:   a.routerGuard,
 		MacSpoofing:   a.macSpoofing,
@@ -570,6 +581,7 @@ func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID, switchID strin
 			}
 		}
 		l.VNICIfIndex = s.vnicIf
+		l.ManagementAdapterID = s.managementID
 		l.VNICMAC = s.vnicMAC
 		l.Bindings = map[string]bool{}
 		for c, on := range s.bindings {
@@ -587,7 +599,7 @@ func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID, switchID strin
 		l.NATs = append(l.NATs, nat)
 	}
 	for _, r := range f.firewall[n.FirewallGroup] {
-		l.Firewall = append(l.Firewall, winvm.LiveRule{Direction: "Inbound", Action: "Block", Enabled: r.enabled, IfIndex: r.ifIndex})
+		l.Firewall = append(l.Firewall, winvm.LiveRule{Identity: r.identity, Direction: "Inbound", Action: "Block", Enabled: r.enabled, IfIndex: r.ifIndex})
 	}
 	return l, nil
 }
@@ -672,8 +684,8 @@ func (f *HyperV) Usage(_ context.Context, vmID string) (winvm.Usage, error) {
 
 // ---- Guarder ----
 
-// Disconnect takes every adapter of the VM off its switch.
-func (f *HyperV) Disconnect(_ context.Context, vmID, owner string) error {
+// Disconnect takes the recorded adapter off its switch.
+func (f *HyperV) Disconnect(_ context.Context, vmID, owner, adapterID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Disconnect"); err != nil {
@@ -683,16 +695,21 @@ func (f *HyperV) Disconnect(_ context.Context, vmID, owner string) error {
 	if err != nil {
 		return err
 	}
+	if vm.owner != owner || !strings.EqualFold(vm.adapter.id, adapterID) {
+		return errors.New("fake Hyper-V: the recorded VM adapter was left in place")
+	}
 	vm.adapter.switchID = ""
 	for _, x := range vm.extra {
-		x.switchID = ""
+		if x.switchID != "" {
+			return errors.New("fake Hyper-V: a foreign adapter remains connected")
+		}
 	}
 	return nil
 }
 
 // Connect puts the VM's one adapter on the recorded switch. Like the
 // real script, it refuses a VM with more than one adapter.
-func (f *HyperV) Connect(_ context.Context, vmID, switchID, owner string) error {
+func (f *HyperV) Connect(_ context.Context, vmID, switchID, owner, adapterID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Connect"); err != nil {
@@ -702,7 +719,7 @@ func (f *HyperV) Connect(_ context.Context, vmID, switchID, owner string) error 
 	if err != nil {
 		return err
 	}
-	if len(vm.extra) > 0 {
+	if len(vm.extra) > 0 || !strings.EqualFold(vm.adapter.id, adapterID) {
 		return errors.New("fake Hyper-V: the VM must have exactly one network adapter")
 	}
 	s, ok := f.switches[strings.ToLower(switchID)]
@@ -731,33 +748,25 @@ func (f *HyperV) Start(_ context.Context, vmID, owner string) error {
 	return nil
 }
 
-// AddDeny adds one Deny Both row per prefix. A prefix that already has a row
-// fails as Hyper-V does.
+// AddDeny and RemoveDeny model changes an administrator makes in a fixture.
 func (f *HyperV) AddDeny(_ context.Context, vmID, owner string, ps []netip.Prefix) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.enter("AddDeny"); err != nil {
-		return err
-	}
 	vm, err := f.vm(vmID)
 	if err != nil {
 		return err
 	}
 	for _, p := range ps {
-		if err := addACL(vm.adapter, "Deny", p); err != nil {
+		if _, err := f.addPortACL(vm.adapter, "Deny", p, "external-"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// RemoveDeny removes the Deny row of each prefix.
 func (f *HyperV) RemoveDeny(_ context.Context, vmID, owner string, ps []netip.Prefix) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if err := f.enter("RemoveDeny"); err != nil {
-		return err
-	}
 	vm, err := f.vm(vmID)
 	if err != nil {
 		return err
@@ -766,7 +775,95 @@ func (f *HyperV) RemoveDeny(_ context.Context, vmID, owner string, ps []netip.Pr
 		if err := removeACL(vm.adapter, "Deny", p); err != nil {
 			return err
 		}
+		vm.adapter.portACLs = slices.DeleteFunc(vm.adapter.portACLs, func(a winvm.PortACL) bool {
+			return a.Action == 2 && a.Remote == p.Addr().String() && int(a.RemoteBits) == p.Bits()
+		})
 	}
+	return nil
+}
+
+func (f *HyperV) addPortACL(a *fakeAdapter, action string, q netip.Prefix, marker string) ([]winvm.PortACL, error) {
+	if err := addACL(a, action, q); err != nil {
+		return nil, err
+	}
+	code, family := uint8(2), uint8(2)
+	if action == "Allow" {
+		code = 1
+	}
+	if q.Addr().Is6() {
+		family = 3
+	}
+	var rows []winvm.PortACL
+	for _, dir := range []uint8{1, 2} {
+		f.aclSeq++
+		id := fmt.Sprintf("port-acl-%d", f.aclSeq)
+		rows = append(rows, winvm.PortACL{ID: id, Name: marker + id, Action: code, Direction: dir,
+			Applicability: 2, Type: family, Remote: q.Addr().String(), RemoteBits: uint8(q.Bits())})
+	}
+	a.portACLs = append(a.portACLs, rows...)
+	return rows, nil
+}
+
+func (f *HyperV) AddPortACLs(_ context.Context, p winvm.Plan, action string, ps []netip.Prefix) ([]winvm.PortACL, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.enter("Add" + action); err != nil {
+		return nil, err
+	}
+	vm, err := f.vm(p.VMID)
+	if err != nil {
+		return nil, err
+	}
+	if vm.owner != p.Owner || vm.adapter.id != p.AdapterID || len(vm.extra) != 0 {
+		return nil, errors.New("fake Hyper-V: recorded adapter is not the sole adapter")
+	}
+	var out []winvm.PortACL
+	for _, q := range ps {
+		rows, err := f.addPortACL(vm.adapter, action, q, p.Owner)
+		out = append(out, rows...)
+		if err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+func (f *HyperV) RemovePortACLs(_ context.Context, p winvm.Plan, rows []winvm.PortACL) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(rows) == 0 {
+		return nil
+	}
+	name := "Deny"
+	if rows[0].Action == 1 {
+		name = "Allow"
+	}
+	if err := f.enter("Remove" + name); err != nil {
+		return err
+	}
+	vm, err := f.vm(p.VMID)
+	if err != nil {
+		return err
+	}
+	if vm.owner != p.Owner || vm.adapter.id != p.AdapterID || len(vm.extra) != 0 {
+		return errors.New("fake Hyper-V: recorded adapter is not the sole adapter")
+	}
+	for _, a := range vm.adapter.portACLs {
+		for _, r := range rows {
+			if a.ID == r.ID && a != r {
+				return errors.New("fake Hyper-V: recorded ACL was changed")
+			}
+		}
+	}
+	for _, a := range vm.adapter.portACLs {
+		if !slices.Contains(rows, a) {
+			continue
+		}
+		ip := netip.MustParseAddr(a.Remote)
+		// The fake stores the two directional settings as one packet rule.
+		_ = removeACL(vm.adapter, name, netip.PrefixFrom(ip, int(a.RemoteBits)))
+	}
+	vm.adapter.portACLs = slices.DeleteFunc(vm.adapter.portACLs, func(a winvm.PortACL) bool { return slices.Contains(rows, a) })
 	return nil
 }
 
@@ -782,6 +879,9 @@ func (f *HyperV) LeaveOneWay(vmID string, p netip.Prefix) error {
 	for i, x := range vm.adapter.acls {
 		if x.Action == "Deny" && x.Remote == p.Masked() && x.Direction == "Both" {
 			vm.adapter.acls[i].Direction = "Inbound"
+			vm.adapter.portACLs = slices.DeleteFunc(vm.adapter.portACLs, func(r winvm.PortACL) bool {
+				return r.Direction == 2 && r.Remote == p.Addr().String() && int(r.RemoteBits) == p.Bits()
+			})
 			return nil
 		}
 	}
@@ -882,49 +982,50 @@ func sortedKeys[V any](m map[string]V) []string {
 // on, the gateway address and the on-link route, or returns the one with the
 // recorded ID (renamed or not), or the one with our name when it carries the
 // owner token.
-func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix, owner, vnicMAC, switchID string) (string, int, error) {
+func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (string, string, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EnsureSwitch"); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	if s, ok := f.switches[strings.ToLower(switchID)]; ok && switchID != "" {
 		if err := f.notOwned("switch", n.Switch, s.owner, owner); err != nil {
-			return "", 0, err
+			return "", "", 0, err
 		}
-		if s.vnicMAC != vnicMAC || s.subnet != sub {
-			return "", 0, fmt.Errorf("fake Hyper-V: the switch %s has another vNIC MAC or subnet", switchID)
+		if s.managementID != managementID || s.foreignManagement || s.vnicMAC != vnicMAC || s.subnet != sub {
+			return "", "", 0, fmt.Errorf("fake Hyper-V: the switch %s has another vNIC MAC or subnet", switchID)
 		}
 		if s.name != n.Switch {
 			if other, ok := f.switchByName(n.Switch); ok && other != s {
-				return "", 0, fmt.Errorf("fake Hyper-V: another switch is named %q", n.Switch)
+				return "", "", 0, fmt.Errorf("fake Hyper-V: another switch is named %q", n.Switch)
 			}
 			s.name = n.Switch
 		}
-		return s.id, s.vnicIf, nil
+		return s.id, s.managementID, s.vnicIf, nil
 	}
 	if switchID != "" {
-		return "", 0, errors.New("fake Hyper-V: the recorded switch was not found")
+		return "", "", 0, errors.New("fake Hyper-V: the recorded switch was not found")
 	}
 	if s, ok := f.switchByName(n.Switch); ok {
 		if err := f.notOwned("switch", n.Switch, s.owner, owner); err != nil {
-			return "", 0, err
+			return "", "", 0, err
 		}
 		if s.vnicMAC != vnicMAC || s.subnet != sub {
-			return "", 0, fmt.Errorf("fake Hyper-V: the switch %q has another vNIC MAC or subnet", n.Switch)
+			return "", "", 0, fmt.Errorf("fake Hyper-V: the switch %q has another vNIC MAC or subnet", n.Switch)
 		}
-		return s.id, s.vnicIf, nil
+		return s.id, s.managementID, s.vnicIf, nil
 	}
 	f.seq++
 	s := &fakeSwitch{
 		id: f.newID(), name: n.Switch, typ: "Internal", owner: owner,
-		vnicIf:    20 + f.seq,
-		vnicMAC:   vnicMAC,
-		bindings:  map[string]bool{"ms_pacer": true},
-		subnet:    sub,
-		gateway:   sub.Addr().Next(),
-		linkLocal: netip.MustParseAddr(fmt.Sprintf("fe80::%x", 0x1000+f.seq)),
-		neighbors: map[netip.Addr]string{},
+		vnicIf:       20 + f.seq,
+		managementID: "management-" + f.newID(),
+		vnicMAC:      vnicMAC,
+		bindings:     map[string]bool{"ms_pacer": true},
+		subnet:       sub,
+		gateway:      sub.Addr().Next(),
+		linkLocal:    netip.MustParseAddr(fmt.Sprintf("fe80::%x", 0x1000+f.seq)),
+		neighbors:    map[netip.Addr]string{},
 	}
 	for _, c := range append(slices.Clone(protocols), "ms_server", "ms_msclient") {
 		s.bindings[c] = true
@@ -933,7 +1034,7 @@ func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix
 	f.ifaces = append(f.ifaces, winvm.Interface{IfIndex: s.vnicIf, IfType: 6, ComponentID: "vms_mp", Description: "vEthernet", VMSwitchID: s.id, SwitchType: "Internal"})
 	f.addrs = append(f.addrs, netip.PrefixFrom(s.gateway, sub.Bits()))
 	f.routes = append(f.routes, winvm.Route{Prefix: sub, IfIndex: s.vnicIf, NextHop: netip.IPv4Unspecified(), Metric: 256})
-	return s.id, s.vnicIf, nil
+	return s.id, s.managementID, s.vnicIf, nil
 }
 
 // EnsureNAT creates the NAT or verifies the identity of the recorded one.
@@ -976,7 +1077,7 @@ func (f *HyperV) CreateVM(_ context.Context, p winvm.Plan, iso, answerISO string
 	}
 	vm := &fakeVM{
 		id: f.newID(), name: p.Names.VM, state: "Off", owner: p.Owner, vtpm: true,
-		vhdx: p.VHDXDir + `\` + p.Names.VM + ".vhdx",
+		vhdx: p.Names.DataDir + `\vm-test\` + p.Names.VM + ".vhdx",
 		adapter: &fakeAdapter{id: strings.ToUpper(f.newID()), mac: p.GuestMAC,
 			dhcpGuard: p.DhcpGuard, routerGuard: p.RouterGuard, macSpoofing: p.MacSpoofing},
 		procCount: p.ProcCount, procMax: p.ProcMax, procWeight: p.ProcWeight,
@@ -1026,48 +1127,57 @@ func (f *HyperV) SetIntegration(_ context.Context, vmID, owner string, want map[
 }
 
 // SetBindings turns components off on a vNIC.
-func (f *HyperV) SetBindings(_ context.Context, ifIndex int, switchID, owner string, off []string) error {
+func (f *HyperV) SetBindings(_ context.Context, p winvm.Plan, ifIndex int) (map[string]bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("SetBindings"); err != nil {
-		return err
+		return nil, err
 	}
 	s, err := f.switchByVNIC(ifIndex)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, c := range off {
+	if s.managementID != p.ManagementAdapterID || s.foreignManagement {
+		return nil, errors.New("fake Hyper-V: the management adapter was left in place")
+	}
+	if p.ManagementBindings != nil {
+		if !maps.Equal(p.ManagementBindings, s.bindings) {
+			return nil, errors.New("fake Hyper-V: the management adapter bindings changed")
+		}
+		return maps.Clone(s.bindings), nil
+	}
+	for _, c := range p.BindingsOff {
 		s.bindings[c] = false
 	}
-	return nil
+	return maps.Clone(s.bindings), nil
 }
 
-// EnsureFirewall creates the group's one inbound Block rule on the vNIC, with
-// the owner token, or puts the one there back on the vNIC. It refuses a group
-// with a rule that does not carry the token.
-func (f *HyperV) EnsureFirewall(_ context.Context, n winvm.Names, ifIndex int, switchID, owner string) error {
+// EnsureFirewall creates or verifies the recorded Block rule.
+func (f *HyperV) EnsureFirewall(_ context.Context, p winvm.Plan, ifIndex int) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EnsureFirewall"); err != nil {
-		return err
+		return "", err
 	}
-	rs := f.firewall[n.FirewallGroup]
-	for _, r := range rs {
-		if err := f.notOwned("firewall rule", r.name, r.owner, owner); err != nil {
-			return err
-		}
+	rs := f.firewall[p.Names.FirewallGroup]
+	if len(rs) == 1 && rs[0].owner == p.Owner && rs[0].enabled && rs[0].ifIndex == ifIndex && rs[0].identity == p.FirewallIdentity {
+		return rs[0].identity, nil
 	}
-	if len(rs) == 1 {
-		rs[0].enabled, rs[0].ifIndex = true, ifIndex
-		return nil
+	if len(rs) != 0 {
+		return "", errors.New("fake Hyper-V: the firewall rule differs from Setup")
 	}
-	f.firewall[n.FirewallGroup] = []*fakeRule{{name: n.FirewallGroup + "-block-in-" + owner, owner: owner, enabled: true, ifIndex: ifIndex}}
-	return nil
+	f.seq++
+	id := fmt.Sprintf("%064x", f.seq)
+	f.firewall[p.Names.FirewallGroup] = []*fakeRule{{
+		name:  p.Names.FirewallGroup + "-block-in-" + p.Owner,
+		owner: p.Owner, enabled: true, ifIndex: ifIndex, identity: id,
+	}}
+	return id, nil
 }
 
 // SetHostNeighbor adds the host's static entry for the guest, in place of any
 // other entry on the vNIC.
-func (f *HyperV) SetHostNeighbor(_ context.Context, ifIndex int, switchID, owner string, ip netip.Addr, mac string) error {
+func (f *HyperV) SetHostNeighbor(_ context.Context, ifIndex int, switchID, owner, managementID string, ip netip.Addr, mac string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("SetHostNeighbor"); err != nil {
@@ -1377,23 +1487,27 @@ func (f *HyperV) RemoveVM(_ context.Context, vmID string, p winvm.Plan) ([]strin
 
 // RemoveSwitch removes a switch by ID, with its host vNIC. Like the real
 // script, it refuses while another VM has an adapter on it.
-func (f *HyperV) RemoveSwitch(_ context.Context, switchID, owner string) error {
+func (f *HyperV) RemoveSwitch(_ context.Context, p winvm.Plan) (string, error) {
+	switchID, owner := p.SwitchID, p.Owner
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveSwitch"); err != nil {
-		return err
+		return "", err
 	}
 	s, ok := f.switches[strings.ToLower(switchID)]
 	if !ok {
-		return nil
+		return "", nil
 	}
 	if err := f.notOwned("switch", s.name, s.owner, owner); err != nil {
-		return err
+		return "", err
+	}
+	if p.ManagementAdapterID != s.managementID || s.foreignManagement || !maps.Equal(p.ManagementBindings, s.bindings) {
+		return "the management port inventory differs from Setup", nil
 	}
 	for _, vm := range f.vms {
 		for _, a := range append([]*fakeAdapter{vm.adapter}, vm.extra...) {
 			if a.switchID == s.id {
-				return fmt.Errorf("fake Hyper-V: VM %s still has an adapter on the switch", vm.id)
+				return "a VM still has an adapter on it", nil
 			}
 		}
 	}
@@ -1401,36 +1515,47 @@ func (f *HyperV) RemoveSwitch(_ context.Context, switchID, owner string) error {
 	f.ifaces = slices.DeleteFunc(f.ifaces, func(i winvm.Interface) bool { return i.IfIndex == s.vnicIf })
 	f.routes = slices.DeleteFunc(f.routes, func(r winvm.Route) bool { return r.IfIndex == s.vnicIf })
 	f.addrs = slices.DeleteFunc(f.addrs, func(a netip.Prefix) bool { return a.Addr() == s.gateway })
-	return nil
+	return "", nil
 }
 
 // RemoveNAT removes our NAT when it has our prefix.
-func (f *HyperV) RemoveNAT(_ context.Context, n winvm.Names, sub netip.Prefix, id string) error {
+func (f *HyperV) RemoveNAT(_ context.Context, n winvm.Names, sub netip.Prefix, id string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveNAT"); err != nil {
-		return err
+		return "", err
 	}
 	if have, ok := f.nats[n.NAT]; ok && have.Prefix == sub && have.ID == id {
 		delete(f.nats, n.NAT)
 	}
-	return nil
+	return "", nil
 }
 
 // RemoveFirewall removes the rules of the group that carry the owner token.
-func (f *HyperV) RemoveFirewall(_ context.Context, n winvm.Names, owner string) error {
+func (f *HyperV) RemoveFirewall(_ context.Context, p winvm.Plan) (string, error) {
+	n, owner := p.Names, p.Owner
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveFirewall"); err != nil {
-		return err
+		return "", err
 	}
-	rs := slices.DeleteFunc(f.firewall[n.FirewallGroup], func(r *fakeRule) bool { return owner != "" && r.owner == owner })
+	var kept string
+	rs := slices.DeleteFunc(f.firewall[n.FirewallGroup], func(r *fakeRule) bool {
+		if owner == "" || r.owner != owner {
+			return false
+		}
+		if r.identity != p.FirewallIdentity || !r.enabled {
+			kept = "the firewall rule differs from Setup"
+			return false
+		}
+		return true
+	})
 	if len(rs) == 0 {
 		delete(f.firewall, n.FirewallGroup)
 	} else {
 		f.firewall[n.FirewallGroup] = rs
 	}
-	return nil
+	return kept, nil
 }
 
 // RemoveGuardian deletes the vTPM guardian.
@@ -1821,7 +1946,8 @@ func (f *HyperV) AddAllow(_ context.Context, vmID string, p netip.Prefix) error 
 	if err != nil {
 		return err
 	}
-	return addACL(vm.adapter, "Allow", p)
+	_, err = f.addPortACL(vm.adapter, "Allow", p, "external-")
+	return err
 }
 
 // RemoveAllow removes an Allow row.
@@ -1835,6 +1961,9 @@ func (f *HyperV) RemoveAllow(_ context.Context, vmID string, p netip.Prefix) err
 	if err != nil {
 		return err
 	}
+	vm.adapter.portACLs = slices.DeleteFunc(vm.adapter.portACLs, func(a winvm.PortACL) bool {
+		return a.Action == 1 && a.Remote == p.Addr().String() && int(a.RemoteBits) == p.Bits()
+	})
 	return removeACL(vm.adapter, "Allow", p)
 }
 
@@ -2162,4 +2291,12 @@ func (f *HyperV) SetDiskPath(vmID, path string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.vms[strings.ToLower(vmID)].vhdx = path
+}
+
+// ReplaceAdapter models an administrator installing a different vNIC of the same shape.
+func (f *HyperV) ReplaceAdapter(vmID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	f.vms[strings.ToLower(vmID)].adapter.id = strings.ToUpper(f.newID())
 }

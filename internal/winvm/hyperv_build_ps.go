@@ -16,6 +16,11 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
+// CashPilot changes only objects it created. Shared names, MACs, paths,
+// adapters, switches and rule shapes do not establish ownership. Preserve
+// changes the administrator made after Setup. A copied secret owner token
+// establishes ownership. Byte-identical replacement between steps is out of scope.
+//
 // The write side of the PowerShell seam (the Builder): setup, Repair and
 // Remove VM. Like the read side, each method runs one fixed script with one
 // base64 JSON argument, and every value is checked in Go before it goes in.
@@ -32,7 +37,7 @@ const ownerTag = "cashpilot-owner="
 const guestDiskBytes = 128 * GiB
 
 // hgsGuardian is the guardian a local key protector uses.
-var guardianIDRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var identityDigestRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // hvAdmins is the Hyper-V Administrators group, by SID: its name is
 // translated.
@@ -46,18 +51,50 @@ const buildPrelude = hvPrelude + `function Get-OwnedSwitch([string]$id, [string]
   }
   $sw[0]
 }
-function Get-HostVNIC([string]$id, [string]$owner, [int]$index = 0) {
+function Get-ManagementPort($sw) {
+  Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id }
+}
+function Get-RecordedManagementPort($sw, [string]$managementId) {
+  $mo = @(Get-ManagementPort $sw)
+  if (-not $managementId -or $mo.Count -ne 1 -or [string]$mo[0].Id -ne $managementId) {
+    throw 'The recorded management adapter is missing or the switch has another management port. The ports were left in place.'
+  }
+  $mo[0]
+}
+function Get-HostVNIC([string]$id, [string]$owner, [string]$managementId, [int]$index = 0) {
   $sw = Get-OwnedSwitch $id $owner
-  $mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
-  if ($mo.Count -ne 1) { throw 'The switch does not have exactly one host vNIC.' }
-  $na = @(Find-ManagementAdapter $mo[0])
+  $mo = Get-RecordedManagementPort $sw $managementId
+  $na = @(Find-ManagementAdapter $mo)
   if ($na.Count -ne 1 -or ($index -and $na[0].ifIndex -ne $index)) { throw 'The host vNIC identity could not be verified.' }
   $na[0]
 }
-function Get-HostBinding([string]$component) {
-  $na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+function Get-HostBindings($na) {
   $name = [System.Management.Automation.WildcardPattern]::Escape($na.Name)
-  $b = @(Get-NetAdapterBinding -Name $name -IncludeHidden -AllBindings | Where-Object { $_.ComponentID -eq $component -and $_.Name -eq $na.Name })
+  Get-NetAdapterBinding -Name $name -IncludeHidden -AllBindings | Where-Object { $_.Name -eq $na.Name }
+}
+function Export-HostBindings($na) {
+  $out = @{}
+  foreach ($b in @(Get-HostBindings $na)) {
+    $id = ([string]$b.ComponentID).ToLowerInvariant()
+    if ($out.ContainsKey($id)) { throw 'A binding on the recorded management adapter is ambiguous.' }
+    $out[$id] = [bool]$b.Enabled
+  }
+  if ($out.Count -eq 0) { throw 'Could not read the management adapter bindings.' }
+  $out
+}
+function Test-HostBindings($na, $expected) {
+  if (-not $expected) { return $false }
+  $live = Export-HostBindings $na
+  $settings = @($expected.PSObject.Properties)
+  if ($live.Count -ne $settings.Count) { return $false }
+  foreach ($s in $settings) {
+    if (-not $live.ContainsKey($s.Name) -or $live[$s.Name] -ne [bool]$s.Value) { return $false }
+  }
+  return $true
+}
+function Get-HostBinding([string]$component) {
+  $na = Get-HostVNIC $in.switchId $in.owner $in.managementId ([int]$in.ifIndex)
+  $b = @(Get-HostBindings $na | Where-Object { $_.ComponentID -eq $component })
   if ($b.Count -gt 1) { throw 'The host vNIC binding could not be identified.' }
   $b
 }
@@ -125,48 +162,53 @@ Write-Doc $o
 // Internal switch with the tag in the same call, so no switch of ours is ever
 // left without it. It gives the host vNIC its static MAC and the gateway
 // address, and returns the switch ID and the vNIC's ifIndex.
-const scriptEnsureSwitch = buildPrelude + `$sw = @()
-if ($in.switchId) { $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId }) }
-if (-not $in.switchId) {
-  $sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
-  if ($sw.Count -gt 1) { throw 'More than one switch has this name.' }
-  if ($sw.Count -eq 1) { throw 'A switch with this name exists without a recorded ID.' }
-}
-if ($sw.Count -eq 1) {
-  $sw = Get-OwnedSwitch $in.switchId $in.owner
-  if ($sw.Name -ne $in.switch) {
-    if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'Another switch has this name.' }
-    Rename-VMSwitch -VMSwitch (Get-OwnedSwitch $in.switchId $in.owner) -NewName $in.switch
-  }
-} else {
-  if ($in.switchId) { throw 'The recorded switch was not found.' }
+const scriptEnsureSwitch = buildPrelude + `$fresh = -not $in.switchId
+if ($fresh) {
+  if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'A switch with this name exists without a recorded ID.' }
   $sw = New-VMSwitch -Name $in.switch -SwitchType Internal -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
+  $ports = @(Get-ManagementPort $sw)
+  if ($ports.Count -ne 1 -or -not $ports[0].Id) { throw 'The new switch did not return its management adapter ID.' }
+  $managementId = [string]$ports[0].Id
+} else {
+  $sw = Get-OwnedSwitch $in.switchId $in.owner
+  $managementId = $in.managementId
 }
 $switchId = $sw.Id.ToString()
-$sw = Get-OwnedSwitch $switchId $in.owner
-$mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
-if ($mo.Count -ne 1) { throw 'The switch does not have exactly one host vNIC.' }
-if ((([string]$mo[0].MacAddress) -replace '-', '').ToUpper() -ne $in.mac) {
-  $null = Get-OwnedSwitch $switchId $in.owner
-  Set-VMNetworkAdapter -VMNetworkAdapter $mo[0] -StaticMacAddress $in.mac
+$mo = Get-RecordedManagementPort $sw $managementId
+if ((([string]$mo.MacAddress) -replace '-', '').ToUpper() -ne $in.mac) {
+  if (-not $fresh) { throw 'The recorded management adapter MAC changed and was left in place.' }
+  Set-VMNetworkAdapter -VMNetworkAdapter $mo -StaticMacAddress $in.mac
 }
 $na = $null
 for ($i = 0; $i -lt 30; $i++) {
-  $null = Get-OwnedSwitch $switchId $in.owner
-  $match = @(Find-ManagementAdapter $mo[0])
+  $mo = Get-RecordedManagementPort (Get-OwnedSwitch $switchId $in.owner) $managementId
+  $match = @(Find-ManagementAdapter $mo)
   if ($match.Count -eq 1) { $na = $match[0]; break }
   Start-Sleep -Seconds 1
 }
 if (-not $na) { throw 'The host vNIC did not appear with its device identity.' }
 $idx = [int]$na.ifIndex
+$int = @(Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4)
+if ($int.Count -ne 1) { throw 'Could not verify DHCP on the recorded management adapter.' }
+if ($int[0].Dhcp.ToString() -ne 'Disabled') {
+  if (-not $fresh) { throw 'DHCP is enabled on the recorded management adapter and was left in place.' }
+  $null = Get-HostVNIC $switchId $in.owner $managementId $idx
+  Set-NetIPInterface -InputObject $int[0] -Dhcp Disabled
+}
 $have = @(Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $in.gateway })
 if ($have.Count -eq 0) {
-  $na = Get-HostVNIC $switchId $in.owner $idx
+  $na = Get-HostVNIC $switchId $in.owner $managementId $idx
+  $int = @(Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4)
+  if ($int.Count -ne 1 -or $int[0].Dhcp.ToString() -ne 'Disabled') { throw 'DHCP must already be disabled on the recorded management adapter.' }
   New-NetIPAddress -InterfaceIndex $na.ifIndex -IPAddress $in.gateway -PrefixLength ([int]$in.prefixLen) | Out-Null
 } elseif ($have.Count -ne 1 -or [int]$have[0].PrefixLength -ne [int]$in.prefixLen) {
   throw 'The existing gateway address has a different prefix and was left in place.'
 }
-Write-Doc ([ordered]@{ switchId = $sw.Id.ToString(); ifIndex = $idx })
+if ($sw.Name -ne $in.switch) {
+  if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'Another switch has this name.' }
+  Rename-VMSwitch -VMSwitch $sw -NewName $in.switch
+}
+Write-Doc ([ordered]@{ switchId = $switchId; managementId = $managementId; ifIndex = $idx })
 `
 
 // scriptEnsureNAT returns the provider identity of the new or recorded NAT.
@@ -248,53 +290,79 @@ Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptSetBindings unbinds components from the host vNIC by component ID.
-const scriptSetBindings = buildPrelude + `foreach ($c in @($in.off)) {
-  $b = @(Get-HostBinding $c)
-  if ($b.Count -eq 1 -and $b[0].Enabled) {
-    $null = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
-    Disable-NetAdapterBinding -InputObject $b[0]
+const scriptSetBindings = buildPrelude + `$na = Get-HostVNIC $in.switchId $in.owner $in.managementId ([int]$in.ifIndex)
+if ($in.expected) {
+  if (-not (Test-HostBindings $na $in.expected)) { throw 'The management adapter bindings changed and were left in place.' }
+} else {
+  foreach ($c in @($in.off)) {
+    $b = @(Get-HostBinding $c)
+    if ($b.Count -eq 1 -and $b[0].Enabled) { Disable-NetAdapterBinding -InputObject $b[0] }
   }
 }
-Write-Doc ([ordered]@{ ok = $true })
+Write-Doc @{ bindings = (Export-HostBindings $na) }
 `
 
 func blockFirewallID(n Names, owner string) string { return n.FirewallGroup + "-block-in-" + owner }
 
-// scriptEnsureFirewall matches the rule's recorded name and live owner tag.
-const scriptEnsureFirewall = buildPrelude + `$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)
-foreach ($r in $rs) {
-  if ($r.Name -cne $in.id -or (Get-Owner ([string]$r.Description)) -cne $in.owner) {
-    throw 'A firewall rule in this group has no matching recorded identity.'
+// firewallPrelude fingerprints the provider ID and the rule's match fields.
+// Enabled is checked separately because the proof temporarily changes it.
+const firewallIdentityPS = `function Get-FirewallIdentity($r) {
+  if (-not $r.InstanceID) { throw 'The firewall rule did not return a provider ID.' }
+  $a = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $r
+  $p = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $r
+  $i = Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $r
+  $app = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r
+  $svc = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $r
+  $it = Get-NetFirewallInterfaceTypeFilter -AssociatedNetFirewallRule $r
+  $sec = Get-NetFirewallSecurityFilter -AssociatedNetFirewallRule $r
+  if (-not $a -or -not $p -or -not $i -or -not $app -or -not $svc -or -not $it -or -not $sec) {
+    throw 'Could not read the complete firewall rule.'
   }
+  $shape = [ordered]@{
+    id = [string]$r.InstanceID; name = [string]$r.Name; group = [string]$r.Group; desc = [string]$r.Description
+    direction = [string]$r.Direction; action = [string]$r.Action; profile = [string]$r.Profile
+    edge = [string]$r.EdgeTraversalPolicy; loose = [string]$r.LooseSourceMapping; localOnly = [string]$r.LocalOnlyMapping
+    local = @($a.LocalAddress | Sort-Object); remote = @($a.RemoteAddress | Sort-Object)
+    protocol = [string]$p.Protocol; localPort = @($p.LocalPort | Sort-Object); remotePort = @($p.RemotePort | Sort-Object)
+    icmp = @($p.IcmpType | Sort-Object); dynamicTarget = [string]$p.DynamicTarget
+    iface = @($i.InterfaceAlias | Sort-Object); ifaceType = [string]$it.InterfaceType
+    program = [string]$app.Program; package = [string]$app.Package; service = [string]$svc.Service
+    auth = [string]$sec.Authentication; encryption = [string]$sec.Encryption; override = [string]$sec.OverrideBlockRules
+    localUser = [string]$sec.LocalUser; remoteUser = [string]$sec.RemoteUser; remoteMachine = [string]$sec.RemoteMachine
+  }
+  $j = ConvertTo-Json -InputObject $shape -Compress -Depth 4
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($j))).Replace('-', '').ToLowerInvariant() }
+  finally { $sha.Dispose() }
 }
-$na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+`
+
+const firewallPrelude = buildPrelude + firewallIdentityPS
+
+const scriptEnsureFirewall = firewallPrelude + `$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)
+$na = Get-HostVNIC $in.switchId $in.owner $in.managementId ([int]$in.ifIndex)
+$alias = [System.Management.Automation.WildcardPattern]::Escape($na.Name)
 if ($rs.Count -eq 0) {
-  New-NetFirewallRule -Name $in.id -DisplayName ($in.group + ' block inbound') -Group $in.group -Direction Inbound -Action Block -InterfaceAlias $na.Name -Enabled True -Description ('CashPilot Secure VM. cashpilot-owner=' + $in.owner) | Out-Null
-} elseif ($rs.Count -eq 1) {
-  Set-NetFirewallRule -InputObject $rs[0] -Direction Inbound -Action Block -InterfaceAlias $na.Name -Enabled True
-} else { throw 'More than one firewall rule has the recorded identity.' }
-Write-Doc ([ordered]@{ ok = $true })
+  $r = New-NetFirewallRule -Name $in.id -DisplayName ($in.group + ' block inbound') -Group $in.group -Direction Inbound -Action Block -InterfaceAlias $alias -Enabled True -Description ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
+  $identity = Get-FirewallIdentity $r
+} elseif ($rs.Count -eq 1 -and $rs[0].Name -ceq $in.id -and (Get-Owner ([string]$rs[0].Description)) -ceq $in.owner) {
+  $r = $rs[0]
+  $identity = Get-FirewallIdentity $r
+  if ($identity -cne $in.identity -or $r.Enabled.ToString() -ne 'True') { throw 'The firewall rule differs from Setup and was left in place.' }
+} else { throw 'The firewall group has a rule without a recorded identity.' }
+Write-Doc ([ordered]@{ identity = $identity })
 `
 
 // scriptSetHostNeighbor adds the guest's entry only when the address is free.
-const scriptSetHostNeighbor = buildPrelude + `$na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+const scriptSetHostNeighbor = buildPrelude + `$na = Get-HostVNIC $in.switchId $in.owner $in.managementId ([int]$in.ifIndex)
 $have = @(Get-NetNeighbor -InterfaceIndex ([int]$na.ifIndex) -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $in.ip })
 if ($have.Count -eq 0) {
-  $na = Get-HostVNIC $in.switchId $in.owner ([int]$in.ifIndex)
+  $na = Get-HostVNIC $in.switchId $in.owner $in.managementId ([int]$in.ifIndex)
   New-NetNeighbor -InterfaceIndex ([int]$na.ifIndex) -IPAddress $in.ip -LinkLayerAddress $in.mac -State Permanent | Out-Null
 } elseif ($have.Count -ne 1 -or $have[0].State.ToString() -ne 'Permanent' -or $have[0].LinkLayerAddress -ne $in.mac) {
   throw 'The existing neighbour entry conflicts with setup and was left in place.'
 }
 Write-Doc ([ordered]@{ ok = $true })
-`
-
-// scriptSetEnhancedSession sets the host-wide setting and returns the old
-// value.
-const scriptSetEnhancedSession = buildPrelude + `$config = @(Get-VMHost)
-if ($config.Count -ne 1 -or $config[0].EnableEnhancedSessionMode -isnot [bool]) { throw 'Could not read the current Enhanced Session setting.' }
-$was = $config[0].EnableEnhancedSessionMode
-if ($was -ne [bool]$in.on) { Set-VMHost -EnableEnhancedSessionMode ([bool]$in.on) }
-Write-Doc ([ordered]@{ was = $was })
 `
 
 // scriptEnsureGuardian records the fingerprint only when this call creates it.
@@ -452,13 +520,17 @@ Write-Doc ([ordered]@{ ok = $true })
 
 // scriptRemoveVM removes the owned VM and the recorded disk file. Any
 // other attached VHDX is reported and kept.
-var scriptRemoveVM = buildPrelude + diskIdentityPrelude + runtime.SecureVMDirectoryPS + `$vm = @()
+var scriptRemoveVM = portACLPrelude + diskIdentityPrelude + runtime.SecureVMDirectoryPS + `$vm = @()
 if ($in.vm) { $vm = @(Find-OurVM $in.vm) }
 if ($vm.Count -gt 1) { throw 'More than one VM has the recorded ID.' }
 $disks = @()
 if ($vm.Count -eq 1) {
   $vm = $vm[0]
   if ((Get-Owner ([string]$vm.Notes)) -cne $in.owner) { throw 'The VM was not made by this install.' }
+  $a = Get-RecordedVMAdapter $in.vm $in.owner $in.adapter $true
+  if ((Get-PortACLDigest $a) -cne $in.aclDigest -or @(Get-VMNetworkAdapterExtendedAcl -VMNetworkAdapter $a).Count -ne 0) {
+    throw 'The VM has independent port ACLs and was left in place.'
+  }
   if (@(Get-VMSnapshot -VM $vm -ErrorAction Stop).Count -ne 0) { throw 'The VM has checkpoints, so it was left in place.' }
   $disks = @(Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path } | ForEach-Object { [string]$_.Path })
   if ($vm.State.ToString() -ne 'Off') { Stop-VM -VM (Get-OwnedVM $in.vm $in.owner) -TurnOff -Force }
@@ -485,15 +557,38 @@ $left = @($disks | Select-Object -Unique)
 Write-Doc ([ordered]@{ left = @($left) })
 `
 
-// scriptRemoveSwitch removes the switch by ID, with its host vNIC. It refuses
-// while a VM has an adapter on it.
+// scriptRemoveSwitch leaves the switch when deleting it would take another
+// port or independent host configuration with it.
 const scriptRemoveSwitch = buildPrelude + `$sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId })
-if ($sw.Count -eq 1) {
-  if ((Get-Owner ([string]$sw[0].Notes)) -cne $in.owner) { throw 'The switch was not made by this install.' }
-  if (@(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw[0].Id) }).Count -gt 0) { throw 'A VM still has an adapter on the switch.' }
-  Remove-VMSwitch -VMSwitch $sw[0] -Force
+if ($sw.Count -eq 0) { Write-Doc @{ kept = '' }; exit 0 }
+$sw = Get-OwnedSwitch $in.switchId $in.owner
+if (@(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw.Id) }).Count -gt 0) {
+  Write-Doc @{ kept = 'a VM still has an adapter on it' }; exit 0
 }
-Write-Doc ([ordered]@{ ok = $true })
+$ports = @(Get-ManagementPort $sw)
+if ($ports.Count -ne 1 -or -not $in.managementId -or [string]$ports[0].Id -ne $in.managementId) {
+  Write-Doc @{ kept = 'the management port inventory differs from Setup' }; exit 0
+}
+$na = Get-HostVNIC $in.switchId $in.owner $in.managementId
+$idx = [int]$na.ifIndex
+$ipif = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4
+if ($ipif.Dhcp.ToString() -ne 'Disabled' -or ((([string]$ports[0].MacAddress) -replace '-', '').ToUpper() -ne $in.mac)) {
+  Write-Doc @{ kept = 'the recorded management port MAC or DHCP setting changed' }; exit 0
+}
+$addresses = @(Get-NetIPAddress -InterfaceIndex $idx | Where-Object {
+  -not ($_.IPAddress -eq $in.gateway -and [int]$_.PrefixLength -eq [int]$in.prefixLen) -and
+  -not ($_.IPAddress -like 'fe80:*' -and $_.SuffixOrigin.ToString() -eq 'Link')
+})
+$neighbors = @(Get-NetNeighbor -InterfaceIndex $idx | Where-Object {
+  $_.State.ToString() -eq 'Permanent' -and
+  -not ($_.IPAddress -eq $in.guest -and [string]$_.LinkLayerAddress -eq $in.guestMac) -and
+  $_.IPAddress -notlike '224.*' -and $_.IPAddress -ne '255.255.255.255' -and $_.IPAddress -notlike 'ff*'
+})
+if ($addresses.Count -gt 0 -or $neighbors.Count -gt 0 -or -not (Test-HostBindings $na $in.bindings)) {
+  Write-Doc @{ kept = 'the management port has independent addresses, neighbours or bindings' }; exit 0
+}
+Remove-VMSwitch -VMSwitch $sw -Force
+Write-Doc @{ kept = '' }
 `
 
 // scriptRemoveNAT removes the exact recorded provider object.
@@ -502,15 +597,24 @@ if ($n.Count -gt 0) {
   if ($n.Count -ne 1 -or [string]$n[0].InstanceID -cne $in.id -or [string]$n[0].InternalIPInterfaceAddressPrefix -ne $in.prefix) {
     throw 'The NAT changed since inventory.'
   }
+  if (@(Get-NetNatStaticMapping | Where-Object { $_.NatName -eq $in.nat }).Count -gt 0 -or
+      @(Get-NetNatExternalAddress | Where-Object { $_.NatName -eq $in.nat }).Count -gt 0) {
+    Write-Doc @{ kept = 'it has independent NAT mappings or external addresses' }; exit 0
+  }
   Remove-NetNat -InputObject $n[0] -Confirm:$false
 }
-Write-Doc ([ordered]@{ ok = $true })
+Write-Doc @{ kept = '' }
 `
 
-// scriptRemoveFirewall removes the rules of the group that carry the owner
-// tag.
-const scriptRemoveFirewall = buildPrelude + `@(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | Where-Object { $_.Name -ceq $in.id -and (Get-Owner ([string]$_.Description)) -ceq $in.owner }) | Remove-NetFirewallRule
-Write-Doc ([ordered]@{ ok = $true })
+const scriptRemoveFirewall = firewallPrelude + `$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -ceq $in.id -and (Get-Owner ([string]$_.Description)) -ceq $in.owner })
+if ($rs.Count -gt 0) {
+  if ($rs.Count -ne 1 -or -not $in.identity -or (Get-FirewallIdentity $rs[0]) -cne $in.identity -or $rs[0].Enabled.ToString() -ne 'True') {
+    Write-Doc @{ kept = 'the firewall rule differs from Setup' }; exit 0
+  }
+  Remove-NetFirewallRule -InputObject $rs[0]
+}
+Write-Doc @{ kept = '' }
 `
 
 // scriptRemoveGuardian rechecks the fingerprint and live VM dependencies.
@@ -520,11 +624,6 @@ if ($g.Count -gt 0) {
   if (@(Get-VM | Where-Object { Test-GuardianUser $_ }).Count -gt 0) { throw 'A VM still needs the guardian.' }
   Remove-HgsGuardian -InputObject $g[0] -Confirm:$false
 }
-Write-Doc ([ordered]@{ ok = $true })
-`
-
-// scriptRemoveHyperVAdmin takes the account out of Hyper-V Administrators.
-const scriptRemoveHyperVAdmin = buildPrelude + `if ((Get-GroupSids 'S-1-5-32-578') -contains $in.sid) { Remove-LocalGroupMember -SID 'S-1-5-32-578' -Member $in.sid }
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -575,7 +674,6 @@ var buildScripts = map[string]string{
 	"SetBindings":         scriptSetBindings,
 	"EnsureFirewall":      scriptEnsureFirewall,
 	"SetHostNeighbor":     scriptSetHostNeighbor,
-	"SetEnhancedSession":  scriptSetEnhancedSession,
 	"EnsureGuardian":      scriptEnsureGuardian,
 	"AddHyperVAdmin":      scriptAddHyperVAdmin,
 	"WriteAnswerISO":      scriptWriteAnswerISO,
@@ -589,7 +687,6 @@ var buildScripts = map[string]string{
 	"RemoveNAT":           scriptRemoveNAT,
 	"RemoveFirewall":      scriptRemoveFirewall,
 	"RemoveGuardian":      scriptRemoveGuardian,
-	"RemoveHyperVAdmin":   scriptRemoveHyperVAdmin,
 	"ClearProof":          scriptClearProof,
 	"Guest":               scriptGuest,
 }
@@ -799,42 +896,44 @@ func (h *psHost) Inventory(ctx context.Context, n Names, known KnownIDs, sid str
 }
 
 // EnsureSwitch creates or checks the switch and its host vNIC.
-func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID string) (string, int, error) {
+func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (string, string, int, error) {
 	if switchID != "" && !guidRe.MatchString(switchID) {
-		return "", 0, fmt.Errorf("switch ID %q is not a GUID", switchID)
+		return "", "", 0, fmt.Errorf("switch ID %q is not a GUID", switchID)
 	}
 	if err := n.Validate(); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	if err := checkSubnet(sub); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	if err := checkOwner(owner); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	mac, err := NormalizeMAC(vnicMAC)
 	if err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
 	arg := struct {
-		Switch    string `json:"switch"`
-		SwitchID  string `json:"switchId"`
-		Owner     string `json:"owner"`
-		MAC       string `json:"mac"`
-		Gateway   string `json:"gateway"`
-		PrefixLen int    `json:"prefixLen"`
-	}{n.Switch, switchID, owner, mac, sub.Addr().Next().String(), sub.Bits()}
+		Switch       string `json:"switch"`
+		SwitchID     string `json:"switchId"`
+		ManagementID string `json:"managementId"`
+		Owner        string `json:"owner"`
+		MAC          string `json:"mac"`
+		Gateway      string `json:"gateway"`
+		PrefixLen    int    `json:"prefixLen"`
+	}{n.Switch, switchID, managementID, owner, mac, sub.Addr().Next().String(), sub.Bits()}
 	var w struct {
-		SwitchID string `json:"switchId"`
-		IfIndex  int    `json:"ifIndex"`
+		SwitchID     string `json:"switchId"`
+		ManagementID string `json:"managementId"`
+		IfIndex      int    `json:"ifIndex"`
 	}
 	if err := b.call(ctx, scriptEnsureSwitch, arg, &w); err != nil {
-		return "", 0, err
+		return "", "", 0, err
 	}
-	if !guidRe.MatchString(w.SwitchID) || checkIfIndex(w.IfIndex) != nil {
-		return "", 0, fmt.Errorf("the switch came back as %q on interface %d", w.SwitchID, w.IfIndex)
+	if !guidRe.MatchString(w.SwitchID) || !validNATID(w.ManagementID) || (switchID != "" && !strings.EqualFold(managementID, w.ManagementID)) || checkIfIndex(w.IfIndex) != nil {
+		return "", "", 0, fmt.Errorf("the switch came back as %q on interface %d", w.SwitchID, w.IfIndex)
 	}
-	return w.SwitchID, w.IfIndex, nil
+	return w.SwitchID, w.ManagementID, w.IfIndex, nil
 }
 
 func validNATID(id string) bool {
@@ -878,7 +977,7 @@ func (b psBuilder) CreateVM(ctx context.Context, p Plan, iso, answerISO string) 
 	if err := checkOwner(p.Owner); err != nil {
 		return "", "", OwnedDisk{}, nil, err
 	}
-	for what, path := range map[string]string{"VHDX folder": p.VHDXDir, "ISO": iso, "answer ISO": answerISO} {
+	for what, path := range map[string]string{"ISO": iso, "answer ISO": answerISO} {
 		if err := checkWinPath(what, path); err != nil {
 			return "", "", OwnedDisk{}, nil, err
 		}
@@ -926,46 +1025,63 @@ func (b psBuilder) SetIntegration(ctx context.Context, vmID, owner string, want 
 
 // SetBindings unbinds components from the host vNIC. Only the planned
 // components may go.
-func (b psBuilder) SetBindings(ctx context.Context, ifIndex int, switchID, owner string, off []string) error {
-	if err := checkVMID("switch ID", switchID); err != nil {
-		return err
+func (b psBuilder) SetBindings(ctx context.Context, p Plan, ifIndex int) (map[string]bool, error) {
+	if err := checkVMID("switch ID", p.SwitchID); err != nil {
+		return nil, err
 	}
-	if err := checkOwner(owner); err != nil {
-		return err
+	if err := checkOwner(p.Owner); err != nil {
+		return nil, err
 	}
 	if err := checkIfIndex(ifIndex); err != nil {
-		return err
+		return nil, err
 	}
-	for _, c := range off {
+	for _, c := range p.BindingsOff {
 		if !slices.Contains(BindingsOff(), c) {
-			return fmt.Errorf("component %q is not one setup unbinds", c)
+			return nil, fmt.Errorf("component %q is not one setup unbinds", c)
 		}
 	}
-	return b.ok(ctx, scriptSetBindings, map[string]any{"ifIndex": ifIndex, "switchId": switchID, "owner": owner, "off": off})
+	var w struct {
+		Bindings map[string]bool `json:"bindings"`
+	}
+	err := b.call(ctx, scriptSetBindings, map[string]any{
+		"ifIndex": ifIndex, "switchId": p.SwitchID, "managementId": p.ManagementAdapterID,
+		"owner": p.Owner, "off": p.BindingsOff, "expected": p.ManagementBindings,
+	}, &w)
+	if err == nil && len(w.Bindings) == 0 {
+		err = errors.New("the management adapter did not return its bindings")
+	}
+	return w.Bindings, err
 }
 
-// EnsureFirewall makes the group's one inbound Block rule on the vNIC.
-func (b psBuilder) EnsureFirewall(ctx context.Context, n Names, ifIndex int, switchID, owner string) error {
-	if err := n.Validate(); err != nil {
-		return err
+// EnsureFirewall makes or verifies the recorded inbound Block rule.
+func (b psBuilder) EnsureFirewall(ctx context.Context, p Plan, ifIndex int) (string, error) {
+	if err := p.Names.Validate(); err != nil {
+		return "", err
 	}
-	if err := checkVMID("switch ID", switchID); err != nil {
-		return err
+	if err := checkVMID("switch ID", p.SwitchID); err != nil {
+		return "", err
 	}
-	if err := checkOwner(owner); err != nil {
-		return err
+	if err := checkOwner(p.Owner); err != nil {
+		return "", err
 	}
 	if err := checkIfIndex(ifIndex); err != nil {
-		return err
+		return "", err
 	}
-	if err := checkOwner(owner); err != nil {
-		return err
+	var w struct {
+		Identity string `json:"identity"`
 	}
-	return b.ok(ctx, scriptEnsureFirewall, map[string]any{"group": n.FirewallGroup, "id": blockFirewallID(n, owner), "ifIndex": ifIndex, "switchId": switchID, "owner": owner})
+	err := b.call(ctx, scriptEnsureFirewall, map[string]any{
+		"group": p.Names.FirewallGroup, "id": blockFirewallID(p.Names, p.Owner), "ifIndex": ifIndex,
+		"switchId": p.SwitchID, "managementId": p.ManagementAdapterID, "owner": p.Owner, "identity": p.FirewallIdentity,
+	}, &w)
+	if err == nil && !identityDigestRE.MatchString(w.Identity) {
+		err = errors.New("the firewall did not return a rule identity")
+	}
+	return w.Identity, err
 }
 
 // SetHostNeighbor gives the host its static entry for the guest.
-func (b psBuilder) SetHostNeighbor(ctx context.Context, ifIndex int, switchID, owner string, ip netip.Addr, mac string) error {
+func (b psBuilder) SetHostNeighbor(ctx context.Context, ifIndex int, switchID, owner, managementID string, ip netip.Addr, mac string) error {
 	if err := checkVMID("switch ID", switchID); err != nil {
 		return err
 	}
@@ -982,16 +1098,7 @@ func (b psBuilder) SetHostNeighbor(ctx context.Context, ifIndex int, switchID, o
 	if err != nil {
 		return err
 	}
-	return b.ok(ctx, scriptSetHostNeighbor, map[string]any{"ifIndex": ifIndex, "switchId": switchID, "owner": owner, "ip": ip.String(), "mac": macDash(m)})
-}
-
-// SetEnhancedSession sets the host-wide setting.
-func (b psBuilder) SetEnhancedSession(ctx context.Context, on bool) (bool, error) {
-	var w struct {
-		Was bool `json:"was"`
-	}
-	err := b.call(ctx, scriptSetEnhancedSession, map[string]bool{"on": on}, &w)
-	return w.Was, err
+	return b.ok(ctx, scriptSetHostNeighbor, map[string]any{"ifIndex": ifIndex, "switchId": switchID, "managementId": managementID, "owner": owner, "ip": ip.String(), "mac": macDash(m)})
 }
 
 // EnsureGuardian returns the fingerprint only when this call created it.
@@ -1000,7 +1107,7 @@ func (b psBuilder) EnsureGuardian(ctx context.Context) (string, error) {
 		ID string `json:"id"`
 	}
 	err := b.call(ctx, scriptEnsureGuardian, map[string]string{}, &w)
-	if err == nil && w.ID != "" && !guardianIDRE.MatchString(w.ID) {
+	if err == nil && w.ID != "" && !identityDigestRE.MatchString(w.ID) {
 		return "", errors.New("the guardian fingerprint is invalid")
 	}
 	return w.ID, err
@@ -1192,60 +1299,70 @@ func (b psBuilder) RemoveVM(ctx context.Context, vmID string, p Plan) ([]string,
 	var w struct {
 		Left []string `json:"left"`
 	}
-	err := b.call(ctx, scriptRemoveVM, map[string]any{"vm": vmID, "owner": p.Owner, "disk": p.Disk}, &w)
+	err := b.call(ctx, scriptRemoveVM, map[string]any{"vm": vmID, "owner": p.Owner, "disk": p.Disk, "adapter": p.AdapterID, "aclDigest": portACLDigest(p.PortACLs)}, &w)
 	return w.Left, err
 }
 
-// RemoveSwitch removes the switch by ID.
-func (b psBuilder) RemoveSwitch(ctx context.Context, switchID, owner string) error {
-	if err := checkVMID("switch ID", switchID); err != nil {
-		return err
+// RemoveSwitch removes the recorded switch only when its port is unused.
+func (b psBuilder) RemoveSwitch(ctx context.Context, p Plan) (string, error) {
+	if err := checkVMID("switch ID", p.SwitchID); err != nil {
+		return "", err
 	}
-	if err := checkOwner(owner); err != nil {
-		return err
+	if err := checkOwner(p.Owner); err != nil {
+		return "", err
 	}
-	return b.ok(ctx, scriptRemoveSwitch, map[string]string{"switchId": switchID, "owner": owner})
+	var w struct {
+		Kept string `json:"kept"`
+	}
+	err := b.call(ctx, scriptRemoveSwitch, map[string]any{
+		"switchId": p.SwitchID, "owner": p.Owner, "managementId": p.ManagementAdapterID,
+		"mac": p.HostVNICMAC, "gateway": p.Gateway.String(), "prefixLen": p.Subnet.Bits(),
+		"guest": p.GuestIP.String(), "guestMac": macDash(p.GuestMAC), "bindings": p.ManagementBindings,
+	}, &w)
+	return w.Kept, err
 }
 
 // RemoveNAT deletes only an independently identified NAT.
-func (b psBuilder) RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id string) error {
+func (b psBuilder) RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id string) (string, error) {
 	if err := n.Validate(); err != nil {
-		return err
+		return "", err
 	}
 	if err := checkSubnet(sub); err != nil {
-		return err
+		return "", err
 	}
 	if !independentNATID(n.NAT, id) {
-		return errors.New("the NAT has no independent provider identity")
+		return "", errors.New("the NAT has no independent provider identity")
 	}
-	return b.ok(ctx, scriptRemoveNAT, map[string]string{"nat": n.NAT, "prefix": sub.String(), "id": id})
+	var w struct {
+		Kept string `json:"kept"`
+	}
+	err := b.call(ctx, scriptRemoveNAT, map[string]string{"nat": n.NAT, "prefix": sub.String(), "id": id}, &w)
+	return w.Kept, err
 }
 
-// RemoveFirewall removes the group's rules that carry the owner tag.
-func (b psBuilder) RemoveFirewall(ctx context.Context, n Names, owner string) error {
-	if err := n.Validate(); err != nil {
-		return err
+// RemoveFirewall removes only the exact rule Setup recorded.
+func (b psBuilder) RemoveFirewall(ctx context.Context, p Plan) (string, error) {
+	if err := p.Names.Validate(); err != nil {
+		return "", err
 	}
-	if err := checkOwner(owner); err != nil {
-		return err
+	if err := checkOwner(p.Owner); err != nil {
+		return "", err
 	}
-	return b.ok(ctx, scriptRemoveFirewall, map[string]string{"group": n.FirewallGroup, "id": blockFirewallID(n, owner), "owner": owner})
+	var w struct {
+		Kept string `json:"kept"`
+	}
+	err := b.call(ctx, scriptRemoveFirewall, map[string]string{
+		"group": p.Names.FirewallGroup, "id": blockFirewallID(p.Names, p.Owner), "owner": p.Owner, "identity": p.FirewallIdentity,
+	}, &w)
+	return w.Kept, err
 }
 
 // RemoveGuardian deletes the guardian.
 func (b psBuilder) RemoveGuardian(ctx context.Context, id string) error {
-	if !guardianIDRE.MatchString(id) {
+	if !identityDigestRE.MatchString(id) {
 		return errors.New("the guardian has no recorded fingerprint")
 	}
 	return b.ok(ctx, scriptRemoveGuardian, map[string]string{"id": id})
-}
-
-// RemoveHyperVAdmin takes the account out of Hyper-V Administrators.
-func (b psBuilder) RemoveHyperVAdmin(ctx context.Context, sid string) error {
-	if !sidRe.MatchString(sid) {
-		return fmt.Errorf("%q is not a SID", sid)
-	}
-	return b.ok(ctx, scriptRemoveHyperVAdmin, map[string]string{"sid": sid})
 }
 
 // ClearProof reports earlier proof artifacts that have no live identity.
