@@ -756,3 +756,72 @@ func TestAManagerSeesAndKeepsAChangeAnotherProcessSaved(t *testing.T) {
 		t.Fatalf("a broken file changed the config in memory: %+v", c)
 	}
 }
+
+// TestAConcurrentReaderNeverSeesAHalfWrittenConfig: the window and the
+// background helper each read and write config.json. A reader in the other
+// process must always see a whole file, the old one or the new one, never an
+// empty or partial one.
+func TestAConcurrentReaderNeverSeesAHalfWrittenConfig(t *testing.T) {
+	m := newTestManager(t)
+	big := map[string]string{}
+	for i := 0; i < 2000; i++ {
+		big[fmt.Sprintf("service-%04d", i)] = strings.Repeat("f", 64)
+	}
+	path := filepath.Join(m.AppDir(), "config.json")
+
+	stop := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		defer close(writerDone)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			err := m.Update(func(c *AppConfig) {
+				if i%2 == 0 {
+					c.DriftIgnored = big
+				} else {
+					c.DriftIgnored = nil
+				}
+			})
+			if err != nil {
+				writerDone <- err
+				return
+			}
+		}
+	}()
+
+	deadline := time.Now().Add(400 * time.Millisecond)
+	reads := 0
+	for time.Now().Before(deadline) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue // Windows: the rename can briefly hold the file
+		}
+		reads++
+		var cfg AppConfig
+		if len(raw) == 0 || json.Unmarshal(raw, &cfg) != nil {
+			close(stop)
+			<-writerDone
+			t.Fatalf("read %d saw a half-written config (%d bytes)", reads, len(raw))
+		}
+	}
+	close(stop)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if reads == 0 {
+		t.Fatal("the reader never read the file, so this proves nothing")
+	}
+	entries, err := os.ReadDir(m.AppDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp") {
+			t.Fatalf("a temp file was left behind: %s", e.Name())
+		}
+	}
+}

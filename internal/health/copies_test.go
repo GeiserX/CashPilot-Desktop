@@ -204,3 +204,59 @@ func TestCopyKeysNeverMeetASlug(t *testing.T) {
 		t.Fatalf("copy 2 and the copy through proxy 2 share key %q", a)
 	}
 }
+
+// cached reports whether the window cache holds a verdict and a restart wait for key.
+func cached(key string) (verdict, wait bool) {
+	windows.mu.Lock()
+	defer windows.mu.Unlock()
+	_, verdict = windows.entries[key]
+	_, wait = windows.restarted[key]
+	return verdict, wait
+}
+
+// A copy that is no longer listed at all (a removed copy, a deleted proxy) leaves
+// nothing in the cache for good, so its maps do not grow for the life of the
+// process. Its restart wait goes only once it is over, so a listing that misses a
+// copy for one pass cannot let it restart early, and the first copy's entries stay.
+func TestAnUnlistedCopyIsDroppedFromTheCache(t *testing.T) {
+	now := freshWindows(t)
+	svc := realService(t, "proxybase")
+	f := newFakeCopies()
+	f.set(deadRelay, false) // the first copy, read through Collect
+	f.setCopy(copy2, deadRelay)
+	f.setCopy(proxied, deadRelay)
+	check(t, f, svc, "running")
+	checkCopies(t, f, svc, copy2, proxied)
+	if got := f.restarted(); len(got) != 2 {
+		t.Fatalf("restarts = %v, want copy 2 and the proxied copy", got)
+	}
+
+	// Copy 2 is removed and the proxy deleted: neither is listed any more.
+	checkCopies(t, f, svc)
+	for _, key := range []string{copy2.key(), proxied.key()} {
+		if verdict, wait := cached(key); verdict || !wait {
+			t.Fatalf("%s right after it left the list: verdict kept %v, wait kept %v; want the verdict gone and the wait kept", key, verdict, wait)
+		}
+	}
+	if verdict, wait := cached(svc.Slug); !verdict || !wait {
+		t.Fatalf("the first copy lost its entries: verdict %v, wait %v", verdict, wait)
+	}
+
+	// Listed again inside its wait: no second restart.
+	checkCopies(t, f, svc, copy2)
+	if got := f.restarted(); len(got) != 2 {
+		t.Fatalf("a copy missed by one listing restarted again inside its wait: %v", got)
+	}
+
+	// Once the waits are over, nothing is left of either copy.
+	*now = now.Add(restartEvery)
+	checkCopies(t, f, svc)
+	for _, key := range []string{copy2.key(), proxied.key()} {
+		if verdict, wait := cached(key); verdict || wait {
+			t.Fatalf("%s is still cached after it left the list: verdict %v, wait %v", key, verdict, wait)
+		}
+	}
+	if _, wait := cached(svc.Slug); !wait {
+		t.Fatal("the first copy's restart wait was dropped")
+	}
+}

@@ -62,6 +62,30 @@ function secretInput(item: EnvSetting): string {
  */
 export interface SettingField { name: string; value: string; readOnly: boolean; secret: boolean; clear: boolean; initial?: string }
 
+/** The parts of a settings input that settingField reads. An HTMLInputElement has them all. */
+export interface SettingInput {
+  value: string;
+  readOnly: boolean;
+  dataset: { setting?: string; clear?: string; initial?: string };
+  hasAttribute(name: string): boolean;
+}
+
+/**
+ * Reads one drawn input of the settings form as Save sees it. `initial` comes
+ * from the data-initial renderEnvSetting draws a plain field with, so a field
+ * the user did not touch is left out of the save.
+ */
+export function settingField(input: SettingInput): SettingField {
+  return {
+    name: input.dataset.setting || "",
+    value: input.value,
+    readOnly: input.readOnly,
+    secret: input.hasAttribute("data-secret"),
+    clear: input.dataset.clear === "true",
+    initial: input.dataset.initial,
+  };
+}
+
 /**
  * What Save sends to SaveSettings. A secret box left blank is left out, so the
  * backend keeps the saved value; only Remove sends it empty, which unpairs.
