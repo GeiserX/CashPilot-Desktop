@@ -68,6 +68,7 @@ for (const op of OPS) {
 }
 check("RULE 1: WSL installs no distribution", item(stepConfirm("wsl-install", false), "changes").includes("--no-distribution"));
 check("RULE 1: docker-users adds only this account, by its SID", /only yours/.test(item(stepConfirm("docker-users", false), "changes")) && /SID/.test(item(stepConfirm("docker-users", false), "changes")));
+check("RULE 1: the hypervisor change asks for a restart only when it changed the boot option", /only if CashPilot changed the boot option/.test(item(stepConfirm("hypervisor-launch", false), "after")) && /already auto, no restart follows/.test(item(stepConfirm("hypervisor-launch", false), "after")), item(stepConfirm("hypervisor-launch", false), "after"));
 check("RULE 1: the Linux switch says it affects the user's other Docker work", /all your Docker work/.test(item(stepConfirm("linux-engine", false), "changes")));
 check("RULE 2: the Docker install says CashPilot never accepts Docker's terms", item(stepConfirm("docker-install", false), "changes").includes("CashPilot never accepts Docker's terms for you"));
 check("RULE 5: the direct-download retry says so on its confirm screen", item(stepConfirm("wsl-install", true), "web-download") === WEB_DOWNLOAD_NOTE && item(stepConfirm("wsl-install", false), "web-download") === "");
