@@ -210,6 +210,22 @@ export namespace catalog {
 	        this.cpuShares = source["cpuShares"];
 	    }
 	}
+	export class TrafficStall {
+	    share?: number;
+	    peerMinMbPerHour?: number;
+	    hours?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TrafficStall(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.share = source["share"];
+	        this.peerMinMbPerHour = source["peerMinMbPerHour"];
+	        this.hours = source["hours"];
+	    }
+	}
 	export class HealthSignal {
 	    pattern: string;
 	    means: string;
@@ -329,6 +345,7 @@ export namespace catalog {
 	    devices: string[];
 	    healthSignals: HealthSignal[];
 	    healthProbe?: Record<string, any>;
+	    trafficStall?: TrafficStall;
 	    advertisedAddressEnv: string;
 	    privileged: boolean;
 	    stopTimeout: number;
@@ -362,6 +379,7 @@ export namespace catalog {
 	        this.devices = source["devices"];
 	        this.healthSignals = this.convertValues(source["healthSignals"], HealthSignal);
 	        this.healthProbe = source["healthProbe"];
+	        this.trafficStall = this.convertValues(source["trafficStall"], TrafficStall);
 	        this.advertisedAddressEnv = source["advertisedAddressEnv"];
 	        this.privileged = source["privileged"];
 	        this.stopTimeout = source["stopTimeout"];
@@ -471,6 +489,77 @@ export namespace catalog {
 		}
 	}
 	
+	
+	export class ObligationWhen {
+	    date?: string;
+	    every?: string;
+	    on?: number;
+	    dueDays?: number;
+	    since?: string;
+	    days?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ObligationWhen(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.every = source["every"];
+	        this.on = source["on"];
+	        this.dueDays = source["dueDays"];
+	        this.since = source["since"];
+	        this.days = source["days"];
+	    }
+	}
+	export class Obligation {
+	    id: string;
+	    action: string;
+	    title: string;
+	    loss: string;
+	    how?: string;
+	    url?: string;
+	    when: ObligationWhen;
+	    warnDays?: number[];
+	    source: string;
+	    checked: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Obligation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.action = source["action"];
+	        this.title = source["title"];
+	        this.loss = source["loss"];
+	        this.how = source["how"];
+	        this.url = source["url"];
+	        this.when = this.convertValues(source["when"], ObligationWhen);
+	        this.warnDays = source["warnDays"];
+	        this.source = source["source"];
+	        this.checked = source["checked"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	export class Payment {
 	    methods: string[];
@@ -839,6 +928,7 @@ export namespace catalog {
 		    return a;
 		}
 	}
+	
 	
 
 }
@@ -1805,6 +1895,38 @@ export namespace main {
 	}
 	
 	
+	export class HostCheckResult {
+	    facts: winvm.HostFacts;
+	    runtime: runtime.Status;
+	
+	    static createFrom(source: any = {}) {
+	        return new HostCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.facts = this.convertValues(source["facts"], winvm.HostFacts);
+	        this.runtime = this.convertValues(source["runtime"], runtime.Status);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ImportApplyRequest {
 	    source: string;
 	    files: importers.File[];
@@ -2480,7 +2602,9 @@ export namespace runtime {
 	export class Status {
 	    available: boolean;
 	    nativeAvailable: boolean;
+	    nativeServices: string[];
 	    kind: string;
+	    reason: string;
 	    message: string;
 	    version: string;
 	    context: string;
@@ -2494,7 +2618,9 @@ export namespace runtime {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.available = source["available"];
 	        this.nativeAvailable = source["nativeAvailable"];
+	        this.nativeServices = source["nativeServices"];
 	        this.kind = source["kind"];
+	        this.reason = source["reason"];
 	        this.message = source["message"];
 	        this.version = source["version"];
 	        this.context = source["context"];
@@ -2996,6 +3122,109 @@ export namespace usage {
 	        this.trafficPartial = source["trafficPartial"];
 	        this.cpuPartial = source["cpuPartial"];
 	        this.memoryPartial = source["memoryPartial"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace winvm {
+	
+	export class HostVerdict {
+	    eligible: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HostVerdict(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.eligible = source["eligible"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class HostFacts {
+	    os: string;
+	    supported: boolean;
+	    build: number;
+	    ubr: number;
+	    editionId: string;
+	    arch: string;
+	    hypervisorPresent: string;
+	    virtualizationFirmware: string;
+	    slat: string;
+	    wslFeature: string;
+	    vmPlatformFeature: string;
+	    wslInstalled: string;
+	    wslVersion: string;
+	    dockerDesktopInstalled: string;
+	    dockerDesktopRunning: string;
+	    dockerDesktopStarted: string;
+	    dockerService: string;
+	    userSid: string;
+	    dockerUsersGroup: string;
+	    dockerUsersListed: string;
+	    dockerUsersToken: string;
+	    restartPending: string;
+	    restartReasons: string[];
+	    problems: Record<string, string>;
+	    virtualization: string;
+	    hyperVEdition: string;
+	    wsl: string;
+	    secureVmHost: HostVerdict;
+	
+	    static createFrom(source: any = {}) {
+	        return new HostFacts(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.os = source["os"];
+	        this.supported = source["supported"];
+	        this.build = source["build"];
+	        this.ubr = source["ubr"];
+	        this.editionId = source["editionId"];
+	        this.arch = source["arch"];
+	        this.hypervisorPresent = source["hypervisorPresent"];
+	        this.virtualizationFirmware = source["virtualizationFirmware"];
+	        this.slat = source["slat"];
+	        this.wslFeature = source["wslFeature"];
+	        this.vmPlatformFeature = source["vmPlatformFeature"];
+	        this.wslInstalled = source["wslInstalled"];
+	        this.wslVersion = source["wslVersion"];
+	        this.dockerDesktopInstalled = source["dockerDesktopInstalled"];
+	        this.dockerDesktopRunning = source["dockerDesktopRunning"];
+	        this.dockerDesktopStarted = source["dockerDesktopStarted"];
+	        this.dockerService = source["dockerService"];
+	        this.userSid = source["userSid"];
+	        this.dockerUsersGroup = source["dockerUsersGroup"];
+	        this.dockerUsersListed = source["dockerUsersListed"];
+	        this.dockerUsersToken = source["dockerUsersToken"];
+	        this.restartPending = source["restartPending"];
+	        this.restartReasons = source["restartReasons"];
+	        this.problems = source["problems"];
+	        this.virtualization = source["virtualization"];
+	        this.hyperVEdition = source["hyperVEdition"];
+	        this.wsl = source["wsl"];
+	        this.secureVmHost = this.convertValues(source["secureVmHost"], HostVerdict);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

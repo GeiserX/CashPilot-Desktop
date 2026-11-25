@@ -120,6 +120,19 @@ func (m *Manager) HasNativeRuntime() bool {
 	return ok
 }
 
+// NativeServices names the services in list that the native runtime would run on
+// this machine: those kindForService routes to it. Without Docker these are the
+// only ones that can run, so an empty list means nothing can.
+func (m *Manager) NativeServices(list []catalog.Service) []string {
+	names := []string{}
+	for _, svc := range list {
+		if m.kindForService(svc) == nativeRuntimeKind {
+			names = append(names, svc.Name)
+		}
+	}
+	return names
+}
+
 // kindForService picks the runtime kind a service should deploy onto. A service that
 // declares a native binary for THIS host (GOOS/GOARCH) is preferred onto the native
 // runtime when that provider is registered; every other service — image-only, or with

@@ -1,0 +1,346 @@
+//go:build windows
+
+package winvm
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
+)
+
+// systemProbes reads this Windows PC, without admin rights.
+type systemProbes struct{}
+
+var system probes = systemProbes{}
+
+// createNoWindow keeps a child process from flashing a console over the app.
+const createNoWindow = 0x08000000
+
+func hidden(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	return cmd
+}
+
+func (systemProbes) supported() bool { return true }
+
+// osVersion reads the build and the edition from the registry. The 64-bit view is
+// asked for by name, so a 32-bit build of the app would read the same values.
+func (systemProbes) osVersion(context.Context) (func(*HostFacts), error) {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE|registry.WOW64_64KEY)
+	if err != nil {
+		return nil, err
+	}
+	defer k.Close()
+	buildText, _, err := k.GetStringValue("CurrentBuild")
+	if err != nil {
+		return nil, err
+	}
+	build, err := strconv.Atoi(strings.TrimSpace(buildText))
+	if err != nil {
+		return nil, fmt.Errorf("CurrentBuild %q is not a number", buildText)
+	}
+	ubr, _, _ := k.GetIntegerValue("UBR")
+	edition, _, _ := k.GetStringValue("EditionID")
+	return func(f *HostFacts) {
+		f.Build = build
+		f.UBR = int(ubr)
+		f.EditionID = strings.TrimSpace(edition)
+	}, nil
+}
+
+// cim runs cimScript in an unelevated, hidden PowerShell.
+func (systemProbes) cim(ctx context.Context) (func(*HostFacts), error) {
+	cmd := hidden(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(cimScript))
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("PowerShell: %v", err)
+	}
+	return parseCIM(out)
+}
+
+// wsl looks for the WSL package and asks it its version. Only the package's own
+// wsl.exe under Program Files is run, never the inbox System32 one: on a PC without
+// WSL that one can offer to install it, and this check changes nothing.
+func (systemProbes) wsl(ctx context.Context) (func(*HostFacts), error) {
+	pf := os.Getenv("ProgramFiles")
+	if pf == "" {
+		return nil, errors.New("ProgramFiles is not set")
+	}
+	exe := filepath.Join(pf, "WSL", "wsl.exe")
+	if _, err := os.Stat(exe); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return func(f *HostFacts) { f.WSLInstalled = No }, nil
+		}
+		return nil, err
+	}
+	cmd := hidden(ctx, exe, "--version")
+	cmd.Env = append(os.Environ(), "WSL_UTF8=1")
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	version := ""
+	if err == nil {
+		version = parseWSLVersion(out)
+	}
+	return func(f *HostFacts) {
+		f.WSLInstalled = Yes
+		f.WSLVersion = version
+	}, nil
+}
+
+// docker reads whether Docker Desktop is installed, running and was ever started
+// on this account, and the state of its service.
+func (systemProbes) docker(context.Context) (func(*HostFacts), error) {
+	installed := dockerInstalled()
+	running := processRunning("Docker Desktop.exe")
+	started := Unknown
+	if appData := os.Getenv("APPDATA"); appData != "" {
+		started = No
+		for _, name := range []string{"settings-store.json", "settings.json"} {
+			if _, err := os.Stat(filepath.Join(appData, "Docker", name)); err == nil {
+				started = Yes
+			}
+		}
+	}
+	service := serviceState("com.docker.service")
+	return func(f *HostFacts) {
+		f.DockerDesktopInstalled = installed
+		f.DockerDesktopRunning = running
+		f.DockerDesktopStarted = started
+		f.DockerService = service
+	}, nil
+}
+
+// dockerInstalled is Yes when the uninstall key or the app's exe is found, No when
+// every place was read and none had it, Unknown when one could not be read.
+func dockerInstalled() Tri {
+	const uninstall = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Docker Desktop`
+	certain := true
+	for _, root := range []registry.Key{registry.LOCAL_MACHINE, registry.CURRENT_USER} {
+		k, err := registry.OpenKey(root, uninstall, registry.QUERY_VALUE|registry.WOW64_64KEY)
+		if err == nil {
+			k.Close()
+			return Yes
+		}
+		if !errors.Is(err, registry.ErrNotExist) {
+			certain = false
+		}
+	}
+	var paths []string
+	if pf := os.Getenv("ProgramFiles"); pf != "" {
+		paths = append(paths, filepath.Join(pf, "Docker", "Docker", "Docker Desktop.exe"))
+	}
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		paths = append(paths, filepath.Join(local, "Programs", "DockerDesktop", "Docker Desktop.exe"))
+	}
+	for _, p := range paths {
+		_, err := os.Stat(p)
+		if err == nil {
+			return Yes
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			certain = false
+		}
+	}
+	if certain {
+		return No
+	}
+	return Unknown
+}
+
+// processRunning walks the process list for an exe name.
+func processRunning(exe string) Tri {
+	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
+	if err != nil {
+		return Unknown
+	}
+	defer windows.CloseHandle(snap)
+	var e windows.ProcessEntry32
+	e.Size = uint32(unsafe.Sizeof(e))
+	for err = windows.Process32First(snap, &e); err == nil; err = windows.Process32Next(snap, &e) {
+		if strings.EqualFold(windows.UTF16ToString(e.ExeFile[:]), exe) {
+			return Yes
+		}
+	}
+	if errors.Is(err, windows.ERROR_NO_MORE_FILES) {
+		return No
+	}
+	return Unknown
+}
+
+// serviceState asks the service manager for one service's state. Querying status
+// is open to every user.
+func serviceState(name string) string {
+	m, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return "unknown"
+	}
+	defer windows.CloseServiceHandle(m)
+	n, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return "unknown"
+	}
+	s, err := windows.OpenService(m, n, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+			return "absent"
+		}
+		return "unknown"
+	}
+	defer windows.CloseServiceHandle(s)
+	var st windows.SERVICE_STATUS
+	if err := windows.QueryServiceStatus(s, &st); err != nil {
+		return "unknown"
+	}
+	switch st.CurrentState {
+	case windows.SERVICE_RUNNING:
+		return "running"
+	case windows.SERVICE_STOPPED:
+		return "stopped"
+	case windows.SERVICE_START_PENDING:
+		return "starting"
+	}
+	return "unknown"
+}
+
+// account reads the signed-in user's SID and its docker-users membership, both on
+// the group's member list and in this session's token. docker-users is the name
+// Docker Desktop gives the group on every language of Windows; it is looked up on
+// this computer by name once, and everything after that compares SIDs.
+func (systemProbes) account(context.Context) (func(*HostFacts), error) {
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		return nil, err
+	}
+	userSID := user.User.Sid
+	sidText := userSID.String()
+	group, listed, token := Unknown, Unknown, Unknown
+	computer, err := windows.ComputerName()
+	if err == nil {
+		gsid, _, _, err := windows.LookupSID("", computer+`\docker-users`)
+		switch {
+		case errors.Is(err, windows.ERROR_NONE_MAPPED):
+			group, listed, token = No, No, No
+		case err == nil:
+			group = Yes
+			if in, err := windows.Token(0).IsMember(gsid); err == nil {
+				token = triOf(in)
+			}
+			if in, err := localGroupHas("docker-users", userSID); err == nil {
+				listed = triOf(in)
+			}
+		}
+	}
+	return func(f *HostFacts) {
+		f.UserSID = sidText
+		f.DockerUsersGroup = group
+		f.DockerUsersListed = listed
+		f.DockerUsersToken = token
+	}, nil
+}
+
+var (
+	modnetapi32                 = windows.NewLazySystemDLL("netapi32.dll")
+	procNetLocalGroupGetMembers = modnetapi32.NewProc("NetLocalGroupGetMembers")
+)
+
+// localGroupHas reads a local group's member list at level 0 (one SID per member)
+// and reports whether sid is on it. Get-LocalGroupMember is not used: it throws on
+// a group holding a member it cannot resolve, such as a deleted or Entra account.
+func localGroupHas(group string, sid *windows.SID) (bool, error) {
+	g, err := windows.UTF16PtrFromString(group)
+	if err != nil {
+		return false, err
+	}
+	const maxPreferredLength = 0xFFFFFFFF
+	var buf *byte
+	var read, total uint32
+	var resume uintptr
+	r, _, _ := procNetLocalGroupGetMembers.Call(0, uintptr(unsafe.Pointer(g)), 0,
+		uintptr(unsafe.Pointer(&buf)), maxPreferredLength,
+		uintptr(unsafe.Pointer(&read)), uintptr(unsafe.Pointer(&total)), uintptr(unsafe.Pointer(&resume)))
+	if buf != nil {
+		defer windows.NetApiBufferFree(buf)
+	}
+	if r != 0 {
+		return false, syscall.Errno(r)
+	}
+	if read == 0 {
+		return false, nil
+	}
+	// LOCALGROUP_MEMBERS_INFO_0 is a single PSID.
+	for _, member := range unsafe.Slice((**windows.SID)(unsafe.Pointer(buf)), read) {
+		if member != nil && member.Equals(sid) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// restart reads the three markers Windows leaves while it waits for a restart.
+func (systemProbes) restart(context.Context) (func(*HostFacts), error) {
+	var reasons []string
+	certain := true
+	keyExists := func(path string) bool {
+		k, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE|registry.WOW64_64KEY)
+		if err == nil {
+			k.Close()
+			return true
+		}
+		if !errors.Is(err, registry.ErrNotExist) {
+			certain = false
+		}
+		return false
+	}
+	if keyExists(`SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending`) {
+		reasons = append(reasons, "cbs")
+	}
+	if keyExists(`SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired`) {
+		reasons = append(reasons, "windows-update")
+	}
+	if k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SYSTEM\CurrentControlSet\Control\Session Manager`, registry.QUERY_VALUE|registry.WOW64_64KEY); err == nil {
+		ops, _, err := k.GetStringsValue("PendingFileRenameOperations")
+		k.Close()
+		switch {
+		case err == nil && hasNonEmpty(ops):
+			reasons = append(reasons, "file-rename")
+		case err != nil && !errors.Is(err, registry.ErrNotExist):
+			certain = false
+		}
+	} else {
+		certain = false
+	}
+	pending := Unknown
+	switch {
+	case len(reasons) > 0:
+		pending = Yes
+	case certain:
+		pending = No
+	}
+	return func(f *HostFacts) {
+		f.RestartPending = pending
+		f.RestartReasons = append([]string{}, reasons...)
+	}, nil
+}
+
+func hasNonEmpty(values []string) bool {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}

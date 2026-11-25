@@ -360,6 +360,25 @@ func TestHasNativeRuntime(t *testing.T) {
 	}
 }
 
+// NativeServices lists only what the native runtime would run on this machine, and
+// nothing while no native runtime is registered: first run reads an empty list as
+// "nothing runs without Docker".
+func TestNativeServicesListsOnlyWhatRunsNativelyHere(t *testing.T) {
+	here := catalog.Service{Name: "Here", Slug: "here", Native: catalog.NativeConfig{Binaries: []catalog.NativeBinary{{OS: goruntime.GOOS, Arch: goruntime.GOARCH}}}}
+	elsewhere := catalog.Service{Name: "Elsewhere", Slug: "elsewhere", Native: catalog.NativeConfig{Binaries: []catalog.NativeBinary{{OS: "plan9", Arch: goruntime.GOARCH}}}}
+	image := catalog.Service{Name: "Image", Slug: "image"}
+	list := []catalog.Service{here, elsewhere, image}
+
+	m := NewManager(&fakeProvider{}, newTestCatalog(t), newTestStore(t))
+	if got := m.NativeServices(list); len(got) != 0 {
+		t.Fatalf("no native runtime registered, but NativeServices = %v", got)
+	}
+	m.Register(runtime.NativeRuntimeKind, &fakeProvider{})
+	if got := m.NativeServices(list); len(got) != 1 || got[0] != "Here" {
+		t.Fatalf("NativeServices = %v, want [Here]", got)
+	}
+}
+
 func TestDeployValidationErrors(t *testing.T) {
 	st := newTestStore(t)
 	m := NewManager(&fakeProvider{}, newTestCatalog(t), st)
