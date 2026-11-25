@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Lab only (T1): read the fence proof of one Secure VM lab instance and check
+  Lab only (T2): read the fence proof of one Secure VM lab instance and check
   every step's outcome, the guard's status and the guard task.
 
 .DESCRIPTION
@@ -12,7 +12,7 @@
   Changes nothing.
 
 .EXAMPLE
-  .\t1-proof.ps1 -Instance 1
+  .\t2-proof.ps1 -Instance 1
 #>
 param([Parameter(Mandatory = $true)][ValidateRange(1, 9)][int]$Instance)
 $ErrorActionPreference = 'Stop'

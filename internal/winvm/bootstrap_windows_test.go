@@ -20,7 +20,7 @@ func TestBootstrapAndGuestScriptsParse(t *testing.T) {
 	for _, s := range GuestScripts() {
 		all["guest:"+s.Name] = s.Text
 	}
-	for _, f := range []string{"t1-proof.ps1", "t2-build.ps1", "t2-remove.ps1"} {
+	for _, f := range []string{"t2-proof.ps1", "t2-build.ps1", "t2-remove.ps1"} {
 		b, err := os.ReadFile(filepath.Join("..", "..", "scripts", "winvm-lab", f))
 		if err != nil {
 			t.Fatal(err)
