@@ -82,6 +82,7 @@ import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, rend
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
+import { stallItems } from "./render/stall";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
 import { renderEnvSetting, settingsSaveValues } from "./render/settings";
@@ -514,7 +515,7 @@ function renderDashboard(current: AppState) {
     drift: current.drift,
     producerStates: current.producerStates,
     isolation: current.isolation,
-  });
+  }).concat(stallItems(current.stalls));
 
   root.innerHTML = `
     ${titlebar()}

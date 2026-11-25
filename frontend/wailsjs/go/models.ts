@@ -1434,6 +1434,30 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class StallAlert {
+	    slug: string;
+	    service: string;
+	    container: string;
+	    copy: number;
+	    since: number;
+	    hours: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StallAlert(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.service = source["service"];
+	        this.container = source["container"];
+	        this.copy = source["copy"];
+	        this.since = source["since"];
+	        this.hours = source["hours"];
+	        this.message = source["message"];
+	    }
+	}
 	export class RouteProxy {
 	    id: number;
 	    name: string;
@@ -1770,6 +1794,7 @@ export namespace main {
 	    drift: Record<string, Array<string>>;
 	    isolation?: runtime.FenceStatus;
 	    route: RouteState;
+	    stalls: StallAlert[];
 	
 	    static createFrom(source: any = {}) {
 	        return new AppState(source);
@@ -1802,6 +1827,7 @@ export namespace main {
 	        this.drift = source["drift"];
 	        this.isolation = this.convertValues(source["isolation"], runtime.FenceStatus);
 	        this.route = this.convertValues(source["route"], RouteState);
+	        this.stalls = this.convertValues(source["stalls"], StallAlert);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2327,6 +2353,7 @@ export namespace main {
 		    return a;
 		}
 	}
+	
 	export class UnfinishedRestore {
 	    slug: string;
 	    service: string;
