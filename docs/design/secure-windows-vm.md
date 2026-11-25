@@ -1,4 +1,4 @@
-# ADR: one Secure Windows VM for desktop-only earners
+# ADR: one Secure VM (Windows 11 Pro) for desktop-only earners
 
 - **Status:** accepted. The lab ran on 2026-11-24 and 2026-11-25. Three questions wait for a host reboot or a host sleep (Q5 reboot part, Q8, Q16). Three lab results are not proven yet: Q3 (unbinding `ms_tcpip6` alone), Q4 (the locale-free drop-counter read) and Q13 (narrow listeners without registration). §6 lists them with every other open item.
 - **Scope:** Windows hosts only. Exactly one Hyper-V VM. Only for services that have no Docker or native path.

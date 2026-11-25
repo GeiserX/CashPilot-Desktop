@@ -50,6 +50,18 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev nsis
 
+      # The Windows installer is built with NSIS. wails build skips it with only a
+      # warning when makensis is missing, so make sure it is on PATH here, and the
+      # packaging step fails when the installer is not there.
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $nsis = Join-Path ${env:ProgramFiles(x86)} 'NSIS'
+          if (-not (Test-Path (Join-Path $nsis 'makensis.exe'))) { choco install nsis -y --no-progress }
+          if (-not (Test-Path (Join-Path $nsis 'makensis.exe'))) { Write-Error "makensis.exe is not in $nsis"; exit 1 }
+          Add-Content -Path $env:GITHUB_PATH -Value $nsis
+
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
@@ -83,9 +95,16 @@ jobs:
         if: runner.os == 'Linux'
         run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -tags webkit2_41 -ldflags "$CASHPILOT_LDFLAGS"
 
-      - name: Build Wails app
-        if: runner.os != 'Linux'
+      - name: Build Wails app (macOS)
+        if: runner.os == 'macOS'
         run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -ldflags "$CASHPILOT_LDFLAGS"
+
+      # -nsis also builds the installer, build/bin/CashPilot-Desktop-setup.exe,
+      # from build/windows/installer/project.nsi.
+      - name: Build Wails app and installer (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.12.0 build -clean -nsis -ldflags "$CASHPILOT_LDFLAGS"
 
       # Sign with the Developer ID certificate under the hardened runtime, notarize and
       # staple, so Gatekeeper opens the app instead of calling it damaged. A missing
@@ -145,9 +164,19 @@ jobs:
           }
           $cert = [System.Convert]::FromBase64String($env:WINDOWS_SIGN_CERT)
           [System.IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", $cert)
-          Get-ChildItem -Recurse "build\bin" -Include "*.exe" | ForEach-Object {
-            & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_SIGN_CERT_PASSWORD" /tr http://timestamp.digicert.com /td sha256 /fd sha256 $_.FullName
+          function Sign([string] $file) {
+            & signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_SIGN_CERT_PASSWORD" /tr http://timestamp.digicert.com /td sha256 /fd sha256 $file
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed on $file" }
           }
+          # The installer carries a copy of the exe, so the exe is signed first and
+          # the installer is built again around the signed exe, then signed itself.
+          $exe = (Resolve-Path "build\bin\CashPilot Desktop.exe").Path
+          Sign $exe
+          Push-Location build\windows\installer
+          & makensis "-DARG_WAILS_AMD64_BINARY=$exe" project.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed" }
+          Pop-Location
+          Sign (Resolve-Path "build\bin\CashPilot-Desktop-setup.exe").Path
           Remove-Item "$env:RUNNER_TEMP\cert.pfx"
         shell: pwsh
 
@@ -170,12 +199,23 @@ jobs:
           test -n "$app" || { echo "no .app bundle found in build/bin"; ls -la build/bin; exit 1; }
           ditto -c -k --keepParent "$app" "dist/CashPilot-Desktop-${{ matrix.platform }}.zip"
 
+      # The installer, then the portable exe. The portable exe costs nothing to
+      # keep: it is the file the installer installs.
       - name: Package release asset (Windows)
         if: runner.os == 'Windows'
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
+          if (-not (Test-Path "build\bin\CashPilot-Desktop-setup.exe")) { Write-Error "wails build made no installer (is makensis on PATH?)"; exit 1 }
+          Copy-Item "build\bin\CashPilot-Desktop-setup.exe" "dist\CashPilot-Desktop-${{ matrix.platform }}-setup.exe"
           Copy-Item "build\bin\CashPilot Desktop.exe" "dist\CashPilot-Desktop-${{ matrix.platform }}.exe"
         shell: pwsh
+
+      # Install, uninstall and check, on the exact installer this release ships
+      # (scripts/windows-installer-check.ps1).
+      - name: Check the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/windows-installer-check.ps1 -Installer "dist/CashPilot-Desktop-${{ matrix.platform }}-setup.exe"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -255,3 +295,24 @@ jobs:
           body_path: ${{ runner.temp }}/release-notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # The release page shows each file under a name that says what it is.
+      # packaging/packaging_test.go checks that every published file has a label here.
+      - name: Label the release files
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          labels='CashPilot-Desktop-windows-amd64-setup.exe|CashPilot Desktop for Windows (installer, x64)
+          CashPilot-Desktop-windows-amd64.exe|CashPilot Desktop for Windows (portable, x64)
+          CashPilot-Desktop-darwin-arm64.zip|CashPilot Desktop for macOS (Apple silicon)
+          CashPilot-Desktop-linux-amd64.tar.gz|CashPilot Desktop for Linux (x64)
+          SHA256SUMS|SHA256SUMS (checksums of every file)'
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[] | "\(.id) \(.name)"' > assets.txt
+          test -s assets.txt
+          while read -r id name; do
+            label="$(printf '%s\n' "$labels" | sed 's/^ *//' | awk -F'|' -v n="$name" '$1 == n { print $2 }')"
+            if [ -z "$label" ]; then echo "::error::no label for release file $name"; exit 1; fi
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$id" -f label="$label" --jq '"\(.name) -> \(.label)"'
+          done < assets.txt

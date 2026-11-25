@@ -11,13 +11,31 @@ Built with [Wails](https://wails.io) (Go + vanilla TypeScript) for a lightweight
 
 ## Download
 
-Download the latest release for your platform:
+Download the latest release for your system from https://github.com/GeiserX/CashPilot-Desktop/releases/latest
 
-| Platform | File on the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest) | How to open it |
+| Download | File | How to open it |
 |----------|------|-------|
-| macOS (Apple Silicon) | `CashPilot-Desktop-darwin-arm64.zip` | Unzip it and double-click `cashpilot-desktop.app`. It is signed and notarized, so Gatekeeper lets it open; macOS only asks once to confirm an app downloaded from the internet |
-| Windows (x64) | `CashPilot-Desktop-windows-amd64.exe` | The app itself, not an installer; run it. It is unsigned unless a signing certificate is configured in CI, so SmartScreen may warn |
-| Linux (x64) | `CashPilot-Desktop-linux-amd64.tar.gz` | Extract it and run `CashPilot Desktop`; it needs GTK 3 and WebKitGTK 4.1 |
+| **CashPilot Desktop for Windows**, installer (x64) | `CashPilot-Desktop-windows-amd64-setup.exe` | Run it. It installs into your own account, with no admin prompt, and adds a Start menu shortcut, a desktop shortcut and an entry in Settings > Apps > Installed apps. It is not code-signed yet, so SmartScreen may warn: click More info, then Run anyway |
+| **CashPilot Desktop for Windows**, portable (x64) | `CashPilot-Desktop-windows-amd64.exe` | The app itself; run it from any folder. It installs nothing and has no uninstaller. The same SmartScreen warning applies |
+| **CashPilot Desktop for macOS** (Apple silicon) | `CashPilot-Desktop-darwin-arm64.zip` | Unzip it and double-click `cashpilot-desktop.app`. It is signed and notarized, so Gatekeeper lets it open; macOS only asks once to confirm an app downloaded from the internet |
+| **CashPilot Desktop for Linux** (x64) | `CashPilot-Desktop-linux-amd64.tar.gz` | Extract it and run `CashPilot Desktop`; it needs GTK 3 and WebKitGTK 4.1 |
+
+### Windows: installer or portable
+
+Both copies keep their data in the same folder, `%APPDATA%\CashPilot Desktop`. So you can move from the portable exe to the installer, or back, and keep your settings, earnings history and saved logins.
+
+The background helper (Settings > Background Earning) starts the copy you opened last. When you open the installed app after the portable exe, the helper moves to the installed app, and the other way round. You can delete the portable exe once you have opened the installed app.
+
+### Uninstall on Windows
+
+Open Settings > Apps > Installed apps, find CashPilot Desktop and click Uninstall. The uninstaller always removes the app, its shortcuts, its entry in Installed apps, the background helper's scheduled task and the reminder that reopens the Docker setup after a restart. It asks about two more things, and both start unticked:
+
+- **Stop and remove the earning apps CashPilot Desktop started.** This removes only the containers CashPilot Desktop made, and its native earning apps with their Windows Firewall rules. It never touches other containers, such as those of a CashPilot worker. Docker volumes stay. Unticked, the containers keep running in Docker.
+- **Delete my CashPilot data.** This deletes the settings, the earnings database, the logs and the saved logins, with their keys in the Windows Credential Manager. Unticked, they stay, and a new install or the portable exe finds them again.
+
+The uninstaller does not remove the Secure VM (Windows 11 Pro); it says so when one exists. For a silent uninstall, run `uninstall.exe /S` from the install folder, `%LOCALAPPDATA%\Programs\CashPilot Desktop`. Add `/REMOVEEARNERS` and `/DELETEDATA` to answer yes to the two questions.
+
+The portable exe has no uninstaller. To remove it, turn off Background Earning in Settings, then delete the exe.
 
 ## System requirements
 

@@ -43,3 +43,7 @@ Docker containers continue running independently -- they don't stop when CashPil
 **Can I run CashPilot Desktop on multiple machines?**
 
 Yes. Pick **Join my CashPilot** on the other machines -- they join your CashPilot server and appear on its Fleet page. Each one runs its own set of services and reports what runs there; the server collects and shows the earnings. A Desktop cannot join another Desktop.
+
+**How do I uninstall CashPilot Desktop on Windows?**
+
+Use Settings > Apps > Installed apps, as for any app. The uninstaller removes the app, its shortcuts and its background helper. It asks whether to also stop and remove the earning apps it started, and whether to delete your data. By default it keeps both, so your containers keep earning and a new install finds your data. It never touches containers that CashPilot Desktop did not make. The details are in [Getting started](getting-started.md#uninstall-on-windows).

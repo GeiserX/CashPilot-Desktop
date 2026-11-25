@@ -533,6 +533,10 @@ type EnvVar struct {
 	// replaces the stored one (SaveCredentials), where the web app keeps the old
 	// value as retired. The user typed the new id on the one machine Desktop runs.
 	Identifier bool `json:"identifier,omitempty" yaml:"identifier"`
+	// SeedFile, when set, means the value is a wallet seed phrase that lives in a
+	// file in the service's own volume instead (seedfile.go): Desktop never stores
+	// it, never asks for it as a field and never passes it as a variable.
+	SeedFile *SeedFile `json:"seedFile,omitempty" yaml:"seed_file"`
 }
 
 type Requirements struct {

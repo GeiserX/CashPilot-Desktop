@@ -8,7 +8,7 @@ import (
 
 // ErrUnsupported is what every Hyper-V call returns where the Secure VM cannot
 // run: any OS but Windows, and the product guest's raw-frame probe.
-var ErrUnsupported = errors.New("the Secure VM needs Windows 11 with Hyper-V")
+var ErrUnsupported = errors.New("the Secure VM (Windows 11 Pro) needs Windows 11 with Hyper-V")
 
 // The Hyper-V seam. Every call to the operating system goes through these
 // interfaces. The Windows implementation runs one fixed PowerShell script per

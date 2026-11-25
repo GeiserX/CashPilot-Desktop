@@ -90,3 +90,40 @@ func TestEveryVendoredPatternCompilesAndAcceptsItsDefault(t *testing.T) {
 		t.Fatal("no vendored entry declares a pattern; this test would pass by checking nothing")
 	}
 }
+
+// The vendored seed_file block passes the same rules the web catalog applies, so
+// a deploy never refuses Sia over it, and a broken block is caught by them.
+func TestTheVendoredSeedFileIsValid(t *testing.T) {
+	cat, err := LoadEmbedded(os.DirFS(filepath.Join("..", "..")))
+	if err != nil {
+		t.Fatalf("LoadEmbedded: %v", err)
+	}
+	svc, ok := cat.Get("sia-hostd")
+	if !ok {
+		t.Fatal("sia-hostd is not in the catalog")
+	}
+	item, ok := svc.SeedVar()
+	if !ok || item.Key != "HOSTD_WALLET_SEED" || item.SeedFile.Path != "/data/hostd.yml" {
+		t.Fatalf("sia-hostd has no seed_file on HOSTD_WALLET_SEED: %+v", item)
+	}
+	if problem := svc.SeedFileProblem(); problem != "" {
+		t.Fatalf("the vendored seed_file is refused: %s", problem)
+	}
+	broken := svc
+	broken.Docker.Env = append([]EnvVar(nil), svc.Docker.Env...)
+	for i := range broken.Docker.Env {
+		if broken.Docker.Env[i].SeedFile != nil {
+			spec := *broken.Docker.Env[i].SeedFile
+			spec.Path = "/elsewhere/hostd.yml"
+			spec.PhrasePattern = "no group"
+			broken.Docker.Env[i].SeedFile = &spec
+			broken.Docker.Env[i].Secret = false
+		}
+	}
+	problem := broken.SeedFileProblem()
+	for _, want := range []string{"only for a secret", "folder docker.volumes mounts", "phrase_pattern must have exactly one group"} {
+		if !strings.Contains(problem, want) {
+			t.Errorf("SeedFileProblem missed %q: %s", want, problem)
+		}
+	}
+}

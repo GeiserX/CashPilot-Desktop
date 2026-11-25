@@ -22,3 +22,6 @@ packaging/** text eol=lf
 
 # The Secure VM's golden desired.json files are compared byte for byte.
 internal/winvm/testdata/** text eol=lf
+
+# The BIP-39 wordlist is checked against its published sha256.
+internal/siaseed/english.txt text eol=lf

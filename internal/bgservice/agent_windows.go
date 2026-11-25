@@ -3,11 +3,17 @@
 package bgservice
 
 import (
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
 	"strings"
+	"syscall"
+	"unicode/utf16"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // windowsTaskName is the scheduled-task path (folder\name). schtasks accepts a
@@ -80,6 +86,47 @@ func (a *windowsAgent) Status() (Status, error) {
 	st.Installed = true
 	st.Running = schtasksRunning(out)
 	return st, nil
+}
+
+// Stop ends the helper the task started. A task that is not running is not an
+// error worth reporting: the caller removes the task next either way.
+func (a *windowsAgent) Stop() error {
+	if out, err := runSchtasks("/end", "/tn", a.taskName); err != nil {
+		return fmt.Errorf("schtasks /end: %v: %s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// RegisteredCommand reads the executable the task starts, or "" when there is no
+// task. It asks Task Scheduler through PowerShell and reads UTF-8, because the
+// path can hold any character of the user's name and schtasks writes in the
+// console's code page.
+func (a *windowsAgent) RegisteredCommand() (string, error) {
+	exe, err := runtime.PowerShellExe()
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command(exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(taskCommandScript(a.taskName)))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} // CREATE_NO_WINDOW
+	out, err := cmd.Output()
+	if err != nil {
+		var detail string
+		if ee, ok := err.(*exec.ExitError); ok {
+			detail = ": " + strings.TrimSpace(string(ee.Stderr))
+		}
+		return "", fmt.Errorf("read the scheduled task %s: %w%s", a.taskName, err, detail)
+	}
+	return parseTaskCommand(string(out)), nil
+}
+
+// psEncode is the -EncodedCommand form of a script: base64 of its UTF-16LE bytes.
+func psEncode(script string) string {
+	units := utf16.Encode([]rune(script))
+	b := make([]byte, 2*len(units))
+	for i, u := range units {
+		binary.LittleEndian.PutUint16(b[2*i:], u)
+	}
+	return base64.StdEncoding.EncodeToString(b)
 }
 
 func runSchtasks(args ...string) (string, error) {

@@ -37,7 +37,9 @@ export function serviceFormFields(
   service: Service,
   collectorFields: Record<string, CollectorField[]> | null | undefined,
 ): ServiceField[] {
-  const env = (service.docker?.env || []).map((item) => ({
+  // A wallet seed lives in a file in the node's own volume (render/wallet.ts): it is
+  // never a field, so it is never typed, saved or sent back.
+  const env = (service.docker?.env || []).filter((item) => !item.seedFile).map((item) => ({
     key: item.key,
     label: item.label || item.key,
     description: stripHtml(item.description || item.key),
