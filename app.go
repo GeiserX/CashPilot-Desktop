@@ -37,7 +37,10 @@ import (
 )
 
 type App struct {
-	ctx        context.Context
+	ctx context.Context
+	// startErr holds the error that stopped startCore, so ready() can report it
+	// instead of errStillStarting, which the window would wait on.
+	startErr   atomic.Pointer[error]
 	cfg        *config.Manager
 	catalog    *catalog.Catalog
 	store      *store.Store
@@ -194,21 +197,21 @@ func (a *App) startCore(ctx context.Context) error {
 
 	cfg, err := config.NewManager()
 	if err != nil {
-		a.emitError("config", err)
+		a.failStart("config", err)
 		return err
 	}
 	a.cfg = cfg
 
 	st, err := store.Open(cfg.DataDir())
 	if err != nil {
-		a.emitError("store", err)
+		a.failStart("store", err)
 		return err
 	}
 	a.store = st
 
 	cat, err := catalog.LoadEmbedded(serviceFiles)
 	if err != nil {
-		a.emitError("catalog", err)
+		a.failStart("catalog", err)
 		return err
 	}
 	a.catalog = cat
@@ -2285,11 +2288,27 @@ func (a *App) retryCustom() {
 	}
 }
 
+// errStillStarting is what the bound methods return until startCore has set up the
+// config, catalog, store and runtimes. The window waits while it sees exactly this
+// text (STILL_STARTING in frontend/src/render/boot.ts), so keep the two equal.
+var errStillStarting = errors.New("app is still starting")
+
 func (a *App) ready() error {
 	if a.cfg == nil || a.catalog == nil || a.store == nil || a.runtime == nil || a.services == nil {
-		return fmt.Errorf("app is still starting")
+		if failed := a.startErr.Load(); failed != nil {
+			return *failed
+		}
+		return errStillStarting
 	}
 	return nil
+}
+
+// failStart reports the error that stopped startCore and keeps it for ready(), so
+// the window shows it at once instead of waiting for a start that will not come.
+func (a *App) failStart(scope string, err error) {
+	a.emitError(scope, err)
+	failed := fmt.Errorf("%s: %w", scope, err)
+	a.startErr.Store(&failed)
 }
 
 func (a *App) emitError(scope string, err error) {
