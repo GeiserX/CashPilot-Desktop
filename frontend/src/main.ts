@@ -108,7 +108,7 @@ import { renderEnvSetting, settingField, settingsSaveValues } from "./render/set
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
-import { catalogFilterTabs, renderCatalogTable, wizardCategoryChoices } from "./render/catalog";
+import { catalogFilterTabs, renderCatalogTable, wizardCategoryChoices, wizardCategoryCopy } from "./render/catalog";
 import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
@@ -2363,13 +2363,6 @@ function renderWizardProgress() {
 }
 
 function renderWizardCategories(categories: string[]) {
-  const copy: Record<string, string> = {
-    bandwidth: "Share your internet connection",
-    depin: "Run decentralized infrastructure",
-    storage: "Rent out disk space",
-    compute: "Share CPU or GPU power",
-    mining: "Mine with your own hardware, or track a pool you already mine on",
-  };
   return `
     <h2>What would you like to share?</h2>
     <p class="muted">Pick one or more categories and CashPilot will show matching services.</p>
@@ -2377,7 +2370,7 @@ function renderWizardCategories(categories: string[]) {
       ${categories.map((category) => `
         <button class="wizard-category ${wizardCategories.includes(category) ? "selected" : ""}" data-category="${category}">
           <strong>${escapeHtml(capitalize(category))}</strong>
-          <span>${escapeHtml(copy[category] || "Available providers")}</span>
+          <span>${escapeHtml(wizardCategoryCopy(category))}</span>
         </button>
       `).join("")}
     </div>

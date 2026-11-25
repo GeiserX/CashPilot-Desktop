@@ -22,7 +22,7 @@
 import { attentionItems, renderAttention } from "../.harness-build/render/attention.js";
 import { chartWindow, niceMax, renderEarningsBars } from "../.harness-build/render/chart.js";
 import { renderServicesTable, SERVICE_COLUMNS } from "../.harness-build/render/services.js";
-import { catalogFilterTabs, catalogRow, estimateText, renderCatalogTable, wizardCategoryChoices } from "../.harness-build/render/catalog.js";
+import { catalogFilterTabs, catalogRow, estimateText, renderCatalogTable, wizardCategoryChoices, wizardCategoryCopy } from "../.harness-build/render/catalog.js";
 
 let failures = 0;
 let checks = 0;
@@ -181,6 +181,9 @@ check("RULE 5: the wizard offers Mining when a mining service exists",
 check("CONTROL: the wizard offers no category without a service",
   JSON.stringify(wizardCategoryChoices([svc("alpha")])) === JSON.stringify(["bandwidth"]),
   JSON.stringify(wizardCategoryChoices([svc("alpha")])));
+check("RULE 5: the Mining wizard card says what mining means here",
+  wizardCategoryCopy("mining") === "Mine with your own hardware, or track a pool you already mine on",
+  wizardCategoryCopy("mining"));
 
 // ---------------------------------------------------------------------------
 // The provider disabled the account: one card, no Start, no Fix credentials.
