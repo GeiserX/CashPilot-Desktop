@@ -1600,6 +1600,7 @@ func (f *HyperV) ClearProof(_ context.Context, n winvm.Names, owner string) (win
 			f.capture = nil
 			res.Cleared = append(res.Cleared, "the proof pktmon session")
 		} else {
+			res.UnverifiedCapture = true
 			res.Left = append(res.Left, "the unverified pktmon session")
 		}
 	}

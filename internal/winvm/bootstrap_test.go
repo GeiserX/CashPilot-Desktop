@@ -23,7 +23,7 @@ func TestEmbeddedScriptPins(t *testing.T) {
 		want string
 	}{
 		"autounattend.tpl.xml": {[]byte(answerTemplate), "7313f82b46a37e34169b0cab8fec2f39f5e564c42de024e9822024e235de5475"},
-		"setup.ps1":            {setupPS1, "e23f4eb0d0f5636031a8614aa49d6f8dd600f1ba898b232d7b339957a9877886"},
+		"setup.ps1":            {setupPS1, "7a4cf116b3cdc1e5cc62268924befbd030bdeb09cedbcfd7635d1c2fb8fcb1a4"},
 		"remove.ps1":           {removePS1, "8adbdf5550197b5bfaee711d71354cd94501c2fbb2f332414b0fd7033d1920f3"},
 	} {
 		s := sha256.Sum256(c.b)
@@ -31,7 +31,7 @@ func TestEmbeddedScriptPins(t *testing.T) {
 			t.Errorf("%s changed: sha256 %s, pinned %s", name, got, c.want)
 		}
 	}
-	if b := SetupBootstrap(); b.SHA256 != "E23F4EB0D0F5636031A8614AA49D6F8DD600F1BA898B232D7B339957A9877886" || b.Name != "setup.ps1" {
+	if b := SetupBootstrap(); b.SHA256 != "7A4CF116B3CDC1E5CC62268924BEFBD030BDEB09CEDBCFD7635D1C2FB8FCB1A4" || b.Name != "setup.ps1" {
 		t.Errorf("SetupBootstrap = %s %s", b.Name, b.SHA256)
 	}
 }
@@ -60,6 +60,7 @@ function Start-ScheduledTask {
   Add-Content -LiteralPath $env:CPD_TEST_MARKER -Value 'start'
 }
 function Start-Process {
+  if ($Mode -eq 'rejected-params') { return [pscustomobject]@{ ExitCode = 2 } }
   throw 'injected launch failure'
 }
 $exe = Join-Path $Dir 'new.exe'
@@ -89,6 +90,7 @@ exit $LASTEXITCODE
 		{"setup bad parameters", SetupBootstrap(), "bad-params", 13, ""},
 		{"remove bad executable", RemoveBootstrap(), "bad-exe", 13, ""},
 		{"setup failure after replacement", SetupBootstrap(), "launch-failure", 1, "stop\nstart"},
+		{"setup role rejects params", SetupBootstrap(), "rejected-params", 2, "stop\nstart"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()

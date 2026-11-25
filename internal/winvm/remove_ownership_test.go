@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"github.com/GeiserX/CashPilot-Desktop/e2e/harness/hvfake"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -51,9 +53,19 @@ func TestClearProofLeavesCaptureFromAnotherInstall(t *testing.T) {
 	dir := build(t, f)
 	p := readPlan(t, dir)
 	f.LeaveProofLeftovers(p.Names, p.Owner[:len(p.Owner)-1])
+	capture := filepath.Join(dir, "proof", "pktmon-1", "capture.etl")
+	if err := os.MkdirAll(filepath.Dir(capture), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(capture, []byte("capture evidence"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	res := remove(t, f, dir)
 	if !strings.Contains(strings.Join(f.Objects(), "\n"), "pktmon=true") ||
 		!strings.Contains(strings.Join(res.Left, "\n"), "pktmon session") {
 		t.Fatalf("Remove did not keep and list the unverified capture: %+v", res)
+	}
+	if _, err := os.Stat(capture); err != nil {
+		t.Fatalf("Remove touched the unverified session's capture: %v", err)
 	}
 }

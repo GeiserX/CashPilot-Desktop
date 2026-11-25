@@ -55,11 +55,11 @@ var captureFile = regexp.MustCompile(`^c[0-9]+\.pcapng$`)
 
 // generatedData identifies only the paths setup writes. The plan and the
 // running bootstrap are cleaned up separately.
-func generatedData(rel string, d fs.DirEntry) bool {
+func generatedData(rel string, d fs.DirEntry, owner string) bool {
 	parts := strings.Split(rel, string(filepath.Separator))
 	if d.IsDir() {
 		return len(parts) == 1 && (rel == proofDir || rel == answerISOFile+".stage") ||
-			len(parts) == 2 && parts[0] == proofDir && captureDir.MatchString(parts[1])
+			len(parts) == 2 && parts[0] == proofDir && ownedCaptureDir(parts[1], owner)
 	}
 	if !d.Type().IsRegular() {
 		return false
@@ -78,15 +78,26 @@ func generatedData(rel string, d fs.DirEntry) bool {
 		return parts[0] == guardDir && (parts[1] == "setup-params.json" || bootstrapTemp.MatchString(parts[1])) ||
 			parts[0] == answerISOFile+".stage" && parts[1] == "autounattend.xml"
 	case 3:
-		return parts[0] == proofDir && captureDir.MatchString(parts[1]) &&
+		return parts[0] == proofDir && ownedCaptureDir(parts[1], owner) &&
 			(parts[2] == "capture.etl" || captureFile.MatchString(parts[2]))
 	}
 	return false
 }
 
+func ownedCaptureDir(name, owner string) bool {
+	if !captureDir.MatchString(name) {
+		return false
+	}
+	suffix := strings.TrimPrefix(name, "pktmon-")
+	if strings.Contains(suffix, "-") {
+		return owner != "" && strings.HasPrefix(suffix, owner+"-")
+	}
+	return true // legacy, untagged capture names
+}
+
 // cleanupData removes generated files and empty generated directories. It
 // also serves Repair, which only clears stale proof captures.
-func cleanupData(dir, under string, report func(string, error)) {
+func cleanupData(dir, under, owner string, unverifiedCapture bool, report func(string, error)) {
 	var dirs []string
 	root := filepath.Join(dir, under)
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -97,7 +108,10 @@ func cleanupData(dir, under string, report func(string, error)) {
 		if err != nil {
 			return err
 		}
-		if generatedData(rel, d) {
+		if unverifiedCapture && rel == proofDir && d.IsDir() {
+			return filepath.SkipDir
+		}
+		if generatedData(rel, d, owner) {
 			if d.IsDir() {
 				dirs = append(dirs, path)
 			} else {
@@ -125,9 +139,9 @@ func cleanupData(dir, under string, report func(string, error)) {
 // belongs to. Without desired.json nothing on the host is touched: this
 // install cannot tell its objects apart, so they are only listed.
 func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retErr error) {
-	knownPlan := false
+	owner := ""
 	defer func() {
-		res.Left = append(res.Left, unknownData(d.Dir, knownPlan)...)
+		res.Left = append(res.Left, unknownData(d.Dir, owner)...)
 	}()
 	logf := func(format string, args ...any) {
 		if d.Logf != nil {
@@ -151,7 +165,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	if p.Names != n {
 		return res, fmt.Errorf("desired.json belongs to %q, not %q", p.Names.VM, n.VM)
 	}
-	knownPlan = p.Owner != ""
+	owner = p.Owner
 	inv, err := d.HV.Inventory(ctx, n, KnownIDs{VM: p.VMID, Switch: p.SwitchID}, "")
 	if err != nil {
 		return res, err
@@ -315,10 +329,10 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	if len(errs) > 0 {
 		return res, fmt.Errorf("Remove VM did not finish; run it again: %w", errors.Join(errs...))
 	}
-	if !knownPlan {
+	if owner == "" {
 		return res, nil
 	}
-	cleanupData(d.Dir, "", func(path string, err error) {
+	cleanupData(d.Dir, "", owner, proof.UnverifiedCapture, func(path string, err error) {
 		if err != nil {
 			fail(path, err)
 		} else {
@@ -337,7 +351,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 
 // unknownData lists unrecognized paths even if Remove cannot read a plan
 // or a host operation fails.
-func unknownData(dir string, knownPlan bool) []string {
+func unknownData(dir, owner string) []string {
 	var out []string
 	exe, _ := os.Executable()
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -349,7 +363,7 @@ func unknownData(dir string, knownPlan bool) []string {
 			return err
 		}
 		if strings.EqualFold(path, exe) ||
-			knownPlan && (generatedData(rel, d) || rel == PlanFile ||
+			owner != "" && (generatedData(rel, d, owner) || rel == PlanFile ||
 				rel == guardDir && d.IsDir() ||
 				filepath.Dir(rel) == guardDir && d.Type().IsRegular() && slices.Contains(guardFiles, d.Name())) {
 			return nil

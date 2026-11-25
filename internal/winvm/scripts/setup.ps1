@@ -75,8 +75,9 @@ try {
   $exePublished = $true
   # -Wait matters for a GUI-subsystem exe.
   $p = Start-Process -FilePath $copy -ArgumentList @('--vm-setup', ('"' + $pcopy + '"')) -Wait -PassThru -WindowStyle Hidden
-  $launched = $true
   $code = $p.ExitCode
+  # Exit 2 rejects the input before the setup role changes the journal.
+  $launched = $code -ne 2
 } finally {
   if (-not $launched -and $exePublished) {
     if ([IO.File]::Exists($exeBackup)) { Publish $exeBackup $copy $discard }
@@ -90,7 +91,13 @@ try {
     $task = Get-OwnedTask
     if ($task -and $task.State.ToString() -ne 'Running') { Start-ScheduledTask -InputObject $task | Out-Null }
   }
-  foreach ($f in @($stagedExe, $stagedParams, $exeBackup, $paramsBackup, $discard)) {
+  $cleanup = @($stagedExe, $stagedParams, $paramsBackup, $discard)
+  if (-not $launched -or $code -eq 0 -or $code -eq 3) {
+    $cleanup += $exeBackup
+  } elseif ([IO.File]::Exists($exeBackup)) {
+    Write-Output ('kept: ' + $exeBackup + ' (previous guard copy)')
+  }
+  foreach ($f in $cleanup) {
     Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
   }
 }

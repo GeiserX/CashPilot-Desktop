@@ -120,8 +120,9 @@ type Builder interface {
 }
 
 type ProofCleanup struct {
-	Cleared []string `json:"cleared"`
-	Left    []string `json:"left"`
+	Cleared           []string `json:"cleared"`
+	Left              []string `json:"left"`
+	UnverifiedCapture bool     `json:"unverifiedCapture"`
 }
 
 // KnownIDs are the VM and switch IDs desired.json records, "" for none.

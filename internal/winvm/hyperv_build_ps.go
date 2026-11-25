@@ -340,7 +340,8 @@ $resume.Enabled = $true
 $resume.Subscription = '<QueryList><Query Id="0" Path="System"><Select Path="System">*[System[Provider[@Name=''Microsoft-Windows-Power-Troubleshooter''] and EventID=1]]</Select></Query></QueryList>'
 $set = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 $pr = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
-Register-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -Action $action -Trigger @($boot, $rep, $resume) -Settings $set -Principal $pr -Description ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner) -Force | Out-Null
+$replace = $t.Count -eq 1
+Register-ScheduledTask -TaskPath $in.taskPath -TaskName $in.taskName -Action $action -Trigger @($boot, $rep, $resume) -Settings $set -Principal $pr -Description ('CashPilot Secure VM guard. cashpilot-owner=' + $in.owner) -Force:$replace | Out-Null
 Write-Doc ([ordered]@{ ok = $true })
 `
 
@@ -436,6 +437,7 @@ Write-Doc ([ordered]@{ ok = $true })
 // the full instance-specific path of a pktmon session.
 const scriptClearProof = buildPrelude + `$done = @()
 $left = @()
+$unverifiedCapture = $false
 foreach ($r in @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue)) {
   if ($in.desc -and [string]$r.Description -ceq $in.desc) {
     Remove-NetFirewallRule -InputObject $r
@@ -463,9 +465,12 @@ if ($s.Count -gt 0) {
     & $pm stop | Out-Null
     if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
     $done += 'the proof pktmon session'
-  } else { $left += 'the running pktmon session (ownership could not be verified)' }
+  } else {
+    $unverifiedCapture = $true
+    $left += 'the running pktmon session (ownership could not be verified)'
+  }
 }
-Write-Doc ([ordered]@{ cleared = @($done); left = @($left) })
+Write-Doc ([ordered]@{ cleared = @($done); left = @($left); unverifiedCapture = $unverifiedCapture })
 `
 
 // scriptGuest runs one guest script over PowerShell Direct as the given

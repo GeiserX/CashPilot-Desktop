@@ -404,9 +404,9 @@ func (b *builder) journal(ctx context.Context) error {
 			return err
 		}
 	}
-	if prev != nil && prev.Owner != "" {
+	if prev != nil && prev.Owner != "" && !proofCleanup.UnverifiedCapture {
 		var cleanupErr error
-		cleanupData(b.Dir, proofDir, func(_ string, err error) { cleanupErr = errors.Join(cleanupErr, err) })
+		cleanupData(b.Dir, proofDir, prev.Owner, false, func(_ string, err error) { cleanupErr = errors.Join(cleanupErr, err) })
 		if cleanupErr != nil {
 			return cleanupErr
 		}
