@@ -403,6 +403,8 @@ export interface WorkerDeployRequest {
   confirmed: boolean;
   allowSharedIdentity: boolean;
   replaceExisting: boolean;
+  // The container a replaceExisting yes was for (WorkerDeployResult.expectedContainer).
+  expectedContainer: string;
 }
 
 // WorkerDeployResult mirrors the Go WorkerDeployResult. With ask set nothing was
@@ -419,6 +421,9 @@ export interface WorkerDeployResult {
   worker: string;
   containerId: string;
   notes: string[] | null;
+  // With ask replace_existing: the container the question is about, "none" or a
+  // full Docker ID; absent when the worker cannot name it.
+  expectedContainer?: string;
 }
 
 // WorkerCopy mirrors store.FleetContainer: one copy a worker's heartbeat listed.

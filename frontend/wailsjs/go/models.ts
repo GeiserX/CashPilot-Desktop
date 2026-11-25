@@ -2753,6 +2753,7 @@ export namespace main {
 	    confirmed: boolean;
 	    allowSharedIdentity: boolean;
 	    replaceExisting: boolean;
+	    expectedContainer: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployRequest(source);
@@ -2766,6 +2767,7 @@ export namespace main {
 	        this.confirmed = source["confirmed"];
 	        this.allowSharedIdentity = source["allowSharedIdentity"];
 	        this.replaceExisting = source["replaceExisting"];
+	        this.expectedContainer = source["expectedContainer"];
 	    }
 	}
 	export class WorkerDeployResult {
@@ -2775,6 +2777,7 @@ export namespace main {
 	    containerId: string;
 	    notes: string[];
 	    credentialWarning?: string;
+	    expectedContainer?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployResult(source);
@@ -2788,6 +2791,7 @@ export namespace main {
 	        this.containerId = source["containerId"];
 	        this.notes = source["notes"];
 	        this.credentialWarning = source["credentialWarning"];
+	        this.expectedContainer = source["expectedContainer"];
 	    }
 	}
 	
