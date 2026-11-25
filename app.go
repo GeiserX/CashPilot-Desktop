@@ -1574,10 +1574,13 @@ func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
 }
 
 func (l *deployCredentialsLock) startDeploy() uint64 {
-	l.deploy.Lock()
+	// A save made while this deploy queues must also win. Release writes
+	// before waiting so the active deploy can finish saving its credentials.
 	l.writes.Lock()
-	defer l.writes.Unlock()
-	return l.explicitSaves
+	startSaves := l.explicitSaves
+	l.writes.Unlock()
+	l.deploy.Lock()
+	return startSaves
 }
 
 func (a *App) saveDeployedCredentials(slug string, values map[string]string, lock *deployCredentialsLock, startSaves uint64) bool {

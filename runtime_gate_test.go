@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -290,11 +291,14 @@ func configured(t *testing.T, app *App, slug string) bool {
 type heldEngineProvider struct {
 	engineProvider
 	entered, release chan struct{}
+	firstEntered     atomic.Bool
 }
 
 func (p *heldEngineProvider) Deploy(ctx context.Context, spec runtime.DeploySpec, progress func(string)) (runtime.ContainerInfo, error) {
-	close(p.entered)
-	<-p.release
+	if p.firstEntered.CompareAndSwap(false, true) {
+		close(p.entered)
+		<-p.release
+	}
 	return p.engineProvider.Deploy(ctx, spec, progress)
 }
 
