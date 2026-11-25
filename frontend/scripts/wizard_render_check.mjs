@@ -363,6 +363,21 @@ const oldText = renderWizardServiceSetup(wipterSvc, wipterFields, "devbox", null
 });
 check("RULE 7: a consent to an older text asks again", oldText.includes('data-session-disclosure="wipter"') && !oldText.includes("Install this provider's native app"), oldText);
 
+const ocean = renderWizardServiceSetup(service({
+  slug: "ocean",
+  name: "OCEAN",
+  category: "mining",
+  manualOnly: true,
+  platforms: [],
+  docker: { env: [] },
+  collector: { accrual: "pool" },
+  referral: { signupUrl: "https://ocean.xyz/getstarted", account: false },
+}), { ocean: [{ key: "OCEAN_ADDRESS", label: "BTC payout address", required: true }] }, "devbox");
+check("a pool tracker asks for the public payout address", inputs(ocean).some((input) => input.env === "OCEAN_ADDRESS" && input.type === "text"), ocean);
+check("the pool tracker has no local app to install", !ocean.includes("data-session-") && !ocean.includes("Install this provider's native app"), ocean);
+check("OCEAN links to the provider without offering an account", ocean.includes("https://ocean.xyz/getstarted") && ocean.includes("Visit site") && !ocean.includes("Create account"), ocean);
+check("OCEAN's setup checks its unpaid balance and cannot deploy", ocean.includes("holds for this address") && ocean.includes("Check pool balance") && ocean.includes('data-wizard-action="deploy" data-slug="ocean" disabled'), ocean);
+
 const phoneApp = renderWizardServiceSetup(service({ slug: "nodle", name: "Nodle", manualOnly: true, platforms: ["ios", "android"], docker: { env: [] } }), {}, "devbox");
 check("RULE 7: a phone-only manual app keeps the plain install tip", phoneApp.includes("Install this provider's native app") && !phoneApp.includes("data-session-"), phoneApp);
 check("RULE 7: and its setup guide", phoneApp.includes('data-url="https://geiserx.github.io/CashPilot/guides/nodle/"'), phoneApp);

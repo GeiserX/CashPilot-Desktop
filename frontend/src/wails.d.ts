@@ -1029,7 +1029,7 @@ export interface Service {
   earnings: { monthlyLow: number; monthlyHigh: number; currency: string; per: string; notes: string };
   cashout: { method: string; dashboardUrl: string; minAmount: number; currency: string; notes: string };
   platforms: string[];
-  collector: { type: string; notes: string; credentialHint: string; perNodeEarnings: boolean };
+  collector: { type: string; notes: string; credentialHint: string; perNodeEarnings: boolean; accrual?: string };
   payout: {
     model: string;
     chain: string;

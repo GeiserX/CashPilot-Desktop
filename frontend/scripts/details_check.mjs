@@ -180,6 +180,16 @@ check("the minimum is shown with the unit it is counted in", valueOf(paid, "Mini
 check("the payment methods are shown", valueOf(paid, "Paid by") === "paypal, crypto");
 check("the payout frequency is shown", valueOf(paid, "Paid out") === "On request");
 
+const ocean = {
+  ...honeygain,
+  slug: "ocean",
+  collector: { accrual: "pool" },
+  cashout: { method: "auto", minAmount: 0.01048576, currency: "BTC" },
+};
+const oceanPayout = payoutFacts(ocean, { amount: 0.00000001, currency: "BTC" });
+check("payout facts show a satoshi as unpaid", valueOf(oceanPayout, "Unpaid pool balance") === "0.00000001 BTC", oceanPayout);
+check("payout facts show the exact pool threshold", valueOf(oceanPayout, "Automatic payout threshold") === "0.01048576 BTC", oceanPayout);
+
 const undocumented = payoutFacts({
   ...honeygain,
   payment: {methods: [], frequency: "", currency: ""},
