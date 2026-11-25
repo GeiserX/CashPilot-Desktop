@@ -49,6 +49,9 @@ type App struct {
 	exchange   *exchange.Service
 	trayIcon   []byte
 	fleetAPI   *fleetAPIServer
+	// host caches the last reading of this Windows PC (host_check.go).
+	host     *hostFacts
+	hostOnce sync.Once
 	// saveDialog asks the user where to write a file and returns the chosen path,
 	// or "" when they dismissed the dialog. Zero value means the real Wails dialog;
 	// it is a field so the export path can be driven in a test, which has no window
@@ -228,6 +231,7 @@ func (a *App) startCore(ctx context.Context) error {
 			memoryFailing.Store(false)
 		},
 	)
+	a.wireHostFacts(ctx, docker)
 	a.runtime = docker
 	a.fence = docker
 	native := runtime.NewNativeProcessProvider(cfg.AppDir())
@@ -601,17 +605,15 @@ func (a *App) GetAppState() (AppState, error) {
 		return AppState{}, err
 	}
 	a.retryCustom()
-	runtimeStatus := a.runtime.Status(a.ctx)
-	// Surface the always-on native runtime alongside Docker's status so the frontend
-	// can proceed (and message honestly) on Docker OR native. Available keeps its
-	// Docker-only meaning; this is purely additive.
-	runtimeStatus.NativeAvailable = a.services.HasNativeRuntime()
 	// Fetch these once and thread them into the helpers below instead of letting
 	// each helper re-run its own full-table scan (they were each queried up to 3x
 	// per GetAppState call before this).
 	deployments := a.store.ListDeployments()
 	earnings := a.store.ListLatestEarnings()
 	visible := a.catalog.ListVisible()
+	// Docker's status with the native runtime's part added (host_check.go), so the
+	// frontend can proceed, and say honestly what runs, on Docker OR native.
+	runtimeStatus := a.runtimeStatus(visible)
 	return AppState{
 		Config:           a.cfg.Config(),
 		Runtime:          runtimeStatus,
@@ -1088,7 +1090,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_HOSTNAME_PREFIX", Label: "Hostname Prefix", Value: cfg.HostnamePrefix, Source: "Config", Help: "Containers are named <prefix>-<service> where supported."},
 		{Key: "CASHPILOT_COLLECT_INTERVAL", Label: "Collect Interval (min)", Value: strconv.Itoa(cfg.CollectIntervalMinutes), Source: "Config", Help: "Minutes between future automatic earnings collection runs."},
 		{Key: "CASHPILOT_DISPLAY_CURRENCY", Label: "Display Currency", Value: cfg.DisplayCurrency, Source: "Config", Help: "Currency used in the topbar and dashboard summaries."},
-		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: a.fleetKey, Source: "Config", Secret: true, Help: "Bearer token used by external workers and mobile clients."},
+		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: a.fleetKey, Source: "Config", Secret: true, ReadOnly: true, Help: "Bearer token used by external workers and mobile clients."},
 		{Key: "CASHPILOT_UI_URL", Label: "Desktop API URL", Value: a.fleetUIURL(), Source: "Runtime", ReadOnly: true, Help: "URL that external workers should use for CASHPILOT_UI_URL."},
 		{Key: "CASHPILOT_FLEET_SERVER", Label: "Accept workers (hub mode)", Value: strconv.FormatBool(cfg.FleetServerEnabled), Source: "Config", Help: "OFF by default, and that is the intended shape: CashPilot Desktop is a SPOKE. The CashPilot server is the hub. Turning this on lets other workers and phones report to THIS machine, which makes it a second source of truth for a fleet -- only do that if you are deliberately running Desktop as a hub instead of a CashPilot server."},
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
@@ -1176,10 +1178,9 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		cfg.UpstreamURL = next
 	}
 	if value, present := values["upstreamKey"]; present {
-		// Stored verbatim, including empty -- clearing the field is how a user
-		// unpairs the credential. Like the existing fleet key, the real value
-		// round-trips to the form (rendered type="password"); this file does not
-		// invent a mask-and-detect scheme that no other secret here uses.
+		// Stored verbatim, including empty -- that is how a user unpairs the
+		// credential. The form never shows the saved key and leaves this out when
+		// its box is left blank, so only its Remove button sends it empty.
 		if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), strings.TrimSpace(value)); err != nil {
 			return SettingsState{}, fmt.Errorf("storing the pairing key: %w", err)
 		}
@@ -1403,12 +1404,11 @@ func (a *App) CheckRuntime() (runtime.Status, error) {
 	if err := a.ready(); err != nil {
 		return runtime.Status{}, err
 	}
-	status := a.runtime.Status(a.ctx)
-	// Report native availability alongside Docker so onboarding's "Check Again" can
-	// unblock on the always-on native runtime, not only on Docker. Additive only —
+	// Cache-only: refreshState calls this after every service action, so it must
+	// never wait for a host reading. "Check again" on first run calls HostCheck,
+	// which reads the PC afresh. Native availability rides alongside Docker;
 	// Available still reflects Docker.
-	status.NativeAvailable = a.services.HasNativeRuntime()
-	return status, nil
+	return a.runtimeStatus(a.catalog.ListVisible()), nil
 }
 
 func (a *App) GetRuntimeGuides() []runtime.InstallGuide {

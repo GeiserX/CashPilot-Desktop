@@ -103,7 +103,8 @@ type Response struct {
 //   - a list: the fleet's exits now. ok is true. Entries that are not strings are left out.
 //   - null, or anything but a list: the server could not read its fleet this time.
 //     ok is false and sent is true: keep the list held, unknown after a start.
-//   - no key: a server from before the list. sent is false: no other exits.
+//   - no key: a server from before the list. sent is false: no other exits while no
+//     list is held yet, and keep a held list (a server rolled back to before the list).
 func ParseFleetExits(raw json.RawMessage) (ips []string, ok, sent bool) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {

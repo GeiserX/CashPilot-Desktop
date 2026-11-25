@@ -1017,6 +1017,39 @@ func startProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int6
 	return exit, d.start(ctx, p.earnerName)
 }
 
+// restartProxied restarts the earner of one running proxied copy where it is, for a
+// health signal a restart clears (web app/proxy_tunnel.py restart). Never a stop and a
+// start: a start that failed after the stop would leave the copy down, and nothing
+// brings an earner back while its tunnel is stopped. The tunnel is left alone.
+//
+// It refuses an earner that is not running, and a copy whose tunnel is not running or
+// has not proved its exit. The owner and the traffic cap stop the tunnel too, so a
+// copy either of them stopped is refused here. It runs under the copy's deploy lock,
+// so it never lands inside a redeploy of the same copy.
+func restartProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64, timeout int) error {
+	mu := deployLock(slug, proxyID)
+	mu.Lock()
+	defer mu.Unlock()
+	p, err := pairOf(ctx, d, slug, proxyID)
+	if err != nil {
+		return err
+	}
+	if !p.earnerOK || !p.tunnelOK {
+		return proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
+	}
+	if p.tunnel.State == nil || p.tunnel.State.Status != "running" {
+		return proxyErr("The tunnel of %s is not running, so it was left as it was", p.earnerName)
+	}
+	out, err := d.readFile(ctx, p.tunnelNm, tunnelReadyFile)
+	if _, ready := parseReady(out); err != nil || !ready {
+		return proxyErr("The tunnel of %s has not proved its exit, so it was left as it was", p.earnerName)
+	}
+	if p.earner.State == nil || p.earner.State.Status != "running" {
+		return proxyErr("%s is not running, so it was left as it was", p.earnerName)
+	}
+	return d.restart(ctx, p.earnerName, stopTimeoutOr(p.earner, timeout))
+}
+
 func removeProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64, timeout int) ([]string, error) {
 	p, err := pairOf(ctx, d, slug, proxyID)
 	if err != nil {
@@ -1283,6 +1316,20 @@ func (p *DockerProvider) StartProxied(ctx context.Context, slug string, proxyID 
 	return withTunnelDocker(&p.fence, func(d tunnelDocker) (Exit, error) {
 		return startProxied(ctx, d, slug, proxyID, stopTimeoutSeconds, spec, ownIP)
 	})
+}
+
+// RestartProxied restarts the running earner of a proxied copy inside its ready
+// tunnel, and nothing else (see restartProxied).
+func (p *DockerProvider) RestartProxied(ctx context.Context, slug string, proxyID int64, stopTimeoutSeconds int) error {
+	_, err := withTunnelDocker(&p.fence, func(d tunnelDocker) (struct{}, error) {
+		return struct{}{}, restartProxied(ctx, d, slug, proxyID, stopTimeoutSeconds)
+	})
+	return err
+}
+
+// ProxiedLogsMatching is LogsMatching for the earner of slug's proxied copy through proxyID.
+func (p *DockerProvider) ProxiedLogsMatching(ctx context.Context, slug string, proxyID int64, since time.Duration, match *regexp.Regexp, lines int) (string, error) {
+	return logsMatching(ctx, proxiedName(slug, proxyID), since, match, lines)
 }
 
 // RemoveProxied removes the earner, then its tunnel and the tunnel's secret volume.

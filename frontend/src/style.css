@@ -692,6 +692,8 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .setting-row > small { grid-column: 2; color: var(--text-muted); font-size: var(--fs-2); }
 .setting-row strong { color: var(--text-primary); font-weight: 600; }
 .setting-row span small { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--fs-1); }
+.setting-row .secret-field { display: flex; gap: 8px; align-items: center; }
+.setting-row .secret-field input { flex: 1; min-width: 0; }
 .collector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 24px; margin-top: 4px; }
 .collector-row {
   display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center;

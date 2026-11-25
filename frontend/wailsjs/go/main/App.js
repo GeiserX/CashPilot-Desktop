@@ -138,6 +138,10 @@ export function GetUsage(arg1, arg2) {
   return window['go']['main']['App']['GetUsage'](arg1, arg2);
 }
 
+export function HostCheck() {
+  return window['go']['main']['App']['HostCheck']();
+}
+
 export function IgnoreDrift(arg1) {
   return window['go']['main']['App']['IgnoreDrift'](arg1);
 }

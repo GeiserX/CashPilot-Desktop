@@ -43,6 +43,7 @@ import {
   GetRuntimeGuides,
   GetSettingsState,
   GetUsage,
+  HostCheck,
   IgnoreDrift,
   ListPayouts,
   PreflightService,
@@ -83,6 +84,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
+import { renderEnvSetting, settingsSaveValues } from "./render/settings";
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
@@ -94,6 +96,7 @@ import { renderWizardServiceSetup } from "./render/wizard";
 import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
+import { runtimeCard } from "./render/onboarding";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
@@ -276,21 +279,10 @@ function renderOnboarding(current: AppState) {
     return;
   }
   const runtime = current.runtime;
-  // Onboarding proceeds on EITHER runtime: Docker (runs every service) OR the
-  // always-on native runtime (runs services that ship a native app, no Docker
-  // needed). Native-only is a READY state, not a warning — only "neither" warns.
-  const dockerReady = runtime.available;
-  const runtimeReady = runtime.available || runtime.nativeAvailable;
-  const runtimeTitle = dockerReady
-    ? "Runtime ready"
-    : runtime.nativeAvailable
-      ? "Native mode ready — no Docker needed"
-      : "Runtime setup needed";
-  // Docker/neither show the backend's (Docker-centric) message, escaped; native-only
-  // shows honest static copy instead of the alarming "choose a runtime" Docker text.
-  const runtimeBody = !dockerReady && runtime.nativeAvailable
-    ? "You can run services that ship a native app right away. A few container-only services would additionally need Docker."
-    : escapeHtml(runtime.message);
+  // Onboarding proceeds when Docker answers, or when the native runtime can run at
+  // least one catalog app here. Native-only is never called ready: the card says
+  // most apps need Docker and points at its guide (render/onboarding.ts).
+  const card = runtimeCard(runtime);
   root.innerHTML = `
     ${titlebar()}
     <div class="gate">
@@ -300,13 +292,9 @@ function renderOnboarding(current: AppState) {
           ${renderGateSteps(firstRunSteps(firstRunPath), "runtime")}
           <h1 class="gate-title">Put your idle machine to work</h1>
           <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
-          <div class="runtime-card ${runtimeReady ? "ok" : "warn"}">
-            <strong>${runtimeTitle}</strong>
-            <span>${runtimeBody}</span>
-            ${runtime.context ? `<small>Docker context: ${escapeHtml(runtime.context)}</small>` : ""}
-          </div>
+          ${card.html}
           <div class="gate-actions">
-            <button class="btn btn-primary btn-lg" id="continue-btn" ${runtimeReady ? "" : "disabled"}>Open the dashboard</button>
+            <button class="btn btn-primary btn-lg" id="continue-btn" ${card.canContinue ? "" : "disabled"}>Open the dashboard</button>
             <button class="btn btn-ghost btn-lg" id="refresh-runtime">Check again</button>
           </div>
           <div id="install-guides" class="guide-grid"></div>
@@ -321,7 +309,8 @@ function renderOnboarding(current: AppState) {
     render();
   });
   document.querySelector("#refresh-runtime")?.addEventListener("click", async () => {
-    const updated = await CheckRuntime();
+    // HostCheck reads this PC afresh, so a fix the user just made shows at once.
+    const updated = (await HostCheck()).runtime;
     state = {...current, runtime: updated, guides: await GetRuntimeGuides()};
     render();
   });
@@ -1294,6 +1283,7 @@ async function renderSettings(current: AppState) {
   wireShellNav();
   maybeResetScroll();
   document.querySelector("#save-settings")?.addEventListener("click", () => void saveSettingsFromForm());
+  wireSecretSettings(settings.environment);
   document.querySelector<HTMLInputElement>("#bg-helper-toggle")?.addEventListener("change", (event) => void toggleBackgroundHelper(event));
   wireRestore();
   wireModeCard();
@@ -1416,18 +1406,49 @@ function wireRestoreForm(form: HTMLFormElement | null, needsName: boolean) {
   });
 }
 
-function renderEnvSetting(item: SettingsState["environment"][number]) {
-  const editableKey = envInputName(item.key);
-  return `
-    <label class="setting-row">
-      <span>
-        <strong>${escapeHtml(item.label)}</strong>
-        <small>${escapeHtml(item.key)} · ${escapeHtml(item.source)}</small>
-      </span>
-      <input data-setting="${editableKey}" value="${escapeHtml(item.value)}" ${item.readOnly ? "readonly" : ""} />
-      <small>${escapeHtml(item.help)}</small>
-    </label>
-  `;
+// The Secret rows of Settings (render/settings.ts) carry no stored value in the
+// page. Show reveals what the user types, Remove marks the saved value for
+// deletion on Save, and Copy reads a read-only secret from memory.
+function wireSecretSettings(environment: SettingsState["environment"]) {
+  const stored = new Map(environment.filter((item) => item.secret).map((item) => [item.key, item.value]));
+  document.querySelectorAll<HTMLButtonElement>("[data-secret-toggle]").forEach((button) => {
+    const input = button.parentElement?.querySelector<HTMLInputElement>("input");
+    button.addEventListener("click", () => {
+      if (!input) return;
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.textContent = show ? "Hide" : "Show";
+      button.setAttribute("aria-pressed", String(show));
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-secret-clear]").forEach((button) => {
+    const input = button.parentElement?.querySelector<HTMLInputElement>("input[data-secret]");
+    if (!input) return;
+    const savedPlaceholder = input.placeholder;
+    button.addEventListener("click", () => {
+      const clear = input.dataset.clear !== "true";
+      if (clear) {
+        input.value = "";
+        input.dataset.clear = "true";
+        input.placeholder = "Removed when you save.";
+      } else {
+        delete input.dataset.clear;
+        input.placeholder = savedPlaceholder;
+      }
+      button.textContent = clear ? "Keep" : "Remove";
+      button.setAttribute("aria-pressed", String(clear));
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-secret-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(stored.get(button.dataset.secretCopy || "") || "");
+        button.textContent = "Copied";
+      } catch (error) {
+        showErrorToast({scope: "clipboard", error: String(error)});
+      }
+    });
+  });
 }
 
 function renderCollectorSetting(item: SettingsState["collectors"][number]) {
@@ -1441,10 +1462,14 @@ function renderCollectorSetting(item: SettingsState["collectors"][number]) {
 }
 
 async function saveSettingsFromForm() {
-  const values: Record<string, string> = {};
-  document.querySelectorAll<HTMLInputElement>("[data-setting]").forEach((input) => {
-    if (!input.readOnly) values[input.dataset.setting || ""] = input.value;
-  });
+  const fields = Array.from(document.querySelectorAll<HTMLInputElement>("[data-setting]")).map((input) => ({
+    name: input.dataset.setting || "",
+    value: input.value,
+    readOnly: input.readOnly,
+    secret: input.hasAttribute("data-secret"),
+    clear: input.dataset.clear === "true",
+  }));
+  const values = settingsSaveValues(fields);
   try {
     await SaveSettings(values);
     state = await GetAppState();
@@ -1522,23 +1547,6 @@ async function toggleBackgroundHelper(event: Event) {
     input.disabled = false;
     showErrorToast({scope: "background", error: String(error)});
   }
-}
-
-function envInputName(key: string) {
-  const names: Record<string, string> = {
-    CASHPILOT_HOSTNAME_PREFIX: "hostnamePrefix",
-    CASHPILOT_COLLECT_INTERVAL: "collectIntervalMinutes",
-    CASHPILOT_DISPLAY_CURRENCY: "displayCurrency",
-    CASHPILOT_FLEET_BIND: "fleetBindAddress",
-    CASHPILOT_FLEET_PORT: "fleetPort",
-    CASHPILOT_FLEET_SERVER: "fleetServerEnabled",
-    CASHPILOT_DRIFT_WARNINGS: "driftWarnings",
-    CASHPILOT_ISOLATION: "isolation",
-    CASHPILOT_UPSTREAM_URL: "upstreamUrl",
-    CASHPILOT_UPSTREAM_KEY: "upstreamKey",
-    TZ: "timezone",
-  };
-  return names[key] || key;
 }
 
 async function renderActivity(current: AppState, view?: ActivityView) {
