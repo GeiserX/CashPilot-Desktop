@@ -17,6 +17,7 @@
 //
 //	go run ./cmd/releasenotes -tag v1.6.0 artifacts/desktop-*/*
 //	go run ./cmd/releasenotes -tag v1.6.0 -prev v1.5.0 -to v1.6.0 a.exe b.zip
+//	go run ./cmd/releasenotes -tag v1.7.0 -windows-signed=true artifacts/desktop-*/*
 //
 // -prev defaults to the newest v*.*.* tag reachable from -to, other than -tag.
 // The asset arguments are only read for their file names.
@@ -41,6 +42,10 @@ type Release struct {
 	Prev    string   // the version before it, "" for the first release
 	Commits []string // commit subjects, oldest first
 	Assets  []string // the file names the release publishes
+
+	// WindowsSigned says the Windows files carry a code signature. The release
+	// workflow sets it: the build signs them exactly when WINDOWS_SIGN_CERT is set.
+	WindowsSigned bool
 }
 
 // hiddenScopes keeps a feat or fix out of "What changed for you".
@@ -141,21 +146,27 @@ func writeDownloads(b *strings.Builder, r Release) {
 	if installer != "" || portable != "" {
 		b.WriteString("\n### Install on Windows\n\n")
 		b.WriteString("1. Download the file.\n")
-		b.WriteString("2. Edge may say the file \"isn't commonly downloaded\". Click the arrow next to **Delete** and choose **Keep anyway**. Some Edge versions put it under **...** > **Keep**, then **Show more** > **Keep anyway**.\n")
-		b.WriteString("3. Open the file. If Windows says \"Windows protected your PC\", click **More info**, then **Run anyway**.\n")
+		b.WriteString("2. Edge may say the file \"isn't commonly downloaded\". Open the **...** menu on that warning and choose **Keep**. Edge then shows a box that starts \"Make sure you trust\". Open the arrow next to **Delete** and choose **Keep anyway**.\n")
+		b.WriteString("3. Open the file. The first time, Windows may say \"Windows protected your PC\". Click **More info**, then **Run anyway**.\n")
 		switch {
 		case installer != "":
 			b.WriteString("4. Follow the installer. CashPilot Desktop is then in the Start menu, and you can remove it in Settings > Apps > Installed apps.\n")
 		default:
 			b.WriteString("4. The app opens. The file is the app, so keep it in a folder you will find again.\n")
 		}
-		b.WriteString("\nWhy the warnings: the Windows files are not code-signed yet. Windows warns about any unsigned file that few people have downloaded. ")
+		if r.WindowsSigned {
+			b.WriteString("\nWhy the warnings: Windows can warn about any new file that few people have downloaded yet, even a signed one. ")
+		} else {
+			b.WriteString("\nWhy the warnings: the Windows files are not code-signed yet. Windows warns about any unsigned file that few people have downloaded. ")
+		}
 		b.WriteString("To check that your file is the one this release built, compare it with `SHA256SUMS`, or run ")
 		fmt.Fprintf(b, "`gh attestation verify <file> -R %s`.\n", r.Repo)
 	}
 	if mac != "" {
 		b.WriteString("\n### Install on macOS\n\n")
-		b.WriteString("Open the zip file, then drag CashPilot Desktop to Applications. The app is signed and notarized by Apple, so macOS opens it without a warning.\n")
+		b.WriteString("1. Open the zip file, then drag CashPilot Desktop to Applications.\n")
+		b.WriteString("2. Open CashPilot Desktop. The first time, macOS asks: \"CashPilot Desktop\" is an app downloaded from the Internet. Are you sure you want to open it? Click **Open**.\n")
+		b.WriteString("\nThe app is signed and notarized by Apple. macOS still asks once for every app downloaded from the Internet.\n")
 	}
 	if linux != "" {
 		b.WriteString("\n### Install on Linux\n\n")
@@ -253,13 +264,14 @@ func run(args []string) (string, error) {
 	prev := fs.String("prev", "", "the previous version (default: the newest earlier v*.*.* tag reachable from -to)")
 	to := fs.String("to", "HEAD", "the commit the release is built from")
 	repo := fs.String("repo", "GeiserX/CashPilot-Desktop", "owner/name on GitHub")
+	windowsSigned := fs.Bool("windows-signed", false, "the Windows files are code-signed")
 	if err := fs.Parse(args); err != nil {
 		return "", err
 	}
 	if *tag == "" {
 		return "", fmt.Errorf("-tag is required")
 	}
-	r := Release{Repo: *repo, Tag: *tag, Prev: *prev}
+	r := Release{Repo: *repo, Tag: *tag, Prev: *prev, WindowsSigned: *windowsSigned}
 	if r.Prev == "" {
 		p, err := previousTag(r.Tag, *to)
 		if err != nil {

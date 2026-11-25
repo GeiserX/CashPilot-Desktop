@@ -271,12 +271,16 @@ jobs:
       # to take, the two Windows warnings and what to click, then only the changes a
       # user can reach, and every commit last in a collapsed block
       # (cmd/releasenotes). GitHub's generated notes were the commit list alone.
+      # The build signs the Windows files exactly when WINDOWS_SIGN_CERT is set (it
+      # fails the job if signtool fails), so the notes explain the unsigned-file
+      # warnings only when that secret is missing.
       - name: Write the release notes
         env:
           TAG: ${{ inputs.version || github.ref_name }}
+          WINDOWS_SIGNED: ${{ secrets.WINDOWS_SIGN_CERT != '' }}
         run: |
           set -euo pipefail
-          go run ./cmd/releasenotes -tag "$TAG" -repo "$GITHUB_REPOSITORY" artifacts/desktop-*/* artifacts/SHA256SUMS > "$RUNNER_TEMP/release-notes.md"
+          go run ./cmd/releasenotes -tag "$TAG" -repo "$GITHUB_REPOSITORY" -windows-signed="$WINDOWS_SIGNED" artifacts/desktop-*/* artifacts/SHA256SUMS > "$RUNNER_TEMP/release-notes.md"
           cat "$RUNNER_TEMP/release-notes.md"
           test -s "$RUNNER_TEMP/release-notes.md"
 

@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -104,55 +106,110 @@ func TestTheSignupURLTheUIReceivesIsTheCatalogsOwn(t *testing.T) {
 // account", "no sign-up", "there is no account in the usual sense".
 var saysNoAccount = regexp.MustCompile(`(?i)\bno (?:sign-?up or )?account\b|\bno sign-?up\b`)
 
-// A provider with no account to sign up for must not get a "Create account" button.
-// Anyone Protocol's card said "No account is needed at all" next to one. The
-// button reads referral.account, so an entry whose account rules say there is no
-// account has to say it there too, and the UI has to receive it.
-func TestAnEntryWithNoAccountTellsTheUISo(t *testing.T) {
-	cat := visibleCatalog(t)
-	noAccount := map[string]bool{}
-	for _, svc := range cat.List() {
-		if !saysNoAccount.MatchString(svc.Disclosure.AccountRules) {
-			continue
-		}
-		noAccount[svc.Slug] = true
-		if svc.Referral.Account == nil || *svc.Referral.Account {
-			t.Errorf("%s: account_rules says there is no account (%q), but referral.account is not false, so the card offers Create account",
-				svc.Slug, svc.Disclosure.AccountRules)
-		}
-		if strings.Contains(svc.Disclosure.AccountRules, "needed at all") {
-			t.Errorf("%s: account_rules says nothing is needed at all, while the entry needs a wallet or a node: %q", svc.Slug, svc.Disclosure.AccountRules)
-		}
-	}
-	if !noAccount["anyone-protocol"] {
-		t.Fatalf("anyone-protocol's account rules no longer read as no account; this check proves nothing: %v", noAccount)
-	}
+// cardText is every catalog text the UI receives for a service's card: the
+// description, the disclosure rows, the rating's pros, cons, caps and notes, and
+// the env fields' labels and hints. Read from the app state as the UI gets it.
+type cardText struct {
+	Slug             string `json:"slug"`
+	Description      string `json:"description"`
+	ShortDescription string `json:"shortDescription"`
+	Referral         struct {
+		SignupURL string `json:"signupUrl"`
+		Account   *bool  `json:"account"`
+	} `json:"referral"`
+	Disclosure   map[string]string `json:"disclosure"`
+	RatingResult *struct {
+		Caps    []struct{ Reason string } `json:"caps"`
+		Notes   map[string]string         `json:"notes"`
+		Cons    []struct{ Text string }   `json:"cons"`
+		Pros    []struct{ Text string }   `json:"pros"`
+		TopCons []struct{ Text string }   `json:"topCons"`
+	} `json:"ratingResult"`
+	Docker struct {
+		Env []struct {
+			Label       string `json:"label"`
+			Description string `json:"description"`
+		} `json:"env"`
+	} `json:"docker"`
+}
 
-	raw, err := json.Marshal(AppState{Services: cat.ListVisible()})
+// fields names each text, so a failure says where the claim is.
+func (c cardText) fields() map[string]string {
+	out := map[string]string{"description": c.Description, "short_description": c.ShortDescription}
+	for k, v := range c.Disclosure {
+		out["disclosure."+k] = v
+	}
+	if r := c.RatingResult; r != nil {
+		for i, x := range r.Caps {
+			out[fmt.Sprintf("rating.caps[%d]", i)] = x.Reason
+		}
+		for k, v := range r.Notes {
+			out["rating.notes."+k] = v
+		}
+		for i, x := range r.Cons {
+			out[fmt.Sprintf("rating.cons[%d]", i)] = x.Text
+		}
+		for i, x := range r.TopCons {
+			out[fmt.Sprintf("rating.topCons[%d]", i)] = x.Text
+		}
+		for i, x := range r.Pros {
+			out[fmt.Sprintf("rating.pros[%d]", i)] = x.Text
+		}
+	}
+	for i, e := range c.Docker.Env {
+		out[fmt.Sprintf("docker.env[%d]", i)] = e.Label + " " + e.Description
+	}
+	return out
+}
+
+// A provider with no account to sign up for must not get a "Create account" button.
+// Anyone Protocol's card said "No account is needed at all" next to one, and
+// Golem's pros said "No account" next to one. The button reads referral.account,
+// so an entry whose card text says there is no account anywhere has to say it
+// there too, and the UI has to receive it.
+func TestAnEntryWithNoAccountTellsTheUISo(t *testing.T) {
+	raw, err := json.Marshal(AppState{Services: visibleCatalog(t).ListVisible()})
 	if err != nil {
 		t.Fatalf("marshal app state: %v", err)
 	}
 	var wire struct {
-		Services []struct {
-			Slug     string `json:"slug"`
-			Referral struct {
-				Account *bool `json:"account"`
-			} `json:"referral"`
-		} `json:"services"`
+		Services []cardText `json:"services"`
 	}
 	if err := json.Unmarshal(raw, &wire); err != nil {
 		t.Fatalf("read app state back: %v", err)
 	}
-	seen := false
-	for _, sent := range wire.Services {
-		if sent.Slug == "anyone-protocol" {
-			seen = true
-			if sent.Referral.Account == nil || *sent.Referral.Account {
-				t.Errorf("anyone-protocol: the UI receives account %v, want false", sent.Referral.Account)
+	noAccount := map[string]bool{}
+	read := 0
+	for _, svc := range wire.Services {
+		fields := svc.fields()
+		read += len(fields)
+		keys := make([]string, 0, len(fields))
+		for k := range fields {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := fields[k]
+			if strings.Contains(v, "needed at all") {
+				t.Errorf("%s: %s says nothing is needed at all, while every entry needs a wallet, a node or both: %q", svc.Slug, k, v)
+			}
+			if !saysNoAccount.MatchString(v) || noAccount[svc.Slug] {
+				continue
+			}
+			noAccount[svc.Slug] = true
+			if svc.Referral.Account == nil || *svc.Referral.Account {
+				t.Errorf("%s: %s says there is no account (%q), but the UI receives referral.account %v, so the card offers Create account",
+					svc.Slug, k, v, svc.Referral.Account)
 			}
 		}
 	}
-	if !seen {
-		t.Fatalf("anyone-protocol did not reach the UI")
+	// Controls: the reader must have seen the texts, and the claims it exists for.
+	for _, slug := range []string{"anyone-protocol", "golem"} {
+		if !noAccount[slug] {
+			t.Fatalf("%s no longer reads as having no account; this check proves nothing: %v", slug, noAccount)
+		}
+	}
+	if read < 10*len(wire.Services) {
+		t.Fatalf("read only %d texts for %d services; the card text did not reach the check", read, len(wire.Services))
 	}
 }

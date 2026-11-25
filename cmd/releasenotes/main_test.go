@@ -107,8 +107,9 @@ func TestEveryFileIsLinkedAndTheInstallerIsTheOneToUse(t *testing.T) {
 		t.Errorf("the portable file is not explained:\n%s", download)
 	}
 	for _, want := range []string{
-		"Click the arrow next to **Delete** and choose **Keep anyway**",
-		"click **More info**, then **Run anyway**",
+		"Open the **...** menu on that warning and choose **Keep**",
+		"\"Make sure you trust\". Open the arrow next to **Delete** and choose **Keep anyway**",
+		"Click **More info**, then **Run anyway**",
 		"not code-signed yet",
 		"Settings > Apps > Installed apps",
 	} {
@@ -160,6 +161,56 @@ func TestForPeople(t *testing.T) {
 		heading, text, ok := forPeople(c.subject)
 		if heading != c.heading || text != c.text || ok != c.ok {
 			t.Errorf("forPeople(%q) = %q, %q, %v; want %q, %q, %v", c.subject, heading, text, ok, c.heading, c.text, c.ok)
+		}
+	}
+}
+
+// The build signs the Windows files when the signing secret is set. A signed
+// release must not tell people the files are unsigned, and an unsigned one must.
+func TestTheUnsignedLineFollowsTheSignature(t *testing.T) {
+	r := Release{Repo: "GeiserX/CashPilot-Desktop", Tag: "v1.7.0", Prev: "v1.6.0", Commits: v160, Assets: allAssets}
+	unsigned := section(t, Render(r), "## Download", "## What changed for you")
+	if !strings.Contains(unsigned, "the Windows files are not code-signed yet") {
+		t.Errorf("an unsigned release must say so:\n%s", unsigned)
+	}
+	r.WindowsSigned = true
+	signed := section(t, Render(r), "## Download", "## What changed for you")
+	if strings.Contains(signed, "not code-signed") || strings.Contains(signed, "unsigned") {
+		t.Errorf("a signed release must not say its files are unsigned:\n%s", signed)
+	}
+	for _, want := range []string{"even a signed one", "**Keep anyway**", "**Run anyway**"} {
+		if !strings.Contains(signed, want) {
+			t.Errorf("the signed notes lack %q:\n%s", want, signed)
+		}
+	}
+}
+
+// A notarized app still gets Gatekeeper's first-open question. The notes must
+// say so and name the button, not promise that no warning appears.
+func TestMacOSNamesTheFirstOpenQuestion(t *testing.T) {
+	mac := section(t, render(v160, allAssets), "### Install on macOS", "### Install on Linux")
+	for _, want := range []string{"is an app downloaded from the Internet. Are you sure you want to open it?", "Click **Open**", "notarized"} {
+		if !strings.Contains(mac, want) {
+			t.Errorf("the macOS steps lack %q:\n%s", want, mac)
+		}
+	}
+	if strings.Contains(mac, "without a warning") {
+		t.Errorf("the macOS steps must not promise no warning:\n%s", mac)
+	}
+}
+
+// The workflow passes -windows-signed; the flag must reach the notes.
+func TestTheSignedFlagReachesTheNotes(t *testing.T) {
+	for _, c := range []struct {
+		flag     string
+		unsigned bool
+	}{{"-windows-signed=true", false}, {"-windows-signed=false", true}} {
+		out, err := run([]string{"-tag", "v9.9.9", "-prev", "HEAD", "-to", "HEAD", c.flag, "x/CashPilot-Desktop-windows-amd64.exe"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(out, "not code-signed yet"); got != c.unsigned {
+			t.Errorf("%s: says unsigned = %v, want %v:\n%s", c.flag, got, c.unsigned, out)
 		}
 	}
 }
