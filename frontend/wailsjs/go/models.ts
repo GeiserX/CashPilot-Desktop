@@ -294,6 +294,28 @@ export namespace catalog {
 	        this.port = source["port"];
 	    }
 	}
+	export class SeedFile {
+	    path: string;
+	    key: string;
+	    words: number;
+	    generate: string[];
+	    phrasePattern: string;
+	    addressPattern: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SeedFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.key = source["key"];
+	        this.words = source["words"];
+	        this.generate = source["generate"];
+	        this.phrasePattern = source["phrasePattern"];
+	        this.addressPattern = source["addressPattern"];
+	    }
+	}
 	export class EnvVar {
 	    key: string;
 	    label: string;
@@ -305,6 +327,7 @@ export namespace catalog {
 	    portRange?: boolean;
 	    perDevice?: boolean;
 	    identifier?: boolean;
+	    seedFile?: SeedFile;
 	
 	    static createFrom(source: any = {}) {
 	        return new EnvVar(source);
@@ -322,7 +345,26 @@ export namespace catalog {
 	        this.portRange = source["portRange"];
 	        this.perDevice = source["perDevice"];
 	        this.identifier = source["identifier"];
+	        this.seedFile = this.convertValues(source["seedFile"], SeedFile);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class DockerConfig {
 	    image: string;
@@ -425,6 +467,55 @@ export namespace catalog {
 	        this.per = source["per"];
 	        this.notes = source["notes"];
 	    }
+	}
+	
+	export class GuestWindows {
+	    process: string;
+	    publisher: string;
+	    downloadPage: string;
+	    signin: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GuestWindows(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.process = source["process"];
+	        this.publisher = source["publisher"];
+	        this.downloadPage = source["downloadPage"];
+	        this.signin = source["signin"];
+	    }
+	}
+	export class GuestConfig {
+	    windows?: GuestWindows;
+	
+	    static createFrom(source: any = {}) {
+	        return new GuestConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.windows = this.convertValues(source["windows"], GuestWindows);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	
 	
@@ -847,6 +938,7 @@ export namespace catalog {
 		    return a;
 		}
 	}
+	
 	
 	export class Service {
 	    name: string;
@@ -2482,6 +2574,71 @@ export namespace main {
 	        this.startedAt = source["startedAt"];
 	    }
 	}
+	export class WalletChoice {
+	    mode: string;
+	    phrase: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WalletChoice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.phrase = source["phrase"];
+	    }
+	}
+	export class WalletOutcome {
+	    created: boolean;
+	    migrated: boolean;
+	    address: string;
+	    phrase?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WalletOutcome(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.created = source["created"];
+	        this.migrated = source["migrated"];
+	        this.address = source["address"];
+	        this.phrase = source["phrase"];
+	    }
+	}
+	export class WalletDeployResult {
+	    deployment: store.Deployment;
+	    wallet?: WalletOutcome;
+	
+	    static createFrom(source: any = {}) {
+	        return new WalletDeployResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deployment = this.convertValues(source["deployment"], store.Deployment);
+	        this.wallet = this.convertValues(source["wallet"], WalletOutcome);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 
 }
 
@@ -2960,6 +3117,24 @@ export namespace runtime {
 	        this.tools = source["tools"];
 	    }
 	}
+	export class WalletResult {
+	    Created: boolean;
+	    Migrated: boolean;
+	    Address: string;
+	    Phrase: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WalletResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.Created = source["Created"];
+	        this.Migrated = source["Migrated"];
+	        this.Address = source["Address"];
+	        this.Phrase = source["Phrase"];
+	    }
+	}
 
 }
 
@@ -3306,6 +3481,7 @@ export namespace store {
 	    memoryMb: number;
 	    customImage: string;
 	    instances: number;
+	    walletAddress: string;
 	    createdAt: string;
 	    updatedAt: string;
 	
@@ -3325,6 +3501,7 @@ export namespace store {
 	        this.memoryMb = source["memoryMb"];
 	        this.customImage = source["customImage"];
 	        this.instances = source["instances"];
+	        this.walletAddress = source["walletAddress"];
 	        this.createdAt = source["createdAt"];
 	        this.updatedAt = source["updatedAt"];
 	    }
