@@ -13,22 +13,22 @@ import (
 
 // The block CashPilot's Fleet page copies under Add a box, byte for byte
 // (app/templates/fleet.html copyWorkerEnv).
-const addABoxBlock = "CASHPILOT_UI_URL=http://192.168.1.10:8080\nCASHPILOT_API_KEY=s3cr3t-fleet-key\nCASHPILOT_WORKER_NAME=server-name"
+const addABoxBlock = "CASHPILOT_UI_URL=http://192.168.1.10:8080\nCASHPILOT_API_KEY=test-key\nCASHPILOT_WORKER_NAME=server-name"
 
 func TestParseJoinReadsTheAddABoxBlock(t *testing.T) {
 	cases := []struct {
 		name, block, url, key string
 		want                  Target
 	}{
-		{"the block as copied", addABoxBlock, "", "", Target{"http://192.168.1.10:8080", "s3cr3t-fleet-key"}},
-		{"windows line ends and blank lines", "\r\n" + strings.ReplaceAll(addABoxBlock, "\n", "\r\n") + "\r\n\r\n", "", "", Target{"http://192.168.1.10:8080", "s3cr3t-fleet-key"}},
-		{"spaces and quotes", "  CASHPILOT_UI_URL = \"https://cp.example.com/\"  \n\tCASHPILOT_API_KEY='s3cr3t-fleet-key'\t", "", "", Target{"https://cp.example.com", "s3cr3t-fleet-key"}},
+		{"the block as copied", addABoxBlock, "", "", Target{"http://192.168.1.10:8080", "test-key"}},
+		{"windows line ends and blank lines", "\r\n" + strings.ReplaceAll(addABoxBlock, "\n", "\r\n") + "\r\n\r\n", "", "", Target{"http://192.168.1.10:8080", "test-key"}},
+		{"spaces and quotes", "  CASHPILOT_UI_URL = \"https://cp.example.com/\"  \n\tCASHPILOT_API_KEY='test-key'\t", "", "", Target{"https://cp.example.com", "test-key"}},
 		{"export and compose list markers", "export CASHPILOT_UI_URL=http://nas.lan:8080\n- CASHPILOT_API_KEY=k1", "", "", Target{"http://nas.lan:8080", "k1"}},
 		{"yaml colon form", "CASHPILOT_UI_URL: http://10.0.0.2:8080\nCASHPILOT_API_KEY: k2", "", "", Target{"http://10.0.0.2:8080", "k2"}},
 		{"the two fields", "", " http://192.168.1.10:8080/ ", " k3 ", Target{"http://192.168.1.10:8080", "k3"}},
 		{"a bare host:port gets http", "", "192.168.1.10:8080", "k4", Target{"http://192.168.1.10:8080", "k4"}},
 		{"a block without a key takes the key field", "CASHPILOT_UI_URL=http://10.1.1.1:8080", "", "k5", Target{"http://10.1.1.1:8080", "k5"}},
-		{"the block wins over the fields", addABoxBlock, "http://other:1", "other", Target{"http://192.168.1.10:8080", "s3cr3t-fleet-key"}},
+		{"the block wins over the fields", addABoxBlock, "http://other:1", "other", Target{"http://192.168.1.10:8080", "test-key"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
