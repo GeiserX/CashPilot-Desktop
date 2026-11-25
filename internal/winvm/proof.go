@@ -1027,6 +1027,10 @@ func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepR
 	if err := r.sleep(ctx, r.wait()); err != nil {
 		e2.Err = err.Error()
 	}
+	// The host's own listener is the witness, not the guest's word: anything
+	// it takes after the registration is gone is an arrival, whatever the
+	// guest reports.
+	seen := len(l.Received())
 	keys := append(slices.Clone(r.p.GCSBaseline), svc)
 	for _, k := range keys {
 		ok, err := r.G.HVSock(ctx, k, r.token())
@@ -1035,6 +1039,11 @@ func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepR
 			e2.Err = joinErr(e2.Err, "guest hv_sock probe to "+k+": "+err.Error())
 		case ok:
 			e2.Arrived = append(e2.Arrived, "hvsock:"+k)
+		}
+	}
+	if got := l.Received(); len(got) > seen {
+		for _, tok := range got[seen:] {
+			e2.Arrived = append(e2.Arrived, "hvsock listener:"+tok)
 		}
 	}
 	if err := closeL(ctx); err != nil {

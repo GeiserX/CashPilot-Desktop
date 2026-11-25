@@ -339,3 +339,29 @@ func TestProofVMBusGreenKeepsTheListenerBound(t *testing.T) {
 		t.Fatalf("VMBus green with the registration kept = %+v, want leak", rs[i])
 	}
 }
+
+// lyingGuest connects over hv_sock as asked but always reports a refusal, as
+// a hostile guest would.
+type lyingGuest struct{ winvm.GuestProbe }
+
+func (g lyingGuest) HVSock(ctx context.Context, service, token string) (bool, error) {
+	_, err := g.GuestProbe.HVSock(ctx, service, token)
+	return false, err
+}
+
+// TestProofVMBusGreenReadsTheHostListener: the VMBus green step judges by
+// what the still-bound host listener took after the registration was
+// deleted, not by the guest's report. A guest that connects and reports a
+// refusal leaks.
+func TestProofVMBusGreenReadsTheHostListener(t *testing.T) {
+	_, p, r, h, tg := proofRig(t)
+	r.P, r.G = keptRegistration{r.P}, lyingGuest{r.G}
+	rs, _ := r.Run(context.Background(), p, h, tg)
+	i := slices.IndexFunc(rs, func(r winvm.StepResult) bool { return r.ID == winvm.StepVMBusGreen })
+	if i < 0 || rs[i].Outcome != winvm.Leak {
+		t.Fatalf("VMBus green with a guest that hides its connection = %+v, want leak", rs[i])
+	}
+	if ok, _ := winvm.Verdict(rs); ok {
+		t.Fatal("the proof passed with a guest that hides its hv_sock connection")
+	}
+}
