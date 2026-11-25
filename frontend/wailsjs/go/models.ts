@@ -2052,6 +2052,20 @@ export namespace main {
 	        this.collector = source["collector"];
 	    }
 	}
+	export class CredentialView {
+	    values: Record<string, string>;
+	    savedSecrets: Record<string, boolean>;
+
+	    static createFrom(source: any = {}) {
+	        return new CredentialView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.values = source["values"];
+	        this.savedSecrets = source["savedSecrets"];
+	    }
+	}
 	
 	
 	export class EnvSetting {
@@ -2752,6 +2766,7 @@ export namespace main {
 	    worker: string;
 	    containerId: string;
 	    notes: string[];
+	    credentialWarning?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployResult(source);
@@ -2764,6 +2779,7 @@ export namespace main {
 	        this.worker = source["worker"];
 	        this.containerId = source["containerId"];
 	        this.notes = source["notes"];
+	        this.credentialWarning = source["credentialWarning"];
 	    }
 	}
 	

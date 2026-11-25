@@ -29,7 +29,7 @@ declare module "../wailsjs/go/main/App" {
   export function SignOutNow(): Promise<void>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
-  export function GetCredentials(slug: string): Promise<Record<string, string>>;
+  export function GetCredentials(slug: string): Promise<CredentialView>;
   export function PreflightService(slug: string): Promise<PreflightReport>;
   // image: null keeps the image the deployment already uses, "" goes back to the
   // catalog's, anything else runs that image instead. instances: null keeps the number
@@ -404,7 +404,13 @@ export interface WorkerDeployRequest {
 
 // WorkerDeployResult mirrors the Go WorkerDeployResult. With ask set nothing was
 // deployed: the owner answers message, and a yes sends the deploy again.
+export interface CredentialView {
+  values: Record<string, string>;
+  savedSecrets: Record<string, boolean>;
+}
+
 export interface WorkerDeployResult {
+  credentialWarning?: string;
   ask: string;
   message: string;
   worker: string;
@@ -997,6 +1003,7 @@ export interface InstallGuide {
 }
 
 export interface Service {
+  native?: { env?: EnvVar[] };
   name: string;
   slug: string;
   category: string;

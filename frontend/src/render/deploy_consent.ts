@@ -33,8 +33,11 @@ export const POWERSHELL_PATH = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\
  * only the earnings collector reads is never missing either: the deploy does not
  * read it.
  */
-export function missingRequiredFields(fields: ServiceField[], values: Record<string, string>): ServiceField[] {
-  return fields.filter((field) => deployNeeds(field) && !(values[field.key] || "").trim());
+export function missingRequiredFields(
+  fields: ServiceField[], values: Record<string, string>, savedSecrets?: Record<string, boolean>,
+): ServiceField[] {
+  return fields.filter((field) => deployNeeds(field) && !(values[field.key] || "").trim() &&
+    !(field.secret && savedSecrets?.[field.key]));
 }
 
 /** The note next to Deploy when fields marked * are empty. */
@@ -167,6 +170,7 @@ interface CheckedDeployTarget {
   workers?: WorkerTarget[] | null;
   localReplacement?: string;
   invalidField?: string;
+  savedSecrets?: Record<string, boolean>;
   workerBusyText?(worker: WorkerTarget): string;
 }
 
@@ -231,7 +235,7 @@ export async function runCheckedDeploy(
       calls.say(answer.kind, answer.text);
       return { kind: "done", answer };
     }
-    const missing = missingRequiredFields(fields, values);
+    const missing = missingRequiredFields(fields, values, target.savedSecrets);
     if (missing.length) return { kind: "missing", missing };
     if (target.localReplacement && !(await calls.confirmReplace?.(target.localReplacement))) {
       const answer = { kind: "cancelled" as const, text: "Nothing was deployed." };

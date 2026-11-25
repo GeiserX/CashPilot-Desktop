@@ -65,12 +65,11 @@ const targets = [
 }
 
 function calls(answers, confirms) {
-  const log = { deploys: [], saved: 0, asked: [] };
+  const log = { deploys: [], asked: [] };
   return {
     log,
     confirm: (message) => { log.asked.push(message); return confirms.shift() ?? false; },
     deploy: async (yes) => { log.deploys.push(yes); return answers.shift(); },
-    save: async () => { log.saved++; },
   };
 }
 const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: null };
@@ -79,13 +78,11 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   for (const [proxy, copies] of [[3, null], [null, 2]]) {
     const c = calls([ok], []);
     const out = await runWorkerDeploy("honeygain", targets[1], proxy, copies, c);
-    check(`RULE 3: route ${proxy} copies ${copies} is refused`, out.kind === "refused" && out.message.includes("Nothing was deployed") && c.log.deploys.length === 0 && c.log.saved === 0, JSON.stringify(out));
+    check(`RULE 3: route ${proxy} copies ${copies} is refused`, out.kind === "refused" && out.message.includes("Nothing was deployed") && c.log.deploys.length === 0, JSON.stringify(out));
   }
   const c = calls([ok], []);
   const out = await runWorkerDeploy("honeygain", targets[1], null, 1, c);
-  check("RULE 3: one copy from the worker's own IP deploys before saving", out.kind === "deployed" && c.log.deploys.length === 1 && c.log.saved === 0, JSON.stringify(c.log));
-  if (out.kind === "deployed") await out.save();
-  check("RULE 3: the deploy result lets the card save afterwards", c.log.saved === 1, JSON.stringify(c.log));
+  check("RULE 3: one copy deploys from the worker's own IP", out.kind === "deployed" && c.log.deploys.length === 1, JSON.stringify(c.log));
 }
 
 {
@@ -102,10 +99,10 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   ]), JSON.stringify(c.log.deploys));
   c = calls([stepUp], [false]);
   out = await runWorkerDeploy("vault", targets[1], null, null, c);
-  check("RULE 4: a no sends nothing more and saves nothing", out.kind === "cancelled" && c.log.deploys.length === 1 && c.log.saved === 0, JSON.stringify(c.log));
+  check("RULE 4: a no sends nothing more", out.kind === "cancelled" && c.log.deploys.length === 1, JSON.stringify(c.log));
   c = calls([stepUp, stepUp], [true]);
   out = await runWorkerDeploy("vault", targets[1], null, null, c);
-  check("RULE 4: a question asked again after a yes is refused, not looped", out.kind === "refused" && c.log.deploys.length === 2 && c.log.saved === 0, JSON.stringify(out));
+  check("RULE 4: a question asked again after a yes is refused, not looped", out.kind === "refused" && c.log.deploys.length === 2, JSON.stringify(out));
   c = calls([ok], [false]);
   out = await runWorkerDeploy("honeygain", targets[0], null, null, c);
   check("RULE 4: a redeploy on a worker that runs it asks first", out.kind === "cancelled" && c.log.asked[0] === "Redeploy honeygain on garage <b>? The existing container will be replaced, but its volumes are kept." && c.log.deploys.length === 0, JSON.stringify(c.log));

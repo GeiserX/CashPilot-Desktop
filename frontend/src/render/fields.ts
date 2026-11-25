@@ -59,16 +59,22 @@ export function serviceFormFields(
 ): ServiceField[] {
   // A wallet seed lives in a file in the node's own volume (render/wallet.ts): it is
   // never a field, so it is never typed, saved or sent back.
+  const collector = (collectorFields || {})[service.slug] || [];
+  const extraSecrets = new Set([
+    ...collector.filter((item) => item.secret).map((item) => item.key),
+    ...(service.native?.env || []).filter((item) => item.secret).map((item) => item.key),
+  ]);
   const env = (service.docker?.env || []).filter((item) => !item.seedFile).map((item) => ({
     key: item.key,
     label: item.label || item.key,
     description: stripHtml(item.description || item.key),
-    secret: item.secret,
+    secret: item.secret || extraSecrets.has(item.key),
     required: item.required,
     default: item.default,
     pattern: item.pattern,
   }));
   const envKeys = new Set(env.map((item) => item.key));
-  const collector = (collectorFields || {})[service.slug] || [];
-  return [...env, ...collector.filter((item) => !envKeys.has(item.key)).map((item) => ({ ...item, earnings: true }))];
+  return [...env, ...collector.filter((item) => !envKeys.has(item.key)).map((item) => ({
+    ...item, secret: extraSecrets.has(item.key), earnings: true,
+  }))];
 }

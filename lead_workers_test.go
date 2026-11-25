@@ -499,3 +499,24 @@ func TestAWorkerThatHasNotUsedItsKeyYetGetsTheSharedKey(t *testing.T) {
 		t.Fatalf("err = %v, calls %d", err, worker.count())
 	}
 }
+
+func TestWorkerDeploySavesTypedCredentialsAndKeepsOmittedSettings(t *testing.T) {
+	app := newLeadApp(t)
+	worker := newFakeDockerWorker(t)
+	enrolWorker(t, app, "garage", worker.srv.URL, nil)
+	if err := app.store.SaveCredentials("plain", map[string]string{
+		"TOKEN": "previous-token", "DEVICE_NAME": "my-worker",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := app.DeployToWorker("plain", WorkerDeployRequest{
+		WorkerID: workerID(t, app, "garage"), Values: map[string]string{"TOKEN": "replacement-token"},
+	})
+	if err != nil || result.ContainerID == "" || result.CredentialWarning != "" {
+		t.Fatalf("worker deploy failed: %v", err)
+	}
+	saved, err := app.store.GetCredentials("plain")
+	if err != nil || saved["TOKEN"] != "replacement-token" || saved["DEVICE_NAME"] != "my-worker" {
+		t.Fatalf("the worker deploy did not save the new token and keep the device name: %v", err)
+	}
+}

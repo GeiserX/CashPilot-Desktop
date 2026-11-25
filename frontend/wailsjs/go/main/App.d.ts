@@ -73,7 +73,7 @@ export function GetAppState():Promise<main.AppState>;
 
 export function GetCopyLogs(arg1:string,arg2:number,arg3:number):Promise<string>;
 
-export function GetCredentials(arg1:string):Promise<Record<string, string>>;
+export function GetCredentials(arg1:string):Promise<main.CredentialView>;
 
 export function GetEarningsSummary():Promise<main.EarningsSummary>;
 

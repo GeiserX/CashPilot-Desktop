@@ -258,15 +258,17 @@ check(
     .map((input) => `${input.env}=${JSON.stringify(input.value)}`)
     .join(", "),
 );
-// A saved credential reaches the input through hydrateWizardForm(), which sets
-// input.value on the live node. If the render ever learned to pre-fill instead, the
-// secret would be written into a value attribute -- into the page source, into any
-// innerHTML dump, into a screenshot of the DOM inspector. So a stray value on a field
-// object must stay out of the markup.
+// Only ordinary settings are used to fill inputs during hydration. Even a
+// secret with a catalog default must start with an empty input.
 const carrier = renderWizardServiceSetup(repocket, {
   repocket: [{ key: "REPOCKET_PASSWORD", label: "Password", description: "pw", secret: true, value: "hunter2-SECRET" }],
 }, "devbox");
 check("RULE 5: a value riding on a field object never reaches the markup", !carrier.includes("hunter2-SECRET"), carrier);
+const secretDefault = renderWizardServiceSetup(service({
+  docker: { env: [envVar("API_KEY", { secret: true, default: "secret-default" })] },
+}), null, "devbox");
+check("RULE 5: a secret input starts blank even with a catalog default",
+  inputs(secretDefault).find((input) => input.env === "API_KEY")?.value === "", secretDefault);
 check(
   "a default that would break out of its value attribute is escaped",
   !renderWizardServiceSetup(

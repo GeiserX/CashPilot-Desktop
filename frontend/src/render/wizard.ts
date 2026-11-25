@@ -108,7 +108,8 @@ export function renderWizardServiceSetup(
         ${fields.map((item) => `
           <label>
             <span>${escapeHtml(item.label)}${fieldMark(item)}</span>
-            <input data-wizard-env="${escapeHtml(item.key)}" type="${item.secret ? "password" : "text"}"${item.secret ? ' autocomplete="new-password"' : ""}${item.pattern ? ` pattern="${escapeHtml(item.pattern)}"` : ""} placeholder="${escapeHtml(item.description)}" value="${escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
+            <input data-wizard-env="${escapeHtml(item.key)}" type="${item.secret ? "password" : "text"}"${item.secret ? ' autocomplete="new-password"' : ""}${item.pattern ? ` pattern="${escapeHtml(item.pattern)}"` : ""} placeholder="${escapeHtml(item.description)}" value="${item.secret ? "" : escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
+            ${item.secret ? '<small class="muted">Leave blank to keep a saved value. Enter a new value to replace it.</small>' : ""}
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>

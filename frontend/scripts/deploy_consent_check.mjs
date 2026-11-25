@@ -36,7 +36,7 @@ import {
   runCheckedDeploy,
   runDeployWithStatus,
 } from "../.harness-build/render/deploy_consent.js";
-import { runWorkerDeploy } from "../.harness-build/render/where.js";
+import { runWorkerDeploy, workerDeployText } from "../.harness-build/render/where.js";
 import { walletChoiceRefusal, walletDeployAnswer } from "../.harness-build/render/wallet.js";
 import { serviceFormFields } from "../.harness-build/render/fields.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
@@ -327,7 +327,7 @@ const hgFields = serviceFormFields(hg, {});
 
 for (const continueImport of [false, true]) {
   const trace = [];
-  await runCheckedDeploy(fields, full, true, BUSY, {
+  await runCheckedDeploy(hgFields, { HG_EMAIL: "saved@example.com" }, true, BUSY, {
     confirmReplace: async () => {
       await Promise.resolve();
       trace.push("import confirmation");
@@ -340,7 +340,7 @@ for (const continueImport of [false, true]) {
       trace.push(approval === step ? "deploy with approval" : "unapproved deploy");
       return { kind: "ok", text: "Deployed." };
     },
-  }, { localReplacement: "Deploy this imported service?" });
+  }, { localReplacement: "Deploy this imported service?", savedSecrets: { HG_PASSWORD: true } });
   const expected = continueImport
     ? ["import confirmation", "firewall check", "CashPilot consent", "deploy with approval"]
     : ["import confirmation"];
@@ -370,20 +370,12 @@ for (const continueImport of [false, true]) {
   const answer = await runDeployWithStatus(BUSY, (kind, text) => trace.push([kind, text]), async () => {
     const deployed = await runWorkerDeploy("honeygain", { id: 2, name: "attic", online: true, reason: "", services: [] }, null, null, {
       confirm: () => false,
-      deploy: async () => ({ ask: "", worker: "attic" }),
-      save: async () => {
-        check("the worker success is visible when local saving starts", trace[1]?.[0] === "ok", JSON.stringify(trace));
-        throw new Error("local credentials unavailable");
-      },
+      deploy: async () => ({ ask: "", worker: "attic", credentialWarning: "CashPilot could not save the credentials on this computer." }),
     });
-    return {
-      kind: "ok",
-      text: "Deployed to attic.",
-      followUp: { failure: "CashPilot could not save the credentials on this computer.", run: deployed.save },
-    };
+    return { kind: "ok", text: workerDeployText(deployed.result) };
   });
   check("a local save failure keeps the worker success",
-    answer.kind === "ok" && answer.text.includes("Deployed to attic.") && answer.text.includes("local credentials unavailable"), JSON.stringify(trace));
+    answer.kind === "ok" && answer.text.includes("Deployed to attic.") && answer.text.includes("CashPilot could not save the credentials"), JSON.stringify(trace));
 }
 
 if (failures) {

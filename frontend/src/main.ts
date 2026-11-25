@@ -141,7 +141,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RouteState, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult, WorkerTarget } from "./wails";
+import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RouteState, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WorkerTarget } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -180,8 +180,6 @@ let wizardRouteDrafts: Record<string, number | null> = {};
 let wizardWhereDrafts: Record<string, number | null> = {};
 const wizardDeployFeedback: Record<string, DeployFeedback> = {};
 const wizardDeploying = new Set<string>();
-// Keep wallet passwords blank on redraw after a deploy attempt in this window.
-const wizardWalletAttempts = new Set<string>();
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -1372,7 +1370,7 @@ async function runImportDeploy(slug: string) {
     const fields = service ? serviceFormFields(service, state?.collectorFields) : [];
     const saved = await GetCredentials(slug);
     if (statuses !== importDeploys || activeView !== "import") return;
-    const outcome = await runCheckedDeploy(fields, saved, true, `Deploying ${name}...`, {
+    const outcome = await runCheckedDeploy(fields, saved.values, true, `Deploying ${name}...`, {
       confirmReplace: async (message) => {
         const report = await PreflightService(slug).catch(() => null);
         if (statuses !== importDeploys || activeView !== "import") return false;
@@ -1388,6 +1386,7 @@ async function runImportDeploy(slug: string) {
         return { kind: "ok", text: "Deployed." };
       },
     }, {
+      savedSecrets: saved.savedSecrets,
       localReplacement: `Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.`,
     });
     if (outcome.kind === "missing") setFeedback(outcome);
@@ -1395,8 +1394,8 @@ async function runImportDeploy(slug: string) {
     else if (outcome.kind === "cancelled") setFeedback({ kind: "cancelled", text: CANCELLED_TEXT });
     if (outcome.kind !== "done" || outcome.answer.kind !== "ok" || statuses !== importDeploys) return;
     state = await GetAppState().catch(() => state);
-    const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
-    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+    const creds = await GetCredentials(slug).catch(() => null);
+    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds?.values || {}, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
     if (link && statuses === importDeploys) {
       importLinks = { ...importLinks, [slug]: link };
       renderImportIfShown();
@@ -2507,19 +2506,38 @@ function closeWizard() {
   render();
 }
 
+function wizardCredentialInputs(slug: string) {
+  return document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${CSS.escape(slug)}"] [data-wizard-env]`);
+}
+
+function markWizardSecretsSaved(slug: string, keys: string[]) {
+  for (const input of wizardCredentialInputs(slug)) {
+    if (input.type === "password" && keys.includes(input.dataset.wizardEnv || "")) {
+      input.dataset.savedSecret = "true";
+      input.placeholder = "Saved";
+    }
+  }
+}
+
 async function hydrateWizardForm(service: Service) {
-  let creds: Record<string, string> = {};
+  const inputs = wizardCredentialInputs(service.slug);
   try {
-    creds = await GetCredentials(service.slug);
+    const { values, savedSecrets } = await GetCredentials(service.slug);
+    for (const input of inputs) {
+      if (!input.isConnected) continue;
+      const key = input.dataset.wizardEnv || "";
+      if (input.type === "password") {
+        if (savedSecrets[key]) {
+          input.dataset.savedSecret = "true";
+          input.placeholder = "Saved";
+        }
+      } else if (values[key]) {
+        input.value = values[key];
+      }
+    }
   } catch (error) {
     showErrorToast({scope: "credentials", error: String(error)});
   }
-  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${service.slug}"] [data-wizard-env]`).forEach((input) => {
-    // A deploy may have cleared the password while GetCredentials was pending.
-    if (input.type === "password" && wizardWalletAttempts.has(service.slug)) return;
-    const key = input.dataset.wizardEnv || "";
-    if (creds[key]) input.value = creds[key];
-  });
 }
 
 // The pre-deploy check, filled in beside the Deploy button once the backend has
@@ -2537,12 +2555,41 @@ async function hydrateWizardPreflight(service: Service) {
   }
 }
 
-function readWizardForm(slug: string): Record<string, string> {
+function readWizardForm(slug: string) {
   const values: Record<string, string> = {};
-  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env]`).forEach((input) => {
-    values[input.dataset.wizardEnv || ""] = input.value;
-  });
-  return values;
+  const savedSecrets: Record<string, boolean> = {};
+  const secretKeys: string[] = [];
+  for (const input of wizardCredentialInputs(slug)) {
+    const key = input.dataset.wizardEnv || "";
+    values[key] = input.value;
+    if (input.type === "password") {
+      if (input.dataset.savedSecret) savedSecrets[key] = true;
+      secretKeys.push(key);
+      input.value = "";
+    }
+  }
+  const typedSecrets = secretKeys.filter((key) => values[key].trim());
+  return { values, savedSecrets, secretKeys, typedSecrets };
+}
+
+function clearRequestSecrets(values: Record<string, string>, keys: string[], wallet?: WalletChoice) {
+  for (const key of keys) delete values[key];
+  if (wallet) wallet.phrase = "";
+}
+
+// Wails serializes the arguments during the call. Drop the secret fields
+// before awaiting the reply or refreshing the app.
+function sendCredentialRequest<T>(
+  values: Record<string, string>, keys: string[], send: (request: Record<string, string>) => Promise<T>,
+  keepDraft = false,
+): Promise<T> {
+  const request = { ...values };
+  try {
+    return send(request);
+  } finally {
+    clearRequestSecrets(request, keys);
+    if (!keepDraft) clearRequestSecrets(values, keys);
+  }
 }
 
 // A typed value the catalog constrains (the input carries its pattern) is checked
@@ -2565,30 +2612,29 @@ async function runWizardAction(slug: string, action: string) {
     if (output) output.textContent = `${invalid.dataset.wizardEnv} does not have the shape this provider expects.`;
     return;
   }
-  const values = readWizardForm(slug);
   if (action === "deploy") {
     invalid?.reportValidity();
     if (wizardDeploying.has(slug)) return;
     wizardDeploying.add(slug);
     try {
-      await wizardDeploy(slug, values, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
+      await wizardDeploy(slug, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
     } finally {
       wizardDeploying.delete(slug);
     }
     return;
   }
+  if (action !== "save" && action !== "collect") return;
+  const { values, secretKeys, typedSecrets } = readWizardForm(slug);
   try {
+    await sendCredentialRequest(values, secretKeys, (request) => SaveCredentials(slug, request));
+    markWizardSecretsSaved(slug, typedSecrets);
     if (action === "save") {
-      await SaveCredentials(slug, values);
       if (output) output.textContent = "Credentials saved.";
       return;
     }
-    if (action === "collect") {
-      await SaveCredentials(slug, values);
-      const record = await CollectService(slug);
-      if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
-      state = await GetAppState();
-    }
+    const record = await CollectService(slug);
+    if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
+    state = await GetAppState();
   } catch (error) {
     if (output) output.textContent = String(error);
   }
@@ -2633,32 +2679,28 @@ interface WizardDeploySettings {
   image: string | null;
   instances: number | null;
   route: RouteState | null | undefined;
-  custom: boolean;
+  secretKeys: string[];
+  typedSecrets: string[];
   wallet?: WalletChoice;
 }
 
 // A deploy from the card: every field marked * is filled, and when Windows will
 // show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
 // answer replaces "Deploying..." next to Deploy however it ends.
-async function wizardDeploy(slug: string, values: Record<string, string>, workerId: number | null, invalidField?: string) {
+async function wizardDeploy(slug: string, workerId: number | null, invalidField?: string) {
   const service = state?.services?.find((item) => item.slug === slug);
   const name = service?.name || slug;
   const fields = service && !service.custom ? serviceFormFields(service, state?.collectorFields) : [];
   const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
+  const { values, secretKeys, typedSecrets, savedSecrets } = readWizardForm(slug);
   const settings: WizardDeploySettings = {
-    values,
+    values, secretKeys, typedSecrets,
     proxyId: readWizardRoute(slug),
     image: readWizardImage(slug),
     instances: readWizardInstances(slug),
     route: state?.route,
-    custom: Boolean(service?.custom),
     wallet: workerId === null && seedFileVar(service) ? readWalletChoice(slug) : undefined,
   };
-  if (settings.wallet) {
-    wizardWalletAttempts.add(slug);
-    document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env][type="password"]`)
-      .forEach((input) => { input.value = ""; });
-  }
   const { proxyId, route } = settings;
   const replacesLocal = proxyId === null
     ? state?.deployments?.some((deployment) => deployment.slug === slug)
@@ -2674,6 +2716,7 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
     workers: state?.workerTargets,
     workerBusyText: (worker) => `Deploying ${name} to ${worker.name}...`,
     invalidField,
+    savedSecrets,
     localReplacement: replacesLocal
       ? `Redeploy ${name} ${proxyId === null ? "on this computer" : "through this proxy"}? The existing node will be replaced. Its saved data is kept.`
       : undefined,
@@ -2681,12 +2724,7 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
     sayDeploy(slug, "failed", deployErrorText(error));
     return null;
   }).finally(() => {
-    if (settings.wallet) {
-      settings.wallet.phrase = "";
-      for (const field of fields) {
-        if (field.secret) delete values[field.key];
-      }
-    }
+    clearRequestSecrets(values, secretKeys, settings.wallet);
   });
   const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
   form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
@@ -2710,41 +2748,37 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
 async function deployFromCard(
   slug: string, settings: WizardDeploySettings, worker: WorkerTarget | undefined, approval: AdminStep | null,
 ): Promise<DeployAnswer> {
-  const { values, proxyId, image, instances, route, custom, wallet } = settings;
+  const { values, proxyId, image, instances, route, secretKeys, typedSecrets, wallet } = settings;
   if (worker) {
     const outcome = await runWorkerDeploy(slug, worker, proxyId, instances, {
       confirm: (message) => confirm(message),
-      deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image: image || "", ...yes}),
-      save: async () => {
-        const typed = Object.entries(values).filter(([, value]) => value.trim());
-        if (typed.length) await SaveCredentials(slug, { ...await GetCredentials(slug), ...Object.fromEntries(typed) });
-      },
-    });
+      // Keep the draft while the worker can still ask for confirmation.
+      deploy: (yes) => sendCredentialRequest(values, secretKeys, (request) =>
+        DeployToWorker(slug, { workerId: worker.id, values: request, image: image || "", ...yes }),
+        true,
+      ),
+    }).finally(() => clearRequestSecrets(values, secretKeys));
     if (outcome.kind === "deployed") {
-      return {
-        kind: "ok",
-        text: workerDeployText(outcome.result),
-        followUp: { failure: "CashPilot could not save the credentials on this computer.", run: outcome.save },
-      };
+      if (!outcome.result.credentialWarning) markWizardSecretsSaved(slug, typedSecrets);
+      return { kind: "ok", text: workerDeployText(outcome.result) };
     }
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
-  if (wallet) return runWalletDeploy(slug, values, image, instances, wallet);
-  // A custom service has no credentials: it runs its saved definition.
+  if (wallet) return runWalletDeploy(slug, values, image, instances, wallet, secretKeys, typedSecrets);
   const outcome = await runRouteDeploy(slug, proxyId, image, instances, route, {
-    save: async () => {
-      if (!custom) await SaveCredentials(slug, values);
-    },
     confirm: (message) => confirm(message),
-    routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
-    direct: (leaveRoute) => {
-      if (approval) return DeployServiceWithAdminApproval(slug, values, image, instances, leaveRoute, approval);
-      return leaveRoute ? DeployServiceLeavingRoute(slug, values, image, instances) : DeployService(slug, values, image, instances);
-    },
+    routed: (proxyId) => sendCredentialRequest(values, secretKeys, (request) =>
+      DeployServiceRouted(slug, request, proxyId),
+    ),
+    direct: (leaveRoute) => sendCredentialRequest(values, secretKeys, (request) => {
+      if (approval) return DeployServiceWithAdminApproval(slug, request, image, instances, leaveRoute, approval);
+      return leaveRoute ? DeployServiceLeavingRoute(slug, request, image, instances) : DeployService(slug, request, image, instances);
+    }),
   });
   if (outcome.kind === "refused" || outcome.kind === "cancelled") {
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
+  markWizardSecretsSaved(slug, typedSecrets);
   const followUp = {
     failure: "CashPilot could not refresh the app.",
     run: async () => {
@@ -2820,16 +2854,21 @@ function readWalletChoice(slug: string): WalletChoice {
 
 async function runWalletDeploy(
   slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice,
+  secretKeys: string[], typedSecrets: string[],
 ): Promise<DeployAnswer> {
   const refusal = walletChoiceRefusal(choice);
   if (refusal) return refusal;
   if (choice.mode === "generate") sayDeploy(slug, "busy", "Deploying, and creating a new wallet...");
-  let result: WalletDeployResult;
-  try {
-    result = await DeployServiceWallet(slug, values, image, instances, choice);
-  } finally {
+  const result = await sendCredentialRequest(values, secretKeys, (request) => {
+    const requestChoice = { ...choice };
     choice.phrase = "";
-  }
+    try {
+      return DeployServiceWallet(slug, request, image, instances, requestChoice);
+    } finally {
+      requestChoice.phrase = "";
+    }
+  });
+  markWizardSecretsSaved(slug, typedSecrets);
   const wallet = result.wallet;
   dropNewWalletPhrase();
   if (wallet?.phrase) {

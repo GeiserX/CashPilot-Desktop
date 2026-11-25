@@ -32,7 +32,11 @@ function checkWizard(scenario) {
   const events = {};
   let finishAdminCheck;
   let finishHydration;
-  let savedCredentials = { [fieldKey]: "saved" };
+  let finishDeploy;
+  let finishRefresh;
+  let savedSettings = { [fieldKey]: "saved" };
+  let savedPassword = wallet ? "previous password" : "";
+  let redrawHydration;
   let workerDeploys = 0;
   let localAdminChecks = 0;
   let passwordSends = 0;
@@ -41,10 +45,21 @@ function checkWizard(scenario) {
   let sentValues;
   window.runtime = { EventsOnMultiple(name, fn) { events[name] = fn; } };
   window.go = { main: { App: new Proxy({
-    async GetAppState() { return structuredClone(state); },
+    async GetAppState() {
+      if (wallet && settings && !finishRefresh) {
+        return new Promise(resolve => { finishRefresh = () => resolve(structuredClone(state)); });
+      }
+      return structuredClone(state);
+    },
     async GetCredentials() {
-      if (wallet && !finishHydration) return new Promise(resolve => { finishHydration = resolve; });
-      return { ...savedCredentials };
+      const view = { values: { ...savedSettings }, savedSecrets: savedPassword ? { HOSTD_API_PASSWORD: true } : {} };
+      if (wallet && !finishHydration) return new Promise(resolve => { finishHydration = () => resolve(view); });
+      if (wallet && settings) redrawHydration = view;
+      return view;
+    },
+    async SaveCredentials(slug, values) {
+      savedSettings = { [fieldKey]: values[fieldKey] };
+      if (values.HOSTD_API_PASSWORD?.trim()) savedPassword = values.HOSTD_API_PASSWORD;
     },
     async DeployAdminStep() {
       if (!wallet) {
@@ -56,12 +71,13 @@ function checkWizard(scenario) {
     async DeployServiceWallet(slug, values, image, instances, choice) {
       sentChoice = choice;
       sentValues = values;
-      savedCredentials = { ...values };
+      savedSettings = { [fieldKey]: values[fieldKey] };
+      if (values.HOSTD_API_PASSWORD?.trim()) savedPassword = values.HOSTD_API_PASSWORD;
       settings = {
         storage: values.SIA_STORAGE_DIR, image, instances, mode: choice.mode,
         passwordSent: values.HOSTD_API_PASSWORD === "test password", phraseSent: choice.phrase === "test phrase",
       };
-      return { deployment: { slug } };
+      return new Promise(resolve => { finishDeploy = () => resolve({ deployment: { slug } }); });
     },
     async DeployToWorker() {
       workerDeploys++;
@@ -105,7 +121,7 @@ function checkWizard(scenario) {
       const rejectionSentNothing = passwordSends === 0 && !settings;
       const passwordClearedAfterRejection = password.value === "";
       const phraseClearedAfterRejection = phrase.value === "";
-      finishHydration({ ...savedCredentials, HOSTD_API_PASSWORD: "previous password" });
+      finishHydration();
       await until(() => q(field).value === "saved", "delayed credentials response");
       const passwordEmptyAfterDelayedHydration = password.value === "";
 
@@ -120,16 +136,41 @@ function checkWizard(scenario) {
       const phraseClearedAtClick = phrase.value === "";
       click("#wizard-next");
       finishAdminCheck({ needed: false });
-      await until(() => settings, "wallet deploy");
+      await until(() => finishDeploy, "wallet deploy request");
+      const secretsClearedWhileDeployIsPending = !sentValues.HOSTD_API_PASSWORD && sentChoice.phrase === "";
+      finishDeploy();
       click("#wizard-prev");
-      await until(() => status() === "ok" && q(field).value === "/fixture/storage", "wallet result and redrawn credentials");
+      await until(() => status() === "ok" && finishRefresh && q(field).value === "/fixture/storage",
+        "wallet result and redrawn credentials during refresh");
+      const secretsClearedWhileRefreshIsPending = !sentValues.HOSTD_API_PASSWORD && sentChoice.phrase === "";
+      const redrawReportsOnlyPresence = redrawHydration.savedSecrets.HOSTD_API_PASSWORD === true &&
+        !JSON.stringify(redrawHydration).includes(savedPassword);
+      const passwordEmptyAfterRedraw = q(passwordField).value === "";
+      const phraseEmptyAfterRedraw = q("[data-wallet-phrase]").value === "";
+      const savedPasswordLabel = q(passwordField).placeholder === "Saved" &&
+        q(passwordField).closest("label").textContent.includes("Leave blank to keep a saved value");
+      finishRefresh();
+
+      q(field).value = "/fixture/edited";
+      click('[data-wizard-action="save"]');
+      await until(() => q(`[data-output-slug="${slug}"]`).textContent === "Credentials saved.", "directory-only save");
+      const directoryOnlySave = savedSettings[fieldKey] === "/fixture/edited" && savedPassword === "test password";
+      const importedSettings = settings;
+      finishAdminCheck = undefined;
+      finishDeploy = undefined;
+      click(deploy);
+      await until(() => finishAdminCheck, "admin check with a blank saved password");
+      finishAdminCheck({ needed: false });
+      await until(() => finishDeploy, "redeploy with a blank saved password");
+      finishDeploy();
+      await until(() => status() === "ok", "redeploy result");
+      const blankPasswordDeploy = settings.storage === "/fixture/edited" && !settings.passwordSent && savedPassword === "test password";
       return {
-        settings, rejectedBeforeAdminCheck, rejectionSentNothing,
+        settings: importedSettings, rejectedBeforeAdminCheck, rejectionSentNothing,
         passwordClearedAfterRejection, phraseClearedAfterRejection, passwordEmptyAfterDelayedHydration,
         passwordClearedAtClick, phraseClearedAtClick, phraseClearedAtEnd: sentChoice.phrase === "",
-        passwordEmptyAfterRedraw: q(passwordField).value === "",
-        phraseEmptyAfterRedraw: q("[data-wallet-phrase]").value === "",
-        passwordClearedFromRequest: !sentValues.HOSTD_API_PASSWORD,
+        passwordEmptyAfterRedraw, phraseEmptyAfterRedraw, savedPasswordLabel, directoryOnlySave, blankPasswordDeploy,
+        secretsClearedWhileDeployIsPending, secretsClearedWhileRefreshIsPending, redrawReportsOnlyPresence,
         passwordSends,
       };
     }
@@ -192,7 +233,12 @@ try {
     phraseClearedAtEnd: true,
     passwordEmptyAfterRedraw: true,
     phraseEmptyAfterRedraw: true,
-    passwordClearedFromRequest: true,
+    savedPasswordLabel: true,
+    directoryOnlySave: true,
+    blankPasswordDeploy: true,
+    secretsClearedWhileDeployIsPending: true,
+    secretsClearedWhileRefreshIsPending: true,
+    redrawReportsOnlyPresence: true,
     passwordSends: 1,
   } : { status: "failed", workerRefused: true, statusAfterRedraw: "failed", workerDeploys: 1, localAdminChecks: 0 });
   console.log(`wizard deploy DOM: ${scenario} passed`);
