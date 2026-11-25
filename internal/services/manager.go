@@ -876,7 +876,7 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 				label = item.Key
 			}
 			value := credentials[item.Key]
-			if item.Required && value == "" && item.Default == "" {
+			if item.Required && strings.TrimSpace(value) == "" && strings.TrimSpace(item.Default) == "" {
 				return fmt.Errorf("missing required field: %s", label)
 			}
 			// A value the catalog constrains must match all of the pattern (and a port

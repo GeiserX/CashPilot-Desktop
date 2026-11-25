@@ -82,6 +82,14 @@ func TestDeployChecksOnlyWhatTheDeployNeeds(t *testing.T) {
 	}
 }
 
+func TestDeployRejectsWhitespaceOnlyRequiredValues(t *testing.T) {
+	app, provider := newFormFieldsTestApp(t, formFieldsCatalog)
+	_, err := app.DeployService("req", map[string]string{"TOKEN": " \t\n", "NAME": ""}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "Token") || len(provider.deployed) != 0 {
+		t.Fatalf("blank required value: error = %v, runtime calls = %v", err, provider.deployed)
+	}
+}
+
 // THE RULE: a wallet seed is never a field (it lives in its file), so a Sia deploy
 // with every other field filled and no seed value passes the deploy check.
 func TestASiaDeployWithoutASeedValuePassesTheFieldCheck(t *testing.T) {
