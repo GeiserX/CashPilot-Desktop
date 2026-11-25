@@ -345,6 +345,9 @@ export interface AppState {
   route: RouteState | null;
   // The Money waiting panel; null from a backend that predates it.
   reminders?: RemindersView | null;
+  // Running copies that carry almost no traffic while the other copies of their
+  // service here are busy (stall_alerts.go).
+  stalls: StallAlert[] | null;
 }
 
 // RemindersView mirrors the Go RemindersView (reminders_app.go).
@@ -392,6 +395,19 @@ export interface ReminderMuted {
   rule: string;
   name: string;
   title: string;
+}
+
+// StallAlert mirrors the Go StallAlert: one copy that runs but gets almost no work.
+// since is the start of its first low hour (Unix seconds); message is the whole
+// alert in plain words.
+export interface StallAlert {
+  slug: string;
+  service: string;
+  container: string;
+  copy: number;
+  since: number;
+  hours: number;
+  message: string;
 }
 
 // ScalingLimit mirrors services.ScalingLimit. reason is "" when max is above 1.

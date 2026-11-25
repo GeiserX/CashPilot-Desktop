@@ -111,6 +111,9 @@ type App struct {
 	fleetLimiter *fleetRateLimiter
 	// usageStop stops the usage sampler (usage_sampler.go) and waits for it.
 	usageStop func()
+	// stalls is the stall alerts by container name (stall_alerts.go), guarded by stallMu.
+	stallMu sync.Mutex
+	stalls  map[string]StallAlert
 	// proxyStop stops the proxied-copies pass (app_proxies.go) and waits for it.
 	proxyStop func()
 	// deviceLinkStop stops the device-registration retry pass (app_device_links.go).
@@ -434,6 +437,9 @@ type AppState struct {
 	// Reminders is the Money waiting panel: what to claim, withdraw or keep active
 	// before a provider writes off the money (reminders_app.go).
 	Reminders RemindersView `json:"reminders"`
+	// Stalls are the running copies that carry almost no traffic while the other
+	// copies of their service here are busy (stall_alerts.go).
+	Stalls []StallAlert `json:"stalls"`
 }
 
 // RouteState is what the deploy form needs to offer a route.
@@ -644,6 +650,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Isolation:        a.isolationStatus(),
 		Route:            a.routeState(visible),
 		Reminders:        a.reminders(),
+		Stalls:           a.currentStalls(),
 	}, nil
 }
 
@@ -2076,6 +2083,7 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 	items = append(items, a.deviceLinkGaveUpNotifications()...)
 	items = append(items, a.proxyNotifications()...)
 	items = append(items, a.activityNotifications()...)
+	items = append(items, a.stallNotifications()...)
 	if len(deployments) == 0 {
 		items = append(items, Notification{Level: "info", Title: "No services deployed", Message: "Use the setup wizard or register a mobile device to start tracking earnings."})
 	}

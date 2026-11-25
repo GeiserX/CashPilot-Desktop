@@ -356,10 +356,10 @@ type DockerConfig struct {
 	// dials this service back at, so it can be compared against the machine's
 	// current egress address. Only that variable is ever copied out; the rest may
 	// hold credentials.
-	// TrafficStall is the web catalog's docker.traffic_stall block: the web app alerts
-	// when one running copy sends almost nothing while the service's other copies are
-	// busy (app/traffic_stall.py). Desktop parses it so the field round-trips and the
-	// strict-decode test passes, and does not act on it.
+	// TrafficStall is the web catalog's docker.traffic_stall block: alert when one
+	// running copy sends almost nothing while the service's other copies are busy.
+	// internal/stall judges it and stall_alerts.go raises the alert, as the web app's
+	// app/traffic_stall.py does.
 	TrafficStall         *TrafficStall  `json:"trafficStall,omitempty" yaml:"traffic_stall"`
 	AdvertisedAddressEnv string         `json:"advertisedAddressEnv" yaml:"advertised_address_env"`
 	Privileged           bool           `json:"privileged" yaml:"privileged"`

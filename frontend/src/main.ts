@@ -84,6 +84,7 @@ import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProx
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
+import { stallItems } from "./render/stall";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
 import { renderEnvSetting, settingsSaveValues } from "./render/settings";
@@ -516,7 +517,7 @@ function renderDashboard(current: AppState) {
     drift: current.drift,
     producerStates: current.producerStates,
     isolation: current.isolation,
-  }), current.reminders);
+  }).concat(stallItems(current.stalls)), current.reminders);
 
   root.innerHTML = `
     ${titlebar()}
