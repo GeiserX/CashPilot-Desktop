@@ -1,14 +1,16 @@
 # CashPilot Secure VM setup bootstrap. The admin stub copied this file into
 # the admin-only guard folder and checked its SHA-256 before it ran it.
-# It copies the CashPilot exe next to itself, checks the copy's SHA-256, and
-# runs the copy as --vm-setup. The copy is also what the guard task runs.
+# It copies the CashPilot exe and the params file next to itself, checks
+# each copy's SHA-256, and runs the exe copy as --vm-setup on the params
+# copy. The exe copy is also what the guard task runs.
 param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [Parameter(Mandatory = $true)][string]$ExeHash,
   [Parameter(Mandatory = $true)][string]$DataDir,
   [Parameter(Mandatory = $true)][string]$TaskPath,
   [Parameter(Mandatory = $true)][string]$TaskName,
-  [Parameter(Mandatory = $true)][string]$Params
+  [Parameter(Mandatory = $true)][string]$Params,
+  [Parameter(Mandatory = $true)][string]$ParamsHash
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -32,6 +34,22 @@ if ((Get-FileHash -LiteralPath $copy -Algorithm SHA256).Hash -ne $ExeHash.ToUppe
   Remove-Item -LiteralPath $copy -Force -ErrorAction SilentlyContinue
   exit 13
 }
-# -Wait matters: the exe is a GUI-subsystem binary, so a bare call returns at once.
-$p = Start-Process -FilePath $copy -ArgumentList @('--vm-setup', ('"' + $Params + '"')) -Wait -PassThru -WindowStyle Hidden
-exit $p.ExitCode
+# The params file lies in a folder the user can write. The exe reads only a
+# copy in the admin-only guard folder whose SHA-256 the app gave, so a file
+# swapped after the app wrote it is never read, and the elevated exe deletes
+# only that copy. The app deletes its own file.
+$pcopy = Join-Path $guard 'setup-params.json'
+if (Test-Path -LiteralPath $pcopy) { Remove-Item -LiteralPath $pcopy -Force }
+Copy-Item -LiteralPath $Params -Destination $pcopy
+if ((Get-FileHash -LiteralPath $pcopy -Algorithm SHA256).Hash -ne $ParamsHash.ToUpper()) {
+  Remove-Item -LiteralPath $pcopy -Force -ErrorAction SilentlyContinue
+  exit 13
+}
+try {
+  # -Wait matters: the exe is a GUI-subsystem binary, so a bare call returns at once.
+  $p = Start-Process -FilePath $copy -ArgumentList @('--vm-setup', ('"' + $pcopy + '"')) -Wait -PassThru -WindowStyle Hidden
+  $code = $p.ExitCode
+} finally {
+  if (Test-Path -LiteralPath $pcopy) { Remove-Item -LiteralPath $pcopy -Force -ErrorAction SilentlyContinue }
+}
+exit $code

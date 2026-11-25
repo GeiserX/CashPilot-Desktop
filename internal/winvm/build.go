@@ -59,6 +59,11 @@ type SetupParams struct {
 	Lab *LabOverrides `json:"lab"`
 }
 
+// userSIDRe is one user account: local or domain (S-1-5-21-...) or Microsoft
+// Entra ID (S-1-12-1-...). A group or well-known SID such as Everyone or
+// Users would put every account in Hyper-V Administrators.
+var userSIDRe = regexp.MustCompile(`^S-1-(5-21|12-1)-[0-9]+-[0-9]+-[0-9]+-[0-9]+$`)
+
 var winPathRe = regexp.MustCompile(`^[A-Za-z]:\\[^"'` + "`" + `$;&|<>*?\r\n]*$`)
 
 // ParseSetupParams reads a params file strictly.
@@ -70,8 +75,8 @@ func ParseSetupParams(b []byte) (SetupParams, error) {
 	if sp.Version != SetupParamsVersion {
 		return SetupParams{}, fmt.Errorf("setup params version %d, this code reads %d", sp.Version, SetupParamsVersion)
 	}
-	if !sidRe.MatchString(sp.UserSID) {
-		return SetupParams{}, fmt.Errorf("setup params: %q is not a Windows account SID", sp.UserSID)
+	if !userSIDRe.MatchString(sp.UserSID) {
+		return SetupParams{}, fmt.Errorf("setup params: %q is not the SID of one user account", sp.UserSID)
 	}
 	if err := checkPassword("cpadmin", sp.AdminPassword); err != nil {
 		return SetupParams{}, err

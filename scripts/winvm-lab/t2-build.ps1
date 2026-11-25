@@ -38,13 +38,17 @@ $guard = Join-Path $data 'guard'
 $taskPath = '\CashPilot\'
 $taskName = 'VMGuard-' + $name
 
+# As the app's stub does: a folder that exists must already be owned by
+# SYSTEM or Administrators, and a new one gets its rules as it is made.
 function Lock-Dir([string]$p) {
+  $acl = New-Object Security.AccessControl.DirectorySecurity
+  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
   if (Test-Path -LiteralPath $p) {
     $i = Get-Item -LiteralPath $p -Force
     if (-not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('not a plain folder: ' + $p) }
-  } else { New-Item -ItemType Directory -Path $p -Force | Out-Null }
-  $acl = New-Object Security.AccessControl.DirectorySecurity
-  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')
+    $o = (Get-Acl -LiteralPath $p).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($o -ne 'S-1-5-18' -and $o -ne 'S-1-5-32-544') { throw ('not made by an administrator, so not used: ' + $p + '. Delete it and try again.') }
+  } else { [IO.Directory]::CreateDirectory($p, $acl) | Out-Null }
   Set-Acl -LiteralPath $p -AclObject $acl
 }
 
@@ -97,11 +101,12 @@ if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Force }
 Copy-Item -LiteralPath $src -Destination $dst
 if ((Get-FileHash -LiteralPath $dst).Hash -ne (Get-FileHash -LiteralPath $src).Hash) { throw 'setup.ps1 changed while it was copied' }
 $exeHash = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash
+$paramsHash = (Get-FileHash -LiteralPath $paramsFile -Algorithm SHA256).Hash
 $ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
 $started = Get-Date
 # Run Windows PowerShell with only its own modules, even from PowerShell 7.
 $env:PSModulePath = $env:ProgramFiles + '\WindowsPowerShell\Modules;' + [Environment]::SystemDirectory + '\WindowsPowerShell\v1.0\Modules'
-& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile
+& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst -Exe $Exe -ExeHash $exeHash -DataDir $data -TaskPath $taskPath -TaskName $taskName -Params $paramsFile -ParamsHash $paramsHash
 $code = $LASTEXITCODE
 Remove-Item -LiteralPath $paramsFile -Force -ErrorAction SilentlyContinue
 'setup exit code: ' + $code + ' after ' + [int]((Get-Date) - $started).TotalMinutes + ' min'

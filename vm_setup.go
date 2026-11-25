@@ -108,7 +108,8 @@ func readParamsFile(path string) ([]byte, error) {
 // runVMSetup builds or repairs the instance the params file names. It must
 // run as that instance's guard copy, so the guard task it registers points at
 // an exe only an admin can change. The params file holds the guest passwords
-// and the key: it is deleted once it has been read as a params file.
+// and the key: it must be setup.ps1's copy in the guard folder, and it is
+// deleted once setup ends.
 func runVMSetup(ctx context.Context, params, exe string, mk func(winvm.Names) winvm.BuildDeps, errOut io.Writer) int {
 	raw, err := readParamsFile(params)
 	if err != nil {
@@ -120,7 +121,6 @@ func runVMSetup(ctx context.Context, params, exe string, mk func(winvm.Names) wi
 		fmt.Fprintln(errOut, "vm-setup:", err)
 		return vmExitUsage
 	}
-	defer os.Remove(params)
 	n, _, _, err := winvm.SetupNames(sp)
 	if err != nil {
 		fmt.Fprintln(errOut, "vm-setup:", err)
@@ -134,6 +134,14 @@ func runVMSetup(ctx context.Context, params, exe string, mk func(winvm.Names) wi
 	if d.Dir == "" {
 		d.Dir = n.DataDir // a test points it elsewhere
 	}
+	// setup.ps1 hands over the hash-checked copy it made in the admin-only
+	// guard folder. A params file anywhere else lies where a user could swap
+	// it or link its folder, so it is neither used nor deleted as admin.
+	if !strings.EqualFold(filepath.Dir(filepath.Clean(params)), filepath.Join(d.Dir, "guard")) {
+		fmt.Fprintf(errOut, "vm-setup: the params file must be the copy in %s\n", filepath.Join(d.Dir, "guard"))
+		return vmExitUsage
+	}
+	defer os.Remove(params)
 	logger := log.New(errOut, "", log.LstdFlags)
 	if f, err := winvm.OpenAppend(filepath.Join(d.Dir, setupLogFile)); err == nil {
 		defer f.Close()

@@ -15,7 +15,7 @@ func TestEmbeddedScriptPins(t *testing.T) {
 		want string
 	}{
 		"autounattend.tpl.xml": {[]byte(answerTemplate), "7313f82b46a37e34169b0cab8fec2f39f5e564c42de024e9822024e235de5475"},
-		"setup.ps1":            {setupPS1, "67fcb789cb8be453673a26321bebc3b844b0bf978e875fe657c157fbba516775"},
+		"setup.ps1":            {setupPS1, "fa8f287edc26ec6c7bf04f95f35fc3deb8cbce5e0c49f99b691d53b2df2e4dfa"},
 		"remove.ps1":           {removePS1, "3abda4fe37ba2a6e48c3e7da6ad5efc2398a3c0b627e06019215f3be54a0b33d"},
 	} {
 		s := sha256.Sum256(c.b)
@@ -23,7 +23,7 @@ func TestEmbeddedScriptPins(t *testing.T) {
 			t.Errorf("%s changed: sha256 %s, pinned %s", name, got, c.want)
 		}
 	}
-	if b := SetupBootstrap(); b.SHA256 != "67FCB789CB8BE453673A26321BEBC3B844B0BF978E875FE657C157FBBA516775" || b.Name != "setup.ps1" {
+	if b := SetupBootstrap(); b.SHA256 != "FA8F287EDC26EC6C7BF04F95F35FC3DEB8CBCE5E0C49F99B691D53B2DF2E4DFA" || b.Name != "setup.ps1" {
 		t.Errorf("SetupBootstrap = %s %s", b.Name, b.SHA256)
 	}
 }

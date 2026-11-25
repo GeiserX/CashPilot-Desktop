@@ -17,6 +17,12 @@ import (
 )
 
 func writeParams(t *testing.T, edit func(*winvm.SetupParams)) string {
+	return writeParamsIn(t, t.TempDir(), edit)
+}
+
+// writeParamsIn writes a params file into dir, as setup.ps1 writes its copy
+// into the guard folder.
+func writeParamsIn(t *testing.T, dir string, edit func(*winvm.SetupParams)) string {
 	t.Helper()
 	sp := winvm.SetupParams{
 		Version: winvm.SetupParamsVersion, VHDXDir: `D:\VMs`, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
@@ -27,7 +33,10 @@ func writeParams(t *testing.T, edit func(*winvm.SetupParams)) string {
 		edit(&sp)
 	}
 	b, _ := json.Marshal(sp)
-	p := filepath.Join(t.TempDir(), "params.json")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, "setup-params.json")
 	if err := os.WriteFile(p, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +51,7 @@ func TestRunVMSetupBuildsAndDeletesTheParams(t *testing.T) {
 			Echo:  func(context.Context) []netip.Addr { return []netip.Addr{f.PublicIP} },
 			Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() }, ProofWait: time.Millisecond}
 	}
-	params := writeParams(t, nil)
+	params := writeParamsIn(t, filepath.Join(dir, "guard"), nil)
 	var out bytes.Buffer
 	if code := runVMSetup(context.Background(), params, winvm.ProductNames().GuardExe(), mk, &out); code != vmExitOK {
 		t.Fatalf("exit %d:\n%s", code, out.String())
@@ -75,6 +84,8 @@ func TestRunVMSetupRefuses(t *testing.T) {
 	}{
 		"not the guard copy": {writeParams(t, nil), `C:\Users\u\Downloads\CashPilot.exe`},
 		"bad params":         {writeParams(t, func(sp *winvm.SetupParams) { sp.UserSID = "nobody" }), guard},
+		"Everyone as user":   {writeParams(t, func(sp *winvm.SetupParams) { sp.UserSID = "S-1-1-0" }), guard},
+		"Users as user":      {writeParams(t, func(sp *winvm.SetupParams) { sp.UserSID = "S-1-5-32-545" }), guard},
 		"lab settings":       {writeParams(t, func(sp *winvm.SetupParams) { sp.Lab = &winvm.LabOverrides{Instance: 1} }), guard},
 		"no file":            {filepath.Join(t.TempDir(), "missing.json"), guard},
 	}
@@ -89,6 +100,26 @@ func TestRunVMSetupRefuses(t *testing.T) {
 	}
 	if code := vmSetupMain("a", "b", nil); code != vmExitUsage {
 		t.Errorf("both roles at once: exit %d", code)
+	}
+}
+
+// TestRunVMSetupRefusesParamsOutsideTheGuardFolder: the elevated setup reads
+// only setup.ps1's copy in the admin-only guard folder. A params file in a
+// folder the user can write is neither used nor deleted.
+func TestRunVMSetupRefusesParamsOutsideTheGuardFolder(t *testing.T) {
+	dir := t.TempDir()
+	mk := func(winvm.Names) winvm.BuildDeps { return winvm.BuildDeps{Dir: dir} }
+	for name, params := range map[string]string{
+		"a user folder":   writeParams(t, nil),
+		"the data folder": writeParamsIn(t, dir, nil),
+	} {
+		var out bytes.Buffer
+		if code := runVMSetup(context.Background(), params, winvm.ProductNames().GuardExe(), mk, &out); code != vmExitUsage {
+			t.Errorf("%s: exit %d, want %d:\n%s", name, code, vmExitUsage, out.String())
+		}
+		if _, err := os.Stat(params); err != nil {
+			t.Errorf("%s: the elevated setup deleted a params file outside the guard folder: %v", name, err)
+		}
 	}
 }
 
