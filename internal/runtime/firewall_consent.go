@@ -148,7 +148,7 @@ func firewallReadiness(st firewallState, program string, nets []string, what str
 // It names the fix and nothing else: the service runs as a program on Windows,
 // so there is no other way to run it from this card.
 func firewallNotEnforced(what, why string) error {
-	return fmt.Errorf("%s, and %s, so the rule would do nothing and Windows was not asked for anything. Fix that, then click Deploy again", what, why)
+	return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, then click Deploy again", what, why)
 }
 
 // firewallCreateFailed says why creating the rule failed. A No at the Windows
@@ -167,4 +167,15 @@ func firewallRemoveFailed(name string, err error) error {
 		return fmt.Errorf("you chose No at the Windows permission prompt. The Windows Firewall rule %q is still there. If the service was running, it was stopped before the prompt. Try again and choose Yes", name)
 	}
 	return fmt.Errorf("the Windows Firewall rule %q is still there (approve the Windows admin prompt and remove again, or delete it yourself with Remove-NetFirewallRule -DisplayName %s): %w", name, psQuote(name), err)
+}
+
+func verifyCreatedFirewallRule(st firewallState, program string, nets []string, what string) error {
+	if !st.matches(program, nets) {
+		return fmt.Errorf("%s, and the rule is still not in place after creating it", what)
+	}
+	// The firewall can be switched off while the admin prompt waits.
+	if why := st.notEnforced(); why != "" {
+		return fmt.Errorf("%s. CashPilot checked the rule after the admin step and found that %s. Fix that, then click Deploy again", what, why)
+	}
+	return nil
 }

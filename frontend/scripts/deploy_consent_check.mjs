@@ -170,6 +170,7 @@ const hgFields = serviceFormFields(hg, {});
   check("RULE 4: No never promises that nothing changes", !/nothing changes/i.test(text.prompt), text.prompt);
   check("RULE 4: No says a running node stays stopped", text.prompt.includes("If MystNodes was running, the deploy stopped it before the prompt, and it stays stopped"), text.prompt);
   check("RULE 4: what changes names the rule, the program and the ranges", text.changes.includes(step.ruleName) && text.changes.includes(step.program) && text.changes.includes("100.64.0.0/10") && text.changes.includes("169.254.0.0/16"), text.changes);
+  check("RULE 4: the changes do not promise that the rest of the PC is unchanged", !/nothing else/i.test(text.changes), text.changes);
   check("RULE 4: what follows", /restart/i.test(text.after), text.after);
   check("RULE 4: how to undo", text.undo.includes("Removing MystNodes") && text.undo.includes("Outbound Rules"), text.undo);
   for (const part of ["changes", "prompt", "after", "undo"]) {
@@ -187,7 +188,7 @@ const hgFields = serviceFormFields(hg, {});
   await runCheckedDeploy(fields, full, false, BUSY, routed);
   check("RULE 5: a deploy through a proxy asks no admin step", routed.log.join(",") === "say:busy,deploy,say:ok", routed.log.join(","));
 
-  const off = "mysterium was not started: it needs a Windows Firewall rule that blocks it from 100.64.0.0/10, and Windows Firewall is off for the network this computer is on, so the rule would do nothing and Windows was not asked for anything. Fix that, then click Deploy again";
+  const off = "mysterium was not started: it needs a Windows Firewall rule that blocks it from 100.64.0.0/10, and Windows Firewall is off for the network this computer is on, so the rule would do nothing. Fix that, then click Deploy again";
   const unreadable = calls({ adminStep: () => Promise.reject(off) });
   const outcome = await runCheckedDeploy(fields, full, true, BUSY, unreadable);
   check("RULE 5: an unreadable step stops with its reason", outcome.kind === "blocked" && outcome.message === off, JSON.stringify(outcome));

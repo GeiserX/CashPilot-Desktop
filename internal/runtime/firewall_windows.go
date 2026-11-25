@@ -121,14 +121,7 @@ func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate boo
 	if err != nil {
 		return fmt.Errorf("%s, and %v", what, err)
 	}
-	if !st.matches(program, nets) {
-		return fmt.Errorf("%s, and the rule is still not in place after creating it", what)
-	}
-	// The firewall can be switched off while the admin prompt waits.
-	if why := st.notEnforced(); why != "" {
-		return firewallNotEnforced(what, why)
-	}
-	return nil
+	return verifyCreatedFirewallRule(st, program, nets, what)
 }
 
 // firewallReady reports whether the rule for program and nets is in place,

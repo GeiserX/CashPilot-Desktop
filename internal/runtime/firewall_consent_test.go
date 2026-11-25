@@ -225,3 +225,15 @@ func (p *NativeProcessProvider) slugAlive(slug string) bool {
 	p.mu.Unlock()
 	return mp != nil && p.procAlive(mp)
 }
+
+func TestFirewallDisabledAfterAdminStepReportsCreation(t *testing.T) {
+	program := "myst.exe"
+	nets := []string{"100.64.0.0/10"}
+	state := firewallState{Found: true, Enabled: true, Direction: 2, Profiles: 0x7FFFFFFF,
+		Program: program, Remote: "100.64.0.0/255.192.0.0", FirewallOff: true}
+	err := verifyCreatedFirewallRule(state, program, nets, "MystNodes was not started")
+	if err == nil || strings.Contains(err.Error(), "was not asked") ||
+		!strings.Contains(err.Error(), "after the admin step") || !strings.Contains(err.Error(), "Windows Firewall is off") {
+		t.Fatalf("post-admin firewall check: %v, want the reason and the step that already ran", err)
+	}
+}

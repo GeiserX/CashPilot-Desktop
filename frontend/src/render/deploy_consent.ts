@@ -76,7 +76,7 @@ export function adminConsentText(serviceName: string, step: AdminStep): AdminCon
       : `${oldRule ? "Remove" : "Add"} a Windows Firewall rule for ${serviceName}?`,
     changes: [
       oldRule ? `Before ${serviceName} starts, CashPilot removes the old outbound rule "${oldRule}". The new deployment no longer needs it.` : "",
-      rule ? `Before it starts, Windows adds one outbound firewall rule, "${rule}". It blocks only ${serviceName}'s program (${program}) from reaching ${rangesText(step.networks || [])}. Nothing else on this PC changes.` : "",
+      rule ? `Before it starts, Windows adds one outbound firewall rule, "${rule}". It blocks only ${serviceName}'s program (${program}) from reaching ${rangesText(step.networks || [])}.` : "",
     ].filter(Boolean).join(" "),
     prompt:
       `Windows then ${rule && oldRule ? "shows a permission prompt for each rule" : "shows a permission prompt"}. It names Windows PowerShell (${POWERSHELL_PATH}), because CashPilot changes the firewall through it. ` +
@@ -132,7 +132,7 @@ export const CANCELLED_TEXT = "Nothing was deployed. You chose Cancel, so Window
 /** The text of a rejected deploy: the backend's own reason, never an empty line. */
 export function deployErrorText(error: unknown): string {
   const text = (error instanceof Error ? error.message : String(error ?? "")).trim();
-  return text || "CashPilot got no reason back. Nothing on this card changed; try Deploy again.";
+  return text || "CashPilot got no reason back. Check the service before trying Deploy again.";
 }
 
 /** What a checked deploy did. */
