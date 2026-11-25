@@ -125,6 +125,24 @@ func TestSubnetCollision(t *testing.T) {
 	if hit, _ := SubnetCollision(inside, ourSwitchID, testSubnet); !hit {
 		t.Errorf("a stray address inside our /29 is not a collision")
 	}
+	// Our gateway address held at a wider prefix is a collision: our vNIC was
+	// readdressed, or another adapter took the address.
+	for _, held := range []string{"172.20.0.9/24", "172.20.0.9/16"} {
+		wider := testHost()
+		for i, a := range wider.Addrs {
+			if a == pfx("172.20.0.9/29") {
+				wider.Addrs[i] = pfx(held)
+			}
+		}
+		if hit, _ := SubnetCollision(wider, ourSwitchID, testSubnet); !hit {
+			t.Errorf("our gateway held as %s is not a collision", held)
+		}
+		another := testHost()
+		another.Addrs = append(another.Addrs, pfx(held))
+		if hit, _ := SubnetCollision(another, ourSwitchID, testSubnet); !hit {
+			t.Errorf("our gateway also held as %s on another adapter is not a collision", held)
+		}
+	}
 	// The default route via a gateway is not a collision.
 	if hit, _ := SubnetCollision(testHost(), ourSwitchID, testSubnet); hit {
 		t.Errorf("the default route counted as a collision")

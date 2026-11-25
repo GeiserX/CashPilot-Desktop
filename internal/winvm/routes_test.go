@@ -215,6 +215,25 @@ func TestSplitDefaultThroughWireGuardIsFullTunnel(t *testing.T) {
 	}
 }
 
+// A tunnel route of exactly /4 outside the static Denies covers a sixteenth of
+// the internet, so it is a full tunnel. A /5 is not one by the route rule alone;
+// it gets its own Deny instead.
+func TestFullTunnelRouteEdgeIsSlashFour(t *testing.T) {
+	h := testHost()
+	h.Routes = append(h.Routes, route("32.0.0.0/4", ifWireGuard, "", 0))
+	if full, _ := FullTunnel(h, ourSwitchID); !full {
+		t.Errorf("a /4 through WireGuard is not a full tunnel")
+	}
+	h = testHost()
+	h.Routes = append(h.Routes, route("32.0.0.0/5", ifWireGuard, "", 0))
+	if full, why := FullTunnel(h, ourSwitchID); full {
+		t.Errorf("a /5 through WireGuard counted as a full tunnel by the route rule: %s", why)
+	}
+	if got := TunnelPrefixes(h, ourSwitchID, StaticDeny()); !slices.Contains(got, pfx("32.0.0.0/5")) {
+		t.Errorf("the /5 gets no Deny: %v", got)
+	}
+}
+
 func TestExitNodeDefaultRouteIsFullTunnel(t *testing.T) {
 	h := testHost()
 	h.Routes = append(h.Routes, route("0.0.0.0/0", ifTailnet, "100.100.100.100", 0))

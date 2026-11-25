@@ -399,7 +399,9 @@ func CheckVMHost(in VMHostInput) VMHostReport {
 		add(CheckNATOverlap, Yes, "")
 	}
 
-	if full, why := FullTunnel(in.Net, in.OurSwitchID); full {
+	if len(in.Net.Interfaces) == 0 && len(in.Net.Routes) == 0 && len(in.Net.Egress) == 0 {
+		add(CheckDefaultRoute, Unknown, "could not read the routes")
+	} else if full, why := FullTunnel(in.Net, in.OurSwitchID); full {
 		add(CheckDefaultRoute, No, why)
 	} else {
 		add(CheckDefaultRoute, Yes, "")

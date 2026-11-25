@@ -14,7 +14,7 @@ type LiveState struct {
 	VMExists      bool            `json:"vmExists"`
 	VMState       string          `json:"vmState"`
 	Adapters      []LiveAdapter   `json:"adapters"` // every adapter on the VM
-	ACLs          []ACL           `json:"acls"`     // Meter rows included, so Diff can flag them
+	ACLs          []ACL           `json:"acls"`     // as Hyper-V lists them: Meter rows included, a Both rule as an Inbound and an Outbound row
 	ExtACLs       int             `json:"extAcls"`  // must be 0
 	DhcpGuard     bool            `json:"dhcpGuard"`
 	RouterGuard   bool            `json:"routerGuard"`
@@ -33,16 +33,16 @@ type LiveState struct {
 	Disks         int             `json:"disks"`
 	Passthrough   []string        `json:"passthrough"` // GPU-P, DDA, COM paths, USB: must be empty
 	SwitchType    string          `json:"switchType"`
-	SwitchPorts   int             `json:"switchPorts"` // VM adapters on our switch: must be 1
+	SwitchPorts   int             `json:"switchPorts"` // VM adapters on our switch: 1 while ours is connected, 0 while it is not
 	VNICIfIndex   int             `json:"vnicIfIndex"`
 	VNICMAC       string          `json:"vnicMac"`
 	Bindings      map[string]bool `json:"bindings"`    // component ID -> enabled, on our vNIC
-	ProtocolsOn   []string        `json:"protocolsOn"` // enabled NetTrans-class components on our vNIC
+	ProtocolsOn   []string        `json:"protocolsOn"` // enabled NetTrans-class components on our vNIC; ms_tcpip is always among them
 	NATs          []LiveNAT       `json:"nats"`        // every NetNat on the host
 	Firewall      []LiveRule      `json:"firewall"`    // rules of our group
 	HostNeighbor  *Neighbor       `json:"hostNeighbor"`
 	Enhanced      bool            `json:"enhancedSession"`
-	GCS           []string        `json:"gcs"`
+	GCS           []string        `json:"gcs"` // GuestCommunicationServices key names; nil means not read, empty means none
 	HostBuild     string          `json:"hostBuild"`
 }
 
@@ -83,8 +83,10 @@ type Change struct {
 }
 
 // Diff compares the live state with the plan and the Denies of this pass. Any
-// change means the fence is not the one that was proven. A value the reading
-// does not have counts as changed, so a broken reader fails closed.
+// change means the fence is not the one that was proven. A part the reader
+// could not fill counts as changed, so a broken reader fails closed: a missing
+// binding or integration service, an empty static MAC, a vNIC ifIndex of 0, no
+// ms_tcpip in ProtocolsOn, and a nil GCS list.
 func Diff(p Plan, live LiveState, d Dynamic) []Change {
 	var cs []Change
 	add := func(field string, want, got any) {
@@ -118,13 +120,17 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 	for i, a := range want {
 		wantS[i] = a.String()
 	}
-	var gotS []string
+	var rows []ACL
 	for _, a := range live.ACLs {
 		if strings.EqualFold(a.Action, "Meter") {
 			add("meterAcl", "none", a.String())
 			continue
 		}
-		gotS = append(gotS, ACL{Action: a.Action, Direction: a.Direction, Remote: a.Remote.Masked()}.String())
+		rows = append(rows, ACL{Action: a.Action, Direction: a.Direction, Remote: a.Remote.Masked()})
+	}
+	var gotS []string
+	for _, a := range foldBoth(rows) {
+		gotS = append(gotS, a.String())
 	}
 	slices.Sort(gotS)
 	slices.Sort(wantS)
@@ -181,7 +187,13 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 		add("passthrough", "none", strings.Join(live.Passthrough, ","))
 	}
 	cmp("switchType", "Internal", live.SwitchType)
-	cmp("switchPorts", 1, live.SwitchPorts)
+	// Our adapter is the only one on our switch. While the boot routine has it
+	// disconnected, the switch must have none.
+	wantPorts := 0
+	if len(live.Adapters) == 1 && strings.EqualFold(live.Adapters[0].SwitchID, p.SwitchID) {
+		wantPorts = 1
+	}
+	cmp("switchPorts", wantPorts, live.SwitchPorts)
 	if m, _ := NormalizeMAC(live.VNICMAC); m != p.HostVNICMAC {
 		add("vnicMac", p.HostVNICMAC, live.VNICMAC)
 	}
@@ -197,7 +209,11 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 		}
 	}
 	// IPv4 is the only protocol allowed on our vNIC; any other, a third-party
-	// protocol driver included, could answer non-IP frames.
+	// protocol driver included, could answer non-IP frames. The host's IPv4
+	// stack is always on, so a list without it means the reader failed.
+	if !slices.ContainsFunc(live.ProtocolsOn, func(c string) bool { return strings.EqualFold(c, "ms_tcpip") }) {
+		add("protocols", "ms_tcpip", "unread")
+	}
 	for _, c := range live.ProtocolsOn {
 		if !strings.EqualFold(c, "ms_tcpip") {
 			add("protocols", "ms_tcpip", c)
@@ -238,13 +254,44 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 	}
 
 	// A new hv_sock service is drift until the user reviews it (Repair takes a
-	// new baseline). A removed one is not a risk.
+	// new baseline). A removed one is not a risk. A list not read could hide a
+	// new one.
+	if live.GCS == nil {
+		add("gcs", "only the setup list", "unread")
+	}
 	for _, k := range GCSBaseline(live.GCS) {
 		if !slices.Contains(p.GCSBaseline, k) {
 			add("gcs", "only the setup list", k)
 		}
 	}
 	return cs
+}
+
+// foldBoth turns each Inbound and Outbound row with the same action and prefix
+// into one Both row. Get-VMNetworkAdapterAcl lists a Both rule that way. A row
+// left without its pair stays one-way, so it is still drift.
+func foldBoth(rows []ACL) []ACL {
+	opposite := map[string]string{"inbound": "Outbound", "outbound": "Inbound"}
+	used := make([]bool, len(rows))
+	var out []ACL
+	for i, a := range rows {
+		if used[i] {
+			continue
+		}
+		used[i] = true
+		if other, ok := opposite[strings.ToLower(a.Direction)]; ok {
+			for j := i + 1; j < len(rows); j++ {
+				b := rows[j]
+				if !used[j] && strings.EqualFold(b.Direction, other) && b.Action == a.Action && b.Remote == a.Remote {
+					used[j] = true
+					a.Direction = "Both"
+					break
+				}
+			}
+		}
+		out = append(out, a)
+	}
+	return out
 }
 
 func diffSets(a, b []string, label string) string {

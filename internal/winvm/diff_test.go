@@ -91,6 +91,7 @@ func driftCases() []driftCase {
 		}},
 		{"Deny turned Allow", "acl", func(l *LiveState, _ *Dynamic) { l.ACLs[0].Action = "Allow" }},
 		{"Deny one-way", "acl", func(l *LiveState, _ *Dynamic) { l.ACLs[0].Direction = "Outbound" }},
+		{"Deny inbound only", "acl", func(l *LiveState, _ *Dynamic) { l.ACLs[0].Direction = "Inbound" }},
 		{"extra Allow row", "acl", func(l *LiveState, _ *Dynamic) {
 			l.ACLs = append(l.ACLs, ACL{Action: "Allow", Direction: "Both", Remote: pfx("192.168.77.1/32")})
 		}},
@@ -130,8 +131,15 @@ func driftCases() []driftCase {
 		{"GPU-P", "passthrough", func(l *LiveState, _ *Dynamic) { l.Passthrough = []string{"gpu-p"} }},
 		{"switch made External", "switchType", func(l *LiveState, _ *Dynamic) { l.SwitchType = "External" }},
 		{"second VM on our switch", "switchPorts", func(l *LiveState, _ *Dynamic) { l.SwitchPorts = 2 }},
+		{"our switch reads empty while connected", "switchPorts", func(l *LiveState, _ *Dynamic) { l.SwitchPorts = 0 }},
+		{"another VM on our switch while ours is disconnected", "switchPorts", func(l *LiveState, _ *Dynamic) {
+			l.Adapters[0].SwitchID = ""
+			l.SwitchPorts = 1
+		}},
 		{"host vNIC MAC", "vnicMac", func(l *LiveState, _ *Dynamic) { l.VNICMAC = "00-15-5D-00-00-77" }},
 		{"third-party protocol", "protocols", func(l *LiveState, _ *Dynamic) { l.ProtocolsOn = append(l.ProtocolsOn, "insecure_npcap_proto") }},
+		{"protocols unread", "protocols", func(l *LiveState, _ *Dynamic) { l.ProtocolsOn = nil }},
+		{"protocols without IPv4", "protocols", func(l *LiveState, _ *Dynamic) { l.ProtocolsOn = []string{"insecure_npcap_proto"} }},
 		{"NAT gone", "nat", func(l *LiveState, _ *Dynamic) { l.NATs = l.NATs[1:] }},
 		{"NAT prefix changed", "nat", func(l *LiveState, _ *Dynamic) { l.NATs[0].Prefix = pfx("172.20.0.0/24") }},
 		{"second NAT of ours", "nat", func(l *LiveState, _ *Dynamic) { l.NATs = append(l.NATs, l.NATs[0]) }},
@@ -155,6 +163,7 @@ func driftCases() []driftCase {
 		{"new hv_sock service", "gcs", func(l *LiveState, _ *Dynamic) {
 			l.GCS = append(l.GCS, "0000abcd-facb-11e6-bd58-64006a7986d3")
 		}},
+		{"hv_sock services unread", "gcs", func(l *LiveState, _ *Dynamic) { l.GCS = nil }},
 	}
 	// Each BindingsOff component bound again, and each one missing from the
 	// reading, is drift.
@@ -219,20 +228,63 @@ func TestMatchingStateHasNoChangesAndBootConnects(t *testing.T) {
 	if cs := Diff(p, live, d); len(cs) != 0 {
 		t.Fatalf("Diff on the matching state = %+v", cs)
 	}
-	// After the boot routine disconnects, the adapter has no switch. That is
-	// not drift, or Boot could never reconnect.
+	// After the boot routine disconnects, the adapter has no switch and our
+	// switch has no VM adapter. That is not drift, or Boot could never
+	// reconnect.
 	live.Adapters[0].SwitchID = ""
+	live.SwitchPorts = 0
 	if cs := Diff(p, live, d); len(cs) != 0 {
 		t.Errorf("a disconnected adapter is drift: %+v", cs)
 	}
 	// A removed hv_sock service is not a risk.
-	live.GCS = nil
+	live.GCS = []string{}
 	if cs := Diff(p, live, d); len(cs) != 0 {
 		t.Errorf("a removed hv_sock service is drift: %+v", cs)
 	}
 	a := Decide(Boot, okInputs(nil))
 	if !a.Disconnect || !a.Connect || !a.Start {
 		t.Errorf("Boot on a clean state = %+v, want disconnect, connect and start", a)
+	}
+}
+
+// Get-VMNetworkAdapterAcl lists each Both rule as an Inbound and an Outbound
+// row. Diff folds a matching pair into one Both row, so the real reading is
+// not drift, but a row left without its pair still is.
+func TestHyperVSplitACLRowsFold(t *testing.T) {
+	p := testPlan(t, nil)
+	d := testDynamic()
+	split := func() []ACL {
+		var rows []ACL
+		for i, a := range p.WantACLs(d) {
+			in, out := a, a
+			in.Direction, out.Direction = "Inbound", "Outbound"
+			if i%2 == 0 {
+				rows = append(rows, out, in) // the order must not matter
+			} else {
+				rows = append(rows, in, out)
+			}
+		}
+		return rows
+	}
+	live := liveFor(p, d)
+	live.ACLs = split()
+	if cs := Diff(p, live, d); len(cs) != 0 {
+		t.Fatalf("the Hyper-V split reading is drift: %+v", cs)
+	}
+
+	cases := map[string]func([]ACL) []ACL{
+		"one half of a pair gone": func(r []ACL) []ACL { return r[1:] },
+		"one half turned Allow":   func(r []ACL) []ACL { r[0].Action = "Allow"; return r },
+		"a pair plus a stray half": func(r []ACL) []ACL {
+			return append(r, ACL{Action: "Deny", Direction: "Inbound", Remote: r[0].Remote})
+		},
+	}
+	for name, mutate := range cases {
+		live := liveFor(p, d)
+		live.ACLs = mutate(split())
+		if cs := Diff(p, live, d); !hasField(cs, "acl") {
+			t.Errorf("%s: no acl drift, got %+v", name, cs)
+		}
 	}
 }
 
