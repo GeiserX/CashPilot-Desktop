@@ -2198,6 +2198,7 @@ function renderSetupWizard(current: AppState) {
   });
   document.querySelectorAll<HTMLSelectElement>("[data-wizard-where]").forEach((select) => {
     select.addEventListener("change", () => {
+      select.setCustomValidity("");
       wizardWhereDrafts[select.dataset.wizardWhere || ""] = whereChoice(select.value);
     });
   });
@@ -2205,6 +2206,13 @@ function renderSetupWizard(current: AppState) {
     button.addEventListener("click", () => {
       const slug = button.dataset.slug || "";
       const action = button.dataset.wizardAction || "";
+      if (action === "deploy") {
+        const where = button.closest("[data-form-slug]")?.querySelector<HTMLSelectElement>("[data-wizard-where]");
+        const workerId = whereChoice(where?.value);
+        const refusal = missingWizardWorker(workerId);
+        where?.setCustomValidity(refusal);
+        if (refusal) where?.reportValidity();
+      }
       void runWizardAction(slug, action);
     });
   });
@@ -2440,6 +2448,11 @@ function readWizardWhere(slug: string): number | null {
   return select ? whereChoice(select.value) : null;
 }
 
+function missingWizardWorker(workerId: number | null): string {
+  if (workerId === null || state?.workerTargets?.some((worker) => worker.id === workerId)) return "";
+  return "The selected worker is unavailable. Choose a target before deploying.";
+}
+
 function closeWizard() {
   dropNewWalletPhrase();
   activeView = "dashboard";
@@ -2506,6 +2519,10 @@ async function runWizardAction(slug: string, action: string) {
   }
   const values = readWizardForm(slug);
   try {
+    if (action === "deploy") {
+      const refusal = missingWizardWorker(readWizardWhere(slug));
+      if (refusal) throw new Error(refusal);
+    }
     if (action === "save") {
       await SaveCredentials(slug, values);
       if (output) output.textContent = "Credentials saved.";
