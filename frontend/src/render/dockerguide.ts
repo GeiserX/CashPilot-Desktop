@@ -15,7 +15,7 @@
 //
 // Pure: takes the model, returns HTML.
 
-import type { FirmwareRestart, GuideStep, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
+import type { FirmwareRestart, GuideStep, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { outcomeHtml, stepConfirm, stepRestart, stepRunning, stepSignOut } from "./dockersteps.js";
 
@@ -80,11 +80,13 @@ function nameList(names: string[]): string {
 }
 
 /**
- * Docker runs Linux containers, so a guided setup is finished: Go clears the
- * journal on the same reading (host_check.go), and the resume banner goes.
+ * This PC's own Docker Desktop runs Linux containers, so a guided setup is
+ * finished: Go cleared the journal on the same reading and says so
+ * (host_check.go setupFinished), and the resume banner goes. An engine elsewhere,
+ * or Windows containers, finishes nothing.
  */
-export function setupFinished(runtime: Pick<RuntimeStatus, "reason">): boolean {
-  return runtime.reason === "running";
+export function setupFinished(result: Pick<HostCheckResult, "setupFinished">): boolean {
+  return result.setupFinished === true;
 }
 
 /** The engine answers: Docker runs, in Linux or in Windows containers mode. */
