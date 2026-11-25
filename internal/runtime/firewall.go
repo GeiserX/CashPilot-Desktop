@@ -187,3 +187,15 @@ func windowsRemoteAddresses(s string) ([]string, bool) {
 	slices.Sort(out)
 	return out, len(out) > 0
 }
+
+// firewallRuleProgramScript checks absence separately from errors such as a
+// stopped firewall service. The exact name belongs to the local policy store.
+func firewallRuleProgramScript(name string) string {
+	return `$rule = Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object { $_.Name -eq ` + psQuote(name) + ` }
+$program = ''
+if ($null -ne $rule) {
+  $program = [string]($rule | Get-NetFirewallApplicationFilter).Program
+  if ([string]::IsNullOrEmpty($program)) { throw 'The Windows Firewall rule has no program filter.' }
+}
+`
+}

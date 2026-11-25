@@ -58,9 +58,8 @@ func waitBlockedOnMutex(fn string, timeout time.Duration) bool {
 // would turn that memory off again.
 func TestSaveSettingsKeepsTheFencesMemory(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
-	recordIsolationOnWhileBlocked(t, app, ".(*App).SaveSettings(", app.upstream.mu.Lock, app.upstream.mu.Unlock, func() error {
-		// A new pairing address clears the old worker key under upstream.mu, after
-		// the form was read.
+	recordIsolationOnWhileBlocked(t, app, ".(*App).SaveSettings(", app.pairingMu.Lock, app.pairingMu.Unlock, func() error {
+		// The pairing update waits behind Join and Leave after reading the form.
 		_, err := app.SaveSettings(map[string]string{"upstreamUrl": "https://cashpilot.example", "displayCurrency": "EUR"})
 		return err
 	})

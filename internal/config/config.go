@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/filelock"
 	"github.com/zalando/go-keyring"
 )
 
@@ -279,6 +281,11 @@ func (m *Manager) Save(cfg AppConfig) error {
 	cfg = applyDefaults(cfg)
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	release, err := m.lockConfig()
+	if err != nil {
+		return err
+	}
+	defer release()
 	if err := m.persist(cfg); err != nil {
 		return err
 	}
@@ -332,6 +339,11 @@ func (m *Manager) reloadLocked() (bool, error) {
 func (m *Manager) Update(mutate func(cfg *AppConfig)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	release, err := m.lockConfig()
+	if err != nil {
+		return err
+	}
+	defer release()
 	// Start from the file, not only from memory: another process may have saved
 	// a change (a join made in the window, seen by the helper), and writing this
 	// Manager's older copy back would undo it.
@@ -344,6 +356,16 @@ func (m *Manager) Update(mutate func(cfg *AppConfig)) error {
 	}
 	m.cfg = next
 	return nil
+}
+
+// The window and helper have separate Managers. Hold the file lock across
+// each write so neither can put back the other's previous settings.
+func (m *Manager) lockConfig() (func(), error) {
+	release, ok := filelock.Acquire(context.Background(), m.path+".lock", 5*time.Second)
+	if !ok {
+		return nil, errors.New("could not lock the config file")
+	}
+	return release, nil
 }
 
 // persist writes the config to disk and remembers what it wrote (saved). Takes
@@ -412,11 +434,16 @@ func renameReplacing(from, to string) error {
 }
 
 // load runs once during NewManager (single-threaded, before the Manager is
-// shared with the background fleet HTTP server), so it does not take the lock.
+// shared with the background fleet HTTP server), so it only takes the file lock.
 func (m *Manager) load() error {
+	release, err := m.lockConfig()
+	if err != nil {
+		return err
+	}
+	defer release()
 	raw, err := os.ReadFile(m.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return m.Save(m.cfg)
+		return m.persist(applyDefaults(m.cfg))
 	}
 	if err != nil {
 		return err
@@ -522,17 +549,6 @@ func UpstreamEnrolmentKey(appDir string) (string, error) {
 // SetUpstreamEnrolmentKey persists the shared enrolment token.
 func SetUpstreamEnrolmentKey(appDir, value string) error {
 	return writeSecret(appDir, keyringUserUpstreamEnrol, ".upstream_enrolment_key", value)
-}
-
-// UpstreamWorkerKey returns the per-worker key the server issued to this
-// machine, or "" before enrolment completes.
-func UpstreamWorkerKey(appDir string) (string, error) {
-	return readSecret(appDir, keyringUserUpstreamWorker, ".upstream_worker_key")
-}
-
-// SetUpstreamWorkerKey persists the per-worker key issued by the server.
-func SetUpstreamWorkerKey(appDir, value string) error {
-	return writeSecret(appDir, keyringUserUpstreamWorker, ".upstream_worker_key", value)
 }
 
 // readSecret is the shared body of the keychain-first readers.

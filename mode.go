@@ -173,6 +173,9 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 	if err := a.ready(); err != nil {
 		return JoinResult{}, err
 	}
+	a.pairingMu.Lock()
+	defer a.pairingMu.Unlock()
+	a.refreshConfig()
 	if a.joined() {
 		return JoinResult{}, errors.New("this computer is already joined to a CashPilot; switch to Run everything here first")
 	}
@@ -220,12 +223,9 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 		}
 		// The worker key belongs to the server that issued it.
 		workerKey := strings.TrimSpace(resp.WorkerKey)
-		if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), workerKey); err != nil {
+		if err := config.SetJoinedWorkerKey(a.cfg.AppDir(), target.URL, workerKey); err != nil {
 			return fmt.Errorf("saving this computer's own key: %w", err)
 		}
-		a.upstream.mu.Lock()
-		a.upstream.workerKey = workerKey
-		a.upstream.mu.Unlock()
 		return nil
 	}, func(c *config.AppConfig) {
 		c.UpstreamURL = target.URL
@@ -274,6 +274,7 @@ func (a *App) savePairingKey(key string) error {
 func (a *App) updateConfigForServerCommands(saveKeys func(config.AppConfig) error, update func(*config.AppConfig)) (firewallErr, configErr error) {
 	a.workerFirewall.mu.Lock()
 	defer a.workerFirewall.mu.Unlock()
+	a.refreshConfig()
 	if err := saveKeys(a.cfg.Config()); err != nil {
 		return nil, err
 	}
@@ -308,8 +309,11 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 	if err := a.ready(); err != nil {
 		return LeaveResult{}, err
 	}
+	a.pairingMu.Lock()
+	defer a.pairingMu.Unlock()
+	a.refreshConfig()
 	if !a.joined() {
-		return LeaveResult{}, errors.New("this computer already runs everything here")
+		return a.retryServerCommandsRemoval()
 	}
 	out := LeaveResult{
 		ServerURL: strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/"),
@@ -324,7 +328,7 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 			return fmt.Errorf("clearing the key: %w", err)
 		}
 		a.upstream.mu.Lock()
-		a.upstream.workerKey, a.upstream.statusURL = "", ""
+		a.upstream.statusURL = ""
 		a.upstream.mu.Unlock()
 		return nil
 	}, func(c *config.AppConfig) {

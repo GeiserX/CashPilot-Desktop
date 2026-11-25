@@ -291,9 +291,7 @@ func TestAnUnconfirmedWorkerDoesNotTryToImport(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			app := newPayloadTestApp(t, nil)
 			seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
-			app.upstream.mu.Lock()
-			app.upstream.workerKey = tc.heldKey
-			app.upstream.mu.Unlock()
+			saveTestWorkerKey(t, app, tc.heldKey)
 
 			stub := newPairingStub(t, tc.reDelivered)
 			client := &upstream.Client{HTTP: stub.Client()}
@@ -318,11 +316,8 @@ func TestAConfirmedWorkerImportsOnItsNextHeartbeat(t *testing.T) {
 	stub := newPairingStub(t, "") // no key returned == this worker is confirmed
 	client := &upstream.Client{HTTP: stub.Client()}
 
-	// sendUpstream reads the cached worker key, so seed it as a confirmed worker
-	// would already hold it.
-	app.upstream.mu.Lock()
-	app.upstream.workerKey = "own-key"
-	app.upstream.mu.Unlock()
+	// Seed the saved key of a confirmed worker.
+	saveTestWorkerKey(t, app, "own-key")
 
 	app.sendUpstream(context.Background(), client, stub.URL, "shared-enrolment-key")
 	if got := stub.importCount(); got != 1 {

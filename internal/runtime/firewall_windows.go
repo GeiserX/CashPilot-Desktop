@@ -142,3 +142,16 @@ func removeFirewallBlock(slug, program string) error {
 	}
 	return nil
 }
+
+// FirewallRuleProgram reads a local rule by its unique name, without elevation.
+// An empty program means the named rule was absent.
+func FirewallRuleProgram(name string) (string, error) {
+	script := `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+` + firewallRuleProgramScript(name) + `
+[Console]::Write($program)
+`
+	out, err := powerShell("-EncodedCommand", psEncode(script))
+	return string(out), err
+}

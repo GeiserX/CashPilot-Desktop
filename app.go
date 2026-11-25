@@ -137,6 +137,8 @@ type App struct {
 	// workerAPI is the API a joined CashPilot server commands this computer through
 	// (worker_api.go).
 	workerAPI workerAPIState
+	// pairingMu orders explicit Join and Leave requests in the window.
+	pairingMu sync.Mutex
 	// workerFirewall coordinates firewall consent with pairing changes.
 	workerFirewall workerFirewallState
 }
@@ -309,8 +311,9 @@ func (a *App) startCore(ctx context.Context) error {
 	a.startDeviceLinkRetry(ctx)
 	// What each earner talks to, when the owner switched Activity on.
 	a.startActivitySampler(ctx)
-	// Optional, and a no-op unless the user paired this Desktop with a
-	// CashPilot server. Standalone is the default and unaffected.
+	// Resolve an interrupted Windows rule change before opening the worker API.
+	a.recoverServerCommandsFirewall()
+	// Report to the server when this Desktop is paired.
 	a.startUpstream(ctx)
 	// While joined, the server deploys and stops services here (worker_api.go).
 	a.startWorkerAPI(ctx)
@@ -1258,6 +1261,10 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	address, hasAddress := values["upstreamUrl"]
 	address = strings.TrimRight(strings.TrimSpace(address), "/")
 	key, hasKey := values["upstreamKey"]
+	if hasAddress || hasKey {
+		a.pairingMu.Lock()
+		defer a.pairingMu.Unlock()
+	}
 	// Only the fields this form owns are written, onto the config as it is now.
 	// A whole-snapshot Save would put back changes such as the fence recording
 	// that isolation is on while the form saves keys.
@@ -1273,9 +1280,6 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 			if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
 				return fmt.Errorf("clearing the previous worker key: %w", err)
 			}
-			a.upstream.mu.Lock()
-			a.upstream.workerKey = ""
-			a.upstream.mu.Unlock()
 		}
 		if hasKey {
 			if err := a.savePairingKey(strings.TrimSpace(key)); err != nil {
@@ -2282,9 +2286,8 @@ func (a *App) ensureFleetAPIKey() error {
 	}
 	// Strip any plaintext token still carried in config.json (the omitempty tag drops
 	// the now-empty field on the next write).
-	if cfg := a.cfg.Config(); cfg.FleetAPIKey != "" {
-		cfg.FleetAPIKey = ""
-		if err := a.cfg.Save(cfg); err != nil {
+	if a.cfg.Config().FleetAPIKey != "" {
+		if err := a.cfg.Update(func(c *config.AppConfig) { c.FleetAPIKey = "" }); err != nil {
 			return err
 		}
 	}
