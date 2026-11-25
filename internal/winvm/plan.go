@@ -285,6 +285,11 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 	if es != ESOff && es != ESKeep {
 		return Plan{}, fmt.Errorf("enhanced session policy %q is unknown", es)
 	}
+	// Keep is for the lab only: the product always turns Enhanced Session off
+	// (decision 2), so a product plan with keep would be a looser fence.
+	if es == ESKeep && o.Names == ProductNames() {
+		return Plan{}, errors.New("the product VM must turn Enhanced Session off; keep is a lab setting")
+	}
 	var exits []netip.Addr
 	for _, a := range o.ExtraExits {
 		a = a.Unmap()
@@ -369,6 +374,23 @@ func GCSBaseline(keys []string) []string {
 	return out
 }
 
+// unmapPrefix turns an IPv4-mapped IPv6 prefix (::ffff:a.b.c.d/n) into its
+// IPv4 prefix (a.b.c.d/n-96) and masks it. A mapped prefix shorter than /96
+// spans more than the mapped range and has no IPv4 form: it comes back
+// invalid, and the caller drops it (::/0 already denies all of IPv6).
+func unmapPrefix(q netip.Prefix) netip.Prefix {
+	if !q.IsValid() {
+		return netip.Prefix{}
+	}
+	if q.Addr().Is4In6() {
+		if q.Bits() < 96 {
+			return netip.Prefix{}
+		}
+		return netip.PrefixFrom(q.Addr().Unmap(), q.Bits()-96).Masked()
+	}
+	return q.Masked()
+}
+
 func checkSubnet(s netip.Prefix) error {
 	if !s.IsValid() || !s.Addr().Is4() || s.Bits() != 29 || s.Masked() != s || !natSpace.Contains(s.Addr()) {
 		return fmt.Errorf("subnet %v is not a /29 inside %v", s, natSpace)
@@ -403,8 +425,8 @@ func (p Plan) WantACLs(d Dynamic) []ACL {
 	}
 	for _, set := range [][]netip.Prefix{d.HostAddrs, d.OnLink, d.OwnIPs, d.Tunnels} {
 		for _, q := range set {
-			if q.IsValid() {
-				dyn = append(dyn, netip.PrefixFrom(q.Addr().Unmap(), q.Bits()).Masked())
+			if q = unmapPrefix(q); q.IsValid() {
+				dyn = append(dyn, q)
 			}
 		}
 	}

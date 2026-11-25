@@ -169,7 +169,7 @@ func TestArchNameIsNotGOARCH(t *testing.T) {
 // vmHostInput is a PC ready for the Secure VM, for each test to break one thing.
 func vmHostInput(edit func(*VMHostInput)) VMHostInput {
 	in := VMHostInput{
-		NATs:         []netip.Prefix{pfx("10.250.255.0/30")},
+		NATs:         []netip.Prefix{pfx("10.99.0.0/30")},
 		Subnet:       testSubnet,
 		Net:          testHost(),
 		Network:      CurrentNetwork{ID: NetworkID{GatewayMAC: "00-11-22-33-44-55", ProfileID: "{6F1C2D3E-0000-4000-8000-000000000001}"}},

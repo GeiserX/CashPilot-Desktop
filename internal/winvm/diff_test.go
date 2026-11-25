@@ -53,7 +53,7 @@ func liveFor(p Plan, d Dynamic) LiveState {
 		VNICMAC:      "00-15-5D-00-00-01",
 		Bindings:     bindings,
 		ProtocolsOn:  []string{"ms_tcpip"},
-		NATs:         []LiveNAT{{Name: p.Names.NAT, Prefix: p.Subnet}, {Name: "OtherLab", Prefix: pfx("10.250.255.0/30")}},
+		NATs:         []LiveNAT{{Name: p.Names.NAT, Prefix: p.Subnet}, {Name: "OtherLab", Prefix: pfx("10.99.0.0/30")}},
 		Firewall:     []LiveRule{{Direction: "Inbound", Action: "Block", Enabled: true, IfIndex: vnic}},
 		HostNeighbor: &Neighbor{IP: p.GuestIP, MAC: "00-15-5d-00-00-02", State: "Permanent"},
 		GCS:          []string{"999E53D4-3D5C-4C3E-8779-BED06EC056E1"},
@@ -237,7 +237,8 @@ func TestMatchingStateHasNoChangesAndBootConnects(t *testing.T) {
 }
 
 func TestEnhancedSessionUnderKeepIsNotDriftButLabelled(t *testing.T) {
-	p := testPlan(t, func(p *Plan) { p.EnhancedSession = ESKeep; p.EnhancedSessionOriginal = nil })
+	lab, _ := LabNames(1)
+	p := testPlan(t, func(p *Plan) { p.Names = lab; p.EnhancedSession = ESKeep; p.EnhancedSessionOriginal = nil })
 	d := testDynamic()
 	live := liveFor(p, d)
 	live.Enhanced = true
@@ -300,8 +301,10 @@ func TestDecideOverEveryCombination(t *testing.T) {
 			if boot.Connect && !boot.Disconnect {
 				t.Errorf("Boot connected without disconnecting first for %s", label)
 			}
-			if in.ProofLock && (boot != Action{Reason: boot.Reason} || Decide(Periodic, in) != Action{Reason: boot.Reason}) {
-				t.Errorf("the guard acted under a valid proof lock for %s", label)
+			// Under a valid lock, Periodic leaves the proof alone, but Boot and
+			// Resume still disconnect: a reboot mid-proof may have left holes open.
+			if in.ProofLock && (boot != Action{Disconnect: true, Reason: boot.Reason} || Decide(Periodic, in) != Action{Reason: boot.Reason}) {
+				t.Errorf("under a valid proof lock Boot = %+v and Periodic = %+v for %s, want Boot to disconnect only and Periodic to do nothing", boot, Decide(Periodic, in), label)
 			}
 			if !in.ProofLock && !clean {
 				if p := Decide(Periodic, in); !p.Disconnect || p.Reason == "" {

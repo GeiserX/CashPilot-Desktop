@@ -120,6 +120,24 @@ func TestWantACLsPrunesCoveredAndNeverRepeatsAPrefix(t *testing.T) {
 	}
 	assertUniquePrefixes(t, acls)
 
+	// An IPv4-mapped prefix becomes its IPv4 prefix; one wider than the mapped
+	// range has no IPv4 form and is dropped. Neither may leave an invalid row.
+	mapped := p.WantACLs(Dynamic{OwnIPs: []netip.Prefix{pfx("::ffff:198.51.100.7/128"), pfx("::ffff:198.51.100.128/121"), pfx("::ffff:0:0/80")}})
+	for _, want := range []string{"198.51.100.7/32", "198.51.100.128/25"} {
+		if !hasRow(mapped, want) {
+			t.Errorf("mapped prefix did not become row %s", want)
+		}
+	}
+	for _, a := range mapped {
+		if !a.Remote.IsValid() {
+			t.Errorf("WantACLs emitted an invalid row: %+v", a)
+		}
+	}
+	if len(mapped) != len(StaticDeny())+3 {
+		t.Errorf("mapped input gave %d rows, want %d", len(mapped), len(StaticDeny())+3)
+	}
+	assertUniquePrefixes(t, mapped)
+
 	// The same over random input: never two rows with one prefix, every static
 	// row always there, and the order stable.
 	r := rand.New(rand.NewSource(1))
@@ -191,7 +209,8 @@ func TestEnhancedSessionOriginalSurvivesRepair(t *testing.T) {
 	}
 
 	// The keep policy never records one.
-	keep := testOptions(ProductNames())
+	lab1, _ := LabNames(1)
+	keep := testOptions(lab1)
 	keep.EnhancedSession = ESKeep
 	k, err := NewPlan(keep, nil)
 	if err != nil {
@@ -289,6 +308,7 @@ func TestLoadPlanRefusesALooserOrBrokenFile(t *testing.T) {
 		"bad names":          edit(func(p *Plan) { p.Names.DataDir = `C:\Users\Public` }),
 		"bad vm id":          edit(func(p *Plan) { p.VMID = "x; Remove-VM *" }),
 		"keep with original": edit(func(p *Plan) { p.EnhancedSession = ESKeep }),
+		"product keeps es":   edit(func(p *Plan) { p.EnhancedSession = ESKeep; p.EnhancedSessionOriginal = nil }),
 		"unnormalized gcs":   edit(func(p *Plan) { p.GCSBaseline = []string{"abc"} }),
 		"vhdx injection":     edit(func(p *Plan) { p.VHDXDir = `D:\x"; calc; "` }),
 	}
@@ -316,7 +336,7 @@ func TestPlanRoundTrip(t *testing.T) {
 
 func TestNewPlanRefusesBadOptions(t *testing.T) {
 	cases := map[string]func(*Options){
-		"bad names":         func(o *Options) { o.Names.VM = "bunker" },
+		"bad names":         func(o *Options) { o.Names.VM = "other-vm" },
 		"relative vhdx":     func(o *Options) { o.VHDXDir = `CashPilotVM` },
 		"dotdot vhdx":       func(o *Options) { o.VHDXDir = `D:\a\..\Windows` },
 		"subnet /24":        func(o *Options) { o.Subnet = pfx("172.20.0.0/24") },
@@ -329,6 +349,7 @@ func TestNewPlanRefusesBadOptions(t *testing.T) {
 		"tiny memory":       func(o *Options) { o.GuestMemory = GiB },
 		"odd memory":        func(o *Options) { o.GuestMemory = 4*GiB + 1 },
 		"unknown es":        func(o *Options) { o.EnhancedSession = "maybe" },
+		"product keeps es":  func(o *Options) { o.EnhancedSession = ESKeep },
 		"ipv6 exit":         func(o *Options) { o.ExtraExits = []netip.Addr{addr("2001:db8::1")} },
 	}
 	for name, edit := range cases {

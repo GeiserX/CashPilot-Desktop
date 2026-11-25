@@ -336,11 +336,18 @@ type Action struct {
 
 // Decide is the one function allowed to connect the VM. Boot and Resume always
 // disconnect first and connect only when nothing at all is wrong. Periodic only
-// ever disconnects. While setup's proof holds the lock, the guard does nothing:
-// the proof opens holes on purpose and restores them itself.
+// ever disconnects. While setup's proof holds the lock, Periodic does nothing:
+// the proof opens holes on purpose and restores them itself. Boot and Resume
+// still disconnect under the lock and never connect: a boot or a wake in the
+// middle of a proof means the proof was cut short, maybe with its holes open,
+// and a VM started by hand in that window must not reach the network.
 func Decide(m Mode, in Inputs) Action {
 	if in.ProofLock {
-		return Action{Reason: "The fence proof is running."}
+		const why = "The fence proof is running."
+		if m == Periodic {
+			return Action{Reason: why}
+		}
+		return Action{Disconnect: true, Reason: why}
 	}
 	why := blocker(in)
 	if m == Periodic {
