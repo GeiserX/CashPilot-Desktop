@@ -45,12 +45,12 @@ import (
 // OBJECTS; a list of strings earns a 422. The server discovers what a worker runs via
 // containers[*].slug, which is why Container carries one.
 type Payload struct {
-	Name       string     `json:"name"`
-	URL        string     `json:"url"`
-	ClientID   string     `json:"client_id"`
-	Containers []Item     `json:"containers"`
-	Apps       []Item     `json:"apps"`
-	SystemInfo SystemInfo `json:"system_info"`
+	Name       string      `json:"name"`
+	URL        string      `json:"url"`
+	ClientID   string      `json:"client_id"`
+	Containers []Container `json:"containers"`
+	Apps       []Item      `json:"apps"`
+	SystemInfo SystemInfo  `json:"system_info"`
 }
 
 // Item is one thing this machine is running, in the server's shape.
@@ -58,6 +58,46 @@ type Item struct {
 	Slug   string `json:"slug"`
 	Name   string `json:"name,omitempty"`
 	Status string `json:"status,omitempty"`
+}
+
+// Container is one copy of a service, in the web worker's shape
+// (orchestrator.get_status). The server folds the counters into its usage rows
+// (usage.samples_from_heartbeat), and its stall check reads those rows, so the
+// names and units are the web worker's: net_rx_bytes and net_tx_bytes are the
+// cumulative bytes since the container started, keyed by container_id, the
+// 12-character short id. A counter that was not read goes out as null, never
+// 0: a stopped copy and a host-network one have none, as on the web.
+type Container struct {
+	Slug        string `json:"slug"`
+	Name        string `json:"name,omitempty"`
+	Status      string `json:"status,omitempty"`
+	ContainerID string `json:"container_id,omitempty"`
+	// Instance is which copy of its service this is, 1 for the first. Without it
+	// the server reads every copy as copy 1.
+	Instance   int      `json:"instance,omitempty"`
+	CPUPercent *float64 `json:"cpu_percent"`
+	MemoryMB   *float64 `json:"memory_mb"`
+	NetRxBytes *uint64  `json:"net_rx_bytes"`
+	NetTxBytes *uint64  `json:"net_tx_bytes"`
+}
+
+// Proxied is one copy that leaves through a proxy, in the web worker's shape
+// (proxy_tunnel.status). It is kept out of Containers, as on the web: it leaves
+// from another IP and is not a copy of the service. Its counters are its
+// tunnel's, which carries every byte the earner moves.
+type Proxied struct {
+	Slug              string  `json:"slug"`
+	ProxyID           int64   `json:"proxy_id"`
+	Name              string  `json:"name"`
+	Status            string  `json:"status"`
+	ContainerID       string  `json:"container_id"`
+	TunnelStatus      string  `json:"tunnel_status"`
+	TunnelContainerID string  `json:"tunnel_container_id"`
+	TunnelStartedAt   string  `json:"tunnel_started_at"`
+	NetRxBytes        *uint64 `json:"net_rx_bytes"`
+	NetTxBytes        *uint64 `json:"net_tx_bytes"`
+	ExitIP            string  `json:"exit_ip,omitempty"`
+	ExitCountry       string  `json:"exit_country,omitempty"`
 }
 
 // SystemInfo describes the host.
@@ -77,6 +117,11 @@ type SystemInfo struct {
 	// cannot reach this line's port forwards. Omitted when unknown: the server then
 	// keeps the last address it had.
 	EgressIP string `json:"egress_ip,omitempty"`
+	// Proxied is this machine's proxied copies: an empty list when it has none,
+	// null when they could not be read, as the web worker sends it. A null makes
+	// the server treat this machine's list as partial, so it clears no alert of
+	// a copy the list may leave out.
+	Proxied []Proxied `json:"proxied"`
 }
 
 // Response is what the server sends back.

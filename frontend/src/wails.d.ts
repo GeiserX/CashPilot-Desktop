@@ -360,6 +360,9 @@ export interface AppState {
   // Running copies that carry almost no traffic while the other copies of their
   // service here are busy (stall_alerts.go).
   stalls: StallAlert[] | null;
+  // The CashPilot server that raises the stall alerts of this computer's own
+  // copies while joined to it; "" while this computer raises them.
+  stallsServer?: string;
 }
 
 // RemindersView mirrors the Go RemindersView (reminders_app.go).
@@ -416,7 +419,9 @@ export interface StallAlert {
   slug: string;
   service: string;
   container: string;
+  // 0 for a proxied copy, which has proxyId instead.
   copy: number;
+  proxyId?: number;
   since: number;
   hours: number;
   message: string;

@@ -447,6 +447,10 @@ type AppState struct {
 	// Stalls are the running copies that carry almost no traffic while the other
 	// copies of their service here are busy (stall_alerts.go).
 	Stalls []StallAlert `json:"stalls"`
+	// StallsServer is the CashPilot server that raises the stall alerts of this
+	// computer's own copies while joined to it, "" when this computer raises them
+	// (stallServer). The proxied copies' alerts stay here.
+	StallsServer string `json:"stallsServer"`
 }
 
 // RouteState is what the deploy form needs to offer a route.
@@ -658,6 +662,7 @@ func (a *App) GetAppState() (AppState, error) {
 		Route:            a.routeState(visible),
 		Reminders:        a.reminders(),
 		Stalls:           a.currentStalls(),
+		StallsServer:     a.stallServer(time.Now()),
 	}, nil
 }
 

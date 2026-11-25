@@ -16,7 +16,8 @@ import (
 const usageSampleInterval = 5 * time.Minute
 
 // startUsageSampler starts the loop that records CPU, memory and traffic per
-// container for the usage graphs. It runs on its own timer, not inside the
+// container for the usage graphs, the proxied copies included (withProxiedUnits): their
+// traffic is their tunnel's, and their CPU and memory are not read. It runs on its own timer, not inside the
 // earnings collection, because that one runs hourly by default and an hourly
 // graph needs more than one reading an hour.
 func (a *App) startUsageSampler(ctx context.Context) {
@@ -29,12 +30,13 @@ func (a *App) startUsageSampler(ctx context.Context) {
 		cancel()
 		<-done
 	}
+	list := withProxiedUnits(a.services.List, a.services.ReadProxiedCopies)
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(usageSampleInterval)
 		defer ticker.Stop()
 		for {
-			a.sampleUsage(loopCtx, a.services.List)
+			a.sampleUsage(loopCtx, list)
 			select {
 			case <-loopCtx.Done():
 				return

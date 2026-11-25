@@ -230,8 +230,8 @@ func TestSampleUsageRunsTheStallCheck(t *testing.T) {
 	}
 }
 
-// Joined to a CashPilot server, the check still runs: the server gets no traffic
-// counters from this computer, so it cannot judge these copies.
+// Joined to a CashPilot server that has not answered yet, the check still runs:
+// nothing says the server judges these copies.
 func TestStallCheckRunsWhileJoined(t *testing.T) {
 	a := newStallApp(t)
 	if err := a.cfg.Update(func(c *config.AppConfig) { c.Mode = config.ModeFollower }); err != nil {
@@ -248,5 +248,147 @@ func TestStallCheckRunsWhileJoined(t *testing.T) {
 	}
 	if titles := stallTitles(a); len(titles) != 1 {
 		t.Fatalf("notifications = %q, want the stall while joined", titles)
+	}
+}
+
+// judgedBy joins the app to a server whose last answer came at answered and did or
+// did not come from a release that judges stalls.
+func judgedBy(t *testing.T, a *App, answered time.Time, judges bool) string {
+	t.Helper()
+	const url = "https://cashpilot.example"
+	if err := a.cfg.Update(func(c *config.AppConfig) { c.Mode = config.ModeFollower; c.UpstreamURL = url }); err != nil {
+		t.Fatal(err)
+	}
+	a.upstream.statusURL, a.upstream.lastOK, a.upstream.stallsJudged = url, answered, judges
+	return url
+}
+
+// A server that judges this computer's copies raises their alerts: the local check
+// raises none for them and drops the one it held, and the app state names the server.
+func TestStallCheckLeavesTheCopiesToAServerThatJudgesThem(t *testing.T) {
+	a := newStallApp(t)
+	sent(t, a, "honeygain", 1, stallNow, 12, 30_000_000)
+	sent(t, a, "honeygain", 2, stallNow, 12, 0)
+	a.checkStalls(listing("honeygain", 2, nil), stallNow)
+	if len(a.currentStalls()) != 1 {
+		t.Fatalf("stalls = %+v, want one to start from", a.currentStalls())
+	}
+
+	url := judgedBy(t, a, stallNow.Add(-time.Minute), true)
+	if got := a.stallServer(stallNow); got != url {
+		t.Fatalf("stallServer = %q, want %q", got, url)
+	}
+	a.checkStalls(listing("honeygain", 2, nil), stallNow)
+	if got := a.currentStalls(); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none while the server judges the copies", got)
+	}
+	if titles := stallTitles(a); len(titles) != 0 {
+		t.Fatalf("notifications = %q, want none while the server judges the copies", titles)
+	}
+}
+
+// The local check keeps judging whenever the server may not: a release older than
+// v2.10.0, no answer for three heartbeats, heartbeats more than an hour apart (the
+// server counts no traffic across that gap), or not joined at all.
+func TestStallCheckRunsWhenTheServerMayNotJudge(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, a *App)
+	}{
+		{"older server", func(t *testing.T, a *App) { judgedBy(t, a, stallNow.Add(-time.Minute), false) }},
+		{"no answer for three heartbeats", func(t *testing.T, a *App) { judgedBy(t, a, stallNow.Add(-4*time.Minute), true) }},
+		{"hourly or slower heartbeats", func(t *testing.T, a *App) {
+			judgedBy(t, a, stallNow.Add(-time.Minute), true)
+			if err := a.cfg.Update(func(c *config.AppConfig) { c.UpstreamIntervalMinutes = 61 }); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"not joined", func(t *testing.T, a *App) {
+			judgedBy(t, a, stallNow.Add(-time.Minute), true)
+			if err := a.cfg.Update(func(c *config.AppConfig) { c.Mode = config.ModeLead }); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newStallApp(t)
+			tc.setup(t, a)
+			sent(t, a, "honeygain", 1, stallNow, 12, 30_000_000)
+			sent(t, a, "honeygain", 2, stallNow, 12, 0)
+			a.checkStalls(listing("honeygain", 2, nil), stallNow)
+			if a.stallServer(stallNow) != "" {
+				t.Fatal("stallServer names a server that may not judge")
+			}
+			if got := a.currentStalls(); len(got) != 1 || got[0].Copy != 2 {
+				t.Fatalf("stalls = %+v, want copy 2 judged here", got)
+			}
+		})
+	}
+}
+
+// proxiedUnit is the proxied copy of slug through proxy id, as withProxiedUnits lists it.
+func proxiedUnit(slug string, id int64, status string) runtime.ContainerInfo {
+	return runtime.ContainerInfo{Slug: slug, Name: fmt.Sprintf("cashpilot-%s-p%d", slug, id), ContainerID: fmt.Sprintf("tunnel-%d", id), Status: status, ProxyID: id}
+}
+
+// A proxied copy that sends almost nothing while the service's own copies are busy
+// gets its alert, named as the proxied copy, with no copy number.
+func TestStallJudgesAProxiedCopy(t *testing.T) {
+	a := newStallApp(t)
+	sent(t, a, "honeygain", 1, stallNow, 12, 30_000_000)
+	last := stall.LastWholeHour(stallNow.Unix())
+	var rows []store.UsageHour
+	for i := 0; i < 12; i++ {
+		tx := int64(10_000)
+		rows = append(rows, store.UsageHour{Container: "cashpilot-honeygain-p3", Slug: "honeygain", Hour: last - 3600*int64(i), Beats: 12, TxBytes: &tx, NetSeconds: 3600})
+	}
+	if err := a.store.RecordUsage(func(map[string]store.UsageBaseline) ([]store.UsageHour, map[string]store.UsageBaseline) {
+		return rows, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	units := append(listing("honeygain", 1, nil), proxiedUnit("honeygain", 3, "running"))
+	a.checkStalls(units, stallNow)
+	got := a.currentStalls()
+	if len(got) != 1 || got[0].Container != "cashpilot-honeygain-p3" || got[0].ProxyID != 3 || got[0].Copy != 0 {
+		t.Fatalf("stalls = %+v, want the proxied copy", got)
+	}
+	if !strings.Contains(got[0].Message, "Honeygain proxied copy (cashpilot-honeygain-p3) has sent under 0.1 MB an hour") {
+		t.Fatalf("message = %q", got[0].Message)
+	}
+	if titles := stallTitles(a); len(titles) != 1 || titles[0] != "Honeygain proxied copy: almost no traffic" {
+		t.Fatalf("notifications = %q", titles)
+	}
+
+	// While a server judges the service's own copies, the proxied copy stays judged
+	// here: the server's check reads no proxied copy's traffic.
+	judgedBy(t, a, stallNow.Add(-time.Minute), true)
+	sent(t, a, "honeygain", 2, stallNow, 12, 0)
+	a.checkStalls(append(listing("honeygain", 2, nil), proxiedUnit("honeygain", 3, "running")), stallNow)
+	got = a.currentStalls()
+	if len(got) != 1 || got[0].ProxyID != 3 {
+		t.Fatalf("stalls = %+v, want only the proxied copy while the server judges the rest", got)
+	}
+
+	// A server that already judged when the proxied copy went quiet: its alert is
+	// raised here all the same.
+	b := newStallApp(t)
+	judgedBy(t, b, stallNow.Add(-time.Minute), true)
+	sent(t, b, "honeygain", 1, stallNow, 12, 30_000_000)
+	sent(t, b, "honeygain", 2, stallNow, 12, 0)
+	if err := b.store.RecordUsage(func(map[string]store.UsageBaseline) ([]store.UsageHour, map[string]store.UsageBaseline) {
+		return rows, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b.checkStalls(append(listing("honeygain", 2, nil), proxiedUnit("honeygain", 3, "running")), stallNow)
+	if got := b.currentStalls(); len(got) != 1 || got[0].ProxyID != 3 {
+		t.Fatalf("stalls = %+v, want the proxied copy raised while the server judges the rest", got)
+	}
+
+	// Stopping the proxied copy clears it, as for any copy.
+	a.checkStalls(append(listing("honeygain", 2, nil), proxiedUnit("honeygain", 3, "exited")), stallNow)
+	if got := a.currentStalls(); len(got) != 0 {
+		t.Fatalf("stalls = %+v, want none once the proxied copy stopped", got)
 	}
 }
