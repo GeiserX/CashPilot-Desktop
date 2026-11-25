@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"io/fs"
 	"time"
 
 	"github.com/moby/moby/client"
@@ -12,25 +13,18 @@ import (
 func DockerDesktopEngineReason(ctx context.Context) string {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	denied := false
-	for _, pipe := range []string{"dockerDesktopLinuxEngine", "dockerDesktopWindowsEngine"} {
-		host := "npipe:////./pipe/" + pipe
-		cli, err := client.NewClientWithOpts(client.WithHost(host))
-		if err != nil {
-			continue
-		}
-		_, err = cli.Ping(ctx, client.PingOptions{})
-		_ = cli.Close()
-		if err == nil {
-			if pipe == "dockerDesktopWindowsEngine" {
-				return ReasonWindowsContainers
-			}
-			return ReasonRunning
-		}
-		denied = probeEndpoint(ctx, host) == endpointDenied || denied
+	return probeDockerDesktopPipes(ctx, pingDockerDesktopPipe)
+}
+
+func pingDockerDesktopPipe(ctx context.Context, host string) (string, error) {
+	cli, err := client.NewClientWithOpts(client.WithHost(host))
+	if err != nil {
+		return "", err
 	}
-	if denied {
-		return ReasonAccessDenied
+	defer cli.Close()
+	ping, err := cli.Ping(ctx, client.PingOptions{})
+	if err != nil && probeEndpoint(ctx, host) == endpointDenied {
+		return "", fs.ErrPermission
 	}
-	return ""
+	return ping.OSType, err
 }
