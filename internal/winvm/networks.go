@@ -93,7 +93,8 @@ func normalizeNetwork(n NetworkID) (NetworkID, bool) {
 // /29. The Default Switch and WSL pick a random /20 inside 172.16/12 at boot,
 // and one can land on ours. It looks at host addresses (only our gateway may sit
 // inside the /29, and no wider prefix may contain it) and at on-link routes of
-// every other interface.
+// every other interface. A route of /4 or shorter is a full tunnel, not a
+// network on the PC: FullTunnel names it, so it is left to that check.
 func SubnetCollision(h HostNet, ourSwitchID string, sub netip.Prefix) (bool, string) {
 	gw := sub.Addr().Next()
 	for _, a := range h.Addrs {
@@ -108,7 +109,7 @@ func SubnetCollision(h HostNet, ourSwitchID string, sub netip.Prefix) (bool, str
 		}
 	}
 	for _, r := range h.Routes {
-		if !onLink(r) || r.Prefix.Bits() == 0 || !r.Prefix.Masked().Overlaps(sub) {
+		if !onLink(r) || r.Prefix.Bits() <= fullTunnelBits || !r.Prefix.Masked().Overlaps(sub) {
 			continue
 		}
 		if c, i := classOf(h, r.IfIndex, ourSwitchID); c != IfOurs {

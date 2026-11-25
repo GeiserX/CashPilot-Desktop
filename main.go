@@ -51,10 +51,18 @@ func main() {
 	// --vm-inspect <desired.json> prints the Secure VM's live Hyper-V state and its
 	// drift as JSON, reads only, and exits (vm_inspect.go).
 	inspect := fs.String(vmInspectFlag, "", "print the Secure VM's live state and drift from this desired.json, as JSON; changes nothing")
-	_ = fs.Parse(os.Args[1:])
+	// --vm-guard <data folder> is the Secure VM's SYSTEM guard: it keeps the VM
+	// off the network unless its fence is exactly the proven one (vm_guard.go).
+	// It never opens a window. --once boot|pass runs one routine, for the lab.
+	guard := fs.String(vmGuardFlag, "", "run the Secure VM's guard on this data folder; no window")
+	once := fs.String(vmGuardOnceFlag, "", "with --vm-guard: run one routine (boot or pass) and exit")
+	parseErr := fs.Parse(os.Args[1:])
 
 	if *inspect != "" {
 		os.Exit(runVMInspectMain(*inspect))
+	}
+	if *guard != "" {
+		os.Exit(vmGuardMain(*guard, *once, parseErr, runVMGuardMain))
 	}
 
 	if *daemon {

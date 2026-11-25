@@ -143,6 +143,16 @@ func TestSubnetCollision(t *testing.T) {
 			t.Errorf("our gateway also held as %s on another adapter is not a collision", held)
 		}
 	}
+	// A VPN's on-link 0.0.0.0/1 plus 128.0.0.0/1 covers our /29 but is a full
+	// tunnel, not a network that took our addresses: FullTunnel names it.
+	split := testHost()
+	split.Routes = append(split.Routes, route("0.0.0.0/1", ifWireGuard, "", 0), route("128.0.0.0/1", ifWireGuard, "", 0))
+	if hit, why := SubnetCollision(split, ourSwitchID, testSubnet); hit {
+		t.Errorf("a split default route counted as a collision: %s", why)
+	}
+	if full, _ := FullTunnel(split, ourSwitchID); !full {
+		t.Errorf("the split default route is not a full tunnel")
+	}
 	// The default route via a gateway is not a collision.
 	if hit, _ := SubnetCollision(testHost(), ourSwitchID, testSubnet); hit {
 		t.Errorf("the default route counted as a collision")

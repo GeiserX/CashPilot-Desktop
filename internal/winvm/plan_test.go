@@ -402,3 +402,16 @@ func TestGCSBaselineNormalizes(t *testing.T) {
 		t.Errorf("GCSBaseline(nil) is nil, want an empty list")
 	}
 }
+
+// An other line's exit keeps its row under a wider dynamic prefix: setup
+// placed it and the guard does not manage it.
+func TestWantACLsKeepsAnExitUnderATunnel(t *testing.T) {
+	p := testPlan(t, nil)
+	acls := p.WantACLs(Dynamic{Tunnels: []netip.Prefix{pfx("203.0.113.0/24")}})
+	for _, want := range []string{"203.0.113.7/32", "203.0.113.0/24"} {
+		if !hasRow(acls, want) {
+			t.Errorf("no row for %s", want)
+		}
+	}
+	assertUniquePrefixes(t, acls)
+}

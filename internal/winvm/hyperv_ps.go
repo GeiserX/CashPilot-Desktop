@@ -365,6 +365,36 @@ Connect-VMNetworkAdapter -VMNetworkAdapter $a[0] -VMSwitch $sw[0]
 Write-Doc ([ordered]@{ switchId = $sw[0].Id.ToString() })
 `
 
+// scriptStart starts the VM unless it already runs, and reports its state.
+const scriptStart = hvPrelude + `$vm = @(Find-OurVM $in.vm)
+if ($vm.Count -ne 1) { throw 'The VM was not found.' }
+if ($vm[0].State.ToString() -ne 'Running') { Start-VM -VM $vm[0] }
+$vm = @(Find-OurVM $in.vm)
+Write-Doc ([ordered]@{ state = $vm[0].State.ToString() })
+`
+
+// scriptAddDeny adds one Deny Both row per remote on the VM's one adapter, then
+// lists the adapter's Deny rows so Go can check that each one is there.
+const scriptAddDeny = hvPrelude + `$vm = @(Find-OurVM $in.vm)
+if ($vm.Count -ne 1) { throw 'The VM was not found.' }
+$a = @(Get-VMNetworkAdapter -VM $vm[0])
+if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
+foreach ($r in @($in.remotes)) { Add-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] -RemoteIPAddress $r -Direction Both -Action Deny }
+Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
+`
+
+// scriptRemoveDeny removes the Deny rows of each remote from the VM's one
+// adapter, both directions, then lists the Deny rows left. A /32 matches
+// whether Hyper-V lists it bare or with its /32.
+const scriptRemoveDeny = hvPrelude + `$vm = @(Find-OurVM $in.vm)
+if ($vm.Count -ne 1) { throw 'The VM was not found.' }
+$a = @(Get-VMNetworkAdapter -VM $vm[0])
+if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
+$rs = @($in.remotes | ForEach-Object { ([string]$_) -replace '/32$', '' })
+@(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Deny') -and ($rs -contains (([string]$_.RemoteAddress) -replace '/32$', '')) }) | Remove-VMNetworkAdapterAcl
+Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
+`
+
 // hvScripts is every script the seam runs, by method, for the parser test.
 var hvScripts = map[string]string{
 	"ReadLive":     scriptReadLive,
@@ -374,6 +404,9 @@ var hvScripts = map[string]string{
 	"Usage":        scriptUsage,
 	"Disconnect":   scriptDisconnect,
 	"Connect":      scriptConnect,
+	"Start":        scriptStart,
+	"AddDeny":      scriptAddDeny,
+	"RemoveDeny":   scriptRemoveDeny,
 }
 
 // checkVMID accepts only a GUID.
@@ -973,6 +1006,158 @@ func (h *psHost) Connect(ctx context.Context, vmID, switchName string) error {
 		return fmt.Errorf("the connect did not report a switch ID (%q)", w.SwitchID)
 	}
 	return nil
+}
+
+// Start starts the VM and checks that it runs.
+func (h *psHost) Start(ctx context.Context, vmID string) error {
+	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	var w struct {
+		State string `json:"state"`
+	}
+	arg := struct {
+		VM string `json:"vm"`
+	}{vmID}
+	if err := h.call(ctx, scriptStart, arg, &w); err != nil {
+		return err
+	}
+	if w.State != "Running" {
+		return fmt.Errorf("the VM did not start: it is %q", w.State)
+	}
+	return nil
+}
+
+// maxDenyRows caps how many rows one write script touches. AddDeny and
+// RemoveDeny send a longer list in batches of this size, so a split tunnel
+// with many routes still gets its Denies.
+const maxDenyRows = 256
+
+// maxDenyTotal caps how many rows one AddDeny or RemoveDeny call may touch.
+const maxDenyTotal = 16 * maxDenyRows
+
+// checkDenies accepts only masked IPv4 prefixes, at most maxDenyTotal, with no
+// repeat, and returns each one as Hyper-V writes it: a /32 as a bare address.
+// The guard only manages its own IPv4 rows; IPv6 is one static row.
+func checkDenies(ps []netip.Prefix) ([]string, error) {
+	if len(ps) == 0 || len(ps) > maxDenyTotal {
+		return nil, fmt.Errorf("%d prefixes; one call takes 1 to %d", len(ps), maxDenyTotal)
+	}
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		if !p.IsValid() || !p.Addr().Is4() || p != p.Masked() {
+			return nil, fmt.Errorf("prefix %v is not a masked IPv4 prefix", p)
+		}
+		s := aclArg(p)
+		if slices.Contains(out, s) {
+			return nil, fmt.Errorf("prefix %v is listed twice", p)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// aclArg is a prefix as Get-VMNetworkAdapterAcl lists it: a /32 as a bare
+// address, anything else in CIDR form.
+func aclArg(p netip.Prefix) string {
+	if p.Bits() == 32 {
+		return p.Addr().String()
+	}
+	return p.String()
+}
+
+// denyWire is the Deny rows a write script lists after it ran.
+type denyWire struct {
+	Deny []struct {
+		Direction string `json:"direction"`
+		Remote    string `json:"remote"`
+	} `json:"deny"`
+}
+
+// hasBoth is whether the rows hold remote in both directions, as one Both rule
+// is listed. Rows compare as prefixes, so a /32 listed bare or as a.b.c.d/32
+// is the same row.
+func (w denyWire) hasBoth(remote netip.Prefix) (in, out bool) {
+	for _, r := range w.Deny {
+		if p, err := parsePrefixOrAddr(r.Remote); err != nil || p.Masked() != remote {
+			continue
+		}
+		switch strings.ToLower(r.Direction) {
+		case "inbound":
+			in = true
+		case "outbound":
+			out = true
+		case "both":
+			in, out = true, true
+		}
+	}
+	return in, out
+}
+
+// denyBatches runs script once per batch of at most maxDenyRows prefixes, and
+// hands each batch and the rows listed after it to check.
+func (h *psHost) denyBatches(ctx context.Context, script, vmID string, ps []netip.Prefix, rs []string, check func([]netip.Prefix, denyWire) error) error {
+	for i := 0; i < len(ps); i += maxDenyRows {
+		j := min(i+maxDenyRows, len(ps))
+		var w denyWire
+		arg := struct {
+			VM      string   `json:"vm"`
+			Remotes []string `json:"remotes"`
+		}{vmID, rs[i:j]}
+		if err := h.call(ctx, script, arg, &w); err != nil {
+			return err
+		}
+		if err := check(ps[i:j], w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddDeny adds a Deny Both row for each prefix and checks that each one is
+// there afterwards.
+func (h *psHost) AddDeny(ctx context.Context, vmID string, ps []netip.Prefix) error {
+	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	rs, err := checkDenies(ps)
+	if err != nil {
+		return err
+	}
+	return h.denyBatches(ctx, scriptAddDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
+		for _, p := range batch {
+			if in, out := w.hasBoth(p); !in || !out {
+				return fmt.Errorf("the Deny for %s is not in place after the add", aclArg(p))
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveDeny removes the Deny rows of each prefix and checks that none is left.
+// It refuses a static Deny: only the guard's own rows ever go, and a static row
+// gone is drift that only Repair puts back.
+func (h *psHost) RemoveDeny(ctx context.Context, vmID string, ps []netip.Prefix) error {
+	if err := checkVMID("VM ID", vmID); err != nil {
+		return err
+	}
+	rs, err := checkDenies(ps)
+	if err != nil {
+		return err
+	}
+	for _, p := range ps {
+		if slices.Contains(StaticDeny(), p) {
+			return fmt.Errorf("the static Deny %v is never removed", p)
+		}
+	}
+	return h.denyBatches(ctx, scriptRemoveDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
+		for _, p := range batch {
+			if in, out := w.hasBoth(p); in || out {
+				return fmt.Errorf("a Deny for %s is still there after the remove", aclArg(p))
+			}
+		}
+		return nil
+	})
 }
 
 // sleepCtx waits d, or until ctx ends.
