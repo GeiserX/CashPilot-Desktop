@@ -182,9 +182,11 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 
 // pcapng builds a little-endian pcapng file with one Ethernet interface and
 // one packet per frame.
-func pcapng(frames ...[]byte) []byte {
+func pcapng(frames ...[]byte) []byte { return pcapngOrder(binary.LittleEndian, frames...) }
+
+// pcapngOrder builds the same file in the byte order le.
+func pcapngOrder(le binary.ByteOrder, frames ...[]byte) []byte {
 	var b bytes.Buffer
-	le := binary.LittleEndian
 	block := func(typ uint32, body []byte) {
 		for len(body)%4 != 0 {
 			body = append(body, 0)
@@ -229,9 +231,11 @@ func ipv4TCP(src, dst netip.Addr, port uint16) []byte {
 
 func TestParsePcapng(t *testing.T) {
 	src, dst := netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.1")
-	ks, err := parsePcapng(pcapng(ipv4TCP(src, dst, 45000), []byte{0, 1, 2}))
-	if err != nil || len(ks) != 1 || ks[0].Dst != dst || ks[0].Port != 45000 || ks[0].Proto != "TCP" {
-		t.Fatalf("%+v %v", ks, err)
+	for _, bo := range []binary.ByteOrder{binary.LittleEndian, binary.BigEndian} {
+		ks, err := parsePcapng(pcapngOrder(bo, ipv4TCP(src, dst, 45000), []byte{0, 1, 2}))
+		if err != nil || len(ks) != 1 || ks[0].Dst != dst || ks[0].Port != 45000 || ks[0].Proto != "TCP" {
+			t.Fatalf("%v: %+v %v", bo, ks, err)
+		}
 	}
 	good := pcapng(ipv4TCP(src, dst, 1))
 	for name, b := range map[string][]byte{"cut short": good[:len(good)-3], "bad length": append(good[:4:4], 0xff, 0xff, 0xff, 0x7f)} {
