@@ -291,6 +291,9 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	// The fence's own reading, cached for an hour: the server hands it to the fleet's
 	// other boxes, whose fences then drop this line too.
 	payload.SystemInfo.EgressIP = a.egressIP(ctx)
+	// Where the server sends its commands (worker_api.go); "" leaves this computer
+	// report-only on the server, as before.
+	payload.URL = a.workerAPIURL(serverURL)
 	// Every copy with its traffic counters, read in this process's turn, which ends
 	// once the server answered (heartbeat_traffic.go).
 	release := func() {}

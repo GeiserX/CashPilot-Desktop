@@ -17,6 +17,8 @@ export function AcceptSessionRisk(arg1:string,arg2:string):Promise<Record<string
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
 
+export function AllowServerCommandsThroughFirewall():Promise<main.ServerCommandsState>;
+
 export function ApplyImport(arg1:main.ImportApplyRequest):Promise<main.ImportResult>;
 
 export function BackgroundHelperStatus():Promise<bgservice.Status>;
@@ -150,6 +152,8 @@ export function SaveProxy(arg1:number,arg2:Record<string, string>):Promise<proxi
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
 
 export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
+
+export function SetServerCommands(arg1:boolean):Promise<main.ServerCommandsState>;
 
 export function SetupResume():Promise<setupresume.View>;
 

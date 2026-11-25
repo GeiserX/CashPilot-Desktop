@@ -210,6 +210,7 @@ export function renderModeCard(state: ModeState, view: ModeCardView, left: Leave
       <ul class="mode-effects">
         <li>Earning apps on this computer keep running.</li>
         <li>This computer stops reporting to <code>${escapeHtml(server)}</code> and forgets its keys.</li>
+        <li>Your CashPilot can no longer start and stop services on this computer.</li>
         <li>This computer starts collecting earnings again, with the provider logins saved here.</li>
         <li>Your CashPilot keeps a row for <strong>${escapeHtml(state.name)}</strong>. Remove it on its Fleet page.</li>
         <li>The days while joined stay on your CashPilot. They are not copied back here.</li>
@@ -224,6 +225,7 @@ export function renderModeCard(state: ModeState, view: ModeCardView, left: Leave
         <strong>This computer runs everything here again</strong>
         <span>Now remove <strong>${escapeHtml(left.name)}</strong> on the Fleet page of your CashPilot at <code>${escapeHtml(left.serverUrl)}</code>.</span>
       </div>
+      ${left.firewallError ? `<p class="pairing-line warn" data-left-firewall>${escapeHtml(left.firewallError)}. Nothing listens behind it now. You can delete it in Windows Defender Firewall.</p>` : ""}
       <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="summary">OK</button></div>`;
   } else if (following) {
     body = `

@@ -10,6 +10,10 @@ export function AddFleetDevice(arg1) {
   return window['go']['main']['App']['AddFleetDevice'](arg1);
 }
 
+export function AllowServerCommandsThroughFirewall() {
+  return window['go']['main']['App']['AllowServerCommandsThroughFirewall']();
+}
+
 export function ApplyImport(arg1) {
   return window['go']['main']['App']['ApplyImport'](arg1);
 }
@@ -276,6 +280,10 @@ export function SaveSettings(arg1) {
 
 export function SetActivityEnabled(arg1) {
   return window['go']['main']['App']['SetActivityEnabled'](arg1);
+}
+
+export function SetServerCommands(arg1) {
+  return window['go']['main']['App']['SetServerCommands'](arg1);
 }
 
 export function SetupResume() {

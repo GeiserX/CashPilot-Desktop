@@ -127,6 +127,13 @@ type AppConfig struct {
 	// it opens again. It is written before the restart and cleared when the flow
 	// finishes or the user cancels it. nil when no setup is under way.
 	SetupJournal *SetupJournal `json:"setupJournal,omitempty"`
+	// ServerCommandsOff is the dashboard switch "<server> can start and stop
+	// services on this computer", turned off. The zero value is on, so joining a
+	// server turns the server-commands API on; joining again keeps the user's choice.
+	ServerCommandsOff bool `json:"serverCommandsOff,omitempty"`
+	// ServerCommandsFirewallRule is the Windows Firewall rule CashPilot made for that
+	// API, "" when it made none. Leaving the server removes it.
+	ServerCommandsFirewallRule string `json:"serverCommandsFirewallRule,omitempty"`
 }
 
 // SetupJournal says where a guided setup stood before a restart. It only says

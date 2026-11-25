@@ -72,6 +72,20 @@ Limits:
 
 While joined, the dashboard says the earnings are on the server, and shows the last heartbeat and the last error in plain words. Collector errors from before the join are not shown, because this computer no longer collects.
 
+### The server starts and stops services here
+
+While joined, your CashPilot can deploy, stop, start, restart and remove services on this computer, as it does on a CashPilot Docker worker. The dashboard card **<server> can start and stop services on this computer** has the switch and shows the last command the server sent. It is on when you join. When you join again, the switch keeps what you chose. `serverCommandsOff` in `config.json` holds it.
+
+- The server reaches this computer on TCP port 8086. CashPilot listens there only on this computer's private network and Tailscale addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, fc00::/7). It never listens on 0.0.0.0, a public address or the bridges the earning apps' containers use. It refuses a request from any other source address.
+- It takes only the key the server gave this computer when it joined. The shared key every box joins with is refused, and so is a request with no key. The key is never logged or shown.
+- A deploy runs the service of this computer's own catalog, with the image CashPilot pins here. The server's request sets only the variables. Every local rule still holds: a retired or desktop-only service, a missing required field, a service routed through a proxy, a computer set to run services only through a proxy. A refusal goes back to the server in plain words.
+- The server cannot delete data that cannot be recovered, such as a node identity or a wallet. Do that on this computer.
+- It deploys one copy of a service. Add more copies on this computer.
+- On Windows, Windows Firewall blocks the server until you allow it. The card's **Allow through Windows Firewall** button says what it opens, then asks Windows for an administrator: inbound TCP 8086, for CashPilot only, on networks Windows calls private, from the ranges above.
+- Turning the switch off closes the port at once. Switching to **Run everything here** closes it and removes the firewall rule. If you refuse the administrator prompt then, CashPilot names the rule so you can delete it in Windows Defender Firewall; nothing listens behind it any more.
+
+The window and the background helper share the port: whichever holds it serves the server, and the other one reports the same address.
+
 An install that was upgraded as a `follower` keeps **Accept workers** as it was, so its workers keep reporting. The Settings card lists them until you point them at the server and turn the switch off.
 
 While joined to CashPilot 2.10.0 or newer, the heartbeat carries each copy's traffic counters, as a CashPilot worker's does, and the server raises the traffic stall alerts for this computer's own copies; the dashboard says so. This holds only while the server answers and the heartbeat interval is under 3 minutes, because the server marks a box offline after 3 minutes of silence and does not judge it then. Otherwise, and always for copies behind a proxy, this computer judges its copies itself.

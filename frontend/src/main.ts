@@ -14,6 +14,8 @@ import {
   GetActivityDetail,
   RefreshActivityNetworks,
   SetActivityEnabled,
+  SetServerCommands,
+  AllowServerCommandsThroughFirewall,
   InstallBackgroundHelper,
   ListCustomServices,
   ApplyImport,
@@ -87,6 +89,7 @@ import {
   SignOutNow,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderServerCommands } from "./render/server_commands";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
 import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, type Mode, type ModeCardView } from "./render/mode";
@@ -714,6 +717,7 @@ function renderDashboard(current: AppState) {
           <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
         `)}
         ${current.pairing ? renderJoinedBanner(current.pairing) : ""}
+        ${current.serverCommands ? renderServerCommands(current.serverCommands) : ""}
         <!-- The money first and largest; the container count sits at the far
              end, smaller, because it answers a different question. -->
         <section class="stats-grid money-strip" aria-label="Earnings">
@@ -818,6 +822,17 @@ function renderDashboard(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-isolation-action]").forEach((button) => {
     button.addEventListener("click", () => void runEnableIsolation());
+  });
+  document.querySelector<HTMLInputElement>("[data-server-commands-switch]")?.addEventListener("change", (event) => {
+    const on = (event.target as HTMLInputElement).checked;
+    void SetServerCommands(on).then(refreshState, (error) => setOutput(`Could not switch it: ${String(error)}`));
+  });
+  document.querySelector<HTMLButtonElement>("[data-server-commands-firewall]")?.addEventListener("click", () => {
+    setOutput("Waiting for the Windows administrator prompt...");
+    void AllowServerCommandsThroughFirewall().then(
+      () => { setOutput("Windows Firewall now lets your CashPilot reach this computer."); return refreshState(); },
+      (error) => setOutput(String(error)),
+    );
   });
   document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
     button.addEventListener("click", () => {

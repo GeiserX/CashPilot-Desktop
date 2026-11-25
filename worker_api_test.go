@@ -1,0 +1,475 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
+)
+
+// The server-commands API (worker_api.go): a joined CashPilot server deploys, stops,
+// starts, restarts and removes services on this computer through the web worker's
+// routes, with the key it issued to this computer at the join.
+
+const (
+	testWorkerKey = "per-worker-key-issued-at-join"
+	testSharedKey = "shared-fleet-key"
+	testLANPeer   = "192.168.1.20:51234"
+)
+
+// joinedApp is the App under test, joined to a server with its own key saved.
+func joinedApp(t *testing.T) *appUnderTest {
+	t.Helper()
+	app := newAppUnderTest(t)
+	// Heartbeats go to a local stand-in, never to a real address, and every loop the
+	// test starts ends with it.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "worker_id": 1})
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	app.ctx = ctx
+	t.Cleanup(app.stopScheduler)
+	t.Cleanup(app.stopUpstream)
+	if err := config.SetUpstreamEnrolmentKey(app.cfg.AppDir(), testSharedKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), testWorkerKey); err != nil {
+		t.Fatal(err)
+	}
+	app.upstream.workerKey = testWorkerKey
+	if err := app.cfg.Update(func(c *config.AppConfig) {
+		c.Mode = config.ModeFollower
+		c.UpstreamURL = server.URL
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return app
+}
+
+// call sends one request to the API as a LAN peer with the given key.
+func call(t *testing.T, app *appUnderTest, method, path, key string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader *bytes.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader = bytes.NewReader(raw)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(method, path, reader)
+	req.RemoteAddr = testLANPeer
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+	w := httptest.NewRecorder()
+	app.workerAPIMux().ServeHTTP(w, req)
+	return w
+}
+
+func honeygainSpec(t *testing.T, app *appUnderTest) map[string]any {
+	t.Helper()
+	svc, ok := app.catalog.Get("honeygain")
+	if !ok {
+		t.Fatal("honeygain is not in the catalog")
+	}
+	return map[string]any{
+		// The server sends its own catalog's tag; the repository is what must match.
+		"image": imageRepository(svc.Docker.Image) + ":1.0.0",
+		"env": map[string]string{
+			"HONEYGAIN_EMAIL":    "someone@example.test",
+			"HONEYGAIN_PASSWORD": "not-a-real-password",
+		},
+		"ports":        map[string]any{},
+		"volumes":      map[string]any{},
+		"cap_add":      []string{"SYS_ADMIN"},
+		"network_mode": "host",
+		"instance":     1,
+	}
+}
+
+func detailText(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		return w.Body.String()
+	}
+	if s, ok := body["detail"].(string); ok {
+		return s
+	}
+	raw, _ := json.Marshal(body["detail"])
+	return string(raw)
+}
+
+func TestServerCommandsTakeOnlyThisComputersOwnKey(t *testing.T) {
+	app := joinedApp(t)
+	for _, tc := range []struct {
+		name, key string
+		want      int
+	}{
+		{"the key the server issued at the join", testWorkerKey, http.StatusOK},
+		{"the shared fleet key", testSharedKey, http.StatusUnauthorized},
+		{"a wrong key", "not-the-key", http.StatusUnauthorized},
+		{"no key", "", http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := call(t, app, http.MethodGet, "/api/status", tc.key, nil)
+			if w.Code != tc.want {
+				t.Fatalf("status %d, want %d: %s", w.Code, tc.want, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), testWorkerKey) {
+				t.Fatal("the answer carries the key")
+			}
+		})
+	}
+}
+
+func TestServerCommandsRefuseAPublicSource(t *testing.T) {
+	app := joinedApp(t)
+	for _, peer := range []string{"203.0.113.5:4000", "[2001:db8::1]:4000", "[::ffff:8.8.8.8]:4000"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		req.RemoteAddr = peer
+		req.Header.Set("Authorization", "Bearer "+testWorkerKey)
+		w := httptest.NewRecorder()
+		app.workerAPIMux().ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s: status %d, want 403", peer, w.Code)
+		}
+	}
+	for _, peer := range []string{"10.1.2.3:1", "172.20.0.9:1", "100.95.1.2:1", "[fd7a:115c:a1e0::1]:1"} {
+		if !sourceAllowed(peer) {
+			t.Errorf("%s should be allowed", peer)
+		}
+	}
+}
+
+func TestServerCommandsWithoutAnIssuedKeyFailClosed(t *testing.T) {
+	app := joinedApp(t)
+	app.upstream.workerKey = ""
+	if err := config.SetUpstreamWorkerKey(app.cfg.AppDir(), ""); err != nil {
+		t.Fatal(err)
+	}
+	// The shared key is the only one left, and it still opens nothing.
+	if w := call(t, app, http.MethodGet, "/api/status", testSharedKey, nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", w.Code)
+	}
+}
+
+func TestServerCommandsListenOnPrivateAddressesOnly(t *testing.T) {
+	in := []ifaceAddr{
+		{Iface: "lo0", Up: true, Loop: true, Addr: netip.MustParseAddr("127.0.0.1")},
+		{Iface: "en0", Up: true, Addr: netip.MustParseAddr("192.168.1.30")},
+		{Iface: "en0", Up: true, Addr: netip.MustParseAddr("fe80::1")},
+		{Iface: "en0", Up: true, Addr: netip.MustParseAddr("2001:db8::30")},
+		{Iface: "en1", Up: true, Addr: netip.MustParseAddr("203.0.113.30")},
+		{Iface: "tailscale0", Up: true, Addr: netip.MustParseAddr("100.101.102.103")},
+		{Iface: "tailscale0", Up: true, Addr: netip.MustParseAddr("fd7a:115c:a1e0::5")},
+		{Iface: "docker0", Up: true, Addr: netip.MustParseAddr("172.17.0.1")},
+		{Iface: "br-1234", Up: true, Addr: netip.MustParseAddr("172.18.0.1")},
+		{Iface: "vEthernet (WSL)", Up: true, Addr: netip.MustParseAddr("172.29.0.1")},
+		{Iface: "en5", Up: false, Addr: netip.MustParseAddr("10.0.0.5")},
+		{Iface: "en6", Up: true, Addr: netip.MustParseAddr("0.0.0.0")},
+	}
+	got := listenAddrs(in)
+	want := []netip.Addr{
+		netip.MustParseAddr("100.101.102.103"),
+		netip.MustParseAddr("192.168.1.30"),
+		netip.MustParseAddr("fd7a:115c:a1e0::5"),
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listens on %v, want %v", got, want)
+	}
+	if ip := pickURLAddr(got, netip.MustParseAddr("100.101.102.103")); ip.String() != "100.101.102.103" {
+		t.Errorf("the reported address is %v, want the one the server is reached from", ip)
+	}
+	if ip := pickURLAddr(got, netip.MustParseAddr("203.0.113.30")); ip.String() != "192.168.1.30" {
+		t.Errorf("the reported address is %v, want the LAN address", ip)
+	}
+}
+
+// fakeListen records the addresses the API asks for and listens on loopback instead,
+// so the lifecycle is tested without owning a LAN address.
+type fakeListen struct {
+	mu    sync.Mutex
+	asked []string
+}
+
+func (f *fakeListen) listen(network, addr string) (net.Listener, error) {
+	f.mu.Lock()
+	f.asked = append(f.asked, addr)
+	f.mu.Unlock()
+	return net.Listen(network, "127.0.0.1:0")
+}
+
+func useAddrs(t *testing.T, addrs ...string) *fakeListen {
+	t.Helper()
+	oldAddrs, oldListen := machineAddrs, listenTCP
+	t.Cleanup(func() { machineAddrs, listenTCP = oldAddrs, oldListen })
+	machineAddrs = func() []ifaceAddr {
+		var out []ifaceAddr
+		for _, a := range addrs {
+			out = append(out, ifaceAddr{Iface: "en0", Up: true, Addr: netip.MustParseAddr(a)})
+		}
+		return out
+	}
+	f := &fakeListen{}
+	listenTCP = f.listen
+	return f
+}
+
+func listening(app *appUnderTest) int {
+	app.workerAPI.mu.Lock()
+	defer app.workerAPI.mu.Unlock()
+	return len(app.workerAPI.listeners)
+}
+
+func TestServerCommandsRunWhileJoinedAndStopOnLeave(t *testing.T) {
+	f := useAddrs(t, "192.168.1.30", "8.8.8.8")
+	app := joinedApp(t)
+	oldRun := runFirewallScript
+	t.Cleanup(func() { runFirewallScript = oldRun })
+	var scripts []string
+	runFirewallScript = func(s string) error { scripts = append(scripts, s); return nil }
+	if err := app.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsFirewallRule = serverCommandsRuleName() }); err != nil {
+		t.Fatal(err)
+	}
+
+	app.syncWorkerAPI()
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	if n := listening(app); n != 1 {
+		t.Fatalf("%d listeners while joined, want 1", n)
+	}
+	if !slices.Equal(f.asked, []string{"192.168.1.30:8086"}) {
+		t.Fatalf("asked to listen on %v, want only the private address", f.asked)
+	}
+	if got := app.workerAPIURL(app.cfg.Config().UpstreamURL); got != "http://192.168.1.30:8086" {
+		t.Errorf("the heartbeat reports %q", got)
+	}
+
+	if _, err := app.SwitchToLead(); err != nil {
+		t.Fatal(err)
+	}
+	if n := listening(app); n != 0 {
+		t.Fatalf("%d listeners after leaving, want 0", n)
+	}
+	if got := app.workerAPIURL(""); got != "" {
+		t.Errorf("the heartbeat still reports %q after leaving", got)
+	}
+	if len(scripts) != 1 || !strings.Contains(scripts[0], "Remove-NetFirewallRule") {
+		t.Errorf("leaving did not remove the firewall rule: %v", scripts)
+	}
+	if rule := app.cfg.Config().ServerCommandsFirewallRule; rule != "" {
+		t.Errorf("the rule %q is still recorded after leaving", rule)
+	}
+}
+
+func TestServerCommandsSwitchOffMeansNoListener(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	app := joinedApp(t)
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	app.syncWorkerAPI()
+	if n := listening(app); n != 1 {
+		t.Fatalf("%d listeners with the switch on (the default), want 1", n)
+	}
+	state, err := app.SetServerCommands(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := listening(app); n != 0 || state.Listening || state.On {
+		t.Fatalf("switch off: %d listeners, state %+v", n, state)
+	}
+	// A request that reaches a process that has not caught up yet is refused too.
+	if w := call(t, app, http.MethodGet, "/api/status", testWorkerKey, nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d with the switch off, want 503", w.Code)
+	}
+	if _, err := app.SetServerCommands(true); err != nil {
+		t.Fatal(err)
+	}
+	if n := listening(app); n != 1 {
+		t.Fatalf("%d listeners after switching on again, want 1", n)
+	}
+}
+
+func TestServerCommandsAreOffWhileNotJoined(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	app := newAppUnderTest(t)
+	app.syncWorkerAPI()
+	if n := listening(app); n != 0 {
+		t.Fatalf("%d listeners on a computer that runs everything itself", n)
+	}
+	if w := call(t, app, http.MethodGet, "/api/status", testWorkerKey, nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d, want 503", w.Code)
+	}
+}
+
+func TestServerCommandsDriveAServiceThroughEveryRoute(t *testing.T) {
+	app := joinedApp(t)
+
+	w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, honeygainSpec(t, app))
+	if w.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", w.Code, w.Body.String())
+	}
+	var deployed map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &deployed)
+	if deployed["status"] != "deployed" || deployed["container_id"] == "" {
+		t.Fatalf("deploy answered %v", deployed)
+	}
+	c, ok := app.Docker.Container("cashpilot-honeygain")
+	if !ok || c.State != "running" {
+		t.Fatalf("no running earner after deploy: %+v", c)
+	}
+	svc, _ := app.catalog.Get("honeygain")
+	if c.Image != svc.Docker.Image {
+		t.Errorf("the earner runs %q, want the catalog's pinned %q", c.Image, svc.Docker.Image)
+	}
+
+	w = call(t, app, http.MethodGet, "/api/containers", testWorkerKey, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"slug":"honeygain"`) {
+		t.Fatalf("list: %d %s", w.Code, w.Body.String())
+	}
+	w = call(t, app, http.MethodGet, "/api/status", testWorkerKey, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"container_count":1`) {
+		t.Fatalf("status: %d %s", w.Code, w.Body.String())
+	}
+
+	for _, step := range []struct{ action, answer, state string }{
+		{"stop", "stopped", "exited"},
+		{"start", "started", "running"},
+		{"restart", "restarted", "running"},
+	} {
+		w = call(t, app, http.MethodPost, "/api/containers/honeygain/"+step.action, testWorkerKey, nil)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), step.answer) {
+			t.Fatalf("%s: %d %s", step.action, w.Code, w.Body.String())
+		}
+		if c, _ := app.Docker.Container("cashpilot-honeygain"); c.State != step.state {
+			t.Fatalf("after %s the earner is %q, want %q", step.action, c.State, step.state)
+		}
+	}
+	if last := app.lastServerCommand(); last == nil || last.Action != "restart" || !last.OK {
+		t.Errorf("the last command is %+v", last)
+	}
+
+	w = call(t, app, http.MethodGet, "/api/containers/honeygain/logs?lines=10", testWorkerKey, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"logs"`) {
+		t.Fatalf("logs: %d %s", w.Code, w.Body.String())
+	}
+
+	w = call(t, app, http.MethodDelete, "/api/containers/honeygain", testWorkerKey, nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "removed") {
+		t.Fatalf("remove: %d %s", w.Code, w.Body.String())
+	}
+	if _, ok := app.Docker.Container("cashpilot-honeygain"); ok {
+		t.Fatal("the earner is still there after remove")
+	}
+	w = call(t, app, http.MethodPost, "/api/containers/honeygain/stop", testWorkerKey, nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("stop of a removed service: %d, want 404", w.Code)
+	}
+}
+
+func TestServerCommandsKeepTheLocalDeployRules(t *testing.T) {
+	app := joinedApp(t)
+
+	missing := honeygainSpec(t, app)
+	missing["env"] = map[string]string{"HONEYGAIN_EMAIL": "someone@example.test"}
+	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, missing); w.Code != http.StatusBadRequest {
+		t.Errorf("a deploy without a required field: %d %s, want 400", w.Code, w.Body.String())
+	}
+
+	other := honeygainSpec(t, app)
+	other["image"] = "attacker/miner:1.0"
+	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, other); w.Code != http.StatusForbidden {
+		t.Errorf("a deploy of another image: %d %s, want 403", w.Code, w.Body.String())
+	}
+
+	if w := call(t, app, http.MethodPost, "/api/containers/not-a-service/deploy", testWorkerKey, honeygainSpec(t, app)); w.Code != http.StatusForbidden {
+		t.Errorf("a deploy of a slug this catalog lacks: %d, want 403", w.Code)
+	}
+
+	second := honeygainSpec(t, app)
+	second["instance"] = 2
+	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, second); w.Code != http.StatusBadRequest {
+		t.Errorf("a deploy of copy 2: %d, want 400", w.Code)
+	}
+
+	// A computer set to run services only through a proxy refuses a direct deploy,
+	// from the server as from its own Deploy button.
+	t.Setenv(services.ProxiedOnlyEnv, "true")
+	w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, honeygainSpec(t, app))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("a deploy the local rules refuse: %d %s, want 409", w.Code, w.Body.String())
+	}
+	if _, ok := app.Docker.Container("cashpilot-honeygain"); ok {
+		t.Fatal("a refused deploy left a container")
+	}
+	if last := app.lastServerCommand(); last == nil || last.OK || last.Action != "deploy" {
+		t.Errorf("the refused deploy is recorded as %+v", last)
+	}
+	if strings.Contains(w.Body.String(), "not-a-real-password") {
+		t.Error("the refusal carries a credential")
+	}
+}
+
+func TestServerCommandsNeverDeleteIrreplaceableData(t *testing.T) {
+	app := joinedApp(t)
+	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, honeygainSpec(t, app)); w.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", w.Code, w.Body.String())
+	}
+	w := call(t, app, http.MethodDelete, "/api/containers/honeygain?delete_volumes=true&allow_delete_critical=true", testWorkerKey, nil)
+	if w.Code != http.StatusForbidden || !strings.Contains(detailText(t, w), "step_up_rejected") {
+		t.Fatalf("a critical delete: %d %s, want 403 step_up_rejected", w.Code, w.Body.String())
+	}
+	if _, ok := app.Docker.Container("cashpilot-honeygain"); !ok {
+		t.Fatal("the refused delete removed the earner")
+	}
+}
+
+func TestServerCommandsFirewallRuleIsScoped(t *testing.T) {
+	script := addRuleScript(serverCommandsRuleName(), `C:\Program Files\CashPilot\it's.exe`)
+	for _, want := range []string{
+		"-Direction Inbound", "-Protocol TCP", "-LocalPort 8086", "-Profile Private",
+		"'10.0.0.0/8'", "'172.16.0.0/12'", "'192.168.0.0/16'", "'100.64.0.0/10'", "'fc00::/7'",
+		`-Program 'C:\Program Files\CashPilot\it''s.exe'`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the rule script lacks %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(script, "Any") || strings.Contains(script, "Public") || strings.Contains(script, "Domain") {
+		t.Errorf("the rule is wider than the private profile:\n%s", script)
+	}
+}
+
+func TestServerCommandsFirewallRuleNeedsTheUsersYes(t *testing.T) {
+	app := joinedApp(t)
+	oldNeeded, oldRun := firewallRuleNeeded, runFirewallScript
+	t.Cleanup(func() { firewallRuleNeeded, runFirewallScript = oldNeeded, oldRun })
+	firewallRuleNeeded = true
+	runFirewallScript = func(string) error { return errors.New("exit status 1223") }
+	if _, err := app.AllowServerCommandsThroughFirewall(); err == nil {
+		t.Fatal("a refused admin prompt reported success")
+	}
+	if rule := app.cfg.Config().ServerCommandsFirewallRule; rule != "" {
+		t.Fatalf("a rule that was never made is recorded: %q", rule)
+	}
+	runFirewallScript = func(string) error { return nil }
+	state, err := app.AllowServerCommandsThroughFirewall()
+	if err != nil || !state.FirewallRule {
+		t.Fatalf("allow: %+v, %v", state, err)
+	}
+}

@@ -127,6 +127,9 @@ type App struct {
 	deviceLinkStop func()
 	// activity is the Activity sampler (activity_sampler.go): off until the owner switches it on.
 	activity activityState
+	// workerAPI is the API a joined CashPilot server commands this computer through
+	// (worker_api.go).
+	workerAPI workerAPIState
 }
 
 // fenceController is the slice of the Docker provider that keeps earners off the LAN.
@@ -300,6 +303,8 @@ func (a *App) startCore(ctx context.Context) error {
 	// Optional, and a no-op unless the user paired this Desktop with a
 	// CashPilot server. Standalone is the default and unaffected.
 	a.startUpstream(ctx)
+	// While joined, the server deploys and stops services here (worker_api.go).
+	a.startWorkerAPI(ctx)
 	// The window and the background helper each run the steps above from their
 	// own copy of the config: follow a join or a switch the other one saved.
 	a.startConfigSync(ctx)
@@ -361,6 +366,7 @@ func (a *App) Shutdown(_ context.Context) {
 	a.stopDeviceLinkRetry()
 	a.stopActivitySampler()
 	a.stopUpstream()
+	a.stopWorkerAPI()
 	if a.fleetAPI != nil {
 		_ = a.fleetAPI.Close()
 	}
@@ -402,6 +408,9 @@ type AppState struct {
 	// Pairing is the link to the CashPilot server while this computer is joined
 	// (last heartbeat, last error in plain words); nil when it runs everything here.
 	Pairing *PairingStatus `json:"pairing"`
+	// ServerCommands is whether that server can start and stop services here, and the
+	// last command it sent (worker_api.go); nil when this computer runs everything here.
+	ServerCommands *ServerCommandsState `json:"serverCommands"`
 	// Hostname is this machine's name, so a deploy form can render a {hostname}-defaulted
 	// field with the real value the deploy path will substitute (instead of the literal
 	// "cashpilot-{hostname}" the raw catalog default would otherwise show and submit).
@@ -650,6 +659,7 @@ func (a *App) GetAppState() (AppState, error) {
 		ServiceDetails:   a.store.ListServiceDetails(),
 		Fleet:            a.fleetView(),
 		Pairing:          a.pairingStatus(),
+		ServerCommands:   a.serverCommandsView(),
 		Hostname:         runtime.DeviceHostname(),
 		CollectorFields:  collectors.AllFields(),
 		Scaling:          a.services.ScalingLimits(visible),

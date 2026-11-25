@@ -234,6 +234,8 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 		return JoinResult{}, err
 	}
 	a.recordPairing(target.URL, upstream.Failure{})
+	// Before the loop's first heartbeat, so it already reports the API's address.
+	a.syncWorkerAPI()
 	if a.ctx != nil {
 		a.startUpstream(a.ctx)
 	}
@@ -246,6 +248,9 @@ type LeaveResult struct {
 	ServerURL string `json:"serverUrl"`
 	// Name is the row to remove on the server's Fleet page.
 	Name string `json:"name"`
+	// FirewallError says why the firewall rule CashPilot made for the server's
+	// commands is still there, "" when it was removed or there was none.
+	FirewallError string `json:"firewallError"`
 }
 
 // SwitchToLead makes a joined computer run everything itself again. It stops the
@@ -278,6 +283,15 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 		c.Mode = config.ModeLead
 	}); err != nil {
 		return LeaveResult{}, err
+	}
+	// The server no longer commands this computer: close its API, and remove the
+	// firewall rule made for it. A rule that stays (the admin prompt was refused) is
+	// reported, so the user can delete it in Windows Defender Firewall; nothing
+	// listens behind it any more.
+	a.syncWorkerAPI()
+	if err := a.removeServerCommandsRule(); err != nil {
+		log.Printf("server commands: %v", err)
+		out.FirewallError = err.Error()
 	}
 	// Collect now rather than at the next tick, which can be an hour away.
 	if a.ctx != nil {
