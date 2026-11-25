@@ -72,8 +72,13 @@ import {
   DiscardPartialRestore,
   AcceptSessionRisk,
   RevokeSessionRisk,
+  GetModeState,
+  JoinCashPilot,
+  StartAsLead,
+  SwitchToLead,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, type Mode, type ModeCardView } from "./render/mode";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
@@ -100,11 +105,21 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, PointsBalance, Service, SessionConsent, SettingsState, UnfinishedRestore, UsageView } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, Service, SessionConsent, SettingsState, UnfinishedRestore, UsageView } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
-let onboardingStep: "welcome" | "runtime" = "welcome";
+let onboardingStep: "welcome" | "mode" | "join" | "runtime" = "welcome";
+// The path the first run is on: "lead" (Run everything here), "follower" (Join my
+// CashPilot), or "" before the choice. It decides which steps the bar shows.
+let firstRunPath: Mode = "";
+// A first run that chose a mode on an earlier start carries on from the runtime step.
+let onboardingResumeChecked = false;
+// The Settings card "How this computer runs": its screen, its state, and what the
+// last switch to Run everything here said to do on the server.
+let modeCardView: ModeCardView = "summary";
+let modeState: ModeState | null = null;
+let modeLeft: LeaveResult | null = null;
 type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity" | "import";
 
 let activeView: View = "dashboard";
@@ -244,8 +259,23 @@ function render() {
 }
 
 function renderOnboarding(current: AppState) {
+  if (!onboardingResumeChecked) {
+    onboardingResumeChecked = true;
+    if (current.config.mode === "lead" || current.config.mode === "follower") {
+      firstRunPath = current.config.mode;
+      onboardingStep = "runtime";
+    }
+  }
   if (onboardingStep === "welcome") {
     renderWelcome();
+    return;
+  }
+  if (onboardingStep === "mode") {
+    renderModeStep();
+    return;
+  }
+  if (onboardingStep === "join") {
+    renderJoinStep();
     return;
   }
   const runtime = current.runtime;
@@ -259,7 +289,7 @@ function renderOnboarding(current: AppState) {
       ${gateBar()}
       <main class="gate-main">
         <section class="gate-panel gate-panel-wide">
-          ${gateSteps(2)}
+          ${renderGateSteps(firstRunSteps(firstRunPath), "runtime")}
           <h1 class="gate-title">Put your idle machine to work</h1>
           <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
           ${card.html}
@@ -292,10 +322,104 @@ function gateBar() {
   return `<header class="gate-bar"><span class="topbar-brand">${officialLogoMark()}<span>CashPilot</span></span></header>`;
 }
 
-function gateSteps(active: 1 | 2) {
-  const step = (n: 1 | 2, label: string) =>
-    `<li class="gate-step ${n === active ? "active" : n < active ? "completed" : ""}"><span class="wizard-step-number">${n}</span>${label}</li>`;
-  return `<ol class="gate-steps" aria-label="Step ${active} of 2">${step(1, "Welcome")}${step(2, "Runtime")}</ol>`;
+// First run, step 2: Run everything here, or Join my CashPilot.
+function renderModeStep() {
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="gate">
+      ${gateBar()}
+      <main class="gate-main">
+        <section class="gate-panel gate-panel-wide">
+          ${renderGateSteps(firstRunSteps(firstRunPath), "mode")}
+          ${renderModeChoice()}
+        </section>
+      </main>
+    </div>
+  `;
+  wireChrome();
+  document.querySelectorAll<HTMLButtonElement>("[data-mode-choice]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (button.dataset.modeChoice === "follower") {
+        firstRunPath = "follower";
+        onboardingStep = "join";
+        render();
+        return;
+      }
+      try {
+        await StartAsLead();
+        state = await GetAppState();
+      } catch (error) {
+        showErrorToast({scope: "mode", error: String(error)});
+        return;
+      }
+      firstRunPath = "lead";
+      onboardingStep = "runtime";
+      render();
+    });
+  });
+}
+
+// First run, the join step of Join my CashPilot.
+function renderJoinStep() {
+  root.innerHTML = `
+    ${titlebar()}
+    <div class="gate">
+      ${gateBar()}
+      <main class="gate-main">
+        <section class="gate-panel gate-panel-wide">
+          ${renderGateSteps(firstRunSteps(firstRunPath), "join")}
+          <h1 class="gate-title">Join my CashPilot</h1>
+          ${renderJoinForm()}
+        </section>
+      </main>
+    </div>
+  `;
+  wireChrome();
+  wireJoinForm(document, () => {
+    firstRunPath = "";
+    onboardingStep = "mode";
+    render();
+  }, async () => {
+    state = await GetAppState();
+    onboardingStep = "runtime";
+    render();
+  });
+}
+
+// The join form, on the first run and in Settings: one live heartbeat, then the
+// outcome under the form. A failure keeps what the user pasted; a success clears
+// the fields, which hold the key, and offers Continue.
+function wireJoinForm(scope: ParentNode, onBack: () => void, onContinue: () => void | Promise<void>) {
+  const form = scope.querySelector<HTMLFormElement>("#join-form");
+  if (!form) return;
+  scope.querySelector<HTMLButtonElement>("#join-back")?.addEventListener("click", onBack);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const connect = form.querySelector<HTMLButtonElement>("#join-connect")!;
+    const out = form.querySelector<HTMLElement>("#join-result")!;
+    const field = (name: string) => form.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name=${name}]`)!;
+    connect.disabled = true;
+    connect.textContent = "Connecting\u2026";
+    let result: JoinResult;
+    try {
+      result = await JoinCashPilot({block: field("block").value, url: field("url").value, key: field("key").value});
+    } catch (error) {
+      showErrorToast({scope: "mode", error: String(error)});
+      connect.disabled = false;
+      connect.textContent = "Connect";
+      return;
+    }
+    out.innerHTML = renderJoinOutcome(result);
+    if (!result.ok) {
+      connect.disabled = false;
+      connect.textContent = "Connect";
+      return;
+    }
+    field("block").value = "";
+    field("key").value = "";
+    connect.closest(".gate-actions")?.remove();
+    out.querySelector<HTMLButtonElement>("#join-continue")?.addEventListener("click", () => void onContinue());
+  });
 }
 
 function renderWelcome() {
@@ -305,7 +429,7 @@ function renderWelcome() {
       ${gateBar()}
       <main class="gate-main">
         <section class="gate-panel">
-          ${gateSteps(1)}
+          ${renderGateSteps(firstRunSteps(firstRunPath), "welcome")}
           <h1 class="gate-title">Welcome to CashPilot</h1>
           <p class="gate-lede">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
           <div class="gate-actions">
@@ -317,7 +441,7 @@ function renderWelcome() {
   `;
   wireChrome();
   document.querySelector("#get-started")?.addEventListener("click", () => {
-    onboardingStep = "runtime";
+    onboardingStep = "mode";
     render();
   });
 }
@@ -401,6 +525,7 @@ function renderDashboard(current: AppState) {
         ${pageHead("Dashboard", `
           <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
         `)}
+        ${current.pairing ? renderJoinedBanner(current.pairing) : ""}
         <!-- The money first and largest; the container count sits at the far
              end, smaller, because it answers a different question. -->
         <section class="stats-grid money-strip" aria-label="Earnings">
@@ -1091,6 +1216,12 @@ async function renderSettings(current: AppState) {
   } catch (error) {
     showErrorToast({scope: "restore", error: String(error)});
   }
+  try {
+    modeState = await GetModeState();
+  } catch (error) {
+    modeState = null;
+    showErrorToast({scope: "mode", error: String(error)});
+  }
   if (request !== settingsRequest || activeView !== "settings") return;
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
@@ -1102,6 +1233,7 @@ async function renderSettings(current: AppState) {
         ${topbar("settings", current)}
         <main class="page-content">
           ${pageHead("Settings")}
+          <div id="mode-card-slot">${modeState ? renderModeCard(modeState, modeCardView, modeLeft) : ""}</div>
           <section class="card">
             <div class="card-header">
               <div>
@@ -1154,10 +1286,60 @@ async function renderSettings(current: AppState) {
   wireSecretSettings(settings.environment);
   document.querySelector<HTMLInputElement>("#bg-helper-toggle")?.addEventListener("change", (event) => void toggleBackgroundHelper(event));
   wireRestore();
+  wireModeCard();
   wireSessionConsent(document);
   document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.service));
   });
+}
+
+// Settings > How this computer runs: each switch shows its confirm screen first.
+function redrawModeCard() {
+  const slot = document.querySelector<HTMLElement>("#mode-card-slot");
+  if (!slot || !modeState) return;
+  slot.innerHTML = renderModeCard(modeState, modeCardView, modeLeft);
+  wireModeCard();
+}
+
+function wireModeCard() {
+  const slot = document.querySelector<HTMLElement>("#mode-card-slot");
+  if (!slot) return;
+  const backToSummary = () => {
+    modeCardView = "summary";
+    redrawModeCard();
+  };
+  slot.querySelectorAll<HTMLButtonElement>("[data-mode-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const action = button.dataset.modeAction as ModeCardView | "leave";
+      if (action !== "leave") {
+        if (action === "summary") modeLeft = null;
+        modeCardView = action;
+        redrawModeCard();
+        return;
+      }
+      button.disabled = true;
+      try {
+        modeLeft = await SwitchToLead();
+        modeState = await GetModeState();
+        state = await GetAppState();
+        modeCardView = "left";
+      } catch (error) {
+        showErrorToast({scope: "mode", error: String(error)});
+        button.disabled = false;
+        return;
+      }
+      // Redraw the whole page, not only the card: the Environment Variables form
+      // below still holds the server address and hub setting from before the leave.
+      render();
+    });
+  });
+  if (modeCardView === "join") {
+    wireJoinForm(slot, backToSummary, async () => {
+      modeCardView = "summary";
+      state = await GetAppState();
+      render();
+    });
+  }
 }
 
 // Settings > Restore from a backup: choose a file, read its preview, confirm, restore.
@@ -1288,6 +1470,7 @@ async function saveSettingsFromForm() {
     readOnly: input.readOnly,
     secret: input.hasAttribute("data-secret"),
     clear: input.dataset.clear === "true",
+    initial: input.dataset.initial,
   }));
   const values = settingsSaveValues(fields);
   try {

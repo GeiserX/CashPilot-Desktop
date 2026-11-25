@@ -68,6 +68,8 @@ export function GetFleetState():Promise<main.FleetState>;
 
 export function GetLogs(arg1:string,arg2:number):Promise<string>;
 
+export function GetModeState():Promise<main.ModeState>;
+
 export function GetProxiesState():Promise<main.ProxiesState>;
 
 export function GetRuntimeGuides():Promise<Array<runtime.InstallGuide>>;
@@ -83,6 +85,8 @@ export function HostCheck():Promise<main.HostCheckResult>;
 export function IgnoreDrift(arg1:string):Promise<void>;
 
 export function InstallBackgroundHelper():Promise<void>;
+
+export function JoinCashPilot(arg1:main.JoinRequest):Promise<main.JoinResult>;
 
 export function ListCustomServices():Promise<Array<services.CustomServiceView>>;
 
@@ -132,6 +136,8 @@ export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsS
 
 export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
 
+export function StartAsLead():Promise<void>;
+
 export function StartProxiedCopy(arg1:string,arg2:number):Promise<void>;
 
 export function StartService(arg1:string):Promise<void>;
@@ -143,6 +149,8 @@ export function StopProxiedCopy(arg1:string,arg2:number):Promise<void>;
 export function StopService(arg1:string):Promise<void>;
 
 export function StopServiceCopy(arg1:string,arg2:number):Promise<void>;
+
+export function SwitchToLead():Promise<main.LeaveResult>;
 
 export function TestProxy(arg1:number):Promise<services.ProxyTestResult>;
 

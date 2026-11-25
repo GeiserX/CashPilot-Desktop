@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -115,6 +116,39 @@ type AppConfig struct {
 	// any fence. The wizard shows the install steps only while the recorded text
 	// version matches the disclosure it shows now. Revoking deletes the entry.
 	SessionConsent map[string]SessionConsent `json:"sessionConsent,omitempty"`
+	// Mode is how this computer runs: ModeLead ("Run everything here": it collects
+	// the earnings, shows the dashboard and runs its earners) or ModeFollower ("Join
+	// my CashPilot": it runs earners for a CashPilot server, which collects and shows
+	// the earnings). Empty only on a new install whose first run has not asked yet.
+	// An install from before this field gets it once, from its saved state
+	// (inferMode), and never sees the first run again.
+	Mode string `json:"mode,omitempty"`
+}
+
+// The two values of AppConfig.Mode.
+const (
+	ModeLead     = "lead"
+	ModeFollower = "follower"
+)
+
+// inferMode gives an install from before AppConfig.Mode its mode, from what it
+// already has: a saved server address means it reports to a CashPilot, so it is
+// a follower; an install that finished its first run without one is a lead. A
+// new install that has not finished its first run keeps "" so the first run asks.
+// It reports whether it set anything, so load can persist the answer once.
+func inferMode(cfg *AppConfig) bool {
+	if cfg.Mode != "" {
+		return false
+	}
+	switch {
+	case strings.TrimSpace(cfg.UpstreamURL) != "":
+		cfg.Mode = ModeFollower
+	case cfg.FirstRunComplete:
+		cfg.Mode = ModeLead
+	default:
+		return false
+	}
+	return true
 }
 
 // SessionConsent is one accepted disclosure: which text the user read, and when.
@@ -134,6 +168,10 @@ type Manager struct {
 	path    string
 	mu      sync.RWMutex
 	cfg     AppConfig
+	// saved is the file as this Manager last read or wrote it, so Reload can tell
+	// a change another process saved (the background helper and the window each
+	// hold a Manager on the same file) from its own.
+	saved []byte
 }
 
 // applyDefaults fills zero/invalid fields with safe defaults. The fleet bind
@@ -205,13 +243,44 @@ func (m *Manager) DataDir() string {
 
 func (m *Manager) Save(cfg AppConfig) error {
 	cfg = applyDefaults(cfg)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if err := m.persist(cfg); err != nil {
 		return err
 	}
-	m.mu.Lock()
 	m.cfg = cfg
-	m.mu.Unlock()
 	return nil
+}
+
+// Reload reads the file again when another process changed it since this
+// Manager last read or wrote it, and reports whether it did. The window and the
+// background helper (--daemon) each hold a Manager on the same file, so a join
+// or a switch made in the window reaches the helper only through here. A file
+// that cannot be read or parsed (another process may be halfway through writing
+// it) leaves the config in memory as it was and is read again next time.
+func (m *Manager) Reload() (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reloadLocked()
+}
+
+func (m *Manager) reloadLocked() (bool, error) {
+	raw, err := os.ReadFile(m.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(raw, m.saved) {
+		return false, nil
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return false, err
+	}
+	m.cfg, m.saved = applyDefaults(cfg), raw
+	return true, nil
 }
 
 // Update applies mutate to the current config and persists the result as ONE
@@ -229,6 +298,10 @@ func (m *Manager) Save(cfg AppConfig) error {
 func (m *Manager) Update(mutate func(cfg *AppConfig)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Start from the file, not only from memory: another process may have saved
+	// a change (a join made in the window, seen by the helper), and writing this
+	// Manager's older copy back would undo it.
+	_, _ = m.reloadLocked()
 	next := m.cfg
 	mutate(&next)
 	next = applyDefaults(next)
@@ -239,8 +312,8 @@ func (m *Manager) Update(mutate func(cfg *AppConfig)) error {
 	return nil
 }
 
-// persist writes the config to disk. Takes no lock, so it is safe to call with
-// m.mu already held.
+// persist writes the config to disk and remembers what it wrote (saved). Takes
+// no lock: call it with m.mu held, or before the Manager is shared (load).
 func (m *Manager) persist(cfg AppConfig) error {
 	if err := os.MkdirAll(m.appDir, 0o700); err != nil {
 		return err
@@ -249,7 +322,11 @@ func (m *Manager) persist(cfg AppConfig) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.path, raw, 0o600)
+	if err := os.WriteFile(m.path, raw, 0o600); err != nil {
+		return err
+	}
+	m.saved = raw
+	return nil
 }
 
 // load runs once during NewManager (single-threaded, before the Manager is
@@ -266,7 +343,14 @@ func (m *Manager) load() error {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return err
 	}
-	m.cfg = applyDefaults(cfg)
+	m.cfg, m.saved = applyDefaults(cfg), raw
+	if inferMode(&m.cfg) {
+		// Written once, so the answer holds even if the address is cleared later
+		// by hand: from now on only the user's own switch changes the mode.
+		if err := m.persist(m.cfg); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

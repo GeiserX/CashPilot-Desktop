@@ -306,6 +306,9 @@ export interface AppState {
   // server has not reported yet -- and it is what a machine returns to after
   // unlinking, because its own rows were copied upstream, never moved.
   fleet: FleetView | null;
+  // The link to the CashPilot server while this computer is joined; null when it
+  // runs everything here.
+  pairing?: PairingStatus | null;
   // This machine's hostname, so a {hostname}-defaulted deploy field renders the real
   // value the deploy path will substitute rather than the literal "{hostname}".
   hostname: string;
@@ -557,6 +560,49 @@ export interface AppConfig {
   fleetPort: number;
   // Per service slug, the desktop-app risk disclosure the user accepted. Absent: none.
   sessionConsent?: Record<string, SessionConsent> | null;
+  // "lead" (Run everything here), "follower" (Join my CashPilot), or absent before
+  // the first run chose.
+  mode?: string;
+}
+
+// The link to the CashPilot server, as the last heartbeat left it (Go PairingStatus).
+export interface PairingStatus {
+  serverUrl: string;
+  // RFC3339 of the last accepted heartbeat; "" never.
+  lastHeartbeat: string;
+  lastAttempt: string;
+  // Why the last try failed, in plain words; "" when it worked.
+  lastError: string;
+  errorCode: string;
+}
+
+// What the Settings card "How this computer runs" shows (Go ModeState).
+export interface ModeState {
+  // "lead", "follower", or "" before the first run chose.
+  mode: string;
+  name: string;
+  pairing?: PairingStatus | null;
+  hubOn: boolean;
+  hubDevices: string[] | null;
+}
+
+// The answer to one join (Go JoinResult). A failed connection has ok false.
+export interface JoinResult {
+  ok: boolean;
+  code: string;
+  message: string;
+  serverUrl: string;
+  serverHost: string;
+  name: string;
+  workerId: number;
+  hubWasOn: boolean;
+  hubDevices: string[] | null;
+}
+
+// What to do on the server after leaving it (Go LeaveResult).
+export interface LeaveResult {
+  serverUrl: string;
+  name: string;
 }
 
 export interface SessionConsent {
