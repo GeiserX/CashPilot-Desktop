@@ -35,11 +35,7 @@ const hgsGuardian = "UntrustedGuardian"
 const hvAdmins = "S-1-5-32-578"
 
 // buildPrelude adds the helpers the build scripts share to hvPrelude.
-const buildPrelude = hvPrelude + `function Get-Owner([string]$s) {
-  if ($s -match 'cashpilot-owner=([0-9a-f]{32})') { return $Matches[1] }
-  return ''
-}
-function Get-AdapterByMac([string]$mac) {
+const buildPrelude = hvPrelude + `function Get-AdapterByMac([string]$mac) {
   @(Get-NetAdapter -IncludeHidden | Where-Object { (([string]$_.MacAddress) -replace '-', '').ToUpper() -eq $mac })
 }
 function Get-GroupSids([string]$sid) {
@@ -97,27 +93,21 @@ Write-Doc $o
 // address, and returns the switch ID and the vNIC's ifIndex.
 const scriptEnsureSwitch = buildPrelude + `$sw = @()
 if ($in.switchId) { $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId }) }
-if ($sw.Count -eq 0) {
+if (-not $in.switchId) {
   $sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
   if ($sw.Count -gt 1) { throw 'More than one switch has this name.' }
   if ($sw.Count -eq 1 -and (Get-Owner ([string]$sw[0].Notes)) -ne $in.owner) { throw 'A switch with this name exists and was not made by this install.' }
 }
 if ($sw.Count -eq 1) {
   $sw = $sw[0]
+  if ((Get-Owner ([string]$sw.Notes)) -cne $in.owner) { throw 'The switch was not made by this install.' }
   if ($sw.Name -ne $in.switch) {
-    # Renamed by someone: the guard connects by our name, so take it back.
     if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'Another switch has this name.' }
     Rename-VMSwitch -VMSwitch $sw -NewName $in.switch
   }
 } else {
-  $before = @(Get-VMSwitch | ForEach-Object { $_.Id.ToString() })
-  try {
-    $sw = New-VMSwitch -Name $in.switch -SwitchType Internal -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
-  } catch {
-    # A switch this call made without its tag would block every rerun.
-    Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -and ($before -notcontains $_.Id.ToString()) } | Remove-VMSwitch -Force -ErrorAction SilentlyContinue
-    throw
-  }
+  if ($in.switchId) { throw 'The recorded switch was not found.' }
+  $sw = New-VMSwitch -Name $in.switch -SwitchType Internal -Notes ('CashPilot Secure VM. cashpilot-owner=' + $in.owner)
 }
 $mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
 if ($mo.Count -ne 1) { throw 'The switch does not have exactly one host vNIC.' }
@@ -158,7 +148,6 @@ const scriptCreateVM = buildPrelude + `if (@(Get-VM | Where-Object { $_.Name -eq
 $disk = Join-Path $in.vhdxDir ($in.vm + '.vhdx')
 if (Test-Path -LiteralPath $disk) { throw 'The VM disk already exists.' }
 New-Item -ItemType Directory -Force -Path $in.vhdxDir | Out-Null
-$before = @(Get-VM | ForEach-Object { $_.Id.ToString() })
 $vm = $null
 try {
   $vm = New-VM -Name $in.vm -Generation 2 -MemoryStartupBytes ([uint64]$in.memory) -NewVHDPath $disk -NewVHDSizeBytes ([uint64]$in.diskBytes) -Path $in.vhdxDir
@@ -178,17 +167,9 @@ try {
   $dvd = @(Get-VMDvdDrive -VM $vm | Where-Object { $_.Path -eq $in.iso })
   Set-VMFirmware -VM $vm -FirstBootDevice $dvd[0]
 } catch {
-  # Take back what this call made, so the rerun starts clean: the new VM (by
-  # the IDs that were not there before), its disk and its empty folders.
-  Get-VM | Where-Object { ($_.Name -eq $in.vm) -and ($before -notcontains $_.Id.ToString()) } | ForEach-Object {
-    Stop-VM -VM $_ -TurnOff -Force -ErrorAction SilentlyContinue
-    Remove-VM -VM $_ -Force -ErrorAction SilentlyContinue
-  }
-  Remove-Item -LiteralPath $disk -Force -ErrorAction SilentlyContinue
-  $folder = Join-Path $in.vhdxDir $in.vm
-  if (Test-Path -LiteralPath $folder) {
-    Get-ChildItem -LiteralPath $folder -Recurse -Directory | Sort-Object { $_.FullName.Length } -Descending | Where-Object { @(Get-ChildItem -LiteralPath $_.FullName -Force).Count -eq 0 } | Remove-Item -Force -ErrorAction SilentlyContinue
-    if (@(Get-ChildItem -LiteralPath $folder -Force).Count -eq 0) { Remove-Item -LiteralPath $folder -Force -ErrorAction SilentlyContinue }
+  if ($vm) {
+    Stop-VM -VM $vm -TurnOff -Force -ErrorAction SilentlyContinue
+    Remove-VM -VM $vm -Force -ErrorAction SilentlyContinue
   }
   throw
 }
@@ -350,6 +331,7 @@ const scriptRemoveVM = buildPrelude + `$vm = @(Find-OurVM $in.vm)
 $left = @()
 if ($vm.Count -eq 1) {
   $vm = $vm[0]
+  if ((Get-Owner ([string]$vm.Notes)) -cne $in.owner) { throw 'The VM was not made by this install.' }
   $root = ([IO.Path]::GetFullPath($in.vhdxDir)).TrimEnd('\') + '\'
   $disks = @(Get-VMHardDiskDrive -VM $vm | Where-Object { $_.Path } | ForEach-Object { [string]$_.Path })
   $folder = Join-Path $in.vhdxDir $vm.Name
@@ -372,6 +354,7 @@ Write-Doc ([ordered]@{ left = @($left) })
 // while a VM has an adapter on it.
 const scriptRemoveSwitch = buildPrelude + `$sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId })
 if ($sw.Count -eq 1) {
+  if ((Get-Owner ([string]$sw[0].Notes)) -cne $in.owner) { throw 'The switch was not made by this install.' }
   if (@(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw[0].Id) }).Count -gt 0) { throw 'A VM still has an adapter on the switch.' }
   Remove-VMSwitch -VMSwitch $sw[0] -Force
 }
@@ -983,26 +966,32 @@ func (b psBuilder) UnregisterGuardTask(ctx context.Context, n Names, owner strin
 }
 
 // RemoveVM removes the VM and its disks in vhdxDir.
-func (b psBuilder) RemoveVM(ctx context.Context, vmID, vhdxDir string) ([]string, error) {
+func (b psBuilder) RemoveVM(ctx context.Context, vmID, vhdxDir, owner string) ([]string, error) {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return nil, err
 	}
 	if err := checkWinPath("VHDX folder", vhdxDir); err != nil {
 		return nil, err
 	}
+	if err := checkOwner(owner); err != nil {
+		return nil, err
+	}
 	var w struct {
 		Left []string `json:"left"`
 	}
-	err := b.call(ctx, scriptRemoveVM, map[string]string{"vm": vmID, "vhdxDir": vhdxDir}, &w)
+	err := b.call(ctx, scriptRemoveVM, map[string]string{"vm": vmID, "vhdxDir": vhdxDir, "owner": owner}, &w)
 	return w.Left, err
 }
 
 // RemoveSwitch removes the switch by ID.
-func (b psBuilder) RemoveSwitch(ctx context.Context, switchID string) error {
+func (b psBuilder) RemoveSwitch(ctx context.Context, switchID, owner string) error {
 	if err := checkVMID("switch ID", switchID); err != nil {
 		return err
 	}
-	return b.ok(ctx, scriptRemoveSwitch, map[string]string{"switchId": switchID})
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
+	return b.ok(ctx, scriptRemoveSwitch, map[string]string{"switchId": switchID, "owner": owner})
 }
 
 // RemoveNAT removes our NAT when it is on our /29.

@@ -24,8 +24,8 @@ type holeAfterProof struct {
 	done *bool
 }
 
-func (h holeAfterProof) ReadLive(ctx context.Context, n winvm.Names, vmID string) (winvm.LiveState, error) {
-	live, err := h.HyperV.ReadLive(ctx, n, vmID)
+func (h holeAfterProof) ReadLive(ctx context.Context, n winvm.Names, vmID, switchID string) (winvm.LiveState, error) {
+	live, err := h.HyperV.ReadLive(ctx, n, vmID, switchID)
 	if err == nil && *h.done {
 		for i := range live.Firewall {
 			live.Firewall[i].Enabled = false
@@ -166,7 +166,7 @@ func TestBuildRefusesAMeterRow(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Meter row") {
 		t.Fatalf("Repair with a Meter row = %v, want a refusal that names it", err)
 	}
-	live, err := f.ReadLive(context.Background(), p.Names, p.VMID)
+	live, err := f.ReadLive(context.Background(), p.Names, p.VMID, p.SwitchID)
 	if err != nil {
 		t.Fatal(err)
 	}

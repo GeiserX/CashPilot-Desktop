@@ -77,6 +77,10 @@ function Write-Doc($o) {
   $j = ConvertTo-Json -InputObject $o -Compress -Depth 8
   [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j)))
 }
+function Get-Owner([string]$s) {
+  if ($s -cmatch '(?:^| )cashpilot-owner=([0-9a-f]{32})$') { return $Matches[1] }
+  return ''
+}
 function Find-OurVM($id) { Get-VM | Where-Object { $_.Id.ToString() -eq $id } }
 `
 
@@ -135,7 +139,7 @@ try { foreach ($p in @(Get-VMComPort -VM $vm)) { if ($p.Path) { $pt += 'com:' + 
 $o.passthrough = @($pt)
 $idx = 0
 try {
-  $sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
+  $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId })
   if ($sw.Count -eq 1) {
     $sw = $sw[0]
     $o.switchType = $sw.SwitchType.ToString()
@@ -352,14 +356,14 @@ Write-Doc ([ordered]@{ adapters = $a.Count; connected = $left })
 `
 
 // scriptConnect connects the VM's one adapter to the one Internal switch with
-// the given name. It refuses a VM with more adapters, a missing or doubled
+// the recorded ID. It refuses a VM with more adapters, a missing or doubled
 // switch, and a switch of any other type.
 const scriptConnect = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
+if ($vm.Count -ne 1 -or (Get-Owner ([string]$vm[0].Notes)) -cne $in.owner) { throw 'The owned VM was not found.' }
 $a = @(Get-VMNetworkAdapter -VM $vm[0])
 if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-$sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
-if ($sw.Count -ne 1) { throw 'The switch was not found exactly once.' }
+$sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId })
+if ($sw.Count -ne 1 -or (Get-Owner ([string]$sw[0].Notes)) -cne $in.owner) { throw 'The owned switch was not found.' }
 if ($sw[0].SwitchType.ToString() -ne 'Internal') { throw 'The switch is not an Internal switch.' }
 Connect-VMNetworkAdapter -VMNetworkAdapter $a[0] -VMSwitch $sw[0]
 Write-Doc ([ordered]@{ switchId = $sw[0].Id.ToString() })
@@ -508,19 +512,22 @@ func hvArg(arg []byte) string { return hvArgEnv + "=" + base64.StdEncoding.Encod
 
 // ReadLive reads the live state of our VM, switch, vNIC, NAT, firewall group
 // and host settings.
-func (h *psHost) ReadLive(ctx context.Context, n Names, vmID string) (LiveState, error) {
+func (h *psHost) ReadLive(ctx context.Context, n Names, vmID, switchID string) (LiveState, error) {
 	if err := n.Validate(); err != nil {
 		return LiveState{}, err
 	}
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return LiveState{}, err
 	}
+	if err := checkVMID("switch ID", switchID); err != nil {
+		return LiveState{}, err
+	}
 	var w liveWire
 	arg := struct {
 		VM     string `json:"vm"`
-		Switch string `json:"switch"`
+		Switch string `json:"switchId"`
 		Group  string `json:"group"`
-	}{vmID, n.Switch, n.FirewallGroup}
+	}{vmID, switchID, n.FirewallGroup}
 	if err := h.call(ctx, scriptReadLive, arg, &w); err != nil {
 		return LiveState{}, err
 	}
@@ -984,26 +991,26 @@ func (h *psHost) Disconnect(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// Connect puts the VM's one adapter on our Internal switch, found by name.
-func (h *psHost) Connect(ctx context.Context, vmID, switchName string) error {
+// Connect puts the VM's one adapter on the recorded Internal switch.
+func (h *psHost) Connect(ctx context.Context, vmID, switchID, owner string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
-	if !objectName.MatchString(switchName) {
-		return fmt.Errorf("switch name %q is not allowed", switchName)
+	if err := checkVMID("switch ID", switchID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
+		return err
 	}
 	var w struct {
 		SwitchID string `json:"switchId"`
 	}
-	arg := struct {
-		VM     string `json:"vm"`
-		Switch string `json:"switch"`
-	}{vmID, switchName}
+	arg := map[string]string{"vm": vmID, "switchId": switchID, "owner": owner}
 	if err := h.call(ctx, scriptConnect, arg, &w); err != nil {
 		return err
 	}
-	if !guidRe.MatchString(w.SwitchID) {
-		return fmt.Errorf("the connect did not report a switch ID (%q)", w.SwitchID)
+	if !strings.EqualFold(w.SwitchID, switchID) {
+		return fmt.Errorf("the connect reported switch ID %q, want %q", w.SwitchID, switchID)
 	}
 	return nil
 }

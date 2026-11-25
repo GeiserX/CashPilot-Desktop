@@ -115,10 +115,6 @@ foreach ($c in @($in.components)) {
 Write-Doc ([ordered]@{ files = @($out) })
 `
 
-// scriptSwitchByName finds our switch's ID by name.
-const scriptSwitchByName = buildPrelude + `Write-Doc ([ordered]@{ ids = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch } | ForEach-Object { $_.Id.ToString() }) })
-`
-
 var proberScripts = map[string]string{
 	"SetL3":        scriptSetL3,
 	"SetBinding":   scriptSetBinding,
@@ -128,7 +124,6 @@ var proberScripts = map[string]string{
 	"PktmonStart":  scriptPktmonStart,
 	"PktmonStop":   scriptPktmonStop,
 	"PktmonExport": scriptPktmonExport,
-	"SwitchByName": scriptSwitchByName,
 }
 
 func init() {
@@ -149,8 +144,9 @@ type psProber struct {
 	// element; nil where there is none.
 	hv func(ctx context.Context, bindVMID, service string, register bool, element string) (HVListener, error)
 	// owner is this install's owner token, written into every object the
-	// proof makes. Build sets it from desired.json (see forOwner).
-	owner string
+	// proof makes. Build sets it from desired.json (see forPlan).
+	owner    string
+	switchID string
 	// tmp holds pktmon's capture files.
 	tmp string
 
@@ -160,10 +156,9 @@ type psProber struct {
 
 var _ Prober = (*psProber)(nil)
 
-// forOwner is this Prober for the install with the owner token, so every
-// canary rule and hv_sock test key it makes carries the token.
-func (p *psProber) forOwner(owner string) Prober {
-	return &psProber{h: p.h, n: p.n, program: p.program, listen: p.listen, hv: p.hv, tmp: p.tmp, owner: owner}
+// forPlan scopes the proof to the installation's owner and switch.
+func (p *psProber) forPlan(plan Plan) Prober {
+	return &psProber{h: p.h, n: p.n, program: p.program, listen: p.listen, hv: p.hv, tmp: p.tmp, owner: plan.Owner, switchID: plan.SwitchID}
 }
 
 // checkOwner refuses to make a proof object without a valid owner token:
@@ -427,15 +422,8 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sw struct {
-		IDs []string `json:"ids"`
-	}
-	if err := c.p.h.call(ctx, scriptSwitchByName, map[string]string{"switch": c.p.n.Switch}, &sw); err != nil {
+	if err := checkVMID("proof switch ID", c.p.switchID); err != nil {
 		return nil, err
-	}
-	ourSwitch := ""
-	if len(sw.IDs) == 1 {
-		ourSwitch = sw.IDs[0]
 	}
 	want := []int{}
 	for id := range comps {
@@ -466,7 +454,7 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 			return nil, fmt.Errorf("pktmon did not export component %d (%s)", id, comps[id].Name)
 		}
 		cp := comps[id]
-		class := componentClass(h, ourSwitch, cp.IfIndex)
+		class := componentClass(h, c.p.switchID, cp.IfIndex)
 		b, err := readCapped(path, 64<<20, true)
 		if err != nil {
 			return nil, err

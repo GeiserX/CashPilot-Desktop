@@ -533,7 +533,15 @@ func (r Runner) Run(ctx context.Context, p Plan, h HostNet, t ProofTargets) (rs 
 // ready connects and starts the VM for the proof, and refuses a fence that
 // already has a hole: an Allow row left by an earlier proof, or L3 off.
 func (r *proofRun) ready(ctx context.Context) error {
-	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID)
+	inv, err := r.B.Inventory(ctx, r.p.Names, KnownIDs{VM: r.p.VMID, Switch: r.p.SwitchID}, "")
+	if err != nil {
+		return err
+	}
+	if adopt(inv.VMs, r.p.VMID, r.p.Owner) == "" || adopt(inv.Switches, r.p.SwitchID, r.p.Owner) == "" {
+		return fmt.Errorf("%w: the recorded VM or switch has no matching owner tag", ErrNotOwned)
+	}
+
+	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		return fmt.Errorf("could not read the VM before the proof: %w", err)
 	}
@@ -543,8 +551,13 @@ func (r *proofRun) ready(ctx context.Context) error {
 	if err := fenceClosed(live); err != nil {
 		return fmt.Errorf("the fence has a hole before the proof starts: %w", err)
 	}
+	for _, a := range live.Adapters {
+		if a.SwitchID != "" && !strings.EqualFold(a.SwitchID, r.p.SwitchID) {
+			return errors.New("the VM is already connected to another switch")
+		}
+	}
 	if !anyConnected(live) {
-		if err := r.B.Connect(ctx, r.p.VMID, r.p.Names.Switch); err != nil {
+		if err := r.B.Connect(ctx, r.p.VMID, r.p.SwitchID, r.p.Owner); err != nil {
 			return fmt.Errorf("could not connect the VM for the proof: %w", err)
 		}
 	}
@@ -584,7 +597,7 @@ func fenceClosed(live LiveState) error {
 
 // checkRestored reads the fence after the proof and wants it closed.
 func (r *proofRun) checkRestored(ctx context.Context) error {
-	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID)
+	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		return fmt.Errorf("could not read the fence after the proof: %w", err)
 	}
@@ -599,7 +612,7 @@ func (r *proofRun) checkRestored(ctx context.Context) error {
 // (0x800700B7); closing puts it back.
 func (r *proofRun) openAllow(ctx context.Context, a netip.Addr) error {
 	q := netip.PrefixFrom(a.WithZone(""), a.BitLen())
-	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID)
+	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		return err
 	}
@@ -630,7 +643,7 @@ func (r *proofRun) openAllow(ctx context.Context, a netip.Addr) error {
 // allowGone is whether the Allow row for q is gone, so a retried close that
 // finds nothing to remove counts as done.
 func (r *proofRun) allowGone(ctx context.Context, q netip.Prefix) bool {
-	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID)
+	live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		return false
 	}
@@ -819,7 +832,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 	case StepVMBusRed:
 		return r.vmbus(ctx, s, tok)
 	case StepBindings:
-		live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID)
+		live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 		if err != nil {
 			return fail(err), nil
 		}
@@ -841,7 +854,7 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 			e.Err = strings.Join(bad, "; ")
 		}
 	case StepGreen:
-		live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID)
+		live, err := r.B.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 		if err == nil {
 			err = fenceClosed(live)
 		}

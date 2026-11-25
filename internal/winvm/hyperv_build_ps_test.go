@@ -93,8 +93,8 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 			return err
 		}},
 		{"UnregisterGuardTask", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.UnregisterGuardTask(ctx, n, tOwner) }},
-		{"RemoveVM", `{"left":[]}`, []string{`"vhdxDir":"D:\\VMs"`}, func(b psBuilder) error { _, err := b.RemoveVM(ctx, tVMID, `D:\VMs`); return err }},
-		{"RemoveSwitch", ok, []string{tSwitchID}, func(b psBuilder) error { return b.RemoveSwitch(ctx, tSwitchID) }},
+		{"RemoveVM", `{"left":[]}`, []string{`"vhdxDir":"D:\\VMs"`}, func(b psBuilder) error { _, err := b.RemoveVM(ctx, tVMID, `D:\VMs`, tOwner); return err }},
+		{"RemoveSwitch", ok, []string{tSwitchID}, func(b psBuilder) error { return b.RemoveSwitch(ctx, tSwitchID, tOwner) }},
 		{"RemoveNAT", ok, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { return b.RemoveNAT(ctx, n, sub) }},
 		{"RemoveFirewall", ok, []string{`"owner":"` + tOwner + `"`}, func(b psBuilder) error { return b.RemoveFirewall(ctx, n, tOwner) }},
 		{"RemoveGuardian", ok, []string{`{}`}, func(b psBuilder) error { return b.RemoveGuardian(ctx) }},
@@ -174,8 +174,8 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 		"guest user not admin": func(b psBuilder) error {
 			return b.Guest(ctx, tVMID, Cred{User: "earner", Password: testPassword(1)}, scriptGuestPing, nil, nil)
 		},
-		"remove VM not a GUID":  func(b psBuilder) error { _, err := b.RemoveVM(ctx, "*", `D:\VMs`); return err },
-		"remove switch by name": func(b psBuilder) error { return b.RemoveSwitch(ctx, "CashPilot-VM") },
+		"remove VM not a GUID":  func(b psBuilder) error { _, err := b.RemoveVM(ctx, "*", `D:\VMs`, tOwner); return err },
+		"remove switch by name": func(b psBuilder) error { return b.RemoveSwitch(ctx, "CashPilot-VM", tOwner) },
 		"remove firewall no owner": func(b psBuilder) error {
 			return b.RemoveFirewall(ctx, n, "")
 		},
@@ -286,7 +286,7 @@ func TestProberSeam(t *testing.T) {
 	ok := `{"ok":true}`
 	h, r, _ := newSeam()
 	var ln net.Listener
-	p := &psProber{h: h, n: n, program: n.GuardExe(), tmp: t.TempDir(), owner: tOwner, listen: func(string, string) (net.Listener, error) {
+	p := &psProber{h: h, n: n, program: n.GuardExe(), tmp: t.TempDir(), owner: tOwner, switchID: tSwitchID, listen: func(string, string) (net.Listener, error) {
 		var err error
 		ln, err = net.Listen("tcp", "127.0.0.1:0")
 		return ln, err
@@ -313,10 +313,10 @@ func TestProberSeam(t *testing.T) {
 			if a := r.args[len(r.args)-1]; !strings.Contains(a, `"desc":"CashPilot Secure VM proof canary. cashpilot-owner=`+tOwner+`"`) {
 				t.Errorf("the canary rule does not carry the owner token: %s", a)
 			}
-			if _, err := p.forOwner("").Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45002, netip.MustParsePrefix("192.0.2.11/32")); err == nil {
+			if _, err := p.forPlan(Plan{}).Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45002, netip.MustParsePrefix("192.0.2.11/32")); err == nil {
 				t.Error("a canary with no owner token was opened")
 			}
-			if _, err := p.forOwner("").HVListener(ctx, tVMID, tVMID, true); err == nil {
+			if _, err := p.forPlan(Plan{}).HVListener(ctx, tVMID, tVMID, true); err == nil {
 				t.Error("an hv_sock test key with no owner token was registered")
 			}
 			if _, err := p.Canary(ctx, netip.MustParseAddr("192.0.2.10"), 45001, netip.Prefix{}); err == nil {
@@ -349,7 +349,7 @@ func TestProberSeam(t *testing.T) {
 			}
 		}
 	}
-	// pktmon: start, then stop, list, read the host, find our switch, export.
+	// pktmon: start, then stop, list, read the host, export.
 	dst := netip.MustParseAddr("198.51.100.7")
 	r.answers = append(r.answers, ok)
 	c, err := p.Pktmon(ctx, []PktFilter{{Addr: dst, Proto: "TCP", Port: 45000}})
@@ -362,7 +362,7 @@ func TestProberSeam(t *testing.T) {
 	os.WriteFile(out, pcapng(ipv4TCP(netip.MustParseAddr("192.0.2.10"), dst, 45000), ipv4TCP(netip.MustParseAddr("192.0.2.10"), dst, 1)), 0o600)
 	os.WriteFile(vnic, pcapng(ipv4TCP(netip.MustParseAddr("172.31.250.2"), dst, 45000)), 0o600)
 	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
-	r.answers = append(r.answers, `{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ids":["`+tSwitchID+`"]}`,
+	r.answers = append(r.answers, `{"list":`+jsonQuote(list)+`}`, cannedHostNet,
 		`{"files":[{"id":4,"path":`+jsonQuote(out)+`},{"id":9,"path":`+jsonQuote(vnic)+`}]}`)
 	recs, err := c.Stop(ctx)
 	if err != nil {
@@ -415,9 +415,9 @@ func TestPktmonRefusesMissingComponentExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := `[{"Components":[{"Id":4,"Name":"Ethernet","ifIndex":7},{"Id":9,"Name":"vEthernet","ifIndex":20}]}]`
-	h, _, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ids":["`+tSwitchID+`"]}`,
+	h, _, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet,
 		`{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
-	c := psCapture{p: &psProber{h: h}, dir: dir}
+	c := psCapture{p: &psProber{h: h, switchID: tSwitchID}, dir: dir}
 	if _, err := c.Stop(context.Background()); err == nil || !strings.Contains(err.Error(), "component 9") {
 		t.Fatalf("Stop = %v, want a missing export error for component 9", err)
 	}

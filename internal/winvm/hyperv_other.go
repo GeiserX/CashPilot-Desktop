@@ -25,7 +25,7 @@ var (
 	_ GuestProbe = unsupported{}
 )
 
-func (unsupported) ReadLive(context.Context, Names, string) (LiveState, error) {
+func (unsupported) ReadLive(context.Context, Names, string, string) (LiveState, error) {
 	return LiveState{}, ErrUnsupported
 }
 func (unsupported) ReadHostNet(context.Context, []netip.Addr) (HostNet, error) {
@@ -40,7 +40,7 @@ func (unsupported) DropCounters(context.Context, string, string) (DropSample, er
 func (unsupported) Usage(context.Context, string) (Usage, error) { return Usage{}, ErrUnsupported }
 
 func (unsupported) Disconnect(context.Context, string) error              { return ErrUnsupported }
-func (unsupported) Connect(context.Context, string, string) error         { return ErrUnsupported }
+func (unsupported) Connect(context.Context, string, string, string) error { return ErrUnsupported }
 func (unsupported) Start(context.Context, string) error                   { return ErrUnsupported }
 func (unsupported) AddDeny(context.Context, string, []netip.Prefix) error { return ErrUnsupported }
 func (unsupported) RemoveDeny(context.Context, string, []netip.Prefix) error {
@@ -86,10 +86,10 @@ func (unsupported) Guest(context.Context, string, Cred, GuestScript, any, any) e
 	return ErrUnsupported
 }
 func (unsupported) UnregisterGuardTask(context.Context, Names, string) error { return ErrUnsupported }
-func (unsupported) RemoveVM(context.Context, string, string) ([]string, error) {
+func (unsupported) RemoveVM(context.Context, string, string, string) ([]string, error) {
 	return nil, ErrUnsupported
 }
-func (unsupported) RemoveSwitch(context.Context, string) error           { return ErrUnsupported }
+func (unsupported) RemoveSwitch(context.Context, string, string) error   { return ErrUnsupported }
 func (unsupported) RemoveNAT(context.Context, Names, netip.Prefix) error { return ErrUnsupported }
 func (unsupported) RemoveFirewall(context.Context, Names, string) error  { return ErrUnsupported }
 func (unsupported) RemoveGuardian(context.Context) error                 { return ErrUnsupported }

@@ -439,7 +439,7 @@ func TestBuildWithAFailedProof(t *testing.T) {
 	}
 	for _, o := range f.Objects() {
 		if strings.HasPrefix(o, "vm ") {
-			live, err := f.ReadLive(context.Background(), p.Names, p.VMID)
+			live, err := f.ReadLive(context.Background(), p.Names, p.VMID, p.SwitchID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -458,7 +458,7 @@ func TestBuildWithAFailedProof(t *testing.T) {
 // adapterSwitch is the switch any adapter of the Secure VM is on, "" for none.
 func adapterSwitch(t *testing.T, f *hvfake.HyperV, p winvm.Plan) string {
 	t.Helper()
-	live, err := f.ReadLive(context.Background(), p.Names, p.VMID)
+	live, err := f.ReadLive(context.Background(), p.Names, p.VMID, p.SwitchID)
 	if err != nil {
 		t.Fatal(err)
 	}

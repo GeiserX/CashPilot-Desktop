@@ -175,8 +175,8 @@ func TestSeamScriptsAndArguments(t *testing.T) {
 		answer string
 		call   func(h *psHost) (any, error)
 	}{
-		{"ReadLive", scriptReadLive, `{"vm":"` + tVMID + `","switch":"CashPilot-VM","group":"CashPilotVM"}`, cannedLive(),
-			func(h *psHost) (any, error) { return h.ReadLive(ctx, ProductNames(), tVMID) }},
+		{"ReadLive", scriptReadLive, `{"vm":"` + tVMID + `","switchId":"` + tSwitchID + `","group":"CashPilotVM"}`, cannedLive(),
+			func(h *psHost) (any, error) { return h.ReadLive(ctx, ProductNames(), tVMID, tSwitchID) }},
 		{"ReadHostNet", scriptReadHostNet, `{"samples":["1.1.1.1","9.9.9.9"]}`, cannedHostNet,
 			func(h *psHost) (any, error) { return h.ReadHostNet(ctx, two) }},
 		{"ReadNetwork", scriptReadNetwork, `{}`, cannedNetwork,
@@ -187,8 +187,8 @@ func TestSeamScriptsAndArguments(t *testing.T) {
 			func(h *psHost) (any, error) { return h.Usage(ctx, tVMID) }},
 		{"Disconnect", scriptDisconnect, `{"vm":"` + tVMID + `"}`, `{"adapters":1,"connected":0}`,
 			func(h *psHost) (any, error) { return nil, h.Disconnect(ctx, tVMID) }},
-		{"Connect", scriptConnect, `{"vm":"` + tVMID + `","switch":"CashPilot-VM"}`, `{"switchId":"` + tSwitchID + `"}`,
-			func(h *psHost) (any, error) { return nil, h.Connect(ctx, tVMID, "CashPilot-VM") }},
+		{"Connect", scriptConnect, `{"owner":"` + tOwner + `","switchId":"` + tSwitchID + `","vm":"` + tVMID + `"}`, `{"switchId":"` + tSwitchID + `"}`,
+			func(h *psHost) (any, error) { return nil, h.Connect(ctx, tVMID, tSwitchID, tOwner) }},
 		{"Start", scriptStart, `{"vm":"` + tVMID + `"}`, `{"state":"Running"}`,
 			func(h *psHost) (any, error) { return nil, h.Start(ctx, tVMID) }},
 		{"AddDeny", scriptAddDeny, `{"vm":"` + tVMID + `","remotes":["198.51.100.0/24","203.0.113.9"]}`, cannedDenyAfterAdd,
@@ -267,7 +267,7 @@ func TestReadLiveMatchesPlan(t *testing.T) {
 func readCanned(t *testing.T, live string) (LiveState, HostNet) {
 	t.Helper()
 	h, _, _ := newSeam(live, cannedHostNet)
-	l, err := h.ReadLive(context.Background(), ProductNames(), tVMID)
+	l, err := h.ReadLive(context.Background(), ProductNames(), tVMID, tSwitchID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,12 +347,12 @@ func TestReadLiveFailsClosedOnBadValues(t *testing.T) {
 
 func TestReadLiveVMAbsent(t *testing.T) {
 	h, _, _ := newSeam(`{"vmExists":false}`)
-	l, err := h.ReadLive(context.Background(), ProductNames(), tVMID)
+	l, err := h.ReadLive(context.Background(), ProductNames(), tVMID, tSwitchID)
 	if err != nil || l.VMExists {
 		t.Fatalf("got %+v, %v", l, err)
 	}
 	h, _, _ = newSeam(`{}`)
-	if _, err := h.ReadLive(context.Background(), ProductNames(), tVMID); err == nil {
+	if _, err := h.ReadLive(context.Background(), ProductNames(), tVMID, tSwitchID); err == nil {
 		t.Fatal("an answer that does not say whether the VM exists was accepted")
 	}
 }
@@ -495,18 +495,18 @@ func TestSeamRefusesBadInput(t *testing.T) {
 	other := ProductNames()
 	other.VM = "bunker"
 	cases := map[string]func(h *psHost) error{
-		"an injected switch name": func(h *psHost) error { _, err := h.ReadLive(ctx, bad, tVMID); return err },
-		"a name outside our sets": func(h *psHost) error { _, err := h.ReadLive(ctx, other, tVMID); return err },
+		"an injected switch name": func(h *psHost) error { _, err := h.ReadLive(ctx, bad, tVMID, tSwitchID); return err },
+		"a name outside our sets": func(h *psHost) error { _, err := h.ReadLive(ctx, other, tVMID, tSwitchID); return err },
 		"a VM ID that is no GUID": func(h *psHost) error {
-			_, err := h.ReadLive(ctx, ProductNames(), "' + (Stop-Computer) + '")
+			_, err := h.ReadLive(ctx, ProductNames(), "' + (Stop-Computer) + '", tSwitchID)
 			return err
 		},
 		"a braced VM ID":             func(h *psHost) error { _, err := h.Usage(ctx, "{"+tVMID+"}"); return err },
 		"an empty VM ID":             func(h *psHost) error { return h.Disconnect(ctx, "") },
 		"a bad adapter ID":           func(h *psHost) error { _, err := h.DropCounters(ctx, tVMID, "*"); return err },
-		"a switch name with a space": func(h *psHost) error { return h.Connect(ctx, tVMID, "Default Switch") },
-		"a switch name too long":     func(h *psHost) error { return h.Connect(ctx, tVMID, strings.Repeat("a", 33)) },
-		"a switch name with a quote": func(h *psHost) error { return h.Connect(ctx, tVMID, "a'b") },
+		"a switch name with a space": func(h *psHost) error { return h.Connect(ctx, tVMID, "Default Switch", tOwner) },
+		"a switch name too long":     func(h *psHost) error { return h.Connect(ctx, tVMID, strings.Repeat("a", 33), tOwner) },
+		"a switch name with a quote": func(h *psHost) error { return h.Connect(ctx, tVMID, "a'b", tOwner) },
 		"an IPv6 sample": func(h *psHost) error {
 			_, err := h.ReadHostNet(ctx, []netip.Addr{netip.MustParseAddr("2001:db8::1")})
 			return err
@@ -599,7 +599,7 @@ func TestSeamRefusesBadOutput(t *testing.T) {
 		"not JSON at all": `<Objs Version="1.1.0.1">`,
 	} {
 		h, _, _ := newSeam(answer)
-		if _, err := h.ReadLive(context.Background(), ProductNames(), tVMID); err == nil {
+		if _, err := h.ReadLive(context.Background(), ProductNames(), tVMID, tSwitchID); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
 	}
@@ -608,7 +608,7 @@ func TestSeamRefusesBadOutput(t *testing.T) {
 		t.Error("a disconnect that left an adapter connected was accepted")
 	}
 	h, _, _ = newSeam(`{"switchId":""}`)
-	if err := h.Connect(context.Background(), tVMID, "CashPilot-VM"); err == nil {
+	if err := h.Connect(context.Background(), tVMID, tSwitchID, tOwner); err == nil {
 		t.Error("a connect that reported no switch was accepted")
 	}
 	h, _, _ = newSeam(`{"state":"Off"}`)

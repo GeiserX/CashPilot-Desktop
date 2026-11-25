@@ -449,19 +449,23 @@ func (b *builder) journal(ctx context.Context) error {
 	return b.save()
 }
 
-// adopt is the ID of the one object of ours in objs, by recorded ID or owner
-// token, or "" when none is there.
+// adopt returns the ID only when exactly one live object matches.
 func adopt(objs []OwnedObject, id, owner string) string {
+	var found string
 	for _, o := range objs {
-		if ownedBy(o, id, owner) {
-			return o.ID
+		if !ownedBy(o, id, owner) {
+			continue
 		}
+		if found != "" {
+			return ""
+		}
+		found = o.ID
 	}
-	return ""
+	return found
 }
 
 func ownedBy(o OwnedObject, id, owner string) bool {
-	return (id != "" && strings.EqualFold(o.ID, id)) || (owner != "" && o.Owner == owner)
+	return owner != "" && o.Owner == owner && (id == "" || strings.EqualFold(o.ID, id))
 }
 
 // checkOwnership refuses any object with our names that the earlier plan does
@@ -635,7 +639,7 @@ func (b *builder) readInstall() (*installState, error) {
 // any point resumes with the same answer file.
 func (b *builder) vm(ctx context.Context) error {
 	if b.p.VMID != "" {
-		live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID)
+		live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID, b.p.SwitchID)
 		if err != nil {
 			return err
 		}
@@ -710,7 +714,7 @@ func (b *builder) dynamic() Dynamic {
 // left by a proof that stopped), every Deny not wanted goes, and every wanted
 // Deny missing or one-way is added.
 func (b *builder) acls(ctx context.Context) error {
-	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID)
+	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID, b.p.SwitchID)
 	if err != nil {
 		return err
 	}
@@ -821,7 +825,7 @@ func (b *builder) install(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID)
+	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID, b.p.SwitchID)
 	if err != nil {
 		return err
 	}
@@ -894,7 +898,7 @@ func (b *builder) firstSession(ctx context.Context) error {
 			return fmt.Errorf("the guest still holds copies of the answer file: %s", strings.Join(out.PantherLeft, ", "))
 		}
 	}
-	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID)
+	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID, b.p.SwitchID)
 	if err != nil {
 		return err
 	}
@@ -958,7 +962,7 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	}
 	b.h = h
 	dyn := b.dynamic()
-	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID)
+	live, err := b.HV.ReadLive(ctx, b.n, b.p.VMID, b.p.SwitchID)
 	if err != nil {
 		return res, err
 	}
@@ -979,8 +983,8 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	// Every canary rule and hv_sock test key the proof makes carries the
 	// owner token, so ClearProof can find this install's and only those.
 	pr := b.Probe
-	if o, ok := pr.(interface{ forOwner(string) Prober }); ok {
-		pr = o.forOwner(b.p.Owner)
+	if o, ok := pr.(interface{ forPlan(Plan) Prober }); ok {
+		pr = o.forPlan(b.p)
 	}
 	run := Runner{B: b.HV, P: pr, G: g, Clock: b.Now, Sleep: b.Sleep, Dir: b.Dir, Rand: b.Rand, Logf: b.Logf, Wait: b.ProofWait}
 	t := Targets(h, b.p.SwitchID, b.own, live.VNICIfIndex)

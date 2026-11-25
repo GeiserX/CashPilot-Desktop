@@ -62,7 +62,7 @@ func runVMInspect(ctx context.Context, r winvm.Reader, planPath string, out, err
 	rep := vmInspectReport{VM: p.Names.VM, VMID: p.VMID, Errors: map[string]string{}}
 	fail := func(what string, err error) { rep.Errors[what] = err.Error() }
 
-	if l, err := r.ReadLive(ctx, p.Names, p.VMID); err != nil {
+	if l, err := r.ReadLive(ctx, p.Names, p.VMID, p.SwitchID); err != nil {
 		fail("live", err)
 	} else {
 		rep.Live = &l

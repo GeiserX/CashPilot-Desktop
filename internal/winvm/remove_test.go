@@ -333,3 +333,58 @@ func TestRemoveDeletesSetupLeftovers(t *testing.T) {
 		t.Errorf("Remove deleted a file setup never makes: %v", err)
 	}
 }
+
+func TestRemoveLeavesVMCopyWithTheOwnerTag(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	p := readPlan(t, dir)
+	copyID := f.AddForeignVM(p.Names.VM, false)
+	if err := f.SetVMOwner(copyID, p.Owner); err != nil {
+		t.Fatal(err)
+	}
+	res := remove(t, f, dir)
+	if !strings.Contains(strings.Join(f.Objects(), "\n"), "vm "+copyID+" ") ||
+		!strings.Contains(strings.Join(res.Left, "\n"), copyID) {
+		t.Fatalf("Remove did not keep and list the copied VM: %+v", res)
+	}
+}
+
+func TestRemoveLeavesRecordedVMWithoutTheOwnerTag(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	p := readPlan(t, dir)
+	if err := f.SetVMOwner(p.VMID, ""); err != nil {
+		t.Fatal(err)
+	}
+	res := remove(t, f, dir)
+	if !strings.Contains(strings.Join(f.Objects(), "\n"), "vm "+p.VMID+" ") ||
+		!strings.Contains(strings.Join(res.Left, "\n"), p.VMID) {
+		t.Fatalf("Remove did not keep and list the untagged VM: %+v", res)
+	}
+}
+
+func TestRemoveLeavesBothVMsWhenRecoveryIsAmbiguous(t *testing.T) {
+	f := hvfake.New()
+	dir := build(t, f)
+	p := readPlan(t, dir)
+	copyID := f.AddForeignVM(p.Names.VM, false)
+	if err := f.SetVMOwner(copyID, p.Owner); err != nil {
+		t.Fatal(err)
+	}
+	vmID := p.VMID
+	p.VMID, p.AdapterID = "", ""
+	raw, err := p.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, winvm.PlanFile), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := remove(t, f, dir)
+	for _, id := range []string{vmID, copyID} {
+		if !strings.Contains(strings.Join(f.Objects(), "\n"), "vm "+id+" ") ||
+			!strings.Contains(strings.Join(res.Left, "\n"), id) {
+			t.Fatalf("Remove did not keep and list VM %s: %+v", id, res)
+		}
+	}
+}

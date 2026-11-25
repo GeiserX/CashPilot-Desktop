@@ -22,7 +22,7 @@ var ErrUnsupported = errors.New("the Secure VM (Windows 11 Pro) needs Windows 11
 
 // Reader reads the host. Nothing it does changes anything.
 type Reader interface {
-	ReadLive(ctx context.Context, n Names, vmID string) (LiveState, error)
+	ReadLive(ctx context.Context, n Names, vmID, switchID string) (LiveState, error)
 	ReadHostNet(ctx context.Context, samples []netip.Addr) (HostNet, error)
 	ReadNetwork(ctx context.Context) (CurrentNetwork, error)
 	// DropCounters reads the FailedSecurityPolicy drop counter of one adapter.
@@ -46,9 +46,8 @@ type Reader interface {
 type Guarder interface {
 	Reader
 	Disconnect(ctx context.Context, vmID string) error
-	// Connect takes the switch by name, because a disconnect clears the
-	// adapter's switch (ADR §5 item 11).
-	Connect(ctx context.Context, vmID, switchName string) error
+	// Connect matches both recorded IDs and both live owner tags.
+	Connect(ctx context.Context, vmID, switchID, owner string) error
 	Start(ctx context.Context, vmID string) error
 	AddDeny(ctx context.Context, vmID string, p []netip.Prefix) error
 	RemoveDeny(ctx context.Context, vmID string, p []netip.Prefix) error
@@ -58,8 +57,8 @@ type Guarder interface {
 // idempotent: a call whose result is already in place changes nothing, so a
 // build that stopped half way runs again from the start.
 //
-// Ownership: a VM or a switch is this install's only when its ID is recorded in
-// the plan or its Notes carry the plan's Owner token. A firewall rule or the
+// Ownership: a VM or switch must carry the plan's Owner token and match its
+// recorded ID when present. A firewall rule or the
 // guard task is ours only when its description carries the token. The NAT has
 // neither, so it is ours only when it has our name and our recorded /29. Build
 // and Remove read Inventory first and refuse, or leave alone, anything else.
@@ -108,8 +107,8 @@ type Builder interface {
 	UnregisterGuardTask(ctx context.Context, n Names, owner string) error
 	// RemoveVM turns the VM off, removes it, and deletes its disks that lie in
 	// vhdxDir. It lists the disks it left because they lie elsewhere.
-	RemoveVM(ctx context.Context, vmID, vhdxDir string) (left []string, err error)
-	RemoveSwitch(ctx context.Context, switchID string) error
+	RemoveVM(ctx context.Context, vmID, vhdxDir, owner string) (left []string, err error)
+	RemoveSwitch(ctx context.Context, switchID, owner string) error
 	RemoveNAT(ctx context.Context, n Names, sub netip.Prefix) error
 	// RemoveFirewall removes the rules of our group that carry the owner token.
 	RemoveFirewall(ctx context.Context, n Names, owner string) error

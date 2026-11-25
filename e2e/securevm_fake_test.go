@@ -31,7 +31,7 @@ func build(t *testing.T, f *hvfake.HyperV, staticARP bool) winvm.Plan {
 func diffNow(t *testing.T, f *hvfake.HyperV, p winvm.Plan) []winvm.Change {
 	t.Helper()
 	ctx := context.Background()
-	live, err := f.ReadLive(ctx, p.Names, p.VMID)
+	live, err := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestFakeHyperVIPv6Stack(t *testing.T) {
 	to := netip.AddrPortFrom(ll, 40020)
 	c, _ := f.Canary(ctx, ll, to.Port(), netip.MustParsePrefix("fe80::/10"))
 	defer c.Close()
-	live, _ := f.ReadLive(ctx, p.Names, p.VMID)
+	live, _ := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	f.TCP(ctx, to, "v6")
 	if len(c.Arrived()) != 0 {
 		t.Fatal("the planned fence let IPv6 reach the host")
@@ -296,14 +296,14 @@ func TestFakeHyperVFaultHooks(t *testing.T) {
 
 	boom := errors.New("boom")
 	f.FailNext("ReadLive", boom)
-	if _, err := f.ReadLive(ctx, p.Names, p.VMID); !errors.Is(err, boom) {
+	if _, err := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID); !errors.Is(err, boom) {
 		t.Fatalf("FailNext: %v", err)
 	}
-	if _, err := f.ReadLive(ctx, p.Names, p.VMID); err != nil {
+	if _, err := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID); err != nil {
 		t.Fatalf("FailNext fails only once: %v", err)
 	}
 
-	live, _ := f.ReadLive(ctx, p.Names, p.VMID)
+	live, _ := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	f.SetBinding(ctx, live.VNICIfIndex, "ms_rspndr", true)
 	if !slices.ContainsFunc(diffNow(t, f, p), func(c winvm.Change) bool { return c.Field == "bindings" }) {
 		t.Fatal("SetBinding: a binding back on is not drift")

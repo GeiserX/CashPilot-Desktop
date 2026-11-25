@@ -121,25 +121,27 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 	}
 
 	ourVM := ""
+	vmID := adopt(inv.VMs, p.VMID, p.Owner)
 	for _, v := range inv.VMs {
-		if !ownedBy(v, p.VMID, p.Owner) {
+		if vmID == "" || !strings.EqualFold(v.ID, vmID) {
 			res.Left = append(res.Left, "the VM "+v.ID+" (not made by this install)")
 			continue
 		}
-		ourVM = v.ID
-		left, err := d.HV.RemoveVM(ctx, v.ID, p.VHDXDir)
+		left, err := d.HV.RemoveVM(ctx, v.ID, p.VHDXDir, p.Owner)
 		if err != nil {
 			fail("VM", err)
 			continue
 		}
+		ourVM = v.ID
 		res.Removed = append(res.Removed, "the VM "+v.ID+" and its disk")
 		for _, f := range left {
 			res.Left = append(res.Left, f+" (outside the VM folder, so not deleted)")
 		}
 	}
 
+	swID := adopt(inv.Switches, p.SwitchID, p.Owner)
 	for _, s := range inv.Switches {
-		if !ownedBy(s, p.SwitchID, p.Owner) {
+		if swID == "" || !strings.EqualFold(s.ID, swID) {
 			res.Left = append(res.Left, "the switch "+s.ID+" (not made by this install)")
 			continue
 		}
@@ -153,7 +155,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 			res.Kept = append(res.Kept, fmt.Sprintf("the switch %s, its address and its neighbour entry: another VM (%s) has an adapter on it", s.ID, strings.Join(others, ", ")))
 			continue
 		}
-		if err := d.HV.RemoveSwitch(ctx, s.ID); err != nil {
+		if err := d.HV.RemoveSwitch(ctx, s.ID, p.Owner); err != nil {
 			fail("switch", err)
 			continue
 		}

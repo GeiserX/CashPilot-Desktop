@@ -129,7 +129,7 @@ func proofRig(t *testing.T) (*hvfake.HyperV, winvm.Plan, winvm.Runner, winvm.Hos
 	if err != nil {
 		t.Fatal(err)
 	}
-	live, err := f.ReadLive(context.Background(), p.Names, p.VMID)
+	live, err := f.ReadLive(context.Background(), p.Names, p.VMID, p.SwitchID)
 	if err != nil {
 		t.Fatal(err)
 	}

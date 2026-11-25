@@ -457,7 +457,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	if p.VMID, p.AdapterID, err = f.CreateVM(ctx, p, "", ""); err != nil {
 		return winvm.Plan{}, err
 	}
-	live, err := f.ReadLive(ctx, n, p.VMID)
+	live, err := f.ReadLive(ctx, n, p.VMID, p.SwitchID)
 	if err != nil {
 		return winvm.Plan{}, err
 	}
@@ -494,7 +494,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 	}
 	p.SetGCSBaseline(live.GCS)
 	p.HostBuild = live.HostBuild
-	if err := f.Connect(ctx, p.VMID, n.Switch); err != nil {
+	if err := f.Connect(ctx, p.VMID, p.SwitchID, p.Owner); err != nil {
 		return winvm.Plan{}, err
 	}
 	return p, f.Start(ctx, p.VMID)
@@ -504,7 +504,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 
 // ReadLive lists what a real host lists, a Both rule as an Inbound and an
 // Outbound row included.
-func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID string) (winvm.LiveState, error) {
+func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID, switchID string) (winvm.LiveState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("ReadLive"); err != nil {
@@ -555,7 +555,7 @@ func (f *HyperV) ReadLive(_ context.Context, n winvm.Names, vmID string) (winvm.
 	for id, on := range vm.integration {
 		l.Integration[id] = on
 	}
-	if s, ok := f.switchByName(n.Switch); ok {
+	if s, ok := f.switches[strings.ToLower(switchID)]; ok {
 		l.SwitchType = s.typ
 		for _, v := range f.vms {
 			for _, x := range append([]*fakeAdapter{v.adapter}, v.extra...) {
@@ -685,9 +685,9 @@ func (f *HyperV) Disconnect(_ context.Context, vmID string) error {
 	return nil
 }
 
-// Connect puts the VM's one adapter on the switch with that name. Like the
+// Connect puts the VM's one adapter on the recorded switch. Like the
 // real script, it refuses a VM with more than one adapter.
-func (f *HyperV) Connect(_ context.Context, vmID, switchName string) error {
+func (f *HyperV) Connect(_ context.Context, vmID, switchID, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("Connect"); err != nil {
@@ -700,9 +700,9 @@ func (f *HyperV) Connect(_ context.Context, vmID, switchName string) error {
 	if len(vm.extra) > 0 {
 		return errors.New("fake Hyper-V: the VM must have exactly one network adapter")
 	}
-	s, ok := f.switchByName(switchName)
-	if !ok {
-		return fmt.Errorf("fake Hyper-V: no switch %q", switchName)
+	s, ok := f.switches[strings.ToLower(switchID)]
+	if !ok || s.typ != "Internal" || owner == "" || s.owner != owner || vm.owner != owner {
+		return fmt.Errorf("fake Hyper-V: VM or switch %q not owned", switchID)
 	}
 	vm.adapter.switchID = s.id
 	return nil
@@ -881,6 +881,9 @@ func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix
 		return "", 0, err
 	}
 	if s, ok := f.switches[strings.ToLower(switchID)]; ok && switchID != "" {
+		if err := f.notOwned("switch", n.Switch, s.owner, owner); err != nil {
+			return "", 0, err
+		}
 		if s.vnicMAC != vnicMAC || s.subnet != sub {
 			return "", 0, fmt.Errorf("fake Hyper-V: the switch %s has another vNIC MAC or subnet", switchID)
 		}
@@ -888,9 +891,12 @@ func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix
 			if other, ok := f.switchByName(n.Switch); ok && other != s {
 				return "", 0, fmt.Errorf("fake Hyper-V: another switch is named %q", n.Switch)
 			}
-			s.name = n.Switch // the guard connects by this name
+			s.name = n.Switch
 		}
 		return s.id, s.vnicIf, nil
+	}
+	if switchID != "" {
+		return "", 0, errors.New("fake Hyper-V: the recorded switch was not found")
 	}
 	if s, ok := f.switchByName(n.Switch); ok {
 		if err := f.notOwned("switch", n.Switch, s.owner, owner); err != nil {
@@ -1326,7 +1332,7 @@ func (f *HyperV) UnregisterGuardTask(_ context.Context, n winvm.Names, owner str
 }
 
 // RemoveVM removes the VM and its disk when the disk lies in vhdxDir.
-func (f *HyperV) RemoveVM(_ context.Context, vmID, vhdxDir string) ([]string, error) {
+func (f *HyperV) RemoveVM(_ context.Context, vmID, vhdxDir, owner string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveVM"); err != nil {
@@ -1335,6 +1341,9 @@ func (f *HyperV) RemoveVM(_ context.Context, vmID, vhdxDir string) ([]string, er
 	vm, ok := f.vms[strings.ToLower(vmID)]
 	if !ok {
 		return nil, nil
+	}
+	if err := f.notOwned("VM", vm.name, vm.owner, owner); err != nil {
+		return nil, err
 	}
 	delete(f.vms, vm.id)
 	if !strings.HasPrefix(strings.ToLower(vm.vhdx), strings.ToLower(strings.TrimRight(vhdxDir, `\`)+`\`)) {
@@ -1345,7 +1354,7 @@ func (f *HyperV) RemoveVM(_ context.Context, vmID, vhdxDir string) ([]string, er
 
 // RemoveSwitch removes a switch by ID, with its host vNIC. Like the real
 // script, it refuses while another VM has an adapter on it.
-func (f *HyperV) RemoveSwitch(_ context.Context, switchID string) error {
+func (f *HyperV) RemoveSwitch(_ context.Context, switchID, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("RemoveSwitch"); err != nil {
@@ -1354,6 +1363,9 @@ func (f *HyperV) RemoveSwitch(_ context.Context, switchID string) error {
 	s, ok := f.switches[strings.ToLower(switchID)]
 	if !ok {
 		return nil
+	}
+	if err := f.notOwned("switch", s.name, s.owner, owner); err != nil {
+		return err
 	}
 	for _, vm := range f.vms {
 		for _, a := range append([]*fakeAdapter{vm.adapter}, vm.extra...) {

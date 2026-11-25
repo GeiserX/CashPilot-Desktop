@@ -33,7 +33,7 @@ type OwnerSpy struct {
 	Got *string
 }
 
-func (s OwnerSpy) forOwner(owner string) Prober {
-	*s.Got = owner
+func (s OwnerSpy) forPlan(p Plan) Prober {
+	*s.Got = p.Owner
 	return s.Prober
 }

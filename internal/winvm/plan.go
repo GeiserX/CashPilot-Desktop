@@ -184,7 +184,7 @@ type Plan struct {
 	// Owner is a random token setup writes into desired.json before it creates
 	// anything, and into the Notes of the VM and the switch and the description
 	// of the firewall rule and the guard task it creates. A host object is this
-	// install's only when its ID is recorded here or it carries this token.
+	// install's only when it carries this token and matches its recorded ID, if any.
 	Owner string `json:"owner"`
 	// AdminGrantsTracked distinguishes confirmed grants from older plans,
 	// which wrote AddedAdminSIDs before trying the host operation.

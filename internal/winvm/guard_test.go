@@ -122,7 +122,7 @@ func (r *rig) since(m int) []string {
 
 func (r *rig) vnic() int {
 	r.t.Helper()
-	l, err := r.f.ReadLive(context.Background(), r.p.Names, r.p.VMID)
+	l, err := r.f.ReadLive(context.Background(), r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func (r *rig) vnic() int {
 // acls lists the Deny prefixes on the VM's adapter now.
 func (r *rig) acls() []netip.Prefix {
 	r.t.Helper()
-	l, err := r.f.ReadLive(context.Background(), r.p.Names, r.p.VMID)
+	l, err := r.f.ReadLive(context.Background(), r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func (r *rig) acls() []netip.Prefix {
 // connectedNow reads whether the adapter is on a switch, from the fake.
 func (r *rig) connectedNow() bool {
 	r.t.Helper()
-	l, err := r.f.ReadLive(context.Background(), r.p.Names, r.p.VMID)
+	l, err := r.f.ReadLive(context.Background(), r.p.Names, r.p.VMID, r.p.SwitchID)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestGuardProofLock(t *testing.T) {
 	if st.Network != winvm.NetDisconnected {
 		t.Fatalf("Boot under the lock: %+v", st)
 	}
-	r.f.Connect(ctx, r.p.VMID, r.p.Names.Switch)
+	r.f.Connect(ctx, r.p.VMID, r.p.SwitchID, r.p.Owner)
 	if err := winvm.WriteProofLock(r.dir, now.Add(-16*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +591,7 @@ func TestGuardBootConnectsOnlyOnAnExactMatch(t *testing.T) {
 		m := r.mark()
 		st := r.d.Boot(ctx)
 		calls := r.since(m)
-		if len(calls) == 0 || calls[0] != "Disconnect" {
+		if len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" {
 			t.Fatalf("Boot did not disconnect first: %v", calls)
 		}
 		ci, si := slices.Index(calls, "Connect"), slices.Index(calls, "Start")
@@ -612,7 +612,7 @@ func TestGuardBootConnectsOnlyOnAnExactMatch(t *testing.T) {
 			t.Fatal(err)
 		}
 		st := r.d.Boot(ctx)
-		l, _ := r.f.ReadLive(ctx, r.p.Names, r.p.VMID)
+		l, _ := r.f.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 		if st.Network != winvm.NetConnected || !strings.EqualFold(l.Adapters[0].SwitchID, r.p.SwitchID) {
 			t.Fatalf("Boot left the adapter on %q: %+v", l.Adapters[0].SwitchID, st)
 		}
@@ -638,7 +638,7 @@ func TestGuardBootConnectsOnlyOnAnExactMatch(t *testing.T) {
 			m := r.mark()
 			st := r.d.Boot(ctx)
 			calls := r.since(m)
-			if len(calls) == 0 || calls[0] != "Disconnect" || slices.Contains(calls, "Connect") || slices.Contains(calls, "Start") {
+			if len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || slices.Contains(calls, "Connect") || slices.Contains(calls, "Start") {
 				t.Fatalf("Boot calls %v", calls)
 			}
 			if st.Network != winvm.NetDisconnected || st.Reason == "" || r.connectedNow() {
@@ -825,7 +825,7 @@ func TestGuardWithoutAPlan(t *testing.T) {
 				vmID := r.p.VMID
 				if c.drop {
 					r.f.Disconnect(ctx, vmID)
-					r.f.RemoveVM(ctx, vmID, r.p.VHDXDir)
+					r.f.RemoveVM(ctx, vmID, r.p.VHDXDir, r.p.Owner)
 				}
 				if c.foreign {
 					r.f.AddForeignVM(r.p.Names.VM, false)
@@ -839,7 +839,7 @@ func TestGuardWithoutAPlan(t *testing.T) {
 					t.Fatalf("network %q, want %q: %+v, calls %v", st.Network, c.want, st, r.since(m))
 				}
 				if !c.drop {
-					l, err := r.f.ReadLive(ctx, r.p.Names, vmID)
+					l, err := r.f.ReadLive(ctx, r.p.Names, vmID, r.p.SwitchID)
 					if err != nil || !l.VMExists || slices.ContainsFunc(l.Adapters, func(a winvm.LiveAdapter) bool { return a.SwitchID != "" }) {
 						t.Fatalf("our VM stayed on the network: %+v %v", l.Adapters, err)
 					}
@@ -915,7 +915,7 @@ func TestGuardRunResumesAfterSleep(t *testing.T) {
 	r.setNow(provedAt.Add(2 * time.Hour))
 	m = r.mark()
 	st := l.Tick(ctx)
-	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") || st.Network != winvm.NetConnected {
+	if calls := r.since(m); len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || !slices.Contains(calls, "Connect") || st.Network != winvm.NetConnected {
 		t.Fatalf("no resume after the clock jumped: %+v %v", st, calls)
 	}
 }
@@ -971,7 +971,7 @@ func TestGuardRunRetriesAFailedDenyWrite(t *testing.T) {
 		m = r.mark()
 		st = l.Tick(ctx)
 		calls := r.since(m)
-		if len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "AddDeny") || !slices.Contains(calls, "Connect") {
+		if len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || !slices.Contains(calls, "AddDeny") || !slices.Contains(calls, "Connect") {
 			t.Fatalf("the retry: %v", calls)
 		}
 		if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld || !slices.Contains(r.acls(), netip.PrefixFrom(nu, 32)) {
@@ -995,7 +995,7 @@ func TestGuardRunRetriesAFailedDenyWrite(t *testing.T) {
 		m := r.mark()
 		st = l.Tick(ctx)
 		calls := r.since(m)
-		if len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "RemoveDeny") || !slices.Contains(calls, "Connect") {
+		if len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || !slices.Contains(calls, "RemoveDeny") || !slices.Contains(calls, "Connect") {
 			t.Fatalf("the retry: %v", calls)
 		}
 		if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld || slices.Contains(r.acls(), old) {
@@ -1045,7 +1045,7 @@ func TestGuardRunReconnectsOnceTheReasonIsGone(t *testing.T) {
 			m = r.mark()
 			st = l.Tick(ctx)
 			calls := r.since(m)
-			if len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") {
+			if len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || !slices.Contains(calls, "Connect") {
 				t.Fatalf("the tick after the reason went is not the boot routine: %v", calls)
 			}
 			if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld || st.Reason != "" || !r.connectedNow() {
@@ -1092,7 +1092,7 @@ func TestGuardRunNeverReconnectsAfterADriftCut(t *testing.T) {
 	}
 	// Someone puts the VM back on its switch by hand: the next tick takes it off
 	// again, though the fence matches now.
-	r.f.Connect(ctx, r.p.VMID, r.p.Names.Switch)
+	r.f.Connect(ctx, r.p.VMID, r.p.SwitchID, r.p.Owner)
 	if err := expectStillCut(l.Tick(ctx), "acl"); err != nil || r.connectedNow() {
 		t.Fatalf("a VM reconnected by hand during a cut: %v", err)
 	}
@@ -1104,7 +1104,7 @@ func TestGuardRunNeverReconnectsAfterADriftCut(t *testing.T) {
 	r.setNow(provedAt.Add(3 * time.Hour))
 	m = r.mark()
 	st := l.Tick(ctx)
-	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") {
+	if calls := r.since(m); len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || !slices.Contains(calls, "Connect") {
 		t.Fatalf("the resume after the cut: %v", calls)
 	}
 	if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld || st.Reason != "" || len(st.Changes) != 0 {
@@ -1143,7 +1143,7 @@ func TestGuardRunRetryHoldsOffUnderAProofLock(t *testing.T) {
 	if err := winvm.WriteProofLock(r.dir, provedAt.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	r.f.Connect(ctx, r.p.VMID, r.p.Names.Switch) // the proof's own connect
+	r.f.Connect(ctx, r.p.VMID, r.p.SwitchID, r.p.Owner) // the proof's own connect
 	m := r.mark()
 	l.Tick(ctx)
 	l.Tick(ctx)
@@ -1154,7 +1154,7 @@ func TestGuardRunRetryHoldsOffUnderAProofLock(t *testing.T) {
 	r.f.Disconnect(ctx, r.p.VMID) // the proof ends with the VM off
 	m = r.mark()
 	st := l.Tick(ctx)
-	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") || st.Network != winvm.NetConnected {
+	if calls := r.since(m); len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || !slices.Contains(calls, "Connect") || st.Network != winvm.NetConnected {
 		t.Fatalf("after the lock: %+v %v", st, calls)
 	}
 }
@@ -1220,8 +1220,8 @@ type tamperOnConnect struct {
 	do func()
 }
 
-func (h tamperOnConnect) Connect(ctx context.Context, vmID, switchName string) error {
-	if err := h.HyperV.Connect(ctx, vmID, switchName); err != nil {
+func (h tamperOnConnect) Connect(ctx context.Context, vmID, switchID, owner string) error {
+	if err := h.HyperV.Connect(ctx, vmID, switchID, owner); err != nil {
 		return err
 	}
 	h.do()
@@ -1295,7 +1295,7 @@ func TestGuardRunRetriesAFailedStart(t *testing.T) {
 	m := r.mark()
 	st = l.Tick(ctx)
 	calls := r.since(m)
-	if len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") || !slices.Contains(calls, "Start") {
+	if len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" || !slices.Contains(calls, "Connect") || !slices.Contains(calls, "Start") {
 		t.Fatalf("the tick after the failed start is not the boot routine: %v", calls)
 	}
 	if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld || st.Reason != "" || !r.connectedNow() {
@@ -1326,7 +1326,7 @@ func TestGuardRunRetriesABootDisconnectThatFailed(t *testing.T) {
 	os.Remove(filepath.Join(r.dir, winvm.LockFile))
 	m := r.mark()
 	l.Tick(ctx)
-	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" {
+	if calls := r.since(m); len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" {
 		t.Fatalf("the tick after the lock is not the boot routine: %v", calls)
 	}
 }
@@ -1481,7 +1481,7 @@ func TestGuardRunRemovesAOneWayLeftover(t *testing.T) {
 	if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld {
 		t.Fatalf("not back after the one-way leftover: %+v", st)
 	}
-	l2, _ := r.f.ReadLive(ctx, r.p.Names, r.p.VMID)
+	l2, _ := r.f.ReadLive(ctx, r.p.Names, r.p.VMID, r.p.SwitchID)
 	if slices.ContainsFunc(l2.ACLs, func(a winvm.ACL) bool { return a.Remote == old }) {
 		t.Fatalf("the leftover is still there: %v", l2.ACLs)
 	}
@@ -1496,17 +1496,17 @@ type cancelAfterConnect struct {
 	connected *bool
 }
 
-func (h cancelAfterConnect) Connect(ctx context.Context, vmID, switchName string) error {
+func (h cancelAfterConnect) Connect(ctx context.Context, vmID, switchID, owner string) error {
 	*h.connected = true
-	return h.HyperV.Connect(ctx, vmID, switchName)
+	return h.HyperV.Connect(ctx, vmID, switchID, owner)
 }
 
-func (h cancelAfterConnect) ReadLive(ctx context.Context, n winvm.Names, vmID string) (winvm.LiveState, error) {
+func (h cancelAfterConnect) ReadLive(ctx context.Context, n winvm.Names, vmID, switchID string) (winvm.LiveState, error) {
 	if *h.connected {
 		h.cancel()
 		return winvm.LiveState{}, ctx.Err()
 	}
-	return h.HyperV.ReadLive(ctx, n, vmID)
+	return h.HyperV.ReadLive(ctx, n, vmID, switchID)
 }
 
 func (h cancelAfterConnect) Disconnect(ctx context.Context, vmID string) error {
@@ -1582,7 +1582,21 @@ func TestGuardRunRetriesABootWhoseDisconnectsFailed(t *testing.T) {
 	}
 	m := r.mark()
 	l.Tick(ctx)
-	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" {
+	if calls := r.since(m); len(calls) < 2 || calls[0] != "Inventory" || calls[1] != "Disconnect" {
 		t.Fatalf("the tick after the failed boot is not the boot routine: %v", calls)
+	}
+}
+
+func TestGuardReconnectsToRecordedSwitchAfterRename(t *testing.T) {
+	r := newRig(t)
+	if err := r.f.RenameSwitch(r.p.SwitchID, "my renamed switch"); err != nil {
+		t.Fatal(err)
+	}
+	r.f.AddSwitch(r.p.Names.Switch, "Internal")
+	if st := r.d.Boot(context.Background()); st.Network != winvm.NetConnected {
+		t.Fatalf("the guard did not connect to the recorded switch: %+v", st)
+	}
+	if sw := adapterSwitch(t, r.f, r.p); sw != r.p.SwitchID {
+		t.Fatalf("the adapter connected to %q, want %q", sw, r.p.SwitchID)
 	}
 }
