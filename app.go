@@ -645,6 +645,7 @@ func (a *App) GetAppState() (AppState, error) {
 		return AppState{}, err
 	}
 	a.retryCustom()
+	a.refreshHostSetup()
 	// Fetch these once and thread them into the helpers below instead of letting
 	// each helper re-run its own full-table scan (they were each queried up to 3x
 	// per GetAppState call before this).

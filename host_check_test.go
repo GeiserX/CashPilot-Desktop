@@ -148,6 +148,49 @@ func TestRemoteEngineCannotHideStoppedDockerDesktop(t *testing.T) {
 	}
 }
 
+func TestAppStateRefreshesStaleWindowsFactsWithWorkingEngine(t *testing.T) {
+	app := gateApp(t, &engineProvider{status: runtime.Status{Available: true, Reason: runtime.ReasonRunning}})
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
+	old := winvm.HostFacts{
+		OS: "windows", Supported: true, Build: 26100, Virtualization: winvm.Yes,
+		WSL: winvm.WSLReady, WSLVersion: "2.3.0", VMPlatformFeature: winvm.Yes,
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	app.host = &hostFacts{facts: old, at: time.Now().Add(-20 * time.Minute), read: func(context.Context) winvm.HostFacts {
+		close(started)
+		<-release
+		fresh := old
+		fresh.WSL = winvm.WSLMissing
+		return fresh
+	}}
+	if _, err := app.GetAppState(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("GetAppState did not start a Windows reading with the working loopback engine")
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for app.host.cached().WSL != winvm.WSLMissing && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	state, err := app.GetAppState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Runtime.Available || !strings.Contains(state.Runtime.SetupTask, "WSL") {
+		t.Errorf("runtime did not pick up the new Windows reading: %+v", state.Runtime)
+	}
+	for _, notice := range state.Notifications {
+		if notice.Runtime && strings.Contains(notice.Message, "WSL") {
+			return
+		}
+	}
+	t.Errorf("Alerts omit the refreshed Windows reading: %+v", state.Notifications)
+}
+
 // CheckRuntime runs after every deploy, stop, restart and remove (refreshState),
 // so it must answer from the cache and never start a host reading of its own.
 func TestCheckRuntimeNeverReadsTheHost(t *testing.T) {

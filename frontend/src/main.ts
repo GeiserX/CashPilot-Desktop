@@ -231,10 +231,14 @@ const root = document.querySelector<HTMLDivElement>("#app")!;
 async function boot() {
   await bootWhenReady({
     load: async () => {
+      wireBackendEvents();
       state = await GetAppState();
       await applySetupResume();
       render();
-      wireBackendEvents();
+      if (hostReadingPending) {
+        hostReadingPending = false;
+        void refreshRuntimeSnapshot();
+      }
     },
     showStarting: () => {
       root.innerHTML = withChrome(renderStarting(""));
@@ -249,6 +253,8 @@ async function boot() {
 let backendEventsWired = false;
 
 let eventRefreshInFlight = false;
+let hostReadingPending = false;
+let runtimeSnapshotRequest = 0;
 
 // The Go backend emits these after background collection cycles and deployment
 // changes. Refresh state so passive earnings appear without the user navigating.
@@ -258,6 +264,10 @@ function wireBackendEvents() {
   backendEventsWired = true;
   EventsOn("earnings:changed", () => void onBackendEvent());
   EventsOn("deployment:changed", () => void onBackendEvent());
+  EventsOn("runtime:host-checked", () => {
+    if (state) void refreshRuntimeSnapshot();
+    else hostReadingPending = true;
+  });
   // Background/startup failures the Go side reports via app:error had no listener,
   // so ~every background error was silently dropped. Surface them to the user.
   EventsOn("app:error", (payload) => showErrorToast(payload));
@@ -311,8 +321,15 @@ async function onBackendEvent() {
   if (eventRefreshInFlight) return;
   if (!state || !state.config.firstRunComplete) return;
   eventRefreshInFlight = true;
+  const runtimeRequest = runtimeSnapshotRequest;
   try {
-    state = await GetAppState();
+    const next = await GetAppState();
+    if (state && runtimeRequest !== runtimeSnapshotRequest) {
+      const notice = state.notifications?.find((item) => item.runtime) ?? null;
+      state = { ...next, ...withRuntimeReading(next, state.runtime, notice) };
+    } else {
+      state = next;
+    }
     // Only re-render on the dashboard; other views own an in-progress form, so
     // update state silently and let them pick it up on their next natural render.
     if (activeView === "dashboard") render();
@@ -503,14 +520,7 @@ function renderRuntimeView(current: AppState) {
     state = { ...state, ...withRuntimeReading(state, runtime, notice) };
     const slot = document.querySelector("#runtime-card-slot");
     if (slot) slot.innerHTML = runtimeCard(state.runtime).html;
-    const button = document.querySelector<HTMLButtonElement>(".topbar-runtime");
-    if (button) {
-      button.classList.toggle("text-warn", !runtimeUsable(state.runtime));
-      button.title = state.runtime.message;
-      button.innerHTML = topbarRuntimeLabel(state.runtime);
-    }
-    const alerts = document.querySelector(".notification-menu");
-    if (alerts) alerts.innerHTML = renderAlerts(state.notifications);
+    updateRuntimeChrome(state);
   };
   // The checklist reads the PC when it opens; outside Windows the reading says so
   // and the install guides stay the whole page (render/runtimepage.ts).
@@ -1048,21 +1058,48 @@ function renderAlerts(notifications: NotificationItem[] | null) {
   `;
 }
 
-let dashboardRequest = 0;
+function updateRuntimeChrome(current: AppState) {
+  const button = document.querySelector<HTMLButtonElement>(".topbar-runtime");
+  if (button) {
+    button.classList.toggle("text-warn", !runtimeUsable(current.runtime));
+    button.title = current.runtime.message;
+    button.innerHTML = topbarRuntimeLabel(current.runtime);
+  }
+  const alerts = document.querySelector(".notification-menu");
+  if (alerts) alerts.innerHTML = renderAlerts(current.notifications);
+}
+
+// A Windows host reading can finish after GetAppState returned. Update the open
+// surfaces without replacing any in-progress form.
+async function refreshRuntimeSnapshot() {
+  if (!state?.config.firstRunComplete) return;
+  const request = ++runtimeSnapshotRequest;
+  const snapshot = await readRuntimeSnapshot(GetAppState, state);
+  if (!state || request !== runtimeSnapshotRequest) return;
+  state = { ...state, ...snapshot };
+  if (activeView === "dashboard") {
+    render();
+    return;
+  }
+  updateRuntimeChrome(state);
+  if (activeView !== "settings") return;
+  const card = document.querySelector("#runtime-settings-slot");
+  if (card) {
+    card.innerHTML = renderRuntimeSettings(state.runtime);
+    wireShellNav(card);
+  }
+  const provider = document.querySelector("[data-runtime-provider-state]");
+  if (provider) provider.outerHTML = runtimeProviderNote(state.runtime);
+}
+
 function showView(view: View) {
   activeView = view;
   render();
-  if (view !== "dashboard" || !state) return;
-  const request = ++dashboardRequest;
-  void readRuntimeSnapshot(GetAppState, state).then((snapshot) => {
-    if (!state || activeView !== "dashboard" || request !== dashboardRequest) return;
-    state = { ...state, ...snapshot };
-    render();
-  });
+  if (view === "dashboard") void refreshRuntimeSnapshot();
 }
 
-function wireShellNav() {
-  document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
+function wireShellNav(scope: ParentNode = document) {
+  scope.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
       if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import" || next === "runtime") {
@@ -1073,7 +1110,7 @@ function wireShellNav() {
       }
     });
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
+  scope.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
     button.addEventListener("click", () => {
       const url = button.dataset.url;
       if (url) BrowserOpenURL(url);
@@ -1461,9 +1498,11 @@ async function renderSettings(current: AppState) {
     modeState = null;
     showErrorToast({scope: "mode", error: String(error)});
   }
+  const runtimeRequest = runtimeSnapshotRequest;
   const snapshot = await readRuntimeSnapshot(GetAppState, state ?? current);
   if (request !== settingsRequest || activeView !== "settings") return;
-  current = state = { ...(state ?? current), ...snapshot };
+  current = state ?? current;
+  if (runtimeRequest === runtimeSnapshotRequest) current = state = { ...current, ...snapshot };
   const { runtime } = current;
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
@@ -1475,7 +1514,7 @@ async function renderSettings(current: AppState) {
         <main class="page-content">
           ${pageHead("Settings")}
           <div id="mode-card-slot">${modeState ? renderModeCard(modeState, modeCardView, modeLeft) : ""}</div>
-          ${renderRuntimeSettings(runtime)}
+          <div id="runtime-settings-slot">${renderRuntimeSettings(runtime)}</div>
           <section class="card">
             <div class="card-header">
               <div>
