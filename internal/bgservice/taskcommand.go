@@ -4,25 +4,29 @@ import "strings"
 
 // taskCommandScript is the PowerShell that prints, as UTF-8, the executable the
 // scheduled task taskName (folder\name) starts, and prints nothing when there is
-// no such task. Get-ScheduledTask reads a task of this user without admin. A
-// missing task is a CIM NotFound error, which a SilentlyContinue would still turn
-// into exit code 1, so it is caught by its code.
+// no such task. It asks Task Scheduler's own COM API, which a user may read for
+// their own tasks without admin. A missing folder or task is HRESULT 0x80070002
+// or 0x80070003 there, a code and not a sentence, so it reads the same on a
+// Windows in any language. Any other error fails the script.
 func taskCommandScript(taskName string) string {
 	folder, name := `\`, taskName
 	if i := strings.LastIndex(taskName, `\`); i >= 0 {
-		folder, name = `\`+strings.Trim(taskName[:i], `\`)+`\`, taskName[i+1:]
+		folder, name = `\`+strings.Trim(taskName[:i], `\`), taskName[i+1:]
 	}
 	return `$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+$s = New-Object -ComObject Schedule.Service
+$s.Connect()
 try {
-  $t = Get-ScheduledTask -TaskPath ` + psLiteral(folder) + ` -TaskName ` + psLiteral(name) + `
-} catch [Microsoft.Management.Infrastructure.CimException] {
-  # No such task, or no such folder: nothing is registered. Any other error fails.
-  if ($_.Exception.NativeErrorCode -eq 'NotFound') { exit 0 }
+  $task = $s.GetFolder(` + psLiteral(folder) + `).GetTask(` + psLiteral(name) + `)
+} catch {
+  $e = $_.Exception
+  while ($e -and -not ($e -is [System.Runtime.InteropServices.COMException])) { $e = $e.InnerException }
+  if ($e -and ($e.HResult -eq -2147024894 -or $e.HResult -eq -2147024893)) { exit 0 }
   throw
 }
-foreach ($a in @($t.Actions)) { if ($a.Execute) { [Console]::Out.Write($a.Execute); break } }
+foreach ($a in $task.Definition.Actions) { if ($a.Type -eq 0 -and $a.Path) { [Console]::Out.Write($a.Path); break } }
 exit 0
 `
 }

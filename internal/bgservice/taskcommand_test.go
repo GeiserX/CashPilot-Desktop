@@ -7,15 +7,18 @@ import (
 
 func TestTaskCommandScriptSplitsFolderAndName(t *testing.T) {
 	s := taskCommandScript(`CashPilot\Helper`)
-	if !strings.Contains(s, `-TaskPath '\CashPilot\' -TaskName 'Helper'`) {
+	if !strings.Contains(s, `GetFolder('\CashPilot').GetTask('Helper')`) {
 		t.Errorf("script does not ask for folder \\CashPilot\\ and name Helper:\n%s", s)
 	}
-	if s := taskCommandScript(`Helper`); !strings.Contains(s, `-TaskPath '\' -TaskName 'Helper'`) {
+	if s := taskCommandScript(`Helper`); !strings.Contains(s, `GetFolder('\').GetTask('Helper')`) {
 		t.Errorf("a task at the root is not asked for in \\:\n%s", s)
 	}
 	// A quote in a name cannot end the literal.
-	if s := taskCommandScript(`O'Brien\Helper`); !strings.Contains(s, `'\O''Brien\'`) {
+	if s := taskCommandScript(`O'Brien\Helper`); !strings.Contains(s, `GetFolder('\O''Brien')`) {
 		t.Errorf("quote not escaped:\n%s", s)
+	}
+	if !strings.Contains(s, "-2147024894") {
+		t.Error("the script does not read a missing task (0x80070002) as none")
 	}
 	if !strings.Contains(s, "UTF8Encoding") {
 		t.Error("the script does not write UTF-8, so a path with an accent would come back garbled")
