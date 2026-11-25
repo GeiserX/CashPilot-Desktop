@@ -305,7 +305,7 @@ func TestReadLiveFailsClosedOnBadValues(t *testing.T) {
 		"firewall on any interface":    {`"ifIndex":20}]`, `"ifIndex":0}]`},
 		"a Meter row":                  {`"acls":[`, `"acls":[{"action":"Meter","direction":"Outbound","remote":"0.0.0.0/1","local":""},`},
 		"a MAC ACL row":                {`"acls":[`, `"acls":[{"action":"Allow","direction":"Inbound","remote":"00-15-5D-00-00-09","local":""},`},
-		"a row with a local address":   {`"acls":[`, `"acls":[{"action":"Deny","direction":"Inbound","remote":"","local":"10.0.0.0/8"},`},
+		"a row with a local address":   {`{"action":"Deny","direction":"Inbound","remote":"10.0.0.0/8","local":""}`, `{"action":"Deny","direction":"Inbound","remote":"10.0.0.0/8","local":"172.31.250.2"}`},
 		"a one-way Deny":               {`{"action":"Deny","direction":"Outbound","remote":"192.0.2.0/24","local":""}`, `{"action":"Allow","direction":"Outbound","remote":"192.0.2.0/24","local":""}`},
 		"two unicast neighbours":       {`{"ip":"172.31.250.7","mac":"FF-FF-FF-FF-FF-FF","state":"Permanent"}`, `{"ip":"172.31.250.3","mac":"00-15-5D-0A-00-09","state":"Permanent"}`},
 		"a passthrough device":         {`"passthrough":[]`, `"passthrough":["Get-VMAssignableDevice"]`},
