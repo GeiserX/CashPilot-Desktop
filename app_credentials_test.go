@@ -129,3 +129,56 @@ func TestSiaDeployKeepsBlankPasswordAndReplacesTypedPassword(t *testing.T) {
 	deploy("", initial[passwordKey])
 	deploy("new test password", "new test password")
 }
+
+func TestOrdinarySettingsSaveKeepsLegacyCollectorToken(t *testing.T) {
+	app := newAppUnderTest(t)
+	const slug = "traffmonetizer"
+	const token = "1|legacy-saved-test"
+	if err := app.store.SaveCredentials(slug, map[string]string{
+		"token": token, "TRAFFMONETIZER_DEVICE_NAME": "old-name",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkCollector := func() {
+		t.Helper()
+		record, err := app.CollectService(slug)
+		if err != nil || record.Error != "" || record.Balance != 7.25 {
+			t.Fatalf("collector did not use the legacy token: %v, %s", err, record.Error)
+		}
+	}
+	checkCollector()
+	if err := app.SaveCredentials(slug, map[string]string{
+		"TRAFFMONETIZER_TOKEN": "", "TRAFFMONETIZER_DEVICE_NAME": "new-name",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := app.store.GetCredentials(slug)
+	if err != nil || stored["token"] != token || stored["TRAFFMONETIZER_TOKEN"] != "" ||
+		stored["TRAFFMONETIZER_DEVICE_NAME"] != "new-name" {
+		t.Fatalf("ordinary settings save did not preserve the legacy token: %v", err)
+	}
+	checkCollector()
+}
+
+func TestFirstLocalDeploySavesSecretOnlyAfterSuccess(t *testing.T) {
+	app := newAppUnderTest(t)
+	app.collectors = nil
+	const slug = "honeygain"
+	const password = "fresh-fixture-password"
+	values := map[string]string{"HONEYGAIN_EMAIL": "test@example.test", "HONEYGAIN_PASSWORD": password}
+	app.Docker.FailCreate("cashpilot-"+slug, "test capacity failure")
+	if _, err := app.DeployService(slug, values, nil, nil); err == nil {
+		t.Fatal("fixture deploy should fail")
+	}
+	view, err := app.GetCredentials(slug)
+	if err != nil || view.SavedSecrets["HONEYGAIN_PASSWORD"] {
+		t.Fatalf("failed deploy saved the password: %v", err)
+	}
+	if _, err := app.DeployService(slug, values, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := app.store.GetCredentials(slug)
+	if err != nil || stored["HONEYGAIN_PASSWORD"] != password {
+		t.Fatalf("successful retry did not save the password: %v", err)
+	}
+}

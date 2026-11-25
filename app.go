@@ -115,6 +115,9 @@ type App struct {
 	// a reap/delete landing mid-sequence could blank a confirmed device's key. Reap
 	// and manual delete take the same lock so they cannot interleave with a heartbeat.
 	fleetMu sync.Mutex
+	// workerDeployMu serializes live replacement checks and deploys, including
+	// shared identity checks across workers.
+	workerDeployMu sync.Mutex
 	// fleetLimiter throttles the heartbeat/enrollment endpoint per client IP as
 	// defense-in-depth against floods, mass enrollment (DB growth), and racing the
 	// enrollment window. Initialised in startFleetAPI.
@@ -1526,7 +1529,12 @@ func (a *App) deployService(slug string, values map[string]string, opts services
 		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
 	}
+	saveErr := a.saveLocalDeployCredentials(slug, values)
 	a.emitEvent("deployment:changed", deployment)
+	if saveErr != nil {
+		a.emitError("credentials", saveErr)
+		return deployment, walletResult, saveErr
+	}
 	a.registerDevice(slug, creds)
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
@@ -1553,7 +1561,12 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 		a.emitError("deploy", err)
 		return services.ProxiedResult{}, err
 	}
+	saveErr := a.saveLocalDeployCredentials(slug, values)
 	a.emitEvent("deployment:changed", slug)
+	if saveErr != nil {
+		a.emitError("credentials", saveErr)
+		return result, saveErr
+	}
 	a.registerDevice(slug, creds)
 	return result, nil
 }

@@ -41,11 +41,12 @@ export function missingRequiredFields(
 }
 
 /** The note next to Deploy when fields marked * are empty. */
-export function missingFieldsNotice(missing: ServiceField[]): string {
+export function missingFieldsNotice(missing: ServiceField[], retrySecret = false): string {
   return `
     <div class="deploy-notice warn" data-deploy-notice="missing" role="alert">
       <p><strong>Fill in every field marked * first.</strong> Nothing was deployed.</p>
       <ul>${missing.map((field) => `<li data-missing-field="${escapeHtml(field.key)}">${escapeHtml(field.label)}</li>`).join("")}</ul>
+      ${retrySecret ? `<p>${RETRY_SECRET_TEXT}</p>` : ""}
     </div>`;
 }
 
@@ -126,10 +127,10 @@ export interface DeployAnswer {
 }
 
 /** The note next to Deploy while it runs, or once it answered. */
-export function deployNotice(kind: "busy" | DeployAnswer["kind"], text: string): string {
+export function deployNotice(kind: "busy" | DeployAnswer["kind"], text: string, worker = false): string {
   const tone = kind === "failed" ? "error" : kind === "cancelled" ? "warn" : kind === "ok" ? "ok" : "";
   const role = kind === "failed" ? "alert" : "status";
-  const lead = kind === "failed" ? "<strong>The deploy did not finish.</strong> " : "";
+  const lead = kind === "failed" && !worker ? "<strong>The deploy did not finish.</strong> " : "";
   return `<div class="deploy-notice ${tone}" data-deploy-notice="${kind}" role="${role}"><p>${lead}${escapeHtml(text)}</p></div>`;
 }
 
@@ -174,13 +175,17 @@ interface CheckedDeployTarget {
   workerBusyText?(worker: WorkerTarget): string;
 }
 
-export type DeployStatus = { kind: "busy" | DeployAnswer["kind"]; text: string };
+export type DeployStatus = { kind: "busy" | DeployAnswer["kind"]; text: string; worker?: boolean };
 
-export type DeployFeedback = DeployStatus | { kind: "missing"; missing: ServiceField[] };
+export type DeployFeedback = (DeployStatus | { kind: "missing"; missing: ServiceField[] }) & { retrySecret?: boolean };
+
+const RETRY_SECRET_TEXT = "Your secret changes were not saved. CashPilot will use them if you retry in this card.";
 
 export function renderDeployFeedback(status?: DeployFeedback): string {
   if (!status) return "";
-  return status.kind === "missing" ? missingFieldsNotice(status.missing) : deployNotice(status.kind, status.text);
+  if (status.kind === "missing") return missingFieldsNotice(status.missing, status.retrySecret);
+  const text = status.retrySecret ? `${status.text} ${RETRY_SECRET_TEXT}` : status.text;
+  return deployNotice(status.kind, text, status.worker);
 }
 
 export function renderDeployPanel(slug: string, status?: DeployFeedback): string {

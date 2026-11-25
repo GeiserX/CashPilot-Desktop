@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"maps"
 	"strings"
 
@@ -72,9 +73,9 @@ func (a *App) SaveCredentials(slug string, values map[string]string) error {
 	return a.saveCredentials(slug, creds)
 }
 
-// withSavedSecrets fills in omitted or blank secret fields. An empty deploy
-// request reuses every saved setting. A nonsecret field in a submitted form
-// still follows the form's value, including an explicit blank.
+// withSavedSecrets keeps omitted or blank secrets and any stored keys the current
+// forms don't list. Older collectors may still read those keys. An empty deploy
+// request reuses every saved setting. Known public fields follow the form.
 func (a *App) withSavedSecrets(slug string, values map[string]string, deploy bool) (map[string]string, error) {
 	stored, err := a.store.GetCredentials(slug)
 	if err != nil {
@@ -85,12 +86,16 @@ func (a *App) withSavedSecrets(slug string, values map[string]string, deploy boo
 	}
 	merged := make(map[string]string, len(values))
 	maps.Copy(merged, values)
-	for key, private := range a.credentialFields(slug) {
+	fields := a.credentialFields(slug)
+	for key, private := range fields {
 		if private && strings.TrimSpace(merged[key]) == "" {
 			delete(merged, key)
-			if strings.TrimSpace(stored[key]) != "" {
-				merged[key] = stored[key]
-			}
+		}
+	}
+	for key, value := range stored {
+		private, listed := fields[key]
+		if (!listed || private) && strings.TrimSpace(merged[key]) == "" {
+			merged[key] = value
 		}
 	}
 	return merged, nil
@@ -107,8 +112,6 @@ func (a *App) saveCredentials(slug string, values map[string]string) error {
 }
 
 func (a *App) prepareDeployCredentials(slug string, values map[string]string, image *string) (map[string]string, error) {
-	a.credentialsMu.Lock()
-	defer a.credentialsMu.Unlock()
 	// Custom services deploy their saved definition without a credential form.
 	var creds map[string]string
 	if !catalog.IsCustomSlug(slug) {
@@ -129,12 +132,19 @@ func (a *App) prepareDeployCredentials(slug string, values map[string]string, im
 			return nil, err
 		}
 	}
-	if len(values) > 0 && !catalog.IsCustomSlug(slug) {
-		if err := a.saveCredentials(slug, creds); err != nil {
-			return nil, err
-		}
-	}
 	return creds, nil
+}
+
+// Merge the submitted settings after the runtime succeeds. Read the current
+// store again so a blank field cannot overwrite a secret saved during deploy.
+func (a *App) saveLocalDeployCredentials(slug string, values map[string]string) error {
+	if len(values) == 0 || catalog.IsCustomSlug(slug) {
+		return nil
+	}
+	if err := a.SaveCredentials(slug, values); err != nil {
+		return fmt.Errorf("The service deployed, but CashPilot could not save its settings: %w", err)
+	}
+	return nil
 }
 
 // A worker deploy saves the nonblank fields supplied for the successful attempt.

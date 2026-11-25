@@ -15,17 +15,20 @@ assert.ok(process.env.CHROME_BIN, "Set CHROME_BIN to your Chromium executable.")
 function checkWizard(scenario) {
   const wallet = scenario === "wallet";
   const slug = wallet ? "sia-hostd" : "plain";
-  const fieldKey = wallet ? "SIA_STORAGE_DIR" : "TOKEN";
+  const fieldKey = wallet ? "SIA_STORAGE_DIR" : "DEVICE_NAME";
+  const secretKey = wallet ? "HOSTD_API_PASSWORD" : "TOKEN";
   const env = [{ key: fieldKey, label: wallet ? "Storage directory" : "Token", required: true }];
   if (wallet) env.push(
     { key: "HOSTD_API_PASSWORD", label: "Dashboard password", required: true, secret: true },
     { key: "HOSTD_WALLET_SEED", required: true, seedFile: { path: "/wallet/seed" } },
   );
+  if (!wallet) env.push({ key: secretKey, label: "Token", required: true, secret: true });
   const state = {
     config: { firstRunComplete: true },
     services: [{ slug, name: "Fixture", category: "storage", status: "active", docker: { image: "fixture/node:1", env } }],
     deployments: [],
     runtime: { available: true },
+    currencies: ["USD", "EUR"],
     scaling: { [slug]: { max: 3 } },
     workerTargets: wallet ? [] : [{ id: 23, name: "garage", online: true, services: [] }],
   };
@@ -35,7 +38,7 @@ function checkWizard(scenario) {
   let finishDeploy;
   let finishRefresh;
   let savedSettings = { [fieldKey]: "saved" };
-  let savedPassword = wallet ? "previous password" : "";
+  let savedPassword = "previous password";
   let redrawHydration;
   let workerDeploys = 0;
   let localAdminChecks = 0;
@@ -43,6 +46,14 @@ function checkWizard(scenario) {
   let settings;
   let sentChoice;
   let sentValues;
+  let workerFailure;
+  let workerReplacement = false;
+  let allowReplacement = false;
+  let testLocal = false;
+  const workerRequests = [];
+  const localRequests = [];
+  const questions = [];
+  window.confirm = (message) => { questions.push(message); return allowReplacement; };
   window.runtime = { EventsOnMultiple(name, fn) { events[name] = fn; } };
   window.go = { main: { App: new Proxy({
     async GetAppState() {
@@ -52,7 +63,7 @@ function checkWizard(scenario) {
       return structuredClone(state);
     },
     async GetCredentials() {
-      const view = { values: { ...savedSettings }, savedSecrets: savedPassword ? { HOSTD_API_PASSWORD: true } : {} };
+      const view = { values: { ...savedSettings }, savedSecrets: savedPassword ? { [secretKey]: true } : {} };
       if (wallet && !finishHydration) return new Promise(resolve => { finishHydration = () => resolve(view); });
       if (wallet && settings) redrawHydration = view;
       return view;
@@ -64,7 +75,8 @@ function checkWizard(scenario) {
     async DeployAdminStep() {
       if (!wallet) {
         localAdminChecks++;
-        throw Error("Unexpected local deploy");
+        if (!testLocal) throw Error("Unexpected local deploy");
+        return { needed: false };
       }
       return new Promise(resolve => { finishAdminCheck = resolve; });
     },
@@ -79,9 +91,21 @@ function checkWizard(scenario) {
       };
       return new Promise(resolve => { finishDeploy = () => resolve({ deployment: { slug } }); });
     },
-    async DeployToWorker() {
+    async DeployToWorker(_slug, request) {
       workerDeploys++;
+      workerRequests.push(request.values[secretKey] || savedPassword);
+      if (workerReplacement && !request.replaceExisting) {
+        return { ask: "replace_existing", message: "The existing container will be replaced." };
+      }
+      if (workerFailure) throw Error(workerFailure);
+      if (request.values[secretKey]) savedPassword = request.values[secretKey];
       return { worker: "garage", containerId: "fixture" };
+    },
+    async DeployService(_slug, values) {
+      localRequests.push(values[secretKey]);
+      if (localRequests.length === 1) throw Error("Container could not be created.");
+      savedPassword = values[secretKey];
+      return { slug };
     },
   }, { get: (app, name) => async (...args) => {
     if (args.some(arg => arg?.HOSTD_API_PASSWORD === "test password")) passwordSends++;
@@ -119,11 +143,11 @@ function checkWizard(scenario) {
       await until(() => status() === "missing", "missing storage directory");
       const rejectedBeforeAdminCheck = !finishAdminCheck && Boolean(q('[data-missing-field="SIA_STORAGE_DIR"]'));
       const rejectionSentNothing = passwordSends === 0 && !settings;
-      const passwordClearedAfterRejection = password.value === "";
+      const passwordKeptForRetry = password.value === "test password" && notice().includes("Your secret changes were not saved.");
       const phraseClearedAfterRejection = phrase.value === "";
       finishHydration();
       await until(() => q(field).value === "saved", "delayed credentials response");
-      const passwordEmptyAfterDelayedHydration = password.value === "";
+      const hydrationLeavesEdit = password.value === "test password";
 
       phrase.value = "test phrase";
       password.value = "test password";
@@ -134,9 +158,9 @@ function checkWizard(scenario) {
       await until(() => finishAdminCheck, "admin check");
       const passwordClearedAtClick = password.value === "";
       const phraseClearedAtClick = phrase.value === "";
-      click("#wizard-next");
       finishAdminCheck({ needed: false });
       await until(() => finishDeploy, "wallet deploy request");
+      click("#wizard-next");
       const secretsClearedWhileDeployIsPending = !sentValues.HOSTD_API_PASSWORD && sentChoice.phrase === "";
       finishDeploy();
       click("#wizard-prev");
@@ -167,7 +191,7 @@ function checkWizard(scenario) {
       const blankPasswordDeploy = settings.storage === "/fixture/edited" && !settings.passwordSent && savedPassword === "test password";
       return {
         settings: importedSettings, rejectedBeforeAdminCheck, rejectionSentNothing,
-        passwordClearedAfterRejection, phraseClearedAfterRejection, passwordEmptyAfterDelayedHydration,
+        passwordKeptForRetry, phraseClearedAfterRejection, hydrationLeavesEdit,
         passwordClearedAtClick, phraseClearedAtClick, phraseClearedAtEnd: sentChoice.phrase === "",
         passwordEmptyAfterRedraw, phraseEmptyAfterRedraw, savedPasswordLabel, directoryOnlySave, blankPasswordDeploy,
         secretsClearedWhileDeployIsPending, secretsClearedWhileRefreshIsPending, redrawReportsOnlyPresence,
@@ -192,7 +216,86 @@ function checkWizard(scenario) {
     };
     click("#wizard-next");
     click("#wizard-prev");
-    return { ...beforeRedraw, statusAfterRedraw: status(), workerDeploys, localAdminChecks };
+    const unavailable = { ...beforeRedraw, statusAfterRedraw: status(), workerDeploys, localAdminChecks };
+    const token = () => q(`[data-wizard-env="${secretKey}"]`);
+    const retryNotice = () => notice().includes("Your secret changes were not saved.") &&
+      notice().includes("CashPilot will use them if you retry in this card.");
+    const selectWorker = async () => {
+      state.workerTargets = [{ id: 23, name: "garage", online: true, services: [] }];
+      events["earnings:changed"]();
+      await pause();
+      click("#wizard-next");
+      click("#wizard-prev");
+      await until(() => q(field).value === "saved", "redrawn worker card");
+    };
+    await selectWorker();
+    const retryWorker = [];
+    let keptOnRedraw = false;
+    for (const failure of ["The worker is busy. Try again.",
+      "The connection to the worker dropped before it answered. The deploy outcome is unknown."]) {
+      const replacement = "fixture replacement " + retryWorker.length;
+      const storedBefore = savedPassword;
+      token().value = replacement;
+      workerFailure = failure;
+      click(deploy);
+      await until(() => status() === "failed", "worker refusal or disconnect");
+      const kept = token().value === replacement && retryNotice() && notice().includes(failure);
+      const stillSaved = savedPassword === storedBefore;
+      if (retryWorker.length === 0) {
+        const edited = token();
+        const currency = q("#currency-select");
+        currency.value = "EUR";
+        currency.dispatchEvent(new Event("change", { bubbles: true }));
+        await until(() => !edited.isConnected && q(field).value === "saved", "currency redraw within Setup");
+        keptOnRedraw = token().value === replacement && retryNotice();
+      }
+      workerFailure = undefined;
+      click(deploy);
+      await until(() => status() === "ok", "worker retry");
+      retryWorker.push({ kept, stillSaved, resent: workerRequests.slice(-2).every(value => value === replacement),
+        cleared: token().value === "" && !retryNotice() && savedPassword === replacement });
+    }
+
+    workerReplacement = true;
+    token().value = "replacement requiring approval";
+    click(deploy);
+    await until(() => status() === "cancelled", "declined worker replacement");
+    const declined = questions.length === 1 && token().value === "replacement requiring approval" && retryNotice();
+    allowReplacement = true;
+    click(deploy);
+    await until(() => status() === "ok", "approved worker replacement retry");
+    const approved = questions.length === 2 && workerRequests.slice(-3).every(value => value === "replacement requiring approval")
+      && token().value === "";
+
+    // A retry edit belongs to this Setup card, even if the same service is reopened.
+    workerReplacement = false;
+    workerFailure = "Worker unavailable.";
+    token().value = "discard when setup closes";
+    click(deploy);
+    await until(() => status() === "failed", "worker failure before leaving Setup");
+    click("#wizard-next");
+    click("#wizard-prev");
+    await until(() => q(field).value === "saved", "reopened setup");
+    const clearedOnClose = token().value === "" && !retryNotice();
+
+    // A first local failure keeps the typed token available without a saved flag or redraw.
+    testLocal = true;
+    savedPassword = "";
+    click("#wizard-next");
+    click("#wizard-prev");
+    await until(() => q(field).value === "saved", "first local setup");
+    const target = q("[data-wizard-where]");
+    target.value = "";
+    target.dispatchEvent(new Event("change", { bubbles: true }));
+    token().value = "first local token";
+    click(deploy);
+    await until(() => status() === "failed" && notice().includes("Container could not be created."), "first local deploy failure");
+    const localKept = token().value === "first local token" && !savedPassword && retryNotice();
+    click(deploy);
+    await until(() => status() === "ok" || status() === "missing", "local retry without a redraw");
+    const localRetried = status() === "ok" && localRequests.length === 2 && localRequests.every(value => value === "first local token")
+      && token().value === "" && token().placeholder === "Saved";
+    return { unavailable, retryWorker, keptOnRedraw, declined, approved, clearedOnClose, localKept, localRetried };
   }
   document.addEventListener("DOMContentLoaded", async () => {
     try {
@@ -225,9 +328,9 @@ try {
     },
     rejectedBeforeAdminCheck: true,
     rejectionSentNothing: true,
-    passwordClearedAfterRejection: true,
+    passwordKeptForRetry: true,
     phraseClearedAfterRejection: true,
-    passwordEmptyAfterDelayedHydration: true,
+    hydrationLeavesEdit: true,
     passwordClearedAtClick: true,
     phraseClearedAtClick: true,
     phraseClearedAtEnd: true,
@@ -240,7 +343,14 @@ try {
     secretsClearedWhileRefreshIsPending: true,
     redrawReportsOnlyPresence: true,
     passwordSends: 1,
-  } : { status: "failed", workerRefused: true, statusAfterRedraw: "failed", workerDeploys: 1, localAdminChecks: 0 });
+  } : {
+    unavailable: { status: "failed", workerRefused: true, statusAfterRedraw: "failed", workerDeploys: 1, localAdminChecks: 0 },
+    retryWorker: [
+      { kept: true, stillSaved: true, resent: true, cleared: true },
+      { kept: true, stillSaved: true, resent: true, cleared: true },
+    ],
+    keptOnRedraw: true, declined: true, approved: true, clearedOnClose: true, localKept: true, localRetried: true,
+  });
   console.log(`wizard deploy DOM: ${scenario} passed`);
 } finally {
   rmSync(temp, { recursive: true, force: true });

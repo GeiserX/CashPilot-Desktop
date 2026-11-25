@@ -179,7 +179,7 @@ let wizardRouteDrafts: Record<string, number | null> = {};
 // cleared as the Route box's picks are (render/where.ts).
 let wizardWhereDrafts: Record<string, number | null> = {};
 const wizardDeployFeedback: Record<string, DeployFeedback> = {};
-const wizardDeploying = new Set<string>();
+const wizardDeploying = new Map<string, WizardDeploySettings>();
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -347,6 +347,7 @@ function render() {
   // A seed phrase on screen goes with the view it was shown in.
   if (activeView !== "dashboard") hideRevealedSeed();
   if (activeView !== "wizard") dropNewWalletPhrase();
+  if (activeView !== "wizard" || wizardStep !== 3) closeWizardDeployDrafts();
   if (!state.config.firstRunComplete) {
     renderOnboarding(state);
     return;
@@ -2164,6 +2165,7 @@ function renderPointsSection(points: PointsBalance[]) {
 }
 
 function openWizard(input?: string | Event) {
+  closeWizardDeployDrafts();
   const slug = typeof input === "string" ? input : "";
   activeView = "wizard";
   wizardStep = slug ? 3 : 1;
@@ -2176,6 +2178,10 @@ function openWizard(input?: string | Event) {
 }
 
 function renderSetupWizard(current: AppState) {
+  // Reuse only the edits from cards that stay open during this redraw.
+  const secretDrafts = new Map([...root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')]
+    .filter((input) => input.value)
+    .map((input) => [wizardSecretInputKey(input), input.value]));
   const services = current.services || [];
   const categories = wizardCategoryChoices(services);
   if (wizardCategories.length === 0 && categories.length > 0) {
@@ -2255,6 +2261,7 @@ function renderSetupWizard(current: AppState) {
   });
   document.querySelectorAll<HTMLSelectElement>("[data-wizard-where]").forEach((select) => {
     select.addEventListener("change", () => {
+      select.setCustomValidity("");
       wizardWhereDrafts[select.dataset.wizardWhere || ""] = whereChoice(select.value);
     });
   });
@@ -2262,6 +2269,13 @@ function renderSetupWizard(current: AppState) {
     button.addEventListener("click", () => {
       const slug = button.dataset.slug || "";
       const action = button.dataset.wizardAction || "";
+      if (action === "deploy") {
+        const where = button.closest("[data-form-slug]")?.querySelector<HTMLSelectElement>("[data-wizard-where]");
+        const workerId = whereChoice(where?.value);
+        const refusal = missingWizardWorker(workerId);
+        where?.setCustomValidity(refusal);
+        if (refusal) where?.reportValidity();
+      }
       void runWizardAction(slug, action);
     });
   });
@@ -2281,6 +2295,9 @@ function renderSetupWizard(current: AppState) {
   });
   wireSessionConsent(document);
   wireWalletChoices();
+  for (const input of root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')) {
+    input.value = secretDrafts.get(wizardSecretInputKey(input)) || "";
+  }
   fillNewWalletPanel();
   selectedServices.forEach((service) => void hydrateWizardForm(service));
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
@@ -2497,6 +2514,11 @@ function readWizardWhere(slug: string): number | null {
   return select ? whereChoice(select.value) : null;
 }
 
+function missingWizardWorker(workerId: number | null): string {
+  if (workerId === null || state?.workerTargets?.some((worker) => worker.id === workerId)) return "";
+  return "The selected worker is unavailable. Choose a target before deploying.";
+}
+
 function closeWizard() {
   dropNewWalletPhrase();
   activeView = "dashboard";
@@ -2504,6 +2526,19 @@ function closeWizard() {
   wizardRouteDrafts = {};
   wizardWhereDrafts = {};
   render();
+}
+
+function wizardSecretInputKey(input: HTMLInputElement) {
+  return JSON.stringify([input.closest<HTMLElement>("[data-form-slug]")?.dataset.formSlug, input.dataset.wizardEnv]);
+}
+
+function closeWizardDeployDrafts() {
+  for (const input of root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')) input.value = "";
+  for (const settings of wizardDeploying.values()) {
+    settings.open = false;
+    clearRequestSecrets(settings.values, settings.secretKeys, settings.wallet);
+  }
+  for (const feedback of Object.values(wizardDeployFeedback)) delete feedback.retrySecret;
 }
 
 function wizardCredentialInputs(slug: string) {
@@ -2581,14 +2616,12 @@ function clearRequestSecrets(values: Record<string, string>, keys: string[], wal
 // before awaiting the reply or refreshing the app.
 function sendCredentialRequest<T>(
   values: Record<string, string>, keys: string[], send: (request: Record<string, string>) => Promise<T>,
-  keepDraft = false,
 ): Promise<T> {
   const request = { ...values };
   try {
     return send(request);
   } finally {
     clearRequestSecrets(request, keys);
-    if (!keepDraft) clearRequestSecrets(values, keys);
   }
 }
 
@@ -2615,10 +2648,11 @@ async function runWizardAction(slug: string, action: string) {
   if (action === "deploy") {
     invalid?.reportValidity();
     if (wizardDeploying.has(slug)) return;
-    wizardDeploying.add(slug);
     try {
       await wizardDeploy(slug, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
     } finally {
+      const settings = wizardDeploying.get(slug);
+      if (settings) clearRequestSecrets(settings.values, settings.secretKeys, settings.wallet);
       wizardDeploying.delete(slug);
     }
     return;
@@ -2626,8 +2660,15 @@ async function runWizardAction(slug: string, action: string) {
   if (action !== "save" && action !== "collect") return;
   const { values, secretKeys, typedSecrets } = readWizardForm(slug);
   try {
-    await sendCredentialRequest(values, secretKeys, (request) => SaveCredentials(slug, request));
+    const saved = sendCredentialRequest(values, secretKeys, (request) => SaveCredentials(slug, request));
+    clearRequestSecrets(values, secretKeys);
+    await saved;
     markWizardSecretsSaved(slug, typedSecrets);
+    const feedback = wizardDeployFeedback[slug];
+    if (feedback?.retrySecret) {
+      delete feedback.retrySecret;
+      setWizardDeployFeedback(slug, feedback);
+    }
     if (action === "save") {
       if (output) output.textContent = "Credentials saved.";
       return;
@@ -2637,6 +2678,8 @@ async function runWizardAction(slug: string, action: string) {
     state = await GetAppState();
   } catch (error) {
     if (output) output.textContent = String(error);
+  } finally {
+    clearRequestSecrets(values, secretKeys);
   }
 }
 
@@ -2674,6 +2717,7 @@ function askDeployConsent(panel: HTMLElement | null, name: string, step: AdminSt
 }
 
 interface WizardDeploySettings {
+  open: boolean;
   values: Record<string, string>;
   proxyId: number | null;
   image: string | null;
@@ -2694,12 +2738,30 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
   const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
   const { values, secretKeys, typedSecrets, savedSecrets } = readWizardForm(slug);
   const settings: WizardDeploySettings = {
-    values, secretKeys, typedSecrets,
+    open: true, values, secretKeys, typedSecrets,
     proxyId: readWizardRoute(slug),
     image: readWizardImage(slug),
     instances: readWizardInstances(slug),
     route: state?.route,
     wallet: workerId === null && seedFileVar(service) ? readWalletChoice(slug) : undefined,
+  };
+  wizardDeploying.set(slug, settings);
+  const restoreSecretEdits = () => {
+    if (!settings.open) return false;
+    let restored = false;
+    for (const input of wizardCredentialInputs(slug)) {
+      const key = input.dataset.wizardEnv || "";
+      if (input.type === "password" && typedSecrets.includes(key) && values[key] && !input.value) {
+        input.value = values[key];
+        restored = true;
+      }
+    }
+    clearRequestSecrets(values, secretKeys);
+    return restored;
+  };
+  const say = (kind: DeployStatus["kind"], text: string) => {
+    const retrySecret = (kind === "failed" || kind === "cancelled") && restoreSecretEdits();
+    setWizardDeployFeedback(slug, { kind, text, retrySecret, worker: workerId !== null });
   };
   const { proxyId, route } = settings;
   const replacesLocal = proxyId === null
@@ -2709,8 +2771,13 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
     confirmReplace: (message) => confirm(message),
     adminStep: () => DeployAdminStep(slug),
     askConsent: (step) => askDeployConsent(panel, name, step),
-    say: (kind, text) => sayDeploy(slug, kind, text),
-    deploy: (approval, worker) => deployFromCard(slug, settings, worker, approval),
+    say,
+    deploy: async (approval, worker) => {
+      if (!settings.open) return { kind: "cancelled", text: "Setup was closed. Nothing was deployed." };
+      const answer = await deployFromCard(slug, settings, worker, approval);
+      if (answer.kind === "ok") clearRequestSecrets(values, secretKeys);
+      return answer;
+    },
   }, {
     workerId,
     workers: state?.workerTargets,
@@ -2721,10 +2788,8 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
       ? `Redeploy ${name} ${proxyId === null ? "on this computer" : "through this proxy"}? The existing node will be replaced. Its saved data is kept.`
       : undefined,
   }).catch((error) => {
-    sayDeploy(slug, "failed", deployErrorText(error));
+    say("failed", deployErrorText(error));
     return null;
-  }).finally(() => {
-    clearRequestSecrets(values, secretKeys, settings.wallet);
   });
   const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
   form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
@@ -2734,12 +2799,12 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
     form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => {
       if (keys.has(input.dataset.wizardEnv || "")) input.setAttribute("aria-invalid", "true");
     });
-    setWizardDeployFeedback(slug, { kind: "missing", missing: outcome.missing });
+    setWizardDeployFeedback(slug, { kind: "missing", missing: outcome.missing, retrySecret: restoreSecretEdits() });
     form?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
     return;
   }
-  if (outcome.kind === "cancelled") sayDeploy(slug, "cancelled", CANCELLED_TEXT);
-  else sayDeploy(slug, "failed", outcome.message);
+  if (outcome.kind === "cancelled") say("cancelled", CANCELLED_TEXT);
+  else say("failed", outcome.message);
 }
 
 // The deploy itself, once the card's checks passed: to a worker, with a wallet
@@ -2751,13 +2816,11 @@ async function deployFromCard(
   const { values, proxyId, image, instances, route, secretKeys, typedSecrets, wallet } = settings;
   if (worker) {
     const outcome = await runWorkerDeploy(slug, worker, proxyId, instances, {
-      confirm: (message) => confirm(message),
-      // Keep the draft while the worker can still ask for confirmation.
+      confirm: (message) => settings.open && confirm(message),
       deploy: (yes) => sendCredentialRequest(values, secretKeys, (request) =>
         DeployToWorker(slug, { workerId: worker.id, values: request, image: image || "", ...yes }),
-        true,
       ),
-    }).finally(() => clearRequestSecrets(values, secretKeys));
+    });
     if (outcome.kind === "deployed") {
       if (!outcome.result.credentialWarning) markWizardSecretsSaved(slug, typedSecrets);
       return { kind: "ok", text: workerDeployText(outcome.result) };
