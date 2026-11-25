@@ -70,9 +70,11 @@ function Get-GuardianIdentity($g) {
 // switch with the recorded IDs whatever their names are now, the owner token
 // each carries, and the host facts setup and Remove VM check.
 const scriptInventory = buildPrelude + `$o = [ordered]@{}
-$o.vms = @(Get-VM | Where-Object { ($_.Name -eq $in.vm) -or ($in.vmId -and ($_.Id.ToString() -eq $in.vmId)) } | ForEach-Object { [ordered]@{ id = $_.Id.ToString(); owner = (Get-Owner ([string]$_.Notes)) } })
+$o.vms = @(Get-VM | Where-Object { ($_.Name -eq $in.vm) -or ($in.vmId -and ($_.Id.ToString() -eq $in.vmId)) -or
+  (-not $in.vmId -and $in.owner -and (Get-Owner ([string]$_.Notes)) -ceq $in.owner) } | ForEach-Object { [ordered]@{ id = $_.Id.ToString(); owner = (Get-Owner ([string]$_.Notes)) } })
 $o.guardianVms = @(Get-VM | Where-Object { Test-GuardianUser $_ } | ForEach-Object { $_.Id.ToString() })
-$o.switches = @(Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -or ($in.switchId -and ($_.Id.ToString() -eq $in.switchId)) } | ForEach-Object {
+$o.switches = @(Get-VMSwitch | Where-Object { ($_.Name -eq $in.switch) -or ($in.switchId -and ($_.Id.ToString() -eq $in.switchId)) -or
+  (-not $in.switchId -and $in.owner -and (Get-Owner ([string]$_.Notes)) -ceq $in.owner) } | ForEach-Object {
   $sw = $_
   $ports = @(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw.Id) } | ForEach-Object { $_.VMId.ToString() } | Select-Object -Unique)
   [ordered]@{ id = $sw.Id.ToString(); owner = (Get-Owner ([string]$sw.Notes)); ports = @($ports) }
@@ -655,12 +657,18 @@ func (h *psHost) Inventory(ctx context.Context, n Names, known KnownIDs, sid str
 			return Inventory{}, fmt.Errorf("%s %q is not a GUID", what, id)
 		}
 	}
+	if known.Owner != "" {
+		if err := checkOwner(known.Owner); err != nil {
+			return Inventory{}, err
+		}
+	}
 	arg := struct {
 		nameArg
 		SID      string `json:"sid"`
 		VMID     string `json:"vmId"`
 		SwitchID string `json:"switchId"`
-	}{na, sid, known.VM, known.Switch}
+		Owner    string `json:"owner"`
+	}{na, sid, known.VM, known.Switch, known.Owner}
 	var w inventoryWire
 	if err := h.call(ctx, scriptInventory, arg, &w); err != nil {
 		return Inventory{}, err

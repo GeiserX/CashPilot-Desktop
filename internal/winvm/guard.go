@@ -231,7 +231,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 		st.Fence, st.Network = FenceCut, NetConnected
 		var owned string
 		if names != nil && ownerRe.MatchString(owner) {
-			inv, err := d.HV.Inventory(ctx, *names, KnownIDs{VM: vmID}, "")
+			inv, err := d.HV.Inventory(ctx, *names, KnownIDs{VM: vmID, Owner: owner}, "")
 			if err == nil {
 				owned = adopt(inv.VMs, vmID, owner)
 				if len(inv.VMs) == 0 {

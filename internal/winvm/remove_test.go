@@ -370,7 +370,7 @@ func TestRemoveLeavesBothVMsWhenRecoveryIsAmbiguous(t *testing.T) {
 	f := hvfake.New()
 	dir := build(t, f)
 	p := readPlan(t, dir)
-	copyID := f.AddForeignVM(p.Names.VM, false)
+	copyID := f.AddForeignVM("copied-vm", false)
 	if err := f.SetVMOwner(copyID, p.Owner); err != nil {
 		t.Fatal(err)
 	}

@@ -816,7 +816,8 @@ func (f *HyperV) Inventory(_ context.Context, n winvm.Names, known winvm.KnownID
 		FreeRAM:      f.FreeRAM,
 	}
 	for _, vm := range f.sortedVMs() {
-		if vm.name == n.VM || strings.EqualFold(vm.id, known.VM) {
+		if vm.name == n.VM || strings.EqualFold(vm.id, known.VM) ||
+			known.VM == "" && known.Owner != "" && vm.owner == known.Owner {
 			inv.VMs = append(inv.VMs, winvm.OwnedObject{ID: vm.id, Owner: vm.owner})
 		}
 		if vm.vtpm || vm.keyProtector {
@@ -824,7 +825,8 @@ func (f *HyperV) Inventory(_ context.Context, n winvm.Names, known winvm.KnownID
 		}
 	}
 	for _, s := range f.sortedSwitches() {
-		if s.name != n.Switch && !strings.EqualFold(s.id, known.Switch) {
+		if s.name != n.Switch && !strings.EqualFold(s.id, known.Switch) &&
+			!(known.Switch == "" && known.Owner != "" && s.owner == known.Owner) {
 			continue
 		}
 		o := winvm.OwnedObject{ID: s.id, Owner: s.owner}

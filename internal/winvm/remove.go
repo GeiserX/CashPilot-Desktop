@@ -166,7 +166,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		return res, fmt.Errorf("desired.json belongs to %q, not %q", p.Names.VM, n.VM)
 	}
 	owner = p.Owner
-	inv, err := d.HV.Inventory(ctx, n, KnownIDs{VM: p.VMID, Switch: p.SwitchID}, "")
+	inv, err := d.HV.Inventory(ctx, n, KnownIDs{VM: p.VMID, Switch: p.SwitchID, Owner: p.Owner}, "")
 	if err != nil {
 		return res, err
 	}

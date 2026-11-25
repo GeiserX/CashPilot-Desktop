@@ -125,11 +125,11 @@ type ProofCleanup struct {
 	UnverifiedCapture bool     `json:"unverifiedCapture"`
 }
 
-// KnownIDs are the VM and switch IDs desired.json records, "" for none.
-// Inventory lists those objects by ID too, so a VM or a switch the user renamed
-// is still found, kept and removed.
+// KnownIDs lets Inventory find renamed objects by recorded ID. In recovery
+// without an ID, it lists every object of that kind carrying the owner tag.
 type KnownIDs struct {
 	VM, Switch string
+	Owner      string
 }
 
 // Inventory is what Builder.Inventory reads.

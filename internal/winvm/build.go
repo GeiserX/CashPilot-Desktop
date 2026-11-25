@@ -360,7 +360,7 @@ func (b *builder) journal(ctx context.Context) error {
 	b.prev = prev
 	var known KnownIDs
 	if prev != nil {
-		known = KnownIDs{VM: prev.VMID, Switch: prev.SwitchID}
+		known = KnownIDs{VM: prev.VMID, Switch: prev.SwitchID, Owner: prev.Owner}
 	}
 	if b.inv, err = b.HV.Inventory(ctx, b.n, known, b.sp.UserSID); err != nil {
 		return err
