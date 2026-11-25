@@ -43,8 +43,8 @@ export interface GuideModel {
   checkFailed?: boolean;
   /** Seconds since Start Docker Desktop while waiting for its engine; null when not waiting. */
   waiting: number | null;
-  /** How the last wait ended. */
-  waitResult: "" | "answered" | "timeout" | "failed";
+  /** How the last wait ended, including an answer found by a checklist read after the deadline. */
+  waitResult: "" | "answered" | "checklist-answered" | "timeout" | "failed";
   /** Set when the app opened on the checklist after a restart. */
   resume: SetupResumeView | null;
   /** What the last "Restart into BIOS" answered, when the PC did not restart. */
@@ -105,7 +105,7 @@ export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-g
 }
 
 /** The progress line while waiting for Docker's engine, and how the wait ended. */
-export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "steps" | "checkFailed">): string {
+export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult">): string {
   let text = "";
   let tone = "";
   if (model.waiting !== null) {
@@ -113,7 +113,7 @@ export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "ste
   } else if (model.waitResult === "answered") {
     text = "Docker's engine answered.";
     tone = "ok";
-  } else if (model.waitResult === "timeout" && !model.checkFailed && engineAnswers(model.steps)) {
+  } else if (model.waitResult === "checklist-answered") {
     text = "Docker's engine answered during the checklist check.";
     tone = "ok";
   } else if (model.waitResult === "timeout") {

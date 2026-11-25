@@ -13,7 +13,7 @@
 // it takes everything that talks to Go as deps and never imports the bindings.
 
 import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
-import { START_LIMIT_SECONDS, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
+import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
 import { runLine } from "./dockersteps.js";
 
 export interface DockerGuideDeps {
@@ -106,6 +106,9 @@ export class DockerGuide {
   private applyReading(result: HostCheckResult): void {
     this.model.steps = result.steps ?? [];
     this.model.runtime = result.runtime;
+    if (this.model.waitResult === "timeout" && engineAnswers(this.model.steps)) {
+      this.model.waitResult = "checklist-answered";
+    }
     if (setupFinished(result)) this.model.resume = null;
     this.deps.checked?.(result);
   }

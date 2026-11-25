@@ -298,6 +298,25 @@ for (const rejects of [false, true]) {
 }
 
 {
+  const confirmation = "Docker's engine answered during the checklist check.";
+  const running = { ...steps.find((step) => step.id === "a6"), state: "done", text: "Docker Desktop is running." };
+  let reads = 0;
+  const { deps: d } = deps({
+    hostCheck: async () => {
+      if (++reads === 1) return { runtime: runtimeDown, steps: [running] };
+      throw new Error("HostCheck unavailable");
+    },
+  });
+  const h = holder();
+  const g = new DockerGuide(h, d, { runtime: runtimeDown, resume: null, result: { runtime: runtimeDown, steps } });
+  await g.startDocker();
+  check("RULE 8 (wiring): the deadline checklist can confirm the engine answered", d.now() === START_LIMIT_SECONDS * 1000 && text(h.innerHTML).includes(confirmation), text(h.innerHTML));
+  await g.check();
+  const message = text(h.innerHTML);
+  check("RULE 8 (wiring): failed Check again keeps the deadline confirmation and reports the read error", reads === 2 && message.includes(confirmation) && message.includes("could not refresh the Docker checklist") && !message.includes("may show its terms"), message);
+}
+
+{
   const { deps: d } = deps({ startDocker: async () => { throw new Error("not installed"); } });
   const g = new DockerGuide(holder(), d, { runtime: runtimeDown, resume: null, result: { facts: {}, runtime: runtimeDown, steps } });
   await g.startDocker();
