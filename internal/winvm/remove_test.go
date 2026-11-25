@@ -110,8 +110,8 @@ func TestRemoveKeepsAMembershipItDidNotAdd(t *testing.T) {
 	f := hvfake.New()
 	f.SetHyperVAdmin(testUserSID, true)
 	dir := build(t, f)
-	if readPlan(t, dir).AddedAdminSID != "" {
-		t.Fatal("AddedAdminSID is set though the user was a member")
+	if got := readPlan(t, dir).AddedAdminSIDs; len(got) != 0 {
+		t.Fatalf("AddedAdminSIDs = %v though the user was a member", got)
 	}
 	remove(t, f, dir)
 	if !strings.Contains(strings.Join(f.Objects(), "\n"), "hyperv-admin "+testUserSID) {

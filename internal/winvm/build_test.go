@@ -561,39 +561,39 @@ func TestBuildRepairWithAFailedProofIsNotProven(t *testing.T) {
 	}
 }
 
-// TestBuildRepairFromAnotherAccount: setup records the one account it adds
-// to Hyper-V Administrators, so Remove VM can take it out again. A Repair
-// from a second account that is not a member would add an account nobody
-// recorded, so it is refused before anything changes. A second account that
-// is already a member adds nothing, so it may run Repair.
+// TestBuildRepairFromAnotherAccount: setup records every account it adds to
+// Hyper-V Administrators, so Remove VM can take each one out again. A Repair
+// from a second account that is not a member adds it and records it too. A
+// third account that is already a member is not recorded, and Remove VM
+// leaves it in the group.
 func TestBuildRepairFromAnotherAccount(t *testing.T) {
 	const other = "S-1-5-21-1111111111-2222222222-3333333333-1002"
+	const member = "S-1-5-21-1111111111-2222222222-3333333333-1003"
 	f := hvfake.New()
+	f.SetHyperVAdmin(member, true)
 	before := f.Objects()
 	dir := t.TempDir()
 	d := buildDeps(t, f, dir)
 	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
 		t.Fatal(err)
 	}
-	if got := readPlan(t, dir).AddedAdminSID; got != testUserSID {
-		t.Fatalf("AddedAdminSID = %q, want %q", got, testUserSID)
+	if got := readPlan(t, dir).AddedAdminSIDs; !slices.Equal(got, []string{testUserSID}) {
+		t.Fatalf("AddedAdminSIDs = %v, want [%s]", got, testUserSID)
 	}
-	sp := setupParams()
-	sp.UserSID = other
-	if _, err := winvm.Build(context.Background(), d, sp); err == nil {
-		t.Fatal("a Repair from a second account that is not a member passed")
+	for _, sid := range []string{other, member, other} {
+		sp := setupParams()
+		sp.UserSID = sid
+		if _, err := winvm.Build(context.Background(), d, sp); err != nil {
+			t.Fatalf("Repair from %s: %v", sid, err)
+		}
 	}
-	if strings.Contains(strings.Join(f.Objects(), "\n"), "hyperv-admin "+other) {
-		t.Fatal("the refused Repair added the second account to Hyper-V Administrators")
+	if got := readPlan(t, dir).AddedAdminSIDs; !slices.Equal(got, []string{testUserSID, other}) {
+		t.Fatalf("AddedAdminSIDs = %v after the other accounts' Repairs, want [%s %s]", got, testUserSID, other)
 	}
-	f.SetHyperVAdmin(other, true)
-	if _, err := winvm.Build(context.Background(), d, sp); err != nil {
-		t.Fatalf("Repair from a second account that is a member: %v", err)
+	objs := strings.Join(f.Objects(), "\n")
+	if !strings.Contains(objs, "hyperv-admin "+other) {
+		t.Fatal("the second account's Repair did not add it to Hyper-V Administrators")
 	}
-	if got := readPlan(t, dir).AddedAdminSID; got != testUserSID {
-		t.Fatalf("AddedAdminSID = %q after the second account's Repair, want %q", got, testUserSID)
-	}
-	f.SetHyperVAdmin(other, false)
 	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {
 		t.Fatal(err)
 	}

@@ -369,12 +369,6 @@ func (b *builder) journal(ctx context.Context) error {
 		return err
 	}
 	b.guardOurs = prev != nil && b.inv.Task != nil && b.inv.Task.Owner == prev.Owner
-	// Setup records the one account it adds to Hyper-V Administrators, so
-	// Remove VM can take it out again. A Repair from another account that is
-	// not a member would add an account nobody recorded.
-	if prev != nil && prev.AddedAdminSID != "" && !strings.EqualFold(prev.AddedAdminSID, b.sp.UserSID) && !b.inv.HyperVAdmin {
-		return errors.New("this Secure VM was set up from another Windows account; run Repair from that account, or Remove VM and set it up again")
-	}
 	// A Repair changes the fence, so the VM goes off the network before the
 	// first change and stays off until the proof passes and the guard's boot
 	// routine finds an exact match.
@@ -781,11 +775,13 @@ func (b *builder) enhancedSession(ctx context.Context) error {
 }
 
 // hyperVAdmin adds the user to Hyper-V Administrators every time (DESKTOP-VM
-// §4, Privileges), and records the SID first when it was not a member, so
-// removal takes out only an account setup added.
+// §4, Privileges). It records the SID first when the account was not a
+// member, for every account a setup or a Repair adds, so removal takes out
+// each account setup added and no other.
 func (b *builder) hyperVAdmin(ctx context.Context) error {
-	if !b.inv.HyperVAdmin && b.p.AddedAdminSID == "" {
-		b.p.AddedAdminSID = b.sp.UserSID
+	recorded := slices.ContainsFunc(b.p.AddedAdminSIDs, func(s string) bool { return strings.EqualFold(s, b.sp.UserSID) })
+	if !b.inv.HyperVAdmin && !recorded {
+		b.p.AddedAdminSIDs = append(b.p.AddedAdminSIDs, b.sp.UserSID)
 		if err := b.save(); err != nil {
 			return err
 		}

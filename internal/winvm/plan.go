@@ -186,9 +186,10 @@ type Plan struct {
 	// of the firewall rule and the guard task it creates. A host object is this
 	// install's only when its ID is recorded here or it carries this token.
 	Owner string `json:"owner"`
-	// AddedAdminSID is the account setup added to Hyper-V Administrators, or ""
-	// when that account was a member already. Removal takes out only this one.
-	AddedAdminSID string `json:"addedAdminSid"`
+	// AddedAdminSIDs are the accounts setup or a Repair added to Hyper-V
+	// Administrators, each one recorded before it is added. An account that
+	// was a member already is not in the list. Removal takes out only these.
+	AddedAdminSIDs []string `json:"addedAdminSids"`
 
 	GCSBaseline []string  `json:"gcsBaseline"` // GuestCommunicationServices keys at setup, upper case
 	HostBuild   string    `json:"hostBuild"`   // CurrentBuild.UBR, for the re-proof trigger
@@ -345,6 +346,7 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 		BindingsOff:     BindingsOff(),
 		EnhancedSession: es,
 		GCSBaseline:     []string{},
+		AddedAdminSIDs:  []string{},
 	}
 	if p.ExtraExits == nil {
 		p.ExtraExits = []netip.Addr{}
@@ -355,7 +357,8 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 		}
 		p.VMID, p.AdapterID, p.SwitchID = prev.VMID, prev.AdapterID, prev.SwitchID
 		p.CreatedGuardian = prev.CreatedGuardian
-		p.Owner, p.AddedAdminSID = prev.Owner, prev.AddedAdminSID
+		p.Owner = prev.Owner
+		p.AddedAdminSIDs = append([]string{}, prev.AddedAdminSIDs...)
 		if prev.EnhancedSessionOriginal != nil {
 			v := *prev.EnhancedSessionOriginal
 			p.EnhancedSessionOriginal = &v
@@ -560,8 +563,13 @@ func (p Plan) validate() error {
 	if p.Owner != "" && !ownerRe.MatchString(p.Owner) {
 		return fmt.Errorf("plan: owner %q is not 32 lower-case hex digits", p.Owner)
 	}
-	if p.AddedAdminSID != "" && !sidRe.MatchString(p.AddedAdminSID) {
-		return fmt.Errorf("plan: %q is not a Windows account SID", p.AddedAdminSID)
+	for i, sid := range p.AddedAdminSIDs {
+		if !sidRe.MatchString(sid) {
+			return fmt.Errorf("plan: %q is not a Windows account SID", sid)
+		}
+		if slices.ContainsFunc(p.AddedAdminSIDs[:i], func(s string) bool { return strings.EqualFold(s, sid) }) {
+			return fmt.Errorf("plan: %q is recorded twice", sid)
+		}
 	}
 	got := p
 	if got.ExtraExits == nil {
@@ -569,6 +577,9 @@ func (p Plan) validate() error {
 	}
 	if got.GCSBaseline == nil {
 		got.GCSBaseline = []string{}
+	}
+	if got.AddedAdminSIDs == nil {
+		got.AddedAdminSIDs = []string{}
 	}
 	if !reflect.DeepEqual(got, want) {
 		return errors.New("plan: a fence field differs from what this code writes")

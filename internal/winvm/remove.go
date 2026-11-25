@@ -69,7 +69,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 	if p.Names != n {
 		return res, fmt.Errorf("desired.json belongs to %q, not %q", p.Names.VM, n.VM)
 	}
-	inv, err := d.HV.Inventory(ctx, n, KnownIDs{VM: p.VMID, Switch: p.SwitchID}, p.AddedAdminSID)
+	inv, err := d.HV.Inventory(ctx, n, KnownIDs{VM: p.VMID, Switch: p.SwitchID}, "")
 	if err != nil {
 		return res, err
 	}
@@ -196,11 +196,13 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (RemoveResult, error) {
 		}
 	}
 
-	if p.AddedAdminSID != "" && inv.HyperVAdmin {
-		if err := d.HV.RemoveHyperVAdmin(ctx, p.AddedAdminSID); err != nil {
+	// Each account setup added comes out; taking out one that is no longer a
+	// member does nothing.
+	for _, sid := range p.AddedAdminSIDs {
+		if err := d.HV.RemoveHyperVAdmin(ctx, sid); err != nil {
 			fail("Hyper-V Administrators", err)
 		} else {
-			res.Removed = append(res.Removed, "the account setup added to Hyper-V Administrators")
+			res.Removed = append(res.Removed, "the account "+sid+" setup added to Hyper-V Administrators")
 		}
 	}
 
