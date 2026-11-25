@@ -95,6 +95,10 @@ type FleetDevice struct {
 	Services  []string `json:"services"`
 	LastSeen  string   `json:"lastSeen"`
 	CreatedAt string   `json:"createdAt"`
+	// EgressIP is the public IP the device last reported (system_info.egress_ip), ""
+	// when it never did. The LAN fence drops it, so an earner cannot reach that line's
+	// port forwards. Kept from the dashboard: only the fence reads it.
+	EgressIP string `json:"-"`
 }
 
 // Two processes share one data directory more often than it looks — the window
@@ -700,9 +704,12 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 	// devices. ON CONFLICT(kind, name) preserves the existing row's id and created_at
 	// and refreshes only the mutable fields — exactly what the prior UPDATE branch did
 	// — while RETURNING id yields the row id for both the insert and the update path.
+	//
+	// An empty egress_ip keeps the stored one: a worker whose lookup failed is still on
+	// the same line, and the fence must go on dropping it (web main._fleet_exits).
 	err = s.scanWrite(`
-		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, created_at, updated_at)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		INSERT INTO fleet_devices(name, kind, endpoint, os, arch, status, services, last_seen, egress_ip, created_at, updated_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 		ON CONFLICT(kind, name) DO UPDATE SET
 			endpoint=excluded.endpoint,
 			os=excluded.os,
@@ -710,9 +717,10 @@ func (s *Store) UpsertFleetHeartbeat(device FleetDevice) (FleetDevice, error) {
 			status=excluded.status,
 			services=excluded.services,
 			last_seen=excluded.last_seen,
+			egress_ip=CASE WHEN excluded.egress_ip != '' THEN excluded.egress_ip ELSE fleet_devices.egress_ip END,
 			updated_at=datetime('now')
 		RETURNING id
-	`, []any{device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen}, &device.ID)
+	`, []any{device.Name, device.Kind, device.Endpoint, device.OS, device.Arch, device.Status, string(servicesRaw), device.LastSeen, device.EgressIP}, &device.ID)
 	if err != nil {
 		return FleetDevice{}, err
 	}
@@ -807,7 +815,7 @@ func (s *Store) FleetDevices() ([]FleetDevice, error) {
 // unless strict.
 func (s *Store) readFleetDevices(strict bool) ([]FleetDevice, error) {
 	rows, err := s.db.Query(`
-		SELECT id, name, kind, endpoint, os, arch, status, services, last_seen, created_at
+		SELECT id, name, kind, endpoint, os, arch, status, services, last_seen, created_at, egress_ip
 		FROM fleet_devices ORDER BY kind, name
 	`)
 	if err != nil {
@@ -818,7 +826,7 @@ func (s *Store) readFleetDevices(strict bool) ([]FleetDevice, error) {
 	for rows.Next() {
 		var device FleetDevice
 		var servicesRaw string
-		if err := rows.Scan(&device.ID, &device.Name, &device.Kind, &device.Endpoint, &device.OS, &device.Arch, &device.Status, &servicesRaw, &device.LastSeen, &device.CreatedAt); err != nil {
+		if err := rows.Scan(&device.ID, &device.Name, &device.Kind, &device.Endpoint, &device.OS, &device.Arch, &device.Status, &servicesRaw, &device.LastSeen, &device.CreatedAt, &device.EgressIP); err != nil {
 			if strict {
 				return nil, err
 			}
@@ -978,6 +986,7 @@ func (s *Store) migrate() error {
 			last_seen TEXT NOT NULL DEFAULT '',
 			api_key_hash TEXT NOT NULL DEFAULT '',
 			key_confirmed INTEGER NOT NULL DEFAULT 0,
+			egress_ip TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
@@ -1013,6 +1022,7 @@ func (s *Store) migrate() error {
 		{"deployments", "custom_image", "ALTER TABLE deployments ADD COLUMN custom_image TEXT NOT NULL DEFAULT ''"},
 		{"deployments", "instances", "ALTER TABLE deployments ADD COLUMN instances INTEGER NOT NULL DEFAULT 1"},
 		{"earnings", "error_kind", "ALTER TABLE earnings ADD COLUMN error_kind TEXT NOT NULL DEFAULT ''"},
+		{"fleet_devices", "egress_ip", "ALTER TABLE fleet_devices ADD COLUMN egress_ip TEXT NOT NULL DEFAULT ''"},
 	} {
 		has, err := s.columnExists(col.table, col.name)
 		if err != nil {

@@ -548,6 +548,10 @@ type tunnelDocker interface {
 	// sidecarNetwork is the network a tunnel joins: the fenced one when LAN isolation
 	// is on, "" for the default bridge. An error means the fence could not be applied.
 	sidecarNetwork(ctx context.Context) (string, error)
+	// tunnelStarted applies the fence again for a tunnel that just started, so it gets
+	// its exception to a proxy or exit node on one of the owner's other lines now
+	// (lanfence_exits.go). A failure shows in the fence status; the recheck tries again.
+	tunnelStarted(ctx context.Context)
 }
 
 type liveTunnelDocker struct {
@@ -560,6 +564,12 @@ func (d liveTunnelDocker) sidecarNetwork(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	return d.fence.networkForDeploy(ctx, d.cli, false)
+}
+
+func (d liveTunnelDocker) tunnelStarted(ctx context.Context) {
+	if d.fence != nil {
+		_, _ = d.fence.networkForDeploy(ctx, d.cli, false)
+	}
 }
 
 func (d liveTunnelDocker) facts(ctx context.Context) daemonInfo { return daemonFacts(ctx, d.cli) }
@@ -676,6 +686,7 @@ func parseReady(out string) (Exit, bool) {
 
 func waitReady(ctx context.Context, d tunnelDocker, id string, timeout time.Duration) (Exit, error) {
 	deadline := time.Now().Add(timeout)
+	fenced := false
 	for time.Now().Before(deadline) {
 		ins, found, err := d.inspect(ctx, id)
 		if err != nil || !found || ins.State == nil {
@@ -686,6 +697,13 @@ func waitReady(ctx context.Context, d tunnelDocker, id string, timeout time.Dura
 			break
 		}
 		if status == "running" {
+			if !fenced {
+				// Its address on the fenced network exists only now, and a proxy on
+				// one of the owner's exits answers it only once its exception is in
+				// the table: the five-minute recheck would come after it gave up.
+				fenced = true
+				d.tunnelStarted(ctx)
+			}
 			if out, err := d.readFile(ctx, id, tunnelReadyFile); err == nil {
 				if e, ok := parseReady(out); ok {
 					return e, nil

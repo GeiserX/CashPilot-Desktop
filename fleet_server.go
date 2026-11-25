@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -66,6 +67,9 @@ type workerSystemInfo struct {
 	// Android client omit it, and treating absent as "desktop" would lock out
 	// every legitimate spoke.
 	DeviceType string `json:"device_type"`
+	// EgressIP is the worker's public IP. Kept per device, it goes back to every
+	// worker as fleet_exits, so each LAN fence drops the owner's other lines.
+	EgressIP string `json:"egress_ip"`
 }
 
 // deviceTypeDesktop is what internal/upstream sends when this app reports to a
@@ -271,6 +275,12 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kind := heartbeatKind(body)
+	// Read before the lock: on a stale cache it asks the echo service, and every
+	// other heartbeat would wait behind that.
+	ownExit := ""
+	if kind != "mobile" {
+		ownExit = a.egressIP(r.Context())
+	}
 
 	// Serialize the read(FleetDeviceKeyState) -> classify -> upsert -> set/confirm
 	// sequence: it is not one DB transaction, so without this lock two concurrent or
@@ -304,6 +314,9 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		Status:   "online",
 		Services: heartbeatServices(body),
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
+		// Only a public IPv4 is kept, as the web dashboard does: a phone on mobile
+		// data reports its carrier's address, which moves with it.
+		EgressIP: workerExit(kind, body.SystemInfo.EgressIP),
 	})
 	if err != nil {
 		a.emitError("fleet-heartbeat", err)
@@ -312,6 +325,9 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{"status": "ok", "worker_id": device.ID}
+	if kind != "mobile" {
+		resp["fleet_exits"] = a.hubFleetExits(ownExit)
+	}
 	switch action {
 	case fleetAuthIssue:
 		// Enroll (or reissue a fresh key for an unconfirmed device that came back
@@ -334,6 +350,37 @@ func (a *App) handleWorkerHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// workerExit is the exit a heartbeat reported, kept only for a worker and only when it
+// is a public IPv4.
+func workerExit(kind, reported string) string {
+	if kind == "mobile" {
+		return ""
+	}
+	if ips := runtime.ExitTargets([]string{reported}); len(ips) == 1 {
+		return ips[0]
+	}
+	return ""
+}
+
+// hubFleetExits is the fleet_exits a worker gets back: the public IPv4 of every box
+// that reports here, and this Desktop's own, which runs earners too. The worker drops
+// them all but its own (web main._fleet_exits, GeiserX/CashPilot#810). nil goes out as
+// null when the devices cannot be read, so the worker keeps the list it has rather
+// than lose the drops. The caller holds fleetMu.
+func (a *App) hubFleetExits(ownExit string) []string {
+	devices, err := a.store.FleetDevices()
+	if err != nil {
+		return nil
+	}
+	ips := []string{ownExit}
+	for _, d := range devices {
+		if d.Kind != "mobile" {
+			ips = append(ips, d.EgressIP)
+		}
+	}
+	return append([]string{}, runtime.ExitTargets(ips)...)
 }
 
 // fleetAuthAction is how a heartbeat should be treated under the per-worker-key protocol.

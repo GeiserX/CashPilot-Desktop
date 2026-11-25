@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +59,12 @@ type upstreamState struct {
 	// point to find out. Persisting it would make one old server a permanent
 	// verdict.
 	historyUnsupported bool
+	// fleetExits are the public IPs of the fleet's boxes from the server's last
+	// heartbeat reply, which the LAN fence drops (fenceOtherExits). fleetExitsKnown is
+	// false until the first reply since the loop started: the fence then keeps the
+	// drops its table has rather than lose another line's.
+	fleetExits      []string
+	fleetExitsKnown bool
 }
 
 // startUpstream begins heartbeating when paired, and is a no-op when not.
@@ -152,6 +160,9 @@ func (a *App) stopUpstream() {
 	// startUpstream returns early when standalone -- which is precisely the
 	// unpair case.
 	a.upstream.fleetEarnings, a.upstream.fleetEarningsAt = nil, time.Time{}
+	// The fleet's exits belong to the server we no longer talk to; a new pairing
+	// starts from unknown again.
+	a.upstream.fleetExits, a.upstream.fleetExitsKnown = nil, false
 	a.upstream.mu.Unlock()
 }
 
@@ -162,6 +173,9 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	a.upstream.mu.Unlock()
 
 	payload := a.upstreamPayload()
+	// The fence's own reading, cached for an hour: the server hands it to the fleet's
+	// other boxes, whose fences then drop this line too.
+	payload.SystemInfo.EgressIP = a.egressIP(ctx)
 	resp, err := client.Send(ctx, serverURL, upstream.AuthToken(workerKey, enrolKey), payload)
 	if errors.Is(err, upstream.ErrUnauthorized) && strings.TrimSpace(workerKey) != "" && strings.TrimSpace(enrolKey) != "" {
 		// The server no longer knows this machine's own key: the owner removed it
@@ -194,6 +208,12 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		a.upstream.workerKey = next
 		a.upstream.mu.Unlock()
 		log.Printf("upstream: enrolled with %s and stored this machine's own key", serverURL)
+	}
+
+	// The fleet's other exits: the fence drops them as soon as they arrive or change,
+	// as the web worker does.
+	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
+		a.fence.ReconcileFence(ctx)
 	}
 
 	// Whatever the server reported about the platforms this machine runs. An
@@ -315,6 +335,68 @@ func historyReadings(balances []store.DailyBalance) []upstream.ImportReading {
 		})
 	}
 	return out
+}
+
+// applyFleetExits takes the fleet's exits from a heartbeat reply. It reports whether
+// the list the fence drops changed, so the fence must be applied again.
+//
+// A null list comes from a server that could not read its fleet this time: the list
+// stays as it is, unknown after a start, so the table keeps its drops. A reply without
+// the key comes from a server that predates it: no other exits.
+func (a *App) applyFleetExits(raw json.RawMessage) bool {
+	ips, ok, sent := upstream.ParseFleetExits(raw)
+	a.upstream.mu.Lock()
+	defer a.upstream.mu.Unlock()
+	switch {
+	case ok:
+		ips = runtime.ExitTargets(ips)
+	case !sent && !a.upstream.fleetExitsKnown:
+		ips = nil
+	default:
+		return false
+	}
+	if a.upstream.fleetExitsKnown && slices.Equal(ips, a.upstream.fleetExits) {
+		return false
+	}
+	a.upstream.fleetExits, a.upstream.fleetExitsKnown = ips, true
+	return true
+}
+
+// fenceOtherExits is the owner's other public IPs for the LAN fence, and whether the
+// list is complete: the fleet's exits from the CashPilot server while paired, and
+// those of the workers that report to this Desktop as a hub. Phones are left out: one
+// on mobile data reports its carrier's address.
+func (a *App) fenceOtherExits() ([]string, bool) {
+	var ips []string
+	complete := true
+	a.upstream.mu.Lock()
+	if a.upstream.cancel != nil {
+		ips = append(ips, a.upstream.fleetExits...)
+		complete = a.upstream.fleetExitsKnown
+	}
+	a.upstream.mu.Unlock()
+	if a.store == nil {
+		return ips, complete
+	}
+	devices, err := a.store.FleetDevices()
+	if err != nil {
+		// Not "no workers": the fence keeps the drops it has.
+		return ips, false
+	}
+	for _, d := range devices {
+		if d.Kind != "mobile" {
+			ips = append(ips, d.EgressIP)
+		}
+	}
+	return ips, complete
+}
+
+// egressIP is this machine's public IPv4, "" when unknown or without a fence.
+func (a *App) egressIP(ctx context.Context) string {
+	if a.fence == nil {
+		return ""
+	}
+	return a.fence.EgressIP(ctx)
 }
 
 // upstreamPayload describes what this machine is running, in the server's shape.

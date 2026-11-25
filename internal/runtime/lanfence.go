@@ -99,10 +99,10 @@ const (
 
 // fenceHelperImage is the CashPilot worker image the helper runs. It carries nft,
 // iptables-legacy and app/lan_fence.py; the worker starts the same helper from its own
-// image. Pinned by digest, like the tunnel image: the helper runs with host networking
+// image. 2.10.0 is the first that reads FENCE_EXITS and FENCE_TUNNELS (lanfence_exits.go). Pinned by digest, like the tunnel image: the helper runs with host networking
 // and NET_ADMIN, so a re-pushed tag must not change what it runs. A var so a live test
 // can point it at a local build.
-var fenceHelperImage = "drumsergio/cashpilot-worker:1.70.0@sha256:1f0fccd176b1ad6128665bdde36c20f5c070a02049ef405d0d45ebb769af5b64"
+var fenceHelperImage = "drumsergio/cashpilot-worker:2.10.0@sha256:e8ddf83eed185aef0ba1a4a1f54c60f0703c1163126d9e59758f6496377ddc78"
 
 // fenceDNS are the resolvers an earner on the fenced bridge gets. Docker's embedded
 // resolver forwards a container's lookups from inside its network, so a daemon whose
@@ -157,6 +157,7 @@ type fenceAPI interface {
 	ContainerRemove(ctx context.Context, containerID string, options client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (client.ImageInspectResult, error)
 	ImagePull(ctx context.Context, refStr string, options client.ImagePullOptions) (client.ImagePullResponse, error)
+	CopyFromContainer(ctx context.Context, containerID string, options client.CopyFromContainerOptions) (client.CopyFromContainerResult, error)
 	ServerVersion(ctx context.Context, options client.ServerVersionOptions) (client.ServerVersionResult, error)
 }
 
@@ -194,8 +195,11 @@ type fence struct {
 	// lookupEgress returns this machine's public IP, "" when it cannot be read. Most
 	// home routers loop a connection to their own public address back into the LAN
 	// (NAT loopback), so the table drops that address too. egress and egressAt cache
-	// it; mu guards them.
+	// it; egressMu guards them.
 	lookupEgress func(ctx context.Context) string
+	// otherExits returns the owner's other public IPs and whether that list is
+	// complete (lanfence_exits.go). Nil for none.
+	otherExits func() (ips []string, complete bool)
 	// gatedSlug reports a service the catalog marks fence_gated (SetFenceGated).
 	gatedSlug func(slug string) bool
 	// stoppedPath is the file that names the fence-gated containers the user stopped
@@ -210,6 +214,7 @@ type fence struct {
 	startRefused map[string]bool
 	egress       string
 	egressAt     time.Time
+	egressMu     sync.Mutex // egress and egressAt, so a heartbeat can read them during an apply
 	mu           sync.Mutex // the helper and the apply sequence
 	reconcileMu  sync.Mutex // whole reconciles, so one cannot overwrite a later one's status
 	stateMu      sync.Mutex // status
@@ -571,8 +576,8 @@ func parseFenceResult(stdout string) (fenceResult, error) {
 // fenceHelperSpec is the helper container. It needs NET_ADMIN in the daemon's network
 // namespace to write the table, and nothing else: every other capability is dropped,
 // its root filesystem is read-only, and it runs our own script, never an earner.
-// egress is the public IPv4 to drop as well, "" for none.
-func fenceHelperSpec(action, subnet, egress string, filtered bool) (*container.Config, *container.HostConfig) {
+// exits are the owner's public IPv4s to drop as well, and the tunnels' exceptions.
+func fenceHelperSpec(action, subnet string, exits fenceExits, filtered bool) (*container.Config, *container.HostConfig) {
 	filter := "1"
 	if !filtered {
 		filter = "0"
@@ -582,13 +587,12 @@ func fenceHelperSpec(action, subnet, egress string, filtered bool) (*container.C
 		Image:      fenceHelperImage,
 		Entrypoint: []string{"python", "-c", fenceHelperScript},
 		Cmd:        []string{action},
-		Env: []string{
+		Env: append([]string{
 			"FENCE_IFACE=" + fenceBridge,
 			"FENCE_SUBNET=" + subnet,
 			"FENCE_FILTER=" + filter,
 			"FENCE_BACKEND=auto",
-			"FENCE_EGRESS=" + egress,
-		},
+		}, exits.env(filtered)...),
 		User:        "0:0",
 		Labels:      map[string]string{fenceProbeLabel: "fence"},
 		Healthcheck: &container.HealthConfig{Test: []string{"NONE"}},
@@ -698,11 +702,11 @@ func helperLogs(ctx context.Context, cli fenceAPI, id string, stdout bool) strin
 
 // runHelper runs the helper to completion and returns what it printed. The helper is
 // removed on every path. The caller holds f.mu.
-func runHelper(ctx context.Context, cli fenceAPI, action, subnet, egress string, filtered bool) (fenceResult, error) {
+func runHelper(ctx context.Context, cli fenceAPI, action, subnet string, exits fenceExits, filtered bool) (fenceResult, error) {
 	if err := ensureHelperImage(ctx, cli); err != nil {
 		return fenceResult{}, err
 	}
-	cfg, host := fenceHelperSpec(action, subnet, egress, filtered)
+	cfg, host := fenceHelperSpec(action, subnet, exits, filtered)
 	var created client.ContainerCreateResult
 	var err error
 	// Twice: another process can create its helper between our clear and our create.
@@ -801,7 +805,7 @@ func (f *fence) applyLocked(ctx context.Context, cli fenceAPI) (fenceResult, err
 	if err != nil {
 		return fenceResult{}, fmt.Errorf("The LAN fence could not be applied on this machine: %w.", err)
 	}
-	res, err := runHelper(ctx, cli, "apply", subnet, f.egressIP(ctx), true)
+	res, err := runHelper(ctx, cli, "apply", subnet, f.exitsFor(ctx, cli), true)
 	if err != nil {
 		return res, fmt.Errorf("The LAN fence could not be applied on this machine: %w.", err)
 	}
@@ -829,22 +833,28 @@ var fenceNow = time.Now
 
 // egressIP is the public IPv4 the table drops, or "" when none is known; the helper
 // then keeps the drop the table already has. A failed lookup keeps the last address.
-// The caller holds f.mu.
+// The lookup runs outside egressMu, so a reader of the cache never waits on it.
 func (f *fence) egressIP(ctx context.Context) string {
 	if f.lookupEgress == nil {
 		return ""
 	}
 	now := fenceNow()
+	f.egressMu.Lock()
 	ttl := egressTTL
 	if f.egress == "" {
 		ttl = egressRetry
 	}
 	if !f.egressAt.IsZero() && now.Sub(f.egressAt) < ttl {
+		defer f.egressMu.Unlock()
 		return f.egress
 	}
 	f.egressAt = now
+	f.egressMu.Unlock()
 	// The fence only drops IPv4: the earners' network has no IPv6 route out.
-	if ip, err := netip.ParseAddr(proxies.PublicIP(f.lookupEgress(ctx))); err == nil && ip.Is4() {
+	ip, err := netip.ParseAddr(proxies.PublicIP(f.lookupEgress(ctx)))
+	f.egressMu.Lock()
+	defer f.egressMu.Unlock()
+	if err == nil && ip.Is4() {
 		f.egress = ip.String()
 	}
 	return f.egress
@@ -883,7 +893,7 @@ func (f *fence) reduce(ctx context.Context, cli fenceAPI, net *network.Inspect) 
 		f.recordResult("failed", fenceResult{}, err)
 		return
 	}
-	res, err := runHelper(ctx, cli, "apply", subnet, f.egressIP(ctx), false)
+	res, err := runHelper(ctx, cli, "apply", subnet, fenceExits{Own: f.egressIP(ctx)}, false)
 	switch {
 	case err != nil:
 		f.recordResult("failed", res, err)
