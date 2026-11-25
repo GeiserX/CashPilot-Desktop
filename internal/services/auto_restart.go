@@ -2,11 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
 	"sync"
 	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // ownerStops orders the owner's Stop and an automatic restart of the same service
@@ -208,6 +211,12 @@ func (m *Manager) restartStuckProxied(ctx context.Context, slug string, id int64
 		return fmt.Errorf("this runtime cannot restart a proxied copy in place")
 	}
 	if err := restarter.RestartProxied(ctx, slug, id, m.stopTimeout(slug)); err != nil {
+		// A refusal (the copy is down or its tunnel is stopped) is the runtime
+		// leaving the copy as it is, not a failed restart. Anything else is one.
+		var refused *runtime.ProxyError
+		if !errors.As(err, &refused) {
+			m.store.RecordEvent(slug, "restart_error", fmt.Sprintf("copy through proxy %d: %v", id, err))
+		}
 		return err
 	}
 	m.store.RecordEvent(slug, "auto_restarted", fmt.Sprintf("copy through proxy %d: %s", id, reason))

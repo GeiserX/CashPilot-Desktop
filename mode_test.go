@@ -473,6 +473,68 @@ func TestTheHelperFollowsAJoinAndALeaveMadeInTheWindow(t *testing.T) {
 	}
 }
 
+// TestTheHelperLoopStopsAtItsNextTickWhenTheWindowLeaves: the pairing loop
+// itself reads the config file at each tick, so a leave made in the other
+// process stops its heartbeats at the next tick, not at the next config sync,
+// which can be a minute away.
+func TestTheHelperLoopStopsAtItsNextTickWhenTheWindowLeaves(t *testing.T) {
+	const tick = 20 * time.Millisecond
+	saved := heartbeatInterval
+	heartbeatInterval = func(int) time.Duration { return tick }
+	t.Cleanup(func() { heartbeatInterval = saved })
+
+	window := newPayloadTestApp(t, nil)
+	stub := newJoinStub(t, http.StatusOK, `{"status":"ok","worker_id":9,"worker_key":"own"}`)
+	if res, err := window.JoinCashPilot(JoinRequest{URL: stub.URL, Key: "fleet-key"}); err != nil || !res.OK {
+		t.Fatalf("join: %+v %v", res, err)
+	}
+
+	// The helper: its own Manager on the same file, read after the join. No
+	// startConfigSync runs and syncConfig is never called below, so only the
+	// loop's own check can stop it.
+	helperCfg, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	helper := &App{cfg: helperCfg, store: window.store, catalog: window.catalog, collectors: newFakeCollector(nil, nil), ctx: ctx}
+	helper.startUpstream(ctx)
+	t.Cleanup(helper.stopUpstream)
+	helper.upstream.mu.Lock()
+	done := helper.upstream.done
+	helper.upstream.mu.Unlock()
+	if done == nil {
+		t.Fatal("the helper did not start its pairing loop")
+	}
+	before := stub.count()
+	waitFor(t, "two helper heartbeats", func() bool { return stub.count() >= before+2 })
+
+	if _, err := window.SwitchToLead(); err != nil {
+		t.Fatalf("SwitchToLead: %v", err)
+	}
+	left := stub.count()
+	select {
+	case <-done:
+	case <-time.After(50 * tick):
+		t.Fatal("the helper's pairing loop kept running after the window left the server")
+	}
+	if extra := stub.count() - left; extra > 1 {
+		t.Fatalf("the helper sent %d heartbeats after the window left; at most one already in flight is allowed", extra)
+	}
+	stopped := stub.count()
+	time.Sleep(5 * tick)
+	if stub.count() != stopped {
+		t.Fatal("heartbeats went on after the loop stopped")
+	}
+	helper.upstream.mu.Lock()
+	link := helper.upstream.linkURL
+	helper.upstream.mu.Unlock()
+	if link != stub.URL {
+		t.Fatalf("linkURL = %q: something other than the loop's own check stopped it", link)
+	}
+}
+
 // TestCollectorErrorsAreHiddenWhileJoined: the collector errors and the
 // "device not on your account" notices come from the last local collection.
 // While joined there is none, so they would stay on screen for good.

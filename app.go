@@ -1173,9 +1173,10 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		if next != "" && next != cfg.UpstreamURL {
 			// Refused here, where the user sees it, rather than on every
 			// heartbeat, where only the log would. Only a NEW address is
-			// checked: the form sends every field on every save, so checking an
-			// address saved under an older, looser rule would block changing
-			// any other setting until the user retyped it.
+			// checked: the Settings form sends only the fields the user changed,
+			// but another caller can still send the saved address back as it is,
+			// and checking an address saved under an older, looser rule would
+			// then block changing any other setting until the user retyped it.
 			if err := upstream.ValidateServerURL(next); err != nil {
 				return SettingsState{}, fmt.Errorf("pairing address: %w", err)
 			}

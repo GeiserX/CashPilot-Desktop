@@ -8,7 +8,7 @@
 //
 //   node scripts/settings_render_check.mjs      # against ./.harness-build
 
-import { renderEnvSetting, settingsSaveValues } from "../.harness-build/render/settings.js";
+import { renderEnvSetting, settingField, settingsSaveValues } from "../.harness-build/render/settings.js";
 
 let failures = 0;
 let checks = 0;
@@ -83,6 +83,35 @@ check("join, then Save before Continue: the empty address and the hub are not se
 check("an edited plain field is sent", settingsSaveValues([plainField({value: "http://new.example:8080", initial: "http://old.example:8080"})]).upstreamUrl === "http://new.example:8080");
 check("a plain field cleared by hand is sent empty", settingsSaveValues([plainField({value: "", initial: "http://old.example:8080"})]).upstreamUrl === "");
 check("an untouched secret is still left out next to an untouched plain field", Object.keys(settingsSaveValues([field({}), plainField({value: "a", initial: "a"})])).length === 0);
+
+// The wiring between the two: Save reads each drawn input with settingField. The
+// input below is the one renderEnvSetting draws, parsed the way a browser would
+// expose it, so a read that drops data-initial sends an untouched field again.
+function drawnInput(html) {
+  const tag = html.match(/<input\b[^>]*>/)?.[0] || "";
+  const attrs = {};
+  for (const [, name, quoted] of tag.matchAll(/\s([\w-]+)(?:="([^"]*)")?/g)) {
+    attrs[name] = (quoted ?? "").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  }
+  const dataset = {};
+  for (const [name, value] of Object.entries(attrs)) {
+    if (name.startsWith("data-")) dataset[name.slice(5).replace(/-(\w)/g, (_, c) => c.toUpperCase())] = value;
+  }
+  return {value: attrs.value ?? "", readOnly: "readonly" in attrs, dataset, hasAttribute: (name) => name in attrs};
+}
+const address = setting({key: "CASHPILOT_UPSTREAM_URL", label: "CashPilot server", value: 'http://old.example:8080/?a="b"&c'});
+const untouched = drawnInput(renderEnvSetting(address));
+check("Save: a field drawn with a value and left unchanged is not sent", !("upstreamUrl" in settingsSaveValues([settingField(untouched)])), JSON.stringify(settingField(untouched)));
+const edited = drawnInput(renderEnvSetting(address));
+edited.value = "http://new.example:8080";
+check("Save: an edited field is sent", settingsSaveValues([settingField(edited)]).upstreamUrl === "http://new.example:8080", JSON.stringify(settingField(edited)));
+const typedSecret = drawnInput(renderEnvSetting(secrets[0]));
+typedSecret.value = "new-key";
+check("Save: a typed secret is read as a secret and sent", (() => {
+  const f = settingField(typedSecret);
+  return f.secret && f.name === "upstreamKey" && settingsSaveValues([f]).upstreamKey === "new-key";
+})(), JSON.stringify(settingField(typedSecret)));
+check("Save: an untouched secret box is not sent", Object.keys(settingsSaveValues([settingField(drawnInput(renderEnvSetting(secrets[0])))])).length === 0);
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} settings checks FAILED`);
