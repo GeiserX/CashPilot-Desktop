@@ -921,6 +921,9 @@ export interface Service {
     code: string;
     program: boolean | null;
     bonus: { referrer: string; referee: string };
+    // false: the provider has no account to sign up for, so the link is labelled
+    // Visit. null or absent: an account is needed.
+    account?: boolean | null;
   };
   docker: DockerConfig;
   requirements: {

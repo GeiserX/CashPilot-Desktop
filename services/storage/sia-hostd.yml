@@ -21,6 +21,7 @@ referral:
   # Permissionless: no account to sign up for, and the Sia Foundation runs no
   # referral programme for hosts (checked on sia.tech and docs.sia.tech).
   program: false
+  account: false
 
 docker:
   image: "ghcr.io/siafoundation/hostd@sha256:2f27742e103cf79cf1bc818820af936fb342ee435e7bd5ee4f0193f7cd03e2cd"
