@@ -44,6 +44,12 @@ func BuildDeploySpec(svc catalog.Service, in SpecInput) (DeploySpec, error) {
 	if svc.Custom {
 		return DeploySpec{}, fmt.Errorf("%s is a custom service, which runs only on this computer for now", svc.Name)
 	}
+	if _, ok := svc.SeedVar(); ok {
+		// The seed phrase is the wallet. It lives in a file in the node's own volume
+		// and never goes out as a variable, and the worker API here carries no wallet
+		// choice, so the node runs only where that file is made: this computer.
+		return DeploySpec{}, fmt.Errorf("%s keeps its wallet seed phrase in a file on the machine that runs it, so it runs only on this computer for now. Choose This computer in Where. Nothing was deployed", svc.Name)
+	}
 	if svc.ManualOnly || strings.TrimSpace(svc.Docker.Image) == "" {
 		return DeploySpec{}, fmt.Errorf("%s has no Docker image, so a worker cannot run it", svc.Name)
 	}
