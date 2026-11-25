@@ -316,6 +316,12 @@ func TestStallCheckRunsWhenTheServerMayNotJudge(t *testing.T) {
 	}{
 		{"older server", func(t *testing.T, a *App) { judgedBy(t, a, stallNow.Add(-time.Minute), false) }},
 		{"no answer for over 15 minutes", func(t *testing.T, a *App) { judgedBy(t, a, stallNow.Add(-16*time.Minute), true) }},
+		{"heartbeats 3 minutes apart, which the server marks offline", func(t *testing.T, a *App) {
+			judgedBy(t, a, stallNow.Add(-time.Minute), true)
+			if err := a.cfg.Update(func(c *config.AppConfig) { c.UpstreamIntervalMinutes = 3 }); err != nil {
+				t.Fatal(err)
+			}
+		}},
 		{"hourly heartbeats", func(t *testing.T, a *App) {
 			judgedBy(t, a, stallNow.Add(-time.Minute), true)
 			if err := a.cfg.Update(func(c *config.AppConfig) { c.UpstreamIntervalMinutes = 60 }); err != nil {

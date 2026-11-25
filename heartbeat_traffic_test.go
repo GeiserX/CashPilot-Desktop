@@ -148,6 +148,9 @@ func TestHeartbeatKeepsWhatItHadWhenTheReadFails(t *testing.T) {
 	if v, present := info["proxied"]; !present || v != nil {
 		t.Fatalf("proxied = %v (present %v), want null when it could not be read", v, present)
 	}
+	if v, present := info["containers_listed"]; !present || v != false {
+		t.Fatalf("containers_listed = %v (present %v), want false when only the stored copies went out", v, present)
+	}
 
 	// No proxied copy at all is an empty list.
 	p = app.upstreamPayload()
@@ -183,6 +186,9 @@ func TestHeartbeatSendsNoCountersOutOfTurn(t *testing.T) {
 	if len(p.Containers) != 0 || p.SystemInfo.Proxied != nil {
 		t.Fatalf("payload = %+v, want no reading", p)
 	}
+	if p.SystemInfo.ContainersListed == nil || *p.SystemInfo.ContainersListed {
+		t.Fatal("containers_listed is not false for a heartbeat that read nothing")
+	}
 
 	hold()
 	app.withLiveUnits(t.Context(), &p,
@@ -190,6 +196,9 @@ func TestHeartbeatSendsNoCountersOutOfTurn(t *testing.T) {
 		func(context.Context) ([]runtime.ProxiedCopy, error) { return liveProxied(), nil })()
 	if !read || len(p.Containers) != 3 {
 		t.Fatalf("after the turn came back: read %v, containers %d; want the reading", read, len(p.Containers))
+	}
+	if p.SystemInfo.ContainersListed == nil || !*p.SystemInfo.ContainersListed {
+		t.Fatal("containers_listed is not true for a whole live list")
 	}
 }
 

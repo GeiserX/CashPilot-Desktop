@@ -50,6 +50,8 @@ func (a *App) heartbeatLockPath() string {
 func (a *App) withLiveUnits(ctx context.Context, p *upstream.Payload,
 	list func(context.Context) ([]runtime.ContainerInfo, error),
 	proxied func(context.Context) ([]runtime.ProxiedCopy, error)) (release func()) {
+	listed := false
+	p.SystemInfo.ContainersListed = &listed
 	release, ok := heartbeatSendLock(ctx, a.heartbeatLockPath(), heartbeatLockWait)
 	if !ok {
 		log.Printf("upstream: the other CashPilot process did not give up its turn to send; this heartbeat carries no traffic counters")
@@ -57,6 +59,7 @@ func (a *App) withLiveUnits(ctx context.Context, p *upstream.Payload,
 	}
 	if infos, err := list(ctx); err == nil {
 		p.Containers = heartbeatContainers(infos)
+		listed = true
 	}
 	if copies, err := proxied(ctx); err == nil {
 		p.SystemInfo.Proxied = heartbeatProxied(copies)

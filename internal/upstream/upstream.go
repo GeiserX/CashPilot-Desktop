@@ -127,6 +127,11 @@ type SystemInfo struct {
 	// the server treat this machine's list as partial, so it clears no alert of
 	// a copy the list may leave out.
 	Proxied []Proxied `json:"proxied"`
+	// ContainersListed is false when Containers is not this machine's whole list:
+	// the live read failed or the other process held its turn, so only the stored
+	// first copies went out. The server then retires no device id of a copy the
+	// list leaves out, as it does for a web worker that sends the same flag.
+	ContainersListed *bool `json:"containers_listed,omitempty"`
 }
 
 // Response is what the server sends back.

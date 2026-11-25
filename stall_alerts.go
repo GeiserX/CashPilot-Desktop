@@ -182,7 +182,9 @@ func stallCopyLabel(copyN int) string {
 // (stallServerGrace) and from a release whose stall check reads the counters the
 // heartbeat carries (stallsJudged), and the heartbeats come more often than hourly:
 // the server counts no traffic across a gap of over an hour (usage.MaxBaselineAge,
-// the web's too), and a real gap is the interval plus the time to send.
+// the web's too), and a real gap is the interval plus the time to send. In practice
+// the server's offline rule (serverStaleAfter) is the tighter limit: heartbeats must
+// come less than 3 minutes apart.
 func (a *App) stallServer(now time.Time) string {
 	if a.cfg == nil || !a.joined() {
 		return ""
@@ -190,7 +192,7 @@ func (a *App) stallServer(now time.Time) string {
 	cfg := a.cfg.Config()
 	serverURL := strings.TrimSpace(cfg.UpstreamURL)
 	interval := heartbeatInterval(cfg.UpstreamIntervalMinutes)
-	if serverURL == "" || interval.Seconds() >= usage.MaxBaselineAge {
+	if serverURL == "" || interval.Seconds() >= usage.MaxBaselineAge || interval >= serverStaleAfter {
 		return ""
 	}
 	a.upstream.mu.Lock()
@@ -201,6 +203,12 @@ func (a *App) stallServer(now time.Time) string {
 	}
 	return strings.TrimRight(serverURL, "/")
 }
+
+// serverStaleAfter is how long a CashPilot server lets a worker stay silent before
+// it marks it offline (STALE_WORKER_SECONDS in the web app). Its stall check skips
+// offline boxes, so with heartbeats this far apart it would judge none of this
+// computer's copies, and this computer keeps judging them itself.
+const serverStaleAfter = 180 * time.Second
 
 // stallServerGrace is how long the server may stay silent before this computer
 // judges its own copies again: three heartbeats, and at least 15 minutes, three
