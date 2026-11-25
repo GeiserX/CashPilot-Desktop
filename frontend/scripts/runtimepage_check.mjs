@@ -10,7 +10,7 @@
 //
 //   node scripts/runtimepage_check.mjs      # against ./.harness-build
 
-import { loadRuntimePage, readRuntimeSnapshot, withRuntimeReading } from "../.harness-build/render/runtimepage.js";
+import { loadRuntimePage, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "../.harness-build/render/runtimepage.js";
 
 import { renderDockerGuide } from "../.harness-build/render/dockerguide.js";
 
@@ -78,10 +78,7 @@ const page = (current = true) => {
   const oldAlert = { runtime: true, title: "Runtime offline" };
   const otherAlert = { title: "No services deployed" };
   const old = { runtime: { available: false, nativeAvailable: true }, notifications: [oldAlert, otherAlert] };
-  const healthy = { runtime: fresh, notifications: [otherAlert] };
-  const updated = await readRuntimeSnapshot(async () => healthy, old);
-  check("a Dashboard or Settings refresh takes the status and Alerts from one snapshot", updated.runtime === fresh && updated.notifications.length === 1 && updated.notifications[0] === otherAlert);
-  const failed = await readRuntimeSnapshot(async () => { throw new Error("read failed"); }, old);
+  const failed = withRuntimeReading(old, unknownRuntime, unknownRuntimeNotice);
   check("a failed refresh keeps native capability and unrelated alerts, and drops stale Docker status", failed.runtime.nativeAvailable && failed.runtime.reason === "" && failed.notifications[0]?.title === "Docker status unknown" && failed.notifications[1] === otherAlert && !failed.notifications.includes(oldAlert));
   const recovered = withRuntimeReading(failed, fresh, null);
   check("a runtime check clears only the runtime alert when Docker recovers", recovered.runtime === fresh && recovered.notifications.length === 1 && recovered.notifications[0] === otherAlert);

@@ -25,7 +25,7 @@ class Element {
 
   set innerHTML(html) {
     this.html = html;
-    this.children = [...html.matchAll(/<(button|details|div|p|small)\b([^>]*)>/g)];
+    this.children = [...html.matchAll(/<(button|details|div|p|section|small)\b([^>]*)>/g)];
     this.elements = new Map();
   }
 
@@ -215,6 +215,97 @@ async function checkCase(name, run) {
   }
 }
 
+for (const nativeAvailable of [false, true]) {
+  const name = `Docker stops before first run opens Dashboard (native apps: ${nativeAvailable})`;
+  await checkCase(name, async () => {
+    const native = { nativeAvailable, nativeServices: nativeAvailable ? ["MystNodes"] : [] };
+    let firstRunComplete = false;
+    let runtime = { ...ready, ...native };
+    const appReads = [];
+    const { root } = await openApp(name, runtime, false, async () => answered, {
+      CompleteOnboarding: async () => { firstRunComplete = true; },
+      GetAppState: async () => {
+        appReads.push({ firstRunComplete, reason: runtime.reason });
+        const notifications = firstRunComplete
+          ? [{ runtime: true, level: "warning", title: "Docker offline", message: runtime.message }]
+          : [];
+        return { config: { mode: "lead", firstRunComplete }, runtime, notifications, guides: [] };
+      },
+      GetUsage: async () => null,
+    });
+
+    assert.match(root.querySelector("#runtime-card-slot").innerHTML, /Runtime ready/);
+    runtime = { ...stopped, ...native };
+    root.querySelector("#continue-btn").click();
+    await setImmediate();
+
+    assert.deepEqual(appReads, [
+      { firstRunComplete: false, reason: "running" },
+      { firstRunComplete: true, reason: "not-running" },
+    ]);
+    const attention = root.querySelector(".attention").innerHTML;
+    assert.deepEqual({
+      stoppedBadge: (nativeAvailable ? /Native mode/ : /Runtime offline/).test(root.querySelector(".topbar-runtime").innerHTML),
+      stoppedMessage: attention.includes(stopped.message),
+      setupPrompt: /<button[^>]*data-view="runtime"[^>]*>Set up Docker<\/button>/.test(attention),
+      allClear: /Nothing needs you/.test(attention),
+    }, { stoppedBadge: true, stoppedMessage: true, setupPrompt: true, allClear: false });
+    assert.match(root.querySelector(".notification-menu").innerHTML, /Docker offline/);
+  });
+}
+
+await checkCase("first-run checklist Skip uses the fresh Dashboard reading", async () => {
+  const native = { nativeAvailable: true, nativeServices: ["MystNodes"] };
+  const nativeOnly = { ...stopped, ...native };
+  let firstRunComplete = false;
+  const { root } = await openApp("skip", nativeOnly, false, async () => ({ ...setup, runtime: nativeOnly }), {
+    CancelSetup: async () => {},
+    CompleteOnboarding: async () => { firstRunComplete = true; },
+    GetAppState: async () => ({
+      config: { mode: "lead", firstRunComplete },
+      runtime: firstRunComplete ? { ...ready, ...native } : nativeOnly,
+      guides: [],
+    }),
+    GetUsage: async () => null,
+  });
+  const guide = () => root.querySelector("#docker-guide");
+  guide().querySelector('[data-guide-action="skip"]').click();
+  guide().querySelector('[data-guide-action="skip-go"]').click();
+  await setImmediate();
+  assert.match(root.querySelector(".topbar-runtime").innerHTML, /Runtime ready/);
+  assert.match(root.querySelector(".attention").innerHTML, /Nothing needs you/);
+});
+
+await checkCase("a first-run retry finishing in Settings preserves the newer reading", async () => {
+  const retry = Promise.withResolvers();
+  let firstRunComplete = false;
+  let appReads = 0;
+  const { root } = await openApp("first-run-to-settings", ready, false, () => retry.promise, {
+    CompleteOnboarding: async () => { firstRunComplete = true; },
+    GetAppState: async () => ({
+      config: { mode: "lead", firstRunComplete },
+      runtime: ++appReads === 1 ? ready : stopped,
+      guides: [],
+    }),
+    GetUsage: async () => null,
+    GetSettingsState: async () => ({ environment: [], collectors: [] }),
+    BackgroundHelperStatus: async () => ({ supported: false }),
+    UnfinishedRestores: async () => [],
+    GetModeState: async () => null,
+  });
+  root.querySelector("#refresh-runtime").click();
+  root.querySelector("#continue-btn").click();
+  await setImmediate();
+  root.querySelector('[data-view="settings"]').click();
+  await setImmediate();
+  assert.equal(appReads, 3);
+
+  retry.resolve(answered);
+  await setImmediate();
+  assert.match(root.querySelector(".topbar-runtime").innerHTML, /Runtime offline/);
+  assert.match(root.querySelector("#runtime-settings-slot").innerHTML, /Set up Docker/);
+});
+
 for (const view of ["fleet", "activity"]) {
   await checkCase(`${view} load preserves a failed retry`, async () => {
     const host = Promise.withResolvers();
@@ -249,8 +340,8 @@ for (const view of ["fleet", "activity"]) {
   });
 }
 
-for (const olderRetry of [false, true]) {
-  const name = olderRetry ? "Settings check supersedes an older Runtime retry" : "Settings check reaches Fleet after navigation";
+for (const retryOrder of ["none", "retry-first", "settings-first"]) {
+  const name = `Settings check reaches Fleet (completion order: ${retryOrder})`;
   await checkCase(name, async () => {
     const settingsCheck = Promise.withResolvers();
     const retry = Promise.withResolvers();
@@ -267,7 +358,7 @@ for (const olderRetry of [false, true]) {
       GetProxiesState: async () => null,
     });
     const badge = () => root.querySelector(".topbar-runtime").innerHTML;
-    if (olderRetry) {
+    if (retryOrder !== "none") {
       root.querySelector(".topbar-runtime").click();
       await setImmediate();
       root.querySelector("#docker-guide").querySelector("#docker-guide-check").click();
@@ -280,16 +371,23 @@ for (const olderRetry of [false, true]) {
     await setImmediate();
     assert.match(badge(), /Runtime ready/);
 
-    if (olderRetry) {
+    if (retryOrder === "retry-first") {
       retry.reject(new Error("Host check failed"));
       await setImmediate();
-      assert.match(badge(), /Runtime ready/, "an older check cannot publish while a newer check is pending");
-      assert.doesNotMatch(root.querySelector(".notification-menu").innerHTML, /Docker status unknown/);
+      assert.match(badge(), /Runtime unknown/, "the retry can publish while the Settings check is pending");
+      assert.match(root.querySelector(".notification-menu").innerHTML, /Docker status unknown/);
     }
     settingsCheck.resolve(snapshot(stopped));
     await setImmediate();
     assert.match(badge(), /Runtime offline/);
     assert.match(root.innerHTML, /Add Worker or Mobile/);
+    assert.doesNotMatch(root.querySelector(".notification-menu").innerHTML, /Docker status unknown/);
+
+    if (retryOrder === "settings-first") {
+      retry.resolve(answered);
+      await setImmediate();
+      assert.match(badge(), /Runtime offline/, "a retry cannot replace the completed Settings check");
+    }
   });
 }
 

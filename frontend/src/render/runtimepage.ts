@@ -47,15 +47,6 @@ export function withRuntimeReading(current: RuntimeSnapshot, runtime: RuntimeSta
   };
 }
 
-export async function readRuntimeSnapshot(read: () => Promise<RuntimeSnapshot>, current: RuntimeSnapshot): Promise<RuntimeSnapshot> {
-  try {
-    const { runtime, notifications } = await read();
-    return { runtime, notifications };
-  } catch {
-    return withRuntimeReading(current, unknownRuntime, unknownRuntimeNotice);
-  }
-}
-
 /** The checklist covers Docker Desktop, so its guide card goes when there is one. */
 export function guidesBesideChecklist(guides: InstallGuide[], checklist: boolean): InstallGuide[] {
   return checklist ? guides.filter((g) => g.id !== "docker-desktop-windows") : guides;

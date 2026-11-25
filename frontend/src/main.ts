@@ -123,7 +123,7 @@ import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
-import { guidesBesideChecklist, loadRuntimePage, readRuntimeSnapshot, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
+import { guidesBesideChecklist, loadRuntimePage, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
 import { renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
@@ -246,7 +246,7 @@ const boot = createBoot({
   wireChrome,
   load: async () => {
     wireBackendEvents();
-    state = await getAppState();
+    await loadAppState();
     await applySetupResume();
     render();
     if (hostReadingPending) {
@@ -262,7 +262,15 @@ let backendEventsWired = false;
 
 let eventRefreshInFlight = false;
 let hostReadingPending = false;
-let runtimeSnapshotRequest = 0;
+let runtimeCheckStarted = 0;
+let runtimeCheckCompleted = 0;
+
+// A newer check supersedes an older one once it finishes, even if it failed.
+function completeRuntimeCheck(request: number) {
+  if (request < runtimeCheckCompleted) return false;
+  runtimeCheckCompleted = request;
+  return true;
+}
 
 // The Go backend emits these after background collection cycles and deployment
 // changes. Refresh state so passive earnings appear without the user navigating.
@@ -299,11 +307,10 @@ async function applySetupResume() {
 
 // Publish every explicit host check to the shared runtime, even when it fails.
 async function hostCheck() {
-  const request = ++runtimeSnapshotRequest;
-  const firstRun = !state?.config.firstRunComplete;
+  const request = ++runtimeCheckStarted;
   const publish = (result: HostCheckResult | null) => {
-    if (!state || request !== runtimeSnapshotRequest) return;
-    if (firstRun) {
+    if (!state || !completeRuntimeCheck(request)) return;
+    if (!state.config.firstRunComplete) {
       firstRunHost = result;
       if (result) firstRunHasChecklist = !!result.facts?.supported && !!result.steps?.length;
     }
@@ -345,29 +352,32 @@ function guideDeps(skip: DockerGuideDeps["skip"]): DockerGuideDeps {
   };
 }
 
-// App-state reads also check Docker. While the checklist is on screen, HostCheck
-// owns the reading because it returns the rows and status together.
-function hostCheckOwnsRuntime() {
-  return state && (state.config.firstRunComplete ? activeView === "runtime" : onboardingStep === "runtime");
-}
-
-async function getAppState() {
-  const request = hostCheckOwnsRuntime() ? null : ++runtimeSnapshotRequest;
+// App-state reads check Docker too. Apply the result here, so a caller resuming
+// after the await cannot replace a runtime reading published in the meantime.
+async function loadAppState(scope: "all" | "runtime" = "all") {
+  const request = ++runtimeCheckStarted;
   let next: AppState;
   try {
     next = await GetAppState();
   } catch (error) {
-    if (request === runtimeSnapshotRequest) setRuntimeReading(unknownRuntime, unknownRuntimeNotice);
-    throw error;
+    if (completeRuntimeCheck(request)) setRuntimeReading(unknownRuntime, unknownRuntimeNotice);
+    if (scope === "all") throw error;
+    return;
   }
-  if (!state) return next;
-  if (request === runtimeSnapshotRequest) {
-    state = { ...state, runtime: next.runtime, notifications: next.notifications };
-    if (activeView !== "dashboard") updateRuntimeSurfaces(state);
-    return next;
+
+  const previous = state;
+  if (completeRuntimeCheck(request)) {
+    state = scope === "runtime" && previous
+      ? { ...previous, runtime: next.runtime, notifications: next.notifications }
+      : next;
+  } else if (scope === "all" && previous) {
+    const notice = previous.notifications?.find((item) => item.runtime) ?? null;
+    state = { ...next, ...withRuntimeReading(next, previous.runtime, notice) };
+  } else {
+    return;
   }
-  const notice = state.notifications?.find((item) => item.runtime) ?? null;
-  return { ...next, ...withRuntimeReading(next, state.runtime, notice) };
+  // The caller draws the first screen and the transition out of onboarding.
+  if (previous && (previous.config.firstRunComplete || !state.config.firstRunComplete)) updateRuntimeSurfaces(state);
 }
 
 async function onBackendEvent() {
@@ -375,10 +385,7 @@ async function onBackendEvent() {
   if (!state || !state.config.firstRunComplete) return;
   eventRefreshInFlight = true;
   try {
-    state = await getAppState();
-    // Other views may have unsaved input, so getAppState updates their runtime
-    // controls in place.
-    if (activeView === "dashboard") render();
+    await loadAppState();
   } catch {
     // transient background refresh failure — ignore; next event/read recovers
   } finally {
@@ -473,11 +480,7 @@ function renderOnboarding(current: AppState) {
           <div id="install-guides" class="guide-grid"></div>
   `, {wide: true});
   wireChrome();
-  document.querySelector("#continue-btn")?.addEventListener("click", async () => {
-    await CompleteOnboarding();
-    state = await getAppState();
-    render();
-  });
+  document.querySelector("#continue-btn")?.addEventListener("click", finishOnboarding);
   document.querySelector("#refresh-runtime")?.addEventListener("click", async () => {
     if (firstRunChecking) return;
     // HostCheck reads this PC afresh, so a fix the user just made shows at once.
@@ -495,13 +498,15 @@ function renderOnboarding(current: AppState) {
   });
   const holder = document.querySelector<HTMLDivElement>("#docker-guide");
   if (checklist && holder) {
-    dockerGuide = new DockerGuide(holder, guideDeps(async () => {
-      await CompleteOnboarding();
-      state = await getAppState();
-      render();
-    }), {resume: setupResume, result: firstRunHost, checkFailed: !firstRunHost});
+    dockerGuide = new DockerGuide(holder, guideDeps(finishOnboarding), {resume: setupResume, result: firstRunHost, checkFailed: !firstRunHost});
   }
   renderGuides(guidesBesideChecklist(current.guides || [], checklist));
+}
+
+async function finishOnboarding() {
+  await CompleteOnboarding();
+  await loadAppState();
+  render();
 }
 
 // First run's first reading of this PC. It lands after the first draw, so the
@@ -582,7 +587,7 @@ function renderModeStep() {
       }
       try {
         await StartAsLead();
-        state = await getAppState();
+        await loadAppState();
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
         return;
@@ -603,7 +608,7 @@ function renderJoinStep() {
     onboardingStep = "mode";
     render();
   }, async () => {
-    state = await getAppState();
+    await loadAppState();
     onboardingStep = "runtime";
     render();
   });
@@ -1105,12 +1110,9 @@ function updateRuntimeSurfaces(current: AppState) {
 // A Windows host reading can finish after GetAppState returned. Update the open
 // surfaces without replacing any in-progress form.
 async function refreshRuntimeSnapshot() {
-  if (!state?.config.firstRunComplete || hostCheckOwnsRuntime()) return;
-  const request = ++runtimeSnapshotRequest;
-  const snapshot = await readRuntimeSnapshot(GetAppState, state);
-  if (!state || request !== runtimeSnapshotRequest) return;
-  state = { ...state, ...snapshot };
-  updateRuntimeSurfaces(state);
+  // The checklist already starts its own host check.
+  if (!state?.config.firstRunComplete || activeView === "runtime") return;
+  await loadAppState("runtime");
 }
 
 function showView(view: View) {
@@ -1135,7 +1137,7 @@ function wireShellNav(scope: ParentNode = document) {
   document.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
     const currency = (event.target as HTMLSelectElement).value;
     await SaveSettings({displayCurrency: currency});
-    state = await getAppState();
+    await loadAppState();
     render();
   });
 }
@@ -1276,7 +1278,7 @@ async function saveCustomService(editor: HTMLFormElement) {
     editor.dataset.customEditor = saved.slug;
     customEditing = saved;
     customViews = await ListCustomServices();
-    state = await getAppState();
+    await loadAppState();
     customEditing = null;
     render();
     const deployed = state?.deployments?.some((dep) => dep.slug === saved.slug);
@@ -1294,7 +1296,7 @@ async function deleteCustomService(slug: string) {
   try {
     await DeleteCustomService(slug);
     customViews = await ListCustomServices();
-    state = await getAppState();
+    await loadAppState();
     render();
   } catch (error) {
     showErrorToast({scope: "custom service", error: String(error)});
@@ -1442,7 +1444,7 @@ async function runImportApply() {
   try {
     importResult = await ApplyImport({ ...importRequest, slugs, extra });
     importDeployed = [];
-    state = await getAppState();
+    await loadAppState();
     importLinks = {};
     showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
     renderImportIfShown();
@@ -1468,7 +1470,7 @@ async function runImportDeploy(slug: string) {
     if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) return;
     await DeployService(slug, {}, null, null);
     importDeployed = [...importDeployed, slug];
-    state = await getAppState();
+    await loadAppState();
     // The saved values hold the device id; the step is the one the wizard shows.
     const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
     const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
@@ -1617,7 +1619,7 @@ function wireModeCard() {
       try {
         modeLeft = await SwitchToLead();
         modeState = await GetModeState();
-        state = await getAppState();
+        await loadAppState();
         modeCardView = "left";
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
@@ -1632,7 +1634,7 @@ function wireModeCard() {
   if (modeCardView === "join") {
     wireJoinForm(slot, backToSummary, async () => {
       modeCardView = "summary";
-      state = await getAppState();
+      await loadAppState();
       render();
     });
   }
@@ -1769,8 +1771,8 @@ async function saveSettingsFromForm() {
       await SaveSettings(values);
     },
     refresh: async () => {
-      state = await getAppState();
-      if (activeView === "settings") await renderSettings(state);
+      await loadAppState();
+      if (activeView === "settings" && state) await renderSettings(state);
       else render();
     },
     show: (html) => {
@@ -2704,13 +2706,13 @@ async function runWizardAction(slug: string, action: string) {
         return;
       }
       if (outcome.kind === "routed") {
-        state = await getAppState();
+        await loadAppState();
         const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
         if (output) output.textContent = routedDeployText(outcome.result, link);
         return;
       }
       const deployment = outcome.deployment;
-      state = await getAppState();
+      await loadAppState();
       // The box now holds what runs, so a second Deploy without an edit keeps it.
       const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
       if (imageInput) {
@@ -2730,7 +2732,7 @@ async function runWizardAction(slug: string, action: string) {
       await SaveCredentials(slug, values);
       const record = await CollectService(slug);
       if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
-      state = await getAppState();
+      await loadAppState();
     }
   } catch (error) {
     if (output) output.textContent = String(error);
@@ -2804,7 +2806,7 @@ async function runWalletDeploy(slug: string, values: Record<string, string>, out
     newWallet = { slug, words: phraseWords(wallet.phrase), address: wallet.address || "", step: "show", positions: [], error: "" };
     wallet.phrase = "";
   }
-  state = await getAppState();
+  await loadAppState();
   let text = "Deployed.";
   if (newWallet) text = "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once.";
   else if (wallet?.migrated) text = "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume.";
@@ -3087,7 +3089,8 @@ async function runCopyAction(slug: string, n: number, action: string) {
 async function refreshState() {
   if (!state) return;
   const deployments = await RefreshDeployments().catch(() => state?.deployments || []);
-  state = {...await getAppState(), deployments};
+  await loadAppState();
+  state = {...state, deployments};
   render();
 }
 
