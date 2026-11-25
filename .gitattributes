@@ -22,3 +22,7 @@ packaging/** text eol=lf
 
 # The Secure VM's golden desired.json files are compared byte for byte.
 internal/winvm/testdata/** text eol=lf
+
+# The Secure VM's embedded scripts are pinned by SHA-256 (bootstrap_test.go),
+# and the admin stub checks setup.ps1 and remove.ps1 by hash.
+internal/winvm/scripts/** text eol=lf

@@ -419,3 +419,29 @@ func TestDecideReasonsReadPlainly(t *testing.T) {
 		}
 	}
 }
+
+// foldBoth folds an Inbound and an Outbound row into one Both row only when
+// their actions match too, whichever comes first: a Deny one way and an
+// Allow the other is two rows, never a Both Deny.
+func TestFoldBothNeedsTheSameActionInEitherOrder(t *testing.T) {
+	q := pfx("198.51.100.0/24")
+	in := ACL{Action: "Deny", Direction: "Inbound", Remote: q}
+	out := ACL{Action: "Allow", Direction: "Outbound", Remote: q}
+	for _, rows := range [][]ACL{{in, out}, {out, in}} {
+		got := foldBoth(rows)
+		if len(got) != 2 {
+			t.Fatalf("%v folded into %v", rows, got)
+		}
+		for _, a := range got {
+			if a.Direction == "Both" {
+				t.Fatalf("%v folded into a Both row: %v", rows, got)
+			}
+		}
+	}
+	same := ACL{Action: "Deny", Direction: "Outbound", Remote: q}
+	for _, rows := range [][]ACL{{in, same}, {same, in}} {
+		if got := foldBoth(rows); len(got) != 1 || got[0].Direction != "Both" || got[0].Action != "Deny" {
+			t.Fatalf("%v did not fold into one Both Deny: %v", rows, got)
+		}
+	}
+}

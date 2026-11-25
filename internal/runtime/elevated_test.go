@@ -55,3 +55,37 @@ func TestElevatedScriptCarriesTheSignedInSID(t *testing.T) {
 		}
 	}
 }
+
+func TestSecureVMStubRefusesBadValues(t *testing.T) {
+	ok := SecureVMStub{DataDir: `C:\ProgramData\CashPilot`, Script: `C:\Users\u\AppData\Local\Temp\setup.ps1`,
+		ScriptName: "setup.ps1", ScriptSHA256: strings.Repeat("AB", 32),
+		Args: [][2]string{{"Exe", `C:\Program Files\CashPilot\CashPilot.exe`}, {"Params", `C:\Users\u\p.json`}}}
+	s, err := ok.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"'" + strings.Repeat("AB", 32) + "'", "-Exe 'C:\\Program Files\\CashPilot\\CashPilot.exe'", "exit 13", "ReparsePoint", "O:BAD:PAI"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the stub lacks %q", want)
+		}
+	}
+	bad := map[string]func(*SecureVMStub){
+		"quote in the data folder": func(s *SecureVMStub) { s.DataDir = `C:\x'; calc; '` },
+		"relative script":          func(s *SecureVMStub) { s.Script = `setup.ps1` },
+		"dot dot":                  func(s *SecureVMStub) { s.DataDir = `C:\ProgramData\..\Windows` },
+		"lowercase hash":           func(s *SecureVMStub) { s.ScriptSHA256 = strings.Repeat("ab", 32) },
+		"short hash":               func(s *SecureVMStub) { s.ScriptSHA256 = "AB" },
+		"script name with a path":  func(s *SecureVMStub) { s.ScriptName = `..\x.ps1` },
+		"quote in a value":         func(s *SecureVMStub) { s.Args = [][2]string{{"Exe", `C:\a' + (calc) + '`}} },
+		"dollar in a value":        func(s *SecureVMStub) { s.Args = [][2]string{{"Exe", `C:\$env:x`}} },
+		"bad parameter name":       func(s *SecureVMStub) { s.Args = [][2]string{{"exe; calc", `C:\a`}} },
+		"newline in a value":       func(s *SecureVMStub) { s.Args = [][2]string{{"Exe", "C:\\a\ncalc"}} },
+	}
+	for name, edit := range bad {
+		s := ok
+		edit(&s)
+		if _, err := s.Build(); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

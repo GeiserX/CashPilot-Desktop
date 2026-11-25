@@ -1,0 +1,202 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
+)
+
+// The Secure VM's elevated roles. The admin bootstraps (setup.ps1,
+// remove.ps1) run the admin-only copy of this exe with one of them; all the
+// work is winvm.Build and winvm.Remove. Neither opens a window.
+const (
+	vmSetupFlag  = "vm-setup"
+	vmRemoveFlag = "vm-remove"
+)
+
+// Exit codes of the two roles. 3010 is never used: nothing here needs a
+// restart.
+const (
+	vmExitOK          = 0
+	vmExitFailed      = 1
+	vmExitUsage       = 2
+	vmExitProofFailed = 3 // built, but the proof was not green: the guard keeps the VM off
+)
+
+// vmSetupTimeout bounds a whole setup: Windows Setup alone can take an hour.
+const vmSetupTimeout = 4 * time.Hour
+
+// maxParamsFile caps the params file.
+const maxParamsFile = 64 << 10
+
+// setupLogFile is setup's log in the data folder, readable by users so the
+// app can show progress. It never holds a password: Build logs step names.
+const setupLogFile = "setup.log"
+
+// vmSetupMain is main's --vm-setup / --vm-remove branch.
+func vmSetupMain(params, dir string, parseErr error) int {
+	if parseErr != nil || (params != "") == (dir != "") {
+		fmt.Fprintln(os.Stderr, "vm-setup: give exactly one of --vm-setup <params.json> or --vm-remove <data folder>")
+		return vmExitUsage
+	}
+	if runtime.GOOS != "windows" {
+		fmt.Fprintln(os.Stderr, "vm-setup:", winvm.ErrUnsupported)
+		return vmExitUsage
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "vm-setup:", err)
+		return vmExitFailed
+	}
+	if params != "" {
+		ctx, cancel := context.WithTimeout(ctx, vmSetupTimeout)
+		defer cancel()
+		return runVMSetup(ctx, params, exe, productBuildDeps, os.Stderr)
+	}
+	return runVMRemove(ctx, dir, func(n winvm.Names) winvm.RemoveDeps {
+		return winvm.RemoveDeps{HV: winvm.NewBuilder()}
+	}, os.Stderr)
+}
+
+// productBuildDeps is the real Hyper-V, the proof's Prober and the echo
+// services. The guest probe is the PowerShell Direct one Build picks.
+func productBuildDeps(n winvm.Names) winvm.BuildDeps {
+	return winvm.BuildDeps{
+		HV:    winvm.NewBuilder(),
+		Probe: winvm.NewProber(n),
+		Echo:  winvm.DefaultEcho(),
+		Now:   time.Now,
+	}
+}
+
+// readParamsFile reads a regular file of at most maxParamsFile bytes.
+func readParamsFile(path string) ([]byte, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, maxParamsFile+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxParamsFile {
+		return nil, fmt.Errorf("the params file is over %d bytes", maxParamsFile)
+	}
+	return b, nil
+}
+
+// runVMSetup builds or repairs the instance the params file names. It must
+// run as that instance's guard copy, so the guard task it registers points at
+// an exe only an admin can change. The params file holds the guest passwords
+// and the key: it is deleted once it has been read as a params file.
+func runVMSetup(ctx context.Context, params, exe string, mk func(winvm.Names) winvm.BuildDeps, errOut io.Writer) int {
+	raw, err := readParamsFile(params)
+	if err != nil {
+		fmt.Fprintln(errOut, "vm-setup:", err)
+		return vmExitUsage
+	}
+	sp, err := winvm.ParseSetupParams(raw)
+	if err != nil {
+		fmt.Fprintln(errOut, "vm-setup:", err)
+		return vmExitUsage
+	}
+	defer os.Remove(params)
+	n, _, _, err := winvm.SetupNames(sp)
+	if err != nil {
+		fmt.Fprintln(errOut, "vm-setup:", err)
+		return vmExitUsage
+	}
+	if !strings.EqualFold(filepath.Clean(exe), filepath.Clean(n.GuardExe())) {
+		fmt.Fprintf(errOut, "vm-setup: must run as %s, not %s\n", n.GuardExe(), exe)
+		return vmExitUsage
+	}
+	d := mk(n)
+	if d.Dir == "" {
+		d.Dir = n.DataDir // a test points it elsewhere
+	}
+	logger := log.New(errOut, "", log.LstdFlags)
+	if f, err := winvm.OpenAppend(filepath.Join(d.Dir, setupLogFile)); err == nil {
+		defer f.Close()
+		logger = log.New(io.MultiWriter(errOut, f), "", log.LstdFlags)
+	}
+	d.Exe, d.Logf = n.GuardExe(), logger.Printf
+	res, err := winvm.Build(ctx, d, sp)
+	switch {
+	case errors.Is(err, winvm.ErrProofFailed):
+		logger.Printf("setup: built, but the proof did not pass: %v", err)
+		return vmExitProofFailed
+	case err != nil:
+		logger.Printf("setup failed: %v", err)
+		return vmExitFailed
+	}
+	logger.Printf("setup done: network=%s fence=%s", res.Status.Network, res.Status.Fence)
+	return vmExitOK
+}
+
+// namesForDir is the instance whose data folder dir is: the product's or a
+// lab instance's, nothing else.
+func namesForDir(dir string) (winvm.Names, error) {
+	d, err := guardDir(dir)
+	if err != nil {
+		return winvm.Names{}, err
+	}
+	if d == winvm.ProductNames().DataDir {
+		return winvm.ProductNames(), nil
+	}
+	for i := 1; i <= winvm.MaxLabInstance; i++ {
+		if n, _ := winvm.LabNames(i); n.DataDir == d {
+			return n, nil
+		}
+	}
+	return winvm.Names{}, fmt.Errorf("%q is not the Secure VM's data folder", dir)
+}
+
+// runVMRemove removes the instance of the data folder dir and prints what it
+// removed, kept and left.
+func runVMRemove(ctx context.Context, dir string, mk func(winvm.Names) winvm.RemoveDeps, errOut io.Writer) int {
+	n, err := namesForDir(dir)
+	if err != nil {
+		fmt.Fprintln(errOut, "vm-remove:", err)
+		return vmExitUsage
+	}
+	d := mk(n)
+	if d.Dir == "" {
+		d.Dir = n.DataDir
+	}
+	d.Logf = log.New(errOut, "", log.LstdFlags).Printf
+	res, err := winvm.Remove(ctx, d, n)
+	for _, x := range res.Removed {
+		fmt.Fprintln(errOut, "removed:", x)
+	}
+	for _, x := range res.Kept {
+		fmt.Fprintln(errOut, "kept:", x)
+	}
+	for _, x := range res.Left {
+		fmt.Fprintln(errOut, "left:", x)
+	}
+	if err != nil {
+		fmt.Fprintln(errOut, "vm-remove:", err)
+		return vmExitFailed
+	}
+	return vmExitOK
+}

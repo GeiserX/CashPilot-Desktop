@@ -1038,13 +1038,18 @@ const maxDenyTotal = 16 * maxDenyRows
 
 // checkDenies accepts only masked IPv4 prefixes, at most maxDenyTotal, with no
 // repeat, and returns each one as Hyper-V writes it: a /32 as a bare address.
-// The guard only manages its own IPv4 rows; IPv6 is one static row.
+// The guard only manages its own IPv4 rows; IPv6 is one static row, ::/0,
+// which setup places and nothing removes.
 func checkDenies(ps []netip.Prefix) ([]string, error) {
 	if len(ps) == 0 || len(ps) > maxDenyTotal {
 		return nil, fmt.Errorf("%d prefixes; one call takes 1 to %d", len(ps), maxDenyTotal)
 	}
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
+		if p == allIPv6 {
+			out = append(out, p.String())
+			continue
+		}
 		if !p.IsValid() || !p.Addr().Is4() || p != p.Masked() {
 			return nil, fmt.Errorf("prefix %v is not a masked IPv4 prefix", p)
 		}
@@ -1056,6 +1061,9 @@ func checkDenies(ps []netip.Prefix) ([]string, error) {
 	}
 	return out, nil
 }
+
+// allIPv6 is the static Deny over all of IPv6.
+var allIPv6 = netip.MustParsePrefix("::/0")
 
 // aclArg is a prefix as Get-VMNetworkAdapterAcl lists it: a /32 as a bare
 // address, anything else in CIDR form.

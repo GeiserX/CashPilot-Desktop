@@ -8,8 +8,11 @@ import "os"
 // on Windows; this keeps the files sane where the tests run.
 func protect(path string, a fileAccess) error {
 	mode := os.FileMode(0o600)
-	if a == usersRead {
+	switch a {
+	case usersRead:
 		mode = 0o644
+	case usersWrite:
+		mode = 0o666
 	}
 	return os.Chmod(path, mode)
 }

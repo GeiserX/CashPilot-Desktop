@@ -181,6 +181,15 @@ type Plan struct {
 	// Removal deletes it only then: other VMs may share it.
 	CreatedGuardian bool `json:"createdGuardian"`
 
+	// Owner is a random token setup writes into desired.json before it creates
+	// anything, and into the Notes of the VM and the switch and the description
+	// of the firewall rule and the guard task it creates. A host object is this
+	// install's only when its ID is recorded here or it carries this token.
+	Owner string `json:"owner"`
+	// AddedAdminSID is the account setup added to Hyper-V Administrators, or ""
+	// when that account was a member already. Removal takes out only this one.
+	AddedAdminSID string `json:"addedAdminSid"`
+
 	GCSBaseline []string  `json:"gcsBaseline"` // GuestCommunicationServices keys at setup, upper case
 	HostBuild   string    `json:"hostBuild"`   // CurrentBuild.UBR, for the re-proof trigger
 	ProvedAt    time.Time `json:"provedAt"`
@@ -203,10 +212,10 @@ type Options struct {
 // field that touches the fence: ACLs, bindings, firewall or integration services.
 // A test asserts that by reflection.
 type LabOverrides struct {
-	MinHostRAM          uint64
-	GuestMemory         uint64
-	KeepEnhancedSession bool
-	Instance            int
+	MinHostRAM          uint64 `json:"minHostRam"`
+	GuestMemory         uint64 `json:"guestMemory"`
+	KeepEnhancedSession bool   `json:"keepEnhancedSession"`
+	Instance            int    `json:"instance"`
 }
 
 // Apply returns o with the lab's names and resource numbers.
@@ -226,6 +235,8 @@ func (l LabOverrides) Apply(o Options) (Options, error) {
 }
 
 var (
+	ownerRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	sidRe   = regexp.MustCompile(`^S-1-[0-9]+(-[0-9]+){1,15}$`)
 	macHex  = regexp.MustCompile(`^[0-9A-F]{12}$`)
 	guidRe  = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 	vhdxDir = regexp.MustCompile(`^[A-Za-z]:\\[^"'` + "`" + `$;&|<>*?\r\n]*$`)
@@ -290,6 +301,12 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 	if es == ESKeep && o.Names == ProductNames() {
 		return Plan{}, errors.New("the product VM must turn Enhanced Session off; keep is a lab setting")
 	}
+	// An install that turned Enhanced Session off holds the value to put back.
+	// Switching it to keep would drop that value, and removal would then leave
+	// Enhanced Session off for good. Remove it first, or keep it on off.
+	if es == ESKeep && prev != nil && prev.EnhancedSessionOriginal != nil {
+		return Plan{}, errors.New("this install turned Enhanced Session off and must put it back; remove the VM before you build it with keep")
+	}
 	var exits []netip.Addr
 	for _, a := range o.ExtraExits {
 		a = a.Unmap()
@@ -338,6 +355,7 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 		}
 		p.VMID, p.AdapterID, p.SwitchID = prev.VMID, prev.AdapterID, prev.SwitchID
 		p.CreatedGuardian = prev.CreatedGuardian
+		p.Owner, p.AddedAdminSID = prev.Owner, prev.AddedAdminSID
 		if prev.EnhancedSessionOriginal != nil {
 			v := *prev.EnhancedSessionOriginal
 			p.EnhancedSessionOriginal = &v
@@ -538,6 +556,12 @@ func (p Plan) validate() error {
 	}
 	if p.EnhancedSession == ESKeep && p.EnhancedSessionOriginal != nil {
 		return errors.New("plan: a keep policy never records an original Enhanced Session value")
+	}
+	if p.Owner != "" && !ownerRe.MatchString(p.Owner) {
+		return fmt.Errorf("plan: owner %q is not 32 lower-case hex digits", p.Owner)
+	}
+	if p.AddedAdminSID != "" && !sidRe.MatchString(p.AddedAdminSID) {
+		return fmt.Errorf("plan: %q is not a Windows account SID", p.AddedAdminSID)
 	}
 	got := p
 	if got.ExtraExits == nil {

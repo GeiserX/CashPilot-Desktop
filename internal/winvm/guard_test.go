@@ -778,14 +778,76 @@ func TestGuardWithoutAPlan(t *testing.T) {
 			}
 		})
 	}
-	t.Run("no VM known", func(t *testing.T) {
-		r := newRig(t)
-		os.Remove(filepath.Join(r.dir, winvm.StateFile))
-		os.Remove(filepath.Join(r.dir, winvm.PlanFile))
-		m := r.mark()
-		st := r.d.Pass(context.Background())
-		if st.Network != winvm.NetAbsent || !strings.Contains(st.Reason, "desired state") || len(r.since(m)) != 0 {
-			t.Fatalf("status %+v, calls %v", st, r.since(m))
+	// With no plan and no state the guard cannot tell which VM is this
+	// install's, so it touches none, and it never reports the VM as absent:
+	// it may still be on the network.
+	for _, c := range []struct{ name, plan, state string }{
+		{"no VM known", "", ""},
+		{"garbage plan and garbage state", `{"version":1,"names":`, `not json at all`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t)
+			for file, body := range map[string]string{winvm.StateFile: c.state, winvm.PlanFile: c.plan} {
+				path := filepath.Join(r.dir, file)
+				os.Remove(path)
+				if body != "" {
+					os.WriteFile(path, []byte(body), 0o600)
+				}
+			}
+			m := r.mark()
+			st := r.d.Pass(context.Background())
+			if st.Network == winvm.NetAbsent || st.Fence != winvm.FenceCut || !strings.Contains(st.Reason, "cannot tell") {
+				t.Fatalf("status %+v", st)
+			}
+			if calls := r.since(m); len(calls) != 0 {
+				t.Fatalf("the guard touched a VM it cannot tell is ours: %v", calls)
+			}
+		})
+	}
+	// A plan that names no VM yet (setup stopped before it saved the ID) with
+	// no state: the guard finds the VM by the plan's owner token and takes it
+	// off; with no VM of that name, absent is the truth; with a VM of that
+	// name and no token, it touches nothing and assumes the worst.
+	t.Run("interrupted setup", func(t *testing.T) {
+		for _, c := range []struct {
+			name    string
+			foreign bool
+			drop    bool
+			want    string
+		}{
+			{"our VM by token", false, false, winvm.NetDisconnected},
+			{"no VM", false, true, winvm.NetAbsent},
+			{"a VM without our token", true, true, winvm.NetConnected},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				ctx := context.Background()
+				r := newRig(t)
+				vmID := r.p.VMID
+				if c.drop {
+					r.f.Disconnect(ctx, vmID)
+					r.f.RemoveVM(ctx, vmID, r.p.VHDXDir)
+				}
+				if c.foreign {
+					r.f.AddForeignVM(r.p.Names.VM, false)
+				}
+				r.p.VMID, r.p.AdapterID = "", ""
+				r.writePlan()
+				os.Remove(filepath.Join(r.dir, winvm.StateFile))
+				m := r.mark()
+				st := r.d.Pass(ctx)
+				if st.Network != c.want {
+					t.Fatalf("network %q, want %q: %+v, calls %v", st.Network, c.want, st, r.since(m))
+				}
+				if !c.drop {
+					l, err := r.f.ReadLive(ctx, r.p.Names, vmID)
+					if err != nil || !l.VMExists || slices.ContainsFunc(l.Adapters, func(a winvm.LiveAdapter) bool { return a.SwitchID != "" }) {
+						t.Fatalf("our VM stayed on the network: %+v %v", l.Adapters, err)
+					}
+				}
+				if c.foreign && slices.Contains(r.since(m), "Disconnect") {
+					t.Fatal("the guard disconnected a VM without our token")
+				}
+			})
 		}
 	})
 }
@@ -1480,5 +1542,47 @@ func TestGuardChangeOnConnectWhileRunning(t *testing.T) {
 	st := r.d.Boot(ctx)
 	if st.Network != winvm.NetDisconnected || st.Fence != winvm.FenceCut || r.connectedNow() {
 		t.Fatalf("status %+v", st)
+	}
+}
+
+// A cut whose Disconnect fails leaves the VM on the network: the status must
+// say so plainly, never that the VM is cut off, and the next pass tries again.
+func TestGuardCutWhoseDisconnectFailedSaysSo(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.f.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")})
+	r.f.FailNext("Disconnect", nil)
+	st := r.d.Pass(ctx)
+	if !r.connectedNow() || st.Network != winvm.NetConnected || st.Fence != winvm.FenceCut {
+		t.Fatalf("status %+v", st)
+	}
+	if strings.Contains(strings.ToLower(st.Reason), "cut off") || !strings.Contains(st.Reason, "could not take the VM off the network") {
+		t.Fatalf("reason %q", st.Reason)
+	}
+	m := r.mark()
+	st = r.d.Pass(ctx)
+	if !slices.Contains(r.since(m), "Disconnect") || r.connectedNow() || st.Network != winvm.NetDisconnected {
+		t.Fatalf("the next pass did not take it off: %+v %v", st, r.since(m))
+	}
+}
+
+// Under no proof lock, a Boot whose Disconnect fails twice (once before the
+// check, once for keepOff) leaves the VM on the network unbooted: the next
+// tick is the boot routine again, which starts with a Disconnect.
+func TestGuardRunRetriesABootWhoseDisconnectsFailed(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.writePrefs(`{"keepOff":true,"approvedNetworks":[],"uploadLimitMbps":0}`)
+	r.f.FailNth("Disconnect", 1, nil)
+	r.f.FailNth("Disconnect", 2, nil)
+	l := winvm.NewGuardLoop(r.d)
+	st := l.Boot(ctx)
+	if !r.connectedNow() {
+		t.Fatalf("both disconnects failed, yet the adapter is off: %+v", st)
+	}
+	m := r.mark()
+	l.Tick(ctx)
+	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" {
+		t.Fatalf("the tick after the failed boot is not the boot routine: %v", calls)
 	}
 }

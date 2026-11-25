@@ -137,3 +137,83 @@ func elevatedOutcome(err error) (ElevatedResult, error) {
 	}
 	return ElevatedResult{}, err
 }
+
+// SecureVMStub is what the app hands RunElevated to set up or remove the
+// Secure VM. The stub is short and travels inside the command line, so no
+// user can change it. It:
+//
+//  1. makes DataDir and DataDir\guard folders only SYSTEM and Administrators
+//     can write, owned by Administrators, with no inherited rule, refusing a
+//     path that is a link or a file;
+//  2. copies the bootstrap the app wrote (Script, in a folder the user can
+//     write) into the guard folder and checks the copy's SHA-256 against
+//     ScriptSHA256, exiting ExitBadHash when it differs, so a script changed
+//     after the app wrote it never runs;
+//  3. runs the copy with the given arguments and exits with its exit code.
+type SecureVMStub struct {
+	DataDir      string
+	Script       string // where the app wrote the bootstrap
+	ScriptName   string // the copy's file name: setup.ps1 or remove.ps1
+	ScriptSHA256 string // uppercase hex
+	// Args are the bootstrap's named parameters, in order.
+	Args [][2]string
+}
+
+// ExitBadHash is ERROR_INVALID_DATA: a copied file did not have the SHA-256
+// the stub expected, so nothing ran.
+const ExitBadHash = 13
+
+var (
+	stubPath  = regexp.MustCompile(`^[A-Za-z]:\\[^"'` + "`" + `$;&|<>*?\r\n]{0,240}$`)
+	stubHash  = regexp.MustCompile(`^[0-9A-F]{64}$`)
+	stubName  = regexp.MustCompile(`^[a-z]+\.ps1$`)
+	stubParam = regexp.MustCompile(`^[A-Z][A-Za-z]{0,31}$`)
+	stubValue = regexp.MustCompile(`^[^"'` + "`" + `$;&|<>*?\r\n]{0,260}$`)
+)
+
+// Build writes the stub. Every value is checked against a strict grammar
+// before it is put between single quotes, so none can end the quote.
+func (s SecureVMStub) Build() (string, error) {
+	for what, p := range map[string]string{"data folder": s.DataDir, "script": s.Script} {
+		if !stubPath.MatchString(p) || strings.Contains(p, "..") {
+			return "", fmt.Errorf("the %s %q is not an absolute Windows path", what, p)
+		}
+	}
+	if !stubName.MatchString(s.ScriptName) {
+		return "", fmt.Errorf("script name %q is not allowed", s.ScriptName)
+	}
+	if !stubHash.MatchString(s.ScriptSHA256) {
+		return "", errors.New("the script hash is not 64 uppercase hex digits")
+	}
+	var args []string
+	for _, a := range s.Args {
+		if !stubParam.MatchString(a[0]) || !stubValue.MatchString(a[1]) {
+			return "", fmt.Errorf("bootstrap argument %q is not allowed", a[0])
+		}
+		args = append(args, "-"+a[0], "'"+a[1]+"'")
+	}
+	return strings.Join([]string{
+		"$ErrorActionPreference = 'Stop'",
+		"$ProgressPreference = 'SilentlyContinue'",
+		"trap { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
+		"function Lock-Dir([string]$p) {",
+		"  if (Test-Path -LiteralPath $p) {",
+		"    $i = Get-Item -LiteralPath $p -Force",
+		"    if (-not $i.PSIsContainer -or ($i.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw ('not a plain folder: ' + $p) }",
+		"  } else { New-Item -ItemType Directory -Path $p | Out-Null }",
+		"  $acl = New-Object Security.AccessControl.DirectorySecurity",
+		"  $acl.SetSecurityDescriptorSddlForm('O:BAD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)')",
+		"  Set-Acl -LiteralPath $p -AclObject $acl",
+		"}",
+		"$data = '" + s.DataDir + "'",
+		"$guard = Join-Path $data 'guard'",
+		"Lock-Dir $data",
+		"Lock-Dir $guard",
+		"$dst = Join-Path $guard '" + s.ScriptName + "'",
+		"Copy-Item -LiteralPath '" + s.Script + "' -Destination $dst -Force",
+		"if ((Get-FileHash -LiteralPath $dst -Algorithm SHA256).Hash -ne '" + s.ScriptSHA256 + "') { Remove-Item -LiteralPath $dst -Force; exit " + fmt.Sprint(ExitBadHash) + " }",
+		"$ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\\v1.0\\powershell.exe'",
+		"& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $dst " + strings.Join(args, " "),
+		"exit $LASTEXITCODE",
+	}, "\n"), nil
+}

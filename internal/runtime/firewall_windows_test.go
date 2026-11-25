@@ -3,8 +3,15 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestFirewallBlockLive drives the real Windows Firewall. It changes the machine, so
@@ -54,5 +61,64 @@ func TestFirewallBlockLive(t *testing.T) {
 		}
 	default:
 		t.Fatalf("unknown step %q", step)
+	}
+}
+
+// TestSecureVMStubLive runs the Secure VM's admin stub for real in this
+// elevated process: a bootstrap with the right hash runs with its arguments
+// and hands back its exit code; one whose hash differs never runs and the stub
+// exits ExitBadHash; a data folder that is a link is refused.
+func TestSecureVMStubLive(t *testing.T) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		if os.Getenv("GITHUB_ACTIONS") == "true" {
+			t.Fatal("expected an elevated process on the Windows CI runner")
+		}
+		t.Skip("not elevated: the stub would show the admin prompt")
+	}
+	tmp := t.TempDir()
+	marker := filepath.Join(tmp, "ran.txt")
+	body := []byte("param([string]$Mode, [string]$Out)\n'ran' | Set-Content -LiteralPath $Out\nif ($Mode -eq 'restart') { exit 3010 }\nexit 0\n")
+	script := filepath.Join(tmp, "boot.ps1")
+	if err := os.WriteFile(script, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	good := strings.ToUpper(hex.EncodeToString(sum[:]))
+	stub := func(data, hash, mode string) (ElevatedResult, error) {
+		s, err := SecureVMStub{DataDir: data, Script: script, ScriptName: "boot.ps1", ScriptSHA256: hash,
+			Args: [][2]string{{"Mode", mode}, {"Out", marker}}}.Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return RunElevated(s)
+	}
+	data := filepath.Join(tmp, "data")
+	if res, err := stub(data, good, "ok"); err != nil || res.RestartNeeded {
+		t.Fatalf("good hash: %+v, %v", res, err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the bootstrap did not run")
+	}
+	if res, err := stub(data, good, "restart"); err != nil || !res.RestartNeeded {
+		t.Fatalf("exit 3010: %+v, %v", res, err)
+	}
+	os.Remove(marker)
+	bad := strings.Repeat("A", 64)
+	_, err := stub(data, bad, "ok")
+	if code, ok := ExitCodeOf(err); !ok || code != ExitBadHash {
+		t.Fatalf("wrong hash: %v (code %d), want exit %d", err, code, ExitBadHash)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the bootstrap ran with the wrong hash")
+	}
+	if _, err := os.Stat(filepath.Join(data, "guard", "boot.ps1")); err == nil {
+		t.Fatal("the copy with the wrong hash was left in the guard folder")
+	}
+	link := filepath.Join(tmp, "link")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, tmp).CombinedOutput(); err != nil {
+		t.Fatalf("mklink: %v: %s", err, out)
+	}
+	if _, err := stub(link, good, "ok"); err == nil {
+		t.Fatal("a data folder that is a link was accepted")
 	}
 }

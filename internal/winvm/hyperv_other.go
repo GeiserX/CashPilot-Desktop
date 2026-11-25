@@ -10,6 +10,12 @@ import (
 // NewHost is a host without Hyper-V: every call returns ErrUnsupported.
 func NewHost() Host { return unsupported{} }
 
+// NewBuilder is a host without Hyper-V: every call returns ErrUnsupported.
+func NewBuilder() Builder { return unsupported{} }
+
+// NewProber is a host without Hyper-V: every call returns ErrUnsupported.
+func NewProber(Names) Prober { return unsupported{} }
+
 // unsupported implements every seam interface with ErrUnsupported.
 type unsupported struct{}
 
@@ -41,8 +47,11 @@ func (unsupported) RemoveDeny(context.Context, string, []netip.Prefix) error {
 	return ErrUnsupported
 }
 
-func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix) (string, string, error) {
-	return "", "", ErrUnsupported
+func (unsupported) Inventory(context.Context, Names, string) (Inventory, error) {
+	return Inventory{}, ErrUnsupported
+}
+func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, string) (string, int, error) {
+	return "", 0, ErrUnsupported
 }
 func (unsupported) EnsureNAT(context.Context, Names, netip.Prefix) error { return ErrUnsupported }
 func (unsupported) CreateVM(context.Context, Plan, string, string) (string, string, error) {
@@ -51,8 +60,8 @@ func (unsupported) CreateVM(context.Context, Plan, string, string) (string, stri
 func (unsupported) SetIntegration(context.Context, string, map[string]bool) error {
 	return ErrUnsupported
 }
-func (unsupported) SetBindings(context.Context, int, []string) error { return ErrUnsupported }
-func (unsupported) EnsureFirewall(context.Context, Names, int) error { return ErrUnsupported }
+func (unsupported) SetBindings(context.Context, int, []string) error         { return ErrUnsupported }
+func (unsupported) EnsureFirewall(context.Context, Names, int, string) error { return ErrUnsupported }
 func (unsupported) SetHostNeighbor(context.Context, int, netip.Addr, string) error {
 	return ErrUnsupported
 }
@@ -60,13 +69,31 @@ func (unsupported) SetEnhancedSession(context.Context, bool) (bool, error) {
 	return false, ErrUnsupported
 }
 func (unsupported) EnsureGuardian(context.Context) (bool, error) { return false, ErrUnsupported }
-func (unsupported) RegisterGuardTask(context.Context, Names, string) error {
+func (unsupported) AddHyperVAdmin(context.Context, string) (bool, error) {
+	return false, ErrUnsupported
+}
+func (unsupported) WriteAnswerISO(context.Context, string, []byte) error { return ErrUnsupported }
+func (unsupported) BootKeys(context.Context, string) error               { return ErrUnsupported }
+func (unsupported) EjectDVDs(context.Context, string) error              { return ErrUnsupported }
+func (unsupported) RegisterGuardTask(context.Context, Names, string, string) error {
 	return ErrUnsupported
 }
-func (unsupported) Guest(context.Context, string, Cred, GuestScript, any) error {
+func (unsupported) StartGuardTask(context.Context, Names) error { return ErrUnsupported }
+func (unsupported) Guest(context.Context, string, Cred, GuestScript, any, any) error {
 	return ErrUnsupported
 }
-func (unsupported) Remove(context.Context, Plan) ([]string, error) { return nil, ErrUnsupported }
+func (unsupported) UnregisterGuardTask(context.Context, Names, string) error { return ErrUnsupported }
+func (unsupported) RemoveVM(context.Context, string, string) ([]string, error) {
+	return nil, ErrUnsupported
+}
+func (unsupported) RemoveSwitch(context.Context, string) error           { return ErrUnsupported }
+func (unsupported) RemoveNAT(context.Context, Names, netip.Prefix) error { return ErrUnsupported }
+func (unsupported) RemoveFirewall(context.Context, Names, string) error  { return ErrUnsupported }
+func (unsupported) RemoveGuardian(context.Context) error                 { return ErrUnsupported }
+func (unsupported) RemoveHyperVAdmin(context.Context, string) error      { return ErrUnsupported }
+func (unsupported) LinkLocal(context.Context, int) (netip.Addr, error) {
+	return netip.Addr{}, ErrUnsupported
+}
 
 func (unsupported) Canary(context.Context, netip.Addr, uint16, string) (Canary, error) {
 	return nil, ErrUnsupported

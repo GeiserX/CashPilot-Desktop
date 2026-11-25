@@ -1,0 +1,297 @@
+package winvm_test
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/e2e/harness/hvfake"
+	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
+)
+
+var buildNow = time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+
+const testUserSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+
+func setupParams() winvm.SetupParams {
+	return winvm.SetupParams{
+		Version: winvm.SetupParamsVersion, VHDXDir: `D:\VMs`, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
+		AdminPassword: "Adm1n-Pass-0123456789", EarnerPassword: "Earn3r-Pass-0123456789",
+		UserSID: testUserSID, ApproveNetwork: true,
+	}
+}
+
+func buildDeps(t *testing.T, f *hvfake.HyperV, dir string) winvm.BuildDeps {
+	t.Helper()
+	return winvm.BuildDeps{
+		HV: f, Probe: f, Guest: f,
+		Echo:      func(context.Context) []netip.Addr { return []netip.Addr{f.PublicIP} },
+		Now:       func() time.Time { return buildNow },
+		Sleep:     func(ctx context.Context, d time.Duration) error { return ctx.Err() },
+		Dir:       dir,
+		Exe:       `C:\ProgramData\CashPilot\guard\CashPilot.exe`,
+		Logf:      t.Logf,
+		ProofWait: time.Millisecond,
+	}
+}
+
+func readPlan(t *testing.T, dir string) winvm.Plan {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, winvm.PlanFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := winvm.LoadPlan(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func indexOf(calls []string, method string) int {
+	return slices.IndexFunc(calls, func(c string) bool {
+		return c == method || strings.HasPrefix(c, method+" ") || strings.HasPrefix(c, method+"(")
+	})
+}
+
+func TestBuildProvesAndConnects(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	res, err := winvm.Build(context.Background(), buildDeps(t, f, dir), setupParams())
+	if err != nil {
+		t.Fatalf("Build: %v\nproof: %+v", err, res.Proof)
+	}
+	p := readPlan(t, dir)
+	if !p.ProvedAt.Equal(buildNow) {
+		t.Fatalf("ProvedAt = %v, want %v", p.ProvedAt, buildNow)
+	}
+	if ok, why := winvm.Verdict(res.Proof); !ok {
+		t.Logf("verdict: %s", why)
+		t.Fatalf("verdict not green: %+v", res.Proof)
+	}
+	if res.Status.Network != winvm.NetConnected {
+		t.Fatalf("after the build the guard says %q (%s), want connected", res.Status.Network, res.Status.Reason)
+	}
+	if !f.TaskRunning(p.Names.GuardTask) {
+		t.Fatal("the guard task is not running after the build")
+	}
+	if f.PantherLeft(p.VMID) {
+		t.Fatal("the guest still holds Windows Setup's copies of the answer file")
+	}
+	if got := f.GuestAccount(p.VMID, "cpadmin"); got != setupParams().AdminPassword {
+		t.Fatal("cpadmin does not have the real password")
+	}
+	for _, name := range []string{"install.json", "answer.iso", winvm.LockFile} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s is still there after the build (%v)", name, err)
+		}
+	}
+	calls := f.Calls()
+	order := []string{"Inventory", "EnsureSwitch", "EnsureNAT", "SetBindings", "EnsureFirewall", "SetHostNeighbor",
+		"EnsureGuardian", "WriteAnswerISO", "CreateVM", "SetIntegration", "AddDeny", "SetEnhancedSession",
+		"AddHyperVAdmin", "Start", "Guest", "EjectDVDs", "RegisterGuardTask", "Canary", "StartGuardTask"}
+	last := -1
+	for _, m := range order {
+		i := indexOf(calls, m)
+		if i < 0 {
+			t.Fatalf("%s was never called; calls: %v", m, calls)
+		}
+		if i < last {
+			t.Fatalf("%s came before %s; calls: %v", m, order[slices.Index(order, m)-1], calls)
+		}
+		last = i
+	}
+	if lock, err := os.ReadFile(filepath.Join(dir, winvm.ProofFile)); err != nil || len(lock) == 0 {
+		t.Fatalf("proof.json not written: %v", err)
+	}
+}
+
+// TestBuildRepairKeepsThePlan runs setup twice: the second run is Repair and
+// writes the same desired.json except ProvedAt, keeps the Enhanced Session
+// value it recorded the first time, and creates nothing new.
+func TestBuildRepairKeepsThePlan(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	d := buildDeps(t, f, dir)
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatal(err)
+	}
+	first := readPlan(t, dir)
+	if first.EnhancedSessionOriginal == nil || !*first.EnhancedSessionOriginal {
+		t.Fatalf("EnhancedSessionOriginal = %v, want true (the fake starts with it on)", first.EnhancedSessionOriginal)
+	}
+	later := buildNow.Add(48 * time.Hour)
+	d.Now = func() time.Time { return later }
+	m := len(f.Calls())
+	if _, err := winvm.Build(context.Background(), d, setupParams()); err != nil {
+		t.Fatalf("Repair: %v", err)
+	}
+	second := readPlan(t, dir)
+	if !second.ProvedAt.Equal(later) {
+		t.Fatalf("Repair ProvedAt = %v, want %v", second.ProvedAt, later)
+	}
+	second.ProvedAt = first.ProvedAt
+	a, _ := first.Marshal()
+	b, _ := second.Marshal()
+	if string(a) != string(b) {
+		t.Fatalf("Repair changed desired.json:\n%s\n---\n%s", a, b)
+	}
+	for _, c := range f.Calls()[m:] {
+		switch c {
+		case "CreateVM", "WriteAnswerISO", "BootKeys", "EjectDVDs":
+			t.Fatalf("Repair called %s", c)
+		}
+	}
+	if n := strings.Count(strings.Join(f.Objects(), "\n"), "\nvm "); n != 0 && !strings.HasPrefix(f.Objects()[0], "vm ") {
+		t.Fatal("unexpected VM listing")
+	}
+}
+
+// TestBuildRefusesForeignObjects: an object with the Secure VM's name that
+// this install did not make stops the build before it changes anything.
+func TestBuildRefusesForeignObjects(t *testing.T) {
+	n := winvm.ProductNames()
+	cases := map[string]func(f *hvfake.HyperV){
+		"vm":       func(f *hvfake.HyperV) { f.AddForeignVM(n.VM, false) },
+		"switch":   func(f *hvfake.HyperV) { f.AddSwitch(n.Switch, "Internal") },
+		"nat":      func(f *hvfake.HyperV) { f.AddForeignNAT(n.NAT, netip.MustParsePrefix("172.31.200.0/29")) },
+		"firewall": func(f *hvfake.HyperV) { f.AddForeignRule(n.FirewallGroup, "someone-else") },
+		"task":     func(f *hvfake.HyperV) { f.AddForeignTask(n.GuardTask) },
+	}
+	for name, add := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := hvfake.New()
+			add(f)
+			before := f.Objects()
+			_, err := winvm.Build(context.Background(), buildDeps(t, f, t.TempDir()), setupParams())
+			if !errors.Is(err, winvm.ErrNotOwned) {
+				t.Fatalf("Build = %v, want ErrNotOwned", err)
+			}
+			if got := f.Objects(); !slices.Equal(got, before) {
+				t.Fatalf("the refused build changed the host:\n%v\n---\n%v", before, got)
+			}
+			for _, c := range f.Calls() {
+				if c != "Inventory" {
+					t.Fatalf("the refused build called %s", c)
+				}
+			}
+		})
+	}
+}
+
+// failAfter lets one call take effect and then report an error, as a
+// PowerShell call that timed out after Hyper-V acted would.
+type failAfter struct {
+	*hvfake.HyperV
+	method string
+}
+
+func (w *failAfter) hit(m string) bool {
+	if w.method == m {
+		w.method = ""
+		return true
+	}
+	return false
+}
+
+var errAfter = errors.New("the call worked but its answer was lost")
+
+func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.Prefix, owner, mac string) (string, int, error) {
+	id, ifx, err := w.HyperV.EnsureSwitch(ctx, n, sub, owner, mac)
+	if err == nil && w.hit("EnsureSwitch") {
+		return "", 0, errAfter
+	}
+	return id, ifx, err
+}
+
+func (w *failAfter) CreateVM(ctx context.Context, p winvm.Plan, iso, answer string) (string, string, error) {
+	vm, ad, err := w.HyperV.CreateVM(ctx, p, iso, answer)
+	if err == nil && w.hit("CreateVM") {
+		return "", "", errAfter
+	}
+	return vm, ad, err
+}
+
+func (w *failAfter) Guest(ctx context.Context, vmID string, c winvm.Cred, s winvm.GuestScript, arg, out any) error {
+	err := w.HyperV.Guest(ctx, vmID, c, s, arg, out)
+	if err == nil && s.Name == "first-session" && w.hit("Guest") {
+		return errAfter
+	}
+	return err
+}
+
+// TestBuildResumesAfterEachStep fails each seam call once, runs setup again,
+// and checks the second run finishes with one VM and one switch, and that
+// Remove VM then puts the host back exactly as it was.
+func TestBuildResumesAfterEachStep(t *testing.T) {
+	methods := []string{"Inventory", "ReadHostNet", "EnsureSwitch", "EnsureNAT", "SetBindings", "EnsureFirewall",
+		"SetHostNeighbor", "EnsureGuardian", "WriteAnswerISO", "CreateVM", "SetIntegration", "ReadLive", "AddDeny",
+		"SetEnhancedSession", "AddHyperVAdmin", "Start", "BootKeys", "EjectDVDs", "RegisterGuardTask",
+		"Connect", "Canary", "Pktmon", "AddAllow", "RemoveAllow", "SetL3", "SetBinding", "HVListener",
+		"StartGuardTask", "Disconnect"}
+	for _, m := range methods {
+		for _, after := range []bool{false, true} {
+			if after && m != "EnsureSwitch" && m != "CreateVM" && m != "Guest" {
+				continue
+			}
+			name := m
+			if after {
+				name += "-after"
+			}
+			t.Run(name, func(t *testing.T) {
+				f := hvfake.New()
+				before := f.Objects()
+				dir := t.TempDir()
+				d := buildDeps(t, f, dir)
+				if after {
+					d.HV = &failAfter{HyperV: f, method: m}
+				} else {
+					f.FailNext(m, errors.New("injected"))
+				}
+				_, err1 := winvm.Build(context.Background(), d, setupParams())
+				if !slices.Contains(f.Calls(), m) {
+					t.Fatalf("%s was never called, so this case tests nothing", m)
+				}
+				// A red step has two witnesses (the canary and pktmon), so one
+				// failing alone still shows the hole; the guard retries its own
+				// reads and cuts.
+				mayPass := map[string]bool{"ReadLive": true, "Disconnect": true, "Canary": true, "Pktmon": true}
+				if err1 == nil && !mayPass[m] {
+					t.Fatalf("the first build passed with %s failing", m)
+				}
+				d.HV = f
+				res, err := winvm.Build(context.Background(), d, setupParams())
+				if err != nil {
+					t.Fatalf("the resumed build failed: %v (first: %v)", err, err1)
+				}
+				if res.Status.Network != winvm.NetConnected {
+					t.Fatalf("after the resumed build the guard says %q: %s", res.Status.Network, res.Status.Reason)
+				}
+				vms, sws := 0, 0
+				for _, o := range f.Objects() {
+					if strings.HasPrefix(o, "vm ") {
+						vms++
+					}
+					if strings.HasPrefix(o, "switch ") {
+						sws++
+					}
+				}
+				if vms != 1 || sws != 1 {
+					t.Fatalf("%d VMs and %d switches after the resume:\n%s", vms, sws, strings.Join(f.Objects(), "\n"))
+				}
+				if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: f, Dir: dir, Logf: t.Logf}, winvm.ProductNames()); err != nil {
+					t.Fatal(err)
+				}
+				if got := f.Objects(); !slices.Equal(got, before) {
+					t.Fatalf("after Remove the host differs:\n%s\n---\n%s", strings.Join(before, "\n"), strings.Join(got, "\n"))
+				}
+			})
+		}
+	}
+}

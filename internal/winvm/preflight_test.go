@@ -262,13 +262,14 @@ func TestCheckVMHostRAMEdges(t *testing.T) {
 		t.Errorf("the exact minimums failed: %+v", r.Checks)
 	}
 	// A lab guest of 4 GiB needs 5 GiB free, and a lab minimum lowers the
-	// installed floor.
+	// installed floor, in a lab build only: a product build keeps 12 GiB
+	// whatever the input says.
 	r = CheckVMHost(vmHostInput(func(in *VMHostInput) {
 		in.GuestMemory, in.FreeRAM = 4*GiB, 5*GiB
 		in.MinHostRAM, in.InstalledRAM = 8*GiB, 8*GiB
 	}))
-	if !r.Ready {
-		t.Errorf("the lab sizes failed: %+v", r.Checks)
+	if r.Ready != labBuild {
+		t.Errorf("lab sizes with labBuild=%v: ready=%v, want %v: %+v", labBuild, r.Ready, labBuild, r.Checks)
 	}
 	// An empty GCS list is a valid baseline: nothing registered.
 	r = CheckVMHost(vmHostInput(func(in *VMHostInput) { in.GCS = []string{} }))

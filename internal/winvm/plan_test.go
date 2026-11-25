@@ -415,3 +415,53 @@ func TestWantACLsKeepsAnExitUnderATunnel(t *testing.T) {
 	}
 	assertUniquePrefixes(t, acls)
 }
+
+// TestEnhancedSessionPolicyChangesRoundTrip: every plan NewPlan writes loads
+// again, across each change of policy on a lab instance. Off to keep after an
+// original was recorded is refused, because keep would drop the value Remove
+// VM must put back.
+func TestEnhancedSessionPolicyChangesRoundTrip(t *testing.T) {
+	lab, _ := LabNames(1)
+	opts := func(es ESPolicy) Options { o := testOptions(lab); o.EnhancedSession = es; return o }
+	roundTrip := func(name string, p Plan) {
+		t.Helper()
+		b, err := p.Marshal()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		q, err := LoadPlan(b)
+		if err != nil {
+			t.Fatalf("%s: the plan NewPlan wrote does not load: %v", name, err)
+		}
+		if !reflect.DeepEqual(p, q) {
+			t.Fatalf("%s: round trip changed the plan", name)
+		}
+	}
+	off, err := NewPlan(opts(ESOff), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off.RecordEnhancedSession(true)
+	roundTrip("off", off)
+	keep, err := NewPlan(opts(ESKeep), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip("keep", keep)
+	keepToOff, err := NewPlan(opts(ESOff), &keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keepToOff.RecordEnhancedSession(true)
+	roundTrip("keep then off", keepToOff)
+	offToOff, err := NewPlan(opts(ESOff), &off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip("off then off", offToOff)
+	if p, err := NewPlan(opts(ESKeep), &off); err == nil {
+		b, _ := p.Marshal()
+		_, lerr := LoadPlan(b)
+		t.Fatalf("off then keep was accepted (and LoadPlan says %v)", lerr)
+	}
+}

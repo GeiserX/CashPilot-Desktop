@@ -79,6 +79,11 @@ jobs:
         if: '!matrix.race'
         run: go test ./...
 
+      # The Secure VM's lab build (winvmlab) honours lab settings a product
+      # build refuses; its tests prove the gate from the other side.
+      - name: Test (Secure VM lab build)
+        run: go test -tags winvmlab ./internal/winvm/
+
       - name: Upload coverage to Codecov
         if: matrix.coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1

@@ -219,15 +219,31 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	}()
 
 	gs := d.loadState()
-	// failClosed takes the VM of the last plan that could be read off the
-	// network, when the plan now gives no VM to check, and adds until to the
-	// reason. The state stays as it was for when the plan is back.
-	failClosed := func(until string) {
-		if gs.VMID == "" {
-			return
+	// failClosed takes the VM off the network when the plan gives no VM to
+	// check, and adds until to the reason. The VM is the one state.json last
+	// saw, or else the one with the plan's names that carries its owner token
+	// (an interrupted setup). With neither, the guard cannot tell which VM is
+	// this install's, so it touches none and reports the worst case: still on
+	// the network. The state stays as it was for when the plan is back.
+	failClosed := func(until string, plan *Plan) {
+		vmID := gs.VMID
+		if vmID == "" && plan != nil {
+			inv, err := d.HV.Inventory(ctx, plan.Names, "")
+			if err == nil {
+				vmID = adopt(inv.VMs, "", plan.Owner)
+				if vmID == "" && len(inv.VMs) == 0 {
+					return // no VM with this install's name: absent is the truth
+				}
+			} else {
+				d.logf("list VMs: %v", err)
+			}
 		}
 		st.Fence, st.Network = FenceCut, NetConnected
-		if err := d.HV.Disconnect(ctx, gs.VMID); err != nil {
+		if vmID == "" {
+			st.Reason += " The guard cannot tell which VM is this install's, so it cannot take it off the network. Run Repair, or Remove VM."
+			return
+		}
+		if err := d.HV.Disconnect(ctx, vmID); err != nil {
 			d.logf("disconnect failed: %v", err)
 		} else {
 			st.Network = NetDisconnected
@@ -238,13 +254,13 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	if err != nil {
 		st.Reason = "Could not read the VM's desired state, so the guard cannot check it: " + err.Error()
 		d.logf("%s", st.Reason)
-		failClosed("the guard can read it again")
+		failClosed("the guard can read it again", nil)
 		return st, leftOff
 	}
 	st.VM, st.ProvedAt = p.Names.VM, p.ProvedAt
 	if p.VMID == "" || p.AdapterID == "" || p.SwitchID == "" {
 		st.Reason = "The VM is not built yet."
-		failClosed("its desired state names it again")
+		failClosed("its desired state names it again", &p)
 		return st, leftOff
 	}
 	gs = gs.forPlan(p)
@@ -444,8 +460,13 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	if reason != "" && (!connected || startErr != nil) {
 		st.Reason = reason
 	}
-	if gs.Cut && !connected {
+	switch {
+	case gs.Cut && !connected:
 		st.Reason = cutReason(gs.CutChanges)
+	case gs.Cut:
+		// The cut holds but Disconnect failed: the VM is still on the network,
+		// so the status must not say it is cut off.
+		st.Reason = "The VM's protection changed, but the guard could not take the VM off the network. It tries again at its next check."
 	}
 	if st.Reason == "" && !connected && lErr == nil && live.VMExists {
 		st.Reason = "The VM is off the network. The guard checks its protection again and connects it at its next check."

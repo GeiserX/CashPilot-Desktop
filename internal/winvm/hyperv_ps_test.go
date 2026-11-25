@@ -219,6 +219,9 @@ func TestSeamScriptsAndArguments(t *testing.T) {
 		seen[c.name] = true
 	}
 	for name := range hvScripts {
+		if _, build := buildScripts[name]; build || strings.HasPrefix(name, "Prober.") {
+			continue // TestBuildSeamScriptsAndArguments
+		}
 		if !seen[name] {
 			t.Errorf("script %s has no seam case", name)
 		}

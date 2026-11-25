@@ -33,6 +33,10 @@ type Reader interface {
 	// size and the adapter's byte counter. It never turns on resource metering,
 	// which can add Meter ACLs.
 	Usage(ctx context.Context, vmID string) (Usage, error)
+	// Inventory lists every host object that carries one of our names, with
+	// the owner token each carries, and the host facts build and remove check.
+	// The guard reads it only to find the VM of an interrupted setup.
+	Inventory(ctx context.Context, n Names, userSID string) (Inventory, error)
 }
 
 // Guarder is what the SYSTEM guard needs: the reads, and the few writes it may
@@ -48,26 +52,93 @@ type Guarder interface {
 	RemoveDeny(ctx context.Context, vmID string, p []netip.Prefix) error
 }
 
-// Builder is what the elevated setup, Repair and Remove need.
+// Builder is what the elevated setup, Repair and Remove need. Every write is
+// idempotent: a call whose result is already in place changes nothing, so a
+// build that stopped half way runs again from the start.
+//
+// Ownership: a VM or a switch is this install's only when its ID is recorded in
+// the plan or its Notes carry the plan's Owner token. A firewall rule or the
+// guard task is ours only when its description carries the token. The NAT has
+// neither, so it is ours only when it has our name and our recorded /29. Build
+// and Remove read Inventory first and refuse, or leave alone, anything else.
 type Builder interface {
 	Guarder
-	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix) (switchID string, vnicMAC string, err error)
+	// EnsureSwitch creates the Internal switch with the owner token in its
+	// Notes, gives its host vNIC vnicMAC and the gateway address of sub, or
+	// checks those on the switch already there. It refuses a switch with our
+	// name that does not carry the token.
+	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC string) (switchID string, vnicIfIndex int, err error)
 	EnsureNAT(ctx context.Context, n Names, sub netip.Prefix) error
+	// CreateVM creates the VM off, with p.Owner in its Notes, the plan's
+	// shape, one disconnected adapter with its static MAC and port guards
+	// (only the proof and the guard ever connect it), and the two ISOs as DVD
+	// drives, the Windows ISO first to boot.
 	CreateVM(ctx context.Context, p Plan, iso, answerISO string) (vmID, adapterID string, err error)
 	// SetIntegration runs before the first Start-VM.
 	SetIntegration(ctx context.Context, vmID string, want map[string]bool) error
 	SetBindings(ctx context.Context, vnicIfIndex int, off []string) error
-	EnsureFirewall(ctx context.Context, n Names, vnicIfIndex int) error
+	EnsureFirewall(ctx context.Context, n Names, vnicIfIndex int, owner string) error
 	SetHostNeighbor(ctx context.Context, vnicIfIndex int, ip netip.Addr, mac string) error
 	SetEnhancedSession(ctx context.Context, on bool) (was bool, err error)
 	EnsureGuardian(ctx context.Context) (created bool, err error)
-	// RegisterGuardTask triggers at startup, on resume (Power-Troubleshooter 1)
-	// and every 5 minutes, with IgnoreNew.
-	RegisterGuardTask(ctx context.Context, n Names, exe string) error
-	// Guest runs one fixed script over PowerShell Direct and decodes its answer,
-	// capped at 64 KB, into out.
-	Guest(ctx context.Context, vmID string, cred Cred, s GuestScript, out any) error
-	Remove(ctx context.Context, p Plan) (left []string, err error)
+	// AddHyperVAdmin adds the account to Hyper-V Administrators (S-1-5-32-578)
+	// by SID, and reports whether it was added now.
+	AddHyperVAdmin(ctx context.Context, sid string) (added bool, err error)
+	// WriteAnswerISO writes the answer file onto a new ISO at path.
+	WriteAnswerISO(ctx context.Context, path string, xml []byte) error
+	// BootKeys presses a key once a second for 10 seconds, for the Gen 2
+	// "press any key to boot from CD" prompt.
+	BootKeys(ctx context.Context, vmID string) error
+	// EjectDVDs removes every DVD drive of the VM.
+	EjectDVDs(ctx context.Context, vmID string) error
+	// RegisterGuardTask stops the guard task if it runs, then registers it with
+	// the owner token in its description. It triggers at startup, on resume
+	// (Power-Troubleshooter 1) and every 5 minutes from ProofLockTTL on, with
+	// IgnoreNew, so a fresh guard never starts in the middle of the proof.
+	RegisterGuardTask(ctx context.Context, n Names, exe, owner string) error
+	StartGuardTask(ctx context.Context, n Names) error
+	// Guest runs one fixed script over PowerShell Direct with one JSON
+	// argument, and decodes its answer, capped at 64 KB, into out.
+	Guest(ctx context.Context, vmID string, cred Cred, s GuestScript, arg, out any) error
+
+	// The removal side. Each one is a no-op when the object is already gone.
+	UnregisterGuardTask(ctx context.Context, n Names, owner string) error
+	// RemoveVM turns the VM off, removes it, and deletes its disks that lie in
+	// vhdxDir. It lists the disks it left because they lie elsewhere.
+	RemoveVM(ctx context.Context, vmID, vhdxDir string) (left []string, err error)
+	RemoveSwitch(ctx context.Context, switchID string) error
+	RemoveNAT(ctx context.Context, n Names, sub netip.Prefix) error
+	// RemoveFirewall removes the rules of our group that carry the owner token.
+	RemoveFirewall(ctx context.Context, n Names, owner string) error
+	RemoveGuardian(ctx context.Context) error
+	RemoveHyperVAdmin(ctx context.Context, sid string) error
+}
+
+// Inventory is what Builder.Inventory reads.
+type Inventory struct {
+	VMs      []OwnedObject `json:"vms"`      // every VM named Names.VM
+	Switches []OwnedObject `json:"switches"` // every switch named Names.Switch
+	NATs     []LiveNAT     `json:"nats"`     // every NetNat on the host
+	Firewall []OwnedObject `json:"firewall"` // every rule of Names.FirewallGroup, by rule name
+	Task     *OwnedObject  `json:"task"`     // the guard task, nil when absent
+	Guardian bool          `json:"guardian"` // the UntrustedGuardian exists
+	VTPMVMs  []string      `json:"vtpmVms"`  // IDs of every VM with a vTPM
+	// HyperVAdmin is whether the user SID is in Hyper-V Administrators.
+	HyperVAdmin  bool     `json:"hypervAdmin"`
+	Enhanced     bool     `json:"enhancedSession"`
+	GCS          []string `json:"gcs"` // nil when not read
+	HostBuild    string   `json:"hostBuild"`
+	InstalledRAM uint64   `json:"installedRam"`
+	FreeRAM      uint64   `json:"freeRam"`
+}
+
+// OwnedObject is one host object with our name. Owner is the token its Notes
+// or description carry, "" for none. Ports lists the VMs with an adapter on a
+// switch.
+type OwnedObject struct {
+	ID    string   `json:"id"`
+	Owner string   `json:"owner"`
+	Ports []string `json:"ports,omitempty"`
 }
 
 // Prober opens the holes the proof needs and watches the host for arrivals.
@@ -80,6 +151,9 @@ type Prober interface {
 	AddAllow(ctx context.Context, vmID string, p netip.Prefix) error
 	RemoveAllow(ctx context.Context, vmID string, p netip.Prefix) error
 	HVListener(ctx context.Context, bindVMID, service string, register bool) (HVListener, error)
+	// LinkLocal is the host vNIC's IPv6 link-local address, without a zone.
+	// It exists only while ms_tcpip6 is bound.
+	LinkLocal(ctx context.Context, vnicIfIndex int) (netip.Addr, error)
 }
 
 // GuestProbe sends probes from inside the guest. Product: PowerShell Direct.

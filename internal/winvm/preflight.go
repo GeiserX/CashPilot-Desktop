@@ -413,7 +413,8 @@ type VMHostInput struct {
 	InstalledRAM uint64 // 0 means unknown
 	FreeRAM      uint64 // 0 means unknown
 	GuestMemory  uint64 // 0 means DefaultGuestMemory
-	// MinHostRAM is 0 for the product. Only a lab build lowers it.
+	// MinHostRAM is 0 for the product. Only a lab build lowers it: a product
+	// build ignores it.
 	MinHostRAM uint64
 	// GCS is the GuestCommunicationServices key names; nil means not read.
 	GCS []string
@@ -479,8 +480,9 @@ func CheckVMHost(in VMHostInput) VMHostReport {
 		add(CheckMetered, Yes, "")
 	}
 
+	// Only a lab build (winvmlab) may lower the floor.
 	minRAM := in.MinHostRAM
-	if minRAM == 0 {
+	if minRAM == 0 || !labBuild {
 		minRAM = MinHostRAM
 	}
 	guest := in.GuestMemory

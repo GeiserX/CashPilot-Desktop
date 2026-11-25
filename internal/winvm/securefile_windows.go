@@ -13,15 +13,19 @@ import (
 // SY is SYSTEM, BA is Administrators, BU is Users; FA is full access, FR is
 // read.
 const (
-	sddlAdminOnly = "D:P(A;;FA;;;SY)(A;;FA;;;BA)"
-	sddlUsersRead = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)"
+	sddlAdminOnly  = "D:P(A;;FA;;;SY)(A;;FA;;;BA)"
+	sddlUsersRead  = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)"
+	sddlUsersWrite = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FRFW;;;BU)"
 )
 
 // protect replaces the file's DACL with the access rule.
 func protect(path string, a fileAccess) error {
 	sddl := sddlAdminOnly
-	if a == usersRead {
+	switch a {
+	case usersRead:
 		sddl = sddlUsersRead
+	case usersWrite:
+		sddl = sddlUsersWrite
 	}
 	sd, err := windows.SecurityDescriptorFromString(sddl)
 	if err != nil {

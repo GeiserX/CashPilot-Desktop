@@ -18,6 +18,24 @@ func NewHost() Host {
 	return &psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx}
 }
 
+// NewBuilder is the real Hyper-V for setup, Repair and Remove VM.
+func NewBuilder() Builder {
+	return psBuilder{&psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx}}
+}
+
+// NewProber is the proof's Prober for instance n. Its canaries let in only
+// this exe, and pktmon's capture files go under the instance's data folder.
+func NewProber(n Names) Prober {
+	exe, _ := os.Executable()
+	return &psProber{
+		h:       &psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx},
+		n:       n,
+		program: exe,
+		hv:      openHVListener,
+		tmp:     filepath.Join(n.DataDir, "proof"),
+	}
+}
+
 // runPowerShell runs one fixed script in a hidden Windows PowerShell 5.1, found
 // by full path so PATH cannot point elsewhere. The script text goes in as
 // -EncodedCommand and never changes; the argument goes in through the

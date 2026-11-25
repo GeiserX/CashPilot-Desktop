@@ -19,6 +19,11 @@ const (
 	adminOnly fileAccess = iota
 	// usersRead: SYSTEM and Administrators read and write; Users read.
 	usersRead
+	// usersWrite: SYSTEM and Administrators full; Users read and write the
+	// contents but cannot change the access rule or delete the file. Only
+	// prefs.json has it: the one input the user may write, which can only
+	// keep the VM off.
+	usersWrite
 )
 
 // writeAtomic writes b to path through a new temporary file in the same

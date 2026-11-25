@@ -29,6 +29,7 @@ check:
 	@unformatted="$$(gofmt -l .)"; \
 	if [ -n "$$unformatted" ]; then echo "not gofmt'd:"; echo "$$unformatted"; exit 1; fi
 	go test -race ./...
+	go test -tags winvmlab ./internal/winvm/
 
 generate:
 	$(WAILS) generate module
