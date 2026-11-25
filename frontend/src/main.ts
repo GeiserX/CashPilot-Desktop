@@ -2708,7 +2708,7 @@ async function deployFromCard(
     }
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
   }
-  if (state?.services?.some((service) => service.slug === slug && seedFileVar(service))) return runWalletDeploy(slug, values, image, instances);
+  if (state?.services?.some((service) => service.slug === slug && seedFileVar(service))) return runWalletDeploy(slug, values);
   // A custom service has no credentials: it runs its saved definition.
   const custom = state?.services?.some((service) => service.slug === slug && service.custom);
   const outcome = await runRouteDeploy(slug, proxyId, image, instances, state?.route, {
@@ -2798,9 +2798,7 @@ function readWalletChoice(slug: string): WalletChoice {
   return { mode, phrase };
 }
 
-async function runWalletDeploy(
-  slug: string, values: Record<string, string>, image: string | null, instances: number | null,
-): Promise<DeployAnswer> {
+async function runWalletDeploy(slug: string, values: Record<string, string>): Promise<DeployAnswer> {
   const choice = readWalletChoice(slug);
   const refusal = walletChoiceRefusal(choice);
   if (refusal) return refusal;
@@ -2808,7 +2806,7 @@ async function runWalletDeploy(
   let result: WalletDeployResult;
   try {
     await SaveCredentials(slug, values);
-    result = await DeployServiceWallet(slug, values, image, instances, choice);
+    result = await DeployServiceWallet(slug, values, readWizardImage(slug), readWizardInstances(slug), choice);
   } finally {
     choice.phrase = "";
   }
