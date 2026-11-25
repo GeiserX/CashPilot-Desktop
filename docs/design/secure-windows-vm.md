@@ -1,6 +1,6 @@
 # ADR: one Secure Windows VM for desktop-only earners
 
-- **Status:** accepted. The lab ran on 2026-11-24 and 2026-11-25. Three questions wait for a host reboot or a host sleep (Q5 reboot part, Q8, Q16). Four results are not proven yet and are listed in §6.
+- **Status:** accepted. The lab ran on 2026-11-24 and 2026-11-25. Three questions wait for a host reboot or a host sleep (Q5 reboot part, Q8, Q16). Three lab results are not proven yet: Q3 (unbinding `ms_tcpip6` alone), Q4 (the locale-free drop-counter read) and Q13 (narrow listeners without registration). §6 lists them with every other open item.
 - **Scope:** Windows hosts only. Exactly one Hyper-V VM. Only for services that have no Docker or native path.
 - **Overrides:** `docs/research/vm-isolation.md:120` ("Do not build a VM orchestrator"), for this one case. The rule that CashPilot never runs inside a guest stays. `docs/design/managed-runtime.md` (a Linux VM for containers) is not affected.
 
@@ -31,7 +31,7 @@ The fence is proven red, then green, at install, before any earner exists.
 |---|---|---|
 | 1 | Who holds Hyper-V rights | Setup adds the user to Hyper-V Administrators (`S-1-5-32-578`). The lab showed what this gives (Q6). The setup text says it plainly. |
 | 2 | Enhanced Session | Off for the whole host. Setup records the old value. Removal restores it. |
-| 3 | Code signing | **Phase 2 ships unsigned.** We buy no certificate for now. The release job signs when the secrets exist and skips the step otherwise, so a missing certificate never fails the Windows release. Windows shows a SmartScreen warning on download, and the wizard and `docs/secure-vm.md` explain it. The admin prompt is not affected: it elevates `powershell.exe` (`runElevated`, `internal/runtime/firewall_windows.go`), so it shows "Windows PowerShell" with Microsoft as the verified publisher. It never says "Unknown publisher" for CashPilot. The cost of a certificate is still open. |
+| 3 | Code signing | **Phase 2 ships unsigned.** We buy no certificate for now. The release job signs when the secrets exist and skips the step otherwise, so a missing certificate never fails the Windows release. Windows shows a SmartScreen warning on download, and the wizard and `docs/secure-vm.md` explain it. The admin prompt is not affected: it elevates `powershell.exe` (`RunElevated`, `internal/runtime/firewall_windows.go`), so it shows "Windows PowerShell" with Microsoft as the verified publisher. It never says "Unknown publisher" for CashPilot. The cost of a certificate is still open. |
 | 4 | 90-day trial | Only as a small "testing only" link, never the default. |
 | 5 | Honeygain | Stays out of the VM. |
 | 6 | Minimum host | 12 GB RAM and 100 GB free on the chosen drive. |
@@ -76,7 +76,7 @@ The fence is proven red, then green, at install, before any earner exists.
 | Q14 | **Yes, for the VM's upload.** | With a cap of 10 Mbit/s, upload fell from 62 to 9.6 Mbit/s. Download was not capped (338, then 250 Mbit/s). A value of 0 removed the cap (56 Mbit/s). | The slider is labelled "upload limit". |
 | Q15 | **Yes, for Home and for Pro.** | With the network on, setup skipped OOBE and asked for no Microsoft account. It created two local accounts and logged on `earner` by itself. PowerShell Direct works. `Panther\unattend-original.xml` keeps both passwords in **plain text**. | Delete both Panther files. Machine settings go in `specialize`, not in `FirstLogonCommands`. |
 | Q16 | **Not run.** | The lab host offers S3 sleep only. Hibernation is off, and the hypervisor refuses hybrid sleep. | **Needs a host sleep.** |
-| Q17 | Markers found for both apps, and a red state seen for both. | Wipter: `%APPDATA%\wipter-app\secure-credentials.json` holds the key `com.wipter.auth.production:<user>` only when signed in. `logs\main.log` shows the connection state. PassiveApp: `%APPDATA%\passiveapp-desktop\data.json` holds `token` only when signed in. | `guest.windows.signin` gets these markers. The reader returns presence and state only. |
+| Q17 | Markers found for both apps, and a red state seen for both. | Wipter: `%APPDATA%\wipter-app\secure-credentials.json` holds the key `com.wipter.auth.production:<user>` only when signed in. `logs\main.log` shows the connection state. PassiveApp: `%APPDATA%\passiveapp-desktop\data.json` holds `token` only when signed in. | A later `guest.windows.signed_in` block gets these markers (2b). `signin` stays `console` or `none`. The reader returns presence and state only. |
 
 ---
 
