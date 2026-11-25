@@ -83,6 +83,7 @@ check("RULE 3: the wizard sends a custom service to its own card", card.includes
 check("RULE 3: the card has no credential input", !card.includes("data-wizard-env"), card);
 check("RULE 3: the card has no Image box", !card.includes("data-wizard-image"), card);
 check("RULE 3: the card has no save or collect button", !card.includes('data-wizard-action="save"') && !card.includes('data-wizard-action="collect"'), card);
+check("a custom Docker card has the preflight slot before Deploy", /<div[^>]*data-preflight-slug="custom-mine"[^>]*><\/div>[\s\S]*data-wizard-action="deploy"/.test(card), card);
 check("RULE 3: the card can deploy", card.includes('data-wizard-action="deploy" data-slug="custom-mine"'), card);
 const control = renderWizardServiceSetup(catalogService, {}, "box", null, "", null, 1);
 check("CONTROL: a catalog card does have credential inputs and an Image box", control.includes("data-wizard-env") && control.includes("data-wizard-image"), control);
