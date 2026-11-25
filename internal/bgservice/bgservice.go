@@ -52,3 +52,17 @@ type Agent interface {
 	// Status reports whether the agent is installed and currently running.
 	Status() (Status, error)
 }
+
+// Stopper is an Agent that can stop the helper it registered while it runs. The
+// uninstaller stops it before it removes the registration, because removing a
+// Windows Scheduled Task does not end the process it started.
+type Stopper interface {
+	Stop() error
+}
+
+// CommandReporter is an Agent that can read back which executable its
+// registration starts. It returns "" when nothing is registered. The app uses it
+// to keep the helper on the copy the user opens (helper_follow.go).
+type CommandReporter interface {
+	RegisteredCommand() (string, error)
+}

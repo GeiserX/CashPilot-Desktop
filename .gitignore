@@ -13,6 +13,13 @@ build/*
 !build/darwin/
 !build/darwin/Info.plist
 !build/darwin/Info.dev.plist
+# The Windows installer script. wails build writes wails_tools.nsh, the WebView2
+# bootstrapper under tmp/, icon.ico and the manifest next to it on every build.
+!build/windows/
+build/windows/*
+!build/windows/installer/
+build/windows/installer/*
+!build/windows/installer/project.nsi
 .DS_Store
 .omc/
 pnpm-lock.yaml

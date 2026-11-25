@@ -47,7 +47,10 @@ Full list, upgrade notes and known limits: [What's new in 1.0](docs/whats-new-1.
 
 ## Quick start
 
-1. Download the app for your platform from the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest). Docker or Podman must be installed; the wizard helps if it is missing.
+1. Download the app from the [latest release](https://github.com/GeiserX/CashPilot-Desktop/releases/latest). Docker or Podman must be installed; the wizard helps if it is missing.
+   - **CashPilot Desktop for Windows**: the installer, `CashPilot-Desktop-windows-amd64-setup.exe`. It installs for your account with no admin prompt and adds an uninstaller to Settings > Apps. The portable `CashPilot-Desktop-windows-amd64.exe` runs from any folder and installs nothing. Both use the same data.
+   - **CashPilot Desktop for macOS**: `CashPilot-Desktop-darwin-arm64.zip`, for Apple silicon.
+   - **CashPilot Desktop for Linux**: `CashPilot-Desktop-linux-amd64.tar.gz`, for x64.
 2. Launch the app and pick how it runs: **Run everything here** (it collects your earnings and shows the dashboard) or **Join my CashPilot** (paste the block from your CashPilot's Fleet page, Add a box; the app tests the connection before it saves anything).
 3. Browse the service catalog, deploy containers, and watch earnings from the dashboard or the tray.
 

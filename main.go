@@ -56,6 +56,12 @@ func main() {
 	// It never opens a window. --once boot|pass runs one routine, for the lab.
 	guard := fs.String(vmGuardFlag, "", "run the Secure VM's guard on this data folder; no window")
 	once := fs.String(vmGuardOnceFlag, "", "with --vm-guard: run one routine (boot or pass) and exit")
+	// --uninstall-cleanup is what the Windows uninstaller runs before it deletes the
+	// files: it removes the background helper, the RunOnce value and, when asked,
+	// the earning containers and the user's data (uninstall.go). No window.
+	uninstall := fs.Bool(uninstallFlag, false, "remove what the app set up on this computer, for the uninstaller; no window")
+	removeEarners := fs.Bool(removeEarnersFlag, false, "with --uninstall-cleanup: also stop and remove the earners CashPilot Desktop deployed")
+	deleteData := fs.Bool(deleteDataFlag, false, "with --uninstall-cleanup: also delete the settings, database, logs and saved keys")
 	parseErr := fs.Parse(os.Args[1:])
 
 	if *inspect != "" {
@@ -63,6 +69,10 @@ func main() {
 	}
 	if *guard != "" {
 		os.Exit(vmGuardMain(*guard, *once, parseErr, runVMGuardMain))
+	}
+
+	if *uninstall {
+		os.Exit(runUninstallMain(*removeEarners, *deleteData, parseErr))
 	}
 
 	if *daemon {

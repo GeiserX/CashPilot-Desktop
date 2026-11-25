@@ -119,6 +119,10 @@ type App struct {
 	// defense-in-depth against floods, mass enrollment (DB growth), and racing the
 	// enrollment window. Initialised in startFleetAPI.
 	fleetLimiter *fleetRateLimiter
+	// walletReveals limits RevealWalletSeed per service (wallet_app.go). Made on
+	// first use, under walletRevealMu.
+	walletRevealMu sync.Mutex
+	walletReveals  *fleetRateLimiter
 	// usageStop stops the usage sampler (usage_sampler.go) and waits for it.
 	usageStop func()
 	// stalls is the stall alerts by container name (stall_alerts.go), guarded by stallMu.
@@ -356,6 +360,8 @@ func (a *App) DomReady(ctx context.Context) {
 	wailsruntime.WindowShow(ctx)
 	PositionMainWindowOnPrimaryScreen()
 	InstallTrayIcon(a.trayIcon)
+	// A helper registered by another copy of the app follows this one (helper_follow.go).
+	go a.keepHelperOnThisCopy()
 }
 
 func (a *App) Shutdown(_ context.Context) {
@@ -599,6 +605,7 @@ type FleetState struct {
 	Devices       []store.FleetDevice `json:"devices"`
 	UIURL         string              `json:"uiUrl"`
 	LocalAPIURL   string              `json:"localApiUrl"`
+	Reach         FleetReach          `json:"reach"`
 	APIKey        string              `json:"apiKey"`
 	APIListening  bool                `json:"apiListening"`
 	WorkerSnippet string              `json:"workerSnippet"`
@@ -1125,7 +1132,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
 		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
 		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
-		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Podman cannot be fenced yet: there auto deploys unfenced and on refuses container deploys. Takes effect on the next deploy."},
+		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: isolationHelp(a.catalog.ListVisible())},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Leave EMPTY to run everything here (standalone), the default. To join a CashPilot, use How this computer runs above: it tests the connection before it saves anything. While joined, this computer reports what it runs and stops collecting earnings itself; your CashPilot collects them and shows them. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
@@ -1371,6 +1378,7 @@ func (a *App) GetFleetState() (FleetState, error) {
 		Devices:       devices,
 		UIURL:         uiURL,
 		LocalAPIURL:   localAPIURL,
+		Reach:         a.fleetReachNow(),
 		APIKey:        a.fleetKey,
 		APIListening:  a.fleetAPI != nil,
 		WorkerSnippet: fmt.Sprintf("CASHPILOT_UI_URL=%s\nCASHPILOT_API_KEY=%s\nCASHPILOT_WORKER_NAME=%s-worker\nCASHPILOT_WORKER_URL=http://<worker-lan-ip>:8081", uiURL, a.fleetKey, cfg.HostnamePrefix),
@@ -1467,14 +1475,31 @@ func (a *App) SaveCredentials(slug string, values map[string]string) error {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	return a.store.SaveCredentials(slug, values)
+	return a.saveCredentials(slug, values)
 }
 
+// saveCredentials stores values for slug. A wallet seed is never among them
+// (services.CredentialsToSave).
+func (a *App) saveCredentials(slug string, values map[string]string) error {
+	toSave, err := a.services.CredentialsToSave(slug, values)
+	if err != nil {
+		return err
+	}
+	return a.store.SaveCredentials(slug, toSave)
+}
+
+// GetCredentials is what the deploy form is filled from. A wallet seed is never
+// sent to the window: it lives in the node's data volume, and RevealWalletSeed is
+// the only way to see it.
 func (a *App) GetCredentials(slug string) (map[string]string, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
-	return a.store.GetCredentials(slug)
+	creds, err := a.store.GetCredentials(slug)
+	if err != nil {
+		return nil, err
+	}
+	return a.services.CredentialsForWindow(slug, creds), nil
 }
 
 // PreflightService reports what could stop a service earning on THIS machine,
@@ -1507,12 +1532,13 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	return a.deployService(slug, values, image, instances, false)
+	deployment, _, err := a.deployService(slug, values, image, instances, false, nil)
+	return deployment, err
 }
 
-func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool) (store.Deployment, error) {
+func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	a.retryCustom()
 	// A custom service deploys its saved definition; the form has no credentials for
@@ -1528,7 +1554,7 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	if len(creds) == 0 && !custom {
 		stored, err := a.store.GetCredentials(slug)
 		if err != nil {
-			return store.Deployment{}, err
+			return store.Deployment{}, nil, err
 		}
 		creds = stored
 	}
@@ -1537,23 +1563,23 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	// "Configured" badge for a service that cannot actually start.
 	if err := a.services.ValidateDeploy(slug, creds); err != nil {
 		a.emitError("deploy", err)
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	if image != nil {
 		if err := services.ValidateImage(*image); err != nil {
 			a.emitError("deploy", err)
-			return store.Deployment{}, err
+			return store.Deployment{}, nil, err
 		}
 	}
 	if len(values) > 0 {
-		if err := a.store.SaveCredentials(slug, values); err != nil {
-			return store.Deployment{}, err
+		if err := a.saveCredentials(slug, values); err != nil {
+			return store.Deployment{}, nil, err
 		}
 	}
-	deployment, err := a.services.DeployWith(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute})
+	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute, Wallet: wallet})
 	if err != nil {
 		a.emitError("deploy", err)
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	a.emitEvent("deployment:changed", deployment)
 	a.registerDevice(slug, creds)
@@ -1564,7 +1590,7 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	if a.collectors != nil && a.collectors.Supports(slug) {
 		go a.collectOne(a.ctx, slug)
 	}
-	return deployment, nil
+	return deployment, walletResult, nil
 }
 
 // DeployServiceRouted deploys slug through proxy proxyID from its first start, so it
@@ -1586,7 +1612,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 		return services.ProxiedResult{}, err
 	}
 	if len(values) > 0 {
-		if err := a.store.SaveCredentials(slug, values); err != nil {
+		if err := a.saveCredentials(slug, values); err != nil {
 			return services.ProxiedResult{}, err
 		}
 	}
@@ -1604,7 +1630,8 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 // the owner confirmed it runs from this machine's own IP from now on. Its routed copy
 // is removed first.
 func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	return a.deployService(slug, values, image, instances, true)
+	deployment, _, err := a.deployService(slug, values, image, instances, true, nil)
+	return deployment, err
 }
 
 func (a *App) StopService(slug string) error {

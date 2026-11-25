@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -103,6 +104,9 @@ type DeploySpec struct {
 	// started, and a container already under the name refuses it instead of being
 	// replaced. Every other deploy check applies as on a deploy.
 	CreateOnly bool
+	// Wallet is what the deploy asks of the service's wallet seed file (seedfile.go),
+	// for a service whose catalog entry has one. nil keeps the wallet the node has.
+	Wallet *WalletRequest
 }
 
 type ContainerInfo struct {
@@ -125,6 +129,10 @@ type ContainerInfo struct {
 	MemoryKnown bool    `json:"-"`
 	NetRxBytes  *uint64 `json:"-"`
 	NetTxBytes  *uint64 `json:"-"`
+	// Wallet is what a deploy did with the service's wallet seed file, nil for a
+	// service with none. It can hold a new wallet's phrase, so it never travels
+	// with the rest of this struct: the caller hands it on once and drops it.
+	Wallet *WalletResult `json:"-"`
 	// ProxyID is set on a proxied copy (ProxiedStatus) that the usage graphs and
 	// the stall check read beside the service's own copies: its counters are its
 	// tunnel's, and ContainerID is the tunnel's, the container they belong to.
@@ -265,7 +273,7 @@ func (p *DockerProvider) Status(ctx context.Context) Status {
 	}
 }
 
-func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress func(string)) (ContainerInfo, error) {
+func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress func(string)) (_ ContainerInfo, retErr error) {
 	cli, err := dockerClient()
 	if err != nil {
 		return ContainerInfo{}, err
@@ -416,6 +424,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	aside := name + setAsideSuffix
 	setAside, wasRunning := false, false
+	var wallet *WalletResult
+	walletSettled := false
+	// A new or pasted wallet this deploy wrote is taken back out when the deploy
+	// fails after it: the owner was never shown it (WalletResult.Undo).
+	defer func() { retErr = wallet.Undo(retErr) }()
 	if inspectErr == nil {
 		if live.Container.Config != nil {
 			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
@@ -445,6 +458,12 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 				progress(fmt.Sprintf("Keeping %s at %s, where its data already is (the catalog asked for %s).", k.Kept, k.Target, k.Requested))
 			}
 		}
+		// The wallet goes into the volume the replacement will mount, and before the
+		// running node is stopped: a wallet that cannot be settled costs nothing.
+		if wallet, err = p.settleWallet(ctx, cli, spec, image, name, hostConfig.Mounts, configEnv(live.Container), progress); err != nil {
+			return ContainerInfo{}, err
+		}
+		walletSettled = true
 		// Stop it the way Stop does, with its own grace period: a storage node gets
 		// the chance to flush (Storj asks for 300 seconds for exactly that). The stop
 		// also frees its published ports for the replacement. One that still runs
@@ -507,6 +526,12 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		return refusedReplacement{err: err, restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name)}
 	}
 
+	if !walletSettled {
+		// Nothing runs under the name, so nothing was set aside either.
+		if wallet, err = p.settleWallet(ctx, cli, spec, image, name, hostConfig.Mounts, nil, progress); err != nil {
+			return ContainerInfo{}, err
+		}
+	}
 	if progress != nil {
 		progress("Creating " + name)
 	}
@@ -564,7 +589,26 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		Image:       image,
 		Status:      "running",
 		Instance:    max(spec.Instance, 1),
+		Wallet:      wallet,
 	}, nil
+}
+
+// settleWallet is prepareWallet for a deploy: only the first copy of a service has
+// a wallet, and a restore's create (CreateOnly) of one is refused.
+// liveEnv is the env of the container being replaced, nil when there is none.
+func (p *DockerProvider) settleWallet(ctx context.Context, cli *client.Client, spec DeploySpec, image, name string, mounts []mount.Mount, liveEnv []string, progress func(string)) (*WalletResult, error) {
+	item, ok := spec.Service.SeedVar()
+	if !ok || spec.Instance > 1 {
+		return nil, nil
+	}
+	if spec.CreateOnly {
+		// A restore writes the backup's data after the create, so no wallet step
+		// can run here, and a node started on a backup without the file would run no
+		// wallet. RestoreTargets refuses Sia today (its storage is a host folder);
+		// this keeps any later restore path from starting one unchecked.
+		return nil, fmt.Errorf("%s keeps its wallet seed in a file in its data volume, which a restore from the app does not check, so nothing was restored. Use the command line steps in the backup guide", spec.Service.Name)
+	}
+	return prepareWallet(ctx, cli, spec.Service, image, name, mounts, spec.Wallet, seedEnvValue(liveEnv, item.Key), progress)
 }
 
 func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSeconds int) error {
@@ -1307,6 +1351,12 @@ func buildEnv(svc catalog.Service, overrides map[string]string) map[string]strin
 	env := make(map[string]string)
 	declared := make(map[string]bool, len(svc.Docker.Env))
 	for _, item := range svc.Docker.Env {
+		// A wallet seed lives in its file (seedfile.go) and never in a container's
+		// environment, whoever passes it: a stored value from before the file, an
+		// older caller, a restore or a proxied copy.
+		if item.SeedFile != nil {
+			continue
+		}
 		declared[item.Key] = true
 		if item.Default != "" {
 			env[item.Key] = item.Default
@@ -1345,16 +1395,14 @@ func buildPorts(raw []string) (network.PortSet, network.PortMap, error) {
 	ports := network.PortSet{}
 	bindings := network.PortMap{}
 	for _, mapping := range raw {
-		// The schema is ports: ["host:container"], so anything else is a typo in a
-		// service definition. Skipping it used to publish no port and start the
-		// container anyway, which looks like a working deploy until someone tries
-		// to reach the service.
-		parts := strings.Split(mapping, ":")
-		if len(parts) != 2 {
-			return nil, nil, fmt.Errorf("invalid port mapping %q: want \"host:container\"", mapping)
+		// The schema is ports: ["host:container"] or ["ip:host:container"], so
+		// anything else is a typo in a service definition. Skipping it used to
+		// publish no port and start the container anyway, which looks like a
+		// working deploy until someone tries to reach the service.
+		hostIP, host, containerPort, ok := splitPortMapping(mapping)
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid port mapping %q: want \"host:container\" or \"ip:host:container\"", mapping)
 		}
-		host := parts[0]
-		containerPort := parts[1]
 		if !strings.Contains(containerPort, "/") {
 			containerPort += "/tcp"
 		}
@@ -1365,10 +1413,33 @@ func buildPorts(raw []string) (network.PortSet, network.PortMap, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("invalid port mapping %q: %w", mapping, err)
 		}
+		binding := network.PortBinding{HostPort: host}
+		if hostIP != "" {
+			// An address in front binds the port to it alone: Sia's dashboard can
+			// spend the wallet, so the catalog publishes it on 127.0.0.1 only.
+			addr, err := netip.ParseAddr(hostIP)
+			if err != nil {
+				return nil, nil, fmt.Errorf("invalid port mapping %q: %q is not an IP address", mapping, hostIP)
+			}
+			binding.HostIP = addr
+		}
 		ports[port] = struct{}{}
-		bindings[port] = []network.PortBinding{{HostPort: host}}
+		bindings[port] = append(bindings[port], binding)
 	}
 	return ports, bindings, nil
+}
+
+// splitPortMapping splits a catalog port, "host:container" or "ip:host:container"
+// (an IPv4 address: an IPv6 one would need brackets the schema does not use).
+func splitPortMapping(mapping string) (hostIP, host, containerPort string, ok bool) {
+	parts := strings.Split(mapping, ":")
+	switch len(parts) {
+	case 2:
+		return "", parts[0], parts[1], parts[1] != ""
+	case 3:
+		return parts[0], parts[1], parts[2], parts[0] != "" && parts[2] != ""
+	}
+	return "", "", "", false
 }
 
 // buildServicePorts is everything the container publishes: the static ports, the
