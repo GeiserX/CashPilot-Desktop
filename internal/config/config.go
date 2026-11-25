@@ -494,7 +494,7 @@ func refuseKeyRegen(err error, goos string) bool {
 }
 
 func MasterKey(appDir string) ([]byte, error) {
-	encoded, err := keyring.Get(keyringService, keyringUser)
+	encoded, err := credentials.Get(keyringService, keyringUser)
 	if err == nil && encoded != "" {
 		return base64.StdEncoding.DecodeString(encoded)
 	}
@@ -503,7 +503,7 @@ func MasterKey(appDir string) ([]byte, error) {
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		decoded, decodeErr := base64.StdEncoding.DecodeString(string(raw))
 		if decodeErr == nil {
-			_ = keyring.Set(keyringService, keyringUser, string(raw))
+			_ = credentials.Set(keyringService, keyringUser, string(raw))
 			return decoded, nil
 		}
 	}
@@ -517,7 +517,7 @@ func MasterKey(appDir string) ([]byte, error) {
 		return nil, err
 	}
 	encoded = base64.StdEncoding.EncodeToString(key)
-	if err := keyring.Set(keyringService, keyringUser, encoded); err != nil {
+	if err := credentials.Set(keyringService, keyringUser, encoded); err != nil {
 		if err := os.WriteFile(keyPath, []byte(encoded), 0o600); err != nil {
 			return nil, err
 		}
@@ -532,14 +532,14 @@ func MasterKey(appDir string) ([]byte, error) {
 // can generate a fresh token or migrate a legacy config.json value and persist it via
 // SetFleetKey.
 func FleetKey(appDir string) (string, error) {
-	value, err := keyring.Get(keyringService, keyringUserFleet)
+	value, err := credentials.Get(keyringService, keyringUserFleet)
 	if err == nil && value != "" {
 		return value, nil
 	}
 	keyPath := filepath.Join(appDir, ".fleet_api_key")
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		value = string(raw)
-		_ = keyring.Set(keyringService, keyringUserFleet, value)
+		_ = credentials.Set(keyringService, keyringUserFleet, value)
 		return value, nil
 	}
 
@@ -562,7 +562,7 @@ func LegacyEnrolmentKey(appDir string) (string, error) {
 	if fileErr == nil {
 		return strings.TrimSpace(string(raw)), nil
 	}
-	value, err := keyring.Get(keyringService, keyringUserUpstreamEnrol)
+	value, err := credentials.Get(keyringService, keyringUserUpstreamEnrol)
 	if refuseKeyRegen(err, runtimeGOOS) {
 		return "", err
 	}
@@ -576,14 +576,14 @@ func LegacyEnrolmentKey(appDir string) (string, error) {
 // difference matters: treating a locked keychain as "not stored" would silently
 // re-enrol the machine and orphan its existing worker identity.
 func readSecret(appDir, keyringUser, fileName string) (string, error) {
-	value, err := keyring.Get(keyringService, keyringUser)
+	value, err := credentials.Get(keyringService, keyringUser)
 	if err == nil && value != "" {
 		return value, nil
 	}
 	keyPath := filepath.Join(appDir, fileName)
 	if raw, readErr := os.ReadFile(keyPath); readErr == nil && len(raw) > 0 {
 		value = strings.TrimSpace(string(raw))
-		_ = keyring.Set(keyringService, keyringUser, value)
+		_ = credentials.Set(keyringService, keyringUser, value)
 		return value, nil
 	}
 	if refuseKeyRegen(err, runtimeGOOS) {
@@ -607,7 +607,7 @@ func readSecret(appDir, keyringUser, fileName string) (string, error) {
 // phone.
 func writeSecret(appDir, keyringUser, fileName, value string) error {
 	keyPath := filepath.Join(appDir, fileName)
-	if err := keyring.Set(keyringService, keyringUser, value); err != nil {
+	if err := credentials.Set(keyringService, keyringUser, value); err != nil {
 		return os.WriteFile(keyPath, []byte(value), 0o600)
 	}
 	dropFallback(keyPath)

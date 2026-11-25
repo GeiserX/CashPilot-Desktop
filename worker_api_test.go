@@ -78,6 +78,9 @@ func call(t *testing.T, app *appUnderTest, method, path, key string, body any) *
 	}
 	w := httptest.NewRecorder()
 	app.workerAPIMux().ServeHTTP(w, req)
+	// Let the guard finish any asynchronous resync before a test changes the
+	// switch or restores the listener and firewall fakes.
+	app.workerAPI.guardResync.Wait()
 	return w
 }
 

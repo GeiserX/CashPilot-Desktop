@@ -16,7 +16,6 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
-	"github.com/zalando/go-keyring"
 )
 
 // newPayloadTestApp builds a minimal App over a temp config + store, seeded with
@@ -24,7 +23,7 @@ import (
 // also supplies the keyring mock via TestMain.
 func newPayloadTestApp(t *testing.T, deployments []store.Deployment) *App {
 	t.Helper()
-	keyring.MockInit()
+	testKeyring.reset()
 	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
 	cfg, err := config.NewManager()
 	if err != nil {

@@ -16,7 +16,6 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
-	"github.com/zalando/go-keyring"
 )
 
 func reviewWindow(t *testing.T, helper *appUnderTest, url string) *App {
@@ -100,8 +99,8 @@ func TestRound7SameServerRejoinAllRoutes(t *testing.T) {
 				}
 			}
 			if unreadable {
-				keyring.MockInitWithError(errors.New("test keychain inaccessible"))
-				t.Cleanup(keyring.MockInit)
+				testKeyring.fail(errors.New("test keychain inaccessible"))
+				t.Cleanup(testKeyring.reset)
 				if old, next := status(testWorkerKey), status(newKey); old != 503 || next != 503 {
 					t.Errorf("with key store also unavailable: previous/current %d/%d, want 503/503", old, next)
 				}
@@ -236,8 +235,8 @@ func TestRound7ExitAtReplacementPromptThenLeave(t *testing.T) {
 	useAddrs(t)
 	app := joinedApp(t)
 	// A separate test process cannot see the mock keychain.
-	keyring.MockInitWithError(errors.New("credential store unavailable"))
-	t.Cleanup(keyring.MockInit)
+	testKeyring.fail(errors.New("credential store unavailable"))
+	t.Cleanup(testKeyring.reset)
 	saveTestWorkerKey(t, app.App, testWorkerKey)
 	if err := setDesiredFirewall(t, app.App, round8OldProgram, false); err != nil {
 		t.Fatal(err)
@@ -269,20 +268,20 @@ func TestRound7RecoveringKeychainKeepsRejoinKey(t *testing.T) {
 	}))
 	defer server.Close()
 	window := reviewWindow(t, helper, server.URL)
-	oldCredential, err := keyring.Get("CashPilot Desktop", "upstream-pairing")
+	oldCredential, err := testKeyring.Get("CashPilot Desktop", "upstream-pairing")
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyring.MockInitWithError(errors.New("credential store temporarily locked"))
-	t.Cleanup(keyring.MockInit)
+	testKeyring.fail(errors.New("credential store temporarily locked"))
+	t.Cleanup(testKeyring.reset)
 	reviewRejoin(t, window, server.URL)
 	status := func(key string) int { return call(t, helper, "GET", "/api/status", key, nil).Code }
 	if old, next := status(testWorkerKey), status(newKey); old != 401 || next != 200 {
 		t.Fatalf("while using fallback: previous/current %d/%d, want 401/200", old, next)
 	}
 	// The mock resets its map when unlocked, so put back the unchanged credential.
-	keyring.MockInit()
-	if err := keyring.Set("CashPilot Desktop", "upstream-pairing", oldCredential); err != nil {
+	testKeyring.reset()
+	if err := testKeyring.Set("CashPilot Desktop", "upstream-pairing", oldCredential); err != nil {
 		t.Fatal(err)
 	}
 	if old, next := status(testWorkerKey), status(newKey); old != 401 || next != 200 {

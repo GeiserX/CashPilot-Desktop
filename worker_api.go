@@ -74,6 +74,8 @@ type workerAPIState struct {
 	cancel  context.CancelFunc
 	done    chan struct{}
 	limiter *fleetRateLimiter
+
+	guardResync sync.WaitGroup
 }
 
 // ServerCommand is the last command the server sent, for the dashboard.
@@ -409,7 +411,8 @@ func (a *App) guard(next http.HandlerFunc) http.HandlerFunc {
 		// The other process may have left the server or turned the switch off.
 		a.refreshConfig()
 		if !a.workerAPIWanted() {
-			go a.syncWorkerAPI()
+			// A resync can shut down the server handling this request.
+			a.workerAPI.guardResync.Go(a.syncWorkerAPI)
 			detail(w, http.StatusServiceUnavailable, "This computer does not take commands from a CashPilot right now")
 			return
 		}

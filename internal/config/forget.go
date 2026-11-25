@@ -24,7 +24,7 @@ var keychainEntries = []string{keyringUser, keyringUserFleet, keyringUserUpstrea
 func DeleteKeychainSecrets() error {
 	var errs []error
 	for _, user := range keychainEntries {
-		if err := keyring.Delete(keyringService, user); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+		if err := credentials.Delete(keyringService, user); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 			errs = append(errs, fmt.Errorf("%s: %w", user, err))
 		}
 	}

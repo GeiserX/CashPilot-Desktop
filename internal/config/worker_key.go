@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/zalando/go-keyring"
 )
 
 const workerKeyFile = ".upstream_worker_key"
@@ -27,7 +25,7 @@ func LegacyWorkerKey(appDir, serverURL string) (string, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}
-	raw, storeErr := keyring.Get(keyringService, keyringUserUpstreamWorker)
+	raw, storeErr := credentials.Get(keyringService, keyringUserUpstreamWorker)
 	fallback, fileErr := os.ReadFile(path)
 	// The old writer used a fallback when the keychain kept an earlier key.
 	for _, value := range []string{string(fallback), raw} {

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/filelock"
-	"github.com/zalando/go-keyring"
 )
 
 // Pairing is the window's current choice. An empty server means Lead. The
@@ -103,7 +102,7 @@ func (m *Manager) PublishPairing(previous, serverURL string, removeFirewall bool
 	// Retire the pre-revision credentials after a successful migration or Leave.
 	if previous == "" {
 		for _, user := range []string{keyringUserUpstreamEnrol, keyringUserUpstreamWorker} {
-			_ = keyring.Delete(keyringService, user)
+			_ = credentials.Delete(keyringService, user)
 		}
 		for _, name := range []string{workerKeyFile, workerKeyFile + ".generation", ".upstream_enrolment_key", "server-commands-firewall.json"} {
 			dropFallback(filepath.Join(m.appDir, name))
@@ -165,7 +164,7 @@ func (m *Manager) credentialSlot(p Pairing) (user, path string) {
 func (m *Manager) savePairingCredential(p Pairing, key PairingCredential) error {
 	user, path := m.credentialSlot(p)
 	raw, _ := json.Marshal(key)
-	if err := keyring.Set(keyringService, user, string(raw)); err == nil {
+	if err := credentials.Set(keyringService, user, string(raw)); err == nil {
 		dropFallback(path)
 		return nil
 	}
@@ -174,7 +173,7 @@ func (m *Manager) savePairingCredential(p Pairing, key PairingCredential) error 
 
 func (m *Manager) clearPairingCredential(p Pairing) {
 	user, path := m.credentialSlot(p)
-	_ = keyring.Delete(keyringService, user)
+	_ = credentials.Delete(keyringService, user)
 	dropFallback(path)
 }
 
@@ -188,7 +187,7 @@ func (m *Manager) ReadPairingCredential(promote bool) (Pairing, PairingCredentia
 		return p, key, err
 	}
 	user, path := m.credentialSlot(p)
-	if raw, err := keyring.Get(keyringService, user); err == nil &&
+	if raw, err := credentials.Get(keyringService, user); err == nil &&
 		json.Unmarshal([]byte(raw), &key) == nil && key.Revision == p.Revision {
 		return p, key, nil
 	}
@@ -200,7 +199,7 @@ func (m *Manager) ReadPairingCredential(promote bool) (Pairing, PairingCredentia
 		}
 		return p, PairingCredential{}, errors.New("the key for the current pairing is unavailable")
 	}
-	if promote && !p.Suspended && keyring.Set(keyringService, user, string(raw)) == nil {
+	if promote && !p.Suspended && credentials.Set(keyringService, user, string(raw)) == nil {
 		dropFallback(path)
 	}
 	return p, key, nil
