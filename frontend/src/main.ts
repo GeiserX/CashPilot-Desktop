@@ -92,7 +92,8 @@ import { renderFleetSection } from "./render/fleet";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
 import { bootWhenReady, renderFailed, renderStarting, wireBootRetry } from "./render/boot";
-import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, type Mode, type ModeCardView } from "./render/mode";
+import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, renderWelcome as welcomePanel, type Mode, type ModeCardView } from "./render/mode";
+import { gatePage, withChrome } from "./render/chrome";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
@@ -227,7 +228,7 @@ async function boot() {
       wireBackendEvents();
     },
     showStarting: () => {
-      root.innerHTML = renderStarting(titlebar());
+      root.innerHTML = withChrome(renderStarting(""));
       wireChrome();
     },
     showFailed: renderError,
@@ -388,12 +389,7 @@ function renderOnboarding(current: AppState) {
   // least one catalog app here. Native-only is never called ready: the card says
   // most apps need Docker and points at its guide (render/onboarding.ts).
   const card = runtimeCard(runtime, {checking});
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel gate-panel-wide">
+  root.innerHTML = gatePage(gateBar(), `
           ${renderGateSteps(firstRunSteps(firstRunPath), "runtime")}
           <h1 class="gate-title">Put your idle machine to work</h1>
           <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
@@ -404,10 +400,7 @@ function renderOnboarding(current: AppState) {
           </div>
           <div id="docker-guide"></div>
           <div id="install-guides" class="guide-grid"></div>
-        </section>
-      </main>
-    </div>
-  `;
+  `, {wide: true});
   wireChrome();
   document.querySelector("#continue-btn")?.addEventListener("click", async () => {
     await CompleteOnboarding();
@@ -477,8 +470,7 @@ async function firstRunHostCheck() {
 // elsewhere the install guides. The runtime status in the top bar opens it.
 function renderRuntimeView(current: AppState) {
   const card = runtimeCard(current.runtime);
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("runtime", current)}
@@ -491,7 +483,7 @@ function renderRuntimeView(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -533,18 +525,10 @@ function gateBar() {
 
 // First run, step 2: Run everything here, or Join my CashPilot.
 function renderModeStep() {
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel gate-panel-wide">
-          ${renderGateSteps(firstRunSteps(firstRunPath), "mode")}
-          ${renderModeChoice()}
-        </section>
-      </main>
-    </div>
-  `;
+  root.innerHTML = gatePage(gateBar(), `
+    ${renderGateSteps(firstRunSteps(firstRunPath), "mode")}
+    ${renderModeChoice()}
+  `, {wide: true});
   wireChrome();
   document.querySelectorAll<HTMLButtonElement>("[data-mode-choice]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -570,19 +554,11 @@ function renderModeStep() {
 
 // First run, the join step of Join my CashPilot.
 function renderJoinStep() {
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel gate-panel-wide">
-          ${renderGateSteps(firstRunSteps(firstRunPath), "join")}
-          <h1 class="gate-title">Join my CashPilot</h1>
-          ${renderJoinForm()}
-        </section>
-      </main>
-    </div>
-  `;
+  root.innerHTML = gatePage(gateBar(), `
+    ${renderGateSteps(firstRunSteps(firstRunPath), "join")}
+    <h1 class="gate-title">Join my CashPilot</h1>
+    ${renderJoinForm()}
+  `, {wide: true});
   wireChrome();
   wireJoinForm(document, () => {
     firstRunPath = "";
@@ -632,22 +608,10 @@ function wireJoinForm(scope: ParentNode, onBack: () => void, onContinue: () => v
 }
 
 function renderWelcome() {
-  root.innerHTML = `
-    ${titlebar()}
-    <div class="gate">
-      ${gateBar()}
-      <main class="gate-main">
-        <section class="gate-panel">
-          ${renderGateSteps(firstRunSteps(firstRunPath), "welcome")}
-          <h1 class="gate-title">Welcome to CashPilot</h1>
-          <p class="gate-lede">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
-          <div class="gate-actions">
-            <button class="btn btn-primary btn-lg" id="get-started">Get started</button>
-          </div>
-        </section>
-      </main>
-    </div>
-  `;
+  root.innerHTML = gatePage(gateBar(), `
+    ${renderGateSteps(firstRunSteps(firstRunPath), "welcome")}
+    ${welcomePanel()}
+  `);
   wireChrome();
   document.querySelector("#get-started")?.addEventListener("click", () => {
     onboardingStep = "mode";
@@ -725,8 +689,7 @@ function renderDashboard(current: AppState) {
     isolation: current.isolation,
   }).concat(stallItems(current.stalls)), current.reminders);
 
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("dashboard", current)}
@@ -816,7 +779,7 @@ function renderDashboard(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -1082,8 +1045,7 @@ function renderCatalog(current: AppState) {
   // The open editor's typed values live only in the DOM. Search, the filter tabs and
   // any refresh redraw this page, so the live form is put back over the redrawn copy.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-custom-editor]");
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("catalog", current)}
@@ -1106,7 +1068,7 @@ function renderCatalog(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -1272,8 +1234,7 @@ function renderImportIfShown() {
 
 function renderImport(current: AppState) {
   const keep = renderedImportPreview === importPreview ? readImportForm() : null;
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("settings", current)}
@@ -1286,7 +1247,7 @@ function renderImport(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   renderedImportPreview = importPreview;
   if (keep) restoreImportForm(keep);
   wireChrome();
@@ -1452,8 +1413,7 @@ async function renderSettings(current: AppState) {
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
   // bring the withdrawn row back.
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("settings", current)}
@@ -1504,7 +1464,7 @@ async function renderSettings(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -1784,8 +1744,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   }
   if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
   activityShown = data;
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("activity", current)}
@@ -1796,7 +1755,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -1908,8 +1867,7 @@ async function renderFleet(current: AppState) {
   proxiesState = proxies;
   // The open proxy editor's typed values live only in the DOM; see keepsLiveProxyEditor.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("fleet", current)}
@@ -1960,7 +1918,7 @@ async function renderFleet(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -2157,8 +2115,7 @@ function renderSetupWizard(current: AppState) {
   }
   const filtered = services.filter((svc) => wizardCategories.includes(svc.category));
   const selectedServices = services.filter((svc) => wizardSelected.includes(svc.slug));
-  root.innerHTML = `
-    ${titlebar()}
+  root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("wizard", current)}
@@ -2180,7 +2137,7 @@ function renderSetupWizard(current: AppState) {
         ${pageFoot()}
       </div>
     </div>
-  `;
+  `);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
@@ -3005,22 +2962,9 @@ function showInfoToast(payload: {scope?: string; message?: string} | string) {
 }
 
 function renderError(error: unknown) {
-  root.innerHTML = renderFailed(titlebar(), error);
+  root.innerHTML = withChrome(renderFailed("", error));
   wireChrome();
   wireBootRetry(root, () => void boot());
-}
-
-function titlebar() {
-  return `
-    <div class="titlebar">
-      <div class="traffic-lights">
-        <button class="traffic close" data-window-action="close" aria-label="Close"></button>
-        <button class="traffic minimise" data-window-action="minimise" aria-label="Minimise"></button>
-        <button class="traffic maximise" data-window-action="maximise" aria-label="Maximise"></button>
-      </div>
-      <span>CashPilot Desktop</span>
-    </div>
-  `;
 }
 
 function wireChrome() {

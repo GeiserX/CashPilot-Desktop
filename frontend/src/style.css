@@ -68,6 +68,8 @@
   --accent: #e2e5e9;
   --accent-hover: #ffffff;
   --accent-soft: rgba(226, 229, 233, 0.07);
+  /* The keyboard focus ring: white, 2px, 2px clear of the control. */
+  --focus-ring: #ffffff;
 
   --success: #46b37f;
   --success-strong: #1f7a4f;
@@ -123,7 +125,7 @@ h3 { font-size: var(--fs-3); }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: 0.4; }
-:focus-visible { outline: 2px solid var(--text-primary); outline-offset: 1px; }
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 a { color: var(--text-primary); text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px; }
 a:hover { color: var(--accent-hover); text-decoration-color: currentColor; }
@@ -187,7 +189,15 @@ code { color: var(--text-primary); }
   --wails-draggable: no-drag;
   width: 12px; height: 12px;
   padding: 0; border: 0; border-radius: 50%;
+  display: inline-grid; place-items: center;
+  color: rgba(0, 0, 0, 0.7); font-size: 11px; font-weight: 700; line-height: 1;
 }
+/* The ring sits clear of the coloured dot, and the dot shows what it does, so
+   a keyboard user sees "Close" before pressing Enter on it. */
+.traffic:focus-visible { outline-offset: 3px; }
+.traffic-lights:hover .traffic.close::before, .traffic.close:focus-visible::before { content: "\00D7"; }
+.traffic-lights:hover .traffic.minimise::before, .traffic.minimise:focus-visible::before { content: "\2212"; }
+.traffic-lights:hover .traffic.maximise::before, .traffic.maximise:focus-visible::before { content: "+"; }
 .traffic.close { background: #ff5f57; }
 .traffic.minimise { background: #febc2e; }
 .traffic.maximise { background: #28c840; }
@@ -615,7 +625,7 @@ input:not([type="checkbox"]):not([type="radio"]), select, textarea {
 }
 textarea { height: auto; padding: 6px 8px; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--text-secondary); }
-input:focus-visible, select:focus-visible { outline: 2px solid var(--text-primary); outline-offset: -1px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -1px; }
 input::placeholder { color: var(--text-muted); opacity: 0.8; }
 input[type="checkbox"] { accent-color: var(--text-primary); }
 .currency-select { width: auto; height: 24px; font-size: var(--fs-1); }
