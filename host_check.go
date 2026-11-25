@@ -17,9 +17,10 @@ import (
 // the runtime status read with them, whose Reason says why Docker is or is not
 // ready, and the Docker checklist derived from both (Windows only).
 type HostCheckResult struct {
-	Facts   winvm.HostFacts `json:"facts"`
-	Runtime runtime.Status  `json:"runtime"`
-	Steps   []winvm.Step    `json:"steps"`
+	Facts         winvm.HostFacts `json:"facts"`
+	Runtime       runtime.Status  `json:"runtime"`
+	Steps         []winvm.Step    `json:"steps"`
+	RuntimeNotice *Notification   `json:"runtimeNotice"`
 	// SetupFinished is true when this reading ended the guided setup: this PC's
 	// own Docker Desktop runs Linux containers (winvm.LocalLinuxEngine), and the
 	// journal and RunOnce value are gone.
@@ -49,7 +50,10 @@ func (a *App) HostCheck() (HostCheckResult, error) {
 			finished = false
 		}
 	}
-	return HostCheckResult{Facts: facts, Runtime: status, Steps: steps, SetupFinished: finished}, nil
+	return HostCheckResult{
+		Facts: facts, Runtime: status, Steps: steps,
+		RuntimeNotice: runtimeNotification(status), SetupFinished: finished,
+	}, nil
 }
 
 // dockerSteps is the checklist for one reading. The engine answering proves the

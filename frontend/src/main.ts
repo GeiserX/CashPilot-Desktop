@@ -120,7 +120,7 @@ import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
-import { guidesBesideChecklist, loadRuntimePage } from "./render/runtimepage";
+import { guidesBesideChecklist, loadRuntimePage, readRuntimeSnapshot, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
 import { renderRuntimeSettings, runtimeProviderNote } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
@@ -134,7 +134,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
+import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, NotificationItem, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -286,7 +286,7 @@ async function hostCheck() {
 }
 
 // What the checklist needs from Go. skip and checked differ per screen.
-function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked">): DockerGuideDeps {
+function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked"> & Partial<Pick<DockerGuideDeps, "hostCheck">>): DockerGuideDeps {
   return {
     hostCheck,
     checkRuntime: CheckRuntime,
@@ -499,15 +499,25 @@ function renderRuntimeView(current: AppState) {
   maybeResetScroll();
   const holder = document.querySelector<HTMLDivElement>("#docker-guide");
   const guides = current.guides || [];
-  const showRuntime = (runtime: RuntimeStatus) => {
-    if (state) state = {...state, runtime};
+  const runtimeViewCurrent = () => activeView === "runtime" && !!holder?.isConnected;
+  const showRuntime = (runtime: RuntimeStatus, notice: NotificationItem | null) => {
+    if (!state || !runtimeViewCurrent()) return;
+    state = { ...state, ...withRuntimeReading(state, runtime, notice) };
     const slot = document.querySelector("#runtime-card-slot");
-    if (slot) slot.innerHTML = runtimeCard(runtime).html;
+    if (slot) slot.innerHTML = runtimeCard(state.runtime).html;
+    const button = document.querySelector<HTMLButtonElement>(".topbar-runtime");
+    if (button) {
+      button.classList.toggle("text-warn", !runtimeUsable(state.runtime));
+      button.title = state.runtime.message;
+      button.innerHTML = topbarRuntimeLabel(state.runtime);
+    }
+    const alerts = document.querySelector(".notification-menu");
+    if (alerts) alerts.innerHTML = renderAlerts(state.notifications);
   };
   // The checklist reads the PC when it opens; outside Windows the reading says so
   // and the install guides stay the whole page (render/runtimepage.ts).
   void loadRuntimePage(hostCheck, guides, {
-    current: () => activeView === "runtime" && !!holder?.isConnected,
+    current: runtimeViewCurrent,
     setRuntime: showRuntime,
     showGuides: renderGuides,
     showHolder: (html) => {
@@ -518,11 +528,16 @@ function renderRuntimeView(current: AppState) {
     showChecklist: (result) => {
       if (!holder) return;
       dockerGuide = new DockerGuide(holder, guideDeps({
-        skip: () => {
-          activeView = "dashboard";
-          render();
+        skip: () => showView("dashboard"),
+        checked: (res) => showRuntime(res.runtime, res.runtimeNotice),
+        hostCheck: async () => {
+          try {
+            return await hostCheck();
+          } catch (error) {
+            showRuntime(unknownRuntime, unknownRuntimeNotice);
+            throw error;
+          }
         },
-        checked: (res) => showRuntime(res.runtime),
       }), {runtime: result.runtime, resume: setupResume, result});
     },
   });
@@ -986,8 +1001,6 @@ function topbar(active: View, current: AppState) {
   // summary is a snapshot and the setting can change under it). Falling back to
   // config only when the summary has no currency of its own.
   const disp = current.summary?.displayCurrency || current.config.displayCurrency || "USD";
-  const notifications = current.notifications || [];
-  const runtimeOk = current.runtime.available || current.runtime.nativeAvailable;
   return `
     <header class="topbar">
       <div class="topbar-brand">
@@ -997,26 +1010,56 @@ function topbar(active: View, current: AppState) {
       ${renderTopnav(active)}
       <div class="topbar-right">
         ${renderAddServiceButton(active)}
-        <button class="topbar-runtime ${runtimeOk ? "" : "text-warn"} ${active === "runtime" ? "active" : ""}" data-view="runtime" title="${escapeHtml(current.runtime.message || "")}"><span class="runtime-dot ${runtimeOk ? "ok" : "warn"}"></span>${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</button>
+        <button class="topbar-runtime ${runtimeUsable(current.runtime) ? "" : "text-warn"} ${active === "runtime" ? "active" : ""}" data-view="runtime" title="${escapeHtml(current.runtime.message || "")}">${topbarRuntimeLabel(current.runtime)}</button>
         <span class="topbar-earnings" title="Total balance across every service">${escapeHtml(totalText(current.summary, disp))}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
         </select>
         <details class="notification-menu">
-          <summary aria-label="Alerts">Alerts${notifications.length ? ` <span class="notify-badge">${notifications.length}</span>` : ""}</summary>
-          <div class="notification-popover">
-            <strong>Alerts</strong>
-            ${notifications.length ? notifications.map((item) => `
-              <div class="notification-item ${escapeHtml(item.level)}">
-                <span>${escapeHtml(item.title)}</span>
-                <small>${escapeHtml(item.message)}</small>
-              </div>
-            `).join("") : `<p class="muted">No alerts right now.</p>`}
-          </div>
+          ${renderAlerts(current.notifications)}
         </details>
       </div>
     </header>
   `;
+}
+
+function runtimeUsable(runtime: RuntimeStatus) {
+  return runtime.available || runtime.nativeAvailable;
+}
+
+function topbarRuntimeLabel(runtime: RuntimeStatus) {
+  const label = runtime.available ? "Runtime ready"
+    : runtime.nativeAvailable ? "Native mode"
+    : runtime.reason ? "Runtime offline" : "Runtime unknown";
+  return `<span class="runtime-dot ${runtimeUsable(runtime) ? "ok" : "warn"}"></span>${label}`;
+}
+
+function renderAlerts(notifications: NotificationItem[] | null) {
+  return `
+    <summary aria-label="Alerts">Alerts${notifications?.length ? ` <span class="notify-badge">${notifications.length}</span>` : ""}</summary>
+    <div class="notification-popover">
+      <strong>Alerts</strong>
+      ${notifications?.length ? notifications.map((item) => `
+        <div class="notification-item ${escapeHtml(item.level)}">
+          <span>${escapeHtml(item.title)}</span>
+          <small>${escapeHtml(item.message)}</small>
+        </div>
+      `).join("") : `<p class="muted">No alerts right now.</p>`}
+    </div>
+  `;
+}
+
+let dashboardRequest = 0;
+function showView(view: View) {
+  activeView = view;
+  render();
+  if (view !== "dashboard" || !state) return;
+  const request = ++dashboardRequest;
+  void readRuntimeSnapshot(GetAppState, state).then((snapshot) => {
+    if (!state || activeView !== "dashboard" || request !== dashboardRequest) return;
+    state = { ...state, ...snapshot };
+    render();
+  });
 }
 
 function wireShellNav() {
@@ -1024,11 +1067,10 @@ function wireShellNav() {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
       if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import" || next === "runtime") {
-        activeView = next;
         ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav(next, wizardStep));
         wizardWhereDrafts = {};
         resetScrollAfterRender = true;
-        render();
+        showView(next);
       }
     });
   });
@@ -1420,9 +1462,10 @@ async function renderSettings(current: AppState) {
     modeState = null;
     showErrorToast({scope: "mode", error: String(error)});
   }
-  // The Runtime card says the state now, not the one read at start.
-  const runtime = await CheckRuntime().catch(() => current.runtime);
+  const snapshot = await readRuntimeSnapshot(GetAppState, state ?? current);
   if (request !== settingsRequest || activeView !== "settings") return;
+  current = state = { ...(state ?? current), ...snapshot };
+  const { runtime } = current;
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
   // bring the withdrawn row back.
@@ -2458,11 +2501,10 @@ function readWizardWhere(slug: string): number | null {
 
 function closeWizard() {
   dropNewWalletPhrase();
-  activeView = "dashboard";
   wizardStep = 1;
   wizardRouteDrafts = {};
   wizardWhereDrafts = {};
-  render();
+  showView("dashboard");
 }
 
 async function hydrateWizardForm(service: Service) {
@@ -2955,8 +2997,8 @@ async function runCopyAction(slug: string, n: number, action: string) {
 
 async function refreshState() {
   if (!state) return;
-  const [runtime, deployments] = await Promise.all([CheckRuntime(), RefreshDeployments().catch(() => state?.deployments || [])]);
-  state = {...await GetAppState(), runtime, deployments};
+  const deployments = await RefreshDeployments().catch(() => state?.deployments || []);
+  state = {...await GetAppState(), deployments};
   render();
 }
 

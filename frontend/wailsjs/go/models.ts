@@ -1935,6 +1935,7 @@ export namespace main {
 	    level: string;
 	    title: string;
 	    message: string;
+	    runtime?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Notification(source);
@@ -1945,6 +1946,7 @@ export namespace main {
 	        this.level = source["level"];
 	        this.title = source["title"];
 	        this.message = source["message"];
+	        this.runtime = source["runtime"];
 	    }
 	}
 	export class AppState {
@@ -2206,6 +2208,7 @@ export namespace main {
 	    facts: winvm.HostFacts;
 	    runtime: runtime.Status;
 	    steps: winvm.Step[];
+	    runtimeNotice?: Notification;
 	    setupFinished: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -2217,6 +2220,7 @@ export namespace main {
 	        this.facts = this.convertValues(source["facts"], winvm.HostFacts);
 	        this.runtime = this.convertValues(source["runtime"], runtime.Status);
 	        this.steps = this.convertValues(source["steps"], winvm.Step);
+	        this.runtimeNotice = this.convertValues(source["runtimeNotice"], Notification);
 	        this.setupFinished = source["setupFinished"];
 	    }
 	
@@ -3223,6 +3227,7 @@ export namespace runtime {
 	    available: boolean;
 	    nativeAvailable: boolean;
 	    nativeServices: string[];
+	    setupTask?: string;
 	    kind: string;
 	    reason: string;
 	    message: string;
@@ -3239,6 +3244,7 @@ export namespace runtime {
 	        this.available = source["available"];
 	        this.nativeAvailable = source["nativeAvailable"];
 	        this.nativeServices = source["nativeServices"];
+	        this.setupTask = source["setupTask"];
 	        this.kind = source["kind"];
 	        this.reason = source["reason"];
 	        this.message = source["message"];

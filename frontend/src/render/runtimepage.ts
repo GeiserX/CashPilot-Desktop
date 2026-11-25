@@ -10,20 +10,51 @@
 //
 // Pure apart from the deps it is given.
 
-import type { HostCheckResult, InstallGuide, RuntimeStatus } from "../wails";
+import type { AppState, HostCheckResult, InstallGuide, NotificationItem, RuntimeStatus } from "../wails";
 import { escapeHtml } from "./format.js";
 
 export interface RuntimePageDeps {
   /** The page is still on screen; a reading that lands after it left draws nothing. */
   current(): boolean;
   /** The reading's runtime: the card and the app's state take it. */
-  setRuntime(runtime: RuntimeStatus): void;
+  setRuntime(runtime: RuntimeStatus, notice: NotificationItem | null): void;
   /** The install guide cards under the checklist. */
   showGuides(guides: InstallGuide[]): void;
   /** HTML for the checklist's slot; "" empties it. */
   showHolder(html: string): void;
   /** This PC has a checklist: mount it with the reading. */
   showChecklist(result: HostCheckResult): void;
+}
+
+export const unknownRuntime: RuntimeStatus = {
+  available: false, nativeAvailable: false, nativeServices: null,
+  reason: "", message: "Unknown. CashPilot could not check Docker on this computer.",
+  kind: "", context: "", version: "", tools: null,
+};
+
+export const unknownRuntimeNotice: NotificationItem = {
+  runtime: true, level: "warning", title: "Docker status unknown", message: unknownRuntime.message,
+};
+
+type RuntimeSnapshot = Pick<AppState, "runtime" | "notifications">;
+
+/** Apply the runtime reading and its alert together, keeping unrelated alerts. */
+export function withRuntimeReading(current: RuntimeSnapshot, runtime: RuntimeStatus, notice: NotificationItem | null): RuntimeSnapshot {
+  const otherAlerts = (current.notifications || []).filter((item) => !item.runtime);
+  const { nativeAvailable, nativeServices } = current.runtime;
+  return {
+    runtime: runtime === unknownRuntime ? { ...runtime, nativeAvailable, nativeServices } : runtime,
+    notifications: notice ? [notice, ...otherAlerts] : otherAlerts,
+  };
+}
+
+export async function readRuntimeSnapshot(read: () => Promise<RuntimeSnapshot>, current: RuntimeSnapshot): Promise<RuntimeSnapshot> {
+  try {
+    const { runtime, notifications } = await read();
+    return { runtime, notifications };
+  } catch {
+    return withRuntimeReading(current, unknownRuntime, unknownRuntimeNotice);
+  }
 }
 
 /** The checklist covers Docker Desktop, so its guide card goes when there is one. */
@@ -46,12 +77,13 @@ export async function loadRuntimePage(check: () => Promise<HostCheckResult>, gui
     result = await check();
   } catch (error) {
     if (!deps.current()) return;
+    deps.setRuntime(unknownRuntime, unknownRuntimeNotice);
     deps.showHolder(runtimeCheckFailed(error));
     deps.showGuides(guides);
     return;
   }
   if (!deps.current()) return;
-  deps.setRuntime(result.runtime);
+  deps.setRuntime(result.runtime, result.runtimeNotice);
   const checklist = !!result.facts?.supported && (result.steps?.length ?? 0) > 0;
   deps.showGuides(guidesBesideChecklist(guides, checklist));
   if (!checklist) {

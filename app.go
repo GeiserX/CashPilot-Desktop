@@ -503,6 +503,7 @@ type Notification struct {
 	Level   string `json:"level"`
 	Title   string `json:"title"`
 	Message string `json:"message"`
+	Runtime bool   `json:"runtime,omitempty"`
 }
 
 // EarningsSummary is the dashboard's converted, aggregated view of earnings.
@@ -2128,13 +2129,8 @@ func (a *App) ManagedRuntimePlan() runtime.ManagedRuntimePlan {
 
 func (a *App) notifications(status runtime.Status, earnings []store.EarningsRecord, deployments []store.Deployment) []Notification {
 	var items []Notification
-	// Only warn that the runtime is offline when NEITHER Docker nor the always-on
-	// native runtime can run anything. With native available the app works without
-	// Docker, so a "Runtime offline" alert there would be dishonest and alarming.
-	if !status.Available && !status.NativeAvailable {
-		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
-	} else if notice, ok := dockerNotice(status); ok {
-		items = append(items, notice)
+	if notice := runtimeNotification(status); notice != nil {
+		items = append(items, *notice)
 	}
 	// A container whose image no longer matches the catalog often keeps running (so it
 	// looks healthy) while the retired provider client earns nothing — surface it so the

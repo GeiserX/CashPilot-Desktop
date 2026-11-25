@@ -10,7 +10,7 @@
 //
 //   node scripts/runtimepage_check.mjs      # against ./.harness-build
 
-import { loadRuntimePage } from "../.harness-build/render/runtimepage.js";
+import { loadRuntimePage, readRuntimeSnapshot, withRuntimeReading } from "../.harness-build/render/runtimepage.js";
 
 let failures = 0;
 let checks = 0;
@@ -25,12 +25,12 @@ function check(name, condition, detail = "") {
 const guides = [{ id: "docker-desktop-windows", name: "Docker Desktop" }, { id: "podman", name: "Podman" }];
 const fresh = { available: true, reason: "running", message: "Connected." };
 const page = (current = true) => {
-  const seen = { runtime: [], guides: null, holder: null, checklist: null };
+  const seen = { runtime: [], alerts: [], guides: null, holder: null, checklist: null };
   return {
     seen,
     deps: {
       current: () => current,
-      setRuntime: (r) => seen.runtime.push(r),
+      setRuntime: (r, alert) => { seen.runtime.push(r); seen.alerts.push(alert); },
       showGuides: (g) => { seen.guides = g; },
       showHolder: (h) => { seen.holder = h; },
       showChecklist: (r) => { seen.checklist = r; },
@@ -51,7 +51,8 @@ const page = (current = true) => {
   check("RULE 2: a failed reading says no check ran", /data-runtime-check-failed/.test(seen.holder || "") && /shown without that check/.test(seen.holder || ""), seen.holder);
   check("RULE 2: a failed reading offers Check again", /data-runtime-recheck/.test(seen.holder || ""), seen.holder);
   check("RULE 2: the error is escaped", !(seen.holder || "").includes("<did") && (seen.holder || "").includes("&lt;did not answer&gt;"), seen.holder);
-  check("RULE 2: no checklist and no runtime from a failed reading", seen.checklist === null && seen.runtime.length === 0);
+  check("RULE 2: a failed reading replaces ready status with Unknown", seen.checklist === null && seen.runtime[0]?.available === false && seen.runtime[0]?.reason === "");
+  check("RULE 2: a failed reading replaces the runtime alert", seen.alerts[0]?.title === "Docker status unknown");
   check("RULE 2: the guides still show", seen.guides?.length === 2);
 }
 
@@ -66,10 +67,25 @@ const page = (current = true) => {
 
 {
   const { seen, deps } = page();
-  const result = { facts: { supported: true }, runtime: fresh, steps: [{ id: "a1" }] };
+  const runtimeNotice = { runtime: true, level: "warning", title: "Docker setup needs you", message: "WSL is off." };
+  const result = { facts: { supported: true }, runtime: fresh, runtimeNotice, steps: [{ id: "a1" }] };
   await loadRuntimePage(async () => result, guides, deps);
+  check("a successful read passes its runtime alert with its snapshot", seen.alerts[0] === runtimeNotice);
   check("RULE 4: a checklist is mounted with the reading", seen.checklist === result && seen.runtime[0] === fresh);
   check("RULE 4: the Docker Desktop guide card goes", seen.guides?.map((g) => g.id).join() === "podman", JSON.stringify(seen.guides));
+}
+
+{
+  const oldAlert = { runtime: true, title: "Runtime offline" };
+  const otherAlert = { title: "No services deployed" };
+  const old = { runtime: { available: false, nativeAvailable: true }, notifications: [oldAlert, otherAlert] };
+  const healthy = { runtime: fresh, notifications: [otherAlert] };
+  const updated = await readRuntimeSnapshot(async () => healthy, old);
+  check("a Dashboard or Settings refresh takes the status and Alerts from one snapshot", updated.runtime === fresh && updated.notifications.length === 1 && updated.notifications[0] === otherAlert);
+  const failed = await readRuntimeSnapshot(async () => { throw new Error("read failed"); }, old);
+  check("a failed refresh keeps native capability and unrelated alerts, and drops stale Docker status", failed.runtime.nativeAvailable && failed.runtime.reason === "" && failed.notifications[0]?.title === "Docker status unknown" && failed.notifications[1] === otherAlert && !failed.notifications.includes(oldAlert));
+  const recovered = withRuntimeReading(failed, fresh, null);
+  check("a runtime check clears only the runtime alert when Docker recovers", recovered.runtime === fresh && recovered.notifications.length === 1 && recovered.notifications[0] === otherAlert);
 }
 
 if (failures > 0) {

@@ -757,6 +757,7 @@ export interface SessionConsent {
 }
 
 export interface NotificationItem {
+  runtime?: boolean;
   level: string;
   title: string;
   message: string;
@@ -931,6 +932,7 @@ export interface GuideStep {
 export interface HostCheckResult {
   facts: HostFacts;
   runtime: RuntimeStatus;
+  runtimeNotice: NotificationItem | null;
   // The Docker checklist; null outside Windows.
   steps: GuideStep[] | null;
   // This reading ended the guided setup: this PC's own Docker Desktop runs

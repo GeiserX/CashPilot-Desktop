@@ -95,6 +95,9 @@ func TestRemoteEngineKeepsLocalDockerSetupInAlerts(t *testing.T) {
 	if res.SetupFinished || !res.Runtime.Available {
 		t.Fatalf("remote engine changed local setup completion or engine availability: %+v", res)
 	}
+	if res.RuntimeNotice == nil || !res.RuntimeNotice.Runtime || !strings.Contains(res.RuntimeNotice.Message, "WSL") {
+		t.Fatalf("HostCheck did not return the runtime alert with the reading: %+v", res.RuntimeNotice)
+	}
 	state, err := app.GetAppState()
 	if err != nil {
 		t.Fatal(err)

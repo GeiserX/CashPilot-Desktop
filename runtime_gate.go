@@ -70,6 +70,17 @@ func (a *App) refuseWithoutDocker(slug string) error {
 	return err
 }
 
+func runtimeNotification(status runtime.Status) *Notification {
+	if !status.Available && !status.NativeAvailable {
+		return &Notification{Runtime: true, Level: "warning", Title: "Runtime offline", Message: status.Message}
+	}
+	if notice, ok := dockerNotice(status); ok {
+		notice.Runtime = true
+		return &notice
+	}
+	return nil
+}
+
 // dockerNotice keeps local setup visible when an engine answers elsewhere, or
 // explains what runs on a computer where only native apps can start.
 func dockerNotice(status runtime.Status) (Notification, bool) {
