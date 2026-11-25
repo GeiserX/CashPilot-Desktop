@@ -347,3 +347,22 @@ func TestHypervisorChangeReadsTheLaunchTypeFirst(t *testing.T) {
 		t.Errorf("already Auto ended %+v", o)
 	}
 }
+
+// Only the install's own Windows features wait for a restart. The update turns on
+// nothing, so a restart pending for something else never reads as "WSL needs a
+// restart"; wsl.exe's own 3010 still does, through RunElevated.
+func TestWSLUpdateIgnoresAnUnrelatedPendingRestart(t *testing.T) {
+	for _, web := range []bool{false, true} {
+		install, _ := SetupScript(OpWSLInstall, web)
+		if !strings.Contains(install, "if (RebootPending) { exit 3010 }") {
+			t.Errorf("web=%v: the install no longer asks for the restart its features need:\n%s", web, install)
+		}
+		update, _ := SetupScript(OpWSLUpdate, web)
+		if strings.Contains(update, "if (RebootPending)") {
+			t.Errorf("web=%v: the update turns any pending restart into its own:\n%s", web, update)
+		}
+		if !strings.Contains(update, "if ($code -ne 0) { exit $code }") || !strings.HasSuffix(update, "exit 0\n") {
+			t.Errorf("web=%v: the update does not pass wsl.exe's own code through:\n%s", web, update)
+		}
+	}
+}

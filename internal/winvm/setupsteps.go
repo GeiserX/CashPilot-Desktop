@@ -149,9 +149,12 @@ func SetupScript(op string, webDownload bool) (string, error) {
 
 // wslScript runs System32's wsl.exe with args. The install first reads the WSL
 // policy (HKLM\SOFTWARE\Policies\WSL, AllowWSL 0 is "WSL is not allowed"), so a
-// managed PC stops with CodePolicy before anything runs. After the tool, a
-// pending Component Based Servicing restart turns success into 3010.
-func wslScript(args []string, webDownload bool, seconds int, checkPolicy bool) string {
+// managed PC stops with CodePolicy before anything runs. After the install, a
+// pending Component Based Servicing restart turns success into 3010: the install
+// turns on Windows features, which finish at the next start. The update turns on
+// nothing, so a pending restart there belongs to something else (often Windows
+// Update) and is not the update's: only wsl.exe's own 3010 or 1641 asks for one.
+func wslScript(args []string, webDownload bool, seconds int, install bool) string {
 	if webDownload {
 		args = append(args, "--web-download")
 	}
@@ -161,7 +164,7 @@ func wslScript(args []string, webDownload bool, seconds int, checkPolicy bool) s
 	}
 	var b strings.Builder
 	b.WriteString(prelude())
-	if checkPolicy {
+	if install {
 		fmt.Fprintf(&b, `$policy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\WSL' -Name AllowWSL -ErrorAction SilentlyContinue
 if ($policy -and $policy.AllowWSL -eq 0) { exit %s }
 `, psCode(CodePolicy))
@@ -170,9 +173,11 @@ if ($policy -and $policy.AllowWSL -eq 0) { exit %s }
 if (-not (Test-Path -LiteralPath $wsl)) { exit %s }
 $code = Bounded $wsl @(%s) %d
 if ($code -ne 0) { exit $code }
-if (RebootPending) { exit 3010 }
-exit 0
 `, psCode(CodeToolMissing), strings.Join(quoted, ","), seconds)
+	if install {
+		b.WriteString("if (RebootPending) { exit 3010 }\n")
+	}
+	b.WriteString("exit 0\n")
 	return b.String()
 }
 
