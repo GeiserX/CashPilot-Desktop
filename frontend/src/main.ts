@@ -2749,8 +2749,15 @@ function drawReveal(slot: HTMLElement) {
     drawReveal(slot);
   });
   const show = async () => {
+    // One request at a time, and none for an empty box: each try counts against
+    // the three the backend allows in ten minutes.
+    if (revealed?.slug === slug && revealed.view.kind === "ask" && revealed.view.busy) return;
     const input = slot.querySelector<HTMLInputElement>("[data-wallet-reveal-name]");
     const typed = input?.value || "";
+    if (!typed.trim()) {
+      input?.focus();
+      return;
+    }
     const token = {};
     revealed = { slug, view: { kind: "ask", busy: true }, timer: null, token };
     drawReveal(slot);
@@ -2777,7 +2784,11 @@ function drawReveal(slot: HTMLElement) {
   };
   slot.querySelector("[data-wallet-reveal-show]")?.addEventListener("click", () => void show());
   slot.querySelector<HTMLInputElement>("[data-wallet-reveal-name]")?.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") void show();
+    // A held Enter on the button that opened this box repeats into it once it has
+    // focus: only a fresh press, outside an IME composition, asks.
+    if (event.key !== "Enter" || event.repeat || event.isComposing) return;
+    event.preventDefault();
+    void show();
   });
 }
 

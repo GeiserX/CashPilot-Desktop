@@ -124,10 +124,12 @@ func TestAStoredSiaSeedMovesIntoTheVolumeAndOutOfEverythingElse(t *testing.T) {
 	if err := app.store.SaveCredentials(siaSlug, legacy); err != nil {
 		t.Fatalf("store the old settings: %v", err)
 	}
+	oldBlob := storedBlob(t, app)
 
 	if _, err := app.DeployService(siaSlug, map[string]string{}, nil, nil); err != nil {
 		t.Fatalf("DeployService: %v", err)
 	}
+	assertBlobGoneFromDisk(t, app, oldBlob)
 
 	c, ok := app.Docker.Container(siaContainer)
 	if !ok {
@@ -257,6 +259,39 @@ func TestTheComposeExportNeverAsksForTheSeed(t *testing.T) {
 	}
 	if !strings.Contains(out, "HOSTD_API_PASSWORD") {
 		t.Fatalf("the compose export dropped the dashboard password:\n%s", out)
+	}
+}
+
+// storedBlob is the encrypted credentials blob of Sia as the database holds it.
+func storedBlob(t *testing.T, app *appUnderTest) string {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(app.cfg.DataDir(), "cashpilot-desktop.db"))
+	if err != nil {
+		t.Fatalf("open the database: %v", err)
+	}
+	defer db.Close()
+	var blob string
+	if err := db.QueryRow(`SELECT value FROM credentials WHERE slug = ?`, siaSlug).Scan(&blob); err != nil {
+		t.Fatalf("read the blob: %v", err)
+	}
+	return blob
+}
+
+// assertBlobGoneFromDisk fails when any part of blob, the encrypted credentials
+// that held the seed, is still in the database file or its log: its key stays in
+// the keychain, so a leftover copy could still be decrypted.
+func assertBlobGoneFromDisk(t *testing.T, app *appUnderTest, blob string) {
+	t.Helper()
+	var disk []byte
+	for _, name := range []string{"cashpilot-desktop.db", "cashpilot-desktop.db-wal", "cashpilot-desktop.db-shm"} {
+		raw, err := os.ReadFile(filepath.Join(app.cfg.DataDir(), name))
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		disk = append(disk, raw...)
+	}
+	if strings.Contains(string(disk), blob[len(blob)/2:len(blob)/2+40]) {
+		t.Error("the encrypted copy of the stored seed is still in the database file")
 	}
 }
 

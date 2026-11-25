@@ -124,6 +124,12 @@ const ask = renderRevealPanel("sia-hostd", "Sia (hostd)", { kind: "ask", error: 
 check("the reveal asks for the service's name", ask.includes("data-wallet-reveal-name") && ask.includes("Sia (hostd)"));
 check("the reveal shows the backend's refusal", ask.includes("type the service&#039;s name"));
 check("asking holds no word", !ask.includes("abandon"));
+const busy = renderRevealPanel("sia-hostd", "Sia (hostd)", { kind: "ask", busy: true });
+const busyInput = busy.match(/<input data-wallet-reveal-name[^>]*>/)?.[0] || "";
+const busyShow = busy.match(/<button[^>]*data-wallet-reveal-show[^>]*>/)?.[0] || "";
+check("a pending reveal takes no second Enter or click", / disabled/.test(busyInput) && / disabled/.test(busyShow));
+check("a pending reveal can still be cancelled", !/ disabled/.test(busy.match(/<button[^>]*data-wallet-reveal-hide[^>]*>/)?.[0] || " disabled"));
+check("an idle prompt takes typing", !/ disabled/.test(ask.match(/<input data-wallet-reveal-name[^>]*>/)?.[0] || " disabled"));
 const revealed = renderRevealPanel("sia-hostd", "Sia (hostd)", { kind: "shown", words: WORDS });
 check("a reveal shows 12 numbered words", (revealed.match(/data-seed-n=/g) || []).length === 12);
 check("a reveal can be hidden", revealed.includes("data-wallet-reveal-hide"));

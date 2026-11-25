@@ -147,9 +147,14 @@ func (m *Manager) forgetStoredSeed(slug string, svc catalog.Service, address str
 			return
 		}
 	}
-	delete(stored, key)
-	if err := m.store.SaveCredentials(slug, stored); err != nil {
+	// ScrubCredential, not SaveCredentials: every earlier save left an encrypted
+	// copy of the seed in the database file, and its key stays in the keychain.
+	_, busy, err := m.store.ScrubCredential(slug, key)
+	switch {
+	case err != nil:
 		m.store.RecordEvent(slug, "wallet_error", "the old stored copy of the wallet seed phrase could not be deleted: "+err.Error())
+	case busy:
+		m.store.RecordEvent(slug, "wallet_error", "the old stored copy of the wallet seed phrase was deleted, but the database log was busy, so an older copy may stay in it until the next checkpoint")
 	}
 }
 

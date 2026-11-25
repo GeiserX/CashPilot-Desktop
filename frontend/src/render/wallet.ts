@@ -166,7 +166,7 @@ export function renderRevealPanel(slug: string, name: string, view: RevealView):
     return `
       <div class="wallet-reveal" data-wallet-reveal-view="ask">
         <label><span>To show the seed phrase, type <strong>${escapeHtml(name)}</strong></span>
-          <input data-wallet-reveal-name="${s}" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" />
+          <input data-wallet-reveal-name="${s}" type="text" autocomplete="off" spellcheck="false" autocapitalize="off"${view.busy ? " disabled" : ""} />
         </label>
         ${view.error ? `<p class="error-text">${escapeHtml(view.error)}</p>` : ""}
         <div class="actions left">
