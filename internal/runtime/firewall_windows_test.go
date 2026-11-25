@@ -135,7 +135,9 @@ func TestSecureVMStubLive(t *testing.T) {
 	if err := os.WriteFile(trap, []byte("'planted' | Set-Content -LiteralPath $Out\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{trap, "/grant", "*S-1-5-32-545:(M)"}, {trap, "/setowner", "*S-1-5-32-545"}} {
+	// The folders are Administrators', so only the planted file is refused.
+	for _, args := range [][]string{{planted, "/setowner", "*S-1-5-32-544"}, {guard, "/setowner", "*S-1-5-32-544"},
+		{trap, "/grant", "*S-1-5-32-545:(M)"}, {trap, "/setowner", "*S-1-5-32-545"}} {
 		if out, err := exec.Command("icacls", args...).CombinedOutput(); err != nil {
 			t.Fatalf("icacls %v: %v: %s", args, err, out)
 		}
