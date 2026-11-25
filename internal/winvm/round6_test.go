@@ -61,24 +61,24 @@ function Remove-VMSwitch { throw 'would destroy independent management port' }
 
 func TestR6ManagementAdapterGate(t *testing.T) {
 	const mock = `
-param($switchId, $tag, $portId)
+param($switchId, $tag, $portId, $dhcp)
 function Get-VMSwitch { [pscustomobject]@{ Id = $switchId; Name = 'CashPilot-VM'; SwitchType = 'Internal'; Notes = 'cashpilot-owner=' + $tag } }
 function Get-VMNetworkAdapter { [pscustomobject]@{ SwitchId = $switchId; Id = $portId; DeviceId = 'device'; MacAddress = '00155D000002' } }
 function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'device'; ifIndex = 20 } }
 function Get-NetIPAddress {}
-function Get-NetIPInterface { [pscustomobject]@{ Dhcp = 'Enabled' } }
-function New-NetIPAddress { throw 'would add a gateway and implicitly disable DHCP' }
+function Get-NetIPInterface { [pscustomobject]@{ Dhcp = $dhcp } }
+function New-NetIPAddress { throw 'would add a gateway to an unverified adapter' }
 function Set-NetIPInterface { throw 'would change DHCP on an existing adapter' }
 function Set-VMNetworkAdapter { throw 'would change the MAC on an existing adapter' }
 `
-	for _, tc := range []struct{ name, port, detail string }{
-		{"replacement", "different-port", "recorded management adapter"},
-		{"DHCP enabled", "recorded-port", "DHCP is enabled"},
+	for _, tc := range []struct{ name, port, dhcp, detail string }{
+		{"replacement", "different-port", "Disabled", "recorded management adapter is missing"},
+		{"DHCP enabled", "recorded-port", "Enabled", "DHCP is enabled"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, out := runOwnedScriptWithFake(t, mock, scriptEnsureSwitch,
 				map[string]any{"switch": "CashPilot-VM", "switchId": tSwitchID, "managementId": "recorded-port",
-					"owner": tOwner, "mac": "00155D000002", "gateway": "172.31.250.1", "prefixLen": 29}, tSwitchID, tOwner, tc.port)
+					"owner": tOwner, "mac": "00155D000002", "gateway": "172.31.250.1", "prefixLen": 29}, tSwitchID, tOwner, tc.port, tc.dhcp)
 			if code == 0 || !strings.Contains(string(out), tc.detail) {
 				t.Fatalf("exit %d: %s", code, out)
 			}
