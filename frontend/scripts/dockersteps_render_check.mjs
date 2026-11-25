@@ -6,7 +6,9 @@
 //      prompt (naming Windows PowerShell for every admin change), whether a
 //      restart or sign-out follows, and how to undo it, and has Cancel.
 //   2. THE DOCKER INSTALL says CashPilot never accepts Docker's terms, and no
-//      screen offers to accept them.
+//      screen offers to accept them. It says what to pick in Docker's own
+//      installer: the recommended per-user install with WSL 2, Windows
+//      containers off, as the checklist's later steps expect.
 //   3. CANCEL RUNS NOTHING, and Go ahead acts only from the confirm screen.
 //   4. WHILE IT RUNS, a progress line counts the seconds and names the limit.
 //   5. A FAILURE goes back to the list, and the row keeps Needs you with the
@@ -71,6 +73,15 @@ check("RULE 1: docker-users adds only this account, by its SID", /only yours/.te
 check("RULE 1: the hypervisor change asks for a restart only when it changed the boot option", /only if CashPilot changed the boot option/.test(item(stepConfirm("hypervisor-launch", false), "after")) && /already auto, no restart follows/.test(item(stepConfirm("hypervisor-launch", false), "after")), item(stepConfirm("hypervisor-launch", false), "after"));
 check("RULE 1: the Linux switch says it affects the user's other Docker work", /all your Docker work/.test(item(stepConfirm("linux-engine", false), "changes")));
 check("RULE 2: the Docker install says CashPilot never accepts Docker's terms", item(stepConfirm("docker-install", false), "changes").includes("CashPilot never accepts Docker's terms for you"));
+{
+  const choices = item(stepConfirm("docker-install", false), "choices");
+  check("RULE 2: the Docker install says to keep the recommended per-user install", /keep the recommended Per-user installation/.test(choices), choices);
+  check("RULE 2: the Docker install says to pick WSL 2", /with WSL 2/.test(choices) && /WSL 2 backend/.test(choices), choices);
+  check("RULE 2: the Docker install says to leave Windows containers off", /Leave Allow Windows Containers off/.test(choices) && /Linux containers/.test(choices), choices);
+  // The checklist's own Linux switch is the step that expects this choice.
+  check("RULE 2: the advice matches the checklist's Linux containers step", CONSENT["linux-engine"].title.includes("Linux containers"), CONSENT["linux-engine"].title);
+  check("RULE 2: only the Docker install gives installer advice", OPS.filter((op) => item(stepConfirm(op, false), "choices")).join(",") === "docker-install");
+}
 check("RULE 5: the direct-download retry says so on its confirm screen", item(stepConfirm("wsl-install", true), "web-download") === WEB_DOWNLOAD_NOTE && item(stepConfirm("wsl-install", false), "web-download") === "");
 check("RULE 1: an unknown change has no screen", stepConfirm("format-c", false) === "");
 check("RULE 1: text is escaped", !/<script/.test(stepRestart({ step: "a3", op: "wsl-install", state: "restart", text: "<script>x</script>", reopens: false })));

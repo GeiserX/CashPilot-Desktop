@@ -93,9 +93,10 @@ import {
 import { renderFleetSection } from "./render/fleet";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
-import { bootWhenReady, renderFailed, renderStarting, wireBootRetry } from "./render/boot";
-import { firstRunSteps, renderGateSteps, renderJoinForm, renderJoinOutcome, renderJoinedBanner, renderModeCard, renderModeChoice, renderWelcome as welcomePanel, type Mode, type ModeCardView } from "./render/mode";
-import { gatePage, withChrome } from "./render/chrome";
+import { createBoot } from "./render/boot";
+import { firstRunSteps, renderGateSteps, renderJoinOutcome, renderJoinedBanner, renderModeCard, type Mode, type ModeCardView } from "./render/mode";
+import { gatePage as chromeGatePage, withChrome as chromeWithChrome, windowPlatform, type WindowPlatform } from "./render/chrome";
+import { firstRunScreen } from "./render/firstrun";
 import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProxiesSection } from "./render/proxies";
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
@@ -105,10 +106,13 @@ import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
 import { renderEnvSetting, settingField, settingsSaveValues } from "./render/settings";
+import { runSave, saveNoteSlot } from "./render/savenote";
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
 import { catalogFilterTabs, renderCatalogTable, wizardCategoryChoices, wizardCategoryCopy } from "./render/catalog";
+import { wireCatalogRows } from "./render/catalog_open";
+import { wireOpenLinks } from "./render/open_links";
 import { renderAddServiceButton, renderTopnav } from "./render/topbar";
 import { renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
@@ -227,29 +231,31 @@ let settingsRequest = 0;
 
 const root = document.querySelector<HTMLDivElement>("#app")!;
 
+// The title bar draws the window controls of this OS (render/chrome.ts): the
+// webview's user agent says which.
+const chromePlatform: WindowPlatform = windowPlatform(navigator.userAgent);
+const withChrome = (body: string) => chromeWithChrome(body, chromePlatform);
+const gatePage = (bar: string, panel: string, opts: {wide?: boolean} = {}) => chromeGatePage(bar, panel, {...opts, platform: chromePlatform});
+
 // The window can load before the Go side has finished starting (render/boot.ts):
 // wait for it on a calm page, and keep a Try again on the failed page.
-async function boot() {
-  await bootWhenReady({
-    load: async () => {
-      wireBackendEvents();
-      state = await GetAppState();
-      await applySetupResume();
-      render();
-      if (hostReadingPending) {
-        hostReadingPending = false;
-        void refreshRuntimeSnapshot();
-      }
-    },
-    showStarting: () => {
-      root.innerHTML = withChrome(renderStarting(""));
-      wireChrome();
-    },
-    showFailed: renderError,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    now: () => Date.now(),
-  });
-}
+const boot = createBoot({
+  root,
+  chrome: withChrome,
+  wireChrome,
+  load: async () => {
+    wireBackendEvents();
+    state = await GetAppState();
+    await applySetupResume();
+    render();
+    if (hostReadingPending) {
+      hostReadingPending = false;
+      void refreshRuntimeSnapshot();
+    }
+  },
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  now: () => Date.now(),
+});
 
 let backendEventsWired = false;
 
@@ -561,10 +567,7 @@ function gateBar() {
 
 // First run, step 2: Run everything here, or Join my CashPilot.
 function renderModeStep() {
-  root.innerHTML = gatePage(gateBar(), `
-    ${renderGateSteps(firstRunSteps(firstRunPath), "mode")}
-    ${renderModeChoice()}
-  `, {wide: true});
+  root.innerHTML = firstRunScreen("mode", {bar: gateBar(), path: firstRunPath, platform: chromePlatform});
   wireChrome();
   document.querySelectorAll<HTMLButtonElement>("[data-mode-choice]").forEach((button) => {
     button.addEventListener("click", async () => {
@@ -590,11 +593,7 @@ function renderModeStep() {
 
 // First run, the join step of Join my CashPilot.
 function renderJoinStep() {
-  root.innerHTML = gatePage(gateBar(), `
-    ${renderGateSteps(firstRunSteps(firstRunPath), "join")}
-    <h1 class="gate-title">Join my CashPilot</h1>
-    ${renderJoinForm()}
-  `, {wide: true});
+  root.innerHTML = firstRunScreen("join", {bar: gateBar(), path: firstRunPath, platform: chromePlatform});
   wireChrome();
   wireJoinForm(document, () => {
     firstRunPath = "";
@@ -644,10 +643,7 @@ function wireJoinForm(scope: ParentNode, onBack: () => void, onContinue: () => v
 }
 
 function renderWelcome() {
-  root.innerHTML = gatePage(gateBar(), `
-    ${renderGateSteps(firstRunSteps(firstRunPath), "welcome")}
-    ${welcomePanel()}
-  `);
+  root.innerHTML = firstRunScreen("welcome", {bar: gateBar(), path: firstRunPath, platform: chromePlatform});
   wireChrome();
   document.querySelector("#get-started")?.addEventListener("click", () => {
     onboardingStep = "mode";
@@ -839,12 +835,6 @@ function renderDashboard(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-isolation-action]").forEach((button) => {
     button.addEventListener("click", () => void runEnableIsolation());
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
-    });
   });
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1112,12 +1102,7 @@ function wireShellNav(scope: ParentNode = document) {
       }
     });
   });
-  scope.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
-    });
-  });
+  wireOpenLinks(scope, BrowserOpenURL);
   document.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
     const currency = (event.target as HTMLSelectElement).value;
     await SaveSettings({displayCurrency: currency});
@@ -1183,12 +1168,7 @@ function renderCatalog(current: AppState) {
   document.querySelectorAll<HTMLButtonElement>("[data-service]").forEach((button) => {
     button.addEventListener("click", () => openWizard(button.dataset.service));
   });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
-    });
-  });
+  wireCatalogRows(document, (slug) => openWizard(slug));
   wireCustomServices();
   const freshEditor = document.querySelector<HTMLFormElement>("[data-custom-editor]");
   if (liveEditor && freshEditor && keepsLiveEditor(liveEditor.dataset.customEditor, freshEditor.dataset.customEditor)) {
@@ -1523,7 +1503,7 @@ async function renderSettings(current: AppState) {
                 <span class="card-title">Environment Variables</span>
                 <p class="muted compact-copy">Variables that affect this desktop node. Locked values are controlled by the app or OS.</p>
               </div>
-              <button class="primary compact-btn" id="save-settings">Save Variables</button>
+              <div class="save-row">${saveNoteSlot("save-settings-note")}<button class="primary compact-btn" id="save-settings">Save Variables</button></div>
             </div>
             <div class="settings-list">
               ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, "small") : item.key === "CASHPILOT_RUNTIME_PROVIDER" ? runtimeProviderNote(runtime) : "")).join("")}
@@ -1746,16 +1726,30 @@ function renderCollectorSetting(item: SettingsState["collectors"][number]) {
   `;
 }
 
+// Save Variables: a note next to the button says Saving…, then Saved or Not saved
+// with the error (render/savenote.ts).
 async function saveSettingsFromForm() {
   const fields = Array.from(document.querySelectorAll<HTMLInputElement>("[data-setting]")).map(settingField);
   const values = settingsSaveValues(fields);
-  try {
-    await SaveSettings(values);
-    state = await GetAppState();
-    render();
-  } catch (error) {
-    showErrorToast({scope: "settings", error: String(error)});
-  }
+  await runSave({
+    save: async () => {
+      await SaveSettings(values);
+    },
+    refresh: async () => {
+      state = await GetAppState();
+      if (activeView === "settings") await renderSettings(state);
+      else render();
+    },
+    show: (html) => {
+      const slot = document.querySelector("#save-settings-note");
+      if (slot) slot.innerHTML = html;
+    },
+    busy: (on) => {
+      const button = document.querySelector<HTMLButtonElement>("#save-settings");
+      if (button) button.disabled = on;
+    },
+    refreshFailed: (error) => showErrorToast({scope: "settings", error: String(error)}),
+  });
 }
 
 // renderBackgroundCard renders the "Background Earning" settings card. The toggle
@@ -2313,12 +2307,6 @@ function renderSetupWizard(current: AppState) {
       const slugs = (button.dataset.composeExportSelection || "").split(" ").filter(Boolean);
       const arch = document.querySelector<HTMLSelectElement>(`[data-compose-arch="selection"]`)?.value || "";
       void exportCompose(slugs, arch, "compose-selection");
-    });
-  });
-  document.querySelectorAll<HTMLButtonElement>("[data-url]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const url = button.dataset.url;
-      if (url) BrowserOpenURL(url);
     });
   });
   wireSessionConsent(document);
@@ -3084,12 +3072,6 @@ function showInfoToast(payload: {scope?: string; message?: string} | string) {
   const scope = typeof payload === "object" && payload ? payload.scope ?? "" : "";
   const message = typeof payload === "object" && payload ? payload.message ?? "" : String(payload);
   showToast("notification-item", "--warning", scope ? `${scope} notice` : "Notice", message);
-}
-
-function renderError(error: unknown) {
-  root.innerHTML = withChrome(renderFailed("", error));
-  wireChrome();
-  wireBootRetry(root, () => void boot());
 }
 
 function wireChrome() {

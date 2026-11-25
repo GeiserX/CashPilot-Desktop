@@ -357,6 +357,9 @@ func (a *App) DomReady(ctx context.Context) {
 	// computeEarningsSummary -> EnsureFresh, CollectService) read a.ctx
 	// concurrently, so a second write would race with those reads under -race.
 	// DomReady uses its local ctx parameter directly for the window/tray setup.
+	// A screen smaller than the default size gets a window that fits its work
+	// area, so the title bar stays on screen and the taskbar stays clear.
+	fitMainWindow(ctx)
 	wailsruntime.WindowShow(ctx)
 	PositionMainWindowOnPrimaryScreen()
 	InstallTrayIcon(a.trayIcon)
