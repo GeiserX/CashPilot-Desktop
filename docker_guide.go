@@ -78,6 +78,12 @@ func (a *App) RestartToFirmware(step string) (FirmwareRestart, error) {
 // whether RunOnce was armed: a path too long for RunOnce, or an app that moved,
 // leaves the journal alone to bring the checklist back at the next manual start.
 func (a *App) beginRestart(step string) (bool, error) {
+	return a.beginFinish(step, setupresume.FinishRestart)
+}
+
+// beginFinish is beginRestart for a step that waits for finish: a restart, or a
+// sign-out and back in. RunOnce runs at the next sign-in, so it covers both.
+func (a *App) beginFinish(step, finish string) (bool, error) {
 	step = strings.TrimSpace(step)
 	if step == "" || len(step) > 16 {
 		return false, fmt.Errorf("%q is not a checklist step", step)
@@ -88,7 +94,11 @@ func (a *App) beginRestart(step string) (bool, error) {
 		boot = a.hostCache().refresh(a.ctx).LastBoot
 	}
 	err := a.cfg.Update(func(c *config.AppConfig) {
-		c.SetupJournal = setupresume.Next(c.SetupJournal, setupresume.FlowDocker, step, boot, exe)
+		j := setupresume.Next(c.SetupJournal, setupresume.FlowDocker, step, boot, exe)
+		if finish == setupresume.FinishSignOut {
+			j.Finish = finish
+		}
+		c.SetupJournal = j
 	})
 	if err != nil {
 		return false, fmt.Errorf("could not save where the setup stands before the restart: %w", err)

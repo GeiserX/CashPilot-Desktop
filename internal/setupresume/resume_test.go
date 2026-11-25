@@ -89,6 +89,7 @@ func gone(string) bool  { return false }
 
 func TestDecide(t *testing.T) {
 	journal := &config.SetupJournal{Flow: FlowDocker, Step: "a2", BootTimeBefore: "2026-11-25T07:59:58.5Z", ExePath: exe, Attempts: 1}
+	signOut := &config.SetupJournal{Flow: FlowDocker, Step: "a8", BootTimeBefore: "2026-11-25T07:59:58.5Z", ExePath: exe, Attempts: 1, Finish: FinishSignOut}
 	cases := []struct {
 		name      string
 		j         *config.SetupJournal
@@ -109,6 +110,9 @@ func TestDecide(t *testing.T) {
 		{"a boot time that went back is unknown", journal, "2026-11-24T08:00:00Z", false, there, true, RestartedUnknown, false, false},
 		{"exe moved: still lands, and says so", journal, "2026-11-25T08:30:00Z", false, gone, true, RestartedYes, false, true},
 		{"exe moved before the restart: rearm at the new path", journal, "2026-11-25T07:59:58.5Z", false, gone, true, RestartedNo, true, true},
+		{"sign-out step, same boot, opened by hand: still to come", signOut, "2026-11-25T07:59:58.5Z", false, there, true, RestartedNo, true, false},
+		{"sign-out step, same boot, opened by RunOnce: the sign-in happened", signOut, "2026-11-25T07:59:58.5Z", true, there, true, RestartedNo, false, false},
+		{"sign-out step after a restart instead", signOut, "2026-11-25T08:30:00Z", true, there, true, RestartedYes, false, false},
 	}
 	for _, tc := range cases {
 		v := Decide(tc.j, tc.boot, tc.flag, tc.exists)
@@ -117,6 +121,9 @@ func TestDecide(t *testing.T) {
 		}
 		if tc.j != nil && (v.Step != tc.j.Step || v.Attempts != tc.j.Attempts) {
 			t.Errorf("%s: the view lost the journal's step: %+v", tc.name, v)
+		}
+		if want := map[bool]string{true: FinishSignOut, false: FinishRestart}[tc.j == signOut]; tc.j != nil && v.Finish != want {
+			t.Errorf("%s: finish %q, want %q", tc.name, v.Finish, want)
 		}
 	}
 }

@@ -144,6 +144,9 @@ type SetupJournal struct {
 	ExePath string `json:"exePath"`
 	// Attempts counts how many times this step asked for a restart.
 	Attempts int `json:"attempts"`
+	// Finish is what the step waits for: "" or "restart" for a restart, "signout"
+	// for a sign-out and back in (a restart does it too).
+	Finish string `json:"finish,omitempty"`
 }
 
 // The two values of AppConfig.Mode.

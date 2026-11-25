@@ -234,6 +234,10 @@ export function ResetProxyUsage(arg1) {
   return window['go']['main']['App']['ResetProxyUsage'](arg1);
 }
 
+export function RestartNow() {
+  return window['go']['main']['App']['RestartNow']();
+}
+
 export function RestartService(arg1) {
   return window['go']['main']['App']['RestartService'](arg1);
 }
@@ -248,6 +252,10 @@ export function RestoreStateBackup(arg1, arg2, arg3) {
 
 export function RevokeSessionRisk(arg1) {
   return window['go']['main']['App']['RevokeSessionRisk'](arg1);
+}
+
+export function RunSetupStep(arg1, arg2) {
+  return window['go']['main']['App']['RunSetupStep'](arg1, arg2);
 }
 
 export function SaveCredentials(arg1, arg2) {
@@ -272,6 +280,10 @@ export function SetActivityEnabled(arg1) {
 
 export function SetupResume() {
   return window['go']['main']['App']['SetupResume']();
+}
+
+export function SignOutNow() {
+  return window['go']['main']['App']['SignOutNow']();
 }
 
 export function StartAsLead() {

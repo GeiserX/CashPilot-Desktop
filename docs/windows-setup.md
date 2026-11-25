@@ -23,20 +23,33 @@ Click **Check again** after you change something. CashPilot then reads every ste
 |---|---|---|
 | Windows version | The Windows build. Docker needs Windows 11 23H2 (build 22631) or Windows 10 22H2 (build 19045). Windows 10 still works, but gets no security updates since October 2025. | Open Windows Update. |
 | Virtualization in the BIOS | Whether Windows already runs a hypervisor, else the processor's firmware flag. It also checks that the processor has SLAT. | Restart into the BIOS, after a confirm screen. The names of the setting and the usual keys. |
-| WSL 2 backend: Windows features | The Virtual Machine Platform feature. Docker on its Hyper-V backend skips this step. | How to turn on WSL as an administrator. |
-| WSL 2 backend: WSL version | The WSL version. Docker needs 2.1.5 or newer. | How to run `wsl --update`. |
-| Docker Desktop installed | Docker Desktop's install entry and program files. | Open Docker's download page. |
+| WSL 2 backend: Windows features | The Virtual Machine Platform feature. Docker on its Hyper-V backend skips this step. | **Turn on WSL**: `wsl --install --no-distribution`, with one permission prompt, then a restart. No Linux distribution is installed. If the download hangs or fails at the Microsoft Store, a retry with a direct download (`--web-download`). A work or school policy that blocks WSL stops the step with an explanation. |
+| WSL 2 backend: WSL version | The WSL version. Docker needs 2.1.5 or newer. | **Update WSL**: `wsl --update`, with one permission prompt, and the same direct-download retry. |
+| Docker Desktop installed | Docker Desktop's install entry and program files. | **Install Docker Desktop**: a window where winget installs it, or Docker's download page. A PC without winget gets the download page. |
 | Docker Desktop running | Whether Docker Desktop and its engine run. | Start Docker Desktop, then wait up to two minutes for its engine, with a progress line. |
 | Docker's terms | Whether Docker Desktop was ever opened on your account, and whether its engine runs. | Bring Docker Desktop's window forward. You accept its terms there. |
-| docker-users group | Shows only when Docker refuses your account. Whether your account is in the group, and whether this sign-in carries it. | Sign out and back in, or how an administrator adds you. |
-| Linux containers | Whether Docker runs Linux containers, which the apps need. | How to switch in Docker Desktop. |
-| Other virtual machine software | The VirtualBox and VMware drivers. They can slow Docker down. Shown as worth knowing, because nothing proves they stop Docker. | A note only. |
+| docker-users group | Shows only when Docker refuses your account. Whether your account is in the group, and whether this sign-in carries it. | **Add my account to docker-users**, with one permission prompt, then sign out and back in (or restart). When you sign in again, CashPilot checks that Windows gave your account the group. |
+| Linux containers | Whether Docker runs Linux containers, which the apps need. | **Switch to Linux containers**, with Docker's own switch tool. It changes all your Docker work, so it runs only from its confirm screen. Without the tool, how to switch from Docker's menu. |
+| Other virtual machine software | The VirtualBox and VMware drivers. They can slow Docker down. Shown as worth knowing, because nothing proves they stop Docker. When Windows' hypervisor did not start at boot, although virtualization and the Virtual Machine Platform feature are on, the step needs you instead. | **Turn Windows' hypervisor back on** (`bcdedit /set hypervisorlaunchtype auto`), with one permission prompt, then a restart. Otherwise a note only. |
 | This PC is a virtual machine | The PC's maker and model. Inside a virtual machine, Docker needs nested virtualization from the outer machine. | A note only. |
-| Windows Server service | The start type of the Server service (LanmanServer). Docker needs it set to Automatic. While Docker runs, a service on Manual or turned off is only worth knowing. | How to set it as an administrator. |
+| Windows Server service | The start type of the Server service (LanmanServer). Docker needs it set to Automatic. While Docker runs, a service on Manual or turned off is only worth knowing. | **Set it to Automatic**, and start it, with one permission prompt. |
 
-Steps that need an administrator show **Coming in the next version**, with the way to do them by hand.
+## Changes CashPilot makes for you
+
+Each change in bold above runs only from its own confirm screen. The screen says:
+
+- what will change on your PC;
+- whether Windows shows a permission prompt. For the changes that need an administrator, the prompt names Windows PowerShell, because CashPilot makes the change through it. If your account is not an administrator, an administrator types their password there. The Docker Desktop installer asks for permission itself;
+- whether a restart or a sign-out follows;
+- how to undo the change.
+
+**Cancel** changes nothing. While a change runs, a line counts the seconds, and the change stops by itself after its time limit (15 minutes for WSL, 2 minutes for most others). If it fails, the step stays **Needs you** and says why, with Windows' code.
+
+CashPilot checks your PC again before it runs a change. If the step no longer asks for it, nothing runs. It adds only your own account to docker-users, by its ID (SID), which it reads before the permission prompt. So it is your account that joins, even when an administrator types their password.
 
 ## Restarts
+
+Turning on WSL and turning Windows' hypervisor back on need a restart. Joining docker-users needs a sign-out and back in. When a change needs one, CashPilot saves where the checklist stands first, then shows a screen with **Restart now** (or **Sign out now**) and **Later**. That screen says that Windows closes every open app, so save your work first. Nothing restarts or signs out until you click.
 
 Turning on virtualization needs a restart into the BIOS. When you click **Restart into BIOS**, a confirm screen comes first. It says that Windows closes every open app, so save your work first. Only **Restart now** on that screen restarts the PC.
 
@@ -57,8 +70,10 @@ If you do not want Docker, click **Skip, use native apps only**. On Windows, onl
 
 - It never restarts your PC, signs you out or restarts into the BIOS without your click on the confirm screen.
 - It never changes a BIOS setting, and never says a BIOS setting is on unless it read it.
-- It never installs Docker Desktop, WSL or a Linux distribution for you, and never accepts Docker's terms.
-- It never switches Docker between Linux and Windows containers.
+- It never installs Docker Desktop or WSL without your click on the confirm screen, never installs either silently, never installs a Linux distribution, and never accepts Docker's terms. winget's Docker Desktop package would accept them, so CashPilot replaces the installer's options with plain `install`.
+- It never switches Docker between Linux and Windows containers without your click.
+- It never adds anyone but your own account to a group, never adds anyone to Administrators, and adds you to docker-users only when Docker refused your account.
+- It never sets `hypervisorlaunchtype` to off.
 - It never turns off Windows security features: Memory Integrity, Credential Guard, Defender or the firewall.
 - It never touches your WSL distributions, virtual machines or virtual networks.
 - It reads only values Windows does not translate, so the checklist works the same in every language.
