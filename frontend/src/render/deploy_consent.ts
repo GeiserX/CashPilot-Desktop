@@ -121,26 +121,37 @@ export function adminConsentScreen(serviceName: string, step: AdminStep): string
 
 /** What a deploy that ran says next to Deploy once it ended. */
 export interface DeployAnswer {
-  kind: "ok" | "cancelled" | "failed";
+  kind: "ok" | "cancelled" | "failed" | "partial";
   text: string;
   followUp?: { failure: string; run(): Promise<string | void> };
 }
 
 /** The note next to Deploy while it runs, or once it answered. */
 export function deployNotice(kind: "busy" | DeployAnswer["kind"], text: string, worker = false): string {
-  const tone = kind === "failed" ? "error" : kind === "cancelled" ? "warn" : kind === "ok" ? "ok" : "";
-  const role = kind === "failed" ? "alert" : "status";
-  const lead = kind === "failed" && !worker ? "<strong>The deploy did not finish.</strong> " : "";
+  const unfinished = kind === "failed" || kind === "partial";
+  const tone = kind === "failed" ? "error" : kind === "cancelled" || kind === "partial" ? "warn" : kind === "ok" ? "ok" : "";
+  const role = unfinished ? "alert" : "status";
+  const lead = unfinished && !worker ? "<strong>The deploy did not finish.</strong> " : "";
   return `<div class="deploy-notice ${tone}" data-deploy-notice="${kind}" role="${role}"><p>${lead}${escapeHtml(text)}</p></div>`;
 }
 
 /** What Cancel on the admin-step screen leaves behind. */
 export const CANCELLED_TEXT = "Nothing was deployed. You chose Cancel, so Windows was not asked for anything.";
 
+// app_credentials.go adds this code to the message that Wails rejects with.
+const DEPLOY_CREDENTIALS_SAVED = "[deploy_credentials_saved] ";
+
+function deployErrorAnswer(error: unknown): DeployAnswer {
+  const text = (error instanceof Error ? error.message : String(error ?? "")).trim();
+  if (text.startsWith(DEPLOY_CREDENTIALS_SAVED)) {
+    return { kind: "partial", text: text.slice(DEPLOY_CREDENTIALS_SAVED.length) };
+  }
+  return { kind: "failed", text: text || "CashPilot got no reason back. Check the service before trying Deploy again." };
+}
+
 /** The text of a rejected deploy: the backend's own reason, never an empty line. */
 export function deployErrorText(error: unknown): string {
-  const text = (error instanceof Error ? error.message : String(error ?? "")).trim();
-  return text || "CashPilot got no reason back. Check the service before trying Deploy again.";
+  return deployErrorAnswer(error).text;
 }
 
 /** What a checked deploy did. */
@@ -202,7 +213,7 @@ export async function runDeployWithStatus(
   try {
     answer = await deploy();
   } catch (error) {
-    answer = { kind: "failed", text: deployErrorText(error) };
+    answer = deployErrorAnswer(error);
   }
   say(answer.kind, answer.text);
   if (answer.kind === "ok" && answer.followUp) {

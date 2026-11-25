@@ -2760,6 +2760,10 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
     return restored;
   };
   const say = (kind: DeployStatus["kind"], text: string) => {
+    if (kind === "partial") {
+      markWizardSecretsSaved(slug, typedSecrets);
+      clearRequestSecrets(values, secretKeys);
+    }
     const retrySecret = (kind === "failed" || kind === "cancelled") && restoreSecretEdits();
     setWizardDeployFeedback(slug, { kind, text, retrySecret, worker: workerId !== null });
   };

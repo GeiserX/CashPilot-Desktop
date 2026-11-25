@@ -1524,15 +1524,31 @@ func (a *App) deployService(slug string, values map[string]string, opts services
 	if err != nil {
 		return store.Deployment{}, nil, err
 	}
-	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, opts)
-	if err != nil {
-		a.emitError("deploy", err)
-		return store.Deployment{}, nil, err
+	deployment, walletResult, deployErr := a.services.DeployWallet(a.ctx, slug, creds, opts)
+	if deployErr != nil && deployment.Slug == "" {
+		a.emitError("deploy", deployErr)
+		return store.Deployment{}, nil, deployErr
 	}
 	saveErr := a.saveLocalDeployCredentials(slug, values)
 	a.emitEvent("deployment:changed", deployment)
 	if saveErr != nil {
 		a.emitError("credentials", saveErr)
+	}
+	if deployErr != nil {
+		if saveErr != nil {
+			deployErr = errors.Join(deployErr, saveErr)
+		} else {
+			for key, secret := range a.credentialFields(slug) {
+				if secret && strings.TrimSpace(values[key]) != "" {
+					deployErr = savedPartialDeployError{deployErr}
+					break
+				}
+			}
+		}
+		a.emitError("deploy", deployErr)
+		return deployment, nil, deployErr
+	}
+	if saveErr != nil {
 		return deployment, walletResult, saveErr
 	}
 	a.registerDevice(slug, creds)

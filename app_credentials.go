@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -135,7 +136,7 @@ func (a *App) prepareDeployCredentials(slug string, values map[string]string, im
 	return creds, nil
 }
 
-// Merge the submitted settings after the runtime succeeds. Read the current
+// Merge the submitted settings once the runtime has started a copy. Read the current
 // store again so a blank field cannot overwrite a secret saved during deploy.
 func (a *App) saveLocalDeployCredentials(slug string, values map[string]string) error {
 	if len(values) == 0 || catalog.IsCustomSlug(slug) {
@@ -145,6 +146,24 @@ func (a *App) saveLocalDeployCredentials(slug string, values map[string]string) 
 		return fmt.Errorf("The service deployed, but CashPilot could not save its settings: %w", err)
 	}
 	return nil
+}
+
+type savedPartialDeployError struct{ cause error }
+
+func (e savedPartialDeployError) Error() string {
+	return e.cause.Error() + ". CashPilot saved your new credentials and will use them on retry."
+}
+
+func (e savedPartialDeployError) Unwrap() error { return e.cause }
+
+// Wails turns the error into a JavaScript Error. Prefix its message with a
+// code so Setup can clear the draft when the new credentials were saved.
+func formatBindingError(err error) any {
+	var partial savedPartialDeployError
+	if errors.As(err, &partial) {
+		return "[deploy_credentials_saved] " + err.Error()
+	}
+	return err.Error()
 }
 
 // A worker deploy saves the nonblank fields supplied for the successful attempt.

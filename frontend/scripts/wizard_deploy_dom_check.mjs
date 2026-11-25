@@ -50,6 +50,8 @@ function checkWizard(scenario) {
   let workerReplacement = false;
   let allowReplacement = false;
   let testLocal = false;
+  let localFailure;
+  let localToken;
   const workerRequests = [];
   const localRequests = [];
   const questions = [];
@@ -101,11 +103,22 @@ function checkWizard(scenario) {
       if (request.values[secretKey]) savedPassword = request.values[secretKey];
       return { worker: "garage", containerId: "fixture" };
     },
-    async DeployService(_slug, values) {
-      localRequests.push(values[secretKey]);
-      if (localRequests.length === 1) throw Error("Container could not be created.");
-      savedPassword = values[secretKey];
-      return { slug };
+    async DeployService(_slug, values, _image, instances) {
+      const token = values[secretKey] || savedPassword;
+      localRequests.push(token);
+      if (localRequests.length === 1 || localFailure === "first") throw Error("Container could not be created.");
+      const count = instances ?? state.deployments.find((deployment) => deployment.slug === slug)?.instances ?? 1;
+      const deployment = { slug, image: "fixture/node:1", status: "running", instances: count };
+      if (localFailure === "second") {
+        if (instances !== 2) throw Error("Expected a request for two copies.");
+        localToken = savedPassword = token;
+        state.deployments = [deployment];
+        events["deployment:changed"]();
+        throw Error("[deploy_credentials_saved] copy 2 of Fixture failed to start. CashPilot saved your new credentials and will use them on retry.");
+      }
+      localToken = savedPassword = token;
+      state.deployments = [deployment];
+      return deployment;
     },
   }, { get: (app, name) => async (...args) => {
     if (args.some(arg => arg?.HOSTD_API_PASSWORD === "test password")) passwordSends++;
@@ -295,7 +308,33 @@ function checkWizard(scenario) {
     await until(() => status() === "ok" || status() === "missing", "local retry without a redraw");
     const localRetried = status() === "ok" && localRequests.length === 2 && localRequests.every(value => value === "first local token")
       && token().value === "" && token().placeholder === "Saved";
-    return { unavailable, retryWorker, keptOnRedraw, declined, approved, clearedOnClose, localKept, localRetried };
+
+    localFailure = "first";
+    q("[data-wizard-instances]").value = "2";
+    const replacement = "new local token";
+    token().value = replacement;
+    click(deploy);
+    await until(() => status() === "failed" && notice().includes("Container could not be created."), "no local copies started");
+    const totalFailure = token().value === replacement && savedPassword === "first local token" && retryNotice();
+
+    localFailure = "second";
+    click(deploy);
+    await until(() => localRequests.length === 4 && (status() === "partial" || status() === "failed"), "second local copy failed");
+    const partialFailure = localToken === replacement && savedPassword === replacement &&
+      token().value === "" && token().placeholder === "Saved" && !retryNotice() &&
+      notice().includes("copy 2 of Fixture failed to start") && notice().includes("will use them on retry") &&
+      !notice().includes("[deploy_credentials_saved]");
+    click("#wizard-next");
+    click("#wizard-prev");
+    await until(() => token().placeholder === "Saved", "saved token after reopening Setup");
+    const reopenedUsingSaved = token().value === "" && q("[data-wizard-instances]").value === "2";
+    localFailure = undefined;
+    allowReplacement = true;
+    click(deploy);
+    await until(() => status() === "ok", "retry after reopening Setup");
+    const partialRetried = localRequests.at(-1) === replacement && localToken === replacement;
+    return { unavailable, retryWorker, keptOnRedraw, declined, approved, clearedOnClose, localKept, localRetried,
+      totalFailure, partialFailure, reopenedUsingSaved, partialRetried };
   }
   document.addEventListener("DOMContentLoaded", async () => {
     try {
@@ -350,6 +389,7 @@ try {
       { kept: true, stillSaved: true, resent: true, cleared: true },
     ],
     keptOnRedraw: true, declined: true, approved: true, clearedOnClose: true, localKept: true, localRetried: true,
+    totalFailure: true, partialFailure: true, reopenedUsingSaved: true, partialRetried: true,
   });
   console.log(`wizard deploy DOM: ${scenario} passed`);
 } finally {

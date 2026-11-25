@@ -275,15 +275,9 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 // DeployWallet is DeployWith that also returns what the deploy did with the service's
 // wallet seed file: nil for a service with none. A new wallet's phrase is in it, for
 // the caller to show once and drop; it is stored nowhere.
+// If the first copy starts and a later step fails, it returns the deployment with
+// the error and no wallet result.
 func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
-	deployment, wallet, err := m.deployWith(ctx, slug, credentials, opts)
-	if err != nil {
-		return store.Deployment{}, nil, err
-	}
-	return deployment, wallet, nil
-}
-
-func (m *Manager) deployWith(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
 	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
@@ -422,16 +416,16 @@ func (m *Manager) deployWith(ctx context.Context, slug string, credentials map[s
 		MemoryMB:    info.MemoryMB,
 	}
 	if err := m.store.UpsertDeployment(deployment); err != nil {
-		return store.Deployment{}, nil, err
+		return deployment, nil, err
 	}
 	if err := m.store.SetCustomImage(slug, custom); err != nil {
-		return store.Deployment{}, nil, err
+		return deployment, nil, err
 	}
 	deployment.CustomImage = custom
 	// The count is recorded before the extra copies start: if one fails, the next
 	// redeploy still knows how many this machine should run and tries again.
 	if err := m.store.SetInstances(slug, instances); err != nil {
-		return store.Deployment{}, nil, err
+		return deployment, nil, err
 	}
 	deployment.Instances = instances
 	m.afterWallet(slug, svc, info.Wallet)
@@ -455,7 +449,11 @@ func (m *Manager) deployWith(ctx context.Context, slug string, credentials map[s
 		if err != nil {
 			m.store.RecordEvent(slug, "deploy_error", fmt.Sprintf("copy %d: %v", n, err))
 			m.setCopies(slug, copies)
-			return store.Deployment{}, nil, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
+			err = fmt.Errorf("copy %d of %s failed to start: %w", n, svc.Name, err)
+			if n < instances {
+				err = fmt.Errorf("%w. CashPilot skipped the remaining copies", err)
+			}
+			return deployment, nil, err
 		}
 		copies = append(copies, copyInfo)
 	}
@@ -464,7 +462,7 @@ func (m *Manager) deployWith(ctx context.Context, slug string, credentials map[s
 			if err := copier.RemoveCopy(ctx, slug, n, m.stopTimeout(slug)); err != nil {
 				m.store.RecordEvent(slug, "remove_error", fmt.Sprintf("copy %d: %v", n, err))
 				m.setCopies(slug, copies)
-				return store.Deployment{}, nil, fmt.Errorf("copy %d of %s: %w", n, svc.Name, err)
+				return deployment, nil, fmt.Errorf("could not remove copy %d of %s: %w", n, svc.Name, err)
 			}
 			m.store.RecordEvent(slug, "removed", fmt.Sprintf("copy %d", n))
 		}
