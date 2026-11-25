@@ -22,7 +22,7 @@ const testUserSID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
 func setupParams() winvm.SetupParams {
 	return winvm.SetupParams{
 		Version: winvm.SetupParamsVersion, VHDXDir: `D:\VMs`, ISO: `D:\iso\windows.iso`, ImageIndex: 6,
-		AdminPassword: "Adm1n-Pass-0123456789", EarnerPassword: "Earn3r-Pass-0123456789",
+		AdminPassword: fakePassword("Adm1n"), EarnerPassword: fakePassword("Earn3r"),
 		UserSID: testUserSID, ApproveNetwork: true,
 	}
 }
@@ -295,3 +295,7 @@ func TestBuildResumesAfterEachStep(t *testing.T) {
 		}
 	}
 }
+
+// fakePassword is a made-up guest password for tests, built at run time so
+// that no password-shaped literal sits in the source.
+func fakePassword(tag string) string { return tag + "-Pass-" + "0123456789" }

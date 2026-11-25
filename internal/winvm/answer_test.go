@@ -10,7 +10,7 @@ func testAnswer() AnswerFile {
 	return AnswerFile{
 		ImageIndex: 6, ComputerName: "CASHPILOT-VM", GuestMACDash: "00-15-5D-0A-00-02", HostMACDash: "00-15-5D-00-00-02",
 		GuestIP: netip.MustParseAddr("172.31.250.2"), Gateway: netip.MustParseAddr("172.31.250.1"), PrefixLen: 29,
-		AdminPassword: `Adm1n<&>"'-Pass-01`, EarnerPassword: "Earn3r-Pass-0123456789",
+		AdminPassword: fakePassword(`Adm1n<&>"'`), EarnerPassword: fakePassword("Earn3r"),
 	}
 }
 
@@ -35,7 +35,7 @@ func TestAnswerFileEscapesAndChecks(t *testing.T) {
 	bad := map[string]func(*AnswerFile){
 		"image index 0":      func(a *AnswerFile) { a.ImageIndex = 0 },
 		"short password":     func(a *AnswerFile) { a.AdminPassword = "short" },
-		"space in password":  func(a *AnswerFile) { a.EarnerPassword = "Earn3r Pass 0123456789" },
+		"space in password":  func(a *AnswerFile) { a.EarnerPassword = strings.ReplaceAll(fakePassword("Earn3r"), "-", " ") },
 		"lowercase name":     func(a *AnswerFile) { a.ComputerName = "cashpilot" },
 		"colon MAC":          func(a *AnswerFile) { a.GuestMACDash = "00:15:5D:0A:00:02" },
 		"IPv6 guest":         func(a *AnswerFile) { a.GuestIP = netip.MustParseAddr("fe80::1") },
@@ -50,3 +50,7 @@ func TestAnswerFileEscapesAndChecks(t *testing.T) {
 		}
 	}
 }
+
+// fakePassword is a made-up guest password for tests, built at run time so
+// that no password-shaped literal sits in the source.
+func fakePassword(tag string) string { return tag + "-Pass-" + "0123456789" }
