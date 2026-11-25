@@ -620,10 +620,19 @@ func TestSeamRefusesBadOutput(t *testing.T) {
 			t.Errorf("an add with its row %s was accepted", name)
 		}
 	}
-	// A remove that left a row behind failed.
-	h, _, _ = newSeam(cannedDenyAfterAdd)
-	if err := h.RemoveDeny(context.Background(), tVMID, twoDenies); err == nil {
-		t.Error("a remove that left its rows was accepted")
+	// A remove that left a row behind failed, whether Hyper-V lists the /32
+	// bare or with its /32.
+	slash32 := strings.ReplaceAll(cannedDenyAfterAdd, `"203.0.113.9"`, `"203.0.113.9/32"`)
+	for name, answer := range map[string]string{"bare": cannedDenyAfterAdd, "with /32": slash32} {
+		h, _, _ = newSeam(answer)
+		if err := h.RemoveDeny(context.Background(), tVMID, twoDenies); err == nil {
+			t.Errorf("a remove that left its rows (%s) was accepted", name)
+		}
+	}
+	// An add whose /32 Hyper-V lists as a.b.c.d/32 is in place.
+	h, _, _ = newSeam(slash32)
+	if err := h.AddDeny(context.Background(), tVMID, twoDenies); err != nil {
+		t.Errorf("an add listed with /32 was refused: %v", err)
 	}
 }
 

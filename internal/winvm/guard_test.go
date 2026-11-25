@@ -783,3 +783,223 @@ func TestGuardRunResumesAfterSleep(t *testing.T) {
 		t.Fatalf("Run returned %v", err)
 	}
 }
+
+// Run comes back from a stop that was not a change to the fence: once the
+// reason is gone, the next tick runs the boot routine (disconnect, exact
+// compare, connect). Each case turns a reason on, ticks, turns it off, ticks.
+func TestGuardRunReconnectsOnceTheReasonIsGone(t *testing.T) {
+	ctx := context.Background()
+	const approved = `{"keepOff":false,"approvedNetworks":[{"gatewayMac":"00-00-5E-00-53-01","profileId":"{6A5D2C1E-0B7F-4C3A-9E21-5F8D7C6B4A30}"}]}`
+	for _, c := range []struct {
+		name    string
+		on, off func(r *rig)
+	}{
+		{"keepOff", func(r *rig) { r.writePrefs(`{"keepOff":true}`) }, func(r *rig) { r.writePrefs(approved) }},
+		{"a network not approved yet", func(r *rig) { os.Remove(filepath.Join(r.dir, winvm.PrefsFile)) }, func(r *rig) { r.writePrefs(approved) }},
+		{"a broken prefs file", func(r *rig) { r.writePrefs(`{"allowAll":true}`) }, func(r *rig) { r.writePrefs(approved) }},
+		// A cold start: no state yet, no echo answer yet, so no own-IP Deny.
+		{"no own IP yet", func(r *rig) {
+			r.setOwn()
+			os.Remove(filepath.Join(r.dir, winvm.StateFile))
+			r.f.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{netip.PrefixFrom(r.f.PublicIP, 32)})
+		}, func(r *rig) { r.setOwn(r.f.PublicIP) }},
+		{"a failed reading", func(r *rig) { r.f.FailNext("ReadLive", nil) }, func(*rig) {}},
+		{"a failed host reading", func(r *rig) { r.f.FailNext("ReadHostNet", nil) }, func(*rig) {}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRig(t)
+			l := winvm.NewGuardLoop(r.d)
+			if st := l.Boot(ctx); st.Network != winvm.NetConnected {
+				t.Fatalf("Boot: %+v", st)
+			}
+			c.on(r)
+			m := r.mark()
+			st := l.Tick(ctx)
+			if st.Network != winvm.NetDisconnected || st.Reason == "" || slices.Contains(r.since(m), "Connect") {
+				t.Fatalf("with the reason on: %+v %v", st, r.since(m))
+			}
+			c.off(r)
+			m = r.mark()
+			st = l.Tick(ctx)
+			calls := r.since(m)
+			if len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") {
+				t.Fatalf("the tick after the reason went is not the boot routine: %v", calls)
+			}
+			if st.Network != winvm.NetConnected || st.Fence != winvm.FenceHeld || st.Reason != "" || !r.connectedNow() {
+				t.Fatalf("not back on the network: %+v", st)
+			}
+			// Back to passes: the next tick neither disconnects nor connects.
+			m = r.mark()
+			l.Tick(ctx)
+			if calls := r.since(m); slices.Contains(calls, "Disconnect") || slices.Contains(calls, "Connect") {
+				t.Fatalf("a tick after the reconnect: %v", calls)
+			}
+		})
+	}
+}
+
+// A cut for a change to the fence stays a cut: the ticks after it never
+// connect, not even once the change is undone. Only Repair, a reboot or a
+// resume brings the VM back.
+func TestGuardRunNeverReconnectsAfterADriftCut(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	l := winvm.NewGuardLoop(r.d)
+	l.Boot(ctx)
+	ten := netip.MustParsePrefix("10.0.0.0/8")
+	r.f.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{ten})
+	m := r.mark()
+	if err := expectCut(r, l.Tick(ctx), r.since(m), "acl"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.AddDeny(ctx, r.p.VMID, []netip.Prefix{ten}); err != nil {
+		t.Fatal(err)
+	}
+	m = r.mark()
+	for range 3 {
+		l.Tick(ctx)
+	}
+	if calls := r.since(m); slices.Contains(calls, "Connect") || slices.Contains(calls, "Start") {
+		t.Fatalf("a tick after a drift cut connected: %v", calls)
+	}
+	if r.connectedNow() {
+		t.Fatal("the VM is back on the network after a drift cut")
+	}
+}
+
+// A retry under a proof lock is a Pass: it never takes the proof's network
+// away. Once the lock is gone, the retry runs the boot routine.
+func TestGuardRunRetryHoldsOffUnderAProofLock(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	l := winvm.NewGuardLoop(r.d)
+	l.Boot(ctx)
+	r.writePrefs(`{"keepOff":true}`)
+	l.Tick(ctx)
+	r.writePrefs(`{"keepOff":false,"approvedNetworks":[{"gatewayMac":"00-00-5E-00-53-01","profileId":"{6A5D2C1E-0B7F-4C3A-9E21-5F8D7C6B4A30}"}]}`)
+	if err := winvm.WriteProofLock(r.dir, provedAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	r.f.Connect(ctx, r.p.VMID, r.p.Names.Switch) // the proof's own connect
+	m := r.mark()
+	l.Tick(ctx)
+	l.Tick(ctx)
+	if calls := r.since(m); slices.Contains(calls, "Disconnect") || slices.Contains(calls, "Connect") {
+		t.Fatalf("a retry under the lock touched the network: %v", calls)
+	}
+	os.Remove(filepath.Join(r.dir, winvm.LockFile))
+	r.f.Disconnect(ctx, r.p.VMID) // the proof ends with the VM off
+	m = r.mark()
+	st := l.Tick(ctx)
+	if calls := r.since(m); len(calls) == 0 || calls[0] != "Disconnect" || !slices.Contains(calls, "Connect") || st.Network != winvm.NetConnected {
+		t.Fatalf("after the lock: %+v %v", st, calls)
+	}
+}
+
+// A broken prefs file is named as the reason, not a network the user never
+// approved.
+func TestGuardBrokenPrefsReason(t *testing.T) {
+	r := newRig(t)
+	r.writePrefs(`{"keepOff":false,"allowAll":true}`)
+	st := r.d.Pass(context.Background())
+	if st.Network != winvm.NetDisconnected || !strings.Contains(st.Reason, "prefs.json") {
+		t.Fatalf("status %+v", st)
+	}
+}
+
+// A VM off the network always says why, even when nothing blocks it any more.
+func TestGuardStatusNeverBlankWhenOff(t *testing.T) {
+	r := newRig(t)
+	r.writePrefs(`{"keepOff":true}`)
+	r.d.Pass(context.Background())
+	r.writePrefs(`{"keepOff":false,"approvedNetworks":[{"gatewayMac":"00-00-5E-00-53-01","profileId":"{6A5D2C1E-0B7F-4C3A-9E21-5F8D7C6B4A30}"}]}`)
+	st := r.d.Pass(context.Background())
+	if st.Network != winvm.NetDisconnected || st.Fence != winvm.FenceHeld || st.Reason == "" {
+		t.Fatalf("status %+v", st)
+	}
+}
+
+// Under a valid proof lock the status reads the network from the adapter: an
+// adapter on no switch is disconnected, not assumed connected.
+func TestGuardProofLockReadsTheNetwork(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.f.Disconnect(ctx, r.p.VMID)
+	if err := winvm.WriteProofLock(r.dir, provedAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if st := r.d.Pass(ctx); st.Network != winvm.NetDisconnected {
+		t.Fatalf("under the lock with the adapter off: %+v", st)
+	}
+}
+
+// Boot during a proof never connects, even on a fence that matches.
+func TestGuardBootUnderALockOnACleanFence(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	if err := winvm.WriteProofLock(r.dir, provedAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	m := r.mark()
+	st := r.d.Boot(ctx)
+	if calls := r.since(m); !slices.Contains(calls, "Disconnect") || slices.Contains(calls, "Connect") || slices.Contains(calls, "Start") {
+		t.Fatalf("Boot under the lock: %v", calls)
+	}
+	if st.Network != winvm.NetDisconnected || r.connectedNow() {
+		t.Fatalf("Boot under the lock: %+v", st)
+	}
+}
+
+// tamperOnConnect is the fake with a fence that changes the moment the VM is
+// connected.
+type tamperOnConnect struct {
+	*hvfake.HyperV
+	do func()
+}
+
+func (h tamperOnConnect) Connect(ctx context.Context, vmID, switchName string) error {
+	if err := h.HyperV.Connect(ctx, vmID, switchName); err != nil {
+		return err
+	}
+	h.do()
+	return nil
+}
+
+// Boot reads the fence again after it connects: a change there takes the VM
+// off again, it is not started, the status names the change, and the ticks
+// after it do not reconnect, even once the change is undone.
+func TestGuardBootChecksAgainAfterConnect(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	ten := netip.MustParsePrefix("10.0.0.0/8")
+	armed := true
+	r.d.HV = tamperOnConnect{r.f, func() {
+		if armed {
+			r.f.RemoveDeny(ctx, r.p.VMID, []netip.Prefix{ten})
+		}
+	}}
+	r.f.Disconnect(ctx, r.p.VMID)
+	r.f.SetVMState(r.p.VMID, "Off")
+	l := winvm.NewGuardLoop(r.d)
+	m := r.mark()
+	st := l.Boot(ctx)
+	calls := r.since(m)
+	ci := slices.Index(calls, "Connect")
+	if ci < 0 || !slices.Contains(calls[ci:], "Disconnect") || slices.Contains(calls, "Start") {
+		t.Fatalf("Boot after a change on connect: %v", calls)
+	}
+	if st.Network == winvm.NetConnected || st.Fence != winvm.FenceCut || !hasChange(st, "acl") || r.connectedNow() {
+		t.Fatalf("status %+v", st)
+	}
+	// Even with the change undone, the ticks do not reconnect.
+	armed = false
+	if err := r.f.AddDeny(ctx, r.p.VMID, []netip.Prefix{ten}); err != nil {
+		t.Fatal(err)
+	}
+	m = r.mark()
+	l.Tick(ctx)
+	l.Tick(ctx)
+	if slices.Contains(r.since(m), "Connect") {
+		t.Fatalf("a tick reconnected after the change on connect: %v", r.since(m))
+	}
+}

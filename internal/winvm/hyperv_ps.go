@@ -384,13 +384,14 @@ Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] 
 `
 
 // scriptRemoveDeny removes the Deny rows of each remote from the VM's one
-// adapter, both directions, then lists the Deny rows left.
+// adapter, both directions, then lists the Deny rows left. A /32 matches
+// whether Hyper-V lists it bare or with its /32.
 const scriptRemoveDeny = hvPrelude + `$vm = @(Find-OurVM $in.vm)
 if ($vm.Count -ne 1) { throw 'The VM was not found.' }
 $a = @(Get-VMNetworkAdapter -VM $vm[0])
 if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-$rs = @($in.remotes)
-@(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Deny') -and ($rs -contains [string]$_.RemoteAddress) }) | Remove-VMNetworkAdapterAcl
+$rs = @($in.remotes | ForEach-Object { ([string]$_) -replace '/32$', '' })
+@(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Deny') -and ($rs -contains (([string]$_.RemoteAddress) -replace '/32$', '')) }) | Remove-VMNetworkAdapterAcl
 Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
 `
 
@@ -1069,10 +1070,11 @@ type denyWire struct {
 }
 
 // hasBoth is whether the rows hold remote in both directions, as one Both rule
-// is listed.
-func (w denyWire) hasBoth(remote string) (in, out bool) {
+// is listed. Rows compare as prefixes, so a /32 listed bare or as a.b.c.d/32
+// is the same row.
+func (w denyWire) hasBoth(remote netip.Prefix) (in, out bool) {
 	for _, r := range w.Deny {
-		if r.Remote != remote {
+		if p, err := parsePrefixOrAddr(r.Remote); err != nil || p.Masked() != remote {
 			continue
 		}
 		switch strings.ToLower(r.Direction) {
@@ -1105,9 +1107,9 @@ func (h *psHost) AddDeny(ctx context.Context, vmID string, ps []netip.Prefix) er
 	if err := h.call(ctx, scriptAddDeny, arg, &w); err != nil {
 		return err
 	}
-	for _, r := range rs {
-		if in, out := w.hasBoth(r); !in || !out {
-			return fmt.Errorf("the Deny for %s is not in place after the add", r)
+	for _, p := range ps {
+		if in, out := w.hasBoth(p); !in || !out {
+			return fmt.Errorf("the Deny for %s is not in place after the add", aclArg(p))
 		}
 	}
 	return nil
@@ -1137,9 +1139,9 @@ func (h *psHost) RemoveDeny(ctx context.Context, vmID string, ps []netip.Prefix)
 	if err := h.call(ctx, scriptRemoveDeny, arg, &w); err != nil {
 		return err
 	}
-	for _, r := range rs {
-		if in, out := w.hasBoth(r); in || out {
-			return fmt.Errorf("a Deny for %s is still there after the remove", r)
+	for _, p := range ps {
+		if in, out := w.hasBoth(p); in || out {
+			return fmt.Errorf("a Deny for %s is still there after the remove", aclArg(p))
 		}
 	}
 	return nil

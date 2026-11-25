@@ -121,7 +121,7 @@ func (r *rotatingLog) Write(b []byte) (int, error) {
 	if fi, err := os.Stat(r.path); err == nil && fi.Size()+int64(len(b)) > r.max {
 		os.Rename(r.path, r.path+".1")
 	}
-	f, err := os.OpenFile(r.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := winvm.OpenAppend(r.path)
 	if err != nil {
 		return len(b), nil
 	}

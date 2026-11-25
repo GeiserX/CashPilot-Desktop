@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -99,4 +100,37 @@ func readCapped(path string, max int64, trusted bool) ([]byte, error) {
 		return nil, fmt.Errorf("%s is over the %d byte cap", filepath.Base(path), max)
 	}
 	return b, nil
+}
+
+// OpenAppend opens path for appending, for the guard's log. A file it makes
+// gets the usersRead rule. A file already there must be a regular file owned by
+// SYSTEM, Administrators or this account; anything else (a file a standard user
+// made first, a link) is removed and made again, so no user can choose what the
+// SYSTEM guard's log says.
+func OpenAppend(path string) (*os.File, error) {
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode().IsRegular() {
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+			if err == nil {
+				if ownedByAdmin(f) == nil {
+					return f, nil
+				}
+				f.Close()
+			}
+		}
+		if err := os.Remove(path); err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := protect(path, usersRead); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }
