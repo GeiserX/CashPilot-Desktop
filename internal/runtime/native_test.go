@@ -138,7 +138,11 @@ func newTestNativeProvider(t *testing.T) *NativeProcessProvider {
 		t.Errorf("unexpected firewall rule read for %s", slug)
 		return false, errors.New("no firewall in tests")
 	}
-	p.removeFirewall = func(slug, _ string) error {
+	p.firewallExists = func(slug, _ string) (bool, error) {
+		t.Errorf("unexpected old firewall rule read for %s", slug)
+		return false, errors.New("no firewall in tests")
+	}
+	p.removeFirewall = func(slug, _ string, _ bool) error {
 		t.Errorf("unexpected firewall rule removal for %s", slug)
 		return nil
 	}

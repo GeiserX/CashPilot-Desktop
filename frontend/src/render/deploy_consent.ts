@@ -67,23 +67,28 @@ export interface AdminConsentText {
 }
 
 export function adminConsentText(serviceName: string, step: AdminStep): AdminConsentText {
-  const rule = step.ruleName || "CashPilot: block";
+  const rule = step.ruleName;
+  const oldRule = step.removeRuleName;
   const program = step.program || serviceName;
   return {
-    title: `Add a Windows Firewall rule for ${serviceName}?`,
-    changes:
-      `${serviceName} carries other people's traffic. Before it starts, Windows adds one outbound firewall rule, "${rule}". ` +
-      `It blocks only ${serviceName}'s program (${program}) from reaching ${rangesText(step.networks || [])}. ` +
-      "Nothing else on this PC changes.",
+    title: rule && oldRule
+      ? `Change the Windows Firewall rules for ${serviceName}?`
+      : `${oldRule ? "Remove" : "Add"} a Windows Firewall rule for ${serviceName}?`,
+    changes: [
+      oldRule ? `Before ${serviceName} starts, CashPilot removes the old outbound rule "${oldRule}". The new deployment no longer needs it.` : "",
+      rule ? `Before it starts, Windows adds one outbound firewall rule, "${rule}". It blocks only ${serviceName}'s program (${program}) from reaching ${rangesText(step.networks || [])}. Nothing else on this PC changes.` : "",
+    ].filter(Boolean).join(" "),
     prompt:
-      `Windows then shows a permission prompt. It names Windows PowerShell (${POWERSHELL_PATH}), because CashPilot adds the rule through it. ` +
+      `Windows then ${rule && oldRule ? "shows a permission prompt for each rule" : "shows a permission prompt"}. It names Windows PowerShell (${POWERSHELL_PATH}), because CashPilot changes the firewall through it. ` +
       "If your account is not an administrator, an administrator types their password there. " +
-      `Choose Yes to go ahead. If you choose No, CashPilot adds no rule and ${serviceName} does not run. ` +
+      `Choose Yes to go ahead. If you choose No, ${oldRule ? "CashPilot stops the deploy" : "CashPilot adds no rule"} and ${serviceName} does not run. ` +
       `If ${serviceName} was running, the deploy stopped it before the prompt, and it stays stopped until you deploy again and choose Yes.`,
-    after: `No restart. The prompt comes once: the rule stays while ${serviceName} is deployed, so later starts need no prompt.`,
-    undo:
-      `Removing ${serviceName} in CashPilot deletes the rule, with one more permission prompt. ` +
-      `You can also delete it yourself in Windows Defender Firewall with Advanced Security, under Outbound Rules, "${rule}".`,
+    after: rule
+      ? `No restart of Windows. The new rule stays while ${serviceName} is deployed, so later starts need no prompt while the rule is in place.`
+      : "No restart of Windows.",
+    undo: rule
+      ? `Removing ${serviceName} in CashPilot deletes the rule, with one more permission prompt. You can also delete it yourself in Windows Defender Firewall with Advanced Security, under Outbound Rules, "${rule}".`
+      : "Deploying a version that needs the old rule will ask to add it again.",
     go: "Continue",
   };
 }

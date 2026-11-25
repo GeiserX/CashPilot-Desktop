@@ -41,7 +41,14 @@ func (f *firewallCalls) install(p *NativeProcessProvider) {
 		return nil
 	}
 	p.firewallReady = func(string, string, []string) (bool, error) { return f.inPlace, nil }
-	p.removeFirewall = func(slug, program string) error {
+	p.firewallExists = func(string, string) (bool, error) { return f.inPlace, nil }
+	p.removeFirewall = func(slug, program string, mayElevate bool) error {
+		if !f.inPlace {
+			return nil
+		}
+		if !mayElevate {
+			return &AdminApprovalNeeded{Slug: slug}
+		}
 		f.removed = append(f.removed, slug+" "+program)
 		if f.removeFn != nil {
 			return f.removeFn()
@@ -316,8 +323,20 @@ func TestNativeRedeployWithoutFirewallBlockDeletesTheOldRule(t *testing.T) {
 	}
 
 	spec.Service.Native.Binaries[0].FirewallBlock = nil
+	running := p.readRegistry().Entries["fwsvc"].PID
+	step, err := p.AdminStep(spec.Service, spec.Slug)
+	if err != nil || !step.Needed || step.RemoveRuleName != firewallRuleName(spec.Slug, binPath) || step.RuleName != "" {
+		t.Errorf("old firewall rule: AdminStep = %+v, %v, want approval for removal only", step, err)
+	}
+	if _, err := p.Deploy(context.Background(), spec, nil); !errors.As(err, new(*AdminApprovalNeeded)) {
+		t.Errorf("unapproved removal: err = %v, want AdminApprovalNeeded", err)
+	}
+	if entry := p.readRegistry().Entries["fwsvc"]; entry.PID != running || len(fw.removed) != 0 || !p.slugAlive("fwsvc") {
+		t.Fatalf("unapproved removal reached the firewall or stopped the node: %+v, removed %v", entry, fw.removed)
+	}
+	spec.AdminApproval = &step
 	if _, err := p.Deploy(context.Background(), spec, nil); err != nil {
-		t.Fatalf("redeploy without firewall_block: %v", err)
+		t.Fatalf("approved redeploy without firewall_block: %v", err)
 	}
 	if !slices.Equal(fw.removed, []string{"fwsvc " + binPath}) {
 		t.Fatalf("firewall removals = %q, want the old rule for %s", fw.removed, binPath)

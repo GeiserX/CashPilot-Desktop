@@ -27,9 +27,13 @@ func firewallReady(slug, program string, nets []string) (bool, error) {
 	return false, ensureFirewallBlock(slug, program, nets)
 }
 
+// firewallBlockExists always returns false outside Windows.
+func firewallBlockExists(slug, program string) (bool, error) {
+	return false, nil
+}
+
 // removeFirewallBlock has nothing to remove outside Windows.
-func removeFirewallBlock(slug, program string) error {
-	_, _ = slug, program
+func removeFirewallBlock(slug, program string, mayElevate bool) error {
 	return nil
 }
 

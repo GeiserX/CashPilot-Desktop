@@ -969,6 +969,7 @@ export interface AdminStep {
   ruleName?: string;
   program?: string;
   networks?: string[];
+  removeRuleName?: string;
 }
 
 // How a change of the checklist ended (docker_setup.go).

@@ -14,10 +14,6 @@ export function ApplyImport(arg1) {
   return window['go']['main']['App']['ApplyImport'](arg1);
 }
 
-export function ApproveDeployAdminStep(arg1) {
-  return window['go']['main']['App']['ApproveDeployAdminStep'](arg1);
-}
-
 export function BackgroundHelperStatus() {
   return window['go']['main']['App']['BackgroundHelperStatus']();
 }
@@ -84,6 +80,10 @@ export function DeployServiceRouted(arg1, arg2, arg3) {
 
 export function DeployServiceWallet(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['DeployServiceWallet'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function DeployServiceWithAdminApproval(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['DeployServiceWithAdminApproval'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function DeployToWorker(arg1, arg2) {
@@ -272,10 +272,6 @@ export function RestoreStateBackup(arg1, arg2, arg3) {
 
 export function RevealWalletSeed(arg1, arg2) {
   return window['go']['main']['App']['RevealWalletSeed'](arg1, arg2);
-}
-
-export function RevokeDeployAdminStep(arg1) {
-  return window['go']['main']['App']['RevokeDeployAdminStep'](arg1);
 }
 
 export function RevokeSessionRisk(arg1) {

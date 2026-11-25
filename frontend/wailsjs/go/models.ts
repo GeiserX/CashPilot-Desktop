@@ -3045,6 +3045,7 @@ export namespace runtime {
 	    ruleName?: string;
 	    program?: string;
 	    networks?: string[];
+	    removeRuleName?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AdminStep(source);
@@ -3057,6 +3058,7 @@ export namespace runtime {
 	        this.ruleName = source["ruleName"];
 	        this.program = source["program"];
 	        this.networks = source["networks"];
+	        this.removeRuleName = source["removeRuleName"];
 	    }
 	}
 	export class ContainerInfo {

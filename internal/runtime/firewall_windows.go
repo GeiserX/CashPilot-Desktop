@@ -143,19 +143,25 @@ func firewallReady(slug, program string, nets []string) (bool, error) {
 	return firewallReadiness(st, program, nets, what)
 }
 
-// removeFirewallBlock deletes the rule for this program, asking for admin rights
-// only when it exists.
-func removeFirewallBlock(slug, program string) error {
-	name := firewallRuleName(slug, program)
-	st, err := readFirewallRule(name)
-	if err != nil {
+// firewallBlockExists reads whether CashPilot's rule exists for the old binary.
+func firewallBlockExists(slug, program string) (bool, error) {
+	state, err := readFirewallRule(firewallRuleName(slug, program))
+	return state.Found, err
+}
+
+// removeFirewallBlock deletes the rule for this program if it exists and this
+// operation can ask for admin rights.
+func removeFirewallBlock(slug, program string, mayElevate bool) error {
+	exists, err := firewallBlockExists(slug, program)
+	if err != nil || !exists {
 		return err
 	}
-	if !st.Found {
-		return nil
+	if !mayElevate {
+		return &AdminApprovalNeeded{Slug: slug}
 	}
+	name := firewallRuleName(slug, program)
 	if _, err := RunElevated(firewallRemoveScript(name)); err != nil {
-		return fmt.Errorf("the Windows Firewall rule %q is still there (approve the Windows admin prompt and remove again, or delete it yourself with Remove-NetFirewallRule -DisplayName %s): %v", name, psQuote(name), err)
+		return firewallRemoveFailed(name, err)
 	}
 	return nil
 }

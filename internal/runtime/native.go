@@ -131,7 +131,8 @@ type NativeProcessProvider struct {
 	// run PowerShell or raise an admin prompt. ensureFirewall may raise the prompt
 	// only when mayElevate is set by the approved deploy.
 	ensureFirewall func(slug, program string, nets []string, mayElevate bool) error
-	removeFirewall func(slug, program string) error
+	removeFirewall func(slug, program string, mayElevate bool) error
+	firewallExists func(slug, program string) (bool, error)
 	firewallReady  func(slug, program string, nets []string) (bool, error)
 
 	// maxDownload bounds a single artifact download and maxExtract bounds one archive's
@@ -169,6 +170,7 @@ func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 		procs:           make(map[string]*managedProcess),
 		ensureFirewall:  ensureFirewallBlockWith,
 		removeFirewall:  removeFirewallBlock,
+		firewallExists:  firewallBlockExists,
 		firewallReady:   firewallReady,
 	}
 	// statFn is a bound method so it can read p.cpuStatInterval; still a field so tests can
@@ -294,7 +296,9 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 	args := append(buildCommandArgs(bin.Args, env), buildCommandArgs(svc.Native.Command, env)...)
 
 	// Check the approval before stopping a running instance.
-	step, err := p.AdminStep(svc, spec.Slug)
+	prev := p.readRegistry().Entries[spec.Slug]
+	oldProgram := obsoleteFirewallProgram(prev, binPath, bin.FirewallBlock)
+	step, err := p.firewallAdminStep(spec.Slug, binPath, bin.FirewallBlock, oldProgram)
 	if err != nil {
 		return ContainerInfo{}, err
 	}
@@ -303,20 +307,19 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 		return ContainerInfo{}, &AdminApprovalNeeded{Slug: spec.Slug, Name: svc.Name}
 	}
 
-	prev := p.readRegistry().Entries[spec.Slug]
 	p.stopInternal(spec.Slug, false, p.graceFor(StopTimeoutSeconds(spec.Service)))
 	// A rule the previous deploy made and this one no longer wants is deleted now:
 	// once the entry is overwritten, nothing would know it exists.
-	if prev != nil && len(prev.FirewallBlock) > 0 && (len(bin.FirewallBlock) == 0 || prev.BinPath != binPath) {
-		if err := p.removeFirewall(spec.Slug, prev.BinPath); err != nil {
-			return ContainerInfo{}, err
+	if oldProgram != "" {
+		if err := p.removeFirewall(spec.Slug, oldProgram, mayElevate && step.RemoveRuleName != ""); err != nil {
+			return ContainerInfo{}, NameAdminApproval(err, svc.Name)
 		}
 	}
 
 	if progress != nil {
 		progress("Starting native process")
 	}
-	mp, err := p.launchProcess(spec.Slug, binPath, args, envSlice(env), svc.Docker.Resources, mayElevate, registryDesc{URL: bin.URL, SHA256: bin.SHA256, Archive: bin.Archive, FirewallBlock: bin.FirewallBlock})
+	mp, err := p.launchProcess(spec.Slug, binPath, args, envSlice(env), svc.Docker.Resources, mayElevate && step.RuleName != "", registryDesc{URL: bin.URL, SHA256: bin.SHA256, Archive: bin.Archive, FirewallBlock: bin.FirewallBlock})
 	if err != nil {
 		return ContainerInfo{}, NameAdminApproval(err, svc.Name)
 	}
@@ -410,7 +413,7 @@ func (p *NativeProcessProvider) Remove(ctx context.Context, slug string, opts Re
 	// A firewall rule that could not be deleted keeps the registry entry, so the
 	// next Remove tries again instead of forgetting the rule exists.
 	if e != nil && len(e.FirewallBlock) > 0 {
-		if err := p.removeFirewall(slug, e.BinPath); err != nil {
+		if err := p.removeFirewall(slug, e.BinPath, true); err != nil {
 			return err
 		}
 	}

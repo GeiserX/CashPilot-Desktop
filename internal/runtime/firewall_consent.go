@@ -25,6 +25,8 @@ type AdminStep struct {
 	Program string `json:"program,omitempty"`
 	// Networks are the ranges the rule blocks the binary from.
 	Networks []string `json:"networks,omitempty"`
+	// RemoveRuleName is the rule from the previous deployment, if it must go.
+	RemoveRuleName string `json:"removeRuleName,omitempty"`
 }
 
 // AdminApprovalNeeded is the error of a launch whose firewall rule is missing
@@ -41,7 +43,7 @@ func (e *AdminApprovalNeeded) Error() string {
 	if name == "" {
 		name = e.Slug
 	}
-	return fmt.Sprintf("%s was not started: it needs a Windows Firewall rule, and adding that rule makes Windows ask for admin rights. CashPilot explains that prompt before it shows: open %s in Catalog and click Deploy", name, name)
+	return fmt.Sprintf("%s was not started: it needs a Windows Firewall rule change, and Windows asks for admin rights to make it. CashPilot explains that prompt before it shows: open %s in Catalog and click Deploy", name, name)
 }
 
 // NameAdminApproval gives an AdminApprovalNeeded in err the display name, so its
@@ -54,39 +56,59 @@ func NameAdminApproval(err error, name string) error {
 	return err
 }
 
-// AdminStep reports whether deploying svc as slug on this machine would need the
-// admin prompt: its binary for this OS declares firewall_block and the rule for
-// that binary is not in place yet. It only reads; it never raises a prompt.
+// AdminStep reads what the deploy must change in Windows Firewall.
 func (p *NativeProcessProvider) AdminStep(svc catalog.Service, slug string) (AdminStep, error) {
 	bin, ok := svc.NativeBinaryFor(p.goos, p.goarch)
-	if !ok || len(bin.FirewallBlock) == 0 {
+	if !ok {
 		return AdminStep{}, nil
-	}
-	nets, err := validFirewallNetworks(bin.FirewallBlock)
-	if err != nil {
-		return AdminStep{}, err
 	}
 	rel := filepath.FromSlash(bin.Bin)
 	if bin.Bin == "" || !filepath.IsLocal(rel) {
 		return AdminStep{}, fmt.Errorf("refusing native binary path %q: it must stay within the service directory", bin.Bin)
 	}
-	// The same path ensureBinary extracts to, so the rule read is the one the
-	// launch checks.
 	program := filepath.Join(p.baseDir, slug, rel)
-	ready, err := p.firewallReady(slug, program, nets)
-	if err != nil {
-		return AdminStep{}, err
+	oldProgram := obsoleteFirewallProgram(p.readRegistry().Entries[slug], program, bin.FirewallBlock)
+	return p.firewallAdminStep(slug, program, bin.FirewallBlock, oldProgram)
+}
+
+func obsoleteFirewallProgram(prev *nativeRegistryEntry, program string, nets []string) string {
+	if prev != nil && len(prev.FirewallBlock) > 0 && (len(nets) == 0 || prev.BinPath != program) {
+		return prev.BinPath
 	}
-	if ready {
-		return AdminStep{}, nil
+	return ""
+}
+
+func (p *NativeProcessProvider) firewallAdminStep(slug, program string, nets []string, oldProgram string) (AdminStep, error) {
+	var step AdminStep
+	if len(nets) > 0 {
+		nets, err := validFirewallNetworks(nets)
+		if err != nil {
+			return AdminStep{}, err
+		}
+		ready, err := p.firewallReady(slug, program, nets)
+		if err != nil {
+			return AdminStep{}, err
+		}
+		if !ready {
+			step.RuleName = firewallRuleName(slug, program)
+			step.Program = program
+			step.Networks = nets
+		}
 	}
-	return AdminStep{
-		Needed:   true,
-		Kind:     AdminStepFirewallRule,
-		RuleName: firewallRuleName(slug, program),
-		Program:  program,
-		Networks: nets,
-	}, nil
+	if oldProgram != "" {
+		exists, err := p.firewallExists(slug, oldProgram)
+		if err != nil {
+			return AdminStep{}, err
+		}
+		if exists {
+			step.RemoveRuleName = firewallRuleName(slug, oldProgram)
+		}
+	}
+	step.Needed = step.RuleName != "" || step.RemoveRuleName != ""
+	if step.Needed {
+		step.Kind = AdminStepFirewallRule
+	}
+	return step, nil
 }
 
 // approvedBy compares the change explained on the setup card with the change
@@ -94,7 +116,7 @@ func (p *NativeProcessProvider) AdminStep(svc catalog.Service, slug string) (Adm
 func (step AdminStep) approvedBy(approval *AdminStep) bool {
 	return approval != nil && step.Needed && approval.Needed &&
 		step.Kind == approval.Kind && step.RuleName == approval.RuleName &&
-		step.Program == approval.Program && slices.Equal(step.Networks, approval.Networks)
+		step.RemoveRuleName == approval.RemoveRuleName && step.Program == approval.Program && slices.Equal(step.Networks, approval.Networks)
 }
 
 // firewallNext is what ensureFirewallBlock does once it has read the rule: create
@@ -138,4 +160,11 @@ func firewallCreateFailed(slug string, nets []string, what string, err error) er
 		return fmt.Errorf("%s is not running: you chose No at the Windows permission prompt, so CashPilot did not add the Windows Firewall rule that blocks it from %s, and it never runs without that rule. If it was running before this deploy, CashPilot stopped it for the deploy, and it stays stopped. To run it, click Deploy again and choose Yes at the prompt", slug, strings.Join(nets, ", "))
 	}
 	return fmt.Errorf("%s, and creating it failed (approve the Windows admin prompt and try again): %v", what, err)
+}
+
+func firewallRemoveFailed(name string, err error) error {
+	if code, ok := ExitCodeOf(err); ok && code == ExitCancelled {
+		return fmt.Errorf("you chose No at the Windows permission prompt. The Windows Firewall rule %q is still there. If the service was running, it was stopped before the prompt. Try again and choose Yes", name)
+	}
+	return fmt.Errorf("the Windows Firewall rule %q is still there (approve the Windows admin prompt and remove again, or delete it yourself with Remove-NetFirewallRule -DisplayName %s): %w", name, psQuote(name), err)
 }
