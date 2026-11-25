@@ -2,10 +2,10 @@
 
 CashPilot Desktop is a local-first, cross-platform desktop application for deploying and monitoring passive-income and DePIN services. Instead of running CashPilot as a Docker container and accessing it via browser, CashPilot Desktop bundles everything into a single installable app with system tray integration and a guided setup wizard.
 
-It can run in two modes:
+It runs in one of two modes, and the first run asks which:
 
-- **CashPilot mode** -- Full dashboard with service management, earnings tracking, container deployment, and fleet orchestration
-- **Worker Node mode** -- Lightweight agent that connects to an existing CashPilot instance to run services on this machine
+- **Run everything here** -- this computer collects your earnings, shows the dashboard and runs its earning apps. No CashPilot server is needed. Pick this if you do not run CashPilot anywhere else.
+- **Join my CashPilot** -- this computer runs earning apps for a CashPilot server you already have, and that server collects and shows the earnings. Pick this if you already run the CashPilot dashboard on a server or another computer.
 
 Built with [Wails](https://wails.io) (Go + vanilla TypeScript) for a lightweight, cross-platform experience with native performance.
 
@@ -31,9 +31,9 @@ Download the latest release for your platform:
 ## Quick start
 
 1. **Download and open** CashPilot Desktop for your platform (table above)
-2. **Launch the app** -- the setup wizard detects Docker/Podman and guides you through installation if needed
-3. **Choose your mode** -- CashPilot (full dashboard) or Worker Node (connect to existing instance)
-4. **If Worker Node** -- enter your CashPilot instance address and fleet key
+2. **Choose how it runs** -- after Welcome, pick Run everything here, or Join my CashPilot
+3. **If you join** -- on your CashPilot, open Fleet, then Add a box, press Reveal API Key, then Copy, and paste the block into the app (or type the address and key). The app sends one heartbeat and saves the link only if your CashPilot accepts it. The computer then appears on your CashPilot's Fleet page
+4. **Set up the runtime** -- the setup wizard detects Docker/Podman and guides you through installation if needed
 5. **Start earning** -- browse the service catalog, deploy containers, and monitor earnings from the system tray
 
 ## CashPilot Desktop vs Web

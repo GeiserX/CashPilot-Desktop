@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -629,5 +630,129 @@ func TestSessionConsentAbsentByDefault(t *testing.T) {
 	raw, _ := os.ReadFile(filepath.Join(dir, "config.json"))
 	if bytes.Contains(raw, []byte("sessionConsent")) {
 		t.Errorf("an empty consent map was written:\n%s", raw)
+	}
+}
+
+// TestModeIsInferredOnceForAnExistingInstall: an install from before the mode
+// existed must not see the first run again, and must keep doing what it did. A
+// saved server address means it reported to a CashPilot (follower); a finished
+// first run without one means it ran everything itself (lead). A new install
+// keeps no mode, so its first run asks. The answer is written to disk once.
+func TestModeIsInferredOnceForAnExistingInstall(t *testing.T) {
+	cases := []struct {
+		name string
+		disk string // config.json before the upgrade; "" = no file (new install)
+		want string
+	}{
+		{"new install", "", ""},
+		{"first run not finished, no address", `{"firstRunComplete":false}`, ""},
+		{"finished, no address", `{"firstRunComplete":true}`, ModeLead},
+		{"finished, address saved", `{"firstRunComplete":true,"upstreamUrl":"https://cp.example"}`, ModeFollower},
+		{"address saved before the first run finished", `{"upstreamUrl":"http://192.168.1.5:8080"}`, ModeFollower},
+		{"blank address is no address", `{"firstRunComplete":true,"upstreamUrl":"  "}`, ModeLead},
+		{"mode already chosen wins", `{"firstRunComplete":true,"upstreamUrl":"https://cp.example","mode":"lead"}`, ModeLead},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", dir)
+			if tc.disk != "" {
+				if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(tc.disk), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m, err := NewManager()
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			if got := m.Config().Mode; got != tc.want {
+				t.Fatalf("mode = %q, want %q", got, tc.want)
+			}
+			raw, err := os.ReadFile(filepath.Join(dir, "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var onDisk AppConfig
+			if err := json.Unmarshal(raw, &onDisk); err != nil {
+				t.Fatal(err)
+			}
+			if onDisk.Mode != tc.want {
+				t.Fatalf("mode on disk = %q, want %q: the inferred mode was not written once", onDisk.Mode, tc.want)
+			}
+			// Clearing the address by hand afterwards must not flip the mode back:
+			// only the user's own switch changes it.
+			if tc.want == ModeFollower {
+				if err := m.Update(func(c *AppConfig) { c.UpstreamURL = "" }); err != nil {
+					t.Fatal(err)
+				}
+				again, err := NewManager()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := again.Config().Mode; got != ModeFollower {
+					t.Fatalf("mode changed on a later start: %q", got)
+				}
+			}
+		})
+	}
+}
+
+// TestAManagerSeesAndKeepsAChangeAnotherProcessSaved: the window and the
+// background helper each hold a Manager on the same file. A join saved by one
+// must reach the other (Reload), and a later write by the other must not put
+// its older copy back over the join (Update starts from the file).
+func TestAManagerSeesAndKeepsAChangeAnotherProcessSaved(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", dir)
+	window, err := NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper, err := NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := helper.Reload(); err != nil || changed {
+		t.Fatalf("Reload with nothing new: changed %v err %v", changed, err)
+	}
+
+	if err := window.Update(func(c *AppConfig) { c.Mode = ModeFollower; c.UpstreamURL = "http://192.168.1.10:8080" }); err != nil {
+		t.Fatal(err)
+	}
+	// The helper writes something of its own before it looked again.
+	if err := helper.Update(func(c *AppConfig) { c.IsolationOn = true }); err != nil {
+		t.Fatal(err)
+	}
+	again, err := NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := again.Config()
+	if got.Mode != ModeFollower || got.UpstreamURL != "http://192.168.1.10:8080" || !got.IsolationOn {
+		t.Fatalf("on disk: mode %q url %q isolation %v; the helper's write undid the join or lost its own", got.Mode, got.UpstreamURL, got.IsolationOn)
+	}
+
+	if err := window.Update(func(c *AppConfig) { c.Mode = ModeLead; c.UpstreamURL = "" }); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := helper.Reload(); err != nil || !changed {
+		t.Fatalf("Reload after the window left: changed %v err %v", changed, err)
+	}
+	if c := helper.Config(); c.Mode != ModeLead || c.UpstreamURL != "" || !c.IsolationOn {
+		t.Fatalf("the helper reads mode %q url %q isolation %v", c.Mode, c.UpstreamURL, c.IsolationOn)
+	}
+	if changed, _ := helper.Reload(); changed {
+		t.Fatal("a second Reload with nothing new reported a change")
+	}
+
+	// A file caught halfway through a write keeps what is in memory.
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"mode":"fol`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := helper.Reload(); err == nil {
+		t.Fatal("a broken file read as no error")
+	}
+	if c := helper.Config(); c.Mode != ModeLead || !c.IsolationOn {
+		t.Fatalf("a broken file changed the config in memory: %+v", c)
 	}
 }

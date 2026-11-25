@@ -293,6 +293,9 @@ func (a *App) startCore(ctx context.Context) error {
 	// Optional, and a no-op unless the user paired this Desktop with a
 	// CashPilot server. Standalone is the default and unaffected.
 	a.startUpstream(ctx)
+	// The window and the background helper each run the steps above from their
+	// own copy of the config: follow a join or a switch the other one saved.
+	a.startConfigSync(ctx)
 	// The LAN fence: put the table back at startup and every few minutes, so a
 	// reboot or a firewall reload leaves the earners offline only briefly, never on
 	// the LAN.
@@ -389,6 +392,9 @@ type AppState struct {
 	// Nil means show the local numbers alone -- which is standalone, and is also
 	// the state a machine returns to after unlinking.
 	Fleet *FleetView `json:"fleet"`
+	// Pairing is the link to the CashPilot server while this computer is joined
+	// (last heartbeat, last error in plain words); nil when it runs everything here.
+	Pairing *PairingStatus `json:"pairing"`
 	// Hostname is this machine's name, so a deploy form can render a {hostname}-defaulted
 	// field with the real value the deploy path will substitute (instead of the literal
 	// "cashpilot-{hostname}" the raw catalog default would otherwise show and submit).
@@ -629,6 +635,7 @@ func (a *App) GetAppState() (AppState, error) {
 		ProducerStates:   a.producerStates(deployments),
 		ServiceDetails:   a.store.ListServiceDetails(),
 		Fleet:            a.fleetView(),
+		Pairing:          a.pairingStatus(),
 		Hostname:         runtime.DeviceHostname(),
 		CollectorFields:  collectors.AllFields(),
 		Scaling:          a.services.ScalingLimits(visible),
@@ -1098,7 +1105,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
 		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Podman cannot be fenced yet: there auto deploys unfenced and on refuses container deploys. Takes effect on the next deploy."},
 		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
-		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Optional. Leave EMPTY to stay standalone, which is the default and loses nothing. Set to a CashPilot server's URL and this machine reports to it as a worker, so its services appear on that fleet. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text. Earnings are unaffected: the server collects those centrally and this only reports what is running."},
+		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Leave EMPTY to run everything here (standalone), the default. To join a CashPilot, use How this computer runs above: it tests the connection before it saves anything. While joined, this computer reports what it runs and stops collecting earnings itself; your CashPilot collects them and shows them. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
 		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime Provider", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "Current Docker-compatible runtime integration."},
@@ -1245,6 +1252,16 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		cur.DisplayCurrency = cfg.DisplayCurrency
 		cur.HostnamePrefix = cfg.HostnamePrefix
 		cur.Timezone = cfg.Timezone
+		// The mode follows the address when it changes here, as joining and
+		// leaving do: an address means joined, none means run everything here.
+		if cfg.UpstreamURL != cur.UpstreamURL {
+			if cfg.UpstreamURL != "" {
+				cur.Mode = config.ModeFollower
+				cfg.FleetServerEnabled = false
+			} else {
+				cur.Mode = config.ModeLead
+			}
+		}
 		cur.UpstreamURL = cfg.UpstreamURL
 		cur.FleetServerEnabled = cfg.FleetServerEnabled
 		cur.DriftWarningsOff = cfg.DriftWarningsOff
@@ -1721,6 +1738,10 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 	if err := a.ready(); err != nil {
 		return store.EarningsRecord{}, err
 	}
+	a.refreshConfig()
+	if a.joined() {
+		return store.EarningsRecord{}, errJoinedNoCollect
+	}
 	creds, err := a.store.GetCredentials(slug)
 	if err != nil {
 		return store.EarningsRecord{}, err
@@ -1739,7 +1760,8 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 // fetch: a collector failure is already persisted as an error record (surfaced by
 // notifications()), so only store/transport errors are reported here.
 func (a *App) collectOne(ctx context.Context, slug string) {
-	if a.store == nil || a.collectors == nil {
+	a.refreshConfig()
+	if a.store == nil || a.collectors == nil || a.joined() {
 		return
 	}
 	creds, err := a.store.GetCredentials(slug)
@@ -1796,11 +1818,18 @@ func (a *App) collectAll(ctx context.Context) {
 		seen[slug] = true
 		slugs = append(slugs, slug)
 	}
-	for _, dep := range a.store.ListDeployments() {
-		add(dep.Slug)
-	}
-	for _, slug := range a.store.ListCredentialSlugs() {
-		add(slug)
+	// While joined, the CashPilot server logs in to the vendor accounts and this
+	// computer does not, so the two never sign in to the same accounts. The health,
+	// purge and fleet steps below still run. The file is read first: the join may
+	// have been made in the other process (the window, while this is the helper).
+	a.refreshConfig()
+	if !a.joined() {
+		for _, dep := range a.store.ListDeployments() {
+			add(dep.Slug)
+		}
+		for _, slug := range a.store.ListCredentialSlugs() {
+			add(slug)
+		}
 	}
 
 	// Collect the batch through a bounded worker pool: sem caps how many Collect
@@ -2036,12 +2065,17 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 			Message: "The provider changed this service's image. Re-deploy it from the catalog so it keeps earning.",
 		})
 	}
-	for _, record := range earnings {
-		if record.Error != "" {
-			items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
+	// Both come from the last local collection. While joined there is none, so
+	// they would stay on screen from before the join, naming errors this computer
+	// will never retry: your CashPilot reports them instead.
+	if !a.joined() {
+		for _, record := range earnings {
+			if record.Error != "" {
+				items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
+			}
 		}
+		items = append(items, a.unlinkedDeviceNotifications(deployments)...)
 	}
-	items = append(items, a.unlinkedDeviceNotifications(deployments)...)
 	items = append(items, a.deviceLinkGaveUpNotifications()...)
 	items = append(items, a.proxyNotifications()...)
 	items = append(items, a.activityNotifications()...)
