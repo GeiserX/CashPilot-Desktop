@@ -966,6 +966,7 @@ export namespace config {
 	    bootTimeBefore: string;
 	    exePath: string;
 	    attempts: number;
+	    finish?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new SetupJournal(source);
@@ -978,6 +979,7 @@ export namespace config {
 	        this.bootTimeBefore = source["bootTimeBefore"];
 	        this.exePath = source["exePath"];
 	        this.attempts = source["attempts"];
+	        this.finish = source["finish"];
 	    }
 	}
 	export class SessionConsent {
@@ -2433,6 +2435,32 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class SetupStepResult {
+	    step: string;
+	    op: string;
+	    state: string;
+	    text: string;
+	    code?: string;
+	    retry?: string;
+	    url?: string;
+	    reopens: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new SetupStepResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.step = source["step"];
+	        this.op = source["op"];
+	        this.state = source["state"];
+	        this.text = source["text"];
+	        this.code = source["code"];
+	        this.retry = source["retry"];
+	        this.url = source["url"];
+	        this.reopens = source["reopens"];
+	    }
+	}
 	
 	export class UnfinishedRestore {
 	    slug: string;
@@ -3115,6 +3143,7 @@ export namespace setupresume {
 	    exeMoved: boolean;
 	    attempts: number;
 	    fromRunOnce: boolean;
+	    finish: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new View(source);
@@ -3129,6 +3158,7 @@ export namespace setupresume {
 	        this.exeMoved = source["exeMoved"];
 	        this.attempts = source["attempts"];
 	        this.fromRunOnce = source["fromRunOnce"];
+	        this.finish = source["finish"];
 	    }
 	}
 
