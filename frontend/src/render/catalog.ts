@@ -15,6 +15,7 @@ import { customImageBadge } from "./image.js";
 import { containerState } from "./attention.js";
 import { customBadge } from "./custom.js";
 import { gradeBadge } from "./rating.js";
+import { hasAccount } from "./details.js";
 
 /** "$0-5 / device" from the catalog's monthly estimate, or a dash when it has none. */
 export function estimateText(service: Service): string {
@@ -49,8 +50,9 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
   const main = service.manualOnly
     ? signupUrl ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">Visit</button>` : ""
     : `<button class="btn ${deployed ? "btn-ghost" : "btn-primary"} btn-sm" data-service="${escapeHtml(service.slug)}">${deployed ? "Manage" : "Add"}</button>`;
+  // No account to sign up for (referral.account: false): the link is the provider's site.
   const signup = signupUrl && !service.manualOnly
-    ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">Sign up</button>`
+    ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">${hasAccount(service) ? "Sign up" : "Visit"}</button>`
     : "";
   const tags = [
     customBadge(service),

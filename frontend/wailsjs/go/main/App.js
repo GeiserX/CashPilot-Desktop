@@ -34,6 +34,10 @@ export function CollectService(arg1) {
   return window['go']['main']['App']['CollectService'](arg1);
 }
 
+export function CommandWorkerCopy(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['CommandWorkerCopy'](arg1, arg2, arg3, arg4);
+}
+
 export function CompleteOnboarding() {
   return window['go']['main']['App']['CompleteOnboarding']();
 }
@@ -72,6 +76,10 @@ export function DeployServiceRouted(arg1, arg2, arg3) {
 
 export function DeployServiceWallet(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['DeployServiceWallet'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function DeployToWorker(arg1, arg2) {
+  return window['go']['main']['App']['DeployToWorker'](arg1, arg2);
 }
 
 export function DiscardPartialRestore(arg1) {
