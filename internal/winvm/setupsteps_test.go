@@ -334,16 +334,17 @@ func TestHypervisorChangeReadsTheLaunchTypeFirst(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	read := strings.Index(s, "GetElement(0x250000F0)")
+	read := strings.Index(s, "-MethodName GetElement -Arguments @{ Type = [uint32]0x250000F0 }")
 	skip := strings.Index(s, "if ($launch -eq 1) { exit "+psCode(CodeLaunchAuto)+" }")
 	set := strings.Index(s, "'hypervisorlaunchtype','auto'")
 	if read < 0 || skip < 0 || set < 0 || !(read < skip && skip < set) {
 		t.Fatalf("the script does not read the launch type, then stop when it is Auto, before it sets it:\n%s", s)
 	}
-	priv := strings.Index(s, "$scope.Options.EnablePrivileges = $true")
-	open := strings.Index(s, ".OpenStore('')")
-	if priv < 0 || open < 0 || priv > open {
-		t.Errorf("the script does not enable the Backup and Restore privileges before it opens the BCD store:\n%s", s)
+	// The [wmiclass] chain never read on Windows PowerShell 5.1: OpenStore hands
+	// back a bare ManagementBaseObject, and OpenObject on it throws.
+	if !strings.Contains(s, "Invoke-CimMethod -Namespace root/wmi -ClassName BcdStore -MethodName OpenStore") ||
+		strings.Contains(s, "ManagementClass") || strings.Contains(s, "[wmiclass]") {
+		t.Errorf("the script does not read the BCD store through the CIM cmdlets:\n%s", s)
 	}
 	if !strings.Contains(s, "{fa926493-6f1c-4193-a414-58f0b2456d1e}") {
 		t.Errorf("the script does not read {current}")
@@ -351,6 +352,29 @@ func TestHypervisorChangeReadsTheLaunchTypeFirst(t *testing.T) {
 	o := SetupOutcome(OpHypervisorLaunch, runtime.ElevatedResult{}, exitErr(CodeLaunchAuto), false, false)
 	if o.State == OutcomeRestart || o.State == OutcomeDone || !strings.Contains(o.Text, "already set to start at boot") {
 		t.Errorf("already Auto ended %+v", o)
+	}
+}
+
+// Already Auto is not a failure: the read worked and nothing needed changing, so
+// the ending is a note with no error code.
+func TestHypervisorAlreadyAutoIsANoteNotAFailure(t *testing.T) {
+	o := SetupOutcome(OpHypervisorLaunch, runtime.ElevatedResult{}, exitErr(CodeLaunchAuto), false, false)
+	if o.State != OutcomeNote || o.Code != "" {
+		t.Errorf("already Auto ended %s with code %q, want %s and no code", o.State, o.Code, OutcomeNote)
+	}
+	if low := strings.ToLower(o.Text); !strings.Contains(low, "already") || !strings.Contains(low, "changed nothing") {
+		t.Errorf("already Auto does not say it was already on and nothing changed: %s", o.Text)
+	}
+}
+
+// The launch type read, which a live test runs alone on Windows, only reads: no
+// bcdedit, no BCD method that sets or deletes, no exit.
+func TestHypervisorReadChangesNothing(t *testing.T) {
+	low := strings.ToLower(hypervisorRead)
+	for _, w := range []string{"bcdedit", "setintegerelement", "setbooleanelement", "deleteelement", "-methodname set", "exit"} {
+		if strings.Contains(low, w) {
+			t.Errorf("the read part contains %q:\n%s", w, hypervisorRead)
+		}
 	}
 }
 

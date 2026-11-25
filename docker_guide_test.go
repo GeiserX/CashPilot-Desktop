@@ -204,8 +204,11 @@ func TestCancelSetupClearsTheJournal(t *testing.T) {
 // The flow finishes when a check finds Docker running: the journal goes, so the
 // next start opens the dashboard.
 func TestHostCheckEndsTheSetupWhenDockerRuns(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "")
 	app, fake := newGuideTestApp(t, reasonProvider{})
-	app.host = bootAt("2026-11-25T07:59:58.5Z")
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, LastBoot: "2026-11-25T07:59:58.5Z", DockerDesktopRunning: winvm.Yes}
+	}}
 	if _, err := app.beginRestart("a2"); err != nil {
 		t.Fatal(err)
 	}
@@ -294,6 +297,60 @@ func TestHostCheckTrustsNoEngineDockerHostNames(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "tcp://203.0.113.10:2375")
 	if got := a2(); got != winvm.StepUnknown {
 		t.Fatalf("an engine DOCKER_HOST names elsewhere answered, but a2 is %s", got)
+	}
+}
+
+type windowsContainersProvider struct{ stubProvider }
+
+func (windowsContainersProvider) Status(context.Context) runtime.Status {
+	return runtime.Status{Reason: runtime.ReasonWindowsContainers}
+}
+
+// A check ends the guided setup only when this PC's own Docker Desktop runs
+// Linux containers. An engine DOCKER_HOST names elsewhere, or Docker in Windows
+// containers mode, leaves the journal and RunOnce for the setup still to finish,
+// and the result says the setup is not finished, so the banner stays.
+func TestHostCheckEndsTheSetupOnlyForThisPCsLinuxEngine(t *testing.T) {
+	app, fake := newGuideTestApp(t, runningProvider{})
+	app.host = &hostFacts{read: func(context.Context) winvm.HostFacts {
+		return winvm.HostFacts{OS: "windows", Supported: true, LastBoot: "2026-11-25T07:59:58.5Z", DockerDesktopRunning: winvm.Yes}
+	}}
+	if _, err := app.beginRestart("a3"); err != nil {
+		t.Fatal(err)
+	}
+	stays := func(name string) {
+		t.Helper()
+		res, err := app.HostCheck()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.cfg.Config().SetupJournal == nil || res.SetupFinished {
+			t.Fatalf("%s: the setup ended (finished %v)", name, res.SetupFinished)
+		}
+		if armed, _, _ := fake.state(); armed == "" {
+			t.Fatalf("%s: RunOnce was removed", name)
+		}
+	}
+	t.Setenv("DOCKER_HOST", "tcp://203.0.113.10:2375")
+	stays("an engine DOCKER_HOST names elsewhere")
+	t.Setenv("DOCKER_HOST", "")
+	app.runtime = windowsContainersProvider{}
+	stays("Windows containers")
+	app.runtime = runningProvider{}
+	// RunOnce cannot be removed: the journal stays, so the setup is not finished.
+	fake.mu.Lock()
+	fake.disarmError = errors.New("access denied")
+	fake.mu.Unlock()
+	stays("this PC's Docker runs, but RunOnce stays")
+	fake.mu.Lock()
+	fake.disarmError = nil
+	fake.mu.Unlock()
+	res, err := app.HostCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.cfg.Config().SetupJournal != nil || !res.SetupFinished {
+		t.Fatalf("this PC's Docker Desktop runs Linux containers, but the setup did not end (finished %v)", res.SetupFinished)
 	}
 }
 

@@ -17,6 +17,8 @@ Each step has a state:
 
 Click **Check again** after you change something. CashPilot then reads every step again.
 
+A Docker engine that answers proves a step only when it is this PC's own Docker Desktop: no `DOCKER_HOST` and no Docker context that points elsewhere. Windows containers prove only the steps they need, not WSL, virtualization or the advice rows. A guided setup ends when this PC's own Docker Desktop runs Linux containers.
+
 ## The steps
 
 | Step | What CashPilot checks | What it offers |
@@ -31,8 +33,8 @@ Click **Check again** after you change something. CashPilot then reads every ste
 | docker-users group | Shows only when Docker refuses your account. Whether your account is in the group, and whether this sign-in carries it. | **Add my account to docker-users**, with one permission prompt, then sign out and back in (or restart). When you sign in again, CashPilot checks that Windows gave your account the group. |
 | Linux containers | Whether Docker runs Linux containers, which the apps need. | **Switch to Linux containers**, with Docker's own switch tool. It changes all your Docker work, so it runs only from its confirm screen. Without the tool, how to switch from Docker's menu. |
 | Other virtual machine software | The VirtualBox and VMware drivers. They can slow Docker down. Shown as worth knowing, because nothing proves they stop Docker. When Windows' hypervisor is not running, although virtualization and the Virtual Machine Platform feature are on, the software may have turned it off at boot, and the step needs you instead. | **Check and turn Windows' hypervisor back on**, with one permission prompt. CashPilot first tries to read the boot option `hypervisorlaunchtype`. If the read works and it is already auto, nothing changes. If it is not auto, or Windows does not allow the read, CashPilot runs `bcdedit /set hypervisorlaunchtype auto`, and a restart follows. When the hypervisor is running, the row is a note only. |
-| This PC is a virtual machine | The PC's maker and model. Inside a virtual machine, Docker needs nested virtualization from the outer machine. | While Docker does not run, the step needs you: the owner of the outer machine turns this VM off and turns on nested virtualization. On Hyper-V that is `Set-VMProcessor -VMName <name> -ExposeVirtualizationExtensions $true`. CashPilot cannot do this from inside the VM. Once Docker runs, the step is done. |
-| Windows Server service | The start type of the Server service (LanmanServer). Docker needs it set to Automatic. While Docker runs, a service on Manual or turned off is only worth knowing. | **Set it to Automatic**, and start it, with one permission prompt. |
+| This PC is a virtual machine | The PC's maker and model. Inside a virtual machine, Docker needs nested virtualization from the outer machine. | While Docker does not run, the step needs you: the owner of the outer machine turns this VM off and turns on nested virtualization. On Hyper-V that is `Set-VMProcessor -VMName <name> -ExposeVirtualizationExtensions $true`. CashPilot cannot do this from inside the VM. Once this PC's own Docker Desktop runs Linux containers, the step is done. |
+| Windows Server service | The start type of the Server service (LanmanServer). Docker needs it set to Automatic. While this PC's own Docker Desktop runs Linux containers, a service on Manual or turned off is only worth knowing. | **Set it to Automatic**, and start it, with one permission prompt. |
 
 ## Changes CashPilot makes for you
 

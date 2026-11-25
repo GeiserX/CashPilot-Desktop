@@ -249,10 +249,10 @@ async function applySetupResume() {
 }
 
 // HostCheck, plus the frontend's half of finishing a setup: a reading that finds
-// Docker running ends it in Go (host_check.go), so the resume banner goes too.
+// this PC's Docker running ends it in Go (host_check.go), so the resume banner goes too.
 async function hostCheck() {
   const result = await HostCheck();
-  if (setupFinished(result.runtime)) setupResume = null;
+  if (setupFinished(result)) setupResume = null;
   return result;
 }
 
