@@ -34,7 +34,36 @@ function statusDot(status: string): string {
   return `<span class="status-dot ${cls}" title="Deployed here: ${escapeHtml(status || "unknown")}"></span> `;
 }
 
-const KIND: Record<string, string> = { bandwidth: "Bandwidth", depin: "DePIN", storage: "Storage", compute: "Compute", custom: "Custom" };
+const KIND: Record<string, string> = { bandwidth: "Bandwidth", depin: "DePIN", storage: "Storage", compute: "Compute", mining: "Mining", custom: "Custom" };
+
+const ALWAYS_LISTED = ["bandwidth", "depin", "storage", "compute"];
+
+/** The catalog's filter tabs, in order. Mining and Custom get a tab only once a
+ *  service of that kind exists, so no tab opens on an empty table. */
+export function catalogFilterTabs(services: Pick<Service, "category" | "custom">[]): string[] {
+  const tabs = ["all", ...ALWAYS_LISTED];
+  if (services.some((svc) => svc.category === "mining")) tabs.push("mining");
+  if (services.some((svc) => svc.custom)) tabs.push("custom");
+  return tabs;
+}
+
+/** The wizard's category cards: every catalog kind that has at least one service. */
+export function wizardCategoryChoices(services: Pick<Service, "category">[]): string[] {
+  return [...ALWAYS_LISTED, "mining"].filter((category) => services.some((svc) => svc.category === category));
+}
+
+const WIZARD_COPY: Record<string, string> = {
+  bandwidth: "Share your internet connection",
+  depin: "Run decentralized infrastructure",
+  storage: "Rent out disk space",
+  compute: "Share CPU or GPU power",
+  mining: "Mine with your own hardware, or track a pool you already mine on",
+};
+
+/** The line under a wizard category card's title. */
+export function wizardCategoryCopy(category: string): string {
+  return WIZARD_COPY[category] || "Available providers";
+}
 
 /** "update available": the catalog changed the image, or the user edited a custom service's. */
 export function outdatedBadge(service: Pick<Service, "custom"> | undefined): string {
