@@ -26,3 +26,6 @@ internal/winvm/testdata/** text eol=lf
 # The Secure VM's embedded scripts are pinned by SHA-256 (bootstrap_test.go),
 # and the admin stub checks setup.ps1 and remove.ps1 by hash.
 internal/winvm/scripts/** text eol=lf
+
+# The BIP-39 wordlist is checked against its published sha256.
+internal/siaseed/english.txt text eol=lf

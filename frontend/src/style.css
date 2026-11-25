@@ -927,3 +927,18 @@ button.topbar-runtime:hover, button.topbar-runtime.active { color: var(--text-pr
 .pairing-line { margin: 6px 0 0; font-size: var(--fs-2); color: var(--text-secondary); }
 .pairing-line.warn .pairing-error { color: var(--warning); }
 .mode-card-body p { margin: 0 0 6px; }
+
+/* A wallet seed kept in a file (render/wallet.ts). `label` sets display: grid,
+   which would beat the hidden attribute on the phrase box. */
+.wallet-choice { border: 1px solid var(--border, #ddd); border-radius: 8px; padding: 10px 12px; margin: 10px 0; display: grid; gap: 8px; }
+.wallet-choice legend { font-weight: 600; padding: 0 4px; }
+.wallet-option { display: flex; gap: 8px; align-items: flex-start; }
+.wallet-option span { display: grid; gap: 2px; }
+.wallet-phrase[hidden] { display: none; }
+.wallet-panel, .wallet-reveal { display: grid; gap: 8px; margin-top: 10px; }
+.seed-words { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 14px; font-family: var(--font-mono, monospace); }
+.seed-n { display: inline-block; min-width: 1.6em; color: var(--text-secondary); text-align: right; }
+.wallet-word-inputs { display: flex; gap: 10px; flex-wrap: wrap; }
+.wallet-address code { word-break: break-all; }
+.wallet-detail { display: grid; gap: 6px; }
+.wallet-panel .error-text, .wallet-reveal .error-text { color: var(--danger, #c0392b); }

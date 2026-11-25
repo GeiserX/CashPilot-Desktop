@@ -119,6 +119,10 @@ type App struct {
 	// defense-in-depth against floods, mass enrollment (DB growth), and racing the
 	// enrollment window. Initialised in startFleetAPI.
 	fleetLimiter *fleetRateLimiter
+	// walletReveals limits RevealWalletSeed per service (wallet_app.go). Made on
+	// first use, under walletRevealMu.
+	walletRevealMu sync.Mutex
+	walletReveals  *fleetRateLimiter
 	// usageStop stops the usage sampler (usage_sampler.go) and waits for it.
 	usageStop func()
 	// stalls is the stall alerts by container name (stall_alerts.go), guarded by stallMu.
@@ -1464,14 +1468,31 @@ func (a *App) SaveCredentials(slug string, values map[string]string) error {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	return a.store.SaveCredentials(slug, values)
+	return a.saveCredentials(slug, values)
 }
 
+// saveCredentials stores values for slug. A wallet seed is never among them
+// (services.CredentialsToSave).
+func (a *App) saveCredentials(slug string, values map[string]string) error {
+	toSave, err := a.services.CredentialsToSave(slug, values)
+	if err != nil {
+		return err
+	}
+	return a.store.SaveCredentials(slug, toSave)
+}
+
+// GetCredentials is what the deploy form is filled from. A wallet seed is never
+// sent to the window: it lives in the node's data volume, and RevealWalletSeed is
+// the only way to see it.
 func (a *App) GetCredentials(slug string) (map[string]string, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
-	return a.store.GetCredentials(slug)
+	creds, err := a.store.GetCredentials(slug)
+	if err != nil {
+		return nil, err
+	}
+	return a.services.CredentialsForWindow(slug, creds), nil
 }
 
 // PreflightService reports what could stop a service earning on THIS machine,
@@ -1504,12 +1525,13 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	return a.deployService(slug, values, image, instances, false)
+	deployment, _, err := a.deployService(slug, values, image, instances, false, nil)
+	return deployment, err
 }
 
-func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool) (store.Deployment, error) {
+func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	a.retryCustom()
 	// A custom service deploys its saved definition; the form has no credentials for
@@ -1525,7 +1547,7 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	if len(creds) == 0 && !custom {
 		stored, err := a.store.GetCredentials(slug)
 		if err != nil {
-			return store.Deployment{}, err
+			return store.Deployment{}, nil, err
 		}
 		creds = stored
 	}
@@ -1534,23 +1556,23 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	// "Configured" badge for a service that cannot actually start.
 	if err := a.services.ValidateDeploy(slug, creds); err != nil {
 		a.emitError("deploy", err)
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	if image != nil {
 		if err := services.ValidateImage(*image); err != nil {
 			a.emitError("deploy", err)
-			return store.Deployment{}, err
+			return store.Deployment{}, nil, err
 		}
 	}
 	if len(values) > 0 {
-		if err := a.store.SaveCredentials(slug, values); err != nil {
-			return store.Deployment{}, err
+		if err := a.saveCredentials(slug, values); err != nil {
+			return store.Deployment{}, nil, err
 		}
 	}
-	deployment, err := a.services.DeployWith(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute})
+	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute, Wallet: wallet})
 	if err != nil {
 		a.emitError("deploy", err)
-		return store.Deployment{}, err
+		return store.Deployment{}, nil, err
 	}
 	a.emitEvent("deployment:changed", deployment)
 	a.registerDevice(slug, creds)
@@ -1561,7 +1583,7 @@ func (a *App) deployService(slug string, values map[string]string, image *string
 	if a.collectors != nil && a.collectors.Supports(slug) {
 		go a.collectOne(a.ctx, slug)
 	}
-	return deployment, nil
+	return deployment, walletResult, nil
 }
 
 // DeployServiceRouted deploys slug through proxy proxyID from its first start, so it
@@ -1583,7 +1605,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 		return services.ProxiedResult{}, err
 	}
 	if len(values) > 0 {
-		if err := a.store.SaveCredentials(slug, values); err != nil {
+		if err := a.saveCredentials(slug, values); err != nil {
 			return services.ProxiedResult{}, err
 		}
 	}
@@ -1601,7 +1623,8 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 // the owner confirmed it runs from this machine's own IP from now on. Its routed copy
 // is removed first.
 func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	return a.deployService(slug, values, image, instances, true)
+	deployment, _, err := a.deployService(slug, values, image, instances, true, nil)
+	return deployment, err
 }
 
 func (a *App) StopService(slug string) error {

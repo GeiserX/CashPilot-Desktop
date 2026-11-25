@@ -70,6 +70,10 @@ export function DeployServiceRouted(arg1, arg2, arg3) {
   return window['go']['main']['App']['DeployServiceRouted'](arg1, arg2, arg3);
 }
 
+export function DeployServiceWallet(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['DeployServiceWallet'](arg1, arg2, arg3, arg4, arg5);
+}
+
 export function DiscardPartialRestore(arg1) {
   return window['go']['main']['App']['DiscardPartialRestore'](arg1);
 }
@@ -248,6 +252,10 @@ export function RestartToFirmware(arg1) {
 
 export function RestoreStateBackup(arg1, arg2, arg3) {
   return window['go']['main']['App']['RestoreStateBackup'](arg1, arg2, arg3);
+}
+
+export function RevealWalletSeed(arg1, arg2) {
+  return window['go']['main']['App']['RevealWalletSeed'](arg1, arg2);
 }
 
 export function RevokeSessionRisk(arg1) {

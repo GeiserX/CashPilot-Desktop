@@ -63,6 +63,12 @@ type Container struct {
 	// refuseStart is why every start of this container fails, "" for none
 	// (FailStartOfNext).
 	refuseStart string
+	// LogDriver, CapDrop, SecurityOpt and Tmpfs are the HostConfig fields of the
+	// same names (LogConfig.Type for the first), as the create sent them.
+	LogDriver   string
+	CapDrop     []string
+	SecurityOpt []string
+	Tmpfs       map[string]string
 }
 
 // PortBinding is one host binding of a published port.
@@ -123,6 +129,13 @@ type Docker struct {
 	// beforeCall holds, by call, a hook the next such request runs before it is
 	// answered (BeforeCall).
 	beforeCall map[string]func()
+	// volumeFiles are the files in named volumes, by volume and path from its root
+	// (docker_files.go); generatorOutput is what a wallet generator prints.
+	volumeFiles     map[string]map[string]VolumeFile
+	generatorOutput string
+	// created is every container ever created, as it was created, removed ones
+	// included (Created).
+	created []Container
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -416,7 +429,13 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 			RestartPolicy struct {
 				Name string `json:"Name"`
 			} `json:"RestartPolicy"`
-			Mounts []struct {
+			LogConfig struct {
+				Type string `json:"Type"`
+			} `json:"LogConfig"`
+			CapDrop     []string          `json:"CapDrop"`
+			SecurityOpt []string          `json:"SecurityOpt"`
+			Tmpfs       map[string]string `json:"Tmpfs"`
+			Mounts      []struct {
 				Type   string `json:"Type"`
 				Source string `json:"Source"`
 				Target string `json:"Target"`
@@ -458,6 +477,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		NetworkMode:   body.HostConfig.NetworkMode,
 		PortBindings:  body.HostConfig.PortBindings,
 		RestartPolicy: body.HostConfig.RestartPolicy.Name,
+		LogDriver:     body.HostConfig.LogConfig.Type,
+		CapDrop:       body.HostConfig.CapDrop,
+		SecurityOpt:   body.HostConfig.SecurityOpt,
+		Tmpfs:         body.HostConfig.Tmpfs,
 	}
 	if why := d.refuseNextStart[name]; name != "" && why != "" {
 		delete(d.refuseNextStart, name)
@@ -475,6 +498,7 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		c.Name = c.ID
 	}
 	d.containers[name] = c
+	d.created = append(d.created, *c)
 	if why := d.failAfterCreate[name]; why != "" {
 		delete(d.failAfterCreate, name)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": why})
@@ -556,6 +580,9 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 			// The LAN fence helper prints one JSON result: the table is in place.
 			text = `{"backend":"nft","ok":true,"changed":true,"error":"","present":true,"matches":true,"counters":{}}` + "\n"
 		}
+		if found && c.Labels["cashpilot.wallet-helper"] == "generate" {
+			text = d.generatorOutput
+		}
 		d.mu.Unlock()
 		if !found {
 			writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such container: " + id})
@@ -564,6 +591,8 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 		w.Header().Set("Content-Type", "application/vnd.docker.multiplexed-stream")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(logFrame(text))
+	case action == "archive":
+		d.archive(w, r, id)
 	case action == "start":
 		d.setState(w, id, "running")
 	case action == "stop":
