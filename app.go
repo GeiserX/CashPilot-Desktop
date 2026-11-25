@@ -137,7 +137,7 @@ type App struct {
 	// workerAPI is the API a joined CashPilot server commands this computer through
 	// (worker_api.go).
 	workerAPI workerAPIState
-	// workerFirewall coordinates firewall consent with leaving the server.
+	// workerFirewall coordinates firewall consent with pairing changes.
 	workerFirewall workerFirewallState
 }
 
@@ -1199,45 +1199,6 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	if value := strings.TrimSpace(values["timezone"]); value != "" {
 		cfg.Timezone = value
 	}
-	// Pairing. Unlike every other field here, an EMPTY value is meaningful: it
-	// means "unpair", and standalone is the supported default -- so this is
-	// keyed on presence, not on non-emptiness.
-	if value, present := values["upstreamUrl"]; present {
-		next := strings.TrimRight(strings.TrimSpace(value), "/")
-		if next != "" && next != cfg.UpstreamURL {
-			// Refused here, where the user sees it, rather than on every
-			// heartbeat, where only the log would. Only a NEW address is
-			// checked: the Settings form sends only the fields the user changed,
-			// but another caller can still send the saved address back as it is,
-			// and checking an address saved under an older, looser rule would
-			// then block changing any other setting until the user retyped it.
-			if err := upstream.ValidateServerURL(next); err != nil {
-				return SettingsState{}, fmt.Errorf("pairing address: %w", err)
-			}
-		}
-		if next != cfg.UpstreamURL {
-			// Repointing at a DIFFERENT server must discard the per-worker key
-			// the previous one issued. It is that server's credential and means
-			// nothing to the new one; presenting it would fail authentication
-			// with no obvious cause, and keeping it around is a stale secret for
-			// a machine the user has stopped talking to.
-			if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
-				return SettingsState{}, fmt.Errorf("clearing the previous worker key: %w", err)
-			}
-			a.upstream.mu.Lock()
-			a.upstream.workerKey = ""
-			a.upstream.mu.Unlock()
-		}
-		cfg.UpstreamURL = next
-	}
-	if value, present := values["upstreamKey"]; present {
-		// Stored verbatim, including empty -- that is how a user unpairs the
-		// credential. The form never shows the saved key and leaves this out when
-		// its box is left blank, so only its Remove button sends it empty.
-		if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), strings.TrimSpace(value)); err != nil {
-			return SettingsState{}, fmt.Errorf("storing the pairing key: %w", err)
-		}
-	}
 	if value, present := values["fleetServerEnabled"]; present {
 		// Presence-keyed, not non-emptiness: "false" is a meaningful value and
 		// turning the hub back OFF must be possible.
@@ -1290,25 +1251,48 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		}
 		cfg.FleetPort = port
 	}
-	// Only the fields this form owns are written, onto the config as it is now. A
-	// whole-snapshot Save would put back what background work changed since the
-	// snapshot above, such as the fence recording that isolation is on, and the
-	// keyring writes above make that window real.
-	firewallErr, err := a.updateConfigForServerCommands(func(cur *config.AppConfig) {
+	// An empty address leaves the server. An empty key removes the saved key.
+	address, hasAddress := values["upstreamUrl"]
+	address = strings.TrimRight(strings.TrimSpace(address), "/")
+	key, hasKey := values["upstreamKey"]
+	// Only the fields this form owns are written, onto the config as it is now.
+	// A whole-snapshot Save would put back changes such as the fence recording
+	// that isolation is on while the form saves keys.
+	firewallErr, err := a.updateConfigForServerCommands(func(cur config.AppConfig) error {
+		if hasAddress && address != cur.UpstreamURL {
+			// An unchanged legacy address can stay. A new address must pass validation.
+			if address != "" {
+				if err := upstream.ValidateServerURL(address); err != nil {
+					return fmt.Errorf("pairing address: %w", err)
+				}
+			}
+			// The worker key belongs to the previous server.
+			if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
+				return fmt.Errorf("clearing the previous worker key: %w", err)
+			}
+			a.upstream.mu.Lock()
+			a.upstream.workerKey = ""
+			a.upstream.mu.Unlock()
+		}
+		if hasKey {
+			if err := a.savePairingKey(strings.TrimSpace(key)); err != nil {
+				return fmt.Errorf("storing the pairing key: %w", err)
+			}
+		}
+		return nil
+	}, func(cur *config.AppConfig) {
 		cur.DisplayCurrency = cfg.DisplayCurrency
 		cur.HostnamePrefix = cfg.HostnamePrefix
 		cur.Timezone = cfg.Timezone
-		// The mode follows the address when it changes here, as joining and
-		// leaving do: an address means joined, none means run everything here.
-		if cfg.UpstreamURL != cur.UpstreamURL {
-			if cfg.UpstreamURL != "" {
+		if hasAddress && address != cur.UpstreamURL {
+			cur.UpstreamURL = address
+			if address != "" {
 				cur.Mode = config.ModeFollower
 				cfg.FleetServerEnabled = false
 			} else {
 				cur.Mode = config.ModeLead
 			}
 		}
-		cur.UpstreamURL = cfg.UpstreamURL
 		cur.FleetServerEnabled = cfg.FleetServerEnabled
 		cur.DriftWarningsOff = cfg.DriftWarningsOff
 		cur.Isolation = cfg.Isolation

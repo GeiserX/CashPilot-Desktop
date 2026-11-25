@@ -210,27 +210,29 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 	// Accepted. Save the link: the key first, so a config that names a server
 	// always has its key.
 	a.stopUpstream()
-	if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), target.Key); err != nil {
-		return JoinResult{}, fmt.Errorf("saving the key: %w", err)
-	}
-	// The key the server just issued, or none: a key another server issued means
-	// nothing to this one.
-	workerKey := strings.TrimSpace(resp.WorkerKey)
-	if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), workerKey); err != nil {
-		return JoinResult{}, fmt.Errorf("saving this computer's own key: %w", err)
-	}
-	a.upstream.mu.Lock()
-	a.upstream.workerKey = workerKey
-	a.upstream.mu.Unlock()
 	out.HubWasOn = a.cfg.Config().FleetServerEnabled
 	if out.HubWasOn {
 		out.HubDevices = a.hubDeviceNames()
 	}
-	if err := a.cfg.Update(func(c *config.AppConfig) {
+	_, err = a.updateConfigForServerCommands(func(config.AppConfig) error {
+		if err := a.savePairingKey(target.Key); err != nil {
+			return fmt.Errorf("saving the key: %w", err)
+		}
+		// The worker key belongs to the server that issued it.
+		workerKey := strings.TrimSpace(resp.WorkerKey)
+		if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), workerKey); err != nil {
+			return fmt.Errorf("saving this computer's own key: %w", err)
+		}
+		a.upstream.mu.Lock()
+		a.upstream.workerKey = workerKey
+		a.upstream.mu.Unlock()
+		return nil
+	}, func(c *config.AppConfig) {
 		c.UpstreamURL = target.URL
 		c.Mode = config.ModeFollower
 		c.FleetServerEnabled = false
-	}); err != nil {
+	})
+	if err != nil {
 		return JoinResult{}, err
 	}
 	a.recordPairing(target.URL, upstream.Failure{})
@@ -253,24 +255,43 @@ type LeaveResult struct {
 	FirewallError string `json:"firewallError"`
 }
 
-// updateConfigForServerCommands saves the mode change and invalidates any pending
-// firewall consent under the same lock. On leave, it closes the API before asking
-// to remove a recorded firewall rule. The caller shows a cleanup error separately.
-func (a *App) updateConfigForServerCommands(update func(*config.AppConfig)) (firewallErr, configErr error) {
+// savePairingKey invalidates pending consent when the saved key changes, even if
+// the following config write fails. The caller holds workerFirewall.mu.
+func (a *App) savePairingKey(key string) error {
+	appDir := a.cfg.AppDir()
+	previous, readErr := config.UpstreamEnrolmentKey(appDir)
+	if err := config.SetUpstreamEnrolmentKey(appDir, key); err != nil {
+		return err
+	}
+	if readErr != nil || key != previous {
+		a.workerFirewall.generation++
+	}
+	return nil
+}
+
+// updateConfigForServerCommands saves the pairing and invalidates pending consent
+// under the same lock. On leave, it closes the API before removing a recorded rule.
+func (a *App) updateConfigForServerCommands(saveKeys func(config.AppConfig) error, update func(*config.AppConfig)) (firewallErr, configErr error) {
 	a.workerFirewall.mu.Lock()
 	defer a.workerFirewall.mu.Unlock()
-	left := false
+	if err := saveKeys(a.cfg.Config()); err != nil {
+		return nil, err
+	}
+	var changed, left bool
 	if err := a.cfg.Update(func(c *config.AppConfig) {
-		wasJoined := c.Mode == config.ModeFollower
+		mode, address := c.Mode, c.UpstreamURL
 		update(c)
-		left = wasJoined && c.Mode != config.ModeFollower
+		changed = mode != c.Mode || address != c.UpstreamURL
+		left = mode == config.ModeFollower && c.Mode != config.ModeFollower
 	}); err != nil {
 		return nil, err
+	}
+	if changed {
+		a.workerFirewall.generation++
 	}
 	if !left {
 		return nil, nil
 	}
-	a.workerFirewall.generation++
 	a.syncWorkerAPI()
 	if err := a.removeServerCommandsRule(); err != nil {
 		log.Printf("server commands: %v", err)
@@ -295,16 +316,18 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 		Name:      a.upstreamPayload().Name,
 	}
 	a.stopUpstream()
-	if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
-		return LeaveResult{}, fmt.Errorf("clearing this computer's own key: %w", err)
-	}
-	if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), ""); err != nil {
-		return LeaveResult{}, fmt.Errorf("clearing the key: %w", err)
-	}
-	a.upstream.mu.Lock()
-	a.upstream.workerKey, a.upstream.statusURL = "", ""
-	a.upstream.mu.Unlock()
-	firewallErr, err := a.updateConfigForServerCommands(func(c *config.AppConfig) {
+	firewallErr, err := a.updateConfigForServerCommands(func(config.AppConfig) error {
+		if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
+			return fmt.Errorf("clearing this computer's own key: %w", err)
+		}
+		if err := a.savePairingKey(""); err != nil {
+			return fmt.Errorf("clearing the key: %w", err)
+		}
+		a.upstream.mu.Lock()
+		a.upstream.workerKey, a.upstream.statusURL = "", ""
+		a.upstream.mu.Unlock()
+		return nil
+	}, func(c *config.AppConfig) {
 		c.UpstreamURL = ""
 		c.Mode = config.ModeLead
 	})

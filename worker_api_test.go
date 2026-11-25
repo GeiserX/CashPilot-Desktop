@@ -754,84 +754,104 @@ func TestClearingTheAddressInSettingsClosesServerCommands(t *testing.T) {
 	}
 }
 
-func TestLeavingRollsBackAnInFlightFirewallAllow(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		leave func(*App) error
-	}{
-		{"Leave button", func(a *App) error { _, err := a.SwitchToLead(); return err }},
-		{"clear address", func(a *App) error { _, err := a.SaveSettings(map[string]string{"upstreamUrl": ""}); return err }},
-	} {
-		for _, after := range []string{"still left", "rejoined"} {
-			t.Run(tc.name+"/"+after, func(t *testing.T) {
-				useAddrs(t)
-				app := joinedApp(t)
-				address := app.cfg.Config().UpstreamURL
-				oldNeeded, oldRun := firewallRuleNeeded, runFirewallScript
-				t.Cleanup(func() { firewallRuleNeeded, runFirewallScript = oldNeeded, oldRun })
-				firewallRuleNeeded = true
-
-				var installed atomic.Bool
-				adding, resume := make(chan struct{}), make(chan struct{})
-				release := sync.OnceFunc(func() { close(resume) })
-				runFirewallScript = func(script string) error {
-					if strings.Contains(script, "New-NetFirewallRule") {
-						close(adding)
-						<-resume
-						installed.Store(true)
-					} else if strings.Contains(script, "Remove-NetFirewallRule") {
-						installed.Store(false)
-					} else {
-						return errors.New("unexpected firewall script")
-					}
-					return nil
-				}
-				var calls sync.WaitGroup
-				t.Cleanup(func() { release(); calls.Wait() })
-				deadline := time.After(20 * time.Second)
-				allowDone := make(chan error, 1)
-				calls.Go(func() { _, err := app.AllowServerCommandsThroughFirewall(); allowDone <- err })
-				select {
-				case <-adding:
-				case err := <-allowDone:
-					t.Fatalf("Allow returned before it reached the firewall: %v", err)
-				case <-deadline:
-					t.Fatal("Allow did not reach the firewall")
-				}
-
-				leaveDone := make(chan error, 1)
-				calls.Go(func() { leaveDone <- tc.leave(app.App) })
-				select {
-				case err := <-leaveDone:
-					if err != nil || app.joined() {
-						t.Fatalf("leave did not finish while Allow was paused: %v", err)
-					}
-				case <-deadline:
-					t.Fatal("leave waited for the pending Allow")
-				}
-				if after == "rejoined" {
-					if _, err := app.SaveSettings(map[string]string{"upstreamUrl": address}); err != nil || !app.joined() {
-						t.Fatalf("could not rejoin: %v", err)
-					}
-				}
-
-				release()
-				select {
-				case err := <-allowDone:
-					if err == nil {
-						t.Error("late Allow reported success")
-					}
-				case <-deadline:
-					t.Fatal("late Allow did not finish")
-				}
-				if installed.Load() {
-					t.Error("late Allow left its rule installed")
-				}
-				if cfg := app.cfg.Config(); cfg.ServerCommandsFirewallRule != "" || cfg.ServerCommandsFirewallProgram != "" {
-					t.Error("late Allow left its rule recorded")
-				}
-			})
+func TestPairingChangesRollBackAnInFlightFirewallAllow(t *testing.T) {
+	leave := func(a *App) error { _, err := a.SwitchToLead(); return err }
+	save := func(values map[string]string) func(*App) error {
+		return func(a *App) error { _, err := a.SaveSettings(values); return err }
+	}
+	rejoin := func(change func(*App) error) func(*App) error {
+		return func(a *App) error {
+			address := a.cfg.Config().UpstreamURL
+			if err := change(a); err != nil {
+				return err
+			}
+			return save(map[string]string{"upstreamUrl": address})(a)
 		}
+	}
+	clear := save(map[string]string{"upstreamUrl": ""})
+	repoint := save(map[string]string{"upstreamUrl": "http://127.0.0.1:2"})
+	for _, tc := range []struct {
+		name       string
+		change     func(*App) error
+		wantJoined bool
+		wantCancel bool
+	}{
+		{"Leave button", leave, false, true},
+		{"clear address", clear, false, true},
+		{"Leave button and rejoin", rejoin(leave), true, true},
+		{"clear address and rejoin", rejoin(clear), true, true},
+		{"replace address and key", save(map[string]string{"upstreamUrl": "http://127.0.0.1:2", "upstreamKey": "other-test-key"}), true, true},
+		{"replace address only", repoint, true, true},
+		{"replace and restore address", rejoin(repoint), true, true},
+		{"replace key only", save(map[string]string{"upstreamKey": "other-test-key"}), true, true},
+		{"remove key only", save(map[string]string{"upstreamKey": ""}), true, true},
+		{"save the same key", save(map[string]string{"upstreamKey": testSharedKey}), true, false},
+		{"save unrelated settings", save(map[string]string{"timezone": "Europe/Madrid"}), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useAddrs(t)
+			app := joinedApp(t)
+			app.ctx = nil // This test changes the saved pairing without sending heartbeats.
+			oldNeeded, oldRun := firewallRuleNeeded, runFirewallScript
+			t.Cleanup(func() { firewallRuleNeeded, runFirewallScript = oldNeeded, oldRun })
+			firewallRuleNeeded = true
+
+			var installed atomic.Bool
+			adding, resume := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			runFirewallScript = func(script string) error {
+				if strings.Contains(script, "New-NetFirewallRule") {
+					close(adding)
+					<-resume
+					installed.Store(true)
+				} else if script == removeRuleScript() {
+					installed.Store(false)
+				} else {
+					return errors.New("unexpected firewall script")
+				}
+				return nil
+			}
+			var calls sync.WaitGroup
+			t.Cleanup(func() { release(); calls.Wait() })
+			deadline := time.After(20 * time.Second)
+			allowDone := make(chan error, 1)
+			calls.Go(func() { _, err := app.AllowServerCommandsThroughFirewall(); allowDone <- err })
+			select {
+			case <-adding:
+			case err := <-allowDone:
+				t.Fatalf("Allow returned before it reached the firewall: %v", err)
+			case <-deadline:
+				t.Fatal("Allow did not reach the firewall")
+			}
+
+			changeDone := make(chan error, 1)
+			calls.Go(func() { changeDone <- tc.change(app.App) })
+			select {
+			case err := <-changeDone:
+				if err != nil || app.joined() != tc.wantJoined {
+					t.Fatalf("pairing save while Allow was paused: joined %v, error %v", app.joined(), err)
+				}
+			case <-deadline:
+				t.Fatal("pairing save waited for the pending Allow")
+			}
+
+			release()
+			select {
+			case err := <-allowDone:
+				if (err != nil) != tc.wantCancel {
+					t.Errorf("late Allow returned %v, want cancellation %v", err, tc.wantCancel)
+				}
+			case <-deadline:
+				t.Fatal("late Allow did not finish")
+			}
+			if installed.Load() == tc.wantCancel {
+				t.Errorf("rule installed: %v, want %v", installed.Load(), !tc.wantCancel)
+			}
+			cfg := app.cfg.Config()
+			if (cfg.ServerCommandsFirewallRule != "") == tc.wantCancel || (cfg.ServerCommandsFirewallProgram != "") == tc.wantCancel {
+				t.Errorf("rule fields after Allow: %q, %q, want recorded %v", cfg.ServerCommandsFirewallRule, cfg.ServerCommandsFirewallProgram, !tc.wantCancel)
+			}
+		})
 	}
 }
 
