@@ -39,10 +39,12 @@ export interface GuideModel {
   view: GuideView;
   /** A reading of the PC is running. */
   checking: boolean;
+  /** The last checklist read failed. */
+  checkFailed?: boolean;
   /** Seconds since Start Docker Desktop while waiting for its engine; null when not waiting. */
   waiting: number | null;
   /** How the last wait ended. */
-  waitResult: "" | "ready" | "timeout" | "failed";
+  waitResult: "" | "answered" | "timeout" | "failed";
   /** Set when the app opened on the checklist after a restart. */
   resume: SetupResumeView | null;
   /** What the last "Restart into BIOS" answered, when the PC did not restart. */
@@ -103,13 +105,16 @@ export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-g
 }
 
 /** The progress line while waiting for Docker's engine, and how the wait ended. */
-export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult">): string {
+export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "steps" | "checkFailed">): string {
   let text = "";
   let tone = "";
   if (model.waiting !== null) {
     text = `Waiting for Docker's engine to start: ${Math.min(model.waiting, START_LIMIT_SECONDS)} s of ${START_LIMIT_SECONDS / 60} min.`;
-  } else if (model.waitResult === "ready") {
-    text = "Docker's engine is running.";
+  } else if (model.waitResult === "answered") {
+    text = "Docker's engine answered.";
+    tone = "ok";
+  } else if (model.waitResult === "timeout" && !model.checkFailed && engineAnswers(model.steps)) {
+    text = "Docker's engine answered during the checklist check.";
     tone = "ok";
   } else if (model.waitResult === "timeout") {
     text = `Docker's engine did not answer within ${START_LIMIT_SECONDS / 60} minutes. Look at Docker Desktop's window: it may show its terms or a message. Then click Check again.`;
@@ -209,7 +214,7 @@ function summary(model: GuideModel): string {
     return `<p class="docker-guide-summary ok">Docker Desktop is ready on this PC.</p>`;
   }
   if (!model.steps) {
-    return `<p class="docker-guide-summary">Checking this PC…</p>`;
+    return model.checkFailed ? "" : `<p class="docker-guide-summary">Checking this PC…</p>`;
   }
   // A note is advice that blocks nothing, so it is not a step to finish.
   const steps = model.steps.filter((s) => s.state !== "note");
@@ -302,6 +307,7 @@ export function renderDockerGuide(model: GuideModel): string {
       ${summary(model)}
       <ol class="docker-steps">${steps.map((s, i) => stepHtml(s, i, steps, model)).join("")}</ol>
       ${waitLine(model)}
+      ${model.checkFailed ? '<p class="docker-guide-wait warn" role="status">CashPilot could not refresh the Docker checklist. Click Check again to retry.</p>' : ""}
       <div class="gate-actions">
         ${checkAgainButton("docker-guide-check", model.checking || model.waiting !== null)}
         ${skip}

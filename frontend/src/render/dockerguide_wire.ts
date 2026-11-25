@@ -13,7 +13,7 @@
 // it takes everything that talks to Go as deps and never imports the bindings.
 
 import type { FirmwareRestart, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
-import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
+import { START_LIMIT_SECONDS, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
 import { runLine } from "./dockersteps.js";
 
 export interface DockerGuideDeps {
@@ -88,12 +88,13 @@ export class DockerGuide {
 
   private async readChecklist(afterWait = false): Promise<void> {
     this.model.checking = true;
+    this.model.checkFailed = false;
     this.render();
     try {
       const result = await this.deps.hostCheck();
-      if (afterWait && engineAnswers(result.steps)) this.model.waitResult = "ready";
       this.applyReading(result);
     } catch (error) {
+      this.model.checkFailed = true;
       this.deps.failed?.(error);
     } finally {
       this.model.checking = false;
@@ -142,6 +143,7 @@ export class DockerGuide {
     const started = now();
     const deadline = started + START_LIMIT_SECONDS * 1000;
     let nextPoll = started + POLL_EVERY_MS;
+    let answered = false;
     while (this.alive) {
       const remaining = deadline - now();
       if (remaining <= 0) break;
@@ -156,7 +158,8 @@ export class DockerGuide {
 
       nextPoll = tick + POLL_EVERY_MS;
       try {
-        if (await this.deps.dockerEngineReady()) break;
+        answered = await this.deps.dockerEngineReady();
+        if (answered) break;
       } catch {
         // A failed probe can be retried at the next poll.
       }
@@ -165,7 +168,7 @@ export class DockerGuide {
       this.model.waiting = null;
       return;
     }
-    this.model.waitResult = "timeout";
+    this.model.waitResult = answered ? "answered" : "timeout";
     await this.readChecklist(true);
   }
 

@@ -250,9 +250,40 @@ const deps = (over = {}) => {
   });
   const g = new DockerGuide(holder(), d, { runtime: remote, resume: null, result: { facts: {}, runtime: remote, steps } });
   await g.startDocker();
-  check("RULE 8 (wiring): the wait continues until this PC's engine answers", g.model.waitResult === "ready" && g.model.waiting === null && calls.start === 1, JSON.stringify(g.model));
+  check("RULE 8 (wiring): the wait continues until this PC's engine answers", g.model.waitResult === "answered" && g.model.waiting === null && calls.start === 1, JSON.stringify(g.model));
   check("RULE 8 (wiring): only the local pipe is checked until the engine answers", reads.join() === "pipe,pipe,checklist", reads.join());
   check("RULE 8 (wiring): the checklist shows the reading that ended the wait", g.model.steps?.[0]?.id === "a6" && g.model.steps?.[0]?.state === "done");
+}
+
+for (const rejects of [false, true]) {
+  const runningUnknown = { ...steps.find((step) => step.id === "a6"), state: "unknown" };
+  const reading = { runtime: runtimeDown, steps: [runningUnknown] };
+  const error = new Error("HostCheck unavailable");
+  let reads = 0;
+  let reported;
+  const { deps: d } = deps({
+    dockerEngineReady: async () => true,
+    hostCheck: async () => {
+      reads++;
+      if (rejects && reads === 1) throw error;
+      return reading;
+    },
+    failed: (err) => { reported = err; },
+  });
+  const h = holder();
+  const g = new DockerGuide(h, d, { runtime: runtimeDown, resume: null, result: { runtime: runtimeDown, steps } });
+  await g.startDocker();
+  const outcome = rejects ? "the checklist rejects" : "the running row is unknown";
+  const message = text(waitLine(g.model));
+  check(`RULE 8 (wiring): the first pipe answer ends the wait when ${outcome}`, d.now() === 3000 && reads === 1 && g.model.waiting === null);
+  check(`RULE 8 (wiring): the pipe answer is shown when ${outcome}`, message.includes("Docker's engine answered") && !message.includes("did not answer"), message);
+  if (rejects) {
+    check("RULE 8 (wiring): a rejected checklist read is reported separately", reported === error && text(h.innerHTML).includes("could not refresh the Docker checklist"), text(h.innerHTML));
+    await g.check();
+    check("RULE 8 (wiring): a successful retry clears the checklist error", reads === 2 && !text(h.innerHTML).includes("could not refresh the Docker checklist"));
+  } else {
+    check("RULE 8 (wiring): an unknown checklist row keeps its own status", rowLabel(rows(h.innerHTML).find((row) => row.id === "a6")) === "Not known");
+  }
 }
 
 {
