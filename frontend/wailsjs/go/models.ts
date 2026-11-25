@@ -99,6 +99,7 @@ export namespace catalog {
 	    }
 	}
 	export class CollectorMetadata {
+	    accrual?: string;
 	    type: string;
 	    notes: string;
 	    credentialHint: string;
@@ -112,6 +113,7 @@ export namespace catalog {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accrual = source["accrual"];
 	        this.type = source["type"];
 	        this.notes = source["notes"];
 	        this.credentialHint = source["credentialHint"];
@@ -2124,6 +2126,20 @@ export namespace main {
 	        this.collector = source["collector"];
 	    }
 	}
+	export class CredentialView {
+	    values: Record<string, string>;
+	    savedSecrets: Record<string, boolean>;
+
+	    static createFrom(source: any = {}) {
+	        return new CredentialView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.values = source["values"];
+	        this.savedSecrets = source["savedSecrets"];
+	    }
+	}
 	
 	
 	export class EnvSetting {
@@ -2810,6 +2826,7 @@ export namespace main {
 	    image: string;
 	    confirmed: boolean;
 	    allowSharedIdentity: boolean;
+	    replaceExisting: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployRequest(source);
@@ -2822,6 +2839,7 @@ export namespace main {
 	        this.image = source["image"];
 	        this.confirmed = source["confirmed"];
 	        this.allowSharedIdentity = source["allowSharedIdentity"];
+	        this.replaceExisting = source["replaceExisting"];
 	    }
 	}
 	export class WorkerDeployResult {
@@ -2830,6 +2848,7 @@ export namespace main {
 	    worker: string;
 	    containerId: string;
 	    notes: string[];
+	    credentialWarning?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployResult(source);
@@ -2842,6 +2861,7 @@ export namespace main {
 	        this.worker = source["worker"];
 	        this.containerId = source["containerId"];
 	        this.notes = source["notes"];
+	        this.credentialWarning = source["credentialWarning"];
 	    }
 	}
 	
@@ -3117,6 +3137,30 @@ export namespace proxies {
 
 export namespace runtime {
 	
+	export class AdminStep {
+	    needed: boolean;
+	    kind?: string;
+	    ruleName?: string;
+	    replaceRule?: boolean;
+	    program?: string;
+	    networks?: string[];
+	    removeRuleName?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdminStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.needed = source["needed"];
+	        this.kind = source["kind"];
+	        this.ruleName = source["ruleName"];
+	        this.replaceRule = source["replaceRule"];
+	        this.program = source["program"];
+	        this.networks = source["networks"];
+	        this.removeRuleName = source["removeRuleName"];
+	    }
+	}
 	export class ContainerInfo {
 	    slug: string;
 	    containerId: string;

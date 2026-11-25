@@ -15,6 +15,7 @@
 
 import type { CustomDefinition, CustomEnv, CustomEnvView, CustomServiceView, Deployment, ScalingLimit, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { renderDeployPanel, type DeployFeedback } from "./deploy_consent.js";
 import { instancesSection } from "./instances.js";
 
 /** The words every custom service carries: it is the user's image, not a reviewed one. */
@@ -164,7 +165,9 @@ export function renderCustomServicesSection(
  * A custom service's card in the wizard's deploy step. No credential inputs, no
  * Image box, no sign-up or collector: it runs its saved definition.
  */
-export function renderCustomServiceCard(service: Service, scaling?: ScalingLimit | null, instances?: number | null): string {
+export function renderCustomServiceCard(
+  service: Service, scaling?: ScalingLimit | null, instances?: number | null, deployFeedback?: DeployFeedback,
+): string {
   return `
     <article class="wizard-setup-card" data-form-slug="${escapeHtml(service.slug)}">
       <div class="split">
@@ -180,6 +183,7 @@ export function renderCustomServiceCard(service: Service, scaling?: ScalingLimit
       <div class="actions left">
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}">Deploy</button>
       </div>
+      ${renderDeployPanel(service.slug, deployFeedback)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
     </article>
   `;

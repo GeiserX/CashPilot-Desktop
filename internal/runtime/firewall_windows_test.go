@@ -42,7 +42,7 @@ func TestFirewallBlockLive(t *testing.T) {
 			t.Fatalf("the rule matches but would do nothing: %s", why)
 		}
 	case "remove":
-		if err := removeFirewallBlock(slug, program); err != nil {
+		if err := removeFirewallBlock(slug, program, true); err != nil {
 			t.Fatal(err)
 		}
 		st, err := readFirewallRule(firewallRuleName(slug, program))

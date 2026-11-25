@@ -26,7 +26,7 @@
 // Pure: takes catalog data, returns HTML strings, touches no global.
 
 import type { Payout, Service } from "../wails";
-import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { escapeHtml, miningBalancePrecision } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { stripHtml } from "./fields.js";
 
 /** What an undocumented value looks like. Never 0, never an empty cell. */
@@ -79,8 +79,9 @@ function minimumUnit(service: Service): string {
 }
 
 /** Trim a money figure: 20 stays 20, 4.5 stays 4.5, 0.10 becomes 0.1. */
-function trimNumber(value: number): string {
-  return String(Number(value.toFixed(4)));
+function trimNumber(value: number, currency: string): string {
+  const decimals = miningBalancePrecision(currency) ?? 4;
+  return value.toFixed(decimals).replace(/(\.\d*?[1-9])0+$|\.0+$/, "$1");
 }
 
 /**
@@ -92,26 +93,29 @@ function trimNumber(value: number): string {
 export function payoutFacts(service: Service, balance?: Balance | null): Fact[] {
   const minimum = service.cashout?.minAmount;
   const unit = minimumUnit(service);
+  const pool = service.collector?.accrual === "pool";
   const documented = typeof minimum === "number" && Number.isFinite(minimum) && minimum > 0;
   const facts: Fact[] = [
     {
-      label: "Minimum to cash out",
-      value: documented ? `${trimNumber(minimum)}${unit ? ` ${unit}` : ""}` : UNKNOWN,
+      label: pool ? "Automatic payout threshold" : "Minimum to cash out",
+      value: documented ? `${trimNumber(minimum, unit)}${unit ? ` ${unit}` : ""}` : UNKNOWN,
     },
     { label: "Paid by", value: (service.payment?.methods || []).join(", ") || UNKNOWN },
     { label: "Paid out", value: (service.payment?.frequency || "").trim() || UNKNOWN },
   ];
 
   if (balance && Number.isFinite(balance.amount)) {
+    if (pool) {
+      const unit = balance.currency.trim().toUpperCase();
+      facts.push({ label: "Unpaid pool balance", value: `${trimNumber(balance.amount, unit)} ${unit}`.trim() });
+    }
     const threshold = minimumIn(service, balance.currency);
     if (threshold !== null) {
       const remaining = threshold - balance.amount;
+      const reached = pool ? "Minimum reached. The pool pays automatically." : "Nothing — this can be cashed out now";
       facts.push({
         label: "Still to go",
-        value:
-          remaining <= 0
-            ? "Nothing — this can be cashed out now"
-            : `${trimNumber(remaining)} ${(balance.currency || "").trim().toUpperCase()}`.trim(),
+        value: remaining <= 0 ? reached : `${trimNumber(remaining, balance.currency)} ${(balance.currency || "").trim().toUpperCase()}`.trim(),
       });
     }
   }
@@ -199,23 +203,25 @@ export function deviceLinkText(service: Service | undefined, values: Record<stri
 /** One block of label/value rows. */
 function factList(title: string, facts: Fact[]): string {
   return `
-    <div class="detail-block">
-      <strong class="detail-title">${escapeHtml(title)}</strong>
-      <dl class="detail-facts">
-        ${facts
-          .map((fact) => `<div class="detail-fact"><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`)
-          .join("")}
-      </dl>
-    </div>
+    <strong class="detail-title">${escapeHtml(title)}</strong>
+    <dl class="detail-facts">
+      ${facts
+        .map((fact) => `<div class="detail-fact"><dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd></div>`)
+        .join("")}
+    </dl>
   `;
+}
+
+export function renderPayoutFacts(service: Service, balance?: Balance | null): string {
+  return factList("Getting paid", payoutFacts(service, balance));
 }
 
 /** Payout and disclosure together, as they appear under a service's setup card. */
 export function serviceFacts(service: Service, balance?: Balance | null): string {
   return `
     <div class="service-details">
-      ${factList("Getting paid", payoutFacts(service, balance))}
-      ${factList("What it does with your machine", disclosureFacts(service))}
+      <div class="detail-block" data-payout-facts>${renderPayoutFacts(service, balance)}</div>
+      <div class="detail-block">${factList("What it does with your machine", disclosureFacts(service))}</div>
       <div class="detail-block payout-ledger" data-payouts-slug="${escapeHtml(service.slug)}">${payoutLedger(service, undefined)}</div>
     </div>
   `;
@@ -247,7 +253,7 @@ export function payoutLedger(service: Service, payouts: Payout[] | null | undefi
   } else {
     list = `<dl class="detail-facts">${payouts
       .map((payout) => {
-        const what = `${trimNumber(payout.amount)} ${(payout.currency || "").toUpperCase()}${payout.method ? ` · ${payout.method}` : ""}`;
+        const what = `${trimNumber(payout.amount, payout.currency || "")} ${(payout.currency || "").toUpperCase()}${payout.method ? ` · ${payout.method}` : ""}`;
         const unpriced = payout.fxRateUsd === null || payout.fxRateUsd === undefined ? " (no rate for that day, left out of the total)" : "";
         return `<div class="detail-fact"><dt>${escapeHtml(payout.paidOn)}</dt><dd>${escapeHtml(what + unpriced)} <button class="secondary" data-remove-payout="${escapeHtml(String(payout.id))}" data-slug="${slug}">Remove</button></dd></div>`;
       })

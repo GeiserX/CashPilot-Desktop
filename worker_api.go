@@ -591,7 +591,7 @@ func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeplo
 	// The server registers the device on the provider account itself, so this deploy
 	// does not (decision: a joined Desktop leaves vendor contact to the server).
 	catalogOnly := ""
-	dep, _, err := a.deployService(slug, spec.Env, &catalogOnly, nil, false, nil, false)
+	dep, _, err := a.deployService(slug, spec.Env, services.DeployOptions{Image: &catalogOnly}, false)
 	if err != nil {
 		return http.StatusConflict, oneLine(err.Error()), false
 	}

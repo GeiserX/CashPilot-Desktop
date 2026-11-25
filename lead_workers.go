@@ -51,22 +51,26 @@ type WorkerDeployRequest struct {
 	// AllowSharedIdentity is the owner's yes to a device id that already runs on
 	// another box.
 	AllowSharedIdentity bool `json:"allowSharedIdentity"`
+	// ReplaceExisting is the owner's yes to replacing a managed copy on this worker.
+	ReplaceExisting bool `json:"replaceExisting"`
 }
 
 // WorkerDeployResult is what a deploy to a worker did. With Ask set it did nothing:
 // the owner must answer Message first, and the form sends the deploy again with the
-// matching yes ("step_up_required": Confirmed, "identity_in_use": AllowSharedIdentity).
+// matching approval for the image, identity, or replacement.
 type WorkerDeployResult struct {
-	Ask         string   `json:"ask"`
-	Message     string   `json:"message"`
-	Worker      string   `json:"worker"`
-	ContainerID string   `json:"containerId"`
-	Notes       []string `json:"notes"`
+	Ask               string   `json:"ask"`
+	Message           string   `json:"message"`
+	Worker            string   `json:"worker"`
+	ContainerID       string   `json:"containerId"`
+	Notes             []string `json:"notes"`
+	CredentialWarning string   `json:"credentialWarning,omitempty"`
 }
 
 const (
 	askStepUp   = "step_up_required"
 	askIdentity = "identity_in_use"
+	askReplace  = "replace_existing"
 )
 
 // leadOnlyError is why this computer sends no commands to workers, or nil.
@@ -229,7 +233,10 @@ func (a *App) workerFor(id int64) (commandTarget, error) {
 		// key until then, as the web UI falls back to it.
 		auth, own = a.fleetKey, ""
 	}
-	reports, _ := a.store.FleetReports()
+	reports, err := a.store.FleetReports()
+	if err != nil {
+		return commandTarget{}, fmt.Errorf("could not read the selected worker's report: %w", err)
+	}
 	return commandTarget{
 		device: device,
 		report: reports[id],
@@ -239,12 +246,14 @@ func (a *App) workerFor(id int64) (commandTarget, error) {
 }
 
 // DeployToWorker deploys slug to a Docker worker that reports here, with the spec the
-// web UI sends. A deploy that needs the owner's yes first comes back with Ask set and
-// sends nothing.
+// web UI sends. A deploy that needs the owner's yes first comes back with Ask set
+// and leaves the worker's container unchanged.
 func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeployResult, error) {
 	if err := a.ready(); err != nil {
 		return WorkerDeployResult{}, err
 	}
+	a.workerDeployMu.Lock()
+	defer a.workerDeployMu.Unlock()
 	target, err := a.workerFor(req.WorkerID)
 	if err != nil {
 		return WorkerDeployResult{}, err
@@ -274,6 +283,29 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		return WorkerDeployResult{}, err
 	}
 	result := WorkerDeployResult{Worker: target.device.Name}
+	ctx := workerContext(a.ctx)
+	checked, exists, err := target.client.DeployState(ctx, slug)
+	if err != nil {
+		return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
+	}
+	replaceQuestion := fmt.Sprintf("Redeploy %s on %s? The existing container will be replaced, but its volumes are kept.", svc.Name, target.device.Name)
+	if !req.ReplaceExisting {
+		if !checked {
+			exists, err = target.client.LegacyDeployTargetExists(ctx, slug)
+			if err != nil {
+				return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
+			}
+		}
+		if exists || !checked {
+			result.Ask = askReplace
+			result.Message = replaceQuestion
+			if !exists {
+				// An empty inventory can also mean a previous request is still deploying.
+				result.Message = fmt.Sprintf("Deploy %s on %s? This worker cannot confirm that the container is absent. If one exists when the deploy starts, it will be replaced and its volumes will be kept.", svc.Name, target.device.Name)
+			}
+			return result, nil
+		}
+	}
 	carriesID := false
 	for _, key := range workerapi.PerDeviceKeys(svc) {
 		if strings.TrimSpace(spec.Env[key]) == "" {
@@ -309,9 +341,22 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		}
 		spec.Approval = approval
 	}
-	answer, err := target.client.Deploy(workerContext(a.ctx), slug, spec, workerapi.DeployTimeout(svc.Docker.StopTimeout))
+	spec.ReplaceExisting = req.ReplaceExisting
+	timeout := workerapi.DeployTimeout(svc.Docker.StopTimeout)
+	var answer workerapi.DeployResult
+	if checked {
+		answer, err = target.client.DeployChecked(ctx, slug, spec, timeout)
+	} else {
+		answer, err = target.client.Deploy(ctx, slug, spec, timeout)
+	}
 	if err != nil {
 		var refused *workerapi.Error
+		if errors.As(err, &refused) && refused.Code == askReplace && !req.ReplaceExisting {
+			// A prior request can finish after the state read, even if its reply was lost.
+			result.Ask = askReplace
+			result.Message = replaceQuestion
+			return result, nil
+		}
 		if errors.As(err, &refused) && refused.Code == askStepUp && !req.Confirmed && critical {
 			// The worker's own catalog sees a difference (a worker on another
 			// release): its message says which, and a yes sends it signed.
@@ -327,6 +372,10 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	if err := a.store.MarkFleetCopy(target.device.ID, slug, 1, "running"); err != nil {
 		a.emitError("worker-deploy", err)
+	}
+	if err := a.saveWorkerCredentials(slug, req.Values); err != nil {
+		result.CredentialWarning = "CashPilot could not save the credentials on this computer."
+		a.emitError("credentials", err)
 	}
 	return result, nil
 }

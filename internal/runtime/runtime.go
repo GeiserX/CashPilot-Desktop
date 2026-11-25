@@ -107,6 +107,8 @@ type DeploySpec struct {
 	// Wallet is what the deploy asks of the service's wallet seed file (seedfile.go),
 	// for a service whose catalog entry has one. nil keeps the wallet the node has.
 	Wallet *WalletRequest
+	// AdminApproval covers the firewall change approved for this deploy alone.
+	AdminApproval *AdminStep
 }
 
 type ContainerInfo struct {

@@ -214,3 +214,78 @@ func TestTimeoutsCoverTheStop(t *testing.T) {
 		t.Fatalf("fence-gated stop timeout = %v", got)
 	}
 }
+
+func TestDeployStateDistinguishesAnOlderWorkerFromLookupFailure(t *testing.T) {
+	cases := []struct {
+		name              string
+		status            int
+		body              string
+		supported, exists bool
+		wantErr           bool
+	}{
+		{name: "existing", status: 200, body: `{"exists":true}`, supported: true, exists: true},
+		{name: "absent", status: 200, body: `{"exists":false}`, supported: true},
+		{name: "older worker", status: 404, body: `{"detail":"Not Found"}`},
+		{name: "lookup failed", status: 503, body: `{"detail":"Docker offline"}`, wantErr: true},
+		{name: "another 404", status: 404, body: `{"detail":"could not inspect Docker"}`, wantErr: true},
+		{name: "malformed state", status: 200, body: `{}`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := newFakeWorker(t, tc.status, tc.body)
+			c := &Client{BaseURL: srv.URL, Key: "own-key"}
+			supported, exists, err := c.DeployState(context.Background(), "honeygain")
+			if supported != tc.supported || exists != tc.exists || (err != nil) != tc.wantErr {
+				t.Fatalf("state = %t, %t, %v", supported, exists, err)
+			}
+			if seen.method != http.MethodGet || seen.path != "/api/containers/honeygain/deploy-checked" || seen.auth != "Bearer own-key" {
+				t.Fatalf("lookup = %+v", seen)
+			}
+		})
+	}
+}
+
+func TestLegacyDeployInventoryLooksForTheExactContainerName(t *testing.T) {
+	cases := []struct {
+		name    string
+		status  int
+		body    string
+		exists  bool
+		wantErr bool
+	}{
+		{name: "stopped copy", status: 200, body: `[{"name":"cashpilot-honeygain","status":"exited"}]`, exists: true},
+		{name: "other copy", status: 200, body: `[{"name":"cashpilot-honeygain-2","status":"running"}]`},
+		{name: "error", status: 503, body: `{"detail":"Docker offline"}`, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, seen := newFakeWorker(t, tc.status, tc.body)
+			c := &Client{BaseURL: srv.URL, Key: "own-key"}
+			exists, err := c.LegacyDeployTargetExists(context.Background(), "honeygain")
+			if exists != tc.exists || (err != nil) != tc.wantErr {
+				t.Fatalf("inventory = %t, %v", exists, err)
+			}
+			if seen.method != http.MethodGet || seen.path != "/api/containers" || seen.auth != "Bearer own-key" {
+				t.Fatalf("lookup = %+v", seen)
+			}
+		})
+	}
+}
+
+func TestCheckedDeployCarriesOnlyExplicitReplacementApproval(t *testing.T) {
+	srv, seen := newFakeWorker(t, 200, `{"status":"deployed","container_id":"new"}`)
+	c := &Client{BaseURL: srv.URL, Key: "own-key"}
+	for _, approved := range []bool{false, true} {
+		res, err := c.DeployChecked(context.Background(), "honeygain", DeploySpec{Image: "img", ReplaceExisting: approved}, time.Second)
+		if err != nil || res.ContainerID != "new" {
+			t.Fatalf("checked deploy = %+v, %v", res, err)
+		}
+		value, present := seen.body["replace_existing"]
+		if present != approved || (present && value != true) {
+			t.Fatalf("approved = %t, sent %v", approved, seen.body)
+		}
+		if seen.method != http.MethodPost || seen.path != "/api/containers/honeygain/deploy-checked" || seen.body["image"] != "img" || seen.auth != "Bearer own-key" {
+			t.Fatalf("deploy = %+v", seen)
+		}
+	}
+}

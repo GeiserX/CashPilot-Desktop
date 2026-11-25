@@ -134,6 +134,14 @@ check("a redraw of the open Add form keeps the typed values", keepsLiveProxyEdit
 check("opening another proxy's editor drops the old draft", !keepsLiveProxyEditor(addId, editId));
 check("a closed editor brings nothing back", !keepsLiveProxyEditor(editId, closedId));
 
+for (const status of [{ kind: "busy", text: "Deploying through Gate..." }, { kind: "ok", text: "Honeygain is running through Gate." },
+  { kind: "failed", text: "Gate could not start Honeygain." }]) {
+  const redrawn = renderProxiesSection(state, null, status);
+  check(`a Fleet redraw shows the ${status.kind} deploy result by Run a copy`,
+    /data-proxy-run-deploy[\s\S]*data-proxy-deploy-status/.test(redrawn)
+      && redrawn.includes(`data-deploy-notice="${status.kind}"`) && redrawn.includes(status.text));
+}
+
 if (failures) {
   console.error(`\n${failures} of ${checks} proxies checks failed`);
   process.exit(1);
