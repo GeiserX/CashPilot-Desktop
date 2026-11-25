@@ -12,6 +12,9 @@
 //   5. EACH WORKER COPY HAS STOP OR START, RESTART AND REMOVE; A COPY CASHPILOT DID
 //      NOT DEPLOY HAS NONE; A WORKER THAT TAKES NO COMMANDS NOW SAYS WHY AND HAS ITS BUTTONS OFF.
 //   6. ONLY REMOVE ASKS, WITH THE WEB UI'S WORDING.
+//   7. A SERVICE THAT KEEPS ITS WALLET SEED IN A FILE (SIA'S HOSTD) OFFERS NO WORKER:
+//      THE BOX SAYS IT RUNS ON THIS COMPUTER AND WHY, AND THE CARD SHOWS THE WALLET
+//      CHOICE, NEVER A SEED FIELD.
 //
 //   node scripts/where_check.mjs      # against ./.harness-build
 
@@ -140,6 +143,25 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
     copyCommandQuestion("remove", "honeygain", 1, "garage", copies));
   check("RULE 6: removing copy 2 names it",
     copyCommandQuestion("remove", "honeygain", 2, "garage", copies) === "Remove copy 2 of honeygain from garage? This will stop and delete the container. Its data is kept.");
+}
+
+{
+  const sia = {
+    slug: "sia-hostd", name: "Sia hostd", description: "",
+    docker: { image: "ghcr.io/siafoundation/hostd", env: [
+      { key: "HOSTD_WALLET_SEED", label: "Wallet seed phrase", required: true, secret: true, description: "", seedFile: { path: "/data/hostd.yml", key: "recoveryPhrase", words: 12 } },
+      { key: "HOSTD_API_PASSWORD", label: "Dashboard password", required: true, secret: true, description: "" },
+    ] },
+  };
+  const box = whereChoiceSection(sia, targets, 5);
+  check("RULE 7: no worker is offered for a seed-file service", !box.includes("<select") && !box.includes("data-wizard-where=") && !box.includes("<option"), box);
+  check("RULE 7: the box says it runs on this computer, and why", box.includes("Where: this computer.") && box.includes("wallet seed phrase in a file") && box.includes("only on this computer"), box);
+  check("RULE 7: no workers, no box", whereChoiceSection(sia, []) === "" && whereChoiceSection(sia, null) === "");
+  // A pick left from before the redraw cannot bring the worker back.
+  const card = renderWizardServiceSetup(sia, {}, "box", null, "", null, null, null, undefined, null, false, targets, 5);
+  check("RULE 7: the card has no worker pick", !card.includes("data-wizard-where=") && card.includes("only on this computer"), card);
+  check("RULE 7: the card shows the wallet choice", card.includes('data-wallet-choice="sia-hostd"'), card);
+  check("RULE 7: the card shows no seed field", !card.includes('data-wizard-env="HOSTD_WALLET_SEED"') && !card.includes("Wallet seed phrase"), card);
 }
 
 if (failures) {
