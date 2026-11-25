@@ -9,10 +9,12 @@
 
 import type { Service, WorkerDeployResult, WorkerTarget } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { seedFileVar } from "./wallet.js";
 
 /**
  * Render the Where box for one service, or "" when there is nothing to choose: no
- * workers report here, or this service cannot run on a worker.
+ * workers report here, or this service cannot run on a worker. A service that keeps
+ * its wallet seed in a file gets a note that it runs on this computer, and no pick.
  *
  * `draft` is the owner's pick from before a redraw (a worker id, null for this
  * computer, undefined for none). A redraw must keep it, or a worker picked for the
@@ -21,6 +23,11 @@ import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in 
 export function whereChoiceSection(service: Service, targets: WorkerTarget[] | null | undefined, draft?: number | null): string {
   if (service.manualOnly || service.custom || !targets || targets.length === 0) return "";
   const slug = escapeHtml(service.slug);
+  if (seedFileVar(service)) {
+    // The seed phrase is the wallet, and it never travels to a worker (workerapi.BuildDeploySpec):
+    // the node runs where its wallet file is made, so the card's wallet choice applies here.
+    return `<p class="muted compact-copy where-hint" data-where-local="${slug}">Where: this computer. ${escapeHtml(service.name)} keeps its wallet seed phrase in a file on the machine that runs it, so it runs only on this computer for now.</p>`;
+  }
   const ready = targets.filter((t) => t.online && !t.reason);
   if (ready.length === 0) {
     return `<p class="muted compact-copy where-hint" data-where-none="${slug}">Where: this computer. No worker is online.</p>`;
