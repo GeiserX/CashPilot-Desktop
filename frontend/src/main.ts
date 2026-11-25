@@ -103,7 +103,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
-import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, missingFieldsNotice, runCheckedDeploy, type DeployAnswer } from "./render/deploy_consent";
+import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, missingFieldsNotice, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployStatus } from "./render/deploy_consent";
 import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
@@ -188,6 +188,8 @@ let importResult: ImportResult | null = null;
 let importDeployed: string[] = [];
 // The device-link step of each deployed import, shown under it (slug -> text).
 let importLinks: Record<string, string> = {};
+let importDeploys: Record<string, DeployStatus> = {};
+const driftDeploys: Record<string, DeployStatus> = {};
 let importDeploying = new Set<string>();
 // Bumped by each preview, so a slower earlier one cannot land over a later one.
 let importPreviewSeq = 0;
@@ -698,6 +700,7 @@ function renderDashboard(current: AppState) {
     outdated: current.outdatedServices,
     health: current.health,
     drift: current.drift,
+    driftDeploys,
     producerStates: current.producerStates,
     isolation: current.isolation,
   }).concat(stallItems(current.stalls)), current.reminders);
@@ -1256,7 +1259,7 @@ function renderImport(current: AppState) {
           ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
           ${renderImportInput(importSource)}
           ${importPreview ? renderImportPreview(importPreview) : ""}
-          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks) : ""}
+          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks, importDeploys) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -1326,6 +1329,7 @@ async function runImportPreview() {
     importResult = null;
     importDeployed = [];
     importLinks = {};
+    importDeploys = {};
     renderImportIfShown();
   } catch (error) {
     showErrorToast({ scope: "import", error: String(error) });
@@ -1358,6 +1362,7 @@ async function runImportApply() {
     importDeployed = [];
     state = await GetAppState();
     importLinks = {};
+    importDeploys = {};
     showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
     renderImportIfShown();
   } catch (error) {
@@ -1366,25 +1371,35 @@ async function runImportApply() {
 }
 
 async function runImportDeploy(slug: string) {
-  // A second click while this deploy runs does nothing.
   if (!slug || importDeploying.has(slug)) return;
   importDeploying.add(slug);
+  const statuses = importDeploys;
+  const say = (kind: DeployStatus["kind"], text: string) => {
+    statuses[slug] = { kind, text };
+    if (statuses === importDeploys) renderImportIfShown();
+  };
   try {
     const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
-    // The same pre-flight report the wizard shows, when there is one.
     const report = await PreflightService(slug).catch(() => null);
+    if (statuses !== importDeploys) return;
     const preflight = report?.summary ? `\n\n${report.summary}` : "";
-    if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) return;
-    await DeployService(slug, {}, null, null);
-    importDeployed = [...importDeployed, slug];
-    state = await GetAppState();
-    // The saved values hold the device id; the step is the one the wizard shows.
+    if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) {
+      say("cancelled", "Nothing was deployed.");
+      return;
+    }
+    const answer = await runDeployWithStatus(`Deploying ${name}...`, say, async () => {
+      await DeployService(slug, {}, null, null);
+      if (statuses === importDeploys) importDeployed = [...importDeployed, slug];
+      return { kind: "ok", text: "Deployed." };
+    });
+    if (answer.kind !== "ok" || statuses !== importDeploys) return;
+    state = await GetAppState().catch(() => state);
     const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
     const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-    if (link) importLinks = { ...importLinks, [slug]: link };
-    renderImportIfShown();
-  } catch (error) {
-    showErrorToast({ scope: "deploy", error: String(error) });
+    if (link && statuses === importDeploys) {
+      importLinks = { ...importLinks, [slug]: link };
+      renderImportIfShown();
+    }
   } finally {
     importDeploying.delete(slug);
   }
@@ -2514,19 +2529,17 @@ function firstInvalidWizardInput(slug: string): HTMLInputElement | null {
 
 async function runWizardAction(slug: string, action: string) {
   const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
-  const invalid = firstInvalidWizardInput(slug);
-  if (invalid && (action === "save" || action === "deploy")) {
+  const workerId = action === "deploy" ? readWizardWhere(slug) : null;
+  const invalid = workerId === null ? firstInvalidWizardInput(slug) : null;
+  if (invalid && action === "save") {
     invalid.reportValidity();
     if (output) output.textContent = `${invalid.dataset.wizardEnv} does not have the shape this provider expects.`;
     return;
   }
   const values = readWizardForm(slug);
   if (action === "deploy") {
-    if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
-      sayDeploy(slug, "cancelled", "Nothing was deployed.");
-      return;
-    }
-    await wizardDeploy(slug, values);
+    invalid?.reportValidity();
+    await wizardDeploy(slug, values, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
     return;
   }
   try {
@@ -2560,15 +2573,19 @@ function sayDeploy(slug: string, kind: "busy" | DeployAnswer["kind"], text: stri
 // A deploy from the card: every field marked * is filled, and when Windows will
 // show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
 // answer replaces "Deploying..." next to Deploy however it ends.
-async function wizardDeploy(slug: string, values: Record<string, string>) {
+async function wizardDeploy(slug: string, values: Record<string, string>, workerId: number | null, invalidField?: string) {
   const service = state?.services?.find((item) => item.slug === slug);
   const name = service?.name || slug;
   const fields = service && !service.custom ? serviceFormFields(service, state?.collectorFields) : [];
   const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
-  // A worker runs the service in its own Docker: nothing here asks Windows.
-  const worker = state?.workerTargets?.find((target) => target.id === readWizardWhere(slug));
-  const direct = readWizardRoute(slug) === null && !worker;
-  const outcome = await runCheckedDeploy(fields, values, direct, worker ? `Deploying ${name} to ${worker.name}...` : `Deploying ${name}...`, {
+  const proxyId = readWizardRoute(slug);
+  const image = readWizardImage(slug);
+  const instances = readWizardInstances(slug);
+  const replacesLocal = proxyId === null
+    ? state?.deployments?.some((deployment) => deployment.slug === slug)
+    : state?.route?.recorded?.[slug] === proxyId;
+  const outcome = await runCheckedDeploy(fields, values, proxyId === null, `Deploying ${name}...`, {
+    confirmReplace: (message) => confirm(message),
     adminStep: () => DeployAdminStep(slug),
     askConsent: (step) => new Promise<boolean>((resolve) => {
       if (!panel) {
@@ -2583,7 +2600,15 @@ async function wizardDeploy(slug: string, values: Record<string, string>) {
       });
     }),
     say: (kind, text) => sayDeploy(slug, kind, text),
-    deploy: (approval) => deployFromCard(slug, values, worker, approval),
+    deploy: (approval, worker) => deployFromCard(slug, values, worker, approval, proxyId, image, instances),
+  }, {
+    workerId,
+    workers: state?.workerTargets,
+    workerBusyText: (worker) => `Deploying ${name} to ${worker.name}...`,
+    invalidField,
+    localReplacement: replacesLocal
+      ? `Redeploy ${name} ${proxyId === null ? "on this computer" : "through this proxy"}? The existing node will be replaced. Its saved data is kept.`
+      : undefined,
   }).catch((error) => {
     sayDeploy(slug, "failed", deployErrorText(error));
     return null;
@@ -2608,13 +2633,18 @@ async function wizardDeploy(slug: string, values: Record<string, string>) {
 // The deploy itself, once the card's checks passed: to a worker, with a wallet
 // seed (Sia's hostd), or on this computer, directly or through a proxy. Every path
 // answers with what the note next to Deploy says.
-async function deployFromCard(slug: string, values: Record<string, string>, worker: WorkerTarget | undefined, approval: AdminStep | null): Promise<DeployAnswer> {
+async function deployFromCard(
+  slug: string, values: Record<string, string>, worker: WorkerTarget | undefined, approval: AdminStep | null,
+  proxyId: number | null, image: string | null, instances: number | null,
+): Promise<DeployAnswer> {
   if (worker) {
-    const image = readWizardImage(slug) || "";
-    const outcome = await runWorkerDeploy(slug, worker, readWizardRoute(slug), readWizardInstances(slug), {
+    const outcome = await runWorkerDeploy(slug, worker, proxyId, instances, {
       confirm: (message) => confirm(message),
-      deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image, ...yes}),
-      save: () => SaveCredentials(slug, values),
+      deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image: image || "", ...yes}),
+      save: async () => {
+        const typed = Object.entries(values).filter(([, value]) => value.trim());
+        if (typed.length) await SaveCredentials(slug, { ...await GetCredentials(slug), ...Object.fromEntries(typed) });
+      },
     });
     if (outcome.kind === "deployed") return { kind: "ok", text: workerDeployText(outcome.result) };
     return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
@@ -2622,9 +2652,7 @@ async function deployFromCard(slug: string, values: Record<string, string>, work
   if (state?.services?.some((service) => service.slug === slug && seedFileVar(service))) return runWalletDeploy(slug, values);
   // A custom service has no credentials: it runs its saved definition.
   const custom = state?.services?.some((service) => service.slug === slug && service.custom);
-  const image = readWizardImage(slug);
-  const instances = readWizardInstances(slug);
-  const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
+  const outcome = await runRouteDeploy(slug, proxyId, image, instances, state?.route, {
     save: async () => {
       if (!custom) await SaveCredentials(slug, values);
     },
@@ -2938,22 +2966,33 @@ async function runServiceAction(slug: string, action: string) {
 // number of copies, and rebuilds the rest from the current catalog.
 async function runDriftAction(slug: string, action: string) {
   const name = state?.services.find((svc) => svc.slug === slug)?.name || slug;
-  try {
-    if (action === "redeploy") {
-      if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) return;
-      setOutput(`Redeploying ${name}...`);
-      await DeployService(slug, {}, null, null);
-      await refreshState();
-      setOutput(`${name} redeployed.`);
+  if (driftDeploys[slug]?.kind === "busy") return;
+  if (action === "redeploy") {
+    const say = (kind: DeployStatus["kind"], text: string) => {
+      driftDeploys[slug] = { kind, text };
+      const panel = document.querySelector<HTMLElement>(`[data-drift-deploy-status="${slug}"]`);
+      if (panel) panel.innerHTML = deployNotice(kind, text);
+    };
+    if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) {
+      say("cancelled", "Nothing was deployed.");
       return;
     }
-    if (action === "ignore") {
+    const answer = await runDeployWithStatus(`Redeploying ${name}...`, say, async () => {
+      await DeployService(slug, {}, null, null);
+      return { kind: "ok", text: `${name} redeployed.` };
+    });
+    if (answer.kind === "ok") await refreshState().catch(() => undefined);
+    return;
+  }
+  if (action === "ignore") {
+    try {
       await IgnoreDrift(slug);
+      delete driftDeploys[slug];
       await refreshState();
       setOutput(`${name}: warning ignored until the catalog changes it again.`);
+    } catch (error) {
+      setOutput(String(error));
     }
-  } catch (error) {
-    setOutput(String(error));
   }
 }
 

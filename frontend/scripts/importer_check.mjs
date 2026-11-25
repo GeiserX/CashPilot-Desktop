@@ -119,6 +119,12 @@ const linked = renderImportSaved(
 check("a deployed import shows its device-link step, escaped", linked.includes("Link this device &lt;now&gt;"));
 check("control: no step under a service not deployed yet", !linked.includes("not deployed yet"));
 
+const failed = renderImportSaved({ saved: ["honeygain"], kept: {} }, preview, [], {}, {
+  honeygain: { kind: "failed", text: "Could not start <node>" },
+});
+check("a failed import deploy renders its escaped alert beside its own button",
+  /data-import-deploy="honeygain"[^]*?role="alert"[^]*?Could not start &lt;node&gt;/.test(failed));
+
 if (failures) {
   console.error(`\n${failures} of ${checks} import checks failed`);
   process.exit(1);

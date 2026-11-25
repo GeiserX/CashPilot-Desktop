@@ -709,6 +709,8 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 /* What a Deploy click did, next to the button (render/deploy_consent.ts). */
 .deploy-panel:empty { display: none; }
 .deploy-panel { margin-top: 10px; }
+[data-drift-deploy-status] { grid-column: 1 / -1; }
+[data-drift-deploy-status]:empty { display: none; }
 .deploy-notice { padding: 8px 12px; border-left: 2px solid var(--border-strong); font-size: var(--fs-2); white-space: pre-line; }
 .deploy-notice p { margin: 0; }
 .deploy-notice ul { margin: 6px 0 0; padding-left: 20px; }

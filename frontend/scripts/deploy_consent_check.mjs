@@ -21,9 +21,7 @@
 //      question the deploy asks later and Cancel, a refusal, a rejection and a
 //      Sia wallet deploy (its seed notice and its no-phrase refusal) all end with
 //      their own answer there.
-//   9. A CONTINUE SERVES ONE DEPLOY: when the deploy it was given for ends, however
-//      it ended (deployed, a later confirm cancelled, rejected), the approval is
-//      withdrawn. No approval given, nothing to withdraw.
+//   9. A CONTINUE SERVES ONE DEPLOY: the approved step is passed with that call.
 //
 //   node scripts/deploy_consent_check.mjs      # against ./.harness-build
 
@@ -37,6 +35,7 @@ import {
   missingRequiredFields,
   runCheckedDeploy,
 } from "../.harness-build/render/deploy_consent.js";
+import { runWorkerDeploy } from "../.harness-build/render/where.js";
 import { walletChoiceRefusal, walletDeployAnswer } from "../.harness-build/render/wallet.js";
 import { serviceFormFields } from "../.harness-build/render/fields.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
@@ -274,6 +273,44 @@ const hgFields = serviceFormFields(hg, {});
   const cancelled = calls({ consent: false });
   await runCheckedDeploy(fields, full, true, BUSY, cancelled);
   check("RULE 9: Cancel on the screen sends no deploy", !cancelled.log.some((entry) => entry.startsWith("deploy")), cancelled.log.join(","));
+}
+
+// A selected worker owns replacement and credential validation, even with a
+// local copy and blank fields. The actual worker path decides whether to replace.
+{
+  const worker = { id: 23, name: "garage", online: true, services: [] };
+  for (const services of [[], ["honeygain"]]) {
+    const prompts = [];
+    const sent = [];
+    worker.services = services;
+    const c = calls();
+    c.confirmReplace = (message) => { prompts.push(message); return true; };
+    c.deploy = async (approval, selected) => {
+      sent.push([approval, selected?.id]);
+      const result = await runWorkerDeploy("honeygain", selected, null, null, {
+        confirm: c.confirmReplace,
+        deploy: async () => ({ worker: selected.name }),
+        save: async () => {},
+      });
+      return result.kind === "deployed" ? DEPLOYED : { kind: "failed", text: result.kind };
+    };
+    const result = await runCheckedDeploy(serviceFormFields(hg), { HG_EMAIL: "", HG_PASSWORD: "" }, true, BUSY, c, {
+      workerId: 23, workers: [worker], localReplacement: "Replace this computer's copy?",
+    });
+    check("worker deploy reaches the chosen worker with blank fields and no approval", result.kind === "done" && result.answer.kind === "ok" && sent[0]?.[0] === null && sent[0]?.[1] === 23, JSON.stringify({ result, sent }));
+    check("worker replacement is confirmed only when that worker already runs it", prompts.length === services.length && prompts.every((prompt) => prompt.includes("on garage")), JSON.stringify(prompts));
+  }
+  const missing = calls();
+  const refused = await runCheckedDeploy(fields, full, true, BUSY, missing, { workerId: 23, workers: [] });
+  check("a missing worker never falls back to this computer", refused.kind === "blocked" && missing.log.length === 0, JSON.stringify({ refused, log: missing.log }));
+}
+
+// An invalid wizard value replaces any previous status beside Deploy.
+{
+  const c = calls();
+  c.said.push(DEPLOYED);
+  await runCheckedDeploy(fields, full, true, BUSY, c, { invalidField: "API_KEY" });
+  check("invalid wizard field replaces old success with an alert and stops the deploy", c.said.at(-1)?.kind === "failed" && c.said.at(-1)?.text.includes("API_KEY") && !c.log.includes("adminStep"), JSON.stringify(c.said));
 }
 
 if (failures) {

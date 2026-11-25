@@ -20,7 +20,7 @@
 // Pure: takes the model, returns HTML or an outcome. main.ts passes the Wails
 // bindings and the DOM.
 
-import type { AdminStep } from "../wails";
+import type { AdminStep, WorkerTarget } from "../wails";
 import { deployNeeds, type ServiceField } from "./fields.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
@@ -154,29 +154,62 @@ export interface CheckedDeployCalls {
   /** Writes the note next to Deploy. */
   say(kind: "busy" | DeployAnswer["kind"], text: string): void;
   /** The deploy itself, with every question it still asks; it says what happened. */
-  deploy(approval: AdminStep | null): Promise<DeployAnswer>;
+  deploy(approval: AdminStep | null, worker?: WorkerTarget): Promise<DeployAnswer>;
+  confirmReplace?(message: string): boolean;
 }
 
-/**
- * Deploy from the setup card: the field check, then the admin-step screen when
- * Windows will ask, then the deploy. direct is false for a deploy through a
- * proxy or to a worker, which runs in a container and needs no admin prompt. A
- * step that cannot be read (Windows Firewall off, or not readable) is "blocked"
- * with its reason. While the deploy runs the note says busyText; once it ends,
- * the note is its answer, and a rejection is a "failed" answer with the reason.
- * An approval is sent with the deploy call itself.
- */
+interface CheckedDeployTarget {
+  workerId?: number | null;
+  workers?: WorkerTarget[] | null;
+  localReplacement?: string;
+  invalidField?: string;
+  workerBusyText?(worker: WorkerTarget): string;
+}
+
+export type DeployStatus = { kind: "busy" | DeployAnswer["kind"]; text: string };
+
+export async function runDeployWithStatus(
+  busyText: string,
+  say: CheckedDeployCalls["say"],
+  deploy: () => Promise<DeployAnswer>,
+): Promise<DeployAnswer> {
+  say("busy", busyText);
+  let answer: DeployAnswer;
+  try {
+    answer = await deploy();
+  } catch (error) {
+    answer = { kind: "failed", text: deployErrorText(error) };
+  }
+  say(answer.kind, answer.text);
+  return answer;
+}
+
+/** Resolve the target before checking fields or asking about a replacement. */
 export async function runCheckedDeploy(
   fields: ServiceField[],
   values: Record<string, string>,
   direct: boolean,
   busyText: string,
   calls: CheckedDeployCalls,
+  target: CheckedDeployTarget = {},
 ): Promise<CheckedDeployOutcome> {
-  const missing = missingRequiredFields(fields, values);
-  if (missing.length) return { kind: "missing", missing };
+  const worker = target.workers?.find((candidate) => candidate.id === target.workerId);
+  if (target.workerId != null && !worker) {
+    return { kind: "blocked", message: "The selected worker is no longer available. Choose a target and try again." };
+  }
+  // DeployToWorker validates the merged typed, saved and default settings in Go.
+  if (!worker) {
+    if (target.invalidField) {
+      const answer = { kind: "failed" as const, text: `${target.invalidField} does not have the shape this provider expects.` };
+      calls.say(answer.kind, answer.text);
+      return { kind: "done", answer };
+    }
+    const missing = missingRequiredFields(fields, values);
+    if (missing.length) return { kind: "missing", missing };
+    if (target.localReplacement && !calls.confirmReplace?.(target.localReplacement)) return { kind: "cancelled" };
+  }
   let approval: AdminStep | null = null;
-  if (direct) {
+  if (direct && !worker) {
     let step: AdminStep | null;
     try {
       step = await calls.adminStep();
@@ -188,13 +221,10 @@ export async function runCheckedDeploy(
       approval = step;
     }
   }
-  let answer: DeployAnswer;
-  try {
-    calls.say("busy", busyText);
-    answer = await calls.deploy(approval);
-  } catch (error) {
-    answer = { kind: "failed", text: deployErrorText(error) };
-  }
-  calls.say(answer.kind, answer.text);
+  const answer = await runDeployWithStatus(
+    (worker && target.workerBusyText?.(worker)) || busyText,
+    calls.say,
+    () => calls.deploy(approval, worker),
+  );
   return { kind: "done", answer };
 }
