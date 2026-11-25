@@ -171,6 +171,17 @@ interface CheckedDeployTarget {
 
 export type DeployStatus = { kind: "busy" | DeployAnswer["kind"]; text: string };
 
+export type DeployFeedback = DeployStatus | { kind: "missing"; missing: ServiceField[] };
+
+export function renderDeployFeedback(status?: DeployFeedback): string {
+  if (!status) return "";
+  return status.kind === "missing" ? missingFieldsNotice(status.missing) : deployNotice(status.kind, status.text);
+}
+
+export function renderDeployPanel(slug: string, status?: DeployFeedback): string {
+  return `<div class="deploy-panel" data-deploy-panel="${escapeHtml(slug)}" aria-live="polite">${renderDeployFeedback(status)}</div>`;
+}
+
 export async function runDeployWithStatus(
   busyText: string,
   say: CheckedDeployCalls["say"],

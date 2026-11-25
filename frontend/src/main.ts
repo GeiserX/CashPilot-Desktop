@@ -103,7 +103,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
-import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, missingFieldsNotice, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployStatus } from "./render/deploy_consent";
+import { adminConsentScreen, adminConsentText, CANCELLED_TEXT, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
 import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
@@ -174,6 +174,8 @@ let wizardRouteDrafts: Record<string, number | null> = {};
 // The Where box's pick per slug (a worker id, null for this computer), kept and
 // cleared as the Route box's picks are (render/where.ts).
 let wizardWhereDrafts: Record<string, number | null> = {};
+const wizardDeployFeedback: Record<string, DeployFeedback> = {};
+const wizardDeploying = new Set<string>();
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -2427,7 +2429,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug])).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug], wizardDeployFeedback[service.slug])).join("")}
     </div>
   `;
 }
@@ -2542,7 +2544,13 @@ async function runWizardAction(slug: string, action: string) {
   const values = readWizardForm(slug);
   if (action === "deploy") {
     invalid?.reportValidity();
-    await wizardDeploy(slug, values, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
+    if (wizardDeploying.has(slug)) return;
+    wizardDeploying.add(slug);
+    try {
+      await wizardDeploy(slug, values, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
+    } finally {
+      wizardDeploying.delete(slug);
+    }
     return;
   }
   try {
@@ -2562,15 +2570,16 @@ async function runWizardAction(slug: string, action: string) {
   }
 }
 
-// Deploy's answer goes next to the Deploy button (render/deploy_consent.ts); a card
-// without that slot (a custom service) keeps its output line.
-function sayDeploy(slug: string, kind: "busy" | DeployAnswer["kind"], text: string) {
-  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
-  const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
-  if (output) output.textContent = panel ? "" : text;
+function setWizardDeployFeedback(slug: string, status: DeployFeedback) {
+  wizardDeployFeedback[slug] = status;
+  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${CSS.escape(slug)}"]`);
   if (!panel) return;
-  panel.innerHTML = deployNotice(kind, text);
+  panel.innerHTML = renderDeployFeedback(status);
   panel.scrollIntoView({ block: "nearest" });
+}
+
+function sayDeploy(slug: string, kind: DeployStatus["kind"], text: string) {
+  setWizardDeployFeedback(slug, { kind, text });
 }
 
 // A deploy from the card: every field marked * is filled, and when Windows will
@@ -2624,8 +2633,7 @@ async function wizardDeploy(slug: string, values: Record<string, string>, worker
     form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => {
       if (keys.has(input.dataset.wizardEnv || "")) input.setAttribute("aria-invalid", "true");
     });
-    if (panel) panel.innerHTML = missingFieldsNotice(outcome.missing);
-    else sayDeploy(slug, "cancelled", `Fill in every field marked * first: ${outcome.missing.map((field) => field.label).join(", ")}. Nothing was deployed.`);
+    setWizardDeployFeedback(slug, { kind: "missing", missing: outcome.missing });
     form?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
     return;
   }

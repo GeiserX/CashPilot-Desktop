@@ -399,6 +399,17 @@ const none = renderWizardServiceSetup(service({ slug: "quiet", docker: { env: []
 check("a service with no credentials renders none", inputs(none).length === 0, none);
 check("and says so in words", none.includes("No credentials are required by the catalog"), none);
 
+for (const setup of [service({ slug: "quiet" }), service({ slug: "quiet", custom: true })]) {
+  for (const status of [{ kind: "busy", text: "Deploying quiet..." }, { kind: "ok", text: "Deployed quiet." },
+    { kind: "failed", text: "Worker refused." }, { kind: "missing", missing: [{ key: "TOKEN", label: "Token" }] }]) {
+    const redrawn = renderWizardServiceSetup(setup, {}, "devbox", null, null, null, null, null, undefined, null, false, null, null, status);
+    const text = status.text || "Fill in every field marked *";
+    check(`a redrawn ${setup.custom ? "custom" : "catalog"} Deploy card still shows ${status.kind} beside its button`,
+      redrawn.indexOf('data-wizard-action="deploy"') < redrawn.indexOf(`data-deploy-notice="${status.kind}"`)
+        && redrawn.includes(text), redrawn);
+  }
+}
+
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} wizard render checks FAILED`);
   process.exit(1);

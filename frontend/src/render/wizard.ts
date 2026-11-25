@@ -26,6 +26,7 @@ import { imageChoiceSection } from "./image.js";
 import { instancesSection } from "./instances.js";
 import { routeChoiceSection } from "./route.js";
 import { whereChoiceSection } from "./where.js";
+import { renderDeployPanel, type DeployFeedback } from "./deploy_consent.js";
 import { renderCustomServiceCard } from "./custom.js";
 import { needsSessionConsent, renderSessionSlot } from "./session.js";
 import { walletChoiceSection } from "./wallet.js";
@@ -71,9 +72,10 @@ export function renderWizardServiceSetup(
   deployed?: boolean,
   workerTargets?: WorkerTarget[] | null,
   whereDraft?: number | null,
+  deployFeedback?: DeployFeedback,
 ): string {
   // A custom service runs its saved definition: no credentials, no Image box.
-  if (service.custom) return renderCustomServiceCard(service, scaling, instances);
+  if (service.custom) return renderCustomServiceCard(service, scaling, instances, deployFeedback);
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = serviceFormFields(service, collectorFields);
   const earning = breakdown?.find((item) => item.platform === service.slug);
@@ -121,7 +123,7 @@ export function renderWizardServiceSetup(
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
         <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">Collect Earnings</button>
       </div>
-      <div class="deploy-panel" data-deploy-panel="${escapeHtml(service.slug)}" aria-live="polite"></div>
+      ${renderDeployPanel(service.slug, deployFeedback)}
       ${composeExportControl(service)}
       ${serviceFacts(service, balance)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>
