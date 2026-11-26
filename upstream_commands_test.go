@@ -180,9 +180,23 @@ func TestFollowUpThatLosesTheFeatureSendsAgainWithoutTheURL(t *testing.T) {
 		t.Fatalf("feature listed then withdrawn: URLs %q, want none, the URL, then none", got)
 	}
 
+	// Listed, withdrawn, listed, withdrawn: the bound ends the turn on a
+	// withdrawal, so one more heartbeat clears the URL the last one carried.
 	server.plan = func(n int) bool { return n%2 == 1 }
 	app.sendUpstreamLoop(t.Context(), client, server.URL)
-	if got := server.take(); len(got) != 1+maxHeartbeatFollowUps {
-		t.Fatalf("feature flips on every answer: %d heartbeats in one turn, want %d", len(got), 1+maxHeartbeatFollowUps)
+	got := server.take()
+	if len(got) != 2+maxHeartbeatFollowUps {
+		t.Fatalf("feature flips on every answer: %d heartbeats in one turn, want %d", len(got), 2+maxHeartbeatFollowUps)
+	}
+	if !slices.Equal(got, []string{"", commandURL, "", commandURL, ""}) {
+		t.Fatalf("feature flips on every answer: URLs %q, want the last one without the URL", got)
+	}
+
+	// Withdrawn, listed, withdrawn, listed: the bound ends on a listing, and the
+	// URL the server now lists may stay, so the turn stops at the bound.
+	server.plan = func(n int) bool { return n%2 == 0 }
+	app.sendUpstreamLoop(t.Context(), client, server.URL)
+	if got := server.take(); !slices.Equal(got, []string{commandURL, "", commandURL, ""}) {
+		t.Fatalf("flips that end on a listing: URLs %q, want four heartbeats", got)
 	}
 }

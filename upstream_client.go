@@ -174,11 +174,23 @@ const maxHeartbeatFollowUps = 3
 // heartbeat carries the command URL, it sends once more at once, and again when
 // that answer changes it back. An upgraded server can then send commands now,
 // and a rolled-back server loses the URL now, not one interval later. A stable
-// server gets one heartbeat per turn, a single change two.
+// server gets one heartbeat per turn, a single change two. When the bound ends
+// the turn on an answer that withdrew the feature, the last heartbeat still
+// carried the URL, so the turn sends one more without it: the bound limits how
+// often the URL goes out, never how long a server that dropped the feature keeps it.
 func (a *App) sendUpstreamLoop(ctx context.Context, client *upstream.Client, serverURL string) {
 	again := a.sendUpstream(ctx, client, serverURL, "")
 	for i := 0; again && i < maxHeartbeatFollowUps && ctx.Err() == nil; i++ {
 		again = a.sendUpstream(ctx, client, serverURL, "")
+	}
+	if !again || ctx.Err() != nil {
+		return
+	}
+	a.upstream.mu.Lock()
+	withdrawn := !a.upstream.takesCommands
+	a.upstream.mu.Unlock()
+	if withdrawn {
+		a.sendUpstream(ctx, client, serverURL, "")
 	}
 }
 
