@@ -461,6 +461,9 @@ func generateWallet(ctx context.Context, cli seedClient, image, name string, spe
 			Cmd:             append([]string(nil), spec.Generate...),
 			Labels:          map[string]string{LabelWalletHelper: "generate"},
 			NetworkDisabled: true,
+			// It runs the service's own image, so it gets the void stamp like the
+			// service's container (gpu.go): no GPU through an nvidia default runtime.
+			Env: []string{nvidiaVisible + "=void"},
 		},
 		HostConfig: host,
 	})

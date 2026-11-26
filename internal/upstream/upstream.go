@@ -35,6 +35,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 )
 
 // Payload is the body POST /api/workers/heartbeat expects.
@@ -132,6 +134,10 @@ type SystemInfo struct {
 	// first copies went out. The server then retires no device id of a copy the
 	// list leaves out, as it does for a web worker that sends the same flag.
 	ContainersListed *bool `json:"containers_listed,omitempty"`
+	// GPUGrants is the GPU each catalog entry gets here (catalog.GPUGrants), as the
+	// web worker reports it. The server deploys a GPU entry to this computer only
+	// when its own catalog's grant matches this one.
+	GPUGrants map[string]catalog.GPUSpec `json:"gpu_grants"`
 }
 
 // Response is what the server sends back.

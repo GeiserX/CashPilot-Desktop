@@ -585,6 +585,19 @@ func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeplo
 	if !catalogImage(svc, spec.Image) {
 		return http.StatusForbidden, fmt.Sprintf("'%s' runs only the image this computer's catalog pins", slug), false
 	}
+	// The GPU grant and the void stamp are this computer's (internal/runtime/gpu.go):
+	// a request that set NVIDIA_VISIBLE_DEVICES could undo the stamp. The request has
+	// no GPU field at all; the catalog entry alone decides it.
+	var nvidiaKeys []string
+	for key := range spec.Env {
+		if strings.HasPrefix(strings.ToUpper(key), catalog.GPUEnvPrefix) {
+			nvidiaKeys = append(nvidiaKeys, key)
+		}
+	}
+	if len(nvidiaKeys) > 0 {
+		slices.Sort(nvidiaKeys)
+		return http.StatusForbidden, fmt.Sprintf("CashPilot sets the %s variables itself; refused: %s", catalog.GPUEnvPrefix, strings.Join(nvidiaKeys, ", ")), false
+	}
 	if err := a.services.ValidateDeploy(slug, spec.Env); err != nil {
 		return http.StatusBadRequest, oneLine(err.Error()), false
 	}

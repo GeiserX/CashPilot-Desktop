@@ -60,6 +60,8 @@ type ContainerShape struct {
 	Mounts     []string
 	EnvKeys    []string
 	Entrypoint []string
+	// GPU is the drivers of its GPU device requests ("nvidia"), the GPU grant.
+	GPU []string
 }
 
 // shapeClient is the part of the Docker client ContainerShapes needs, so the
@@ -145,6 +147,13 @@ func shapeOf(ctr container.InspectResponse) ContainerShape {
 			}
 		}
 		shape.Devices = sortedKeys(devices)
+		drivers := map[string]bool{}
+		for _, r := range host.DeviceRequests {
+			if r.Driver != "" {
+				drivers[r.Driver] = true
+			}
+		}
+		shape.GPU = sortedKeys(drivers)
 		ports := map[string]bool{}
 		for port := range host.PortBindings {
 			ports[port.String()] = true
@@ -199,8 +208,39 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	if missing := minus(wantDevices, haveDevices); len(missing) > 0 {
 		found = append(found, fmt.Sprintf("missing device %s, which the catalog now passes in", strings.Join(missing, ", ")))
 	}
+	// An AMD or Intel grant's render nodes (and /dev/kfd for ROCm) are picked from
+	// the host at deploy (gpu.go), so they are the catalog's even though it names
+	// none. Any other GPU node, with no grant or an NVIDIA one, is flagged below.
+	grant, granted := dc.GPU.Grant()
+	nvidiaGrant := granted && grant.Vendor == "nvidia"
+	gpuDevices := map[string]bool{}
+	if granted && !nvidiaGrant {
+		for d := range haveDevices {
+			if renderNodeCeiling[d] || (grant.ROCm && d == catalog.KFDDevice) {
+				gpuDevices[d] = true
+				delete(haveDevices, d)
+			}
+		}
+	}
 	if extra := minus(haveDevices, wantDevices); len(extra) > 0 {
 		found = append(found, fmt.Sprintf("still has device %s, which the catalog no longer passes in", strings.Join(extra, ", ")))
+	}
+	// A GPU device request only an NVIDIA grant makes. One left from a grant the
+	// catalog removed or changed keeps the GPU until a redeploy.
+	if extra := minus(toSet(shape.GPU), map[string]bool{"nvidia": nvidiaGrant}); len(extra) > 0 {
+		found = append(found, fmt.Sprintf("still has GPU access (%s device request), which the catalog no longer grants", strings.Join(extra, ", ")))
+	}
+	// An AMD or Intel grant needs a render node; /dev/kfd alone is no GPU. A ROCm
+	// grant also needs /dev/kfd, which a container made before rocm was set lacks.
+	hasRender := false
+	for d := range gpuDevices {
+		hasRender = hasRender || renderNodeCeiling[d]
+	}
+	switch {
+	case granted && ((nvidiaGrant && !slices.Contains(shape.GPU, "nvidia")) || (!nvidiaGrant && !hasRender)):
+		found = append(found, "missing GPU, which the catalog now passes in")
+	case granted && grant.ROCm && !gpuDevices[catalog.KFDDevice]:
+		found = append(found, fmt.Sprintf("missing device %s, which the catalog now passes in", catalog.KFDDevice))
 	}
 
 	// A container that reports no runtime is not judged: nothing is known.
@@ -315,7 +355,8 @@ func ShapeFingerprint(svc catalog.Service) string {
 		UIPort       *catalog.UIPort       `json:"ui_port,omitempty"`
 		UDPPortRange *catalog.UDPPortRange `json:"udp_port_range,omitempty"`
 		Runtime      string                `json:"runtime,omitempty"`
-	}{dc.Image, dc.ImageByArch, dc.CapAdd, dc.Devices, dc.Privileged, dc.Entrypoint, dc.NetworkMode, dc.Ports, dc.Volumes, env, dc.UIPort, dc.UDPPortRange, strings.TrimSpace(dc.Runtime)}
+		GPU          *catalog.GPU          `json:"gpu,omitempty"`
+	}{dc.Image, dc.ImageByArch, dc.CapAdd, dc.Devices, dc.Privileged, dc.Entrypoint, dc.NetworkMode, dc.Ports, dc.Volumes, env, dc.UIPort, dc.UDPPortRange, strings.TrimSpace(dc.Runtime), dc.GPU}
 	blob, _ := json.Marshal(judged) // map keys are sorted by encoding/json
 	sum := sha256.Sum256(blob)
 	return hex.EncodeToString(sum[:])[:16]

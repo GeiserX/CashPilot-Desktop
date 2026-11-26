@@ -82,6 +82,10 @@ type Options struct {
 	// Hostname fills the {hostname} placeholder catalog defaults use for device
 	// names. Empty leaves the placeholder's own default text alone.
 	Hostname string
+	// GPUDevices is the device paths a deploy on this computer would pass in for an
+	// AMD or Intel grant (runtime.HostGPUDevices), or why they cannot be known. A
+	// file names its render node, so without it such an entry has no export.
+	GPUDevices func(catalog.GPUGrant) ([]string, error)
 }
 
 // Generate returns the docker-compose.yml text for the given services.
@@ -134,7 +138,7 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 			// command are the user's own and stay encrypted in the app's database.
 			return "", fmt.Errorf("%s is a custom service, and custom services are not exported", svc.Name)
 		}
-		block, keys, changeable, err := serviceBlock(svc, family, opts.Hostname)
+		block, keys, changeable, err := serviceBlock(svc, family, opts.Hostname, opts.GPUDevices)
 		if err != nil {
 			return "", err
 		}
@@ -216,6 +220,59 @@ type composeService struct {
 	MemReserve    string            `yaml:"mem_reservation,omitempty"`
 	CPUShares     int64             `yaml:"cpu_shares,omitempty"`
 	OomScoreAdj   *int              `yaml:"oom_score_adj,omitempty"`
+	Deploy        *deployBlock      `yaml:"deploy,omitempty"`
+}
+
+// deployBlock carries an NVIDIA GPU grant the way Compose asks for one.
+type deployBlock struct {
+	Resources struct {
+		Reservations struct {
+			Devices []gpuReservation `yaml:"devices"`
+		} `yaml:"reservations"`
+	} `yaml:"resources"`
+}
+
+type gpuReservation struct {
+	Driver       string   `yaml:"driver"`
+	Count        any      `yaml:"count"`
+	Capabilities []string `yaml:"capabilities"`
+}
+
+// gpuFor puts the GPU the deploy would pass in on block. A docker.gpu block that
+// breaks the catalog's rules is refused rather than exported without its GPU. An AMD
+// or Intel GPU is that vendor's own render node on this computer, the one a deploy
+// picks: renderD128 can belong to another vendor's GPU. When that node cannot be
+// known, the entry is refused rather than exported with a guess.
+func gpuFor(svc catalog.Service, block *composeService, devices func(catalog.GPUGrant) ([]string, error)) error {
+	if svc.Docker.GPU == nil {
+		return nil
+	}
+	grant, ok := svc.Docker.GPU.Grant()
+	if problems := catalog.GPUProblems(svc); !ok || len(problems) > 0 {
+		return fmt.Errorf("%s declares a GPU its catalog entry does not describe correctly (%s), so it has no compose export", svc.Name, strings.Join(problems, "; "))
+	}
+	if grant.Vendor == "nvidia" {
+		var count any = 1
+		if grant.All {
+			count = "all"
+		}
+		block.Deploy = &deployBlock{}
+		block.Deploy.Resources.Reservations.Devices = []gpuReservation{{Driver: "nvidia", Count: count, Capabilities: []string{"gpu"}}}
+		return nil
+	}
+	var paths []string
+	err := fmt.Errorf("this export cannot read the GPUs")
+	if devices != nil {
+		paths, err = devices(grant)
+	}
+	if err != nil {
+		vendor := map[string]string{"amd": "AMD", "intel": "Intel"}[grant.Vendor]
+		return fmt.Errorf("%s needs an %s GPU, which a compose file passes in by this computer's render node, and CashPilot could not tell which one (%v). So it has no compose export. Deploy it from the dashboard", svc.Name, vendor, err)
+	}
+	for _, p := range paths {
+		block.Devices = append(block.Devices, p+":"+p)
+	}
+	return nil
 }
 
 // quoted is a scalar that is always written in quotes. Port mappings need it: an
@@ -236,7 +293,7 @@ type loggingBlock struct {
 // serviceBlock builds one service's compose block and returns the keys the user has
 // to fill in for it, and the ones it already carries a value for that they may want
 // to change.
-func serviceBlock(svc catalog.Service, family, hostname string) (*composeService, []string, []setting, error) {
+func serviceBlock(svc catalog.Service, family, hostname string, gpuDevices func(catalog.GPUGrant) ([]string, error)) (*composeService, []string, []setting, error) {
 	image := imageFor(svc.Docker, family)
 	if image == "" {
 		return nil, nil, nil, fmt.Errorf("%s has no container image to export; it is set up outside CashPilot", svc.Name)
@@ -298,6 +355,10 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 		MemReserve:  svc.Docker.Resources.MemReservation,
 		CPUShares:   svc.Docker.Resources.CPUShares,
 		OomScoreAdj: svc.Docker.Resources.OomScoreAdj,
+	}
+
+	if err := gpuFor(svc, block, gpuDevices); err != nil {
+		return nil, nil, nil, err
 	}
 
 	// A host path the user still has to supply is written as ${KEY:?...}, not the

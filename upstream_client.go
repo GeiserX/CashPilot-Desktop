@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	stdruntime "runtime"
 
@@ -584,9 +585,19 @@ func (a *App) upstreamPayload() upstream.Payload {
 			// the server records UNKNOWN rather than a match -- never a guess,
 			// because a wrong version hides exactly the stale install this is
 			// meant to reveal.
-			Version: AppVersion(),
+			Version:   AppVersion(),
+			GPUGrants: a.gpuGrants(),
 		},
 	}
+}
+
+// gpuGrants is what the heartbeat reports as this computer's GPU grants: the
+// server checks it before it deploys a GPU entry here. nil without a catalog.
+func (a *App) gpuGrants() map[string]catalog.GPUSpec {
+	if a.catalog == nil {
+		return nil
+	}
+	return catalog.GPUGrants(a.catalog.List())
 }
 
 // upstreamEnrolmentKey returns the stored pairing key for the settings form.

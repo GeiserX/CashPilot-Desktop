@@ -76,6 +76,9 @@ type fakeDocker struct {
 	// tunnelFiles are the secret files each container's archive answers, by
 	// container ID; a container or file not here answers 404.
 	tunnelFiles map[string]map[string]string
+	// infoName, when set, is the machine name /info answers (the GPU grant reads
+	// it to tell a daemon on this kernel from one in a VM).
+	infoName string
 }
 
 const fenceAppliedOutput = `{"backend":"nft","ok":true,"changed":true,"error":"","present":true,"matches":true,"counters":{"host":0}}`
@@ -280,6 +283,10 @@ func (f *fakeDocker) start(t *testing.T) {
 		switch {
 		case path == "/_ping":
 			w.WriteHeader(http.StatusOK)
+		case f.infoName != "" && path == "/info":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]any{"Name": f.infoName, "OSType": "linux", "Runtimes": map[string]any{"runc": map[string]any{}}})
 		case r.Method == http.MethodGet && strings.HasSuffix(path, setAsideSuffix+"/json"):
 			// Nothing is ever set aside here: the name a deploy sets the old container
 			// aside under is free.
