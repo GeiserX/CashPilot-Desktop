@@ -28,8 +28,9 @@ const (
 var (
 	unMineableCoin    = regexp.MustCompile(`^[A-Za-z0-9]{2,10}$`)
 	unMineableAddress = regexp.MustCompile(`^[A-Za-z0-9]{20,128}$`)
-	// unMineable writes amounts as decimal strings in coin units.
-	unMineableDecimal = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$`)
+	// unMineable writes amounts as decimal strings in coin units. Same forms as
+	// the web's Decimal for a finite non-negative number, so ".5" and "1." too.
+	unMineableDecimal = regexp.MustCompile(`^(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?$`)
 )
 
 // unMineableIdentity is what a balance belongs to: the coin and the address.

@@ -41,6 +41,18 @@ export function miningBalancePrecision(currency: string): number | undefined {
 }
 
 /**
+ * A coin amount with no fixed precision, as the web's formatAmount writes it: at
+ * least 8 decimals, more for a small amount so 8 significant digits show, up to
+ * 12, with trailing zeros cut. unMineable pays in whichever coin the miner picks,
+ * so a pool balance in a coin this file does not list must not round to 0.00.
+ */
+export function coinAmount(value: number): string {
+  const amount = Number.isFinite(value) ? value : 0;
+  const places = amount !== 0 ? Math.min(12, Math.max(8, 7 - Math.floor(Math.log10(Math.abs(amount))))) : 8;
+  return amount.toFixed(places).replace(/(\.\d\d\d*?)0+$/, "$1");
+}
+
+/**
  * Format an amount in a currency, degrading gracefully for reward tokens.
  *
  * `code` is sanitised to A-Z0-9 because it is interpolated UNESCAPED into a
@@ -50,7 +62,7 @@ export function miningBalancePrecision(currency: string): number | undefined {
  * Intl.NumberFormat throws RangeError on non-ISO codes — reward tokens like
  * MYST or GRASS — so those fall back to a plain "1234.00 CODE" string.
  */
-export function formatBalance(value: number, currency: string): string {
+export function formatBalance(value: number, currency: string, pool = false): string {
   const code = (currency || "USD").toUpperCase().replace(/[^A-Z0-9]/g, "");
   const amount = Number.isFinite(value) ? value : 0;
   const precision = miningBalancePrecision(code);
@@ -58,6 +70,8 @@ export function formatBalance(value: number, currency: string): string {
     const native = new Intl.NumberFormat(undefined, { maximumFractionDigits: precision }).format(amount);
     return `${native} ${code}`;
   }
+  // A pool pays in a coin, never in fiat.
+  if (pool) return `${coinAmount(amount)} ${code}`;
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",

@@ -131,6 +131,14 @@ const myst = rowOf(">MystNodes<");
 check("RULE 2: an unconverted balance stays native and says so", myst.includes("23.12 MYST") && myst.includes("no rate") && !myst.includes("€"), myst);
 const converted = renderServicesTable({ services, deployments: [dep("mysterium", "running")], earnings: [], breakdown: [item("mysterium", { balance: 23.12, currency: "MYST", balanceDisplay: 1.82 })], displayCurrency: "USD" });
 check("RULE 2: a converted balance shows the display figure with the native one under it", converted.includes("$1.82") && converted.includes("23.12 MYST"), converted);
+// unMineable pays in any coin. A pool balance in a coin with no set precision
+// shows its small units, as on the web, whether the pool runs here or not.
+const unMineable = { slug: "unmineable", name: "unMineable", collector: { accrual: "pool" } };
+const unMineableItem = item("unmineable", { balance: 0.0042, currency: "SOL", balanceDisplay: 0, convertible: false, cashout: cashout({ comparable: false }) });
+const minedHere = renderServicesTable({ services: [unMineable], deployments: [dep("unmineable", "running")], earnings: [], breakdown: [unMineableItem], displayCurrency: "USD" });
+check("an unMineable balance in an unlisted coin keeps its small units", minedHere.includes("0.0042 SOL") && !minedHere.includes("0.00 SOL"), minedHere);
+const minedElsewhere = renderServicesTable({ services: [unMineable], deployments: [], earnings: [], breakdown: [unMineableItem], displayCurrency: "USD" });
+check("an unMineable balance read but not run here keeps its small units", minedElsewhere.includes("0.0042 SOL"), minedElsewhere);
 const grass = rowOf(">Grass<");
 check("RULE 3: a platform read but not run here keeps its row", grass.includes("not run by this machine") && grass.includes("120.00 GRASS"), grass);
 check("RULE 3: and it offers no container actions", !/data-row-action="(stop|start|remove|logs)"/.test(grass), grass);

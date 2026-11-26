@@ -236,6 +236,8 @@ const unmineable = {
 const unMineablePayout = payoutFacts(unmineable, { amount: 0.00000001, currency: "LTC" });
 check("unMineable shows its per-coin payout terms", valueOf(unMineablePayout, "Payout terms") === unmineable.payment.minimumPayout, unMineablePayout);
 check("unMineable shows one unit of the chosen coin as unpaid", valueOf(unMineablePayout, "Unpaid pool balance") === "0.00000001 LTC", unMineablePayout);
+const unlistedCoin = payoutFacts(unmineable, { amount: 0.00001, currency: "ADA" });
+check("unMineable shows a small balance in an unlisted coin", valueOf(unlistedCoin, "Unpaid pool balance") === "0.00001 ADA", unlistedCoin);
 check("unMineable has no countdown to a minimum it does not state", valueOf(unMineablePayout, "Still to minimum payout") === undefined, unMineablePayout);
 
 const undocumented = payoutFacts({

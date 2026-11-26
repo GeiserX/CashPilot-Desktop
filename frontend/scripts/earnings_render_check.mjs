@@ -91,6 +91,13 @@ for (const coin of ["BNB", "DOGE", "LTC", "SHIB", "TRX"]) {
   check(`unMineable displays 0.00000001 ${coin} in the native balance`, primary(cell(unmineable)) === `0.00000001 ${coin}`, cell(unmineable));
 }
 
+// A pool cell in a coin with no set precision uses the web's coin rule; a reward
+// token outside a pool keeps its two decimals.
+const ada = earning({ platform: "unmineable", currency: "ADA", balance: 0.0012, balanceDisplay: 0 });
+check("a pool balance in an unlisted coin keeps its small units", primary(balanceCell(ada, undefined, "USD", true)) === "0.0012 ADA", balanceCell(ada, undefined, "USD", true));
+check("a pool reading with no summary keeps its small units", balanceCell(undefined, { balance: 0.0012, currency: "ADA" }, "USD", true) === "0.0012 ADA");
+check("a pool balance of exactly zero reads 0.00", primary(balanceCell(earning({ platform: "unmineable", currency: "ADA", balance: 0, balanceDisplay: 0 }), undefined, "USD", true)) === "0.00 ADA");
+
 
 // ---------------------------------------------------------------------------
 // THE RULE.

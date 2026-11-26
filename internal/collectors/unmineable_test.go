@@ -33,6 +33,7 @@ func TestUnMineableReadsTheBalanceInTheChosenCoin(t *testing.T) {
 		{"recorded XMR reply", " xmr ", "XMR", unMineableSample, 0.00071092},
 		{"known address with nothing owed", "SHIB", "SHIB", unMineableReply(`{"balance":"0","payment_threshold":"150000","fresh":false}`), 0},
 		{"exponent string", "DOGE", "DOGE", unMineableReply(`{"balance":"1e-7","payment_threshold":"30","fresh":false}`), 1e-7},
+		{"leading point", "LTC", "LTC", unMineableReply(`{"balance":".5","payment_threshold":"1.","fresh":false}`), 0.5},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -85,6 +86,8 @@ func TestUnMineableFailuresAreNeverAZeroBalance(t *testing.T) {
 		{name: "infinite balance", body: unMineableReply(`{"balance":"Infinity","payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
 		{name: "huge exponent", body: unMineableReply(`{"balance":"1e999","payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
 		{name: "hex balance", body: unMineableReply(`{"balance":"0x1p-2","payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
+		{name: "bare point", body: unMineableReply(`{"balance":".","payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
+		{name: "empty balance", body: unMineableReply(`{"balance":"","payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
 		{name: "word balance", body: unMineableReply(`{"balance":"lots","payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
 		{name: "no threshold", body: unMineableReply(`{"balance":"0.1","fresh":false}`), message: "valid balance", kind: "shape"},
 		{name: "zero threshold", body: unMineableReply(`{"balance":"0.1","payment_threshold":"0","fresh":false}`), message: "valid balance", kind: "shape"},
