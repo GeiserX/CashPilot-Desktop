@@ -142,6 +142,11 @@ type NativeProcessProvider struct {
 	maxDownload int64
 	maxExtract  int64
 
+	// terminate asks a process to exit on its own. It defaults to sendSIGTERM and is a
+	// seam for tests. An error means the request was not delivered, so a stop kills the
+	// process at once instead of waiting out a grace period no signal started.
+	terminate func(*os.Process) error
+
 	mu    sync.Mutex // guards procs
 	procs map[string]*managedProcess
 
@@ -172,6 +177,7 @@ func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 		removeFirewall:  removeFirewallBlock,
 		firewallExists:  firewallBlockExists,
 		firewallReady:   firewallReady,
+		terminate:       sendSIGTERM,
 	}
 	// statFn is a bound method so it can read p.cpuStatInterval; still a field so tests can
 	// swap in a stub sampler.
@@ -651,7 +657,7 @@ func (p *NativeProcessProvider) stopManaged(slug string, grace time.Duration) bo
 		return false
 	}
 	mp.requestStop()
-	gracefulKill(mp.beginStop(), grace, mp.doneCh)
+	gracefulKill(mp.beginStop(), grace, mp.doneCh, p.terminate)
 	<-mp.doneCh
 	_ = mp.log.Close()
 	return true
@@ -718,18 +724,18 @@ func (p *NativeProcessProvider) processIdentity(pid int) (string, int64) {
 
 // signalPID stops a process by pid (an orphan from a previous session we don't own as
 // a child). Graceful SIGTERM then, after the grace period, SIGKILL; force skips
-// straight to kill. os.FindProcess never fails on Unix, and signalling a dead pid is a
-// harmless ignored error, so this never panics.
+// straight to kill, and so does a SIGTERM that could not be delivered (always on
+// Windows). os.FindProcess never fails on Unix, and killing a dead pid is a harmless
+// ignored error, so this never panics.
 func (p *NativeProcessProvider) signalPID(pid int, force bool) {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return
 	}
-	if force {
+	if force || p.terminate(proc) != nil {
 		_ = proc.Kill()
 		return
 	}
-	_ = proc.Signal(syscall.SIGTERM)
 	deadline := time.Now().Add(p.stopTimeout)
 	for time.Now().Before(deadline) {
 		if _, _, alive := p.statFn(pid); !alive {
@@ -740,15 +746,24 @@ func (p *NativeProcessProvider) signalPID(pid int, force bool) {
 	_ = proc.Kill()
 }
 
-// gracefulKill signals cmd's process to terminate, waits up to timeout for the
-// supervisor to reap it (done closes), then escalates to SIGKILL. On Windows SIGTERM
-// delivery is unsupported, so the timeout+Kill path is what actually stops the process
-// there — acceptable for this best-effort v1.
-func gracefulKill(cmd *exec.Cmd, timeout time.Duration, done <-chan struct{}) {
+// sendSIGTERM is the production terminate: it asks a process to exit. Windows has
+// no SIGTERM, and os.Process.Signal there returns an error at once for anything but
+// Kill, so on Windows this always fails and a stop kills the process at once.
+func sendSIGTERM(proc *os.Process) error { return proc.Signal(syscall.SIGTERM) }
+
+// gracefulKill asks cmd's process to terminate, waits up to timeout for the
+// supervisor to reap it (done closes), then escalates to SIGKILL. When terminate
+// returns an error the request never reached the process, so waiting would only
+// delay the stop by the whole grace period: it kills at once instead. That is every
+// stop on Windows, where there is no SIGTERM to send.
+func gracefulKill(cmd *exec.Cmd, timeout time.Duration, done <-chan struct{}, terminate func(*os.Process) error) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = cmd.Process.Signal(syscall.SIGTERM)
+	if err := terminate(cmd.Process); err != nil {
+		_ = cmd.Process.Kill()
+		return
+	}
 	select {
 	case <-done:
 	case <-time.After(timeout):
