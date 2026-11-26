@@ -1136,7 +1136,7 @@ function updateRuntimeSurfaces(current: AppState) {
   // Import's Deploy, Fleet's proxied copies and Activity's sampling line follow Docker.
   if (dockerKey(current.runtime) !== dockerDrawn) {
     if (activeView === "import") renderImportIfShown();
-    else if (activeView === "fleet") void renderFleet();
+    else if (activeView === "fleet") redrawFleetProxies(current);
     else if (activeView === "activity" && activityShown) void renderActivity(activityShown);
   }
   if (activeView === "wizard") {
@@ -1168,7 +1168,9 @@ async function refreshRuntimeSnapshot() {
 function showView(view: View) {
   activeView = view;
   render();
-  if (view === "dashboard") void refreshRuntimeSnapshot();
+  // These views draw Docker controls from the shared reading. Docker may have
+  // started or stopped outside CashPilot since it was read, so read it again.
+  if (view === "dashboard" || view === "import" || view === "fleet" || view === "activity") void refreshRuntimeSnapshot();
 }
 
 function wireShellNav(scope: ParentNode = document) {
@@ -1184,7 +1186,7 @@ function wireShellNav(scope: ParentNode = document) {
     });
   });
   wireOpenLinks(scope, BrowserOpenURL);
-  document.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
+  scope.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
     const currency = (event.target as HTMLSelectElement).value;
     await SaveSettings({displayCurrency: currency});
     await loadAppState();
@@ -2179,6 +2181,32 @@ function renderFleetDevice(device: FleetState["devices"][number]) {
       <div class="badge-row">${(device.services || []).map((service) => `<span class="badge success">${escapeHtml(service)}</span>`).join("") || `<span class="badge">No services yet</span>`}</div>
     </article>
   `;
+}
+
+// A Docker change on Fleet touches only the Proxies section. Redraw that section
+// alone, so the Add Worker form, the Run a copy choices and an open proxy editor
+// keep what the user typed.
+function redrawFleetProxies(current: AppState) {
+  dockerDrawn = dockerKey(current.runtime);
+  const panel = document.querySelector<HTMLElement>(".proxies-panel");
+  if (!panel || !proxiesState) return;
+  const liveEditor = panel.querySelector<HTMLFormElement>("[data-proxy-editor]");
+  const chosen = [...panel.querySelectorAll<HTMLSelectElement>("[data-proxy-run] select")].map((select) => select.value);
+  const holder = document.createElement("div");
+  holder.innerHTML = renderProxiesSection(proxiesState, proxyEditing, proxyDeployStatus, current.runtime);
+  const fresh = holder.querySelector<HTMLElement>(".proxies-panel");
+  if (!fresh) return;
+  fresh.querySelectorAll<HTMLSelectElement>("[data-proxy-run] select").forEach((select, index) => {
+    const value = chosen[index];
+    if (value !== undefined && [...select.options].some((option) => option.value === value && !option.disabled)) select.value = value;
+  });
+  panel.replaceWith(fresh);
+  wireShellNav(fresh);
+  wireProxies();
+  const freshEditor = fresh.querySelector<HTMLFormElement>("[data-proxy-editor]");
+  if (liveEditor && freshEditor && keepsLiveProxyEditor(liveEditor.dataset.proxyEditor, freshEditor.dataset.proxyEditor)) {
+    freshEditor.replaceWith(liveEditor);
+  }
 }
 
 // The Proxies section's buttons. Every action re-renders the Fleet page, which reads

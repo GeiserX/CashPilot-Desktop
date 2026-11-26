@@ -9,7 +9,8 @@
 //      disabled and the page says how to check or set up Docker, with a button to
 //      the Runtime page. Ready, it works. Native apps are never blocked. The
 //      controls are Import > Deploy, Fleet > Proxies > Run a copy and copy Start,
-//      and Dashboard Start, Redeploy and Turn on isolation.
+//      and Dashboard Start, Redeploy and Turn on isolation. A Docker change on
+//      Fleet keeps what the user typed there, and opening Fleet reads Docker again.
 //   2. activity: the last sample's failure is told apart from the Docker status
 //      now, so a fresh "ready" does not keep the cached "Docker is not reachable".
 //   3. read-order: a host check that answers "ready" after a newer reading said
@@ -60,7 +61,7 @@ function checkDockerGate(scenario) {
       cap: { enabled: false, cappedAt: "", capReason: "", usedBytes: 0, capBytes: 0, thresholdPct: 90, resetDay: 0 },
       copies: [{ slug: docker.slug, name: docker.name, status: "exited", exitIp: "", exitCountry: "", stoppedByCap: false }],
     }],
-    candidates: [{ slug: docker.slug, name: docker.name, refusal: "" }],
+    candidates: [{ slug: docker.slug, name: docker.name, refusal: "" }, { slug: "earnapp", name: "EarnApp", refusal: "" }],
   };
   const events = {};
   const hostChecks = [];
@@ -178,12 +179,28 @@ function checkDockerGate(scenario) {
       note: note(".proxies-panel"),
     });
     out.fleet = { stopped: fleet() };
+    // What the user typed or chose on Fleet survives a Docker change.
+    q("#fleet-name").value = "garage-pc";
+    q("#fleet-endpoint").value = "192.0.2.9";
+    q("[data-proxy-run-service]").value = "earnapp";
+    const typed = () => [q("#fleet-name")?.value, q("#fleet-endpoint")?.value, q("[data-proxy-run-service]")?.value].join("|");
     await setRuntime(ready);
     await settle(() => !q("[data-proxy-run-deploy]")?.disabled);
     out.fleet.ready = fleet();
+    out.fleet.typedAfterReady = typed();
     await setRuntime(unknown);
     await settle(() => q("[data-proxy-run-deploy]")?.disabled);
     out.fleet.unknown = fleet();
+    out.fleet.typedAfterUnknown = typed();
+
+    // Docker starts outside CashPilot, with no event: opening Fleet reads it again.
+    await setRuntime(stopped);
+    await view("activity", () => q(".activity-controls"));
+    await pause();
+    state.runtime = ready;
+    await view("fleet", () => q("[data-proxy-run-deploy]"));
+    await settle(() => !q("[data-proxy-run-deploy]")?.disabled);
+    out.fleet.arrive = fleet();
 
     // A button to the Runtime page opens it.
     await setRuntime(stopped);
@@ -284,7 +301,10 @@ const expected = {
     fleet: {
       stopped: { run: "disabled", start: "disabled", note: "Set up Docker" },
       ready: { run: "enabled", start: "enabled", note: "" },
+      typedAfterReady: "garage-pc|192.0.2.9|earnapp",
       unknown: { run: "disabled", start: "disabled", note: "Check Docker" },
+      typedAfterUnknown: "garage-pc|192.0.2.9|earnapp",
+      arrive: { run: "enabled", start: "enabled", note: "" },
     },
     opensRuntime: true,
   },
