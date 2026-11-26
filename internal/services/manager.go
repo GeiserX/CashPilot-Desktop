@@ -341,7 +341,8 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 	if instances < 1 || instances > MaxInstances {
 		return store.Deployment{}, nil, fmt.Errorf("instances must be between 1 and %d", MaxInstances)
 	}
-	if limit := m.ScalingLimit(svc); instances > limit.Max {
+	limit := m.ScalingLimit(svc)
+	if instances > limit.Max {
 		if opts.Instances != nil {
 			return store.Deployment{}, nil, errors.New(limit.Reason)
 		}
@@ -382,13 +383,15 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		}
 	}
 	// Copies are read only when copies are involved, so a plain deploy asks the
-	// runtime nothing it did not ask before.
+	// runtime nothing it did not ask before. A service limited to one copy is always
+	// read: a scale-down whose removal failed has already stored the lower count, and
+	// its leftover copies (a GPU entry's would share the one GPU) go on this deploy.
 	copier, _ := provider.(runtime.CopyProvider)
 	if instances > 1 && copier == nil {
 		return store.Deployment{}, nil, fmt.Errorf("%s cannot run more than once on the %s runtime", svc.Name, runtimeKind)
 	}
 	var running []int
-	if copier != nil && (opts.Instances != nil || recordedCopies > 1) {
+	if copier != nil && (opts.Instances != nil || recordedCopies > 1 || limit.Max == 1) {
 		if running, err = copier.Copies(ctx, slug); err != nil {
 			return store.Deployment{}, nil, err
 		}

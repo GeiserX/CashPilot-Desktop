@@ -367,6 +367,48 @@ func TestDeployWithClampsARecordedCountTheLimitNoLongerAllows(t *testing.T) {
 	}
 }
 
+// A scale-down whose removal fails stays outstanding: the lower count is stored
+// already, so the next plain redeploy must still find and remove the copies above
+// the limit. A GPU entry runs one copy; three would share the one GPU.
+func TestAFailedScaleDownIsFinishedByThePlainRedeploy(t *testing.T) {
+	st := newTestStore(t)
+	fake := newCopyFake()
+	ctx := context.Background()
+	if _, err := NewManager(fake, newScalingCatalog(t), st).DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(3)}); err != nil {
+		t.Fatalf("DeployWith(3) error: %v", err)
+	}
+	gpu := strings.Replace(scalingCatalogYAML, "requirements:\n", "requirements:\n  gpu: true\n", 1)
+	gpu = strings.Replace(gpu, "  image: example/scalable:1.0\n", "  image: example/scalable@sha256:"+strings.Repeat("a", 64)+"\n  runtime: runc\n  gpu:\n    vendor: nvidia\n", 1)
+	granted, err := catalog.LoadEmbedded(fstest.MapFS{"services/bandwidth/scalable.yml": {Data: []byte(gpu)}})
+	if err != nil {
+		t.Fatalf("LoadEmbedded error: %v", err)
+	}
+	m := NewManager(fake, granted, st)
+	if limit := m.ScalingLimit(mustGet(t, granted, "scalable")); limit.Max != 1 {
+		t.Fatalf("the GPU entry's limit = %+v, want 1", limit)
+	}
+	fake.copyErr = errors.New("daemon busy")
+	if _, err := m.Deploy(ctx, "scalable", nil); err == nil || !strings.Contains(err.Error(), "could not remove copy 3") {
+		t.Fatalf("redeploy with a failing removal = %v, want the removal error", err)
+	}
+	fake.copyErr = nil
+	if _, err := m.Deploy(ctx, "scalable", nil); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	if !slices.Equal(fake.removed, []int{3, 2}) || len(fake.running) != 0 {
+		t.Fatalf("the retry removed %v and left %v running, want [3 2] and none", fake.removed, fake.running)
+	}
+}
+
+func mustGet(t *testing.T, cat *catalog.Catalog, slug string) catalog.Service {
+	t.Helper()
+	svc, ok := cat.Get(slug)
+	if !ok {
+		t.Fatalf("no %s in the catalog", slug)
+	}
+	return svc
+}
+
 // Remove takes the copies first. A copy that will not go leaves the first copy and
 // its row in place, so the service is still on the dashboard and a retry finishes.
 func TestRemoveTakesCopiesFirstAndCanBeRetried(t *testing.T) {
