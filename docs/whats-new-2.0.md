@@ -140,6 +140,8 @@ CashPilot, a custom service and a proxied copy cannot ask for a GPU.
   on arm64, on x86 and on virtual machines.
 - unMineable, which mines with XMRig and pays out in the coin that you pick.
   The balance shows in that coin.
+- Dawn and Gradient do not read the referral code from the sign-up link, so
+  their cards now show the code to type, with a Copy button.
 - SRBMiner-Multi, a GPU miner for Pearl, Zano or Ravencoin on the pool that
   you choose, and KRig, which mines Pearl on Kryptex Pool.
 
