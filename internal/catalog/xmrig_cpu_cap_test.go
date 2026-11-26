@@ -289,10 +289,13 @@ func TestXMRigOnX86WithoutAnL3Of2048KInSysfsSetsThreads(t *testing.T) {
 		{"L2 size zero", cacheFiles{"cpu0/cache/index2": {"2", "0K"}}},
 		{"L2 with no size", cacheFiles{"cpu0/cache/index2": {"2", ""}}},
 		{"no level", cacheFiles{"cpu0/cache/index3": {"", "24576K"}}},
+		// With no L3, XMRig counts the L2. A 4096K L2 holds one cn-heavy hash, so
+		// XMRig would follow the hint here. The wrapper checks only the L3 and errs
+		// toward --threads, which still caps.
+		{"L2 only", cacheFiles{"cpu0/cache/index2": {"2", "4096K"}}},
 		// The top cache must hold one hash of every algorithm (cn-heavy: 4 MiB,
 		// counted from half), or the cache pass starts no thread and XMRig falls
 		// back the same way.
-		{"L2 only", cacheFiles{"cpu0/cache/index2": {"2", "4096K"}}},
 		{"L3 size zero", cacheFiles{"cpu0/cache/index3": {"3", "0K"}}},
 		{"small L3", cacheFiles{"cpu0/cache/index2": {"2", "4096K"}, "cpu0/cache/index3": {"3", "1024K"}}},
 		{"L3 just under 2048K", cacheFiles{"cpu0/cache/index3": {"3", "2047K"}}},
