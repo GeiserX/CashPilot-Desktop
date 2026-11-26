@@ -527,3 +527,36 @@ func TestHelperStartedBeforeA2xJoinUsesItAtOnce(t *testing.T) {
 		t.Errorf("%d helper listeners after the join, want 1", n)
 	}
 }
+
+// The process died between the two writes of a 1.x Leave's publication:
+// config.json already holds the next revision's marker and the copied empty
+// server, but pairing.json still names A. A marker that is not A's revision
+// must not bring A back: A stays without authority, and the next start
+// finishes the Leave.
+func TestAMarkerForAnUnpublishedRevisionDoesNotRestoreA(t *testing.T) {
+	app, serverA, hitsA := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+
+	setLegacyKeys(t, "", "")
+	saveAs1x(t, app, func(cfg map[string]any) {
+		delete(cfg, "upstreamUrl")
+		cfg["mode"] = config.ModeLead
+		cfg["pairingRevision"] = "NEXT-REVISION-NEVER-PUBLISHED"
+	})
+	restart(t, app)
+	if p := pairingOf(t, app); p != pairingA {
+		t.Fatalf("setup: pairing %+v, want A's %+v", p, pairingA)
+	}
+	assertNoAuthorityFor(t, helperBefore(t, app), serverA, hitsA)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+	if mode := app.cfg.Config().Mode; mode != config.ModeLead {
+		t.Errorf("mode %q while A's revision is not marked, want lead", mode)
+	}
+
+	app.enrolSavedPairing(t.Context())
+	if p := pairingOf(t, app); p.Revision == pairingA.Revision || p.ServerURL != "" {
+		t.Fatalf("the next start: %+v, want a new revision with no server", p)
+	}
+	assertSlotCleared(t, app, pairingA)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+}

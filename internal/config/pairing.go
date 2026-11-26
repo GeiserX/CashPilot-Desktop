@@ -31,8 +31,10 @@ type PairingCredential struct {
 
 var ErrPairingChanged = errors.New("the pairing changed")
 
-// ErrPairingSuperseded means 1.x saved config.json after this version
-// published the revision (AppConfig.PairingRevision). The revision's credential
+// ErrPairingSuperseded means config.json does not hold the revision's marker
+// (AppConfig.PairingRevision): 1.x saved config.json after this version
+// published the revision, or a publication stopped between its config.json
+// and pairing.json writes. The revision's credential
 // stays unused until the window carries the 1.x choice over or keeps the revision.
 var ErrPairingSuperseded = errors.New("an older version changed the pairing")
 
@@ -277,13 +279,20 @@ func (m *Manager) ReadPairingCredential(promote bool) (Pairing, PairingCredentia
 	}
 	// The pairing lock orders this read after a whole publication, which marks
 	// config.json before it writes pairing.json.
+	// On disk, only the revision's own marker counts. An empty one means 1.x
+	// saved config.json; another revision's means a publication stopped between
+	// its two writes. Either way this revision's credential is not used. When
+	// config.json cannot be read, the copy in memory can predate the window's
+	// last publication, so any marker there counts: 1.x does not make the file
+	// unreadable.
 	marker, ok := m.markerOnDisk()
+	superseded := marker != p.Revision
 	if !ok {
 		m.mu.RLock()
-		marker = m.cfg.PairingRevision
+		superseded = m.cfg.PairingRevision == ""
 		m.mu.RUnlock()
 	}
-	if marker == "" {
+	if superseded {
 		return p, key, ErrPairingSuperseded
 	}
 	user, path := m.credentialSlot(p)

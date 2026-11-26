@@ -142,7 +142,8 @@ type AppConfig struct {
 	// PairingRevision is the pairing revision this version last published or
 	// kept (pairing.go). 1.x does not know the field and drops it when it saves
 	// config.json, so a revision in pairing.json with no marker here means 1.x
-	// saved its own choice since a downgrade. Until the window carries that
+	// saved its own choice since a downgrade. Another revision's marker means a
+	// publication stopped between its two writes. Until the window carries that
 	// choice over, Config shows the 1.x pairing from this file and the revision
 	// gives no credential (ErrPairingSuperseded).
 	PairingRevision string `json:"pairingRevision,omitempty"`
@@ -276,7 +277,7 @@ func (m *Manager) Config() AppConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	cfg := m.cfg
-	if m.pairing.Revision != "" && m.cfg.PairingRevision != "" {
+	if m.pairing.Revision != "" && m.cfg.PairingRevision == m.pairing.Revision {
 		cfg.UpstreamURL = m.pairing.ServerURL
 		cfg.Mode = ModeLead
 		if cfg.UpstreamURL != "" {
