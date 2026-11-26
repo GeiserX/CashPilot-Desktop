@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -85,8 +86,8 @@ func TestACheckedDeployRefusesWhileOtherCopiesExist(t *testing.T) {
 	}
 	fake.target = "c1"
 	before := fake.deployCalls
-	if got, err := m.DeployTarget(ctx, "scalable"); !errors.Is(err, runtime.ErrNoDeployTarget) {
-		t.Fatalf("lookup with copy 2 running = %q, %v; want ErrNoDeployTarget", got, err)
+	if got, err := m.DeployTarget(ctx, "scalable"); !errors.Is(err, runtime.ErrNoDeployTarget) || !strings.Contains(err.Error(), "has 1 more copy on") {
+		t.Fatalf("lookup with copy 2 running = %q, %v; want ErrNoDeployTarget naming 1 more copy", got, err)
 	}
 	for _, expected := range []string{"c1", "none"} {
 		_, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{ExpectedContainer: &expected})

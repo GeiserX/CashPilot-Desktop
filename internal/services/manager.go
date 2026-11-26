@@ -296,7 +296,11 @@ type OtherCopiesError struct {
 }
 
 func (e *OtherCopiesError) Error() string {
-	return fmt.Sprintf("%s has %d more copies on this computer, and a redeploy replaces them too, so your CashPilot cannot name every container it would replace. Redeploy it on this computer, or lower it to one copy here", e.Name, e.Copies)
+	copies := "copies"
+	if e.Copies == 1 {
+		copies = "copy"
+	}
+	return fmt.Sprintf("%s has %d more %s on this computer, and a redeploy replaces them too, so your CashPilot cannot name every container it would replace. Redeploy it on this computer, or lower it to one copy here", e.Name, e.Copies, copies)
 }
 
 func (e *OtherCopiesError) Unwrap() error { return runtime.ErrNoDeployTarget }
