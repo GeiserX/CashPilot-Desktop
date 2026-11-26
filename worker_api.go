@@ -900,7 +900,7 @@ func (a *App) SetServerCommands(on bool) (ServerCommandsState, error) {
 	if !a.joined() {
 		return ServerCommandsState{}, errors.New("this computer is not joined to a CashPilot")
 	}
-	if err := a.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsOff = !on }); err != nil {
+	if err := a.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsOff, c.ServerCommandsChosen = !on, true }); err != nil {
 		return ServerCommandsState{}, err
 	}
 	a.syncWorkerAPI()
