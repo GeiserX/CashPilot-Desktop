@@ -384,6 +384,7 @@ var forwardableCodes = map[string]bool{
 	"route_unknown":               true,
 	"routed_copy_may_exist":       true,
 	"critical_volume":             true,
+	"copy_not_found":              true,
 }
 
 // forwardableTextStatuses are the statuses where the worker writes a plain-string
