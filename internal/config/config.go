@@ -217,6 +217,10 @@ type Manager struct {
 	// a change another process saved (the background helper and the window each
 	// hold a Manager on the same file) from its own.
 	saved []byte
+	// supersededSeen is the revision this Manager last read as superseded on
+	// disk (pairingSuperseded). It stays superseded while config.json cannot be
+	// read, so a marker in memory cannot bring it back.
+	supersededSeen string
 }
 
 // applyDefaults fills zero/invalid fields with safe defaults. The fleet bind
@@ -306,10 +310,23 @@ func (m *Manager) Save(cfg AppConfig) error {
 	defer release()
 	// Copy the pairing fields from the file, not from memory: the other process
 	// may have published since this Manager last read it, and its older marker
-	// written back would make that publication look superseded.
-	_, _ = m.reloadLocked()
-	if m.pairing.Revision != "" || m.cfg.PairingRevision != "" {
+	// written back would make that publication look superseded. A file that
+	// cannot be read or parsed stops the save; a missing one is a first save.
+	if _, err := m.reloadLocked(); err != nil {
+		return err
+	}
+	// Whether a pairing exists comes from pairing.json, not from this Manager's
+	// copy: a helper loaded before the first join has none, and a 1.x save
+	// drops the marker. While one exists, the server, the mode and the server
+	// commands switch stay as the file has them: a publication or Update
+	// changes them, never a whole-object snapshot that may predate it.
+	p, err := m.Pairing()
+	if err != nil {
+		return err
+	}
+	if p.Revision != "" || m.cfg.PairingRevision != "" {
 		cfg.Mode, cfg.UpstreamURL = m.cfg.Mode, m.cfg.UpstreamURL
+		cfg.ServerCommandsOff, cfg.ServerCommandsChosen = m.cfg.ServerCommandsOff, m.cfg.ServerCommandsChosen
 	}
 	// Only a publication writes the marker, so a 1.x save stays visible.
 	cfg.PairingRevision = m.cfg.PairingRevision

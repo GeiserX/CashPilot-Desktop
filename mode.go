@@ -64,7 +64,9 @@ func (a *App) pairingStatus() *PairingStatus {
 	}
 	serverURL := strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/")
 	out := &PairingStatus{ServerURL: serverURL}
-	if p, err := a.cfg.Pairing(); err == nil && p.Suspended {
+	// A suspended revision that a 1.x save superseded is not the pairing shown:
+	// the address waiting in config.json has its own status.
+	if p, err := a.cfg.Pairing(); err == nil && p.Suspended && !a.cfg.PairingSuperseded(p) {
 		out.ErrorCode, out.LastError = "unauthorized", refusedPairingMessage
 		return out
 	}

@@ -158,7 +158,12 @@ func (m *Manager) markPairing(p Pairing) (unmark func(), err error) {
 		return nil, err
 	}
 	defer release()
-	_, _ = m.reloadLocked()
+	// A file that cannot be read or parsed stops the publication before
+	// anything is written: marking it from this Manager's copy could replace a
+	// 1.x choice this Manager never read, and no rollback could restore it.
+	if _, err := m.reloadLocked(); err != nil {
+		return nil, err
+	}
 	was, next := m.cfg, m.cfg
 	next.PairingRevision, next.UpstreamURL, next.Mode = p.Revision, p.ServerURL, ModeLead
 	if p.ServerURL != "" {
@@ -168,6 +173,9 @@ func (m *Manager) markPairing(p Pairing) (unmark func(), err error) {
 		return nil, err
 	}
 	m.cfg = next
+	if m.supersededSeen == p.Revision {
+		m.supersededSeen = ""
+	}
 	return func() {
 		_ = m.Update(func(c *AppConfig) {
 			c.PairingRevision, c.UpstreamURL, c.Mode = was.PairingRevision, was.UpstreamURL, was.Mode
@@ -190,6 +198,30 @@ func (m *Manager) markerOnDisk() (marker string, ok bool) {
 		return "", false
 	}
 	return file.PairingRevision, true
+}
+
+// PairingSuperseded reports whether config.json lacks the revision's marker
+// (ErrPairingSuperseded). On disk, only the revision's own marker counts. An
+// empty one means 1.x saved config.json; another revision's means a
+// publication stopped between its two writes. When config.json cannot be
+// read, the copy in memory can predate the window's last publication, so any
+// marker there counts: 1.x does not make the file unreadable. A revision this
+// Manager already read as superseded on disk stays superseded then.
+func (m *Manager) PairingSuperseded(p Pairing) bool {
+	marker, ok := m.markerOnDisk()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !ok {
+		return m.cfg.PairingRevision == "" || m.supersededSeen == p.Revision
+	}
+	if marker != p.Revision {
+		m.supersededSeen = p.Revision
+		return true
+	}
+	if m.supersededSeen == p.Revision {
+		m.supersededSeen = ""
+	}
+	return false
 }
 
 // UpdatePairing changes only the named revision. The callback can compare the
@@ -279,20 +311,7 @@ func (m *Manager) ReadPairingCredential(promote bool) (Pairing, PairingCredentia
 	}
 	// The pairing lock orders this read after a whole publication, which marks
 	// config.json before it writes pairing.json.
-	// On disk, only the revision's own marker counts. An empty one means 1.x
-	// saved config.json; another revision's means a publication stopped between
-	// its two writes. Either way this revision's credential is not used. When
-	// config.json cannot be read, the copy in memory can predate the window's
-	// last publication, so any marker there counts: 1.x does not make the file
-	// unreadable.
-	marker, ok := m.markerOnDisk()
-	superseded := marker != p.Revision
-	if !ok {
-		m.mu.RLock()
-		superseded = m.cfg.PairingRevision == ""
-		m.mu.RUnlock()
-	}
-	if superseded {
+	if m.PairingSuperseded(p) {
 		return p, key, ErrPairingSuperseded
 	}
 	user, path := m.credentialSlot(p)

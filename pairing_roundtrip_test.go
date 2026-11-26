@@ -29,11 +29,29 @@ const (
 	keychainService    = "CashPilot Desktop"
 )
 
+// roundTripHits counts every request (Load), and per key the requests the
+// server accepted.
+type roundTripHits struct {
+	atomic.Int32
+	accepted map[string]*atomic.Int32
+}
+
+// acceptedWith is how many requests carrying key the server accepted.
+func (h *roundTripHits) acceptedWith(key string) int32 {
+	if n, ok := h.accepted[key]; ok {
+		return n.Load()
+	}
+	return 0
+}
+
 // roundTripServer counts requests and accepts the keys in accept. A request
 // with the shared key gets issued back as the worker key, as a join does.
-func roundTripServer(t *testing.T, issued string, accept ...string) (*httptest.Server, *atomic.Int32) {
+func roundTripServer(t *testing.T, issued string, accept ...string) (*httptest.Server, *roundTripHits) {
 	t.Helper()
-	var hits atomic.Int32
+	hits := &roundTripHits{accepted: map[string]*atomic.Int32{}}
+	for _, key := range accept {
+		hits.accepted[key] = &atomic.Int32{}
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		auth := r.Header.Get("Authorization")
@@ -43,6 +61,7 @@ func roundTripServer(t *testing.T, issued string, accept ...string) (*httptest.S
 		}
 		for _, key := range accept {
 			if auth == "Bearer "+key {
+				hits.accepted[key].Add(1)
 				writeJSON(w, http.StatusOK, upstream.Response{Status: "ok", WorkerID: 3})
 				return
 			}
@@ -50,12 +69,12 @@ func roundTripServer(t *testing.T, issued string, accept ...string) (*httptest.S
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	t.Cleanup(server.Close)
-	return server, &hits
+	return server, hits
 }
 
 // joinedOn2x is a 2.0 window that joined server A itself, with the server
 // commands switch at its default (on). config.json never held A before.
-func joinedOn2x(t *testing.T) (*appUnderTest, *httptest.Server, *atomic.Int32) {
+func joinedOn2x(t *testing.T) (*appUnderTest, *httptest.Server, *roundTripHits) {
 	t.Helper()
 	useAddrs(t, "192.168.1.30")
 	noFirewallRule(t)
@@ -168,7 +187,7 @@ func helperBefore(t *testing.T, app *appUnderTest) *appUnderTest {
 
 // assertNoAuthorityFor fails when this process reports to A with A's key or
 // takes commands with it.
-func assertNoAuthorityFor(t *testing.T, app *appUnderTest, serverA *httptest.Server, hitsA *atomic.Int32) {
+func assertNoAuthorityFor(t *testing.T, app *appUnderTest, serverA *httptest.Server, hitsA *roundTripHits) {
 	t.Helper()
 	before := hitsA.Load()
 	app.upstream.mu.Lock()
@@ -307,10 +326,10 @@ func TestOneXSaveThatKeptTheServerKeepsThe2xPairing(t *testing.T) {
 	if cfg := app.cfg.Config(); !cfg.ServerCommandsOff || cfg.UpstreamURL != serverA.URL {
 		t.Errorf("after the start: off=%t server=%q", cfg.ServerCommandsOff, cfg.UpstreamURL)
 	}
-	before := hitsA.Load()
+	before := hitsA.acceptedWith(roundTripAKey)
 	app.sendUpstream(t.Context(), &upstream.Client{HTTP: serverA.Client()}, serverA.URL, "")
-	if hitsA.Load() == before {
-		t.Error("the kept pairing does not report to A")
+	if hitsA.acceptedWith(roundTripAKey) == before {
+		t.Error("server A accepted no heartbeat with its key from the kept pairing")
 	}
 }
 
@@ -334,6 +353,32 @@ func TestOneXAddressWithNoKeyLeavesAUnused(t *testing.T) {
 	assertNoAuthorityFor(t, app, serverA, hitsA)
 	if hitsB.Load() != 0 {
 		t.Error("something reached server B with no key")
+	}
+}
+
+// Server A refused this computer, so A's revision is suspended. 1.x then saved
+// server B with no key. The window shows B with B's own status, the missing
+// key, not A's refusal: rejoining A is not what the user needs to do.
+func TestASuspendedRevisionDoesNotShowAsTheWaitingAddressError(t *testing.T) {
+	app, _, _ := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+	if err := app.cfg.UpdatePairing(pairingA.Revision, func(p *config.Pairing) error {
+		p.Suspended = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status := app.pairingStatus(); status == nil || status.ErrorCode != "unauthorized" {
+		t.Fatalf("setup: A's suspension shows as %+v, want unauthorized", status)
+	}
+	serverB, _ := roundTripServer(t, "", roundTripBKey)
+
+	saveAs1x(t, app, func(cfg map[string]any) { cfg["upstreamUrl"] = serverB.URL })
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+	status := app.pairingStatus()
+	if status == nil || status.ServerURL != serverB.URL || status.ErrorCode != "no-key" {
+		t.Errorf("the window shows %+v, want B with the no-key error", status)
 	}
 }
 
