@@ -23,10 +23,13 @@ export function escapeHtml(value: string | undefined | null): string {
   );
 }
 
-const miningCurrencies = new Set(["BTC"]);
+const miningCurrencies = new Map([
+  ["BTC", 8],
+  ["XMR", 12],
+]);
 
 export function miningBalancePrecision(currency: string): number | undefined {
-  return miningCurrencies.has(currency.trim().toUpperCase()) ? 8 : undefined;
+  return miningCurrencies.get(currency.trim().toUpperCase());
 }
 
 /**

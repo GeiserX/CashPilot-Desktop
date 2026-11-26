@@ -13,6 +13,8 @@ import (
 
 var bitcoinAddress = regexp.MustCompile(`^(bc1[02-9ac-hj-np-z]{11,71}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$`)
 
+const oceanAddressKey = "OCEAN_ADDRESS"
+
 type collectorError struct {
 	kind    string
 	message string
@@ -20,11 +22,16 @@ type collectorError struct {
 
 func (e collectorError) Error() string { return e.message }
 
-func (r *Registry) collectOcean(ctx context.Context, credentials map[string]string) (Result, error) {
-	address := firstCredential(credentials, "OCEAN_ADDRESS")
+func oceanPayoutAddress(credentials map[string]string) string {
+	address := firstCredential(credentials, oceanAddressKey)
 	if strings.HasPrefix(strings.ToLower(address), "bc1") {
-		address = strings.ToLower(address)
+		return strings.ToLower(address)
 	}
+	return address
+}
+
+func (r *Registry) collectOcean(ctx context.Context, credentials map[string]string) (Result, error) {
+	address := oceanPayoutAddress(credentials)
 	if !bitcoinAddress.MatchString(address) {
 		return Result{}, collectorError{"auth", "Enter the Bitcoin payout address your miner uses on OCEAN, without the worker name."}
 	}
@@ -50,5 +57,8 @@ func (r *Registry) collectOcean(ctx context.Context, credentials map[string]stri
 	if err != nil || parseErr != nil || balance < 0 || math.IsNaN(balance) || math.IsInf(balance, 0) {
 		return Result{}, collectorError{"shape", "OCEAN's answer has no valid unpaid balance."}
 	}
-	return Result{Platform: "ocean", Currency: "BTC", Balance: balance}, nil
+	return Result{
+		Platform: "ocean", Currency: "BTC", Balance: balance,
+		PoolAddressHash: poolAddressHash(address),
+	}, nil
 }

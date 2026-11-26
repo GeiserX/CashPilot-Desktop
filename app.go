@@ -155,11 +155,11 @@ type fenceController interface {
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
-// single service's collector (persisting its earnings record) and report whether a
+// single service's collector with saved credentials and report whether a
 // slug has a native collector at all. It is an interface so the scheduler tests can
 // inject a fake collector without a live store or network.
 type collectorRegistry interface {
-	Collect(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error)
+	CollectSaved(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error)
 	Supports(slug string) bool
 }
 
@@ -920,17 +920,17 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 
 	// Build per-platform day -> cumulative balance maps, the platform's currency,
 	// and a sorted list of the days it was actually collected.
-	perPlat := map[string]map[string]float64{}
+	perPlat := map[string]map[string]store.DailyBalance{}
 	perCur := map[string]string{}
 	daysByPlat := map[string][]string{}
 	for _, b := range a.store.ListDailyBalances(daysBack) {
 		if perPlat[b.Platform] == nil {
-			perPlat[b.Platform] = map[string]float64{}
+			perPlat[b.Platform] = map[string]store.DailyBalance{}
 		}
 		if _, seen := perPlat[b.Platform][b.Day]; !seen {
 			daysByPlat[b.Platform] = append(daysByPlat[b.Platform], b.Day)
 		}
-		perPlat[b.Platform][b.Day] = b.Balance
+		perPlat[b.Platform][b.Day] = b
 		perCur[b.Platform] = b.Currency
 	}
 	for plat := range daysByPlat {
@@ -940,8 +940,8 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// asOf carries the cumulative balance forward: the balance on the latest
 	// collected day on or before `day` (ok=false when nothing was collected on or
 	// before that day, i.e. there is no established baseline yet).
-	asOf := func(plat, day string) (float64, bool) {
-		var val float64
+	asOf := func(plat, day string) (store.DailyBalance, bool) {
+		var val store.DailyBalance
 		found := false
 		for _, d := range daysByPlat[plat] {
 			if d <= day {
@@ -954,38 +954,33 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		return val, found
 	}
 
-	// platformDelta is a SINGLE platform's display-currency accrual between two
-	// days, from its own cumulative balances (not the whole-portfolio total). It
-	// books 0 unless BOTH endpoints have an established, convertible baseline: a
-	// platform's first-ever observation (or a baseline that predates the fetch
-	// window) has no `fromDay` balance, so its whole lifetime cumulative is never
-	// counted as a single day's earning. Per-platform clamping at 0 keeps one
-	// platform's dip from cancelling another's gain.
-	platformDelta := func(plat, fromDay, toDay string) float64 {
-		fromBal, fromOK := asOf(plat, fromDay)
-		if !fromOK {
-			return 0
-		}
-		toBal, toOK := asOf(plat, toDay)
-		if !toOK {
-			return 0
-		}
-		cur := perCur[plat]
-		fromDisp, ok := a.exchange.ToDisplay(fromBal, cur, disp)
+	// Clamp each platform's net change at 0 so one dip cannot cancel another
+	// platform's gain.
+	balanceDelta := func(from, to store.DailyBalance, cur string) float64 {
+		fromDisp, ok := a.exchange.ToDisplay(from.Balance, cur, disp)
 		if !ok {
 			return 0
 		}
-		toDisp, ok := a.exchange.ToDisplay(toBal, cur, disp)
+		toDisp, ok := a.exchange.ToDisplay(to.Balance, cur, disp)
 		if !ok {
 			return 0
 		}
 		return max(0, toDisp-fromDisp)
 	}
-	// sumDelta accrues every platform's per-platform delta over one period.
-	sumDelta := func(fromDay, toDay string) float64 {
+	platformDelta := func(plat, fromDay, toDay string) float64 {
+		from, fromOK := asOf(plat, fromDay)
+		to, toOK := asOf(plat, toDay)
+		// A day's accrual needs a previous balance from the same address.
+		// Legacy pool rows have an empty hash.
+		if !fromOK || !toOK || from.PoolAddressHash != to.PoolAddressHash {
+			return 0
+		}
+		return balanceDelta(from, to, perCur[plat])
+	}
+	sumDelta := func(delta func(plat, fromDay, toDay string) float64, fromDay, toDay string) float64 {
 		var sum float64
 		for plat := range daysByPlat {
-			sum += platformDelta(plat, fromDay, toDay)
+			sum += delta(plat, fromDay, toDay)
 		}
 		return sum
 	}
@@ -1001,6 +996,7 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// converted" -- see the TotalKnown assignment below.
 	priced, unpriced := 0, 0
 	latestDay := ""
+	poolHistory := map[string][]store.DailyBalance{}
 	for plat, days := range daysByPlat {
 		if len(days) == 0 {
 			continue
@@ -1010,7 +1006,24 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 			latestDay = last
 		}
 		cur := perCur[plat]
-		bal := perPlat[plat][last]
+		bal := perPlat[plat][last].Balance
+		if _, pool := collectors.PoolAddressHash(plat, nil); pool {
+			history := a.store.ListPoolBalances(plat, daysBack)
+			poolHistory[plat] = history
+			creds, err := a.store.GetCredentials(plat)
+			hash, _ := collectors.PoolAddressHash(plat, creds)
+			if err != nil || hash == "" {
+				continue
+			}
+			i := len(history) - 1
+			for i >= 0 && history[i].PoolAddressHash != hash {
+				i--
+			}
+			if i < 0 {
+				continue
+			}
+			cur, bal = history[i].Currency, history[i].Balance
+		}
 		if a.exchange.IsPoints(cur) {
 			summary.Points = append(summary.Points, PointsBalance{
 				Platform: plat,
@@ -1049,19 +1062,52 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		latestDay = today
 	}
 
+	// Close each address period before starting a new baseline. Clamping the
+	// net change per period keeps the subtraction used for a single address.
+	// The first period still needs a baseline from before fromDay. Every pool
+	// figure (Today, Daily, Month) goes through here, so a payout address
+	// changed during a day still counts the new address's later gains.
+	periodDelta := func(plat, fromDay, toDay string) float64 {
+		history, pool := poolHistory[plat]
+		if !pool {
+			return platformDelta(plat, fromDay, toDay)
+		}
+		start := sort.Search(len(history), func(i int) bool { return history[i].Day > fromDay })
+		var baseline store.DailyBalance
+		haveBaseline := start > 0
+		if haveBaseline {
+			baseline = history[start-1]
+		}
+		last, seen := baseline, haveBaseline
+		var accrued float64
+		for _, reading := range history[start:] {
+			if reading.Day > toDay {
+				break
+			}
+			if seen && reading.PoolAddressHash != last.PoolAddressHash {
+				if haveBaseline {
+					accrued += balanceDelta(baseline, last, perCur[plat])
+				}
+				baseline, haveBaseline = reading, true
+			}
+			last, seen = reading, true
+		}
+		if haveBaseline {
+			accrued += balanceDelta(baseline, last, perCur[plat])
+		}
+		return accrued
+	}
+
 	// Today / yesterday accrual = per-platform deltas across the two day pairs.
-	todayEarned := sumDelta(dayStr(-1), today)
-	yesterdayEarned := sumDelta(dayStr(-2), dayStr(-1))
+	todayEarned := sumDelta(periodDelta, dayStr(-1), today)
+	yesterdayEarned := sumDelta(periodDelta, dayStr(-2), dayStr(-1))
 	summary.Today = todayEarned
 	if yesterdayEarned > 0 {
 		summary.TodayChange = (todayEarned - yesterdayEarned) / yesterdayEarned * 100
 	}
 
-	// Month = per-platform accrual since the day before this month started; a
-	// platform whose baseline is unknown (before first collection or outside the
-	// window) contributes 0 rather than its whole cumulative balance.
-	summary.Month = sumDelta(beforeMonthStart, latestDay)
-	prevMonthEarned := sumDelta(beforeLastMonthStart, beforeMonthStart)
+	summary.Month = sumDelta(periodDelta, beforeMonthStart, latestDay)
+	prevMonthEarned := sumDelta(periodDelta, beforeLastMonthStart, beforeMonthStart)
 	if prevMonthEarned > 0 {
 		summary.MonthChange = (summary.Month - prevMonthEarned) / prevMonthEarned * 100
 	}
@@ -1073,7 +1119,7 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		prevDay := d.AddDate(0, 0, -1).Format("2006-01-02")
 		summary.Daily = append(summary.Daily, DailyPoint{
 			Day:    d.Format("Jan 02"),
-			Amount: sumDelta(prevDay, curDay),
+			Amount: sumDelta(periodDelta, prevDay, curDay),
 		})
 	}
 
@@ -1798,9 +1844,11 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 	if err != nil {
 		return store.EarningsRecord{}, err
 	}
-	record, err := a.collectors.Collect(a.ctx, slug, creds)
+	record, err := a.collectors.CollectSaved(a.ctx, slug, creds)
 	if err != nil {
-		a.emitError("collector", err)
+		if !errors.Is(err, collectors.ErrPayoutAddressChanged) {
+			a.emitError("collector", err)
+		}
 		return store.EarningsRecord{}, err
 	}
 	a.emitEvent("earnings:changed", record)
@@ -1821,9 +1869,11 @@ func (a *App) collectOne(ctx context.Context, slug string) {
 		a.emitError("collector", err)
 		return
 	}
-	record, err := a.collectors.Collect(ctx, slug, creds)
+	record, err := a.collectors.CollectSaved(ctx, slug, creds)
 	if err != nil {
-		a.emitError("collector", err)
+		if !errors.Is(err, collectors.ErrPayoutAddressChanged) {
+			a.emitError("collector", err)
+		}
 		return
 	}
 	a.emitEvent("earnings:changed", record)
@@ -1912,8 +1962,10 @@ func (a *App) collectAll(ctx context.Context) {
 				a.emitError("collector", err)
 				return
 			}
-			if _, err := a.collectors.Collect(ctx, slug, creds); err != nil {
-				a.emitError("collector", err)
+			if _, err := a.collectors.CollectSaved(ctx, slug, creds); err != nil {
+				if !errors.Is(err, collectors.ErrPayoutAddressChanged) {
+					a.emitError("collector", err)
+				}
 				return
 			}
 			collected.Add(1)

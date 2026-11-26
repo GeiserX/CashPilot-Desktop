@@ -36,6 +36,7 @@ const (
 // they are never priced here (see PointsCurrencies).
 var DefaultCryptoIDs = map[string]string{
 	"BTC":    "bitcoin",
+	"XMR":    "monero",
 	"MYST":   "mysterium",
 	"ANYONE": "airtor-protocol",
 	"STORJ":  "storj",

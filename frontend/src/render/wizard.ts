@@ -97,13 +97,13 @@ export function renderWizardServiceSetup(
       <div class="signup-strip">
         ${signupButton(service)}
         ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
-        ${gated ? "" : `<button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>`}
+        ${gated ? "" : `<button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">${pool ? "Web setup guide" : "Setup guide"}</button>`}
       </div>
       ${referralNote(service)}
       ${ratingBlock(service)}
       ${gated
         ? `<div data-session-slot="${escapeHtml(service.slug)}">${renderSessionSlot(service, consent)}</div>`
-        : pool ? `<p class="tip">CashPilot reads the unpaid balance your mining pool holds for this address.</p>`
+        : pool ? `<p class="tip">Check pool balance saves the address and reads the unpaid balance your mining pool holds for this address.</p>`
         : service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
       ${credentialHint(service)}
       <div class="credential-grid">
@@ -122,7 +122,7 @@ export function renderWizardServiceSetup(
       ${imageChoiceSection(service, customImage)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
-        <button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>
+        ${pool ? "" : `<button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>`}
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
         <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">${pool ? "Check pool balance" : "Collect Earnings"}</button>
       </div>

@@ -2420,7 +2420,20 @@ function renderSetupWizard(current: AppState) {
     input.value = secretDrafts.get(wizardSecretInputKey(input)) || "";
   }
   fillNewWalletPanel();
-  selectedServices.forEach((service) => void hydrateWizardForm(service));
+  selectedServices.forEach((service) => {
+    if (service.collector?.accrual === "pool") {
+      const card = root.querySelector(`[data-form-slug="${CSS.escape(service.slug)}"]`);
+      const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
+      const output = card?.querySelector<HTMLElement>("[data-output-slug]");
+      card?.querySelectorAll("[data-wizard-env]").forEach((input) => {
+        input.addEventListener("input", () => {
+          if (facts) facts.innerHTML = renderPayoutFacts(service);
+          if (output) output.textContent = "";
+        });
+      });
+    }
+    void hydrateWizardForm(service);
+  });
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
   selectedServices.forEach((service) => void hydratePayouts(service));
 }
@@ -2803,9 +2816,9 @@ async function runWizardAction(slug: string, action: string) {
   const pool = action === "collect" ? state?.services?.find((service) => service.slug === slug && service.collector?.accrual === "pool") : undefined;
   const card = pool ? output?.closest(".wizard-setup-card") : null;
   const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
-  const button = card?.querySelector<HTMLButtonElement>('[data-wizard-action="collect"]');
+  const controls = card?.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-wizard-env], [data-wizard-action="collect"]');
   try {
-    if (button) button.disabled = true;
+    controls?.forEach((control) => { control.disabled = true; });
     if (pool && facts) facts.innerHTML = renderPayoutFacts(pool);
     const saved = sendCredentialRequest(values, secretKeys, (request) => SaveCredentials(slug, request));
     clearRequestSecrets(values, secretKeys);
@@ -2833,7 +2846,7 @@ async function runWizardAction(slug: string, action: string) {
   } catch (error) {
     if (output) output.textContent = String(error);
   } finally {
-    if (button) button.disabled = false;
+    controls?.forEach((control) => { control.disabled = false; });
     clearRequestSecrets(values, secretKeys);
   }
 }

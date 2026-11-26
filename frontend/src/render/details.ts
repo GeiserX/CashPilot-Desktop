@@ -95,14 +95,19 @@ export function payoutFacts(service: Service, balance?: Balance | null): Fact[] 
   const unit = minimumUnit(service);
   const pool = service.collector?.accrual === "pool";
   const documented = typeof minimum === "number" && Number.isFinite(minimum) && minimum > 0;
+  const minimumText = documented ? `${trimNumber(minimum, unit)}${unit ? ` ${unit}` : ""}` : UNKNOWN;
+  const poolTerms = pool ? service.payment?.minimumPayout?.trim() : "";
   const facts: Fact[] = [
     {
-      label: pool ? "Automatic payout threshold" : "Minimum to cash out",
-      value: documented ? `${trimNumber(minimum, unit)}${unit ? ` ${unit}` : ""}` : UNKNOWN,
+      label: pool ? "Payout terms" : "Minimum to cash out",
+      value: poolTerms || minimumText,
     },
     { label: "Paid by", value: (service.payment?.methods || []).join(", ") || UNKNOWN },
     { label: "Paid out", value: (service.payment?.frequency || "").trim() || UNKNOWN },
   ];
+
+  const poolNotes = pool ? service.cashout?.notes?.trim() : "";
+  if (poolNotes) facts.push({ label: "Payout notes", value: poolNotes });
 
   if (balance && Number.isFinite(balance.amount)) {
     if (pool) {
@@ -112,9 +117,9 @@ export function payoutFacts(service: Service, balance?: Balance | null): Fact[] 
     const threshold = minimumIn(service, balance.currency);
     if (threshold !== null) {
       const remaining = threshold - balance.amount;
-      const reached = pool ? "Minimum reached. The pool pays automatically." : "Nothing — this can be cashed out now";
+      const reached = pool ? "Minimum reached. Check the pool's payout terms." : "Nothing — this can be cashed out now";
       facts.push({
-        label: "Still to go",
+        label: pool ? "Still to minimum payout" : "Still to go",
         value: remaining <= 0 ? reached : `${trimNumber(remaining, balance.currency)} ${(balance.currency || "").trim().toUpperCase()}`.trim(),
       });
     }

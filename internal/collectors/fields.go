@@ -56,7 +56,7 @@ var collectorFields = map[string][]Field{
 		{Key: "MYSTNODES_PASSWORD", Label: "MystNodes password", Description: "Password used for my.mystnodes.com", Secret: true, Required: true},
 	},
 	"ocean": {
-		{Key: "OCEAN_ADDRESS", Label: "BTC payout address", Required: true},
+		{Key: oceanAddressKey, Label: "BTC payout address", Required: true},
 	},
 	"packetstream": {
 		{Key: "PACKETSTREAM_AUTH_TOKEN", Label: "PacketStream auth cookie", Description: "auth cookie from app.packetstream.io", Secret: true, Required: true},
@@ -73,6 +73,9 @@ var collectorFields = map[string][]Field{
 	},
 	"storj": {
 		{Key: "STORJ_API_URL", Label: "Storj API URL", Description: "Local node dashboard URL, default http://localhost:14002"},
+	},
+	"supportxmr": {
+		{Key: supportXMRAddressKey, Label: "Monero payout address", Required: true},
 	},
 }
 

@@ -379,6 +379,8 @@ check("a pool tracker asks for the public payout address", inputs(ocean).some((i
 check("the pool tracker has no local app to install", !ocean.includes("data-session-") && !ocean.includes("Install this provider's native app"), ocean);
 check("OCEAN links to the provider without offering an account", ocean.includes("https://ocean.xyz/getstarted") && ocean.includes("Visit site") && !ocean.includes("Create account"), ocean);
 check("OCEAN's setup checks its unpaid balance and cannot deploy", ocean.includes("holds for this address") && ocean.includes("Check pool balance") && ocean.includes('data-wizard-action="deploy" data-slug="ocean" disabled'), ocean);
+check("pool setup identifies the linked instructions as the Web setup guide", ocean.includes('data-url="https://geiserx.github.io/CashPilot/guides/ocean/">Web setup guide</button>'), ocean);
+check("pool setup saves the address through the balance check", !ocean.includes('data-wizard-action="save"') && ocean.includes('data-wizard-action="collect"'), ocean);
 
 const phoneApp = renderWizardServiceSetup(service({ slug: "nodle", name: "Nodle", manualOnly: true, platforms: ["ios", "android"], docker: { env: [] } }), {}, "devbox");
 check("RULE 7: a phone-only manual app keeps the plain install tip", phoneApp.includes("Install this provider's native app") && !phoneApp.includes("data-session-"), phoneApp);

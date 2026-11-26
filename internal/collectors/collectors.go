@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -45,11 +46,37 @@ func WithNodeReader(fn NodeReadFunc) Option {
 }
 
 type Result struct {
-	Platform string
-	Balance  float64
-	Currency string
-	Error    string
+	Platform        string
+	Balance         float64
+	Currency        string
+	Error           string
+	PoolAddressHash string
 }
+
+func poolAddressHash(address string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(address)))
+}
+
+// PoolAddressHash identifies the configured address using the same normalization
+// as the collector. The boolean identifies pools that track by payout address.
+func PoolAddressHash(slug string, credentials map[string]string) (string, bool) {
+	var address string
+	switch slug {
+	case "ocean":
+		address = oceanPayoutAddress(credentials)
+	case "supportxmr":
+		address = firstCredential(credentials, supportXMRAddressKey)
+	default:
+		return "", false
+	}
+	if address == "" {
+		return "", true
+	}
+	return poolAddressHash(address), true
+}
+
+// ErrPayoutAddressChanged means a read was discarded after a settings change.
+var ErrPayoutAddressChanged = errors.New("The saved payout address changed during the balance check. Check the balance again.")
 
 // KindUnread is the error kind of a collect whose login worked but whose figure
 // nothing could read (a Mysterium node that is not on this machine). Not a
@@ -110,6 +137,7 @@ var collectorDispatch = map[string]collectorFunc{
 	"repocket":        (*Registry).collectRepocket,
 	"salad":           (*Registry).collectSalad,
 	"storj":           (*Registry).collectStorj,
+	"supportxmr":      (*Registry).collectSupportXMR,
 	"traffmonetizer":  (*Registry).collectTraffmonetizer,
 	"vast-ai":         (*Registry).collectVast,
 }
@@ -123,6 +151,28 @@ func (r *Registry) Supports(slug string) bool {
 }
 
 func (r *Registry) Collect(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error) {
+	return r.store.SaveEarnings(r.collectRecord(ctx, slug, credentials))
+}
+
+// CollectSaved takes credentials read from the store. A pool read is saved
+// only if its payout address still matches after the network request.
+func (r *Registry) CollectSaved(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error) {
+	hash, pool := PoolAddressHash(slug, credentials)
+	if !pool {
+		return r.Collect(ctx, slug, credentials)
+	}
+	record := r.collectRecord(ctx, slug, credentials)
+	saved, matched, err := r.store.SaveEarningsIfCredentialsMatch(record, func(current map[string]string) bool {
+		currentHash, _ := PoolAddressHash(slug, current)
+		return currentHash == hash
+	})
+	if err == nil && !matched {
+		return store.EarningsRecord{}, ErrPayoutAddressChanged
+	}
+	return saved, err
+}
+
+func (r *Registry) collectRecord(ctx context.Context, slug string, credentials map[string]string) store.EarningsRecord {
 	var result Result
 	var err error
 	if fn, ok := collectorDispatch[slug]; ok {
@@ -142,17 +192,17 @@ func (r *Registry) Collect(ctx context.Context, slug string, credentials map[str
 	case errors.As(err, &classified):
 		kind = classified.kind
 	}
-	record := store.EarningsRecord{
-		Platform:  result.Platform,
-		Balance:   result.Balance,
-		Currency:  result.Currency,
-		ErrorKind: kind,
+	return store.EarningsRecord{
+		Platform:        result.Platform,
+		Balance:         result.Balance,
+		Currency:        result.Currency,
+		ErrorKind:       kind,
+		PoolAddressHash: result.PoolAddressHash,
 		// Redact any secret embedded in a URL query (e.g. the Repocket Firebase
 		// sign-in URL carries ?key=<FIREBASE_KEY>) before the error is persisted
 		// verbatim into earnings.error, where it would be readable in the dashboard/DB.
 		Error: redactURLSecrets(result.Error),
 	}
-	return r.store.SaveEarnings(record)
 }
 
 // anyoneRewardsURL is the relay-rewards process on the live node, as published in

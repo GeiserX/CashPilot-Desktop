@@ -188,7 +188,21 @@ const ocean = {
 };
 const oceanPayout = payoutFacts(ocean, { amount: 0.00000001, currency: "BTC" });
 check("payout facts show a satoshi as unpaid", valueOf(oceanPayout, "Unpaid pool balance") === "0.00000001 BTC", oceanPayout);
-check("payout facts show the exact pool threshold", valueOf(oceanPayout, "Automatic payout threshold") === "0.01048576 BTC", oceanPayout);
+check("payout facts show the exact pool threshold", valueOf(oceanPayout, "Payout terms") === "0.01048576 BTC", oceanPayout);
+
+const supportxmr = {
+  ...ocean,
+  slug: "supportxmr",
+  payment: { currency: "XMR", minimumPayout: "0.1 XMR (automatic), 0.01 XMR on request" },
+  cashout: { method: "auto", currency: "XMR", minAmount: 0.01, notes: "The automatic threshold defaults to 0.1 XMR. An instant payout costs 0.001 XMR." },
+};
+const supportPayout = payoutFacts(supportxmr, { amount: 0.000000000001, currency: "XMR" });
+check("SupportXMR shows both payout thresholds", valueOf(supportPayout, "Payout terms") === "0.1 XMR (automatic), 0.01 XMR on request", supportPayout);
+check("SupportXMR explains the default threshold and the request fee", valueOf(supportPayout, "Payout notes") === supportxmr.cashout.notes, supportPayout);
+check("SupportXMR shows one piconero as unpaid", valueOf(supportPayout, "Unpaid pool balance") === "0.000000000001 XMR", supportPayout);
+check("SupportXMR counts down to the request minimum", valueOf(supportPayout, "Still to minimum payout") === "0.009999999999 XMR", supportPayout);
+const supportReady = payoutFacts(supportxmr, { amount: 0.01, currency: "XMR" });
+check("reaching SupportXMR's request minimum directs the user to the payout terms", valueOf(supportReady, "Still to minimum payout") === "Minimum reached. Check the pool's payout terms.", supportReady);
 
 const undocumented = payoutFacts({
   ...honeygain,
