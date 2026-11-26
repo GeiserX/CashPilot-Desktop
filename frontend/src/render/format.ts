@@ -28,6 +28,12 @@ const miningCurrencies = new Map([
   ["XMR", 12],
   ["KAS", 8],
   ["ETC", 9],
+  // Coins unMineable pays in. Its API writes balances with 8 decimals.
+  ["BNB", 8],
+  ["DOGE", 8],
+  ["LTC", 8],
+  ["SHIB", 8],
+  ["TRX", 8],
 ]);
 
 export function miningBalancePrecision(currency: string): number | undefined {

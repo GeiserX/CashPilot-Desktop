@@ -85,6 +85,12 @@ check("HeroMiners Kaspa displays one sompi in the native balance", primary(cell(
 const twominers = earning({ platform: "2miners-etc", currency: "ETC", balance: 0.000000001, balanceDisplay: 0 });
 check("2Miners ETC displays one pool unit in the native balance", primary(cell(twominers)) === "0.000000001 ETC", cell(twominers));
 
+// unMineable writes balances with 8 decimals in whichever coin it pays.
+for (const coin of ["BNB", "DOGE", "LTC", "SHIB", "TRX"]) {
+  const unmineable = earning({ platform: "unmineable", currency: coin, balance: 0.00000001, balanceDisplay: 0 });
+  check(`unMineable displays 0.00000001 ${coin} in the native balance`, primary(cell(unmineable)) === `0.00000001 ${coin}`, cell(unmineable));
+}
+
 
 // ---------------------------------------------------------------------------
 // THE RULE.

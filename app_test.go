@@ -338,6 +338,38 @@ func TestEarningsSummaryPoolAddressChangeWithinADay(t *testing.T) {
 	}
 }
 
+// TestEarningsSummaryUnMineableCoinSwitch: unMineable pays in the coin the miner
+// picks. After a switch from XMR to SHIB, the XMR days are still priced as XMR,
+// and the SHIB balance is a new baseline, never a gain over the XMR figure.
+func TestEarningsSummaryUnMineableCoinSwitch(t *testing.T) {
+	app, st := newEarningsTestApp(t,
+		`{"monero":{"usd":200},"shiba-inu":{"usd":0.00001}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"XMR": "monero", "SHIB": "shiba-inu"}, true)
+	now := time.Now().UTC()
+	address := "4" + strings.Repeat("A", 94)
+	if err := st.SaveCredentials("unmineable", map[string]string{"WALLET": address, "PAYOUT_COIN": "SHIB"}); err != nil {
+		t.Fatal(err)
+	}
+	xmr, shib := testPoolAddressHash("XMR:"+address), testPoolAddressHash("SHIB:"+address)
+	seedEarnings(t, st,
+		store.EarningsRecord{Platform: "unmineable", Balance: 0.01, Currency: "XMR", PoolAddressHash: xmr, CreatedAt: atUTC(now.AddDate(0, 0, -2), 10)},
+		store.EarningsRecord{Platform: "unmineable", Balance: 0.02, Currency: "XMR", PoolAddressHash: xmr, CreatedAt: atUTC(now.AddDate(0, 0, -1), 10)},
+		store.EarningsRecord{Platform: "unmineable", Balance: 100000, Currency: "SHIB", PoolAddressHash: shib, CreatedAt: atUTC(now, 9)},
+		store.EarningsRecord{Platform: "unmineable", Balance: 300000, Currency: "SHIB", PoolAddressHash: shib, CreatedAt: atUTC(now, 10)},
+	)
+	summary := app.computeEarningsSummary(st.ListLatestEarnings())
+	if got := summary.Daily[len(summary.Daily)-2].Amount; !approxEq(got, 2) {
+		t.Errorf("yesterday's Daily point = %v, want 2 (0.01 XMR priced as XMR, not as SHIB)", got)
+	}
+	if !approxEq(summary.Today, 2) {
+		t.Errorf("Today = %v, want 2 (200000 SHIB after the switch opened at 100000)", summary.Today)
+	}
+	if !approxEq(summary.Total, 3) {
+		t.Errorf("Total = %v, want 3 (the current SHIB balance only)", summary.Total)
+	}
+}
+
 // TestEarningsSummaryCarryForwardAcrossGap proves asOf carries the last known
 // cumulative balance across days with no observation, so accrual over a gap is the
 // real delta — not the first-observation inflation and not zero.
