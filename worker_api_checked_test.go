@@ -396,3 +396,62 @@ func TestCheckedDeployRefusesAServiceWithMoreCopiesHere(t *testing.T) {
 		}
 	}
 }
+
+// The lookup answers only what it can read: a copy number it cannot parse is a bad
+// request, and a Docker that fails the inspect is a 503, never a guess at "none".
+func TestCheckedLookupRefusesWhatItCannotRead(t *testing.T) {
+	app := joinedApp(t)
+	if w := call(t, app, http.MethodGet, checkedPath+"?instance=first", testWorkerKey, nil); w.Code != http.StatusBadRequest || !strings.Contains(detailText(t, w), "instance must be between 1 and") {
+		t.Fatalf("lookup with instance=first: %d %s; want 400 naming the range", w.Code, w.Body.String())
+	}
+	app.Docker.FailInspect("cashpilot-honeygain")
+	w := call(t, app, http.MethodGet, checkedPath, testWorkerKey, nil)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(detailText(t, w), "Could not look up the deploy container") {
+		t.Fatalf("lookup while Docker fails the inspect: %d %s; want 503", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"none"`) {
+		t.Fatalf("a failed lookup named no container: %s", w.Body.String())
+	}
+}
+
+// The checked deploy keeps every refusal of the plain route: a body that is not the
+// deploy's JSON shape, a service whose wallet seed stays on this computer, and a
+// service with no container. Each refuses before anything is created.
+func TestCheckedDeployKeepsThePlainRoutesRefusals(t *testing.T) {
+	app := joinedApp(t)
+	sia, ok := app.catalog.Get(siaSlug)
+	if !ok {
+		t.Fatalf("%s is not in the catalog", siaSlug)
+	}
+	for _, tc := range []struct {
+		name string
+		path string
+		body any
+		code int
+		want string
+	}{
+		{"a body that is not the deploy's shape", checkedPath, "deploy honeygain please", http.StatusUnprocessableEntity, "not valid JSON in the expected shape"},
+		{"a wallet seed service", "/api/containers/" + siaSlug + "/deploy-checked",
+			map[string]any{"image": imageRepository(sia.Docker.Image) + ":1.0.0", "env": map[string]string{"HOSTD_API_PASSWORD": t.Name()}, "expected_container": "none"},
+			http.StatusForbidden, "wallet seed phrase in a file"},
+		{"a service with no container", "/api/containers/wipter/deploy-checked",
+			map[string]any{"image": "wipter/wipter:1.0.0", "env": map[string]string{}, "expected_container": "none"},
+			http.StatusForbidden, "has no container, so it cannot be deployed from your CashPilot"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app.Docker.ResetCalls()
+			w := call(t, app, http.MethodPost, tc.path, testWorkerKey, tc.body)
+			if w.Code != tc.code || !strings.Contains(detailText(t, w), tc.want) {
+				t.Fatalf("%s: %d %s; want %d with %q", tc.name, w.Code, w.Body.String(), tc.code, tc.want)
+			}
+			if len(app.Docker.Created()) != 0 {
+				t.Fatalf("%s created a container", tc.name)
+			}
+			for _, c := range app.Docker.Calls() {
+				if strings.Contains(c, "images/create") {
+					t.Fatalf("%s pulled an image: %v", tc.name, app.Docker.Calls())
+				}
+			}
+		})
+	}
+}

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -184,4 +187,75 @@ func identityOf(t *testing.T, app *App, id int64) string {
 		t.Fatalf("worker %d: %v", id, err)
 	}
 	return target.identity()
+}
+
+// The approved container is removed after Desktop's lookup and before the worker's
+// check. The worker refuses, and the new question asks for a first deploy: it says
+// no container is there and expects none, so the yes can only create.
+func TestAContainerRemovedDuringTheDeployIsAskedAboutAsAFirstDeploy(t *testing.T) {
+	app, worker, req := newIDWorkerLead(t)
+	seen := dockerID(100)
+	worker.set(seen)
+	asked, err := app.DeployToWorker("plain", req)
+	if err != nil || asked.ExpectedContainer != seen {
+		t.Fatalf("first question = %+v, %v", asked, err)
+	}
+	worker.mu.Lock()
+	worker.beforeDeploy = func() { worker.current = "none" }
+	worker.mu.Unlock()
+	again, err := app.DeployToWorker("plain", approve(req, asked))
+	current, posts := worker.state()
+	if err != nil || again.Ask != askReplace || again.ExpectedContainer != "none" || current != "none" || len(posts) != 1 {
+		t.Fatalf("refused deploy = %+v, %v, worker runs %s, posts %v; want a first-deploy question", again, err, current, posts)
+	}
+	for _, want := range []string{"deploy_target_changed", "Deploy Plain on garage? No Plain container is there now."} {
+		if !strings.Contains(again.Message, want) {
+			t.Fatalf("new question %q must say %q", again.Message, want)
+		}
+	}
+	result, err := app.DeployToWorker("plain", approve(req, again))
+	current, posts = worker.state()
+	if err != nil || result.Ask != "" || result.ContainerID != current || current == "none" || len(posts) != 2 || posts[1]["expected_container"] != "none" {
+		t.Fatalf("approved first deploy = %+v, %v, posts %v", result, err, posts)
+	}
+}
+
+// A worker that refuses an approved deploy but names no container, neither in its
+// refusal nor in a fresh lookup, gives Desktop nothing to ask about. Desktop shows
+// the worker's own words and code, and sends nothing more.
+func TestARefusalWithNoContainerToAskAboutShowsTheWorkersWords(t *testing.T) {
+	app := newLeadApp(t)
+	var posts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			// An older worker: it names no container.
+			_ = json.NewEncoder(w).Encode(map[string]any{"exists": true})
+			return
+		}
+		posts.Add(1)
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"detail": map[string]any{
+			"error":   "deploy_target_changed",
+			"message": "The container on this worker no longer matches the deploy request.",
+		}})
+	}))
+	t.Cleanup(srv.Close)
+	enrolWorker(t, app, "garage", srv.URL, nil)
+	req := WorkerDeployRequest{WorkerID: workerID(t, app, "garage"), Values: map[string]string{"TOKEN": "typed"}}
+	asked, err := app.DeployToWorker("plain", req)
+	if err != nil || asked.Ask != askReplace || asked.ExpectedContainer != "" {
+		t.Fatalf("older-worker question = %+v, %v", asked, err)
+	}
+	result, err := app.DeployToWorker("plain", approve(req, asked))
+	if err == nil || result.Ask != "" {
+		t.Fatalf("refused yes = %+v, %v; want an error and no question", result, err)
+	}
+	for _, want := range []string{"garage", "no longer matches the deploy request", "deploy_target_changed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q must show %q", err, want)
+		}
+	}
+	if n := posts.Load(); n != 1 {
+		t.Fatalf("the worker got %d deploys; want the one it refused", n)
+	}
 }

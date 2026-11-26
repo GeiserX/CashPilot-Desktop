@@ -17,10 +17,13 @@ import (
 // targetProvider is a fakeProvider that can name the container a deploy replaces.
 type targetProvider struct {
 	*fakeProvider
-	target string
+	target    string
+	targetErr error
 }
 
-func (p *targetProvider) DeployTarget(context.Context, string) (string, error) { return p.target, nil }
+func (p *targetProvider) DeployTarget(context.Context, string) (string, error) {
+	return p.target, p.targetErr
+}
 
 func TestACheckedDeployHandsTheExpectedContainerToTheRuntime(t *testing.T) {
 	fake := &targetProvider{fakeProvider: &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "cid", Status: "running"}}, target: "none"}
@@ -108,5 +111,53 @@ func TestACheckedDeployRefusesWhileOtherCopiesExist(t *testing.T) {
 	}
 	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{ExpectedContainer: &expected}); err != nil {
 		t.Fatalf("checked deploy with one copy: %v", err)
+	}
+}
+
+// The manager compares the expectation itself, under its deploy lock and before
+// the runtime pulls anything, so a stale yes is refused at once. The runtime here
+// compares nothing, so only the manager's own check can refuse.
+func TestACheckedDeployForAnotherContainerIsRefusedBeforeTheRuntime(t *testing.T) {
+	fake := &targetProvider{fakeProvider: &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "c2", Status: "running"}}, target: "c1"}
+	m := NewManager(fake, newTestCatalog(t), newTestStore(t))
+	for _, expected := range []string{"c0", "none"} {
+		_, err := m.DeployWith(context.Background(), "example", map[string]string{"TOKEN": "abc"}, DeployOptions{ExpectedContainer: &expected})
+		var changed *runtime.DeployTargetChanged
+		if !errors.As(err, &changed) || changed.Actual != "c1" {
+			t.Fatalf("checked deploy expecting %s over c1: err = %v; want DeployTargetChanged naming c1", expected, err)
+		}
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("the runtime was asked to deploy %d times; want none", fake.deployCalls)
+	}
+}
+
+// A lookup that fails refuses the deploy: the manager cannot tell which container
+// the deploy would replace, so it replaces none.
+func TestACheckedDeployWhoseLookupFailsTouchesNothing(t *testing.T) {
+	ctx := context.Background()
+	lookup := errors.New("docker is not answering")
+	fake := &targetProvider{fakeProvider: &fakeProvider{deployResult: runtime.ContainerInfo{ContainerID: "c1", Status: "running"}}, targetErr: lookup}
+	m := NewManager(fake, newTestCatalog(t), newTestStore(t))
+	expected := "none"
+	if _, err := m.DeployWith(ctx, "example", map[string]string{"TOKEN": "abc"}, DeployOptions{ExpectedContainer: &expected}); !errors.Is(err, lookup) {
+		t.Fatalf("err = %v; want the lookup's own error", err)
+	}
+	if fake.deployCalls != 0 {
+		t.Fatalf("the runtime was asked to deploy %d times; want none", fake.deployCalls)
+	}
+
+	// The same holds when the runtime cannot list the other copies.
+	copies := &copyTargetFake{copyFake: newCopyFake(), target: "none"}
+	copies.copiesErr = errors.New("cannot list copies")
+	m = NewManager(copies, newScalingCatalog(t), newTestStore(t))
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{ExpectedContainer: &expected}); !errors.Is(err, copies.copiesErr) {
+		t.Fatalf("checked deploy while copies cannot be listed: err = %v; want the listing error", err)
+	}
+	if _, err := m.DeployTarget(ctx, "scalable"); !errors.Is(err, copies.copiesErr) {
+		t.Fatalf("lookup while copies cannot be listed: err = %v; want the listing error", err)
+	}
+	if copies.deployCalls != 0 {
+		t.Fatalf("the runtime was asked to deploy %d times; want none", copies.deployCalls)
 	}
 }
