@@ -325,7 +325,7 @@ func TestACustomImageOnAnIdentityServiceNeedsAYesAndIsSigned(t *testing.T) {
 	if worker.count() != 0 {
 		t.Fatal("nothing may be sent before the owner's yes")
 	}
-	res, err = app.DeployToWorker("vault", WorkerDeployRequest{WorkerID: id, Image: "mine/vault:9", Confirmed: true})
+	res, err = app.DeployToWorker("vault", WorkerDeployRequest{WorkerID: id, Image: "mine/vault:9", Confirmed: true, WorkerIdentity: res.WorkerIdentity})
 	if err != nil || res.Ask != "" {
 		t.Fatalf("confirmed: %+v %v", res, err)
 	}
@@ -361,7 +361,7 @@ func TestAWorkersOwnStepUpQuestionIsAsked(t *testing.T) {
 	if err != nil || res.Ask != "step_up_required" || !strings.Contains(res.Message, "this worker's catalog pins") {
 		t.Fatalf("res %+v err %v", res, err)
 	}
-	if res, err = app.DeployToWorker("vault", WorkerDeployRequest{WorkerID: id, Confirmed: true}); err != nil || res.ContainerID != "ok" {
+	if res, err = app.DeployToWorker("vault", WorkerDeployRequest{WorkerID: id, Confirmed: true, WorkerIdentity: res.WorkerIdentity}); err != nil || res.ContainerID != "ok" {
 		t.Fatalf("after the yes: %+v %v", res, err)
 	}
 }
@@ -380,7 +380,7 @@ func TestADeviceIDThatRunsElsewhereNeedsAYes(t *testing.T) {
 	if second.count() != 0 {
 		t.Fatal("nothing may be sent before the owner's yes")
 	}
-	if res, err = app.DeployToWorker("ider", WorkerDeployRequest{WorkerID: id, Values: map[string]string{"DEVICE_ID": "dev-123"}, AllowSharedIdentity: true}); err != nil || res.Ask != "" || second.count() != 1 {
+	if res, err = app.DeployToWorker("ider", WorkerDeployRequest{WorkerID: id, Values: map[string]string{"DEVICE_ID": "dev-123"}, AllowSharedIdentity: true, WorkerIdentity: res.WorkerIdentity}); err != nil || res.Ask != "" || second.count() != 1 {
 		t.Fatalf("after the yes: %+v %v", res, err)
 	}
 }
@@ -513,7 +513,7 @@ func TestAWorkerThatHasNotUsedItsKeyYetGetsTheSharedKey(t *testing.T) {
 		t.Fatalf("Authorization = %q, want the shared key", got)
 	}
 	// It cannot check an approval yet, so a deploy that needs one says to wait.
-	_, err := app.DeployToWorker("vault", WorkerDeployRequest{WorkerID: id, Image: "mine/vault:9", Confirmed: true})
+	_, err := app.DeployToWorker("vault", WorkerDeployRequest{WorkerID: id, Image: "mine/vault:9", Confirmed: true, WorkerIdentity: identityOf(t, app, id)})
 	if err == nil || !strings.Contains(err.Error(), "has not finished enrolling") || worker.count() != 1 {
 		t.Fatalf("err = %v, calls %d", err, worker.count())
 	}
@@ -569,6 +569,7 @@ func TestWorkerDeployAsksAfterDelayedEmptyHeartbeat(t *testing.T) {
 		t.Fatalf("second deploy = %+v, %v, worker got %d requests; want approval before a second request", result, err, worker.count())
 	}
 	req.ReplaceExisting = true
+	req.WorkerIdentity = result.WorkerIdentity
 	if result, err := app.DeployToWorker("plain", req); err != nil || result.Ask != "" || worker.count() != 2 {
 		t.Fatalf("approved replacement = %+v, %v, worker got %d requests", result, err, worker.count())
 	}
@@ -665,6 +666,7 @@ func TestWorkerDeployRetryAfterDroppedReplyNeedsApproval(t *testing.T) {
 		Values:          map[string]string{"TOKEN": "typed"},
 		ReplaceExisting: true, // Consent for this attempt only.
 	}
+	req.WorkerIdentity = identityOf(t, app, req.WorkerID)
 	if _, err := app.DeployToWorker("plain", req); err == nil || !strings.Contains(err.Error(), "dropped") {
 		t.Fatalf("first deploy = %v; want an unanswered request", err)
 	}
@@ -697,6 +699,7 @@ func TestWorkerDeployAsksWhenTheWorkerFindsACopyDuringDeploy(t *testing.T) {
 		t.Fatalf("deploy = %+v, %v, requests = %d; want the worker's refusal to ask for approval", result, err, worker.count())
 	}
 	req.ReplaceExisting = true
+	req.WorkerIdentity = result.WorkerIdentity
 	if result, err = app.DeployToWorker("plain", req); err != nil || result.ContainerID != "approved" || worker.count() != 2 {
 		t.Fatalf("approved deploy = %+v, %v, requests = %d", result, err, worker.count())
 	}

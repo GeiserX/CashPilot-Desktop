@@ -262,6 +262,91 @@ type DeployOptions struct {
 	// before the file existed into it.
 	Wallet        *runtime.WalletRequest
 	AdminApproval *runtime.AdminStep
+	// ExpectedContainer is the only container the deploy may replace (see
+	// runtime.DeploySpec.ExpectedContainer); nil replaces whatever runs, as the
+	// Deploy button does.
+	ExpectedContainer *string
+}
+
+// DeployTarget names the container a deploy of slug would replace: its full ID, or
+// runtime.NoContainer. It reads no logs.
+func (m *Manager) DeployTarget(ctx context.Context, slug string) (string, error) {
+	kind, name := "", slug
+	if svc, ok := m.catalog.Get(slug); ok {
+		kind, name = m.kindForService(svc), svc.Name
+	}
+	provider, _ := m.resolveProvider(kind)
+	reader, ok := provider.(runtime.DeployTargetReader)
+	if !ok {
+		return "", runtime.ErrNoDeployTarget
+	}
+	if err := refuseOtherCopies(ctx, provider, slug, name); err != nil {
+		return "", err
+	}
+	if svc, ok := m.catalog.Get(slug); ok {
+		dep, found, err := m.store.GetDeployment(slug)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			if err := refuseRecordedCopies(min(dep.Instances, m.ScalingLimit(svc).Max), name); err != nil {
+				return "", err
+			}
+		}
+	}
+	return reader.DeployTarget(ctx, slug)
+}
+
+// OtherCopiesError is a checked deploy refused because copies 2..N of the service
+// exist here. A redeploy replaces them too, or removes them, and a checked deploy
+// names only the first copy's container, so it would touch containers nobody
+// approved. It is an ErrNoDeployTarget.
+type OtherCopiesError struct {
+	Name   string
+	Copies int
+	// Recorded is set when the copies are only in the stored count, not running:
+	// a copy that failed to start, or one removed outside CashPilot. A redeploy
+	// starts them again.
+	Recorded bool
+}
+
+func (e *OtherCopiesError) Error() string {
+	if e.Recorded {
+		return fmt.Sprintf("%s is set to run %d copies on that computer, and a redeploy starts every copy, so your CashPilot cannot name every container it would touch. Redeploy it in CashPilot Desktop on that computer, or lower it to one copy there", e.Name, e.Copies+1)
+	}
+	copies := "copies"
+	if e.Copies == 1 {
+		copies = "copy"
+	}
+	return fmt.Sprintf("%s has %d more %s on that computer, and a redeploy replaces them too, so your CashPilot cannot name every container it would replace. Redeploy it in CashPilot Desktop on that computer, or lower it to one copy there", e.Name, e.Copies, copies)
+}
+
+func (e *OtherCopiesError) Unwrap() error { return runtime.ErrNoDeployTarget }
+
+// refuseOtherCopies is an OtherCopiesError when copies above 1 of slug exist,
+// running or stopped.
+func refuseOtherCopies(ctx context.Context, provider runtime.Provider, slug, name string) error {
+	copier, ok := provider.(runtime.CopyProvider)
+	if !ok {
+		return nil
+	}
+	copies, err := copier.Copies(ctx, slug)
+	if err != nil {
+		return err
+	}
+	if len(copies) > 0 {
+		return &OtherCopiesError{Name: name, Copies: len(copies)}
+	}
+	return nil
+}
+
+// refuseRecordedCopies is an OtherCopiesError when the deploy would run more than
+// one copy: copies 2..N start on every redeploy even when none of them exists yet.
+func refuseRecordedCopies(instances int, name string) error {
+	if instances > 1 {
+		return &OtherCopiesError{Name: name, Copies: instances - 1, Recorded: true}
+	}
+	return nil
 }
 
 // DeployWith deploys slug with the given options. The first copy is deployed exactly
@@ -326,7 +411,13 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		return store.Deployment{}, nil, err
 	}
 	recorded, recordedCopies := "", 1
-	if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
+	dep, found, err := m.store.GetDeployment(slug)
+	if err != nil && opts.ExpectedContainer != nil {
+		// A checked deploy must know how many copies are recorded (see
+		// refuseRecordedCopies), so it does not guess one.
+		return store.Deployment{}, nil, err
+	}
+	if err == nil && found {
 		recorded = dep.CustomImage
 		recordedCopies = max(dep.Instances, 1)
 	}
@@ -377,6 +468,30 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		kind = ""
 	}
 	provider, runtimeKind := m.resolveProvider(kind)
+	if opts.ExpectedContainer != nil {
+		// Only a runtime that compares it may take a checked deploy: any other would
+		// replace whatever runs.
+		reader, ok := provider.(runtime.DeployTargetReader)
+		if !ok {
+			return store.Deployment{}, nil, runtime.ErrNoDeployTarget
+		}
+		if err := refuseOtherCopies(ctx, provider, slug, svc.Name); err != nil {
+			return store.Deployment{}, nil, err
+		}
+		if err := refuseRecordedCopies(instances, svc.Name); err != nil {
+			return store.Deployment{}, nil, err
+		}
+		// Compared first under this lock, as the CashPilot worker does, so a stale
+		// request is refused before an image pull or a wallet step. The runtime
+		// compares again right before it replaces anything.
+		actual, err := reader.DeployTarget(ctx, slug)
+		if err != nil {
+			return store.Deployment{}, nil, err
+		}
+		if actual != *opts.ExpectedContainer {
+			return store.Deployment{}, nil, &runtime.DeployTargetChanged{Actual: actual}
+		}
+	}
 	if runtimeKind != nativeRuntimeKind {
 		if err := checkPublished(svc, credentials); err != nil {
 			return store.Deployment{}, nil, refusedDeploy(svc, err)
@@ -405,7 +520,7 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		}
 	}
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
-	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet, AdminApproval: opts.AdminApproval}, func(message string) {
+	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet, AdminApproval: opts.AdminApproval, ExpectedContainer: opts.ExpectedContainer}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
 	})
 	if err != nil {

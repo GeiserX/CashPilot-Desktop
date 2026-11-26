@@ -250,6 +250,10 @@ func TestDeployStateDistinguishesAnOlderWorkerFromLookupFailure(t *testing.T) {
 		{name: "ID with no container", status: 200, body: `{"exists":false,"expected_container":"` + id + `"}`, wantErr: true},
 		{name: "none with a container", status: 200, body: `{"exists":true,"expected_container":"none"}`, wantErr: true},
 		{name: "not a string", status: 200, body: `{"exists":true,"expected_container":7}`, wantErr: true},
+		// An explicit null is not an older worker leaving the field out: it is a worker
+		// that answered without a usable ID.
+		{name: "explicit null, absent", status: 200, body: `{"exists":false,"expected_container":null}`, wantErr: true},
+		{name: "explicit null, existing", status: 200, body: `{"exists":true,"expected_container":null}`, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

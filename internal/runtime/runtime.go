@@ -112,6 +112,11 @@ type DeploySpec struct {
 	Wallet *WalletRequest
 	// AdminApproval covers the firewall change approved for this deploy alone.
 	AdminApproval *AdminStep
+	// ExpectedContainer, when set, is the only container this deploy may replace:
+	// its full ID, or NoContainer for a deploy that may only create. The runtime
+	// compares it with the live container while it holds the name's replace lock,
+	// and refuses with *DeployTargetChanged before it touches anything.
+	ExpectedContainer *string
 }
 
 type ContainerInfo struct {
@@ -433,6 +438,18 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	live, inspectErr := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if inspectErr != nil && !cerrdefs.IsNotFound(inspectErr) {
 		return ContainerInfo{}, fmt.Errorf("could not check what holds %s, so it was left as it is: %w", name, inspectErr)
+	}
+	// A checked deploy replaces only the container its caller saw. Compared here,
+	// under the name's replace lock and the manager's deploy lock, after the image is
+	// pulled and before anything is stopped, set aside or created.
+	if spec.ExpectedContainer != nil {
+		actual := NoContainer
+		if inspectErr == nil {
+			actual = live.Container.ID
+		}
+		if actual != *spec.ExpectedContainer {
+			return ContainerInfo{}, &DeployTargetChanged{Actual: actual}
+		}
 	}
 	if spec.CreateOnly && inspectErr == nil {
 		return ContainerInfo{}, fmt.Errorf("%s already exists, so nothing was restored. A restore only creates a new container", name)

@@ -86,6 +86,18 @@ func newIDWorker(t *testing.T) *idWorker {
 				return
 			}
 		}
+		if expected != w.current && !w.older && body["replace_existing"] == true && expected == "none" {
+			// CashPilot #831 refuses the bare flag of an older Desktop and says so.
+			current := w.current
+			w.mu.Unlock()
+			rw.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(rw).Encode(map[string]any{"detail": map[string]any{
+				"error":             "replace_existing",
+				"message":           "Update CashPilot-Desktop to confirm the exact container before replacing it.",
+				"current_container": current,
+			}})
+			return
+		}
 		if expected != w.current {
 			current := w.current
 			w.mu.Unlock()
@@ -142,6 +154,7 @@ func newIDWorkerLead(t *testing.T) (*App, *idWorker, WorkerDeployRequest) {
 func approve(req WorkerDeployRequest, asked WorkerDeployResult) WorkerDeployRequest {
 	req.ReplaceExisting = true
 	req.ExpectedContainer = asked.ExpectedContainer
+	req.WorkerIdentity = asked.WorkerIdentity
 	return req
 }
 
@@ -182,6 +195,7 @@ func TestAYesWithoutTheContainerIsNoYes(t *testing.T) {
 	app, worker, req := newIDWorkerLead(t)
 	worker.set(dockerID(1))
 	req.ReplaceExisting = true // A yes that names no container cannot replace one.
+	req.WorkerIdentity = identityOf(t, app, req.WorkerID)
 	asked, err := app.DeployToWorker("plain", req)
 	if _, posts := worker.state(); err != nil || asked.Ask != askReplace || asked.ExpectedContainer != dockerID(1) || len(posts) != 0 {
 		t.Fatalf("deploy = %+v, %v, posts %v; want the question again", asked, err, posts)
