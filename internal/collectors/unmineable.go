@@ -78,6 +78,12 @@ func (r *Registry) collectUnMineable(ctx context.Context, credentials map[string
 		return Result{}, collectorError{"transient", "Could not read the unMineable balance. Try again shortly."}
 	}
 
+	// The endpoint is public. A refused request says nothing about the address,
+	// whatever its body says, so it is checked before the pool's message.
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return Result{}, collectorError{"transient", fmt.Sprintf("unMineable returned HTTP %d.", status)}
+	}
+
 	var payload map[string]json.RawMessage
 	_ = json.Unmarshal(body, &payload)
 	var success *bool
@@ -95,13 +101,8 @@ func (r *Registry) collectUnMineable(ctx context.Context, credentials map[string
 	}
 
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		message := fmt.Sprintf("unMineable returned HTTP %d.", status)
-		// The endpoint is public. A refused request says nothing about the address.
 		// A 429 or 5xx never gets here: the retries end in the transport error above.
-		if status == http.StatusUnauthorized || status == http.StatusForbidden {
-			return Result{}, collectorError{"transient", message}
-		}
-		return Result{}, errors.New(message)
+		return Result{}, fmt.Errorf("unMineable returned HTTP %d.", status)
 	}
 
 	var data map[string]json.RawMessage
@@ -109,8 +110,12 @@ func (r *Registry) collectUnMineable(ctx context.Context, credentials map[string
 		return Result{}, collectorError{"shape", "unMineable did not return address stats."}
 	}
 
+	// A fresh flag that is not a JSON boolean is a shape the collector does not
+	// know. It must not read as false: that would save the 0 of a fresh address.
 	var fresh *bool
-	_ = json.Unmarshal(data["fresh"], &fresh)
+	if json.Unmarshal(data["fresh"], &fresh) != nil {
+		return Result{}, collectorError{"shape", "unMineable did not return a valid balance and payment threshold."}
+	}
 	if fresh != nil && *fresh {
 		// Unknown cause, so no kind: a typo needs a person, while a miner that
 		// has not sent its first shares heals by itself. Never a 0 balance.

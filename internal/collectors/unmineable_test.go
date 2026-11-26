@@ -79,6 +79,8 @@ func TestUnMineableFailuresAreNeverAZeroBalance(t *testing.T) {
 		{name: "refusal with HTTP 200", body: `{"success":false,"msg":"Nope"}`, message: "address stats", kind: "shape"},
 		{name: "no fresh flag", body: unMineableReply(`{"balance":"0.1","payment_threshold":"0.03"}`), message: "valid balance", kind: "shape"},
 		{name: "null fresh flag", body: unMineableReply(`{"balance":"0.1","payment_threshold":"0.03","fresh":null}`), message: "valid balance", kind: "shape"},
+		{name: "string fresh flag", body: unMineableReply(`{"balance":"0","payment_threshold":"0.03","fresh":"true"}`), message: "valid balance", kind: "shape"},
+		{name: "number fresh flag", body: unMineableReply(`{"balance":"0","payment_threshold":"0.03","fresh":0}`), message: "valid balance", kind: "shape"},
 		{name: "no balance", body: unMineableReply(`{"payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
 		{name: "number balance", body: unMineableReply(`{"balance":0.5,"payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
 		{name: "negative balance", body: unMineableReply(`{"balance":"-1","payment_threshold":"0.03","fresh":false}`), message: "valid balance", kind: "shape"},
@@ -100,6 +102,8 @@ func TestUnMineableFailuresAreNeverAZeroBalance(t *testing.T) {
 		{name: "rate limited", status: http.StatusTooManyRequests, message: "Try again shortly", kind: "transient"},
 		{name: "public request refused", status: http.StatusForbidden, message: "HTTP 403", kind: "transient"},
 		{name: "public request unauthorized", status: http.StatusUnauthorized, message: "HTTP 401", kind: "transient"},
+		{name: "refused with an address message", status: http.StatusForbidden, body: `{"success":false,"msg":"Invalid address"}`, message: "HTTP 403", kind: "transient"},
+		{name: "unauthorized with a coin message", status: http.StatusUnauthorized, body: `{"success":false,"msg":"Invalid or missing coin"}`, message: "HTTP 401", kind: "transient"},
 		{name: "bad request", status: http.StatusBadRequest, message: "HTTP 400"},
 	}
 	for _, tt := range tests {
