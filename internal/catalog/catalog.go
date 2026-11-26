@@ -136,6 +136,11 @@ type Referral struct {
 	// that drops the code from signup_url is detectable rather than silent. Referral
 	// attribution is revenue: losing it loses money, and it fails invisibly.
 	Code string `json:"code" yaml:"code"`
+	// CodeEntry is the code the user must type by hand, set when the provider's signup
+	// does not read it from the link (Dawn's extension asks for it). It equals Code;
+	// the UI shows it with a Copy button next to the signup button, or a user who signs
+	// up from the app credits nobody.
+	CodeEntry string `json:"codeEntry" yaml:"code_entry"`
 	// Program is three-valued on purpose and absent is NOT false: true means the
 	// provider was verified to run a referral programme (true with no Code is an
 	// actionable gap), false means it was verified not to, nil means nobody has

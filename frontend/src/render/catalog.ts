@@ -15,7 +15,7 @@ import { customImageBadge } from "./image.js";
 import { containerState } from "./attention.js";
 import { customBadge } from "./custom.js";
 import { gradeBadge } from "./rating.js";
-import { hasAccount } from "./details.js";
+import { codeEntryCopy, hasAccount } from "./details.js";
 
 /** "$0-5 / device" from the catalog's monthly estimate, or a dash when it has none. */
 export function estimateText(service: Service): string {
@@ -83,6 +83,11 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
   const signup = signupUrl && !service.manualOnly
     ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">${hasAccount(service) ? "Sign up" : "Visit"}</button>`
     : "";
+  // Visit and Sign up open the signup page. Where the signup never reads the code
+  // from the link (Dawn's extension), the code sits right beside them, or a user
+  // who signs up from this row credits nobody.
+  const entry = (service.referral?.codeEntry || "").trim();
+  const code = signupUrl && entry ? codeEntryCopy(service, `Code ${escapeHtml(entry)}`) : "";
   const tags = [
     customBadge(service),
     customImageBadge(deployment?.customImage),
@@ -101,7 +106,7 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
       <td class="cell-sub-wrap">${escapeHtml((service.platforms || []).join(", ") || "none listed")}</td>
       <td class="c-num">${escapeHtml(estimateText(service))}</td>
       <td class="c-grade">${gradeBadge(service.ratingResult)}</td>
-      <td class="c-act"><div class="action-btns">${main}${signup}</div></td>
+      <td class="c-act"><div class="action-btns">${main}${signup}${code}</div></td>
     </tr>
   `;
 }
