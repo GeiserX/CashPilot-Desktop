@@ -725,14 +725,21 @@ func (p *NativeProcessProvider) processIdentity(pid int) (string, int64) {
 // signalPID stops a process by pid (an orphan from a previous session we don't own as
 // a child). Graceful SIGTERM then, after the grace period, SIGKILL; force skips
 // straight to kill, and so does a SIGTERM that could not be delivered (always on
-// Windows). os.FindProcess never fails on Unix, and killing a dead pid is a harmless
-// ignored error, so this never panics.
+// Windows). A SIGTERM that finds the process already gone sends nothing more: without
+// a pidfd (macOS) a Kill would go to the bare pid number, which may by then belong to
+// another process. os.FindProcess never fails on Unix, so this never panics.
 func (p *NativeProcessProvider) signalPID(pid int, force bool) {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return
 	}
-	if force || p.terminate(proc) != nil {
+	if force {
+		_ = proc.Kill()
+		return
+	}
+	if err := p.terminate(proc); errors.Is(err, os.ErrProcessDone) {
+		return
+	} else if err != nil {
 		_ = proc.Kill()
 		return
 	}

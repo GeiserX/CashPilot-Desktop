@@ -94,7 +94,9 @@ func TestNativeStopKillsOrphanAtOnceWhenNoSignalIsDelivered(t *testing.T) {
 
 // A real stop of a real earner with the catalog's default 30 s grace returns well
 // under that grace, on every platform CI runs: on Unix because SIGTERM ends the stub,
-// on Windows because there is no SIGTERM and the stop kills at once.
+// on Windows because there is no SIGTERM and the stop kills at once. Only the Windows
+// job can turn this red for the kill-at-once rule; on Unix it passes on the old code
+// too and only checks that SIGTERM still ends the earner.
 func TestNativeStopOfARunningEarnerDoesNotWaitTheGrace(t *testing.T) {
 	p := newTestNativeProvider(t)
 	art := tarGzArtifact(t, stubBinName(), stubBinaryBytes(t))
@@ -124,5 +126,62 @@ func TestNativeStopOfARunningEarnerDoesNotWaitTheGrace(t *testing.T) {
 		t.Logf("Stop returned after %v with a %ds grace", time.Since(start).Round(time.Millisecond), graceSeconds)
 	case <-time.After(10 * time.Second):
 		t.Fatalf("Stop still waiting after %v with a %ds grace", time.Since(start).Round(time.Millisecond), graceSeconds)
+	}
+}
+
+// signalIgnored stands in for a SIGTERM that reaches the process, which then ignores
+// it: the delivered-signal path, on any platform.
+func signalIgnored(*os.Process) error { return nil }
+
+// The reverse of THE RULE: a delivered signal still gets the whole grace period
+// before the kill, so an earner on Unix keeps its chance to shut down cleanly.
+func TestGracefulKillWaitsTheGraceWhenTheSignalIsDelivered(t *testing.T) {
+	cmd, done := startStub(t)
+
+	const grace = 300 * time.Millisecond
+	start := time.Now()
+	gracefulKill(cmd, grace, done, signalIgnored)
+	if elapsed := time.Since(start); elapsed < grace {
+		t.Fatalf("gracefulKill returned after %v, before the %v grace: a delivered signal must get the grace", elapsed.Round(time.Millisecond), grace)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the process is still alive after the grace ran out")
+	}
+}
+
+// The same reverse for an orphan stopped by pid.
+func TestNativeStopWaitsTheGraceForAnOrphanWhenTheSignalIsDelivered(t *testing.T) {
+	p := newTestNativeProvider(t)
+	p.stopTimeout = 300 * time.Millisecond
+	p.terminate = signalIgnored
+
+	cmd, done := startStub(t)
+	start := time.Now()
+	p.signalPID(cmd.Process.Pid, false)
+	if elapsed := time.Since(start); elapsed < p.stopTimeout {
+		t.Fatalf("signalPID returned after %v, before the %v grace: a delivered signal must get the grace", elapsed.Round(time.Millisecond), p.stopTimeout)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the orphan is still alive after the grace ran out")
+	}
+}
+
+// A signal that finds the orphan already gone sends nothing more. Without a pidfd a
+// Kill would go to the bare pid number, which another process may have taken.
+func TestSignalPIDSendsNothingMoreWhenTheOrphanIsAlreadyGone(t *testing.T) {
+	p := newTestNativeProvider(t)
+	p.stopTimeout = 30 * time.Second
+	p.terminate = func(*os.Process) error { return os.ErrProcessDone }
+
+	cmd, done := startStub(t)
+	p.signalPID(cmd.Process.Pid, false)
+	select {
+	case <-done:
+		t.Fatal("signalPID killed the pid after the signal reported the process gone")
+	case <-time.After(300 * time.Millisecond):
 	}
 }
