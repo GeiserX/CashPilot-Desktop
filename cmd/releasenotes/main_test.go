@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -212,5 +215,267 @@ func TestTheSignedFlagReachesTheNotes(t *testing.T) {
 		if got := strings.Contains(out, "not code-signed yet"); got != c.unsigned {
 			t.Errorf("%s: says unsigned = %v, want %v:\n%s", c.flag, got, c.unsigned, out)
 		}
+	}
+}
+
+// A squash merge with an empty title leaves a subject like " (#838)". It used to
+// drop out of the notes without a word; now it has no title and stops the release.
+func TestHasTitle(t *testing.T) {
+	for _, c := range []struct {
+		subject string
+		want    bool
+	}{
+		{"fix: keep the key off the page (#332)", true},
+		{"feat(fleet)!: drop the old pairing (#9)", true},
+		{"Merge branch 'main' into x", true},
+		{"chore: v2 (#7)", true},
+		{" (#838)", false},
+		{"(#838)", false},
+		{"feat: (#838)", false},
+		{"fix(fleet)!: (#838) (#839)", false},
+		{"feat:", false},
+		{"", false},
+		{"  ", false},
+	} {
+		if got := hasTitle(c.subject); got != c.want {
+			t.Errorf("hasTitle(%q) = %v, want %v", c.subject, got, c.want)
+		}
+	}
+}
+
+func TestIsBreaking(t *testing.T) {
+	for _, c := range []struct {
+		c    commit
+		want bool
+	}{
+		{commit{subject: "feat!: drop the old pairing (#9)"}, true},
+		{commit{subject: "fix(fleet)!: refuse the old key (#10)"}, true},
+		{commit{subject: "refactor(app)!: move the config (#11)"}, true},
+		{commit{subject: "feat(app): move the config (#12)", body: "Longer text.\n\nBREAKING CHANGE: config.json moved\n"}, true},
+		{commit{subject: "feat(fleet): drop the old pairing (#13)"}, false},
+		{commit{subject: "fix: say BREAKING CHANGE: in the middle (#14)", body: "It mentions BREAKING CHANGE: but not as a footer.\n"}, false},
+		{commit{subject: "docs: explain feat!: subjects (#15)"}, false},
+		// auto-tag greps the raw %s line, so a leading space stops the match.
+		{commit{subject: " feat!: drop the old pairing (#16)"}, false},
+	} {
+		if got := isBreaking(c.c); got != c.want {
+			t.Errorf("isBreaking(%+v) = %v, want %v", c.c, got, c.want)
+		}
+	}
+}
+
+// auto-tag.yml decides on a major bump with this same test. If the two drift, a
+// release can be major with no breaking change listed, or the other way round.
+func TestBreakingLineIsTheOneAutoTagUses(t *testing.T) {
+	workflow, err := os.ReadFile("../../.github/workflows/auto-tag.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "grep -qE '" + breakingLine.String() + "'"
+	if !strings.Contains(string(workflow), want) {
+		t.Fatalf("auto-tag.yml no longer runs %s; change breakingLine to match it", want)
+	}
+}
+
+func TestAMajorReleaseOpensWithBeforeYouUpgrade(t *testing.T) {
+	r := Release{
+		Repo: "GeiserX/CashPilot-Desktop", Tag: "v2.0.0", Prev: "v1.7.0", Assets: allAssets,
+		Commits:  []string{"feat(fleet)!: drop the old pairing (#9)", "fix: keep the key off the page (#332)", "feat(app): move the config (#12)"},
+		Breaking: []string{"feat(fleet)!: drop the old pairing (#9)", "feat(app): move the config (#12)"},
+	}
+	body := Render(r)
+	if !strings.HasPrefix(body, "## Before you upgrade\n") {
+		t.Fatalf("a major release must open with Before you upgrade:\n%s", body)
+	}
+	before := section(t, body, "## Before you upgrade", "## Download")
+	for _, want := range []string{
+		"[docs/whats-new-2.0.md](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/docs/whats-new-2.0.md)",
+		"before you upgrade from v1.7.0",
+		"- Drop the old pairing (#9)\n",
+		"- Move the config (#12)\n",
+	} {
+		if !strings.Contains(before, want) {
+			t.Errorf("Before you upgrade lacks %q:\n%s", want, before)
+		}
+	}
+	if strings.Contains(before, "Keep the key off the page") {
+		t.Errorf("Before you upgrade must list only the breaking changes:\n%s", before)
+	}
+}
+
+func TestAMajorReleaseWithNoBreakingCommitStillLinksTheGuide(t *testing.T) {
+	body := Render(Release{Repo: "GeiserX/CashPilot-Desktop", Tag: "v3.0.0", Prev: "v2.4.1", Commits: v160, Assets: allAssets})
+	before := section(t, body, "## Before you upgrade", "## Download")
+	if !strings.Contains(before, "docs/whats-new-3.0.md") || strings.Contains(before, "- ") {
+		t.Errorf("want the guide link and no list:\n%s", before)
+	}
+}
+
+func TestOnlyAMajorBumpGetsBeforeYouUpgrade(t *testing.T) {
+	for _, c := range []struct{ tag, prev string }{
+		{"v1.6.0", "v1.5.0"},
+		{"v1.6.1", "v1.6.0"},
+		{"v1.0.0", ""},
+		{"v9.9.9", "HEAD"},
+	} {
+		body := Render(Release{Repo: "GeiserX/CashPilot-Desktop", Tag: c.tag, Prev: c.prev, Commits: v160, Breaking: v160[:1], Assets: allAssets})
+		if strings.Contains(body, "Before you upgrade") {
+			t.Errorf("%s after %q is not a major bump, but the notes say Before you upgrade:\n%s", c.tag, c.prev, body)
+		}
+	}
+}
+
+// gitRepo makes a repository in a temporary folder with a v1.7.0 tag, adds one
+// empty commit per message, and moves the test into it. It returns a function
+// that runs git there and returns its output. The user's own git config stays
+// out, so a global hook or template cannot change what the test sees.
+func gitRepo(t *testing.T, messages ...string) func(args ...string) string {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	g := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", "-c", "init.defaultBranch=main"}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	g("init", "-q")
+	g("commit", "-q", "--allow-empty", "-m", "feat: the first release (#1)")
+	g("tag", "v1.7.0")
+	for _, m := range messages {
+		g("commit", "-q", "--allow-empty", "--allow-empty-message", "--cleanup=verbatim", "-m", m)
+	}
+	return g
+}
+
+// withTitles stands in text for the shipped titles.txt for one test.
+func withTitles(t *testing.T, text string) {
+	t.Helper()
+	old := titlesFile
+	titlesFile = text
+	t.Cleanup(func() { titlesFile = old })
+}
+
+func TestRunListsTheBreakingCommitsOfAMajorRelease(t *testing.T) {
+	gitRepo(t,
+		"feat(fleet)!: drop the old pairing (#9)",
+		"fix: keep the key off the page (#332)",
+		"feat(app): move the config (#12)\n\nBREAKING CHANGE: config.json moved to the app folder",
+		" feat!: a subject auto-tag does not match (#13)",
+	)
+	out, err := run([]string{"-tag", "v2.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := section(t, out, "## Before you upgrade", "## Download")
+	for _, want := range []string{"docs/whats-new-2.0.md", "from v1.7.0", "- Drop the old pairing (#9)\n", "- Move the config (#12)\n"} {
+		if !strings.Contains(before, want) {
+			t.Errorf("Before you upgrade lacks %q:\n%s", want, before)
+		}
+	}
+	for _, gone := range []string{"Keep the key", "auto-tag does not match"} {
+		if strings.Contains(before, gone) {
+			t.Errorf("only what auto-tag counts as breaking belongs here, not %q:\n%s", gone, before)
+		}
+	}
+}
+
+// auto-tag reads every commit, so a breaking commit inside a pull request merged
+// with a merge commit makes the release major. The notes must list it too.
+func TestRunListsABreakingCommitInsideAMergedBranch(t *testing.T) {
+	g := gitRepo(t)
+	g("checkout", "-q", "-b", "pairing")
+	g("commit", "-q", "--allow-empty", "-m", "feat(fleet)!: drop the old pairing")
+	g("checkout", "-q", "main")
+	g("merge", "-q", "--no-ff", "-m", "Merge pull request #5 from x/pairing", "pairing")
+	out, err := run([]string{"-tag", "v2.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := section(t, out, "## Before you upgrade", "## Download")
+	if !strings.Contains(before, "- Drop the old pairing\n") {
+		t.Errorf("Before you upgrade lacks the merged branch's breaking commit:\n%s", before)
+	}
+	devs := section(t, out, "<details>", "</details>")
+	if strings.Contains(devs, "drop the old pairing") {
+		t.Errorf("the developer list holds one line per pull request, not the branch's commits:\n%s", devs)
+	}
+}
+
+func TestRunFailsOnACommitWithNoTitle(t *testing.T) {
+	for _, subject := range []string{" (#838)", "feat: (#838)", ""} {
+		t.Run(subject, func(t *testing.T) {
+			g := gitRepo(t, "fix: keep the key off the page (#332)", subject)
+			hash := g("rev-parse", "HEAD")
+			out, err := run([]string{"-tag", "v1.7.1"})
+			if err == nil {
+				t.Fatalf("want a no-title error, got none:\n%s", out)
+			}
+			// The error names the full hash to copy, the raw subject to search
+			// for, and the way out that leaves main's history alone.
+			for _, want := range []string{"has no title text", hash, fmt.Sprintf("%q", subject), "cmd/releasenotes/titles.txt"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the error lacks %q: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// A commit with no title can never be renamed on main. A line in titles.txt
+// gives it the subject to show, so the release goes on; another commit with no
+// title that the file does not name still stops it.
+func TestRunTakesTheTitleOfAnUntitledCommitFromTitlesTxt(t *testing.T) {
+	g := gitRepo(t, " (#838)", "fix: a later fix (#839)")
+	untitled := g("rev-parse", "HEAD~1")
+	withTitles(t, "# a comment\n\n"+untitled+" fix(fleet): keep the exits when a reply drops the list (#838)\n")
+	out, err := run([]string{"-tag", "v1.7.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := section(t, out, "### Fixed", "<details>")
+	for _, want := range []string{"- Keep the exits when a reply drops the list (#838)\n", "- A later fix (#839)\n"} {
+		if !strings.Contains(fixed, want) {
+			t.Errorf("What changed for you lacks %q:\n%s", want, fixed)
+		}
+	}
+	devs := section(t, out, "<details>", "</details>")
+	if !strings.Contains(devs, "- fix(fleet): keep the exits when a reply drops the list (#838)\n") || strings.Contains(devs, "- (#838)") {
+		t.Errorf("the developer list must show the title from titles.txt:\n%s", devs)
+	}
+
+	g("commit", "-q", "--allow-empty", "--cleanup=verbatim", "-m", " (#840)")
+	if _, err := run([]string{"-tag", "v1.7.1"}); err == nil || !strings.Contains(err.Error(), g("rev-parse", "HEAD")) {
+		t.Fatalf("an untitled commit titles.txt does not name must still fail, got %v", err)
+	}
+}
+
+func TestParseTitles(t *testing.T) {
+	hash := strings.Repeat("ab", 20)
+	got, err := parseTitles("# comment\n\n  " + hash + "   fix: the real title (#838)  \n")
+	if err != nil || len(got) != 1 || got[hash] != "fix: the real title (#838)" {
+		t.Fatalf("parseTitles = %v, %v", got, err)
+	}
+	for _, bad := range []string{
+		"abc1234 fix: a short hash (#1)",
+		hash,
+		hash + " (#838)",
+		strings.ToUpper(hash) + " fix: upper case (#1)",
+	} {
+		if _, err := parseTitles(bad); err == nil {
+			t.Errorf("parseTitles(%q) must fail", bad)
+		}
+	}
+}
+
+// The release runs the tool with the titles.txt it embeds; a bad line there
+// would stop every release.
+func TestTheShippedTitlesFileParses(t *testing.T) {
+	if _, err := parseTitles(titlesFile); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,0 +1,14 @@
+# Subjects for commits on main that have no title text.
+#
+# A squash merge with an empty title leaves a subject like " (#838)", and
+# releasenotes stops the release on it. Main's history is never rewritten, so
+# give such a commit its subject here instead, in a pull request:
+#
+#   <full 40-character commit hash> <the subject it should have had>
+#
+# for example
+#
+#   0123456789abcdef0123456789abcdef01234567 fix(fleet): keep the exits when a reply drops the list (#838)
+#
+# The notes then show that subject everywhere the commit appears. Lines that
+# start with # and empty lines are ignored.
