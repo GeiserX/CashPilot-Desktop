@@ -1062,18 +1062,12 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		latestDay = today
 	}
 
-	// Today / yesterday accrual = per-platform deltas across the two day pairs.
-	todayEarned := sumDelta(platformDelta, dayStr(-1), today)
-	yesterdayEarned := sumDelta(platformDelta, dayStr(-2), dayStr(-1))
-	summary.Today = todayEarned
-	if yesterdayEarned > 0 {
-		summary.TodayChange = (todayEarned - yesterdayEarned) / yesterdayEarned * 100
-	}
-
 	// Close each address period before starting a new baseline. Clamping the
 	// net change per period keeps the subtraction used for a single address.
-	// The first period still needs a baseline from before the month began.
-	monthDelta := func(plat, fromDay, toDay string) float64 {
+	// The first period still needs a baseline from before fromDay. Every pool
+	// figure (Today, Daily, Month) goes through here, so a payout address
+	// changed during a day still counts the new address's later gains.
+	periodDelta := func(plat, fromDay, toDay string) float64 {
 		history, pool := poolHistory[plat]
 		if !pool {
 			return platformDelta(plat, fromDay, toDay)
@@ -1103,8 +1097,17 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		}
 		return accrued
 	}
-	summary.Month = sumDelta(monthDelta, beforeMonthStart, latestDay)
-	prevMonthEarned := sumDelta(monthDelta, beforeLastMonthStart, beforeMonthStart)
+
+	// Today / yesterday accrual = per-platform deltas across the two day pairs.
+	todayEarned := sumDelta(periodDelta, dayStr(-1), today)
+	yesterdayEarned := sumDelta(periodDelta, dayStr(-2), dayStr(-1))
+	summary.Today = todayEarned
+	if yesterdayEarned > 0 {
+		summary.TodayChange = (todayEarned - yesterdayEarned) / yesterdayEarned * 100
+	}
+
+	summary.Month = sumDelta(periodDelta, beforeMonthStart, latestDay)
+	prevMonthEarned := sumDelta(periodDelta, beforeLastMonthStart, beforeMonthStart)
 	if prevMonthEarned > 0 {
 		summary.MonthChange = (summary.Month - prevMonthEarned) / prevMonthEarned * 100
 	}
@@ -1116,7 +1119,7 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		prevDay := d.AddDate(0, 0, -1).Format("2006-01-02")
 		summary.Daily = append(summary.Daily, DailyPoint{
 			Day:    d.Format("Jan 02"),
-			Amount: sumDelta(platformDelta, prevDay, curDay),
+			Amount: sumDelta(periodDelta, prevDay, curDay),
 		})
 	}
 
