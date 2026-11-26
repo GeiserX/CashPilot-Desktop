@@ -98,7 +98,7 @@ import { renderFleetSection } from "./render/fleet";
 import { renderServerCommands } from "./render/server_commands";
 import { wireServerCommandsFirewall } from "./render/server_commands_wire";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
-import { flashCopied } from "./render/copy";
+import { flashCopied, wireCopyText } from "./render/copy";
 import { createBoot } from "./render/boot";
 import { firstRunSteps, renderGateSteps, renderJoinOutcome, renderJoinedBanner, renderModeCard, type Mode, type ModeCardView } from "./render/mode";
 import { gatePage as chromeGatePage, withChrome as chromeWithChrome, windowPlatform, type WindowPlatform } from "./render/chrome";
@@ -1186,6 +1186,7 @@ function wireShellNav(scope: ParentNode = document) {
     });
   });
   wireOpenLinks(scope, BrowserOpenURL);
+  wireCopyText(scope, (text) => navigator.clipboard.writeText(text), (error) => showErrorToast({scope: "clipboard", error: String(error)}));
   scope.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
     const currency = (event.target as HTMLSelectElement).value;
     await SaveSettings({displayCurrency: currency});

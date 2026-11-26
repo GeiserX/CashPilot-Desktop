@@ -155,6 +155,9 @@ code { color: var(--text-primary); }
 .eyebrow { font-size: var(--fs-2); color: var(--text-muted); margin: 0 0 4px; }
 /* Smaller and muted, but next to the link it describes, never only in a footer. */
 .referral-note { margin: 12px 0 0; font-size: var(--fs-2); color: var(--text-muted); }
+.referral-code { margin: 12px 0 0; }
+.referral-code code { user-select: all; }
+.referral-code button { margin-left: 6px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }

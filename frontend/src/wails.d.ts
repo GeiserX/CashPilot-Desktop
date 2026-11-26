@@ -1067,6 +1067,9 @@ export interface Service {
   referral: {
     signupUrl: string;
     code: string;
+    // The code to type by hand where the signup does not read it from the link
+    // (Dawn's extension). "" or absent when the link carries it.
+    codeEntry?: string;
     program: boolean | null;
     bonus: { referrer: string; referee: string };
     // false: the provider has no account to sign up for, so the link is labelled
