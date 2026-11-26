@@ -79,6 +79,36 @@ func (g *GPU) Grant() (GPUGrant, bool) {
 	return GPUGrant{Vendor: g.Vendor, All: all, ROCm: rocm}, true
 }
 
+// GPUSpec is a grant in the web catalog's own shape (app/gpu.py spec_of): count
+// is 1 or "all". A CashPilot server compares the heartbeat's gpu_grants with its
+// own catalog and deploys a GPU entry to this computer only when they match.
+type GPUSpec struct {
+	Vendor string `json:"vendor"`
+	Count  any    `json:"count"`
+	ROCm   bool   `json:"rocm"`
+}
+
+// GPUGrants is the grant of every catalog entry this computer would honour, by
+// slug: never a custom service, never a block that breaks a rule.
+func GPUGrants(services []Service) map[string]GPUSpec {
+	out := map[string]GPUSpec{}
+	for _, svc := range services {
+		if svc.Custom || IsCustomSlug(svc.Slug) {
+			continue
+		}
+		grant, ok := svc.Docker.GPU.Grant()
+		if !ok || len(GPUProblems(svc)) > 0 {
+			continue
+		}
+		spec := GPUSpec{Vendor: grant.Vendor, Count: 1, ROCm: grant.ROCm}
+		if grant.All {
+			spec.Count = "all"
+		}
+		out[svc.Slug] = spec
+	}
+	return out
+}
+
 // GPUProblems is what is wrong with svc's docker.gpu and the keys around it, by the
 // web catalog's rules (app/gpu.py spec_errors). The vendored catalog is held to it
 // by a test, and a deploy of a GPU entry refuses on any of it.

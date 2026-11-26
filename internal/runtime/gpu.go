@@ -56,6 +56,11 @@ const nvidiaHint = "This computer's Docker cannot pass NVIDIA GPUs into containe
 	"`sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` " +
 	"(on Windows, update the NVIDIA driver and Docker Desktop with the WSL 2 backend), then deploy again."
 
+// macNvidiaHint replaces nvidiaHint on a Mac, where no toolkit can help: Docker
+// Desktop and Podman run containers in a VM that gets no NVIDIA GPU.
+const macNvidiaHint = "Docker on a Mac cannot pass an NVIDIA GPU into a container. " +
+	"Run this miner on a Linux or Windows computer with an NVIDIA GPU, for example as a CashPilot worker."
+
 // Where the host's GPUs are read. Vars so tests can point them at a fake tree.
 var (
 	sysfsRoot     = "/sys"
@@ -105,11 +110,18 @@ func sameKernel(facts daemonInfo) (bool, string) {
 	if gpuHostOS != "linux" {
 		return false, fmt.Sprintf("GPU detection is not implemented for %s; this says nothing about whether one exists", gpuHostOS)
 	}
-	if strings.Contains(readSysfs(osReleasePath), "microsoft") {
+	release := readSysfs(osReleasePath)
+	if strings.Contains(release, "microsoft") {
 		return false, "this is WSL, where a GPU is not on the PCI bus CashPilot reads"
 	}
+	if facts.Hostname == "" {
+		return false, "the container runtime did not say which computer it runs on"
+	}
 	host, err := localHostname()
-	if err != nil || facts.Hostname == "" || !strings.EqualFold(strings.TrimSpace(host), facts.Hostname) {
+	// The same name on another box (a homelab default such as "ubuntu") is not the
+	// same kernel: the release must match too when the daemon reports it.
+	otherKernel := facts.KernelVersion != "" && !strings.EqualFold(facts.KernelVersion, release)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(host), facts.Hostname) || otherKernel {
 		return false, "the container runtime runs in a virtual machine or on another computer, whose GPUs CashPilot cannot read"
 	}
 	return true, ""
@@ -305,6 +317,9 @@ func withGPUHint(err error) error {
 	reason := err.Error()
 	switch {
 	case strings.Contains(reason, `could not select device driver "nvidia"`), strings.Contains(reason, "failed to discover GPU vendor from CDI"):
+		if gpuHostOS == "darwin" {
+			return fmt.Errorf("%w. %s", err, macNvidiaHint)
+		}
 		return fmt.Errorf("%w. %s", err, nvidiaHint)
 	case strings.Contains(reason, "error gathering device information while adding custom device"):
 		if strings.Contains(reason, catalog.KFDDevice) {

@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,5 +137,34 @@ func TestEveryVendoredEntryPassesTheGPURules(t *testing.T) {
 	}
 	if checked < 20 {
 		t.Fatalf("checked only %d entries; the catalog did not load", checked)
+	}
+}
+
+// The heartbeat's gpu_grants must equal the web's spec_of for the same entry, or
+// the server refuses every GPU deploy to this computer.
+func TestGPUGrantsIsTheWebShape(t *testing.T) {
+	nvidia := validGPUService()
+	amd := validGPUService()
+	amd.Slug = "gpu-amd"
+	amd.Docker.GPU = &GPU{Vendor: "amd", Count: "all", ROCm: true}
+	custom := validGPUService()
+	custom.Slug = "custom-gpu"
+	saved := validGPUService()
+	saved.Slug = "saved-gpu"
+	saved.Custom = true
+	broken := validGPUService()
+	broken.Slug = "gpu-broken"
+	broken.Docker.Runtime = ""
+	plain := Service{Slug: "plain", Name: "Plain"}
+	got, err := json.Marshal(GPUGrants([]Service{nvidia, amd, custom, saved, broken, plain}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"gpu-amd":{"vendor":"amd","count":"all","rocm":true},"gpu-miner":{"vendor":"nvidia","count":1,"rocm":false}}`
+	if string(got) != want {
+		t.Fatalf("GPUGrants = %s, want %s", got, want)
+	}
+	if empty, _ := json.Marshal(GPUGrants(nil)); string(empty) != "{}" {
+		t.Fatalf("no GPU entry: %s, want {} as the web worker sends", empty)
 	}
 }

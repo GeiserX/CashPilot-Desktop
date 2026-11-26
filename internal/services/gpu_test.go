@@ -59,3 +59,15 @@ func TestAGPUServiceRunsOnce(t *testing.T) {
 		t.Fatalf("two copies: err = %v", err)
 	}
 }
+
+func TestACustomServiceCannotSetAnNvidiaVariable(t *testing.T) {
+	for _, key := range []string{"NVIDIA_VISIBLE_DEVICES", "nvidia_driver_capabilities"} {
+		_, err := validateCustomEnv([]CustomEnv{{Key: key, Value: "all"}}, nil)
+		if err == nil || !strings.Contains(err.Error(), "CashPilot sets the NVIDIA_ variables itself") {
+			t.Fatalf("%s: err = %v", key, err)
+		}
+	}
+	if _, err := validateCustomEnv([]CustomEnv{{Key: "NV_MODE", Value: "x"}}, nil); err != nil {
+		t.Fatalf("an unrelated key was refused: %v", err)
+	}
+}

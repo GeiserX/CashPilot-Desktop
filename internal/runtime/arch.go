@@ -249,6 +249,8 @@ type daemonInfo struct {
 	// Hostname is the name the daemon gives its own machine (/info Name). It equals
 	// this computer's only when the daemon runs on its kernel (see sameKernel).
 	Hostname string
+	// KernelVersion is the daemon's kernel release (/info KernelVersion).
+	KernelVersion string
 }
 
 // infoClient is the one call daemonFacts needs, narrowed so the fallback behaviour is
@@ -274,6 +276,7 @@ func daemonFacts(ctx context.Context, cli infoClient) daemonInfo {
 		facts.OSType = osType
 	}
 	facts.Hostname = strings.TrimSpace(result.Info.Name)
+	facts.KernelVersion = strings.TrimSpace(result.Info.KernelVersion)
 	if len(result.Info.Runtimes) > 0 {
 		facts.Runtimes = make(map[string]bool, len(result.Info.Runtimes))
 		for name := range result.Info.Runtimes {

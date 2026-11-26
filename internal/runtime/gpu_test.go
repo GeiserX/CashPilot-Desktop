@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 )
@@ -110,10 +111,11 @@ func TestReadHostGPUsIsInconclusiveWhenItCannotSeeTheDaemonsMachine(t *testing.T
 		"wsl": func(*daemonInfo) {
 			_ = os.WriteFile(osReleasePath, []byte("5.15.153.1-microsoft-standard-WSL2\n"), 0o644)
 		},
-		"daemon in a vm":     func(f *daemonInfo) { f.Hostname = "docker-desktop" },
-		"daemon did not say": func(f *daemonInfo) { f.Hostname = "" },
-		"no hostname here":   func(*daemonInfo) { localHostname = func() (string, error) { return "", errors.New("no name") } },
-		"sysfs not readable": func(*daemonInfo) { sysfsRoot = filepath.Join(sysfsRoot, "missing") },
+		"daemon in a vm":          func(f *daemonInfo) { f.Hostname = "docker-desktop" },
+		"daemon did not say":      func(f *daemonInfo) { f.Hostname = "" },
+		"no hostname here":        func(*daemonInfo) { localHostname = func() (string, error) { return "", errors.New("no name") } },
+		"same name, other kernel": func(f *daemonInfo) { f.KernelVersion = "6.1.0-rpi7" },
+		"sysfs not readable":      func(*daemonInfo) { sysfsRoot = filepath.Join(sysfsRoot, "missing") },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -453,5 +455,67 @@ func TestDriftKnowsTheGPUGrant(t *testing.T) {
 	again.Docker.GPU = &catalog.GPU{Vendor: "amd", Count: "all"}
 	if ShapeFingerprint(again) == ShapeFingerprint(svc) {
 		t.Fatal("changing the GPU count kept the fingerprint")
+	}
+}
+
+func TestSameKernelAcceptsAMatchingRelease(t *testing.T) {
+	facts := watchtowerSysfs(t)
+	facts.KernelVersion = "6.8.0-generic"
+	if ok, why := sameKernel(facts); !ok {
+		t.Fatalf("same name and release: %s", why)
+	}
+}
+
+func TestTheNvidiaHintOnAMacSaysNoToolkitHelps(t *testing.T) {
+	old := gpuHostOS
+	gpuHostOS = "darwin"
+	t.Cleanup(func() { gpuHostOS = old })
+	got := withGPUHint(errors.New(`could not select device driver "nvidia" with capabilities: [[gpu]]`)).Error()
+	if !strings.Contains(got, "Docker on a Mac cannot pass an NVIDIA GPU") || strings.Contains(got, "nvidia-ctk") {
+		t.Fatalf("hint = %s", got)
+	}
+}
+
+// Docker can refuse at create too; that error gets the hint as the start error does.
+func TestDeployExplainsAGPURefusedAtCreate(t *testing.T) {
+	fake := &fakeDocker{infoName: "docker-desktop", createRefusal: "failed to discover GPU vendor from CDI: no known GPU vendor found"}
+	fake.start(t)
+	spec := deploySpec("gpu-miner")
+	spec.Service = gpuService("nvidia")
+	_, err := (&DockerProvider{}).Deploy(context.Background(), spec, nil)
+	if err == nil || !strings.Contains(err.Error(), "NVIDIA Container Toolkit") {
+		t.Fatalf("Deploy = %v, want the toolkit hint", err)
+	}
+}
+
+func TestARestoreStartGetsTheGPUHint(t *testing.T) {
+	r := newRestoreRun()
+	r.startErr = errors.New(`could not select device driver "nvidia" with capabilities: [[gpu]]`)
+	_, err := r.restore(t, keeper(false), map[string][]byte{"keeper": keeperArchive(t)})
+	if err == nil || !strings.Contains(err.Error(), "NVIDIA Container Toolkit") {
+		t.Fatalf("restore = %v, want the toolkit hint", err)
+	}
+}
+
+type envRecordingSeed struct {
+	*fakeSeedDaemon
+	envs map[string][]string
+}
+
+func (e *envRecordingSeed) ContainerCreate(ctx context.Context, o client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	e.envs[o.Name] = o.Config.Env
+	return e.fakeSeedDaemon.ContainerCreate(ctx, o)
+}
+
+// The wallet generator runs the service's own image, so it gets the stamp too.
+func TestTheWalletGeneratorGetsTheVoidStamp(t *testing.T) {
+	f := &envRecordingSeed{newFakeSeedDaemon(), map[string][]string{}}
+	item, ok := seedService().SeedVar()
+	if !ok {
+		t.Fatal("the seed service has no seed file")
+	}
+	_, _, _ = generateWallet(context.Background(), f, "img", "n-wallet-new", *item.SeedFile)
+	if env, made := f.envs["n-wallet-new"]; !made || !slices.Contains(env, nvidiaVisible+"=void") {
+		t.Fatalf("generator env = %v (created %v)", env, made)
 	}
 }

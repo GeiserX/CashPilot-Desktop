@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"slices"
@@ -149,4 +150,23 @@ func mustService(t *testing.T, app *appUnderTest, slug string) catalog.Service {
 		t.Fatalf("%s not in the catalog", slug)
 	}
 	return svc
+}
+
+// THE RULE the server holds the other end of: a joined CashPilot deploys a GPU
+// entry here only when this heartbeat reports the same grant as its own catalog
+// (web app/main.py _deploy, gpu_grants).
+func TestHeartbeatReportsTheGPUGrantsInTheWebShape(t *testing.T) {
+	app := gpuApp(t)
+	raw, err := json.Marshal(app.upstreamPayload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"gpu_grants":{"gpu-miner":{"vendor":"nvidia","count":1,"rocm":false}}`) {
+		t.Fatalf("payload %s lacks the GPU miner's grant", raw)
+	}
+	plain := joinedApp(t)
+	raw, _ = json.Marshal(plain.upstreamPayload())
+	if !strings.Contains(string(raw), `"gpu_grants":{}`) {
+		t.Fatalf("payload %s: a catalog without GPU entries reports {} as the web worker does", raw)
+	}
 }
