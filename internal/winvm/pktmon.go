@@ -170,7 +170,9 @@ const (
 )
 
 // parsePcapng reads the IPv4 and IPv6 TCP and UDP packets of a pcapng file,
-// in either byte order. It skips any other packet and refuses a broken file.
+// in either byte order. It skips other packet types when it reads addresses.
+// Every export must show packet data: headers alone cannot prove that a quiet
+// component was captured completely.
 func parsePcapng(b []byte) ([]pktInfo, error) {
 	if len(b) == 0 {
 		return nil, errors.New("empty capture export")
@@ -181,7 +183,7 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 	var out []pktInfo
 	var bo binary.ByteOrder = binary.LittleEndian
 	var links []uint16
-	hasInterface := false
+	hasInterface, hasPacketData := false, false
 	for n := 0; len(b) > 0; n++ {
 		if n > maxPcapBlocks || len(b) < 12 {
 			return nil, errors.New("the capture is cut short")
@@ -227,6 +229,7 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 			if ifc >= len(links) || capLen > len(body)-20 {
 				return nil, errors.New("the capture has a packet with no interface or a bad length")
 			}
+			hasPacketData = hasPacketData || capLen > 0
 			if p, ok := parseFrame(links[ifc], body[20:20+capLen]); ok {
 				out = append(out, p)
 			}
@@ -234,6 +237,7 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 			if len(body) < 4 || len(links) == 0 {
 				return nil, errors.New("the capture has a broken simple packet block")
 			}
+			hasPacketData = hasPacketData || (bo.Uint32(body) > 0 && len(body) > 4)
 			if p, ok := parseFrame(links[0], body[4:]); ok {
 				out = append(out, p)
 			}
@@ -242,6 +246,9 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 	}
 	if !hasInterface {
 		return nil, errors.New("capture has no interface evidence")
+	}
+	if !hasPacketData {
+		return nil, errors.New("capture has no packet data to verify the export")
 	}
 	return out, nil
 }

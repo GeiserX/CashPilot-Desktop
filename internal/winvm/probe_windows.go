@@ -83,14 +83,14 @@ func (systemProbes) processor(context.Context) (func(*HostFacts), error) {
 // scripts require access to the Administrators-only directory.
 func (systemProbes) cpu(ctx context.Context) (func(*HostFacts), error) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
-		return readCPUWMI(ctx)
+		return unelevatedWMI.cpu(ctx)
 	}
 	return runCIM(ctx, cpuScript)
 }
 
 func (systemProbes) features(ctx context.Context) (func(*HostFacts), error) {
 	if !windows.GetCurrentProcessToken().IsElevated() {
-		return readFeaturesWMI(ctx)
+		return unelevatedWMI.features(ctx)
 	}
 	return runCIM(ctx, featureScript)
 }

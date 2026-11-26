@@ -436,7 +436,8 @@ func TestPktmonRefusesMissingComponentExport(t *testing.T) {
 	}
 	dir := capture.(*psCapture).dir
 	out := filepath.Join(dir, "c4.pcapng")
-	if err := os.WriteFile(out, pcapng(), 0o600); err != nil {
+	packet := ipv4TCP(netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.20"), 12345)
+	if err := os.WriteFile(out, pcapng(packet), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// Stop does not supply a new inventory. A capture with the component
@@ -444,6 +445,62 @@ func TestPktmonRefusesMissingComponentExport(t *testing.T) {
 	r.answers = append(r.answers, `{"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7},{"id":9,"type":6,"name":"vEthernet","ifIndex":20}]}`, `{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
 	if _, err := capture.Stop(ctx); err == nil || !strings.Contains(err.Error(), "component 9") {
 		t.Fatalf("Stop = %v, want a missing export error for component 9", err)
+	}
+}
+
+func TestHeaderOnlyPktmonExportLeavesProofUnproven(t *testing.T) {
+	ctx := context.Background()
+	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},{"Id":9,"Name":"vEthernet","Type":6,"ifIndex":20}]}]`
+	const metadata = `{"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7},{"id":9,"type":6,"name":"vEthernet","ifIndex":20}]}`
+	dst := netip.MustParseAddr("192.0.2.50")
+	unrelated := pcapng(ipv4TCP(netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.20"), 45000))
+	for _, tc := range []struct {
+		name  string
+		data  []byte
+		green bool
+	}{
+		{"both headers and no packets", pcapng(), false},
+		{"packets outside the proof filter", unrelated, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true}`)
+			mockCaptureStart(h, r)
+			p := &psProber{h: h, owner: tOwner, switchID: tSwitchID, tmp: filepath.Join(t.TempDir(), proofDir)}
+			capture, err := p.Pktmon(ctx, []PktFilter{{Addr: dst, Proto: "TCP", Port: 45000}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := capture.(*psCapture).dir
+			physical, vnic := filepath.Join(dir, "c4.pcapng"), filepath.Join(dir, "c9.pcapng")
+			if err := os.WriteFile(physical, tc.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(vnic, unrelated, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r.answers = append(r.answers, metadata, `{"files":[{"id":4,"path":`+jsonQuote(physical)+`},{"id":9,"path":`+jsonQuote(vnic)+`}]}`)
+			run := proofRun{Runner: Runner{Sleep: func(context.Context, time.Duration) error { return nil }}}
+			probe := probeSet{r: &run, capture: capture}
+			evidence := Evidence{DropDelta: 1}
+			probe.collect(ctx, &evidence)
+
+			var results []StepResult
+			for _, step := range Steps(Plan{}, HostNet{}, ProofTargets{LANIP: dst, Router: dst, OwnIP: dst, VNICIfIndex: 20}) {
+				if step.ID == StepGreen {
+					results = append(results, Judge(step, evidence))
+					continue
+				}
+				witness := Evidence{DropDelta: 1, Delivered: true}
+				if step.Kind == Red {
+					witness.Arrived = []string{"red control"}
+				}
+				results = append(results, Judge(step, witness))
+			}
+			green, why := Verdict(results)
+			if green != tc.green || (!tc.green && !strings.Contains(why, "component 4")) {
+				t.Fatalf("proof green = %v (%s), want %v; capture evidence: %+v", green, why, tc.green, evidence)
+			}
+		})
 	}
 }
 

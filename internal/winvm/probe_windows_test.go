@@ -71,7 +71,7 @@ func TestCIMScriptsOnThisPC(t *testing.T) {
 }
 
 func TestCIMReadsThroughWMI(t *testing.T) {
-	checkCIMReads(t, readCPUWMI, readFeaturesWMI)
+	checkCIMReads(t, unelevatedWMI.cpu, unelevatedWMI.features)
 }
 
 func checkCIMReads(t *testing.T, cpu, features func(context.Context) (func(*HostFacts), error)) {
