@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -500,6 +501,59 @@ function Invoke-FakePktmon {
 `
 	if code, out := runOwnedScriptWithFake(t, mock, scriptPktmonStart, map[string]any{"etl": "capture.etl"}); code != 0 {
 		t.Fatalf("exit %d: %s", code, out)
+	}
+}
+
+func TestPktmonStopReadsETLMetadataByProviderID(t *testing.T) {
+	const mock = `
+param($filtered)
+function Get-EtwTraceSession { [pscustomobject]@{ LocalFilePath = 'capture.etl' } }
+function Join-Path { 'Invoke-FakePktmon' }
+function Invoke-FakePktmon {
+  if ($args[0] -ne 'stop') { throw 'expected pktmon stop' }
+  $global:LASTEXITCODE = 0
+}
+function New-Metadata([guid]$provider, [int]$id, [object[]]$values) {
+  [pscustomobject]@{ ProviderId = $provider; Id = $id; Properties = @($values | ForEach-Object { [pscustomobject]@{ Value = $_ } }) }
+}
+function Get-WinEvent {
+  [CmdletBinding()]
+  param([hashtable]$FilterHashtable, [switch]$Oldest)
+  if ($FilterHashtable.ContainsKey('ProviderName')) { throw 'No events were found that match the specified selection criteria.' }
+  if (-not $Oldest -or $FilterHashtable.Path -ne 'capture.etl' -or ($FilterHashtable.Id -join ',') -ne '20,30,100,110') {
+    throw 'unexpected query for an ETL metadata reading'
+  }
+  $pktmon = '4d4f80d9-c8bd-4d73-bb5b-19c90402c5ac'
+  $other = '9b79ee91-b5fd-41c0-a243-4248e266e9d0'
+  New-Metadata $pktmon 20 @(4, 2, 'Ethernet')
+  New-Metadata $pktmon 30 @(4, 1, 7)
+  New-Metadata $other 30 @(4, 1, 99)
+  New-Metadata $other 100 @(1)
+  if ($filtered -eq 'yes') { New-Metadata $pktmon 110 @(1) }
+}
+`
+	const fakeDisk = `Add-Type 'public static class CpdDisk { public static string Identify(string path) { return "capture-id"; } }'
+`
+	script := strings.Replace(scriptPktmonStop, diskIdentityPrelude, fakeDisk, 1)
+	for _, filtered := range []string{"no", "yes"} {
+		t.Run(filtered, func(t *testing.T) {
+			code, out := runOwnedScriptWithFake(t, mock, script, map[string]any{"etl": "capture.etl", "etlId": "capture-id"}, filtered)
+			doc, err := decodeOutput(out)
+			if code != 0 || err != nil {
+				t.Fatalf("stop exit %d, decode %v: %s", code, err, out)
+			}
+			var got struct {
+				Components []pktComp
+				Filtered   bool
+			}
+			if err := decodeDoc(doc, &got); err != nil {
+				t.Fatal(err)
+			}
+			want := []pktComp{{ID: 4, Type: 2, Name: "Ethernet", IfIndex: 7}}
+			if !slices.Equal(got.Components, want) || got.Filtered != (filtered == "yes") {
+				t.Fatalf("metadata = %+v, want components %+v and filtered=%s", got, want, filtered)
+			}
+		})
 	}
 }
 

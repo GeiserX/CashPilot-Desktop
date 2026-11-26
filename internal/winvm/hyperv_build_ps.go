@@ -124,9 +124,19 @@ function Test-GuardianUser($v) {
     return (@(Get-VMKeyProtector -VM $v).Count -gt 4)
   } catch { return $true }
 }
+function ConvertTo-GuardianCertificateBase64($certificate, [string]$role) {
+  if ($certificate -is [Security.Cryptography.X509Certificates.X509Certificate]) {
+    return [Convert]::ToBase64String($certificate.GetRawCertData())
+  }
+  if ($certificate -is [byte[]]) { return [Convert]::ToBase64String($certificate) }
+  throw ('The guardian ' + $role + ' certificate has unsupported type ' + $certificate.GetType().FullName + '.')
+}
 function Get-GuardianIdentity($g) {
-  if (-not $g.SigningCertificate -or -not $g.EncryptionCertificate) { return '' }
-  $pair = [Convert]::ToBase64String([byte[]]$g.SigningCertificate) + ':' + [Convert]::ToBase64String([byte[]]$g.EncryptionCertificate)
+  if ($null -eq $g.SigningCertificate -or $null -eq $g.EncryptionCertificate) { return '' }
+  $signing = ConvertTo-GuardianCertificateBase64 $g.SigningCertificate 'signing'
+  $encryption = ConvertTo-GuardianCertificateBase64 $g.EncryptionCertificate 'encryption'
+  if (-not $signing -or -not $encryption) { return '' }
+  $pair = $signing + ':' + $encryption
   $sha = [Security.Cryptography.SHA256]::Create()
   try { return [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($pair))).Replace('-', '').ToLowerInvariant() }
   finally { $sha.Dispose() }

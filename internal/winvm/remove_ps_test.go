@@ -1,11 +1,18 @@
 package winvm
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
 )
 
 func requireRemoveKept(t *testing.T, code int, out []byte, reason string) {
@@ -87,17 +94,95 @@ function Remove-VM { throw 'would remove a VM with independent configuration' }
 	}
 }
 
+// guardianCertificates keeps the certificates in memory and leaves the Windows
+// certificate store alone. Hash the raw bytes here to check the legacy identity.
+func guardianCertificates(t *testing.T) (string, string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := func(serial int64, name string) string {
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(serial),
+			Subject:      pkix.Name{CommonName: name},
+			NotBefore:    time.Unix(1700000000, 0),
+			NotAfter:     time.Unix(2100000000, 0),
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.StdEncoding.EncodeToString(der)
+	}
+	signing, encryption := cert(1, "Test signing"), cert(2, "Test encryption")
+	digest := sha256.Sum256([]byte(signing + ":" + encryption))
+	return signing, encryption, hex.EncodeToString(digest[:])
+}
+
+const guardianCertificateMock = `
+param($signing, $encryption, $shape)
+$ErrorActionPreference = 'Stop'
+$signingBytes = [Convert]::FromBase64String($signing)
+$encryptionBytes = [Convert]::FromBase64String($encryption)
+switch ($shape) {
+  'objects' {
+    $sign = [Security.Cryptography.X509Certificates.X509Certificate2]::new($signingBytes)
+    $encrypt = [Security.Cryptography.X509Certificates.X509Certificate2]::new($encryptionBytes)
+  }
+  'base objects' {
+    $sign = [Security.Cryptography.X509Certificates.X509Certificate]::new($signingBytes)
+    $encrypt = [Security.Cryptography.X509Certificates.X509Certificate]::new($encryptionBytes)
+  }
+  'bytes' { $sign = $signingBytes; $encrypt = $encryptionBytes }
+  'invalid' { $sign = 'unexpected'; $encrypt = $encryptionBytes }
+}
+function Get-HgsGuardian { [pscustomobject]@{ SigningCertificate = $sign; EncryptionCertificate = $encrypt } }
+`
+
+func runGuardianScript(t *testing.T, mock, script string, arg map[string]any, signing, encryption, shape string) (int, []byte) {
+	t.Helper()
+	return runOwnedScriptWithFake(t, guardianCertificateMock+mock, "try {\n"+script+`
+} finally {
+  if ($sign -is [Security.Cryptography.X509Certificates.X509Certificate]) { $sign.Reset() }
+  if ($encrypt -is [Security.Cryptography.X509Certificates.X509Certificate]) { $encrypt.Reset() }
+}
+`, arg, signing, encryption, shape)
+}
+
+func TestGuardianIdentityAcceptsCertificateObjectsAndBytes(t *testing.T) {
+	signing, encryption, want := guardianCertificates(t)
+	script := buildPrelude + `Write-Doc @{ id = (Get-GuardianIdentity (Get-HgsGuardian)) }`
+	for _, shape := range []string{"objects", "base objects", "bytes", "invalid"} {
+		t.Run(shape, func(t *testing.T) {
+			code, out := runGuardianScript(t, "", script, nil, signing, encryption, shape)
+			if shape == "invalid" {
+				if code == 0 || !strings.Contains(string(out), "guardian signing certificate has unsupported type") {
+					t.Fatalf("expected a certificate type error, exit %d: %s", code, out)
+				}
+				return
+			}
+			doc, err := decodeOutput(out)
+			if code != 0 || err != nil {
+				t.Fatalf("exit %d, decode %v: %s", code, err, out)
+			}
+			var got struct{ ID string }
+			if err := decodeDoc(doc, &got); err != nil || got.ID != want {
+				t.Fatalf("identity = %q, want %q, decode %v: %s", got.ID, want, err, doc)
+			}
+		})
+	}
+}
+
 func TestRemoveGuardianScriptKeepsGuardianForForeignTPMVM(t *testing.T) {
 	const mock = `
-function Get-HgsGuardian { [pscustomobject]@{ SigningCertificate = [byte[]](1,2); EncryptionCertificate = [byte[]](3,4) } }
 function Get-VM { [pscustomobject]@{ Name = 'decoy-tpm'; Generation = 2 } }
 function Get-VMSecurity { [pscustomobject]@{ TpmEnabled = $true } }
 function Get-VMKeyProtector { [byte[]](0,0,0,0) }
 function Remove-HgsGuardian { throw 'would remove the guardian the decoy VM needs' }
 `
-	certificates := base64.StdEncoding.EncodeToString([]byte{1, 2}) + ":" + base64.StdEncoding.EncodeToString([]byte{3, 4})
-	digest := sha256.Sum256([]byte(certificates))
-	code, out := runOwnedScriptWithFake(t, mock, scriptRemoveGuardian, map[string]any{"id": hex.EncodeToString(digest[:])})
+	signing, encryption, digest := guardianCertificates(t)
+	code, out := runGuardianScript(t, mock, scriptRemoveGuardian, map[string]any{"id": digest}, signing, encryption, "objects")
 	if code == 0 || !strings.Contains(string(out), "A VM still needs the guardian.") {
 		t.Fatalf("expected the guardian dependency refusal, exit %d: %s", code, out)
 	}

@@ -105,7 +105,12 @@ if ($s.Count -ne 1 -or [string]$s[0].LocalFilePath -ne $in.etl -or [CpdDisk]::Id
 $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
 & $pm stop | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
-$metadata = @(Get-WinEvent -FilterHashtable @{ Path = $in.etl; ProviderName = 'Microsoft-Windows-PktMon'; Id = @(20, 30, 100, 110) } -Oldest -ErrorAction Stop)
+# Windows PowerShell 5.1 can return no matches for the ETL when the
+# hashtable includes ProviderName. Check the publisher GUID on the results.
+$pktmonProvider = [guid]'4d4f80d9-c8bd-4d73-bb5b-19c90402c5ac'
+$metadata = @(Get-WinEvent -FilterHashtable @{ Path = $in.etl; Id = @(20, 30, 100, 110) } -Oldest -ErrorAction Stop |
+  Where-Object { $_.ProviderId -eq $pktmonProvider })
+if ($metadata.Count -eq 0) { throw 'The capture has no pktmon metadata.' }
 $indices = @{}
 foreach ($event in @($metadata | Where-Object { $_.Id -eq 30 })) {
   $p = $event.Properties
