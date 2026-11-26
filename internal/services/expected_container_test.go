@@ -202,3 +202,17 @@ func TestACheckedDeployRefusesWhileMoreCopiesAreRecordedThanRun(t *testing.T) {
 		t.Fatalf("checked deploy with one copy: err %v, %d deploys, copy 2 running %v; want one deploy of copy 1", err, fake.deployCalls-before, fake.running[2])
 	}
 }
+
+// A checked lookup that cannot read the deployment record cannot know how many
+// copies are recorded, so it refuses instead of naming the first copy.
+func TestACheckedLookupFailsClosedWhenTheRecordCannotBeRead(t *testing.T) {
+	fake := &targetProvider{fakeProvider: &fakeProvider{}, target: "c1"}
+	st := newTestStore(t)
+	m := NewManager(fake, newTestCatalog(t), st)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := m.DeployTarget(context.Background(), "example"); err == nil {
+		t.Fatalf("DeployTarget with an unreadable store = %q, nil; want the read error", got)
+	}
+}

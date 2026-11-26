@@ -2,8 +2,11 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
@@ -53,7 +56,11 @@ func (p *DockerProvider) DeployTarget(ctx context.Context, slug string) (string,
 // DeployTarget for a native program: a program has no container ID to name, so only
 // a first deploy can be checked.
 func (p *NativeProcessProvider) DeployTarget(_ context.Context, slug string) (string, error) {
-	if p.hasProgram(slug) {
+	has, err := p.hasProgram(slug)
+	if err != nil {
+		return "", err
+	}
+	if has {
 		return "", fmt.Errorf("%s runs as a program on this computer, not in a container: %w", slug, ErrNoDeployTarget)
 	}
 	return NoContainer, nil
@@ -61,9 +68,40 @@ func (p *NativeProcessProvider) DeployTarget(_ context.Context, slug string) (st
 
 // hasProgram reports whether slug has a program here: a registry entry, or a process
 // this session launched whose registry write failed (launchProcess keeps it running).
-func (p *NativeProcessProvider) hasProgram(slug string) bool {
+// A registry that exists but cannot be read is an error, never "no program": it may
+// record one from an earlier session.
+func (p *NativeProcessProvider) hasProgram(slug string) (bool, error) {
 	p.mu.Lock()
 	_, launched := p.procs[slug]
 	p.mu.Unlock()
-	return launched || p.readRegistry().Entries[slug] != nil
+	if launched {
+		return true, nil
+	}
+	reg, err := p.readRegistryStrict()
+	if err != nil {
+		return false, fmt.Errorf("cannot read the record of programs on this computer, so nothing was replaced: %w", err)
+	}
+	return reg.Entries[slug] != nil, nil
+}
+
+// readRegistryStrict reads the registry like readRegistry, but answers a read or
+// decode error instead of an empty registry. A missing file is an empty registry.
+func (p *NativeProcessProvider) readRegistryStrict() (*nativeRegistry, error) {
+	p.regMu.Lock()
+	defer p.regMu.Unlock()
+	reg := &nativeRegistry{Entries: map[string]*nativeRegistryEntry{}}
+	raw, err := os.ReadFile(p.statePath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return reg, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(raw, reg); err != nil {
+		return nil, err
+	}
+	if reg.Entries == nil {
+		reg.Entries = map[string]*nativeRegistryEntry{}
+	}
+	return reg, nil
 }

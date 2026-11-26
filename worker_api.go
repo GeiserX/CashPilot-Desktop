@@ -628,13 +628,14 @@ func (a *App) handleWorkerDeployChecked(w http.ResponseWriter, r *http.Request) 
 	raw, err := io.ReadAll(r.Body)
 	var spec workerDeploySpec
 	var fields map[string]json.RawMessage
-	if err != nil || json.Unmarshal(raw, &spec) != nil || json.Unmarshal(raw, &fields) != nil {
+	if err != nil || json.Unmarshal(raw, &spec) != nil || json.Unmarshal(raw, &fields) != nil || fields == nil {
 		detail(w, http.StatusUnprocessableEntity, "The deploy request is not valid JSON in the expected shape")
 		return
 	}
 	// A JSON null is not a left-out field: the web worker refuses it too.
 	expected, replace := runtime.NoContainer, false
-	if v, ok := fields["expected_container"]; ok && (isJSONNull(v) || json.Unmarshal(v, &expected) != nil) {
+	v, named := fields["expected_container"]
+	if named && (isJSONNull(v) || json.Unmarshal(v, &expected) != nil) {
 		detail(w, http.StatusUnprocessableEntity, `expected_container must be a container ID or "none"`)
 		return
 	}
@@ -661,7 +662,9 @@ func (a *App) handleWorkerDeployChecked(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	code, message := "deploy_target_changed", changed.Error()
-	if replace && expected == runtime.NoContainer {
+	// Only a caller that names no container is an older Desktop: one that sends
+	// "none" itself can ask again with the container there now.
+	if replace && !named {
 		code, message = "replace_existing", "Update CashPilot-Desktop to confirm the exact container before replacing it."
 	}
 	detail(w, http.StatusConflict, map[string]string{"error": code, "message": message, "current_container": changed.Actual})

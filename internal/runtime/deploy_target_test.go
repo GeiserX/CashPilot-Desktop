@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -211,4 +213,34 @@ func serveCounting(t *testing.T, p *NativeProcessProvider, downloads *atomic.Int
 	client.CheckRedirect = httpsOnlyRedirect
 	p.httpClient = client
 	return srv.URL + "/stub"
+}
+
+// A registry that exists but cannot be read may hold a program from an earlier
+// session. A checked lookup and a checked deploy must refuse, not read it as none.
+func TestNativeCheckedDeployRefusesAnUnreadableRegistry(t *testing.T) {
+	ctx := context.Background()
+	p := newTestNativeProvider(t)
+	var downloads atomic.Int32
+	url := serveCounting(t, p, &downloads)
+	if err := os.MkdirAll(filepath.Dir(p.statePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.statePath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.DeployTarget(ctx, "prog"); err == nil || got == NoContainer {
+		t.Fatalf("DeployTarget with an unreadable registry = %q, %v; want an error", got, err)
+	}
+	none := NoContainer
+	spec := DeploySpec{Slug: "prog", Service: nativeService("prog", url, strings.Repeat("0", 64), ""), ExpectedContainer: &none}
+	if _, err := p.Deploy(ctx, spec, nil); err == nil || downloads.Load() != 0 {
+		t.Fatalf("checked deploy with an unreadable registry: err = %v, %d downloads; want a refusal before the download", err, downloads.Load())
+	}
+	// A missing registry is still a first deploy.
+	if err := os.Remove(p.statePath); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.DeployTarget(ctx, "prog"); err != nil || got != NoContainer {
+		t.Fatalf("DeployTarget with no registry file = %q, %v; want none", got, err)
+	}
 }

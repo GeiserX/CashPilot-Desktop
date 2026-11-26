@@ -213,6 +213,12 @@ func TestCheckedDeployTellsAnOlderDesktopToUpdate(t *testing.T) {
 	if earnerID(app) != current {
 		t.Fatal("replace_existing alone replaced the container")
 	}
+	// A caller that names "none" itself supports the checked route: it gets the
+	// typed conflict to ask again, not the update hint.
+	w = call(t, app, http.MethodPost, checkedPath, testWorkerKey, checkedSpec(t, app, map[string]any{"replace_existing": true, "expected_container": "none"}))
+	if d := refusalDetail(t, w); w.Code != http.StatusConflict || d["error"] != "deploy_target_changed" || d["current_container"] != current {
+		t.Fatalf("explicit none with the flag: %d %v; want 409 deploy_target_changed", w.Code, d)
+	}
 	// The flag never stands in for the ID: with the right ID it deploys, flag or not.
 	if w := call(t, app, http.MethodPost, checkedPath, testWorkerKey, checkedSpec(t, app, map[string]any{"replace_existing": true, "expected_container": current})); w.Code != http.StatusOK {
 		t.Fatalf("flag with the right ID: %d %s", w.Code, w.Body.String())
@@ -238,6 +244,17 @@ func TestCheckedDeployRejectsAnExpectationItCannotRead(t *testing.T) {
 				t.Fatal("an unreadable request deployed")
 			}
 		})
+	}
+}
+
+func TestCheckedDeployRejectsANullBody(t *testing.T) {
+	app := joinedApp(t)
+	w := call(t, app, http.MethodPost, checkedPath, testWorkerKey, json.RawMessage("null"))
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a JSON null body: %d %s; want 422", w.Code, w.Body.String())
+	}
+	if earnerID(app) != "none" {
+		t.Fatal("a JSON null body deployed")
 	}
 }
 

@@ -284,7 +284,11 @@ func (m *Manager) DeployTarget(ctx context.Context, slug string) (string, error)
 		return "", err
 	}
 	if svc, ok := m.catalog.Get(slug); ok {
-		if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
+		dep, found, err := m.store.GetDeployment(slug)
+		if err != nil {
+			return "", err
+		}
+		if found {
 			if err := refuseRecordedCopies(min(dep.Instances, m.ScalingLimit(svc).Max), name); err != nil {
 				return "", err
 			}
@@ -407,7 +411,13 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		return store.Deployment{}, nil, err
 	}
 	recorded, recordedCopies := "", 1
-	if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
+	dep, found, err := m.store.GetDeployment(slug)
+	if err != nil && opts.ExpectedContainer != nil {
+		// A checked deploy must know how many copies are recorded (see
+		// refuseRecordedCopies), so it does not guess one.
+		return store.Deployment{}, nil, err
+	}
+	if err == nil && found {
 		recorded = dep.CustomImage
 		recordedCopies = max(dep.Instances, 1)
 	}
