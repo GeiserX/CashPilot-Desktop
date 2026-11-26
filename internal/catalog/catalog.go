@@ -93,6 +93,9 @@ type Service struct {
 	Collector        CollectorMetadata `json:"collector" yaml:"collector"`
 	Payout           Payout            `json:"payout" yaml:"payout"`
 	Disclosure       Disclosure        `json:"disclosure" yaml:"disclosure"`
+	// Mining is a miner's own fee (services/_schema.yml `mining:`), which the deploy
+	// wizard shows before the miner runs. Nil for anything that is not a miner.
+	Mining *Mining `json:"mining" yaml:"mining"`
 	// DeviceLink is set for providers that pay a device only once the user adds its
 	// id to their account by hand (EarnApp, ProxyRack). Nil means nothing to link.
 	DeviceLink *DeviceLink `json:"deviceLink" yaml:"device_link"`
@@ -567,6 +570,23 @@ type Requirements struct {
 	Note            string           `json:"note" yaml:"note"`
 	// NoteColumn says which column Note is a footnote for (vps_ip, devices_per_ip).
 	NoteColumn string `json:"noteColumn" yaml:"note_column"`
+	// HostingNote is the web app's advice for a worker that reports a hosting
+	// connection. It is read so the vendored entry loads, and never shown: Desktop
+	// cannot see what kind of connection this computer is on (internal/preflight),
+	// so it never reaches the frontend.
+	HostingNote string `json:"-" yaml:"hosting_note"`
+}
+
+// Mining is the `mining:` block of a miner (services/_schema.yml).
+type Mining struct {
+	// DevFeePercent is the share of hashing time the miner gives its developers.
+	// Nil means the catalog does not state a usable fee, which is never 0%.
+	DevFeePercent *float64 `json:"devFeePercent" yaml:"dev_fee_percent"`
+	// DevFeeSource is the https:// link that states the fee; anything else is
+	// cleared at load.
+	DevFeeSource string `json:"devFeeSource" yaml:"dev_fee_source"`
+	// PoolFeeNote explains the default pool's fees and payout threshold.
+	PoolFeeNote string `json:"poolFeeNote" yaml:"pool_fee_note"`
 }
 
 // ProxyProhibited is requirements.proxy_prohibited: the provider's own terms that
@@ -657,6 +677,17 @@ func normalize(svc *Service) {
 	}
 	if !strings.HasPrefix(svc.SupportURL, "https://") {
 		svc.SupportURL = ""
+	}
+	if m := svc.Mining; m != nil {
+		// The web catalog allows a fee from 0 to 10 percent. Anything else, NaN
+		// included, is shown as not stated rather than as a number nobody checked.
+		if fee := m.DevFeePercent; fee != nil && !(*fee >= 0 && *fee <= 10) {
+			log.Printf("catalog: %s: mining.dev_fee_percent %v is not from 0 to 10, shown as not stated", svc.Slug, *fee)
+			m.DevFeePercent = nil
+		}
+		if !strings.HasPrefix(m.DevFeeSource, "https://") {
+			m.DevFeeSource = ""
+		}
 	}
 	svc.Docker.HealthSignals = normalizeSignals(svc.Slug, svc.Docker.HealthSignals)
 	if svc.Docker.HealthProbe != nil {

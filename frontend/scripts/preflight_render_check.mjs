@@ -14,7 +14,7 @@
 //
 //   node scripts/preflight_render_check.mjs      # against ./.harness-build
 
-import { renderPreflight } from "../.harness-build/render/preflight.js";
+import { minerFee, renderPreflight } from "../.harness-build/render/preflight.js";
 
 let failures = 0;
 let checks = 0;
@@ -136,6 +136,53 @@ check("and no empty 'Not checked:' line", !nulls.includes("Not checked:"), nulls
 // the part the user needs.
 const unknown = renderPreflight(report({ verdict: "something_new" }));
 check("an unrecognised verdict still shows the summary", unknown.includes("earn nothing here. You can deploy"), unknown);
+
+// ---------------------------------------------------------------------------
+// THE MINER FEE. A miner gives part of its hashing time to its developers. The
+// user reads that before deploying, wherever the miner will run. A fee the
+// catalog does not state is "not stated", never 0%.
+// ---------------------------------------------------------------------------
+const hostingNote = "This machine reports a hosting connection. Check your provider's terms before mining.";
+function miner(mining) {
+  return {
+    name: "XMRig (Monero CPU mining)",
+    slug: "xmrig",
+    category: "mining",
+    // Go never sends requirements.hosting_note (json:"-"). Even if a build did,
+    // it must not render: Desktop cannot see what connection this PC is on.
+    requirements: { hostingNote },
+    mining,
+  };
+}
+const xmrig = minerFee(miner({
+  devFeePercent: 1,
+  devFeeSource: "https://github.com/xmrig/xmrig/blob/v6.27.0/src/donate.h",
+  poolFeeNote: "MoneroOcean, the default pool, charges a 0% mining fee.",
+}));
+check("a miner shows its fee as a share of hashing time", xmrig.includes("Miner fee: 1% of hashing time"), xmrig);
+check("with the pool's own fee note", xmrig.includes("MoneroOcean, the default pool"), xmrig);
+check(
+  "and a button to the source that states the fee",
+  xmrig.includes('data-url="https://github.com/xmrig/xmrig/blob/v6.27.0/src/donate.h"'),
+  xmrig
+);
+check("the hosting note is never shown", !xmrig.includes("hosting connection"), xmrig);
+check("the fee panel offers no Deploy-blocking control", !xmrig.includes("disabled") && !xmrig.includes("data-preflight-blocked"), xmrig);
+
+const unstated = minerFee(miner({ devFeePercent: null, devFeeSource: "", poolFeeNote: "" }));
+check("a fee the catalog does not state is said to be not stated", unstated.includes("not stated"), unstated);
+check("and is never shown as 0%", !unstated.includes("0%"), unstated);
+check("with no source button and no empty pool note", !unstated.includes("data-url") && !unstated.includes('<p class="preflight-summary"></p>'), unstated);
+
+const zero = minerFee(miner({ devFeePercent: 0, devFeeSource: "https://example.com/fee", poolFeeNote: "" }));
+check("a stated 0% fee is a real fee and shows as 0%", zero.includes("Miner fee: 0% of hashing time"), zero);
+
+const plain = minerFee(miner({ devFeePercent: 1, devFeeSource: "javascript:alert(1)", poolFeeNote: "<img src=x onerror=alert(1)>" }));
+check("a source that is not https:// gets no button", !plain.includes("data-url"), plain);
+check("the pool note is escaped", !plain.includes("<img"), plain);
+
+check("a service that is not a miner shows no fee", minerFee({ name: "Honeygain", slug: "honeygain", mining: null }) === "");
+check("nor does a missing service", minerFee(undefined) === "");
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} preflight render checks FAILED`);

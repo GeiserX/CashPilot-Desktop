@@ -1106,6 +1106,10 @@ export interface Service {
     ispRisk: string;
     accountRules: string;
   };
+  // A miner's own fee (services/_schema.yml mining:), shown before deploy. Null for
+  // anything that is not a miner. devFeePercent null means the catalog states no
+  // usable fee, which is never 0%. devFeeSource is "" unless it is https://.
+  mining?: { devFeePercent: number | null; devFeeSource: string; poolFeeNote: string } | null;
   // Set for providers that pay a device only once its id is added to the account.
   deviceLink: { idEnv: string; url: string; steps: string } | null;
   resurrectionChecked: string;

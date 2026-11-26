@@ -164,6 +164,19 @@ check("CONTROL: the card renders", hg.includes('<article class="wizard-setup-car
 check("CONTROL: it is the card for this service", hg.includes('data-form-slug="honeygain"'), hg);
 check("CONTROL: it renders inputs", inputs(hg).length > 0, hg);
 
+// The miner fee sits in the card itself, above the pre-deploy panel and the
+// Deploy button, so it shows before any deploy, to this PC or a fleet worker.
+const minerCard = renderWizardServiceSetup(
+  { ...honeygain, slug: "xmrig", category: "mining", mining: { devFeePercent: 1, devFeeSource: "https://github.com/xmrig/xmrig/blob/v6.27.0/src/donate.h", poolFeeNote: "" } },
+  collectorFields,
+  "devbox",
+);
+const feeAt = minerCard.indexOf("Miner fee: 1% of hashing time");
+check("a miner's card shows its fee", feeAt >= 0, minerCard);
+check("above the pre-deploy panel", feeAt >= 0 && feeAt < minerCard.indexOf('data-preflight-slug="xmrig"'), minerCard);
+check("and above the Deploy button", feeAt >= 0 && feeAt < minerCard.indexOf('data-wizard-action="deploy"'), minerCard);
+check("a card that is not a miner shows no fee", !hg.includes("data-miner-fee"), hg);
+
 // ---------------------------------------------------------------------------
 // RULE 1: every field gets an input, and every input carries data-wizard-env.
 // ---------------------------------------------------------------------------

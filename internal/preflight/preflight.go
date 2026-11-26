@@ -152,7 +152,9 @@ func Assess(in Input) Report {
 
 	// Connection type. Desktop cannot see whether this machine sits on a home line or
 	// in a datacentre, so this stays an explicitly unverified precondition rather
-	// than being dressed up as a check.
+	// than being dressed up as a check. For the same reason requirements.hosting_note,
+	// which the web app shows only on a worker that reports a hosting connection, is
+	// never a finding here.
 	if reqs.ResidentialIP && !reqs.VPSIP {
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,

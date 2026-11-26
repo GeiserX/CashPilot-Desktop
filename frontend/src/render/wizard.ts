@@ -30,6 +30,7 @@ import { renderDeployPanel, type DeployFeedback } from "./deploy_consent.js";
 import { renderCustomServiceCard } from "./custom.js";
 import { needsSessionConsent, renderSessionSlot } from "./session.js";
 import { walletChoiceSection } from "./wallet.js";
+import { minerFee } from "./preflight.js";
 
 /**
  * Render the setup card for one service.
@@ -120,6 +121,7 @@ export function renderWizardServiceSetup(
       ${whereChoiceSection(service, workerTargets, whereDraft)}
       ${routeChoiceSection(service, route, routeDraft)}
       ${imageChoiceSection(service, customImage)}
+      ${minerFee(service)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
         ${pool ? "" : `<button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>`}

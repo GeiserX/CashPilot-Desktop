@@ -519,3 +519,27 @@ func TestARuntimeGapIsTheSummaryAndBlocks(t *testing.T) {
 		t.Fatalf("with no gap: blocking=%v summary=%q", plain.Blocking, plain.Summary)
 	}
 }
+
+// requirements.hosting_note is advice the web app shows only when the worker
+// reports a hosting connection. Desktop cannot see the connection type, so the note
+// is parsed and never shown: showing it to everyone would tell a home PC it is on a
+// datacentre line.
+func TestTheHostingNoteIsParsedAndNotShown(t *testing.T) {
+	xmrig := service(t, "xmrig")
+	note := strings.TrimSpace(xmrig.Requirements.HostingNote)
+	if note == "" {
+		t.Fatal("xmrig requirements.hosting_note was not parsed")
+	}
+	for _, arch := range []string{"", "x86_64", "arm64"} {
+		report := Assess(Input{Service: xmrig, DaemonArch: arch})
+		shown := append([]string{report.Summary}, report.NotChecked...)
+		for _, finding := range report.Findings {
+			shown = append(shown, finding.Message)
+		}
+		for _, text := range shown {
+			if strings.Contains(text, "hosting connection") || strings.Contains(text, note) {
+				t.Errorf("arch %q: the hosting note is shown: %q", arch, text)
+			}
+		}
+	}
+}
