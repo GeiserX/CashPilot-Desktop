@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"maps"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
+	_ "modernc.org/sqlite"
 )
 
 // heldDeployProvider reports the token a local deploy starts with, then waits.
@@ -96,5 +99,71 @@ func TestWorkerCredentialWriteWinsOverAnInFlightLocalDeploy(t *testing.T) {
 				t.Fatalf("stored token = %q, want the worker's %q", stored[deployOrderTokenKey], worker)
 			}
 		})
+	}
+}
+
+// A worker save that fails stored nothing, so it is not a later save. The local
+// deploy that was already running then still saves its own form, as it would
+// with no worker deploy at all.
+func TestFailedWorkerCredentialWriteLeavesAnInFlightLocalDeploySave(t *testing.T) {
+	const slug = "traffmonetizer"
+	const local, typed, worker = "1|local-fixture", "3|typed-local-fixture", "2|worker-fixture"
+	app := newAppUnderTest(t)
+	app.collectors = nil
+	p := &heldDeployProvider{Provider: app.runtime, used: make(chan string, 1), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(p.release) })
+	defer release()
+	app.services = services.NewManager(p, app.catalog, app.store)
+	if err := app.SaveCredentials(slug, map[string]string{deployOrderTokenKey: local}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := app.DeployService(slug, map[string]string{deployOrderTokenKey: typed}, nil, nil)
+		done <- err
+	}()
+	select {
+	case used := <-p.used:
+		if used != typed {
+			t.Fatalf("local runtime got %q, want %q", used, typed)
+		}
+	case err := <-done:
+		t.Fatalf("local deploy did not reach the runtime: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("local deploy did not reach the runtime")
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(app.cfg.DataDir(), "cashpilot-desktop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TRIGGER refuse_credential_write BEFORE INSERT ON credentials
+		BEGIN SELECT RAISE(ABORT, 'credential write refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.saveWorkerCredentials(slug, map[string]string{deployOrderTokenKey: worker}); err == nil {
+		t.Fatal("the worker save reported success although the store refused the write")
+	}
+	if _, err := db.Exec(`DROP TRIGGER refuse_credential_write`); err != nil {
+		t.Fatal(err)
+	}
+
+	release()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("local deploy did not finish")
+	}
+	stored, err := app.store.GetCredentials(slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored[deployOrderTokenKey] != typed {
+		t.Fatalf("stored token = %q, want the local deploy's %q: a failed worker save must not block it", stored[deployOrderTokenKey], typed)
 	}
 }
