@@ -161,3 +161,44 @@ func TestACheckedDeployWhoseLookupFailsTouchesNothing(t *testing.T) {
 		t.Fatalf("the runtime was asked to deploy %d times; want none", copies.deployCalls)
 	}
 }
+
+// A redeploy starts every copy the stored count names, not just those that exist.
+// When copy 2 failed to start (the runtime removes what it created) or was removed
+// outside CashPilot, the count still says 2: a checked deploy approved for the first
+// copy would start a second container nobody approved. It refuses, and so does the
+// lookup, until the owner lowers the count.
+func TestACheckedDeployRefusesWhileMoreCopiesAreRecordedThanRun(t *testing.T) {
+	ctx := context.Background()
+	fake := &copyTargetFake{copyFake: newCopyFake(), target: "none"}
+	m := NewManager(fake, newScalingCatalog(t), newTestStore(t))
+	fake.copyDeployErr = errors.New("copy start failed")
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(2)}); err == nil {
+		t.Fatal("want copy 2 to fail")
+	}
+	fake.copyDeployErr = nil
+	fake.target = "c1"
+	if got, err := m.DeployTarget(ctx, "scalable"); !errors.Is(err, runtime.ErrNoDeployTarget) || !strings.Contains(err.Error(), "is set to run 2 copies") {
+		t.Fatalf("lookup with 2 copies recorded and 1 running = %q, %v; want ErrNoDeployTarget naming the recorded count", got, err)
+	}
+	before := fake.deployCalls
+	expected := "c1"
+	_, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{ExpectedContainer: &expected})
+	var copies *OtherCopiesError
+	if !errors.As(err, &copies) || !errors.Is(err, runtime.ErrNoDeployTarget) || fake.deployCalls != before || fake.running[2] {
+		t.Fatalf("checked deploy with 2 copies recorded: err %v, %d deploys, copy 2 running %v; want a refusal that touches nothing",
+			err, fake.deployCalls-before, fake.running[2])
+	}
+
+	// Positive control: once the owner lowers the count to one, the same checked
+	// deploy replaces the one named container.
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(1)}); err != nil {
+		t.Fatalf("back to one copy: %v", err)
+	}
+	if got, err := m.DeployTarget(ctx, "scalable"); err != nil || got != "c1" {
+		t.Fatalf("lookup with one copy = %q, %v; want c1", got, err)
+	}
+	before = fake.deployCalls
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{ExpectedContainer: &expected}); err != nil || fake.deployCalls != before+1 || fake.running[2] {
+		t.Fatalf("checked deploy with one copy: err %v, %d deploys, copy 2 running %v; want one deploy of copy 1", err, fake.deployCalls-before, fake.running[2])
+	}
+}

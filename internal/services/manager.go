@@ -283,6 +283,13 @@ func (m *Manager) DeployTarget(ctx context.Context, slug string) (string, error)
 	if err := refuseOtherCopies(ctx, provider, slug, name); err != nil {
 		return "", err
 	}
+	if svc, ok := m.catalog.Get(slug); ok {
+		if dep, ok, err := m.store.GetDeployment(slug); err == nil && ok {
+			if err := refuseRecordedCopies(min(dep.Instances, m.ScalingLimit(svc).Max), name); err != nil {
+				return "", err
+			}
+		}
+	}
 	return reader.DeployTarget(ctx, slug)
 }
 
@@ -293,9 +300,16 @@ func (m *Manager) DeployTarget(ctx context.Context, slug string) (string, error)
 type OtherCopiesError struct {
 	Name   string
 	Copies int
+	// Recorded is set when the copies are only in the stored count, not running:
+	// a copy that failed to start, or one removed outside CashPilot. A redeploy
+	// starts them again.
+	Recorded bool
 }
 
 func (e *OtherCopiesError) Error() string {
+	if e.Recorded {
+		return fmt.Sprintf("%s is set to run %d copies on that computer, and a redeploy starts every copy, so your CashPilot cannot name every container it would touch. Redeploy it in CashPilot Desktop on that computer, or lower it to one copy there", e.Name, e.Copies+1)
+	}
 	copies := "copies"
 	if e.Copies == 1 {
 		copies = "copy"
@@ -318,6 +332,15 @@ func refuseOtherCopies(ctx context.Context, provider runtime.Provider, slug, nam
 	}
 	if len(copies) > 0 {
 		return &OtherCopiesError{Name: name, Copies: len(copies)}
+	}
+	return nil
+}
+
+// refuseRecordedCopies is an OtherCopiesError when the deploy would run more than
+// one copy: copies 2..N start on every redeploy even when none of them exists yet.
+func refuseRecordedCopies(instances int, name string) error {
+	if instances > 1 {
+		return &OtherCopiesError{Name: name, Copies: instances - 1, Recorded: true}
 	}
 	return nil
 }
@@ -443,6 +466,9 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 			return store.Deployment{}, nil, runtime.ErrNoDeployTarget
 		}
 		if err := refuseOtherCopies(ctx, provider, slug, svc.Name); err != nil {
+			return store.Deployment{}, nil, err
+		}
+		if err := refuseRecordedCopies(instances, svc.Name); err != nil {
 			return store.Deployment{}, nil, err
 		}
 		// Compared first under this lock, as the CashPilot worker does, so a stale
