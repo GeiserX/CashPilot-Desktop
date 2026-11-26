@@ -137,11 +137,14 @@ func TestStateSurvivesARestart(t *testing.T) {
 // SQLite does not queue writers. While one writer commits back to back, the
 // other gets the lock only if it asks in the short gap between two commits, so
 // it can wait for most of the other writer's run. The store retries a busy write
-// for 30 seconds (writeRetryBudget), and that is the promise under test. So each
-// writer also stops after burst: on a slow disk (the Windows runner commits in
-// about 130 ms) 200 rows took longer than the budget, and the test then measured
-// the disk instead of the store. The app itself never writes back to back for
-// that long: one earnings row per service per collection.
+// for 30 seconds (writeRetryBudget). On a fast disk the whole run fits inside the
+// 250 ms busy_timeout, so this test reaches that retry only on a slow disk such
+// as the Windows runner. The retry itself is guarded on every platform by
+// TestWriteWaitsOutAPeerHoldingTheLock in internal/store. Each writer also stops
+// after burst: on a slow disk (the Windows runner commits in about 130 ms) 200
+// rows took longer than the budget, and the test then measured the disk instead
+// of the store. The app itself never writes back to back for that long: one
+// earnings row per service per collection.
 func TestTwoWritersDoNotLoseRows(t *testing.T) {
 	dir := t.TempDir()
 
