@@ -54,6 +54,8 @@ var DefaultCryptoIDs = map[string]string{
 	"TFUEL":  "theta-fuel",
 	// UpRock's token; its payout minimum is set in UPT (services/depin/uprock.yml).
 	"UPT": "uprock",
+	// Pearl, mined by SRBMiner-Multi and KRig. Kryptex credits its balance in BTC.
+	"PRL": "pearl-2",
 	// Stablecoins some providers pay in; a cash-out recorded in one must count
 	// toward the totals.
 	"USDT": "tether",

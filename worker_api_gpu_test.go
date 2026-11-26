@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io/fs"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -161,12 +162,77 @@ func TestHeartbeatReportsTheGPUGrantsInTheWebShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"gpu_grants":{"gpu-miner":{"vendor":"nvidia","count":1,"rocm":false}}`) {
-		t.Fatalf("payload %s lacks the GPU miner's grant", raw)
+	var payload struct {
+		SystemInfo struct {
+			GPUGrants map[string]map[string]any `json:"gpu_grants"`
+		} `json:"system_info"`
 	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal(err)
+	}
+	// The test entry and the two vendored GPU miners, each in the web shape.
+	nvidiaOne := map[string]any{"vendor": "nvidia", "count": float64(1), "rocm": false}
+	grants := payload.SystemInfo.GPUGrants
+	if len(grants) != 3 {
+		t.Fatalf("payload %s: want the grants of gpu-miner, kryptex-pearl and srbminer-multi", raw)
+	}
+	for _, slug := range []string{"gpu-miner", "kryptex-pearl", "srbminer-multi"} {
+		if !maps.Equal(grants[slug], nvidiaOne) {
+			t.Errorf("gpu_grants[%s] = %v, want %v", slug, grants[slug], nvidiaOne)
+		}
+	}
+	// The vendored catalog now carries GPU miners, so the control is a catalog of
+	// one entry without a GPU.
 	plain := joinedApp(t)
+	honeygain, err := fs.ReadFile(serviceFiles, "services/bandwidth/honeygain.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.catalog, err = catalog.LoadEmbedded(fstest.MapFS{"services/bandwidth/honeygain.yml": {Data: honeygain}}); err != nil {
+		t.Fatal(err)
+	}
 	raw, _ = json.Marshal(plain.upstreamPayload())
 	if !strings.Contains(string(raw), `"gpu_grants":{}`) {
 		t.Fatalf("payload %s: a catalog without GPU entries reports {} as the web worker does", raw)
+	}
+}
+
+// The two vendored GPU miners deploy over the #342 path with their one NVIDIA GPU
+// and the command the catalog builds from the deploy's values.
+func TestServerDeploysTheVendoredGPUMinersWithTheirGPU(t *testing.T) {
+	for slug, tc := range map[string]struct {
+		env  map[string]string
+		want []string
+	}{
+		"kryptex-pearl": {
+			env:  map[string]string{"KRYPTEX_EMAIL": "miner@example.com", "WORKER_NAME": "rig-1"},
+			want: []string{"--url", "stratum+ssl://prl.kryptex.network:8048", "--user", "miner@example.com/rig-1", "--no-rocm"},
+		},
+		"srbminer-multi": {
+			env: map[string]string{"WALLET": "prl1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq", "WORKER_NAME": "rig-1",
+				"ALGO": "pearlhash", "POOL_URL": "pearl.herominers.com:1200", "POOL_TLS": "true"},
+			want: []string{"--disable-cpu", "--algorithm", "pearlhash", "--pool", "pearl.herominers.com:1200",
+				"--wallet", "prl1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq.rig-1", "--tls", "true", "--log-file", "/dev/stdout"},
+		},
+	} {
+		app := gpuApp(t)
+		svc := mustService(t, app, slug)
+		spec := withGPUAsk(map[string]any{"image": svc.Docker.Image, "env": tc.env, "instance": 1})
+		if w := call(t, app, http.MethodPost, "/api/containers/"+slug+"/deploy", testWorkerKey, spec); w.Code != http.StatusOK {
+			t.Fatalf("%s deploy: %d %s", slug, w.Code, w.Body.String())
+		}
+		c, ok := app.Docker.Container("cashpilot-" + slug)
+		if !ok {
+			t.Fatalf("%s: no container", slug)
+		}
+		if len(c.DeviceRequests) != 1 || c.DeviceRequests[0].Driver != "nvidia" || c.DeviceRequests[0].Count != 1 {
+			t.Errorf("%s: DeviceRequests = %+v, want one nvidia GPU", slug, c.DeviceRequests)
+		}
+		if !slices.Equal(c.Cmd, tc.want) {
+			t.Errorf("%s: Cmd = %q\nwant %q", slug, c.Cmd, tc.want)
+		}
+		if limit := app.services.ScalingLimit(svc); limit.Max != 1 {
+			t.Errorf("%s: ScalingLimit = %+v, want one copy", slug, limit)
+		}
 	}
 }

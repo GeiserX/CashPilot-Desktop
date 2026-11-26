@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/moby/moby/api/types/container"
 )
 
@@ -97,5 +98,27 @@ func TestProxiedEarnerSetsInitFromWhatTheImageRuns(t *testing.T) {
 	}
 	if got := earnerInit([]string{"/usr/bin/tini", "--"}); got == nil || *got {
 		t.Fatalf("a tini image got Docker's init too: %v", got)
+	}
+}
+
+// The Compose export cannot inspect the image, so only an init the catalog's own
+// entrypoint or command starts counts.
+func TestCatalogBringsOwnInitReadsOnlyTheCatalog(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		entrypoint []string
+		command    string
+		want       bool
+	}{
+		{"nothing named", nil, "", false},
+		{"flags only", nil, "--disable-cpu --algorithm pearlhash", false},
+		{"tini entrypoint", []string{"/sbin/tini", "--", "run"}, "--flag", true},
+		{"s6 command", nil, "/init", true},
+		{"entrypoint wins over command", []string{"/bin/sh", "-c", "x"}, "/init", false},
+	} {
+		svc := catalog.Service{Docker: catalog.DockerConfig{Entrypoint: tc.entrypoint, Command: tc.command}}
+		if got := CatalogBringsOwnInit(svc); got != tc.want {
+			t.Errorf("%s: CatalogBringsOwnInit = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

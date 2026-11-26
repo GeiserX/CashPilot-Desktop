@@ -181,6 +181,19 @@ const plain = minerFee(miner({ devFeePercent: 1, devFeeSource: "javascript:alert
 check("a source that is not https:// gets no button", !plain.includes("data-url"), plain);
 check("the pool note is escaped", !plain.includes("<img"), plain);
 
+check("a pool that pays the wallet says so", xmrig.includes("then pays your wallet"), xmrig);
+
+// Kryptex holds the balance in its own account (payout model internal), so its card
+// must not promise a wallet payout (web #841).
+const kryptex = minerFee({
+  ...miner({ devFeePercent: 0, devFeeSource: "https://pool.kryptex.com/en/prl", poolFeeNote: "Kryptex lists a separate 3% Pearl PPS+ pool fee." }),
+  name: "Kryptex Pool (Pearl)",
+  slug: "kryptex-pearl",
+  payout: { model: "internal" },
+});
+check("a pool that holds the balance says it keeps it until a withdrawal", kryptex.includes("keeps your balance in its account until you request a withdrawal"), kryptex);
+check("and never says it pays your wallet", !kryptex.includes("pays your wallet") && !kryptex.includes("arrives in your wallet"), kryptex);
+
 check("a service that is not a miner shows no fee", minerFee({ name: "Honeygain", slug: "honeygain", mining: null }) === "");
 check("nor does a missing service", minerFee(undefined) === "");
 
