@@ -386,6 +386,9 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 // cannot be read (a locked keychain) waits for the next start. The helper can
 // report with legacy credentials before the first upgrade, but it cannot
 // publish any key it receives, and it does not report on a superseded revision.
+// A 2.0 development build from before the marker (never released) also left
+// no marker, and its state matches a 1.x save: such an install may lose its
+// pairing at this start and must join again.
 func (a *App) enrolSavedPairing(ctx context.Context) {
 	a.pairingMu.Lock()
 	defer a.pairingMu.Unlock()

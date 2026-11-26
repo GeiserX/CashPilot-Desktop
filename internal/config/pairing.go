@@ -98,11 +98,15 @@ func (m *Manager) PublishPairing(previous, serverURL string, removeFirewall bool
 		}
 	}
 	// Mark config.json first: a revision is never live without its marker, so
-	// a missing marker always means 1.x saved the file.
-	if err := m.markPairing(next); err != nil {
+	// a missing marker always means 1.x saved the file. When pairing.json cannot
+	// be written, the marker goes back, so a revision that 1.x superseded stays
+	// superseded and the next start tries the publication again.
+	unmark, err := m.markPairing(next)
+	if err != nil {
 		return err
 	}
 	if err := m.savePairing(next); err != nil {
+		unmark()
 		return err
 	}
 	m.clearPairingCredential(current)
@@ -136,31 +140,54 @@ func (m *Manager) KeepPairing(revision string) error {
 	if revision == "" || current.Revision != revision {
 		return ErrPairingChanged
 	}
-	return m.markPairing(current)
+	_, err = m.markPairing(current)
+	return err
 }
 
 // markPairing writes the revision's marker into config.json and copies its
 // server into upstreamUrl and mode, so 1.x after a downgrade shows the same
-// pairing, and a 1.x change to it can be told from a save that kept it.
-func (m *Manager) markPairing(p Pairing) error {
+// pairing, and a 1.x change to it can be told from a save that kept it. unmark
+// puts the three fields back as they were (best effort).
+func (m *Manager) markPairing(p Pairing) (unmark func(), err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	release, err := m.lockConfig()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer release()
 	_, _ = m.reloadLocked()
-	next := m.cfg
+	was, next := m.cfg, m.cfg
 	next.PairingRevision, next.UpstreamURL, next.Mode = p.Revision, p.ServerURL, ModeLead
 	if p.ServerURL != "" {
 		next.Mode = ModeFollower
 	}
 	if err := m.persist(next); err != nil {
-		return err
+		return nil, err
 	}
 	m.cfg = next
-	return nil
+	return func() {
+		_ = m.Update(func(c *AppConfig) {
+			c.PairingRevision, c.UpstreamURL, c.Mode = was.PairingRevision, was.UpstreamURL, was.Mode
+		})
+	}, nil
+}
+
+// markerOnDisk reads the marker from config.json. The background helper keeps
+// its own copy of the file, which can predate the window's last publication.
+// ok is false when the file cannot be read; the copy in memory is used then.
+func (m *Manager) markerOnDisk() (marker string, ok bool) {
+	raw, err := os.ReadFile(m.path)
+	if err != nil {
+		return "", false
+	}
+	var file struct {
+		PairingRevision string `json:"pairingRevision"`
+	}
+	if json.Unmarshal(raw, &file) != nil {
+		return "", false
+	}
+	return file.PairingRevision, true
 }
 
 // UpdatePairing changes only the named revision. The callback can compare the
@@ -189,13 +216,23 @@ func (m *Manager) UpdatePairing(revision string, change func(*Pairing) error) er
 	return err
 }
 
+// writePairingFile writes pairing.json. Tests replace it to make the write fail.
+var writePairingFile = writeFileAtomic
+
+// FailPairingWritesForTest makes every pairing.json write return err until
+// restore runs. Not safe while other goroutines publish.
+func FailPairingWritesForTest(err error) (restore func()) {
+	writePairingFile = func(string, []byte) error { return err }
+	return func() { writePairingFile = writeFileAtomic }
+}
+
 func (m *Manager) savePairing(p Pairing) error {
 	// Match Reload's lock order, so a reload that saw the previous file cannot
 	// overwrite the new in-memory view after publication.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	raw, _ := json.Marshal(p)
-	if err := writeFileAtomic(m.PairingPath(), raw); err != nil {
+	if err := writePairingFile(m.PairingPath(), raw); err != nil {
 		return err
 	}
 	m.pairing = p
@@ -238,10 +275,15 @@ func (m *Manager) ReadPairingCredential(promote bool) (Pairing, PairingCredentia
 	if err != nil || p.Revision == "" {
 		return p, key, err
 	}
-	m.mu.RLock()
-	superseded := m.cfg.PairingRevision == ""
-	m.mu.RUnlock()
-	if superseded {
+	// The pairing lock orders this read after a whole publication, which marks
+	// config.json before it writes pairing.json.
+	marker, ok := m.markerOnDisk()
+	if !ok {
+		m.mu.RLock()
+		marker = m.cfg.PairingRevision
+		m.mu.RUnlock()
+	}
+	if marker == "" {
 		return p, key, ErrPairingSuperseded
 	}
 	user, path := m.credentialSlot(p)

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -170,9 +171,19 @@ func helperBefore(t *testing.T, app *appUnderTest) *appUnderTest {
 func assertNoAuthorityFor(t *testing.T, app *appUnderTest, serverA *httptest.Server, hitsA *atomic.Int32) {
 	t.Helper()
 	before := hitsA.Load()
+	app.upstream.mu.Lock()
+	app.upstream.lastFailure = upstream.Failure{}
+	app.upstream.mu.Unlock()
 	app.sendUpstream(t.Context(), &upstream.Client{HTTP: serverA.Client()}, serverA.URL, "")
 	if hitsA.Load() != before {
 		t.Error("a heartbeat reached server A")
+	}
+	// The wait for the window is not a key problem: no keychain error shows.
+	app.upstream.mu.Lock()
+	failure := app.upstream.lastFailure
+	app.upstream.mu.Unlock()
+	if failure.Code == "keychain" {
+		t.Errorf("the heartbeat reported a keychain failure: %+v", failure)
 	}
 	if key := app.currentWorkerKey(); key != "" {
 		t.Errorf("server A's key %q still authorizes commands", key)
@@ -409,31 +420,110 @@ func assertStillOnA(t *testing.T, app *appUnderTest, pairingA config.Pairing, ch
 }
 
 // A locked keychain at the start is not "1.x left no key": the pairing waits,
-// A gets nothing meanwhile, and the next start after the unlock carries B over.
+// A gets nothing meanwhile, and the next start after the unlock carries the 1.x
+// pairing over. The rejoin of A is the case that catches a locked read taken
+// as "no key": that read would keep A's old revision and lose the 1.x key.
+// Only macOS and Windows tell a locked keychain from a missing key
+// (refuseKeyRegen); elsewhere a locked store reads as no key by design.
 func TestLockedKeychainDelaysThe1xCarryOver(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("a locked keychain reads as a missing key on " + runtime.GOOS)
+	}
+	for _, sameServer := range []bool{false, true} {
+		t.Run(map[bool]string{false: "1.x joined B", true: "1.x rejoined A"}[sameServer], func(t *testing.T) {
+			app, serverA, hitsA := joinedOn2x(t)
+			pairingA := pairingOf(t, app)
+			url, worker := serverA.URL, roundTripARejoined
+			if !sameServer {
+				serverB, _ := roundTripServer(t, "", roundTripBKey)
+				url, worker = serverB.URL, roundTripBKey
+			}
+
+			joinOn1x(t, app, url, worker)
+			restart(t, app)
+			testKeyring.fail(errors.New("test keychain locked"))
+			t.Cleanup(testKeyring.reset)
+			app.enrolSavedPairing(t.Context())
+			if p := pairingOf(t, app); p != pairingA {
+				t.Fatalf("a locked keychain changed the pairing: %+v, want %+v", p, pairingA)
+			}
+			assertNoAuthorityFor(t, app, serverA, hitsA)
+
+			// The mock forgets every entry when it unlocks; 1.x's keys are put back.
+			testKeyring.reset()
+			setLegacyKeys(t, testSharedKey, worker)
+			restart(t, app)
+			app.enrolSavedPairing(t.Context())
+			if p := pairingOf(t, app); p.ServerURL != url || p.Revision == pairingA.Revision {
+				t.Fatalf("after the unlock: %+v, want a new revision for %s", p, url)
+			}
+			if _, got := storedKeys(t, app.App); got != worker {
+				t.Errorf("worker key %q after the unlock, want the 1.x key %q", got, worker)
+			}
+			if !app.cfg.Config().ServerCommandsOff {
+				t.Error("server commands are on after the carry-over")
+			}
+		})
+	}
+}
+
+// The Leave that ends a 1.x round trip cannot write pairing.json. A's revision
+// stays superseded: nothing reports to A or takes its commands, and the next
+// start publishes the Leave.
+func TestFailedPairingWriteKeepsThe1xLeaveWaiting(t *testing.T) {
 	app, serverA, hitsA := joinedOn2x(t)
 	pairingA := pairingOf(t, app)
-	serverB, _ := roundTripServer(t, "", roundTripBKey)
 
-	joinOn1x(t, app, serverB.URL, roundTripBKey)
+	setLegacyKeys(t, "", "")
+	saveAs1x(t, app, func(cfg map[string]any) {
+		delete(cfg, "upstreamUrl")
+		cfg["mode"] = config.ModeLead
+	})
 	restart(t, app)
-	testKeyring.fail(errors.New("test keychain locked"))
-	t.Cleanup(testKeyring.reset)
+	restore := config.FailPairingWritesForTest(errors.New("test disk full"))
+	t.Cleanup(restore)
 	app.enrolSavedPairing(t.Context())
+	restore()
 	if p := pairingOf(t, app); p != pairingA {
-		t.Fatalf("a locked keychain changed the pairing: %+v, want %+v", p, pairingA)
+		t.Fatalf("the failed Leave changed the pairing: %+v, want %+v", p, pairingA)
 	}
 	assertNoAuthorityFor(t, app, serverA, hitsA)
-
-	// The mock forgets every entry when it unlocks; 1.x's keys are put back.
-	testKeyring.reset()
-	setLegacyKeys(t, testSharedKey, roundTripBKey)
 	restart(t, app)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+
 	app.enrolSavedPairing(t.Context())
-	if p := pairingOf(t, app); p.ServerURL != serverB.URL || p.Revision == pairingA.Revision {
-		t.Fatalf("after the unlock: %+v, want a new revision for B %s", p, serverB.URL)
+	if p := pairingOf(t, app); p.Revision == pairingA.Revision || p.ServerURL != "" {
+		t.Fatalf("the next start: %+v, want a new revision with no server", p)
 	}
-	if !app.cfg.Config().ServerCommandsOff {
-		t.Error("server commands are on after the carry-over")
+	assertSlotCleared(t, app, pairingA)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+}
+
+// The background helper loaded config.json before the window's first join, so
+// its copy has no marker. The join is still the window's own: the helper
+// reports to the server and listens at once.
+func TestHelperStartedBeforeA2xJoinUsesItAtOnce(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	noFirewallRule(t)
+	app := newAppUnderTest(t)
+	app.ctx = nil
+	app.window = true
+	helper := helperBefore(t, app)
+	serverA, hitsA := roundTripServer(t, roundTripAKey, roundTripAKey)
+	if out, err := app.JoinCashPilot(JoinRequest{URL: serverA.URL, Key: testSharedKey}); err != nil || !out.OK {
+		t.Fatalf("2.0 join to A: %+v, %v", out, err)
+	}
+
+	if _, _, err := helper.cfg.ReadPairingCredential(false); err != nil {
+		t.Errorf("the helper cannot read the new pairing: %v", err)
+	}
+	before := hitsA.Load()
+	helper.sendUpstream(t.Context(), &upstream.Client{HTTP: serverA.Client()}, serverA.URL, "")
+	if hitsA.Load() == before {
+		t.Error("the helper did not report to the server the window joined")
+	}
+	helper.syncWorkerAPI()
+	if n := listening(helper); n != 1 {
+		t.Errorf("%d helper listeners after the join, want 1", n)
 	}
 }
