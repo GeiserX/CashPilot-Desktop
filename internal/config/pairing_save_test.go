@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 )
@@ -322,5 +323,46 @@ func TestReloadDecidesOnTheMarkerReadFromDisk(t *testing.T) {
 	}
 	if p, key, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
 		t.Errorf("unreadable config.json: revision %s gave key %q, %v; want ErrPairingSuperseded", p.Revision, key.Worker, err)
+	}
+}
+
+// A credential read that read A's marker cannot undo a Reload that read a
+// newer file: the read and the state change share one lock. The hook holds the
+// credential read between its read and its state change while a publication
+// stops between its two writes (the next revision's marker over A) and a
+// Reload runs. Without the lock, the Reload finishes inside the hook, the older
+// read clears its state, and the cached next marker lets A through once
+// config.json cannot be read.
+func TestAnOlderMarkerReadCannotUndoANewerReload(t *testing.T) {
+	window, helper := twoManagers(t)
+	publish(t, window, "http://192.168.1.10:8080", "worker-a")
+	if _, err := helper.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := make(chan struct{})
+	afterMarkerReadForTest = func() {
+		afterMarkerReadForTest = nil
+		editConfigFile(t, window, func(f map[string]any) {
+			f["pairingRevision"], f["upstreamUrl"] = "NEXT-REVISION-NEVER-PUBLISHED", "http://192.168.1.20:8080"
+		})
+		go func() {
+			_, _ = helper.Reload()
+			close(reloaded)
+		}()
+		select {
+		case <-reloaded:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	t.Cleanup(func() { afterMarkerReadForTest = nil })
+	if _, _, err := helper.ReadPairingCredential(false); err != nil {
+		t.Fatalf("A's own marker was read first: %v", err)
+	}
+	<-reloaded
+	if err := os.WriteFile(filepath.Join(window.AppDir(), "config.json"), []byte(brokenConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, key, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
+		t.Errorf("unreadable config.json after the newer Reload: revision %s gave key %q, %v; want ErrPairingSuperseded", p.Revision, key.Worker, err)
 	}
 }

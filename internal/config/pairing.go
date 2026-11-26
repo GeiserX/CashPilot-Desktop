@@ -200,6 +200,10 @@ func (m *Manager) markerOnDisk() (marker string, ok bool) {
 	return file.PairingRevision, true
 }
 
+// afterMarkerReadForTest, when set by a test, runs in PairingSuperseded between
+// its read of config.json and the state change.
+var afterMarkerReadForTest func()
+
 // PairingSuperseded reports whether config.json lacks the revision's marker
 // (ErrPairingSuperseded). On disk, only the revision's own marker counts. An
 // empty one means 1.x saved config.json; another revision's means a
@@ -209,9 +213,14 @@ func (m *Manager) markerOnDisk() (marker string, ok bool) {
 // Manager already read as superseded on disk, by a credential read, a load or a
 // Reload, stays superseded then.
 func (m *Manager) PairingSuperseded(p Pairing) bool {
-	marker, ok := m.markerOnDisk()
+	// The read and the state change happen under one lock, so a Reload cannot
+	// record a newer read in between and be undone by this older one.
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	marker, ok := m.markerOnDisk()
+	if afterMarkerReadForTest != nil {
+		afterMarkerReadForTest()
+	}
 	if !ok {
 		return m.cfg.PairingRevision == "" || m.supersededSeen == p.Revision
 	}
