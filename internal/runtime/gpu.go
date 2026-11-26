@@ -1,7 +1,10 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -67,6 +70,10 @@ var (
 	osReleasePath = "/proc/sys/kernel/osrelease"
 	gpuHostOS     = goruntime.GOOS
 	localHostname = os.Hostname
+	// daemonHostLocal says whether an endpoint is this computer's own socket or
+	// pipe. A var so a test's fake daemon, which listens on loopback tcp, can stand
+	// in for the local socket.
+	daemonHostLocal = localDaemonHost
 )
 
 // hostGPUs is what this machine's sysfs says about its GPUs.
@@ -86,11 +93,37 @@ type gpuVendor struct {
 }
 
 func readSysfs(path string) string {
+	value, _ := readSysfsValue(path)
+	return value
+}
+
+// readSysfsValue reads one sysfs attribute. A value that reads as empty is an error
+// too: every attribute read here always holds one.
+func readSysfsValue(path string) (string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	return strings.ToLower(strings.TrimSpace(string(raw)))
+	value := strings.ToLower(strings.TrimSpace(string(raw)))
+	if value == "" {
+		return "", fmt.Errorf("%s is empty", path)
+	}
+	return value, nil
+}
+
+// localDaemonHost reports whether a Docker endpoint is this computer's own: a unix
+// socket, or a named pipe on this machine (npipe:////./pipe/...). A tcp or ssh
+// endpoint, or a pipe on another machine, may reach a daemon elsewhere, even one
+// that reports this computer's hostname and kernel. An empty endpoint says nothing.
+func localDaemonHost(host string) bool {
+	lower := strings.ToLower(strings.TrimSpace(host))
+	if strings.HasPrefix(lower, "unix://") {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(lower, "npipe:"); ok {
+		return strings.HasPrefix(strings.TrimLeft(rest, "/"), "./pipe/")
+	}
+	return false
 }
 
 func renderNumber(path string) int {
@@ -105,7 +138,8 @@ func renderNumber(path string) int {
 // sameKernel reports whether the daemon runs on this machine's own kernel, the only
 // case where this process's sysfs describes the daemon's GPUs. The daemon names its
 // host in /info; Docker Desktop's VM, a Podman machine and a remote DOCKER_HOST all
-// name another one.
+// name another one. The endpoint must be this computer's own socket or pipe too: a
+// remote daemon can report the same hostname and kernel release.
 func sameKernel(facts daemonInfo) (bool, string) {
 	if gpuHostOS != "linux" {
 		return false, fmt.Sprintf("GPU detection is not implemented for %s; this says nothing about whether one exists", gpuHostOS)
@@ -113,6 +147,9 @@ func sameKernel(facts daemonInfo) (bool, string) {
 	release := readSysfs(osReleasePath)
 	if strings.Contains(release, "microsoft") {
 		return false, "this is WSL, where a GPU is not on the PCI bus CashPilot reads"
+	}
+	if !daemonHostLocal(facts.DaemonHost) {
+		return false, "CashPilot reaches the container runtime through a network endpoint, so it may run on another computer, whose GPUs CashPilot cannot read"
 	}
 	if facts.Hostname == "" {
 		return false, "the container runtime did not say which computer it runs on"
@@ -129,7 +166,8 @@ func sameKernel(facts daemonInfo) (bool, string) {
 
 // readHostGPUs reads the daemon's GPUs from sysfs, when the daemon shares this
 // machine's kernel. A display chip of another vendor (a server BMC's ASPEED) is
-// ignored.
+// ignored. A read that fails part way is inconclusive, never "no GPU": only a read
+// where every step succeeded may refuse a vendor.
 func readHostGPUs(facts daemonInfo) hostGPUs {
 	result := hostGPUs{Vendors: map[string]*gpuVendor{}}
 	if ok, why := sameKernel(facts); !ok {
@@ -147,21 +185,46 @@ func readHostGPUs(facts daemonInfo) hostGPUs {
 		result.Reason = fmt.Sprintf("this computer's GPU devices could not be read (%v)", err)
 		return result
 	}
+	var failed []string
 	for _, dev := range devices {
 		dir := filepath.Join(sysfsRoot, "bus", "pci", "devices", dev.Name())
-		if !strings.HasPrefix(readSysfs(filepath.Join(dir, "class")), "0x03") {
+		class, err := readSysfsValue(filepath.Join(dir, "class"))
+		if err != nil {
+			failed = append(failed, err.Error())
 			continue
 		}
-		if vendor := gpuVendorIDs[readSysfs(filepath.Join(dir, "vendor"))]; vendor != "" {
+		if !strings.HasPrefix(class, "0x03") {
+			continue
+		}
+		id, err := readSysfsValue(filepath.Join(dir, "vendor"))
+		if err != nil {
+			failed = append(failed, err.Error())
+			continue
+		}
+		if vendor := gpuVendorIDs[id]; vendor != "" {
 			entry(vendor).PCI++
 		}
 	}
-	nodes, _ := os.ReadDir(filepath.Join(sysfsRoot, "class", "drm"))
+	// No drm class at all is a machine with no GPU driver loaded: a sure "none".
+	nodes, err := os.ReadDir(filepath.Join(sysfsRoot, "class", "drm"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		failed = append(failed, err.Error())
+	}
 	for _, node := range nodes {
 		if !strings.HasPrefix(node.Name(), "renderD") {
 			continue
 		}
-		if vendor := gpuVendorIDs[readSysfs(filepath.Join(sysfsRoot, "class", "drm", node.Name(), "device", "vendor"))]; vendor != "" {
+		id, err := readSysfsValue(filepath.Join(sysfsRoot, "class", "drm", node.Name(), "device", "vendor"))
+		if errors.Is(err, fs.ErrNotExist) {
+			// A render node of a GPU that is not on the PCI bus (an ARM board's own
+			// GPU) has no vendor id, and is none of the three vendors.
+			continue
+		}
+		if err != nil {
+			failed = append(failed, err.Error())
+			continue
+		}
+		if vendor := gpuVendorIDs[id]; vendor != "" {
 			entry(vendor).RenderNodes = append(entry(vendor).RenderNodes, "/dev/dri/"+node.Name())
 		}
 	}
@@ -169,6 +232,12 @@ func readHostGPUs(facts daemonInfo) hostGPUs {
 		sort.Slice(v.RenderNodes, func(i, j int) bool { return renderNumber(v.RenderNodes[i]) < renderNumber(v.RenderNodes[j]) })
 	}
 	_, err = os.Stat(filepath.Join(sysfsRoot, "class", "kfd", "kfd"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		failed = append(failed, err.Error())
+	}
+	if len(failed) > 0 {
+		return hostGPUs{Vendors: map[string]*gpuVendor{}, Reason: fmt.Sprintf("part of this computer's GPU details could not be read (%s)", strings.Join(failed, "; "))}
+	}
 	result.KFD = err == nil
 	result.Conclusive = true
 	return result
@@ -267,18 +336,52 @@ func buildGPU(svc catalog.Service, slug string, instance int, facts daemonInfo) 
 	if !host.Conclusive {
 		return gpuResources{}, fmt.Errorf("%s needs this computer's %s GPU, which CashPilot passes in only when the container runtime runs on this computer's own Linux kernel (%s). Nothing was deployed", name, gpuVendorNames[grant.Vendor], host.Reason)
 	}
+	var devices []container.DeviceMapping
+	for _, n := range grantDevices(grant, host) {
+		devices = append(devices, container.DeviceMapping{PathOnHost: n, PathInContainer: n, CgroupPermissions: "rwm"})
+	}
+	return gpuResources{Devices: devices}, nil
+}
+
+// grantDevices is the device paths an AMD or Intel grant gets from a conclusive
+// read that has the vendor: its first render node (or all of them) and, for ROCm,
+// /dev/kfd.
+func grantDevices(grant catalog.GPUGrant, host hostGPUs) []string {
 	nodes := host.renderNodes(grant.Vendor)
 	if !grant.All {
 		nodes = nodes[:1]
 	}
-	var devices []container.DeviceMapping
-	for _, n := range nodes {
-		devices = append(devices, container.DeviceMapping{PathOnHost: n, PathInContainer: n, CgroupPermissions: "rwm"})
-	}
 	if grant.ROCm {
-		devices = append(devices, container.DeviceMapping{PathOnHost: catalog.KFDDevice, PathInContainer: catalog.KFDDevice, CgroupPermissions: "rwm"})
+		nodes = append(nodes, catalog.KFDDevice)
 	}
-	return gpuResources{Devices: devices}, nil
+	return nodes
+}
+
+// HostGPUDevices is the device paths a deploy on this computer would pass in for an
+// AMD or Intel grant, for the compose export, which has to name them. It fails when
+// they cannot be known: the runtime runs elsewhere, the read is not conclusive, or
+// the vendor is missing.
+func HostGPUDevices(ctx context.Context, grant catalog.GPUGrant) ([]string, error) {
+	cli, err := dockerClient()
+	if err != nil {
+		return nil, err
+	}
+	defer cli.Close()
+	return hostGPUDevices(daemonFacts(ctx, cli), grant)
+}
+
+func hostGPUDevices(facts daemonInfo, grant catalog.GPUGrant) ([]string, error) {
+	if grant.Vendor == "nvidia" {
+		return nil, errors.New("an NVIDIA GPU is passed in by a device request, not by device paths")
+	}
+	host := readHostGPUs(facts)
+	if !host.Conclusive {
+		return nil, errors.New(host.Reason)
+	}
+	if problem := host.missing(grant); problem != "" {
+		return nil, errors.New(problem)
+	}
+	return grantDevices(grant, host), nil
 }
 
 // applyGPU puts a grant on the container's host config, next to the devices the
@@ -330,9 +433,4 @@ func withGPUHint(err error) error {
 		}
 	}
 	return err
-}
-
-// gpuDevice reports whether a device path is one a GPU grant may pass in.
-func gpuDevice(path string) bool {
-	return renderNodeCeiling[path] || path == catalog.KFDDevice
 }

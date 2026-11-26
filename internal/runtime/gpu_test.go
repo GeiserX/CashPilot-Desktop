@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -57,7 +58,16 @@ func fakeSysfs(t *testing.T, pci map[string][2]string, render map[string]string,
 	sysfsRoot, osReleasePath, gpuHostOS = root, release, "linux"
 	localHostname = func() (string, error) { return "minerbox", nil }
 	t.Cleanup(func() { sysfsRoot, osReleasePath, gpuHostOS, localHostname = oldRoot, oldRelease, oldOS, oldHost })
-	return daemonInfo{OSType: "linux", Hostname: "minerbox"}
+	return daemonInfo{OSType: "linux", Hostname: "minerbox", DaemonHost: "unix:///var/run/docker.sock"}
+}
+
+// localFakeDaemon makes the test's fake daemon, which listens on loopback tcp,
+// count as this computer's own socket.
+func localFakeDaemon(t *testing.T) {
+	t.Helper()
+	old := daemonHostLocal
+	daemonHostLocal = func(string) bool { return true }
+	t.Cleanup(func() { daemonHostLocal = old })
 }
 
 // watchtower's shape: three Intel render nodes (SR-IOV functions) and the ASPEED
@@ -72,6 +82,18 @@ func watchtowerSysfs(t *testing.T) daemonInfo {
 		},
 		map[string]string{"renderD128": "0x8086", "renderD129": "0x8086", "renderD130": "0x8086"},
 		false)
+}
+
+// writeSysfs writes one attribute into the fake tree fakeSysfs set up.
+func writeSysfs(t *testing.T, rel, value string) {
+	t.Helper()
+	path := filepath.Join(sysfsRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func gpuService(vendor string, mutate ...func(*catalog.Service)) catalog.Service {
@@ -119,6 +141,19 @@ func TestReadHostGPUsIsInconclusiveWhenItCannotSeeTheDaemonsMachine(t *testing.T
 		"no hostname here":        func(*daemonInfo) { localHostname = func() (string, error) { return "", errors.New("no name") } },
 		"same name, other kernel": func(f *daemonInfo) { f.KernelVersion = "6.1.0-rpi7" },
 		"sysfs not readable":      func(*daemonInfo) { sysfsRoot = filepath.Join(sysfsRoot, "missing") },
+		// A remote daemon can report this computer's own name and kernel release.
+		"tcp endpoint, same name and kernel": func(f *daemonInfo) {
+			f.DaemonHost, f.KernelVersion = "tcp://10.0.0.5:2376", "6.8.0-generic"
+		},
+		"ssh endpoint, same name": func(f *daemonInfo) { f.DaemonHost = "ssh://me@minerbox" },
+		"pipe on another machine": func(f *daemonInfo) { f.DaemonHost = "npipe:////server/pipe/docker_engine" },
+		"endpoint not said":       func(f *daemonInfo) { f.DaemonHost = "" },
+		"pci class empty":         func(*daemonInfo) { writeSysfs(t, "bus/pci/devices/0000_00_1f.3/class", "") },
+		"pci class missing": func(*daemonInfo) {
+			_ = os.Remove(filepath.Join(sysfsRoot, "bus", "pci", "devices", "0000_00_1f.3", "class"))
+		},
+		"pci vendor empty":         func(*daemonInfo) { writeSysfs(t, "bus/pci/devices/0000_00_02.0/vendor", "") },
+		"render node vendor empty": func(*daemonInfo) { writeSysfs(t, "class/drm/renderD129/device/vendor", "") },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -133,6 +168,134 @@ func TestReadHostGPUsIsInconclusiveWhenItCannotSeeTheDaemonsMachine(t *testing.T
 				t.Fatalf("inconclusive read refused: %s", got)
 			}
 		})
+	}
+}
+
+// A listing or a stat that fails for another reason than "not there" is not a sure
+// "none". ENOTDIR has no form on Windows, which reports such a path as missing.
+func TestReadHostGPUsIsInconclusiveWhenAListingFails(t *testing.T) {
+	if goruntime.GOOS == "windows" {
+		t.Skip("a path through a file reads as not-exist on Windows")
+	}
+	cases := map[string]string{
+		"drm listing fails": "class/drm",
+		"kfd stat fails":    "class/kfd",
+	}
+	for name, rel := range cases {
+		t.Run(name, func(t *testing.T) {
+			facts := watchtowerSysfs(t)
+			_ = os.RemoveAll(filepath.Join(sysfsRoot, filepath.FromSlash(rel)))
+			writeSysfs(t, rel, "a file where a directory belongs")
+			host := readHostGPUs(facts)
+			if host.Conclusive || len(host.Vendors) != 0 || !strings.Contains(host.Reason, "could not be read") {
+				t.Fatalf("host = %+v, want inconclusive with the failure", host)
+			}
+		})
+	}
+}
+
+// A machine with no GPU driver loaded has no drm class and no kfd: that read is
+// complete, so it stays sure and still refuses a vendor it lacks. A render node of
+// a GPU off the PCI bus has no vendor id and is not a failure either.
+func TestReadHostGPUsStaysConclusiveWhenEveryReadSucceeds(t *testing.T) {
+	facts := fakeSysfs(t, map[string][2]string{"0000:00:1f.3": {"0x040300", "0x8086"}}, nil, false)
+	if err := os.RemoveAll(filepath.Join(sysfsRoot, "class", "drm")); err != nil {
+		t.Fatal(err)
+	}
+	host := readHostGPUs(facts)
+	if !host.Conclusive || host.describe() != "no GPU" {
+		t.Fatalf("host = %+v, want a sure \"no GPU\"", host)
+	}
+	if got := host.missing(catalog.GPUGrant{Vendor: "nvidia"}); !strings.Contains(got, "no NVIDIA GPU") {
+		t.Fatalf("missing = %q, want the refusal", got)
+	}
+	if err := os.MkdirAll(filepath.Join(sysfsRoot, "class", "drm", "renderD128", "device"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if host := readHostGPUs(facts); !host.Conclusive || len(host.Vendors) != 0 {
+		t.Fatalf("a render node with no vendor id: %+v", host)
+	}
+}
+
+func TestLocalDaemonHost(t *testing.T) {
+	for host, want := range map[string]bool{
+		"unix:///var/run/docker.sock":               true,
+		"unix:///run/user/1000/podman/podman.sock":  true,
+		"npipe:////./pipe/docker_engine":            true,
+		"NPIPE:////./pipe/dockerDesktopLinuxEngine": true,
+		"npipe:////server/pipe/docker_engine":       false,
+		"tcp://127.0.0.1:2375":                      false,
+		"tcp://10.0.0.5:2376":                       false,
+		"ssh://me@box":                              false,
+		"http://docker.example":                     false,
+		"":                                          false,
+	} {
+		if got := localDaemonHost(host); got != want {
+			t.Errorf("localDaemonHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+}
+
+// Through the real client: the fake daemon listens on tcp and names this computer,
+// so it is not read as local. NVIDIA goes ahead for Docker to decide; Intel is
+// refused, since its render node cannot be read.
+func TestATCPEndpointNamingThisComputerIsNotReadAsLocal(t *testing.T) {
+	watchtowerSysfs(t)
+	fake := &fakeDocker{infoName: "minerbox"}
+	fake.start(t)
+	spec := deploySpec("gpu-miner")
+	spec.Service = gpuService("nvidia")
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), spec, nil); err != nil {
+		t.Fatalf("Deploy = %v, want the NVIDIA request to go out (sysfs here is not the daemon's)", err)
+	}
+	if host, _ := createHostConfig(t, fake); len(host.DeviceRequests) != 1 {
+		t.Fatalf("DeviceRequests = %+v", host.DeviceRequests)
+	}
+	spec.Service = gpuService("intel")
+	if _, err := (&DockerProvider{}).Deploy(context.Background(), spec, nil); err == nil || !strings.Contains(err.Error(), "network endpoint") {
+		t.Fatalf("Deploy = %v, want Intel refused on a network endpoint", err)
+	}
+}
+
+func TestHostGPUDevicesIsWhatTheDeployPassesIn(t *testing.T) {
+	facts := fakeSysfs(t,
+		map[string][2]string{"0000:00:02.0": {"0x030000", "0x8086"}, "0000:03:00.0": {"0x030000", "0x1002"}},
+		map[string]string{"renderD128": "0x8086", "renderD129": "0x1002"}, true)
+	got, err := hostGPUDevices(facts, catalog.GPUGrant{Vendor: "amd", ROCm: true})
+	if err != nil || !slices.Equal(got, []string{"/dev/dri/renderD129", catalog.KFDDevice}) {
+		t.Fatalf("amd = %v, %v (want the AMD node, not the Intel renderD128)", got, err)
+	}
+	if got, err := hostGPUDevices(facts, catalog.GPUGrant{Vendor: "intel"}); err != nil || !slices.Equal(got, []string{"/dev/dri/renderD128"}) {
+		t.Fatalf("intel = %v, %v", got, err)
+	}
+	if _, err := hostGPUDevices(facts, catalog.GPUGrant{Vendor: "nvidia"}); err == nil {
+		t.Fatal("an NVIDIA grant got device paths")
+	}
+	facts.DaemonHost = "tcp://10.0.0.5:2376"
+	if _, err := hostGPUDevices(facts, catalog.GPUGrant{Vendor: "amd"}); err == nil || !strings.Contains(err.Error(), "network endpoint") {
+		t.Fatalf("remote endpoint: %v", err)
+	}
+	facts = watchtowerSysfs(t)
+	if _, err := hostGPUDevices(facts, catalog.GPUGrant{Vendor: "amd"}); err == nil || !strings.Contains(err.Error(), "no AMD GPU") {
+		t.Fatalf("missing vendor: %v", err)
+	}
+}
+
+// The export's entry point asks the daemon the client reaches: the fake answers on
+// tcp, so the node is refused as unknowable, and as this computer's own socket it
+// is the AMD card's renderD129.
+func TestHostGPUDevicesAsksTheDaemon(t *testing.T) {
+	fakeSysfs(t,
+		map[string][2]string{"0000:00:02.0": {"0x030000", "0x8086"}, "0000:03:00.0": {"0x030000", "0x1002"}},
+		map[string]string{"renderD128": "0x8086", "renderD129": "0x1002"}, false)
+	fake := &fakeDocker{infoName: "minerbox"}
+	fake.start(t)
+	if _, err := HostGPUDevices(context.Background(), catalog.GPUGrant{Vendor: "amd"}); err == nil || !strings.Contains(err.Error(), "network endpoint") {
+		t.Fatalf("HostGPUDevices over tcp = %v, want refused", err)
+	}
+	localFakeDaemon(t)
+	if got, err := HostGPUDevices(context.Background(), catalog.GPUGrant{Vendor: "amd"}); err != nil || !slices.Equal(got, []string{"/dev/dri/renderD129"}) {
+		t.Fatalf("HostGPUDevices = %v, %v", got, err)
 	}
 }
 
@@ -304,10 +467,10 @@ func TestWithGPUHint(t *testing.T) {
 	}
 }
 
-func TestGPUDeviceIsTheCeilingOnly(t *testing.T) {
-	for path, want := range map[string]bool{"/dev/dri/renderD128": true, "/dev/dri/renderD135": true, "/dev/kfd": true, "/dev/dri/renderD136": false, "/dev/dri/card0": false, "/dev/dri": false, "/dev/net/tun": false} {
-		if gpuDevice(path) != want {
-			t.Errorf("gpuDevice(%q) = %v", path, !want)
+func TestRenderNodeCeilingIsExactNodesOnly(t *testing.T) {
+	for path, want := range map[string]bool{"/dev/dri/renderD128": true, "/dev/dri/renderD135": true, "/dev/kfd": false, "/dev/dri/renderD136": false, "/dev/dri/card0": false, "/dev/dri": false, "/dev/net/tun": false} {
+		if renderNodeCeiling[path] != want {
+			t.Errorf("renderNodeCeiling[%q] = %v", path, !want)
 		}
 	}
 }
@@ -367,6 +530,7 @@ func TestDeployGivesAServiceWithoutTheBlockNoGPU(t *testing.T) {
 
 func TestDeployRefusesAGPUTheMachineLacksBeforeTouchingAnything(t *testing.T) {
 	watchtowerSysfs(t)
+	localFakeDaemon(t)
 	fake := &fakeDocker{infoName: "minerbox"}
 	fake.start(t)
 	spec := deploySpec("gpu-miner")
@@ -469,6 +633,47 @@ func TestDriftKnowsTheGPUGrant(t *testing.T) {
 	again.Docker.GPU = &catalog.GPU{Vendor: "amd", Count: "all"}
 	if ShapeFingerprint(again) == ShapeFingerprint(svc) {
 		t.Fatal("changing the GPU count kept the fingerprint")
+	}
+}
+
+// A grant the catalog removed or changed leaves GPU access a redeploy takes away,
+// and an unchanged valid grant is no drift.
+func TestDriftReportsGPUAccessTheCatalogNoLongerGrants(t *testing.T) {
+	shape := func(svc catalog.Service, requests []string, devices ...string) ContainerShape {
+		host := &container.HostConfig{}
+		for _, d := range requests {
+			host.DeviceRequests = append(host.DeviceRequests, container.DeviceRequest{Driver: d, Count: 1})
+		}
+		for _, d := range devices {
+			host.Devices = append(host.Devices, container.DeviceMapping{PathOnHost: d, PathInContainer: d})
+		}
+		return shapeOf(container.InspectResponse{Config: &container.Config{Image: svc.Docker.Image}, HostConfig: host})
+	}
+	plain := gpuService("nvidia", func(s *catalog.Service) { s.Docker.GPU = nil })
+	rocm := gpuService("amd", func(s *catalog.Service) { s.Docker.GPU.ROCm = true })
+	amd := gpuService("amd")
+	nvidia := gpuService("nvidia")
+	cases := []struct {
+		name string
+		svc  catalog.Service
+		got  ContainerShape
+		want []string
+	}{
+		{"nvidia grant removed", plain, shape(plain, []string{"nvidia"}), []string{"still has GPU access (nvidia device request), which the catalog no longer grants"}},
+		{"amd grant removed", plain, shape(plain, nil, "/dev/dri/renderD129", catalog.KFDDevice), []string{"still has device /dev/dri/renderD129, /dev/kfd, which the catalog no longer passes in"}},
+		{"nvidia changed to amd", amd, shape(amd, []string{"nvidia"}), []string{"still has GPU access (nvidia device request), which the catalog no longer grants", "missing GPU, which the catalog now passes in"}},
+		{"amd changed to nvidia", nvidia, shape(nvidia, nil, "/dev/dri/renderD129"), []string{"still has device /dev/dri/renderD129, which the catalog no longer passes in", "missing GPU, which the catalog now passes in"}},
+		{"rocm removed", amd, shape(amd, nil, "/dev/dri/renderD129", catalog.KFDDevice), []string{"still has device /dev/kfd, which the catalog no longer passes in"}},
+		{"nvidia unchanged", nvidia, shape(nvidia, []string{"nvidia"}), nil},
+		{"amd rocm unchanged", rocm, shape(rocm, nil, "/dev/dri/renderD129", catalog.KFDDevice), nil},
+		{"no grant, no gpu", plain, shape(plain, nil), nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ShapeDrift(tc.svc, tc.got, ""); !slices.Equal(got, tc.want) {
+				t.Fatalf("ShapeDrift = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

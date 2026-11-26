@@ -208,13 +208,15 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	if missing := minus(wantDevices, haveDevices); len(missing) > 0 {
 		found = append(found, fmt.Sprintf("missing device %s, which the catalog now passes in", strings.Join(missing, ", ")))
 	}
-	// A GPU grant's render nodes and /dev/kfd are picked from the host at deploy
-	// (gpu.go), so they are the catalog's even though it names none.
-	_, granted := dc.GPU.Grant()
+	// An AMD or Intel grant's render nodes (and /dev/kfd for ROCm) are picked from
+	// the host at deploy (gpu.go), so they are the catalog's even though it names
+	// none. Any other GPU node, with no grant or an NVIDIA one, is flagged below.
+	grant, granted := dc.GPU.Grant()
+	nvidiaGrant := granted && grant.Vendor == "nvidia"
 	gpuDevices := map[string]bool{}
-	if granted {
+	if granted && !nvidiaGrant {
 		for d := range haveDevices {
-			if gpuDevice(d) {
+			if renderNodeCeiling[d] || (grant.ROCm && d == catalog.KFDDevice) {
 				gpuDevices[d] = true
 				delete(haveDevices, d)
 			}
@@ -223,7 +225,12 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	if extra := minus(haveDevices, wantDevices); len(extra) > 0 {
 		found = append(found, fmt.Sprintf("still has device %s, which the catalog no longer passes in", strings.Join(extra, ", ")))
 	}
-	if granted && len(shape.GPU) == 0 && len(gpuDevices) == 0 {
+	// A GPU device request only an NVIDIA grant makes. One left from a grant the
+	// catalog removed or changed keeps the GPU until a redeploy.
+	if extra := minus(toSet(shape.GPU), map[string]bool{"nvidia": nvidiaGrant}); len(extra) > 0 {
+		found = append(found, fmt.Sprintf("still has GPU access (%s device request), which the catalog no longer grants", strings.Join(extra, ", ")))
+	}
+	if granted && ((nvidiaGrant && !slices.Contains(shape.GPU, "nvidia")) || (!nvidiaGrant && len(gpuDevices) == 0)) {
 		found = append(found, "missing GPU, which the catalog now passes in")
 	}
 

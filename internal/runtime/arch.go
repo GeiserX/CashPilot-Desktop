@@ -251,6 +251,10 @@ type daemonInfo struct {
 	Hostname string
 	// KernelVersion is the daemon's kernel release (/info KernelVersion).
 	KernelVersion string
+	// DaemonHost is the endpoint the client dials (unix:///var/run/docker.sock,
+	// tcp://...), "" when the client does not say. Only a local socket or pipe can
+	// be the daemon of this computer's own kernel (see sameKernel).
+	DaemonHost string
 }
 
 // infoClient is the one call daemonFacts needs, narrowed so the fallback behaviour is
@@ -265,6 +269,9 @@ type infoClient interface {
 // because failing open on security is the wrong direction.
 func daemonFacts(ctx context.Context, cli infoClient) daemonInfo {
 	facts := daemonInfo{Architecture: goruntime.GOARCH, OSType: "linux"}
+	if endpoint, ok := cli.(interface{ DaemonHost() string }); ok {
+		facts.DaemonHost = endpoint.DaemonHost()
+	}
 	result, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return facts

@@ -2512,6 +2512,9 @@ func (a *App) ExportCompose(slugs []string, arch string) (string, error) {
 	body, err := compose.Generate(a.catalog, slugs, compose.Options{
 		Arch:     arch,
 		Hostname: runtime.DeviceHostname(),
+		GPUDevices: func(grant catalog.GPUGrant) ([]string, error) {
+			return runtime.HostGPUDevices(a.ctx, grant)
+		},
 	})
 	if err != nil {
 		return "", err

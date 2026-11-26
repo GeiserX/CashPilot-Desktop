@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -47,15 +48,52 @@ func TestExportCarriesTheNvidiaGrant(t *testing.T) {
 	}
 }
 
-func TestExportMapsTheFirstRenderNodeForAMDAndIntel(t *testing.T) {
-	svc := gpuEntry("amd", func(s *catalog.Service) { s.Docker.GPU.ROCm = true })
-	block := serviceBlockOf(t, parse(t, generate(t, fakeCatalog{"gpu-miner": svc}, []string{"gpu-miner"}, Options{})), "cashpilot-gpu-miner")
-	var got []string
-	for _, d := range block["devices"].([]any) {
-		got = append(got, d.(string))
+// An AMD or Intel GPU is exported as the vendor's own node the deploy would pick,
+// which need not be renderD128: here an Intel iGPU holds renderD128 and the AMD card
+// renderD129, as runtime.HostGPUDevices reads them from this computer.
+func TestExportMapsTheVendorsOwnRenderNode(t *testing.T) {
+	host := map[string][]string{"intel": {"/dev/dri/renderD128"}, "amd": {"/dev/dri/renderD129", "/dev/kfd"}}
+	var asked []catalog.GPUGrant
+	opts := Options{GPUDevices: func(g catalog.GPUGrant) ([]string, error) {
+		asked = append(asked, g)
+		return host[g.Vendor], nil
+	}}
+	for vendor, want := range map[string][]string{
+		"amd":   {"/dev/dri/renderD129:/dev/dri/renderD129", "/dev/kfd:/dev/kfd"},
+		"intel": {"/dev/dri/renderD128:/dev/dri/renderD128"},
+	} {
+		svc := gpuEntry(vendor, func(s *catalog.Service) { s.Docker.GPU.ROCm = vendor == "amd" })
+		block := serviceBlockOf(t, parse(t, generate(t, fakeCatalog{"gpu-miner": svc}, []string{"gpu-miner"}, opts)), "cashpilot-gpu-miner")
+		var got []string
+		for _, d := range block["devices"].([]any) {
+			got = append(got, d.(string))
+		}
+		if !slices.Equal(got, want) || block["deploy"] != nil {
+			t.Fatalf("%s: devices = %v deploy = %v, want %v", vendor, got, block["deploy"], want)
+		}
 	}
-	if !slices.Equal(got, []string{"/dev/dri/renderD128:/dev/dri/renderD128", "/dev/kfd:/dev/kfd"}) || block["deploy"] != nil {
-		t.Fatalf("devices = %v deploy = %v", got, block["deploy"])
+	if len(asked) != 2 || !asked[0].ROCm && !asked[1].ROCm {
+		t.Fatalf("the export asked for %+v, want each grant as declared", asked)
+	}
+}
+
+// When the node cannot be known, the export refuses instead of guessing renderD128.
+func TestExportRefusesARenderNodeItCannotRead(t *testing.T) {
+	svc := gpuEntry("amd")
+	for name, opts := range map[string]Options{
+		"no reader": {},
+		"read fails": {GPUDevices: func(catalog.GPUGrant) ([]string, error) {
+			return nil, errors.New("the container runtime runs in a virtual machine")
+		}},
+	} {
+		_, err := Generate(fakeCatalog{"gpu-miner": svc}, []string{"gpu-miner"}, opts)
+		if err == nil || !strings.Contains(err.Error(), "could not tell which one") || !strings.Contains(err.Error(), "AMD") {
+			t.Fatalf("%s: err = %v, want the export refused", name, err)
+		}
+	}
+	// An NVIDIA grant needs no node, so it exports without a reader.
+	if _, err := Generate(fakeCatalog{"gpu-miner": gpuEntry("nvidia")}, []string{"gpu-miner"}, Options{}); err != nil {
+		t.Fatalf("nvidia: %v", err)
 	}
 }
 
