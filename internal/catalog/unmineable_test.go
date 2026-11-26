@@ -11,10 +11,11 @@ import (
 )
 
 // unMineableWebSHA256 is the sha256 of services/mining/unmineable.yml in the web
-// repository at GeiserX/CashPilot e58dbc7 (#847), which added the CPU cap wrapper
-// to the entry #844 created. If the web entry changes, vendor it with catalogsync,
-// check the referral tests below still describe it, and update this sum in the same PR.
-const unMineableWebSHA256 = "d6615fe0485ccad747437187b46ab2ec7c5496a48f1eb16d82a3bd04c8bd0718"
+// repository at GeiserX/CashPilot 6d22f6a (#850), which made the CPU cap wrapper
+// (#847) hold on x86 hosts with no L3 of at least 2048K in sysfs, in the entry #844
+// created. If the web entry changes, vendor it with catalogsync, check the referral
+// tests below still describe it, and update this sum in the same PR.
+const unMineableWebSHA256 = "f96434fca6d5d17ae92b389bc142fbcd54f51d730b356c7aa5b2d04c62fab614"
 
 // unMineableReferral is CashPilot's unMineable referral code. unMineable reads it
 // from the "#code" after the worker name, so every worker must carry it.
@@ -27,7 +28,7 @@ func TestUnMineableIsTheWebEntry(t *testing.T) {
 	}
 	sum := sha256.Sum256(raw)
 	if got := hex.EncodeToString(sum[:]); got != unMineableWebSHA256 {
-		t.Fatalf("services/mining/unmineable.yml is not the web file at e58dbc7 (sha256 %s, want %s). "+
+		t.Fatalf("services/mining/unmineable.yml is not the web file at 6d22f6a (sha256 %s, want %s). "+
 			"Vendor it with catalogsync and check the referral code before updating the sum", got, unMineableWebSHA256)
 	}
 }
