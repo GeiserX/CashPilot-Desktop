@@ -304,7 +304,11 @@ func (m *Manager) Save(cfg AppConfig) error {
 		return err
 	}
 	defer release()
-	if m.pairing.Revision != "" {
+	// Copy the pairing fields from the file, not from memory: the other process
+	// may have published since this Manager last read it, and its older marker
+	// written back would make that publication look superseded.
+	_, _ = m.reloadLocked()
+	if m.pairing.Revision != "" || m.cfg.PairingRevision != "" {
 		cfg.Mode, cfg.UpstreamURL = m.cfg.Mode, m.cfg.UpstreamURL
 	}
 	// Only a publication writes the marker, so a 1.x save stays visible.
