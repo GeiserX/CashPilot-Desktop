@@ -132,12 +132,20 @@ type AppConfig struct {
 	// ServerCommandsOff is the dashboard switch "<server> can start and stop
 	// services on this computer", turned off. The zero value is on, so joining a
 	// server turns the server-commands API on; joining again keeps the user's choice.
-	// A pairing carried over from 1.x starts off instead (enrolPairing), because
-	// an upgrade is not a choice to let the server run commands here.
+	// A pairing carried over from 1.x starts off instead (enrolPairing,
+	// enrolSavedPairing), also after a downgrade to 1.x and back, because an
+	// upgrade is not a choice to let the server run commands here.
 	ServerCommandsOff bool `json:"serverCommandsOff,omitempty"`
 	// ServerCommandsChosen is true once the user has used that switch. The 1.x
 	// carry-over then leaves ServerCommandsOff as the user set it.
 	ServerCommandsChosen bool `json:"serverCommandsChosen,omitempty"`
+	// PairingRevision is the pairing revision this version last published or
+	// kept (pairing.go). 1.x does not know the field and drops it when it saves
+	// config.json, so a revision in pairing.json with no marker here means 1.x
+	// saved its own choice since a downgrade. Until the window carries that
+	// choice over, Config shows the 1.x pairing from this file and the revision
+	// gives no credential (ErrPairingSuperseded).
+	PairingRevision string `json:"pairingRevision,omitempty"`
 }
 
 // SetupJournal says where a guided setup stood before a restart. It only says
@@ -268,7 +276,7 @@ func (m *Manager) Config() AppConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	cfg := m.cfg
-	if m.pairing.Revision != "" {
+	if m.pairing.Revision != "" && m.cfg.PairingRevision != "" {
 		cfg.UpstreamURL = m.pairing.ServerURL
 		cfg.Mode = ModeLead
 		if cfg.UpstreamURL != "" {
@@ -298,6 +306,8 @@ func (m *Manager) Save(cfg AppConfig) error {
 	if m.pairing.Revision != "" {
 		cfg.Mode, cfg.UpstreamURL = m.cfg.Mode, m.cfg.UpstreamURL
 	}
+	// Only a publication writes the marker, so a 1.x save stays visible.
+	cfg.PairingRevision = m.cfg.PairingRevision
 	if err := m.persist(cfg); err != nil {
 		return err
 	}

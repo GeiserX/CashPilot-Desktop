@@ -31,6 +31,11 @@ type PairingCredential struct {
 
 var ErrPairingChanged = errors.New("the pairing changed")
 
+// ErrPairingSuperseded means 1.x saved config.json after this version
+// published the revision (AppConfig.PairingRevision). The revision's credential
+// stays unused until the window carries the 1.x choice over or keeps the revision.
+var ErrPairingSuperseded = errors.New("an older version changed the pairing")
+
 func (m *Manager) PairingPath() string { return filepath.Join(m.appDir, "pairing.json") }
 
 func (m *Manager) lockPairing() (Pairing, func(), error) {
@@ -92,6 +97,11 @@ func (m *Manager) PublishPairing(previous, serverURL string, removeFirewall bool
 			return err
 		}
 	}
+	// Mark config.json first: a revision is never live without its marker, so
+	// a missing marker always means 1.x saved the file.
+	if err := m.markPairing(next); err != nil {
+		return err
+	}
 	if err := m.savePairing(next); err != nil {
 		return err
 	}
@@ -99,15 +109,57 @@ func (m *Manager) PublishPairing(previous, serverURL string, removeFirewall bool
 	if next.ServerURL == "" && key.Enrolment == "" {
 		m.clearPairingCredential(next)
 	}
-	// Retire the pre-revision credentials after a successful migration or Leave.
-	if previous == "" {
-		for _, user := range []string{keyringUserUpstreamEnrol, keyringUserUpstreamWorker} {
-			_ = credentials.Delete(keyringService, user)
-		}
-		for _, name := range []string{workerKeyFile, workerKeyFile + ".generation", ".upstream_enrolment_key", "server-commands-firewall.json"} {
-			dropFallback(filepath.Join(m.appDir, name))
-		}
+	// Retire the pre-revision credentials after every publication: a migration,
+	// a Leave, or a pairing 1.x made after a downgrade. This version never writes
+	// them. A failed deletion cannot repeat a carry-over, because the marker
+	// above already records this revision.
+	for _, user := range []string{keyringUserUpstreamEnrol, keyringUserUpstreamWorker} {
+		_ = credentials.Delete(keyringService, user)
 	}
+	for _, name := range []string{workerKeyFile, workerKeyFile + ".generation", ".upstream_enrolment_key"} {
+		dropFallback(filepath.Join(m.appDir, name))
+	}
+	if previous == "" {
+		dropFallback(filepath.Join(m.appDir, "server-commands-firewall.json"))
+	}
+	return nil
+}
+
+// KeepPairing marks the revision as this version's again after a 1.x save that
+// left the pairing as it was.
+func (m *Manager) KeepPairing(revision string) error {
+	current, release, err := m.lockPairing()
+	defer release()
+	if err != nil {
+		return err
+	}
+	if revision == "" || current.Revision != revision {
+		return ErrPairingChanged
+	}
+	return m.markPairing(current)
+}
+
+// markPairing writes the revision's marker into config.json and copies its
+// server into upstreamUrl and mode, so 1.x after a downgrade shows the same
+// pairing, and a 1.x change to it can be told from a save that kept it.
+func (m *Manager) markPairing(p Pairing) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	release, err := m.lockConfig()
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, _ = m.reloadLocked()
+	next := m.cfg
+	next.PairingRevision, next.UpstreamURL, next.Mode = p.Revision, p.ServerURL, ModeLead
+	if p.ServerURL != "" {
+		next.Mode = ModeFollower
+	}
+	if err := m.persist(next); err != nil {
+		return err
+	}
+	m.cfg = next
 	return nil
 }
 
@@ -185,6 +237,12 @@ func (m *Manager) ReadPairingCredential(promote bool) (Pairing, PairingCredentia
 	defer release()
 	if err != nil || p.Revision == "" {
 		return p, key, err
+	}
+	m.mu.RLock()
+	superseded := m.cfg.PairingRevision == ""
+	m.mu.RUnlock()
+	if superseded {
+		return p, key, ErrPairingSuperseded
 	}
 	user, path := m.credentialSlot(p)
 	if raw, err := credentials.Get(keyringService, user); err == nil &&
