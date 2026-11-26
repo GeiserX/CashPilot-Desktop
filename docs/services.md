@@ -61,7 +61,7 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 |---------|:-:|:-:|:-:|:-:|--------|--------|
 | [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3) | ✅ | ❌ | Unlimited | Undocumented | PayPal | Active |
 | [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
-| [Dawn Internet](https://dawninternet.com/?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
+| [Dawn Internet](https://infrastructure.finance/validator-extension?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
 | [Deeper Network](https://shop.deeper.network?sca_ref=12020100.q8Vxm3SliA) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |
 | [Ebesucher](https://www.ebesucher.com/?ref=geiserx) | ✅ | ✅ | Unlimited | 1 | PayPal | Active |
 | [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) | Broken: node rewards ended August 2025 |
@@ -77,6 +77,8 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 | [Titan Network](https://edge.titannet.info/signup?inviteCode=2GKKJ495) | ✅ | ❌ | Unlimited | 1 | Crypto (TNT) | Active |
 | [Uprock](https://link.uprock.com/i/33e8492e) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
 | [Wipter](https://wipter.com/register?via=FB1373FBDA) | ✅ | ❌ | Unlimited | Undocumented | PayPal, Crypto | Active |
+
+> Dawn Internet's link does not pass the code on. Create the account in the DAWN Validator extension and enter referral code `2QLQV97F` when it asks.
 
 ## GPU Compute
 
