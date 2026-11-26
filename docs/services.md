@@ -78,6 +78,8 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 | [Uprock](https://link.uprock.com/i/33e8492e) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
 | [Wipter](https://wipter.com/register?via=FB1373FBDA) | ✅ | ❌ | Unlimited | Undocumented | PayPal, Crypto | Active |
 
+> Dawn Internet's link does not pass the code on. Create the account in the DAWN Validator extension and enter referral code `2QLQV97F` when it asks.
+
 ## GPU Compute
 
 GPU-intensive computing services. Requires compatible hardware.

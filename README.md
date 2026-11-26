@@ -65,6 +65,8 @@ CashPilot bundles a catalog of 49 active passive-income services across multiple
 - **GPU compute:** [Flux](https://runonflux.io), [Golem Network](https://golem.network), [io.net](https://io.net), [Nosana](https://nosana.io), [Salad](https://salad.io), [Vast.ai](https://cloud.vast.ai/?ref_id=452772)
 - **Crypto mining:** [2Miners ETC](https://etc.2miners.com/help) (unpaid ETC balance), [HeroMiners Kaspa](https://kaspa.herominers.com/?lang=en) (unpaid KAS balance), [Kryptex Pool (Pearl)](https://pool.kryptex.com/?ref=2444cca8) (NVIDIA GPU, balance kept in your Kryptex account), [OCEAN](https://ocean.xyz/getstarted) (unpaid BTC balance), [SRBMiner-Multi (GPU mining)](https://github.com/doktor83/SRBMiner-Multi/releases) (NVIDIA GPU, fee shown before deploy), [SupportXMR](https://supportxmr.com) (unpaid XMR balance), [unMineable (CPU mining, paid in your coin)](https://unmineable.com/?ref=awk6-j1z0) (unpaid balance in your coin), [XMRig (Monero CPU mining)](https://xmrig.com) (fee shown before deploy)
 
+> Dawn Internet's link does not pass the code on. Create the account in the DAWN Validator extension and enter referral code `2QLQV97F` when it asks.
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md): modes, downloads, system requirements, Desktop vs Web
