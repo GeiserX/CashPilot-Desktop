@@ -289,11 +289,18 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	result := WorkerDeployResult{Worker: target.device.Name, WorkerIdentity: target.identity()}
 	// Every yes was given about one worker. Another one that took over the row (a
 	// worker that enrols under the same name) gets nothing on the strength of it,
-	// not even a create-only deploy: its owner is asked first.
-	if (req.ReplaceExisting || req.AllowSharedIdentity || req.Confirmed) && req.WorkerIdentity != result.WorkerIdentity {
+	// not even a create-only deploy: its owner is asked first. A yes to that
+	// question names the worker it was about and no other flag, so the identity is
+	// checked whenever the form sends one, not only with a flag.
+	if (req.ReplaceExisting || req.AllowSharedIdentity || req.Confirmed || req.WorkerIdentity != "") && req.WorkerIdentity != result.WorkerIdentity {
 		result.Ask = askWorkerChanged
 		result.Message = fmt.Sprintf("%s is not the worker you answered about: another CashPilot worker now reports under that name, at %s. Your answers so far do not count for it. Deploy %s to it?",
 			target.device.Name, target.device.Endpoint, svc.Name)
+		if clientID := strings.TrimSpace(target.report.ClientID); clientID != "" && strings.HasPrefix(req.WorkerIdentity, clientID+"@") {
+			// The same worker, at a new address: that is where the deploy would go.
+			result.Message = fmt.Sprintf("%s now reports at a new address, %s. Your answers so far do not count for it. Deploy %s to it?",
+				target.device.Name, target.device.Endpoint, svc.Name)
+		}
 		return result, nil
 	}
 	image := strings.TrimSpace(req.Image)

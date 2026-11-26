@@ -127,6 +127,72 @@ func TestEveryKindOfYesIsBoundToTheWorkerThatAsked(t *testing.T) {
 	}
 }
 
+// A yes to the worker question names the worker it was about and carries no other
+// flag. A third worker that takes the row before that yes arrives gets nothing on
+// its strength, not even a create-only deploy: its owner is asked about it.
+func TestAYesToTheWorkerQuestionReachesOnlyTheWorkerItNamed(t *testing.T) {
+	app := newLeadApp(t)
+	a, b, c := newIDWorker(t), newIDWorker(t), newIDWorker(t)
+	a.set(dockerID(1))
+	garageHeartbeat(t, app, "client-a", a.srv.URL)
+	id := workerID(t, app, "garage")
+	req := WorkerDeployRequest{WorkerID: id, Values: map[string]string{"TOKEN": "typed"}}
+	asked, err := app.DeployToWorker("plain", req)
+	if err != nil || asked.Ask != askReplace {
+		t.Fatalf("question about A = %+v, %v", asked, err)
+	}
+	garageHeartbeat(t, app, "client-b", b.srv.URL)
+	aboutB, err := app.DeployToWorker("plain", approve(req, asked))
+	if err != nil || aboutB.Ask != askWorkerChanged {
+		t.Fatalf("yes about A after B took the row = %+v, %v; want the worker question", aboutB, err)
+	}
+
+	// C, with no container, takes the row before the yes about B arrives.
+	garageHeartbeat(t, app, "client-c", c.srv.URL)
+	result, err := app.DeployToWorker("plain", WorkerDeployRequest{WorkerID: id, Values: req.Values, WorkerIdentity: aboutB.WorkerIdentity})
+	_, bPosts := b.state()
+	_, cPosts := c.state()
+	if err != nil || result.Ask != askWorkerChanged || len(bPosts) != 0 || len(cPosts) != 0 {
+		t.Fatalf("yes about B after C took the row = %+v, %v; B %d POSTs, C %d POSTs; want a question about C and no POST", result, err, len(bPosts), len(cPosts))
+	}
+	if result.WorkerIdentity != identityOf(t, app, id) || !strings.Contains(result.WorkerIdentity, "client-c@") {
+		t.Fatalf("worker question = %+v; want C's identity", result)
+	}
+	// The yes about C deploys to C.
+	if done, err := app.DeployToWorker("plain", WorkerDeployRequest{WorkerID: id, Values: req.Values, WorkerIdentity: result.WorkerIdentity}); err != nil || done.Ask != "" {
+		t.Fatalf("yes about C = %+v, %v; want a deploy", done, err)
+	}
+	if _, cPosts = c.state(); len(cPosts) != 1 || cPosts[0]["expected_container"] != "none" {
+		t.Fatalf("C POSTs %v; want one create-only deploy", cPosts)
+	}
+}
+
+// The same worker at a new address is asked about too, since that address is where
+// the deploy goes, and the question says it is the same worker.
+func TestAWorkerAtANewAddressIsAskedAboutAsItself(t *testing.T) {
+	app := newLeadApp(t)
+	before, after := newIDWorker(t), newIDWorker(t)
+	before.set(dockerID(1))
+	garageHeartbeat(t, app, "client-a", before.srv.URL)
+	id := workerID(t, app, "garage")
+	req := WorkerDeployRequest{WorkerID: id, Values: map[string]string{"TOKEN": "typed"}}
+	asked, err := app.DeployToWorker("plain", req)
+	if err != nil || asked.Ask != askReplace {
+		t.Fatalf("first question = %+v, %v", asked, err)
+	}
+	garageHeartbeat(t, app, "client-a", after.srv.URL)
+	result, err := app.DeployToWorker("plain", approve(req, asked))
+	_, oldPosts := before.state()
+	_, newPosts := after.state()
+	if err != nil || result.Ask != askWorkerChanged || len(oldPosts) != 0 || len(newPosts) != 0 {
+		t.Fatalf("yes after the address changed = %+v, %v; want the worker question and no POST", result, err)
+	}
+	want := "garage now reports at a new address, " + after.srv.URL + "."
+	if !strings.Contains(result.Message, want) || strings.Contains(result.Message, "another CashPilot worker") {
+		t.Fatalf("question %q must say %q and not name another worker", result.Message, want)
+	}
+}
+
 func TestALateOlderWorkerRefusalSaysToUpdateTheWorker(t *testing.T) {
 	app, worker, req := newIDWorkerLead(t)
 	worker.setOlder(true)

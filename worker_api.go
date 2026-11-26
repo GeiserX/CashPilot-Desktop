@@ -603,7 +603,7 @@ func (a *App) handleWorkerDeployTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, runtime.ErrNoDeployTarget) {
-		detail(w, http.StatusConflict, fmt.Sprintf("%s runs as a program on this computer, not in a container, so your CashPilot cannot name what a redeploy would replace. Redeploy it on this computer", svc.Name))
+		detail(w, http.StatusConflict, fmt.Sprintf("%s runs as a program on that computer, not in a container, so your CashPilot cannot name what a redeploy would replace. Redeploy it in CashPilot Desktop on that computer", svc.Name))
 		return
 	}
 	if err != nil {

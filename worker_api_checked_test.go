@@ -4,10 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	goruntime "runtime"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
 // The checked deploy route (worker_api.go): the CashPilot web worker's
@@ -375,8 +380,8 @@ func TestCheckedDeployRefusesAServiceWithMoreCopiesHere(t *testing.T) {
 	}
 	const path = "/api/containers/traffmonetizer/deploy-checked"
 	w := call(t, app, http.MethodGet, path, testWorkerKey, nil)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "2 more copies") {
-		t.Fatalf("lookup with three copies: %d %s; want 409 naming the other copies", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "2 more copies on that computer") || !strings.Contains(w.Body.String(), "Redeploy it in CashPilot Desktop on that computer") {
+		t.Fatalf("lookup with three copies: %d %s; want 409 naming the other copies, read on the server", w.Code, w.Body.String())
 	}
 	svc, _ := app.catalog.Get("traffmonetizer")
 	spec := map[string]any{"image": svc.Docker.Image, "env": creds, "expected_container": ids["cashpilot-traffmonetizer"]}
@@ -453,5 +458,36 @@ func TestCheckedDeployKeepsThePlainRoutesRefusals(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A service that runs as a program here has no container to name. The lookup names
+// none before its first deploy, and refuses once the program is here, in words the
+// owner reads on the server.
+func TestCheckedLookupRefusesAServiceThatRunsAsAProgram(t *testing.T) {
+	app := joinedApp(t)
+	svc, _ := app.catalog.Get("mysterium")
+	if _, ok := svc.NativeBinaryFor(goruntime.GOOS, goruntime.GOARCH); !ok {
+		t.Skipf("mysterium has no program for %s/%s", goruntime.GOOS, goruntime.GOARCH)
+	}
+	appDir := t.TempDir()
+	app.services.Register(runtime.NativeRuntimeKind, runtime.NewNativeProcessProvider(appDir))
+	const path = "/api/containers/mysterium/deploy-checked"
+	if w := call(t, app, http.MethodGet, path, testWorkerKey, nil); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"expected_container":"none"`) {
+		t.Fatalf("lookup before the program is here: %d %s; want none", w.Code, w.Body.String())
+	}
+	dir := filepath.Join(appDir, "native")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	state := `{"entries":{"mysterium":{"slug":"mysterium","url":"https://example.test/x","desired":"stopped"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	w := call(t, app, http.MethodGet, path, testWorkerKey, nil)
+	for _, want := range []string{"runs as a program on that computer", "Redeploy it in CashPilot Desktop on that computer"} {
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("lookup while the program is here: %d %s; want 409 saying %q", w.Code, w.Body.String(), want)
+		}
 	}
 }
