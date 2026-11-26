@@ -23,6 +23,7 @@ import { containerState } from "./attention.js";
 import { customBadge } from "./custom.js";
 import { outdatedBadge } from "./catalog.js";
 import { walletDetail } from "./wallet.js";
+import { dockerBlocked, type RuntimeInput } from "./runtime_state.js";
 
 export const SERVICE_COLUMNS = 8;
 
@@ -39,6 +40,8 @@ export interface ServicesTableInput {
   producerStates?: Record<string, ProducerReport> | null;
   copies?: Record<string, ServiceCopy[]> | null;
   displayCurrency: string;
+  /** The shared Docker status: Start on a container waits for Docker. */
+  runtime?: Pick<RuntimeInput, "available" | "reason">;
 }
 
 /** Status as a square and a word, the web console's form. */
@@ -112,6 +115,7 @@ export function renderServicesTable(input: ServicesTableInput): string {
     `;
   }
   const outdatedSet = new Set(input.outdated || []);
+  const blocked = input.runtime ? dockerBlocked(input.runtime) : "";
   const nameOf = (slug: string) => services.find((svc) => svc.slug === slug)?.name || itemBy.get(slug)?.name || slug;
 
   const rows = deployments.map((deployment) => {
@@ -148,12 +152,12 @@ export function renderServicesTable(input: ServicesTableInput): string {
           <div class="action-btns">
             ${custom ? "" : rowButton("collect", slug, "Collect balance now")}
             ${rowButton("logs", slug, "Logs")}
-            ${running ? rowButton("stop", slug, "Stop") : disabledAccount ? "" : rowButton("start", slug, "Start")}
+            ${running ? rowButton("stop", slug, "Stop") : disabledAccount ? "" : rowButton("start", slug, "Start", 1, deployment.runtime === "native" ? "" : blocked)}
             ${rowButton("remove", slug, "Remove")}
           </div>
         </td>
       </tr>
-      ${copyRows(name, copies, disabledAccount)}
+      ${copyRows(name, copies, disabledAccount, blocked)}
       ${nodeDetail ? `<tr class="detail-row"><td colspan="${SERVICE_COLUMNS}">${nodeDetail}</td></tr>` : ""}
     `;
   });

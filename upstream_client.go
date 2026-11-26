@@ -77,6 +77,13 @@ type upstreamState struct {
 	// heartbeat carries: v2.10.0 or newer, the release that added both the stall
 	// check and fleet_exits, so its answer carries the fleet_exits key (stallServer).
 	stallsJudged bool
+	// takesCommands is whether the server's last answer listed the command feature
+	// (upstream.TakesCommands). Until it does, the heartbeat reports no command URL:
+	// web v2.10.x would take the URL as a command target and deploy here without
+	// replacement approval or the seed-phrase guard. commandsKnown is false until
+	// the first answer since the loop started.
+	takesCommands bool
+	commandsKnown bool
 	// The pairing's health, for the dashboard and Settings (pairingStatus), so a
 	// failing link shows in the app and not only in the log. statusURL is the
 	// server these belong to: a status from another server is not shown.
@@ -131,7 +138,7 @@ func (a *App) startUpstream(ctx context.Context) {
 
 	go func() {
 		defer close(done)
-		a.sendUpstream(loopCtx, client, serverURL, "")
+		a.sendUpstreamLoop(loopCtx, client, serverURL)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -151,10 +158,40 @@ func (a *App) startUpstream(ctx context.Context) {
 					a.upstream.mu.Unlock()
 					return
 				}
-				a.sendUpstream(loopCtx, client, serverURL, "")
+				a.sendUpstreamLoop(loopCtx, client, serverURL)
 			}
 		}
 	}()
+}
+
+// maxHeartbeatFollowUps bounds the extra heartbeats one turn of the pairing loop
+// sends when answers keep changing the command feature, so a server that flips it
+// on every answer cannot make the loop send without pause.
+const maxHeartbeatFollowUps = 3
+
+// sendUpstreamLoop is one turn of the pairing loop. When the answer changed
+// whether the server lists the command feature, and so changed whether the
+// heartbeat carries the command URL, it sends once more at once, and again when
+// that answer changes it back. An upgraded server can then send commands now,
+// and a rolled-back server loses the URL now, not one interval later. A stable
+// server gets one heartbeat per turn, a single change two. When the bound ends
+// the turn on an answer that withdrew the feature, the last heartbeat still
+// carried the URL, so the turn sends one more without it: the bound limits how
+// often the URL goes out, never how long a server that dropped the feature keeps it.
+func (a *App) sendUpstreamLoop(ctx context.Context, client *upstream.Client, serverURL string) {
+	again := a.sendUpstream(ctx, client, serverURL, "")
+	for i := 0; again && i < maxHeartbeatFollowUps && ctx.Err() == nil; i++ {
+		again = a.sendUpstream(ctx, client, serverURL, "")
+	}
+	if !again || ctx.Err() != nil {
+		return
+	}
+	a.upstream.mu.Lock()
+	withdrawn := !a.upstream.takesCommands
+	a.upstream.mu.Unlock()
+	if withdrawn {
+		a.sendUpstream(ctx, client, serverURL, "")
+	}
 }
 
 // stopUpstream cancels the pairing loop and waits for it to exit. Idempotent.
@@ -257,38 +294,51 @@ func (a *App) stopUpstreamLocked() {
 	// starts from unknown again.
 	a.upstream.fleetExits, a.upstream.fleetExitsKnown = nil, false
 	a.upstream.stallsJudged = false
+	// A new pairing, or the same server after a restart, has said nothing yet.
+	a.upstream.takesCommands, a.upstream.commandsKnown = false, false
 	a.upstream.mu.Unlock()
 }
 
 // sendUpstream reports to the saved pairing. Join owns the worker key, even
-// when an older server sends a key back to a periodic heartbeat.
-func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverURL, enrolKey string) {
+// when an older server sends a key back to a periodic heartbeat. It reports
+// whether to send again now: the answer was the first to list the command feature
+// (this heartbeat left out a command URL it had) or the first to drop it (this
+// heartbeat still carried the URL).
+func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverURL, enrolKey string) (again bool) {
 	pairing, credential, err := a.cfg.ReadPairingCredential(a.window)
 	if err != nil {
 		a.recordPairing(serverURL, upstream.Failure{Code: "keychain", Message: "CashPilot cannot read the saved key. Unlock the keychain or join again."})
-		return
+		return false
 	}
 	if pairing.Revision == "" {
 		credential.Worker, err = config.LegacyWorkerKey(a.cfg.AppDir(), serverURL)
 	} else if pairing.Suspended || pairing.ServerURL != serverURL {
-		return
+		return false
 	} else {
 		enrolKey = credential.Enrolment
 	}
 	token := upstream.AuthToken(credential.Worker, enrolKey)
 	if err != nil || token == "" {
 		a.recordPairing(serverURL, upstream.Failure{Code: "no-key", Message: "No key is available for your CashPilot. Enter the enrolment key in Settings or join again."})
-		return
+		return false
 	}
 
 	payload := a.upstreamPayload()
 	// The fence's own reading, cached for an hour: the server hands it to the fleet's
 	// other boxes, whose fences then drop this line too.
 	payload.SystemInfo.EgressIP = a.egressIP(ctx)
-	// Where the server sends its commands (worker_api.go); "" leaves this computer
-	// report-only on the server, as before.
+	// Where the server sends its commands (worker_api.go), only to a server whose
+	// last answer listed the command feature. "" leaves this computer report-only on
+	// the server, which is safe under any version.
+	commandURL := ""
 	if pairing.Revision != "" && credential.Worker != "" {
-		payload.URL = a.workerAPIURL(serverURL)
+		commandURL = a.workerAPIURL(serverURL)
+	}
+	a.upstream.mu.Lock()
+	takesCommands := a.upstream.takesCommands
+	a.upstream.mu.Unlock()
+	if takesCommands {
+		payload.URL = commandURL
 	}
 	// Every copy with its traffic counters, read in this process's turn, which ends
 	// once the server answered (heartbeat_traffic.go).
@@ -300,26 +350,29 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	current, readErr := a.cfg.Pairing()
 	if readErr != nil || current.Revision != pairing.Revision || current.Suspended {
 		release()
-		return
+		return false
 	}
 	resp, err := client.Send(ctx, serverURL, token, payload)
 	release()
 	if a.suspendRefusedPairing(pairing.Revision, serverURL, err) || ctx.Err() != nil {
-		return
+		return false
 	}
 	current, readErr = a.cfg.Pairing()
 	if readErr != nil || current.Revision != pairing.Revision || current.Suspended {
-		return
+		return false
 	}
 	if err != nil {
 		log.Printf("upstream: %v", err)
 		a.recordPairing(serverURL, upstream.Explain(err, upstream.Host(serverURL), payload.Name))
-		return
+		return false
 	}
 	_, _, judged := upstream.ParseFleetExits(resp.FleetExits)
+	takes := upstream.TakesCommands(resp.Features)
 	a.upstream.mu.Lock()
 	a.upstream.stallsJudged = judged
+	a.upstream.takesCommands, a.upstream.commandsKnown = takes, true
 	a.upstream.mu.Unlock()
+	again = takes != takesCommands && commandURL != ""
 	a.recordPairing(serverURL, upstream.Failure{})
 	// Apply the fleet's exits for this pairing.
 	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
@@ -344,6 +397,7 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	if upstream.Confirmed(credential.Worker, resp.WorkerKey) {
 		a.pushHistoryOnce(ctx, client, serverURL, credential.Worker, pairing.Revision)
 	}
+	return again
 }
 
 const refusedPairingMessage = "Your CashPilot refused this computer's key. In Settings, switch to Run everything here and join again."

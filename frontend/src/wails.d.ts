@@ -800,6 +800,9 @@ export interface ServerCommandsState {
   firewallStatus?: string;
   opens: string;
   last: ServerCommand | null;
+  // The server's last heartbeat answer did not list the command feature, so the
+  // heartbeat reports no URL and the server only sees what runs here.
+  serverTooOld?: boolean;
 }
 
 export interface SessionConsent {

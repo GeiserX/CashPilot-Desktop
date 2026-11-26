@@ -279,3 +279,27 @@ func TestSystemInfoCarriesTheEgressIPOnlyWhenKnown(t *testing.T) {
 		t.Errorf("an unknown exit went out: %s", raw)
 	}
 }
+
+func TestTakesCommandsNeedsTheFeatureInAList(t *testing.T) {
+	for _, tc := range []struct {
+		reply string
+		want  bool
+	}{
+		{`{"status":"ok"}`, false},
+		{`{"status":"ok","features":null}`, false},
+		{`{"status":"ok","features":"desktop_commands"}`, false},
+		{`{"status":"ok","features":{"desktop_commands":true}}`, false},
+		{`{"status":"ok","features":[]}`, false},
+		{`{"status":"ok","features":["deploy_deadline",1,null]}`, false},
+		{`{"status":"ok","features":["Desktop_Commands"]}`, false},
+		{`{"status":"ok","features":[1,"desktop_commands"]}`, true},
+	} {
+		var resp Response
+		if err := json.Unmarshal([]byte(tc.reply), &resp); err != nil {
+			t.Fatalf("%s: %v", tc.reply, err)
+		}
+		if got := TakesCommands(resp.Features); got != tc.want {
+			t.Errorf("%s: TakesCommands = %v, want %v", tc.reply, got, tc.want)
+		}
+	}
+}
