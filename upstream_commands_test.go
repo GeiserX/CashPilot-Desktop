@@ -100,10 +100,11 @@ func TestCommandURLGoesOnlyToAServerThatListsTheFeature(t *testing.T) {
 	}
 
 	// The server is rolled back: the heartbeat that learns it still carries the URL
-	// (the server's last answer listed the feature), and none after it does.
+	// (the server's last answer listed the feature), so a second heartbeat follows
+	// at once without it, and none after it carries the URL.
 	server.modern.Store(false)
-	if got := turn(); !slices.Equal(got, []string{commandURL}) {
-		t.Fatalf("rolled-back server, first turn: URLs %q, want %q once", got, commandURL)
+	if got := turn(); !slices.Equal(got, []string{commandURL, ""}) {
+		t.Fatalf("rolled-back server, first turn: URLs %q, want %q then none", got, commandURL)
 	}
 	for i := range 2 {
 		if got := turn(); !slices.Equal(got, []string{""}) {

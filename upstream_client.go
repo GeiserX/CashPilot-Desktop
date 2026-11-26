@@ -164,10 +164,11 @@ func (a *App) startUpstream(ctx context.Context) {
 	}()
 }
 
-// sendUpstreamLoop is one turn of the pairing loop. When the answer is the first
-// to list the command feature and the heartbeat left out a command URL it had, it
-// sends once more at once, so the server can send commands now and not one
-// interval later.
+// sendUpstreamLoop is one turn of the pairing loop. When the answer changed
+// whether the server lists the command feature, and so changed whether the
+// heartbeat carries the command URL, it sends once more at once. An upgraded
+// server can then send commands now, and a rolled-back server loses the URL now,
+// not one interval later.
 func (a *App) sendUpstreamLoop(ctx context.Context, client *upstream.Client, serverURL string) {
 	if a.sendUpstream(ctx, client, serverURL, "") && ctx.Err() == nil {
 		a.sendUpstream(ctx, client, serverURL, "")
@@ -281,8 +282,9 @@ func (a *App) stopUpstreamLocked() {
 
 // sendUpstream reports to the saved pairing. Join owns the worker key, even
 // when an older server sends a key back to a periodic heartbeat. It reports
-// whether to send again now: the answer was the first to list the command feature,
-// and this heartbeat left out a command URL it had.
+// whether to send again now: the answer was the first to list the command feature
+// (this heartbeat left out a command URL it had) or the first to drop it (this
+// heartbeat still carried the URL).
 func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverURL, enrolKey string) (again bool) {
 	pairing, credential, err := a.cfg.ReadPairingCredential(a.window)
 	if err != nil {
@@ -351,7 +353,7 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	a.upstream.stallsJudged = judged
 	a.upstream.takesCommands, a.upstream.commandsKnown = takes, true
 	a.upstream.mu.Unlock()
-	again = takes && !takesCommands && commandURL != ""
+	again = takes != takesCommands && commandURL != ""
 	a.recordPairing(serverURL, upstream.Failure{})
 	// Apply the fleet's exits for this pairing.
 	if a.applyFleetExits(resp.FleetExits) && a.fence != nil {
