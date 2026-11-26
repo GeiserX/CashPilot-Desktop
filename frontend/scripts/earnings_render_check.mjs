@@ -82,6 +82,9 @@ check("SupportXMR displays one piconero in the native balance", primary(cell(sup
 const herominers = earning({ platform: "herominers-kas", currency: "KAS", balance: 0.00000001, balanceDisplay: 0 });
 check("HeroMiners Kaspa displays one sompi in the native balance", primary(cell(herominers)) === "0.00000001 KAS", cell(herominers));
 
+const twominers = earning({ platform: "2miners-etc", currency: "ETC", balance: 0.000000001, balanceDisplay: 0 });
+check("2Miners ETC displays one pool unit in the native balance", primary(cell(twominers)) === "0.000000001 ETC", cell(twominers));
+
 
 // ---------------------------------------------------------------------------
 // THE RULE.

@@ -27,6 +27,7 @@ const miningCurrencies = new Map([
   ["BTC", 8],
   ["XMR", 12],
   ["KAS", 8],
+  ["ETC", 9],
 ]);
 
 export function miningBalancePrecision(currency: string): number | undefined {

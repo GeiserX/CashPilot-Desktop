@@ -27,6 +27,7 @@ func TestPoolAddressHashMatchesCollectorNormalization(t *testing.T) {
 		{"ocean Base58 keeps its case", "ocean", map[string]string{oceanAddressKey: legacy}, poolAddressHash(legacy), true},
 		{"supportxmr trims the address", "supportxmr", map[string]string{supportXMRAddressKey: " " + supportXMRFund + " "}, poolAddressHash(supportXMRFund), true},
 		{"herominers-kas trims the address", "herominers-kas", map[string]string{heroMinersKaspaAddressKey: " " + heroMinersAddress + " "}, poolAddressHash(heroMinersAddress), true},
+		{"2miners-etc lowercases the address", "2miners-etc", map[string]string{twoMinersETCAddressKey: " 0x" + strings.ToUpper(twoMinersAddress[2:]) + " "}, poolAddressHash(twoMinersAddress), true},
 		{"pool with no address yet", "supportxmr", map[string]string{supportXMRAddressKey: "  "}, "", true},
 		{"service without a payout address", "honeygain", map[string]string{"HONEYGAIN_EMAIL": "a@b.c"}, "", false},
 	}

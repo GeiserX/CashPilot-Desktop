@@ -173,6 +173,25 @@ func TestDefaultKaspaRate(t *testing.T) {
 	}
 }
 
+func TestDefaultEthereumClassicRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",ethereum-classic,") {
+			t.Errorf("CoinGecko request did not include ethereum-classic: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"ethereum-classic":{"usd":20}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(0.1, "ETC"); !ok || got != 2 {
+		t.Fatalf("ToUSD(0.1, ETC) = (%v, %v), want (2, true)", got, ok)
+	}
+}
+
 func TestStaleGracefulOnHTTP500(t *testing.T) {
 	svc, cg, fr := newTestService(t)
 
