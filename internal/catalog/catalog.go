@@ -43,6 +43,7 @@ func IsCustomSlug(slug string) bool {
 // SetCustom replaces the user's custom services. Each must carry the custom- prefix
 // and Custom set; anything else is dropped, so a custom definition can never shadow
 // or stand in for a catalog entry.
+// A mining: block is held to the same rules as a catalog entry's.
 func (c *Catalog) SetCustom(services []Service) {
 	kept := make([]Service, 0, len(services))
 	for _, svc := range services {
@@ -52,6 +53,7 @@ func (c *Catalog) SetCustom(services []Service) {
 		if _, clash := c.bySlug[svc.Slug]; clash {
 			continue
 		}
+		svc.Mining = normalizeMining(svc.Slug, svc.Mining)
 		kept = append(kept, svc)
 	}
 	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Name < kept[j].Name })
@@ -678,21 +680,30 @@ func normalize(svc *Service) {
 	if !strings.HasPrefix(svc.SupportURL, "https://") {
 		svc.SupportURL = ""
 	}
-	if m := svc.Mining; m != nil {
-		// The web catalog allows a fee from 0 to 10 percent. Anything else, NaN
-		// included, is shown as not stated rather than as a number nobody checked.
-		if fee := m.DevFeePercent; fee != nil && !(*fee >= 0 && *fee <= 10) {
-			log.Printf("catalog: %s: mining.dev_fee_percent %v is not from 0 to 10, shown as not stated", svc.Slug, *fee)
-			m.DevFeePercent = nil
-		}
-		if !strings.HasPrefix(m.DevFeeSource, "https://") {
-			m.DevFeeSource = ""
-		}
-	}
+	svc.Mining = normalizeMining(svc.Slug, svc.Mining)
 	svc.Docker.HealthSignals = normalizeSignals(svc.Slug, svc.Docker.HealthSignals)
 	if svc.Docker.HealthProbe != nil {
 		svc.Docker.HealthProbe = jsonSafe(svc.Docker.HealthProbe).(map[string]any)
 	}
+}
+
+// normalizeMining returns a copy of m held to the web catalog's rules, nil for nil.
+// Catalog entries and custom services both pass through it.
+func normalizeMining(slug string, m *Mining) *Mining {
+	if m == nil {
+		return nil
+	}
+	out := *m
+	// The web catalog allows a fee from 0 to 10 percent. Anything else, NaN
+	// included, is shown as not stated rather than as a number nobody checked.
+	if fee := out.DevFeePercent; fee != nil && !(*fee >= 0 && *fee <= 10) {
+		log.Printf("catalog: %s: mining.dev_fee_percent %v is not from 0 to 10, shown as not stated", slug, *fee)
+		out.DevFeePercent = nil
+	}
+	if !strings.HasPrefix(out.DevFeeSource, "https://") {
+		out.DevFeeSource = ""
+	}
+	return &out
 }
 
 // jsonSafe turns the map[any]any that yaml.v3 produces for a nested mapping with a

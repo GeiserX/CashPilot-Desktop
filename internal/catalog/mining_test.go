@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -80,6 +81,45 @@ func TestLoaderClearsAMinerFeeTheWebRejects(t *testing.T) {
 		}
 	}
 	if _, err := json.Marshal(cat.List()); err != nil {
+		t.Errorf("the service list must still encode: %v", err)
+	}
+}
+
+// A custom service skips the loader, so SetCustom holds its mining: block to the
+// same rules: a fee outside 0 to 10 percent or a NaN reads as not stated, and a
+// link that is not https:// is cleared. A valid fee is the control. The caller's
+// own block is left as it was.
+func TestSetCustomClearsAMinerFeeTheWebRejects(t *testing.T) {
+	fee := func(v float64) *float64 { return &v }
+	custom := func(slug string, m Mining) Service {
+		return Service{Name: slug, Slug: "custom-" + slug, Custom: true, Mining: &m}
+	}
+	given := []Service{
+		custom("ok", Mining{DevFeePercent: fee(5), DevFeeSource: "https://example.com/fee"}),
+		custom("neg", Mining{DevFeePercent: fee(-1), DevFeeSource: "https://example.com/fee"}),
+		custom("high", Mining{DevFeePercent: fee(11), DevFeeSource: "http://example.com/fee"}),
+		custom("nan", Mining{DevFeePercent: fee(math.NaN()), DevFeeSource: "javascript:alert(1)"}),
+	}
+	cat := newCatalog(nil)
+	cat.SetCustom(given)
+	ok := mustGet(t, cat, "custom-ok").Mining
+	if ok.DevFeePercent == nil || *ok.DevFeePercent != 5 || ok.DevFeeSource != "https://example.com/fee" {
+		t.Errorf("a 5%% fee with an https source must stay, got %+v", ok)
+	}
+	for _, slug := range []string{"custom-neg", "custom-high", "custom-nan"} {
+		if got := mustGet(t, cat, slug).Mining.DevFeePercent; got != nil {
+			t.Errorf("%s: dev_fee_percent must read as not stated, got %v", slug, *got)
+		}
+	}
+	for _, slug := range []string{"custom-high", "custom-nan"} {
+		if src := mustGet(t, cat, slug).Mining.DevFeeSource; src != "" {
+			t.Errorf("%s: a source that is not https:// must be cleared, got %q", slug, src)
+		}
+	}
+	if given[2].Mining.DevFeePercent == nil || given[2].Mining.DevFeeSource == "" {
+		t.Error("SetCustom changed the caller's mining block")
+	}
+	if _, err := json.Marshal(cat.ListVisible()); err != nil {
 		t.Errorf("the service list must still encode: %v", err)
 	}
 }
