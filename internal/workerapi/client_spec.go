@@ -3,6 +3,7 @@ package workerapi
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -32,6 +33,10 @@ type SpecInput struct {
 	WorkerArch string
 	// WorkerFeatures are what the worker said it can do in its last heartbeat.
 	WorkerFeatures []string
+	// WorkerGPUGrants are the GPU grants the worker reported in its last heartbeat,
+	// by slug, as the web worker's gpu_grants carries them. nil when the worker sent
+	// none: it is older than the GPU grants, or its Docker was down.
+	WorkerGPUGrants map[string]json.RawMessage
 	// CustomImage replaces the catalog image; "" runs the catalog's.
 	CustomImage string
 }
@@ -74,6 +79,9 @@ func BuildDeploySpec(svc catalog.Service, in SpecInput) (DeploySpec, error) {
 	custom := strings.TrimSpace(in.CustomImage)
 	if custom != "" && dc.FenceGated {
 		return DeploySpec{}, fmt.Errorf("%s runs only the image the catalog pins, since it holds NET_ADMIN in its own namespace; clear the Image box", svc.Name)
+	}
+	if err := checkWorkerGPUGrant(svc, custom, in.WorkerGPUGrants); err != nil {
+		return DeploySpec{}, err
 	}
 	image := runtime.ImageForArch(dc, in.WorkerArch)
 	if custom != "" {
@@ -150,6 +158,50 @@ func BuildDeploySpec(svc catalog.Service, in SpecInput) (DeploySpec, error) {
 		spec.Command = &command
 	}
 	return spec, nil
+}
+
+// checkWorkerGPUGrant refuses a GPU service on a worker that would not give it the
+// GPU its catalog entry declares, as the web app's _deploy does. The spec carries
+// no GPU: the worker grants one from its own catalog. A worker without that grant
+// starts the miner without a GPU, and the miner still looks healthy.
+func checkWorkerGPUGrant(svc catalog.Service, customImage string, grants map[string]json.RawMessage) error {
+	if svc.Docker.GPU == nil {
+		return nil
+	}
+	name := svc.Name
+	if name == "" {
+		name = svc.Slug
+	}
+	if customImage != "" {
+		return fmt.Errorf("%s uses a GPU and runs only the catalog image. Clear the Image box", name)
+	}
+	if problems := catalog.GPUProblems(svc); len(problems) > 0 {
+		return fmt.Errorf("%s declares a GPU its catalog entry does not describe correctly (%s), so nothing was deployed", name, strings.Join(problems, "; "))
+	}
+	want, ok := catalog.GPUGrants([]catalog.Service{svc})[svc.Slug]
+	if !ok || !sameGPUGrant(grants[svc.Slug], want) {
+		return fmt.Errorf("this worker did not report the catalog GPU grant for %s. Update the worker and wait for its next heartbeat. Nothing was deployed", name)
+	}
+	return nil
+}
+
+// sameGPUGrant reports whether a grant the worker reported is want, key for key,
+// as the web app compares the two. A missing grant is never the same.
+func sameGPUGrant(raw json.RawMessage, want catalog.GPUSpec) bool {
+	var got map[string]any
+	if len(raw) == 0 || json.Unmarshal(raw, &got) != nil || len(got) != 3 {
+		return false
+	}
+	vendor, _ := got["vendor"].(string)
+	rocm, isBool := got["rocm"].(bool)
+	if vendor != want.Vendor || !isBool || rocm != want.ROCm {
+		return false
+	}
+	if want.Count == "all" {
+		return got["count"] == "all"
+	}
+	count, isNumber := got["count"].(float64)
+	return isNumber && count == 1
 }
 
 // deployEnv is every declared variable: its catalog default, then the stored value,
