@@ -175,7 +175,8 @@ A service is refused, with the reason, when its catalog entry needs:
   catalog, with a link to the provider's own terms.
 
 With today's catalog that rules out EarnApp, URnetwork, ProxyBase Markets,
-Bitping, Mysterium, Storj, Sia and Anyone Protocol. Services that need UDP do
+Bitping, Mysterium, Storj, Sia, Anyone Protocol, and the two GPU miners,
+SRBMiner-Multi and Kryptex Pool (Pearl). Services that need UDP do
 not work through SOCKS5 or HTTP CONNECT; a Tailscale exit node carries UDP.
 
 ## Editing a proxy

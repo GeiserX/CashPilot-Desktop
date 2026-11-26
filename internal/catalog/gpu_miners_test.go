@@ -77,6 +77,10 @@ func TestGPUMinersLoadWithTheirGrantFeeAndPayout(t *testing.T) {
 func TestEveryEnvPatternCompilesAsAnHTMLPattern(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
+		// CI runners ship node; a skip there would hide a pattern the browser ignores.
+		if os.Getenv("CI") != "" {
+			t.Fatal("node is not on PATH in CI, so the browser's pattern rules were not checked")
+		}
 		t.Skip("node is not installed, so the browser's pattern rules cannot be checked here")
 	}
 	patterns := map[string]string{}
@@ -101,7 +105,8 @@ func TestEveryEnvPatternCompilesAsAnHTMLPattern(t *testing.T) {
 		t.Errorf("%s: pattern %q does not compile as an HTML pattern: %s", key, patterns[key], why)
 	}
 
-	// The two fixed in #841 still take and refuse what they should.
+	// The two fields fixed in #841, and the two other SRBMiner fields with a "-",
+	// still take and refuse what they should.
 	samples := map[string][2]string{
 		"kryptex-pearl KRYPTEX_EMAIL": {"first.last+rig@mail-host.example.com", "not an email"},
 		"kryptex-pearl WORKER_NAME":   {"rig-2_b", "bad!"},
