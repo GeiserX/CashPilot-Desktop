@@ -38,6 +38,7 @@ var DefaultCryptoIDs = map[string]string{
 	"BTC":    "bitcoin",
 	"XMR":    "monero",
 	"KAS":    "kaspa",
+	"ETC":    "ethereum-classic",
 	"MYST":   "mysterium",
 	"ANYONE": "airtor-protocol",
 	"STORJ":  "storj",

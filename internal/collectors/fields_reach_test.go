@@ -48,6 +48,10 @@ func wizardFormCredentials(svc catalog.Service) map[string]string {
 			creds[key] = heroMinersAddress
 			return
 		}
+		if key == "TWOMINERS_ETC_ADDRESS" {
+			creds[key] = twoMinersAddress
+			return
+		}
 		if key == "SUPPORTXMR_ADDRESS" {
 			creds[key] = supportXMRFund
 			return

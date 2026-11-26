@@ -28,6 +28,9 @@ type Field struct {
 }
 
 var collectorFields = map[string][]Field{
+	"2miners-etc": {
+		{Key: twoMinersETCAddressKey, Label: "ETC payout address", Required: true},
+	},
 	"anyone-protocol": {
 		{Key: "ANYONE_FINGERPRINTS", Label: "Relay fingerprints", Description: "Comma-separated relay fingerprints", Required: true},
 	},

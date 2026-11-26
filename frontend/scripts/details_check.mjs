@@ -215,6 +215,17 @@ check("HeroMiners shows its adjustable payout threshold", valueOf(heroPayout, "P
 check("HeroMiners shows one sompi as unpaid", valueOf(heroPayout, "Unpaid pool balance") === "0.00000001 KAS", heroPayout);
 check("HeroMiners counts down to its lowest threshold in sompi", valueOf(heroPayout, "Still to minimum payout") === "0.99999999 KAS", heroPayout);
 
+const twominers = {
+  ...ocean,
+  slug: "2miners-etc",
+  payment: { currency: "ETC", minimumPayout: "0.1 ETC (adjustable)" },
+  cashout: { method: "auto", currency: "ETC", minAmount: 0.1, notes: "2Miners pays your address automatically once you reach your chosen threshold. The lowest threshold for ETC payouts is 0.1 ETC." },
+};
+const twoMinersPayout = payoutFacts(twominers, { amount: 0.000000001, currency: "ETC" });
+check("2Miners shows its adjustable payout threshold", valueOf(twoMinersPayout, "Payout terms") === "0.1 ETC (adjustable)", twoMinersPayout);
+check("2Miners shows one pool unit as unpaid", valueOf(twoMinersPayout, "Unpaid pool balance") === "0.000000001 ETC", twoMinersPayout);
+check("2Miners counts down to its lowest threshold in pool units", valueOf(twoMinersPayout, "Still to minimum payout") === "0.099999999 ETC", twoMinersPayout);
+
 const undocumented = payoutFacts({
   ...honeygain,
   payment: {methods: [], frequency: "", currency: ""},

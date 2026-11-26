@@ -68,6 +68,8 @@ func PoolAddressHash(slug string, credentials map[string]string) (string, bool) 
 		address = firstCredential(credentials, supportXMRAddressKey)
 	case "herominers-kas":
 		address = firstCredential(credentials, heroMinersKaspaAddressKey)
+	case "2miners-etc":
+		address = twoMinersETCAddress(credentials)
 	default:
 		return "", false
 	}
@@ -124,6 +126,7 @@ type collectorFunc func(*Registry, context.Context, map[string]string) (Result, 
 // collector. Collect dispatches through it and Supports reports membership, so the
 // two can never drift: a slug either has an entry here or it does not.
 var collectorDispatch = map[string]collectorFunc{
+	"2miners-etc":     (*Registry).collectTwoMinersETC,
 	"anyone-protocol": (*Registry).collectAnyone,
 	"bitping":         (*Registry).collectBitping,
 	"bytelixir":       (*Registry).collectBytelixir,
