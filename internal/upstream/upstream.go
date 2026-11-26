@@ -153,6 +153,32 @@ type Response struct {
 	Earnings  json.RawMessage `json:"earnings,omitempty"`
 	// FleetExits is the public IPv4 of every box of the fleet, read by ParseFleetExits.
 	FleetExits json.RawMessage `json:"fleet_exits,omitempty"`
+	// Features names what the server can do, read by TakesCommands. A server from
+	// before the list sends no key.
+	Features json.RawMessage `json:"features,omitempty"`
+}
+
+// CommandsFeature is what a CashPilot server lists in Features when it may send
+// this computer commands: web v3.0.0 and newer, which redeploys a running copy only
+// after the owner approves the replacement and keeps the seed-phrase guard. web
+// v2.10.x sends no list, yet takes any reported command URL as a command target and
+// deploys without either check.
+const CommandsFeature = "desktop_commands"
+
+// TakesCommands reports whether a heartbeat reply's features list names
+// CommandsFeature. No key, null, or anything but a list is false: the heartbeat then
+// reports no command URL and this computer stays report-only on that server.
+func TakesCommands(raw json.RawMessage) bool {
+	var features []any
+	if json.Unmarshal(raw, &features) != nil {
+		return false
+	}
+	for _, f := range features {
+		if s, ok := f.(string); ok && s == CommandsFeature {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseFleetExits reads the fleet_exits a heartbeat response carried: the public IPv4
