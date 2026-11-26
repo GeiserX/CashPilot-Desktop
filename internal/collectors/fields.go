@@ -51,6 +51,9 @@ var collectorFields = map[string][]Field{
 	"grass": {
 		{Key: "GRASS_ACCESS_TOKEN", Label: "Grass access token", Description: "accessToken from app.grass.io local storage", Secret: true, Required: true},
 	},
+	"herominers-kas": {
+		{Key: heroMinersKaspaAddressKey, Label: "Kaspa payout address", Required: true},
+	},
 	"mysterium": {
 		{Key: "MYSTNODES_EMAIL", Label: "MystNodes email", Description: "Email used for my.mystnodes.com", Required: true},
 		{Key: "MYSTNODES_PASSWORD", Label: "MystNodes password", Description: "Password used for my.mystnodes.com", Secret: true, Required: true},

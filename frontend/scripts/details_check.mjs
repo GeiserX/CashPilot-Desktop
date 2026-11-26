@@ -204,6 +204,17 @@ check("SupportXMR counts down to the request minimum", valueOf(supportPayout, "S
 const supportReady = payoutFacts(supportxmr, { amount: 0.01, currency: "XMR" });
 check("reaching SupportXMR's request minimum directs the user to the payout terms", valueOf(supportReady, "Still to minimum payout") === "Minimum reached. Check the pool's payout terms.", supportReady);
 
+const herominers = {
+  ...ocean,
+  slug: "herominers-kas",
+  payment: { currency: "KAS", minimumPayout: "1 KAS (adjustable)" },
+  cashout: { method: "auto", currency: "KAS", minAmount: 1, notes: "HeroMiners pays your address automatically once you reach your chosen threshold. The lowest threshold is 1 KAS." },
+};
+const heroPayout = payoutFacts(herominers, { amount: 0.00000001, currency: "KAS" });
+check("HeroMiners shows its adjustable payout threshold", valueOf(heroPayout, "Payout terms") === "1 KAS (adjustable)", heroPayout);
+check("HeroMiners shows one sompi as unpaid", valueOf(heroPayout, "Unpaid pool balance") === "0.00000001 KAS", heroPayout);
+check("HeroMiners counts down to its lowest threshold in sompi", valueOf(heroPayout, "Still to minimum payout") === "0.99999999 KAS", heroPayout);
+
 const undocumented = payoutFacts({
   ...honeygain,
   payment: {methods: [], frequency: "", currency: ""},
