@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -212,5 +214,173 @@ func TestTheSignedFlagReachesTheNotes(t *testing.T) {
 		if got := strings.Contains(out, "not code-signed yet"); got != c.unsigned {
 			t.Errorf("%s: says unsigned = %v, want %v:\n%s", c.flag, got, c.unsigned, out)
 		}
+	}
+}
+
+// A squash merge with an empty title leaves a subject like " (#838)". It used to
+// drop out of the notes without a word; now it has no title and stops the release.
+func TestHasTitle(t *testing.T) {
+	for _, c := range []struct {
+		subject string
+		want    bool
+	}{
+		{"fix: keep the key off the page (#332)", true},
+		{"feat(fleet)!: drop the old pairing (#9)", true},
+		{"Merge branch 'main' into x", true},
+		{"chore: v2 (#7)", true},
+		{" (#838)", false},
+		{"(#838)", false},
+		{"feat: (#838)", false},
+		{"fix(fleet)!: (#838) (#839)", false},
+		{"feat:", false},
+		{"", false},
+		{"  ", false},
+	} {
+		if got := hasTitle(c.subject); got != c.want {
+			t.Errorf("hasTitle(%q) = %v, want %v", c.subject, got, c.want)
+		}
+	}
+}
+
+func TestIsBreaking(t *testing.T) {
+	for _, c := range []struct {
+		c    commit
+		want bool
+	}{
+		{commit{subject: "feat!: drop the old pairing (#9)"}, true},
+		{commit{subject: "fix(fleet)!: refuse the old key (#10)"}, true},
+		{commit{subject: "refactor(app)!: move the config (#11)"}, true},
+		{commit{subject: "feat(app): move the config (#12)", body: "Longer text.\n\nBREAKING CHANGE: config.json moved\n"}, true},
+		{commit{subject: "feat(fleet): drop the old pairing (#13)"}, false},
+		{commit{subject: "fix: say BREAKING CHANGE: in the middle (#14)", body: "It mentions BREAKING CHANGE: but not as a footer.\n"}, false},
+		{commit{subject: "docs: explain feat!: subjects (#15)"}, false},
+	} {
+		if got := isBreaking(c.c); got != c.want {
+			t.Errorf("isBreaking(%+v) = %v, want %v", c.c, got, c.want)
+		}
+	}
+}
+
+// auto-tag.yml decides on a major bump with this same test. If the two drift, a
+// release can be major with no breaking change listed, or the other way round.
+func TestBreakingLineIsTheOneAutoTagUses(t *testing.T) {
+	workflow, err := os.ReadFile("../../.github/workflows/auto-tag.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "grep -qE '" + breakingLine.String() + "'"
+	if !strings.Contains(string(workflow), want) {
+		t.Fatalf("auto-tag.yml no longer runs %s; change breakingLine to match it", want)
+	}
+}
+
+func TestAMajorReleaseOpensWithBeforeYouUpgrade(t *testing.T) {
+	r := Release{
+		Repo: "GeiserX/CashPilot-Desktop", Tag: "v2.0.0", Prev: "v1.7.0", Assets: allAssets,
+		Commits:  []string{"feat(fleet)!: drop the old pairing (#9)", "fix: keep the key off the page (#332)", "feat(app): move the config (#12)"},
+		Breaking: []string{"feat(fleet)!: drop the old pairing (#9)", "feat(app): move the config (#12)"},
+	}
+	body := Render(r)
+	if !strings.HasPrefix(body, "## Before you upgrade\n") {
+		t.Fatalf("a major release must open with Before you upgrade:\n%s", body)
+	}
+	before := section(t, body, "## Before you upgrade", "## Download")
+	for _, want := range []string{
+		"[docs/whats-new-2.0.md](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/docs/whats-new-2.0.md)",
+		"before you upgrade from v1.7.0",
+		"- Drop the old pairing (#9)\n",
+		"- Move the config (#12)\n",
+	} {
+		if !strings.Contains(before, want) {
+			t.Errorf("Before you upgrade lacks %q:\n%s", want, before)
+		}
+	}
+	if strings.Contains(before, "Keep the key off the page") {
+		t.Errorf("Before you upgrade must list only the breaking changes:\n%s", before)
+	}
+}
+
+func TestAMajorReleaseWithNoBreakingCommitStillLinksTheGuide(t *testing.T) {
+	body := Render(Release{Repo: "GeiserX/CashPilot-Desktop", Tag: "v3.0.0", Prev: "v2.4.1", Commits: v160, Assets: allAssets})
+	before := section(t, body, "## Before you upgrade", "## Download")
+	if !strings.Contains(before, "docs/whats-new-3.0.md") || strings.Contains(before, "- ") {
+		t.Errorf("want the guide link and no list:\n%s", before)
+	}
+}
+
+func TestOnlyAMajorBumpGetsBeforeYouUpgrade(t *testing.T) {
+	for _, c := range []struct{ tag, prev string }{
+		{"v1.6.0", "v1.5.0"},
+		{"v1.6.1", "v1.6.0"},
+		{"v1.0.0", ""},
+		{"v9.9.9", "HEAD"},
+	} {
+		body := Render(Release{Repo: "GeiserX/CashPilot-Desktop", Tag: c.tag, Prev: c.prev, Commits: v160, Breaking: v160[:1], Assets: allAssets})
+		if strings.Contains(body, "Before you upgrade") {
+			t.Errorf("%s after %q is not a major bump, but the notes say Before you upgrade:\n%s", c.tag, c.prev, body)
+		}
+	}
+}
+
+// gitRepo makes a repository in a temporary folder with a v1.7.0 tag, adds one
+// empty commit per message, and moves the test into it.
+func gitRepo(t *testing.T, messages ...string) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	g := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	g("init", "-q")
+	g("commit", "-q", "--allow-empty", "-m", "feat: the first release (#1)")
+	g("tag", "v1.7.0")
+	for _, m := range messages {
+		g("commit", "-q", "--allow-empty", "--allow-empty-message", "--cleanup=verbatim", "-m", m)
+	}
+}
+
+func TestRunListsTheBreakingCommitsOfAMajorRelease(t *testing.T) {
+	gitRepo(t,
+		"feat(fleet)!: drop the old pairing (#9)",
+		"fix: keep the key off the page (#332)",
+		"feat(app): move the config (#12)\n\nBREAKING CHANGE: config.json moved to the app folder",
+	)
+	out, err := run([]string{"-tag", "v2.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := section(t, out, "## Before you upgrade", "## Download")
+	for _, want := range []string{"docs/whats-new-2.0.md", "from v1.7.0", "- Drop the old pairing (#9)\n", "- Move the config (#12)\n"} {
+		if !strings.Contains(before, want) {
+			t.Errorf("Before you upgrade lacks %q:\n%s", want, before)
+		}
+	}
+	if strings.Contains(before, "Keep the key") {
+		t.Errorf("a plain fix is not breaking:\n%s", before)
+	}
+}
+
+func TestRunFailsOnACommitWithNoTitle(t *testing.T) {
+	for _, subject := range []string{" (#838)", "feat: (#838)", ""} {
+		t.Run(subject, func(t *testing.T) {
+			gitRepo(t, "fix: keep the key off the page (#332)", subject)
+			out, err := run([]string{"-tag", "v1.7.1"})
+			if err == nil || !strings.Contains(err.Error(), "has no title text") {
+				t.Fatalf("want a no-title error, got %v:\n%s", err, out)
+			}
+		})
+	}
+}
+
+// auto-tag never releases a breaking change as a minor or patch. A version typed
+// by hand can, and its notes would hide the break, so the tool refuses it.
+func TestRunFailsOnABreakingChangeInANonMajorRelease(t *testing.T) {
+	gitRepo(t, "feat(fleet)!: drop the old pairing (#9)")
+	out, err := run([]string{"-tag", "v1.8.0"})
+	if err == nil || !strings.Contains(err.Error(), "is not a major release after v1.7.0") {
+		t.Fatalf("want a not-major error, got %v:\n%s", err, out)
 	}
 }

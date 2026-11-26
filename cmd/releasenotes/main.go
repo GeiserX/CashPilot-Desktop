@@ -7,6 +7,9 @@
 // offer yet, and found no word on the two warnings Windows shows for an unsigned
 // file. So the body now has three parts, in this order:
 //
+//  0. Before you upgrade, on a major release only: a link to
+//     docs/whats-new-<major>.0.md and the breaking changes, so nobody upgrades
+//     into one blind.
 //  1. Download: which file to take for each system, the steps to run it, and the
 //     two Windows warnings with what to click and why they appear.
 //  2. What changed for you: only feat and fix commits, minus the scopes that are
@@ -21,6 +24,10 @@
 //
 // -prev defaults to the newest v*.*.* tag reachable from -to, other than -tag.
 // The asset arguments are only read for their file names.
+//
+// The command fails, and so stops the release, on a commit with no title text
+// (a squash merge with an empty title leaves only " (#838)"), and on a breaking
+// change in a release that is not a major bump.
 package main
 
 import (
@@ -30,6 +37,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -41,7 +49,12 @@ type Release struct {
 	Tag     string   // the version being released, e.g. v1.6.0
 	Prev    string   // the version before it, "" for the first release
 	Commits []string // commit subjects, oldest first
-	Assets  []string // the file names the release publishes
+
+	// Breaking holds the subjects of the commits that auto-tag counts as breaking
+	// (see isBreaking), oldest first. On a major bump they are listed under
+	// "Before you upgrade".
+	Breaking []string
+	Assets   []string // the file names the release publishes
 
 	// WindowsSigned says the Windows files carry a code signature. The release
 	// workflow sets it: the build signs them exactly when WINDOWS_SIGN_CERT is set.
@@ -65,6 +78,101 @@ var hiddenScopes = map[string]bool{
 }
 
 var conventional = regexp.MustCompile(`^(feat|fix)(?:\(([^)]*)\))?!?:\s*(.+)$`)
+
+// breakingLine is the test auto-tag.yml runs on every line of every commit's
+// subject and body to decide on a major bump. Keep the two the same: a test
+// reads auto-tag.yml and fails when they drift apart.
+var breakingLine = regexp.MustCompile(`^BREAKING CHANGE:|^[a-z]+(\([^)]*\))?!:`)
+
+// anyType is the "type(scope)!:" prefix of a conventional subject, any type.
+var anyType = regexp.MustCompile(`^[a-z]+(?:\([^)]*\))?!?:`)
+
+// prRef is a trailing pull request number, as a squash merge adds it.
+var prRef = regexp.MustCompile(`\s*\(#\d+\)\s*$`)
+
+// version reads the major number of a v1.2.3 tag.
+var version = regexp.MustCompile(`^v(\d+)\.\d+\.\d+`)
+
+// commit is one first-parent commit of the release.
+type commit struct {
+	hash, subject, body string
+}
+
+// isBreaking says whether auto-tag would count this commit as breaking: a line
+// of its subject or body is a "type!:" subject or a "BREAKING CHANGE:" footer.
+func isBreaking(c commit) bool {
+	for _, line := range strings.Split(c.subject+"\n"+c.body, "\n") {
+		if breakingLine.MatchString(line) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasTitle says whether a subject says anything once the "type(scope):" prefix
+// and the trailing pull request numbers are gone. " (#838)" says nothing.
+func hasTitle(subject string) bool {
+	text := anyType.ReplaceAllString(strings.TrimSpace(subject), "")
+	for {
+		trimmed := prRef.ReplaceAllString(text, "")
+		if trimmed == text {
+			break
+		}
+		text = trimmed
+	}
+	return strings.IndexFunc(text, func(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }) >= 0
+}
+
+// majorOf returns the major number of a v1.2.3 tag.
+func majorOf(tag string) (int, bool) {
+	m := version.FindStringSubmatch(tag)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.Atoi(m[1])
+	return n, err == nil
+}
+
+// majorBump returns the new major number when tag starts a major over prev. The
+// first release (no prev) is not a bump: nobody upgrades into it.
+func majorBump(tag, prev string) (int, bool) {
+	to, ok1 := majorOf(tag)
+	from, ok2 := majorOf(prev)
+	if !ok1 || !ok2 || to <= from {
+		return 0, false
+	}
+	return to, true
+}
+
+// check refuses a release that would publish wrong notes.
+func check(r Release, commits []commit) error {
+	for _, c := range commits {
+		if !hasTitle(c.subject) {
+			return fmt.Errorf("commit %s has no title text, only %q: a squash merge lost its title. Give the commit a real subject before releasing", short(c.hash), c.subject)
+		}
+	}
+	// auto-tag always makes a breaking change a major bump. Only a version typed
+	// by hand can disagree, and then the notes would hide the break.
+	_, tagOK := majorOf(r.Tag)
+	_, prevOK := majorOf(r.Prev)
+	if _, major := majorBump(r.Tag, r.Prev); len(r.Breaking) > 0 && tagOK && prevOK && !major {
+		return fmt.Errorf("%s is not a major release after %s, but %q is a breaking change. Release it as a new major version", r.Tag, r.Prev, r.Breaking[0])
+	}
+	return nil
+}
+
+func short(hash string) string {
+	if len(hash) > 12 {
+		return hash[:12]
+	}
+	return hash
+}
+
+// readable turns a subject into the words a user reads: no "type(scope)!:"
+// prefix, first letter upper case.
+func readable(subject string) string {
+	return capitalize(strings.TrimSpace(anyType.ReplaceAllString(strings.TrimSpace(subject), "")))
+}
 
 // forPeople says whether a commit belongs in "What changed for you", under which
 // heading, and in what words.
@@ -96,6 +204,7 @@ func capitalize(s string) string {
 // Render writes the release body.
 func Render(r Release) string {
 	var b strings.Builder
+	writeBeforeYouUpgrade(&b, r)
 	writeDownloads(&b, r)
 	writeChanges(&b, r)
 	writeDeveloperList(&b, r)
@@ -118,6 +227,25 @@ func findAsset(assets []string, suffix string) string {
 		}
 	}
 	return ""
+}
+
+// writeBeforeYouUpgrade opens the notes of a major release: what to read first,
+// and every breaking change, so a "feat!:" does not hide under "New".
+func writeBeforeYouUpgrade(b *strings.Builder, r Release) {
+	major, ok := majorBump(r.Tag, r.Prev)
+	if !ok {
+		return
+	}
+	doc := fmt.Sprintf("docs/whats-new-%d.0.md", major)
+	b.WriteString("## Before you upgrade\n\n")
+	fmt.Fprintf(b, "This is a major release. Some changes need a step from you. Read [%s](https://github.com/%s/blob/%s/%s) before you upgrade from %s.\n", doc, r.Repo, r.Tag, doc, r.Prev)
+	if len(r.Breaking) > 0 {
+		b.WriteString("\nThe changes that can break how you use the app today:\n\n")
+		for _, subject := range r.Breaking {
+			fmt.Fprintf(b, "- %s\n", readable(subject))
+		}
+	}
+	b.WriteString("\n")
 }
 
 func writeDownloads(b *strings.Builder, r Release) {
@@ -239,21 +367,29 @@ func previousTag(tag, to string) (string, error) {
 	return "", nil
 }
 
-func subjects(prev, to string) ([]string, error) {
+// commits reads the release's commits, oldest first. An empty subject stays in
+// the list, so check can refuse it.
+func commits(prev, to string) ([]commit, error) {
 	rng := to
 	if prev != "" {
 		rng = prev + ".." + to
 	}
-	// First parent only: main is squash-merged, so each line is one pull request.
-	out, err := git("log", "--first-parent", "--reverse", "--format=%s", rng)
+	// First parent only: main is squash-merged, so each commit is one pull request.
+	out, err := git("log", "--first-parent", "--reverse", "--format=%H%x1f%s%x1f%b%x1e", rng)
 	if err != nil {
 		return nil, err
 	}
-	var list []string
-	for _, line := range strings.Split(out, "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			list = append(list, line)
+	var list []commit
+	for _, record := range strings.Split(out, "\x1e") {
+		record = strings.TrimLeft(record, "\n")
+		if record == "" {
+			continue
 		}
+		fields := strings.SplitN(record, "\x1f", 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("git log: unexpected record %q", record)
+		}
+		list = append(list, commit{hash: fields[0], subject: strings.TrimSpace(fields[1]), body: fields[2]})
 	}
 	return list, nil
 }
@@ -279,11 +415,19 @@ func run(args []string) (string, error) {
 		}
 		r.Prev = p
 	}
-	commits, err := subjects(r.Prev, *to)
+	list, err := commits(r.Prev, *to)
 	if err != nil {
 		return "", err
 	}
-	r.Commits = commits
+	for _, c := range list {
+		r.Commits = append(r.Commits, c.subject)
+		if isBreaking(c) {
+			r.Breaking = append(r.Breaking, c.subject)
+		}
+	}
+	if err := check(r, list); err != nil {
+		return "", err
+	}
 	for _, a := range fs.Args() {
 		r.Assets = append(r.Assets, filepath.Base(a))
 	}
