@@ -132,12 +132,21 @@ type AppConfig struct {
 	// ServerCommandsOff is the dashboard switch "<server> can start and stop
 	// services on this computer", turned off. The zero value is on, so joining a
 	// server turns the server-commands API on; joining again keeps the user's choice.
-	// A pairing carried over from 1.x starts off instead (enrolPairing), because
-	// an upgrade is not a choice to let the server run commands here.
+	// A pairing carried over from 1.x starts off instead (enrolPairing,
+	// enrolSavedPairing), also after a downgrade to 1.x and back, because an
+	// upgrade is not a choice to let the server run commands here.
 	ServerCommandsOff bool `json:"serverCommandsOff,omitempty"`
 	// ServerCommandsChosen is true once the user has used that switch. The 1.x
 	// carry-over then leaves ServerCommandsOff as the user set it.
 	ServerCommandsChosen bool `json:"serverCommandsChosen,omitempty"`
+	// PairingRevision is the pairing revision this version last published or
+	// kept (pairing.go). 1.x does not know the field and drops it when it saves
+	// config.json, so a revision in pairing.json with no marker here means 1.x
+	// saved its own choice since a downgrade. Another revision's marker means a
+	// publication stopped between its two writes. Until the window carries that
+	// choice over, Config shows the 1.x pairing from this file and the revision
+	// gives no credential (ErrPairingSuperseded).
+	PairingRevision string `json:"pairingRevision,omitempty"`
 }
 
 // SetupJournal says where a guided setup stood before a restart. It only says
@@ -208,6 +217,12 @@ type Manager struct {
 	// a change another process saved (the background helper and the window each
 	// hold a Manager on the same file) from its own.
 	saved []byte
+	// supersededSeen is the revision this Manager last read as superseded on
+	// disk: by PairingSuperseded, or by a load or Reload whose config.json did
+	// not hold the marker of the pairing.json read with it. It stays superseded
+	// while config.json cannot be read, so a marker in memory cannot bring it
+	// back.
+	supersededSeen string
 }
 
 // applyDefaults fills zero/invalid fields with safe defaults. The fleet bind
@@ -261,6 +276,9 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 	m.pairing, _ = m.Pairing()
+	if marker, read := m.markerOnDisk(); read {
+		m.noteMarkerLocked(marker)
+	}
 	return m, nil
 }
 
@@ -268,7 +286,7 @@ func (m *Manager) Config() AppConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	cfg := m.cfg
-	if m.pairing.Revision != "" {
+	if m.pairing.Revision != "" && m.cfg.PairingRevision == m.pairing.Revision {
 		cfg.UpstreamURL = m.pairing.ServerURL
 		cfg.Mode = ModeLead
 		if cfg.UpstreamURL != "" {
@@ -295,9 +313,28 @@ func (m *Manager) Save(cfg AppConfig) error {
 		return err
 	}
 	defer release()
-	if m.pairing.Revision != "" {
-		cfg.Mode, cfg.UpstreamURL = m.cfg.Mode, m.cfg.UpstreamURL
+	// Copy the pairing fields from the file, not from memory: the other process
+	// may have published since this Manager last read it, and its older marker
+	// written back would make that publication look superseded. A file that
+	// cannot be read or parsed stops the save; a missing one is a first save.
+	if _, err := m.reloadLocked(); err != nil {
+		return err
 	}
+	// Whether a pairing exists comes from pairing.json, not from this Manager's
+	// copy: a helper loaded before the first join has none, and a 1.x save
+	// drops the marker. While one exists, the server, the mode and the server
+	// commands switch stay as the file has them: a publication or Update
+	// changes them, never a whole-object snapshot that may predate it.
+	p, err := m.Pairing()
+	if err != nil {
+		return err
+	}
+	if p.Revision != "" || m.cfg.PairingRevision != "" {
+		cfg.Mode, cfg.UpstreamURL = m.cfg.Mode, m.cfg.UpstreamURL
+		cfg.ServerCommandsOff, cfg.ServerCommandsChosen = m.cfg.ServerCommandsOff, m.cfg.ServerCommandsChosen
+	}
+	// Only a publication writes the marker, so a 1.x save stays visible.
+	cfg.PairingRevision = m.cfg.PairingRevision
 	if err := m.persist(cfg); err != nil {
 		return err
 	}
@@ -324,7 +361,27 @@ func (m *Manager) Reload() (bool, error) {
 	}
 	pairingChanged := p != m.pairing
 	m.pairing = p
+	// Decide on the marker read from disk now, not on the copy in memory: the
+	// file can change after reloadLocked. A missing or unreadable config.json is
+	// not a read, so it neither marks nor clears.
+	if marker, read := m.markerOnDisk(); read {
+		m.noteMarkerLocked(marker)
+	}
 	return changed || pairingChanged, nil
+}
+
+// noteMarkerLocked records whether marker, just read from config.json, is the
+// marker of the pairing.json just read. A marker counts later, while
+// config.json cannot be read, only if it matched when it was read: a
+// publication that stopped between its two writes leaves the next revision's
+// marker over the old revision. Called with m.mu held.
+func (m *Manager) noteMarkerLocked(marker string) {
+	switch {
+	case m.pairing.Revision != "" && marker != m.pairing.Revision:
+		m.supersededSeen = m.pairing.Revision
+	case m.supersededSeen == m.pairing.Revision:
+		m.supersededSeen = ""
+	}
 }
 
 func (m *Manager) reloadLocked() (bool, error) {

@@ -64,7 +64,9 @@ func (a *App) pairingStatus() *PairingStatus {
 	}
 	serverURL := strings.TrimRight(strings.TrimSpace(a.cfg.Config().UpstreamURL), "/")
 	out := &PairingStatus{ServerURL: serverURL}
-	if p, err := a.cfg.Pairing(); err == nil && p.Suspended {
+	// A suspended revision that a 1.x save superseded is not the pairing shown:
+	// the address waiting in config.json has its own status.
+	if p, err := a.cfg.Pairing(); err == nil && p.Suspended && !a.cfg.PairingSuperseded(p) {
 		out.ErrorCode, out.LastError = "unauthorized", refusedPairingMessage
 		return out
 	}
@@ -187,7 +189,7 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 	if err != nil && current.Revision == "" {
 		return JoinResult{}, err
 	}
-	if a.pairingServer(current) != "" && !current.Suspended && (current.Revision == "" || key.Worker != "") {
+	if a.pairingServer(current, errors.Is(err, config.ErrPairingSuperseded)) != "" && !current.Suspended && (current.Revision == "" || key.Worker != "") {
 		return JoinResult{}, errors.New("this computer is already joined to a CashPilot; switch to Run everything here first")
 	}
 	return a.enrolPairing(a.ctx, req, current, "")
@@ -245,8 +247,9 @@ func (a *App) enrolPairing(ctx context.Context, req JoinRequest, current config.
 	// not a choice to allow them, so they start off unless the user already used
 	// the switch. Written before the pairing is published, so neither the window
 	// nor the helper listens in between. A fresh join has no saved address and
-	// keeps the default (on).
-	if current.Revision == "" && a.pairingServer(current) != "" {
+	// keeps the default (on). A 1.x pairing made after a downgrade has a revision:
+	// enrolSavedPairing turns the switch off itself before it calls this.
+	if current.Revision == "" && a.pairingServer(current, false) != "" {
 		if err := a.cfg.Update(func(c *config.AppConfig) {
 			if !c.ServerCommandsChosen {
 				c.ServerCommandsOff = true
@@ -285,9 +288,13 @@ type LeaveResult struct {
 	FirewallError string `json:"firewallError"`
 }
 
-// Explicit changes use the durable address even if config.json could not reload.
-func (a *App) pairingServer(p config.Pairing) string {
-	if p.Revision != "" {
+// pairingServer is the address an explicit change starts from. A live revision
+// gives its own address, even if config.json could not reload. A revision that
+// a 1.x save superseded (config.ErrPairingSuperseded) gives the address in
+// config.json instead: that is what the window shows, and what Leave and a key
+// typed alone in Settings act on, also when the revision itself has no server.
+func (a *App) pairingServer(p config.Pairing, superseded bool) string {
+	if p.Revision != "" && !superseded {
 		return p.ServerURL
 	}
 	return a.cfg.Config().UpstreamURL
@@ -299,7 +306,7 @@ func (a *App) saveSettingsPairing(address string, hasAddress bool, key string, h
 	if keyErr != nil && current.Revision == "" {
 		return false, keyErr
 	}
-	before := a.pairingServer(current)
+	before := a.pairingServer(current, errors.Is(keyErr, config.ErrPairingSuperseded))
 	if !hasAddress {
 		address = before
 	}
@@ -330,7 +337,9 @@ func (a *App) saveSettingsPairing(address string, hasAddress bool, key string, h
 		}
 		return false, err
 	}
-	left := address == "" && before != ""
+	// A superseded revision's own server is left too: a 1.x Leave carried over
+	// at the start (enrolSavedPairing) has no address in config.json.
+	left := address == "" && (before != "" || current.ServerURL != "")
 	if left {
 		key = ""
 	}
@@ -352,11 +361,11 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 	a.pairingMu.Lock()
 	defer a.pairingMu.Unlock()
 	a.refreshConfig()
-	p, err := a.cfg.Pairing()
-	if err != nil {
+	p, _, err := a.cfg.ReadPairingCredential(false)
+	if err != nil && p.Revision == "" {
 		return LeaveResult{}, err
 	}
-	out := LeaveResult{ServerURL: a.pairingServer(p), Name: a.upstreamPayload().Name}
+	out := LeaveResult{ServerURL: a.pairingServer(p, errors.Is(err, config.ErrPairingSuperseded)), Name: a.upstreamPayload().Name}
 	if out.ServerURL == "" {
 		if !firewallRuleNeeded {
 			return out, errors.New("this computer already runs everything here")
@@ -373,13 +382,41 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 	return out, nil
 }
 
-// enrolSavedPairing runs in the window on upgrade. The helper can report with
-// legacy credentials but cannot publish any key it receives.
+// enrolSavedPairing runs in the window at every start. It carries a 1.x
+// pairing over on the first upgrade, when no revision exists yet. It does it
+// again after a downgrade, when 1.x saved config.json over a revision
+// (config.ErrPairingSuperseded): the 1.x choice wins. A 1.x join, to the same
+// server or another, is carried over as on the first upgrade, and that
+// publication retires the old revision's credential and the 1.x credentials. A
+// 1.x Leave is published. A 1.x save that kept the server keeps the revision.
+// When a server stays, server commands start off, because 1.x dropped the
+// switch. A 1.x address with no key waits, unused, for the user; Leave and a
+// key typed in Settings act on that address (pairingServer). A key that
+// cannot be read (a locked keychain) waits for the next start. The helper can
+// report with legacy credentials before the first upgrade, but it cannot
+// publish any key it receives, and it does not report on a superseded revision.
+// A 2.0 development build from before the marker (never released) also left
+// no marker, and its state matches a 1.x save: such an install may lose its
+// pairing at this start and must join again.
 func (a *App) enrolSavedPairing(ctx context.Context) {
 	a.pairingMu.Lock()
 	defer a.pairingMu.Unlock()
 	p, _, err := a.cfg.ReadPairingCredential(true)
-	if err != nil || p.Revision != "" || !a.joined() {
+	superseded := errors.Is(err, config.ErrPairingSuperseded)
+	if !superseded && (err != nil || p.Revision != "") {
+		return
+	}
+	if !a.joined() {
+		if !superseded {
+			return
+		}
+		if p.ServerURL == "" {
+			a.keepPairing(p)
+		} else if _, err := a.saveSettingsPairing("", true, "", true); err != nil {
+			a.emitError("pairing", err)
+		} else if a.ctx != nil {
+			a.runScheduler(a.ctx, a.collectInterval())
+		}
 		return
 	}
 	url := a.cfg.Config().UpstreamURL
@@ -388,7 +425,30 @@ func (a *App) enrolSavedPairing(ctx context.Context) {
 		return
 	}
 	worker, err := config.LegacyWorkerKey(a.cfg.AppDir(), url)
-	if err != nil || (enrol == "" && worker == "") {
+	if err != nil {
+		return
+	}
+	carry := enrol != "" || worker != ""
+	if superseded {
+		if !carry && url != p.ServerURL {
+			// 1.x points at another server with no key, as 1.x showed it. Nothing
+			// reports to either server until the user joins or leaves here.
+			a.recordPairing(url, upstream.Failure{Code: "no-key", Message: "No key is available for your CashPilot. Enter the enrolment key in Settings or join again."})
+			return
+		}
+		if err := a.cfg.Update(func(c *config.AppConfig) {
+			if !c.ServerCommandsChosen {
+				c.ServerCommandsOff = true
+			}
+		}); err != nil {
+			a.emitError("pairing", err)
+			return
+		}
+		if !carry {
+			a.keepPairing(p)
+			return
+		}
+	} else if !carry {
 		return
 	}
 	if out, err := a.enrolPairing(ctx, JoinRequest{URL: url, Key: enrol}, p, worker); err != nil {
@@ -396,4 +456,13 @@ func (a *App) enrolSavedPairing(ctx context.Context) {
 	} else if !out.OK {
 		a.recordPairing(url, upstream.Failure{Code: out.Code, Message: out.Message})
 	}
+}
+
+// keepPairing ends the wait after a 1.x save that left the pairing as it was.
+func (a *App) keepPairing(p config.Pairing) {
+	if err := a.cfg.KeepPairing(p.Revision); err != nil {
+		a.emitError("pairing", err)
+		return
+	}
+	a.syncWorkerAPI()
 }
