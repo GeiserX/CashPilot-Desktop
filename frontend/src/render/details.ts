@@ -26,7 +26,7 @@
 // Pure: takes catalog data, returns HTML strings, touches no global.
 
 import type { Payout, Service } from "../wails";
-import { escapeHtml, miningBalancePrecision } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { coinAmount, escapeHtml, miningBalancePrecision } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { stripHtml } from "./fields.js";
 
 /** What an undocumented value looks like. Never 0, never an empty cell. */
@@ -112,7 +112,8 @@ export function payoutFacts(service: Service, balance?: Balance | null): Fact[] 
   if (balance && Number.isFinite(balance.amount)) {
     if (pool) {
       const unit = balance.currency.trim().toUpperCase();
-      facts.push({ label: "Unpaid pool balance", value: `${trimNumber(balance.amount, unit)} ${unit}`.trim() });
+      const amount = miningBalancePrecision(unit) === undefined ? coinAmount(balance.amount) : trimNumber(balance.amount, unit);
+      facts.push({ label: "Unpaid pool balance", value: `${amount} ${unit}`.trim() });
     }
     const threshold = minimumIn(service, balance.currency);
     if (threshold !== null) {

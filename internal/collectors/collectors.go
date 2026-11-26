@@ -70,6 +70,8 @@ func PoolAddressHash(slug string, credentials map[string]string) (string, bool) 
 		address = firstCredential(credentials, heroMinersKaspaAddressKey)
 	case "2miners-etc":
 		address = twoMinersETCAddress(credentials)
+	case "unmineable":
+		address = unMineableIdentity(credentials)
 	default:
 		return "", false
 	}
@@ -145,6 +147,7 @@ var collectorDispatch = map[string]collectorFunc{
 	"storj":           (*Registry).collectStorj,
 	"supportxmr":      (*Registry).collectSupportXMR,
 	"traffmonetizer":  (*Registry).collectTraffmonetizer,
+	"unmineable":      (*Registry).collectUnMineable,
 	"vast-ai":         (*Registry).collectVast,
 }
 
