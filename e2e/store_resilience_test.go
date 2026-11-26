@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
@@ -132,6 +133,18 @@ func TestStateSurvivesARestart(t *testing.T) {
 // the app used to throw rows away — the loser got "database is locked" back and
 // the collected balance was gone, with nothing on screen to say so. So the bar
 // here is every write landing, not merely the file surviving.
+//
+// SQLite does not queue writers. While one writer commits back to back, the
+// other gets the lock only if it asks in the short gap between two commits, so
+// it can wait for most of the other writer's run. The store retries a busy write
+// for 30 seconds (writeRetryBudget). On a fast disk the whole run fits inside the
+// 250 ms busy_timeout, so this test reaches that retry only on a slow disk such
+// as the Windows runner. The retry itself is guarded on every platform by
+// TestWriteWaitsOutAPeerHoldingTheLock in internal/store. Each writer also stops
+// after burst: on a slow disk (the Windows runner commits in about 130 ms) 200
+// rows took longer than the budget, and the test then measured the disk instead
+// of the store. The app itself never writes back to back for that long: one
+// earnings row per service per collection.
 func TestTwoWritersDoNotLoseRows(t *testing.T) {
 	dir := t.TempDir()
 
@@ -148,9 +161,11 @@ func TestTwoWritersDoNotLoseRows(t *testing.T) {
 	t.Cleanup(func() { _ = two.Close() })
 
 	const rowsEach = 200
+	const burst = 5 * time.Second
 
 	var mu sync.Mutex
 	var failures []error
+	last := map[string]float64{}
 	// start releases both writers together, so they overlap instead of one
 	// finishing while the other is still warming up.
 	start := make(chan struct{})
@@ -158,12 +173,16 @@ func TestTwoWritersDoNotLoseRows(t *testing.T) {
 	write := func(s *store.Store, platform string) {
 		defer wg.Done()
 		<-start
-		for i := 0; i < rowsEach; i++ {
-			if _, err := s.SaveEarnings(store.EarningsRecord{Platform: platform, Balance: float64(i), Currency: "USD"}); err != nil {
-				mu.Lock()
+		began := time.Now()
+		for i := 0; i < rowsEach && time.Since(began) < burst; i++ {
+			_, err := s.SaveEarnings(store.EarningsRecord{Platform: platform, Balance: float64(i), Currency: "USD"})
+			mu.Lock()
+			if err != nil {
 				failures = append(failures, err)
-				mu.Unlock()
+			} else {
+				last[platform] = float64(i)
 			}
+			mu.Unlock()
 		}
 	}
 	wg.Add(2)
@@ -173,7 +192,7 @@ func TestTwoWritersDoNotLoseRows(t *testing.T) {
 	wg.Wait()
 
 	if len(failures) > 0 {
-		t.Errorf("%d of %d writes were lost to the other writer; first: %v", len(failures), 2*rowsEach, failures[0])
+		t.Errorf("%d writes were lost to the other writer; first: %v", len(failures), failures[0])
 	}
 
 	// And the last thing each writer stored is what a fresh reader sees, so a
@@ -188,13 +207,14 @@ func TestTwoWritersDoNotLoseRows(t *testing.T) {
 		latest[row.Platform] = row.Balance
 	}
 	for _, platform := range []string{"honeygain", "iproyal"} {
+		want, wrote := last[platform]
 		got, ok := latest[platform]
-		if !ok {
-			t.Errorf("%s wrote %d rows and none of them are in the database", platform, rowsEach)
+		if !wrote || !ok {
+			t.Errorf("%s: wrote a row %v, found one in the database %v", platform, wrote, ok)
 			continue
 		}
-		if !approx(got, float64(rowsEach-1)) {
-			t.Errorf("%s shows %v, want its last written balance %v", platform, got, float64(rowsEach-1))
+		if !approx(got, want) {
+			t.Errorf("%s shows %v, want its last written balance %v", platform, got, want)
 		}
 	}
 }
