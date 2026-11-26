@@ -31,6 +31,7 @@ import {
   referralNote,
   signupButton,
 } from "../.harness-build/render/details.js";
+import { catalogRow } from "../.harness-build/render/catalog.js";
 import { readFileSync } from "node:fs";
 
 let failures = 0;
@@ -385,7 +386,7 @@ check(
   typed.includes("When Dawn Internet asks for a referral code, type <code>2QLQV97F</code>."),
   typed,
 );
-check("a typed code has a Copy button that copies it", typed.includes('data-copy-text="2QLQV97F">Copy</button>'), typed);
+check("a typed code has a Copy button that copies it", /data-copy-text="2QLQV97F"[^>]*>Copy<\/button>/.test(typed), typed);
 check("the typed code comes before the commission note", typed.indexOf("2QLQV97F") < typed.indexOf("Referral link:"), typed);
 check("a link that carries its code asks nobody to type it", !note.includes("data-copy-text") && !note.includes("referral-code"), note);
 check(
@@ -398,6 +399,24 @@ check(
   "a typed code is escaped",
   !referralNote({...dawn, referral: {...dawn.referral, codeEntry: '"><b>x'}}).includes("<b>x"),
 );
+check(
+  "the Copy button is a small typed button that says what it copies",
+  typed.includes('<button type="button" class="secondary compact-btn" data-copy-text="2QLQV97F" aria-label="Copy Dawn Internet&#039;s referral code 2QLQV97F"'),
+  typed,
+);
+
+// The catalog row: Dawn is manual-only, so its row has only Visit, which opens the
+// signup page. The code must sit beside it, or a signup from the row credits nobody.
+const dawnRow = catalogRow({...dawn, manualOnly: true}, undefined, false);
+check("a manual-only row with a typed code keeps its referral Visit", dawnRow.includes('data-url="https://dawninternet.com/?code=2QLQV97F">Visit</button>'), dawnRow);
+check(
+  "a manual-only row with a typed code shows the code beside Visit",
+  dawnRow.indexOf(">Visit</button>") < dawnRow.indexOf('data-copy-text="2QLQV97F"') && dawnRow.includes(">Code 2QLQV97F</button>"),
+  dawnRow,
+);
+const dockerDawnRow = catalogRow({...dawn, manualOnly: false}, undefined, false);
+check("a Sign up row with a typed code shows the code beside Sign up", dockerDawnRow.includes(">Code 2QLQV97F</button>"), dockerDawnRow);
+check("a row whose link carries its code asks nobody to type it", !catalogRow(honeygain, undefined, false).includes("data-copy-text"));
 
 // ---------------------------------------------------------------------------
 // The device link: after a deploy, a provider that pays a device only once its id

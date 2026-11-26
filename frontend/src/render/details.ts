@@ -188,9 +188,21 @@ export function referralNote(service: Service): string {
   const bonus = referee ? `<strong>New-user bonus with this link:</strong> ${escapeHtml(referee)}. ` : "";
   const entry = (service.referral.codeEntry || "").trim();
   const typed = entry
-    ? `<p class="referral-code">When ${escapeHtml(service.name)} asks for a referral code, type <code>${escapeHtml(entry)}</code>. The link does not fill it in. <button class="btn btn-small secondary" data-copy-text="${escapeHtml(entry)}">Copy</button></p>`
+    ? `<p class="referral-code">When ${escapeHtml(service.name)} asks for a referral code, type <code>${escapeHtml(entry)}</code>. The link does not fill it in. ${codeEntryCopy(service, "Copy")}</p>`
     : "";
   return `${typed}<p class="referral-note">${bonus}Referral link: the CashPilot maintainer may earn a commission from it, which helps keep CashPilot free and maintained.</p>`;
+}
+
+/**
+ * The Copy button for a code typed by hand (referral.codeEntry), or "" when the
+ * link carries the code. label is already HTML. The accessible name says what it
+ * copies. The catalog row uses it beside Visit and Sign up too (render/catalog.ts).
+ */
+export function codeEntryCopy(service: Pick<Service, "name" | "referral">, label: string): string {
+  const entry = (service.referral?.codeEntry || "").trim();
+  if (!entry || !service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
+  const name = escapeHtml(`Copy ${service.name}'s referral code ${entry}`);
+  return `<button type="button" class="secondary compact-btn" data-copy-text="${escapeHtml(entry)}" aria-label="${name}" title="${name}">${label}</button>`;
 }
 
 /**
