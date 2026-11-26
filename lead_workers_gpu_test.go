@@ -48,15 +48,18 @@ func workerHeartbeatWith(t *testing.T, app *App, name, url, key string, systemIn
 // leaves the worker uncalled.
 func TestALeadDeploysAGPUMinerOnlyWithTheWorkersMatchingGrant(t *testing.T) {
 	nvidiaOne := map[string]any{"vendor": "nvidia", "count": 1, "rocm": false}
+	const notReported = "This worker did not report the catalog GPU grant for GPU Miner. Update the worker"
+	const differs = "This worker reported a different GPU grant for GPU Miner than this computer's catalog. Update whichever is older"
 	for name, tc := range map[string]struct {
 		grants any // nil: the field is left out, as an older worker does
 		deploy bool
+		want   string
 	}{
 		"matching":  {grants: map[string]any{"gpu-miner": nvidiaOne}, deploy: true},
-		"missing":   {grants: map[string]any{"other-miner": nvidiaOne}},
-		"differing": {grants: map[string]any{"gpu-miner": map[string]any{"vendor": "nvidia", "count": "all", "rocm": false}}},
-		"older":     {},
-		"not a map": {grants: []any{"gpu-miner"}},
+		"missing":   {grants: map[string]any{"other-miner": nvidiaOne}, want: notReported},
+		"differing": {grants: map[string]any{"gpu-miner": map[string]any{"vendor": "nvidia", "count": "all", "rocm": false}}, want: differs},
+		"older":     {want: notReported},
+		"not a map": {grants: []any{"gpu-miner"}, want: notReported},
 	} {
 		t.Run(name, func(t *testing.T) {
 			app := newGPULeadApp(t)
@@ -78,8 +81,8 @@ func TestALeadDeploysAGPUMinerOnlyWithTheWorkersMatchingGrant(t *testing.T) {
 				}
 				return
 			}
-			if err == nil || !strings.Contains(err.Error(), "did not report the catalog GPU grant for GPU Miner. Update the worker") {
-				t.Fatalf("DeployToWorker = %+v, %v: want the update-the-worker refusal", res, err)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("DeployToWorker = %+v, %v: want %q", res, err, tc.want)
 			}
 			if n := worker.count(); n != 0 {
 				t.Fatalf("the worker got %d calls: a refused deploy must not reach it", n)

@@ -179,10 +179,17 @@ func checkWorkerGPUGrant(svc catalog.Service, customImage string, grants map[str
 		return fmt.Errorf("%s declares a GPU its catalog entry does not describe correctly (%s), so nothing was deployed", name, strings.Join(problems, "; "))
 	}
 	want, ok := catalog.GPUGrants([]catalog.Service{svc})[svc.Slug]
-	if !ok || !sameGPUGrant(grants[svc.Slug], want) {
-		return fmt.Errorf("this worker did not report the catalog GPU grant for %s. Update the worker and wait for its next heartbeat. Nothing was deployed", name)
+	raw := grants[svc.Slug]
+	if ok && sameGPUGrant(raw, want) {
+		return nil
 	}
-	return nil
+	// A grant the worker did report comes from its own catalog. When it differs,
+	// either side may be the older one: the Desktop's catalog ships apart from the
+	// worker's, so blaming the worker alone can send the owner to update the wrong one.
+	if ok && len(raw) > 0 && string(raw) != "null" {
+		return fmt.Errorf("This worker reported a different GPU grant for %s than this computer's catalog. Update whichever is older, the worker or this app, and wait for the worker's next heartbeat. Nothing was deployed", name)
+	}
+	return fmt.Errorf("This worker did not report the catalog GPU grant for %s. Update the worker and wait for its next heartbeat. Nothing was deployed", name)
 }
 
 // sameGPUGrant reports whether a grant the worker reported is want, key for key,

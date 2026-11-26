@@ -44,22 +44,32 @@ func TestAGPUServiceNeedsTheWorkersMatchingGrant(t *testing.T) {
 		t.Fatalf("a matching count all grant must deploy: %v", err)
 	}
 
-	for name, raw := range map[string]string{
-		"missing":       `{"other-miner":{"vendor":"nvidia","count":1,"rocm":false}}`,
-		"empty":         `{}`,
-		"vendor":        `{"gpu-miner":{"vendor":"amd","count":1,"rocm":false}}`,
-		"count":         `{"gpu-miner":{"vendor":"nvidia","count":"all","rocm":false}}`,
-		"rocm":          `{"gpu-miner":{"vendor":"nvidia","count":1,"rocm":true}}`,
-		"no rocm key":   `{"gpu-miner":{"vendor":"nvidia","count":1}}`,
-		"extra key":     `{"gpu-miner":{"vendor":"nvidia","count":1,"rocm":false,"devices":"all"}}`,
-		"count string":  `{"gpu-miner":{"vendor":"nvidia","count":"1","rocm":false}}`,
-		"not an object": `{"gpu-miner":"nvidia"}`,
-		"null":          `{"gpu-miner":null}`,
+	amd := gpuService()
+	amd.Docker.GPU = &catalog.GPU{Vendor: "amd", ROCm: true}
+	in.WorkerGPUGrants = grants(`{"gpu-miner":{"vendor":"amd","count":1,"rocm":true}}`)
+	if _, err := BuildDeploySpec(amd, in); err != nil {
+		t.Fatalf("a matching amd rocm grant must deploy: %v", err)
+	}
+
+	const notReported = "This worker did not report the catalog GPU grant for GPU Miner. Update the worker"
+	const differs = "This worker reported a different GPU grant for GPU Miner than this computer's catalog. Update whichever is older"
+	for name, tc := range map[string]struct{ raw, want string }{
+		"missing":       {`{"other-miner":{"vendor":"nvidia","count":1,"rocm":false}}`, notReported},
+		"empty":         {`{}`, notReported},
+		"null":          {`{"gpu-miner":null}`, notReported},
+		"vendor":        {`{"gpu-miner":{"vendor":"amd","count":1,"rocm":false}}`, differs},
+		"count":         {`{"gpu-miner":{"vendor":"nvidia","count":"all","rocm":false}}`, differs},
+		"rocm":          {`{"gpu-miner":{"vendor":"nvidia","count":1,"rocm":true}}`, differs},
+		"rocm string":   {`{"gpu-miner":{"vendor":"nvidia","count":1,"rocm":"false"}}`, differs},
+		"no rocm key":   {`{"gpu-miner":{"vendor":"nvidia","count":1}}`, differs},
+		"extra key":     {`{"gpu-miner":{"vendor":"nvidia","count":1,"rocm":false,"devices":"all"}}`, differs},
+		"count string":  {`{"gpu-miner":{"vendor":"nvidia","count":"1","rocm":false}}`, differs},
+		"not an object": {`{"gpu-miner":"nvidia"}`, differs},
 	} {
-		in.WorkerGPUGrants = grants(raw)
+		in.WorkerGPUGrants = grants(tc.raw)
 		_, err := BuildDeploySpec(gpuService(), in)
-		if err == nil || !strings.Contains(err.Error(), "did not report the catalog GPU grant for GPU Miner. Update the worker") {
-			t.Errorf("%s: err = %v, want the update-the-worker refusal", name, err)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
 		}
 	}
 }
