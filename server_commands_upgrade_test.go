@@ -123,8 +123,15 @@ func TestUpgradeKeepsAServerCommandsChoiceMadeBeforeItFinished(t *testing.T) {
 	if p, _ := app.cfg.Pairing(); p.Revision != "" {
 		t.Fatal("the pairing migrated while the server was down")
 	}
-	if _, err := app.SetServerCommands(true); err != nil {
+	if state := app.serverCommandsState(); state.On || state.Listening {
+		t.Fatalf("the card before the carry-over: %+v, want the switch off", state)
+	}
+	state, err := app.SetServerCommands(true)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !state.On {
+		t.Fatalf("the card after the user turned the switch on: %+v", state)
 	}
 
 	serverUp.Store(true)
@@ -203,5 +210,30 @@ func TestUpgradedPairingOnWindowsStillWaitsForTheFirewallButton(t *testing.T) {
 	}
 	if n := listening(app); n != 1 || !state.Listening || len(scripts) != 1 {
 		t.Fatalf("after the rule: %d listeners, state %+v, scripts %v", n, state, scripts)
+	}
+}
+
+// The helper holds its own config.Manager. If it read config.json before the
+// window turned the switch off, and pairing.json after the window published the
+// carried-over pairing, it must still not listen.
+func TestHelperWithAStaleSwitchDoesNotListenAfterTheCarryOver(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	noFirewallRule(t)
+	app, _ := upgradedApp(t, true)
+	helperCfg, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	app.enrolSavedPairing(t.Context())
+	if p, err := app.cfg.Pairing(); err != nil || p.Revision == "" {
+		t.Fatalf("the 1.x pairing did not migrate: %+v, %v", p, err)
+	}
+
+	app.cfg = helperCfg
+	app.closeWorkerListeners(nil)
+	app.syncWorkerAPI()
+	if n := listening(app); n != 0 {
+		t.Fatalf("the helper opened %d listeners with a switch read before the carry-over, want 0", n)
 	}
 }

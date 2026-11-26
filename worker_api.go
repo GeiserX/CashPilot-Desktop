@@ -161,6 +161,9 @@ func (a *App) syncWorkerAPI() {
 	}
 	var want []netip.Addr
 	p, key, err := a.cfg.ReadPairingCredential(false)
+	// Read the config after the pairing: the window writes the switch before it
+	// publishes a pairing, so a pairing read here never pairs with an older switch.
+	a.refreshConfig()
 	wanted := err == nil && a.workerAPIWanted() && !p.Suspended && p.ServerURL != "" && key.Worker != ""
 	// On Windows nothing listens before the scoped firewall rule exists: a first
 	// listen with no rule makes Windows ask on its own, and either answer there
@@ -865,9 +868,18 @@ func (a *App) serverCommandsState() ServerCommandsState {
 	if a.currentWorkerKey() == "" || (firewallRuleNeeded && firewall != "ready") {
 		listening = false
 	}
+	on := !cfg.ServerCommandsOff
+	// A 1.x pairing not carried over yet (no revision, a server address in
+	// config.json) gets the switch off when it is (enrolPairing). Show it off
+	// already, so the card does not show on and then turn off by itself.
+	if on && !cfg.ServerCommandsChosen {
+		if p, err := a.cfg.Pairing(); err == nil && p.Revision == "" && a.pairingServer(p) != "" {
+			on = false
+		}
+	}
 	out := ServerCommandsState{
 		Server:         upstream.Host(serverURL),
-		On:             !cfg.ServerCommandsOff,
+		On:             on,
 		Listening:      listening,
 		Problem:        problem,
 		FirewallNeeded: firewallRuleNeeded,
