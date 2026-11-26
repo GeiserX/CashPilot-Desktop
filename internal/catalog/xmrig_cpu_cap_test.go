@@ -76,6 +76,9 @@ var xmrigTestArgs = []string{"--url=pool:1", "--no-color"}
 // script that prints its arguments. cpuPercent nil leaves CPU_PERCENT unset.
 func xmrigArgs(t *testing.T, entrypoint []string, cpuPercent *string, cpus, machine string) []string {
 	t.Helper()
+	if len(entrypoint) != 4 {
+		t.Fatalf("xmrig entrypoint = %q, want the /bin/sh -c <script> -- wrapper", entrypoint)
+	}
 	if runtime.GOOS == "windows" {
 		t.Skip("the wrapper is a POSIX shell script")
 	}
