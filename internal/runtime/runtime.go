@@ -319,6 +319,15 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if err != nil {
 		return ContainerInfo{}, fmt.Errorf("%s copy %d: %w", svc.Name, spec.Instance, err)
 	}
+	// The GPU comes from the catalog entry alone (gpu.go), and every container
+	// without an NVIDIA grant gets the void stamp.
+	gpu, err := buildGPU(svc, spec.Slug, spec.Instance, facts)
+	if err != nil {
+		return ContainerInfo{}, err
+	}
+	if err := stampGPUEnv(svc, env, gpu.NVIDIA); err != nil {
+		return ContainerInfo{}, err
+	}
 	ports, bindings, err := buildServicePorts(svc.Docker, env)
 	if err != nil {
 		return ContainerInfo{}, fmt.Errorf("%s was not deployed: %w. The running container was not touched", svc.Name, err)
@@ -349,6 +358,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if err != nil {
 		return ContainerInfo{}, err
 	}
+	applyGPU(hostConfig, gpu)
 
 	// An entry that publishes no build for this machine still deploys: the user is
 	// told plainly and the pull decides. Refusing here would block a machine whose
@@ -575,7 +585,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 				madeID = made.Container.ID
 			}
 		}
-		return ContainerInfo{}, rollBack(err, madeID)
+		return ContainerInfo{}, rollBack(withGPUHint(err), madeID)
 	}
 	if spec.CreateOnly {
 		// Nothing was set aside (the name was free), so there is nothing to put back.
@@ -585,7 +595,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		progress("Starting " + name)
 	}
 	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		return ContainerInfo{}, rollBack(err, created.ID)
+		return ContainerInfo{}, rollBack(withGPUHint(err), created.ID)
 	}
 	if setAside {
 		// The replacement runs, so the old container goes. Its named volumes stay; a
@@ -1902,6 +1912,13 @@ var ownInits = map[string]bool{
 func bringsOwnInit(imageEntrypoint, imageCmd, entrypoint, cmd []string) bool {
 	first := mainProgram(imageEntrypoint, imageCmd, entrypoint, cmd)
 	return first == "/init" || ownInits[path.Base(first)]
+}
+
+// CatalogBringsOwnInit is bringsOwnInit for a file that cannot inspect the image,
+// such as the Compose export: only an init the catalog's own entrypoint or command
+// names counts (web app/compose_generator.py calls _brings_own_init with no image).
+func CatalogBringsOwnInit(svc catalog.Service) bool {
+	return bringsOwnInit(nil, nil, svc.Docker.Entrypoint, tokenizeCommand(svc.Docker.Command))
 }
 
 func entrypointFor(svc catalog.Service) []string {

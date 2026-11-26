@@ -496,6 +496,11 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 		}
 		return client.ContainerCreateOptions{}, proxyErr("%s: %s", name, err)
 	}
+	// No GPU for a proxied copy (Refusal says so first), so it gets the void stamp
+	// like any container without an NVIDIA grant.
+	if err := stampGPUEnv(svc, env, false); err != nil {
+		return client.ContainerCreateOptions{}, proxyErr("%s", err)
+	}
 	stopTimeout := StopTimeoutSeconds(svc)
 	labels := containerLabels(req.Slug, 1)
 	labels[LabelProxy] = strconv.FormatInt(req.ProxyID, 10)
@@ -524,6 +529,7 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 	// device, no privilege and nothing that could rewrite or bypass the firewall.
 	host.Privileged = false
 	host.Resources.Devices = nil
+	host.Resources.DeviceRequests = nil
 	if risky := proxies.RiskyCaps(host.CapAdd); len(risky) > 0 {
 		return client.ContainerCreateOptions{}, proxyErr("A proxied copy cannot hold %s: it could change or bypass its tunnel's firewall", strings.Join(risky, ", "))
 	}

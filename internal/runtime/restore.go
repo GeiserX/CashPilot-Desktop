@@ -421,7 +421,7 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		released = true
 		if !gated {
 			if err := steps.start(ctx); err != nil {
-				return fmt.Errorf("Docker could not start %s (%v)", name, err)
+				return fmt.Errorf("Docker could not start %s (%v)", name, withGPUHint(err))
 			}
 			result.Started = true
 			return nil

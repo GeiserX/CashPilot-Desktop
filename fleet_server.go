@@ -79,6 +79,10 @@ type workerSystemInfo struct {
 	// "instances"). Read loosely: a list entry that is not a string is skipped
 	// rather than failing the heartbeat.
 	Features []any `json:"features"`
+	// GPUGrants are the GPU grants a CashPilot worker gives catalog services, by
+	// slug (web app/worker_api.py). Kept raw, so a value of the wrong shape is
+	// dropped rather than failing the heartbeat.
+	GPUGrants json.RawMessage `json:"gpu_grants"`
 }
 
 // deviceTypeDesktop is what internal/upstream sends when this app reports to a
@@ -519,6 +523,10 @@ func heartbeatReport(body workerHeartbeat) store.FleetReport {
 		if name, ok := f.(string); ok {
 			report.Features = append(report.Features, name)
 		}
+	}
+	var grants map[string]json.RawMessage
+	if json.Unmarshal(body.SystemInfo.GPUGrants, &grants) == nil && grants != nil {
+		report.GPUGrants = grants
 	}
 	return report
 }

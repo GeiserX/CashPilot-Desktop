@@ -305,13 +305,14 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		return WorkerDeployResult{}, err
 	}
 	spec, err := workerapi.BuildDeploySpec(svc, workerapi.SpecInput{
-		Typed:          req.Values,
-		Stored:         stored,
-		LocalHostname:  runtime.DeviceHostname(),
-		DeviceName:     workerapi.DeviceName(a.cfg.Config().HostnamePrefix, target.report.ClientID, target.device.ID),
-		WorkerArch:     target.device.Arch,
-		WorkerFeatures: target.report.Features,
-		CustomImage:    image,
+		Typed:           req.Values,
+		Stored:          stored,
+		LocalHostname:   runtime.DeviceHostname(),
+		DeviceName:      workerapi.DeviceName(a.cfg.Config().HostnamePrefix, target.report.ClientID, target.device.ID),
+		WorkerArch:      target.device.Arch,
+		WorkerFeatures:  target.report.Features,
+		WorkerGPUGrants: target.report.GPUGrants,
+		CustomImage:     image,
 	})
 	if err != nil {
 		return WorkerDeployResult{}, err

@@ -192,6 +192,39 @@ func TestDefaultEthereumClassicRate(t *testing.T) {
 	}
 }
 
+// unMineable pays in the coin the miner picks; the web prices the same five.
+func TestDefaultUnMineableCoinRates(t *testing.T) {
+	want := map[string]string{"BNB": "binancecoin", "DOGE": "dogecoin", "LTC": "litecoin", "SHIB": "shiba-inu", "TRX": "tron"}
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ids := "," + r.URL.Query().Get("ids") + ","
+		for _, id := range want {
+			if !strings.Contains(ids, ","+id+",") {
+				t.Errorf("CoinGecko request did not include %s: %s", id, r.URL.RawQuery)
+			}
+		}
+		_, _ = io.WriteString(w, `{"binancecoin":{"usd":600},"dogecoin":{"usd":0.2},"litecoin":{"usd":80},"shiba-inu":{"usd":0.00001},"tron":{"usd":0.25}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	for coin, usd := range map[string]float64{"BNB": 600, "DOGE": 2, "LTC": 80, "SHIB": 1, "TRX": 0.25} {
+		amount := 1.0
+		switch coin {
+		case "DOGE":
+			amount = 10
+		case "SHIB":
+			amount = 100000
+		}
+		if got, ok := svc.ToUSD(amount, coin); !ok || math.Abs(got-usd) > 1e-9 {
+			t.Errorf("ToUSD(%v, %s) = (%v, %v), want (%v, true)", amount, coin, got, ok, usd)
+		}
+	}
+}
+
 func TestStaleGracefulOnHTTP500(t *testing.T) {
 	svc, cg, fr := newTestService(t)
 
@@ -400,5 +433,25 @@ func assertCachePreserved(t *testing.T, svc *Service) {
 	}
 	if got, ok := svc.ToUSD(5, "USD"); !ok || !approx(got, 5) {
 		t.Fatalf("USD must still convert: ToUSD(5, USD) = (%v, %v)", got, ok)
+	}
+}
+
+// Pearl (PRL), mined by SRBMiner-Multi and KRig, is priced as the web prices it.
+func TestDefaultPearlRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",pearl-2,") {
+			t.Errorf("CoinGecko request did not include pearl-2: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"pearl-2":{"usd":0.5}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(4, "PRL"); !ok || got != 2 {
+		t.Fatalf("ToUSD(4, PRL) = (%v, %v), want (2, true)", got, ok)
 	}
 }

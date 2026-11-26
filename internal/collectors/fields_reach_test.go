@@ -52,6 +52,15 @@ func wizardFormCredentials(svc catalog.Service) map[string]string {
 			creds[key] = twoMinersAddress
 			return
 		}
+		// unMineable reads the deploy's own payout coin and address.
+		if svc.Slug == "unmineable" && key == "PAYOUT_COIN" {
+			creds[key] = "XMR"
+			return
+		}
+		if svc.Slug == "unmineable" && key == "WALLET" {
+			creds[key] = supportXMRFund
+			return
+		}
 		if key == "SUPPORTXMR_ADDRESS" {
 			creds[key] = supportXMRFund
 			return
