@@ -371,6 +371,34 @@ check("the note leads with the new user's bonus", withBonus.includes("New-user b
 check("the bonus text is escaped", !withBonus.includes("<b>") && withBonus.includes("&lt;b&gt;"), withBonus);
 check("no bonus recorded, no bonus line", !note.includes("New-user bonus"), note);
 
+// A code typed by hand (referral.code_entry): Dawn's extension and Gradient's form
+// never read it from the link, so the note names it and offers a Copy button.
+const dawn = {
+  ...honeygain,
+  slug: "dawn",
+  name: "Dawn Internet",
+  referral: {signupUrl: "https://dawninternet.com/?code=2QLQV97F", code: "2QLQV97F", codeEntry: "2QLQV97F"},
+};
+const typed = referralNote(dawn);
+check(
+  "a typed code is named next to the signup button",
+  typed.includes("When Dawn Internet asks for a referral code, type <code>2QLQV97F</code>."),
+  typed,
+);
+check("a typed code has a Copy button that copies it", typed.includes('data-copy-text="2QLQV97F">Copy</button>'), typed);
+check("the typed code comes before the commission note", typed.indexOf("2QLQV97F") < typed.indexOf("Referral link:"), typed);
+check("a link that carries its code asks nobody to type it", !note.includes("data-copy-text") && !note.includes("referral-code"), note);
+check(
+  "a catalog synced before code_entry existed renders as before",
+  referralNote({...dawn, referral: {signupUrl: dawn.referral.signupUrl, code: "2QLQV97F"}}) ===
+    referralNote({...dawn, referral: {signupUrl: dawn.referral.signupUrl, code: "2QLQV97F", codeEntry: ""}}) &&
+    !referralNote({...dawn, referral: {signupUrl: dawn.referral.signupUrl, code: "2QLQV97F"}}).includes("data-copy-text"),
+);
+check(
+  "a typed code is escaped",
+  !referralNote({...dawn, referral: {...dawn.referral, codeEntry: '"><b>x'}}).includes("<b>x"),
+);
+
 // ---------------------------------------------------------------------------
 // The device link: after a deploy, a provider that pays a device only once its id
 // is on the user's account says so, with the id and the link filled in.

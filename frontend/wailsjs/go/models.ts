@@ -872,6 +872,7 @@ export namespace catalog {
 	export class Referral {
 	    signupUrl: string;
 	    code: string;
+	    codeEntry: string;
 	    program?: boolean;
 	    bonus: ReferralBonus;
 	    account?: boolean;
@@ -884,6 +885,7 @@ export namespace catalog {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.signupUrl = source["signupUrl"];
 	        this.code = source["code"];
+	        this.codeEntry = source["codeEntry"];
 	        this.program = source["program"];
 	        this.bonus = this.convertValues(source["bonus"], ReferralBonus);
 	        this.account = source["account"];
