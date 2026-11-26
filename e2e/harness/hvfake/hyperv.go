@@ -455,7 +455,7 @@ func (f *HyperV) BuildFenced(staticARP bool) (winvm.Plan, error) {
 		return winvm.Plan{}, err
 	}
 	p.Owner = owner
-	if p.SwitchID, p.ManagementAdapterID, _, err = f.EnsureSwitch(ctx, n, sub, owner, p.HostVNICMAC, "", ""); err != nil {
+	if p.SwitchID, p.ManagementAdapterID, p.HostVNICMAC, _, err = f.EnsureSwitch(ctx, n, sub, owner, "", "", ""); err != nil {
 		return winvm.Plan{}, err
 	}
 	if p.NATID, err = f.EnsureNAT(ctx, n, sub, ""); err != nil {
@@ -980,47 +980,40 @@ func sortedKeys[V any](m map[string]V) []string {
 
 // EnsureSwitch creates the Internal switch with its host vNIC, every binding
 // on, the gateway address and the on-link route, or returns the one with the
-// recorded ID (renamed or not), or the one with our name when it carries the
-// owner token.
-func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (string, string, int, error) {
+// recorded ID (renamed or not).
+func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (string, string, string, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("EnsureSwitch"); err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
 	if s, ok := f.switches[strings.ToLower(switchID)]; ok && switchID != "" {
 		if err := f.notOwned("switch", n.Switch, s.owner, owner); err != nil {
-			return "", "", 0, err
+			return "", "", "", 0, err
 		}
 		if s.managementID != managementID || s.foreignManagement || s.vnicMAC != vnicMAC || s.subnet != sub {
-			return "", "", 0, fmt.Errorf("fake Hyper-V: the switch %s has another vNIC MAC or subnet", switchID)
+			return "", "", "", 0, fmt.Errorf("fake Hyper-V: the switch %s has another vNIC MAC or subnet", switchID)
 		}
 		if s.name != n.Switch {
 			if other, ok := f.switchByName(n.Switch); ok && other != s {
-				return "", "", 0, fmt.Errorf("fake Hyper-V: another switch is named %q", n.Switch)
+				return "", "", "", 0, fmt.Errorf("fake Hyper-V: another switch is named %q", n.Switch)
 			}
 			s.name = n.Switch
 		}
-		return s.id, s.managementID, s.vnicIf, nil
+		return s.id, s.managementID, s.vnicMAC, s.vnicIf, nil
 	}
 	if switchID != "" {
-		return "", "", 0, errors.New("fake Hyper-V: the recorded switch was not found")
+		return "", "", "", 0, errors.New("fake Hyper-V: the recorded switch was not found")
 	}
-	if s, ok := f.switchByName(n.Switch); ok {
-		if err := f.notOwned("switch", n.Switch, s.owner, owner); err != nil {
-			return "", "", 0, err
-		}
-		if s.vnicMAC != vnicMAC || s.subnet != sub {
-			return "", "", 0, fmt.Errorf("fake Hyper-V: the switch %q has another vNIC MAC or subnet", n.Switch)
-		}
-		return s.id, s.managementID, s.vnicIf, nil
+	if _, ok := f.switchByName(n.Switch); ok {
+		return "", "", "", 0, errors.New("fake Hyper-V: a switch with this name exists without a recorded ID")
 	}
 	f.seq++
 	s := &fakeSwitch{
 		id: f.newID(), name: n.Switch, typ: "Internal", owner: owner,
 		vnicIf:       20 + f.seq,
 		managementID: "management-" + f.newID(),
-		vnicMAC:      vnicMAC,
+		vnicMAC:      fmt.Sprintf("00155D%06X", f.seq),
 		bindings:     map[string]bool{"ms_pacer": true},
 		subnet:       sub,
 		gateway:      sub.Addr().Next(),
@@ -1034,7 +1027,7 @@ func (f *HyperV) EnsureSwitch(_ context.Context, n winvm.Names, sub netip.Prefix
 	f.ifaces = append(f.ifaces, winvm.Interface{IfIndex: s.vnicIf, IfType: 6, ComponentID: "vms_mp", Description: "vEthernet", VMSwitchID: s.id, SwitchType: "Internal"})
 	f.addrs = append(f.addrs, netip.PrefixFrom(s.gateway, sub.Bits()))
 	f.routes = append(f.routes, winvm.Route{Prefix: sub, IfIndex: s.vnicIf, NextHop: netip.IPv4Unspecified(), Metric: 256})
-	return s.id, s.managementID, s.vnicIf, nil
+	return s.id, s.managementID, s.vnicMAC, s.vnicIf, nil
 }
 
 // EnsureNAT creates the NAT or verifies the identity of the recorded one.

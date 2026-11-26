@@ -51,8 +51,8 @@ func (unsupported) RemovePortACLs(context.Context, Plan, []PortACL) error { retu
 func (unsupported) Inventory(context.Context, Names, KnownIDs, string) (Inventory, error) {
 	return Inventory{}, ErrUnsupported
 }
-func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, string, string, string) (string, string, int, error) {
-	return "", "", 0, ErrUnsupported
+func (unsupported) EnsureSwitch(context.Context, Names, netip.Prefix, string, string, string, string) (string, string, string, int, error) {
+	return "", "", "", 0, ErrUnsupported
 }
 func (unsupported) EnsureNAT(context.Context, Names, netip.Prefix, string) (string, error) {
 	return "", ErrUnsupported

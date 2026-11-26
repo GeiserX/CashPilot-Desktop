@@ -271,12 +271,12 @@ func (w *failAfter) hit(m string) bool {
 
 var errAfter = errors.New("the call worked but its answer was lost")
 
-func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.Prefix, owner, mac, switchID, managementID string) (string, string, int, error) {
-	id, managementID, ifx, err := w.HyperV.EnsureSwitch(ctx, n, sub, owner, mac, switchID, managementID)
+func (w *failAfter) EnsureSwitch(ctx context.Context, n winvm.Names, sub netip.Prefix, owner, mac, switchID, managementID string) (string, string, string, int, error) {
+	id, managementID, assignedMAC, ifx, err := w.HyperV.EnsureSwitch(ctx, n, sub, owner, mac, switchID, managementID)
 	if err == nil && w.hit("EnsureSwitch") {
-		return "", "", 0, errAfter
+		return "", "", "", 0, errAfter
 	}
-	return id, managementID, ifx, err
+	return id, managementID, assignedMAC, ifx, err
 }
 
 func (w *failAfter) CreateVM(ctx context.Context, p winvm.Plan, iso, answer string) (string, string, winvm.OwnedDisk, []winvm.OwnedDVD, error) {

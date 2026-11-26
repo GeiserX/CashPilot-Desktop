@@ -157,11 +157,9 @@ $o.freeRam = [uint64](Get-CimInstance -ClassName Win32_OperatingSystem).FreePhys
 Write-Doc $o
 `
 
-// scriptEnsureSwitch takes the switch with the recorded ID (renamed or not),
-// else the one with our name when it carries the tag, else creates the
-// Internal switch with the tag in the same call, so no switch of ours is ever
-// left without it. It gives the host vNIC its static MAC and the gateway
-// address, and returns the switch ID and the vNIC's ifIndex.
+// scriptEnsureSwitch checks the switch with the recorded ID or creates an
+// Internal switch with the owner tag. It sets the gateway on the host vNIC
+// and returns its assigned MAC with the switch and adapter identities.
 const scriptEnsureSwitch = buildPrelude + `$fresh = -not $in.switchId
 if ($fresh) {
   if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'A switch with this name exists without a recorded ID.' }
@@ -174,11 +172,6 @@ if ($fresh) {
   $managementId = $in.managementId
 }
 $switchId = $sw.Id.ToString()
-$mo = Get-RecordedManagementPort $sw $managementId
-if ((([string]$mo.MacAddress) -replace '-', '').ToUpper() -ne $in.mac) {
-  if (-not $fresh) { throw 'The recorded management adapter MAC changed and was left in place.' }
-  Set-VMNetworkAdapter -VMNetworkAdapter $mo -StaticMacAddress $in.mac
-}
 $na = $null
 for ($i = 0; $i -lt 30; $i++) {
   $mo = Get-RecordedManagementPort (Get-OwnedSwitch $switchId $in.owner) $managementId
@@ -187,6 +180,13 @@ for ($i = 0; $i -lt 30; $i++) {
   Start-Sleep -Seconds 1
 }
 if (-not $na) { throw 'The host vNIC did not appear with its device identity.' }
+$mac = (([string]$mo.MacAddress) -replace '-', '').ToUpperInvariant()
+if (-not $fresh -and $mac -cne $in.mac) {
+  throw 'The recorded management adapter MAC changed and was left in place.'
+}
+if ($fresh -and $mac -cnotmatch '^00155D[0-9A-F]{6}$') {
+  throw 'Hyper-V did not assign the management adapter a MAC with the 00-15-5D prefix.'
+}
 $idx = [int]$na.ifIndex
 $int = @(Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4)
 if ($int.Count -ne 1) { throw 'Could not verify DHCP on the recorded management adapter.' }
@@ -208,7 +208,7 @@ if ($sw.Name -ne $in.switch) {
   if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'Another switch has this name.' }
   Rename-VMSwitch -VMSwitch $sw -NewName $in.switch
 }
-Write-Doc ([ordered]@{ switchId = $switchId; managementId = $managementId; ifIndex = $idx })
+Write-Doc ([ordered]@{ switchId = $switchId; managementId = $managementId; mac = $mac; ifIndex = $idx })
 `
 
 const natOwnershipPrelude = buildPrelude + `function Test-RecordedNAT($nat, $recorded) {
@@ -908,22 +908,26 @@ func (h *psHost) Inventory(ctx context.Context, n Names, known KnownIDs, sid str
 }
 
 // EnsureSwitch creates or checks the switch and its host vNIC.
-func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (string, string, int, error) {
+func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (string, string, string, int, error) {
 	if switchID != "" && !guidRe.MatchString(switchID) {
-		return "", "", 0, fmt.Errorf("switch ID %q is not a GUID", switchID)
+		return "", "", "", 0, fmt.Errorf("switch ID %q is not a GUID", switchID)
 	}
 	if err := n.Validate(); err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
 	if err := checkSubnet(sub); err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
 	if err := checkOwner(owner); err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
-	mac, err := NormalizeMAC(vnicMAC)
-	if err != nil {
-		return "", "", 0, err
+	var mac string
+	if switchID != "" {
+		var err error
+		mac, err = NormalizeMAC(vnicMAC)
+		if err != nil {
+			return "", "", "", 0, err
+		}
 	}
 	arg := struct {
 		Switch       string `json:"switch"`
@@ -937,15 +941,19 @@ func (b psBuilder) EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, 
 	var w struct {
 		SwitchID     string `json:"switchId"`
 		ManagementID string `json:"managementId"`
+		MAC          string `json:"mac"`
 		IfIndex      int    `json:"ifIndex"`
 	}
 	if err := b.call(ctx, scriptEnsureSwitch, arg, &w); err != nil {
-		return "", "", 0, err
+		return "", "", "", 0, err
 	}
-	if !guidRe.MatchString(w.SwitchID) || !validNATID(w.ManagementID) || (switchID != "" && !strings.EqualFold(managementID, w.ManagementID)) || checkIfIndex(w.IfIndex) != nil {
-		return "", "", 0, fmt.Errorf("the switch came back as %q on interface %d", w.SwitchID, w.IfIndex)
+	if !guidRe.MatchString(w.SwitchID) || !validNATID(w.ManagementID) || checkIfIndex(w.IfIndex) != nil {
+		return "", "", "", 0, fmt.Errorf("the switch came back as %q on interface %d", w.SwitchID, w.IfIndex)
 	}
-	return w.SwitchID, w.ManagementID, w.IfIndex, nil
+	if switchID != "" && (!strings.EqualFold(switchID, w.SwitchID) || !strings.EqualFold(managementID, w.ManagementID) || w.MAC != mac) {
+		return "", "", "", 0, errors.New("the switch or management adapter identity changed")
+	}
+	return w.SwitchID, w.ManagementID, w.MAC, w.IfIndex, nil
 }
 
 func validNATID(id string) bool {

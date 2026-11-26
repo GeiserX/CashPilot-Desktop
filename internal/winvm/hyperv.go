@@ -65,11 +65,9 @@ type Guarder interface {
 type Builder interface {
 	Guarder
 	// EnsureSwitch creates the Internal switch with the owner token in its
-	// Notes, gives its host vNIC vnicMAC and the gateway address of sub, or
-	// checks those on the switch already there: the one with the recorded
-	// switchID (renamed or not), else the one with our name. It refuses a
-	// switch with our name that does not carry the token.
-	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (id, managementAdapterID string, vnicIfIndex int, err error)
+	// Notes and configures the gateway. It returns the assigned host vNIC MAC.
+	// On a recorded switch it verifies the adapter ID and MAC before changes.
+	EnsureSwitch(ctx context.Context, n Names, sub netip.Prefix, owner, vnicMAC, switchID, managementID string) (id, managementAdapterID, assignedMAC string, vnicIfIndex int, err error)
 	EnsureNAT(ctx context.Context, n Names, sub netip.Prefix, knownID string) (id string, err error)
 	// CreateVM creates the VM off, with p.Owner in its Notes, the plan's
 	// shape, one disconnected adapter with its static MAC and port guards

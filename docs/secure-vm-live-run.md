@@ -4,13 +4,14 @@ Use a Windows 11 Pro Hyper-V host with HGS tooling and NTFS. Run the candidate a
 
 ## Choose the test host
 
-Prefer a disposable Windows 11 Pro VM with nested virtualization. Enable `ExposeVirtualizationExtensions` on that VM. Use an image with `UntrustedGuardian` already present. Take a checkpoint before the run and roll back the test VM after cleanup. Run Setup and every decoy and collision case on the test host, which must carry no other workloads. Take only read-only before and after inventories of the outer host.
+Prefer a disposable Windows 11 Pro VM with nested virtualization. Enable `ExposeVirtualizationExtensions` on that VM. Take a checkpoint before the run and roll back the test VM after cleanup. Run Setup and every decoy and collision case on the test host, which must carry no other workloads. Take only read-only before and after inventories of the outer host.
 
 ## Keep `bunker` read-only
 
 - Use read-only queries for `bunker` and its resources. Never create an object named `bunker`.
 - Never rename, start, stop, save, checkpoint, move or reconfigure `bunker`. Leave its switch, adapters, disks, guardian and checkpoints untouched.
-- Leave all guardians in place. Never swap a guardian or replace `UntrustedGuardian`. Before every Setup, run `Get-HgsGuardian -Name UntrustedGuardian`. Require exactly one result with fingerprints that match `before.json`. Otherwise stop before Setup and report.
+- Leave all guardians in place. On a shared test host, run `Get-HgsGuardian -Name UntrustedGuardian` before every Setup. Require exactly one result with fingerprints that match `before.json`. Stop and report if the lookup fails this check.
+- On the disposable nested guest, record an absent `UntrustedGuardian` in `before.json` and let Setup create it. After successful Setup, check that `Get-HgsGuardian -Name UntrustedGuardian` returns exactly one guardian. Record its signing and encryption certificate fingerprints.
 - Keep the host running. Reboot and sleep tests require separate owner approval and guards. Reserve rollback for the disposable test VM.
 - Run every command from an SSH session as the admin account. Never sign in over RDP or at the console. Never open VMConnect or run `logoff`, `tsdiscon`, `shutdown` or `Restart-Computer`.
 - If the test host has an owner's RDP session, check it and its network path before each stage. Use only `qwinsta` and `Get-NetTCPConnection -LocalPort 3389` to read the session. Confirm the session ID and the interface that carries its traffic. Stop and report if any step could disrupt that session.
@@ -46,7 +47,7 @@ Record every other VM that exists before the run. Include its ID, name, state an
 | Integration services | Use `Get-VMIntegrationService` on the VM. Record service IDs, names, enabled state and status. |
 | VM switches and host vNICs | Use `Get-VMSwitch` for the full switch list. Record IDs, names, types, Notes and physical interface GUIDs. For `bunker`'s switch IDs, record the switch ports and any host vNIC's port ID, interface GUID, MAC, addresses, routes and bindings. Leave out address lifetimes and addresses with `SuffixOrigin` `Random`. |
 | Host policy and packet monitor | Record `EnableEnhancedSessionMode` from `Get-VMHost`. Save the filter list from `pktmon filter list` and the session configuration from `pktmon status` and `Get-EtwTraceSession -Name PktMon`. Record filter names and clauses, session state and trace path. |
-| NAT | Use `Get-NetNat` for the full list. Record names, provider instance IDs, prefixes, settings, static mappings and external addresses. |
+| NAT | Use `Get-NetNat` for the full list. Record names, provider instance IDs, prefixes, settings, static mappings, external addresses and their port ranges. |
 | Hyper-V Administrators | Record the member SIDs of local group `S-1-5-32-578`. |
 | CashPilot tasks | Record the registered tasks under `\CashPilot\`. Save the task paths, names and registration XML. |
 | CashPilot firewall and proof registrations | Record the rules in group `CashPilotVM`, the selected lab groups `cpd-svm-<n>` and their `-proof` groups. Include rule IDs, descriptions and filters. Record the GUIDs and `ElementName` values for proof keys under `HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization\GuestCommunicationServices`. |
@@ -55,13 +56,19 @@ Use the same fields and ordering for every JSON file. Sort arrays by provider ID
 
 Save and compare the inventory of every VM that existed before the run after each test stage. For a running VM, compare the uptime increase with elapsed time at the provider's reporting precision. Keep both raw uptime readings.
 
-On a running VM's writable leaf disk, file size can grow and `LastWriteTime` can advance. Keep both raw size and time readings. Require an exact match for the path, volume serial, file ID, disk type, virtual size and parent chain. Require an exact match for every field of a parent disk. Stop and report any other difference.
+On a running VM's writable leaf disk, file size can grow and `LastWriteTime` can advance. Keep both raw size and time readings. Require an exact match for the path, volume serial, file ID, disk type, virtual size and parent chain. Require an exact match for every field of a parent disk.
+
+If the test VM uses the Default Switch, allow new Windows ICS port ranges on the outer host. Require the NAT settings and every other NAT's port ranges to match the baseline.
+
+If the run saved and resumed one of its own VMs, allow its key protector hash to change. Require the protector length and other VM security fields to match the baseline.
+
+Stop and report any other difference.
 
 ## Create the decoys
 
 1. Reserve unused lab instance numbers for collisions, the NAT refusal and successful Setup. Check the host inventory and instance directories for each number. Keep their ledgers separate.
 2. Create a powered-off `decoy-persistent` VM with a vNIC on the internal switch `decoy-internal`. Attach its differencing VHDX. Record both the base VHDX and its child.
-3. Give the management vNIC on `decoy-internal` a distinct MAC with CashPilot's `00-15-5D` prefix. Check that the MAC is unused. Choose an unused subnet outside host subnets, non-default routes and NAT prefixes.
+3. Record the MAC that Hyper-V assigns to the management vNIC on `decoy-internal`. Verify that the MAC starts with `00-15-5D` and that no other adapter uses it. Choose an unused subnet outside host subnets, non-default routes and NAT prefixes.
 4. For the collision number, create an internal switch and a VM named `cpd-svm-<collision>`. These are throwaway fixtures. Put a distinct 32-hex `cashpilot-owner=` tag in the switch and VM Notes. Keep the VM off.
 5. Create a harmless disabled rule in the `cpd-svm-<collision>` firewall group and another in `cpd-svm-<collision>-proof`. Register a disabled task at `\CashPilot\VMGuard-cpd-svm-<collision>`. Use the decoy tag in their descriptions.
 6. Create a test GuestCommunicationServices key with a fresh GUID. Start its `ElementName` with `CashPilot Secure VM proof cpd-svm-<collision>.`

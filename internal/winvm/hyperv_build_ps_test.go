@@ -47,9 +47,9 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 				}
 				return err
 			}},
-		{"EnsureSwitch", `{"switchId":"` + tSwitchID + `","managementId":"` + tAdapterID + `","ifIndex":20}`, []string{`"owner":"` + tOwner + `"`, `"mac":"00155D000002"`, `"gateway":"172.31.250.1"`, `"prefixLen":29`, `"switchId":"` + tSwitchID + `"`},
+		{"EnsureSwitch", `{"switchId":"` + tSwitchID + `","managementId":"` + tAdapterID + `","mac":"00155D000002","ifIndex":20}`, []string{`"owner":"` + tOwner + `"`, `"mac":"00155D000002"`, `"gateway":"172.31.250.1"`, `"prefixLen":29`, `"switchId":"` + tSwitchID + `"`},
 			func(b psBuilder) error {
-				_, _, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00-15-5D-00-00-02", tSwitchID, tAdapterID)
+				_, _, _, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00-15-5D-00-00-02", tSwitchID, tAdapterID)
 				return err
 			}},
 		{"EnsureNAT", `{"id":"` + tSwitchID + `"}`, []string{`"prefix":"172.31.250.0/29"`}, func(b psBuilder) error { _, err := b.EnsureNAT(ctx, n, sub, ""); return err }},
@@ -137,7 +137,7 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 	p.Owner = tOwner
 	cases := map[string]func(b psBuilder) error{
 		"owner not hex": func(b psBuilder) error {
-			_, _, _, err := b.EnsureSwitch(ctx, n, sub, "x'; Remove-VM *", "00155D000002", "", tAdapterID)
+			_, _, _, _, err := b.EnsureSwitch(ctx, n, sub, "x'; Remove-VM *", "00155D000002", "", tAdapterID)
 			return err
 		},
 		"lab names elsewhere": func(b psBuilder) error {
@@ -189,7 +189,7 @@ func TestBuildSeamRefusesBadInput(t *testing.T) {
 			return err
 		},
 		"ensure switch ID not a GUID": func(b psBuilder) error {
-			_, _, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00155D000002", "x' -or 1", tAdapterID)
+			_, _, _, _, err := b.EnsureSwitch(ctx, n, sub, tOwner, "00155D000002", "x' -or 1", tAdapterID)
 			return err
 		},
 	}
@@ -598,6 +598,66 @@ if (-not (Test-DiskInUse 'parent-id')) { exit 23 }
 `, nil)
 	if code != 0 {
 		t.Fatalf("did not protect the recorded disk behind a checkpoint child: exit %d: %s", code, out)
+	}
+}
+
+func TestEnsureSwitchAdoptsAssignedManagementMAC(t *testing.T) {
+	const mock = `
+param($fakeSwitch, $assignedMAC)
+function Get-VMSwitch { $script:switch }
+function New-VMSwitch($Name, $SwitchType, $Notes) {
+  $script:switch = [pscustomobject]@{ Id = $fakeSwitch; Name = $Name; SwitchType = $SwitchType; Notes = $Notes }
+  $script:switch
+}
+function Get-VMNetworkAdapter {
+  param([switch]$ManagementOS)
+  if (-not $ManagementOS) { throw 'expected a management OS lookup' }
+  [pscustomobject]@{ SwitchId = $fakeSwitch; Id = 'management-port'; DeviceId = 'device'; MacAddress = $assignedMAC; IsManagementOs = $true }
+}
+function Set-VMNetworkAdapter($VMNetworkAdapter, $StaticMacAddress) {
+  if ($VMNetworkAdapter.IsManagementOs -and $StaticMacAddress) {
+    throw 'The specified parameters cannot be set for a management OS adapter.'
+  }
+  throw 'unexpected adapter change'
+}
+function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'device'; ifIndex = 20; MacAddress = $assignedMAC } }
+function Get-NetIPInterface { [pscustomobject]@{ Dhcp = 'Disabled' } }
+function Get-NetIPAddress { [pscustomobject]@{ IPAddress = '172.31.250.1'; PrefixLength = 29 } }
+`
+	for _, tc := range []struct {
+		name, assignedMAC, wantError string
+	}{
+		{name: "Hyper-V assignment", assignedMAC: "00155D47E3A1"},
+		{name: "unexpected prefix", assignedMAC: "02155D47E3A1", wantError: "00-15-5D"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out := runOwnedScriptWithFake(t, mock, scriptEnsureSwitch, map[string]any{
+				"switch": "CashPilot-VM", "owner": tOwner, "mac": "00155D000002",
+				"gateway": "172.31.250.1", "prefixLen": 29,
+			}, tSwitchID, tc.assignedMAC)
+			if tc.wantError != "" {
+				if code == 0 || !strings.Contains(string(out), tc.wantError) {
+					t.Fatalf("exit %d, output %s, want %q", code, out, tc.wantError)
+				}
+				return
+			}
+			if code != 0 {
+				t.Fatalf("exit %d: %s", code, out)
+			}
+			raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				MAC string
+			}
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.MAC != tc.assignedMAC {
+				t.Fatalf("reported MAC = %q, want %q", got.MAC, tc.assignedMAC)
+			}
+		})
 	}
 }
 

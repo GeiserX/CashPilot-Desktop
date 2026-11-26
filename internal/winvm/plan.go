@@ -184,7 +184,7 @@ type Plan struct {
 	Subnet      netip.Prefix `json:"subnet"` // a free /29 in 172.16/12
 	Gateway     netip.Addr   `json:"gateway"`
 	GuestIP     netip.Addr   `json:"guestIp"`
-	HostVNICMAC string       `json:"hostVnicMac"` // the guest's static ARP entry points here
+	HostVNICMAC string       `json:"hostVnicMac"` // assigned by Hyper-V when the switch is created
 	GuestMAC    string       `json:"guestMac"`
 
 	StaticDeny []netip.Prefix `json:"staticDeny"`
@@ -300,9 +300,15 @@ func NewPlan(o Options, prev *Plan) (Plan, error) {
 	if err := checkSubnet(o.Subnet); err != nil {
 		return Plan{}, err
 	}
-	hostMAC, err := NormalizeMAC(o.HostVNICMAC)
-	if err != nil {
-		return Plan{}, fmt.Errorf("host vNIC: %w", err)
+	var hostMAC string
+	if o.HostVNICMAC != "" {
+		var err error
+		hostMAC, err = NormalizeMAC(o.HostVNICMAC)
+		if err != nil {
+			return Plan{}, fmt.Errorf("host vNIC: %w", err)
+		}
+	} else if prev != nil && (prev.SwitchID != "" || prev.ManagementAdapterID != "" || prev.VMID != "" || !prev.ProvedAt.IsZero()) {
+		return Plan{}, errors.New("host vNIC: missing the recorded MAC")
 	}
 	guestMAC, err := NormalizeMAC(o.GuestMAC)
 	if err != nil {

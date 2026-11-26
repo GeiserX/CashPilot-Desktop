@@ -353,8 +353,8 @@ func (b *builder) loadPrev() (*Plan, error) {
 
 // journal reads the earlier plan, checks every object with our names against
 // it, and writes the new plan before anything is created. A fresh build gets
-// a new owner token, a /29 and two MACs; a resumed build or a Repair keeps
-// them.
+// a new owner token, a /29 and a guest MAC. Hyper-V assigns the host MAC
+// when the switch is created.
 func (b *builder) journal(ctx context.Context) error {
 	prev, err := b.loadPrev()
 	if err != nil {
@@ -439,10 +439,7 @@ func (b *builder) journal(ctx context.Context) error {
 		if o.Subnet, err = PickSubnet(inUse); err != nil {
 			return err
 		}
-		o.HostVNICMAC, o.GuestMAC = b.newMAC(), b.newMAC()
-		for o.GuestMAC == o.HostVNICMAC {
-			o.GuestMAC = b.newMAC()
-		}
+		o.GuestMAC = b.newMAC()
 	}
 	p, err := NewPlan(o, prev)
 	if err != nil {
@@ -458,7 +455,16 @@ func (b *builder) journal(ctx context.Context) error {
 	}
 	p.SwitchID = adopt(b.inv.Switches, p.SwitchID, p.Owner)
 	if p.SwitchID == "" {
-		p.ManagementAdapterID, p.ManagementBindings = "", nil
+		if prev != nil && prev.SwitchID != "" {
+			st, err := b.readInstall()
+			if err != nil {
+				return err
+			}
+			if p.VMID != "" || st != nil {
+				return errors.New("the recorded switch is missing and its MAC is in use by the Windows guest or its answer file; run Remove VM before building again")
+			}
+		}
+		p.HostVNICMAC, p.ManagementAdapterID, p.ManagementBindings = "", "", nil
 	}
 	p.SetGCSBaseline(b.inv.GCS)
 	p.HostBuild = b.inv.HostBuild
@@ -600,7 +606,7 @@ func (b *builder) ensureSwitch(ctx context.Context) error {
 	if err := b.requireOwnedNATs(inv.NATs); err != nil {
 		return err
 	}
-	id, managementID, ifx, err := b.HV.EnsureSwitch(ctx, b.n, b.p.Subnet, b.p.Owner, b.p.HostVNICMAC, b.p.SwitchID, b.p.ManagementAdapterID)
+	id, managementID, mac, ifx, err := b.HV.EnsureSwitch(ctx, b.n, b.p.Subnet, b.p.Owner, b.p.HostVNICMAC, b.p.SwitchID, b.p.ManagementAdapterID)
 	if err != nil {
 		return err
 	}
@@ -608,11 +614,20 @@ func (b *builder) ensureSwitch(ctx context.Context) error {
 		return fmt.Errorf("the switch came back without an ID or a host vNIC (%q, %d)", id, ifx)
 	}
 	b.vnicIf = ifx
-	if !strings.EqualFold(b.p.SwitchID, id) {
-		b.p.SwitchID, b.p.ManagementAdapterID = id, managementID
-		return b.save()
+	if b.p.SwitchID != "" {
+		if !strings.EqualFold(b.p.SwitchID, id) || !strings.EqualFold(b.p.ManagementAdapterID, managementID) || b.p.HostVNICMAC != mac {
+			return fmt.Errorf("%w: the switch or management adapter identity changed", ErrNotOwned)
+		}
+		return nil
 	}
-	return nil
+	if !macHex.MatchString(mac) || !strings.HasPrefix(mac, "00155D") {
+		return fmt.Errorf("Hyper-V assigned the host vNIC MAC %q, which does not have the 00-15-5D prefix", mac)
+	}
+	for b.p.GuestMAC == mac {
+		b.p.GuestMAC = b.newMAC()
+	}
+	b.p.SwitchID, b.p.ManagementAdapterID, b.p.HostVNICMAC = id, managementID, mac
+	return b.save()
 }
 
 func (b *builder) ensureNAT(ctx context.Context) error {
