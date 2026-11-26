@@ -154,6 +154,25 @@ func TestDefaultMoneroRate(t *testing.T) {
 	}
 }
 
+func TestDefaultKaspaRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",kaspa,") {
+			t.Errorf("CoinGecko request did not include kaspa: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"kaspa":{"usd":0.05}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(40, "KAS"); !ok || got != 2 {
+		t.Fatalf("ToUSD(40, KAS) = (%v, %v), want (2, true)", got, ok)
+	}
+}
+
 func TestStaleGracefulOnHTTP500(t *testing.T) {
 	svc, cg, fr := newTestService(t)
 

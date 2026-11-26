@@ -79,6 +79,9 @@ check("OCEAN shows its full automatic payout threshold", payoutCell(ocean).inclu
 const supportxmr = earning({ platform: "supportxmr", currency: "XMR", balance: 0.000000000001, balanceDisplay: 0 });
 check("SupportXMR displays one piconero in the native balance", primary(cell(supportxmr)) === "0.000000000001 XMR", cell(supportxmr));
 
+const herominers = earning({ platform: "herominers-kas", currency: "KAS", balance: 0.00000001, balanceDisplay: 0 });
+check("HeroMiners Kaspa displays one sompi in the native balance", primary(cell(herominers)) === "0.00000001 KAS", cell(herominers));
+
 
 // ---------------------------------------------------------------------------
 // THE RULE.

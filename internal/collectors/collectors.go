@@ -66,6 +66,8 @@ func PoolAddressHash(slug string, credentials map[string]string) (string, bool) 
 		address = oceanPayoutAddress(credentials)
 	case "supportxmr":
 		address = firstCredential(credentials, supportXMRAddressKey)
+	case "herominers-kas":
+		address = firstCredential(credentials, heroMinersKaspaAddressKey)
 	default:
 		return "", false
 	}
@@ -126,6 +128,7 @@ var collectorDispatch = map[string]collectorFunc{
 	"bitping":         (*Registry).collectBitping,
 	"bytelixir":       (*Registry).collectBytelixir,
 	"earnapp":         (*Registry).collectEarnApp,
+	"herominers-kas":  (*Registry).collectHeroMinersKaspa,
 	"honeygain":       (*Registry).collectHoneygain,
 	"earnfm":          (*Registry).collectEarnFM,
 	"grass":           (*Registry).collectGrass,

@@ -26,6 +26,7 @@ export function escapeHtml(value: string | undefined | null): string {
 const miningCurrencies = new Map([
   ["BTC", 8],
   ["XMR", 12],
+  ["KAS", 8],
 ]);
 
 export function miningBalancePrecision(currency: string): number | undefined {
