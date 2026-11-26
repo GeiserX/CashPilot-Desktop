@@ -294,3 +294,33 @@ func TestASupersededRevisionStaysRejectedWhenTheConfigIsRemoved(t *testing.T) {
 		t.Errorf("config.json removed: revision %s gave key %q, %v; want ErrPairingSuperseded", p.Revision, key.Worker, err)
 	}
 }
+
+// Reload decides on the marker it read from disk, not on the copy in memory:
+// the file can change between reloadLocked and that read. Here the copy in
+// memory still holds A's marker while config.json on disk has none, as when
+// another process rewrites the file in between. A stays superseded.
+func TestReloadDecidesOnTheMarkerReadFromDisk(t *testing.T) {
+	window, helper := twoManagers(t)
+	a := publish(t, window, "http://192.168.1.10:8080", "worker-a")
+	if _, err := helper.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	editConfigFile(t, window, func(f map[string]any) { delete(f, "pairingRevision") })
+	if _, _, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
+		t.Fatalf("after the 1.x save: %v, want ErrPairingSuperseded", err)
+	}
+	// reloadLocked sees an unchanged snapshot, so the copy in memory keeps A.
+	helper.mu.Lock()
+	helper.saved = configFile(t, helper)
+	helper.cfg.PairingRevision = a.Revision
+	helper.mu.Unlock()
+	if _, err := helper.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(window.AppDir(), "config.json"), []byte(brokenConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, key, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
+		t.Errorf("unreadable config.json: revision %s gave key %q, %v; want ErrPairingSuperseded", p.Revision, key.Worker, err)
+	}
+}

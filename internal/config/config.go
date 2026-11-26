@@ -276,8 +276,8 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 	m.pairing, _ = m.Pairing()
-	if _, read := m.markerOnDisk(); read {
-		m.noteMarkerLocked()
+	if marker, read := m.markerOnDisk(); read {
+		m.noteMarkerLocked(marker)
 	}
 	return m, nil
 }
@@ -361,22 +361,23 @@ func (m *Manager) Reload() (bool, error) {
 	}
 	pairingChanged := p != m.pairing
 	m.pairing = p
-	// A missing config.json is not a read: the copy in memory says nothing
-	// about the current file, so it neither marks nor clears.
-	if _, read := m.markerOnDisk(); read {
-		m.noteMarkerLocked()
+	// Decide on the marker read from disk now, not on the copy in memory: the
+	// file can change after reloadLocked. A missing or unreadable config.json is
+	// not a read, so it neither marks nor clears.
+	if marker, read := m.markerOnDisk(); read {
+		m.noteMarkerLocked(marker)
 	}
 	return changed || pairingChanged, nil
 }
 
-// noteMarkerLocked records whether the config.json just read holds the marker
-// of the pairing.json just read. A marker counts later, while config.json
-// cannot be read, only if it matched when it was read: a publication that
-// stopped between its two writes leaves the next revision's marker over the
-// old revision. Called with m.mu held.
-func (m *Manager) noteMarkerLocked() {
+// noteMarkerLocked records whether marker, just read from config.json, is the
+// marker of the pairing.json just read. A marker counts later, while
+// config.json cannot be read, only if it matched when it was read: a
+// publication that stopped between its two writes leaves the next revision's
+// marker over the old revision. Called with m.mu held.
+func (m *Manager) noteMarkerLocked(marker string) {
 	switch {
-	case m.pairing.Revision != "" && m.cfg.PairingRevision != m.pairing.Revision:
+	case m.pairing.Revision != "" && marker != m.pairing.Revision:
 		m.supersededSeen = m.pairing.Revision
 	case m.supersededSeen == m.pairing.Revision:
 		m.supersededSeen = ""
