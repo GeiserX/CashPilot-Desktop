@@ -354,3 +354,45 @@ func TestCheckedDeployComparesAgainRightBeforeTheReplacement(t *testing.T) {
 		t.Fatalf("the renamed container was touched: %+v", c)
 	}
 }
+
+// A redeploy here also replaces copies 2..N, and the checked route names one
+// container. While other copies exist, the lookup and the deploy refuse, so the
+// server never asks about, or replaces, containers it did not name.
+func TestCheckedDeployRefusesAServiceWithMoreCopiesHere(t *testing.T) {
+	app := joinedApp(t)
+	creds := map[string]string{"TRAFFMONETIZER_TOKEN": "not-a-real-token"}
+	three := 3
+	if _, err := app.DeployService("traffmonetizer", creds, nil, &three); err != nil {
+		t.Fatalf("three copies: %v", err)
+	}
+	ids := map[string]string{}
+	for _, name := range []string{"cashpilot-traffmonetizer", "cashpilot-traffmonetizer-2", "cashpilot-traffmonetizer-3"} {
+		c, ok := app.Docker.Container(name)
+		if !ok {
+			t.Fatalf("%s is not running", name)
+		}
+		ids[name] = c.ID
+	}
+	const path = "/api/containers/traffmonetizer/deploy-checked"
+	w := call(t, app, http.MethodGet, path, testWorkerKey, nil)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "2 more copies") {
+		t.Fatalf("lookup with three copies: %d %s; want 409 naming the other copies", w.Code, w.Body.String())
+	}
+	svc, _ := app.catalog.Get("traffmonetizer")
+	spec := map[string]any{"image": svc.Docker.Image, "env": creds, "expected_container": ids["cashpilot-traffmonetizer"]}
+	app.Docker.ResetCalls()
+	w = call(t, app, http.MethodPost, path, testWorkerKey, spec)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "2 more copies") {
+		t.Fatalf("checked deploy with three copies: %d %s; want 409 naming the other copies", w.Code, w.Body.String())
+	}
+	for name, id := range ids {
+		if c, ok := app.Docker.Container(name); !ok || c.ID != id {
+			t.Fatalf("%s changed after a refused deploy", name)
+		}
+	}
+	for _, c := range app.Docker.Calls() {
+		if strings.Contains(c, "images/create") || strings.Contains(c, "/stop") || strings.Contains(c, "/containers/create") {
+			t.Fatalf("a refused deploy called Docker %s; calls %v", c, app.Docker.Calls())
+		}
+	}
+}

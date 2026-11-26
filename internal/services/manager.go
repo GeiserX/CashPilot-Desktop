@@ -271,16 +271,51 @@ type DeployOptions struct {
 // DeployTarget names the container a deploy of slug would replace: its full ID, or
 // runtime.NoContainer. It reads no logs.
 func (m *Manager) DeployTarget(ctx context.Context, slug string) (string, error) {
-	kind := ""
+	kind, name := "", slug
 	if svc, ok := m.catalog.Get(slug); ok {
-		kind = m.kindForService(svc)
+		kind, name = m.kindForService(svc), svc.Name
 	}
 	provider, _ := m.resolveProvider(kind)
 	reader, ok := provider.(runtime.DeployTargetReader)
 	if !ok {
 		return "", runtime.ErrNoDeployTarget
 	}
+	if err := refuseOtherCopies(ctx, provider, slug, name); err != nil {
+		return "", err
+	}
 	return reader.DeployTarget(ctx, slug)
+}
+
+// OtherCopiesError is a checked deploy refused because copies 2..N of the service
+// exist here. A redeploy replaces them too, or removes them, and a checked deploy
+// names only the first copy's container, so it would touch containers nobody
+// approved. It is an ErrNoDeployTarget.
+type OtherCopiesError struct {
+	Name   string
+	Copies int
+}
+
+func (e *OtherCopiesError) Error() string {
+	return fmt.Sprintf("%s has %d more copies on this computer, and a redeploy replaces them too, so your CashPilot cannot name every container it would replace. Redeploy it on this computer, or lower it to one copy here", e.Name, e.Copies)
+}
+
+func (e *OtherCopiesError) Unwrap() error { return runtime.ErrNoDeployTarget }
+
+// refuseOtherCopies is an OtherCopiesError when copies above 1 of slug exist,
+// running or stopped.
+func refuseOtherCopies(ctx context.Context, provider runtime.Provider, slug, name string) error {
+	copier, ok := provider.(runtime.CopyProvider)
+	if !ok {
+		return nil
+	}
+	copies, err := copier.Copies(ctx, slug)
+	if err != nil {
+		return err
+	}
+	if len(copies) > 0 {
+		return &OtherCopiesError{Name: name, Copies: len(copies)}
+	}
+	return nil
 }
 
 // DeployWith deploys slug with the given options. The first copy is deployed exactly
@@ -396,6 +431,9 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		reader, ok := provider.(runtime.DeployTargetReader)
 		if !ok {
 			return store.Deployment{}, nil, runtime.ErrNoDeployTarget
+		}
+		if err := refuseOtherCopies(ctx, provider, slug, svc.Name); err != nil {
+			return store.Deployment{}, nil, err
 		}
 		// Compared first under this lock, as the CashPilot worker does, so a stale
 		// request is refused before an image pull or a wallet step. The runtime

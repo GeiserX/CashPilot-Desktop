@@ -63,3 +63,49 @@ func TestACheckedDeployOnARuntimeThatCannotCompareTouchesNothing(t *testing.T) {
 		t.Fatalf("DeployTarget err = %v; want ErrNoDeployTarget", err)
 	}
 }
+
+// copyTargetFake runs copies 2..N and names the first copy's container.
+type copyTargetFake struct {
+	*copyFake
+	target string
+}
+
+func (f *copyTargetFake) DeployTarget(context.Context, string) (string, error) { return f.target, nil }
+
+// A redeploy also redeploys copies 2..N, and removes the copies above the count.
+// A checked deploy names one container, the first copy's, so while other copies
+// exist it would replace containers nobody approved: it refuses before anything is
+// touched, and so does the lookup.
+func TestACheckedDeployRefusesWhileOtherCopiesExist(t *testing.T) {
+	ctx := context.Background()
+	fake := &copyTargetFake{copyFake: newCopyFake(), target: "none"}
+	m := NewManager(fake, newScalingCatalog(t), newTestStore(t))
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(2)}); err != nil {
+		t.Fatalf("two copies: %v", err)
+	}
+	fake.target = "c1"
+	before := fake.deployCalls
+	if got, err := m.DeployTarget(ctx, "scalable"); !errors.Is(err, runtime.ErrNoDeployTarget) {
+		t.Fatalf("lookup with copy 2 running = %q, %v; want ErrNoDeployTarget", got, err)
+	}
+	for _, expected := range []string{"c1", "none"} {
+		_, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{ExpectedContainer: &expected})
+		if !errors.Is(err, runtime.ErrNoDeployTarget) || fake.deployCalls != before || len(fake.removed) != 0 || !fake.running[2] {
+			t.Fatalf("checked deploy expecting %s with copy 2 running: err %v, %d deploys, removed %v; want a refusal that touches nothing",
+				expected, err, fake.deployCalls-before, fake.removed)
+		}
+	}
+
+	// Once the extra copy is gone (the owner lowered the count here), the same
+	// request replaces the one named container.
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{Instances: intPtr(1)}); err != nil {
+		t.Fatalf("back to one copy: %v", err)
+	}
+	expected := "c1"
+	if got, err := m.DeployTarget(ctx, "scalable"); err != nil || got != "c1" {
+		t.Fatalf("lookup with one copy = %q, %v; want c1", got, err)
+	}
+	if _, err := m.DeployWith(ctx, "scalable", nil, DeployOptions{ExpectedContainer: &expected}); err != nil {
+		t.Fatalf("checked deploy with one copy: %v", err)
+	}
+}
