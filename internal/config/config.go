@@ -132,7 +132,12 @@ type AppConfig struct {
 	// ServerCommandsOff is the dashboard switch "<server> can start and stop
 	// services on this computer", turned off. The zero value is on, so joining a
 	// server turns the server-commands API on; joining again keeps the user's choice.
+	// A pairing carried over from 1.x starts off instead (enrolPairing), because
+	// an upgrade is not a choice to let the server run commands here.
 	ServerCommandsOff bool `json:"serverCommandsOff,omitempty"`
+	// ServerCommandsChosen is true once the user has used that switch. The 1.x
+	// carry-over then leaves ServerCommandsOff as the user set it.
+	ServerCommandsChosen bool `json:"serverCommandsChosen,omitempty"`
 }
 
 // SetupJournal says where a guided setup stood before a restart. It only says

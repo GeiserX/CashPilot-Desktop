@@ -240,6 +240,21 @@ func (a *App) enrolPairing(ctx context.Context, req JoinRequest, current config.
 			return JoinResult{}, err
 		}
 	}
+	// No revision yet and a server address in config.json: this enrolment carries
+	// a 1.x pairing over. Server commands did not exist in 1.x, and an upgrade is
+	// not a choice to allow them, so they start off unless the user already used
+	// the switch. Written before the pairing is published, so neither the window
+	// nor the helper listens in between. A fresh join has no saved address and
+	// keeps the default (on).
+	if current.Revision == "" && a.pairingServer(current) != "" {
+		if err := a.cfg.Update(func(c *config.AppConfig) {
+			if !c.ServerCommandsChosen {
+				c.ServerCommandsOff = true
+			}
+		}); err != nil {
+			return JoinResult{}, err
+		}
+	}
 	if key := strings.TrimSpace(resp.WorkerKey); key != "" {
 		worker = key
 	}
