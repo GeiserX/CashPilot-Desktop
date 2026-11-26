@@ -35,10 +35,17 @@ const (
 // that converts to the GRASS token only during airdrops at unknown ratios, so
 // they are never priced here (see PointsCurrencies).
 var DefaultCryptoIDs = map[string]string{
-	"BTC":    "bitcoin",
-	"XMR":    "monero",
-	"KAS":    "kaspa",
-	"ETC":    "ethereum-classic",
+	"BTC": "bitcoin",
+	"XMR": "monero",
+	"KAS": "kaspa",
+	"ETC": "ethereum-classic",
+	// Coins unMineable pays out that are not already listed. Any other coin is
+	// still tracked, in its own units, without a price.
+	"BNB":    "binancecoin",
+	"DOGE":   "dogecoin",
+	"LTC":    "litecoin",
+	"SHIB":   "shiba-inu",
+	"TRX":    "tron",
 	"MYST":   "mysterium",
 	"ANYONE": "airtor-protocol",
 	"STORJ":  "storj",

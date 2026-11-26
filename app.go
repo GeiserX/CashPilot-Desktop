@@ -1100,6 +1100,14 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		if !pool {
 			return platformDelta(plat, fromDay, toDay)
 		}
+		// A period is one balance identity (on unMineable, one address in one
+		// coin), so it is priced in its own currency, not the latest one.
+		periodCur := func(reading store.DailyBalance) string {
+			if reading.Currency != "" {
+				return reading.Currency
+			}
+			return perCur[plat]
+		}
 		start := sort.Search(len(history), func(i int) bool { return history[i].Day > fromDay })
 		var baseline store.DailyBalance
 		haveBaseline := start > 0
@@ -1114,14 +1122,14 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 			}
 			if seen && reading.PoolAddressHash != last.PoolAddressHash {
 				if haveBaseline {
-					accrued += balanceDelta(baseline, last, perCur[plat])
+					accrued += balanceDelta(baseline, last, periodCur(baseline))
 				}
 				baseline, haveBaseline = reading, true
 			}
 			last, seen = reading, true
 		}
 		if haveBaseline {
-			accrued += balanceDelta(baseline, last, perCur[plat])
+			accrued += balanceDelta(baseline, last, periodCur(baseline))
 		}
 		return accrued
 	}

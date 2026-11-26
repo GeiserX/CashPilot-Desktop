@@ -147,6 +147,12 @@ type Referral struct {
 	// SignupURL "Visit", never "Create account" or "Sign up". nil means an account
 	// is needed.
 	Account *bool `json:"account" yaml:"account"`
+	// Referrer and Referee state the split when the code is a setting rather than
+	// a signup bonus (unMineable's "#code" after the worker name). Parsed for
+	// parity and never sent to the frontend: the web UI shows only Bonus, and the
+	// entry's mining.pool_fee_note already discloses the split before deploy.
+	Referrer string `json:"-" yaml:"referrer"`
+	Referee  string `json:"-" yaml:"referee"`
 }
 
 // CodeAttributesURL reports whether a referral code is ANCHORED in a signup URL,
