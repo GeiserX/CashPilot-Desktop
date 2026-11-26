@@ -521,6 +521,22 @@ export namespace catalog {
 	}
 	
 	
+	export class Mining {
+	    devFeePercent?: number;
+	    devFeeSource: string;
+	    poolFeeNote: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Mining(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.devFeePercent = source["devFeePercent"];
+	        this.devFeeSource = source["devFeeSource"];
+	        this.poolFeeNote = source["poolFeeNote"];
+	    }
+	}
 	export class NativeBinary {
 	    os: string;
 	    arch: string;
@@ -965,6 +981,7 @@ export namespace catalog {
 	    collector: CollectorMetadata;
 	    payout: Payout;
 	    disclosure: Disclosure;
+	    mining?: Mining;
 	    deviceLink?: DeviceLink;
 	    resurrectionChecked: string;
 	    ratingResult?: RatingResult;
@@ -998,6 +1015,7 @@ export namespace catalog {
 	        this.collector = this.convertValues(source["collector"], CollectorMetadata);
 	        this.payout = this.convertValues(source["payout"], Payout);
 	        this.disclosure = this.convertValues(source["disclosure"], Disclosure);
+	        this.mining = this.convertValues(source["mining"], Mining);
 	        this.deviceLink = this.convertValues(source["deviceLink"], DeviceLink);
 	        this.resurrectionChecked = source["resurrectionChecked"];
 	        this.ratingResult = this.convertValues(source["ratingResult"], RatingResult);

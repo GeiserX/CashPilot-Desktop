@@ -50,6 +50,35 @@ export function localDockerGap(service: Service | undefined, runtime: RuntimeSta
 }
 
 /**
+ * A miner's own fee, shown before deploy wherever the miner will run. The fee is a
+ * fact about the miner, not about this computer, so it does not wait for the
+ * backend and does not disappear when the deploy goes to a fleet worker.
+ *
+ * A fee the catalog does not state renders as "not stated", never as 0%.
+ * requirements.hosting_note is never shown: Desktop cannot see the connection type.
+ */
+export function minerFee(service: Service | undefined): string {
+  const mining = service?.mining;
+  if (!mining) return "";
+  const fee = typeof mining.devFeePercent === "number" && Number.isFinite(mining.devFeePercent) ? mining.devFeePercent : null;
+  const headline = fee === null
+    ? "Miner fee: not stated in the catalog. Check the miner's own terms before you deploy."
+    : `Miner fee: ${escapeHtml(String(fee))}% of hashing time goes to the miner's developers.`;
+  const pool = mining.poolFeeNote?.trim() ? `<p class="preflight-summary">${escapeHtml(mining.poolFeeNote.trim())}</p>` : "";
+  const source = mining.devFeeSource?.startsWith("https://")
+    ? `<div><button class="btn btn-ghost btn-sm" data-url="${escapeHtml(mining.devFeeSource)}">Miner fee source</button></div>`
+    : "";
+  return `
+    <section class="preflight" data-miner-fee style="border-left: 3px solid var(--border-strong); background: var(--accent-soft);">
+      <strong>${headline}</strong>
+      ${pool}
+      <p class="muted preflight-unchecked">The pool holds what you mine until your payout threshold, then pays your wallet.</p>
+      ${source}
+    </section>
+  `;
+}
+
+/**
  * Render the pre-deploy check for a service on this computer.
  *
  * `report` is null while the check is still running, or when it failed — both
