@@ -700,7 +700,7 @@ func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeplo
 	}
 	if len(nvidiaKeys) > 0 {
 		slices.Sort(nvidiaKeys)
-		return http.StatusForbidden, fmt.Sprintf("CashPilot sets the %s variables itself; refused: %s", catalog.GPUEnvPrefix, strings.Join(nvidiaKeys, ", ")), false
+		return refuse(http.StatusForbidden, fmt.Sprintf("CashPilot sets the %s variables itself; refused: %s", catalog.GPUEnvPrefix, strings.Join(nvidiaKeys, ", ")))
 	}
 	if err := a.services.ValidateDeploy(slug, spec.Env); err != nil {
 		return refuse(http.StatusBadRequest, oneLine(err.Error()))
