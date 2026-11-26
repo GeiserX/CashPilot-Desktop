@@ -362,6 +362,11 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		// catalog pins (web app/main.py _fence_gated_spec).
 		return store.Deployment{}, nil, fmt.Errorf("%s runs only the image the catalog pins, since it holds NET_ADMIN; clear the Image box to deploy it", svc.Name)
 	}
+	if custom != "" && svc.Docker.GPU != nil {
+		// The GPU grant trusts the reviewed image the catalog pins, not whatever runs
+		// under its name (web app/orchestrator.py gpu_grant_for_deploy).
+		return store.Deployment{}, nil, fmt.Errorf("%s uses this computer's GPU and runs only the image the catalog pins; clear the Image box to deploy it", svc.Name)
+	}
 	if custom != "" {
 		// The chosen image replaces the catalog's and every per-architecture
 		// override with it: it is the user's answer for this machine. An image only

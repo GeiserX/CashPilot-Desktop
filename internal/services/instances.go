@@ -34,6 +34,9 @@ func (m *Manager) ScalingLimit(svc catalog.Service) ScalingLimit {
 	if perIP := svc.Requirements.DevicesPerIP; perIP != nil && *perIP == 1 {
 		return ScalingLimit{1, name + " allows one device per IP address, so a second copy on one machine earns nothing."}
 	}
+	if svc.Docker.GPU != nil {
+		return ScalingLimit{1, name + " uses this computer's GPU, which two copies would share."}
+	}
 	if len(svc.Docker.Volumes) > 0 {
 		return ScalingLimit{1, name + " keeps data in a host directory, which two copies would share."}
 	}

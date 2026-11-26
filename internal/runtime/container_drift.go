@@ -60,6 +60,8 @@ type ContainerShape struct {
 	Mounts     []string
 	EnvKeys    []string
 	Entrypoint []string
+	// GPU is the drivers of its GPU device requests ("nvidia"), the GPU grant.
+	GPU []string
 }
 
 // shapeClient is the part of the Docker client ContainerShapes needs, so the
@@ -145,6 +147,13 @@ func shapeOf(ctr container.InspectResponse) ContainerShape {
 			}
 		}
 		shape.Devices = sortedKeys(devices)
+		drivers := map[string]bool{}
+		for _, r := range host.DeviceRequests {
+			if r.Driver != "" {
+				drivers[r.Driver] = true
+			}
+		}
+		shape.GPU = sortedKeys(drivers)
 		ports := map[string]bool{}
 		for port := range host.PortBindings {
 			ports[port.String()] = true
@@ -199,8 +208,23 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	if missing := minus(wantDevices, haveDevices); len(missing) > 0 {
 		found = append(found, fmt.Sprintf("missing device %s, which the catalog now passes in", strings.Join(missing, ", ")))
 	}
+	// A GPU grant's render nodes and /dev/kfd are picked from the host at deploy
+	// (gpu.go), so they are the catalog's even though it names none.
+	_, granted := dc.GPU.Grant()
+	gpuDevices := map[string]bool{}
+	if granted {
+		for d := range haveDevices {
+			if gpuDevice(d) {
+				gpuDevices[d] = true
+				delete(haveDevices, d)
+			}
+		}
+	}
 	if extra := minus(haveDevices, wantDevices); len(extra) > 0 {
 		found = append(found, fmt.Sprintf("still has device %s, which the catalog no longer passes in", strings.Join(extra, ", ")))
+	}
+	if granted && len(shape.GPU) == 0 && len(gpuDevices) == 0 {
+		found = append(found, "missing GPU, which the catalog now passes in")
 	}
 
 	// A container that reports no runtime is not judged: nothing is known.
@@ -315,7 +339,8 @@ func ShapeFingerprint(svc catalog.Service) string {
 		UIPort       *catalog.UIPort       `json:"ui_port,omitempty"`
 		UDPPortRange *catalog.UDPPortRange `json:"udp_port_range,omitempty"`
 		Runtime      string                `json:"runtime,omitempty"`
-	}{dc.Image, dc.ImageByArch, dc.CapAdd, dc.Devices, dc.Privileged, dc.Entrypoint, dc.NetworkMode, dc.Ports, dc.Volumes, env, dc.UIPort, dc.UDPPortRange, strings.TrimSpace(dc.Runtime)}
+		GPU          *catalog.GPU          `json:"gpu,omitempty"`
+	}{dc.Image, dc.ImageByArch, dc.CapAdd, dc.Devices, dc.Privileged, dc.Entrypoint, dc.NetworkMode, dc.Ports, dc.Volumes, env, dc.UIPort, dc.UDPPortRange, strings.TrimSpace(dc.Runtime), dc.GPU}
 	blob, _ := json.Marshal(judged) // map keys are sorted by encoding/json
 	sum := sha256.Sum256(blob)
 	return hex.EncodeToString(sum[:])[:16]

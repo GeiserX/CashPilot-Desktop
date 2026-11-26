@@ -246,6 +246,9 @@ type daemonInfo struct {
 	// Runtimes are the OCI runtimes the daemon offers ("runc", "runsc"), nil when it
 	// did not say. A service whose entry names a runtime is checked against it.
 	Runtimes map[string]bool
+	// Hostname is the name the daemon gives its own machine (/info Name). It equals
+	// this computer's only when the daemon runs on its kernel (see sameKernel).
+	Hostname string
 }
 
 // infoClient is the one call daemonFacts needs, narrowed so the fallback behaviour is
@@ -270,6 +273,7 @@ func daemonFacts(ctx context.Context, cli infoClient) daemonInfo {
 	if osType := strings.TrimSpace(strings.ToLower(result.Info.OSType)); osType != "" {
 		facts.OSType = osType
 	}
+	facts.Hostname = strings.TrimSpace(result.Info.Name)
 	if len(result.Info.Runtimes) > 0 {
 		facts.Runtimes = make(map[string]bool, len(result.Info.Runtimes))
 		for name := range result.Info.Runtimes {

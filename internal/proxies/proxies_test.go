@@ -147,6 +147,7 @@ func TestRefusal(t *testing.T) {
 		"LAN fence":         func(s *catalog.Service) { s.Docker.FenceGated = true },
 		"volume":            func(s *catalog.Service) { s.Docker.Volumes = []string{"v:/d"} },
 		"device":            func(s *catalog.Service) { s.Docker.Devices = []string{"/dev/net/tun"} },
+		"GPU":               func(s *catalog.Service) { s.Docker.GPU = &catalog.GPU{Vendor: "nvidia"} },
 		"privileged":        func(s *catalog.Service) { s.Docker.Privileged = true },
 		"NET_RAW":           func(s *catalog.Service) { s.Docker.CapAdd = []string{"cap_net_raw", "SETUID"} },
 		"terms forbid": func(s *catalog.Service) {

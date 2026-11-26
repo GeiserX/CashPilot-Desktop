@@ -356,6 +356,9 @@ type DockerConfig struct {
 	// to the kernel, so only devices the runtime allow-lists may be requested, and
 	// only by the service whose own entry declares them.
 	Devices []string `json:"devices" yaml:"devices"`
+	// GPU is the GPU the deploy passes in (gpu.go). Read from this computer's own
+	// catalog, never from a deploy request. Not sent to the frontend.
+	GPU *GPU `json:"-" yaml:"gpu"`
 	// HealthSignals are log patterns that say whether the service is EARNING, which
 	// container health cannot see. For services with no collector it is the only
 	// signal there is.

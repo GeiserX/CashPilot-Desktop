@@ -216,6 +216,53 @@ type composeService struct {
 	MemReserve    string            `yaml:"mem_reservation,omitempty"`
 	CPUShares     int64             `yaml:"cpu_shares,omitempty"`
 	OomScoreAdj   *int              `yaml:"oom_score_adj,omitempty"`
+	Deploy        *deployBlock      `yaml:"deploy,omitempty"`
+}
+
+// deployBlock carries an NVIDIA GPU grant the way Compose asks for one.
+type deployBlock struct {
+	Resources struct {
+		Reservations struct {
+			Devices []gpuReservation `yaml:"devices"`
+		} `yaml:"reservations"`
+	} `yaml:"resources"`
+}
+
+type gpuReservation struct {
+	Driver       string   `yaml:"driver"`
+	Count        any      `yaml:"count"`
+	Capabilities []string `yaml:"capabilities"`
+}
+
+// firstRenderNode is the render node an AMD or Intel GPU is exported as. The app
+// picks the node from the host's sysfs at deploy; a file cannot, so it names the
+// first one and the user edits it if theirs differs (web app/compose_generator.py).
+const firstRenderNode = "/dev/dri/renderD128"
+
+// gpuFor puts the GPU the deploy would pass in on block. A docker.gpu block that
+// breaks the catalog's rules is refused rather than exported without its GPU.
+func gpuFor(svc catalog.Service, block *composeService) error {
+	if svc.Docker.GPU == nil {
+		return nil
+	}
+	grant, ok := svc.Docker.GPU.Grant()
+	if problems := catalog.GPUProblems(svc); !ok || len(problems) > 0 {
+		return fmt.Errorf("%s declares a GPU its catalog entry does not describe correctly (%s), so it has no compose export", svc.Name, strings.Join(problems, "; "))
+	}
+	if grant.Vendor == "nvidia" {
+		var count any = 1
+		if grant.All {
+			count = "all"
+		}
+		block.Deploy = &deployBlock{}
+		block.Deploy.Resources.Reservations.Devices = []gpuReservation{{Driver: "nvidia", Count: count, Capabilities: []string{"gpu"}}}
+		return nil
+	}
+	block.Devices = append(block.Devices, firstRenderNode+":"+firstRenderNode)
+	if grant.ROCm {
+		block.Devices = append(block.Devices, catalog.KFDDevice+":"+catalog.KFDDevice)
+	}
+	return nil
 }
 
 // quoted is a scalar that is always written in quotes. Port mappings need it: an
@@ -298,6 +345,10 @@ func serviceBlock(svc catalog.Service, family, hostname string) (*composeService
 		MemReserve:  svc.Docker.Resources.MemReservation,
 		CPUShares:   svc.Docker.Resources.CPUShares,
 		OomScoreAdj: svc.Docker.Resources.OomScoreAdj,
+	}
+
+	if err := gpuFor(svc, block); err != nil {
+		return nil, nil, nil, err
 	}
 
 	// A host path the user still has to supply is written as ${KEY:?...}, not the
