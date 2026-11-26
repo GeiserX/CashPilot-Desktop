@@ -57,6 +57,9 @@ type WorkerDeployRequest struct {
 	// replace question named (WorkerDeployResult.ExpectedContainer). "" for a
 	// worker that cannot name it.
 	ExpectedContainer string `json:"expectedContainer"`
+	// WorkerIdentity is the worker the yes answers: the WorkerDeployResult.WorkerIdentity
+	// of the question. Every yes counts only for that worker.
+	WorkerIdentity string `json:"workerIdentity"`
 }
 
 // WorkerDeployResult is what a deploy to a worker did. With Ask set it did nothing:
@@ -73,12 +76,18 @@ type WorkerDeployResult struct {
 	// is about: "none" or its full Docker ID, "" when the worker cannot name it. A
 	// yes sends it back, and the worker replaces only that container.
 	ExpectedContainer string `json:"expectedContainer,omitempty"`
+	// WorkerIdentity names the worker a question is about: its client ID and address.
+	// The form sends it back with the yes.
+	WorkerIdentity string `json:"workerIdentity,omitempty"`
 }
 
 const (
 	askStepUp   = "step_up_required"
 	askIdentity = "identity_in_use"
 	askReplace  = "replace_existing"
+	// askWorkerChanged: another worker reports under the selected worker's name now,
+	// so the yes given so far was about a different worker.
+	askWorkerChanged = "worker_changed"
 )
 
 // leadOnlyError is why this computer sends no commands to workers, or nil.
@@ -198,6 +207,13 @@ type commandTarget struct {
 	ownKey string
 }
 
+// identity names the worker behind the fleet row: its client ID and its address.
+// A worker that takes over the row while it enrols (same name, another client)
+// changes it, and so does a new address, since that is where the deploy goes.
+func (t commandTarget) identity() string {
+	return strings.TrimSpace(t.report.ClientID) + "@" + strings.TrimRight(strings.TrimSpace(t.device.Endpoint), "/")
+}
+
 // workerFor resolves the worker a command goes to: the one asked for, or with id 0
 // the one online worker (workerapi.PickWorker), and checks it can take commands now.
 func (a *App) workerFor(id int64) (commandTarget, error) {
@@ -270,6 +286,23 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	if !ok {
 		return WorkerDeployResult{}, fmt.Errorf("unknown service: %s", slug)
 	}
+	result := WorkerDeployResult{Worker: target.device.Name, WorkerIdentity: target.identity()}
+	// Every yes was given about one worker. Another one that took over the row (a
+	// worker that enrols under the same name) gets nothing on the strength of it,
+	// not even a create-only deploy: its owner is asked first. A yes to that
+	// question names the worker it was about and no other flag, so the identity is
+	// checked whenever the form sends one, not only with a flag.
+	if (req.ReplaceExisting || req.AllowSharedIdentity || req.Confirmed || req.WorkerIdentity != "") && req.WorkerIdentity != result.WorkerIdentity {
+		result.Ask = askWorkerChanged
+		result.Message = fmt.Sprintf("%s is not the worker you answered about: another CashPilot worker now reports under that name, at %s. Your answers so far do not count for it. Deploy %s to it?",
+			target.device.Name, target.device.Endpoint, svc.Name)
+		if clientID := strings.TrimSpace(target.report.ClientID); clientID != "" && strings.HasPrefix(req.WorkerIdentity, clientID+"@") {
+			// The same worker, at a new address: that is where the deploy would go.
+			result.Message = fmt.Sprintf("%s now reports at a new address, %s. Your answers so far do not count for it. Deploy %s to it?",
+				target.device.Name, target.device.Endpoint, svc.Name)
+		}
+		return result, nil
+	}
 	image := strings.TrimSpace(req.Image)
 	if err := services.ValidateImage(image); err != nil {
 		return WorkerDeployResult{}, err
@@ -291,7 +324,6 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	if err != nil {
 		return WorkerDeployResult{}, err
 	}
-	result := WorkerDeployResult{Worker: target.device.Name}
 	ctx := workerContext(a.ctx)
 	state, err := target.client.DeployState(ctx, slug)
 	if err != nil {
@@ -387,33 +419,37 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	if err != nil {
 		var refused *workerapi.Error
-		if errors.As(err, &refused) && refused.Code == askReplace && !legacyYes {
-			// A prior request can finish after the state read, even if its reply was lost.
-			result.Ask = askReplace
-			result.Message = replaceQuestion
-			return result, nil
-		}
-		if errors.As(err, &refused) && refused.Code == codeTargetChanged {
-			if !named {
-				return WorkerDeployResult{}, fmt.Errorf("%s: %s (%s)", target.device.Name, refused.Message, refused.Code)
-			}
-			// The container changed after the lookup: the yes was for another one.
-			// Ask again about the one there now, with the worker's own words.
+		if errors.As(err, &refused) && (refused.Code == askReplace || refused.Code == codeTargetChanged) {
+			// The container, or the worker itself, changed after the lookup. A
+			// worker that names the container now is asked about the one there,
+			// even if it was updated in between and its refusal says to update
+			// Desktop: the yes was for another container, or for none.
 			current := refused.CurrentContainer
-			if fresh, err := target.client.DeployState(ctx, slug); err == nil && fresh.Container != "" {
+			fresh, ferr := target.client.DeployState(ctx, slug)
+			freshNamed := ferr == nil && fresh.Container != ""
+			if freshNamed {
 				current = fresh.Container
 			}
-			if current == "" {
-				return WorkerDeployResult{}, fmt.Errorf("%s: %s (%s)", target.device.Name, refused.Message, refused.Code)
+			if (named || freshNamed) && current != "" {
+				question := namedReplaceQuestion(svc.Name, target.device.Name, current)
+				if current == workerapi.NoContainer {
+					question = fmt.Sprintf("Deploy %s on %s? No %s container is there now.", svc.Name, target.device.Name, svc.Name)
+				}
+				result.Ask = askReplace
+				result.ExpectedContainer = current
+				result.Message = fmt.Sprintf("%s refused the deploy (%s): %s\n\n%s", target.device.Name, refused.Code, refused.Message, question)
+				if !named {
+					result.Message = fmt.Sprintf("CashPilot on %s was updated during this deploy and now names the container it would replace.\n\n%s", target.device.Name, question)
+				}
+				return result, nil
 			}
-			question := namedReplaceQuestion(svc.Name, target.device.Name, current)
-			if current == workerapi.NoContainer {
-				question = fmt.Sprintf("Deploy %s on %s? No %s container is there now.", svc.Name, target.device.Name, svc.Name)
+			if refused.Code == askReplace && !legacyYes {
+				// A prior request can finish after the state read, even if its reply was lost.
+				result.Ask = askReplace
+				result.Message = replaceQuestion + fmt.Sprintf(" Update CashPilot on %s so it can confirm the exact container before replacing it.", target.device.Name)
+				return result, nil
 			}
-			result.Ask = askReplace
-			result.ExpectedContainer = current
-			result.Message = fmt.Sprintf("%s refused the deploy (%s): %s\n\n%s", target.device.Name, refused.Code, refused.Message, question)
-			return result, nil
+			return WorkerDeployResult{}, fmt.Errorf("%s: %s (%s)", target.device.Name, refused.Message, refused.Code)
 		}
 		if errors.As(err, &refused) && refused.Code == askStepUp && !req.Confirmed && critical {
 			// The worker's own catalog sees a difference (a worker on another

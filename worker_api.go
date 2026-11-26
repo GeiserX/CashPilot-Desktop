@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 	"github.com/GeiserX/CashPilot-Desktop/internal/workerapi"
@@ -362,6 +364,8 @@ func (a *App) workerAPIMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/status", a.guard(a.handleWorkerStatus))
 	mux.HandleFunc("GET /api/containers", a.guard(a.handleWorkerContainers))
 	mux.HandleFunc("POST /api/containers/{slug}/deploy", a.guard(a.handleWorkerDeploy))
+	mux.HandleFunc("GET /api/containers/{slug}/deploy-checked", a.guard(a.handleWorkerDeployTarget))
+	mux.HandleFunc("POST /api/containers/{slug}/deploy-checked", a.guard(a.handleWorkerDeployChecked))
 	mux.HandleFunc("POST /api/containers/{slug}/{action}", a.guard(a.handleWorkerAction))
 	mux.HandleFunc("DELETE /api/containers/{slug}", a.guard(a.handleWorkerRemove))
 	mux.HandleFunc("GET /api/containers/{slug}/logs", a.guard(a.handleWorkerLogs))
@@ -564,33 +568,136 @@ func (a *App) handleWorkerDeploy(w http.ResponseWriter, r *http.Request) {
 		detail(w, http.StatusForbidden, fmt.Sprintf("%s. Open CashPilot Desktop on that computer to deploy it. Nothing was deployed", err))
 		return
 	}
-	status, answer, ok := a.deployForServer(slug, svc, spec)
-	a.recordServerCommand("deploy", slug, ok, answer)
-	if !ok {
+	// This route replaces whatever runs, as it always did: an older CashPilot sends
+	// it with no expectation, or with the short ID of its container list.
+	status, answer, err := a.deployForServer(slug, svc, spec, nil)
+	a.recordServerCommand("deploy", slug, err == nil, answer)
+	if err != nil {
 		detail(w, status, answer)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "deployed", "container_id": answer})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deployed", "container_id": answer[:min(12, len(answer))]})
+}
+
+// The checked deploy, as the CashPilot worker serves it (app/worker_api.py
+// api_checked_deploy_state and api_deploy_container_checked): the lookup names the
+// container a deploy would replace, and the deploy replaces only the one it
+// expects, compared under the deploy lock right before the replacement.
+
+// handleWorkerDeployTarget names the container a deploy of slug would replace: its
+// full ID, or "none". It reads no logs, so a container with Docker logging off is
+// named too.
+func (a *App) handleWorkerDeployTarget(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	n, err := instanceParam(r)
+	if err != nil {
+		detail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if n != 1 {
+		detail(w, http.StatusBadRequest, oneCopyPerDeploy)
+		return
+	}
+	svc, _ := a.catalog.Get(slug)
+	if svc.Slug == "" || catalog.IsCustomSlug(slug) || svc.Custom {
+		detail(w, http.StatusForbidden, notInCatalog(slug))
+		return
+	}
+	target, err := a.services.DeployTarget(r.Context(), slug)
+	var copies *services.OtherCopiesError
+	if errors.As(err, &copies) {
+		detail(w, http.StatusConflict, copies.Error())
+		return
+	}
+	if errors.Is(err, runtime.ErrNoDeployTarget) {
+		detail(w, http.StatusConflict, fmt.Sprintf("%s runs as a program on that computer, not in a container, so your CashPilot cannot name what a redeploy would replace. Redeploy it in CashPilot Desktop on that computer", svc.Name))
+		return
+	}
+	if err != nil {
+		detail(w, http.StatusServiceUnavailable, "Could not look up the deploy container in Docker.")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"exists": target != runtime.NoContainer, "expected_container": target})
+}
+
+// handleWorkerDeployChecked deploys slug only over the container the request
+// expects: expected_container is its full ID, or "none" (also when left out) for a
+// deploy that may only create.
+func (a *App) handleWorkerDeployChecked(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	raw, err := io.ReadAll(r.Body)
+	var spec workerDeploySpec
+	var fields map[string]json.RawMessage
+	if err != nil || json.Unmarshal(raw, &spec) != nil || json.Unmarshal(raw, &fields) != nil || fields == nil {
+		detail(w, http.StatusUnprocessableEntity, "The deploy request is not valid JSON in the expected shape")
+		return
+	}
+	// A JSON null is not a left-out field: the web worker refuses it too.
+	expected, replace := runtime.NoContainer, false
+	v, named := fields["expected_container"]
+	if named && (isJSONNull(v) || json.Unmarshal(v, &expected) != nil) {
+		detail(w, http.StatusUnprocessableEntity, `expected_container must be a container ID or "none"`)
+		return
+	}
+	// An older CashPilot-Desktop sends this flag alone. It changes the words of a
+	// refusal, never the container that may be replaced.
+	if v, ok := fields["replace_existing"]; ok && (isJSONNull(v) || json.Unmarshal(v, &replace) != nil) {
+		detail(w, http.StatusUnprocessableEntity, "replace_existing must be true or false")
+		return
+	}
+	svc, _ := a.catalog.Get(slug)
+	if err := workerapi.CheckRemoteWalletDeploy(svc); err != nil {
+		detail(w, http.StatusForbidden, fmt.Sprintf("%s. Open CashPilot Desktop on that computer to deploy it. Nothing was deployed", err))
+		return
+	}
+	status, answer, err := a.deployForServer(slug, svc, spec, &expected)
+	a.recordServerCommand("deploy", slug, err == nil, answer)
+	if err == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deployed", "container_id": answer})
+		return
+	}
+	var changed *runtime.DeployTargetChanged
+	if !errors.As(err, &changed) {
+		detail(w, status, answer)
+		return
+	}
+	code, message := "deploy_target_changed", changed.Error()
+	// Only a caller that names no container is an older Desktop: one that sends
+	// "none" itself can ask again with the container there now.
+	if replace && !named {
+		code, message = "replace_existing", "Update CashPilot-Desktop to confirm the exact container before replacing it."
+	}
+	detail(w, http.StatusConflict, map[string]string{"error": code, "message": message, "current_container": changed.Actual})
+}
+
+func isJSONNull(v json.RawMessage) bool { return bytes.Equal(bytes.TrimSpace(v), []byte("null")) }
+
+const oneCopyPerDeploy = "CashPilot Desktop takes one copy per deploy from your CashPilot; add more copies on this computer"
+
+func notInCatalog(slug string) string {
+	return fmt.Sprintf("'%s' is not in this computer's catalog, so it cannot be deployed here", slug)
 }
 
 // deployForServer runs one deploy the server asked for. It answers the HTTP status,
-// and the container id on success or the refusal in plain words.
-func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeploySpec) (int, string, bool) {
+// and the full container id on success or the refusal in plain words. expected,
+// when set, is the only container the deploy may replace (see handleWorkerDeployChecked).
+func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeploySpec, expected *string) (int, string, error) {
+	refuse := func(status int, answer string) (int, string, error) { return status, answer, errors.New(answer) }
 	instance := spec.Instance
 	if instance == 0 {
 		instance = 1
 	}
 	if instance != 1 {
-		return http.StatusBadRequest, "CashPilot Desktop takes one copy per deploy from your CashPilot; add more copies on this computer", false
+		return refuse(http.StatusBadRequest, oneCopyPerDeploy)
 	}
 	if svc.Slug == "" || catalog.IsCustomSlug(slug) || svc.Custom {
-		return http.StatusForbidden, fmt.Sprintf("'%s' is not in this computer's catalog, so it cannot be deployed here", slug), false
+		return refuse(http.StatusForbidden, notInCatalog(slug))
 	}
 	if svc.ManualOnly {
-		return http.StatusForbidden, fmt.Sprintf("%s has no container, so it cannot be deployed from your CashPilot", svc.Name), false
+		return refuse(http.StatusForbidden, fmt.Sprintf("%s has no container, so it cannot be deployed from your CashPilot", svc.Name))
 	}
 	if !catalogImage(svc, spec.Image) {
-		return http.StatusForbidden, fmt.Sprintf("'%s' runs only the image this computer's catalog pins", slug), false
+		return refuse(http.StatusForbidden, fmt.Sprintf("'%s' runs only the image this computer's catalog pins", slug))
 	}
 	// The GPU grant and the void stamp are this computer's (internal/runtime/gpu.go):
 	// a request that set NVIDIA_VISIBLE_DEVICES could undo the stamp. The request has
@@ -603,10 +710,10 @@ func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeplo
 	}
 	if len(nvidiaKeys) > 0 {
 		slices.Sort(nvidiaKeys)
-		return http.StatusForbidden, fmt.Sprintf("CashPilot sets the %s variables itself; refused: %s", catalog.GPUEnvPrefix, strings.Join(nvidiaKeys, ", ")), false
+		return refuse(http.StatusForbidden, fmt.Sprintf("CashPilot sets the %s variables itself; refused: %s", catalog.GPUEnvPrefix, strings.Join(nvidiaKeys, ", ")))
 	}
 	if err := a.services.ValidateDeploy(slug, spec.Env); err != nil {
-		return http.StatusBadRequest, oneLine(err.Error()), false
+		return refuse(http.StatusBadRequest, oneLine(err.Error()))
 	}
 	// The app's own deploy path, as the Deploy button runs it, so every local rule
 	// stays in one place: what is stored (never a wallet seed), digest pins, fences,
@@ -614,15 +721,11 @@ func (a *App) deployForServer(slug string, svc catalog.Service, spec workerDeplo
 	// The server registers the device on the provider account itself, so this deploy
 	// does not (decision: a joined Desktop leaves vendor contact to the server).
 	catalogOnly := ""
-	dep, _, err := a.deployService(slug, spec.Env, services.DeployOptions{Image: &catalogOnly}, false)
+	dep, _, err := a.deployService(slug, spec.Env, services.DeployOptions{Image: &catalogOnly, ExpectedContainer: expected}, false)
 	if err != nil {
-		return http.StatusConflict, oneLine(err.Error()), false
+		return http.StatusConflict, oneLine(err.Error()), err
 	}
-	id := dep.ContainerID
-	if len(id) > 12 {
-		id = id[:12]
-	}
-	return http.StatusOK, id, true
+	return http.StatusOK, dep.ContainerID, nil
 }
 
 // instanceParam reads ?instance=, 1 when absent, as the web worker validates it.
