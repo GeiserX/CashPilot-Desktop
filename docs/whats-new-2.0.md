@@ -17,12 +17,13 @@ what changed.
 | CashPilot 3.0.0 or newer | Reports only | Reports, and takes server commands while the switch is on |
 
 "Reports only" means that the server shows what runs here, but cannot run
-commands here.
+commands here. Under CashPilot 2.x, Desktop 2.0 still listens on TCP 8086
+while the switch is on, but the server never learns the address.
 
 - Desktop 2.0 sends its command address only to a server whose heartbeat
   answer says that it can command a Desktop safely. CashPilot 3.0.0 sends that
-  answer. An older server never gets the address, and the dashboard card says
-  that the server is older than CashPilot 3.0.0.
+  answer. An older server never gets the address. While the switch is on, the
+  dashboard card says that the server is older than CashPilot 3.0.0.
 - Desktop 1.7.0 has no server commands. It stays report-only under CashPilot
   3.0.0, so you can upgrade the server first.
 - Upgrade the server first, then Desktop.
@@ -35,10 +36,20 @@ commands here.
    refuses an `NVIDIA_` variable when you save a service and when you deploy
    it. A custom service from 1.x that sets one keeps running, but you cannot
    deploy it again until you remove the variable.
-3. Know that the pairing change is one-way. Desktop 2.0 moves this computer's
+3. Move GPU work out of your custom services. In 2.0, a custom service gets
+   no GPU. A custom service that uses an NVIDIA GPU through Docker's nvidia
+   default runtime runs without the GPU after its next deploy. Run that
+   workload outside CashPilot, or ask for a catalog entry.
+4. Know that the pairing change is one-way. Desktop 2.0 moves this computer's
    pairing with your CashPilot into a new file, `pairing.json`, and deletes the
-   old keys. After that, a return to Desktop 1.x needs a new join.
-4. Download 2.0 from the
+   old keys. After that, a return to Desktop 1.x needs a new join. Desktop 1.x
+   leaves `pairing.json` in place. If you then upgrade to 2.0 again, 2.0 uses
+   that old pairing and ignores a join that you made in 1.x. Server commands
+   can then start on, because 1.x drops the saved switch. After that upgrade,
+   check the server and the switch on the dashboard card. To use the server
+   from the 1.x join, switch to **Run everything here** in Settings, then join
+   again.
+5. Download 2.0 from the
    [releases page](https://github.com/GeiserX/CashPilot-Desktop/releases).
    Desktop does not update itself and does not tell you about a new version.
 
@@ -46,10 +57,11 @@ commands here.
 
 These steps apply to a computer that was joined to a CashPilot server in 1.x.
 
-1. Open the CashPilot window once while your server is reachable. The window
-   moves the pairing to `pairing.json` on the first start after the server
-   answers. The background helper cannot do it. Until then, this computer
-   keeps reporting with its old key.
+1. Start CashPilot while your server is reachable. When the window starts,
+   it moves the pairing to `pairing.json` if the server answers. The
+   background helper cannot do it. If the server was down, quit CashPilot
+   from the tray and start it again. Until the move, this computer keeps
+   reporting with its old key.
 2. If the background helper is on, sign out and sign in again, or restart the
    computer. The helper then runs 2.0 too.
 3. Turn on server commands if you want them. They start off after an upgrade
@@ -66,8 +78,10 @@ The details are in [Join my CashPilot](configuration.md#join-my-cashpilot).
 The dashboard then says "Your CashPilot refused this computer's key." This
 happens when the server answers HTTP 401, for example after the owner removed
 this computer on the server's Fleet page. Desktop 1.x joined again by itself
-with the shared key. Desktop 2.0 does not. It stops the heartbeat and the
-server commands until you join again by hand:
+with the shared key. Desktop 2.0 does not. After the move to `pairing.json`,
+it stops the heartbeat and the server commands until you join again by hand.
+A pairing that is not moved yet keeps sending the heartbeat with its old key
+and shows the same message. In both cases, join again:
 
 1. In Settings, open **How this computer runs** and switch to
    **Run everything here**.
@@ -126,7 +140,8 @@ CashPilot, a custom service and a proxied copy cannot ask for a GPU.
   on arm64, on x86 and on virtual machines.
 - unMineable, which mines with XMRig and pays out in the coin that you pick.
   The balance shows in that coin.
-- SRBMiner-Multi and KRig, GPU miners for Pearl on Kryptex Pool.
+- SRBMiner-Multi, a GPU miner for Pearl, Zano or Ravencoin on the pool that
+  you choose, and KRig, which mines Pearl on Kryptex Pool.
 
 ## Fixes that you can notice
 

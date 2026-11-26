@@ -24,7 +24,7 @@ Two things keep expectations realistic. Stacking many bandwidth apps on one conn
 
 **Is it safe?**
 
-All service containers run isolated via Docker. Credentials are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service). The app communicates only with localhost, the services you choose to deploy and the CashPilot server you joined, if any. While the server-commands switch is on, that server can also deploy and stop services here, through TCP 8086 on private network and Tailscale addresses only ([details](configuration.md#the-server-starts-and-stops-services-here)). No telemetry, no analytics, no data leaves your machine unless a service requires it.
+All service containers run isolated via Docker. Credentials are stored in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service). The app communicates with localhost, the services you choose to deploy and the CashPilot server you joined, if any. It also asks api.ipify.org for this computer's public IP (for the LAN fence and proxy checks), and CoinGecko and Frankfurter for exchange rates. While the server-commands switch is on, that server can also deploy and stop services here, through TCP 8086 on private network and Tailscale addresses only ([details](configuration.md#the-server-starts-and-stops-services-here)). No telemetry, no analytics, no data leaves your machine unless a service requires it.
 
 **Desktop-only apps and your safety**
 
