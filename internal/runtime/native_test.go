@@ -74,7 +74,7 @@ func runNativeStub() {
 		}
 	}
 	// Stay alive until the supervisor signals/kills us (default SIGTERM disposition
-	// terminates the process on Unix; Windows relies on Kill after the grace period).
+	// terminates the process on Unix; Windows has no SIGTERM, so a stop kills at once).
 	// Not select{}: when no goroutine can ever run and no timer is pending, the Go
 	// runtime calls the process deadlocked and exits it with status 2. The Linux and
 	// macOS test binaries link cgo (macOS also purego), which switches that check
@@ -177,8 +177,9 @@ func nativeService(slug, url, sha, archive string) catalog.Service {
 		Name: slug,
 		Slug: slug,
 		// A redeploy stops the old process with the catalog's grace period (30 s
-		// when unset) before it kills it. Windows cannot send the stub SIGTERM, so
-		// it would sit out the whole grace period.
+		// when unset) before it kills it. A short grace keeps a test fast if a stop
+		// ever waits again; TestNativeStopOfARunningEarnerDoesNotWaitTheGrace checks
+		// the full 30 s case.
 		Docker: catalog.DockerConfig{StopTimeout: 1},
 		Native: catalog.NativeConfig{
 			Binaries: []catalog.NativeBinary{{
