@@ -62,7 +62,7 @@ func runVMGuardMain(dir, once string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	deps := winvm.GuardDeps{
-		HV:   winvm.NewHost(),
+		HV:   winvm.NewHost(d),
 		Echo: winvm.DefaultEcho(),
 		Now:  time.Now,
 		Dir:  d,

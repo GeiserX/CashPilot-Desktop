@@ -237,13 +237,6 @@ func TestSeamScriptsAndArguments(t *testing.T) {
 	}
 }
 
-// Every script fits on one Windows command line as -EncodedCommand.
-func TestSeamLauncherFitsTheCommandLine(t *testing.T) {
-	if n := len(psEncode(hostScriptLauncher)); n > 30000 {
-		t.Fatalf("launcher is %d characters encoded, over a Windows command line", n)
-	}
-}
-
 // The argument travels as base64 JSON in one environment variable.
 func TestSeamArgumentEnvironment(t *testing.T) {
 	got := hvArg([]byte(`{"vm":"x'; Remove-VM *"}`))
@@ -613,10 +606,10 @@ func TestParsePrefixOrAddr(t *testing.T) {
 }
 
 func TestNewHostOtherOS(t *testing.T) {
-	if _, ok := NewHost().(*psHost); ok {
+	if _, ok := NewHost("").(*psHost); ok {
 		return // Windows
 	}
-	if _, err := NewHost().ReadNetwork(context.Background()); !errors.Is(err, ErrUnsupported) {
+	if _, err := NewHost("").ReadNetwork(context.Background()); !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("got %v, want ErrUnsupported", err)
 	}
 }

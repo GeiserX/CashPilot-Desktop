@@ -42,7 +42,7 @@ type vmInspectReport struct {
 func runVMInspectMain(planPath string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), vmInspectTimeout)
 	defer cancel()
-	return runVMInspect(ctx, winvm.NewHost(), planPath, os.Stdout, os.Stderr)
+	return runVMInspect(ctx, winvm.NewHost(""), planPath, os.Stdout, os.Stderr)
 }
 
 // runVMInspect reads through r, which is only a winvm.Reader: nothing here can

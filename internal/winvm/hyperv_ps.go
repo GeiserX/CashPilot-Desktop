@@ -66,11 +66,6 @@ type psHost struct {
 
 var _ Host = (*psHost)(nil)
 
-// hostScriptLauncher reads the fixed script through the child process pipe.
-const hostScriptLauncher = `$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()))
-& ([scriptblock]::Create($source))
-exit $LASTEXITCODE`
-
 // hvPrelude starts every script. It stops on the first error, reads the one
 // argument, and defines Write-Doc, which prints the answer as base64 of UTF-8
 // JSON so the console's code page cannot change a byte of it.

@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -36,12 +35,8 @@ func hidden(ctx context.Context, name string, args ...string) *exec.Cmd {
 
 // cimCommand runs script in System32's Windows PowerShell, by its full path,
 // never from PATH.
-func cimCommand(ctx context.Context, script string) (*exec.Cmd, error) {
-	ps, err := runtime.PowerShellExe()
-	if err != nil {
-		return nil, err
-	}
-	return hidden(ctx, ps, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(script)), nil
+func cimCommand(ctx context.Context, script string) (*exec.Cmd, func(), error) {
+	return filePowerShellCommand(ctx, "", script)
 }
 
 func (systemProbes) supported() bool { return true }
@@ -93,10 +88,11 @@ func (systemProbes) features(ctx context.Context) (func(*HostFacts), error) {
 }
 
 func runCIM(ctx context.Context, script string) (func(*HostFacts), error) {
-	cmd, err := cimCommand(ctx, script)
+	cmd, release, err := cimCommand(ctx, script)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, cimError(ctx.Err(), err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"slices"
 )
 
 // The guest scripts. Each one runs inside the guest over PowerShell Direct as
@@ -14,8 +15,10 @@ import (
 // reads the guest.
 
 // guestPrelude starts every guest script.
-const guestPrelude = `$ErrorActionPreference = 'Stop'
+const guestPrelude = `param([string]$json)
+$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+$a = $json | ConvertFrom-Json
 `
 
 // scriptGuestPing answers once PowerShell Direct works.
@@ -149,7 +152,15 @@ var guestScripts = []GuestScript{scriptGuestPing, scriptFirstSession, scriptGues
 	scriptGuestDNS, scriptGuestNeighbor, scriptGuestHVSock, scriptGuestEgress}
 
 // GuestScripts lists every guest script, for the parser test and the lab.
-func GuestScripts() []GuestScript { return guestScripts }
+func GuestScripts() []GuestScript { return slices.Clone(guestScripts) }
+
+func guestScriptNamed(name string) (GuestScript, bool) {
+	i := slices.IndexFunc(guestScripts, func(g GuestScript) bool { return g.Name == name })
+	if i < 0 {
+		return GuestScript{}, false
+	}
+	return guestScripts[i], true
+}
 
 // psDirectProbe is the product's GuestProbe: each probe is one fixed guest
 // script over PowerShell Direct as cpadmin.

@@ -61,11 +61,20 @@ function Get-RecordedManagementPort($sw, [string]$managementId) {
   }
   $mo[0]
 }
-function Get-HostVNIC([string]$id, [string]$owner, [string]$managementId, [int]$index = 0) {
+function Get-EffectiveManagementMAC($port, $adapter) {
+  $assigned = (([string]$port.MacAddress) -replace '-', '').ToUpperInvariant()
+  $effective = (([string]$adapter.MacAddress) -replace '-', '').ToUpperInvariant()
+  if ($effective -cmatch '^[0-9A-F]{12}$' -and $assigned -ceq $effective) { return $effective }
+  return ''
+}
+function Get-HostVNIC([string]$id, [string]$owner, [string]$managementId, [int]$index = 0, [string]$mac = '') {
   $sw = Get-OwnedSwitch $id $owner
   $mo = Get-RecordedManagementPort $sw $managementId
   $na = @(Find-ManagementAdapter $mo)
   if ($na.Count -ne 1 -or ($index -and $na[0].ifIndex -ne $index)) { throw 'The host vNIC identity could not be verified.' }
+  if ($mac -and (Get-EffectiveManagementMAC $mo $na[0]) -cne $mac) {
+    throw 'The recorded management adapter MAC changed and was left in place.'
+  }
   $na[0]
 }
 function Get-HostBindings($na) {
@@ -180,10 +189,11 @@ for ($i = 0; $i -lt 30; $i++) {
   Start-Sleep -Seconds 1
 }
 if (-not $na) { throw 'The host vNIC did not appear with its device identity.' }
-$mac = (([string]$mo.MacAddress) -replace '-', '').ToUpperInvariant()
+$mac = Get-EffectiveManagementMAC $mo $na
 if (-not $fresh -and $mac -cne $in.mac) {
   throw 'The recorded management adapter MAC changed and was left in place.'
 }
+if (-not $mac) { throw 'The management adapter MAC does not match the Hyper-V port MAC.' }
 if ($fresh -and $mac -cnotmatch '^00155D[0-9A-F]{6}$') {
   throw 'Hyper-V did not assign the management adapter a MAC with the 00-15-5D prefix.'
 }
@@ -192,12 +202,12 @@ $int = @(Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4)
 if ($int.Count -ne 1) { throw 'Could not verify DHCP on the recorded management adapter.' }
 if ($int[0].Dhcp.ToString() -ne 'Disabled') {
   if (-not $fresh) { throw 'DHCP is enabled on the recorded management adapter and was left in place.' }
-  $null = Get-HostVNIC $switchId $in.owner $managementId $idx
+  $null = Get-HostVNIC $switchId $in.owner $managementId $idx $mac
   Set-NetIPInterface -InputObject $int[0] -Dhcp Disabled
 }
 $have = @(Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq $in.gateway })
 if ($have.Count -eq 0) {
-  $na = Get-HostVNIC $switchId $in.owner $managementId $idx
+  $na = Get-HostVNIC $switchId $in.owner $managementId $idx $mac
   $int = @(Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4)
   if ($int.Count -ne 1 -or $int[0].Dhcp.ToString() -ne 'Disabled') { throw 'DHCP must already be disabled on the recorded management adapter.' }
   New-NetIPAddress -InterfaceIndex $na.ifIndex -IPAddress $in.gateway -PrefixLength ([int]$in.prefixLen) | Out-Null
@@ -206,8 +216,10 @@ if ($have.Count -eq 0) {
 }
 if ($sw.Name -ne $in.switch) {
   if (@(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch }).Count -gt 0) { throw 'Another switch has this name.' }
+  $null = Get-HostVNIC $switchId $in.owner $managementId $idx $mac
   Rename-VMSwitch -VMSwitch $sw -NewName $in.switch
 }
+$null = Get-HostVNIC $switchId $in.owner $managementId $idx $mac
 Write-Doc ([ordered]@{ switchId = $switchId; managementId = $managementId; mac = $mac; ifIndex = $idx })
 `
 
@@ -586,7 +598,7 @@ if ($ports.Count -ne 1 -or -not $in.managementId -or [string]$ports[0].Id -ne $i
 $na = Get-HostVNIC $in.switchId $in.owner $in.managementId
 $idx = [int]$na.ifIndex
 $ipif = Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4
-if ($ipif.Dhcp.ToString() -ne 'Disabled' -or ((([string]$ports[0].MacAddress) -replace '-', '').ToUpper() -ne $in.mac)) {
+if (-not $in.mac -or (Get-EffectiveManagementMAC $ports[0] $na) -cne $in.mac -or $ipif.Dhcp.ToString() -ne 'Disabled') {
   Write-Doc @{ kept = 'the recorded management port MAC or DHCP setting changed' }; exit 0
 }
 $addresses = @(Get-NetIPAddress -InterfaceIndex $idx | Where-Object {
@@ -601,6 +613,7 @@ $neighbors = @(Get-NetNeighbor -InterfaceIndex $idx | Where-Object {
 if ($addresses.Count -gt 0 -or $neighbors.Count -gt 0 -or -not (Test-HostBindings $na $in.bindings)) {
   Write-Doc @{ kept = 'the management port has independent addresses, neighbours or bindings' }; exit 0
 }
+$null = Get-HostVNIC $in.switchId $in.owner $in.managementId $idx $in.mac
 Remove-VMSwitch -VMSwitch $sw -Force
 Write-Doc @{ kept = '' }
 `
@@ -663,18 +676,12 @@ if ($s.Count -gt 0) {
 Write-Doc ([ordered]@{ cleared = @(); left = @($left); unverifiedCapture = ($s.Count -gt 0) })
 `
 
-// scriptGuest runs one guest script over PowerShell Direct as the given
-// account. The script text and its JSON argument travel as data: the guest
-// side parses the argument into $a and dot-sources the fixed text, so $a is
-// in its scope. What the guest printed comes back as one string.
+// scriptGuest runs a verified local script file through PowerShell Direct.
+// The guest receives its JSON argument separately from the script.
 const scriptGuest = buildPrelude + `$pw = ConvertTo-SecureString ([string]$in.password) -AsPlainText -Force
 $cred = New-Object Management.Automation.PSCredential ([string]$in.user, $pw)
 $null = Get-OwnedVM $in.vm $in.owner
-$out = Invoke-Command -VMId $in.vm -Credential $cred -ErrorAction Stop -ArgumentList ([string]$in.arg), ([string]$in.text) -ScriptBlock {
-  param($j, $t)
-  $a = $j | ConvertFrom-Json
-  . ([scriptblock]::Create($t))
-}
+$out = Invoke-Command -VMId $in.vm -Credential $cred -ErrorAction Stop -FilePath $env:CPD_HV_GUEST_FILE -ArgumentList ([string]$in.arg)
 Write-Doc ([ordered]@{ out = (@($out) -join "` + "`n" + `") })
 `
 
@@ -1269,7 +1276,7 @@ func (b psBuilder) Guest(ctx context.Context, vmID, owner string, cred Cred, s G
 	if err := checkOwner(owner); err != nil {
 		return err
 	}
-	if !slices.ContainsFunc(guestScripts, func(g GuestScript) bool { return g == s }) {
+	if fixed, ok := guestScriptNamed(s.Name); !ok || s != fixed {
 		return fmt.Errorf("guest script %q is not one this package defines", s.Name)
 	}
 	if cred.User != guestUser {
@@ -1285,7 +1292,7 @@ func (b psBuilder) Guest(ctx context.Context, vmID, owner string, cred Cred, s G
 	var w struct {
 		Out string `json:"out"`
 	}
-	if err := b.call(ctx, scriptGuest, map[string]string{"vm": vmID, "owner": owner, "user": cred.User, "password": cred.Password, "arg": a, "text": s.Text}, &w); err != nil {
+	if err := b.call(ctx, scriptGuest, map[string]string{"vm": vmID, "owner": owner, "user": cred.User, "password": cred.Password, "arg": a, "guest": s.Name}, &w); err != nil {
 		return err
 	}
 	if len(w.Out) > maxGuestOut {

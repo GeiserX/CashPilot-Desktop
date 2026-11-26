@@ -64,7 +64,7 @@ func TestR6ManagementAdapterGate(t *testing.T) {
 param($switchId, $tag, $portId, $dhcp)
 function Get-VMSwitch { [pscustomobject]@{ Id = $switchId; Name = 'CashPilot-VM'; SwitchType = 'Internal'; Notes = 'cashpilot-owner=' + $tag } }
 function Get-VMNetworkAdapter { [pscustomobject]@{ SwitchId = $switchId; Id = $portId; DeviceId = 'device'; MacAddress = '00155D000002' } }
-function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'device'; ifIndex = 20 } }
+function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'device'; ifIndex = 20; MacAddress = '00-15-5D-00-00-02' } }
 function Get-NetIPAddress {}
 function Get-NetIPInterface { [pscustomobject]@{ Dhcp = $dhcp } }
 function New-NetIPAddress { throw 'would add a gateway to an unverified adapter' }

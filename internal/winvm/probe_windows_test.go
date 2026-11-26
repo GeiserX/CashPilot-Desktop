@@ -98,10 +98,11 @@ func TestCIMScriptsOnThisPC(t *testing.T) {
 // The CIM reads run System32's Windows PowerShell by its full path, never the
 // bare name PATH would resolve.
 func TestCIMRunsPowerShellByItsFullPath(t *testing.T) {
-	cmd, err := cimCommand(context.Background(), "exit 0")
+	cmd, release, err := cimCommand(context.Background(), "exit 0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	dir, err := windows.GetSystemDirectory()
 	if err != nil {
 		t.Fatal(err)

@@ -7,11 +7,48 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPowerShellFileLauncher(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	const script = hvPrelude + "Write-Doc @{ echo = [string]$in.message }\n"
+	const arg = `{"message":"one '; throw 'as data"}`
+
+	cmd, release, err := filePowerShellCommand(ctx, dir, script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := cmd.Args[len(cmd.Args)-1]
+	release()
+	want := []string{"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path}
+	if !slices.Equal(cmd.Args[1:], want) || filepath.Dir(path) != dir || filepath.Ext(path) != ".ps1" || cmd.Stdin != nil {
+		t.Fatalf("unexpected file launch: %q", cmd.Args)
+	}
+	out, err := runPowerShell(ctx, dir, script, []byte(arg))
+	if err != nil {
+		t.Fatalf("file launch returned %q: %v", out, err)
+	}
+	var result struct {
+		Echo string `json:"echo"`
+	}
+	if err := decodeDoc(out, &result); err != nil || result.Echo != "one '; throw 'as data" {
+		t.Fatalf("file launch did not echo the argument: %q: %v", out, err)
+	}
+	if err := os.WriteFile(path, []byte("throw 'tampered script ran'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runPowerShell(ctx, dir, script, []byte(arg)); err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("expected SHA-256 refusal before launch, got %v", err)
+	}
+	t.Logf("Windows PowerShell ran the verified .ps1 and refused the tampered copy: %s", path)
+}
 
 // parseScript runs PowerShell's own parser over a script and prints how many
 // parse errors it found. It never runs the script.
@@ -27,10 +64,11 @@ func parseErrors(t *testing.T, script string) (int, string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd, err := hostPowerShellCommand(ctx, "-EncodedCommand", psEncode(parseScript))
+	cmd, release, err := filePowerShellCommand(ctx, "", parseScript)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(script)))
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
@@ -50,7 +88,7 @@ func parseErrors(t *testing.T, script string) (int, string) {
 // runner has no Hyper-V, so nothing is run. A quoting mistake like the one that
 // made the first lab run report a false green fails here.
 func TestScriptsParse(t *testing.T) {
-	all := map[string]string{"cpuScript": cpuScript, "featureScript": featureScript, "hostScriptLauncher": hostScriptLauncher}
+	all := map[string]string{"cpuScript": cpuScript, "featureScript": featureScript}
 	for name, s := range hvScripts {
 		all[name] = s
 	}

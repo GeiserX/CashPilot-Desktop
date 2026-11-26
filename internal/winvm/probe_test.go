@@ -2,7 +2,6 @@ package winvm
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -296,16 +295,6 @@ func TestParseWSLVersionReadsDigitsInAnyLanguage(t *testing.T) {
 	}
 	if got := parseWSLVersion([]byte("no version here")); got != "" {
 		t.Errorf("no version: got %q", got)
-	}
-}
-
-func TestPSEncodeIsUTF16LEBase64(t *testing.T) {
-	raw, err := base64.StdEncoding.DecodeString(psEncode("exit 3"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != string(utf16le("exit 3")) {
-		t.Errorf("decoded %q", raw)
 	}
 }
 

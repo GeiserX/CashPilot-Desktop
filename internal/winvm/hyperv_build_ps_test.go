@@ -77,7 +77,7 @@ func TestBuildSeamScriptsAndArguments(t *testing.T) {
 		{"RegisterGuardTask", ok, []string{`"exe":"C:\\ProgramData\\CashPilot\\guard\\CashPilot-guard.exe"`, `"delay":900`, `"dir":"C:\\ProgramData\\CashPilot"`},
 			func(b psBuilder) error { return b.RegisterGuardTask(ctx, n, n.GuardExe(), tOwner) }},
 		{"StartGuardTask", ok, []string{`"taskName":"VMGuard"`}, func(b psBuilder) error { return b.StartGuardTask(ctx, n, tOwner) }},
-		{"Guest", `{"out":"{\"ok\":true}"}`, []string{`"user":"cpadmin"`, `"arg":"{}"`}, func(b psBuilder) error {
+		{"Guest", `{"out":"{\"ok\":true}"}`, []string{`"user":"cpadmin"`, `"arg":"{}"`, `"guest":"ping"`}, func(b psBuilder) error {
 			var out struct {
 				OK bool `json:"ok"`
 			}
@@ -603,7 +603,7 @@ if (-not (Test-DiskInUse 'parent-id')) { exit 23 }
 
 func TestEnsureSwitchAdoptsAssignedManagementMAC(t *testing.T) {
 	const mock = `
-param($fakeSwitch, $assignedMAC)
+param($fakeSwitch, $assignedMAC, $effectiveMAC)
 function Get-VMSwitch { $script:switch }
 function New-VMSwitch($Name, $SwitchType, $Notes) {
   $script:switch = [pscustomobject]@{ Id = $fakeSwitch; Name = $Name; SwitchType = $SwitchType; Notes = $Notes }
@@ -620,21 +620,22 @@ function Set-VMNetworkAdapter($VMNetworkAdapter, $StaticMacAddress) {
   }
   throw 'unexpected adapter change'
 }
-function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'device'; ifIndex = 20; MacAddress = $assignedMAC } }
+function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'device'; ifIndex = 20; MacAddress = $effectiveMAC } }
 function Get-NetIPInterface { [pscustomobject]@{ Dhcp = 'Disabled' } }
 function Get-NetIPAddress { [pscustomobject]@{ IPAddress = '172.31.250.1'; PrefixLength = 29 } }
 `
 	for _, tc := range []struct {
-		name, assignedMAC, wantError string
+		name, assignedMAC, effectiveMAC, wantError string
 	}{
-		{name: "Hyper-V assignment", assignedMAC: "00155D47E3A1"},
-		{name: "unexpected prefix", assignedMAC: "02155D47E3A1", wantError: "00-15-5D"},
+		{name: "Hyper-V assignment", assignedMAC: "00155D47E3A1", effectiveMAC: "00-15-5D-47-E3-A1"},
+		{name: "unexpected prefix", assignedMAC: "02155D47E3A1", effectiveMAC: "02155D47E3A1", wantError: "00-15-5D"},
+		{name: "different effective MAC", assignedMAC: "00155D47E3A1", effectiveMAC: "00155D47E3A2", wantError: "does not match the Hyper-V port MAC"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, out := runOwnedScriptWithFake(t, mock, scriptEnsureSwitch, map[string]any{
 				"switch": "CashPilot-VM", "owner": tOwner, "mac": "00155D000002",
 				"gateway": "172.31.250.1", "prefixLen": 29,
-			}, tSwitchID, tc.assignedMAC)
+			}, tSwitchID, tc.assignedMAC, tc.effectiveMAC)
 			if tc.wantError != "" {
 				if code == 0 || !strings.Contains(string(out), tc.wantError) {
 					t.Fatalf("exit %d, output %s, want %q", code, out, tc.wantError)
@@ -665,13 +666,13 @@ func TestSwitchGatewayUsesManagementAdapterIdentity(t *testing.T) {
 	const mock = `
 function Get-VMSwitch { [pscustomobject]@{ Id = $fakeSwitch; Name = 'CashPilot-VM'; SwitchType = 'Internal'; Notes = ('cashpilot-owner=' + $owner) } }
 function Get-VMNetworkAdapter {
-  param([switch]$ManagementOS)
-  [pscustomobject]@{ SwitchId = $fakeSwitch; Id = "management-port"; DeviceId = 'management-device'; MacAddress = '00155D000002' }
+  param([switch]$ManagementOS, [switch]$All)
+  [pscustomobject]@{ SwitchId = $fakeSwitch; Id = "management-port"; DeviceId = 'management-device'; MacAddress = '00155D000002'; IsManagementOs = $true }
 }
 function Get-NetAdapter {
   param([switch]$IncludeHidden)
   [pscustomobject]@{ DeviceId = 'foreign-device'; ifIndex = 7; MacAddress = '00-15-5D-00-00-02' }
-  [pscustomobject]@{ DeviceId = 'management-device'; ifIndex = 20; MacAddress = '00-15-5D-00-00-03' }
+  [pscustomobject]@{ DeviceId = 'management-device'; Name = 'management'; ifIndex = 20; MacAddress = $interfaceMAC }
 }
 function Get-NetIPInterface { [pscustomobject]@{ Dhcp = "Disabled" } }
 function Get-NetIPAddress {
@@ -685,10 +686,31 @@ function New-NetIPAddress {
 }
 `
 	args := map[string]any{"switch": "CashPilot-VM", "switchId": tSwitchID, "managementId": "management-port", "owner": tOwner, "mac": "00155D000002", "gateway": "172.31.250.1", "prefixLen": 29}
-	code, out := runOwnedScriptWithFake(t, "param($fakeSwitch, $owner)\n"+mock, scriptEnsureSwitch, args, tSwitchID, tOwner)
+	const params = "param($fakeSwitch, $owner, $interfaceMAC)\n"
+	code, out := runOwnedScriptWithFake(t, params+mock, scriptEnsureSwitch, args, tSwitchID, tOwner, "00-15-5D-00-00-02")
 	if code != 0 {
 		t.Fatalf("could not configure the owned adapter without touching other addresses: exit %d: %s", code, out)
 	}
+	t.Run("Repair refuses effective MAC drift", func(t *testing.T) {
+		code, out := runOwnedScriptWithFake(t, params+mock, scriptEnsureSwitch, args, tSwitchID, tOwner, "00-15-5D-00-00-03")
+		if code == 0 || !strings.Contains(string(out), "management adapter MAC") {
+			t.Fatalf("Repair accepted a changed interface MAC: exit %d: %s", code, out)
+		}
+	})
+	t.Run("Remove preserves switch after effective MAC drift", func(t *testing.T) {
+		const removeMock = mock + `
+function Get-NetIPAddress {}
+function Get-NetNeighbor {}
+function Get-NetAdapterBinding { [pscustomobject]@{ Name = 'management'; ComponentID = 'ms_tcpip'; Enabled = $true } }
+function Remove-VMSwitch { throw 'would remove the switch with a changed interface MAC' }
+`
+		args["bindings"] = map[string]bool{"ms_tcpip": true}
+		code, out := runOwnedScriptWithFake(t, params+removeMock, scriptRemoveSwitch, args, tSwitchID, tOwner, "00-15-5D-00-00-03")
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+		if code != 0 || err != nil || !strings.Contains(string(raw), "MAC") {
+			t.Fatalf("Remove did not report the changed MAC: exit %d: %s", code, out)
+		}
+	})
 }
 
 func TestVMStartAndDisconnectRecheckOwner(t *testing.T) {

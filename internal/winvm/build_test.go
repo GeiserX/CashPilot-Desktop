@@ -425,6 +425,50 @@ func TestBuildRepairFindsRenamedObjects(t *testing.T) {
 	}
 }
 
+func TestBuildRepairGuidanceAfterEarlierRepairClearedSwitchID(t *testing.T) {
+	for _, lastStage := range []string{"installed guest", "pending Windows install"} {
+		t.Run(lastStage, func(t *testing.T) {
+			ctx := context.Background()
+			f := hvfake.New()
+			dir := t.TempDir()
+			d := buildDeps(t, f, dir)
+			var wantErr error
+			if lastStage == "pending Windows install" {
+				wantErr = errors.New("stopped before creating the guest")
+				f.FailNext("CreateVM", wantErr)
+			}
+			if _, err := winvm.Build(ctx, d, setupParams()); !errors.Is(err, wantErr) {
+				t.Fatalf("prepare fixture: %v, want %v", err, wantErr)
+			}
+			p := readPlan(t, dir)
+			if p.VMID != "" {
+				if err := f.Disconnect(ctx, p.VMID, p.Owner, p.AdapterID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kept, err := f.RemoveSwitch(ctx, p); err != nil || kept != "" {
+				t.Fatalf("remove fixture switch: %q, %v", kept, err)
+			}
+			p.SwitchID, p.ManagementAdapterID, p.ManagementBindings = "", "", nil
+			p.ProvedAt = time.Time{}
+			raw, err := p.Marshal()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, winvm.PlanFile), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			callsBefore := len(f.Calls())
+			if _, err := winvm.Build(ctx, d, setupParams()); err == nil || !strings.Contains(err.Error(), "run Remove VM before building again") {
+				t.Fatalf("Repair gave no missing-switch guidance: %v", err)
+			}
+			if indexOf(f.Calls()[callsBefore:], "EnsureSwitch") >= 0 {
+				t.Fatal("Repair attempted to create a replacement switch")
+			}
+		})
+	}
+}
+
 // TestBuildRepairClearsProofLeftovers: a proof killed in the middle leaves a
 // canary rule, its hv_sock test key and a running pktmon session. Repair
 // clears them before it lists the host, so the key stays out of the GCS

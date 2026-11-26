@@ -58,7 +58,7 @@ Save and compare the inventory of every VM that existed before the run after eac
 
 On a running VM's writable leaf disk, file size can grow and `LastWriteTime` can advance. Keep both raw size and time readings. Require an exact match for the path, volume serial, file ID, disk type, virtual size and parent chain. Require an exact match for every field of a parent disk.
 
-If the test VM uses the Default Switch, allow new Windows ICS port ranges on the outer host. Require the NAT settings and every other NAT's port ranges to match the baseline.
+Allow a new Windows ICS port range on the outer host only if the evidence ties that range to the test VM. Stop if any new range has no such evidence. Require the NAT settings and every other NAT's port ranges to match the baseline.
 
 If the run saved and resumed one of its own VMs, allow its key protector hash to change. Require the protector length and other VM security fields to match the baseline.
 

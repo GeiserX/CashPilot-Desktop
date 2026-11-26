@@ -4,7 +4,7 @@ package winvm
 
 import (
 	"context"
-	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,13 +16,19 @@ import (
 
 // NewHost is the real Hyper-V, read and guarded through PowerShell, with the
 // drop counter's PDH fallback.
-func NewHost() Host {
-	return &psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx}
+func NewHost(dir string) Host {
+	return windowsHost(dir)
+}
+
+func windowsHost(dir string) *psHost {
+	return &psHost{run: func(ctx context.Context, script string, arg []byte) ([]byte, error) {
+		return runPowerShell(ctx, dir, script, arg)
+	}, pdh: pdhDropInstances, sleep: sleepCtx}
 }
 
 // NewBuilder is the real Hyper-V for setup, Repair and Remove VM.
-func NewBuilder() Builder {
-	return psBuilder{&psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx}}
+func NewBuilder(n Names) Builder {
+	return psBuilder{windowsHost(n.DataDir)}
 }
 
 // NewProber is the proof's Prober for instance n. Its canaries let in only
@@ -30,7 +36,7 @@ func NewBuilder() Builder {
 func NewProber(n Names) Prober {
 	exe, _ := os.Executable()
 	return &psProber{
-		h:       &psHost{run: runPowerShell, pdh: pdhDropInstances, sleep: sleepCtx},
+		h:       windowsHost(n.DataDir),
 		n:       n,
 		program: exe,
 		hv:      openHVListener,
@@ -38,17 +44,33 @@ func NewProber(n Names) Prober {
 	}
 }
 
-// runPowerShell runs one fixed script in a hidden Windows PowerShell 5.1, found
-// by full path so PATH cannot point elsewhere. It reads the fixed script
-// from stdin to keep its size out of the Windows command line. The argument
-// travels in the environment as base64 JSON.
-func runPowerShell(ctx context.Context, script string, arg []byte) ([]byte, error) {
-	cmd, err := hostPowerShellCommand(ctx, "-EncodedCommand", psEncode(hostScriptLauncher))
+// runPowerShell runs fixed code from a verified file. Its JSON argument travels
+// in the environment and is never part of the script or command line.
+func runPowerShell(ctx context.Context, dir, script string, arg []byte) ([]byte, error) {
+	cmd, release, err := filePowerShellCommand(ctx, dir, script)
 	if err != nil {
 		return nil, err
 	}
-	cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(script)))
+	defer release()
 	cmd.Env = append(cmd.Env, hvArg(arg))
+	if script == scriptGuest {
+		var request struct {
+			Guest string
+		}
+		if err := json.Unmarshal(arg, &request); err != nil {
+			return nil, err
+		}
+		guest, ok := guestScriptNamed(request.Guest)
+		if !ok {
+			return nil, fmt.Errorf("unknown guest script %q", request.Guest)
+		}
+		path, release, err := preparePowerShellFile(dir, guest.Text)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+		cmd.Env = append(cmd.Env, "CPD_HV_GUEST_FILE="+path)
+	}
 	stdout := &cappedBuffer{max: maxHVRaw}
 	stderr := &cappedBuffer{max: 4 << 10}
 	cmd.Stdout, cmd.Stderr = stdout, stderr

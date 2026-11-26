@@ -76,7 +76,7 @@ func vmSetupMain(params, dir string, parseErr error) int {
 		return vmExitUsage
 	}
 	return runVMRemove(ctx, dir, func(n winvm.Names) winvm.RemoveDeps {
-		return winvm.RemoveDeps{HV: winvm.NewBuilder()}
+		return winvm.RemoveDeps{HV: winvm.NewBuilder(n)}
 	}, os.Stderr)
 }
 
@@ -84,7 +84,7 @@ func vmSetupMain(params, dir string, parseErr error) int {
 // services. The guest probe is the PowerShell Direct one Build picks.
 func productBuildDeps(n winvm.Names) winvm.BuildDeps {
 	return winvm.BuildDeps{
-		HV:    winvm.NewBuilder(),
+		HV:    winvm.NewBuilder(n),
 		Probe: winvm.NewProber(n),
 		Echo:  winvm.DefaultEcho(),
 		Now:   time.Now,

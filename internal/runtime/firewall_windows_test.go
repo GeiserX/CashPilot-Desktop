@@ -92,7 +92,19 @@ func TestSecureVMStubLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return RunElevated(s)
+		path := filepath.Join(tmp, "bootstrap-wrapper.ps1")
+		if err := os.WriteFile(path, []byte("\xef\xbb\xbf"+s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		exe, err := PowerShellExe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(exe, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path).CombinedOutput()
+		if len(out) > 0 {
+			t.Logf("bootstrap wrapper: %s", out)
+		}
+		return elevatedOutcome(err)
 	}
 	data := filepath.Join(tmp, "data")
 	if res, err := stub(data, good, "ok"); err != nil || res.RestartNeeded {

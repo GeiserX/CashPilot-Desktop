@@ -455,7 +455,7 @@ func (b *builder) journal(ctx context.Context) error {
 	}
 	p.SwitchID = adopt(b.inv.Switches, p.SwitchID, p.Owner)
 	if p.SwitchID == "" {
-		if prev != nil && prev.SwitchID != "" {
+		if prev != nil {
 			st, err := b.readInstall()
 			if err != nil {
 				return err

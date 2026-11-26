@@ -12,7 +12,7 @@ var ErrUnsupported = errors.New("the Secure VM (Windows 11 Pro) needs Windows 11
 
 // The Hyper-V seam. Every call to the operating system goes through these
 // interfaces. The Windows implementation runs one fixed PowerShell script per
-// method with -EncodedCommand. Host data reaches a script only as one base64
+// method from a SHA-256-verified file. Host data reaches a script as one base64
 // JSON argument, which the script reads with ConvertFrom-Json, and Go checks
 // every value before it goes in: names against ^[A-Za-z0-9-]{1,32}$, IDs as
 // GUIDs, addresses through netip. No guest string ever enters a script. Each

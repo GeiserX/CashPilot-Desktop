@@ -20,10 +20,11 @@ func runPS(t *testing.T, timeout time.Duration, script string) (string, uint32, 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd, err := hostPowerShellCommand(ctx, "-EncodedCommand", psEncode(script))
+	cmd, release, err := filePowerShellCommand(ctx, "", script)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("PowerShell ran past %v", timeout)

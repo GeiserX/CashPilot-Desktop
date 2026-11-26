@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"golang.org/x/sys/windows"
 )
 
 func fakePowerShellCommand(t *testing.T, ctx context.Context, args ...string) *exec.Cmd {
@@ -22,6 +24,46 @@ func fakePowerShellCommand(t *testing.T, ctx context.Context, args ...string) *e
 		t.Fatal(err)
 	}
 	return cmd
+}
+
+func TestEmbeddedBootstrapsReachInputHashCheck(t *testing.T) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("the bootstrap requires Administrator access")
+	}
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	input := filepath.Join(dir, "fixture.txt")
+	if err := os.WriteFile(input, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, bootstrap := range []Bootstrap{SetupBootstrap(), RemoveBootstrap()} {
+		t.Run(bootstrap.Name, func(t *testing.T) {
+			path := filepath.Join(dir, bootstrap.Name)
+			if err := os.WriteFile(path, bootstrap.Text, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			badHash := strings.Repeat("0", 64)
+			args := [][2]string{
+				{"Exe", input}, {"ExeHash", badHash}, {"DataDir", data},
+				{"TaskPath", `\CashPilot\`}, {"TaskName", "BootstrapFixture"},
+			}
+			if bootstrap.Name == "setup.ps1" {
+				args = append(args, [2]string{"Params", input}, [2]string{"ParamsHash", badHash})
+			}
+			stub, err := (runtime.SecureVMStub{
+				DataDir: data, Script: path, ScriptName: bootstrap.Name, ScriptSHA256: bootstrap.SHA256, Args: args,
+			}).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Both real bootstraps must load the directory and journal helpers
+			// in their own process, then refuse the fixture before any VM work.
+			out, code, _ := runPS(t, time.Minute, stub)
+			if code != runtime.ExitBadHash {
+				t.Fatalf("bootstrap exited %d before the input hash check: %s", code, out)
+			}
+		})
+	}
 }
 
 // TestBootstrapAndGuestScriptsParse checks the elevation stubs, bootstraps,

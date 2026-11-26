@@ -125,7 +125,7 @@ function Get-VMNetworkAdapter {
   if ($ManagementOS) { [pscustomobject]@{ SwitchId = $switchId; Id = 'Microsoft:mgmt'; DeviceId = 'dev'; MacAddress = '00155D000002'; IsManagementOs = $true } }
   elseif ($All -and $extra -eq 'VM port') { [pscustomobject]@{ SwitchId = $switchId; IsManagementOs = $false; VMId = 'decoy-port' } }
 }
-function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'dev'; ifIndex = 20; Name = 'vEthernet (CashPilot-VM)' } }
+function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'dev'; ifIndex = 20; Name = 'vEthernet (CashPilot-VM)'; MacAddress = '00-15-5D-00-00-02' } }
 function Get-NetIPInterface { [pscustomobject]@{ Dhcp = 'Disabled' } }
 function Get-NetIPAddress {
   [pscustomobject]@{ IPAddress = '172.31.250.1'; PrefixLength = 29 }

@@ -31,8 +31,11 @@ func TestEmbeddedScriptPins(t *testing.T) {
 			t.Errorf("%s changed: sha256 %s, pinned %s", name, got, c.want)
 		}
 	}
-	if b := SetupBootstrap(); b.SHA256 != "A694FF3C19A2E61368B128B206CC7B7BD61F4AAB21BEA0779CE5F9F6C821FD4C" || b.Name != "setup.ps1" {
+	if b := SetupBootstrap(); b.SHA256 != "0A5BADA917FC0CE865C53BC1A7B9EEFDFDC27A668AE8813F454DB0C62EDDBE4E" || b.Name != "setup.ps1" {
 		t.Errorf("SetupBootstrap = %s %s", b.Name, b.SHA256)
+	}
+	if b := RemoveBootstrap(); b.SHA256 != "9508D95914408741A7B98FF07C0E989D1DAD3B8DBD03C95F969515C93F007EE0" || b.Name != "remove.ps1" {
+		t.Errorf("RemoveBootstrap = %s %s", b.Name, b.SHA256)
 	}
 }
 

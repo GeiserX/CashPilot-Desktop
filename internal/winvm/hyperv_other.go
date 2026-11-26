@@ -8,10 +8,10 @@ import (
 )
 
 // NewHost is a host without Hyper-V: every call returns ErrUnsupported.
-func NewHost() Host { return unsupported{} }
+func NewHost(string) Host { return unsupported{} }
 
 // NewBuilder is a host without Hyper-V: every call returns ErrUnsupported.
-func NewBuilder() Builder { return unsupported{} }
+func NewBuilder(Names) Builder { return unsupported{} }
 
 // NewProber is a host without Hyper-V: every call returns ErrUnsupported.
 func NewProber(Names) Prober { return unsupported{} }

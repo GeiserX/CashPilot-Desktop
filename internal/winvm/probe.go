@@ -3,8 +3,6 @@ package winvm
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,7 +11,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-	"unicode/utf16"
 )
 
 // ProbeTimeout bounds one whole reading. Each probe runs on its own goroutine, and
@@ -366,14 +363,4 @@ var versionPattern = regexp.MustCompile(`\d+\.\d+\.\d+(?:\.\d+)?`)
 func parseWSLVersion(out []byte) string {
 	clean := bytes.ReplaceAll(out, []byte{0}, nil)
 	return string(versionPattern.Find(clean))
-}
-
-// psEncode is the -EncodedCommand form of a script: base64 of its UTF-16LE bytes.
-func psEncode(script string) string {
-	units := utf16.Encode([]rune(script))
-	b := make([]byte, 2*len(units))
-	for i, u := range units {
-		binary.LittleEndian.PutUint16(b[2*i:], u)
-	}
-	return base64.StdEncoding.EncodeToString(b)
 }

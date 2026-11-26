@@ -138,8 +138,8 @@ func elevatedOutcome(err error) (ElevatedResult, error) {
 	return ElevatedResult{}, err
 }
 
-// SecureVMStub verifies the bootstrap bytes in memory and runs them while
-// holding leases on the recorded data and guard directories.
+// SecureVMStub runs a verified bootstrap file while holding leases on the
+// recorded data and guard directories.
 type SecureVMStub struct {
 	DataDir      string
 	Script       string // where the app wrote the bootstrap
@@ -195,13 +195,24 @@ func (s SecureVMStub) Build() (string, error) {
 		"$sha = [Security.Cryptography.SHA256]::Create()",
 		"try { $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '') } finally { $sha.Dispose() }",
 		"if ($hash -cne '" + s.ScriptSHA256 + "') { exit " + fmt.Sprint(ExitBadHash) + " }",
-		"$command = [scriptblock]::Create([Text.Encoding]::UTF8.GetString($bytes))",
 		"$data = '" + s.DataDir + "'",
 		"$create = $" + fmt.Sprint(s.ScriptName != "remove.ps1"),
 		"$root = Open-CPDDirectory $data $create 'cashpilot-data'",
 		"try {",
 		"  $guard = Open-CPDDirectory (Join-Path $data 'guard') $create 'cashpilot-guard'",
-		"  try { & $command " + strings.Join(args, " ") + " } finally { $guard.Dispose() }",
+		"  try {",
+		"    $path = Join-Path (Join-Path $data 'guard') ('.' + [guid]::NewGuid().ToString('N') + '." + s.ScriptName + "')",
+		"    $file = [IO.File]::Open($path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)",
+		"    try {",
+		"      try { $file.Write($bytes, 0, $bytes.Length) } finally { $file.Dispose() }",
+		"      $locked = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)",
+		"      try {",
+		"        if ((Get-FileHash -InputStream $locked -Algorithm SHA256).Hash -cne '" + s.ScriptSHA256 + "') { exit " + fmt.Sprint(ExitBadHash) + " }",
+		"        $ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\\v1.0\\powershell.exe'",
+		"        & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $path " + strings.Join(args, " "),
+		"      } finally { $locked.Dispose() }",
+		"    } finally { [IO.File]::Delete($path) }",
+		"  } finally { $guard.Dispose() }",
 		"} finally { $root.Dispose() }",
 		"exit $LASTEXITCODE",
 	}, "\n"), nil
