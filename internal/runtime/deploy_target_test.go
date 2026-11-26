@@ -236,6 +236,13 @@ func TestNativeCheckedDeployRefusesAnUnreadableRegistry(t *testing.T) {
 	if _, err := p.Deploy(ctx, spec, nil); err == nil || downloads.Load() != 0 {
 		t.Fatalf("checked deploy with an unreadable registry: err = %v, %d downloads; want a refusal before the download", err, downloads.Load())
 	}
+	// A registry that holds only JSON null is just as unreadable.
+	if err := os.WriteFile(p.statePath, []byte("null\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.DeployTarget(ctx, "prog"); err == nil || got == NoContainer {
+		t.Fatalf("DeployTarget with a null registry = %q, %v; want an error", got, err)
+	}
 	// A missing registry is still a first deploy.
 	if err := os.Remove(p.statePath); err != nil {
 		t.Fatal(err)

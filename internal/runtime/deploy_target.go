@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -96,6 +97,11 @@ func (p *NativeProcessProvider) readRegistryStrict() (*nativeRegistry, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	// A bare null decodes into the empty registry above without an error, but the
+	// registry never writes it, so it is as unreadable as broken JSON.
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, errors.New("the record of programs holds null")
 	}
 	if err := json.Unmarshal(raw, reg); err != nil {
 		return nil, err
