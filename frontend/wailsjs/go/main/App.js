@@ -10,6 +10,10 @@ export function AddFleetDevice(arg1) {
   return window['go']['main']['App']['AddFleetDevice'](arg1);
 }
 
+export function AllowServerCommandsThroughFirewall() {
+  return window['go']['main']['App']['AllowServerCommandsThroughFirewall']();
+}
+
 export function ApplyImport(arg1) {
   return window['go']['main']['App']['ApplyImport'](arg1);
 }
@@ -274,6 +278,10 @@ export function RestoreStateBackup(arg1, arg2, arg3) {
   return window['go']['main']['App']['RestoreStateBackup'](arg1, arg2, arg3);
 }
 
+export function RetryServerCommandsFirewallRemoval() {
+  return window['go']['main']['App']['RetryServerCommandsFirewallRemoval']();
+}
+
 export function RevealWalletSeed(arg1, arg2) {
   return window['go']['main']['App']['RevealWalletSeed'](arg1, arg2);
 }
@@ -304,6 +312,10 @@ export function SaveSettings(arg1) {
 
 export function SetActivityEnabled(arg1) {
   return window['go']['main']['App']['SetActivityEnabled'](arg1);
+}
+
+export function SetServerCommands(arg1) {
+  return window['go']['main']['App']['SetServerCommands'](arg1);
 }
 
 export function SetupResume() {

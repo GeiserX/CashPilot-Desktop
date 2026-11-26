@@ -16,6 +16,9 @@ import {
   GetActivityDetail,
   RefreshActivityNetworks,
   SetActivityEnabled,
+  SetServerCommands,
+  AllowServerCommandsThroughFirewall,
+  RetryServerCommandsFirewallRemoval,
   InstallBackgroundHelper,
   ListCustomServices,
   ApplyImport,
@@ -92,6 +95,8 @@ import {
   SignOutNow,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderServerCommands } from "./render/server_commands";
+import { wireServerCommandsFirewall } from "./render/server_commands_wire";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
 import { createBoot } from "./render/boot";
@@ -752,6 +757,7 @@ function renderDashboard(current: AppState) {
           <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
         `)}
         ${current.pairing ? renderJoinedBanner(current.pairing) : ""}
+        ${current.serverCommands ? renderServerCommands(current.serverCommands) : ""}
         <!-- The money first and largest; the container count sits at the far
              end, smaller, because it answers a different question. -->
         <section class="stats-grid money-strip" aria-label="Earnings">
@@ -857,6 +863,16 @@ function renderDashboard(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-isolation-action]").forEach((button) => {
     button.addEventListener("click", () => void runEnableIsolation());
+  });
+  document.querySelector<HTMLInputElement>("[data-server-commands-switch]")?.addEventListener("change", (event) => {
+    const on = (event.target as HTMLInputElement).checked;
+    void SetServerCommands(on).then(refreshState, (error) => setOutput(`Could not switch it: ${String(error)}`));
+  });
+  wireServerCommandsFirewall(document, {
+    allow: AllowServerCommandsThroughFirewall,
+    refresh: refreshState,
+    setOutput,
+    notice: (message) => showInfoToast({ scope: "Server commands", message }),
   });
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1649,8 +1665,8 @@ function wireModeCard() {
   };
   slot.querySelectorAll<HTMLButtonElement>("[data-mode-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const action = button.dataset.modeAction as ModeCardView | "leave";
-      if (action !== "leave") {
+      const action = button.dataset.modeAction as ModeCardView | "leave" | "firewall-cleanup";
+      if (action !== "leave" && action !== "firewall-cleanup") {
         if (action === "summary") modeLeft = null;
         modeCardView = action;
         redrawModeCard();
@@ -1658,10 +1674,15 @@ function wireModeCard() {
       }
       button.disabled = true;
       try {
-        modeLeft = await SwitchToLead();
+        if (action === "firewall-cleanup") {
+          await RetryServerCommandsFirewallRemoval();
+          if (modeLeft) modeLeft = {...modeLeft, firewallError: ""};
+        } else {
+          modeLeft = await SwitchToLead();
+          modeCardView = "left";
+        }
         modeState = await GetModeState();
         await loadAppState();
-        modeCardView = "left";
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
         button.disabled = false;

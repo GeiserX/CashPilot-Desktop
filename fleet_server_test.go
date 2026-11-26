@@ -18,7 +18,6 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
-	"github.com/zalando/go-keyring"
 )
 
 // TestMain mocks the keyring so store.Open (via config.MasterKey) stays fully
@@ -27,7 +26,11 @@ import (
 // ordinary-machine tests red. RunOnce is a fake, so no test can make Windows
 // start the test binary at the next sign-in (docker_guide.go).
 func TestMain(m *testing.M) {
-	keyring.MockInit()
+	// Worker firewall tests opt in with a fake Windows rule and elevation.
+	firewallRuleNeeded = false
+
+	testKeyring.reset()
+	config.SetCredentialKeyringForTest(&testKeyring)
 	defaultRunOnce = &fakeRunOnce{}
 	// No heartbeat reads the real runtime unless its test says what it lists.
 	heartbeatReads = noHeartbeatReads
@@ -407,9 +410,9 @@ func TestHandleWorkerHeartbeatEnrollConfirmReject(t *testing.T) {
 // a legacy plaintext fleetApiKey found in config.json is preserved (moved into the
 // keychain/file store so already-configured workers keep authenticating), stripped
 // from config.json on disk, and reused on the next startup instead of regenerated.
-// TestMain mocks the keyring, so keyring.MockInit resets it to a clean in-memory store.
+// TestMain mocks the keyring, so reset the mock to a clean in-memory store.
 func TestEnsureFleetAPIKeyMigratesLegacyPlaintext(t *testing.T) {
-	keyring.MockInit()
+	testKeyring.reset()
 	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
 	cfg, err := config.NewManager()
 	if err != nil {
@@ -465,7 +468,7 @@ func TestEnsureFleetAPIKeyMigratesLegacyPlaintext(t *testing.T) {
 // token gets a generated bearer token stored in the hardened store, and that the
 // generated token never touches config.json.
 func TestEnsureFleetAPIKeyGeneratesWhenAbsent(t *testing.T) {
-	keyring.MockInit()
+	testKeyring.reset()
 	t.Setenv("CASHPILOT_DESKTOP_DATA_DIR", t.TempDir())
 	cfg, err := config.NewManager()
 	if err != nil {

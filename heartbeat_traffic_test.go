@@ -223,7 +223,7 @@ func TestTheServersAnswerSaysWhetherItJudgesStalls(t *testing.T) {
 			if err := app.cfg.Update(func(c *config.AppConfig) { c.Mode = config.ModeFollower; c.UpstreamURL = srv.URL }); err != nil {
 				t.Fatal(err)
 			}
-			app.upstream.workerKey = "own-key"
+			saveTestWorkerKey(t, app, "own-key")
 			app.sendUpstream(t.Context(), &upstream.Client{HTTP: srv.Client()}, srv.URL, "shared")
 			if got := app.stallServer(time.Now()) != ""; got != tc.want {
 				t.Fatalf("server judges stalls = %v, want %v", got, tc.want)
@@ -302,7 +302,7 @@ func TestSendUpstreamSendsTheCountersToTheServer(t *testing.T) {
 	t.Cleanup(func() { heartbeatSendLock = oldLock })
 
 	app := newPayloadTestApp(t, nil)
-	app.upstream.workerKey = "own-key"
+	publishTestPairing(t, app, srv.URL, "own-key")
 	client := &upstream.Client{HTTP: srv.Client()}
 	app.sendUpstream(t.Context(), client, srv.URL, "shared")
 	if taken != 1 || given != 1 {

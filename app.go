@@ -32,7 +32,6 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
-	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -140,6 +139,13 @@ type App struct {
 	deviceLinkStop func()
 	// activity is the Activity sampler (activity_sampler.go): off until the owner switches it on.
 	activity activityState
+	// workerAPI is the API a joined CashPilot server commands this computer through
+	// (worker_api.go).
+	workerAPI workerAPIState
+	// pairingMu orders explicit Join and Leave requests in the window.
+	pairingMu          sync.Mutex
+	window             bool
+	stopPairingUpgrade func()
 }
 
 // fenceController is the slice of the Docker provider that keeps earners off the LAN.
@@ -183,7 +189,16 @@ func NewApp() *App {
 // startCore and leaves a.ready() failing for every binding, so — exactly as before —
 // there is nothing further for the GUI hook to do with the returned error.
 func (a *App) Startup(ctx context.Context) {
-	_ = a.startCore(ctx)
+	a.window = true
+	if a.startCore(ctx) == nil {
+		upgradeCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		a.stopPairingUpgrade = func() { cancel(); <-done }
+		go func() {
+			defer close(done)
+			a.enrolSavedPairing(upgradeCtx)
+		}()
+	}
 }
 
 // startCore initialises everything the app needs in BOTH roles: config, the local
@@ -310,9 +325,14 @@ func (a *App) startCore(ctx context.Context) error {
 	a.startDeviceLinkRetry(ctx)
 	// What each earner talks to, when the owner switched Activity on.
 	a.startActivitySampler(ctx)
-	// Optional, and a no-op unless the user paired this Desktop with a
-	// CashPilot server. Standalone is the default and unaffected.
+	// Resolve an interrupted Windows rule change before opening the worker API.
+	if a.window {
+		a.recoverServerCommandsFirewall()
+	}
+	// Report to the server when this Desktop is paired.
 	a.startUpstream(ctx)
+	// While joined, the server deploys and stops services here (worker_api.go).
+	a.startWorkerAPI(ctx)
 	// The window and the background helper each run the steps above from their
 	// own copy of the config: follow a join or a switch the other one saved.
 	a.startConfigSync(ctx)
@@ -371,6 +391,9 @@ func (a *App) DomReady(ctx context.Context) {
 }
 
 func (a *App) Shutdown(_ context.Context) {
+	if a.stopPairingUpgrade != nil {
+		a.stopPairingUpgrade()
+	}
 	// Stop the collection loop before closing the store so no in-flight collect
 	// writes to a database that is about to close.
 	a.stopScheduler()
@@ -379,6 +402,7 @@ func (a *App) Shutdown(_ context.Context) {
 	a.stopDeviceLinkRetry()
 	a.stopActivitySampler()
 	a.stopUpstream()
+	a.stopWorkerAPI()
 	if a.fleetAPI != nil {
 		_ = a.fleetAPI.Close()
 	}
@@ -420,6 +444,9 @@ type AppState struct {
 	// Pairing is the link to the CashPilot server while this computer is joined
 	// (last heartbeat, last error in plain words); nil when it runs everything here.
 	Pairing *PairingStatus `json:"pairing"`
+	// ServerCommands is whether that server can start and stop services here, and the
+	// last command it sent (worker_api.go); nil when this computer runs everything here.
+	ServerCommands *ServerCommandsState `json:"serverCommands"`
 	// Hostname is this machine's name, so a deploy form can render a {hostname}-defaulted
 	// field with the real value the deploy path will substitute (instead of the literal
 	// "cashpilot-{hostname}" the raw catalog default would otherwise show and submit).
@@ -677,6 +704,7 @@ func (a *App) GetAppState() (AppState, error) {
 		ServiceDetails:   a.store.ListServiceDetails(),
 		Fleet:            a.fleetView(),
 		Pairing:          a.pairingStatus(),
+		ServerCommands:   a.serverCommandsView(),
 		Hostname:         runtime.DeviceHostname(),
 		CollectorFields:  collectors.AllFields(),
 		Scaling:          a.services.ScalingLimits(visible),
@@ -1244,45 +1272,6 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	if value := strings.TrimSpace(values["timezone"]); value != "" {
 		cfg.Timezone = value
 	}
-	// Pairing. Unlike every other field here, an EMPTY value is meaningful: it
-	// means "unpair", and standalone is the supported default -- so this is
-	// keyed on presence, not on non-emptiness.
-	if value, present := values["upstreamUrl"]; present {
-		next := strings.TrimRight(strings.TrimSpace(value), "/")
-		if next != "" && next != cfg.UpstreamURL {
-			// Refused here, where the user sees it, rather than on every
-			// heartbeat, where only the log would. Only a NEW address is
-			// checked: the Settings form sends only the fields the user changed,
-			// but another caller can still send the saved address back as it is,
-			// and checking an address saved under an older, looser rule would
-			// then block changing any other setting until the user retyped it.
-			if err := upstream.ValidateServerURL(next); err != nil {
-				return SettingsState{}, fmt.Errorf("pairing address: %w", err)
-			}
-		}
-		if next != cfg.UpstreamURL {
-			// Repointing at a DIFFERENT server must discard the per-worker key
-			// the previous one issued. It is that server's credential and means
-			// nothing to the new one; presenting it would fail authentication
-			// with no obvious cause, and keeping it around is a stale secret for
-			// a machine the user has stopped talking to.
-			if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
-				return SettingsState{}, fmt.Errorf("clearing the previous worker key: %w", err)
-			}
-			a.upstream.mu.Lock()
-			a.upstream.workerKey = ""
-			a.upstream.mu.Unlock()
-		}
-		cfg.UpstreamURL = next
-	}
-	if value, present := values["upstreamKey"]; present {
-		// Stored verbatim, including empty -- that is how a user unpairs the
-		// credential. The form never shows the saved key and leaves this out when
-		// its box is left blank, so only its Remove button sends it empty.
-		if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), strings.TrimSpace(value)); err != nil {
-			return SettingsState{}, fmt.Errorf("storing the pairing key: %w", err)
-		}
-	}
 	if value, present := values["fleetServerEnabled"]; present {
 		// Presence-keyed, not non-emptiness: "false" is a meaningful value and
 		// turning the hub back OFF must be possible.
@@ -1335,26 +1324,27 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		}
 		cfg.FleetPort = port
 	}
-	// Only the fields this form owns are written, onto the config as it is now. A
-	// whole-snapshot Save would put back what background work changed since the
-	// snapshot above, such as the fence recording that isolation is on, and the
-	// keyring writes above make that window real.
-	if err := a.cfg.Update(func(cur *config.AppConfig) {
+	address, hasAddress := values["upstreamUrl"]
+	key, hasKey := values["upstreamKey"]
+	left := false
+	if hasAddress || hasKey {
+		a.pairingMu.Lock()
+		defer a.pairingMu.Unlock()
+		var err error
+		left, err = a.saveSettingsPairing(strings.TrimRight(strings.TrimSpace(address), "/"), hasAddress, strings.TrimSpace(key), hasKey)
+		if err != nil {
+			return SettingsState{}, err
+		}
+	}
+	pairing := a.cfg.Config()
+	joined := pairing.Mode == config.ModeFollower
+	err := a.cfg.Update(func(cur *config.AppConfig) {
 		cur.DisplayCurrency = cfg.DisplayCurrency
 		cur.HostnamePrefix = cfg.HostnamePrefix
 		cur.Timezone = cfg.Timezone
-		// The mode follows the address when it changes here, as joining and
-		// leaving do: an address means joined, none means run everything here.
-		if cfg.UpstreamURL != cur.UpstreamURL {
-			if cfg.UpstreamURL != "" {
-				cur.Mode = config.ModeFollower
-				cfg.FleetServerEnabled = false
-			} else {
-				cur.Mode = config.ModeLead
-			}
+		if _, set := values["fleetServerEnabled"]; set || (hasAddress && joined && cfg.UpstreamURL != pairing.UpstreamURL) {
+			cur.FleetServerEnabled = cfg.FleetServerEnabled && !joined
 		}
-		cur.UpstreamURL = cfg.UpstreamURL
-		cur.FleetServerEnabled = cfg.FleetServerEnabled
 		cur.DriftWarningsOff = cfg.DriftWarningsOff
 		cur.Isolation = cfg.Isolation
 		if cfg.Isolation == "off" {
@@ -1363,12 +1353,18 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		cur.FleetBindAddress = cfg.FleetBindAddress
 		cur.CollectIntervalMinutes = cfg.CollectIntervalMinutes
 		cur.FleetPort = cfg.FleetPort
-	}); err != nil {
+	})
+	if err != nil {
 		return SettingsState{}, err
+	}
+	if left {
+		if err := a.removeServerCommandsRule(); err != nil {
+			a.emitNotice("server-commands", err.Error())
+		}
 	}
 	// If the collection cadence changed, restart the ticker so the new interval
 	// takes effect immediately instead of waiting for the next app launch.
-	if cfg.CollectIntervalMinutes != previousInterval && a.ctx != nil {
+	if (left || cfg.CollectIntervalMinutes != previousInterval) && a.ctx != nil {
 		a.runScheduler(a.ctx, a.collectInterval())
 	}
 	// The fleet listener binds its port/address once at Startup; changing them here
@@ -1562,7 +1558,7 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances})
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances}, true)
 	return deployment, err
 }
 
@@ -1590,7 +1586,9 @@ func (l *deployCredentialsLock) startDeploy(credentialsMu *sync.Mutex) uint64 {
 	return startSaves
 }
 
-func (a *App) deployService(slug string, values map[string]string, opts services.DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
+// register lets a local deploy add the device to the provider account. A deploy
+// sent by the server leaves registration to the server.
+func (a *App) deployService(slug string, values map[string]string, opts services.DeployOptions, register bool) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, nil, err
 	}
@@ -1632,7 +1630,9 @@ func (a *App) deployService(slug string, values map[string]string, opts services
 	if saveErr != nil {
 		return deployment, walletResult, saveErr
 	}
-	a.registerDevice(slug, creds)
+	if register {
+		a.registerDevice(slug, creds)
+	}
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
 	// services with a native collector are worth kicking; the rest would merely
@@ -1678,7 +1678,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 // the owner confirmed it runs from this machine's own IP from now on. Its routed copy
 // is removed first.
 func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: true})
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: true}, true)
 	return deployment, err
 }
 
@@ -2329,9 +2329,8 @@ func (a *App) ensureFleetAPIKey() error {
 	}
 	// Strip any plaintext token still carried in config.json (the omitempty tag drops
 	// the now-empty field on the next write).
-	if cfg := a.cfg.Config(); cfg.FleetAPIKey != "" {
-		cfg.FleetAPIKey = ""
-		if err := a.cfg.Save(cfg); err != nil {
+	if a.cfg.Config().FleetAPIKey != "" {
+		if err := a.cfg.Update(func(c *config.AppConfig) { c.FleetAPIKey = "" }); err != nil {
 			return err
 		}
 	}

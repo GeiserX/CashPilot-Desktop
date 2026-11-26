@@ -78,7 +78,7 @@ func TestHistoryIsHandedOverOnceAndOnlyOnce(t *testing.T) {
 	)
 	stub := newImportStub(t)
 
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 	first := len(stub.readings())
 	if first != 2 {
 		t.Fatalf("the server was handed %d reading(s), want 2", first)
@@ -87,7 +87,7 @@ func TestHistoryIsHandedOverOnceAndOnlyOnce(t *testing.T) {
 	// Every heartbeat calls this. Re-sending up to 400 days of readings once a
 	// minute forever is the failure being prevented -- the import is idempotent,
 	// so it would be correct and still wrong.
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 	if got := len(stub.readings()); got != first {
 		t.Fatalf("history was re-sent: %d readings after the second call, want %d", got, first)
 	}
@@ -100,7 +100,7 @@ func TestTheLocalRowsSurviveTheHandOver(t *testing.T) {
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 12.5, Currency: "GRASS"})
 	stub := newImportStub(t)
 
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 
 	local := app.store.ListDailyBalances(400)
 	if len(local) != 1 || local[0].Platform != "grass" || local[0].Balance != 12.5 {
@@ -116,7 +116,7 @@ func TestAFailedHandOverIsRetriedRatherThanRecorded(t *testing.T) {
 	stub.status = http.StatusForbidden // still enrolling, as far as the server is concerned
 	stub.mu.Unlock()
 
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 	if got := app.cfg.Config().UpstreamHistoryPushedTo; got != "" {
 		t.Fatalf("a refused push was recorded as done: %q", got)
 	}
@@ -124,7 +124,7 @@ func TestAFailedHandOverIsRetriedRatherThanRecorded(t *testing.T) {
 	stub.mu.Lock()
 	stub.status = http.StatusOK
 	stub.mu.Unlock()
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 	if len(stub.readings()) == 0 {
 		t.Fatal("the retry sent nothing")
 	}
@@ -140,8 +140,8 @@ func TestPairingWithADifferentServerHandsItTheHistoryToo(t *testing.T) {
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
 
 	first, second := newImportStub(t), newImportStub(t)
-	app.pushHistoryOnce(context.Background(), testImportClient(first), first.URL, "own-key")
-	app.pushHistoryOnce(context.Background(), testImportClient(second), second.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(first), first.URL, "own-key", "")
+	app.pushHistoryOnce(context.Background(), testImportClient(second), second.URL, "own-key", "")
 
 	if len(second.readings()) != 1 {
 		t.Fatalf("the second server was handed %d reading(s), want 1", len(second.readings()))
@@ -156,9 +156,9 @@ func TestATrailingSlashIsNotADifferentServer(t *testing.T) {
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
 	stub := newImportStub(t)
 
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 	sent := len(stub.readings())
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL+"/", "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL+"/", "own-key", "")
 	if got := len(stub.readings()); got != sent {
 		t.Fatalf("a trailing slash re-sent the history: %d readings, want %d", got, sent)
 	}
@@ -171,7 +171,7 @@ func TestAnEmptyHistoryIsRecordedWithoutPostingAnything(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
 	stub := newImportStub(t)
 
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 	if got := len(stub.received()); got != 0 {
 		t.Fatalf("posted %d request(s) with no history to send", got)
 	}
@@ -188,7 +188,7 @@ func TestTheHandOverUsesTheStableClientID(t *testing.T) {
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
 	stub := newImportStub(t)
 
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 
 	got := stub.received()
 	if len(got) != 1 {
@@ -213,7 +213,7 @@ func TestTheHandOverIsAuthenticatedWithThisMachinesOwnKey(t *testing.T) {
 	seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
 	client := &upstream.Client{HTTP: srv.Client()}
 
-	app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key", "")
 	if auth != "Bearer own-key" {
 		t.Fatalf("Authorization = %q", auth)
 	}
@@ -291,11 +291,8 @@ func TestAnUnconfirmedWorkerDoesNotTryToImport(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			app := newPayloadTestApp(t, nil)
 			seedEarnings(t, app.store, store.EarningsRecord{Platform: "grass", Balance: 1, Currency: "GRASS"})
-			app.upstream.mu.Lock()
-			app.upstream.workerKey = tc.heldKey
-			app.upstream.mu.Unlock()
-
 			stub := newPairingStub(t, tc.reDelivered)
+			publishTestPairing(t, app, stub.URL, tc.heldKey)
 			client := &upstream.Client{HTTP: stub.Client()}
 
 			app.sendUpstream(context.Background(), client, stub.URL, tc.enrolmentToken)
@@ -318,11 +315,8 @@ func TestAConfirmedWorkerImportsOnItsNextHeartbeat(t *testing.T) {
 	stub := newPairingStub(t, "") // no key returned == this worker is confirmed
 	client := &upstream.Client{HTTP: stub.Client()}
 
-	// sendUpstream reads the cached worker key, so seed it as a confirmed worker
-	// would already hold it.
-	app.upstream.mu.Lock()
-	app.upstream.workerKey = "own-key"
-	app.upstream.mu.Unlock()
+	// Seed the saved key of a confirmed worker.
+	publishTestPairing(t, app, stub.URL, "own-key")
 
 	app.sendUpstream(context.Background(), client, stub.URL, "shared-enrolment-key")
 	if got := stub.importCount(); got != 1 {
@@ -352,7 +346,7 @@ func TestASettingsChangeDuringTheUploadIsNotClobbered(t *testing.T) {
 	defer srv.Close()
 
 	client := &upstream.Client{HTTP: srv.Client()}
-	app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key", "")
 
 	got := app.cfg.Config()
 	if got.DisplayCurrency != "EUR" {
@@ -384,7 +378,7 @@ func TestAServerTooOldToImportIsAskedOnce(t *testing.T) {
 	client := &upstream.Client{HTTP: srv.Client()}
 
 	for range 3 {
-		app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key")
+		app.pushHistoryOnce(context.Background(), client, srv.URL, "own-key", "")
 	}
 	if calls != 1 {
 		t.Fatalf("asked an old server %d times, want 1", calls)
@@ -478,7 +472,7 @@ func TestSkippedSlugsAreNotTreatedAsAFailure(t *testing.T) {
 	stub.skipped = []string{"a-service-this-server-does-not-have"}
 	stub.mu.Unlock()
 
-	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key")
+	app.pushHistoryOnce(context.Background(), testImportClient(stub), stub.URL, "own-key", "")
 	if got := app.cfg.Config().UpstreamHistoryPushedTo; !strings.HasPrefix(got, "http://127.0.0.1") {
 		t.Fatalf("skips were treated as a failure: UpstreamHistoryPushedTo = %q", got)
 	}

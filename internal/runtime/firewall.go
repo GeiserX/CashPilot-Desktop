@@ -187,3 +187,30 @@ func windowsRemoteAddresses(s string) ([]string, bool) {
 	slices.Sort(out)
 	return out, len(out) > 0
 }
+
+// NamedFirewallRule is the local rule's actual state. Program is empty when a
+// rule exists with a different scope.
+type NamedFirewallRule struct {
+	Found   bool
+	Program string
+}
+
+// Read the store before filtering so an absent rule can be distinguished from
+// an unavailable firewall service.
+func namedFirewallRuleScript(name string) string {
+	return `$rule = Get-NetFirewallRule -PolicyStore PersistentStore | Where-Object { $_.Name -eq ` + psQuote(name) + ` }
+$o = @{ found = ($null -ne $rule) }
+if ($null -ne $rule) {
+  $o.program = [string]($rule | Get-NetFirewallApplicationFilter).Program
+  $o.enabled = [string]$rule.Enabled
+  $o.direction = [string]$rule.Direction
+  $o.action = [string]$rule.Action
+  $o.profile = [string]$rule.Profile
+  $port = $rule | Get-NetFirewallPortFilter
+  $o.protocol = [string]$port.Protocol
+  $o.port = [string]$port.LocalPort
+  $o.remote = [string[]]@(($rule | Get-NetFirewallAddressFilter).RemoteAddress)
+}
+$o | ConvertTo-Json -Compress
+`
+}

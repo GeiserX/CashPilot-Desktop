@@ -7,8 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -16,7 +14,6 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
-	"github.com/zalando/go-keyring"
 )
 
 // The owner's other internet lines (web GeiserX/CashPilot#810): every box's fence
@@ -312,20 +309,19 @@ func TestConfiguredUpstreamKeepsFenceExitsWhileHeartbeatIsStopped(t *testing.T) 
 	}
 }
 
-func TestHeartbeatAppliesFleetExitsEvenIfTheIssuedKeyCannotBeSaved(t *testing.T) {
+func TestHeartbeatAppliesFleetExitsWhenTheCredentialStoreLocks(t *testing.T) {
 	app := newPayloadTestApp(t, nil)
 	fence := &fakeFence{}
 	app.fence = fence
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// The signed-in account locked its credential store while the report
+		// was in flight. The key generation is still readable.
+		testKeyring.fail(errors.New("test keychain locked"))
 		_, _ = io.WriteString(w, `{"status":"ok","worker_key":"issued","fleet_exits":["198.51.100.4"]}`)
 	}))
 	defer srv.Close()
 	setFleetUpstreamURL(t, app, srv.URL)
-	if err := os.Mkdir(filepath.Join(app.cfg.AppDir(), ".upstream_worker_key"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	keyring.MockInitWithError(errors.New("test keychain locked"))
-	t.Cleanup(keyring.MockInit)
+	t.Cleanup(testKeyring.reset)
 
 	app.sendUpstream(context.Background(), &upstream.Client{HTTP: srv.Client()}, srv.URL, "shared")
 	if ips, complete := app.fenceOtherExits(); !slices.Equal(ips, []string{"198.51.100.4"}) || !complete || fence.reconciled != 1 {

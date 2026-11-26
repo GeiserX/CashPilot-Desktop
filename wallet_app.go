@@ -46,7 +46,7 @@ type WalletDeployResult struct {
 func (a *App) DeployServiceWallet(slug string, values map[string]string, image *string, instances *int, choice WalletChoice) (WalletDeployResult, error) {
 	request := &runtime.WalletRequest{Mode: choice.Mode, Phrase: choice.Phrase}
 	choice.Phrase = ""
-	deployment, wallet, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances, Wallet: request})
+	deployment, wallet, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances, Wallet: request}, true)
 	request.Phrase = ""
 	if err != nil {
 		return WalletDeployResult{}, err

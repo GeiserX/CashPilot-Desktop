@@ -9,13 +9,12 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
-	"github.com/zalando/go-keyring"
 )
 
 // A Mysterium node Desktop runs natively has no container: it must be read through
 // the native reader, not sent to a container exec that cannot work.
 func TestNativeMysteriumIsReadNatively(t *testing.T) {
-	keyring.MockInit()
+	testKeyring.reset()
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)

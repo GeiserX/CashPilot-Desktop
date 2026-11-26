@@ -4,9 +4,14 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -141,4 +146,44 @@ func removeFirewallBlock(slug, program string, mayElevate bool) error {
 		return firewallRemoveFailed(name, err)
 	}
 	return nil
+}
+
+// ReadNamedFirewallRule reads one local firewall rule by its unique name.
+func ReadNamedFirewallRule(name string, port int, subnets []string) (NamedFirewallRule, error) {
+	script := `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+` + namedFirewallRuleScript(name)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	raw, err := powerShellContext(ctx, "-EncodedCommand", psEncode(script))
+	if err != nil {
+		return NamedFirewallRule{}, err
+	}
+	var rule struct {
+		Found                                                        bool
+		Program, Enabled, Direction, Action, Profile, Port, Protocol string
+		Remote                                                       []string
+	}
+	if err := json.Unmarshal(raw, &rule); err != nil {
+		return NamedFirewallRule{}, err
+	}
+	got := make([]string, 0, len(rule.Remote))
+	for _, subnet := range rule.Remote {
+		if prefix, err := netip.ParsePrefix(subnet); err == nil {
+			got = append(got, prefix.Masked().String())
+		} else if ipv4, ok := windowsRemoteAddresses(subnet); ok {
+			got = append(got, ipv4...)
+		}
+	}
+	slices.Sort(got)
+	want := slices.Clone(subnets)
+	slices.Sort(want)
+	result := NamedFirewallRule{Found: rule.Found}
+	if rule.Found && rule.Enabled == "True" && rule.Direction == "Inbound" && rule.Action == "Allow" &&
+		rule.Profile == "Private" && rule.Port == strconv.Itoa(port) && (rule.Protocol == "TCP" || rule.Protocol == "6") &&
+		len(got) == len(rule.Remote) && slices.Equal(got, want) {
+		result.Program = rule.Program
+	}
+	return result, nil
 }

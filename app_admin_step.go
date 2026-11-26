@@ -21,6 +21,6 @@ func (a *App) DeployAdminStep(slug string) (runtime.AdminStep, error) {
 func (a *App) DeployServiceWithAdminApproval(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, approval runtime.AdminStep) (store.Deployment, error) {
 	deployment, _, err := a.deployService(slug, values, services.DeployOptions{
 		Image: image, Instances: instances, LeaveRoute: leaveRoute, AdminApproval: &approval,
-	})
+	}, true)
 	return deployment, err
 }

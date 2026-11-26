@@ -1136,6 +1136,7 @@ export namespace config {
 	    sessionConsent?: Record<string, SessionConsent>;
 	    mode?: string;
 	    setupJournal?: SetupJournal;
+	    serverCommandsOff?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1167,6 +1168,7 @@ export namespace config {
 	        this.sessionConsent = this.convertValues(source["sessionConsent"], SessionConsent, true);
 	        this.mode = source["mode"];
 	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
+	        this.serverCommandsOff = source["serverCommandsOff"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1695,6 +1697,74 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ServerCommand {
+	    at: string;
+	    action: string;
+	    slug: string;
+	    ok: boolean;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerCommand(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.at = source["at"];
+	        this.action = source["action"];
+	        this.slug = source["slug"];
+	        this.ok = source["ok"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class ServerCommandsState {
+	    server: string;
+	    on: boolean;
+	    listening: boolean;
+	    url: string;
+	    problem: string;
+	    firewallNeeded: boolean;
+	    firewallRule: boolean;
+	    firewallStatus: string;
+	    opens: string;
+	    last?: ServerCommand;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerCommandsState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.on = source["on"];
+	        this.listening = source["listening"];
+	        this.url = source["url"];
+	        this.problem = source["problem"];
+	        this.firewallNeeded = source["firewallNeeded"];
+	        this.firewallRule = source["firewallRule"];
+	        this.firewallStatus = source["firewallStatus"];
+	        this.opens = source["opens"];
+	        this.last = this.convertValues(source["last"], ServerCommand);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class PairingStatus {
 	    serverUrl: string;
 	    lastHeartbeat: string;
@@ -1967,6 +2037,7 @@ export namespace main {
 	    serviceDetails: Record<string, string>;
 	    fleet?: FleetView;
 	    pairing?: PairingStatus;
+	    serverCommands?: ServerCommandsState;
 	    hostname: string;
 	    collectorFields: Record<string, Array<collectors.Field>>;
 	    scaling: Record<string, services.ScalingLimit>;
@@ -2003,6 +2074,7 @@ export namespace main {
 	        this.serviceDetails = source["serviceDetails"];
 	        this.fleet = this.convertValues(source["fleet"], FleetView);
 	        this.pairing = this.convertValues(source["pairing"], PairingStatus);
+	        this.serverCommands = this.convertValues(source["serverCommands"], ServerCommandsState);
 	        this.hostname = source["hostname"];
 	        this.collectorFields = this.convertValues(source["collectorFields"], Array<collectors.Field>, true);
 	        this.scaling = this.convertValues(source["scaling"], services.ScalingLimit, true);
@@ -2421,6 +2493,7 @@ export namespace main {
 	export class LeaveResult {
 	    serverUrl: string;
 	    name: string;
+	    firewallError: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new LeaveResult(source);
@@ -2430,6 +2503,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.serverUrl = source["serverUrl"];
 	        this.name = source["name"];
+	        this.firewallError = source["firewallError"];
 	    }
 	}
 	export class ModeState {
@@ -2438,6 +2512,7 @@ export namespace main {
 	    pairing?: PairingStatus;
 	    hubOn: boolean;
 	    hubDevices: string[];
+	    firewallCleanup: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModeState(source);
@@ -2450,6 +2525,7 @@ export namespace main {
 	        this.pairing = this.convertValues(source["pairing"], PairingStatus);
 	        this.hubOn = source["hubOn"];
 	        this.hubDevices = source["hubDevices"];
+	        this.firewallCleanup = source["firewallCleanup"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2597,6 +2673,8 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	

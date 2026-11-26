@@ -343,6 +343,9 @@ export interface AppState {
   // The link to the CashPilot server while this computer is joined; null when it
   // runs everything here.
   pairing?: PairingStatus | null;
+  // While joined: whether that server can start and stop services here (Go
+  // ServerCommandsState); null when this computer runs everything here.
+  serverCommands?: ServerCommandsState | null;
   // This machine's hostname, so a {hostname}-defaulted deploy field renders the real
   // value the deploy path will substitute rather than the literal "{hostname}".
   hostname: string;
@@ -746,6 +749,7 @@ export interface ModeState {
   pairing?: PairingStatus | null;
   hubOn: boolean;
   hubDevices: string[] | null;
+  firewallCleanup?: string;
 }
 
 // The answer to one join (Go JoinResult). A failed connection has ok false.
@@ -765,6 +769,31 @@ export interface JoinResult {
 export interface LeaveResult {
   serverUrl: string;
   name: string;
+  // Why the firewall rule made for the server's commands is still there; "" when gone.
+  firewallError?: string;
+}
+
+// The last command the CashPilot server sent this computer (Go ServerCommand).
+export interface ServerCommand {
+  at: string;
+  action: string;
+  slug: string;
+  ok: boolean;
+  detail: string;
+}
+
+// The dashboard card while joined (Go ServerCommandsState).
+export interface ServerCommandsState {
+  server: string;
+  on: boolean;
+  listening: boolean;
+  url: string;
+  problem: string;
+  firewallNeeded: boolean;
+  firewallRule: boolean;
+  firewallStatus?: string;
+  opens: string;
+  last: ServerCommand | null;
 }
 
 export interface SessionConsent {

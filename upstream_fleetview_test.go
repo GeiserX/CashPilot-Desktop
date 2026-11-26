@@ -96,9 +96,7 @@ func TestAHeartbeatsFiguresBecomeTheFleetView(t *testing.T) {
 	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = srv.URL }); err != nil {
 		t.Fatal(err)
 	}
-	app.upstream.mu.Lock()
-	app.upstream.workerKey = "own-key"
-	app.upstream.mu.Unlock()
+	saveTestWorkerKey(t, app, "own-key")
 
 	app.sendUpstream(context.Background(), testClient(srv), srv.URL, "enrol")
 
@@ -135,9 +133,7 @@ func TestAPlatformWithNoReadingStaysUnknown(t *testing.T) {
 	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = srv.URL }); err != nil {
 		t.Fatal(err)
 	}
-	app.upstream.mu.Lock()
-	app.upstream.workerKey = "own-key"
-	app.upstream.mu.Unlock()
+	saveTestWorkerKey(t, app, "own-key")
 	app.sendUpstream(context.Background(), testClient(srv), srv.URL, "enrol")
 
 	view := app.fleetView()
@@ -171,9 +167,7 @@ func TestASharedPlatformIsMarkedAsShared(t *testing.T) {
 	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = srv.URL }); err != nil {
 		t.Fatal(err)
 	}
-	app.upstream.mu.Lock()
-	app.upstream.workerKey = "own-key"
-	app.upstream.mu.Unlock()
+	saveTestWorkerKey(t, app, "own-key")
 	app.sendUpstream(context.Background(), testClient(srv), srv.URL, "enrol")
 
 	byslug := map[string]bool{}
@@ -201,9 +195,7 @@ func TestUnlinkingReturnsToTheLocalPictureAlone(t *testing.T) {
 	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = srv.URL }); err != nil {
 		t.Fatal(err)
 	}
-	app.upstream.mu.Lock()
-	app.upstream.workerKey = "own-key"
-	app.upstream.mu.Unlock()
+	saveTestWorkerKey(t, app, "own-key")
 	app.sendUpstream(context.Background(), testClient(srv), srv.URL, "enrol")
 	if app.fleetView() == nil {
 		t.Fatal("precondition failed: no fleet view while paired")
@@ -340,9 +332,7 @@ func TestAHeartbeatWithNoFiguresDoesNotBlankTheLastOnes(t *testing.T) {
 	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamURL = first.URL }); err != nil {
 		t.Fatal(err)
 	}
-	app.upstream.mu.Lock()
-	app.upstream.workerKey = "own-key"
-	app.upstream.mu.Unlock()
+	saveTestWorkerKey(t, app, "own-key")
 	app.sendUpstream(context.Background(), testClient(first), first.URL, "enrol")
 
 	// The same server, now reporting nothing at all.

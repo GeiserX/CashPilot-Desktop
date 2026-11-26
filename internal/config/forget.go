@@ -16,7 +16,7 @@ func AppDataDir() (string, error) {
 }
 
 // keychainEntries are every secret the app keeps in the OS keychain.
-var keychainEntries = []string{keyringUser, keyringUserFleet, keyringUserUpstreamEnrol, keyringUserUpstreamWorker}
+var keychainEntries = []string{keyringUser, keyringUserFleet, keyringUserUpstreamEnrol, keyringUserUpstreamWorker, pairingKey, pairingKeyAlt}
 
 // DeleteKeychainSecrets removes every secret the app keeps in the OS keychain.
 // An entry that is not there is not an error. It is part of deleting the user's
@@ -24,7 +24,7 @@ var keychainEntries = []string{keyringUser, keyringUserFleet, keyringUserUpstrea
 func DeleteKeychainSecrets() error {
 	var errs []error
 	for _, user := range keychainEntries {
-		if err := keyring.Delete(keyringService, user); err != nil && !errors.Is(err, keyring.ErrNotFound) {
+		if err := credentials.Delete(keyringService, user); err != nil && !errors.Is(err, keyring.ErrNotFound) {
 			errs = append(errs, fmt.Errorf("%s: %w", user, err))
 		}
 	}
