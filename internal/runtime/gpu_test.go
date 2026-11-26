@@ -37,6 +37,9 @@ func fakeSysfs(t *testing.T, pci map[string][2]string, render map[string]string,
 		t.Fatal(err)
 	}
 	for name, cv := range pci {
+		// A real PCI address holds ':', which Windows forbids in a file name. The
+		// reader never parses the name, so the tree swaps it for '_' on every OS.
+		name = strings.ReplaceAll(name, ":", "_")
 		write(filepath.Join(root, "bus", "pci", "devices", name, "class"), cv[0])
 		write(filepath.Join(root, "bus", "pci", "devices", name, "vendor"), cv[1])
 	}
@@ -268,7 +271,17 @@ func TestStampGPUEnv(t *testing.T) {
 	}
 }
 
+// pinGPUHostOS makes withGPUHint and the sysfs read act as on goos, whatever OS
+// runs the test: the NVIDIA hint differs on a Mac.
+func pinGPUHostOS(t *testing.T, goos string) {
+	t.Helper()
+	old := gpuHostOS
+	gpuHostOS = goos
+	t.Cleanup(func() { gpuHostOS = old })
+}
+
 func TestWithGPUHint(t *testing.T) {
+	pinGPUHostOS(t, "linux")
 	// Docker's own messages, recorded on a daemon with no GPU (web specs/gpu.md).
 	cases := map[string]string{
 		`Error response from daemon: could not select device driver "nvidia" with capabilities: [[gpu]]`:                 "NVIDIA Container Toolkit",
@@ -370,6 +383,7 @@ func TestDeployRefusesAGPUTheMachineLacksBeforeTouchingAnything(t *testing.T) {
 }
 
 func TestDeployExplainsAMissingNvidiaToolkit(t *testing.T) {
+	pinGPUHostOS(t, "linux")
 	fake := &fakeDocker{infoName: "docker-desktop", startRefusal: `could not select device driver "nvidia" with capabilities: [[gpu]]`}
 	fake.start(t)
 	spec := deploySpec("gpu-miner")
@@ -467,17 +481,31 @@ func TestSameKernelAcceptsAMatchingRelease(t *testing.T) {
 }
 
 func TestTheNvidiaHintOnAMacSaysNoToolkitHelps(t *testing.T) {
-	old := gpuHostOS
-	gpuHostOS = "darwin"
-	t.Cleanup(func() { gpuHostOS = old })
+	pinGPUHostOS(t, "darwin")
+	for _, msg := range []string{
+		`could not select device driver "nvidia" with capabilities: [[gpu]]`,
+		"failed to discover GPU vendor from CDI: no known GPU vendor found",
+	} {
+		got := withGPUHint(errors.New(msg)).Error()
+		if !strings.HasPrefix(got, msg) || !strings.Contains(got, "Docker on a Mac cannot pass an NVIDIA GPU") || strings.Contains(got, "nvidia-ctk") {
+			t.Fatalf("hint = %s", got)
+		}
+	}
+}
+
+// Windows has no hint of its own: the toolkit hint carries the Docker Desktop
+// with WSL 2 step.
+func TestTheNvidiaHintOnWindowsNamesWSL2(t *testing.T) {
+	pinGPUHostOS(t, "windows")
 	got := withGPUHint(errors.New(`could not select device driver "nvidia" with capabilities: [[gpu]]`)).Error()
-	if !strings.Contains(got, "Docker on a Mac cannot pass an NVIDIA GPU") || strings.Contains(got, "nvidia-ctk") {
+	if !strings.Contains(got, "NVIDIA Container Toolkit") || !strings.Contains(got, "WSL 2 backend") || strings.Contains(got, "Docker on a Mac") {
 		t.Fatalf("hint = %s", got)
 	}
 }
 
 // Docker can refuse at create too; that error gets the hint as the start error does.
 func TestDeployExplainsAGPURefusedAtCreate(t *testing.T) {
+	pinGPUHostOS(t, "linux")
 	fake := &fakeDocker{infoName: "docker-desktop", createRefusal: "failed to discover GPU vendor from CDI: no known GPU vendor found"}
 	fake.start(t)
 	spec := deploySpec("gpu-miner")
@@ -489,6 +517,7 @@ func TestDeployExplainsAGPURefusedAtCreate(t *testing.T) {
 }
 
 func TestARestoreStartGetsTheGPUHint(t *testing.T) {
+	pinGPUHostOS(t, "linux")
 	r := newRestoreRun()
 	r.startErr = errors.New(`could not select device driver "nvidia" with capabilities: [[gpu]]`)
 	_, err := r.restore(t, keeper(false), map[string][]byte{"keeper": keeperArchive(t)})
