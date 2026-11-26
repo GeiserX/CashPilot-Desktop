@@ -348,7 +348,8 @@ for (const retryOrder of ["none", "retry-first", "settings-first"]) {
     const snapshot = (runtime) => ({ config: { mode: "lead", firstRunComplete: true }, runtime, guides: [] });
     let appReads = 0;
     let hostReads = 0;
-    const { root } = await openApp(name, ready, true, async () => ++hostReads === 1 ? answered : retry.promise, {
+    // A host read after the retry finds Docker as the Settings check left it: stopped.
+    const { root } = await openApp(name, ready, true, async () => ++hostReads === 1 ? answered : hostReads === 2 ? retry.promise : setup, {
       GetAppState: async () => ++appReads === 1 ? snapshot(ready) : settingsCheck.promise,
       GetSettingsState: async () => ({ environment: [], collectors: [] }),
       BackgroundHelperStatus: async () => ({ supported: false }),
@@ -387,6 +388,7 @@ for (const retryOrder of ["none", "retry-first", "settings-first"]) {
       retry.resolve(answered);
       await setImmediate();
       assert.match(badge(), /Runtime offline/, "a retry cannot replace the completed Settings check");
+      assert.equal(hostReads, 3, "the replaced retry reads the PC again instead of returning its old rows");
     }
   });
 }

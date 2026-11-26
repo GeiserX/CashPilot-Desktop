@@ -133,7 +133,7 @@ import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
 import { guidesBesideChecklist, loadRuntimePage, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
-import { renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
+import { dockerBlockedNote, renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
@@ -237,6 +237,13 @@ let activityPage = 0;
 // The Activity view last drawn: a late detail answer redraws this one, never
 // the older view its click came from.
 let activityShown: ActivityView | null = null;
+// The Docker status Import, Fleet and Activity were last drawn with. Their Docker
+// controls and lines follow it, so a change redraws them (updateRuntimeSurfaces).
+let dockerDrawn = "";
+
+function dockerKey(runtime: RuntimeStatus) {
+  return `${runtime.available}|${runtimeState(runtime).kind}|${(runtime.nativeServices || []).join(",")}`;
+}
 let activityOpen: Record<string, ActivityDetail | null> = {};
 // Deletes still running (switch-off or Delete data): rows do not open meanwhile.
 let activityDeleting = 0;
@@ -320,26 +327,32 @@ async function applySetupResume() {
 }
 
 // Publish every explicit host check to the shared runtime, even when it fails.
-async function hostCheck() {
-  const request = ++runtimeCheckStarted;
-  const publish = (result: HostCheckResult | null) => {
-    if (!state || !completeRuntimeCheck(request)) return;
-    if (!state.config.firstRunComplete) {
-      firstRunHost = result;
-      if (result) firstRunHasChecklist = !!result.facts?.supported && !!result.steps?.length;
+// A reading that a newer one replaced while it ran is not returned: its checklist
+// rows would contradict the status on screen (a late "ready" after an earnings
+// refresh read "stopped"). The newer reading may have had no rows, so read again.
+async function hostCheck(): Promise<HostCheckResult> {
+  for (let attempt = 1; ; attempt++) {
+    const request = ++runtimeCheckStarted;
+    const publish = (result: HostCheckResult | null) => {
+      if (!state || !completeRuntimeCheck(request)) return false;
+      if (!state.config.firstRunComplete) {
+        firstRunHost = result;
+        if (result) firstRunHasChecklist = !!result.facts?.supported && !!result.steps?.length;
+      }
+      if (result && setupFinished(result)) setupResume = null;
+      setRuntimeReading(result?.runtime ?? unknownRuntime, result ? result.runtimeNotice : unknownRuntimeNotice);
+      return true;
+    };
+    let result: HostCheckResult;
+    try {
+      result = await HostCheck();
+    } catch (error) {
+      publish(null);
+      throw error;
     }
-    if (result && setupFinished(result)) setupResume = null;
-    setRuntimeReading(result?.runtime ?? unknownRuntime, result ? result.runtimeNotice : unknownRuntimeNotice);
-  };
-  let result: HostCheckResult;
-  try {
-    result = await HostCheck();
-  } catch (error) {
-    publish(null);
-    throw error;
+    if (publish(result) || !state) return result;
+    if (attempt === 3) throw new Error("Docker changed while CashPilot was checking it. Check again");
   }
-  publish(result);
-  return result;
 }
 
 // What the checklist needs from Go. Skip differs per screen.
@@ -827,6 +840,7 @@ function renderDashboard(current: AppState) {
               producerStates: current.producerStates,
               copies,
               displayCurrency: disp,
+              runtime: current.runtime,
             })}
           </div>
         </section>
@@ -1119,6 +1133,12 @@ function updateRuntimeSurfaces(current: AppState) {
     return;
   }
   updateRuntimeChrome(current);
+  // Import's Deploy, Fleet's proxied copies and Activity's sampling line follow Docker.
+  if (dockerKey(current.runtime) !== dockerDrawn) {
+    if (activeView === "import") renderImportIfShown();
+    else if (activeView === "fleet") void renderFleet();
+    else if (activeView === "activity" && activityShown) void renderActivity(activityShown);
+  }
   if (activeView === "wizard") {
     for (const draw of wizardPreflightDraws.values()) draw();
     const summary = document.querySelector("#wizard-runtime-summary");
@@ -1364,8 +1384,20 @@ function renderImportIfShown() {
   if (state && activeView === "import") renderImport(state);
 }
 
+// Imported services that need Docker here while it cannot run them, each with the
+// note that says why. A native app is never in it (localDockerGap).
+function importWaitsForDocker(current: AppState): Record<string, string> {
+  const waits: Record<string, string> = {};
+  for (const slug of importResult?.saved || []) {
+    const service = current.services?.find((item) => item.slug === slug);
+    if (localDockerGap(service, current.runtime)) waits[slug] = dockerBlockedNote(current.runtime);
+  }
+  return waits;
+}
+
 function renderImport(current: AppState) {
   const keep = renderedImportPreview === importPreview ? readImportForm() : null;
+  dockerDrawn = dockerKey(current.runtime);
   root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
@@ -1374,7 +1406,7 @@ function renderImport(current: AppState) {
           ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
           ${renderImportInput(importSource)}
           ${importPreview ? renderImportPreview(importPreview) : ""}
-          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks, importDeploys) : ""}
+          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks, importDeploys, importWaitsForDocker(current)) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -1932,13 +1964,14 @@ async function renderActivity(view?: ActivityView) {
   }
   if (!state || page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
   activityShown = data;
+  dockerDrawn = dockerKey(state.runtime);
   root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
         ${topbar("activity", state)}
         <main class="page-content">
           ${pageHead("Activity")}
-          ${renderActivityPage(data, activityOpen)}
+          ${renderActivityPage(data, activityOpen, state.runtime)}
         </main>
         ${pageFoot()}
       </div>
@@ -2053,6 +2086,7 @@ async function renderFleet() {
   }
   if (!state || !fleetRedrawIsCurrent(request, fleetRequest, activeView)) return;
   proxiesState = proxies;
+  dockerDrawn = dockerKey(state.runtime);
   // The open proxy editor's typed values live only in the DOM; see keepsLiveProxyEditor.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
   root.innerHTML = withChrome(`
@@ -2094,7 +2128,7 @@ async function renderFleet() {
             </div>
           </section>
 
-          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing, proxyDeployStatus) : ""}
+          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing, proxyDeployStatus, state.runtime) : ""}
         </main>
         ${pageFoot()}
       </div>

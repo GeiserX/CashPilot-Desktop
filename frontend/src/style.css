@@ -738,6 +738,10 @@ input[type="checkbox"] { accent-color: var(--text-primary); }
 .deploy-panel { margin-top: 10px; }
 [data-drift-deploy-status] { grid-column: 1 / -1; }
 [data-drift-deploy-status]:empty { display: none; }
+/* A Docker action that waits for Docker: why, and the button to Runtime. */
+.docker-blocked { color: var(--warning); margin: 4px 0 0; }
+.docker-blocked .btn { margin-left: 6px; }
+.attn-row .docker-blocked { grid-column: 1 / -1; margin: 0; }
 .drift-deploy-results { display: grid; gap: 6px; margin-top: 8px; }
 .deploy-notice { padding: 8px 12px; border-left: 2px solid var(--border-strong); font-size: var(--fs-2); white-space: pre-line; }
 .deploy-notice p { margin: 0; }
