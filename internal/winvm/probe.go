@@ -215,37 +215,39 @@ func parseCIM(out []byte) (func(*HostFacts), error) {
 	if err := json.Unmarshal(bytes.TrimSpace(out), &c); err != nil {
 		return nil, fmt.Errorf("could not read the CIM answer: %v", err)
 	}
-	return func(f *HostFacts) {
-		if c.HypervisorPresent != nil {
-			f.HypervisorPresent = triPtr(c.HypervisorPresent)
-		}
-		if c.Manufacturer != nil {
-			f.Manufacturer = strings.TrimSpace(*c.Manufacturer)
-		}
-		if c.Model != nil {
-			f.Model = strings.TrimSpace(*c.Model)
-		}
-		if c.LastBoot != nil {
-			f.LastBoot = bootTime(*c.LastBoot)
-		}
-		// The native processor probe wins these three; CIM fills them only when it
-		// had no answer.
-		if c.Firmware != nil && f.Firmware == Unknown {
-			f.Firmware = triPtr(c.Firmware)
-		}
-		if c.SLAT != nil && f.SLAT == Unknown {
-			f.SLAT = triPtr(c.SLAT)
-		}
-		if c.Architecture != nil && f.Arch == "unknown" {
-			f.Arch = archName(*c.Architecture)
-		}
-		if c.WSLFeature != nil {
-			f.WSLFeature = featureState(c.WSLFeature)
-		}
-		if c.VMPFeature != nil {
-			f.VMPlatformFeature = featureState(c.VMPFeature)
-		}
-	}, nil
+	return c.apply, nil
+}
+
+func (c cimFacts) apply(f *HostFacts) {
+	if c.HypervisorPresent != nil {
+		f.HypervisorPresent = triPtr(c.HypervisorPresent)
+	}
+	if c.Manufacturer != nil {
+		f.Manufacturer = strings.TrimSpace(*c.Manufacturer)
+	}
+	if c.Model != nil {
+		f.Model = strings.TrimSpace(*c.Model)
+	}
+	if c.LastBoot != nil {
+		f.LastBoot = bootTime(*c.LastBoot)
+	}
+	// The native processor probe wins these three; CIM fills them only when it
+	// had no answer.
+	if c.Firmware != nil && f.Firmware == Unknown {
+		f.Firmware = triPtr(c.Firmware)
+	}
+	if c.SLAT != nil && f.SLAT == Unknown {
+		f.SLAT = triPtr(c.SLAT)
+	}
+	if c.Architecture != nil && f.Arch == "unknown" {
+		f.Arch = archName(*c.Architecture)
+	}
+	if c.WSLFeature != nil {
+		f.WSLFeature = featureState(c.WSLFeature)
+	}
+	if c.VMPFeature != nil {
+		f.VMPlatformFeature = featureState(c.VMPFeature)
+	}
 }
 
 // bootTime normalises LastBootUpTime as PowerShell's round-trip format writes it

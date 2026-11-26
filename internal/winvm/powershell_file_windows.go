@@ -41,7 +41,7 @@ func preparePowerShellFile(dir, script string) (string, func(), error) {
 	body := []byte("\xef\xbb\xbf" + script)
 	sum := sha256.Sum256(body)
 	if dir == "" {
-		return temporaryPowerShellFile(body, sum)
+		return privateHostPowerShellFile(body, sum)
 	}
 
 	root, err := openArtifact(dir, false)
@@ -74,16 +74,38 @@ func preparePowerShellFile(dir, script string) (string, func(), error) {
 	}, nil
 }
 
-// temporaryPowerShellFile serves the host probes and the read-only inspector
-// when no instance directory is available.
-func temporaryPowerShellFile(body []byte, sum [sha256.Size]byte) (string, func(), error) {
-	var f *os.File
-	var err error
-	if windows.GetCurrentProcessToken().IsElevated() {
-		f, err = createAdminPowerShellFile()
-	} else {
-		f, err = os.CreateTemp(os.TempDir(), "cashpilot-*.ps1")
+// privateHostPowerShellFile stages and removes one script for a host read
+// outside an instance. Each call has its own file so separate processes can
+// read the same host without replacing each other's scripts.
+func privateHostPowerShellFile(body []byte, sum [sha256.Size]byte) (string, func(), error) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return "", nil, fmt.Errorf("launch from the private PowerShell script directory: %w", windows.ERROR_ELEVATION_REQUIRED)
 	}
+	programData, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0)
+	if err != nil {
+		return "", nil, err
+	}
+	dir, err := hostScriptDirectory(programData)
+	if err != nil {
+		return "", nil, err
+	}
+	release, err := pinHostScriptDirectory(dir)
+	if err != nil {
+		return "", nil, err
+	}
+	path, removeScript, err := stageHostPowerShellFile(dir, body, sum)
+	if err != nil {
+		release()
+		return "", nil, err
+	}
+	return path, func() {
+		removeScript()
+		release()
+	}, nil
+}
+
+func stageHostPowerShellFile(dir string, body []byte, sum [sha256.Size]byte) (string, func(), error) {
+	f, err := createAdminPowerShellFile(dir)
 	if err != nil {
 		return "", nil, err
 	}
@@ -116,17 +138,13 @@ func temporaryPowerShellFile(body []byte, sum [sha256.Size]byte) (string, func()
 	return path, func() { f.Close(); remove() }, nil
 }
 
-func createAdminPowerShellFile() (*os.File, error) {
-	dir, err := windows.GetSystemWindowsDirectory()
-	if err != nil {
-		return nil, err
-	}
-	path := filepath.Join(dir, "Temp", randomArtifactName("cashpilot-", ".ps1"))
+func createAdminPowerShellFile(dir string) (*os.File, error) {
+	path := filepath.Join(dir, randomArtifactName("cashpilot-", ".ps1"))
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
-	// Set the owner and the DACL when the file is created in the shared Temp.
+	// Set the owner and the protected DACL when the file is created.
 	sd, err := windows.SecurityDescriptorFromString("O:BA" + sddlAdminOnly)
 	if err != nil {
 		return nil, err

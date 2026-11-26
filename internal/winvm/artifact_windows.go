@@ -12,13 +12,17 @@ import (
 )
 
 func openArtifact(path string, deleteAccess bool) (windows.Handle, error) {
-	p, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return windows.InvalidHandle, err
-	}
 	access := uint32(windows.FILE_READ_ATTRIBUTES)
 	if deleteAccess {
 		access |= windows.DELETE
+	}
+	return openArtifactWithAccess(path, access)
+}
+
+func openArtifactWithAccess(path string, access uint32) (windows.Handle, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return windows.InvalidHandle, err
 	}
 	h, err := windows.CreateFile(p, access, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
 		nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)

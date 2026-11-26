@@ -79,12 +79,19 @@ func (systemProbes) processor(context.Context) (func(*HostFacts), error) {
 		windows.IsProcessorFeaturePresent(windows.PF_SECOND_LEVEL_ADDRESS_TRANSLATION)), nil
 }
 
-// cpu and features run their CIM scripts in an unelevated, hidden PowerShell.
+// An unelevated app reads the same facts directly through WMI. PowerShell
+// scripts require access to the Administrators-only directory.
 func (systemProbes) cpu(ctx context.Context) (func(*HostFacts), error) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return readCPUWMI(ctx)
+	}
 	return runCIM(ctx, cpuScript)
 }
 
 func (systemProbes) features(ctx context.Context) (func(*HostFacts), error) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return readFeaturesWMI(ctx)
+	}
 	return runCIM(ctx, featureScript)
 }
 
