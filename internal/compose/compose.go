@@ -213,6 +213,7 @@ type composeService struct {
 	CapAdd        []string          `yaml:"cap_add,omitempty"`
 	SecurityOpt   []string          `yaml:"security_opt,omitempty"`
 	PidsLimit     int               `yaml:"pids_limit,omitempty"`
+	Init          bool              `yaml:"init,omitempty"`
 	Entrypoint    []string          `yaml:"entrypoint,omitempty"`
 	Command       string            `yaml:"command,omitempty"`
 	StopGrace     string            `yaml:"stop_grace_period,omitempty"`
@@ -385,6 +386,13 @@ func serviceBlock(svc catalog.Service, family, hostname string, gpuDevices func(
 	if svc.Docker.Command != "" {
 		block.Command = interpolate(svc.Docker.Command, env)
 	}
+	// Docker's init as PID 1, as a deploy here starts it (runtime applyInit). Some
+	// programs misbehave as PID 1: SRBMiner-Multi exits at once with an empty log.
+	// The export cannot read the image's own ENTRYPOINT, so it skips only an init the
+	// catalog names itself, as the web export does. An image whose ENTRYPOINT is
+	// tini (proxybase-cli) gets Docker's init in front of its own, which a deploy
+	// skips; tini then only logs a warning.
+	block.Init = !runtime.CatalogBringsOwnInit(svc)
 	// A container SIGKILLed before it has finished writing loses work — Storj drops
 	// in-flight pieces and audit score — so the entry's own stop timeout travels
 	// with the file instead of leaving it on Docker's 10-second default.

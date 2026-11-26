@@ -435,3 +435,23 @@ func assertCachePreserved(t *testing.T, svc *Service) {
 		t.Fatalf("USD must still convert: ToUSD(5, USD) = (%v, %v)", got, ok)
 	}
 }
+
+// Pearl (PRL), mined by SRBMiner-Multi and KRig, is priced as the web prices it.
+func TestDefaultPearlRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",pearl-2,") {
+			t.Errorf("CoinGecko request did not include pearl-2: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"pearl-2":{"usd":0.5}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(4, "PRL"); !ok || got != 2 {
+		t.Fatalf("ToUSD(4, PRL) = (%v, %v), want (2, true)", got, ok)
+	}
+}

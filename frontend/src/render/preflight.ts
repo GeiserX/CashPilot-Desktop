@@ -65,6 +65,11 @@ export function minerFee(service: Service | undefined): string {
     ? "Miner fee: not stated in the catalog. Check the miner's own terms before you deploy."
     : `Miner fee: ${escapeHtml(String(fee))}% of hashing time goes to the miner's developers.`;
   const pool = mining.poolFeeNote?.trim() ? `<p class="preflight-summary">${escapeHtml(mining.poolFeeNote.trim())}</p>` : "";
+  // Only an external payout reaches the user's wallet. An internal one (Kryptex)
+  // stays in the pool's account until the user asks for it.
+  const payout = service?.payout?.model === "internal"
+    ? "The pool keeps your balance in its account until you request a withdrawal. Check the balance on the pool dashboard."
+    : "The pool holds what you mine until your payout threshold, then pays your wallet.";
   const source = mining.devFeeSource?.startsWith("https://")
     ? `<div><button class="btn btn-ghost btn-sm" data-url="${escapeHtml(mining.devFeeSource)}">Miner fee source</button></div>`
     : "";
@@ -72,7 +77,7 @@ export function minerFee(service: Service | undefined): string {
     <section class="preflight" data-miner-fee style="border-left: 3px solid var(--border-strong); background: var(--accent-soft);">
       <strong>${headline}</strong>
       ${pool}
-      <p class="muted preflight-unchecked">The pool holds what you mine until your payout threshold, then pays your wallet.</p>
+      <p class="muted preflight-unchecked">${payout}</p>
       ${source}
     </section>
   `;

@@ -1897,6 +1897,13 @@ func bringsOwnInit(imageEntrypoint, imageCmd, entrypoint, cmd []string) bool {
 	return first == "/init" || ownInits[path.Base(first)]
 }
 
+// CatalogBringsOwnInit is bringsOwnInit for a file that cannot inspect the image,
+// such as the Compose export: only an init the catalog's own entrypoint or command
+// names counts (web app/compose_generator.py calls _brings_own_init with no image).
+func CatalogBringsOwnInit(svc catalog.Service) bool {
+	return bringsOwnInit(nil, nil, svc.Docker.Entrypoint, tokenizeCommand(svc.Docker.Command))
+}
+
 func entrypointFor(svc catalog.Service) []string {
 	if len(svc.Docker.Entrypoint) == 0 {
 		return nil

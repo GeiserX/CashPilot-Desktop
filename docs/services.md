@@ -2,7 +2,7 @@
 
 > Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
 
-CashPilot bundles a catalog of 47 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
+CashPilot bundles a catalog of 49 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
 
 ## Before you start: how bandwidth-sharing works
 
@@ -87,8 +87,10 @@ GPU-intensive computing services. Requires compatible hardware.
 | [Flux](https://runonflux.io) | ✅ | ❌ | 220GB | Crypto (FLUX) | Active |
 | [Golem Network](https://golem.network) | ✅ | ❌ | 20GB | Crypto (GLM) | Active |
 | [io.net](https://io.net) | ✅ | ✅ | N/A | Crypto (IO) | Active |
+| [Kryptex Pool (Pearl)](https://pool.kryptex.com/?ref=2444cca8) | ✅ | ✅ (NVIDIA) | N/A | BTC balance in your Kryptex account | Beta |
 | [Nosana](https://nosana.io) | ✅ | ✅ | 50GB | Crypto (NOS) | Active |
 | [Salad](https://salad.io) | ✅ | ✅ | N/A | PayPal, Gift Cards | Active |
+| [SRBMiner-Multi (GPU mining)](https://github.com/doktor83/SRBMiner-Multi/releases) | ✅ | ✅ (NVIDIA) | N/A | Crypto (PRL, ZANO or RVN), paid by your pool | Beta |
 | [Vast.ai](https://cloud.vast.ai/?ref_id=452772) | ✅ | ✅ | 100GB | Wise, PayPal, Stripe | Active |
 
 > **Note:** Earnings vary widely by location, hardware, and demand.
