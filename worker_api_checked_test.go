@@ -251,13 +251,19 @@ func TestCheckedDeployKeepsTheLockFromTheCheckToTheReplacement(t *testing.T) {
 
 	// Two requests approved for the same container arrive together (a double
 	// click, two dashboards). While the first stops that container, the second
-	// starts; it must wait, and then find the first one's replacement.
+	// starts; it must wait, and then find the first one's replacement. The first
+	// goes on only once the second waits on the deploy lock, so the second's checks
+	// all run after the replacement, never before it by chance.
 	second := make(chan *httptest.ResponseRecorder, 1)
+	waited := false
 	app.Docker.BeforeCall("POST /containers/cashpilot-honeygain/stop", func() {
 		go func() { second <- call(t, app, http.MethodPost, checkedPath, testWorkerKey, spec) }()
-		time.Sleep(500 * time.Millisecond)
+		waited = waitBlockedOnMutex(".(*deployCredentialsLock).startDeploy(", 10*time.Second)
 	})
 	first := call(t, app, http.MethodPost, checkedPath, testWorkerKey, spec)
+	if !waited {
+		t.Fatal("the second request did not wait on the deploy lock while the first one replaced the container")
+	}
 	if first.Code != http.StatusOK {
 		t.Fatalf("first approved replacement: %d %s", first.Code, first.Body.String())
 	}
