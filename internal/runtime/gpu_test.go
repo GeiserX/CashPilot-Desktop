@@ -666,6 +666,9 @@ func TestDriftReportsGPUAccessTheCatalogNoLongerGrants(t *testing.T) {
 		{"rocm removed", amd, shape(amd, nil, "/dev/dri/renderD129", catalog.KFDDevice), []string{"still has device /dev/kfd, which the catalog no longer passes in"}},
 		{"nvidia unchanged", nvidia, shape(nvidia, []string{"nvidia"}), nil},
 		{"amd rocm unchanged", rocm, shape(rocm, nil, "/dev/dri/renderD129", catalog.KFDDevice), nil},
+		{"rocm grant, render node only", rocm, shape(rocm, nil, "/dev/dri/renderD129"), []string{"missing device /dev/kfd, which the catalog now passes in"}},
+		{"rocm grant, kfd only", rocm, shape(rocm, nil, catalog.KFDDevice), []string{"missing GPU, which the catalog now passes in"}},
+		{"amd without rocm, render node only", amd, shape(amd, nil, "/dev/dri/renderD129"), nil},
 		{"no grant, no gpu", plain, shape(plain, nil), nil},
 	}
 	for _, tc := range cases {

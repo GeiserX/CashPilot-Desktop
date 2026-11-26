@@ -230,8 +230,17 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	if extra := minus(toSet(shape.GPU), map[string]bool{"nvidia": nvidiaGrant}); len(extra) > 0 {
 		found = append(found, fmt.Sprintf("still has GPU access (%s device request), which the catalog no longer grants", strings.Join(extra, ", ")))
 	}
-	if granted && ((nvidiaGrant && !slices.Contains(shape.GPU, "nvidia")) || (!nvidiaGrant && len(gpuDevices) == 0)) {
+	// An AMD or Intel grant needs a render node; /dev/kfd alone is no GPU. A ROCm
+	// grant also needs /dev/kfd, which a container made before rocm was set lacks.
+	hasRender := false
+	for d := range gpuDevices {
+		hasRender = hasRender || renderNodeCeiling[d]
+	}
+	switch {
+	case granted && ((nvidiaGrant && !slices.Contains(shape.GPU, "nvidia")) || (!nvidiaGrant && !hasRender)):
 		found = append(found, "missing GPU, which the catalog now passes in")
+	case granted && grant.ROCm && !gpuDevices[catalog.KFDDevice]:
+		found = append(found, fmt.Sprintf("missing device %s, which the catalog now passes in", catalog.KFDDevice))
 	}
 
 	// A container that reports no runtime is not judged: nothing is known.
