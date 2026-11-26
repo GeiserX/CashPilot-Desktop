@@ -226,6 +226,20 @@ check("2Miners shows its adjustable payout threshold", valueOf(twoMinersPayout, 
 check("2Miners shows one pool unit as unpaid", valueOf(twoMinersPayout, "Unpaid pool balance") === "0.000000001 ETC", twoMinersPayout);
 check("2Miners counts down to its lowest threshold in pool units", valueOf(twoMinersPayout, "Still to minimum payout") === "0.099999999 ETC", twoMinersPayout);
 
+// unMineable pays in the coin the miner picks, so the catalog states no fixed minimum.
+const unmineable = {
+  ...ocean,
+  slug: "unmineable",
+  payment: { methods: ["crypto"], minimumPayout: "Set per coin by unMineable (0.03 XMR on 2026-11-26)" },
+  cashout: { method: "auto", notes: "unMineable pays your address once your balance reaches the coin's payment threshold." },
+};
+const unMineablePayout = payoutFacts(unmineable, { amount: 0.00000001, currency: "LTC" });
+check("unMineable shows its per-coin payout terms", valueOf(unMineablePayout, "Payout terms") === unmineable.payment.minimumPayout, unMineablePayout);
+check("unMineable shows one unit of the chosen coin as unpaid", valueOf(unMineablePayout, "Unpaid pool balance") === "0.00000001 LTC", unMineablePayout);
+const unlistedCoin = payoutFacts(unmineable, { amount: 0.00001, currency: "ADA" });
+check("unMineable shows a small balance in an unlisted coin", valueOf(unlistedCoin, "Unpaid pool balance") === "0.00001 ADA", unlistedCoin);
+check("unMineable has no countdown to a minimum it does not state", valueOf(unMineablePayout, "Still to minimum payout") === undefined, unMineablePayout);
+
 const undocumented = payoutFacts({
   ...honeygain,
   payment: {methods: [], frequency: "", currency: ""},

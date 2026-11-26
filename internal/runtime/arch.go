@@ -246,6 +246,15 @@ type daemonInfo struct {
 	// Runtimes are the OCI runtimes the daemon offers ("runc", "runsc"), nil when it
 	// did not say. A service whose entry names a runtime is checked against it.
 	Runtimes map[string]bool
+	// Hostname is the name the daemon gives its own machine (/info Name). It equals
+	// this computer's only when the daemon runs on its kernel (see sameKernel).
+	Hostname string
+	// KernelVersion is the daemon's kernel release (/info KernelVersion).
+	KernelVersion string
+	// DaemonHost is the endpoint the client dials (unix:///var/run/docker.sock,
+	// tcp://...), "" when the client does not say. Only a local socket or pipe can
+	// be the daemon of this computer's own kernel (see sameKernel).
+	DaemonHost string
 }
 
 // infoClient is the one call daemonFacts needs, narrowed so the fallback behaviour is
@@ -260,6 +269,9 @@ type infoClient interface {
 // because failing open on security is the wrong direction.
 func daemonFacts(ctx context.Context, cli infoClient) daemonInfo {
 	facts := daemonInfo{Architecture: goruntime.GOARCH, OSType: "linux"}
+	if endpoint, ok := cli.(interface{ DaemonHost() string }); ok {
+		facts.DaemonHost = endpoint.DaemonHost()
+	}
 	result, err := cli.Info(ctx, client.InfoOptions{})
 	if err != nil {
 		return facts
@@ -270,6 +282,8 @@ func daemonFacts(ctx context.Context, cli infoClient) daemonInfo {
 	if osType := strings.TrimSpace(strings.ToLower(result.Info.OSType)); osType != "" {
 		facts.OSType = osType
 	}
+	facts.Hostname = strings.TrimSpace(result.Info.Name)
+	facts.KernelVersion = strings.TrimSpace(result.Info.KernelVersion)
 	if len(result.Info.Runtimes) > 0 {
 		facts.Runtimes = make(map[string]bool, len(result.Info.Runtimes))
 		for name := range result.Info.Runtimes {
