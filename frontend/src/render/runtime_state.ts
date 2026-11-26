@@ -52,6 +52,38 @@ export function runtimeState(runtime: Pick<RuntimeInput, "available" | "reason">
   return { kind: "not-ready", label: "Docker cannot run yet" };
 }
 
+/**
+ * Why an action that runs a container on this computer cannot run now, and how to
+ * get Docker going, in plain words; "" when Docker answers. Every such control
+ * (Import's Deploy, a proxied copy, Dashboard Start, Redeploy and Turn on
+ * isolation) reads this one shared status, so none stays clickable while Docker is
+ * stopped or not known. Native apps never ask.
+ */
+export function dockerBlocked(runtime: Pick<RuntimeInput, "available" | "reason">): string {
+  if (runtime.available) return "";
+  switch (runtimeState(runtime).kind) {
+    case "unknown":
+      return "CashPilot could not check Docker on this computer. Open Runtime to check it again.";
+    case "not-installed":
+      return "Docker is not set up on this computer. Open Runtime to set it up.";
+    case "not-running":
+      return "Docker is installed but not running. Open Runtime to start it.";
+    default:
+      return "Docker cannot run on this computer yet. Open Runtime to see what it needs.";
+  }
+}
+
+/**
+ * The line beside a disabled Docker action: why, and the button to the Runtime
+ * page (its Docker checklist on Windows). "" when Docker answers.
+ */
+export function dockerBlockedNote(runtime: Pick<RuntimeInput, "available" | "reason">): string {
+  const why = dockerBlocked(runtime);
+  if (!why) return "";
+  const label = runtimeState(runtime).kind === "unknown" ? "Check Docker" : "Set up Docker";
+  return `<p class="docker-blocked compact-copy" data-docker-blocked role="note">${escapeHtml(why)} <button class="btn btn-ghost btn-sm" data-view="runtime">${label}</button></p>`;
+}
+
 /** "A", "A and B", "A, B and C". */
 function nameList(names: string[]): string {
   if (names.length <= 1) return names.join("");

@@ -1572,7 +1572,7 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 
 type deployCredentialsLock struct {
 	deploy        sync.Mutex
-	explicitSaves uint64 // guarded by App.credentialsMu
+	explicitSaves uint64 // Save Credentials and worker deploy saves; guarded by App.credentialsMu
 }
 
 func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
