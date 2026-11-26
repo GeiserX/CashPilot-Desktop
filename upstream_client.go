@@ -164,14 +164,21 @@ func (a *App) startUpstream(ctx context.Context) {
 	}()
 }
 
+// maxHeartbeatFollowUps bounds the extra heartbeats one turn of the pairing loop
+// sends when answers keep changing the command feature, so a server that flips it
+// on every answer cannot make the loop send without pause.
+const maxHeartbeatFollowUps = 3
+
 // sendUpstreamLoop is one turn of the pairing loop. When the answer changed
 // whether the server lists the command feature, and so changed whether the
-// heartbeat carries the command URL, it sends once more at once. An upgraded
-// server can then send commands now, and a rolled-back server loses the URL now,
-// not one interval later.
+// heartbeat carries the command URL, it sends once more at once, and again when
+// that answer changes it back. An upgraded server can then send commands now,
+// and a rolled-back server loses the URL now, not one interval later. A stable
+// server gets one heartbeat per turn, a single change two.
 func (a *App) sendUpstreamLoop(ctx context.Context, client *upstream.Client, serverURL string) {
-	if a.sendUpstream(ctx, client, serverURL, "") && ctx.Err() == nil {
-		a.sendUpstream(ctx, client, serverURL, "")
+	again := a.sendUpstream(ctx, client, serverURL, "")
+	for i := 0; again && i < maxHeartbeatFollowUps && ctx.Err() == nil; i++ {
+		again = a.sendUpstream(ctx, client, serverURL, "")
 	}
 }
 

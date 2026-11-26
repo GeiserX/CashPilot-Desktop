@@ -18,8 +18,11 @@ import (
 type commandsServer struct {
 	*httptest.Server
 	modern atomic.Bool
-	mu     sync.Mutex
-	urls   []string
+	// plan, when set, decides per heartbeat (1, 2, ...) whether the answer lists
+	// the feature, in place of modern.
+	plan func(n int) bool
+	mu   sync.Mutex
+	urls []string
 }
 
 func newCommandsServer(t *testing.T) *commandsServer {
@@ -34,9 +37,14 @@ func newCommandsServer(t *testing.T) *commandsServer {
 		}
 		s.mu.Lock()
 		s.urls = append(s.urls, body.URL)
+		n := len(s.urls)
 		s.mu.Unlock()
 		reply := map[string]any{"status": "ok", "worker_id": 1, "fleet_exits": []string{}}
-		if s.modern.Load() {
+		modern := s.modern.Load()
+		if s.plan != nil {
+			modern = s.plan(n)
+		}
+		if modern {
 			reply["features"] = []string{"something_else", upstream.CommandsFeature}
 		}
 		writeJSON(w, http.StatusOK, reply)
@@ -144,5 +152,37 @@ func TestCommandFeatureIsForgottenWhenTheLoopRestarts(t *testing.T) {
 	app.sendUpstreamLoop(t.Context(), client, server.URL)
 	if got := server.take(); !slices.Equal(got, []string{""}) {
 		t.Fatalf("after a restart toward an old server: URLs %q, want one without a URL", got)
+	}
+}
+
+// A server that lists the feature in one answer and withdraws it in the next
+// (a rollback during the follow-up, or a mixed pool behind one address) must not
+// keep the command URL until the next interval: the turn sends once more,
+// without it. A server that flips on every answer gets a bounded number of
+// heartbeats per turn.
+func TestFollowUpThatLosesTheFeatureSendsAgainWithoutTheURL(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	oldNeeded := firewallRuleNeeded
+	t.Cleanup(func() { firewallRuleNeeded = oldNeeded })
+	firewallRuleNeeded = false
+	server := newCommandsServer(t)
+	app := newAppUnderTest(t)
+	t.Cleanup(app.stopUpstream)
+	publishTestPairing(t, app.App, server.URL, testWorkerKey)
+	app.syncWorkerAPI()
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	const commandURL = "http://192.168.1.30:8086"
+	client := &upstream.Client{HTTP: server.Client()}
+
+	server.plan = func(n int) bool { return n == 1 }
+	app.sendUpstreamLoop(t.Context(), client, server.URL)
+	if got := server.take(); !slices.Equal(got, []string{"", commandURL, ""}) {
+		t.Fatalf("feature listed then withdrawn: URLs %q, want none, the URL, then none", got)
+	}
+
+	server.plan = func(n int) bool { return n%2 == 1 }
+	app.sendUpstreamLoop(t.Context(), client, server.URL)
+	if got := server.take(); len(got) != 1+maxHeartbeatFollowUps {
+		t.Fatalf("feature flips on every answer: %d heartbeats in one turn, want %d", len(got), 1+maxHeartbeatFollowUps)
 	}
 }
