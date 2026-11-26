@@ -26,11 +26,13 @@
 // The asset arguments are only read for their file names.
 //
 // The command fails, and so stops the release, on a commit with no title text
-// (a squash merge with an empty title leaves only " (#838)"), and on a breaking
-// change in a release that is not a major bump.
+// (a squash merge with an empty title leaves only " (#838)"). Main's history is
+// never rewritten, so the way past such a commit is a line in titles.txt that
+// gives it the subject it should have had.
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
 	"os"
@@ -51,7 +53,7 @@ type Release struct {
 	Commits []string // commit subjects, oldest first
 
 	// Breaking holds the subjects of the commits that auto-tag counts as breaking
-	// (see isBreaking), oldest first. On a major bump they are listed under
+	// (see isBreaking), oldest first, merged branches included. On a major bump they are listed under
 	// "Before you upgrade".
 	Breaking []string
 	Assets   []string // the file names the release publishes
@@ -81,7 +83,8 @@ var conventional = regexp.MustCompile(`^(feat|fix)(?:\(([^)]*)\))?!?:\s*(.+)$`)
 
 // breakingLine is the test auto-tag.yml runs on every line of every commit's
 // subject and body to decide on a major bump. Keep the two the same: a test
-// reads auto-tag.yml and fails when they drift apart.
+// reads auto-tag.yml and fails when they drift apart. auto-tag reads every
+// commit, not only the first parents, and the raw subject, so isBreaking does too.
 var breakingLine = regexp.MustCompile(`^BREAKING CHANGE:|^[a-z]+(\([^)]*\))?!:`)
 
 // anyType is the "type(scope)!:" prefix of a conventional subject, any type.
@@ -93,9 +96,46 @@ var prRef = regexp.MustCompile(`\s*\(#\d+\)\s*$`)
 // version reads the major number of a v1.2.3 tag.
 var version = regexp.MustCompile(`^v(\d+)\.\d+\.\d+`)
 
-// commit is one first-parent commit of the release.
+// commit is one commit of the release. subject is git's %s as it is, leading
+// space included, because that is the line auto-tag tests.
 type commit struct {
 	hash, subject, body string
+}
+
+// titlesFile gives a subject to a commit whose own subject has no title text.
+// See the file for the format.
+//
+//go:embed titles.txt
+var titlesFile string
+
+// hashLine is a full commit hash.
+var hashLine = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// parseTitles reads titlesFile into a map from full commit hash to subject.
+func parseTitles(text string) (map[string]string, error) {
+	titles := map[string]string{}
+	for n, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		hash, subject, _ := strings.Cut(line, " ")
+		subject = strings.TrimSpace(subject)
+		if !hashLine.MatchString(hash) || !hasTitle(subject) {
+			return nil, fmt.Errorf("titles.txt line %d: want a full 40-character commit hash, a space, then a subject with title text; got %q", n+1, line)
+		}
+		titles[hash] = subject
+	}
+	return titles, nil
+}
+
+// title is the subject the notes show for a commit: the one titles.txt gives
+// it, or its own.
+func title(c commit, titles map[string]string) string {
+	if t, ok := titles[c.hash]; ok {
+		return t
+	}
+	return strings.TrimSpace(c.subject)
 }
 
 // isBreaking says whether auto-tag would count this commit as breaking: a line
@@ -144,28 +184,16 @@ func majorBump(tag, prev string) (int, bool) {
 	return to, true
 }
 
-// check refuses a release that would publish wrong notes.
-func check(r Release, commits []commit) error {
+// checkTitles refuses a commit with no title text that titles.txt does not
+// name. The error says how to get past it without rewriting main's history.
+func checkTitles(commits []commit, titles map[string]string) error {
 	for _, c := range commits {
-		if !hasTitle(c.subject) {
-			return fmt.Errorf("commit %s has no title text, only %q: a squash merge lost its title. Give the commit a real subject before releasing", short(c.hash), c.subject)
+		if _, ok := titles[c.hash]; !ok && !hasTitle(c.subject) {
+			return fmt.Errorf("commit %s has no title text, only %q: a squash merge lost its title. "+
+				"Do not rewrite main. In a pull request, add the line \"%s <the subject it should have had>\" to cmd/releasenotes/titles.txt, merge it, then run the release again", c.hash, c.subject, c.hash)
 		}
 	}
-	// auto-tag always makes a breaking change a major bump. Only a version typed
-	// by hand can disagree, and then the notes would hide the break.
-	_, tagOK := majorOf(r.Tag)
-	_, prevOK := majorOf(r.Prev)
-	if _, major := majorBump(r.Tag, r.Prev); len(r.Breaking) > 0 && tagOK && prevOK && !major {
-		return fmt.Errorf("%s is not a major release after %s, but %q is a breaking change. Release it as a new major version", r.Tag, r.Prev, r.Breaking[0])
-	}
 	return nil
-}
-
-func short(hash string) string {
-	if len(hash) > 12 {
-		return hash[:12]
-	}
-	return hash
 }
 
 // readable turns a subject into the words a user reads: no "type(scope)!:"
@@ -368,14 +396,19 @@ func previousTag(tag, to string) (string, error) {
 }
 
 // commits reads the release's commits, oldest first. An empty subject stays in
-// the list, so check can refuse it.
-func commits(prev, to string) ([]commit, error) {
+// the list, so checkTitles can refuse it. firstParent reads one commit per pull
+// request, as main is squash-merged; without it the list also holds the commits
+// of a merged branch, which auto-tag reads too.
+func commits(prev, to string, firstParent bool) ([]commit, error) {
 	rng := to
 	if prev != "" {
 		rng = prev + ".." + to
 	}
-	// First parent only: main is squash-merged, so each commit is one pull request.
-	out, err := git("log", "--first-parent", "--reverse", "--format=%H%x1f%s%x1f%b%x1e", rng)
+	args := []string{"log", "--reverse", "--format=%H%x1f%s%x1f%b%x1e"}
+	if firstParent {
+		args = append(args, "--first-parent")
+	}
+	out, err := git(append(args, rng)...)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +422,7 @@ func commits(prev, to string) ([]commit, error) {
 		if len(fields) != 3 {
 			return nil, fmt.Errorf("git log: unexpected record %q", record)
 		}
-		list = append(list, commit{hash: fields[0], subject: strings.TrimSpace(fields[1]), body: fields[2]})
+		list = append(list, commit{hash: fields[0], subject: fields[1], body: fields[2]})
 	}
 	return list, nil
 }
@@ -415,18 +448,28 @@ func run(args []string) (string, error) {
 		}
 		r.Prev = p
 	}
-	list, err := commits(r.Prev, *to)
+	titles, err := parseTitles(titlesFile)
 	if err != nil {
 		return "", err
 	}
-	for _, c := range list {
-		r.Commits = append(r.Commits, c.subject)
-		if isBreaking(c) {
-			r.Breaking = append(r.Breaking, c.subject)
-		}
-	}
-	if err := check(r, list); err != nil {
+	list, err := commits(r.Prev, *to, true)
+	if err != nil {
 		return "", err
+	}
+	if err := checkTitles(list, titles); err != nil {
+		return "", err
+	}
+	for _, c := range list {
+		r.Commits = append(r.Commits, title(c, titles))
+	}
+	all, err := commits(r.Prev, *to, false)
+	if err != nil {
+		return "", err
+	}
+	for _, c := range all {
+		if isBreaking(c) {
+			r.Breaking = append(r.Breaking, title(c, titles))
+		}
 	}
 	for _, a := range fs.Args() {
 		r.Assets = append(r.Assets, filepath.Base(a))
