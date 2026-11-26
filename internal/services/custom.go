@@ -210,6 +210,9 @@ func validateCustomEnv(in []CustomEnv, previous *CustomDefinition) ([]CustomEnv,
 		if !customEnvKey.MatchString(key) {
 			return nil, errors.New("variable names start with a letter or _, then letters, digits or _ (at most 128 characters)")
 		}
+		if strings.HasPrefix(strings.ToUpper(key), catalog.GPUEnvPrefix) {
+			return nil, fmt.Errorf("CashPilot sets the %s variables itself, so %s cannot be set here", catalog.GPUEnvPrefix, key)
+		}
 		if seen[key] {
 			return nil, fmt.Errorf("%s is set twice", key)
 		}

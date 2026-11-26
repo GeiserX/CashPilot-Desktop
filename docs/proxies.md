@@ -168,6 +168,7 @@ A service is refused, with the reason, when its catalog entry needs:
 - published ports;
 - volumes or host directories;
 - devices (Mysterium needs `/dev/net/tun` and UDP);
+- this computer's GPU (`docker.gpu`, a GPU miner);
 - privileged mode, or the capabilities `NET_ADMIN`, `NET_RAW` or `SYS_ADMIN`
   (Bitping asks for `NET_RAW`);
 - terms that forbid proxies or VPNs: `requirements.proxy_prohibited` in the
