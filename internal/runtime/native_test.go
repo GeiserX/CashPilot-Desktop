@@ -75,7 +75,15 @@ func runNativeStub() {
 	}
 	// Stay alive until the supervisor signals/kills us (default SIGTERM disposition
 	// terminates the process on Unix; Windows relies on Kill after the grace period).
-	select {}
+	// Not select{}: when no goroutine can ever run and no timer is pending, the Go
+	// runtime calls the process deadlocked and exits it with status 2. The Linux and
+	// macOS test binaries link cgo (macOS also purego), which switches that check
+	// off, so a blocked stub lived there. The Windows test binary has neither, so
+	// its stub died a few milliseconds after it started. A sleep keeps a timer
+	// pending, so the stub lives on every platform.
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -168,6 +176,10 @@ func nativeService(slug, url, sha, archive string) catalog.Service {
 	return catalog.Service{
 		Name: slug,
 		Slug: slug,
+		// A redeploy stops the old process with the catalog's grace period (30 s
+		// when unset) before it kills it. Windows cannot send the stub SIGTERM, so
+		// it would sit out the whole grace period.
+		Docker: catalog.DockerConfig{StopTimeout: 1},
 		Native: catalog.NativeConfig{
 			Binaries: []catalog.NativeBinary{{
 				OS:      goruntime.GOOS,
@@ -507,6 +519,41 @@ func TestNativeSupervisorRespawnsKilledStub(t *testing.T) {
 		return pid2 > 0 && pid2 != pid1
 	}) {
 		t.Fatalf("supervisor did not respawn after the process was killed (pid1=%d)", pid1)
+	}
+}
+
+// TestNativeStubStaysUpUntilStopped pins the stub every native test relies on: once
+// it runs, it keeps running until something stops it. A stub that exits on its own is
+// respawned by the supervisor under a new pid, so a test that looks right after a
+// deploy sees a dead or different process now and then. On Windows that made
+// TestNativeStopSignalsOrphanFromRegistry and
+// TestNativeRedeployWithoutFirewallBlockDeletesTheOldRule fail at random.
+func TestNativeStubStaysUpUntilStopped(t *testing.T) {
+	binPath := filepath.Join(t.TempDir(), stubBinName())
+	if err := os.WriteFile(binPath, stubBinaryBytes(t), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "marker")
+	var stderr bytes.Buffer
+	cmd := exec.Command(binPath)
+	cmd.Env = append(os.Environ(), "CASHPILOT_NATIVE_STUB=1", "CASHPILOT_STUB_MARKER="+marker)
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start stub: %v", err)
+	}
+	exited := make(chan struct{})
+	var waitErr error
+	go func() { waitErr = cmd.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = cmd.Process.Kill(); <-exited })
+
+	// The stub writes the marker as soon as it runs; from then on it must stay up.
+	if !waitFor(t, 10*time.Second, func() bool { return fileExists(marker) }) {
+		t.Fatal("the stub never wrote its marker")
+	}
+	select {
+	case <-exited:
+		t.Fatalf("the stub exited on its own (%v): %s", waitErr, stderr.String())
+	case <-time.After(time.Second):
 	}
 }
 
