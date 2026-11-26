@@ -276,7 +276,9 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 	m.pairing, _ = m.Pairing()
-	m.noteMarkerLocked()
+	if _, read := m.markerOnDisk(); read {
+		m.noteMarkerLocked()
+	}
 	return m, nil
 }
 
@@ -359,7 +361,11 @@ func (m *Manager) Reload() (bool, error) {
 	}
 	pairingChanged := p != m.pairing
 	m.pairing = p
-	m.noteMarkerLocked()
+	// A missing config.json is not a read: the copy in memory says nothing
+	// about the current file, so it neither marks nor clears.
+	if _, read := m.markerOnDisk(); read {
+		m.noteMarkerLocked()
+	}
 	return changed || pairingChanged, nil
 }
 

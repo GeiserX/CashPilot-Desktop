@@ -271,3 +271,26 @@ func TestAKeptRevisionStaysLiveWhenTheConfigTurnsUnreadable(t *testing.T) {
 		t.Errorf("unreadable config.json after the window kept A: key %q, %v; want worker-a", key.Worker, err)
 	}
 }
+
+// A missing config.json is not a read. A revision the helper read as
+// superseded stays superseded when the file is gone at its next Reload.
+func TestASupersededRevisionStaysRejectedWhenTheConfigIsRemoved(t *testing.T) {
+	window, helper := twoManagers(t)
+	publish(t, window, "http://192.168.1.10:8080", "worker-a")
+	if _, err := helper.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	editConfigFile(t, window, func(f map[string]any) { delete(f, "pairingRevision") })
+	if _, _, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
+		t.Fatalf("after the 1.x save: %v, want ErrPairingSuperseded", err)
+	}
+	if err := os.Remove(filepath.Join(window.AppDir(), "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := helper.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if p, key, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
+		t.Errorf("config.json removed: revision %s gave key %q, %v; want ErrPairingSuperseded", p.Revision, key.Worker, err)
+	}
+}
