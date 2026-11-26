@@ -40,15 +40,26 @@ while the switch is on, but the server never learns the address.
    no GPU. A custom service that uses an NVIDIA GPU through Docker's nvidia
    default runtime runs without the GPU after its next deploy. Run that
    workload outside CashPilot, or ask for a catalog entry.
-4. Know that the pairing change is one-way. Desktop 2.0 moves this computer's
+4. Know what happens if you go back to 1.x. Desktop 2.0 moves this computer's
    pairing with your CashPilot into a new file, `pairing.json`, and deletes the
-   old keys. After that, a return to Desktop 1.x needs a new join. Desktop 1.x
-   leaves `pairing.json` in place. If you then upgrade to 2.0 again, 2.0 uses
-   that old pairing and ignores a join that you made in 1.x. Server commands
-   can then start on, because 1.x drops the saved switch. After that upgrade,
-   check the server and the switch on the dashboard card. To use the server
-   from the 1.x join, switch to **Run everything here** in Settings, then join
-   again.
+   old keys. After that, a return to Desktop 1.x needs a new join. When you
+   upgrade to 2.0 again, the window applies the choice you made in 1.x when
+   it first starts:
+   - You joined a server in 1.x, the same one or another one: 2.0 moves that
+     pairing over, as on a first upgrade. The keychain must be unlocked and the
+     server must answer when the window starts. If not, unlock the keychain or
+     restore the connection, then quit CashPilot from the tray and start it
+     again.
+   - You left the server in 1.x: 2.0 leaves it too.
+   - You did not change the pairing in 1.x: 2.0 keeps its own pairing.
+   - 1.x has a server address but no key for it: 2.0 shows that address and
+     waits. Join again or leave in Settings.
+
+   When the pairing changes, the key that 2.0 held before stops working.
+   Server commands start off again, because 1.x drops the saved switch. Turn
+   them on with the switch on the dashboard card. Until the window has applied
+   the 1.x choice, this computer does not report to any server and takes no
+   commands.
 5. Download 2.0 from the
    [releases page](https://github.com/GeiserX/CashPilot-Desktop/releases).
    Desktop does not update itself and does not tell you about a new version.

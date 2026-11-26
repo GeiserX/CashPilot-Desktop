@@ -1,0 +1,756 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync/atomic"
+	"testing"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
+)
+
+// A user on 2.0 joined to server A downgrades to 1.x, changes the pairing
+// there, and upgrades again. 1.x knows nothing of pairing.json, writes its own
+// keys and config.json, and drops every config.json field it does not know.
+// The 1.x choice must win at the next 2.0 start, and a 2.0 start with no 1.x
+// in between must change nothing.
+
+const (
+	roundTripAKey      = "worker-key-a-from-2x-join"
+	roundTripBKey      = "worker-key-b-from-1x-join"
+	roundTripARejoined = "worker-key-a-from-1x-rejoin"
+	keychainService    = "CashPilot Desktop"
+)
+
+// roundTripHits counts every request (Load), and per key the requests the
+// server accepted.
+type roundTripHits struct {
+	atomic.Int32
+	accepted map[string]*atomic.Int32
+}
+
+// acceptedWith is how many requests carrying key the server accepted.
+func (h *roundTripHits) acceptedWith(key string) int32 {
+	if n, ok := h.accepted[key]; ok {
+		return n.Load()
+	}
+	return 0
+}
+
+// roundTripServer counts requests and accepts the keys in accept. A request
+// with the shared key gets issued back as the worker key, as a join does.
+func roundTripServer(t *testing.T, issued string, accept ...string) (*httptest.Server, *roundTripHits) {
+	t.Helper()
+	hits := &roundTripHits{accepted: map[string]*atomic.Int32{}}
+	for _, key := range accept {
+		hits.accepted[key] = &atomic.Int32{}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		auth := r.Header.Get("Authorization")
+		if auth == "Bearer "+testSharedKey {
+			writeJSON(w, http.StatusOK, upstream.Response{Status: "ok", WorkerID: 3, WorkerKey: issued})
+			return
+		}
+		for _, key := range accept {
+			if auth == "Bearer "+key {
+				hits.accepted[key].Add(1)
+				writeJSON(w, http.StatusOK, upstream.Response{Status: "ok", WorkerID: 3})
+				return
+			}
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(server.Close)
+	return server, hits
+}
+
+// joinedOn2x is a 2.0 window that joined server A itself, with the server
+// commands switch at its default (on). config.json never held A before.
+func joinedOn2x(t *testing.T) (*appUnderTest, *httptest.Server, *roundTripHits) {
+	t.Helper()
+	useAddrs(t, "192.168.1.30")
+	noFirewallRule(t)
+	app := newAppUnderTest(t)
+	app.ctx = nil
+	app.window = true
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	serverA, hitsA := roundTripServer(t, roundTripAKey, roundTripAKey, roundTripARejoined)
+	if out, err := app.JoinCashPilot(JoinRequest{URL: serverA.URL, Key: testSharedKey}); err != nil || !out.OK {
+		t.Fatalf("2.0 join to A: %+v, %v", out, err)
+	}
+	app.syncWorkerAPI()
+	if n := listening(app); n != 1 {
+		t.Fatalf("%d listeners after the 2.0 join, want 1", n)
+	}
+	return app, serverA, hitsA
+}
+
+// saveAs1x rewrites config.json as 1.x saves it: the fields 1.x does not know
+// are gone, and change sets what the 1.x user chose.
+func saveAs1x(t *testing.T, app *appUnderTest, change func(cfg map[string]any)) {
+	t.Helper()
+	path := filepath.Join(app.cfg.AppDir(), "config.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"pairingRevision", "serverCommandsOff", "serverCommandsChosen"} {
+		delete(cfg, field)
+	}
+	change(cfg)
+	if raw, err = json.MarshalIndent(cfg, "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// joinOn1x is a 1.x join: its two keys in the keychain, then the address.
+func joinOn1x(t *testing.T, app *appUnderTest, url, worker string) {
+	t.Helper()
+	setLegacyKeys(t, testSharedKey, worker)
+	saveAs1x(t, app, func(cfg map[string]any) { cfg["upstreamUrl"], cfg["mode"] = url, config.ModeFollower })
+}
+
+func setLegacyKeys(t *testing.T, enrol, worker string) {
+	t.Helper()
+	if err := testKeyring.Set(keychainService, "upstream-enrolment-key", enrol); err != nil {
+		t.Fatal(err)
+	}
+	if err := testKeyring.Set(keychainService, "upstream-worker-key", worker); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// slotOf names the keychain entry and fallback file of a revision's credential.
+func slotOf(p config.Pairing) string {
+	if p.Alternate {
+		return "upstream-pairing-alt"
+	}
+	return "upstream-pairing"
+}
+
+// assertSlotCleared fails when the revision's credential is still stored.
+func assertSlotCleared(t *testing.T, app *appUnderTest, p config.Pairing) {
+	t.Helper()
+	if _, err := testKeyring.Get(keychainService, slotOf(p)); err == nil {
+		t.Errorf("the credential of revision %s is still in the keychain", p.Revision)
+	}
+	if _, err := os.Stat(filepath.Join(app.cfg.AppDir(), "."+slotOf(p))); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the credential of revision %s still has a fallback file: %v", p.Revision, err)
+	}
+}
+
+func assertLegacyKeysRetired(t *testing.T) {
+	t.Helper()
+	for _, user := range []string{"upstream-enrolment-key", "upstream-worker-key"} {
+		if value, err := testKeyring.Get(keychainService, user); err == nil {
+			t.Errorf("the 1.x key %s is still in the keychain: %q", user, value)
+		}
+	}
+}
+
+func pairingOf(t *testing.T, app *appUnderTest) config.Pairing {
+	t.Helper()
+	p, err := app.cfg.Pairing()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// helperBefore is the background helper started on the same files before the
+// window: its own Manager, no window role.
+func helperBefore(t *testing.T, app *appUnderTest) *appUnderTest {
+	t.Helper()
+	cfg, err := config.NewManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper := &appUnderTest{App: &App{cfg: cfg, store: app.store, catalog: app.catalog, runtime: app.runtime, services: app.services}}
+	t.Cleanup(func() { helper.closeWorkerListeners(nil) })
+	return helper
+}
+
+// assertNoAuthorityFor fails when this process reports to A with A's key or
+// takes commands with it.
+func assertNoAuthorityFor(t *testing.T, app *appUnderTest, serverA *httptest.Server, hitsA *roundTripHits) {
+	t.Helper()
+	before := hitsA.Load()
+	app.upstream.mu.Lock()
+	app.upstream.lastFailure = upstream.Failure{}
+	app.upstream.mu.Unlock()
+	app.sendUpstream(t.Context(), &upstream.Client{HTTP: serverA.Client()}, serverA.URL, "")
+	if hitsA.Load() != before {
+		t.Error("a heartbeat reached server A")
+	}
+	// The wait for the window is not a key problem: no keychain error shows.
+	app.upstream.mu.Lock()
+	failure := app.upstream.lastFailure
+	app.upstream.mu.Unlock()
+	if failure.Code == "keychain" {
+		t.Errorf("the heartbeat reported a keychain failure: %+v", failure)
+	}
+	if key := app.currentWorkerKey(); key != "" {
+		t.Errorf("server A's key %q still authorizes commands", key)
+	}
+	app.syncWorkerAPI()
+	if n := listening(app); n != 0 {
+		t.Errorf("%d listeners for server A, want 0", n)
+	}
+}
+
+// 1.x joined server B. The next 2.0 start carries B over as a first upgrade
+// does: a new revision for B, server commands off, A's credential and the 1.x
+// keys retired. The helper started before the window gives A nothing.
+func TestOneXJoinAfterDowngradeReplacesThe2xPairing(t *testing.T) {
+	app, serverA, hitsA := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+	serverB, hitsB := roundTripServer(t, "", roundTripBKey)
+
+	joinOn1x(t, app, serverB.URL, roundTripBKey)
+	restart(t, app)
+	assertNoAuthorityFor(t, helperBefore(t, app), serverA, hitsA)
+
+	app.enrolSavedPairing(t.Context())
+	p := pairingOf(t, app)
+	if p.Revision == pairingA.Revision || p.ServerURL != serverB.URL {
+		t.Fatalf("after the start: %+v, want a new revision for B %s", p, serverB.URL)
+	}
+	if hitsB.Load() == 0 {
+		t.Error("the carry-over never asked server B")
+	}
+	if cfg := app.cfg.Config(); !cfg.ServerCommandsOff || cfg.ServerCommandsChosen || cfg.UpstreamURL != serverB.URL {
+		t.Errorf("config after the carry-over: off=%t chosen=%t server=%q", cfg.ServerCommandsOff, cfg.ServerCommandsChosen, cfg.UpstreamURL)
+	}
+	if _, worker := storedKeys(t, app.App); worker != roundTripBKey {
+		t.Errorf("worker key %q, want B's 1.x key", worker)
+	}
+	assertSlotCleared(t, app, pairingA)
+	assertLegacyKeysRetired(t)
+	if w := call(t, app, http.MethodGet, "/api/status", roundTripAKey, nil); w.Code == http.StatusOK {
+		t.Error("server A's key still opens the server commands")
+	}
+	app.syncWorkerAPI()
+	if n := listening(app); n != 0 {
+		t.Errorf("%d listeners after the carry-over, want 0 (commands off)", n)
+	}
+
+	// The next start is a plain 2.0 restart: nothing moves again.
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+	if again := pairingOf(t, app); again != p {
+		t.Errorf("a second start changed the pairing: %+v, want %+v", again, p)
+	}
+}
+
+// 1.x left the server. The next 2.0 start publishes a Leave: A's credential is
+// gone, and nothing reports to A or listens for it.
+func TestOneXLeaveAfterDowngradeLeavesThe2xPairing(t *testing.T) {
+	app, serverA, hitsA := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+
+	setLegacyKeys(t, "", "")
+	saveAs1x(t, app, func(cfg map[string]any) {
+		delete(cfg, "upstreamUrl")
+		cfg["mode"] = config.ModeLead
+	})
+	restart(t, app)
+	assertNoAuthorityFor(t, helperBefore(t, app), serverA, hitsA)
+
+	app.enrolSavedPairing(t.Context())
+	p := pairingOf(t, app)
+	if p.Revision == pairingA.Revision || p.ServerURL != "" {
+		t.Fatalf("after the start: %+v, want a new revision with no server", p)
+	}
+	if mode := app.cfg.Config().Mode; mode != config.ModeLead {
+		t.Errorf("mode %q after the 1.x Leave, want lead", mode)
+	}
+	assertSlotCleared(t, app, pairingA)
+	assertLegacyKeysRetired(t)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+}
+
+// 1.x joined server A again and got a new key. The next 2.0 start carries that
+// pairing over: a new revision with the 1.x key, server commands off, and the
+// key 2.0 held for A retired.
+func TestOneXRejoinOfTheSameServerIsCarriedOver(t *testing.T) {
+	app, serverA, _ := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+
+	joinOn1x(t, app, serverA.URL, roundTripARejoined)
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+
+	p := pairingOf(t, app)
+	if p.Revision == pairingA.Revision || p.ServerURL != serverA.URL {
+		t.Fatalf("after the start: %+v, want a new revision for A", p)
+	}
+	if cfg := app.cfg.Config(); !cfg.ServerCommandsOff || cfg.ServerCommandsChosen {
+		t.Errorf("server commands off=%t chosen=%t, want off and not chosen", cfg.ServerCommandsOff, cfg.ServerCommandsChosen)
+	}
+	if _, worker := storedKeys(t, app.App); worker != roundTripARejoined {
+		t.Errorf("worker key %q, want the key 1.x got", worker)
+	}
+	assertSlotCleared(t, app, pairingA)
+	assertLegacyKeysRetired(t)
+}
+
+// 1.x opened and saved its settings, and left the pairing alone. The next 2.0
+// start keeps the revision, and server commands start off because 1.x dropped
+// the switch.
+func TestOneXSaveThatKeptTheServerKeepsThe2xPairing(t *testing.T) {
+	app, serverA, hitsA := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+
+	saveAs1x(t, app, func(cfg map[string]any) { cfg["displayCurrency"] = "EUR" })
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+
+	if p := pairingOf(t, app); p != pairingA {
+		t.Fatalf("the pairing changed: %+v, want %+v", p, pairingA)
+	}
+	if cfg := app.cfg.Config(); !cfg.ServerCommandsOff || cfg.UpstreamURL != serverA.URL {
+		t.Errorf("after the start: off=%t server=%q", cfg.ServerCommandsOff, cfg.UpstreamURL)
+	}
+	before := hitsA.acceptedWith(roundTripAKey)
+	app.sendUpstream(t.Context(), &upstream.Client{HTTP: serverA.Client()}, serverA.URL, "")
+	if hitsA.acceptedWith(roundTripAKey) == before {
+		t.Error("server A accepted no heartbeat with its key from the kept pairing")
+	}
+}
+
+// 1.x pointed at server B with no key, which 1.x could not use either. The next
+// 2.0 start shows B as 1.x left it and keeps A's revision unused: nothing
+// reports to A or takes its commands until the user joins or leaves here.
+func TestOneXAddressWithNoKeyLeavesAUnused(t *testing.T) {
+	app, serverA, hitsA := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+	serverB, hitsB := roundTripServer(t, "", roundTripBKey)
+
+	saveAs1x(t, app, func(cfg map[string]any) { cfg["upstreamUrl"] = serverB.URL })
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+	if p := pairingOf(t, app); p != pairingA {
+		t.Fatalf("the pairing changed with no 1.x key: %+v, want %+v", p, pairingA)
+	}
+	if url := app.cfg.Config().UpstreamURL; url != serverB.URL {
+		t.Errorf("the window shows %q, want B as 1.x left it", url)
+	}
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+	if hitsB.Load() != 0 {
+		t.Error("something reached server B with no key")
+	}
+}
+
+// Server A refused this computer, so A's revision is suspended. 1.x then saved
+// server B with no key. The window shows B with B's own status, the missing
+// key, not A's refusal: rejoining A is not what the user needs to do.
+func TestASuspendedRevisionDoesNotShowAsTheWaitingAddressError(t *testing.T) {
+	app, _, _ := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+	if err := app.cfg.UpdatePairing(pairingA.Revision, func(p *config.Pairing) error {
+		p.Suspended = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if status := app.pairingStatus(); status == nil || status.ErrorCode != "unauthorized" {
+		t.Fatalf("setup: A's suspension shows as %+v, want unauthorized", status)
+	}
+	serverB, _ := roundTripServer(t, "", roundTripBKey)
+
+	saveAs1x(t, app, func(cfg map[string]any) { cfg["upstreamUrl"] = serverB.URL })
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+	status := app.pairingStatus()
+	if status == nil || status.ServerURL != serverB.URL || status.ErrorCode != "no-key" {
+		t.Errorf("the window shows %+v, want B with the no-key error", status)
+	}
+}
+
+// A plain 2.0 restart with no 1.x in between touches nothing: not the pairing,
+// not the server commands switch (at its default, or turned on by the user),
+// not config.json.
+func TestPlain2xRestartKeepsThePairing(t *testing.T) {
+	for _, chosen := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default switch", true: "switch turned on"}[chosen], func(t *testing.T) {
+			app, _, _ := joinedOn2x(t)
+			if chosen {
+				if _, err := app.SetServerCommands(true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			pairingA := pairingOf(t, app)
+			path := filepath.Join(app.cfg.AppDir(), "config.json")
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			restart(t, app)
+			app.enrolSavedPairing(t.Context())
+			assertStillOnA(t, app, pairingA, chosen)
+			if after, _ := os.ReadFile(path); !bytes.Equal(after, before) {
+				t.Errorf("a plain restart rewrote config.json:\n%s\nwant\n%s", after, before)
+			}
+		})
+	}
+}
+
+// 2.0's own config saves, including a whole-object Save from a caller that
+// never saw the marker, are not mistaken for a 1.x save: the switch keeps its
+// default (on), and the pairing stays.
+func Test2xConfigSavesAreNotA1xChange(t *testing.T) {
+	app, _, _ := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+
+	raw, err := json.Marshal(app.cfg.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	delete(fields, "pairingRevision")
+	fields["displayCurrency"] = "EUR"
+	raw, _ = json.Marshal(fields)
+	var cfg config.AppConfig
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.cfg.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.SaveSettings(map[string]string{"timezone": "Europe/Madrid"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.cfg.Update(func(c *config.AppConfig) { c.UpstreamHistoryPushedTo = c.UpstreamURL }); err != nil {
+		t.Fatal(err)
+	}
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+	assertStillOnA(t, app, pairingA, false)
+}
+
+func assertStillOnA(t *testing.T, app *appUnderTest, pairingA config.Pairing, chosen bool) {
+	t.Helper()
+	if p := pairingOf(t, app); p != pairingA {
+		t.Fatalf("the pairing changed: %+v, want %+v", p, pairingA)
+	}
+	if cfg := app.cfg.Config(); cfg.ServerCommandsOff || cfg.ServerCommandsChosen != chosen {
+		t.Errorf("server commands off=%t chosen=%t, want on and chosen=%t", cfg.ServerCommandsOff, cfg.ServerCommandsChosen, chosen)
+	}
+	if w := call(t, app, http.MethodGet, "/api/status", roundTripAKey, nil); w.Code != http.StatusOK {
+		t.Errorf("server A's key gets %d, want 200", w.Code)
+	}
+	app.syncWorkerAPI()
+	if n := listening(app); n != 1 {
+		t.Errorf("%d listeners, want 1", n)
+	}
+}
+
+// A locked keychain at the start is not "1.x left no key": the pairing waits,
+// A gets nothing meanwhile, and the next start after the unlock carries the 1.x
+// pairing over. The rejoin of A is the case that catches a locked read taken
+// as "no key": that read would keep A's old revision and lose the 1.x key.
+// Only macOS and Windows tell a locked keychain from a missing key
+// (refuseKeyRegen); elsewhere a locked store reads as no key by design.
+func TestLockedKeychainDelaysThe1xCarryOver(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "windows" {
+		t.Skip("a locked keychain reads as a missing key on " + runtime.GOOS)
+	}
+	for _, sameServer := range []bool{false, true} {
+		t.Run(map[bool]string{false: "1.x joined B", true: "1.x rejoined A"}[sameServer], func(t *testing.T) {
+			app, serverA, hitsA := joinedOn2x(t)
+			pairingA := pairingOf(t, app)
+			url, worker := serverA.URL, roundTripARejoined
+			if !sameServer {
+				serverB, _ := roundTripServer(t, "", roundTripBKey)
+				url, worker = serverB.URL, roundTripBKey
+			}
+
+			joinOn1x(t, app, url, worker)
+			restart(t, app)
+			testKeyring.fail(errors.New("test keychain locked"))
+			t.Cleanup(testKeyring.reset)
+			app.enrolSavedPairing(t.Context())
+			if p := pairingOf(t, app); p != pairingA {
+				t.Fatalf("a locked keychain changed the pairing: %+v, want %+v", p, pairingA)
+			}
+			assertNoAuthorityFor(t, app, serverA, hitsA)
+
+			// The mock forgets every entry when it unlocks; 1.x's keys are put back.
+			testKeyring.reset()
+			setLegacyKeys(t, testSharedKey, worker)
+			restart(t, app)
+			app.enrolSavedPairing(t.Context())
+			if p := pairingOf(t, app); p.ServerURL != url || p.Revision == pairingA.Revision {
+				t.Fatalf("after the unlock: %+v, want a new revision for %s", p, url)
+			}
+			if _, got := storedKeys(t, app.App); got != worker {
+				t.Errorf("worker key %q after the unlock, want the 1.x key %q", got, worker)
+			}
+			if !app.cfg.Config().ServerCommandsOff {
+				t.Error("server commands are on after the carry-over")
+			}
+		})
+	}
+}
+
+// The Leave that ends a 1.x round trip cannot write pairing.json. A's revision
+// stays superseded: nothing reports to A or takes its commands, and the next
+// start publishes the Leave.
+func TestFailedPairingWriteKeepsThe1xLeaveWaiting(t *testing.T) {
+	app, serverA, hitsA := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+
+	setLegacyKeys(t, "", "")
+	saveAs1x(t, app, func(cfg map[string]any) {
+		delete(cfg, "upstreamUrl")
+		cfg["mode"] = config.ModeLead
+	})
+	restart(t, app)
+	restore := config.FailPairingWritesForTest(errors.New("test disk full"))
+	t.Cleanup(restore)
+	app.enrolSavedPairing(t.Context())
+	restore()
+	if p := pairingOf(t, app); p != pairingA {
+		t.Fatalf("the failed Leave changed the pairing: %+v, want %+v", p, pairingA)
+	}
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+	restart(t, app)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+
+	app.enrolSavedPairing(t.Context())
+	if p := pairingOf(t, app); p.Revision == pairingA.Revision || p.ServerURL != "" {
+		t.Fatalf("the next start: %+v, want a new revision with no server", p)
+	}
+	assertSlotCleared(t, app, pairingA)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+}
+
+// The background helper loaded config.json before the window's first join, so
+// its copy has no marker. The join is still the window's own: the helper
+// reports to the server and listens at once.
+func TestHelperStartedBeforeA2xJoinUsesItAtOnce(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	noFirewallRule(t)
+	app := newAppUnderTest(t)
+	app.ctx = nil
+	app.window = true
+	helper := helperBefore(t, app)
+	serverA, hitsA := roundTripServer(t, roundTripAKey, roundTripAKey)
+	if out, err := app.JoinCashPilot(JoinRequest{URL: serverA.URL, Key: testSharedKey}); err != nil || !out.OK {
+		t.Fatalf("2.0 join to A: %+v, %v", out, err)
+	}
+
+	if _, _, err := helper.cfg.ReadPairingCredential(false); err != nil {
+		t.Errorf("the helper cannot read the new pairing: %v", err)
+	}
+	before := hitsA.Load()
+	helper.sendUpstream(t.Context(), &upstream.Client{HTTP: serverA.Client()}, serverA.URL, "")
+	if hitsA.Load() == before {
+		t.Error("the helper did not report to the server the window joined")
+	}
+	helper.syncWorkerAPI()
+	if n := listening(helper); n != 1 {
+		t.Errorf("%d helper listeners after the join, want 1", n)
+	}
+}
+
+// The process died between the two writes of a 1.x Leave's publication:
+// config.json already holds the next revision's marker and the copied empty
+// server, but pairing.json still names A. A marker that is not A's revision
+// must not bring A back: A stays without authority, and the next start
+// finishes the Leave.
+func TestAMarkerForAnUnpublishedRevisionDoesNotRestoreA(t *testing.T) {
+	app, serverA, hitsA := joinedOn2x(t)
+	pairingA := pairingOf(t, app)
+
+	setLegacyKeys(t, "", "")
+	saveAs1x(t, app, func(cfg map[string]any) {
+		delete(cfg, "upstreamUrl")
+		cfg["mode"] = config.ModeLead
+		cfg["pairingRevision"] = "NEXT-REVISION-NEVER-PUBLISHED"
+	})
+	restart(t, app)
+	if p := pairingOf(t, app); p != pairingA {
+		t.Fatalf("setup: pairing %+v, want A's %+v", p, pairingA)
+	}
+	assertNoAuthorityFor(t, helperBefore(t, app), serverA, hitsA)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+	if mode := app.cfg.Config().Mode; mode != config.ModeLead {
+		t.Errorf("mode %q while A's revision is not marked, want lead", mode)
+	}
+
+	app.enrolSavedPairing(t.Context())
+	if p := pairingOf(t, app); p.Revision == pairingA.Revision || p.ServerURL != "" {
+		t.Fatalf("the next start: %+v, want a new revision with no server", p)
+	}
+	assertSlotCleared(t, app, pairingA)
+	assertNoAuthorityFor(t, app, serverA, hitsA)
+}
+
+// The window and the helper each hold a Manager on config.json. The helper's
+// copy predates the window's last publication. A whole-object Save from that
+// copy must not write its older marker or server over the window's: the
+// window's pairing stays live, and config.json still names its server.
+func TestSaveFromAnOlderCopyKeepsTheNewerMarker(t *testing.T) {
+	for _, onA := range []bool{false, true} {
+		t.Run(map[bool]string{false: "helper loaded before the first join", true: "helper loaded while on A"}[onA], func(t *testing.T) {
+			useAddrs(t, "192.168.1.30")
+			noFirewallRule(t)
+			app := newAppUnderTest(t)
+			app.ctx = nil
+			app.window = true
+			t.Cleanup(func() { app.closeWorkerListeners(nil) })
+			serverA, _ := roundTripServer(t, roundTripAKey, roundTripAKey)
+			serverB, _ := roundTripServer(t, roundTripBKey, roundTripBKey)
+			helper := helperBefore(t, app)
+			want, wantKey := serverA.URL, roundTripAKey
+			if out, err := app.JoinCashPilot(JoinRequest{URL: serverA.URL, Key: testSharedKey}); err != nil || !out.OK {
+				t.Fatalf("2.0 join to A: %+v, %v", out, err)
+			}
+			if onA {
+				helper = helperBefore(t, app)
+				if _, err := app.SaveSettings(map[string]string{"upstreamUrl": serverB.URL, "upstreamKey": testSharedKey}); err != nil {
+					t.Fatalf("switch to B: %v", err)
+				}
+				want, wantKey = serverB.URL, roundTripBKey
+			}
+			published := pairingOf(t, app)
+			if published.ServerURL != want {
+				t.Fatalf("setup: pairing %+v, want server %s", published, want)
+			}
+
+			cfg := helper.cfg.Config()
+			cfg.DisplayCurrency = "EUR"
+			if err := helper.cfg.Save(cfg); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, key, err := app.cfg.ReadPairingCredential(false); err != nil || key.Worker != wantKey {
+				t.Errorf("after the helper's save: worker key %q, %v; want %q", key.Worker, err, wantKey)
+			}
+			raw, err := os.ReadFile(filepath.Join(app.cfg.AppDir(), "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var file config.AppConfig
+			if err := json.Unmarshal(raw, &file); err != nil {
+				t.Fatal(err)
+			}
+			if file.PairingRevision != published.Revision || file.UpstreamURL != want || file.Mode != config.ModeFollower || file.DisplayCurrency != "EUR" {
+				t.Errorf("config.json after the helper's save: marker=%q server=%q mode=%q currency=%q; want %q, %q, follower, EUR",
+					file.PairingRevision, file.UpstreamURL, file.Mode, file.DisplayCurrency, published.Revision, want)
+			}
+		})
+	}
+}
+
+// pendingOneXAddress leaves the window as a 1.x save with no key leaves it: the
+// revision is superseded and config.json names server B, which the window
+// shows as pending. afterLeave starts from a 2.0 Leave, so the revision has no
+// server; otherwise the revision is still A's.
+func pendingOneXAddress(t *testing.T, afterLeave bool) (app *appUnderTest, serverA, serverB *httptest.Server, revision config.Pairing) {
+	t.Helper()
+	app, serverA, _ = joinedOn2x(t)
+	if afterLeave {
+		if _, err := app.SwitchToLead(); err != nil {
+			t.Fatalf("2.0 Leave: %v", err)
+		}
+	}
+	revision = pairingOf(t, app)
+	serverB, _ = roundTripServer(t, roundTripBKey, roundTripBKey)
+	setLegacyKeys(t, "", "")
+	saveAs1x(t, app, func(cfg map[string]any) {
+		cfg["upstreamUrl"] = serverB.URL
+		delete(cfg, "mode")
+	})
+	restart(t, app)
+	app.enrolSavedPairing(t.Context())
+	if p := pairingOf(t, app); p != revision {
+		t.Fatalf("setup: the pairing changed with no 1.x key: %+v, want %+v", p, revision)
+	}
+	if cfg := app.cfg.Config(); cfg.UpstreamURL != serverB.URL || cfg.Mode != config.ModeFollower {
+		t.Fatalf("setup: the window shows %q (%s), want B pending", cfg.UpstreamURL, cfg.Mode)
+	}
+	return app, serverA, serverB, revision
+}
+
+// While 1.x's address B waits for a key, Leave leaves B, the address the window
+// shows, also when the superseded revision had no server.
+func TestLeaveWhileAOneXAddressWaitsLeavesIt(t *testing.T) {
+	for _, afterLeave := range []bool{false, true} {
+		t.Run(map[bool]string{false: "revision for A", true: "revision after a 2.0 Leave"}[afterLeave], func(t *testing.T) {
+			app, _, serverB, revision := pendingOneXAddress(t, afterLeave)
+			out, err := app.SwitchToLead()
+			if err != nil {
+				t.Fatalf("Leave: %v", err)
+			}
+			if out.ServerURL != serverB.URL {
+				t.Errorf("Leave answered server %q, want B %s", out.ServerURL, serverB.URL)
+			}
+			if p := pairingOf(t, app); p.Revision == revision.Revision || p.ServerURL != "" {
+				t.Fatalf("after Leave: %+v, want a new revision with no server", p)
+			}
+			if cfg := app.cfg.Config(); cfg.UpstreamURL != "" || cfg.Mode != config.ModeLead {
+				t.Errorf("after Leave the window shows %q (%s), want lead", cfg.UpstreamURL, cfg.Mode)
+			}
+		})
+	}
+}
+
+// While 1.x's address B waits for a key, a key typed alone in Settings joins B,
+// the address the window shows, not the superseded revision's server.
+func TestKeyAloneWhileAOneXAddressWaitsJoinsIt(t *testing.T) {
+	for _, afterLeave := range []bool{false, true} {
+		t.Run(map[bool]string{false: "revision for A", true: "revision after a 2.0 Leave"}[afterLeave], func(t *testing.T) {
+			app, _, serverB, revision := pendingOneXAddress(t, afterLeave)
+			if _, err := app.SaveSettings(map[string]string{"upstreamKey": testSharedKey}); err != nil {
+				t.Fatalf("key alone: %v", err)
+			}
+			if p := pairingOf(t, app); p.Revision == revision.Revision || p.ServerURL != serverB.URL {
+				t.Fatalf("after the key: %+v, want a new revision for B %s", p, serverB.URL)
+			}
+			if _, worker := storedKeys(t, app.App); worker != roundTripBKey {
+				t.Errorf("worker key %q, want B's", worker)
+			}
+		})
+	}
+}
+
+// On Windows, the start that carries a 1.x Leave over records that the server
+// commands rule must go, as a Leave made here does. config.json has no address
+// after the 1.x Leave; the revision's own server is what was left.
+func TestOneXLeaveCarriedOverRemovesTheFirewallRule(t *testing.T) {
+	app, _, _ := joinedOn2x(t)
+	setLegacyKeys(t, "", "")
+	saveAs1x(t, app, func(cfg map[string]any) {
+		delete(cfg, "upstreamUrl")
+		cfg["mode"] = config.ModeLead
+	})
+	restart(t, app)
+	installed := round8NewProgram
+	setupRound8Firewall(t, &installed)
+
+	app.enrolSavedPairing(t.Context())
+	if p := pairingOf(t, app); p.ServerURL != "" || !p.RemoveFirewall {
+		t.Fatalf("after the carried-over Leave: %+v, want no server and the rule's removal recorded", p)
+	}
+}

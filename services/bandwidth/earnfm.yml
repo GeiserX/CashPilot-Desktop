@@ -13,6 +13,9 @@ short_description: Bandwidth sharing - email/password auth, lightweight client
 referral:
   signup_url: "https://earn.fm/ref/GEISYB91"
   code: "GEISYB91"
+  bonus:
+    referrer: "10% of their earnings for life"
+    referee: "$5 starting balance"
 
 docker:
   image: "earnfm/earnfm-client@sha256:96169b3cd1b5cf2fce74b24b72949037d9539eeceb70ecdbe6d8081839a5db32"

@@ -981,7 +981,7 @@ func (a *App) serverCommandsState() ServerCommandsState {
 	// config.json) gets the switch off when it is (enrolPairing). Show it off
 	// already, so the card does not show on and then turn off by itself.
 	if on && !cfg.ServerCommandsChosen {
-		if p, err := a.cfg.Pairing(); err == nil && p.Revision == "" && a.pairingServer(p) != "" {
+		if p, err := a.cfg.Pairing(); err == nil && p.Revision == "" && a.pairingServer(p, false) != "" {
 			on = false
 		}
 	}

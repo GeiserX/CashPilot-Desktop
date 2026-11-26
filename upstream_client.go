@@ -306,6 +306,11 @@ func (a *App) stopUpstreamLocked() {
 // heartbeat still carried the URL).
 func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverURL, enrolKey string) (again bool) {
 	pairing, credential, err := a.cfg.ReadPairingCredential(a.window)
+	if errors.Is(err, config.ErrPairingSuperseded) {
+		// 1.x changed the pairing after a downgrade. Only the window carries that
+		// change over (enrolSavedPairing); until then nothing reports to either server.
+		return false
+	}
 	if err != nil {
 		a.recordPairing(serverURL, upstream.Failure{Code: "keychain", Message: "CashPilot cannot read the saved key. Unlock the keychain or join again."})
 		return false
