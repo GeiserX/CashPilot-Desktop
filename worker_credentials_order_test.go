@@ -30,8 +30,9 @@ func (p *heldDeployProvider) Deploy(_ context.Context, spec runtime.DeploySpec, 
 // A worker deploy saves the credentials it sent. When it does that while a local
 // deploy of the same service is running, the worker's save is the later one and
 // wins, as Save Credentials does: the local deploy then saves nothing. Before, the
-// local deploy merged its form into the worker's values, so a blank secret saved
-// the worker's token, which the local container never got.
+// local deploy saved its form over the worker's save. A typed secret replaced the
+// worker's token. With a blank secret the token stayed the worker's, but the local
+// form's other fields, such as the device name, replaced the worker's save.
 func TestWorkerCredentialWriteWinsOverAnInFlightLocalDeploy(t *testing.T) {
 	const slug = "traffmonetizer"
 	const local, worker = "1|local-fixture", "2|worker-fixture"
