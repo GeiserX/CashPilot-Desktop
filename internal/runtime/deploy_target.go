@@ -53,8 +53,17 @@ func (p *DockerProvider) DeployTarget(ctx context.Context, slug string) (string,
 // DeployTarget for a native program: a program has no container ID to name, so only
 // a first deploy can be checked.
 func (p *NativeProcessProvider) DeployTarget(_ context.Context, slug string) (string, error) {
-	if p.readRegistry().Entries[slug] != nil {
+	if p.hasProgram(slug) {
 		return "", fmt.Errorf("%s runs as a program on this computer, not in a container: %w", slug, ErrNoDeployTarget)
 	}
 	return NoContainer, nil
+}
+
+// hasProgram reports whether slug has a program here: a registry entry, or a process
+// this session launched whose registry write failed (launchProcess keeps it running).
+func (p *NativeProcessProvider) hasProgram(slug string) bool {
+	p.mu.Lock()
+	_, launched := p.procs[slug]
+	p.mu.Unlock()
+	return launched || p.readRegistry().Entries[slug] != nil
 }

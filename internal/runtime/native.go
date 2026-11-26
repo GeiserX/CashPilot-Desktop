@@ -286,7 +286,7 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 	if spec.ExpectedContainer != nil {
 		// See DeployTarget: a running program cannot be named, so a checked deploy
 		// only creates one.
-		if p.readRegistry().Entries[spec.Slug] != nil {
+		if p.hasProgram(spec.Slug) {
 			return ContainerInfo{}, fmt.Errorf("%s runs as a program on this computer, not in a container: %w", svc.Name, ErrNoDeployTarget)
 		}
 		if *spec.ExpectedContainer != NoContainer {

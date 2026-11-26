@@ -152,6 +152,44 @@ func TestNativeCheckedDeployOnlyCreates(t *testing.T) {
 	}
 }
 
+// A program this session launched but could not write to the registry still runs:
+// the lookup must not name it as none, and a create-only yes must not stop it.
+func TestNativeProgramWithNoRegistryEntryIsNotAFirstDeploy(t *testing.T) {
+	ctx := context.Background()
+	p := newTestNativeProvider(t)
+	var downloads atomic.Int32
+	url := serveCounting(t, p, &downloads)
+	p.mu.Lock()
+	p.procs["prog"] = &managedProcess{slug: "prog"}
+	p.mu.Unlock()
+	t.Cleanup(func() {
+		p.mu.Lock()
+		delete(p.procs, "prog")
+		p.mu.Unlock()
+	})
+	if len(p.readRegistry().Entries) != 0 {
+		t.Fatalf("registry has entries %v; want none", p.readRegistry().Entries)
+	}
+
+	if got, err := p.DeployTarget(ctx, "prog"); !errors.Is(err, ErrNoDeployTarget) {
+		t.Fatalf("DeployTarget while an unregistered program runs = %q, %v; want ErrNoDeployTarget", got, err)
+	}
+	none := NoContainer
+	spec := DeploySpec{Slug: "prog", Service: nativeService("prog", url, strings.Repeat("0", 64), ""), ExpectedContainer: &none}
+	if _, err := p.Deploy(ctx, spec, nil); !errors.Is(err, ErrNoDeployTarget) {
+		t.Fatalf("checked deploy while an unregistered program runs: err = %v; want ErrNoDeployTarget", err)
+	}
+	if downloads.Load() != 0 {
+		t.Fatalf("a refused checked deploy downloaded the binary %d times", downloads.Load())
+	}
+	p.mu.Lock()
+	_, still := p.procs["prog"]
+	p.mu.Unlock()
+	if !still {
+		t.Fatal("a refused checked deploy stopped the running program")
+	}
+}
+
 func seedNativeEntry(t *testing.T, p *NativeProcessProvider, slug string) {
 	t.Helper()
 	if err := p.mutateRegistry(func(reg *nativeRegistry) {
