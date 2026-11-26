@@ -2850,6 +2850,7 @@ export namespace main {
 	    allowSharedIdentity: boolean;
 	    replaceExisting: boolean;
 	    expectedContainer: string;
+	    workerIdentity: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployRequest(source);
@@ -2864,6 +2865,7 @@ export namespace main {
 	        this.allowSharedIdentity = source["allowSharedIdentity"];
 	        this.replaceExisting = source["replaceExisting"];
 	        this.expectedContainer = source["expectedContainer"];
+	        this.workerIdentity = source["workerIdentity"];
 	    }
 	}
 	export class WorkerDeployResult {
@@ -2874,6 +2876,7 @@ export namespace main {
 	    notes: string[];
 	    credentialWarning?: string;
 	    expectedContainer?: string;
+	    workerIdentity?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployResult(source);
@@ -2888,6 +2891,7 @@ export namespace main {
 	        this.notes = source["notes"];
 	        this.credentialWarning = source["credentialWarning"];
 	        this.expectedContainer = source["expectedContainer"];
+	        this.workerIdentity = source["workerIdentity"];
 	    }
 	}
 	

@@ -262,6 +262,25 @@ type DeployOptions struct {
 	// before the file existed into it.
 	Wallet        *runtime.WalletRequest
 	AdminApproval *runtime.AdminStep
+	// ExpectedContainer is the only container the deploy may replace (see
+	// runtime.DeploySpec.ExpectedContainer); nil replaces whatever runs, as the
+	// Deploy button does.
+	ExpectedContainer *string
+}
+
+// DeployTarget names the container a deploy of slug would replace: its full ID, or
+// runtime.NoContainer. It reads no logs.
+func (m *Manager) DeployTarget(ctx context.Context, slug string) (string, error) {
+	kind := ""
+	if svc, ok := m.catalog.Get(slug); ok {
+		kind = m.kindForService(svc)
+	}
+	provider, _ := m.resolveProvider(kind)
+	reader, ok := provider.(runtime.DeployTargetReader)
+	if !ok {
+		return "", runtime.ErrNoDeployTarget
+	}
+	return reader.DeployTarget(ctx, slug)
 }
 
 // DeployWith deploys slug with the given options. The first copy is deployed exactly
@@ -371,6 +390,24 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		kind = ""
 	}
 	provider, runtimeKind := m.resolveProvider(kind)
+	if opts.ExpectedContainer != nil {
+		// Only a runtime that compares it may take a checked deploy: any other would
+		// replace whatever runs.
+		reader, ok := provider.(runtime.DeployTargetReader)
+		if !ok {
+			return store.Deployment{}, nil, runtime.ErrNoDeployTarget
+		}
+		// Compared first under this lock, as the CashPilot worker does, so a stale
+		// request is refused before an image pull or a wallet step. The runtime
+		// compares again right before it replaces anything.
+		actual, err := reader.DeployTarget(ctx, slug)
+		if err != nil {
+			return store.Deployment{}, nil, err
+		}
+		if actual != *opts.ExpectedContainer {
+			return store.Deployment{}, nil, &runtime.DeployTargetChanged{Actual: actual}
+		}
+	}
 	if runtimeKind != nativeRuntimeKind {
 		if err := checkPublished(svc, credentials); err != nil {
 			return store.Deployment{}, nil, refusedDeploy(svc, err)
@@ -397,7 +434,7 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		}
 	}
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
-	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet, AdminApproval: opts.AdminApproval}, func(message string) {
+	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet, AdminApproval: opts.AdminApproval, ExpectedContainer: opts.ExpectedContainer}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
 	})
 	if err != nil {

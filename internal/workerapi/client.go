@@ -163,10 +163,7 @@ type DeployTargetState struct {
 // DeployState reports whether the worker supports checked deploys, and if so
 // whether the actual Docker name to be deployed already exists.
 func (c *Client) DeployState(ctx context.Context, slug string) (DeployTargetState, error) {
-	var out struct {
-		Exists    *bool   `json:"exists"`
-		Container *string `json:"expected_container"`
-	}
+	var out map[string]json.RawMessage
 	err := c.do(ctx, http.MethodGet, "/api/containers/"+url.PathEscape(slug)+checkedDeploySuffix, nil, nil, nil, 0, &out)
 	if err != nil {
 		var refusal *Error
@@ -175,20 +172,25 @@ func (c *Client) DeployState(ctx context.Context, slug string) (DeployTargetStat
 		}
 		return DeployTargetState{}, err
 	}
-	if out.Exists == nil {
+	var exists bool
+	if raw, ok := out["exists"]; !ok || isNull(raw) || json.Unmarshal(raw, &exists) != nil {
 		return DeployTargetState{}, errors.New("the worker did not answer the container lookup")
 	}
-	state := DeployTargetState{Checked: true, Exists: *out.Exists}
-	if out.Container != nil {
-		// A worker that names the container must name one this app can send back,
-		// and agree with itself about whether it exists.
-		if !ContainerRef(*out.Container) || (*out.Container != NoContainer) != state.Exists {
+	state := DeployTargetState{Checked: true, Exists: exists}
+	// Left out, the worker is older than CashPilot #831 and names no container. A
+	// worker that sends the field must name one this app can send back (a null
+	// names none), and agree with itself about whether it exists.
+	if raw, ok := out["expected_container"]; ok {
+		var id string
+		if isNull(raw) || json.Unmarshal(raw, &id) != nil || !ContainerRef(id) || (id != NoContainer) != exists {
 			return DeployTargetState{}, errors.New("the worker answered the container lookup with an ID this app cannot use; update the worker")
 		}
-		state.Container = *out.Container
+		state.Container = id
 	}
 	return state, nil
 }
+
+func isNull(raw json.RawMessage) bool { return bytes.Equal(bytes.TrimSpace(raw), []byte("null")) }
 
 // NoContainer is what a worker says, and a deploy expects, when no container has
 // the deploy's Docker name.

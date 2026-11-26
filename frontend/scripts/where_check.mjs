@@ -108,9 +108,9 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   check("RULE 4: both questions are asked, each once", out.kind === "deployed" && c.log.asked.length === 2, JSON.stringify(c.log));
   check("RULE 4: the identity question is the web UI's", c.log.asked[0] === "The Device ID for Ider already runs on first.\n\nDeploy anyway?", c.log.asked[0]);
   check("RULE 4: each yes is sent with the deploy", JSON.stringify(c.log.deploys) === JSON.stringify([
-    { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "" },
-    { confirmed: false, allowSharedIdentity: true, replaceExisting: false, expectedContainer: "" },
-    { confirmed: true, allowSharedIdentity: true, replaceExisting: false, expectedContainer: "" },
+    { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "", workerIdentity: "" },
+    { confirmed: false, allowSharedIdentity: true, replaceExisting: false, expectedContainer: "", workerIdentity: "" },
+    { confirmed: true, allowSharedIdentity: true, replaceExisting: false, expectedContainer: "", workerIdentity: "" },
   ]), JSON.stringify(c.log.deploys));
   c = calls([stepUp], [false]);
   out = await runWorkerDeploy("vault", targets[1], null, null, c);
@@ -249,6 +249,48 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
   check("RULE 8: an older worker that asks again after a yes is refused",
     out.kind === "refused" && c.log.asked.length === 1, JSON.stringify(out));
+}
+
+{
+  // RULE 9: a yes is about the worker that asked. Every question names a worker
+  // identity; the yes carries it back, and a question that says another worker now
+  // reports under that name drops every earlier yes before the deploy goes on.
+  const id = (n) => String(n).repeat(64).slice(0, 64);
+  const named = (n, who) => ({ ...ok, ask: "replace_existing", expectedContainer: id(n), workerIdentity: who,
+    message: `Redeploy honeygain on attic? The existing container (${id(n).slice(0, 12)}) will be replaced, but its volumes are kept.` });
+  const changedWorker = (who) => ({ ...ok, ask: "worker_changed", workerIdentity: who,
+    message: "attic is not the worker you answered about: another CashPilot worker now reports under that name, so your earlier answers do not count. Deploy honeygain to it?" });
+  const identity = { ...ok, ask: "identity_in_use", workerIdentity: "client-a@http://10.0.0.5:8081", message: "The Device ID for Ider already runs on first." };
+  const a = "client-a@http://10.0.0.5:8081";
+  const b = "client-b@http://10.0.0.9:8081";
+  let c = calls([named(1, a), ok], [true]);
+  let out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 9: the yes carries the worker that asked",
+    out.kind === "deployed" && c.log.deploys[0].workerIdentity === "" && c.log.deploys[1].workerIdentity === a, JSON.stringify(c.log));
+  c = calls([named(1, a), identity, changedWorker(b), named(2, b), ok], [true, true, true, true]);
+  out = await runWorkerDeploy("ider", targets[1], null, null, c);
+  check("RULE 9: another worker under the same name is asked about, with the backend's words",
+    out.kind === "deployed" && c.log.asked[2] === changedWorker(b).message, JSON.stringify(c.log));
+  check("RULE 9: that question drops every earlier yes and binds the next ones to the new worker",
+    JSON.stringify(c.log.deploys[3]) === JSON.stringify({ confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "", workerIdentity: b })
+      && c.log.deploys[4].replaceExisting === true && c.log.deploys[4].expectedContainer === id(2) && c.log.deploys[4].workerIdentity === b, JSON.stringify(c.log.deploys));
+  c = calls([named(1, a), changedWorker(b)], [true, false]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 9: a no to the new worker sends nothing more", out.kind === "cancelled" && c.log.deploys.length === 2, JSON.stringify(c.log));
+  c = calls([named(1, a), changedWorker(b), changedWorker(b)], [true, true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 9: the same worker question after its yes is refused, not looped",
+    out.kind === "refused" && c.log.asked.length === 2 && c.log.deploys.length === 3, JSON.stringify(out));
+}
+
+{
+  // RULE 10: the last round shows no question: its yes would have no deploy to go with.
+  const id = (n) => String(n).repeat(64).slice(0, 64);
+  const named = (n) => ({ ...ok, ask: "replace_existing", expectedContainer: id(n % 10) + String(n), message: `question ${n}` });
+  const c = calls(Array.from({ length: 20 }, (_, n) => named(n + 1)), Array(20).fill(true));
+  const out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 10: every question shown has a deploy that uses its answer",
+    out.kind === "refused" && c.log.deploys.length === 8 && c.log.asked.length === 7, JSON.stringify({ out, asked: c.log.asked.length, deploys: c.log.deploys.length }));
 }
 
 if (failures) {
