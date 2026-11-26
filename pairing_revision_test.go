@@ -306,6 +306,10 @@ func TestSavedEnrolmentKeyUpgradesThroughTheWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.enrolSavedPairing(t.Context())
+	// An upgrade leaves server commands off (server_commands_upgrade_test.go).
+	if _, err := app.SetServerCommands(true); err != nil {
+		t.Fatal(err)
+	}
 	if got := call(t, app, "GET", "/api/status", issued, nil).Code; got != 200 {
 		t.Errorf("guarded route after upgrade returned %d", got)
 	}

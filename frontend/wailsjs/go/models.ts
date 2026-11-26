@@ -1155,6 +1155,7 @@ export namespace config {
 	    mode?: string;
 	    setupJournal?: SetupJournal;
 	    serverCommandsOff?: boolean;
+	    serverCommandsChosen?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1187,6 +1188,7 @@ export namespace config {
 	        this.mode = source["mode"];
 	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
 	        this.serverCommandsOff = source["serverCommandsOff"];
+	        this.serverCommandsChosen = source["serverCommandsChosen"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
