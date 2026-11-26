@@ -35,6 +35,10 @@ const (
 // that converts to the GRASS token only during airdrops at unknown ratios, so
 // they are never priced here (see PointsCurrencies).
 var DefaultCryptoIDs = map[string]string{
+	"BTC":    "bitcoin",
+	"XMR":    "monero",
+	"KAS":    "kaspa",
+	"ETC":    "ethereum-classic",
 	"MYST":   "mysterium",
 	"ANYONE": "airtor-protocol",
 	"STORJ":  "storj",

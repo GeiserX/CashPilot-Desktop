@@ -15,6 +15,8 @@ declare module "../wailsjs/go/main/App" {
   export function CheckRuntime(): Promise<RuntimeStatus>;
   // Reads this PC afresh (Windows only; elsewhere facts.supported is false).
   export function HostCheck(): Promise<HostCheckResult>;
+  // Checks the local Docker Desktop pipes without reading the full checklist.
+  export function DockerDesktopEngineReady(): Promise<boolean>;
   // The Docker checklist's actions (Windows only; elsewhere they fail).
   export function StartDockerDesktop(): Promise<void>;
   export function OpenWindowsUpdate(): Promise<void>;
@@ -29,7 +31,7 @@ declare module "../wailsjs/go/main/App" {
   export function SignOutNow(): Promise<void>;
   export function GetRuntimeGuides(): Promise<InstallGuide[]>;
   export function SaveCredentials(slug: string, values: Record<string, string>): Promise<void>;
-  export function GetCredentials(slug: string): Promise<Record<string, string>>;
+  export function GetCredentials(slug: string): Promise<CredentialView>;
   export function PreflightService(slug: string): Promise<PreflightReport>;
   // image: null keeps the image the deployment already uses, "" goes back to the
   // catalog's, anything else runs that image instead. instances: null keeps the number
@@ -39,6 +41,9 @@ declare module "../wailsjs/go/main/App" {
   // switch of a routed service back to this machine's own IP.
   export function DeployServiceRouted(slug: string, values: Record<string, string>, proxyId: number): Promise<ProxiedResult>;
   export function DeployServiceLeavingRoute(slug: string, values: Record<string, string>, image: string | null, instances: number | null): Promise<Deployment>;
+  // Whether a deploy of slug makes Windows show its admin prompt, and what for. Reads only.
+  export function DeployAdminStep(slug: string): Promise<AdminStep>;
+  export function DeployServiceWithAdminApproval(slug: string, values: Record<string, string>, image: string | null, instances: number | null, leaveRoute: boolean, approval: AdminStep): Promise<Deployment>;
   // DeployService for a service that keeps its wallet seed in a file (Sia's hostd),
   // with the owner's wallet choice (wallet_app.go).
   export function DeployServiceWallet(slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice): Promise<WalletDeployResult>;
@@ -338,6 +343,9 @@ export interface AppState {
   // The link to the CashPilot server while this computer is joined; null when it
   // runs everything here.
   pairing?: PairingStatus | null;
+  // While joined: whether that server can start and stop services here (Go
+  // ServerCommandsState); null when this computer runs everything here.
+  serverCommands?: ServerCommandsState | null;
   // This machine's hostname, so a {hostname}-defaulted deploy field renders the real
   // value the deploy path will substitute rather than the literal "{hostname}".
   hostname: string;
@@ -397,16 +405,28 @@ export interface WorkerDeployRequest {
   image: string;
   confirmed: boolean;
   allowSharedIdentity: boolean;
+  replaceExisting: boolean;
+  // The container a replaceExisting yes was for (WorkerDeployResult.expectedContainer).
+  expectedContainer: string;
 }
 
 // WorkerDeployResult mirrors the Go WorkerDeployResult. With ask set nothing was
 // deployed: the owner answers message, and a yes sends the deploy again.
+export interface CredentialView {
+  values: Record<string, string>;
+  savedSecrets: Record<string, boolean>;
+}
+
 export interface WorkerDeployResult {
+  credentialWarning?: string;
   ask: string;
   message: string;
   worker: string;
   containerId: string;
   notes: string[] | null;
+  // With ask replace_existing: the container the question is about, "none" or a
+  // full Docker ID; absent when the worker cannot name it.
+  expectedContainer?: string;
 }
 
 // WorkerCopy mirrors store.FleetContainer: one copy a worker's heartbeat listed.
@@ -729,6 +749,7 @@ export interface ModeState {
   pairing?: PairingStatus | null;
   hubOn: boolean;
   hubDevices: string[] | null;
+  firewallCleanup?: string;
 }
 
 // The answer to one join (Go JoinResult). A failed connection has ok false.
@@ -748,6 +769,31 @@ export interface JoinResult {
 export interface LeaveResult {
   serverUrl: string;
   name: string;
+  // Why the firewall rule made for the server's commands is still there; "" when gone.
+  firewallError?: string;
+}
+
+// The last command the CashPilot server sent this computer (Go ServerCommand).
+export interface ServerCommand {
+  at: string;
+  action: string;
+  slug: string;
+  ok: boolean;
+  detail: string;
+}
+
+// The dashboard card while joined (Go ServerCommandsState).
+export interface ServerCommandsState {
+  server: string;
+  on: boolean;
+  listening: boolean;
+  url: string;
+  problem: string;
+  firewallNeeded: boolean;
+  firewallRule: boolean;
+  firewallStatus?: string;
+  opens: string;
+  last: ServerCommand | null;
 }
 
 export interface SessionConsent {
@@ -757,6 +803,7 @@ export interface SessionConsent {
 }
 
 export interface NotificationItem {
+  runtime?: boolean;
   level: string;
   title: string;
   message: string;
@@ -847,8 +894,9 @@ export interface RuntimeStatus {
   nativeAvailable: boolean;
   // The catalog apps the native runtime can run on this machine.
   nativeServices: string[] | null;
+  setupTask?: string;
   kind: string;
-  // Why Docker is or is not ready: running, not-installed, not-running,
+  // Why Docker is or is not ready: running, not-installed, not-running, unreachable,
   // windows-containers, access-denied, wsl-missing, wsl-outdated,
   // virtualization-off or first-start-pending. message says it in plain words.
   reason: string;
@@ -930,6 +978,7 @@ export interface GuideStep {
 export interface HostCheckResult {
   facts: HostFacts;
   runtime: RuntimeStatus;
+  runtimeNotice: NotificationItem | null;
   // The Docker checklist; null outside Windows.
   steps: GuideStep[] | null;
   // This reading ended the guided setup: this PC's own Docker Desktop runs
@@ -958,6 +1007,18 @@ export interface SetupResumeView {
   signedIn?: boolean;
 }
 
+// What a deploy's Windows admin prompt is for (internal/runtime/firewall_consent.go).
+export interface AdminStep {
+  needed: boolean;
+  // "firewall-rule" when needed.
+  kind?: string;
+  ruleName?: string;
+  replaceRule?: boolean;
+  program?: string;
+  networks?: string[];
+  removeRuleName?: string;
+}
+
 // How a change of the checklist ended (docker_setup.go).
 export interface SetupStepResult {
   step: string;
@@ -982,6 +1043,7 @@ export interface InstallGuide {
 }
 
 export interface Service {
+  native?: { env?: EnvVar[] };
   name: string;
   slug: string;
   category: string;
@@ -1028,7 +1090,7 @@ export interface Service {
   earnings: { monthlyLow: number; monthlyHigh: number; currency: string; per: string; notes: string };
   cashout: { method: string; dashboardUrl: string; minAmount: number; currency: string; notes: string };
   platforms: string[];
-  collector: { type: string; notes: string; credentialHint: string; perNodeEarnings: boolean };
+  collector: { type: string; notes: string; credentialHint: string; perNodeEarnings: boolean; accrual?: string };
   payout: {
     model: string;
     chain: string;
@@ -1169,8 +1231,9 @@ export interface PreflightFinding {
   message: string;
 }
 
-// PreflightReport is what CashPilot knows before a deploy runs. blocking is always
-// false: the report informs the decision, it never takes it. notChecked names what
+// PreflightReport is what CashPilot knows before a deploy runs. blocking is false
+// unless the service cannot run here at all (a Docker app with no Docker engine);
+// otherwise the report informs the decision, it never takes it. notChecked names what
 // nobody looked at, so a clean report is not mistaken for a guarantee. Mirrors
 // preflight.Report.
 export interface PreflightReport {

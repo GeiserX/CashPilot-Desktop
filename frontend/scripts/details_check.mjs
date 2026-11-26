@@ -180,6 +180,52 @@ check("the minimum is shown with the unit it is counted in", valueOf(paid, "Mini
 check("the payment methods are shown", valueOf(paid, "Paid by") === "paypal, crypto");
 check("the payout frequency is shown", valueOf(paid, "Paid out") === "On request");
 
+const ocean = {
+  ...honeygain,
+  slug: "ocean",
+  collector: { accrual: "pool" },
+  cashout: { method: "auto", minAmount: 0.01048576, currency: "BTC" },
+};
+const oceanPayout = payoutFacts(ocean, { amount: 0.00000001, currency: "BTC" });
+check("payout facts show a satoshi as unpaid", valueOf(oceanPayout, "Unpaid pool balance") === "0.00000001 BTC", oceanPayout);
+check("payout facts show the exact pool threshold", valueOf(oceanPayout, "Payout terms") === "0.01048576 BTC", oceanPayout);
+
+const supportxmr = {
+  ...ocean,
+  slug: "supportxmr",
+  payment: { currency: "XMR", minimumPayout: "0.1 XMR (automatic), 0.01 XMR on request" },
+  cashout: { method: "auto", currency: "XMR", minAmount: 0.01, notes: "The automatic threshold defaults to 0.1 XMR. An instant payout costs 0.001 XMR." },
+};
+const supportPayout = payoutFacts(supportxmr, { amount: 0.000000000001, currency: "XMR" });
+check("SupportXMR shows both payout thresholds", valueOf(supportPayout, "Payout terms") === "0.1 XMR (automatic), 0.01 XMR on request", supportPayout);
+check("SupportXMR explains the default threshold and the request fee", valueOf(supportPayout, "Payout notes") === supportxmr.cashout.notes, supportPayout);
+check("SupportXMR shows one piconero as unpaid", valueOf(supportPayout, "Unpaid pool balance") === "0.000000000001 XMR", supportPayout);
+check("SupportXMR counts down to the request minimum", valueOf(supportPayout, "Still to minimum payout") === "0.009999999999 XMR", supportPayout);
+const supportReady = payoutFacts(supportxmr, { amount: 0.01, currency: "XMR" });
+check("reaching SupportXMR's request minimum directs the user to the payout terms", valueOf(supportReady, "Still to minimum payout") === "Minimum reached. Check the pool's payout terms.", supportReady);
+
+const herominers = {
+  ...ocean,
+  slug: "herominers-kas",
+  payment: { currency: "KAS", minimumPayout: "1 KAS (adjustable)" },
+  cashout: { method: "auto", currency: "KAS", minAmount: 1, notes: "HeroMiners pays your address automatically once you reach your chosen threshold. The lowest threshold is 1 KAS." },
+};
+const heroPayout = payoutFacts(herominers, { amount: 0.00000001, currency: "KAS" });
+check("HeroMiners shows its adjustable payout threshold", valueOf(heroPayout, "Payout terms") === "1 KAS (adjustable)", heroPayout);
+check("HeroMiners shows one sompi as unpaid", valueOf(heroPayout, "Unpaid pool balance") === "0.00000001 KAS", heroPayout);
+check("HeroMiners counts down to its lowest threshold in sompi", valueOf(heroPayout, "Still to minimum payout") === "0.99999999 KAS", heroPayout);
+
+const twominers = {
+  ...ocean,
+  slug: "2miners-etc",
+  payment: { currency: "ETC", minimumPayout: "0.1 ETC (adjustable)" },
+  cashout: { method: "auto", currency: "ETC", minAmount: 0.1, notes: "2Miners pays your address automatically once you reach your chosen threshold. The lowest threshold for ETC payouts is 0.1 ETC." },
+};
+const twoMinersPayout = payoutFacts(twominers, { amount: 0.000000001, currency: "ETC" });
+check("2Miners shows its adjustable payout threshold", valueOf(twoMinersPayout, "Payout terms") === "0.1 ETC (adjustable)", twoMinersPayout);
+check("2Miners shows one pool unit as unpaid", valueOf(twoMinersPayout, "Unpaid pool balance") === "0.000000001 ETC", twoMinersPayout);
+check("2Miners counts down to its lowest threshold in pool units", valueOf(twoMinersPayout, "Still to minimum payout") === "0.099999999 ETC", twoMinersPayout);
+
 const undocumented = payoutFacts({
   ...honeygain,
   payment: {methods: [], frequency: "", currency: ""},

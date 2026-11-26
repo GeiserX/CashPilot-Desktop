@@ -42,7 +42,8 @@ type Resources struct {
 }
 
 // DeploySpec is the body of POST /api/containers/{slug}/deploy, field for field
-// what the web app's _deploy sends. A port binding is a host port (int), or
+// what the web app's _deploy sends, with optional replacement approval.
+// A port binding is a host port (int), or
 // [address, port] for a bind to one interface, or a list of those pairs.
 type DeploySpec struct {
 	Image       string            `json:"image"`
@@ -60,6 +61,15 @@ type DeploySpec struct {
 	// Approval is the signed note that the owner confirmed this exact spec on a
 	// service that keeps a wallet or node identity (see Sign and DeployTarget).
 	Approval string `json:"approval,omitempty"`
+	// ReplaceExisting is sent only after the owner has approved a replacement, and
+	// only to a worker that cannot name the container it would replace.
+	ReplaceExisting bool `json:"replace_existing,omitempty"`
+	// ExpectedContainer is the container the deploy may replace, for a worker that
+	// names it (DeployTargetState.Container): "none" for a first deploy, or the full
+	// Docker ID the owner approved. The worker refuses with deploy_target_changed
+	// when another container is there, so a replacement never hits one the owner
+	// did not see.
+	ExpectedContainer string `json:"expected_container,omitempty"`
 }
 
 // KeptMount is one mount the worker kept where the running container has it.
@@ -94,6 +104,11 @@ type Error struct {
 	Code    string
 	Message string
 	Unknown bool
+	// CurrentContainer is the container the worker found instead of the expected
+	// one, on a deploy_target_changed refusal: "none" or a full Docker ID.
+	CurrentContainer string
+
+	missingEndpoint bool
 }
 
 func (e *Error) Error() string { return e.Message }
@@ -128,6 +143,95 @@ func ValidBaseURL(raw string) (string, error) {
 func (c *Client) Deploy(ctx context.Context, slug string, spec DeploySpec, timeout time.Duration) (DeployResult, error) {
 	var out DeployResult
 	err := c.do(ctx, http.MethodPost, "/api/containers/"+url.PathEscape(slug)+"/deploy", nil, spec, spec.Env, timeout, &out)
+	return out, err
+}
+
+const checkedDeploySuffix = "/deploy-checked"
+
+// DeployTargetState is what a worker says about the container a deploy would replace.
+type DeployTargetState struct {
+	// Checked is true when the worker serves the checked deploy route.
+	Checked bool
+	// Exists is true when a container already has the deploy's Docker name.
+	Exists bool
+	// Container names that container: "none", or its full Docker ID. It is "" when
+	// the worker does not name it (a worker older than CashPilot #831), so a
+	// replacement there can hit whichever container runs when the deploy starts.
+	Container string
+}
+
+// DeployState reports whether the worker supports checked deploys, and if so
+// whether the actual Docker name to be deployed already exists.
+func (c *Client) DeployState(ctx context.Context, slug string) (DeployTargetState, error) {
+	var out struct {
+		Exists    *bool   `json:"exists"`
+		Container *string `json:"expected_container"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/containers/"+url.PathEscape(slug)+checkedDeploySuffix, nil, nil, nil, 0, &out)
+	if err != nil {
+		var refusal *Error
+		if errors.As(err, &refusal) && refusal.missingEndpoint {
+			return DeployTargetState{}, nil
+		}
+		return DeployTargetState{}, err
+	}
+	if out.Exists == nil {
+		return DeployTargetState{}, errors.New("the worker did not answer the container lookup")
+	}
+	state := DeployTargetState{Checked: true, Exists: *out.Exists}
+	if out.Container != nil {
+		// A worker that names the container must name one this app can send back,
+		// and agree with itself about whether it exists.
+		if !ContainerRef(*out.Container) || (*out.Container != NoContainer) != state.Exists {
+			return DeployTargetState{}, errors.New("the worker answered the container lookup with an ID this app cannot use; update the worker")
+		}
+		state.Container = *out.Container
+	}
+	return state, nil
+}
+
+// NoContainer is what a worker says, and a deploy expects, when no container has
+// the deploy's Docker name.
+const NoContainer = "none"
+
+// ContainerRef reports whether s names a deploy target as the worker does:
+// NoContainer, or a full Docker container ID (64 lowercase hex characters).
+func ContainerRef(s string) bool {
+	if s == NoContainer {
+		return true
+	}
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// LegacyDeployTargetExists checks the worker's inventory. It can show an
+// existing container, but a cached inventory cannot prove one is absent.
+func (c *Client) LegacyDeployTargetExists(ctx context.Context, slug string) (bool, error) {
+	var out []struct {
+		Name string `json:"name"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/containers", nil, nil, nil, 0, &out); err != nil {
+		return false, err
+	}
+	for _, container := range out {
+		if container.Name == "cashpilot-"+slug {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// DeployChecked makes the worker enforce replacement approval under its deploy lock.
+func (c *Client) DeployChecked(ctx context.Context, slug string, spec DeploySpec, timeout time.Duration) (DeployResult, error) {
+	var out DeployResult
+	err := c.do(ctx, http.MethodPost, "/api/containers/"+url.PathEscape(slug)+checkedDeploySuffix, nil, spec, spec.Env, timeout, &out)
 	return out, err
 }
 
@@ -185,14 +289,36 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if c.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Key)
 	}
+	deploy, isDeploy := out.(*DeployResult)
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return transportError(err, timeout)
+		failure := transportError(err, timeout)
+		if isDeploy && failure.Unknown {
+			failure.Message = "The worker deploy outcome is unknown. " + failure.Message
+		}
+		return failure
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	const maxReplyBytes = 1 << 20
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxReplyBytes+1))
+	if isDeploy && (readErr != nil || len(raw) > maxReplyBytes) {
+		return unknownDeployReply(resp.StatusCode)
+	}
 	if resp.StatusCode >= 400 {
-		return refusal(resp.StatusCode, raw, sentEnv)
+		failure := refusal(resp.StatusCode, raw, sentEnv)
+		if isDeploy && failure.Unknown {
+			return unknownDeployReply(resp.StatusCode)
+		}
+		return failure
+	}
+	if isDeploy {
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 ||
+			json.Unmarshal(raw, deploy) != nil || deploy.Status != "deployed" ||
+			strings.TrimSpace(deploy.ContainerID) == "" {
+			*deploy = DeployResult{}
+			return unknownDeployReply(resp.StatusCode)
+		}
+		return nil
 	}
 	if out == nil || len(bytes.TrimSpace(raw)) == 0 {
 		return nil
@@ -201,6 +327,13 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return &Error{Status: resp.StatusCode, Message: "The worker answered, but not in a form this app reads; update the worker"}
 	}
 	return nil
+}
+
+func unknownDeployReply(status int) *Error {
+	return &Error{
+		Status: status, Unknown: true,
+		Message: "The worker deploy outcome is unknown. CashPilot did not get a complete success reply. Check the worker before trying again.",
+	}
 }
 
 func (c *Client) httpClient() *http.Client {
@@ -240,6 +373,8 @@ var forwardableCodes = map[string]bool{
 	"isolation_check_unavailable": true,
 	"critical_volume_mount":       true,
 	"step_up_required":            true,
+	"replace_existing":            true,
+	"deploy_target_changed":       true,
 	"step_up_rejected":            true,
 	"restore_unfinished":          true,
 	"restore_cleared":             true,
@@ -275,6 +410,7 @@ func refusal(status int, raw []byte, sentEnv map[string]string) *Error {
 		var structured struct {
 			Error   any `json:"error"`
 			Message any `json:"message"`
+			Current any `json:"current_container"`
 		}
 		if json.Unmarshal(envelope.Detail, &structured) == nil {
 			if code, ok := structured.Error.(string); ok && forwardableCodes[code] {
@@ -283,11 +419,18 @@ func refusal(status int, raw []byte, sentEnv map[string]string) *Error {
 				if message == "" {
 					message = failureText(status)
 				}
-				return &Error{Status: status, Code: code, Message: message, Unknown: unknown}
+				failure := &Error{Status: status, Code: code, Message: message, Unknown: unknown}
+				if current, ok := structured.Current.(string); ok && ContainerRef(current) {
+					failure.CurrentContainer = current
+				}
+				return failure
 			}
 		}
 		var text string
-		if forwardableTextStatuses[status] && json.Unmarshal(envelope.Detail, &text) == nil && text != "Not Found" {
+		if forwardableTextStatuses[status] && json.Unmarshal(envelope.Detail, &text) == nil {
+			if text == "Not Found" {
+				return &Error{Status: status, Message: failureText(status), missingEndpoint: status == http.StatusNotFound}
+			}
 			if cleaned := clean(text, sentEnv); cleaned != "" {
 				return &Error{Status: status, Message: cleaned}
 			}

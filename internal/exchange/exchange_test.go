@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -131,6 +132,63 @@ func TestRefreshAndConvert(t *testing.T) {
 	snap.Fiat["EUR"] = 999 // mutate the copy...
 	if got, ok := svc.ToUSD(10, "EUR"); !ok || !approx(got, 10.0/0.9) {
 		t.Fatalf("Snapshot mutation leaked into the cache: ToUSD(10, EUR) = (%v, %v)", got, ok)
+	}
+}
+
+func TestDefaultMoneroRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",monero,") {
+			t.Errorf("CoinGecko request did not include monero: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"monero":{"usd":200}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(0.01, "XMR"); !ok || got != 2 {
+		t.Fatalf("ToUSD(0.01, XMR) = (%v, %v), want (2, true)", got, ok)
+	}
+}
+
+func TestDefaultKaspaRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",kaspa,") {
+			t.Errorf("CoinGecko request did not include kaspa: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"kaspa":{"usd":0.05}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(40, "KAS"); !ok || got != 2 {
+		t.Fatalf("ToUSD(40, KAS) = (%v, %v), want (2, true)", got, ok)
+	}
+}
+
+func TestDefaultEthereumClassicRate(t *testing.T) {
+	cg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(","+r.URL.Query().Get("ids")+",", ",ethereum-classic,") {
+			t.Errorf("CoinGecko request did not include ethereum-classic: %s", r.URL.RawQuery)
+		}
+		_, _ = io.WriteString(w, `{"ethereum-classic":{"usd":20}}`)
+	}))
+	t.Cleanup(cg.Close)
+	fr := httptest.NewServer(&toggleHandler{body: frankfurterBody})
+	t.Cleanup(fr.Close)
+	svc := NewService(WithBaseURLs(cg.URL, fr.URL))
+	if err := svc.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, ok := svc.ToUSD(0.1, "ETC"); !ok || got != 2 {
+		t.Fatalf("ToUSD(0.1, ETC) = (%v, %v), want (2, true)", got, ok)
 	}
 }
 

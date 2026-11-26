@@ -1501,6 +1501,45 @@ func TestWriteWaitsOutAPeerHoldingTheLock(t *testing.T) {
 
 func approxEqual(a, b float64) bool { return a-b < 1e-9 && b-a < 1e-9 }
 
+func TestSaveEarningsRechecksCredentialsAfterPeerWrite(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	peer, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+
+	const slug, key = "supportxmr", "SUPPORTXMR_ADDRESS"
+	if err := s.SaveCredentials(slug, map[string]string{key: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	record := EarningsRecord{Platform: slug, Currency: "XMR", Balance: 0.1}
+	_, matched, err := s.SaveEarningsIfCredentialsMatch(record, func(values map[string]string) bool {
+		if values[key] != "first" {
+			return false
+		}
+		// Commit the replacement after the comparison reads the old value.
+		if err := peer.SaveCredentials(slug, map[string]string{key: "second"}); err != nil {
+			t.Fatal(err)
+		}
+		return true
+	})
+	if err != nil || matched || len(s.ListLatestEarnings()) != 0 {
+		t.Fatalf("changed credentials must discard the result, got matched=%v err=%v", matched, err)
+	}
+	saved, matched, err := s.SaveEarningsIfCredentialsMatch(record, func(values map[string]string) bool {
+		return values[key] == "second"
+	})
+	if err != nil || !matched || saved.CreatedAt == "" || len(s.ListLatestEarnings()) != 1 {
+		t.Fatalf("matching credentials must save the result, got record=%+v matched=%v err=%v", saved, matched, err)
+	}
+}
+
 // TestFleetDeviceInsertWaitsOutAPeerHoldingTheLock is the RETURNING-statement
 // twin of the earnings test above: a new fleet device is inserted through
 // QueryRow rather than Exec, and it has to wait for the lock the same way.
@@ -1551,12 +1590,14 @@ func TestFleetDeviceInsertWaitsOutAPeerHoldingTheLock(t *testing.T) {
 	}
 }
 
-// TestEarningsErrorKindColumnMigrates covers an install whose earnings table predates
-// the error kind: its old rows must still be listed, and a new row keeps its kind.
-func TestEarningsErrorKindColumnMigrates(t *testing.T) {
+// The earnings metadata migration keeps existing readings and adds fields for
+// future errors and pool balances.
+func TestEarningsMetadataColumnsMigrate(t *testing.T) {
 	s := openTestStore(t)
-	if _, err := s.db.Exec("ALTER TABLE earnings DROP COLUMN error_kind"); err != nil {
-		t.Fatalf("drop column (simulate pre-migration schema): %v", err)
+	for _, column := range []string{"error_kind", "pool_address_hash"} {
+		if _, err := s.db.Exec("ALTER TABLE earnings DROP COLUMN " + column); err != nil {
+			t.Fatalf("drop %s (simulate pre-migration schema): %v", column, err)
+		}
 	}
 	if _, err := s.db.Exec(`INSERT INTO earnings(platform,balance,currency,error,created_at) VALUES('honeygain',1,'USD','','2026-11-01T00:00:00Z')`); err != nil {
 		t.Fatalf("seed old-shape row: %v", err)
@@ -1567,9 +1608,13 @@ func TestEarningsErrorKindColumnMigrates(t *testing.T) {
 	if _, err := s.SaveEarnings(EarningsRecord{Platform: "mysterium", Currency: "MYST", Error: "no node", ErrorKind: "unread"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.SaveEarnings(EarningsRecord{Platform: "supportxmr", Balance: 0.01, Currency: "XMR", PoolAddressHash: "address-hash"}); err != nil {
+		t.Fatal(err)
+	}
 	got := s.ListLatestEarnings()
-	if len(got) != 2 || got[0].Platform != "honeygain" || got[0].ErrorKind != "" || got[1].ErrorKind != "unread" {
-		t.Fatalf("after migrate: %+v, want the old row kept and the new kind read back", got)
+	if len(got) != 3 || got[0].Platform != "honeygain" || got[0].ErrorKind != "" ||
+		got[0].PoolAddressHash != "" || got[1].ErrorKind != "unread" || got[2].PoolAddressHash != "address-hash" {
+		t.Fatalf("after migrate: %+v, want the old row kept and the new metadata read back", got)
 	}
 }
 

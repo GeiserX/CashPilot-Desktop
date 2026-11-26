@@ -117,6 +117,7 @@ type HostFacts struct {
 	DockerDesktopRunning   Tri    `json:"dockerDesktopRunning"`
 	DockerDesktopStarted   Tri    `json:"dockerDesktopStarted"`
 	DockerService          string `json:"dockerService"`
+	desktopEngineReason    string // Docker Desktop’s own named pipes
 
 	// UserSID is the signed-in account, read from this process's token. The
 	// docker-users facts are by SID: DockerUsersGroup is whether the local group

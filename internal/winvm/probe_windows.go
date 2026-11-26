@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
@@ -133,7 +134,7 @@ func (systemProbes) wsl(ctx context.Context) (func(*HostFacts), error) {
 
 // docker reads whether Docker Desktop is installed, running and was ever started
 // on this account, the state of its service, and the backend its settings choose.
-func (systemProbes) docker(context.Context) (func(*HostFacts), error) {
+func (systemProbes) docker(ctx context.Context) (func(*HostFacts), error) {
 	installed := dockerInstalled()
 	running := processRunning("Docker Desktop.exe")
 	started := Unknown
@@ -153,12 +154,18 @@ func (systemProbes) docker(context.Context) (func(*HostFacts), error) {
 		started = settingsFileFound(errs...)
 	}
 	service := serviceState("com.docker.service")
+	var engineReason string
+	if running == Yes {
+		engineReason = runtime.DockerDesktopEngineReason(ctx)
+	}
+
 	return func(f *HostFacts) {
 		f.DockerDesktopInstalled = installed
 		f.DockerDesktopRunning = running
 		f.DockerDesktopStarted = started
 		f.DockerService = service
 		f.DockerBackend = backend
+		f.desktopEngineReason = engineReason
 	}, nil
 }
 

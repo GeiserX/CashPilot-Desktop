@@ -8,11 +8,13 @@
 //
 // Pure: takes plain state, returns HTML.
 
+import { deployNotice, type DeployStatus } from "./deploy_consent.js";
 import type { FenceStatus, HealthScore, ProducerReport, ServiceCopy } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { runtimeAttention, type RuntimeInput } from "./runtime_state.js";
 
 export interface AttentionInput {
-  runtime: { available: boolean; nativeAvailable: boolean; message: string };
+  runtime: RuntimeInput;
   services: { slug: string; name: string; supportUrl?: string }[];
   deployments: { slug: string; name: string; status: string; runtime?: string }[];
   copies?: Record<string, ServiceCopy[]> | null;
@@ -21,6 +23,7 @@ export interface AttentionInput {
   health?: Record<string, HealthScore> | null;
   /** Per slug, how its container differs from what a redeploy would build. */
   drift?: Record<string, string[]> | null;
+  driftDeploys?: Record<string, DeployStatus>;
   producerStates?: Record<string, ProducerReport> | null;
   /** The LAN fence: which earners can reach the LAN, and whether the fence holds. */
   isolation?: FenceStatus | null;
@@ -35,6 +38,8 @@ export interface AttentionItem {
   why: string;
   /** Already-escaped HTML. */
   actions: string;
+  /** Already-escaped HTML for a deploy result under the row. */
+  deployStatus?: string;
 }
 
 /** The web console's reading of a container state: up, down or somewhere between. */
@@ -60,25 +65,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   const nameOf = (slug: string) => input.services.find((s) => s.slug === slug)?.name || slug;
   const known = (slug: string) => input.services.some((s) => s.slug === slug);
 
-  if (!input.runtime.available && !input.runtime.nativeAvailable) {
-    items.push({
-      level: "fail",
-      tag: "Offline",
-      what: "Runtime",
-      why: `${escapeHtml(input.runtime.message || "Neither Docker nor the native runtime can run anything.")} Services cannot start until it is back.`,
-      actions: "",
-    });
-  } else if (!input.runtime.available && input.deployments.some((dep) => dep.runtime && dep.runtime !== "native")) {
-    // Native services still run, so this is not the whole app being down, but
-    // every container service is.
-    items.push({
-      level: "fail",
-      tag: "Offline",
-      what: "Container runtime",
-      why: `${escapeHtml(input.runtime.message || "Docker is not reachable.")} Container services cannot start until it is back; native ones keep running.`,
-      actions: "",
-    });
-  }
+  // No Docker engine answers: always a row, with the way to the Docker setup
+  // (render/runtime_state.ts), so "Nothing needs you" never shows then.
+  const runtime = runtimeAttention(input.runtime, input.deployments.some((dep) => dep.runtime && dep.runtime !== "native"));
+  if (runtime) items.push(runtime);
 
   // A provider that disabled the account is ONE cause for the stopped container, its
   // copies, its crashes and the missing balance. Each of those rows would point at a
@@ -187,6 +177,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   for (const [slug, found] of Object.entries(input.drift || {})) {
     if (!found || !found.length) continue;
     const s = escapeHtml(slug);
+    const status = input.driftDeploys?.[slug];
     items.push({
       level: "fail",
       tag: "Needs fixing",
@@ -194,6 +185,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       why: `container does not match the catalog: ${found.map((d) => escapeHtml(d)).join("; ")}. Redeploy it: CashPilot keeps the settings it was deployed with.`,
       actions: `<button class="btn btn-primary btn-sm" data-drift-action="redeploy" data-slug="${s}">Redeploy</button>
         <button class="btn btn-ghost btn-sm" data-drift-action="ignore" data-slug="${s}" title="Stop warning about this service until the catalog changes it again">Ignore</button>`,
+      deployStatus: `<div data-drift-deploy-status="${s}">${status ? deployNotice(status.kind, status.text) : ""}</div>`,
     });
   }
 
@@ -263,13 +255,14 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
  * The whole block. `up` and `total` are the container counts for the all-clear
  * line, so a quiet list still says what it checked.
  */
-export function renderAttention(items: AttentionItem[], up: number, total: number): string {
+export function renderAttention(items: AttentionItem[], up: number, total: number, completedDeploys: DeployStatus[] = []): string {
   const rows = items.map((i) => `
     <div class="attn-row attn-${i.level}">
       <span class="attn-tag">${escapeHtml(i.tag)}</span>
       <span class="attn-what">${escapeHtml(i.what)}${i.where ? ` <span class="attn-where">${escapeHtml(i.where)}</span>` : ""}</span>
       <span class="attn-why">${i.why}</span>
       <span class="attn-actions">${i.actions}</span>
+      ${i.deployStatus || ""}
     </div>`).join("");
   return `
     <section class="attention${items.length ? "" : " attention-quiet"}" aria-labelledby="attention-title">
@@ -279,6 +272,7 @@ export function renderAttention(items: AttentionItem[], up: number, total: numbe
       ${items.length
         ? `<div class="attn-list">${rows}</div>`
         : `<p class="attn-clear">Nothing needs you. ${up} of ${total} container${total === 1 ? "" : "s"} up.</p>`}
+      ${completedDeploys.length ? `<div class="drift-deploy-results">${completedDeploys.map((result) => deployNotice(result.kind, result.text)).join("")}</div>` : ""}
     </section>
   `;
 }

@@ -602,7 +602,9 @@ type Cashout struct {
 }
 
 type CollectorMetadata struct {
-	Type string `json:"type" yaml:"type"`
+	// Accrual is "pool" for an unpaid mining balance still held by the pool.
+	Accrual string `json:"accrual,omitempty" yaml:"accrual"`
+	Type    string `json:"type" yaml:"type"`
 	// Notes are implementation hints for whoever writes the collector.
 	Notes string `json:"notes" yaml:"notes"`
 	// CredentialHint is written for the USER, not the developer: the sentence
@@ -648,6 +650,11 @@ const (
 // without refusing the whole entry: a user's app must still start when one entry is
 // wrong. The vendored catalog is held to the strict rules by catalog tests instead.
 func normalize(svc *Service) {
+	// A pool tracked by its payout address can be set up without a provider login.
+	if svc.Collector.Accrual == "pool" && svc.Payout.AddressSource == "collector" && svc.Referral.Account == nil {
+		account := false
+		svc.Referral.Account = &account
+	}
 	if !strings.HasPrefix(svc.SupportURL, "https://") {
 		svc.SupportURL = ""
 	}

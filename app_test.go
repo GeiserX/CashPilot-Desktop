@@ -282,6 +282,62 @@ func TestEarningsSummaryFirstObservationContributesZero(t *testing.T) {
 	}
 }
 
+func TestEarningsSummaryPoolAddressChangeIsANewBaseline(t *testing.T) {
+	app, st := newEarningsTestApp(t,
+		`{"monero":{"usd":200}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"XMR": "monero"}, true)
+	now := time.Now().UTC()
+	address := "4" + strings.Repeat("A", 94)
+	if err := st.SaveCredentials("supportxmr", map[string]string{"SUPPORTXMR_ADDRESS": address}); err != nil {
+		t.Fatal(err)
+	}
+	addressHash := testPoolAddressHash(address)
+	seedEarnings(t, st,
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.01, Currency: "XMR", PoolAddressHash: "first", CreatedAt: atUTC(now.AddDate(0, 0, -2), 10)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.09, Currency: "XMR", PoolAddressHash: addressHash, CreatedAt: atUTC(now.AddDate(0, 0, -1), 10)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.10, Currency: "XMR", PoolAddressHash: addressHash, CreatedAt: atUTC(now, 10)},
+	)
+	summary := app.computeEarningsSummary(st.ListLatestEarnings())
+	if got := summary.Daily[len(summary.Daily)-2].Amount; got != 0 {
+		t.Errorf("replacement address contributed %v to yesterday's earnings, want zero", got)
+	}
+	if !approxEq(summary.Today, 2) || !approxEq(summary.Total, 20) {
+		t.Errorf("today earned %v, total balance %v; want 2 and 20", summary.Today, summary.Total)
+	}
+}
+
+// TestEarningsSummaryPoolAddressChangeWithinADay proves an address change during
+// the day still counts the new address's later gains: its opening read is a new
+// baseline, not a reason to drop the whole day.
+func TestEarningsSummaryPoolAddressChangeWithinADay(t *testing.T) {
+	app, st := newEarningsTestApp(t,
+		`{"monero":{"usd":200}}`,
+		`{"amount":1,"base":"USD","rates":{"EUR":0.9}}`,
+		map[string]string{"XMR": "monero"}, true)
+	now := time.Now().UTC()
+	address := "4" + strings.Repeat("A", 94)
+	if err := st.SaveCredentials("supportxmr", map[string]string{"SUPPORTXMR_ADDRESS": address}); err != nil {
+		t.Fatal(err)
+	}
+	addressHash := testPoolAddressHash(address)
+	seedEarnings(t, st,
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.01, Currency: "XMR", PoolAddressHash: "first", CreatedAt: atUTC(now.AddDate(0, 0, -1), 10)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.09, Currency: "XMR", PoolAddressHash: addressHash, CreatedAt: atUTC(now, 9)},
+		store.EarningsRecord{Platform: "supportxmr", Balance: 0.10, Currency: "XMR", PoolAddressHash: addressHash, CreatedAt: atUTC(now, 10)},
+	)
+	summary := app.computeEarningsSummary(st.ListLatestEarnings())
+	if !approxEq(summary.Today, 2) {
+		t.Errorf("Today = %v, want 2 (0.01 XMR after the new address opened at 0.09)", summary.Today)
+	}
+	if got := summary.Daily[len(summary.Daily)-1].Amount; !approxEq(got, 2) {
+		t.Errorf("today's Daily point = %v, want 2", got)
+	}
+	if got := summary.Daily[len(summary.Daily)-2].Amount; got != 0 {
+		t.Errorf("yesterday's Daily point = %v, want 0 (first read of the old address has no baseline)", got)
+	}
+}
+
 // TestEarningsSummaryCarryForwardAcrossGap proves asOf carries the last known
 // cumulative balance across days with no observation, so accrual over a gap is the
 // real delta — not the first-observation inflation and not zero.
@@ -416,7 +472,7 @@ func (f *fakeCollector) Supports(slug string) bool {
 	return f.supported[slug]
 }
 
-func (f *fakeCollector) Collect(_ context.Context, slug string, _ map[string]string) (store.EarningsRecord, error) {
+func (f *fakeCollector) CollectSaved(_ context.Context, slug string, _ map[string]string) (store.EarningsRecord, error) {
 	// Track concurrent in-flight collects to prove the single-flight guard.
 	cur := f.inFlight.Add(1)
 	for {

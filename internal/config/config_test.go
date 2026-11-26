@@ -512,8 +512,6 @@ func TestClearedSecretStaysClearedAfterAFallbackWrite(t *testing.T) {
 		set  func(dir, v string) error
 		get  func(dir string) (string, error)
 	}{
-		{"upstream worker key", SetUpstreamWorkerKey, UpstreamWorkerKey},
-		{"upstream enrolment key", SetUpstreamEnrolmentKey, UpstreamEnrolmentKey},
 		{"fleet key", SetFleetKey, FleetKey},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -555,7 +553,7 @@ func TestMigratingASecretKeepsTheFallbackFile(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got, _ := UpstreamWorkerKey(dir); got != "from-file" {
+	if got, _ := LegacyWorkerKey(dir, ""); got != "from-file" {
 		t.Fatalf("worker key migration read %q", got)
 	}
 	if got, _ := FleetKey(dir); got != "from-file" {
@@ -563,7 +561,7 @@ func TestMigratingASecretKeepsTheFallbackFile(t *testing.T) {
 	}
 
 	keyring.MockInitWithError(errors.New("secret service is locked")) // a later start
-	if got, err := UpstreamWorkerKey(dir); err != nil || got != "from-file" {
+	if got, err := LegacyWorkerKey(dir, ""); err != nil || got != "from-file" {
 		t.Fatalf("worker key lost when the keychain is locked: %q, %v", got, err)
 	}
 	if got, err := FleetKey(dir); err != nil || got != "from-file" {

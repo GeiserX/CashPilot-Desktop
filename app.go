@@ -32,7 +32,6 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
-	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -75,8 +74,8 @@ type App struct {
 	// restoreMu.
 	restoreMu    sync.Mutex
 	restoreFiles map[string]restoreFile
-	// importMu serializes ApplyImport's read-merge-write of stored credentials.
-	importMu sync.Mutex
+	// credentialsMu serializes read-merge-write operations on saved credentials.
+	credentialsMu sync.Mutex
 	// fleetKey is the fleet bearer token held in memory for the per-request auth
 	// check. It is loaded once at Startup by ensureFleetAPIKey from the OS keychain
 	// (0600 file fallback) so the token is never persisted in config.json and the
@@ -103,6 +102,9 @@ type App struct {
 	// catalog; see loadCustom.
 	customPending atomic.Bool
 
+	// Keep a service's deploy and its credential write in the same order.
+	deployCredentialsLocks sync.Map // service slug -> *deployCredentialsLock
+
 	collecting  atomic.Bool
 	schedMu     sync.Mutex
 	schedCancel context.CancelFunc
@@ -115,6 +117,9 @@ type App struct {
 	// a reap/delete landing mid-sequence could blank a confirmed device's key. Reap
 	// and manual delete take the same lock so they cannot interleave with a heartbeat.
 	fleetMu sync.Mutex
+	// workerDeployMu serializes live replacement checks and deploys, including
+	// shared identity checks across workers.
+	workerDeployMu sync.Mutex
 	// fleetLimiter throttles the heartbeat/enrollment endpoint per client IP as
 	// defense-in-depth against floods, mass enrollment (DB growth), and racing the
 	// enrollment window. Initialised in startFleetAPI.
@@ -134,6 +139,13 @@ type App struct {
 	deviceLinkStop func()
 	// activity is the Activity sampler (activity_sampler.go): off until the owner switches it on.
 	activity activityState
+	// workerAPI is the API a joined CashPilot server commands this computer through
+	// (worker_api.go).
+	workerAPI workerAPIState
+	// pairingMu orders explicit Join and Leave requests in the window.
+	pairingMu          sync.Mutex
+	window             bool
+	stopPairingUpgrade func()
 }
 
 // fenceController is the slice of the Docker provider that keeps earners off the LAN.
@@ -149,11 +161,11 @@ type fenceController interface {
 }
 
 // collectorRegistry is the slice of *collectors.Registry the app depends on: run a
-// single service's collector (persisting its earnings record) and report whether a
+// single service's collector with saved credentials and report whether a
 // slug has a native collector at all. It is an interface so the scheduler tests can
 // inject a fake collector without a live store or network.
 type collectorRegistry interface {
-	Collect(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error)
+	CollectSaved(ctx context.Context, slug string, credentials map[string]string) (store.EarningsRecord, error)
 	Supports(slug string) bool
 }
 
@@ -177,7 +189,16 @@ func NewApp() *App {
 // startCore and leaves a.ready() failing for every binding, so — exactly as before —
 // there is nothing further for the GUI hook to do with the returned error.
 func (a *App) Startup(ctx context.Context) {
-	_ = a.startCore(ctx)
+	a.window = true
+	if a.startCore(ctx) == nil {
+		upgradeCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		a.stopPairingUpgrade = func() { cancel(); <-done }
+		go func() {
+			defer close(done)
+			a.enrolSavedPairing(upgradeCtx)
+		}()
+	}
 }
 
 // startCore initialises everything the app needs in BOTH roles: config, the local
@@ -304,9 +325,14 @@ func (a *App) startCore(ctx context.Context) error {
 	a.startDeviceLinkRetry(ctx)
 	// What each earner talks to, when the owner switched Activity on.
 	a.startActivitySampler(ctx)
-	// Optional, and a no-op unless the user paired this Desktop with a
-	// CashPilot server. Standalone is the default and unaffected.
+	// Resolve an interrupted Windows rule change before opening the worker API.
+	if a.window {
+		a.recoverServerCommandsFirewall()
+	}
+	// Report to the server when this Desktop is paired.
 	a.startUpstream(ctx)
+	// While joined, the server deploys and stops services here (worker_api.go).
+	a.startWorkerAPI(ctx)
 	// The window and the background helper each run the steps above from their
 	// own copy of the config: follow a join or a switch the other one saved.
 	a.startConfigSync(ctx)
@@ -365,6 +391,9 @@ func (a *App) DomReady(ctx context.Context) {
 }
 
 func (a *App) Shutdown(_ context.Context) {
+	if a.stopPairingUpgrade != nil {
+		a.stopPairingUpgrade()
+	}
 	// Stop the collection loop before closing the store so no in-flight collect
 	// writes to a database that is about to close.
 	a.stopScheduler()
@@ -373,6 +402,7 @@ func (a *App) Shutdown(_ context.Context) {
 	a.stopDeviceLinkRetry()
 	a.stopActivitySampler()
 	a.stopUpstream()
+	a.stopWorkerAPI()
 	if a.fleetAPI != nil {
 		_ = a.fleetAPI.Close()
 	}
@@ -414,6 +444,9 @@ type AppState struct {
 	// Pairing is the link to the CashPilot server while this computer is joined
 	// (last heartbeat, last error in plain words); nil when it runs everything here.
 	Pairing *PairingStatus `json:"pairing"`
+	// ServerCommands is whether that server can start and stop services here, and the
+	// last command it sent (worker_api.go); nil when this computer runs everything here.
+	ServerCommands *ServerCommandsState `json:"serverCommands"`
 	// Hostname is this machine's name, so a deploy form can render a {hostname}-defaulted
 	// field with the real value the deploy path will substitute (instead of the literal
 	// "cashpilot-{hostname}" the raw catalog default would otherwise show and submit).
@@ -503,6 +536,7 @@ type Notification struct {
 	Level   string `json:"level"`
 	Title   string `json:"title"`
 	Message string `json:"message"`
+	Runtime bool   `json:"runtime,omitempty"`
 }
 
 // EarningsSummary is the dashboard's converted, aggregated view of earnings.
@@ -644,6 +678,7 @@ func (a *App) GetAppState() (AppState, error) {
 		return AppState{}, err
 	}
 	a.retryCustom()
+	a.refreshHostSetup()
 	// Fetch these once and thread them into the helpers below instead of letting
 	// each helper re-run its own full-table scan (they were each queried up to 3x
 	// per GetAppState call before this).
@@ -669,6 +704,7 @@ func (a *App) GetAppState() (AppState, error) {
 		ServiceDetails:   a.store.ListServiceDetails(),
 		Fleet:            a.fleetView(),
 		Pairing:          a.pairingStatus(),
+		ServerCommands:   a.serverCommandsView(),
 		Hostname:         runtime.DeviceHostname(),
 		CollectorFields:  collectors.AllFields(),
 		Scaling:          a.services.ScalingLimits(visible),
@@ -912,17 +948,17 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 
 	// Build per-platform day -> cumulative balance maps, the platform's currency,
 	// and a sorted list of the days it was actually collected.
-	perPlat := map[string]map[string]float64{}
+	perPlat := map[string]map[string]store.DailyBalance{}
 	perCur := map[string]string{}
 	daysByPlat := map[string][]string{}
 	for _, b := range a.store.ListDailyBalances(daysBack) {
 		if perPlat[b.Platform] == nil {
-			perPlat[b.Platform] = map[string]float64{}
+			perPlat[b.Platform] = map[string]store.DailyBalance{}
 		}
 		if _, seen := perPlat[b.Platform][b.Day]; !seen {
 			daysByPlat[b.Platform] = append(daysByPlat[b.Platform], b.Day)
 		}
-		perPlat[b.Platform][b.Day] = b.Balance
+		perPlat[b.Platform][b.Day] = b
 		perCur[b.Platform] = b.Currency
 	}
 	for plat := range daysByPlat {
@@ -932,8 +968,8 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// asOf carries the cumulative balance forward: the balance on the latest
 	// collected day on or before `day` (ok=false when nothing was collected on or
 	// before that day, i.e. there is no established baseline yet).
-	asOf := func(plat, day string) (float64, bool) {
-		var val float64
+	asOf := func(plat, day string) (store.DailyBalance, bool) {
+		var val store.DailyBalance
 		found := false
 		for _, d := range daysByPlat[plat] {
 			if d <= day {
@@ -946,38 +982,33 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		return val, found
 	}
 
-	// platformDelta is a SINGLE platform's display-currency accrual between two
-	// days, from its own cumulative balances (not the whole-portfolio total). It
-	// books 0 unless BOTH endpoints have an established, convertible baseline: a
-	// platform's first-ever observation (or a baseline that predates the fetch
-	// window) has no `fromDay` balance, so its whole lifetime cumulative is never
-	// counted as a single day's earning. Per-platform clamping at 0 keeps one
-	// platform's dip from cancelling another's gain.
-	platformDelta := func(plat, fromDay, toDay string) float64 {
-		fromBal, fromOK := asOf(plat, fromDay)
-		if !fromOK {
-			return 0
-		}
-		toBal, toOK := asOf(plat, toDay)
-		if !toOK {
-			return 0
-		}
-		cur := perCur[plat]
-		fromDisp, ok := a.exchange.ToDisplay(fromBal, cur, disp)
+	// Clamp each platform's net change at 0 so one dip cannot cancel another
+	// platform's gain.
+	balanceDelta := func(from, to store.DailyBalance, cur string) float64 {
+		fromDisp, ok := a.exchange.ToDisplay(from.Balance, cur, disp)
 		if !ok {
 			return 0
 		}
-		toDisp, ok := a.exchange.ToDisplay(toBal, cur, disp)
+		toDisp, ok := a.exchange.ToDisplay(to.Balance, cur, disp)
 		if !ok {
 			return 0
 		}
 		return max(0, toDisp-fromDisp)
 	}
-	// sumDelta accrues every platform's per-platform delta over one period.
-	sumDelta := func(fromDay, toDay string) float64 {
+	platformDelta := func(plat, fromDay, toDay string) float64 {
+		from, fromOK := asOf(plat, fromDay)
+		to, toOK := asOf(plat, toDay)
+		// A day's accrual needs a previous balance from the same address.
+		// Legacy pool rows have an empty hash.
+		if !fromOK || !toOK || from.PoolAddressHash != to.PoolAddressHash {
+			return 0
+		}
+		return balanceDelta(from, to, perCur[plat])
+	}
+	sumDelta := func(delta func(plat, fromDay, toDay string) float64, fromDay, toDay string) float64 {
 		var sum float64
 		for plat := range daysByPlat {
-			sum += platformDelta(plat, fromDay, toDay)
+			sum += delta(plat, fromDay, toDay)
 		}
 		return sum
 	}
@@ -993,6 +1024,7 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 	// converted" -- see the TotalKnown assignment below.
 	priced, unpriced := 0, 0
 	latestDay := ""
+	poolHistory := map[string][]store.DailyBalance{}
 	for plat, days := range daysByPlat {
 		if len(days) == 0 {
 			continue
@@ -1002,7 +1034,24 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 			latestDay = last
 		}
 		cur := perCur[plat]
-		bal := perPlat[plat][last]
+		bal := perPlat[plat][last].Balance
+		if _, pool := collectors.PoolAddressHash(plat, nil); pool {
+			history := a.store.ListPoolBalances(plat, daysBack)
+			poolHistory[plat] = history
+			creds, err := a.store.GetCredentials(plat)
+			hash, _ := collectors.PoolAddressHash(plat, creds)
+			if err != nil || hash == "" {
+				continue
+			}
+			i := len(history) - 1
+			for i >= 0 && history[i].PoolAddressHash != hash {
+				i--
+			}
+			if i < 0 {
+				continue
+			}
+			cur, bal = history[i].Currency, history[i].Balance
+		}
 		if a.exchange.IsPoints(cur) {
 			summary.Points = append(summary.Points, PointsBalance{
 				Platform: plat,
@@ -1041,19 +1090,52 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		latestDay = today
 	}
 
+	// Close each address period before starting a new baseline. Clamping the
+	// net change per period keeps the subtraction used for a single address.
+	// The first period still needs a baseline from before fromDay. Every pool
+	// figure (Today, Daily, Month) goes through here, so a payout address
+	// changed during a day still counts the new address's later gains.
+	periodDelta := func(plat, fromDay, toDay string) float64 {
+		history, pool := poolHistory[plat]
+		if !pool {
+			return platformDelta(plat, fromDay, toDay)
+		}
+		start := sort.Search(len(history), func(i int) bool { return history[i].Day > fromDay })
+		var baseline store.DailyBalance
+		haveBaseline := start > 0
+		if haveBaseline {
+			baseline = history[start-1]
+		}
+		last, seen := baseline, haveBaseline
+		var accrued float64
+		for _, reading := range history[start:] {
+			if reading.Day > toDay {
+				break
+			}
+			if seen && reading.PoolAddressHash != last.PoolAddressHash {
+				if haveBaseline {
+					accrued += balanceDelta(baseline, last, perCur[plat])
+				}
+				baseline, haveBaseline = reading, true
+			}
+			last, seen = reading, true
+		}
+		if haveBaseline {
+			accrued += balanceDelta(baseline, last, perCur[plat])
+		}
+		return accrued
+	}
+
 	// Today / yesterday accrual = per-platform deltas across the two day pairs.
-	todayEarned := sumDelta(dayStr(-1), today)
-	yesterdayEarned := sumDelta(dayStr(-2), dayStr(-1))
+	todayEarned := sumDelta(periodDelta, dayStr(-1), today)
+	yesterdayEarned := sumDelta(periodDelta, dayStr(-2), dayStr(-1))
 	summary.Today = todayEarned
 	if yesterdayEarned > 0 {
 		summary.TodayChange = (todayEarned - yesterdayEarned) / yesterdayEarned * 100
 	}
 
-	// Month = per-platform accrual since the day before this month started; a
-	// platform whose baseline is unknown (before first collection or outside the
-	// window) contributes 0 rather than its whole cumulative balance.
-	summary.Month = sumDelta(beforeMonthStart, latestDay)
-	prevMonthEarned := sumDelta(beforeLastMonthStart, beforeMonthStart)
+	summary.Month = sumDelta(periodDelta, beforeMonthStart, latestDay)
+	prevMonthEarned := sumDelta(periodDelta, beforeLastMonthStart, beforeMonthStart)
 	if prevMonthEarned > 0 {
 		summary.MonthChange = (summary.Month - prevMonthEarned) / prevMonthEarned * 100
 	}
@@ -1065,7 +1147,7 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		prevDay := d.AddDate(0, 0, -1).Format("2006-01-02")
 		summary.Daily = append(summary.Daily, DailyPoint{
 			Day:    d.Format("Jan 02"),
-			Amount: sumDelta(prevDay, curDay),
+			Amount: sumDelta(periodDelta, prevDay, curDay),
 		})
 	}
 
@@ -1144,7 +1226,7 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Leave EMPTY to run everything here (standalone), the default. To join a CashPilot, use How this computer runs above: it tests the connection before it saves anything. While joined, this computer reports what it runs and stops collecting earnings itself; your CashPilot collects them and shows them. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text."},
 		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
 		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
-		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime Provider", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "Current Docker-compatible runtime integration."},
+		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime provider (chosen)", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "The kind of runtime CashPilot is set to use. existing-docker means a Docker-compatible engine you install, such as Docker Desktop. It does not mean one is installed or running: the Runtime card above says that."},
 	}
 	collectors := make([]CollectorSetting, 0)
 	for _, svc := range a.catalog.ListVisible() {
@@ -1189,45 +1271,6 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	}
 	if value := strings.TrimSpace(values["timezone"]); value != "" {
 		cfg.Timezone = value
-	}
-	// Pairing. Unlike every other field here, an EMPTY value is meaningful: it
-	// means "unpair", and standalone is the supported default -- so this is
-	// keyed on presence, not on non-emptiness.
-	if value, present := values["upstreamUrl"]; present {
-		next := strings.TrimRight(strings.TrimSpace(value), "/")
-		if next != "" && next != cfg.UpstreamURL {
-			// Refused here, where the user sees it, rather than on every
-			// heartbeat, where only the log would. Only a NEW address is
-			// checked: the Settings form sends only the fields the user changed,
-			// but another caller can still send the saved address back as it is,
-			// and checking an address saved under an older, looser rule would
-			// then block changing any other setting until the user retyped it.
-			if err := upstream.ValidateServerURL(next); err != nil {
-				return SettingsState{}, fmt.Errorf("pairing address: %w", err)
-			}
-		}
-		if next != cfg.UpstreamURL {
-			// Repointing at a DIFFERENT server must discard the per-worker key
-			// the previous one issued. It is that server's credential and means
-			// nothing to the new one; presenting it would fail authentication
-			// with no obvious cause, and keeping it around is a stale secret for
-			// a machine the user has stopped talking to.
-			if err := config.SetUpstreamWorkerKey(a.cfg.AppDir(), ""); err != nil {
-				return SettingsState{}, fmt.Errorf("clearing the previous worker key: %w", err)
-			}
-			a.upstream.mu.Lock()
-			a.upstream.workerKey = ""
-			a.upstream.mu.Unlock()
-		}
-		cfg.UpstreamURL = next
-	}
-	if value, present := values["upstreamKey"]; present {
-		// Stored verbatim, including empty -- that is how a user unpairs the
-		// credential. The form never shows the saved key and leaves this out when
-		// its box is left blank, so only its Remove button sends it empty.
-		if err := config.SetUpstreamEnrolmentKey(a.cfg.AppDir(), strings.TrimSpace(value)); err != nil {
-			return SettingsState{}, fmt.Errorf("storing the pairing key: %w", err)
-		}
 	}
 	if value, present := values["fleetServerEnabled"]; present {
 		// Presence-keyed, not non-emptiness: "false" is a meaningful value and
@@ -1281,26 +1324,27 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		}
 		cfg.FleetPort = port
 	}
-	// Only the fields this form owns are written, onto the config as it is now. A
-	// whole-snapshot Save would put back what background work changed since the
-	// snapshot above, such as the fence recording that isolation is on, and the
-	// keyring writes above make that window real.
-	if err := a.cfg.Update(func(cur *config.AppConfig) {
+	address, hasAddress := values["upstreamUrl"]
+	key, hasKey := values["upstreamKey"]
+	left := false
+	if hasAddress || hasKey {
+		a.pairingMu.Lock()
+		defer a.pairingMu.Unlock()
+		var err error
+		left, err = a.saveSettingsPairing(strings.TrimRight(strings.TrimSpace(address), "/"), hasAddress, strings.TrimSpace(key), hasKey)
+		if err != nil {
+			return SettingsState{}, err
+		}
+	}
+	pairing := a.cfg.Config()
+	joined := pairing.Mode == config.ModeFollower
+	err := a.cfg.Update(func(cur *config.AppConfig) {
 		cur.DisplayCurrency = cfg.DisplayCurrency
 		cur.HostnamePrefix = cfg.HostnamePrefix
 		cur.Timezone = cfg.Timezone
-		// The mode follows the address when it changes here, as joining and
-		// leaving do: an address means joined, none means run everything here.
-		if cfg.UpstreamURL != cur.UpstreamURL {
-			if cfg.UpstreamURL != "" {
-				cur.Mode = config.ModeFollower
-				cfg.FleetServerEnabled = false
-			} else {
-				cur.Mode = config.ModeLead
-			}
+		if _, set := values["fleetServerEnabled"]; set || (hasAddress && joined && cfg.UpstreamURL != pairing.UpstreamURL) {
+			cur.FleetServerEnabled = cfg.FleetServerEnabled && !joined
 		}
-		cur.UpstreamURL = cfg.UpstreamURL
-		cur.FleetServerEnabled = cfg.FleetServerEnabled
 		cur.DriftWarningsOff = cfg.DriftWarningsOff
 		cur.Isolation = cfg.Isolation
 		if cfg.Isolation == "off" {
@@ -1309,12 +1353,18 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		cur.FleetBindAddress = cfg.FleetBindAddress
 		cur.CollectIntervalMinutes = cfg.CollectIntervalMinutes
 		cur.FleetPort = cfg.FleetPort
-	}); err != nil {
+	})
+	if err != nil {
 		return SettingsState{}, err
+	}
+	if left {
+		if err := a.removeServerCommandsRule(); err != nil {
+			a.emitNotice("server-commands", err.Error())
+		}
 	}
 	// If the collection cadence changed, restart the ticker so the new interval
 	// takes effect immediately instead of waiting for the next app launch.
-	if cfg.CollectIntervalMinutes != previousInterval && a.ctx != nil {
+	if (left || cfg.CollectIntervalMinutes != previousInterval) && a.ctx != nil {
 		a.runScheduler(a.ctx, a.collectInterval())
 	}
 	// The fleet listener binds its port/address once at Startup; changing them here
@@ -1478,42 +1528,11 @@ func (a *App) GetService(slug string) (catalog.Service, error) {
 	return svc, nil
 }
 
-func (a *App) SaveCredentials(slug string, values map[string]string) error {
-	if err := a.ready(); err != nil {
-		return err
-	}
-	return a.saveCredentials(slug, values)
-}
-
-// saveCredentials stores values for slug. A wallet seed is never among them
-// (services.CredentialsToSave).
-func (a *App) saveCredentials(slug string, values map[string]string) error {
-	toSave, err := a.services.CredentialsToSave(slug, values)
-	if err != nil {
-		return err
-	}
-	return a.store.SaveCredentials(slug, toSave)
-}
-
-// GetCredentials is what the deploy form is filled from. A wallet seed is never
-// sent to the window: it lives in the node's data volume, and RevealWalletSeed is
-// the only way to see it.
-func (a *App) GetCredentials(slug string) (map[string]string, error) {
-	if err := a.ready(); err != nil {
-		return nil, err
-	}
-	creds, err := a.store.GetCredentials(slug)
-	if err != nil {
-		return nil, err
-	}
-	return a.services.CredentialsForWindow(slug, creds), nil
-}
-
 // PreflightService reports what could stop a service earning on THIS machine,
 // before the user deploys it: a provider that forbids containers, an image with no
 // build for this CPU, a service already running on another machine in the fleet,
-// and the requirements nobody can verify from here. It never blocks a deploy — the
-// report is shown in the wizard and the Deploy button stays live either way.
+// and the requirements nobody can verify from here. The frontend checks the
+// shared Docker status separately when it renders the report and Deploy button.
 func (a *App) PreflightService(slug string) (preflight.Report, error) {
 	if err := a.ready(); err != nil {
 		return preflight.Report{}, err
@@ -1539,57 +1558,81 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 // catalog's, anything else is the image to run instead. instances is the Instances
 // box: nil keeps the number of copies the deployment already runs (1 for a new one).
 func (a *App) DeployService(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, false, nil)
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances}, true)
 	return deployment, err
 }
 
-func (a *App) deployService(slug string, values map[string]string, image *string, instances *int, leaveRoute bool, wallet *runtime.WalletRequest) (store.Deployment, *runtime.WalletResult, error) {
+type deployCredentialsLock struct {
+	deploy        sync.Mutex
+	explicitSaves uint64 // guarded by App.credentialsMu
+}
+
+func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
+	if _, ok := a.catalog.Get(slug); !ok {
+		return &deployCredentialsLock{}
+	}
+	entry, _ := a.deployCredentialsLocks.LoadOrStore(slug, &deployCredentialsLock{})
+	return entry.(*deployCredentialsLock)
+}
+
+func (l *deployCredentialsLock) startDeploy(credentialsMu *sync.Mutex) uint64 {
+	// Let an in-progress credential write finish before taking the snapshot.
+	// Release the mutex before queuing so the active deploy can finish its write
+	// and an explicit save made while this deploy waits can still win.
+	credentialsMu.Lock()
+	startSaves := l.explicitSaves
+	credentialsMu.Unlock()
+	l.deploy.Lock()
+	return startSaves
+}
+
+// register lets a local deploy add the device to the provider account. A deploy
+// sent by the server leaves registration to the server.
+func (a *App) deployService(slug string, values map[string]string, opts services.DeployOptions, register bool) (store.Deployment, *runtime.WalletResult, error) {
 	if err := a.ready(); err != nil {
 		return store.Deployment{}, nil, err
 	}
 	a.retryCustom()
-	// A custom service deploys its saved definition; the form has no credentials for
-	// it, and nothing typed there or stored under its slug is read, stored or sent
-	// (services.DeployWith).
-	custom := catalog.IsCustomSlug(slug)
-	if custom {
-		values = nil
-	}
-	// The credentials this deploy will use: the submitted values (which replace the
-	// stored blob) when provided, else whatever is already stored.
-	creds := values
-	if len(creds) == 0 && !custom {
-		stored, err := a.store.GetCredentials(slug)
-		if err != nil {
-			return store.Deployment{}, nil, err
-		}
-		creds = stored
-	}
-	// Validate BEFORE persisting, so a rejected deploy never leaves invalid/blank creds
-	// lingering — they could never deploy, yet they would linger and light the
-	// "Configured" badge for a service that cannot actually start.
-	if err := a.services.ValidateDeploy(slug, creds); err != nil {
-		a.emitError("deploy", err)
-		return store.Deployment{}, nil, err
-	}
-	if image != nil {
-		if err := services.ValidateImage(*image); err != nil {
-			a.emitError("deploy", err)
-			return store.Deployment{}, nil, err
-		}
-	}
-	if len(values) > 0 {
-		if err := a.saveCredentials(slug, values); err != nil {
-			return store.Deployment{}, nil, err
-		}
-	}
-	deployment, walletResult, err := a.services.DeployWallet(a.ctx, slug, creds, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: leaveRoute, Wallet: wallet})
+	lock := a.deployCredentialsLock(slug)
+	startSaves := lock.startDeploy(&a.credentialsMu)
+	defer lock.deploy.Unlock()
+	creds, err := a.prepareDeployCredentials(slug, values, opts.Image)
 	if err != nil {
-		a.emitError("deploy", err)
 		return store.Deployment{}, nil, err
 	}
+	if err := a.refuseWithoutDocker(slug); err != nil {
+		return store.Deployment{}, nil, err
+	}
+	deployment, walletResult, deployErr := a.services.DeployWallet(a.ctx, slug, creds, opts)
+	if deployErr != nil && deployment.Slug == "" {
+		a.emitError("deploy", deployErr)
+		return store.Deployment{}, nil, deployErr
+	}
+	saved, saveErr := a.saveLocalDeployCredentials(slug, values, lock, startSaves)
 	a.emitEvent("deployment:changed", deployment)
-	a.registerDevice(slug, creds)
+	if saveErr != nil {
+		a.emitError("credentials", saveErr)
+	}
+	if deployErr != nil {
+		if saveErr != nil {
+			deployErr = errors.Join(deployErr, saveErr)
+		} else if saved {
+			for key, secret := range a.credentialFields(slug) {
+				if secret && strings.TrimSpace(values[key]) != "" {
+					deployErr = savedPartialDeployError{deployErr}
+					break
+				}
+			}
+		}
+		a.emitError("deploy", deployErr)
+		return deployment, nil, deployErr
+	}
+	if saveErr != nil {
+		return deployment, walletResult, saveErr
+	}
+	if register {
+		a.registerDevice(slug, creds)
+	}
 	// Collect this service's balance right away so the dashboard shows a figure
 	// shortly after deploy instead of waiting for the next scheduled tick. Only
 	// services with a native collector are worth kicking; the rest would merely
@@ -1606,29 +1649,27 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 	if err := a.ready(); err != nil {
 		return services.ProxiedResult{}, err
 	}
-	creds := values
-	if len(creds) == 0 {
-		stored, err := a.store.GetCredentials(slug)
-		if err != nil {
-			return services.ProxiedResult{}, err
-		}
-		creds = stored
-	}
-	if err := a.services.ValidateDeploy(slug, creds); err != nil {
-		a.emitError("deploy", err)
+	lock := a.deployCredentialsLock(slug)
+	startSaves := lock.startDeploy(&a.credentialsMu)
+	defer lock.deploy.Unlock()
+	creds, err := a.prepareDeployCredentials(slug, values, nil)
+	if err != nil {
 		return services.ProxiedResult{}, err
 	}
-	if len(values) > 0 {
-		if err := a.saveCredentials(slug, values); err != nil {
-			return services.ProxiedResult{}, err
-		}
+	if err := a.refuseWithoutDocker(slug); err != nil {
+		return services.ProxiedResult{}, err
 	}
 	result, err := a.services.DeployRouted(a.ctx, slug, creds, proxyID)
 	if err != nil {
 		a.emitError("deploy", err)
 		return services.ProxiedResult{}, err
 	}
+	_, saveErr := a.saveLocalDeployCredentials(slug, values, lock, startSaves)
 	a.emitEvent("deployment:changed", slug)
+	if saveErr != nil {
+		a.emitError("credentials", saveErr)
+		return result, saveErr
+	}
 	a.registerDevice(slug, creds)
 	return result, nil
 }
@@ -1637,7 +1678,7 @@ func (a *App) DeployServiceRouted(slug string, values map[string]string, proxyID
 // the owner confirmed it runs from this machine's own IP from now on. Its routed copy
 // is removed first.
 func (a *App) DeployServiceLeavingRoute(slug string, values map[string]string, image *string, instances *int) (store.Deployment, error) {
-	deployment, _, err := a.deployService(slug, values, image, instances, true, nil)
+	deployment, _, err := a.deployService(slug, values, services.DeployOptions{Image: image, Instances: instances, LeaveRoute: true}, true)
 	return deployment, err
 }
 
@@ -1803,9 +1844,11 @@ func (a *App) CollectService(slug string) (store.EarningsRecord, error) {
 	if err != nil {
 		return store.EarningsRecord{}, err
 	}
-	record, err := a.collectors.Collect(a.ctx, slug, creds)
+	record, err := a.collectors.CollectSaved(a.ctx, slug, creds)
 	if err != nil {
-		a.emitError("collector", err)
+		if !errors.Is(err, collectors.ErrPayoutAddressChanged) {
+			a.emitError("collector", err)
+		}
 		return store.EarningsRecord{}, err
 	}
 	a.emitEvent("earnings:changed", record)
@@ -1826,9 +1869,11 @@ func (a *App) collectOne(ctx context.Context, slug string) {
 		a.emitError("collector", err)
 		return
 	}
-	record, err := a.collectors.Collect(ctx, slug, creds)
+	record, err := a.collectors.CollectSaved(ctx, slug, creds)
 	if err != nil {
-		a.emitError("collector", err)
+		if !errors.Is(err, collectors.ErrPayoutAddressChanged) {
+			a.emitError("collector", err)
+		}
 		return
 	}
 	a.emitEvent("earnings:changed", record)
@@ -1917,8 +1962,10 @@ func (a *App) collectAll(ctx context.Context) {
 				a.emitError("collector", err)
 				return
 			}
-			if _, err := a.collectors.Collect(ctx, slug, creds); err != nil {
-				a.emitError("collector", err)
+			if _, err := a.collectors.CollectSaved(ctx, slug, creds); err != nil {
+				if !errors.Is(err, collectors.ErrPayoutAddressChanged) {
+					a.emitError("collector", err)
+				}
 				return
 			}
 			collected.Add(1)
@@ -2102,11 +2149,8 @@ func (a *App) ManagedRuntimePlan() runtime.ManagedRuntimePlan {
 
 func (a *App) notifications(status runtime.Status, earnings []store.EarningsRecord, deployments []store.Deployment) []Notification {
 	var items []Notification
-	// Only warn that the runtime is offline when NEITHER Docker nor the always-on
-	// native runtime can run anything. With native available the app works without
-	// Docker, so a "Runtime offline" alert there would be dishonest and alarming.
-	if !status.Available && !status.NativeAvailable {
-		items = append(items, Notification{Level: "warning", Title: "Runtime offline", Message: status.Message})
+	if notice := runtimeNotification(status); notice != nil {
+		items = append(items, *notice)
 	}
 	// A container whose image no longer matches the catalog often keeps running (so it
 	// looks healthy) while the retired provider client earns nothing — surface it so the
@@ -2237,9 +2281,18 @@ func hostnameOrDefault(value string) string {
 // current required fields. Keying off required fields (not merely len(creds) > 0) stops
 // an orphaned pre-migration blob — non-empty but missing the current keys — from
 // falsely reading as configured when a deploy would in fact fail until re-entry.
+//
+// A blob whose every value is blank is not configured, and neither is one that
+// leaves out a login the earnings collector requires (collectors.Fields): the form
+// sends every box, so a deploy with the boxes empty used to read as "Configured".
 func (a *App) credsConfigured(slug string, creds map[string]string) bool {
-	if len(creds) == 0 {
+	if !hasCredentialValue(creds) {
 		return false
+	}
+	for _, field := range collectors.Fields(slug) {
+		if field.Required && strings.TrimSpace(creds[field.Key]) == "" {
+			return false
+		}
 	}
 	if a.services == nil {
 		return true
@@ -2276,9 +2329,8 @@ func (a *App) ensureFleetAPIKey() error {
 	}
 	// Strip any plaintext token still carried in config.json (the omitempty tag drops
 	// the now-empty field on the next write).
-	if cfg := a.cfg.Config(); cfg.FleetAPIKey != "" {
-		cfg.FleetAPIKey = ""
-		if err := a.cfg.Save(cfg); err != nil {
+	if a.cfg.Config().FleetAPIKey != "" {
+		if err := a.cfg.Update(func(c *config.AppConfig) { c.FleetAPIKey = "" }); err != nil {
 			return err
 		}
 	}

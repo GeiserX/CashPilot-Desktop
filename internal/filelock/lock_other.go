@@ -1,6 +1,6 @@
 //go:build !windows
 
-package upstream
+package filelock
 
 import (
 	"os"

@@ -16,12 +16,14 @@ import {
   GetActivityDetail,
   RefreshActivityNetworks,
   SetActivityEnabled,
+  SetServerCommands,
+  AllowServerCommandsThroughFirewall,
+  RetryServerCommandsFirewallRemoval,
   InstallBackgroundHelper,
   ListCustomServices,
   ApplyImport,
   PreviewImport,
   RemoveBackgroundHelper,
-  CheckRuntime,
   ChooseRestoreFile,
   CollectService,
   CompleteOnboarding,
@@ -44,7 +46,6 @@ import {
   GetFleetState,
   GetProxiesState,
   GetLogs,
-  GetRuntimeGuides,
   GetSettingsState,
   GetUsage,
   HostCheck,
@@ -77,11 +78,14 @@ import {
   AcceptSessionRisk,
   RevokeSessionRisk,
   ReminderAction,
+  DeployAdminStep,
+  DeployServiceWithAdminApproval,
   GetModeState,
   JoinCashPilot,
   StartAsLead,
   SwitchToLead,
   StartDockerDesktop,
+  DockerDesktopEngineReady,
   OpenWindowsUpdate,
   RestartToFirmware,
   SetupResume,
@@ -91,6 +95,8 @@ import {
   SignOutNow,
 } from "../wailsjs/go/main/App";
 import { renderFleetSection } from "./render/fleet";
+import { renderServerCommands } from "./render/server_commands";
+import { wireServerCommandsFirewall } from "./render/server_commands_wire";
 import { renderFleetSnippets, type FleetSnippet } from "./render/fleet_snippets";
 import { flashCopied } from "./render/copy";
 import { createBoot } from "./render/boot";
@@ -102,6 +108,8 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
+import { adminConsentScreen, CANCELLED_TEXT, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
+import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
@@ -114,22 +122,23 @@ import { catalogFilterTabs, renderCatalogTable, wizardCategoryChoices, wizardCat
 import { wireCatalogRows } from "./render/catalog_open";
 import { wireOpenLinks } from "./render/open_links";
 import { renderAddServiceButton, renderTopnav } from "./render/topbar";
-import { renderPreflight } from "./render/preflight";
+import { localDockerGap, renderPreflight } from "./render/preflight";
 import { escapeHtml, formatBalance } from "./render/format";
 import { renderWizardServiceSetup } from "./render/wizard";
-import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
+import { phraseWords, pickPositions, renderPhrasePanel, renderRevealPanel, seedFileVar, walletChoiceRefusal, walletDeployAnswer, wordsMatch, type PhrasePanelView, type RevealView } from "./render/wallet";
 import { renderSessionConsentCard, renderSessionSlot } from "./render/session";
 import { oneAtATime, wireSessionConsent as wireSessionConsentGate } from "./render/session_wire";
 import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
-import { guidesBesideChecklist, loadRuntimePage } from "./render/runtimepage";
+import { guidesBesideChecklist, loadRuntimePage, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
+import { renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
 import { routeChoice, routedDeployText, runRouteDeploy, wizardAfterNav } from "./render/route";
 import { runWorkerDeploy, whereChoice, workerDeployText } from "./render/where";
 import { copyCommandQuestion, workerCopiesSection } from "./render/workercopies";
-import { composeSelectionExport, deviceLinkText, payoutLedger } from "./render/details";
+import { composeSelectionExport, deviceLinkText, payoutLedger, renderPayoutFacts } from "./render/details";
 import { allTimeNote, totalText, totalCaption } from "./render/total";
 import { renderFleetConnect } from "./render/fleet_reach";
 import { renderFenceStatusLine } from "./render/fence_status";
@@ -137,7 +146,7 @@ import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalCh
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
-import type { ActivityDetail, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, PointsBalance, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WalletDeployResult } from "./wails";
+import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, NotificationItem, PointsBalance, PreflightReport, RouteState, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WorkerTarget } from "./wails";
 
 let state: AppState | null = null;
 let selectedService: Service | null = null;
@@ -150,6 +159,7 @@ let onboardingResumeChecked = false;
 // First run's reading of this PC for the runtime step, once it has landed (or
 // failed), and whether "Check again" is reading now.
 let firstRunHost: HostCheckResult | null = null;
+let firstRunHasChecklist = false;
 let firstRunHostTried = false;
 let firstRunChecking = false;
 // A guided setup a restart interrupted (render/dockerguide.ts), and the checklist
@@ -174,6 +184,9 @@ let wizardRouteDrafts: Record<string, number | null> = {};
 // The Where box's pick per slug (a worker id, null for this computer), kept and
 // cleared as the Route box's picks are (render/where.ts).
 let wizardWhereDrafts: Record<string, number | null> = {};
+const wizardPreflightDraws = new Map<string, () => void>();
+const wizardDeployFeedback: Record<string, DeployFeedback> = {};
+const wizardDeploying = new Map<string, WizardDeploySettings>();
 let catalogFilter = "all";
 let catalogSearch = "";
 // Custom services on the Catalog page: the list as last loaded (null before the first
@@ -188,6 +201,9 @@ let importResult: ImportResult | null = null;
 let importDeployed: string[] = [];
 // The device-link step of each deployed import, shown under it (slug -> text).
 let importLinks: Record<string, string> = {};
+let importDeploys: Record<string, DeployFeedback> = {};
+const driftDeploys: Record<string, DeployStatus> = {};
+let proxyDeployStatus: DeployStatus | undefined;
 let importDeploying = new Set<string>();
 // Bumped by each preview, so a slower earlier one cannot land over a later one.
 let importPreviewSeq = 0;
@@ -243,10 +259,14 @@ const boot = createBoot({
   chrome: withChrome,
   wireChrome,
   load: async () => {
-    state = await GetAppState();
+    wireBackendEvents();
+    await loadAppState();
     await applySetupResume();
     render();
-    wireBackendEvents();
+    if (hostReadingPending) {
+      hostReadingPending = false;
+      void refreshRuntimeSnapshot();
+    }
   },
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   now: () => Date.now(),
@@ -255,6 +275,16 @@ const boot = createBoot({
 let backendEventsWired = false;
 
 let eventRefreshInFlight = false;
+let hostReadingPending = false;
+let runtimeCheckStarted = 0;
+let runtimeCheckCompleted = 0;
+
+// A newer check supersedes an older one once it finishes, even if it failed.
+function completeRuntimeCheck(request: number) {
+  if (request < runtimeCheckCompleted) return false;
+  runtimeCheckCompleted = request;
+  return true;
+}
 
 // The Go backend emits these after background collection cycles and deployment
 // changes. Refresh state so passive earnings appear without the user navigating.
@@ -264,12 +294,19 @@ function wireBackendEvents() {
   backendEventsWired = true;
   EventsOn("earnings:changed", () => void onBackendEvent());
   EventsOn("deployment:changed", () => void onBackendEvent());
+  EventsOn("runtime:host-checked", () => {
+    if (state) void refreshRuntimeSnapshot();
+    else hostReadingPending = true;
+  });
   // Background/startup failures the Go side reports via app:error had no listener,
   // so ~every background error was silently dropped. Surface them to the user.
   EventsOn("app:error", (payload) => showErrorToast(payload));
   EventsOn("app:notice", (payload) => showInfoToast(payload));
   // Windows reopened CashPilot after a restart while this window was open.
-  EventsOn("setup:resume", () => void applySetupResume().then(render));
+  EventsOn("setup:resume", () => void applySetupResume().then(() => {
+    if (dockerGuide) dockerGuide.showResume(setupResume);
+    else render();
+  }));
 }
 
 // A setup a restart interrupted, or a start with --resume-setup, lands on the
@@ -282,20 +319,36 @@ async function applySetupResume() {
   else onboardingStep = "runtime";
 }
 
-// HostCheck, plus the frontend's half of finishing a setup: a reading that finds
-// this PC's Docker running ends it in Go (host_check.go), so the resume banner goes too.
+// Publish every explicit host check to the shared runtime, even when it fails.
 async function hostCheck() {
-  const result = await HostCheck();
-  if (setupFinished(result)) setupResume = null;
+  const request = ++runtimeCheckStarted;
+  const publish = (result: HostCheckResult | null) => {
+    if (!state || !completeRuntimeCheck(request)) return;
+    if (!state.config.firstRunComplete) {
+      firstRunHost = result;
+      if (result) firstRunHasChecklist = !!result.facts?.supported && !!result.steps?.length;
+    }
+    if (result && setupFinished(result)) setupResume = null;
+    setRuntimeReading(result?.runtime ?? unknownRuntime, result ? result.runtimeNotice : unknownRuntimeNotice);
+  };
+  let result: HostCheckResult;
+  try {
+    result = await HostCheck();
+  } catch (error) {
+    publish(null);
+    throw error;
+  }
+  publish(result);
   return result;
 }
 
-// What the checklist needs from Go. skip and checked differ per screen.
-function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked">): DockerGuideDeps {
+// What the checklist needs from Go. Skip differs per screen.
+function guideDeps(skip: DockerGuideDeps["skip"]): DockerGuideDeps {
   return {
     hostCheck,
-    checkRuntime: CheckRuntime,
+    currentRuntime: () => state?.runtime ?? unknownRuntime,
     startDocker: StartDockerDesktop,
+    dockerEngineReady: DockerDesktopEngineReady,
     openWindowsUpdate: OpenWindowsUpdate,
     restartToFirmware: RestartToFirmware,
     runSetupStep: RunSetupStep,
@@ -309,20 +362,44 @@ function guideDeps(extra: Pick<DockerGuideDeps, "skip" | "checked">): DockerGuid
       if (url) BrowserOpenURL(url);
     },
     failed: (error) => showErrorToast({scope: "runtime", error: String(error)}),
-    ...extra,
+    skip,
   };
 }
 
+// App-state reads check Docker too. Apply the result here, so a caller resuming
+// after the await cannot replace a runtime reading published in the meantime.
+async function loadAppState(scope: "all" | "runtime" = "all") {
+  const request = ++runtimeCheckStarted;
+  let next: AppState;
+  try {
+    next = await GetAppState();
+  } catch (error) {
+    if (completeRuntimeCheck(request)) setRuntimeReading(unknownRuntime, unknownRuntimeNotice);
+    if (scope === "all") throw error;
+    return;
+  }
+
+  const previous = state;
+  if (completeRuntimeCheck(request)) {
+    state = scope === "runtime" && previous
+      ? { ...previous, runtime: next.runtime, notifications: next.notifications }
+      : next;
+  } else if (scope === "all" && previous) {
+    const notice = previous.notifications?.find((item) => item.runtime) ?? null;
+    state = { ...next, ...withRuntimeReading(next, previous.runtime, notice) };
+  } else {
+    return;
+  }
+  // The caller draws the first screen and the transition out of onboarding.
+  if (previous && (previous.config.firstRunComplete || !state.config.firstRunComplete)) updateRuntimeSurfaces(state);
+}
 
 async function onBackendEvent() {
   if (eventRefreshInFlight) return;
   if (!state || !state.config.firstRunComplete) return;
   eventRefreshInFlight = true;
   try {
-    state = await GetAppState();
-    // Only re-render on the dashboard; other views own an in-progress form, so
-    // update state silently and let them pick it up on their next natural render.
-    if (activeView === "dashboard") render();
+    await loadAppState();
   } catch {
     // transient background refresh failure — ignore; next event/read recovers
   } finally {
@@ -335,9 +412,11 @@ function render() {
   // Whatever was on screen is replaced: a checklist there stops drawing.
   dockerGuide?.dispose();
   dockerGuide = null;
+  wizardPreflightDraws.clear();
   // A seed phrase on screen goes with the view it was shown in.
   if (activeView !== "dashboard") hideRevealedSeed();
   if (activeView !== "wizard") dropNewWalletPhrase();
+  if (activeView !== "wizard" || wizardStep !== 3) closeWizardDeployDrafts();
   if (!state.config.firstRunComplete) {
     renderOnboarding(state);
     return;
@@ -355,11 +434,11 @@ function render() {
     return;
   }
   if (activeView === "fleet") {
-    void renderFleet(state);
+    void renderFleet();
     return;
   }
   if (activeView === "activity") {
-    void renderActivity(state);
+    void renderActivity();
     return;
   }
   if (activeView === "import") {
@@ -398,8 +477,7 @@ function renderOnboarding(current: AppState) {
   // generic message would tell a PC with virtualization off to open Docker.
   const checking = !runtime.available && !firstRunHostTried;
   if (checking) void firstRunHostCheck();
-  // On Windows the Docker checklist shows below the card while Docker is not ready.
-  const checklist = !runtime.available && !!firstRunHost?.facts?.supported && (firstRunHost.steps?.length ?? 0) > 0;
+  const checklist = firstRunHasChecklist;
   // Onboarding proceeds when Docker answers, or when the native runtime can run at
   // least one catalog app here. Native-only is never called ready: the card says
   // most apps need Docker and points at its guide (render/onboarding.ts).
@@ -417,11 +495,7 @@ function renderOnboarding(current: AppState) {
           <div id="install-guides" class="guide-grid"></div>
   `, {wide: true});
   wireChrome();
-  document.querySelector("#continue-btn")?.addEventListener("click", async () => {
-    await CompleteOnboarding();
-    state = await GetAppState();
-    render();
-  });
+  document.querySelector("#continue-btn")?.addEventListener("click", finishOnboarding);
   document.querySelector("#refresh-runtime")?.addEventListener("click", async () => {
     if (firstRunChecking) return;
     // HostCheck reads this PC afresh, so a fix the user just made shows at once.
@@ -429,8 +503,7 @@ function renderOnboarding(current: AppState) {
     firstRunChecking = true;
     render();
     try {
-      firstRunHost = await hostCheck();
-      state = {...current, runtime: firstRunHost.runtime, guides: await GetRuntimeGuides()};
+      await hostCheck();
     } catch (error) {
       showErrorToast({scope: "runtime", error: String(error)});
     } finally {
@@ -439,28 +512,16 @@ function renderOnboarding(current: AppState) {
     }
   });
   const holder = document.querySelector<HTMLDivElement>("#docker-guide");
-  if (checklist && holder && firstRunHost) {
-    dockerGuide = new DockerGuide(holder, guideDeps({
-      skip: async () => {
-        await CompleteOnboarding();
-        state = await GetAppState();
-        render();
-      },
-      // A reading from the checklist updates the card above it, in place, so the
-      // checklist keeps its screen.
-      checked: (result) => {
-        firstRunHost = result;
-        if (!state) return;
-        state = {...state, runtime: result.runtime};
-        const next = runtimeCard(result.runtime);
-        const slot = document.querySelector("#runtime-card-slot");
-        if (slot) slot.innerHTML = next.html;
-        const go = document.querySelector<HTMLButtonElement>("#continue-btn");
-        if (go) go.disabled = !next.canContinue;
-      },
-    }), {runtime, resume: setupResume, result: firstRunHost});
+  if (checklist && holder) {
+    dockerGuide = new DockerGuide(holder, guideDeps(finishOnboarding), {resume: setupResume, result: firstRunHost, checkFailed: !firstRunHost});
   }
   renderGuides(guidesBesideChecklist(current.guides || [], checklist));
+}
+
+async function finishOnboarding() {
+  await CompleteOnboarding();
+  await loadAppState();
+  render();
 }
 
 // First run's first reading of this PC. It lands after the first draw, so the
@@ -470,10 +531,9 @@ async function firstRunHostCheck() {
   if (firstRunHostPending) return;
   firstRunHostPending = true;
   try {
-    firstRunHost = await hostCheck();
-    if (state) state = {...state, runtime: firstRunHost.runtime};
+    await hostCheck();
   } catch {
-    // The card falls back to the runtime's own message.
+    // hostCheck has already published the unknown status.
   } finally {
     firstRunHostTried = true;
     firstRunHostPending = false;
@@ -504,31 +564,21 @@ function renderRuntimeView(current: AppState) {
   maybeResetScroll();
   const holder = document.querySelector<HTMLDivElement>("#docker-guide");
   const guides = current.guides || [];
-  const showRuntime = (runtime: RuntimeStatus) => {
-    if (state) state = {...state, runtime};
-    const slot = document.querySelector("#runtime-card-slot");
-    if (slot) slot.innerHTML = runtimeCard(runtime).html;
-  };
+  const runtimeViewCurrent = () => activeView === "runtime" && !!holder?.isConnected;
   // The checklist reads the PC when it opens; outside Windows the reading says so
   // and the install guides stay the whole page (render/runtimepage.ts).
   void loadRuntimePage(hostCheck, guides, {
-    current: () => activeView === "runtime" && !!holder?.isConnected,
-    setRuntime: showRuntime,
+    current: runtimeViewCurrent,
     showGuides: renderGuides,
     showHolder: (html) => {
       if (!holder) return;
       holder.innerHTML = html;
       holder.querySelector("[data-runtime-recheck]")?.addEventListener("click", () => render());
     },
-    showChecklist: (result) => {
-      if (!holder) return;
-      dockerGuide = new DockerGuide(holder, guideDeps({
-        skip: () => {
-          activeView = "dashboard";
-          render();
-        },
-        checked: (res) => showRuntime(res.runtime),
-      }), {runtime: result.runtime, resume: setupResume, result});
+    readResume: SetupResume,
+    showChecklist: (result, resume) => {
+      if (!holder || !state) return;
+      dockerGuide = new DockerGuide(holder, guideDeps(() => showView("dashboard")), {resume, result});
     },
   });
 }
@@ -552,7 +602,7 @@ function renderModeStep() {
       }
       try {
         await StartAsLead();
-        state = await GetAppState();
+        await loadAppState();
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
         return;
@@ -573,7 +623,7 @@ function renderJoinStep() {
     onboardingStep = "mode";
     render();
   }, async () => {
-    state = await GetAppState();
+    await loadAppState();
     onboardingStep = "runtime";
     render();
   });
@@ -681,6 +731,9 @@ function renderDashboard(current: AppState) {
   const containers = [...deployments, ...Object.values(copies).flat()];
   const upCount = containers.filter((item) => item.status === "running").length;
   const points = summary?.points || [];
+  const completedDriftDeploys = Object.entries(driftDeploys)
+    .filter(([slug, result]) => result.kind === "ok" && !current.drift?.[slug]?.length)
+    .map(([, result]) => result);
   const attention = withReminders(attentionItems({
     runtime: current.runtime,
     services,
@@ -690,6 +743,7 @@ function renderDashboard(current: AppState) {
     outdated: current.outdatedServices,
     health: current.health,
     drift: current.drift,
+    driftDeploys,
     producerStates: current.producerStates,
     isolation: current.isolation,
   }).concat(stallItems(current.stalls)), current.reminders);
@@ -703,6 +757,7 @@ function renderDashboard(current: AppState) {
           <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
         `)}
         ${current.pairing ? renderJoinedBanner(current.pairing) : ""}
+        ${current.serverCommands ? renderServerCommands(current.serverCommands) : ""}
         <!-- The money first and largest; the container count sits at the far
              end, smaller, because it answers a different question. -->
         <section class="stats-grid money-strip" aria-label="Earnings">
@@ -728,8 +783,8 @@ function renderDashboard(current: AppState) {
           </div>
         </section>
 
-        ${renderFenceStatusLine(current.isolation)}
-        ${renderAttention(attention, upCount, containers.length)}
+        ${renderFenceStatusLine(current.isolation, current.runtime)}
+        ${renderAttention(attention, upCount, containers.length, completedDriftDeploys)}
         ${renderStallServerNote(current.stallsServer)}
 
         ${renderReminders(current.reminders)}
@@ -808,6 +863,16 @@ function renderDashboard(current: AppState) {
   });
   document.querySelectorAll<HTMLButtonElement>("[data-isolation-action]").forEach((button) => {
     button.addEventListener("click", () => void runEnableIsolation());
+  });
+  document.querySelector<HTMLInputElement>("[data-server-commands-switch]")?.addEventListener("change", (event) => {
+    const on = (event.target as HTMLInputElement).checked;
+    void SetServerCommands(on).then(refreshState, (error) => setOutput(`Could not switch it: ${String(error)}`));
+  });
+  wireServerCommandsFirewall(document, {
+    allow: AllowServerCommandsThroughFirewall,
+    refresh: refreshState,
+    setOutput,
+    notice: (message) => showInfoToast({ scope: "Server commands", message }),
   });
   document.querySelectorAll<HTMLButtonElement>("[data-row-action]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -975,8 +1040,6 @@ function topbar(active: View, current: AppState) {
   // summary is a snapshot and the setting can change under it). Falling back to
   // config only when the summary has no currency of its own.
   const disp = current.summary?.displayCurrency || current.config.displayCurrency || "USD";
-  const notifications = current.notifications || [];
-  const runtimeOk = current.runtime.available || current.runtime.nativeAvailable;
   return `
     <header class="topbar">
       <div class="topbar-brand">
@@ -986,46 +1049,125 @@ function topbar(active: View, current: AppState) {
       ${renderTopnav(active)}
       <div class="topbar-right">
         ${renderAddServiceButton(active)}
-        <button class="topbar-runtime ${runtimeOk ? "" : "text-warn"} ${active === "runtime" ? "active" : ""}" data-view="runtime" title="${escapeHtml(current.runtime.message || "")}"><span class="runtime-dot ${runtimeOk ? "ok" : "warn"}"></span>${current.runtime.available ? "Runtime ready" : current.runtime.nativeAvailable ? "Native mode" : "Runtime offline"}</button>
+        <button class="topbar-runtime ${runtimeUsable(current.runtime) ? "" : "text-warn"} ${active === "runtime" ? "active" : ""}" data-view="runtime" title="${escapeHtml(current.runtime.message || "")}">${topbarRuntimeLabel(current.runtime)}</button>
         <span class="topbar-earnings" title="Total balance across every service">${escapeHtml(totalText(current.summary, disp))}</span>
         <select class="currency-select" id="currency-select" title="Display currency">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
         </select>
         <details class="notification-menu">
-          <summary aria-label="Alerts">Alerts${notifications.length ? ` <span class="notify-badge">${notifications.length}</span>` : ""}</summary>
-          <div class="notification-popover">
-            <strong>Alerts</strong>
-            ${notifications.length ? notifications.map((item) => `
-              <div class="notification-item ${escapeHtml(item.level)}">
-                <span>${escapeHtml(item.title)}</span>
-                <small>${escapeHtml(item.message)}</small>
-              </div>
-            `).join("") : `<p class="muted">No alerts right now.</p>`}
-          </div>
+          ${renderAlerts(current.notifications)}
         </details>
       </div>
     </header>
   `;
 }
 
-function wireShellNav() {
-  document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
+function runtimeUsable(runtime: RuntimeStatus) {
+  return runtime.available || (runtime.nativeAvailable && runtimeState(runtime).kind !== "unknown");
+}
+
+function topbarRuntimeLabel(runtime: RuntimeStatus) {
+  const label = runtime.available ? "Runtime ready"
+    : runtimeState(runtime).kind === "unknown" ? "Runtime unknown"
+    : runtime.nativeAvailable ? "Native mode" : "Runtime offline";
+  return `<span class="runtime-dot ${runtimeUsable(runtime) ? "ok" : "warn"}"></span>${label}`;
+}
+
+function renderAlerts(notifications: NotificationItem[] | null) {
+  return `
+    <summary aria-label="Alerts">Alerts${notifications?.length ? ` <span class="notify-badge">${notifications.length}</span>` : ""}</summary>
+    <div class="notification-popover">
+      <strong>Alerts</strong>
+      ${notifications?.length ? notifications.map((item) => `
+        <div class="notification-item ${escapeHtml(item.level)}">
+          <span>${escapeHtml(item.title)}</span>
+          <small>${escapeHtml(item.message)}</small>
+        </div>
+      `).join("") : `<p class="muted">No alerts right now.</p>`}
+    </div>
+  `;
+}
+
+function updateRuntimeChrome(current: AppState) {
+  const button = document.querySelector<HTMLButtonElement>(".topbar-runtime");
+  if (button) {
+    button.classList.toggle("text-warn", !runtimeUsable(current.runtime));
+    button.title = current.runtime.message;
+    button.innerHTML = topbarRuntimeLabel(current.runtime);
+  }
+  const alerts = document.querySelector(".notification-menu");
+  if (alerts) alerts.innerHTML = renderAlerts(current.notifications);
+}
+
+function setRuntimeReading(runtime: RuntimeStatus, notice: NotificationItem | null) {
+  if (!state) return;
+  state = { ...state, ...withRuntimeReading(state, runtime, notice) };
+  updateRuntimeSurfaces(state);
+}
+
+function updateRuntimeSurfaces(current: AppState) {
+  const slot = document.querySelector("#runtime-card-slot");
+  if (slot) {
+    const card = runtimeCard(current.runtime);
+    slot.innerHTML = card.html;
+    const go = document.querySelector<HTMLButtonElement>("#continue-btn");
+    if (go) go.disabled = !card.canContinue;
+  }
+  if (!current.config.firstRunComplete) return;
+  if (activeView === "dashboard") {
+    render();
+    return;
+  }
+  updateRuntimeChrome(current);
+  if (activeView === "wizard") {
+    for (const draw of wizardPreflightDraws.values()) draw();
+    const summary = document.querySelector("#wizard-runtime-summary");
+    if (summary) summary.innerHTML = wizardSummaryServices((current.services || []).filter((service) => wizardSelected.includes(service.slug)));
+  }
+  if (activeView === "settings") {
+    const card = document.querySelector("#runtime-settings-slot");
+    if (card) {
+      card.innerHTML = renderRuntimeSettings(current.runtime);
+      wireShellNav(card);
+    }
+    const provider = document.querySelector("[data-runtime-provider-state]");
+    if (provider) provider.outerHTML = runtimeProviderNote(current.runtime);
+    const fence = document.querySelector("[data-fence-status]");
+    if (fence) fence.outerHTML = renderFenceStatusLine(current.isolation, current.runtime, "small");
+  }
+}
+
+// A Windows host reading can finish after GetAppState returned. Update the open
+// surfaces without replacing any in-progress form.
+async function refreshRuntimeSnapshot() {
+  // The checklist already starts its own host check.
+  if (!state?.config.firstRunComplete || activeView === "runtime") return;
+  await loadAppState("runtime");
+}
+
+function showView(view: View) {
+  activeView = view;
+  render();
+  if (view === "dashboard") void refreshRuntimeSnapshot();
+}
+
+function wireShellNav(scope: ParentNode = document) {
+  scope.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
       if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import" || next === "runtime") {
-        activeView = next;
         ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav(next, wizardStep));
         wizardWhereDrafts = {};
         resetScrollAfterRender = true;
-        render();
+        showView(next);
       }
     });
   });
-  wireOpenLinks(document, BrowserOpenURL);
+  wireOpenLinks(scope, BrowserOpenURL);
   document.querySelector<HTMLSelectElement>("#currency-select")?.addEventListener("change", async (event) => {
     const currency = (event.target as HTMLSelectElement).value;
     await SaveSettings({displayCurrency: currency});
-    state = await GetAppState();
+    await loadAppState();
     render();
   });
 }
@@ -1166,7 +1308,7 @@ async function saveCustomService(editor: HTMLFormElement) {
     editor.dataset.customEditor = saved.slug;
     customEditing = saved;
     customViews = await ListCustomServices();
-    state = await GetAppState();
+    await loadAppState();
     customEditing = null;
     render();
     const deployed = state?.deployments?.some((dep) => dep.slug === saved.slug);
@@ -1184,7 +1326,7 @@ async function deleteCustomService(slug: string) {
   try {
     await DeleteCustomService(slug);
     customViews = await ListCustomServices();
-    state = await GetAppState();
+    await loadAppState();
     render();
   } catch (error) {
     showErrorToast({scope: "custom service", error: String(error)});
@@ -1232,7 +1374,7 @@ function renderImport(current: AppState) {
           ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
           ${renderImportInput(importSource)}
           ${importPreview ? renderImportPreview(importPreview) : ""}
-          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks) : ""}
+          ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks, importDeploys) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -1302,6 +1444,7 @@ async function runImportPreview() {
     importResult = null;
     importDeployed = [];
     importLinks = {};
+    importDeploys = {};
     renderImportIfShown();
   } catch (error) {
     showErrorToast({ scope: "import", error: String(error) });
@@ -1332,8 +1475,9 @@ async function runImportApply() {
   try {
     importResult = await ApplyImport({ ...importRequest, slugs, extra });
     importDeployed = [];
-    state = await GetAppState();
+    await loadAppState();
     importLinks = {};
+    importDeploys = {};
     showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
     renderImportIfShown();
   } catch (error) {
@@ -1342,25 +1486,55 @@ async function runImportApply() {
 }
 
 async function runImportDeploy(slug: string) {
-  // A second click while this deploy runs does nothing.
   if (!slug || importDeploying.has(slug)) return;
   importDeploying.add(slug);
+  const statuses = importDeploys;
+  const setFeedback = (status: DeployFeedback) => {
+    statuses[slug] = status;
+    if (statuses === importDeploys) renderImportIfShown();
+  };
   try {
     const name = importPreview?.rows.find((row) => row.slug === slug)?.name || slug;
-    // The same pre-flight report the wizard shows, when there is one.
+    const service = state?.services?.find((item) => item.slug === slug);
+    const fields = service ? serviceFormFields(service, state?.collectorFields) : [];
+    const saved = await GetCredentials(slug);
     const report = await PreflightService(slug).catch(() => null);
-    const preflight = report?.summary ? `\n\n${report.summary}` : "";
-    if (!confirm(`Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.${preflight}`)) return;
-    await DeployService(slug, {}, null, null);
-    importDeployed = [...importDeployed, slug];
-    state = await GetAppState();
-    // The saved values hold the device id; the step is the one the wizard shows.
-    const creds = await GetCredentials(slug).catch(() => ({} as Record<string, string>));
-    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-    if (link) importLinks = { ...importLinks, [slug]: link };
-    renderImportIfShown();
+    if (statuses !== importDeploys || activeView !== "import") return;
+    const gap = state && localDockerGap(service, state.runtime);
+    if (gap) {
+      setFeedback({ kind: "failed", text: gap });
+      return;
+    }
+    const outcome = await runCheckedDeploy(fields, saved.values, true, `Deploying ${name}...`, {
+      confirmReplace: (message) => {
+        return confirm(report?.summary ? `${message}\n\n${report.summary}` : message);
+      },
+      adminStep: () => DeployAdminStep(slug),
+      askConsent: (step) => askDeployConsent(document.querySelector(`[data-import-deploy-panel="${CSS.escape(slug)}"]`), name, step),
+      say: (kind, text) => setFeedback({ kind, text }),
+      deploy: async (approval) => {
+        if (approval) await DeployServiceWithAdminApproval(slug, {}, null, null, false, approval);
+        else await DeployService(slug, {}, null, null);
+        if (statuses === importDeploys) importDeployed = [...importDeployed, slug];
+        return { kind: "ok", text: "Deployed." };
+      },
+    }, {
+      savedSecrets: saved.savedSecrets,
+      localReplacement: `Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.`,
+    });
+    if (outcome.kind === "missing") setFeedback(outcome);
+    else if (outcome.kind === "blocked") setFeedback({ kind: "failed", text: outcome.message });
+    else if (outcome.kind === "cancelled") setFeedback({ kind: "cancelled", text: CANCELLED_TEXT });
+    if (outcome.kind !== "done" || outcome.answer.kind !== "ok" || statuses !== importDeploys) return;
+    await loadAppState().catch(() => {});
+    const creds = await GetCredentials(slug).catch(() => null);
+    const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), creds?.values || {}, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+    if (link && statuses === importDeploys) {
+      importLinks = { ...importLinks, [slug]: link };
+      renderImportIfShown();
+    }
   } catch (error) {
-    showErrorToast({ scope: "deploy", error: String(error) });
+    setFeedback({ kind: "failed", text: deployErrorText(error) });
   } finally {
     importDeploying.delete(slug);
   }
@@ -1400,6 +1574,10 @@ async function renderSettings(current: AppState) {
     showErrorToast({scope: "mode", error: String(error)});
   }
   if (request !== settingsRequest || activeView !== "settings") return;
+  await refreshRuntimeSnapshot();
+  if (request !== settingsRequest || activeView !== "settings") return;
+  current = state ?? current;
+  const { runtime } = current;
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
   // bring the withdrawn row back.
@@ -1410,6 +1588,7 @@ async function renderSettings(current: AppState) {
         <main class="page-content">
           ${pageHead("Settings")}
           <div id="mode-card-slot">${modeState ? renderModeCard(modeState, modeCardView, modeLeft) : ""}</div>
+          <div id="runtime-settings-slot">${renderRuntimeSettings(runtime)}</div>
           <section class="card">
             <div class="card-header">
               <div>
@@ -1419,7 +1598,7 @@ async function renderSettings(current: AppState) {
               <div class="save-row">${saveNoteSlot("save-settings-note")}<button class="primary compact-btn" id="save-settings">Save Variables</button></div>
             </div>
             <div class="settings-list">
-              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, "small") : "")).join("")}
+              ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, runtime, "small") : item.key === "CASHPILOT_RUNTIME_PROVIDER" ? runtimeProviderNote(runtime) : "")).join("")}
             </div>
           </section>
 
@@ -1486,8 +1665,8 @@ function wireModeCard() {
   };
   slot.querySelectorAll<HTMLButtonElement>("[data-mode-action]").forEach((button) => {
     button.addEventListener("click", async () => {
-      const action = button.dataset.modeAction as ModeCardView | "leave";
-      if (action !== "leave") {
+      const action = button.dataset.modeAction as ModeCardView | "leave" | "firewall-cleanup";
+      if (action !== "leave" && action !== "firewall-cleanup") {
         if (action === "summary") modeLeft = null;
         modeCardView = action;
         redrawModeCard();
@@ -1495,10 +1674,15 @@ function wireModeCard() {
       }
       button.disabled = true;
       try {
-        modeLeft = await SwitchToLead();
+        if (action === "firewall-cleanup") {
+          await RetryServerCommandsFirewallRemoval();
+          if (modeLeft) modeLeft = {...modeLeft, firewallError: ""};
+        } else {
+          modeLeft = await SwitchToLead();
+          modeCardView = "left";
+        }
         modeState = await GetModeState();
-        state = await GetAppState();
-        modeCardView = "left";
+        await loadAppState();
       } catch (error) {
         showErrorToast({scope: "mode", error: String(error)});
         button.disabled = false;
@@ -1512,7 +1696,7 @@ function wireModeCard() {
   if (modeCardView === "join") {
     wireJoinForm(slot, backToSummary, async () => {
       modeCardView = "summary";
-      state = await GetAppState();
+      await loadAppState();
       render();
     });
   }
@@ -1649,8 +1833,8 @@ async function saveSettingsFromForm() {
       await SaveSettings(values);
     },
     refresh: async () => {
-      state = await GetAppState();
-      if (activeView === "settings") await renderSettings(state);
+      await loadAppState();
+      if (activeView === "settings" && state) await renderSettings(state);
       else render();
     },
     show: (html) => {
@@ -1735,7 +1919,7 @@ async function toggleBackgroundHelper(event: Event) {
   }
 }
 
-async function renderActivity(current: AppState, view?: ActivityView) {
+async function renderActivity(view?: ActivityView) {
   const request = activityRequest;
   const page = view ? activityPage : ++activityPage;
   let data: ActivityView;
@@ -1746,12 +1930,12 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     showErrorToast({scope: "activity", error: String(error)});
     return;
   }
-  if (page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
+  if (!state || page !== activityPage || activeView !== "activity" || request !== activityRequest) return;
   activityShown = data;
   root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
-        ${topbar("activity", current)}
+        ${topbar("activity", state)}
         <main class="page-content">
           ${pageHead("Activity")}
           ${renderActivityPage(data, activityOpen)}
@@ -1767,10 +1951,10 @@ async function renderActivity(current: AppState, view?: ActivityView) {
   const run = async (action: () => Promise<ActivityView>) => {
     try {
       await action();
-      await renderActivity(current);
+      await renderActivity();
     } catch (error) {
       showErrorToast({scope: "activity", error: String(error)});
-      void renderActivity(current);
+      void renderActivity();
     }
   };
   document.querySelector<HTMLInputElement>("#activity-toggle")?.addEventListener("change", (event) => {
@@ -1785,7 +1969,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     activityOpen = {};
     activityDeleting++;
     // Take the open rows' addresses off the screen now, not when the delete returns.
-    void renderActivity(current, {...data, enabled: false});
+    void renderActivity({...data, enabled: false});
     void run(() => SetActivityEnabled(on)).finally(() => {
       activityDeleting--;
       activityOpen = {};
@@ -1795,7 +1979,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     activityDays = Number((event.target as HTMLSelectElement).value) || 1;
     activityRequest++;
     activityOpen = {};
-    void renderActivity(current);
+    void renderActivity();
   });
   document.querySelector("#activity-delete")?.addEventListener("click", () => {
     if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
@@ -1804,7 +1988,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
     // As on switch-off: no row opens until the delete is done, and the open
     // rows' addresses leave the screen now.
     activityDeleting++;
-    void renderActivity(current, data);
+    void renderActivity(data);
     void run(() => DeleteActivityData()).finally(() => {
       activityDeleting--;
       activityOpen = {};
@@ -1820,12 +2004,12 @@ async function renderActivity(current: AppState, view?: ActivityView) {
       if (activityDeleting > 0) return;
       if (Object.hasOwn(activityOpen, name)) {
         delete activityOpen[name];
-        void renderActivity(current, data);
+        void renderActivity(data);
         return;
       }
       const open = activityOpen;
       open[name] = null;
-      void renderActivity(current, data);
+      void renderActivity(data);
       let detail: ActivityDetail;
       try {
         detail = await GetActivityDetail(name, activityDays);
@@ -1833,7 +2017,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
         if (open !== activityOpen || open[name] !== null) return;
         delete open[name];
         showErrorToast({scope: "activity", error: String(error)});
-        if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+        if (activeView === "activity" && activityShown) void renderActivity(activityShown);
         return;
       }
       // The window changed, the data was deleted or the row was closed meanwhile:
@@ -1841,7 +2025,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
       if (open !== activityOpen || open[name] !== null) return;
       open[name] = detail;
       // Redraw the newest view, not the one this click came from.
-      if (activeView === "activity" && activityShown) void renderActivity(current, activityShown);
+      if (activeView === "activity" && activityShown) void renderActivity(activityShown);
     });
   });
 }
@@ -1849,7 +2033,7 @@ async function renderActivity(current: AppState, view?: ActivityView) {
 // Counts Fleet redraws, so one that finishes after a newer one never writes the page.
 let fleetRequest = 0;
 
-async function renderFleet(current: AppState) {
+async function renderFleet() {
   const request = ++fleetRequest;
   let fleet: FleetState;
   try {
@@ -1867,14 +2051,14 @@ async function renderFleet(current: AppState) {
     proxies = null;
     showErrorToast({scope: "proxies", error: String(error)});
   }
-  if (!fleetRedrawIsCurrent(request, fleetRequest, activeView)) return;
+  if (!state || !fleetRedrawIsCurrent(request, fleetRequest, activeView)) return;
   proxiesState = proxies;
   // The open proxy editor's typed values live only in the DOM; see keepsLiveProxyEditor.
   const liveEditor = document.querySelector<HTMLFormElement>("[data-proxy-editor]");
   root.innerHTML = withChrome(`
     <div class="app-layout">
       <div class="main-content">
-        ${topbar("fleet", current)}
+        ${topbar("fleet", state)}
         <main class="page-content">
           ${pageHead("Fleet")}
           <section class="stats-grid">
@@ -1910,7 +2094,7 @@ async function renderFleet(current: AppState) {
             </div>
           </section>
 
-          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing) : ""}
+          ${proxiesState ? renderProxiesSection(proxiesState, proxyEditing, proxyDeployStatus) : ""}
         </main>
         ${pageFoot()}
       </div>
@@ -2005,11 +2189,27 @@ function wireProxies() {
     await RemoveProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyRemove));
   });
   on("[data-proxy-run-deploy]", async () => {
+    if (proxyDeployStatus?.kind === "busy") return;
     const slug = valueOf("[data-proxy-run-service]");
     const id = Number(valueOf("[data-proxy-run-proxy]"));
-    if (!slug || !id) return;
-    const result = await DeployProxiedCopy(slug, id);
-    showInfoToast({scope: "proxy", message: `Running through the proxy, exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`});
+    const say = (kind: DeployStatus["kind"], text: string) => {
+      proxyDeployStatus = { kind, text };
+      const slot = document.querySelector<HTMLElement>("[data-proxy-deploy-status]");
+      if (slot) slot.innerHTML = deployNotice(kind, text);
+    };
+    if (!slug || !id) {
+      say("cancelled", "Choose a service and a proxy first. Nothing was deployed.");
+      return;
+    }
+    const service = proxiesState?.candidates.find((item) => item.slug === slug)?.name || slug;
+    const proxy = proxyById(id)?.name || "the selected proxy";
+    await runDeployWithStatus(`Deploying ${service} through ${proxy}...`, say, async () => {
+      const result = await DeployProxiedCopy(slug, id);
+      return {
+        kind: "ok",
+        text: `${service} is running through ${proxy}. Exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`,
+      };
+    });
   });
 }
 
@@ -2107,6 +2307,7 @@ function renderPointsSection(points: PointsBalance[]) {
 }
 
 function openWizard(input?: string | Event) {
+  closeWizardDeployDrafts();
   const slug = typeof input === "string" ? input : "";
   activeView = "wizard";
   wizardStep = slug ? 3 : 1;
@@ -2119,6 +2320,10 @@ function openWizard(input?: string | Event) {
 }
 
 function renderSetupWizard(current: AppState) {
+  // Reuse only the edits from cards that stay open during this redraw.
+  const secretDrafts = new Map([...root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')]
+    .filter((input) => input.value)
+    .map((input) => [wizardSecretInputKey(input), input.value]));
   const services = current.services || [];
   const categories = wizardCategoryChoices(services);
   if (wizardCategories.length === 0 && categories.length > 0) {
@@ -2198,6 +2403,7 @@ function renderSetupWizard(current: AppState) {
   });
   document.querySelectorAll<HTMLSelectElement>("[data-wizard-where]").forEach((select) => {
     select.addEventListener("change", () => {
+      select.setCustomValidity("");
       wizardWhereDrafts[select.dataset.wizardWhere || ""] = whereChoice(select.value);
     });
   });
@@ -2205,6 +2411,13 @@ function renderSetupWizard(current: AppState) {
     button.addEventListener("click", () => {
       const slug = button.dataset.slug || "";
       const action = button.dataset.wizardAction || "";
+      if (action === "deploy") {
+        const where = button.closest("[data-form-slug]")?.querySelector<HTMLSelectElement>("[data-wizard-where]");
+        const workerId = whereChoice(where?.value);
+        const refusal = missingWizardWorker(workerId);
+        where?.setCustomValidity(refusal);
+        if (refusal) where?.reportValidity();
+      }
       void runWizardAction(slug, action);
     });
   });
@@ -2224,8 +2437,24 @@ function renderSetupWizard(current: AppState) {
   });
   wireSessionConsent(document);
   wireWalletChoices();
+  for (const input of root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')) {
+    input.value = secretDrafts.get(wizardSecretInputKey(input)) || "";
+  }
   fillNewWalletPanel();
-  selectedServices.forEach((service) => void hydrateWizardForm(service));
+  selectedServices.forEach((service) => {
+    if (service.collector?.accrual === "pool") {
+      const card = root.querySelector(`[data-form-slug="${CSS.escape(service.slug)}"]`);
+      const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
+      const output = card?.querySelector<HTMLElement>("[data-output-slug]");
+      card?.querySelectorAll("[data-wizard-env]").forEach((input) => {
+        input.addEventListener("input", () => {
+          if (facts) facts.innerHTML = renderPayoutFacts(service);
+          if (output) output.textContent = "";
+        });
+      });
+    }
+    void hydrateWizardForm(service);
+  });
   selectedServices.forEach((service) => void hydrateWizardPreflight(service));
   selectedServices.forEach((service) => void hydratePayouts(service));
 }
@@ -2393,7 +2622,7 @@ function renderWizardSetup(services: Service[]) {
     <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
-      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug])).join("")}
+      ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug], wizardDeployFeedback[service.slug])).join("")}
     </div>
   `;
 }
@@ -2401,13 +2630,19 @@ function renderWizardSetup(services: Service[]) {
 function renderWizardSummary(services: Service[]) {
   return `
     <div class="wizard-summary">
-      <h2>You're all set</h2>
+      <h2>Setup summary</h2>
       <p class="muted">Return to the dashboard to monitor balances, status, logs, and payout progress.</p>
-      <div class="earnings-breakdown">
-        ${services.map((service) => `<div class="earning-chip"><span>${escapeHtml(service.name)}</span><strong>${service.manualOnly ? "Tracking" : "Ready"}</strong><small>${escapeHtml(service.category)}</small></div>`).join("")}
-      </div>
+      <div class="earnings-breakdown" id="wizard-runtime-summary">${wizardSummaryServices(services)}</div>
     </div>
   `;
+}
+
+function wizardSummaryServices(services: Service[]) {
+  return services.map((service) => {
+    const gap = state && wizardWhereDrafts[service.slug] == null && localDockerGap(service, state.runtime);
+    const status = service.manualOnly ? "Tracking" : gap ? "Check Docker" : "Ready";
+    return `<div class="earning-chip"><span>${escapeHtml(service.name)}</span><strong>${status}</strong><small>${escapeHtml(service.category)}</small></div>`;
+  }).join("");
 }
 
 function deploymentOf(slug: string): Deployment | undefined {
@@ -2440,49 +2675,129 @@ function readWizardWhere(slug: string): number | null {
   return select ? whereChoice(select.value) : null;
 }
 
+function missingWizardWorker(workerId: number | null): string {
+  if (workerId === null || state?.workerTargets?.some((worker) => worker.id === workerId)) return "";
+  return "The selected worker is unavailable. Choose a target before deploying.";
+}
+
 function closeWizard() {
   dropNewWalletPhrase();
-  activeView = "dashboard";
   wizardStep = 1;
   wizardRouteDrafts = {};
   wizardWhereDrafts = {};
-  render();
+  showView("dashboard");
+}
+
+function wizardSecretInputKey(input: HTMLInputElement) {
+  return JSON.stringify([input.closest<HTMLElement>("[data-form-slug]")?.dataset.formSlug, input.dataset.wizardEnv]);
+}
+
+function closeWizardDeployDrafts() {
+  for (const input of root.querySelectorAll<HTMLInputElement>('[data-wizard-env][type="password"]')) input.value = "";
+  for (const settings of wizardDeploying.values()) {
+    settings.open = false;
+    clearRequestSecrets(settings.values, settings.secretKeys, settings.wallet);
+  }
+  for (const feedback of Object.values(wizardDeployFeedback)) delete feedback.retrySecret;
+}
+
+function wizardCredentialInputs(slug: string) {
+  return document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${CSS.escape(slug)}"] [data-wizard-env]`);
+}
+
+function markWizardSecretsSaved(slug: string, keys: string[]) {
+  for (const input of wizardCredentialInputs(slug)) {
+    if (input.type === "password" && keys.includes(input.dataset.wizardEnv || "")) {
+      input.dataset.savedSecret = "true";
+      input.placeholder = "Saved";
+    }
+  }
 }
 
 async function hydrateWizardForm(service: Service) {
-  let creds: Record<string, string> = {};
+  const inputs = wizardCredentialInputs(service.slug);
   try {
-    creds = await GetCredentials(service.slug);
+    const { values, savedSecrets } = await GetCredentials(service.slug);
+    for (const input of inputs) {
+      if (!input.isConnected) continue;
+      const key = input.dataset.wizardEnv || "";
+      if (input.type === "password") {
+        if (savedSecrets[key]) {
+          input.dataset.savedSecret = "true";
+          input.placeholder = "Saved";
+        }
+      } else if (values[key]) {
+        input.value = values[key];
+      }
+    }
   } catch (error) {
     showErrorToast({scope: "credentials", error: String(error)});
   }
-  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${service.slug}"] [data-wizard-env]`).forEach((input) => {
-    const key = input.dataset.wizardEnv || "";
-    if (creds[key]) input.value = creds[key];
-  });
 }
 
 // The pre-deploy check, filled in beside the Deploy button once the backend has
 // answered. It runs after the card is on screen because it talks to the container
-// runtime, and a slow or unreachable runtime must not hold up the wizard. A failed
-// check leaves the slot empty: a panel that cannot say anything must say nothing,
-// never a reassuring blank.
+// runtime for the engine architecture. The shared Docker status drives the local
+// Deploy button and setup message while those findings load.
 async function hydrateWizardPreflight(service: Service) {
   const slot = document.querySelector<HTMLDivElement>(`[data-preflight-slug="${service.slug}"]`);
   if (!slot) return;
-  try {
-    slot.innerHTML = renderPreflight(await PreflightService(service.slug));
-  } catch {
-    slot.innerHTML = "";
-  }
+  const select = document.querySelector<HTMLSelectElement>(`[data-wizard-where="${service.slug}"]`);
+  const deploy = document.querySelector<HTMLButtonElement>(`[data-wizard-action="deploy"][data-slug="${service.slug}"]`);
+  let report: PreflightReport | null = null;
+  const draw = () => {
+    if (!slot.isConnected || !state) return;
+    const worker = whereChoice(select?.value);
+    const gap = localDockerGap(service, state.runtime);
+    if (deploy) deploy.disabled = service.manualOnly || (worker === null && !!gap);
+    slot.innerHTML = renderPreflight(report, worker, gap);
+    slot.querySelector('[data-view="runtime"]')?.addEventListener("click", () => {
+      ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav("runtime", wizardStep));
+      wizardWhereDrafts = {};
+      resetScrollAfterRender = true;
+      showView("runtime");
+    });
+  };
+  wizardPreflightDraws.set(service.slug, draw);
+  select?.addEventListener("change", draw);
+  draw();
+  report = await PreflightService(service.slug).catch(() => null);
+  draw();
 }
 
-function readWizardForm(slug: string): Record<string, string> {
+function readWizardForm(slug: string) {
   const values: Record<string, string> = {};
-  document.querySelectorAll<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-env]`).forEach((input) => {
-    values[input.dataset.wizardEnv || ""] = input.value;
-  });
-  return values;
+  const savedSecrets: Record<string, boolean> = {};
+  const secretKeys: string[] = [];
+  for (const input of wizardCredentialInputs(slug)) {
+    const key = input.dataset.wizardEnv || "";
+    values[key] = input.value;
+    if (input.type === "password") {
+      if (input.dataset.savedSecret) savedSecrets[key] = true;
+      secretKeys.push(key);
+      input.value = "";
+    }
+  }
+  const typedSecrets = secretKeys.filter((key) => values[key].trim());
+  return { values, savedSecrets, secretKeys, typedSecrets };
+}
+
+function clearRequestSecrets(values: Record<string, string>, keys: string[], wallet?: WalletChoice) {
+  for (const key of keys) delete values[key];
+  if (wallet) wallet.phrase = "";
+}
+
+// Wails serializes the arguments during the call. Drop the secret fields
+// before awaiting the reply or refreshing the app.
+function sendCredentialRequest<T>(
+  values: Record<string, string>, keys: string[], send: (request: Record<string, string>) => Promise<T>,
+): Promise<T> {
+  const request = { ...values };
+  try {
+    return send(request);
+  } finally {
+    clearRequestSecrets(request, keys);
+  }
 }
 
 // A typed value the catalog constrains (the input carries its pattern) is checked
@@ -2498,91 +2813,251 @@ function firstInvalidWizardInput(slug: string): HTMLInputElement | null {
 
 async function runWizardAction(slug: string, action: string) {
   const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${slug}"]`);
-  const invalid = firstInvalidWizardInput(slug);
-  if (invalid && (action === "save" || action === "deploy")) {
+  const workerId = action === "deploy" ? readWizardWhere(slug) : null;
+  const invalid = workerId === null ? firstInvalidWizardInput(slug) : null;
+  if (invalid && action === "save") {
     invalid.reportValidity();
     if (output) output.textContent = `${invalid.dataset.wizardEnv} does not have the shape this provider expects.`;
     return;
   }
-  const values = readWizardForm(slug);
+  if (action === "deploy") {
+    invalid?.reportValidity();
+    if (wizardDeploying.has(slug)) return;
+    try {
+      await wizardDeploy(slug, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
+    } finally {
+      const settings = wizardDeploying.get(slug);
+      if (settings) clearRequestSecrets(settings.values, settings.secretKeys, settings.wallet);
+      wizardDeploying.delete(slug);
+    }
+    return;
+  }
+  if (action !== "save" && action !== "collect") return;
+  const { values, secretKeys, typedSecrets } = readWizardForm(slug);
+  const pool = action === "collect" ? state?.services?.find((service) => service.slug === slug && service.collector?.accrual === "pool") : undefined;
+  const card = pool ? output?.closest(".wizard-setup-card") : null;
+  const facts = card?.querySelector<HTMLElement>("[data-payout-facts]");
+  const controls = card?.querySelectorAll<HTMLInputElement | HTMLButtonElement>('[data-wizard-env], [data-wizard-action="collect"]');
   try {
+    controls?.forEach((control) => { control.disabled = true; });
+    if (pool && facts) facts.innerHTML = renderPayoutFacts(pool);
+    const saved = sendCredentialRequest(values, secretKeys, (request) => SaveCredentials(slug, request));
+    clearRequestSecrets(values, secretKeys);
+    await saved;
+    markWizardSecretsSaved(slug, typedSecrets);
+    const feedback = wizardDeployFeedback[slug];
+    if (feedback?.retrySecret) {
+      delete feedback.retrySecret;
+      setWizardDeployFeedback(slug, feedback);
+    }
     if (action === "save") {
-      await SaveCredentials(slug, values);
       if (output) output.textContent = "Credentials saved.";
       return;
     }
-    const worker = action === "deploy" ? state?.workerTargets?.find((target) => target.id === readWizardWhere(slug)) : undefined;
-    if (worker) {
-      if (output) output.textContent = `Deploying to ${worker.name}...`;
-      const image = readWizardImage(slug) || "";
-      const outcome = await runWorkerDeploy(slug, worker, readWizardRoute(slug), readWizardInstances(slug), {
-        confirm: (message) => confirm(message),
-        deploy: (yes) => DeployToWorker(slug, {workerId: worker.id, values, image, ...yes}),
-        save: () => SaveCredentials(slug, values),
-      });
-      if (output) output.textContent = outcome.kind === "deployed" ? workerDeployText(outcome.result) : outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
-      return;
+    const record = await CollectService(slug);
+    if (pool && facts) {
+      const balance = record.error ? null : { amount: record.balance, currency: record.currency };
+      facts.innerHTML = renderPayoutFacts(pool, balance);
     }
-    if (action === "deploy") {
-      if (state?.deployments?.some((deployment) => deployment.slug === slug) && !confirm(`Redeploy ${slug}? The existing container will be replaced, but its volumes are kept.`)) {
-        return;
-      }
-      if (output) output.textContent = "Deploying...";
-      const seedService = state?.services?.find((service) => service.slug === slug && seedFileVar(service));
-      if (seedService) {
-        await runWalletDeploy(slug, values, output);
-        return;
-      }
-      // A custom service has no credentials: it runs its saved definition.
-      const custom = state?.services?.some((service) => service.slug === slug && service.custom);
-      const image = readWizardImage(slug);
-      const instances = readWizardInstances(slug);
-      const outcome = await runRouteDeploy(slug, readWizardRoute(slug), image, instances, state?.route, {
-        save: async () => {
-          if (!custom) await SaveCredentials(slug, values);
-        },
-        confirm: (message) => confirm(message),
-        routed: (proxyId) => DeployServiceRouted(slug, values, proxyId),
-        direct: (leaveRoute) => leaveRoute
-          ? DeployServiceLeavingRoute(slug, values, image, instances)
-          : DeployService(slug, values, image, instances),
-      });
-      if (outcome.kind === "refused" || outcome.kind === "cancelled") {
-        if (output) output.textContent = outcome.kind === "refused" ? outcome.message : "Nothing was deployed.";
-        return;
-      }
-      if (outcome.kind === "routed") {
-        state = await GetAppState();
-        const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-        if (output) output.textContent = routedDeployText(outcome.result, link);
-        return;
-      }
-      const deployment = outcome.deployment;
-      state = await GetAppState();
-      // The box now holds what runs, so a second Deploy without an edit keeps it.
-      const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
-      if (imageInput) {
-        imageInput.value = deployment.customImage || "";
-        imageInput.dataset.initial = deployment.customImage || "";
-      }
-      const instancesInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
-      if (instancesInput) {
-        instancesInput.value = String(deployment.instances || 1);
-        instancesInput.dataset.initial = String(deployment.instances || 1);
-      }
-      const link = deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
-      if (output) output.textContent = link ? `Deployed.\n\n${link}` : "Deployed.";
-      return;
+    if (output) {
+      const success = facts ? "Pool balance updated." : `Collected ${formatBalance(record.balance, record.currency)}`;
+      output.textContent = record.error || success;
     }
-    if (action === "collect") {
-      await SaveCredentials(slug, values);
-      const record = await CollectService(slug);
-      if (output) output.textContent = record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`;
-      state = await GetAppState();
-    }
+    await loadAppState();
   } catch (error) {
     if (output) output.textContent = String(error);
+  } finally {
+    controls?.forEach((control) => { control.disabled = false; });
+    clearRequestSecrets(values, secretKeys);
   }
+}
+
+function setWizardDeployFeedback(slug: string, status: DeployFeedback) {
+  wizardDeployFeedback[slug] = status;
+  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${CSS.escape(slug)}"]`);
+  if (!panel) return;
+  panel.innerHTML = renderDeployFeedback(status);
+  panel.scrollIntoView({ block: "nearest" });
+}
+
+function sayDeploy(slug: string, kind: DeployStatus["kind"], text: string) {
+  setWizardDeployFeedback(slug, { kind, text });
+}
+
+// A redraw or navigation can remove the screen while it waits for an answer.
+function askDeployConsent(panel: HTMLElement | null, name: string, step: AdminStep): Promise<boolean> {
+  if (!panel?.isConnected) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const finish = (approved: boolean) => {
+      observer.disconnect();
+      resolve(approved);
+    };
+    const observer = new MutationObserver(() => {
+      if (!panel.isConnected) finish(false);
+    });
+    observer.observe(root, { childList: true, subtree: true });
+    panel.innerHTML = adminConsentScreen(name, step);
+    panel.scrollIntoView({ block: "nearest" });
+    panel.querySelectorAll<HTMLButtonElement>("[data-deploy-consent]").forEach((button) => {
+      button.addEventListener("click", () => finish(panel.isConnected && button.dataset.deployConsent === "go"), { once: true });
+    });
+    panel.querySelector<HTMLButtonElement>('[data-deploy-consent="go"]')?.focus();
+  });
+}
+
+interface WizardDeploySettings {
+  open: boolean;
+  values: Record<string, string>;
+  proxyId: number | null;
+  image: string | null;
+  instances: number | null;
+  route: RouteState | null | undefined;
+  secretKeys: string[];
+  typedSecrets: string[];
+  wallet?: WalletChoice;
+}
+
+// A deploy from the card: every field marked * is filled, and when Windows will
+// show its admin prompt, CashPilot's own screen comes first. Then the deploy, whose
+// answer replaces "Deploying..." next to Deploy however it ends.
+async function wizardDeploy(slug: string, workerId: number | null, invalidField?: string) {
+  const service = state?.services?.find((item) => item.slug === slug);
+  const name = service?.name || slug;
+  const fields = service && !service.custom ? serviceFormFields(service, state?.collectorFields) : [];
+  const panel = document.querySelector<HTMLDivElement>(`[data-deploy-panel="${slug}"]`);
+  const { values, secretKeys, typedSecrets, savedSecrets } = readWizardForm(slug);
+  const settings: WizardDeploySettings = {
+    open: true, values, secretKeys, typedSecrets,
+    proxyId: readWizardRoute(slug),
+    image: readWizardImage(slug),
+    instances: readWizardInstances(slug),
+    route: state?.route,
+    wallet: workerId === null && seedFileVar(service) ? readWalletChoice(slug) : undefined,
+  };
+  wizardDeploying.set(slug, settings);
+  const restoreSecretEdits = () => {
+    if (!settings.open) return false;
+    let restored = false;
+    for (const input of wizardCredentialInputs(slug)) {
+      const key = input.dataset.wizardEnv || "";
+      if (input.type === "password" && typedSecrets.includes(key) && values[key] && !input.value) {
+        input.value = values[key];
+        restored = true;
+      }
+    }
+    clearRequestSecrets(values, secretKeys);
+    return restored;
+  };
+  const say = (kind: DeployStatus["kind"], text: string) => {
+    if (kind === "partial") {
+      markWizardSecretsSaved(slug, typedSecrets);
+      clearRequestSecrets(values, secretKeys);
+    }
+    const retrySecret = (kind === "failed" || kind === "cancelled") && restoreSecretEdits();
+    setWizardDeployFeedback(slug, { kind, text, retrySecret, worker: workerId !== null });
+  };
+  const { proxyId, route } = settings;
+  const replacesLocal = proxyId === null
+    ? state?.deployments?.some((deployment) => deployment.slug === slug)
+    : route?.recorded?.[slug] === proxyId;
+  const outcome = await runCheckedDeploy(fields, values, proxyId === null, `Deploying ${name}...`, {
+    confirmReplace: (message) => confirm(message),
+    adminStep: () => DeployAdminStep(slug),
+    askConsent: (step) => askDeployConsent(panel, name, step),
+    say,
+    deploy: async (approval, worker) => {
+      if (!settings.open) return { kind: "cancelled", text: "Setup was closed. Nothing was deployed." };
+      const answer = await deployFromCard(slug, settings, worker, approval);
+      if (answer.kind === "ok") clearRequestSecrets(values, secretKeys);
+      return answer;
+    },
+  }, {
+    workerId,
+    workers: state?.workerTargets,
+    workerBusyText: (worker) => `Deploying ${name} to ${worker.name}...`,
+    invalidField,
+    savedSecrets,
+    localReplacement: replacesLocal
+      ? `Redeploy ${name} ${proxyId === null ? "on this computer" : "through this proxy"}? The existing node will be replaced. Its saved data is kept.`
+      : undefined,
+  }).catch((error) => {
+    say("failed", deployErrorText(error));
+    return null;
+  });
+  const form = document.querySelector<HTMLElement>(`[data-form-slug="${slug}"]`);
+  form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => input.removeAttribute("aria-invalid"));
+  if (!outcome || outcome.kind === "done") return;
+  if (outcome.kind === "missing") {
+    const keys = new Set(outcome.missing.map((field) => field.key));
+    form?.querySelectorAll<HTMLInputElement>("[data-wizard-env]").forEach((input) => {
+      if (keys.has(input.dataset.wizardEnv || "")) input.setAttribute("aria-invalid", "true");
+    });
+    setWizardDeployFeedback(slug, { kind: "missing", missing: outcome.missing, retrySecret: restoreSecretEdits() });
+    form?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
+    return;
+  }
+  if (outcome.kind === "cancelled") say("cancelled", CANCELLED_TEXT);
+  else say("failed", outcome.message);
+}
+
+// The deploy itself, once the card's checks passed: to a worker, with a wallet
+// seed (Sia's hostd), or on this computer, directly or through a proxy. Every path
+// answers with what the note next to Deploy says.
+async function deployFromCard(
+  slug: string, settings: WizardDeploySettings, worker: WorkerTarget | undefined, approval: AdminStep | null,
+): Promise<DeployAnswer> {
+  const { values, proxyId, image, instances, route, secretKeys, typedSecrets, wallet } = settings;
+  if (worker) {
+    const outcome = await runWorkerDeploy(slug, worker, proxyId, instances, {
+      confirm: (message) => settings.open && confirm(message),
+      deploy: (yes) => sendCredentialRequest(values, secretKeys, (request) =>
+        DeployToWorker(slug, { workerId: worker.id, values: request, image: image || "", ...yes }),
+      ),
+    });
+    if (outcome.kind === "deployed") {
+      if (!outcome.result.credentialWarning) markWizardSecretsSaved(slug, typedSecrets);
+      return { kind: "ok", text: workerDeployText(outcome.result) };
+    }
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
+  }
+  if (wallet) return runWalletDeploy(slug, values, image, instances, wallet, secretKeys, typedSecrets);
+  const outcome = await runRouteDeploy(slug, proxyId, image, instances, route, {
+    confirm: (message) => confirm(message),
+    routed: (proxyId) => sendCredentialRequest(values, secretKeys, (request) =>
+      DeployServiceRouted(slug, request, proxyId),
+    ),
+    direct: (leaveRoute) => sendCredentialRequest(values, secretKeys, (request) => {
+      if (approval) return DeployServiceWithAdminApproval(slug, request, image, instances, leaveRoute, approval);
+      return leaveRoute ? DeployServiceLeavingRoute(slug, request, image, instances) : DeployService(slug, request, image, instances);
+    }),
+  });
+  if (outcome.kind === "refused" || outcome.kind === "cancelled") {
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
+  }
+  markWizardSecretsSaved(slug, typedSecrets);
+  const followUp = {
+    failure: "CashPilot could not refresh the app.",
+    run: async () => {
+      await loadAppState();
+      return deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
+    },
+  };
+  if (outcome.kind === "routed") {
+    return { kind: "ok", text: routedDeployText(outcome.result, ""), followUp };
+  }
+  const deployment = outcome.deployment;
+  // The box now holds what runs, so a second Deploy without an edit keeps it.
+  const imageInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-image]`);
+  if (imageInput) {
+    imageInput.value = deployment.customImage || "";
+    imageInput.dataset.initial = deployment.customImage || "";
+  }
+  const instancesInput = document.querySelector<HTMLInputElement>(`[data-form-slug="${slug}"] [data-wizard-instances]`);
+  if (instancesInput) {
+    instancesInput.value = String(deployment.instances || 1);
+    instancesInput.dataset.initial = String(deployment.instances || 1);
+  }
+  return { kind: "ok", text: "Deployed.", followUp };
 }
 
 // A wallet seed kept in a file (Sia's hostd; render/wallet.ts). The phrase is in this
@@ -2633,34 +3108,37 @@ function readWalletChoice(slug: string): WalletChoice {
   return { mode, phrase };
 }
 
-async function runWalletDeploy(slug: string, values: Record<string, string>, output: HTMLPreElement | null) {
-  const choice = readWalletChoice(slug);
-  if (choice.mode === "import" && phraseWords(choice.phrase).length === 0) {
-    if (output) output.textContent = "Type the seed phrase of the wallet to use, or choose another option.";
-    return;
-  }
-  if (choice.mode === "generate" && output) output.textContent = "Deploying, and creating a new wallet...";
-  let result: WalletDeployResult;
-  try {
-    await SaveCredentials(slug, values);
-    result = await DeployServiceWallet(slug, values, readWizardImage(slug), readWizardInstances(slug), choice);
-  } finally {
+async function runWalletDeploy(
+  slug: string, values: Record<string, string>, image: string | null, instances: number | null, choice: WalletChoice,
+  secretKeys: string[], typedSecrets: string[],
+): Promise<DeployAnswer> {
+  const refusal = walletChoiceRefusal(choice);
+  if (refusal) return refusal;
+  if (choice.mode === "generate") sayDeploy(slug, "busy", "Deploying, and creating a new wallet...");
+  const result = await sendCredentialRequest(values, secretKeys, (request) => {
+    const requestChoice = { ...choice };
     choice.phrase = "";
-  }
+    try {
+      return DeployServiceWallet(slug, request, image, instances, requestChoice);
+    } finally {
+      requestChoice.phrase = "";
+    }
+  });
+  markWizardSecretsSaved(slug, typedSecrets);
   const wallet = result.wallet;
   dropNewWalletPhrase();
   if (wallet?.phrase) {
     newWallet = { slug, words: phraseWords(wallet.phrase), address: wallet.address || "", step: "show", positions: [], error: "" };
     wallet.phrase = "";
   }
-  state = await GetAppState();
-  let text = "Deployed.";
-  if (newWallet) text = "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once.";
-  else if (wallet?.migrated) text = "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume.";
-  else if (wallet?.created) text = "Deployed with the wallet you typed. CashPilot kept no copy of it.";
-  else if (wallet) text = "Deployed. The node kept its wallet.";
-  if (output) output.textContent = text;
   fillNewWalletPanel();
+  return {
+    ...walletDeployAnswer(wallet, newWallet !== null),
+    followUp: {
+      failure: "CashPilot could not refresh the app.",
+      run: async () => { await loadAppState(); },
+    },
+  };
 }
 
 // Draws the one-time panel in its card, and wires it. Called after every wizard draw.
@@ -2870,22 +3348,33 @@ async function runServiceAction(slug: string, action: string) {
 // number of copies, and rebuilds the rest from the current catalog.
 async function runDriftAction(slug: string, action: string) {
   const name = state?.services.find((svc) => svc.slug === slug)?.name || slug;
-  try {
-    if (action === "redeploy") {
-      if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) return;
-      setOutput(`Redeploying ${name}...`);
-      await DeployService(slug, {}, null, null);
-      await refreshState();
-      setOutput(`${name} redeployed.`);
+  if (driftDeploys[slug]?.kind === "busy") return;
+  if (action === "redeploy") {
+    const say = (kind: DeployStatus["kind"], text: string) => {
+      driftDeploys[slug] = { kind, text };
+      const panel = document.querySelector<HTMLElement>(`[data-drift-deploy-status="${slug}"]`);
+      if (panel) panel.innerHTML = deployNotice(kind, text);
+    };
+    if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) {
+      say("cancelled", "Nothing was deployed.");
       return;
     }
-    if (action === "ignore") {
+    const answer = await runDeployWithStatus(`Redeploying ${name}...`, say, async () => {
+      await DeployService(slug, {}, null, null);
+      return { kind: "ok", text: `${name} redeployed.` };
+    });
+    if (answer.kind === "ok") await refreshState().catch(() => undefined);
+    return;
+  }
+  if (action === "ignore") {
+    try {
       await IgnoreDrift(slug);
+      delete driftDeploys[slug];
       await refreshState();
       setOutput(`${name}: warning ignored until the catalog changes it again.`);
+    } catch (error) {
+      setOutput(String(error));
     }
-  } catch (error) {
-    setOutput(String(error));
   }
 }
 
@@ -2935,8 +3424,9 @@ async function runCopyAction(slug: string, n: number, action: string) {
 
 async function refreshState() {
   if (!state) return;
-  const [runtime, deployments] = await Promise.all([CheckRuntime(), RefreshDeployments().catch(() => state?.deployments || [])]);
-  state = {...await GetAppState(), runtime, deployments};
+  const deployments = await RefreshDeployments().catch(() => state?.deployments || []);
+  await loadAppState();
+  state = {...state, deployments};
   render();
 }
 

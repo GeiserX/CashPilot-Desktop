@@ -66,6 +66,26 @@ function primary(html) {
 
 const cell = (item) => balanceCell(item, undefined, "EUR");
 
+const ocean = earning({
+  platform: "ocean",
+  currency: "BTC",
+  balance: 0.00012345,
+  balanceDisplay: 0,
+  cashout: { minAmount: 0.01048576, currency: "BTC", percent: 1, comparable: true },
+});
+check("OCEAN retains every satoshi in the native balance", cell(ocean).includes("0.00012345 BTC"), cell(ocean));
+check("OCEAN shows its full automatic payout threshold", payoutCell(ocean).includes("0.01048576 BTC"), payoutCell(ocean));
+
+const supportxmr = earning({ platform: "supportxmr", currency: "XMR", balance: 0.000000000001, balanceDisplay: 0 });
+check("SupportXMR displays one piconero in the native balance", primary(cell(supportxmr)) === "0.000000000001 XMR", cell(supportxmr));
+
+const herominers = earning({ platform: "herominers-kas", currency: "KAS", balance: 0.00000001, balanceDisplay: 0 });
+check("HeroMiners Kaspa displays one sompi in the native balance", primary(cell(herominers)) === "0.00000001 KAS", cell(herominers));
+
+const twominers = earning({ platform: "2miners-etc", currency: "ETC", balance: 0.000000001, balanceDisplay: 0 });
+check("2Miners ETC displays one pool unit in the native balance", primary(cell(twominers)) === "0.000000001 ETC", cell(twominers));
+
+
 // ---------------------------------------------------------------------------
 // THE RULE.
 // ---------------------------------------------------------------------------

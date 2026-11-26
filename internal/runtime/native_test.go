@@ -130,11 +130,19 @@ func newTestNativeProvider(t *testing.T) *NativeProcessProvider {
 	p.stopTimeout = 3 * time.Second
 	p.cpuStatInterval = 1 * time.Millisecond // keep List's CPU sampling near-instant in tests
 	// Never run PowerShell or raise an admin prompt from a test.
-	p.ensureFirewall = func(slug, _ string, _ []string) error {
+	p.ensureFirewall = func(slug, _ string, _ []string, _ bool) error {
 		t.Errorf("unexpected firewall rule request for %s", slug)
 		return errors.New("no firewall in tests")
 	}
-	p.removeFirewall = func(slug, _ string) error {
+	p.firewallReady = func(slug, _ string, _ []string) (bool, bool, error) {
+		t.Errorf("unexpected firewall rule read for %s", slug)
+		return false, false, errors.New("no firewall in tests")
+	}
+	p.firewallExists = func(slug, _ string) (bool, error) {
+		t.Errorf("unexpected old firewall rule read for %s", slug)
+		return false, errors.New("no firewall in tests")
+	}
+	p.removeFirewall = func(slug, _ string, _ bool) error {
 		t.Errorf("unexpected firewall rule removal for %s", slug)
 		return nil
 	}

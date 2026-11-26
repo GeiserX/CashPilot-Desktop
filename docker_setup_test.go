@@ -88,6 +88,7 @@ func (f *fakeSetupRunner) ran() int {
 // newSetupTestApp is a guide test app on Windows facts, with a fake runner.
 func newSetupTestApp(t *testing.T, reason string, facts winvm.HostFacts) (*App, *fakeRunOnce, *fakeSetupRunner) {
 	t.Helper()
+	t.Setenv("DOCKER_HOST", "") // The fake engine belongs to the Windows PC in these tests.
 	app, runOnce := newGuideTestApp(t, fixedReason{reason: reason})
 	facts.OS, facts.Supported = "windows", true
 	if facts.LastBoot == "" {

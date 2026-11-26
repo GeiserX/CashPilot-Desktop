@@ -19,13 +19,14 @@
 
 import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning, SessionConsent, WorkerTarget } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
-import { serviceFormFields } from "./fields.js";
+import { fieldMark, serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
 import { ratingBlock } from "./rating.js";
 import { imageChoiceSection } from "./image.js";
 import { instancesSection } from "./instances.js";
 import { routeChoiceSection } from "./route.js";
 import { whereChoiceSection } from "./where.js";
+import { renderDeployPanel, type DeployFeedback } from "./deploy_consent.js";
 import { renderCustomServiceCard } from "./custom.js";
 import { needsSessionConsent, renderSessionSlot } from "./session.js";
 import { walletChoiceSection } from "./wallet.js";
@@ -71,13 +72,15 @@ export function renderWizardServiceSetup(
   deployed?: boolean,
   workerTargets?: WorkerTarget[] | null,
   whereDraft?: number | null,
+  deployFeedback?: DeployFeedback,
 ): string {
   // A custom service runs its saved definition: no credentials, no Image box.
-  if (service.custom) return renderCustomServiceCard(service, scaling, instances);
+  if (service.custom) return renderCustomServiceCard(service, scaling, instances, deployFeedback);
   const dashboardUrl = service.cashout?.dashboardUrl || service.website;
   const fields = serviceFormFields(service, collectorFields);
   const earning = breakdown?.find((item) => item.platform === service.slug);
   const balance = earning && !earning.error ? {amount: earning.balance, currency: earning.currency} : null;
+  const pool = service.collector?.accrual === "pool";
   const gated = needsSessionConsent(service);
   const consent = sessionConsent?.[service.slug];
   // A gated app's setup guide is its install steps, so it leaves the signup strip and
@@ -94,19 +97,21 @@ export function renderWizardServiceSetup(
       <div class="signup-strip">
         ${signupButton(service)}
         ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
-        ${gated ? "" : `<button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">Setup guide</button>`}
+        ${gated ? "" : `<button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">${pool ? "Web setup guide" : "Setup guide"}</button>`}
       </div>
       ${referralNote(service)}
       ${ratingBlock(service)}
       ${gated
         ? `<div data-session-slot="${escapeHtml(service.slug)}">${renderSessionSlot(service, consent)}</div>`
+        : pool ? `<p class="tip">Check pool balance saves the address and reads the unpaid balance your mining pool holds for this address.</p>`
         : service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
       ${credentialHint(service)}
       <div class="credential-grid">
         ${fields.map((item) => `
           <label>
-            <span>${escapeHtml(item.label)}${item.required ? " *" : ""}</span>
-            <input data-wizard-env="${escapeHtml(item.key)}" type="${item.secret ? "password" : "text"}"${item.secret ? ' autocomplete="new-password"' : ""}${item.pattern ? ` pattern="${escapeHtml(item.pattern)}"` : ""} placeholder="${escapeHtml(item.description)}" value="${escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
+            <span>${escapeHtml(item.label)}${fieldMark(item)}</span>
+            <input data-wizard-env="${escapeHtml(item.key)}" type="${item.secret ? "password" : "text"}"${item.secret ? ' autocomplete="new-password"' : ""}${item.pattern ? ` pattern="${escapeHtml(item.pattern)}"` : ""} placeholder="${escapeHtml(item.description)}" value="${item.secret ? "" : escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
+            ${item.secret ? '<small class="muted">Leave blank to keep a saved value. Enter a new value to replace it.</small>' : ""}
           </label>
         `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
       </div>
@@ -117,10 +122,11 @@ export function renderWizardServiceSetup(
       ${imageChoiceSection(service, customImage)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
-        <button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>
+        ${pool ? "" : `<button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>`}
         <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
-        <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">Collect Earnings</button>
+        <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">${pool ? "Check pool balance" : "Collect Earnings"}</button>
       </div>
+      ${renderDeployPanel(service.slug, deployFeedback)}
       ${composeExportControl(service)}
       ${serviceFacts(service, balance)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>

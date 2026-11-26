@@ -99,6 +99,7 @@ export namespace catalog {
 	    }
 	}
 	export class CollectorMetadata {
+	    accrual?: string;
 	    type: string;
 	    notes: string;
 	    credentialHint: string;
@@ -112,6 +113,7 @@ export namespace catalog {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.accrual = source["accrual"];
 	        this.type = source["type"];
 	        this.notes = source["notes"];
 	        this.credentialHint = source["credentialHint"];
@@ -1134,6 +1136,7 @@ export namespace config {
 	    sessionConsent?: Record<string, SessionConsent>;
 	    mode?: string;
 	    setupJournal?: SetupJournal;
+	    serverCommandsOff?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1165,6 +1168,7 @@ export namespace config {
 	        this.sessionConsent = this.convertValues(source["sessionConsent"], SessionConsent, true);
 	        this.mode = source["mode"];
 	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
+	        this.serverCommandsOff = source["serverCommandsOff"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1693,6 +1697,74 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ServerCommand {
+	    at: string;
+	    action: string;
+	    slug: string;
+	    ok: boolean;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerCommand(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.at = source["at"];
+	        this.action = source["action"];
+	        this.slug = source["slug"];
+	        this.ok = source["ok"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class ServerCommandsState {
+	    server: string;
+	    on: boolean;
+	    listening: boolean;
+	    url: string;
+	    problem: string;
+	    firewallNeeded: boolean;
+	    firewallRule: boolean;
+	    firewallStatus: string;
+	    opens: string;
+	    last?: ServerCommand;
+	
+	    static createFrom(source: any = {}) {
+	        return new ServerCommandsState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.server = source["server"];
+	        this.on = source["on"];
+	        this.listening = source["listening"];
+	        this.url = source["url"];
+	        this.problem = source["problem"];
+	        this.firewallNeeded = source["firewallNeeded"];
+	        this.firewallRule = source["firewallRule"];
+	        this.firewallStatus = source["firewallStatus"];
+	        this.opens = source["opens"];
+	        this.last = this.convertValues(source["last"], ServerCommand);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class PairingStatus {
 	    serverUrl: string;
 	    lastHeartbeat: string;
@@ -1935,6 +2007,7 @@ export namespace main {
 	    level: string;
 	    title: string;
 	    message: string;
+	    runtime?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Notification(source);
@@ -1945,6 +2018,7 @@ export namespace main {
 	        this.level = source["level"];
 	        this.title = source["title"];
 	        this.message = source["message"];
+	        this.runtime = source["runtime"];
 	    }
 	}
 	export class AppState {
@@ -1963,6 +2037,7 @@ export namespace main {
 	    serviceDetails: Record<string, string>;
 	    fleet?: FleetView;
 	    pairing?: PairingStatus;
+	    serverCommands?: ServerCommandsState;
 	    hostname: string;
 	    collectorFields: Record<string, Array<collectors.Field>>;
 	    scaling: Record<string, services.ScalingLimit>;
@@ -1999,6 +2074,7 @@ export namespace main {
 	        this.serviceDetails = source["serviceDetails"];
 	        this.fleet = this.convertValues(source["fleet"], FleetView);
 	        this.pairing = this.convertValues(source["pairing"], PairingStatus);
+	        this.serverCommands = this.convertValues(source["serverCommands"], ServerCommandsState);
 	        this.hostname = source["hostname"];
 	        this.collectorFields = this.convertValues(source["collectorFields"], Array<collectors.Field>, true);
 	        this.scaling = this.convertValues(source["scaling"], services.ScalingLimit, true);
@@ -2050,6 +2126,20 @@ export namespace main {
 	        this.name = source["name"];
 	        this.configured = source["configured"];
 	        this.collector = source["collector"];
+	    }
+	}
+	export class CredentialView {
+	    values: Record<string, string>;
+	    savedSecrets: Record<string, boolean>;
+
+	    static createFrom(source: any = {}) {
+	        return new CredentialView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.values = source["values"];
+	        this.savedSecrets = source["savedSecrets"];
 	    }
 	}
 	
@@ -2206,6 +2296,7 @@ export namespace main {
 	    facts: winvm.HostFacts;
 	    runtime: runtime.Status;
 	    steps: winvm.Step[];
+	    runtimeNotice?: Notification;
 	    setupFinished: boolean;
 	
 	    static createFrom(source: any = {}) {
@@ -2217,6 +2308,7 @@ export namespace main {
 	        this.facts = this.convertValues(source["facts"], winvm.HostFacts);
 	        this.runtime = this.convertValues(source["runtime"], runtime.Status);
 	        this.steps = this.convertValues(source["steps"], winvm.Step);
+	        this.runtimeNotice = this.convertValues(source["runtimeNotice"], Notification);
 	        this.setupFinished = source["setupFinished"];
 	    }
 	
@@ -2401,6 +2493,7 @@ export namespace main {
 	export class LeaveResult {
 	    serverUrl: string;
 	    name: string;
+	    firewallError: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new LeaveResult(source);
@@ -2410,6 +2503,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.serverUrl = source["serverUrl"];
 	        this.name = source["name"];
+	        this.firewallError = source["firewallError"];
 	    }
 	}
 	export class ModeState {
@@ -2418,6 +2512,7 @@ export namespace main {
 	    pairing?: PairingStatus;
 	    hubOn: boolean;
 	    hubDevices: string[];
+	    firewallCleanup: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ModeState(source);
@@ -2430,6 +2525,7 @@ export namespace main {
 	        this.pairing = this.convertValues(source["pairing"], PairingStatus);
 	        this.hubOn = source["hubOn"];
 	        this.hubDevices = source["hubDevices"];
+	        this.firewallCleanup = source["firewallCleanup"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2577,6 +2673,8 @@ export namespace main {
 		    return a;
 		}
 	}
+	
+	
 	
 	
 	
@@ -2732,6 +2830,8 @@ export namespace main {
 	    image: string;
 	    confirmed: boolean;
 	    allowSharedIdentity: boolean;
+	    replaceExisting: boolean;
+	    expectedContainer: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployRequest(source);
@@ -2744,6 +2844,8 @@ export namespace main {
 	        this.image = source["image"];
 	        this.confirmed = source["confirmed"];
 	        this.allowSharedIdentity = source["allowSharedIdentity"];
+	        this.replaceExisting = source["replaceExisting"];
+	        this.expectedContainer = source["expectedContainer"];
 	    }
 	}
 	export class WorkerDeployResult {
@@ -2752,6 +2854,8 @@ export namespace main {
 	    worker: string;
 	    containerId: string;
 	    notes: string[];
+	    credentialWarning?: string;
+	    expectedContainer?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployResult(source);
@@ -2764,6 +2868,8 @@ export namespace main {
 	        this.worker = source["worker"];
 	        this.containerId = source["containerId"];
 	        this.notes = source["notes"];
+	        this.credentialWarning = source["credentialWarning"];
+	        this.expectedContainer = source["expectedContainer"];
 	    }
 	}
 	
@@ -3039,6 +3145,30 @@ export namespace proxies {
 
 export namespace runtime {
 	
+	export class AdminStep {
+	    needed: boolean;
+	    kind?: string;
+	    ruleName?: string;
+	    replaceRule?: boolean;
+	    program?: string;
+	    networks?: string[];
+	    removeRuleName?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AdminStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.needed = source["needed"];
+	        this.kind = source["kind"];
+	        this.ruleName = source["ruleName"];
+	        this.replaceRule = source["replaceRule"];
+	        this.program = source["program"];
+	        this.networks = source["networks"];
+	        this.removeRuleName = source["removeRuleName"];
+	    }
+	}
 	export class ContainerInfo {
 	    slug: string;
 	    containerId: string;
@@ -3223,6 +3353,7 @@ export namespace runtime {
 	    available: boolean;
 	    nativeAvailable: boolean;
 	    nativeServices: string[];
+	    setupTask?: string;
 	    kind: string;
 	    reason: string;
 	    message: string;
@@ -3239,6 +3370,7 @@ export namespace runtime {
 	        this.available = source["available"];
 	        this.nativeAvailable = source["nativeAvailable"];
 	        this.nativeServices = source["nativeServices"];
+	        this.setupTask = source["setupTask"];
 	        this.kind = source["kind"];
 	        this.reason = source["reason"];
 	        this.message = source["message"];

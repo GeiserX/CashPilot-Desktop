@@ -17,6 +17,8 @@ export function AcceptSessionRisk(arg1:string,arg2:string):Promise<Record<string
 
 export function AddFleetDevice(arg1:Record<string, string>):Promise<main.FleetState>;
 
+export function AllowServerCommandsThroughFirewall():Promise<main.ServerCommandsState>;
+
 export function ApplyImport(arg1:main.ImportApplyRequest):Promise<main.ImportResult>;
 
 export function BackgroundHelperStatus():Promise<bgservice.Status>;
@@ -41,6 +43,8 @@ export function DeleteCustomService(arg1:string):Promise<void>;
 
 export function DeleteProxy(arg1:number):Promise<void>;
 
+export function DeployAdminStep(arg1:string):Promise<runtime.AdminStep>;
+
 export function DeployProxiedCopy(arg1:string,arg2:number):Promise<services.ProxiedResult>;
 
 export function DeployService(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any):Promise<store.Deployment>;
@@ -51,9 +55,13 @@ export function DeployServiceRouted(arg1:string,arg2:Record<string, string>,arg3
 
 export function DeployServiceWallet(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any,arg5:main.WalletChoice):Promise<main.WalletDeployResult>;
 
+export function DeployServiceWithAdminApproval(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any,arg5:boolean,arg6:runtime.AdminStep):Promise<store.Deployment>;
+
 export function DeployToWorker(arg1:string,arg2:main.WorkerDeployRequest):Promise<main.WorkerDeployResult>;
 
 export function DiscardPartialRestore(arg1:string):Promise<void>;
+
+export function DockerDesktopEngineReady():Promise<boolean>;
 
 export function EnableIsolation():Promise<main.IsolationResult>;
 
@@ -69,7 +77,7 @@ export function GetAppState():Promise<main.AppState>;
 
 export function GetCopyLogs(arg1:string,arg2:number,arg3:number):Promise<string>;
 
-export function GetCredentials(arg1:string):Promise<Record<string, string>>;
+export function GetCredentials(arg1:string):Promise<main.CredentialView>;
 
 export function GetEarningsSummary():Promise<main.EarningsSummary>;
 
@@ -143,6 +151,8 @@ export function RestartToFirmware(arg1:string):Promise<main.FirmwareRestart>;
 
 export function RestoreStateBackup(arg1:string,arg2:string,arg3:string):Promise<runtime.RestoreResult>;
 
+export function RetryServerCommandsFirewallRemoval():Promise<void>;
+
 export function RevealWalletSeed(arg1:string,arg2:string):Promise<string>;
 
 export function RevokeSessionRisk(arg1:string):Promise<Record<string, config.SessionConsent>>;
@@ -158,6 +168,8 @@ export function SaveProxy(arg1:number,arg2:Record<string, string>):Promise<proxi
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
 
 export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
+
+export function SetServerCommands(arg1:boolean):Promise<main.ServerCommandsState>;
 
 export function SetupResume():Promise<setupresume.View>;
 

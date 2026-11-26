@@ -238,8 +238,8 @@ check("RULE 3: and a null hostname does the same", !renderWizardServiceSetup(hon
 check("RULE 4: a required field is marked with an asterisk", labelOf(hg, "HONEYGAIN_EMAIL") === "Email *", hg);
 check("RULE 4: so is a required secret", labelOf(hg, "HONEYGAIN_PASSWORD") === "Password *", hg);
 check(
-  "RULE 4: a required collector field is marked too",
-  labelOf(rp, "REPOCKET_PASSWORD") === "Repocket account password *",
+  "RULE 4: a required collector-only field says it is for earnings, not *: the deploy does not wait for it",
+  labelOf(rp, "REPOCKET_PASSWORD") === "Repocket account password (for earnings)",
   rp,
 );
 check(
@@ -258,15 +258,17 @@ check(
     .map((input) => `${input.env}=${JSON.stringify(input.value)}`)
     .join(", "),
 );
-// A saved credential reaches the input through hydrateWizardForm(), which sets
-// input.value on the live node. If the render ever learned to pre-fill instead, the
-// secret would be written into a value attribute -- into the page source, into any
-// innerHTML dump, into a screenshot of the DOM inspector. So a stray value on a field
-// object must stay out of the markup.
+// Only ordinary settings are used to fill inputs during hydration. Even a
+// secret with a catalog default must start with an empty input.
 const carrier = renderWizardServiceSetup(repocket, {
   repocket: [{ key: "REPOCKET_PASSWORD", label: "Password", description: "pw", secret: true, value: "hunter2-SECRET" }],
 }, "devbox");
 check("RULE 5: a value riding on a field object never reaches the markup", !carrier.includes("hunter2-SECRET"), carrier);
+const secretDefault = renderWizardServiceSetup(service({
+  docker: { env: [envVar("API_KEY", { secret: true, default: "secret-default" })] },
+}), null, "devbox");
+check("RULE 5: a secret input starts blank even with a catalog default",
+  inputs(secretDefault).find((input) => input.env === "API_KEY")?.value === "", secretDefault);
 check(
   "a default that would break out of its value attribute is escaped",
   !renderWizardServiceSetup(
@@ -363,6 +365,23 @@ const oldText = renderWizardServiceSetup(wipterSvc, wipterFields, "devbox", null
 });
 check("RULE 7: a consent to an older text asks again", oldText.includes('data-session-disclosure="wipter"') && !oldText.includes("Install this provider's native app"), oldText);
 
+const ocean = renderWizardServiceSetup(service({
+  slug: "ocean",
+  name: "OCEAN",
+  category: "mining",
+  manualOnly: true,
+  platforms: [],
+  docker: { env: [] },
+  collector: { accrual: "pool" },
+  referral: { signupUrl: "https://ocean.xyz/getstarted", account: false },
+}), { ocean: [{ key: "OCEAN_ADDRESS", label: "BTC payout address", required: true }] }, "devbox");
+check("a pool tracker asks for the public payout address", inputs(ocean).some((input) => input.env === "OCEAN_ADDRESS" && input.type === "text"), ocean);
+check("the pool tracker has no local app to install", !ocean.includes("data-session-") && !ocean.includes("Install this provider's native app"), ocean);
+check("OCEAN links to the provider without offering an account", ocean.includes("https://ocean.xyz/getstarted") && ocean.includes("Visit site") && !ocean.includes("Create account"), ocean);
+check("OCEAN's setup checks its unpaid balance and cannot deploy", ocean.includes("holds for this address") && ocean.includes("Check pool balance") && ocean.includes('data-wizard-action="deploy" data-slug="ocean" disabled'), ocean);
+check("pool setup identifies the linked instructions as the Web setup guide", ocean.includes('data-url="https://geiserx.github.io/CashPilot/guides/ocean/">Web setup guide</button>'), ocean);
+check("pool setup saves the address through the balance check", !ocean.includes('data-wizard-action="save"') && ocean.includes('data-wizard-action="collect"'), ocean);
+
 const phoneApp = renderWizardServiceSetup(service({ slug: "nodle", name: "Nodle", manualOnly: true, platforms: ["ios", "android"], docker: { env: [] } }), {}, "devbox");
 check("RULE 7: a phone-only manual app keeps the plain install tip", phoneApp.includes("Install this provider's native app") && !phoneApp.includes("data-session-"), phoneApp);
 check("RULE 7: and its setup guide", phoneApp.includes('data-url="https://geiserx.github.io/CashPilot/guides/nodle/"'), phoneApp);
@@ -398,6 +417,17 @@ check("RULE 6: a non-secret field carries no autocomplete hint", field(rp, "RP_E
 const none = renderWizardServiceSetup(service({ slug: "quiet", docker: { env: [] } }), {}, "devbox");
 check("a service with no credentials renders none", inputs(none).length === 0, none);
 check("and says so in words", none.includes("No credentials are required by the catalog"), none);
+
+for (const setup of [service({ slug: "quiet" }), service({ slug: "quiet", custom: true })]) {
+  for (const status of [{ kind: "busy", text: "Deploying quiet..." }, { kind: "ok", text: "Deployed quiet." },
+    { kind: "failed", text: "Worker refused." }, { kind: "missing", missing: [{ key: "TOKEN", label: "Token" }] }]) {
+    const redrawn = renderWizardServiceSetup(setup, {}, "devbox", null, null, null, null, null, undefined, null, false, null, null, status);
+    const text = status.text || "Fill in every field marked *";
+    check(`a redrawn ${setup.custom ? "custom" : "catalog"} Deploy card still shows ${status.kind} beside its button`,
+      redrawn.indexOf('data-wizard-action="deploy"') < redrawn.indexOf(`data-deploy-notice="${status.kind}"`)
+        && redrawn.includes(text), redrawn);
+  }
+}
 
 if (failures > 0) {
   console.error(`\n${failures} of ${checks} wizard render checks FAILED`);

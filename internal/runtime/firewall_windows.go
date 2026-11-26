@@ -4,9 +4,14 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows"
 )
@@ -93,52 +98,92 @@ func currentUserSID() (string, error) {
 // place, asking for admin rights only when it is missing or differs. It fails when
 // the rule cannot be confirmed, so the caller never starts the binary without it.
 func ensureFirewallBlock(slug, program string, nets []string) error {
+	return ensureFirewallBlockWith(slug, program, nets, true)
+}
+
+// ensureFirewallBlockWith is ensureFirewallBlock that raises the admin prompt only
+// when mayElevate is set (the person approved it in the app). Otherwise a missing
+// rule fails with AdminApprovalNeeded and Windows shows nothing.
+func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate bool) error {
 	nets, err := validFirewallNetworks(nets)
 	if err != nil {
 		return err
 	}
-	name := firewallRuleName(slug, program)
+	return ensureFirewallRule(slug, program, nets, mayElevate, readFirewallRule, RunElevated)
+}
+
+// firewallReady reports whether the rule matches and whether it exists,
+// reading it without admin rights. A firewall that would ignore the rule is an
+// error, not "missing": no admin prompt can fix it, so the app must say what can.
+func firewallReady(slug, program string, nets []string) (ready, found bool, err error) {
 	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
-	st, err := readFirewallRule(name)
+	st, err := readFirewallRule(firewallRuleName(slug, program))
 	if err != nil {
-		return fmt.Errorf("%s, and %v", what, err)
+		return false, false, fmt.Errorf("%s. CashPilot could not read the rule before the admin step: %w", what, err)
 	}
-	if why := st.notEnforced(); why != "" {
-		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
+	ready, err = firewallReadiness(st, program, nets, what)
+	return ready, st.Found, err
+}
+
+// firewallBlockExists reads whether CashPilot's rule exists for the old binary.
+func firewallBlockExists(slug, program string) (bool, error) {
+	state, err := readFirewallRule(firewallRuleName(slug, program))
+	return state.Found, err
+}
+
+// removeFirewallBlock deletes the rule for this program if it exists and this
+// operation can ask for admin rights.
+func removeFirewallBlock(slug, program string, mayElevate bool) error {
+	exists, err := firewallBlockExists(slug, program)
+	if err != nil || !exists {
+		return err
 	}
-	if st.matches(program, nets) {
-		return nil
+	if !mayElevate {
+		return &AdminApprovalNeeded{Slug: slug}
 	}
-	if _, err := RunElevated(firewallCreateScript(name, program, nets)); err != nil {
-		return fmt.Errorf("%s, and creating it failed (approve the Windows admin prompt and try again): %v", what, err)
-	}
-	st, err = readFirewallRule(name)
-	if err != nil {
-		return fmt.Errorf("%s, and %v", what, err)
-	}
-	if !st.matches(program, nets) {
-		return fmt.Errorf("%s, and the rule is still not in place after creating it", what)
-	}
-	// The firewall can be switched off while the admin prompt waits.
-	if why := st.notEnforced(); why != "" {
-		return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, or run %s in Docker", what, why, slug)
+	name := firewallRuleName(slug, program)
+	if _, err := RunElevated(firewallRemoveScript(name)); err != nil {
+		return firewallRemoveFailed(name, err)
 	}
 	return nil
 }
 
-// removeFirewallBlock deletes the rule for this program, asking for admin rights
-// only when it exists.
-func removeFirewallBlock(slug, program string) error {
-	name := firewallRuleName(slug, program)
-	st, err := readFirewallRule(name)
+// ReadNamedFirewallRule reads one local firewall rule by its unique name.
+func ReadNamedFirewallRule(name string, port int, subnets []string) (NamedFirewallRule, error) {
+	script := `$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+` + namedFirewallRuleScript(name)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	raw, err := powerShellContext(ctx, "-EncodedCommand", psEncode(script))
 	if err != nil {
-		return err
+		return NamedFirewallRule{}, err
 	}
-	if !st.Found {
-		return nil
+	var rule struct {
+		Found                                                        bool
+		Program, Enabled, Direction, Action, Profile, Port, Protocol string
+		Remote                                                       []string
 	}
-	if _, err := RunElevated(firewallRemoveScript(name)); err != nil {
-		return fmt.Errorf("the Windows Firewall rule %q is still there (approve the Windows admin prompt and remove again, or delete it yourself with Remove-NetFirewallRule -DisplayName %s): %v", name, psQuote(name), err)
+	if err := json.Unmarshal(raw, &rule); err != nil {
+		return NamedFirewallRule{}, err
 	}
-	return nil
+	got := make([]string, 0, len(rule.Remote))
+	for _, subnet := range rule.Remote {
+		if prefix, err := netip.ParsePrefix(subnet); err == nil {
+			got = append(got, prefix.Masked().String())
+		} else if ipv4, ok := windowsRemoteAddresses(subnet); ok {
+			got = append(got, ipv4...)
+		}
+	}
+	slices.Sort(got)
+	want := slices.Clone(subnets)
+	slices.Sort(want)
+	result := NamedFirewallRule{Found: rule.Found}
+	if rule.Found && rule.Enabled == "True" && rule.Direction == "Inbound" && rule.Action == "Allow" &&
+		rule.Profile == "Private" && rule.Port == strconv.Itoa(port) && (rule.Protocol == "TCP" || rule.Protocol == "6") &&
+		len(got) == len(rule.Remote) && slices.Equal(got, want) {
+		result.Program = rule.Program
+	}
+	return result, nil
 }

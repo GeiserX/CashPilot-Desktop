@@ -28,6 +28,9 @@ type Field struct {
 }
 
 var collectorFields = map[string][]Field{
+	"2miners-etc": {
+		{Key: twoMinersETCAddressKey, Label: "ETC payout address", Required: true},
+	},
 	"anyone-protocol": {
 		{Key: "ANYONE_FINGERPRINTS", Label: "Relay fingerprints", Description: "Comma-separated relay fingerprints", Required: true},
 	},
@@ -51,9 +54,15 @@ var collectorFields = map[string][]Field{
 	"grass": {
 		{Key: "GRASS_ACCESS_TOKEN", Label: "Grass access token", Description: "accessToken from app.grass.io local storage", Secret: true, Required: true},
 	},
+	"herominers-kas": {
+		{Key: heroMinersKaspaAddressKey, Label: "Kaspa payout address", Required: true},
+	},
 	"mysterium": {
 		{Key: "MYSTNODES_EMAIL", Label: "MystNodes email", Description: "Email used for my.mystnodes.com", Required: true},
 		{Key: "MYSTNODES_PASSWORD", Label: "MystNodes password", Description: "Password used for my.mystnodes.com", Secret: true, Required: true},
+	},
+	"ocean": {
+		{Key: oceanAddressKey, Label: "BTC payout address", Required: true},
 	},
 	"packetstream": {
 		{Key: "PACKETSTREAM_AUTH_TOKEN", Label: "PacketStream auth cookie", Description: "auth cookie from app.packetstream.io", Secret: true, Required: true},
@@ -70,6 +79,9 @@ var collectorFields = map[string][]Field{
 	},
 	"storj": {
 		{Key: "STORJ_API_URL", Label: "Storj API URL", Description: "Local node dashboard URL, default http://localhost:14002"},
+	},
+	"supportxmr": {
+		{Key: supportXMRAddressKey, Label: "Monero payout address", Required: true},
 	},
 }
 

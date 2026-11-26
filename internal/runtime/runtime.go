@@ -73,7 +73,10 @@ type Status struct {
 	// available these are the only apps that can run, so first run says so instead
 	// of calling the machine ready.
 	NativeServices []string `json:"nativeServices"`
-	Kind           string   `json:"kind"`
+	// SetupTask is the next local Windows checklist step that needs the user.
+	// A working engine can coexist with unfinished setup on this PC.
+	SetupTask string `json:"setupTask,omitempty"`
+	Kind      string `json:"kind"`
 	// Reason is why the engine is or is not ready, one of the Reason* codes in
 	// engine_state.go, and Message says it in plain words.
 	Reason  string            `json:"reason"`
@@ -107,6 +110,8 @@ type DeploySpec struct {
 	// Wallet is what the deploy asks of the service's wallet seed file (seedfile.go),
 	// for a service whose catalog entry has one. nil keeps the wallet the node has.
 	Wallet *WalletRequest
+	// AdminApproval covers the firewall change approved for this deploy alone.
+	AdminApproval *AdminStep
 }
 
 type ContainerInfo struct {

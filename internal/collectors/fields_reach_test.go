@@ -40,6 +40,22 @@ func wizardFormCredentials(svc catalog.Service) map[string]string {
 			creds[key] = "http://collector.invalid/"
 			return
 		}
+		if key == "OCEAN_ADDRESS" {
+			creds[key] = "bc1q4efd2vns8qwawg3nt4xxzs9053shh0q3x0tuu9"
+			return
+		}
+		if key == "HEROMINERS_KAS_ADDRESS" {
+			creds[key] = heroMinersAddress
+			return
+		}
+		if key == "TWOMINERS_ETC_ADDRESS" {
+			creds[key] = twoMinersAddress
+			return
+		}
+		if key == "SUPPORTXMR_ADDRESS" {
+			creds[key] = supportXMRFund
+			return
+		}
 		creds[key] = "wizard-value"
 	}
 	for _, env := range svc.Docker.Env {

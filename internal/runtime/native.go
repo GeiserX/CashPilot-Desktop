@@ -125,11 +125,15 @@ type NativeProcessProvider struct {
 
 	logCap int64
 
-	// ensureFirewall and removeFirewall keep a binary's firewall_block rule; they
-	// default to ensureFirewallBlock/removeFirewallBlock and are seams for tests, which
-	// must never run PowerShell or raise an admin prompt.
-	ensureFirewall func(slug, program string, nets []string) error
-	removeFirewall func(slug, program string) error
+	// ensureFirewall and removeFirewall keep a binary's firewall_block rule, and
+	// firewallReady reads it; they default to ensureFirewallBlockWith,
+	// removeFirewallBlock and firewallReady and are seams for tests, which must never
+	// run PowerShell or raise an admin prompt. ensureFirewall may raise the prompt
+	// only when mayElevate is set by the approved deploy.
+	ensureFirewall func(slug, program string, nets []string, mayElevate bool) error
+	removeFirewall func(slug, program string, mayElevate bool) error
+	firewallExists func(slug, program string) (bool, error)
+	firewallReady  func(slug, program string, nets []string) (ready, found bool, err error)
 
 	// maxDownload bounds a single artifact download and maxExtract bounds one archive's
 	// total extracted bytes. They default to maxDownloadBytes/maxExtractedBytes and are
@@ -164,8 +168,10 @@ func NewNativeProcessProvider(appDir string) *NativeProcessProvider {
 		maxDownload:     maxDownloadBytes,
 		maxExtract:      maxExtractedBytes,
 		procs:           make(map[string]*managedProcess),
-		ensureFirewall:  ensureFirewallBlock,
+		ensureFirewall:  ensureFirewallBlockWith,
 		removeFirewall:  removeFirewallBlock,
+		firewallExists:  firewallBlockExists,
+		firewallReady:   firewallReady,
 	}
 	// statFn is a bound method so it can read p.cpuStatInterval; still a field so tests can
 	// swap in a stub sampler.
@@ -289,24 +295,33 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 	// before the subcommand in the shared command.
 	args := append(buildCommandArgs(bin.Args, env), buildCommandArgs(svc.Native.Command, env)...)
 
-	// Replace any prior instance (a managed child from this session or an orphan pid
-	// from a previous one) before starting the new one, so redeploy never doubles up.
+	// Check the approval before stopping a running instance.
 	prev := p.readRegistry().Entries[spec.Slug]
+	oldProgram := obsoleteFirewallProgram(prev, binPath, bin.FirewallBlock)
+	step, err := p.firewallAdminStep(spec.Slug, binPath, bin.FirewallBlock, oldProgram)
+	if err != nil {
+		return ContainerInfo{}, err
+	}
+	mayElevate := step.approvedBy(spec.AdminApproval)
+	if step.Needed && !mayElevate {
+		return ContainerInfo{}, &AdminApprovalNeeded{Slug: spec.Slug, Name: svc.Name}
+	}
+
 	p.stopInternal(spec.Slug, false, p.graceFor(StopTimeoutSeconds(spec.Service)))
 	// A rule the previous deploy made and this one no longer wants is deleted now:
 	// once the entry is overwritten, nothing would know it exists.
-	if prev != nil && len(prev.FirewallBlock) > 0 && (len(bin.FirewallBlock) == 0 || prev.BinPath != binPath) {
-		if err := p.removeFirewall(spec.Slug, prev.BinPath); err != nil {
-			return ContainerInfo{}, err
+	if oldProgram != "" {
+		if err := p.removeFirewall(spec.Slug, oldProgram, mayElevate && step.RemoveRuleName != ""); err != nil {
+			return ContainerInfo{}, NameAdminApproval(err, svc.Name)
 		}
 	}
 
 	if progress != nil {
 		progress("Starting native process")
 	}
-	mp, err := p.launchProcess(spec.Slug, binPath, args, envSlice(env), svc.Docker.Resources, registryDesc{URL: bin.URL, SHA256: bin.SHA256, Archive: bin.Archive, FirewallBlock: bin.FirewallBlock})
+	mp, err := p.launchProcess(spec.Slug, binPath, args, envSlice(env), svc.Docker.Resources, mayElevate && step.RuleName != "", registryDesc{URL: bin.URL, SHA256: bin.SHA256, Archive: bin.Archive, FirewallBlock: bin.FirewallBlock})
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerInfo{}, NameAdminApproval(err, svc.Name)
 	}
 
 	pid := 0
@@ -344,7 +359,7 @@ func (p *NativeProcessProvider) Start(ctx context.Context, slug string) error {
 	if p.entryIsOurs(e) {
 		return nil
 	}
-	_, err := p.launchProcess(slug, e.BinPath, e.Args, e.Env, catalog.ResourceLimits{}, registryDesc{URL: e.URL, SHA256: e.SHA256, Archive: e.Archive, FirewallBlock: e.FirewallBlock})
+	_, err := p.launchProcess(slug, e.BinPath, e.Args, e.Env, catalog.ResourceLimits{}, false, registryDesc{URL: e.URL, SHA256: e.SHA256, Archive: e.Archive, FirewallBlock: e.FirewallBlock})
 	return err
 }
 
@@ -398,7 +413,7 @@ func (p *NativeProcessProvider) Remove(ctx context.Context, slug string, opts Re
 	// A firewall rule that could not be deleted keeps the registry entry, so the
 	// next Remove tries again instead of forgetting the rule exists.
 	if e != nil && len(e.FirewallBlock) > 0 {
-		if err := p.removeFirewall(slug, e.BinPath); err != nil {
+		if err := p.removeFirewall(slug, e.BinPath, true); err != nil {
 			return err
 		}
 	}
@@ -490,11 +505,12 @@ type registryDesc struct {
 // launchProcess starts one process, registers it in the procs map and the on-disk
 // registry, and spins up its supervisor. The first start is synchronous so Deploy/Start
 // fail fast if the binary cannot exec; the supervisor thereafter owns Wait + respawn.
-func (p *NativeProcessProvider) launchProcess(slug, binPath string, args, svcEnv []string, res catalog.ResourceLimits, desc registryDesc) (*managedProcess, error) {
+func (p *NativeProcessProvider) launchProcess(slug, binPath string, args, svcEnv []string, res catalog.ResourceLimits, mayElevate bool, desc registryDesc) (*managedProcess, error) {
 	// Fail closed: a binary that declares firewall_block never runs without its rule.
-	// The supervisor's respawns skip this, since the rule outlives the process.
+	// The supervisor's respawns skip this, since the rule outlives the process. The
+	// admin prompt shows only after the person approved it in the app.
 	if len(desc.FirewallBlock) > 0 {
-		if err := p.ensureFirewall(slug, binPath, desc.FirewallBlock); err != nil {
+		if err := p.ensureFirewall(slug, binPath, desc.FirewallBlock, mayElevate); err != nil {
 			return nil, err
 		}
 	}

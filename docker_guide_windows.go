@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"golang.org/x/sys/windows"
 )
 
@@ -45,6 +47,11 @@ func launchDockerDesktop() error {
 		return err
 	}
 	return cmd.Process.Release()
+}
+
+func dockerDesktopEngineReady(ctx context.Context) bool {
+	reason := runtime.DockerDesktopEngineReason(ctx)
+	return reason == runtime.ReasonRunning || reason == runtime.ReasonWindowsContainers
 }
 
 // openWindowsUpdate opens Settings at Windows Update.

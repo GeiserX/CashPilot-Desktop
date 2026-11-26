@@ -11,7 +11,8 @@
 // Pure: takes plain values, returns HTML or plain data. main.ts holds the phrase in
 // one module variable while a panel needs it, and wipes it after.
 
-import type { Deployment, EnvVar, Service } from "../wails";
+import type { Deployment, EnvVar, Service, WalletChoice, WalletOutcome } from "../wails";
+import type { DeployAnswer } from "./deploy_consent.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 
 /** The env entry of service whose value lives in a seed file, if any. */
@@ -22,6 +23,29 @@ export function seedFileVar(service: Service | undefined | null): EnvVar | undef
 /** The words of a phrase as hostd reads it: lowercase, any spacing. */
 export function phraseWords(phrase: string | null | undefined): string[] {
   return String(phrase || "").toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Why a wallet deploy stops before any call, or null when it may go. "Use a
+ * wallet I already have" with no phrase typed deploys nothing.
+ */
+export function walletChoiceRefusal(choice: WalletChoice): DeployAnswer | null {
+  if (choice.mode === "import" && phraseWords(choice.phrase).length === 0) {
+    return { kind: "cancelled", text: "Type the seed phrase of the wallet to use, or choose another option. Nothing was deployed." };
+  }
+  return null;
+}
+
+/**
+ * What a wallet deploy says next to Deploy once it ended. shownOnce is true when
+ * its new wallet's phrase is on screen now, for the one time it ever is.
+ */
+export function walletDeployAnswer(wallet: WalletOutcome | null | undefined, shownOnce: boolean): DeployAnswer {
+  if (shownOnce) return { kind: "ok", text: "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once." };
+  if (wallet?.migrated) return { kind: "ok", text: "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume." };
+  if (wallet?.created) return { kind: "ok", text: "Deployed with the wallet you typed. CashPilot kept no copy of it." };
+  if (wallet) return { kind: "ok", text: "Deployed. The node kept its wallet." };
+  return { kind: "ok", text: "Deployed." };
 }
 
 /**

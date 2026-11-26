@@ -151,6 +151,9 @@ func (c *Client) Import(ctx context.Context, serverURL, token string, p ImportPa
 	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("upstream: reading response: %w", err)
 	}
@@ -165,7 +168,7 @@ func (c *Client) Import(ctx context.Context, serverURL, token string, p ImportPa
 		// 403 here is its own diagnosis and worth keeping legible: it means the
 		// server still considers this worker unconfirmed, so the fix is another
 		// heartbeat, not a new key.
-		return nil, fmt.Errorf("upstream: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, &StatusError{Code: resp.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	var out ImportResponse
 	if err := json.Unmarshal(raw, &out); err != nil {

@@ -15,6 +15,11 @@
 //   7. A SERVICE THAT KEEPS ITS WALLET SEED IN A FILE (SIA'S HOSTD) OFFERS NO WORKER:
 //      THE BOX SAYS IT RUNS ON THIS COMPUTER AND WHY, AND THE CARD SHOWS THE WALLET
 //      CHOICE, NEVER A SEED FIELD.
+//   8. A YES TO A REPLACEMENT NAMES THE CONTAINER ITS QUESTION SHOWED. A WORKER THAT
+//      FINDS ANOTHER CONTAINER ASKS AGAIN, AND ONLY A NEW YES SENDS AGAIN; AN OLDER
+//      WORKER THAT NAMES NONE IS ASKED ONCE, AS BEFORE. A YES FOR ONE CONTAINER IS
+//      NEVER SENT AS AN OLDER WORKER'S YES, NOR THE REVERSE: A WORKER ROLLED BACK OR
+//      UPDATED WHILE THE DIALOG IS OPEN IS ASKED ABOUT AGAIN.
 //
 //   node scripts/where_check.mjs      # against ./.harness-build
 
@@ -64,13 +69,22 @@ const targets = [
   check("RULE 2: a custom service has no box", whereChoiceSection({ ...honeygain, custom: true }, targets) === "");
 }
 
+{
+  const offline = { ...targets[1], online: false, reason: "attic is offline." };
+  for (const [label, workers] of [["offline", [offline]], ["removed", []], ["another worker online", [offline, targets[0]]]]) {
+    const card = renderWizardServiceSetup(honeygain, {}, "box", null, "", null, null, null, undefined, null, false, workers, offline.id);
+    check(`RULE 2: a selected worker stays selected when ${label}`,
+      /<option value="5" selected[^>]*>/.test(card) && card.includes("This computer") && card.includes("Choose"),
+      card.match(/<div class="where-choice">[\s\S]*?<\/div>/)?.[0] || "no Where picker");
+  }
+}
+
 function calls(answers, confirms) {
-  const log = { deploys: [], saved: 0, asked: [] };
+  const log = { deploys: [], asked: [] };
   return {
     log,
     confirm: (message) => { log.asked.push(message); return confirms.shift() ?? false; },
     deploy: async (yes) => { log.deploys.push(yes); return answers.shift(); },
-    save: async () => { log.saved++; },
   };
 }
 const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: null };
@@ -79,11 +93,11 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   for (const [proxy, copies] of [[3, null], [null, 2]]) {
     const c = calls([ok], []);
     const out = await runWorkerDeploy("honeygain", targets[1], proxy, copies, c);
-    check(`RULE 3: route ${proxy} copies ${copies} is refused`, out.kind === "refused" && out.message.includes("Nothing was deployed") && c.log.deploys.length === 0 && c.log.saved === 0, JSON.stringify(out));
+    check(`RULE 3: route ${proxy} copies ${copies} is refused`, out.kind === "refused" && out.message.includes("Nothing was deployed") && c.log.deploys.length === 0, JSON.stringify(out));
   }
   const c = calls([ok], []);
   const out = await runWorkerDeploy("honeygain", targets[1], null, 1, c);
-  check("RULE 3: one copy from the worker's own IP deploys and saves", out.kind === "deployed" && c.log.deploys.length === 1 && c.log.saved === 1, JSON.stringify(c.log));
+  check("RULE 3: one copy deploys from the worker's own IP", out.kind === "deployed" && c.log.deploys.length === 1, JSON.stringify(c.log));
 }
 
 {
@@ -94,19 +108,30 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   check("RULE 4: both questions are asked, each once", out.kind === "deployed" && c.log.asked.length === 2, JSON.stringify(c.log));
   check("RULE 4: the identity question is the web UI's", c.log.asked[0] === "The Device ID for Ider already runs on first.\n\nDeploy anyway?", c.log.asked[0]);
   check("RULE 4: each yes is sent with the deploy", JSON.stringify(c.log.deploys) === JSON.stringify([
-    { confirmed: false, allowSharedIdentity: false },
-    { confirmed: false, allowSharedIdentity: true },
-    { confirmed: true, allowSharedIdentity: true },
+    { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "" },
+    { confirmed: false, allowSharedIdentity: true, replaceExisting: false, expectedContainer: "" },
+    { confirmed: true, allowSharedIdentity: true, replaceExisting: false, expectedContainer: "" },
   ]), JSON.stringify(c.log.deploys));
   c = calls([stepUp], [false]);
   out = await runWorkerDeploy("vault", targets[1], null, null, c);
-  check("RULE 4: a no sends nothing more and saves nothing", out.kind === "cancelled" && c.log.deploys.length === 1 && c.log.saved === 0, JSON.stringify(c.log));
+  check("RULE 4: a no sends nothing more", out.kind === "cancelled" && c.log.deploys.length === 1, JSON.stringify(c.log));
   c = calls([stepUp, stepUp], [true]);
   out = await runWorkerDeploy("vault", targets[1], null, null, c);
-  check("RULE 4: a question asked again after a yes is refused, not looped", out.kind === "refused" && c.log.deploys.length === 2 && c.log.saved === 0, JSON.stringify(out));
-  c = calls([ok], [false]);
+  check("RULE 4: a question asked again after a yes is refused, not looped", out.kind === "refused" && c.log.deploys.length === 2, JSON.stringify(out));
+  const replace = { ...ok, ask: "replace_existing", message: "Redeploy honeygain on attic? The existing container will be replaced, but its volumes are kept." };
+  c = calls([replace], [false]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 4: a replacement question from the worker is shown even with a stale picker",
+    out.kind === "cancelled" && c.log.asked[0] === replace.message && c.log.deploys.length === 1, JSON.stringify(c.log));
+  c = calls([replace, identity, stepUp, ok], [true, true, true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 4: the replacement approval is separate from the device and image approvals",
+    out.kind === "deployed" && c.log.deploys[0].replaceExisting === false
+      && c.log.deploys[3].replaceExisting === true && c.log.asked.length === 3, JSON.stringify(c.log));
+  c = calls([replace], [false]);
   out = await runWorkerDeploy("honeygain", targets[0], null, null, c);
-  check("RULE 4: a redeploy on a worker that runs it asks first", out.kind === "cancelled" && c.log.asked[0] === "Redeploy honeygain on garage <b>? The existing container will be replaced, but its volumes are kept." && c.log.deploys.length === 0, JSON.stringify(c.log));
+  check("RULE 4: a redeploy on a worker that runs it asks first",
+    out.kind === "cancelled" && c.log.asked[0] === replace.message && c.log.deploys.length === 1, JSON.stringify(c.log));
   const text = workerDeployText({ worker: "attic", notes: ["/data stays on /old, where the running container keeps it, instead of /new"] });
   check("RULE 4: the result names the worker and what it kept", text.startsWith("Deployed to attic.") && text.includes("Kept: /data stays on /old"), text);
 }
@@ -162,6 +187,68 @@ const ok = { ask: "", message: "", worker: "attic", containerId: "c1", notes: nu
   check("RULE 7: the card has no worker pick", !card.includes("data-wizard-where=") && card.includes("only on this computer"), card);
   check("RULE 7: the card shows the wallet choice", card.includes('data-wallet-choice="sia-hostd"'), card);
   check("RULE 7: the card shows no seed field", !card.includes('data-wizard-env="HOSTD_WALLET_SEED"') && !card.includes("Wallet seed phrase"), card);
+}
+
+{
+  const id = (n) => String(n).repeat(64).slice(0, 64);
+  const named = (n) => ({ ...ok, ask: "replace_existing", expectedContainer: id(n),
+    message: `Redeploy honeygain on attic? The existing container (${id(n).slice(0, 12)}) will be replaced, but its volumes are kept.` });
+  const identity = { ...ok, ask: "identity_in_use", message: "The Device ID for Ider already runs on first." };
+  let c = calls([named(1), ok], [true]);
+  let out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: the yes carries the container its question named",
+    out.kind === "deployed" && c.log.asked.length === 1 && c.log.asked[0] === named(1).message
+      && c.log.deploys[0].replaceExisting === false && c.log.deploys[0].expectedContainer === ""
+      && c.log.deploys[1].replaceExisting === true && c.log.deploys[1].expectedContainer === id(1), JSON.stringify(c.log));
+  const changed = { ...named(2), message: `The honeygain container on attic changed since you approved replacing it.\n\n${named(2).message}` };
+  c = calls([named(1), changed, ok], [true, true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: a container that changed is asked about again, and the new yes names it",
+    out.kind === "deployed" && c.log.asked.length === 2 && c.log.asked[1] === changed.message
+      && c.log.deploys.length === 3 && c.log.deploys[2].expectedContainer === id(2), JSON.stringify(c.log));
+  c = calls([named(1), changed], [true, false]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: a no to the new container sends nothing more",
+    out.kind === "cancelled" && c.log.deploys.length === 2, JSON.stringify(c.log));
+  c = calls([named(1), named(1)], [true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: the same container asked about again after a yes is refused, not looped",
+    out.kind === "refused" && c.log.asked.length === 1 && c.log.deploys.length === 2, JSON.stringify(out));
+  c = calls([named(1), identity, changed, ok], [true, true, true]);
+  out = await runWorkerDeploy("ider", targets[1], null, null, c);
+  check("RULE 8: a changed container drops only the replacement yes",
+    out.kind === "deployed" && c.log.asked.length === 3 && c.log.deploys[3].allowSharedIdentity === true
+      && c.log.deploys[3].expectedContainer === id(2), JSON.stringify(c.log));
+  const answers = Array.from({ length: 20 }, (_, n) => named(n + 1));
+  c = calls(answers, Array(20).fill(true));
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: a container that keeps changing ends the deploy",
+    out.kind === "refused" && out.message.includes("Nothing was deployed") && c.log.deploys.length < 20, JSON.stringify(out));
+  const older = { ...ok, ask: "replace_existing", message: "Redeploy honeygain on attic? The existing container will be replaced, but its volumes are kept. Update CashPilot on attic so it can confirm the exact container before replacing it." };
+  c = calls([older, ok], [true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: an older worker is asked once and gets the yes alone",
+    out.kind === "deployed" && c.log.asked[0] === older.message
+      && c.log.deploys[1].replaceExisting === true && c.log.deploys[1].expectedContainer === "", JSON.stringify(c.log));
+  const rolledBack = { ...older, message: `attic no longer names the honeygain container you approved replacing, so that yes does not count.\n\n${older.message}` };
+  c = calls([named(1), rolledBack, ok], [true, true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: a yes for one container is asked again when the worker stops naming it",
+    out.kind === "deployed" && c.log.asked.length === 2 && c.log.asked[1] === rolledBack.message
+      && c.log.deploys.length === 3 && c.log.deploys[2].replaceExisting === true && c.log.deploys[2].expectedContainer === "", JSON.stringify(c.log));
+  c = calls([named(1), rolledBack], [true, false]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: a no to the older-worker question sends nothing more",
+    out.kind === "cancelled" && c.log.deploys.length === 2, JSON.stringify(c.log));
+  c = calls([older, named(1), ok], [true, true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: an older worker's yes is asked again when the worker starts naming the container",
+    out.kind === "deployed" && c.log.asked.length === 2 && c.log.asked[1] === named(1).message
+      && c.log.deploys[2].replaceExisting === true && c.log.deploys[2].expectedContainer === id(1), JSON.stringify(c.log));
+  c = calls([older, older], [true]);
+  out = await runWorkerDeploy("honeygain", targets[1], null, null, c);
+  check("RULE 8: an older worker that asks again after a yes is refused",
+    out.kind === "refused" && c.log.asked.length === 1, JSON.stringify(out));
 }
 
 if (failures) {

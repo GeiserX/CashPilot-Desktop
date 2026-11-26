@@ -168,10 +168,16 @@ for (const [code, message] of [
   check("lead confirm: keys forgotten", cl.includes("forgets its keys"));
   check("lead confirm: collection restarts", cl.includes("starts collecting earnings again"));
   check("lead confirm: remove on the Fleet page", cl.includes("Remove it on its Fleet page") && cl.includes("my-pc"));
+  check("lead confirm: the server's commands end", cl.includes("can no longer start and stop services on this computer"), cl);
   check("lead confirm: switch button", renderModeCard(follower, "confirm-lead", null, now).includes('data-mode-action="leave"'));
 
   const left = text(renderModeCard(lead, "left", { serverUrl: "http://192.168.1.10:8080", name: "my-pc" }, now));
   check("after leaving: says what to remove where", left.includes("remove my-pc on the Fleet page") && left.includes("http://192.168.1.10:8080"), left);
+  check("after leaving: no firewall line when the rule went", !left.includes("Windows Defender Firewall"), left);
+  const cleanup = renderModeCard({ ...lead, firewallCleanup: "Rule is still in Windows Firewall <x>" }, "summary", null, now);
+  check("Lead after restart offers firewall cleanup", cleanup.includes('data-mode-action="firewall-cleanup"') && cleanup.includes("&lt;x&gt;"), cleanup);
+  const stuck = renderModeCard(lead, "left", { serverUrl: "http://192.168.1.10:8080", name: "my-pc", firewallError: "the firewall rule <x> was not removed" }, now);
+  check("after leaving: a rule that stayed is named, escaped", text(stuck).includes("You can delete it in Windows Defender Firewall") && stuck.includes("&lt;x&gt;"), stuck);
 }
 
 console.log(`${checks - failures}/${checks} mode render checks passed`);

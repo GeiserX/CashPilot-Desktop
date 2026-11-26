@@ -23,6 +23,17 @@ export function escapeHtml(value: string | undefined | null): string {
   );
 }
 
+const miningCurrencies = new Map([
+  ["BTC", 8],
+  ["XMR", 12],
+  ["KAS", 8],
+  ["ETC", 9],
+]);
+
+export function miningBalancePrecision(currency: string): number | undefined {
+  return miningCurrencies.get(currency.trim().toUpperCase());
+}
+
 /**
  * Format an amount in a currency, degrading gracefully for reward tokens.
  *
@@ -36,6 +47,11 @@ export function escapeHtml(value: string | undefined | null): string {
 export function formatBalance(value: number, currency: string): string {
   const code = (currency || "USD").toUpperCase().replace(/[^A-Z0-9]/g, "");
   const amount = Number.isFinite(value) ? value : 0;
+  const precision = miningBalancePrecision(code);
+  if (precision !== undefined) {
+    const native = new Intl.NumberFormat(undefined, { maximumFractionDigits: precision }).format(amount);
+    return `${native} ${code}`;
+  }
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
