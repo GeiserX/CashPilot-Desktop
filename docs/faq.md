@@ -2,7 +2,7 @@
 
 **How is this different from the CashPilot Docker container?**
 
-It's the same passive-income management system, but packaged as a desktop app instead of a Docker container. You get system tray integration, auto-updates, a guided Docker setup checklist on Windows, and a native window -- no need to manage Docker yourself or access a web UI via browser.
+It's the same passive-income management system, but packaged as a desktop app instead of a Docker container. You get system tray integration, a guided Docker setup checklist on Windows, and a native window -- no need to manage Docker yourself or access a web UI via browser. It does not update itself yet: download each new version from the [releases page](https://github.com/GeiserX/CashPilot-Desktop/releases).
 
 **Do I still need Docker installed?**
 

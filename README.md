@@ -16,6 +16,18 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
   <img src="docs/images/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
 </p>
 
+## What's new in 2.0
+
+In 2.0, a CashPilot server that this computer joined can deploy, stop, start, restart and remove services here. Some changes need a step from you:
+
+- **Server commands need CashPilot 3.0.0 or newer.** Under an older server, Desktop 2.0 only reports. Desktop 1.7.0 also only reports under CashPilot 3.0.0, so upgrade the server first.
+- **Server commands start off after an upgrade from 1.x.** Turn them on with the dashboard switch. A first join in 2.0 starts with them on.
+- **The pairing change is one-way.** A return to 1.x needs a new join.
+- **A refused key needs a new join by hand.** Desktop no longer joins again by itself after HTTP 401.
+- **`NVIDIA_` variables are refused.** Remove them from your custom services before you upgrade.
+
+Desktop does not update itself: download 2.0 from the [releases page](https://github.com/GeiserX/CashPilot-Desktop/releases). The steps before and after the upgrade: [What's new in 2.0](docs/whats-new-2.0.md).
+
 ## What's new in 1.0
 
 1.0 is the first stable release, after about 130 releases since May 2026. Nothing breaks on upgrade. The highlights:
