@@ -206,7 +206,8 @@ func (m *Manager) markerOnDisk() (marker string, ok bool) {
 // publication stopped between its two writes. When config.json cannot be
 // read, the copy in memory can predate the window's last publication, so any
 // marker there counts: 1.x does not make the file unreadable. A revision this
-// Manager already read as superseded on disk stays superseded then.
+// Manager already read as superseded on disk, by a credential read, a load or a
+// Reload, stays superseded then.
 func (m *Manager) PairingSuperseded(p Pairing) bool {
 	marker, ok := m.markerOnDisk()
 	m.mu.Lock()

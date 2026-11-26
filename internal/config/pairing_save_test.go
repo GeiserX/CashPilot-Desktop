@@ -227,3 +227,47 @@ func TestAnInterruptedPublicationStaysRejectedWhenTheConfigTurnsUnreadable(t *te
 		t.Errorf("after the window kept A: %q, %v", key.Worker, err)
 	}
 }
+
+// The helper's only read of the interrupted state is a Reload: it caches the
+// next revision's marker while pairing.json still names A, and config.json
+// turns unreadable before any credential read. A's credential stays refused.
+func TestAReloadOfAnInterruptedPublicationStaysRejectedWhenTheConfigTurnsUnreadable(t *testing.T) {
+	window, helper := twoManagers(t)
+	publish(t, window, "http://192.168.1.10:8080", "worker-a")
+	editConfigFile(t, window, func(f map[string]any) {
+		f["pairingRevision"], f["upstreamUrl"] = "NEXT-REVISION-NEVER-PUBLISHED", "http://192.168.1.20:8080"
+	})
+	if _, err := helper.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(window.AppDir(), "config.json"), []byte(brokenConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, key, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
+		t.Errorf("unreadable config.json: revision %s gave key %q, %v; want ErrPairingSuperseded", p.Revision, key.Worker, err)
+	}
+}
+
+// The helper read A as superseded after a 1.x save, then the window kept A and
+// the helper reloaded the marked file. When config.json turns unreadable after
+// that, A stays live: the reload saw A's own marker.
+func TestAKeptRevisionStaysLiveWhenTheConfigTurnsUnreadable(t *testing.T) {
+	window, helper := twoManagers(t)
+	a := publish(t, window, "http://192.168.1.10:8080", "worker-a")
+	editConfigFile(t, window, func(f map[string]any) { delete(f, "pairingRevision") })
+	if _, _, err := helper.ReadPairingCredential(false); !errors.Is(err, ErrPairingSuperseded) {
+		t.Fatalf("after the 1.x save: %v, want ErrPairingSuperseded", err)
+	}
+	if err := window.KeepPairing(a.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := helper.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(window.AppDir(), "config.json"), []byte(brokenConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, key, err := helper.ReadPairingCredential(false); err != nil || key.Worker != "worker-a" {
+		t.Errorf("unreadable config.json after the window kept A: key %q, %v; want worker-a", key.Worker, err)
+	}
+}

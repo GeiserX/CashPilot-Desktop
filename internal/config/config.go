@@ -218,8 +218,10 @@ type Manager struct {
 	// hold a Manager on the same file) from its own.
 	saved []byte
 	// supersededSeen is the revision this Manager last read as superseded on
-	// disk (pairingSuperseded). It stays superseded while config.json cannot be
-	// read, so a marker in memory cannot bring it back.
+	// disk: by PairingSuperseded, or by a load or Reload whose config.json did
+	// not hold the marker of the pairing.json read with it. It stays superseded
+	// while config.json cannot be read, so a marker in memory cannot bring it
+	// back.
 	supersededSeen string
 }
 
@@ -274,6 +276,7 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 	m.pairing, _ = m.Pairing()
+	m.noteMarkerLocked()
 	return m, nil
 }
 
@@ -356,7 +359,22 @@ func (m *Manager) Reload() (bool, error) {
 	}
 	pairingChanged := p != m.pairing
 	m.pairing = p
+	m.noteMarkerLocked()
 	return changed || pairingChanged, nil
+}
+
+// noteMarkerLocked records whether the config.json just read holds the marker
+// of the pairing.json just read. A marker counts later, while config.json
+// cannot be read, only if it matched when it was read: a publication that
+// stopped between its two writes leaves the next revision's marker over the
+// old revision. Called with m.mu held.
+func (m *Manager) noteMarkerLocked() {
+	switch {
+	case m.pairing.Revision != "" && m.cfg.PairingRevision != m.pairing.Revision:
+		m.supersededSeen = m.pairing.Revision
+	case m.supersededSeen == m.pairing.Revision:
+		m.supersededSeen = ""
+	}
 }
 
 func (m *Manager) reloadLocked() (bool, error) {
