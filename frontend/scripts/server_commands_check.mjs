@@ -7,7 +7,7 @@
 //   2. THE SWITCH is checked when on, unchecked when off, and off says the server
 //      can no longer change anything.
 //   3. REACH: while listening it names the address the server uses; while not, it
-//      says why, escaped.
+//      says why, escaped. A server too old to send commands is named as such.
 //   4. THE LAST COMMAND shows what, which service, when and how it ended; a refusal
 //      shows its reason; none yet says so.
 //   5. WINDOWS: the firewall button shows only where a rule is needed, the switch is
@@ -70,6 +70,14 @@ const base = {
   check("names the address", text(on).includes("http://192.168.1.30:8086"), text(on));
   const down = renderServerCommands({ ...base, listening: false, url: "", problem: "<b>port busy</b>" }, now);
   check("problem escaped", down.includes("&lt;b&gt;port busy&lt;/b&gt;") && !down.includes("<b>port busy"), down);
+  const old = renderServerCommands({ ...base, serverTooOld: true }, now);
+  check(
+    "an old server is told apart from a reachable one",
+    text(old).includes("older than CashPilot 3.0.0") && text(old).includes("only sees what runs here") && !text(old).includes("It reaches this computer"),
+    text(old),
+  );
+  const oldOff = renderServerCommands({ ...base, on: false, serverTooOld: true }, now);
+  check("off still says off with an old server", text(oldOff).includes("Off.") && !text(oldOff).includes("older than"), text(oldOff));
 }
 
 // 4. Last command.

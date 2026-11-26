@@ -107,6 +107,10 @@ type ServerCommandsState struct {
 	FirewallStatus string         `json:"firewallStatus"`
 	Opens          string         `json:"opens"`
 	Last           *ServerCommand `json:"last"`
+	// ServerTooOld is true when the server's last heartbeat answer did not list the
+	// command feature (upstream.TakesCommands): the heartbeat then reports no URL, so
+	// the server only sees what runs here.
+	ServerTooOld bool `json:"serverTooOld"`
 }
 
 // startWorkerAPI starts the loop that keeps the API in step with the config and the
@@ -891,6 +895,9 @@ func (a *App) serverCommandsState() ServerCommandsState {
 	if listening {
 		out.URL = a.workerAPIURL(serverURL)
 	}
+	a.upstream.mu.Lock()
+	out.ServerTooOld = a.upstream.commandsKnown && !a.upstream.takesCommands
+	a.upstream.mu.Unlock()
 	return out
 }
 

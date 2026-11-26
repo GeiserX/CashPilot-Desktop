@@ -1748,6 +1748,7 @@ export namespace main {
 	    firewallStatus: string;
 	    opens: string;
 	    last?: ServerCommand;
+	    serverTooOld: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ServerCommandsState(source);
@@ -1765,6 +1766,7 @@ export namespace main {
 	        this.firewallStatus = source["firewallStatus"];
 	        this.opens = source["opens"];
 	        this.last = this.convertValues(source["last"], ServerCommand);
+	        this.serverTooOld = source["serverTooOld"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
