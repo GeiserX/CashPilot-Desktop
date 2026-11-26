@@ -68,8 +68,9 @@ export function firstCopyLabel(copies: ServiceCopy[] | null | undefined): string
 /**
  * The dashboard rows of copies 2..N, under the service's own row, each with its own
  * Logs and Stop or Start. Removing one copy is lowering the count on the card.
+ * A copy is a container: `dockerBlocked` (why Docker cannot run it now) disables Start.
  */
-export function copyRows(serviceName: string, copies: ServiceCopy[] | null | undefined, noStart = false): string {
+export function copyRows(serviceName: string, copies: ServiceCopy[] | null | undefined, noStart = false, dockerBlocked = ""): string {
   return (copies || []).map((copy) => {
     const n = copy.instance;
     const running = copy.status === "running";
@@ -91,7 +92,7 @@ export function copyRows(serviceName: string, copies: ServiceCopy[] | null | und
         <td class="c-act">
           <div class="action-btns">
             ${rowButton("logs", copy.slug, `Logs of copy ${n}`, n)}
-            ${running ? rowButton("stop", copy.slug, `Stop copy ${n}`, n) : noStart ? "" : rowButton("start", copy.slug, `Start copy ${n}`, n)}
+            ${running ? rowButton("stop", copy.slug, `Stop copy ${n}`, n) : noStart ? "" : rowButton("start", copy.slug, `Start copy ${n}`, n, dockerBlocked)}
           </div>
         </td>
       </tr>

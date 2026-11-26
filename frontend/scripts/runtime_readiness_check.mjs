@@ -306,16 +306,57 @@ await checkCase("a first-run retry finishing in Settings preserves the newer rea
   assert.match(root.querySelector("#runtime-settings-slot").innerHTML, /Set up Docker/);
 });
 
+await checkCase("a check replaced three times in a row gives up and keeps the newer reading", async () => {
+  const held = [];
+  let runtime = ready;
+  const { root, events } = await openApp("give-up", ready, true, async () => {
+    if (held.length === 0) { held.push(null); return answered; }
+    const read = Promise.withResolvers();
+    held.push(read);
+    return read.promise;
+  }, {
+    GetAppState: async () => ({ config: { mode: "lead", firstRunComplete: true }, runtime, guides: [] }),
+  });
+  const badge = () => root.querySelector(".topbar-runtime").innerHTML;
+  const guide = () => root.querySelector("#docker-guide");
+  root.querySelector(".topbar-runtime").click();
+  await setImmediate();
+  assert.match(guide().innerHTML, /Docker Desktop is ready on this PC/);
+
+  guide().querySelector("#docker-guide-check").click();
+  runtime = stopped;
+  for (let read = 1; read <= 3; read++) {
+    await setImmediate();
+    assert.equal(held.length, 1 + read, `the replaced check reads the PC again (read ${read})`);
+    // An earnings refresh reads Docker stopped while this host read is out.
+    events.get("earnings:changed")();
+    await setImmediate();
+    assert.match(badge(), /Runtime offline/);
+    held[read].resolve(answered);
+  }
+  await setImmediate();
+  assert.equal(held.length, 4, "the check stops after three replaced readings");
+  assert.match(badge(), /Runtime offline/, "the top bar keeps the newer reading");
+  assert.match(guide().innerHTML, /current status is unknown/);
+  assert.match(guide().innerHTML, /Click Check again to retry/);
+  assert.doesNotMatch(guide().innerHTML, /data-step=|docker-guide-summary ok/);
+});
+
 for (const view of ["fleet", "activity"]) {
   await checkCase(`${view} load preserves a failed retry`, async () => {
     const host = Promise.withResolvers();
     const page = Promise.withResolvers();
     let checks = 0;
     let loads = 0;
+    let appReads = 0;
     const binding = view === "fleet" ? "GetFleetState" : "GetActivity";
     const { root } = await openApp(view, ready, true, async () => ++checks === 1 ? answered : host.promise, {
       [binding]: () => { loads++; return page.promise; },
       GetProxiesState: async () => null,
+      // Opening the view reads Docker again; that read is still out when the retry fails.
+      GetAppState: () => ++appReads === 1
+        ? Promise.resolve({ config: { mode: "lead", firstRunComplete: true }, runtime: ready, guides: [] })
+        : new Promise(() => {}),
     });
     root.querySelector(".topbar-runtime").click();
     await setImmediate();
@@ -323,6 +364,7 @@ for (const view of ["fleet", "activity"]) {
     root.querySelector("#docker-guide").querySelector("#docker-guide-check").click();
     root.querySelector(`[data-view="${view}"]`).click();
     assert.equal(loads, 1);
+    assert.equal(appReads, 2, "opening the view reads Docker again");
 
     host.reject(new Error("Host check failed"));
     await setImmediate();
@@ -348,7 +390,8 @@ for (const retryOrder of ["none", "retry-first", "settings-first"]) {
     const snapshot = (runtime) => ({ config: { mode: "lead", firstRunComplete: true }, runtime, guides: [] });
     let appReads = 0;
     let hostReads = 0;
-    const { root } = await openApp(name, ready, true, async () => ++hostReads === 1 ? answered : retry.promise, {
+    // A host read after the retry finds Docker as the Settings check left it: stopped.
+    const { root } = await openApp(name, ready, true, async () => ++hostReads === 1 ? answered : hostReads === 2 ? retry.promise : setup, {
       GetAppState: async () => ++appReads === 1 ? snapshot(ready) : settingsCheck.promise,
       GetSettingsState: async () => ({ environment: [], collectors: [] }),
       BackgroundHelperStatus: async () => ({ supported: false }),
@@ -387,6 +430,7 @@ for (const retryOrder of ["none", "retry-first", "settings-first"]) {
       retry.resolve(answered);
       await setImmediate();
       assert.match(badge(), /Runtime offline/, "a retry cannot replace the completed Settings check");
+      assert.equal(hostReads, 3, "the replaced retry reads the PC again instead of returning its old rows");
     }
   });
 }

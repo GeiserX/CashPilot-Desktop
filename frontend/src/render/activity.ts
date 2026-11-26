@@ -9,6 +9,7 @@
 
 import type { ActivityDetail, ActivityRow, ActivityTop, ActivityView } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import type { RuntimeInput } from "./runtime_state.js";
 
 export const UNKNOWN = "—";
 
@@ -108,10 +109,15 @@ function topList(list: ActivityTop[] | null | undefined, label?: (v: string) => 
     .join(" ");
 }
 
-function round(view: ActivityView): string {
+// The last sampling round, which ran up to 5 minutes ago. Its no_runtime says
+// Docker was away THEN; the shared Docker status says whether it is NOW.
+function round(view: ActivityView, runtime?: Pick<RuntimeInput, "available">): string {
   const r = view.round;
   if (!view.enabled || !r || !r.at) return "";
   if (r.workerStatus === "no_image") return `<span class="activity-chip activity-chip-warn">cannot sample: the helper image could not be pulled</span>`;
+  if (r.workerStatus === "no_runtime" && runtime?.available) {
+    return `<span class="activity-chip activity-chip-muted">last sample could not reach Docker. Docker is ready now, so the next sample, within 5 minutes, can run</span>`;
+  }
   if (r.workerStatus === "no_runtime") return `<span class="activity-chip activity-chip-warn">cannot sample: Docker is not reachable</span>`;
   if ((r.leftoverProbes || []).length) {
     return `<span class="activity-chip activity-chip-warn" title="${escapeHtml(r.leftoverProbes.join(", "))}">${r.leftoverProbes.length} helper(s) Docker would not remove</span>`;
@@ -183,7 +189,7 @@ export function renderActivityDetail(d: ActivityDetail, hostNetwork: boolean): s
 }
 
 /** The whole page body under the title. open maps an expanded container to its detail (null while loading). */
-export function renderActivityPage(view: ActivityView, open: Record<string, ActivityDetail | null>): string {
+export function renderActivityPage(view: ActivityView, open: Record<string, ActivityDetail | null>, runtime?: Pick<RuntimeInput, "available">): string {
   const nets = view.networks || ({ present: false } as ActivityView["networks"]);
   const days = [1, 7, 30]
     .map((d) => `<option value="${d}"${view.days === d ? " selected" : ""}>${d === 1 ? "24 hours" : `${d} days`}</option>`)
@@ -195,7 +201,7 @@ export function renderActivityPage(view: ActivityView, open: Record<string, Acti
     `<label class="activity-switch"><input type="checkbox" id="activity-toggle"${view.enabled ? " checked" : ""}> ${view.enabled ? "on" : "off"}</label>` +
     `<select id="activity-days">${days}</select>` +
     `<button class="secondary compact-btn" id="activity-delete">Delete data</button>` +
-    round(view) +
+    round(view, runtime) +
     `</div>` +
     `<p class="muted activity-asn">${
       nets.present

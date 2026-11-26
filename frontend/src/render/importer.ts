@@ -155,8 +155,13 @@ export function importChoices(
   return { slugs, extra };
 }
 
-/** Step 3: what was saved, each with a Deploy button that runs the normal deploy. */
-export function renderImportSaved(result: ImportResult, preview: ImportPreview | null, deployed: string[], links: Record<string, string> = {}, statuses: Record<string, DeployFeedback> = {}): string {
+/**
+ * Step 3: what was saved, each with a Deploy button that runs the normal deploy.
+ * `waitsForDocker` maps a service that needs Docker here, while Docker cannot run
+ * it, to the note that says why (render/runtime_state.ts dockerBlockedNote): its
+ * Deploy is disabled. A native app is never in it.
+ */
+export function renderImportSaved(result: ImportResult, preview: ImportPreview | null, deployed: string[], links: Record<string, string> = {}, statuses: Record<string, DeployFeedback> = {}, waitsForDocker: Record<string, string> = {}): string {
   const names: Record<string, string> = {};
   const labels: Record<string, Record<string, string>> = {};
   for (const row of preview?.rows || []) {
@@ -170,9 +175,11 @@ export function renderImportSaved(result: ImportResult, preview: ImportPreview |
       : "";
     const done = deployed.includes(slug);
     const status = statuses[slug];
+    const waits = done ? "" : waitsForDocker[slug] || "";
     return `<li>
       <strong>${escapeHtml(names[slug] || slug)}</strong>
-      ${done ? (status ? "" : `<span class="muted">deployed</span>`) : `<button class="compact-btn" data-import-deploy="${escapeHtml(slug)}"${status?.kind === "busy" ? " disabled" : ""}>Deploy</button>`}
+      ${done ? (status ? "" : `<span class="muted">deployed</span>`) : `<button class="compact-btn" data-import-deploy="${escapeHtml(slug)}"${status?.kind === "busy" || waits ? " disabled" : ""}>Deploy</button>`}
+      ${waits}
       <div class="deploy-panel" data-import-deploy-panel="${escapeHtml(slug)}" aria-live="polite">${renderDeployFeedback(status)}</div>
       ${keptNote}
       ${done && links[slug] ? `<pre class="muted device-link-text">${escapeHtml(links[slug])}</pre>` : ""}
