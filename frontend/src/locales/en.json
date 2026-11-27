@@ -2234,6 +2234,7 @@
   "go.macvm.busy": "Wait until {action} finishes.",
   "go.macvm.guardStale": "The guard has not checked the fence for {age}. Restart the Mac if this stays.",
   "go.macvm.guardSilent": "The guard has not reported yet.",
+  "go.macvm.guardBooting": "The Mac has just started. The guard starts the Secure VM in a minute or two, after it has put the fence in place.",
   "go.macvm.guestLimit": "macOS lets a Mac run at most 2 macOS virtual machines at once. Stop one in the app that runs it, then press Start.",
   "go.macvm.appCutOff": "The Secure VM is cut off the network, so it does not earn now.",
   "go.macvm.appNotRunning": "It is not running in the Secure VM.",
