@@ -225,7 +225,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		}
 	}
 	if mine > 0 && keepNetwork {
-		res.Kept = append(res.Kept, "the firewall rule for the retained switch")
+		res.Kept = append(res.Kept, "the firewall rule, because the switch or the NAT remains")
 	}
 	if mine > 0 && !keepNetwork {
 		if kept, err := d.HV.RemoveFirewall(ctx, p); err != nil {

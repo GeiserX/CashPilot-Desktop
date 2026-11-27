@@ -45,7 +45,6 @@ func TestRemoveNATScriptKeepsMappedOrReplacedNAT(t *testing.T) {
 param($id, $mapping)
 function Get-NetNat { [pscustomobject]@{ Name = 'CashPilot-VM'; InstanceID = $id; InternalIPInterfaceAddressPrefix = '172.31.250.0/29' } }
 function Get-NetNatStaticMapping { if ($mapping) { [pscustomobject]@{ NatName = 'CashPilot-VM' } } }
-function Get-NetNatExternalAddress {}
 function Remove-NetNat { throw 'would remove the unverified NAT' }
 `
 	for _, tc := range []struct{ name, id, mapping string }{
@@ -56,7 +55,7 @@ function Remove-NetNat { throw 'would remove the unverified NAT' }
 			code, out := runOwnedScriptWithFake(t, mock, scriptRemoveNAT,
 				map[string]any{"nat": "CashPilot-VM", "id": "nat-id", "prefix": "172.31.250.0/29"}, tc.id, tc.mapping)
 			if tc.mapping != "" {
-				requireRemoveKept(t, code, out, "it has independent NAT mappings or external addresses")
+				requireRemoveKept(t, code, out, "it has independent NAT mappings")
 			} else if code == 0 || !strings.Contains(string(out), "The NAT changed since inventory.") {
 				t.Fatalf("expected the NAT identity refusal, exit %d: %s", code, out)
 			}
@@ -279,5 +278,30 @@ func TestSubnetBroadcast(t *testing.T) {
 		if got := subnetBroadcast(netip.MustParsePrefix(in)).String(); got != want {
 			t.Errorf("broadcast of %s = %s, want %s", in, got, want)
 		}
+	}
+}
+
+// TestRemoveNATScriptIgnoresWinNATPortPools: WinNAT lists external address
+// port pools of its own on every NAT, two per host IPv4 address (live run 5:
+// 127.0.0.1 and every host address, 100 ports each). Remove kept the NAT for
+// them. Only a static mapping keeps it now.
+func TestRemoveNATScriptIgnoresWinNATPortPools(t *testing.T) {
+	const mock = `
+function Get-NetNat { [pscustomobject]@{ Name = 'CashPilot-VM'; InstanceID = 'CashPilot-VM;0'; InternalIPInterfaceAddressPrefix = '172.31.250.0/29' } }
+function Get-NetNatStaticMapping {}
+function Get-NetNatExternalAddress {
+  foreach ($ip in '127.0.0.1', '127.0.0.1', '172.22.250.118', '172.22.250.118') {
+    [pscustomobject]@{ NatName = 'CashPilot-VM'; IPAddress = $ip; PortStart = 50270; PortEnd = 50369 }
+  }
+}
+$global:removed = $false
+function Remove-NetNat { $global:removed = $true }
+`
+	code, out := runOwnedScriptWithFake(t, mock, scriptRemoveNAT+"\nif (-not $global:removed) { throw 'the NAT was not removed' }\n",
+		map[string]any{"nat": "CashPilot-VM", "id": "CashPilot-VM;0", "prefix": "172.31.250.0/29"})
+	doc, err := decodeOutput(out)
+	var got struct{ Kept string }
+	if code != 0 || err != nil || decodeDoc(doc, &got) != nil || got.Kept != "" {
+		t.Fatalf("WinNAT's own port pools kept the NAT: exit %d, %v: %s (%s)", code, err, out, doc)
 	}
 }

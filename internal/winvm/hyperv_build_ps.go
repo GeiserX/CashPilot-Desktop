@@ -677,9 +677,11 @@ if ($n.Count -gt 0) {
   if ($n.Count -ne 1 -or -not (Test-RecordedNAT $n[0] $in)) {
     throw 'The NAT changed since inventory.'
   }
-  if (@(Get-NetNatStaticMapping | Where-Object { $_.NatName -eq $in.nat }).Count -gt 0 -or
-      @(Get-NetNatExternalAddress | Where-Object { $_.NatName -eq $in.nat }).Count -gt 0) {
-    Write-Doc @{ kept = 'it has independent NAT mappings or external addresses' }; exit 0
+  # WinNAT adds external address port pools of its own to every NAT, two per
+  # host IPv4 address, so they say nothing about who uses it. A static mapping
+  # is what a person adds to forward ports through it.
+  if (@(Get-NetNatStaticMapping | Where-Object { $_.NatName -eq $in.nat }).Count -gt 0) {
+    Write-Doc @{ kept = 'it has independent NAT mappings' }; exit 0
   }
   Remove-NetNat -InputObject $n[0] -Confirm:$false
 }
