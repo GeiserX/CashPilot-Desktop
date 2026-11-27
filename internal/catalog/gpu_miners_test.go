@@ -16,8 +16,8 @@ import (
 // web entry changes, vendor it with catalogsync, check the tests below still
 // describe it, and update its sum in the same PR.
 var gpuMinerWebSHA256 = map[string]string{
-	"srbminer-multi": "491d93213a1c01cc3fc5bc35e134f436d5ef2f9933a490b929722c1db566ebe0",
-	"kryptex-pearl":  "2ad990f60327fab4041c992656a8274bca75e44210315565b079e8d9553bcc37",
+	"srbminer-multi": "b34d0e7f87920017eb3052e65d07c51912bf3dfca93b704502cb563766c4f5b4",
+	"kryptex-pearl":  "c2f6590c05062c5ed63c4476572edf9abc050bc4c94dad11a089af5670f5b231",
 }
 
 func TestGPUMinersAreTheWebFiles(t *testing.T) {
