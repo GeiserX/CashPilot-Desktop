@@ -44,11 +44,46 @@ func checkPlurals(t *testing.T, locale, key string, nodes []node) {
 					t.Errorf("%s %s: plural case %q is never chosen in %s", locale, key, sel, locale)
 				}
 			}
+			if body, ok := n.cases["one"]; ok && !showsCount(body, n.arg) {
+				if other, found := oneBeyondOne(locale); found {
+					t.Errorf("%s %s: plural case \"one\" never shows the count, but %s also picks it for %d; name exactly one with =1", locale, key, locale, other)
+				}
+			}
 		}
 		for _, c := range n.cases {
 			checkPlurals(t, locale, key, c)
 		}
 	}
+}
+
+// showsCount: the case prints its own number, as # or as {arg}. A case that
+// does not says "one" in words, which is wrong for any other count the
+// locale's one category covers (0 in French, 21 in Russian, 2 in Filipino).
+func showsCount(nodes []node, arg string) bool {
+	for _, n := range nodes {
+		if n.pound || (n.kind == "" && n.arg == arg) {
+			return true
+		}
+		if n.kind == "select" {
+			for _, c := range n.cases {
+				if showsCount(c, arg) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// oneBeyondOne finds a count other than 1 that the locale's one category
+// covers. found is false when one means exactly 1.
+func oneBeyondOne(locale string) (count int64, found bool) {
+	for _, n := range seq(0, 200) {
+		if n != 1 && PluralCategory(locale, n) == "one" {
+			return n, true
+		}
+	}
+	return 0, false
 }
 
 func usesCategory(locale, category string) bool {
