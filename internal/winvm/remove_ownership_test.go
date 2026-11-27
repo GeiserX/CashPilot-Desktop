@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"github.com/GeiserX/CashPilot-Desktop/e2e/harness/hvfake"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,13 +14,25 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
 )
 
-func TestRemoveLeavesForeignNATWithSameNameAndSubnet(t *testing.T) {
+// replacementPrefix is a /29 next to the recorded one. Windows keys a NAT's
+// ID by its name ("name;0"), so a replacement with the same name and prefix
+// is identical to ours in every field the provider reports. A replacement on
+// another prefix is the one Remove and Repair can tell apart.
+func replacementPrefix(t *testing.T, p winvm.Plan) netip.Prefix {
+	t.Helper()
+	a := p.Subnet.Addr().As4()
+	a[2]++
+	return netip.PrefixFrom(netip.AddrFrom4(a), p.Subnet.Bits())
+}
+
+func TestRemoveLeavesForeignNATWithSameNameOnAnotherSubnet(t *testing.T) {
 	f := hvfake.New()
 	dir := build(t, f)
 	p := readPlan(t, dir)
-	f.AddForeignNAT(p.Names.NAT, p.Subnet)
+	other := replacementPrefix(t, p)
+	f.AddForeignNAT(p.Names.NAT, other)
 	res := remove(t, f, dir)
-	if !slices.Contains(f.Objects(), "nat "+p.Names.NAT+" "+p.Subnet.String()) ||
+	if !slices.Contains(f.Objects(), "nat "+p.Names.NAT+" "+other.String()) ||
 		!strings.Contains(strings.Join(res.Left, "\n"), "the NAT "+p.Names.NAT) {
 		t.Fatalf("Remove did not keep and list the replacement NAT: %+v", res)
 	}
@@ -29,7 +42,7 @@ func TestRepairRefusesReplacementNAT(t *testing.T) {
 	f := hvfake.New()
 	dir := build(t, f)
 	p := readPlan(t, dir)
-	f.AddForeignNAT(p.Names.NAT, p.Subnet)
+	f.AddForeignNAT(p.Names.NAT, replacementPrefix(t, p))
 	before := f.Objects()
 	if _, err := winvm.Build(context.Background(), buildDeps(t, f, dir), setupParams()); !errors.Is(err, winvm.ErrNotOwned) {
 		t.Fatalf("Repair = %v, want ErrNotOwned", err)

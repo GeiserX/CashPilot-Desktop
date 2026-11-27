@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -43,6 +44,11 @@ const maxParamsFile = 64 << 10
 // setupLogFile is setup's log in the data folder, readable by users so the
 // app can show progress. It never holds a password: Build logs step names.
 const setupLogFile = "setup.log"
+
+// removeLogFile keeps what a Remove that did not finish removed, kept and
+// left, and why. The bootstrap starts Remove with no standard error, so
+// without it the reason is lost. A finished Remove writes none.
+const removeLogFile = "remove.log"
 
 // vmSetupMain is main's --vm-setup / --vm-remove branch.
 func vmSetupMain(params, dir string, parseErr error) int {
@@ -239,19 +245,32 @@ func runVMRemove(ctx context.Context, dir string, mk func(winvm.Names) winvm.Rem
 	if d.Dir == "" {
 		d.Dir = n.DataDir
 	}
-	d.Logf = log.New(errOut, "", log.LstdFlags).Printf
+	var report bytes.Buffer
+	out := io.MultiWriter(&report, bestEffort{errOut})
+	d.Logf = log.New(out, "", log.LstdFlags).Printf
 	res, err := winvm.Remove(ctx, d, n)
 	for _, x := range res.Removed {
-		fmt.Fprintln(errOut, "removed:", x)
+		fmt.Fprintln(out, "removed:", x)
 	}
 	for _, x := range res.Kept {
-		fmt.Fprintln(errOut, "kept:", x)
+		fmt.Fprintln(out, "kept:", x)
 	}
 	for _, x := range res.Left {
-		fmt.Fprintln(errOut, "left:", x)
+		fmt.Fprintln(out, "left:", x)
 	}
 	if err != nil {
-		fmt.Fprintln(errOut, "vm-remove:", err)
+		fmt.Fprintln(out, "vm-remove:", err)
+	}
+	// desired.json stays until Remove finishes. Only then is the folder gone
+	// or about to go, so only an unfinished Remove writes its log.
+	if _, serr := os.Stat(filepath.Join(d.Dir, winvm.PlanFile)); serr == nil {
+		if f, ferr := winvm.OpenAppend(filepath.Join(d.Dir, removeLogFile)); ferr == nil {
+			fmt.Fprintf(f, "%s remove:\n", time.Now().Format("2006/01/02 15:04:05"))
+			_, _ = f.Write(report.Bytes())
+			_ = f.Close()
+		}
+	}
+	if err != nil {
 		return vmExitFailed
 	}
 	return vmExitOK

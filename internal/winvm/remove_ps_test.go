@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"math/big"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -231,5 +232,52 @@ function Remove-VMSwitch { throw 'would remove the switch with independent confi
 					"bindings": map[string]bool{"ms_tcpip": true}}, tSwitchID, tOwner, tc.extra)
 			requireRemoveKept(t, code, out, tc.reason)
 		})
+	}
+}
+
+// TestRemoveSwitchScriptIgnoresWindowsNeighbours: Windows adds Permanent
+// neighbour entries of its own to the host vNIC: multicast in 224.0.0.0/4 and
+// the subnet broadcast. Live run 5 kept the switch because 239.255.255.250 and
+// 172.31.250.7 counted as user configuration. A neighbour a person added
+// still keeps it.
+func TestRemoveSwitchScriptIgnoresWindowsNeighbours(t *testing.T) {
+	const mock = `
+param($switchId, $owner, $extra)
+function Get-VMSwitch { [pscustomobject]@{ Id = $switchId; Notes = 'cashpilot-owner=' + $owner; SwitchType = 'Internal' } }
+function Get-VMNetworkAdapter {
+  param([switch]$All, [switch]$ManagementOS)
+  if ($ManagementOS) { [pscustomobject]@{ SwitchId = $switchId; Id = 'Microsoft:mgmt'; DeviceId = 'dev'; MacAddress = '00155D000002'; IsManagementOs = $true } }
+}
+function Get-NetAdapter { [pscustomobject]@{ DeviceId = 'dev'; ifIndex = 20; Name = 'vEthernet (CashPilot-VM)'; MacAddress = '00-15-5D-00-00-02' } }
+function Get-NetIPInterface { [pscustomobject]@{ Dhcp = 'Disabled' } }
+function Get-NetIPAddress { [pscustomobject]@{ IPAddress = '172.31.250.1'; PrefixLength = 29 } }
+function Get-NetNeighbor {
+  foreach ($n in @(@('255.255.255.255', 'FF-FF-FF-FF-FF-FF'), @('239.255.255.250', '01-00-5E-7F-FF-FA'), @('224.0.0.252', '01-00-5E-00-00-FC'),
+      @('224.0.0.22', '01-00-5E-00-00-16'), @('172.31.250.7', 'FF-FF-FF-FF-FF-FF'), @('172.31.250.2', '00-15-5D-00-00-03'))) {
+    [pscustomobject]@{ IPAddress = $n[0]; LinkLayerAddress = $n[1]; State = 'Permanent' }
+  }
+  if ($extra -eq 'user neighbour') { [pscustomobject]@{ IPAddress = '172.31.250.5'; LinkLayerAddress = '00-15-5D-00-00-09'; State = 'Permanent' } }
+}
+function Get-NetAdapterBinding { [pscustomobject]@{ Name = 'vEthernet (CashPilot-VM)'; ComponentID = 'ms_tcpip'; Enabled = $true } }
+function Remove-VMSwitch { if ($extra -eq 'user neighbour') { throw 'would remove the switch with a user neighbour' } }
+`
+	arg := map[string]any{"switchId": tSwitchID, "owner": tOwner, "managementId": "Microsoft:mgmt",
+		"mac": "00155D000002", "gateway": "172.31.250.1", "prefixLen": 29, "guest": "172.31.250.2", "guestMac": "00-15-5D-00-00-03",
+		"bindings": map[string]bool{"ms_tcpip": true}, "broadcast": "172.31.250.7"}
+	code, out := runOwnedScriptWithFake(t, mock, scriptRemoveSwitch, arg, tSwitchID, tOwner, "none")
+	doc, err := decodeOutput(out)
+	var got struct{ Kept string }
+	if code != 0 || err != nil || decodeDoc(doc, &got) != nil || got.Kept != "" {
+		t.Fatalf("Windows' own neighbours kept the switch: exit %d, %v: %s (%s)", code, err, out, doc)
+	}
+	code, out = runOwnedScriptWithFake(t, mock, scriptRemoveSwitch, arg, tSwitchID, tOwner, "user neighbour")
+	requireRemoveKept(t, code, out, "the management port has independent addresses, neighbours or bindings")
+}
+
+func TestSubnetBroadcast(t *testing.T) {
+	for in, want := range map[string]string{"172.31.250.0/29": "172.31.250.7", "10.0.0.0/8": "10.255.255.255", "192.168.1.8/30": "192.168.1.11"} {
+		if got := subnetBroadcast(netip.MustParsePrefix(in)).String(); got != want {
+			t.Errorf("broadcast of %s = %s, want %s", in, got, want)
+		}
 	}
 }

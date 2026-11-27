@@ -236,8 +236,9 @@ Write-Doc ([ordered]@{ switchId = $switchId; managementId = $managementId; mac =
 const natOwnershipPrelude = buildPrelude + `function Test-RecordedNAT($nat, $recorded) {
   $id = [string]$recorded.id
   if (-not $id -or [Text.Encoding]::UTF8.GetByteCount($id) -gt 260 -or $id -match '\p{Cc}') { return $false }
-  # A name or a name/store key can be reused by a replacement NAT.
-  if (($id -split ';', 2)[0] -eq $recorded.nat) { return $false }
+  # Windows keys a NAT's InstanceID by its name and store ("name;0"), so the ID
+  # cannot tell a same-name replacement apart. Ownership is the exact record
+  # Setup made, and Setup records only a NAT it created.
   return ($nat.Name -eq $recorded.nat -and [string]$nat.InstanceID -ceq $id -and
     [string]$nat.InternalIPInterfaceAddressPrefix -eq $recorded.prefix)
 }
@@ -556,7 +557,7 @@ Write-Doc ([ordered]@{ ok = $true })
 
 // scriptRemoveVM removes the owned VM and the recorded disk file. Any
 // other attached VHDX is reported and kept.
-var scriptRemoveVM = portACLPrelude + diskIdentityPrelude + runtime.SecureVMDirectoryPS + `$vm = @()
+var scriptRemoveVM = portACLPrelude + diskIdentityPrelude + runtime.SecureVMDirectoryPS + vmFolderPS + `$vm = @()
 if ($in.vm) { $vm = @(Find-OurVM $in.vm) }
 if ($vm.Count -gt 1) { throw 'More than one VM has the recorded ID.' }
 $disks = @()
@@ -579,7 +580,7 @@ if ($in.disk) {
   $lease = $null
   if ($in.disk.folderId -and (Test-Path -LiteralPath $path)) {
     try {
-      $lease = Open-CPDDirectory ([IO.Path]::GetDirectoryName($path)) $false $in.owner
+      $lease = Open-CPDVMFolder ([IO.Path]::GetDirectoryName($path)) $in.owner
       if ($lease.Id -ceq $in.disk.folderId -and -not (Test-DiskInUse $in.disk.id)) {
         $deleted = [CpdDisk]::DeleteOwned($path, $in.disk.id)
       }
@@ -591,6 +592,42 @@ if ($in.disk) {
 }
 $left = @($disks | Select-Object -Unique)
 Write-Doc ([ordered]@{ left = @($left) })
+`
+
+// vmFolderPS opens the private folder Setup made for the VM. New-VM -Path
+// adds Hyper-V's own rules to it: CREATOR OWNER, the Virtual Machines group
+// (S-1-5-83-0) and the VM worker capability. The private-folder check refuses
+// any rule beyond SYSTEM and Administrators, so after New-VM it could never
+// pass and Remove kept the disk (live run 5). This accepts exactly those
+// Hyper-V principals beside the two private rules, then checks the identity
+// Setup recorded on the folder.
+const vmFolderPS = `
+function Open-CPDVMFolder([string]$path, [string]$owner) {
+  $lease = [CpdDirectory]::Pin($path)
+  try {
+    $acl = Get-Acl -LiteralPath $path
+    $private = @('S-1-5-18', 'S-1-5-32-544')
+    $hyperV = @('S-1-3-0', 'S-1-5-83-0', 'S-1-15-3-1024-2268835264-3721307629-241982045-173645152-1490879176-104643441-2915960892-1612460704')
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    $base = @($rules | Where-Object {
+      $_.IdentityReference.Value -in $private -and $_.AccessControlType -eq 'Allow' -and $_.FileSystemRights -eq 'FullControl' -and
+      $_.InheritanceFlags -eq $inherit -and $_.PropagationFlags -eq 'None'
+    })
+    if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin $private -or -not $acl.AreAccessRulesProtected -or
+        @($base | ForEach-Object { $_.IdentityReference.Value } | Select-Object -Unique).Count -ne 2 -or
+        @($rules | Where-Object { $_.AccessControlType -ne 'Allow' -or $_.IsInherited -or $_.IdentityReference.Value -notin ($private + $hyperV) }).Count) {
+      throw ('The VM folder has untrusted access rules: ' + $path)
+    }
+    $record = Join-Path $path '.cashpilot-directory'
+    $null = [CpdDirectory]::FileID($record)
+    if ([IO.File]::ReadAllText($record) -cne ($owner + ':' + $lease.Id)) { throw ('The directory identity was not recorded: ' + $path) }
+    return $lease
+  } catch {
+    $lease.Dispose()
+    throw
+  }
+}
 `
 
 // scriptRemoveSwitch leaves the switch when deleting it would take another
@@ -615,10 +652,16 @@ $addresses = @(Get-NetIPAddress -InterfaceIndex $idx | Where-Object {
   -not ($_.IPAddress -eq $in.gateway -and [int]$_.PrefixLength -eq [int]$in.prefixLen) -and
   -not ($_.IPAddress -like 'fe80:*' -and $_.SuffixOrigin.ToString() -eq 'Link')
 })
+# Windows adds Permanent entries of its own: IPv4 multicast (224.0.0.0/4),
+# the limited and the subnet broadcast, and IPv6 multicast.
 $neighbors = @(Get-NetNeighbor -InterfaceIndex $idx | Where-Object {
+  $ip = [string]$_.IPAddress
   $_.State.ToString() -eq 'Permanent' -and
-  -not ($_.IPAddress -eq $in.guest -and [string]$_.LinkLayerAddress -eq $in.guestMac) -and
-  $_.IPAddress -notlike '224.*' -and $_.IPAddress -ne '255.255.255.255' -and $_.IPAddress -notlike 'ff*'
+  -not ($ip -eq $in.guest -and [string]$_.LinkLayerAddress -eq $in.guestMac) -and
+  $ip -notmatch '^(22[4-9]|23[0-9])\.' -and
+  $ip -ne '255.255.255.255' -and
+  -not ($ip -eq $in.broadcast -and [string]$_.LinkLayerAddress -eq 'FF-FF-FF-FF-FF-FF') -and
+  $ip -notlike 'ff*'
 })
 if ($addresses.Count -gt 0 -or $neighbors.Count -gt 0 -or -not (Test-HostBindings $na $in.bindings)) {
   Write-Doc @{ kept = 'the management port has independent addresses, neighbours or bindings' }; exit 0
@@ -977,17 +1020,12 @@ func validNATID(id string) bool {
 	return id != "" && len(id) <= 260 && strings.IndexFunc(id, unicode.IsControl) < 0
 }
 
-// A name or a name/store key can be reused by a replacement NAT.
-func independentNATID(name, id string) bool {
-	if !validNATID(id) {
-		return false
-	}
-	key, _, _ := strings.Cut(id, ";")
-	return !strings.EqualFold(key, name)
-}
-
+// matchesRecordedNAT: Windows keys a NAT's InstanceID by its name and store
+// ("name;0"), so no NAT has an identity apart from its name. Ownership is the
+// exact name, ID and prefix Setup recorded; Setup records only a NAT it made,
+// because it refuses any NAT it finds before it creates one.
 func matchesRecordedNAT(nat, recorded LiveNAT) bool {
-	return independentNATID(recorded.Name, recorded.ID) && nat.ID == recorded.ID &&
+	return validNATID(recorded.ID) && nat.ID == recorded.ID &&
 		strings.EqualFold(nat.Name, recorded.Name) && nat.Prefix.Masked() == recorded.Prefix
 }
 
@@ -1360,11 +1398,20 @@ func (b psBuilder) RemoveSwitch(ctx context.Context, p Plan) (string, error) {
 		"switchId": p.SwitchID, "owner": p.Owner, "managementId": p.ManagementAdapterID,
 		"mac": p.HostVNICMAC, "gateway": p.Gateway.String(), "prefixLen": p.Subnet.Bits(),
 		"guest": p.GuestIP.String(), "guestMac": macDash(p.GuestMAC), "bindings": p.ManagementBindings,
+		"broadcast": subnetBroadcast(p.Subnet).String(),
 	}, &w)
 	return w.Kept, err
 }
 
-// RemoveNAT deletes only an independently identified NAT.
+// subnetBroadcast is the last address of an IPv4 prefix.
+func subnetBroadcast(p netip.Prefix) netip.Addr {
+	a := p.Masked().Addr().As4()
+	host := uint32(1)<<(32-p.Bits()) - 1
+	v := uint32(a[0])<<24 | uint32(a[1])<<16 | uint32(a[2])<<8 | uint32(a[3]) | host
+	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
+}
+
+// RemoveNAT deletes only the NAT Setup recorded.
 func (b psBuilder) RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id string) (string, error) {
 	if err := n.Validate(); err != nil {
 		return "", err
@@ -1372,8 +1419,8 @@ func (b psBuilder) RemoveNAT(ctx context.Context, n Names, sub netip.Prefix, id 
 	if err := checkSubnet(sub); err != nil {
 		return "", err
 	}
-	if !independentNATID(n.NAT, id) {
-		return "", errors.New("the NAT has no independent provider identity")
+	if !validNATID(id) {
+		return "", errors.New("the NAT has no recorded provider identity")
 	}
 	var w struct {
 		Kept string `json:"kept"`

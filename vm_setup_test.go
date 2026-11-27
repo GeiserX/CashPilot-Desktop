@@ -197,3 +197,41 @@ func canonicalTempDir(t *testing.T) string {
 	}
 	return dir
 }
+
+// TestRemoveLogKeepsTheReasonWithoutStderr: remove.ps1 starts the remove role
+// with no standard error, so a Remove that did not finish must say why in
+// remove.log (live run 5 had no trace of why Remove left the switch, NAT and
+// disk). A Remove that finishes leaves no log behind.
+func TestRemoveLogKeepsTheReasonWithoutStderr(t *testing.T) {
+	f := hvfake.New()
+	dir := canonicalTempDir(t)
+	mk := func(winvm.Names) winvm.BuildDeps {
+		return winvm.BuildDeps{HV: f, Probe: f, Guest: f, Dir: dir,
+			Echo:  func(context.Context) []netip.Addr { return []netip.Addr{f.PublicIP} },
+			Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() }, ProofWait: time.Millisecond}
+	}
+	params := writeParamsIn(t, filepath.Join(dir, "guard"), nil)
+	if code := runVMSetupFor(context.Background(), params, winvm.ProductNames(), dir, nil, mk, &bytes.Buffer{}); code != vmExitOK {
+		t.Fatalf("setup exit %d", code)
+	}
+	rm := func(winvm.Names) winvm.RemoveDeps { return winvm.RemoveDeps{HV: f, Dir: dir} }
+	f.FailNext("RemoveSwitch", errors.New("a switch removal failed for the test"))
+	if code := runVMRemove(context.Background(), winvm.ProductNames().DataDir, rm, brokenStderr{}); code != vmExitFailed {
+		t.Fatalf("remove exit %d, want %d", code, vmExitFailed)
+	}
+	log, err := os.ReadFile(filepath.Join(dir, removeLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"removed: the VM", "vm-remove:", "a switch removal failed for the test"} {
+		if !strings.Contains(string(log), want) {
+			t.Fatalf("remove.log lacks %q:\n%s", want, log)
+		}
+	}
+	if code := runVMRemove(context.Background(), winvm.ProductNames().DataDir, rm, brokenStderr{}); code != vmExitOK {
+		t.Fatalf("second remove exit %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, removeLogFile)); !os.IsNotExist(err) {
+		t.Fatalf("a finished Remove left remove.log: %v", err)
+	}
+}

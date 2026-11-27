@@ -1043,7 +1043,9 @@ func (f *HyperV) EnsureNAT(_ context.Context, n winvm.Names, sub netip.Prefix, i
 		}
 		return have.ID, nil
 	}
-	id = f.newID()
+	// Windows keys a NAT's InstanceID by its name and store, never by an ID
+	// of its own.
+	id = n.NAT + ";0"
 	f.nats[n.NAT] = winvm.LiveNAT{ID: id, Name: n.NAT, Prefix: sub}
 	return id, nil
 }
@@ -1738,7 +1740,7 @@ func (f *HyperV) ClearProof(_ context.Context, n winvm.Names, owner string) (win
 func (f *HyperV) AddForeignNAT(name string, p netip.Prefix) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.nats[name] = winvm.LiveNAT{ID: f.newID(), Name: name, Prefix: p}
+	f.nats[name] = winvm.LiveNAT{ID: name + ";0", Name: name, Prefix: p}
 }
 
 // AddForeignRule adds a firewall rule to a group, with no owner token.

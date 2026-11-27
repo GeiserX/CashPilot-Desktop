@@ -257,15 +257,34 @@ func TestCheckVMHostRefusals(t *testing.T) {
 	}
 }
 
-func TestCheckVMHostRefusesReplacementNATWithNameDerivedID(t *testing.T) {
+// TestCheckVMHostAcceptsItsOwnNATOnARerun: Windows keys every NAT's ID by its
+// name ("name;0"). A Setup rerun must accept the NAT it recorded, or it
+// refuses its own NAT and tells the user to remove it by hand (live run 5). A
+// NAT that differs from the record in ID or prefix is still refused.
+func TestCheckVMHostAcceptsItsOwnNATOnARerun(t *testing.T) {
 	nat := LiveNAT{Name: "CashPilot-VM", ID: "CashPilot-VM;0", Prefix: pfx("172.31.250.0/29")}
 	r := CheckVMHost(vmHostInput(func(in *VMHostInput) {
 		in.RecordedNAT = nat
 		in.NATs = []LiveNAT{nat}
 	}))
-	got := checkOf(r, CheckNATExists)
-	if got.OK != No || !strings.Contains(got.Detail, `A NAT network named "CashPilot-VM" already exists on 172.31.250.0/29`) {
-		t.Errorf("preflight = %+v, want the foreign NAT refusal", got)
+	if got := checkOf(r, CheckNATExists); got.OK != Yes {
+		t.Errorf("preflight = %+v, want the recorded NAT accepted", got)
+	}
+	for name, live := range map[string]LiveNAT{
+		"other prefix": {Name: nat.Name, ID: nat.ID, Prefix: pfx("172.31.251.0/29")},
+		"other ID":     {Name: nat.Name, ID: "CashPilot-VM;1", Prefix: nat.Prefix},
+		"no record":    nat,
+	} {
+		r := CheckVMHost(vmHostInput(func(in *VMHostInput) {
+			if name != "no record" {
+				in.RecordedNAT = nat
+			}
+			in.NATs = []LiveNAT{live}
+		}))
+		got := checkOf(r, CheckNATExists)
+		if got.OK != No || !strings.Contains(got.Detail, `A NAT network named "CashPilot-VM" already exists`) {
+			t.Errorf("%s: preflight = %+v, want the foreign NAT refusal", name, got)
+		}
 	}
 }
 

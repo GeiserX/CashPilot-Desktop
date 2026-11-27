@@ -664,17 +664,33 @@ function New-NetNat { [pscustomobject]@{ InstanceID = 'created-id' } }
 	}
 }
 
-func TestEnsureNATScriptRefusesReplacementNATWithNameDerivedID(t *testing.T) {
+// TestEnsureNATScriptAcceptsItsOwnNameKeyedNAT: the live provider keys every
+// NAT's ID by its name. A Setup rerun reads back the NAT it recorded; one
+// with another prefix is refused.
+func TestEnsureNATScriptAcceptsItsOwnNameKeyedNAT(t *testing.T) {
 	const mock = `
+param($prefix)
 function Get-NetNat {
-  [pscustomobject]@{ Name = 'CashPilot-VM'; InstanceID = 'CashPilot-VM;0'; InternalIPInterfaceAddressPrefix = '172.31.250.0/29'; TcpEstablishedConnectionTimeout = 42 }
+  [pscustomobject]@{ Name = 'CashPilot-VM'; InstanceID = 'CashPilot-VM;0'; InternalIPInterfaceAddressPrefix = $prefix }
 }
 function New-NetNat { throw 'would create a second NAT' }
 `
-	code, out := runOwnedScriptWithFake(t, mock, scriptEnsureNAT,
-		map[string]any{"nat": "CashPilot-VM", "id": "CashPilot-VM;0", "prefix": "172.31.250.0/29"})
-	if code == 0 || !strings.Contains(string(out), `A NAT network named "CashPilot-VM" already exists on 172.31.250.0/29`) {
-		t.Fatalf("exit = %d, output = %s, want the foreign NAT refusal", code, out)
+	for _, tc := range []struct {
+		prefix string
+		ok     bool
+	}{{"172.31.250.0/29", true}, {"172.31.251.0/29", false}} {
+		code, out := runOwnedScriptWithFake(t, mock, scriptEnsureNAT,
+			map[string]any{"nat": "CashPilot-VM", "id": "CashPilot-VM;0", "prefix": "172.31.250.0/29"}, tc.prefix)
+		if tc.ok {
+			doc, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(out)))
+			if code != 0 || err != nil || !strings.Contains(string(doc), "CashPilot-VM;0") {
+				t.Fatalf("%s: exit = %d, output = %s, want the recorded NAT read back", tc.prefix, code, out)
+			}
+			continue
+		}
+		if code == 0 || !strings.Contains(string(out), `A NAT network named "CashPilot-VM" already exists on 172.31.251.0/29`) {
+			t.Fatalf("%s: exit = %d, output = %s, want the foreign NAT refusal", tc.prefix, code, out)
+		}
 	}
 }
 
