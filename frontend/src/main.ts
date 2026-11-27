@@ -695,7 +695,7 @@ function renderSecurityView(current: AppState) {
       <div class="main-content">
         ${topbar("security", current)}
         <main class="page-content">
-          ${pageHead("Security")}
+          ${pageHead(t("main.security.title"))}
           <div id="securevm-slot">${renderSecureVM(secureVM, { askUndo: secureVMAskUndo, removal: secureVMRemoval })}</div>
         </main>
         ${pageFoot()}
@@ -3833,6 +3833,8 @@ function scopeLabel(scope: string) {
       return t("main.scope.proxy");
     case "proxy test":
       return t("main.scope.proxyTest");
+    case "securevm":
+      return t("main.scope.securevm");
     case "restore":
       return t("main.scope.restore");
     case "runtime":
