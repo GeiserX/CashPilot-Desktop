@@ -2,6 +2,7 @@ package i18n
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -178,12 +179,13 @@ func (p *parser) skipSpace() {
 	}
 }
 
-func render(b *strings.Builder, locale string, nodes []node, args map[string]any, number *int64) {
+// number is the plural's value, already formatted, for # in its cases.
+func render(b *strings.Builder, locale string, nodes []node, args map[string]any, number *string) {
 	for _, n := range nodes {
 		switch {
 		case n.pound:
 			if number != nil {
-				b.WriteString(formatNumber(locale, *number))
+				b.WriteString(*number)
 			} else {
 				b.WriteByte('#')
 			}
@@ -204,6 +206,13 @@ func render(b *strings.Builder, locale string, nodes []node, args map[string]any
 			}
 			render(b, locale, body, args, number)
 		case n.kind == "plural":
+			// A fraction is not a count: it takes the other case and shows as
+			// written, in Go and in the frontend alike.
+			if x, ok := args[n.arg].(float64); ok && x != math.Trunc(x) {
+				shown := formatNumber(locale, x)
+				render(b, locale, n.cases["other"], args, &shown)
+				continue
+			}
 			count, ok := toInt(args[n.arg])
 			if !ok {
 				render(b, locale, n.cases["other"], args, nil)
@@ -216,7 +225,8 @@ func render(b *strings.Builder, locale string, nodes []node, args map[string]any
 			if !ok {
 				body = n.cases["other"]
 			}
-			render(b, locale, body, args, &count)
+			shown := formatNumber(locale, count)
+			render(b, locale, body, args, &shown)
 		}
 	}
 }
@@ -244,10 +254,10 @@ func toInt(v any) (int64, bool) {
 // formatNumber writes n with the locale's grouping and Latin digits, as the
 // frontend's Intl.NumberFormat does: current CLDR writes Latin digits for ar,
 // and the copy in x/text predates that.
-func formatNumber(locale string, n int64) string {
+func formatNumber[N int64 | float64](locale string, n N) string {
 	tag, err := language.Parse(locale + "-u-nu-latn")
 	if err != nil {
-		return strconv.FormatInt(n, 10)
+		return fmt.Sprint(n)
 	}
 	return message.NewPrinter(tag).Sprint(number.Decimal(n))
 }

@@ -293,6 +293,12 @@ export function format(
           render(node.cases.get("other")!, null);
           continue;
         }
+        // A fraction is not a count: it takes the other case and shows as
+        // written, here and in Go alike.
+        if (!Number.isInteger(v)) {
+          render(node.cases.get("other")!, v);
+          continue;
+        }
         const body = node.cases.get(`=${v}`) ?? node.cases.get(pluralCategory(locale, v)) ?? node.cases.get("other")!;
         render(body, v);
       }
