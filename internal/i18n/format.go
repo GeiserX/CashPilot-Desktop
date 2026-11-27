@@ -63,14 +63,22 @@ func (p *parser) parse(inCase bool) ([]node, bool) {
 				continue
 			}
 			if p.pos+1 < len(p.src) && strings.ContainsRune("{}#", rune(p.src[p.pos+1])) {
-				end := strings.IndexByte(p.src[p.pos+1:], '\'')
-				if end < 0 {
-					text.WriteString(p.src[p.pos+1:])
-					p.pos = len(p.src)
-					continue
+				// A quoted span runs to the next lone apostrophe; two apostrophes
+				// inside it are one, as everywhere else.
+				p.pos++
+				for p.pos < len(p.src) {
+					if p.src[p.pos] == '\'' {
+						if p.pos+1 < len(p.src) && p.src[p.pos+1] == '\'' {
+							text.WriteByte('\'')
+							p.pos += 2
+							continue
+						}
+						p.pos++
+						break
+					}
+					text.WriteByte(p.src[p.pos])
+					p.pos++
 				}
-				text.WriteString(p.src[p.pos+1 : p.pos+1+end])
-				p.pos += end + 2
 				continue
 			}
 			text.WriteByte(c)
