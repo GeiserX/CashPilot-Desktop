@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
@@ -178,5 +179,27 @@ func TestErrLineIsOneShortLine(t *testing.T) {
 	}
 	if got := errLine(strings.Repeat("é", 400)); len([]rune(got)) != 301 {
 		t.Fatalf("a long line is cut at 300 runes: %d", len([]rune(got)))
+	}
+}
+
+// A status written before this boot must not show the VM as online.
+func TestStatusFromBeforeBootIsDropped(t *testing.T) {
+	boot := time.Date(2026, 11, 28, 0, 31, 58, 0, time.UTC)
+	n := uint64(447)
+	fresh := func() securevm.Status {
+		return securevm.Status{Network: NetConnected, Fence: FenceHeld, Blocked: &n, StartError: "x"}
+	}
+	st := fresh()
+	fromBeforeBoot(&st, boot.Add(-30*time.Second), boot)
+	if st.Network != NetOff || st.Blocked != nil || st.StartError != "" || st.Reason != i18n.T("go.macvm.guardBooting") {
+		t.Fatalf("a status from before the boot stayed: %+v", st)
+	}
+	if st.Fence != FenceHeld {
+		t.Fatalf("the fence verdict changed: %q", st.Fence)
+	}
+	st = fresh()
+	fromBeforeBoot(&st, boot.Add(time.Minute), boot)
+	if st.Network != NetConnected || st.Blocked == nil || st.Reason != "" {
+		t.Fatalf("a status from after the boot changed: %+v", st)
 	}
 }
