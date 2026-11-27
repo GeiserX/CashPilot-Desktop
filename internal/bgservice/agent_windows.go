@@ -105,7 +105,8 @@ func (a *windowsAgent) Stop() error {
 // task that is not running makes /end fail, which is fine. If the state query
 // itself fails, Replace still registers and runs the new copy, and reports the
 // query error: /end has already stopped the old helper, so returning early would
-// leave no helper running.
+// leave no helper running. If the new registration cannot be written, Replace
+// starts the old one again.
 func (a *windowsAgent) Replace(execPath string, args []string) error {
 	_ = a.Stop()
 	var queryErr error
@@ -123,6 +124,11 @@ func (a *windowsAgent) Replace(execPath string, args []string) error {
 		}
 	}
 	if err := a.Install(execPath, args); err != nil {
+		// Install failed before or at /create, so the old registration is still
+		// there: start it again rather than leave no helper running.
+		if out, runErr := runSchtasks("/run", "/tn", a.taskName); runErr != nil {
+			return errors.Join(queryErr, err, fmt.Errorf("schtasks /run: %v: %s", runErr, strings.TrimSpace(out)))
+		}
 		return errors.Join(queryErr, err)
 	}
 	if out, err := runSchtasks("/run", "/tn", a.taskName); err != nil {
