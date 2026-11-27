@@ -413,8 +413,11 @@ func (r Runner) random(n int) []byte {
 
 func (r Runner) token() string { return "cpd-" + hex.EncodeToString(r.random(8)) }
 
-// port is a random port in 40000..59999.
-func (r Runner) port() uint16 { return 40000 + uint16(binary.BigEndian.Uint16(r.random(2))%20000) }
+// port is a random port in 40000..49151, below Windows' dynamic port range
+// (49152 and up). Hyper-V and WinNAT reserve blocks of that range, and a
+// listener there fails with "access ... forbidden by its access permissions"
+// (live run 5: a canary on 49697, inside the reserved 49675-49774).
+func (r Runner) port() uint16 { return 40000 + uint16(binary.BigEndian.Uint16(r.random(2))%9152) }
 
 // guid is a random GUID, for the hv_sock test service.
 func (r Runner) guid() string {

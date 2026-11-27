@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net"
 	"net/netip"
 	"os"
@@ -545,6 +547,60 @@ func TestPktmonRefusesMissingComponentExport(t *testing.T) {
 	r.answers = append(r.answers, `{"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7},{"id":9,"type":6,"name":"vEthernet","ifIndex":20}]}`, `{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
 	if _, err := capture.Stop(ctx); err == nil || !strings.Contains(err.Error(), "component 9") {
 		t.Fatalf("Stop = %v, want a missing export error for component 9", err)
+	}
+}
+
+// TestPktmonStopDeletesTheCaptureWindowsRewrote: pktmon stop writes the
+// capture to a new file at the same path (live run 5: the 16 MiB file from
+// start became a 34 KiB file with a new file ID). Stop must record the new
+// file, or it is never deleted: each proof left its capture folder behind,
+// and the next Setup's proof refused the folder its journal did not know.
+func TestPktmonStopDeletesTheCaptureWindowsRewrote(t *testing.T) {
+	ctx := context.Background()
+	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7}]}]`
+	h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true}`)
+	mockCaptureStart(h, r)
+	start := h.run
+	h.run = func(ctx context.Context, script string, arg []byte) ([]byte, error) {
+		if script == scriptPktmonStop {
+			var in map[string]string
+			if err := json.Unmarshal(arg, &in); err != nil {
+				return nil, err
+			}
+			// Keep the old file open so the new one cannot reuse its ID.
+			old, err := os.Open(in["etl"])
+			if err != nil {
+				return nil, err
+			}
+			defer old.Close()
+			if err := os.Rename(in["etl"], in["etl"]+".old"); err != nil {
+				return nil, err
+			}
+			defer os.Remove(in["etl"] + ".old")
+			if err := os.WriteFile(in["etl"], []byte("final capture"), 0o600); err != nil {
+				return nil, err
+			}
+		}
+		return start(ctx, script, arg)
+	}
+	p := &psProber{h: h, owner: tOwner, switchID: tSwitchID, tmp: filepath.Join(t.TempDir(), proofDir)}
+	capture, err := p.Pktmon(ctx, []PktFilter{{Addr: netip.MustParseAddr("192.0.2.50")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := capture.(*psCapture).dir
+	out := filepath.Join(dir, "c4.pcapng")
+	packet := ipv4TCP(netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.20"), 12345)
+	if err := os.WriteFile(out, pcapng(packet), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.answers = append(r.answers, `{"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7}]}`, `{"files":[{"id":4,"path":`+jsonQuote(out)+`}]}`)
+	if _, err := capture.Stop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+		left, _ := os.ReadDir(dir)
+		t.Fatalf("Stop left its capture folder: %v %v", err, left)
 	}
 }
 

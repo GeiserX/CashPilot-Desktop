@@ -475,6 +475,11 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		_ = j.remove(etlRel)
 		_ = j.remove(c.rel)
 	}()
+	// pktmon stop writes the capture to a new file at the same path, with a
+	// new file ID. Record it, or the capture is never deleted.
+	if _, err := j.note(etlRel); err != nil {
+		return nil, err
+	}
 	if lw.Filtered {
 		return nil, errors.New("pktmon did not prove it captured without host filters")
 	}

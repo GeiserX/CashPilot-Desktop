@@ -1,6 +1,7 @@
 package winvm
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -392,5 +393,17 @@ func TestParseCIMReadsTheMachineAndTheBoot(t *testing.T) {
 	}
 	if bootTime("25/11/2026 8:00:00") != "" {
 		t.Fatal("a localized date was read as a boot time")
+	}
+}
+
+// TestProofPortsStayBelowTheDynamicRange: Windows reserves blocks of its
+// dynamic port range (49152-65535) for Hyper-V and WinNAT, and a canary
+// there cannot listen. Every port the proof picks must stay below it.
+func TestProofPortsStayBelowTheDynamicRange(t *testing.T) {
+	for v := 0; v < 1<<16; v++ {
+		r := Runner{Rand: bytes.NewReader([]byte{byte(v >> 8), byte(v)})}
+		if p := r.port(); p < 40000 || p >= 49152 {
+			t.Fatalf("random %d gave port %d, want 40000..49151", v, p)
+		}
 	}
 }
