@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "runtime",
   "main.scope.serverCommands": "Perintah server",
   "main.scope.settings": "pengaturan",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "Bungkus baris",
+  "logs.empty": "(tidak ada log)"
 }

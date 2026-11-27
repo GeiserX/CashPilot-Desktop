@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "runtime",
   "main.scope.serverCommands": "Comandi del server",
   "main.scope.settings": "impostazioni",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "A capo automatico",
+  "logs.empty": "(nessun log)"
 }

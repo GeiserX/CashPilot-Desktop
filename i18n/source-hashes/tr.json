@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "d92c6a81b2ff",
   "main.scope.serverCommands": "2be7d4aaee5a",
   "main.scope.settings": "cde0fb0dec14",
-  "main.scope.worker": "87eba76e7f31"
+  "main.scope.worker": "87eba76e7f31",
+  "logs.wrap": "6727132ac799",
+  "logs.empty": "b52742a4ec0c"
 }

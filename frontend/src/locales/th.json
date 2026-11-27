@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "รันไทม์",
   "main.scope.serverCommands": "คำสั่งจากเซิร์ฟเวอร์",
   "main.scope.settings": "การตั้งค่า",
-  "main.scope.worker": "เวิร์กเกอร์"
+  "main.scope.worker": "เวิร์กเกอร์",
+  "logs.wrap": "ตัดบรรทัด",
+  "logs.empty": "(ไม่มีบันทึก)"
 }

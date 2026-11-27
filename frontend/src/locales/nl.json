@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "runtime",
   "main.scope.serverCommands": "serveropdrachten",
   "main.scope.settings": "instellingen",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "Regels afbreken",
+  "logs.empty": "(geen logboeken)"
 }
