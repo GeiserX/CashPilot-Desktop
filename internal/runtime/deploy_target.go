@@ -51,6 +51,11 @@ func (p *DockerProvider) DeployTarget(ctx context.Context, slug string) (string,
 	if err != nil {
 		return "", fmt.Errorf("could not look up the deploy container in Docker: %w", err)
 	}
+	// Deploy refuses to replace another CashPilot's container, so naming it here
+	// would ask the user to approve a replacement that never happens.
+	if err := refuseOtherCashPilot(containerName(slug), live.Container); err != nil {
+		return "", err
+	}
 	return live.Container.ID, nil
 }
 

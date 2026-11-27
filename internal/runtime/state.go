@@ -96,8 +96,8 @@ func readState(ctx context.Context, cli stateClient, slug, name string, targets 
 		return nil, nil, err
 	}
 	ctr := inspect.Container
-	if ctr.Config == nil || !IsDesktopContainer(ctr.Config.Labels) {
-		return nil, nil, fmt.Errorf("%s was not created by CashPilot Desktop, so it was left as it is", name)
+	if err := desktopOwned(name, ctr); err != nil {
+		return nil, nil, err
 	}
 	running := ctr.State != nil && ctr.State.Running && !ctr.State.Paused
 	if running {

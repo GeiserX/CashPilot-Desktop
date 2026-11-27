@@ -521,7 +521,7 @@ func undoRestore(ctx context.Context, cli restoreClient, slug, createdID string,
 		ids = append(ids, createdID)
 	}
 	if got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{}); err == nil && got.Container.ID != createdID &&
-		got.Container.Config != nil && got.Container.Config.Labels[LabelService] == slug &&
+		got.Container.Config != nil && IsDesktopContainer(got.Container.Config.Labels) && got.Container.Config.Labels[LabelService] == slug &&
 		got.Container.State != nil && got.Container.State.Status == "created" {
 		ids = append(ids, got.Container.ID)
 	}
@@ -564,7 +564,7 @@ func discardRestore(ctx context.Context, cli restoreClient, slug string, volumes
 	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	switch {
 	case err == nil:
-		if got.Container.Config == nil || got.Container.Config.Labels[LabelService] != slug {
+		if got.Container.Config == nil || !IsDesktopContainer(got.Container.Config.Labels) || got.Container.Config.Labels[LabelService] != slug {
 			return nil, fmt.Errorf("%s belongs to something else, so it was left as it is", name)
 		}
 		if runsOrRestarts(got.Container) {

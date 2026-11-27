@@ -350,7 +350,7 @@ func TestTheRevealReadsOnlyItsOwnContainer(t *testing.T) {
 	f.files["sia-hostd-data/hostd.yml"] = []byte("recoveryPhrase: " + testPhraseA + "\n")
 	f.containers["cashpilot-sia-hostd"] = client.ContainerCreateOptions{
 		Name:       "cashpilot-sia-hostd",
-		Config:     &container.Config{Labels: map[string]string{LabelService: "sia-hostd"}},
+		Config:     &container.Config{Labels: map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: "sia-hostd"}},
 		HostConfig: &container.HostConfig{Mounts: seedMounts},
 	}
 	got, err := readWalletSeed(context.Background(), f, "sia-hostd", seedService())

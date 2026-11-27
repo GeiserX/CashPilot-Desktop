@@ -462,8 +462,8 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// fails after it: the owner was never shown it (WalletResult.Undo).
 	defer func() { retErr = wallet.Undo(retErr) }()
 	if inspectErr == nil {
-		if workerContainer(live.Container) {
-			return ContainerInfo{}, fmt.Errorf("%s was made by a CashPilot worker on this Docker, not by CashPilot Desktop. It was left running; deploy it from that worker, or remove it there first", name)
+		if err := refuseOtherCashPilot(name, live.Container); err != nil {
+			return ContainerInfo{}, err
 		}
 		if live.Container.Config != nil {
 			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
@@ -1855,8 +1855,8 @@ func managedContainerMounts(ctx context.Context, cli inspectClient, name string)
 		return nil, err
 	}
 	ctr := inspect.Container
-	if ctr.Config == nil || !IsDesktopContainer(ctr.Config.Labels) {
-		return nil, fmt.Errorf("%s was not created by CashPilot Desktop, so it was left as it is", name)
+	if err := desktopOwned(name, ctr); err != nil {
+		return nil, err
 	}
 	return ctr.Mounts, nil
 }
