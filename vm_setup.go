@@ -180,7 +180,10 @@ func runVMSetupFor(ctx context.Context, params string, n winvm.Names, dir string
 	logger := log.New(errOut, "", log.LstdFlags)
 	if f, err := winvm.OpenAppend(filepath.Join(d.Dir, setupLogFile)); err == nil {
 		defer f.Close()
-		logger = log.New(io.MultiWriter(errOut, f), "", log.LstdFlags)
+		// setup.ps1 starts this GUI-subsystem exe hidden, with no standard
+		// error, so writes to errOut fail. io.MultiWriter stops at the first
+		// failing writer: the log goes first and errOut never stops it.
+		logger = log.New(io.MultiWriter(f, bestEffort{errOut}), "", log.LstdFlags)
 	}
 	d.Exe, d.Logf = n.GuardExe(), logger.Printf
 	logger.Printf("VM storage volume %s (private directory under %s, 128 GiB dynamic disk)", filepath.VolumeName(dir), dir)
@@ -195,6 +198,15 @@ func runVMSetupFor(ctx context.Context, params string, n winvm.Names, dir string
 	}
 	logger.Printf("setup done: network=%s fence=%s", res.Status.Network, res.Status.Fence)
 	return vmExitOK
+}
+
+// bestEffort writes to w and reports success even when w fails, so a missing
+// standard error never stops the writers after it.
+type bestEffort struct{ w io.Writer }
+
+func (b bestEffort) Write(p []byte) (int, error) {
+	_, _ = b.w.Write(p)
+	return len(p), nil
 }
 
 // namesForDir is the instance whose data folder dir is: the product's or a

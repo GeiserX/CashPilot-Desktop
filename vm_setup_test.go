@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -69,6 +70,40 @@ func TestRunVMSetupBuildsWithBootstrapParams(t *testing.T) {
 	}, &rout)
 	if code != vmExitOK || !strings.Contains(rout.String(), "removed: the VM") {
 		t.Fatalf("remove exit %d:\n%s", code, rout.String())
+	}
+}
+
+// brokenStderr is the standard error of a GUI-subsystem exe that setup.ps1
+// starts hidden: Windows gives it no handle, so every write fails.
+type brokenStderr struct{}
+
+func (brokenStderr) Write([]byte) (int, error) { return 0, os.ErrInvalid }
+
+// TestSetupLogKeepsTheReasonWithoutStderr: the bootstrap starts the setup role
+// with no standard error. setup.log is then the only place the reason for a
+// refusal can reach, so a failing stderr must not stop the log file. On the
+// live run the log stayed empty for every refusal.
+func TestSetupLogKeepsTheReasonWithoutStderr(t *testing.T) {
+	f := hvfake.New()
+	dir := canonicalTempDir(t)
+	f.FailNext("Inventory", errors.New("an inventory read failed for the test"))
+	mk := func(winvm.Names) winvm.BuildDeps {
+		return winvm.BuildDeps{HV: f, Probe: f, Guest: f, Dir: dir,
+			Echo:  func(context.Context) []netip.Addr { return []netip.Addr{f.PublicIP} },
+			Sleep: func(ctx context.Context, _ time.Duration) error { return ctx.Err() }, ProofWait: time.Millisecond}
+	}
+	params := writeParamsIn(t, filepath.Join(dir, "guard"), nil)
+	if code := runVMSetupFor(context.Background(), params, winvm.ProductNames(), dir, nil, mk, brokenStderr{}); code != vmExitFailed {
+		t.Fatalf("exit %d, want %d", code, vmExitFailed)
+	}
+	log, err := os.ReadFile(filepath.Join(dir, setupLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"VM storage volume", "setup failed:", "an inventory read failed for the test"} {
+		if !strings.Contains(string(log), want) {
+			t.Fatalf("setup.log lacks %q:\n%s", want, log)
+		}
 	}
 }
 
