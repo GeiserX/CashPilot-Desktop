@@ -120,8 +120,13 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[ch] || ch);
 }
 
+// A message's own words: & < > and " are escaped; the apostrophe is kept, so
+// "router's" draws the same bytes as the English template did. Every attribute
+// in this app is double-quoted, so an apostrophe cannot end one.
 function escapeText(text: string): string {
-  return escapeHtml(text).replace(/&lt;(\/?)(strong|em|code|b|kbd)&gt;/g, "<$1$2>");
+  return text
+    .replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[ch] || ch)
+    .replace(/&lt;(\/?)(strong|em|code|b|kbd)&gt;/g, "<$1$2>");
 }
 
 /** The CLDR cardinal category of n in locale: zero, one, two, few, many or other. */

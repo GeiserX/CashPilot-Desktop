@@ -62,6 +62,9 @@ check("ht keeps the bare allowed tags", html.includes("<strong>") && html.includ
 check("ht escapes an argument", html.includes("&lt;script&gt;") && !html.includes("<script>"), html);
 check("ht passes a raw() argument through", ht("language.system", { language: raw("<a href=\"#\">x</a>") }).includes("<a href=\"#\">x</a>"));
 
+setLocale("en", {});
+check("ht keeps a plain apostrophe as it is", ht("language.help").includes("computer's"), ht("language.help"));
+
 // Right to left only for Arabic.
 setLocale("ar", {});
 check("ar is right to left", textDirection() === "rtl");
