@@ -488,8 +488,10 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		return nil, err
 	}
 	want := []int{}
-	for id := range comps {
-		want = append(want, id)
+	for id, c := range comps {
+		if !c.Twin {
+			want = append(want, id)
+		}
 	}
 	slices.Sort(want)
 	for _, id := range want {

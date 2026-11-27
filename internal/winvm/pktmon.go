@@ -21,6 +21,10 @@ type pktComp struct {
 	Driver  string
 	IfIndex int
 	Type    int
+	// Twin is a NIC's NDIS view under its SecondaryId. The trace can name
+	// it (setup 1i), but every packet it sees also passes the NIC's own
+	// entry, so the proof neither requires nor exports it.
+	Twin bool
 }
 
 // maxPktmonList caps the component list.
@@ -81,7 +85,7 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 			}
 		case map[string]any:
 			var c pktComp
-			hasID, secondary := false, false
+			hasID, secondary, secondaryID := false, false, 0
 			for k, e := range x {
 				switch strings.ToLower(k) {
 				case "id":
@@ -96,6 +100,7 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 					c.Driver, _ = e.(string)
 				case "secondaryid":
 					secondary = true
+					secondaryID, _ = jsonInt(e)
 				case "ifindex":
 					c.IfIndex, _ = jsonInt(e)
 				case "properties":
@@ -114,9 +119,15 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 				}
 			}
 			if hasID && c.Name != "" && c.ID > 0 && c.isNIC() {
-				if _, seen := out[c.ID]; !seen || (twin[c.ID] && !secondary) {
+				if prev, seen := out[c.ID]; !seen || prev.Twin || (twin[c.ID] && !secondary) {
 					out[c.ID] = c
 					twin[c.ID] = secondary
+				}
+				// A NIC's own entry, or another NIC, always wins over a twin.
+				if secondary && secondaryID > 0 && secondaryID != c.ID {
+					if _, seen := out[secondaryID]; !seen {
+						out[secondaryID] = pktComp{ID: secondaryID, Name: c.Name, Driver: c.Driver, IfIndex: c.IfIndex, Type: 2, Twin: true}
+					}
 				}
 			}
 			for _, e := range x {
@@ -147,7 +158,7 @@ func reconcilePktmon(want map[int]pktComp, actual []pktComp) error {
 		seen[got.ID] = true
 	}
 	for id := range want {
-		if !seen[id] {
+		if !seen[id] && !want[id].Twin {
 			return fmt.Errorf("pktmon trace is missing NIC %d (%s)", id, want[id].Name)
 		}
 	}

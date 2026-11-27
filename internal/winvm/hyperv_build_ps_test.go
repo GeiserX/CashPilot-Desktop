@@ -383,6 +383,24 @@ func TestReconcilePktmonWithWindowsOutput(t *testing.T) {
 	if err := reconcilePktmon(want, etl[1:]); err == nil {
 		t.Fatal("a trace missing a NIC was accepted")
 	}
+	// Setup 1i: the trace also named the host vNIC's NDIS twin by its
+	// SecondaryId, which the list gives no entry of its own.
+	twin := append(slices.Clone(etl), pktComp{ID: 153, Type: 2, Driver: "VmsProxyHNic.sys", Name: "Hyper-V Virtual Ethernet Adapter #4", IfIndex: 30})
+	if err := reconcilePktmon(want, twin); err != nil {
+		t.Fatalf("the host vNIC's NDIS twin did not reconcile: %v", err)
+	}
+	twin[len(twin)-1].IfIndex = 12
+	if err := reconcilePktmon(want, twin); err == nil {
+		t.Fatal("an NDIS twin on another interface was accepted")
+	}
+	for id, c := range want {
+		if c.Twin && id != 153 && id != 149 && id != 5 {
+			t.Errorf("component %d is marked a twin: %+v", id, c)
+		}
+	}
+	if c := want[168]; c.Twin || c.Type != 6 {
+		t.Errorf("the host vNIC lost its own entry: %+v", c)
+	}
 }
 
 // TestProberSeam runs each Prober script once: the holes, the canary with
