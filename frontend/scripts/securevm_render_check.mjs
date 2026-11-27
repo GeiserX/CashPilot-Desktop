@@ -12,7 +12,8 @@
 //
 //   node scripts/securevm_render_check.mjs      # against ./.harness-build
 
-import { renderSecureVM, renderSecureVMRemoval, secureVMGreen, SECUREVM_TEXT } from "../.harness-build/render/securevm.js";
+import { renderSecureVM, renderSecureVMRemoval, secureVMGreen } from "../.harness-build/render/securevm.js";
+import { t } from "../.harness-build/render/i18n.js";
 
 let failures = 0;
 let checks = 0;
@@ -44,7 +45,7 @@ for (const [network, fence] of [["disconnected", "cut"], ["connected", "reprove-
   check(`RULE 1: ${network} + ${fence} is not green`, !secureVMGreen(base({ network, fence })));
 }
 const green = renderSecureVM(base(), { now });
-check("RULE 1: the green state names itself", green.includes('data-securevm-state="connected/held"') && green.includes(SECUREVM_TEXT.network.connected), green);
+check("RULE 1: the green state names itself", green.includes('data-securevm-state="connected/held"') && green.includes(t("securevm.network.connected")) && green.includes("Online"), green);
 check("RULE 1: the green state has no warning tone", !/class="text-warn" data-securevm-state/.test(green));
 const cut = renderSecureVM(base({ network: "disconnected", fence: "cut", reason: "the fence changed, so the Secure VM is cut off the network: rules" }), { now });
 check("RULE 1: a cut fence warns", /class="text-warn" data-securevm-state="disconnected\/cut"/.test(cut), cut);
@@ -54,6 +55,9 @@ check("RULE 1: a cut fence shows the guard's reason", cut.includes("cut off the 
 const noCount = renderSecureVM(base({ blocked: null }), { now });
 check("RULE 2: an unknown drop count is an em dash", noCount.includes("Blocked packets: —") && !/blocked 0 packets/.test(noCount), noCount);
 check("RULE 2: a real zero is shown as zero", renderSecureVM(base({ blocked: 0 }), { now }).includes("blocked 0 packets"));
+check("one dropped packet reads as one packet", renderSecureVM(base({ blocked: 1 }), { now }).includes("blocked 1 packet since"));
+const hostile = renderSecureVM(base({ lastError: '<img src=x onerror=alert(1)>' }), { now });
+check("an error from the guest is escaped", hostile.includes("&lt;img") && !hostile.includes("<img"), hostile);
 const unknownApp = renderSecureVM(base({ apps: [app({ placement: "vm", installed: "yes", running: "unknown", signedIn: "unknown", layers: ["secure-vm", "vm-fence"] })] }), { now });
 check("RULE 2: an unknown sign-in reads unknown, not no", unknownApp.includes("Signed in: unknown") && !unknownApp.includes("Signed in: no"), unknownApp);
 
@@ -73,7 +77,7 @@ check("an earner in the VM shows its placement", inVM.includes('data-placement="
 const signedIn = renderSecureVM(base({ apps: [app({ placement: "vm", installed: "yes", running: "yes", signedIn: "yes", layers: ["secure-vm", "vm-fence"] })] }), { now });
 check("a signed-in earner offers no Sign in", !signedIn.includes("data-securevm-signin"));
 const onHost = renderSecureVM(base({ apps: [app({ placement: "host" })] }), { now });
-check("an earner on this computer shows no VM status", !onHost.includes("Signed in:") && onHost.includes("None beyond this computer"));
+check("an earner on this computer shows no VM status", !onHost.includes("Signed in:") && onHost.includes("Protection: none beyond this computer"));
 
 // Install, unavailable, errors, busy
 const absent = renderSecureVM(base({ installed: false, network: "absent", fence: "unproven" }), { now });

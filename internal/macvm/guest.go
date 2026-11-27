@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
 )
 
@@ -109,29 +110,9 @@ func (g Guest) Provision(ctx context.Context) (bool, error) {
 	stdin := p + "\n" + hex.EncodeToString(kcPassword(p)) + "\n"
 	out, err := g.Exec(ctx, stdin, provisionScript)
 	if err != nil {
-		return false, fmt.Errorf("could not prepare the Secure VM: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T("go.macvm.noPrepare"), err)
 	}
 	return strings.Contains(out, "PROVISIONED new"), nil
-}
-
-// Reboot restarts the guest from inside, so the earner logs in. The Tart
-// process, its softnet and the bridge port stay, so the fence stays too.
-// `shutdown -r` through the agent never returns, so the call is cut short.
-func (g Guest) Reboot(ctx context.Context) error {
-	c, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, _ = g.Exec(c, "", "/sbin/shutdown -r now")
-	cancel()
-	_ = sleep(ctx, 15*time.Second)
-	deadline := time.Now().Add(agentWait)
-	for !g.Ready(ctx) {
-		if time.Now().After(deadline) {
-			return errors.New("the Secure VM did not come back after its restart")
-		}
-		if err := sleep(ctx, 5*time.Second); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Rosetta installs Rosetta in the guest. Theta and UpRock are Intel-only.
@@ -140,10 +121,10 @@ func (g Guest) Rosetta(ctx context.Context) error {
 /usr/sbin/softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1
 /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null && echo ROSETTA ok || echo ROSETTA missing`)
 	if err != nil {
-		return fmt.Errorf("could not install Rosetta in the Secure VM: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("go.macvm.noRosetta"), err)
 	}
 	if !strings.Contains(out, "ROSETTA ok") {
-		return errors.New("Rosetta did not install in the Secure VM. Theta and UpRock need it. Check the internet connection and try again")
+		return errors.New(i18n.T("go.macvm.rosettaMissing"))
 	}
 	return nil
 }
@@ -180,11 +161,11 @@ func (g Guest) InstallApp(ctx context.Context, slug string, m catalog.GuestMacOS
 	case result == "ok":
 		return nil
 	case strings.HasPrefix(result, "refused: "):
-		return fmt.Errorf("the Secure VM refused %s: %s", m.App, strings.TrimPrefix(result, "refused: "))
+		return errors.New(i18n.T("go.macvm.appRefused", "app", m.App, "why", strings.TrimPrefix(result, "refused: ")))
 	case err != nil:
-		return fmt.Errorf("could not install %s in the Secure VM: %w", m.App, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.macvm.noInstallApp", "app", m.App), err)
 	}
-	return fmt.Errorf("could not install %s in the Secure VM", m.App)
+	return errors.New(i18n.T("go.macvm.noInstallApp", "app", m.App))
 }
 
 // RemoveApp stops an earner and takes it out of the guest. Its own data (the
