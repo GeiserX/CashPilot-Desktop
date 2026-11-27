@@ -3606,18 +3606,33 @@ function setOutput(value: string) {
 }
 
 const logWrapKey = "cashpilot-log-wrap";
+// The choice is only remembered: a webview that refuses storage still shows logs.
+let logWrapFallback = false;
+
+function logWrapOn(): boolean {
+  try {
+    return localStorage.getItem(logWrapKey) === "1";
+  } catch {
+    return logWrapFallback;
+  }
+}
 
 // A log goes into the same box as action messages, one entry per line.
 function setLogs(value: string) {
   const out = document.querySelector<HTMLElement>("#service-output");
   if (!out) return;
-  const wrap = localStorage.getItem(logWrapKey) === "1";
+  const wrap = logWrapOn();
   out.innerHTML = renderLogLines(value || "(no logs)", new Date(), wrap);
   out.classList.add("output-logs");
   out.classList.toggle("log-wrap", wrap);
   out.querySelector<HTMLButtonElement>("[data-log-wrap]")?.addEventListener("click", (event) => {
     const on = !out.classList.contains("log-wrap");
-    localStorage.setItem(logWrapKey, on ? "1" : "0");
+    logWrapFallback = on;
+    try {
+      localStorage.setItem(logWrapKey, on ? "1" : "0");
+    } catch {
+      // kept in memory
+    }
     out.classList.toggle("log-wrap", on);
     (event.currentTarget as HTMLButtonElement).setAttribute("aria-pressed", String(on));
     out.scrollTop = out.scrollHeight;
