@@ -1,0 +1,11 @@
+{
+  "language.name": "Bahasa Indonesia",
+  "language.title": "Bahasa",
+  "language.help": "CashPilot Desktop memakai bahasa komputer Anda jika tersedia. Pilih bahasa lain di sini.",
+  "language.system": "Bahasa sistem ({language})",
+  "language.systemNone": "Bahasa sistem (tidak tersedia, jadi bahasa Inggris)",
+  "language.error.unsupported": "CashPilot Desktop tidak punya bahasa dengan kode {code}.",
+  "tray.show": "Tampilkan CashPilot Desktop",
+  "tray.quit": "Keluar dari CashPilot Desktop",
+  "time.justNow": "baru saja"
+}

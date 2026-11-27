@@ -1,0 +1,11 @@
+{
+  "language.name": "Русский",
+  "language.title": "Язык",
+  "language.help": "CashPilot Desktop использует язык вашего компьютера, если он доступен. Выберите здесь другой.",
+  "language.system": "Язык системы ({language})",
+  "language.systemNone": "Язык системы (недоступен, поэтому английский)",
+  "language.error.unsupported": "В CashPilot Desktop нет языка с кодом {code}.",
+  "tray.show": "Показать CashPilot Desktop",
+  "tray.quit": "Выйти из CashPilot Desktop",
+  "time.justNow": "только что"
+}

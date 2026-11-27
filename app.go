@@ -27,6 +27,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
 	"github.com/GeiserX/CashPilot-Desktop/internal/health"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
@@ -226,6 +227,8 @@ func (a *App) startCore(ctx context.Context) error {
 		return err
 	}
 	a.cfg = cfg
+	// Go text (errors, notices, the tray) follows the saved language, else the OS.
+	a.applyLanguage(cfg.Config().Language, nil)
 
 	st, err := store.Open(cfg.DataDir())
 	if err != nil {
@@ -389,7 +392,7 @@ func (a *App) DomReady(ctx context.Context) {
 	fitMainWindow(ctx)
 	wailsruntime.WindowShow(ctx)
 	PositionMainWindowOnPrimaryScreen()
-	InstallTrayIcon(a.trayIcon)
+	InstallTrayIcon(a.trayIcon, i18n.T("tray.show"), i18n.T("tray.quit"))
 	// A helper registered by another copy of the app follows this one (helper_follow.go).
 	go a.keepHelperOnThisCopy()
 }

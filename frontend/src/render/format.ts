@@ -23,6 +23,8 @@ export function escapeHtml(value: string | undefined | null): string {
   );
 }
 
+import { intlLocale, t } from "./i18n.js";
+
 const miningCurrencies = new Map([
   ["BTC", 8],
   ["XMR", 12],
@@ -67,13 +69,13 @@ export function formatBalance(value: number, currency: string, pool = false): st
   const amount = Number.isFinite(value) ? value : 0;
   const precision = miningBalancePrecision(code);
   if (precision !== undefined) {
-    const native = new Intl.NumberFormat(undefined, { maximumFractionDigits: precision }).format(amount);
+    const native = new Intl.NumberFormat(intlLocale(), { maximumFractionDigits: precision }).format(amount);
     return `${native} ${code}`;
   }
   // A pool pays in a coin, never in fiat.
   if (pool) return `${coinAmount(amount)} ${code}`;
   try {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat(intlLocale(), {
       style: "currency",
       currency: code,
       maximumFractionDigits: 2,
@@ -84,7 +86,8 @@ export function formatBalance(value: number, currency: string, pool = false): st
 }
 
 /**
- * Turn an RFC3339 stamp into "just now" / "12 minutes ago".
+ * Turn an RFC3339 stamp into "just now" / "12 minutes ago", in the current
+ * language.
  *
  * An unparseable value yields "" so the caller can omit the phrase entirely
  * rather than render "Invalid Date".
@@ -93,11 +96,11 @@ export function relativeTime(iso: string, now: number = Date.now()): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
   const seconds = Math.max(0, Math.round((now - then) / 1000));
-  if (seconds < 60) return "just now";
+  if (seconds < 60) return t("time.justNow");
+  const ago = new Intl.RelativeTimeFormat(intlLocale(), { numeric: "always" });
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  if (minutes < 60) return ago.format(-minutes, "minute");
   const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.round(hours / 24);
-  return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (hours < 24) return ago.format(-hours, "hour");
+  return ago.format(-Math.round(hours / 24), "day");
 }

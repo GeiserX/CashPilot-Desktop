@@ -1,0 +1,11 @@
+{
+  "language.name": "हिन्दी",
+  "language.title": "भाषा",
+  "language.help": "CashPilot Desktop उपलब्ध होने पर आपके कंप्यूटर की भाषा का उपयोग करता है। यहाँ कोई दूसरी भाषा चुनें।",
+  "language.system": "सिस्टम की भाषा ({language})",
+  "language.systemNone": "सिस्टम की भाषा (उपलब्ध नहीं, इसलिए अंग्रेज़ी)",
+  "language.error.unsupported": "CashPilot Desktop में {code} कोड वाली कोई भाषा नहीं है।",
+  "tray.show": "CashPilot Desktop दिखाएँ",
+  "tray.quit": "CashPilot Desktop बंद करें",
+  "time.justNow": "अभी-अभी"
+}

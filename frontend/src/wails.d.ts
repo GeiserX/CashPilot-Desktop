@@ -836,6 +836,19 @@ export interface CollectorSetting {
   collector: string;
 }
 
+// LanguageState mirrors the Go LanguageState (i18n_app.go).
+export interface LanguageState {
+  /** The saved choice, or "" to follow the system. */
+  preference: string;
+  /** The locale in use now. */
+  active: string;
+  /** What the OS (or the webview) asks for, or "" when we ship none of its languages. */
+  system: string;
+  languages: { code: string; name: string }[];
+  /** Active's translations; English fills the rest. Absent for English. */
+  messages?: Record<string, string> | null;
+}
+
 export interface SettingsState {
   environment: EnvSetting[];
   collectors: CollectorSetting[];

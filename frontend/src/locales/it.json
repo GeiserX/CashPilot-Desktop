@@ -1,0 +1,11 @@
+{
+  "language.name": "Italiano",
+  "language.title": "Lingua",
+  "language.help": "CashPilot Desktop usa la lingua del tuo computer, se disponibile. Scegline un'altra qui.",
+  "language.system": "Lingua di sistema ({language})",
+  "language.systemNone": "Lingua di sistema (non disponibile, quindi inglese)",
+  "language.error.unsupported": "CashPilot Desktop non ha nessuna lingua con il codice {code}.",
+  "tray.show": "Mostra CashPilot Desktop",
+  "tray.quit": "Esci da CashPilot Desktop",
+  "time.justNow": "proprio ora"
+}

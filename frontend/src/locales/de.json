@@ -1,0 +1,11 @@
+{
+  "language.name": "Deutsch",
+  "language.title": "Sprache",
+  "language.help": "CashPilot Desktop verwendet die Sprache Ihres Computers, wenn es sie anbietet. Wählen Sie hier eine andere.",
+  "language.system": "Systemsprache ({language})",
+  "language.systemNone": "Systemsprache (nicht verfügbar, daher Englisch)",
+  "language.error.unsupported": "CashPilot Desktop hat keine Sprache mit dem Code {code}.",
+  "tray.show": "CashPilot Desktop anzeigen",
+  "tray.quit": "CashPilot Desktop beenden",
+  "time.justNow": "gerade eben"
+}
