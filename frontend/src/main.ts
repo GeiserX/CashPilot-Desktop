@@ -96,7 +96,7 @@ import {
   GetLanguageState,
   SetLanguage,
 } from "../wailsjs/go/main/App";
-import { currentLocale, setLocale, textDirection } from "./render/i18n";
+import { currentLocale, ht, setLocale, t, textDirection } from "./render/i18n";
 import { renderLanguageCard } from "./render/language";
 import { renderFleetSection } from "./render/fleet";
 import { renderServerCommands } from "./render/server_commands";
@@ -122,7 +122,7 @@ import { runSave, saveNoteSlot } from "./render/savenote";
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
 import { renderServicesTable } from "./render/services";
-import { catalogFilterTabs, renderCatalogTable, wizardCategoryChoices, wizardCategoryCopy } from "./render/catalog";
+import { catalogFilterTabs, kindLabel, renderCatalogTable, wizardCategoryChoices, wizardCategoryCopy } from "./render/catalog";
 import { wireCatalogRows } from "./render/catalog_open";
 import { wireOpenLinks } from "./render/open_links";
 import { renderAddServiceButton, renderTopnav } from "./render/topbar";
@@ -412,7 +412,7 @@ async function hostCheck(): Promise<HostCheckResult> {
       throw error;
     }
     if (publish(result) || !state) return result;
-    if (attempt === 3) throw new Error("Docker changed while CashPilot was checking it. Check again");
+    if (attempt === 3) throw new Error(t("main.hostCheck.changed"));
   }
 }
 
@@ -558,11 +558,11 @@ function renderOnboarding(current: AppState) {
   const card = runtimeCard(runtime, {checking});
   root.innerHTML = gatePage(gateBar(), `
           ${renderGateSteps(firstRunSteps(firstRunPath), "runtime")}
-          <h1 class="gate-title">Put your idle machine to work</h1>
-          <p class="gate-lede">Share spare bandwidth, storage, CPU, RAM, or GPU with real networks, then track what each service earns from one place.</p>
+          <h1 class="gate-title">${ht("main.onboarding.title")}</h1>
+          <p class="gate-lede">${ht("main.onboarding.lede")}</p>
           <div id="runtime-card-slot">${card.html}</div>
           <div class="gate-actions">
-            <button class="btn btn-primary btn-lg" id="continue-btn" ${card.canContinue ? "" : "disabled"}>Open the dashboard</button>
+            <button class="btn btn-primary btn-lg" id="continue-btn" ${card.canContinue ? "" : "disabled"}>${ht("main.onboarding.openDashboard")}</button>
             ${checklist ? "" : checkAgainButton("refresh-runtime", firstRunChecking || checking)}
           </div>
           <div id="docker-guide"></div>
@@ -624,9 +624,9 @@ function renderRuntimeView(current: AppState) {
       <div class="main-content">
         ${topbar("runtime", current)}
         <main class="page-content">
-          ${pageHead("Runtime")}
+          ${pageHead(t("main.runtime.title"))}
           <div id="runtime-card-slot">${card.html}</div>
-          <div id="docker-guide"><p class="muted compact-copy">Checking this computer…</p></div>
+          <div id="docker-guide"><p class="muted compact-copy">${ht("main.runtime.checking")}</p></div>
           <div id="install-guides" class="guide-grid"></div>
         </main>
         ${pageFoot()}
@@ -716,20 +716,20 @@ function wireJoinForm(scope: ParentNode, onBack: () => void, onContinue: () => v
     const out = form.querySelector<HTMLElement>("#join-result")!;
     const field = (name: string) => form.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[name=${name}]`)!;
     connect.disabled = true;
-    connect.textContent = "Connecting\u2026";
+    connect.textContent = t("main.join.connecting");
     let result: JoinResult;
     try {
       result = await JoinCashPilot({block: field("block").value, url: field("url").value, key: field("key").value});
     } catch (error) {
       showErrorToast({scope: "mode", error: String(error)});
       connect.disabled = false;
-      connect.textContent = "Connect";
+      connect.textContent = t("main.join.connect");
       return;
     }
     out.innerHTML = renderJoinOutcome(result);
     if (!result.ok) {
       connect.disabled = false;
-      connect.textContent = "Connect";
+      connect.textContent = t("main.join.connect");
       return;
     }
     field("block").value = "";
@@ -755,7 +755,7 @@ function renderGuides(guides: InstallGuide[]) {
     <article class="guide">
       <h3>${escapeHtml(guide.name)}</h3>
       <p>${escapeHtml(guide.description)}</p>
-      <button class="guide-link" data-url="${escapeHtml(guide.url)}">Open install guide</button>
+      <button class="guide-link" data-url="${escapeHtml(guide.url)}">${ht("main.guides.open")}</button>
       ${(guide.commands || []).map((cmd) => `<code>${escapeHtml(cmd)}</code>`).join("")}
       ${(guide.notes || []).map((note) => `<small>${escapeHtml(note)}</small>`).join("")}
     </article>
@@ -827,33 +827,33 @@ function renderDashboard(current: AppState) {
       <div class="main-content">
         ${topbar("dashboard", current)}
         <main class="page-content">
-        ${pageHead("Dashboard", `
-          <button class="btn btn-ghost btn-sm" id="refresh">Refresh</button>
+        ${pageHead(t("main.dashboard.title"), `
+          <button class="btn btn-ghost btn-sm" id="refresh">${ht("main.dashboard.refresh")}</button>
         `)}
         ${current.pairing ? renderJoinedBanner(current.pairing) : ""}
         ${current.serverCommands ? renderServerCommands(current.serverCommands) : ""}
         <!-- The money first and largest; the container count sits at the far
              end, smaller, because it answers a different question. -->
-        <section class="stats-grid money-strip" aria-label="Earnings">
+        <section class="stats-grid money-strip" aria-label="${ht("main.dashboard.earningsLabel")}">
           <div class="stat-card stat-card-balance">
-            <div class="stat-label">Balance</div>
+            <div class="stat-label">${ht("main.dashboard.balance")}</div>
             <div class="stat-value">${escapeHtml(totalText(summary, disp))}</div>
             <div class="stat-note">${escapeHtml(totalCaption(summary))}</div>
             ${allTimeNote(summary, disp) ? `<div class="stat-note">${escapeHtml(allTimeNote(summary, disp))}</div>` : ""}
           </div>
           <div class="stat-card">
-            <div class="stat-label">Today</div>
+            <div class="stat-label">${ht("main.dashboard.today")}</div>
             <div class="stat-value">${escapeHtml(formatBalance(summary?.today ?? 0, disp))}</div>
-            <div class="stat-change">${escapeHtml(changeCaption(summary?.todayChange ?? 0, "vs yesterday"))}</div>
+            <div class="stat-change">${escapeHtml(changeCaption(summary?.todayChange ?? 0, "day"))}</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">This month</div>
+            <div class="stat-label">${ht("main.dashboard.month")}</div>
             <div class="stat-value">${escapeHtml(formatBalance(summary?.month ?? 0, disp))}</div>
-            <div class="stat-change">${escapeHtml(summary?.monthChange ? changeCaption(summary.monthChange, "vs last month") : "so far this month")}</div>
+            <div class="stat-change">${escapeHtml(summary?.monthChange ? changeCaption(summary.monthChange, "month") : t("main.dashboard.soFarThisMonth"))}</div>
           </div>
           <div class="stat-card stat-card-ops">
-            <div class="stat-label">Containers up</div>
-            <div class="stat-value">${upCount}${containers.length !== upCount ? ` <span class="stat-qual">of ${containers.length}</span>` : ""}</div>
+            <div class="stat-label">${ht("main.dashboard.containersUp")}</div>
+            <div class="stat-value">${upCount}${containers.length !== upCount ? ` <span class="stat-qual">${ht("main.dashboard.ofTotal", {total: containers.length})}</span>` : ""}</div>
           </div>
         </section>
 
@@ -867,9 +867,9 @@ function renderDashboard(current: AppState) {
 
         <section class="earnings" aria-labelledby="earnings-title">
           <div class="block-head">
-            <h2 class="block-title" id="earnings-title">Earned per day</h2>
+            <h2 class="block-title" id="earnings-title">${ht("main.dashboard.earnedPerDay")}</h2>
             <div class="tab-strip">
-              ${[7, 30].map((days) => `<button class="tab-btn ${chartDays === days ? "active" : ""}" data-chart-days="${days}">${days} days</button>`).join("")}
+              ${[7, 30].map((days) => `<button class="tab-btn ${chartDays === days ? "active" : ""}" data-chart-days="${days}">${ht("main.dashboard.days", {days})}</button>`).join("")}
             </div>
           </div>
           ${renderEarningsBars(summary?.daily || [], disp, chartDays)}
@@ -877,16 +877,16 @@ function renderDashboard(current: AppState) {
 
         <section class="usage" aria-labelledby="usage-title">
           <div class="block-head">
-            <h2 class="block-title" id="usage-title">Resource use</h2>
-            <span class="block-meta">This machine, last ${chartDays} days</span>
+            <h2 class="block-title" id="usage-title">${ht("main.dashboard.resourceUse")}</h2>
+            <span class="block-meta">${ht("main.dashboard.usageMeta", {days: chartDays})}</span>
           </div>
           <div id="usage-panel">${renderUsagePanel(usageView && usageView.days === chartDays ? usageView : null)}</div>
         </section>
 
         <section class="services-block" aria-labelledby="services-title">
           <div class="block-head">
-            <h2 class="block-title" id="services-title">Services</h2>
-            <span class="block-meta">Balances in ${escapeHtml(disp)}</span>
+            <h2 class="block-title" id="services-title">${ht("main.dashboard.services")}</h2>
+            <span class="block-meta">${ht("main.dashboard.balancesIn", {currency: disp})}</span>
           </div>
           <div class="table-scroll">
             ${renderServicesTable({
@@ -941,7 +941,7 @@ function renderDashboard(current: AppState) {
   });
   document.querySelector<HTMLInputElement>("[data-server-commands-switch]")?.addEventListener("change", (event) => {
     const on = (event.target as HTMLInputElement).checked;
-    void SetServerCommands(on).then(refreshState, (error) => setOutput(`Could not switch it: ${String(error)}`));
+    void SetServerCommands(on).then(refreshState, (error) => setOutput(t("main.serverCommands.switchFailed", {error: String(error)})));
   });
   wireServerCommandsFirewall(document, {
     allow: AllowServerCommandsThroughFirewall,
@@ -1020,7 +1020,7 @@ function wireBackupForm(form: HTMLFormElement | null) {
     const recipient = form.querySelector<HTMLInputElement>("input[name=mode]:checked")?.value === "recipient";
     // A typo here makes a file nobody can open, marked as a confirmed backup.
     if (!recipient && secret.value !== repeat.value) {
-      showErrorToast("The two passphrases differ");
+      showErrorToast(t("main.backup.passphrasesDiffer"));
       repeat.value = "";
       return;
     }
@@ -1030,11 +1030,11 @@ function wireBackupForm(form: HTMLFormElement | null) {
     repeat.value = "";
     const button = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
     button.disabled = true;
-    button.textContent = "Reading and encrypting\u2026";
+    button.textContent = t("main.backup.encrypting");
     try {
       const path = await ExportStateBackup(form.dataset.slug || "", recipient ? "" : value, recipient ? "" : again, recipient ? value : "");
       if (path) {
-        showInfoToast(`Backup saved: ${path}`);
+        showInfoToast(t("main.backup.saved", {path}));
         await refreshState();
         return;
       }
@@ -1042,7 +1042,7 @@ function wireBackupForm(form: HTMLFormElement | null) {
       showErrorToast(String(error));
     }
     button.disabled = false;
-    button.textContent = "Encrypt and save";
+    button.textContent = t("main.backup.encryptAndSave");
   });
 }
 
@@ -1071,9 +1071,9 @@ function pageFoot() {
   return `
     <footer class="page-foot">
       <span>CashPilot Desktop v${__APP_VERSION__}</span>
-      <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop">Source</button>
-      <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop/issues">Report a problem</button>
-      <button class="footer-link" data-url="https://github.com/sponsors/GeiserX">Sponsor</button>
+      <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop">${ht("main.foot.source")}</button>
+      <button class="footer-link" data-url="https://github.com/GeiserX/CashPilot-Desktop/issues">${ht("main.foot.reportProblem")}</button>
+      <button class="footer-link" data-url="https://github.com/sponsors/GeiserX">${ht("main.foot.sponsor")}</button>
     </footer>
   `;
 }
@@ -1125,8 +1125,8 @@ function topbar(active: View, current: AppState) {
       <div class="topbar-right">
         ${renderAddServiceButton(active)}
         <button class="topbar-runtime ${runtimeUsable(current.runtime) ? "" : "text-warn"} ${active === "runtime" ? "active" : ""}" data-view="runtime" title="${escapeHtml(current.runtime.message || "")}">${topbarRuntimeLabel(current.runtime)}</button>
-        <span class="topbar-earnings" title="Total balance across every service">${escapeHtml(totalText(current.summary, disp))}</span>
-        <select class="currency-select" id="currency-select" title="Display currency">
+        <span class="topbar-earnings" title="${ht("main.topbar.totalTitle")}">${escapeHtml(totalText(current.summary, disp))}</span>
+        <select class="currency-select" id="currency-select" title="${ht("main.topbar.currencyTitle")}">
           ${(current.currencies || ["USD", "EUR"]).map((currency) => `<option value="${currency}" ${currency === current.config.displayCurrency ? "selected" : ""}>${currency}</option>`).join("")}
         </select>
         <details class="notification-menu">
@@ -1142,23 +1142,23 @@ function runtimeUsable(runtime: RuntimeStatus) {
 }
 
 function topbarRuntimeLabel(runtime: RuntimeStatus) {
-  const label = runtime.available ? "Runtime ready"
-    : runtimeState(runtime).kind === "unknown" ? "Runtime unknown"
-    : runtime.nativeAvailable ? "Native mode" : "Runtime offline";
+  const label = runtime.available ? ht("main.topbar.runtimeReady")
+    : runtimeState(runtime).kind === "unknown" ? ht("main.topbar.runtimeUnknown")
+    : runtime.nativeAvailable ? ht("main.topbar.nativeMode") : ht("main.topbar.runtimeOffline");
   return `<span class="runtime-dot ${runtimeUsable(runtime) ? "ok" : "warn"}"></span>${label}`;
 }
 
 function renderAlerts(notifications: NotificationItem[] | null) {
   return `
-    <summary aria-label="Alerts">Alerts${notifications?.length ? ` <span class="notify-badge">${notifications.length}</span>` : ""}</summary>
+    <summary aria-label="${ht("main.alerts.title")}">${ht("main.alerts.title")}${notifications?.length ? ` <span class="notify-badge">${notifications.length}</span>` : ""}</summary>
     <div class="notification-popover">
-      <strong>Alerts</strong>
+      <strong>${ht("main.alerts.title")}</strong>
       ${notifications?.length ? notifications.map((item) => `
         <div class="notification-item ${escapeHtml(item.level)}">
           <span>${escapeHtml(item.title)}</span>
           <small>${escapeHtml(item.message)}</small>
         </div>
-      `).join("") : `<p class="muted">No alerts right now.</p>`}
+      `).join("") : `<p class="muted">${ht("main.alerts.none")}</p>`}
     </div>
   `;
 }
@@ -1271,19 +1271,19 @@ function renderCatalog(current: AppState) {
       <div class="main-content">
         ${topbar("catalog", current)}
         <main class="page-content">
-          ${pageHead("Catalog")}
+          ${pageHead(t("main.catalog.title"))}
           ${renderCustomServicesSection(customViews, current.deployments || [], customEditing, customLoadError)}
           <div class="filter-bar">
             <div class="filter-tabs">
-              ${categories.map((category) => `<button class="filter-tab ${catalogFilter === category ? "active" : ""}" data-filter="${category}">${escapeHtml(category === "depin" ? "DePIN" : capitalize(category))}</button>`).join("")}
+              ${categories.map((category) => `<button class="filter-tab ${catalogFilter === category ? "active" : ""}" data-filter="${category}">${escapeHtml(category === "all" ? t("main.catalog.all") : kindLabel(category) || capitalize(category))}</button>`).join("")}
             </div>
-            <input class="catalog-search" id="catalog-search" type="search" placeholder="Search services" aria-label="Search services" value="${escapeHtml(catalogSearch)}" />
+            <input class="catalog-search" id="catalog-search" type="search" placeholder="${ht("main.catalog.search")}" aria-label="${ht("main.catalog.search")}" value="${escapeHtml(catalogSearch)}" />
           </div>
           <section class="catalog-block">
             <div class="table-scroll">
               ${renderCatalogTable(services, current.deployments || [], current.outdatedServices)}
             </div>
-            <p class="referral-note">Visit and Sign up links to providers with a referral programme are referral links: the CashPilot maintainer may earn a commission from them. Using them costs you nothing, sometimes gets you a sign-up bonus, and is the simplest way to support CashPilot.</p>
+            <p class="referral-note">${ht("main.catalog.referralNote")}</p>
           </section>
         </main>
         ${pageFoot()}
@@ -1328,7 +1328,7 @@ async function loadCustomViews() {
     customLoadError = "";
   } catch (error) {
     customViews = [];
-    customLoadError = `Your custom services could not be read: ${String(error)}`;
+    customLoadError = t("main.custom.loadFailed", {error: String(error)});
   }
   if (activeView === "catalog") render();
 }
@@ -1396,7 +1396,7 @@ async function saveCustomService(editor: HTMLFormElement) {
     customEditing = null;
     render();
     const deployed = state?.deployments?.some((dep) => dep.slug === saved.slug);
-    showInfoToast({scope: "custom service", message: `${saved.name} saved.${saved.warnings?.length ? ` ${saved.warnings.join(" ")}` : ""}${deployed ? " Redeploy it to apply the change." : ""}`});
+    showInfoToast({scope: "custom service", message: `${t("main.custom.saved", {name: saved.name})}${saved.warnings?.length ? ` ${saved.warnings.join(" ")}` : ""}${deployed ? ` ${t("main.custom.redeployToApply")}` : ""}`});
   } catch (error) {
     if (output) output.textContent = String(error);
   }
@@ -1405,8 +1405,10 @@ async function saveCustomService(editor: HTMLFormElement) {
 async function deleteCustomService(slug: string) {
   const view = customViews?.find((item) => item.slug === slug);
   if (!view) return;
-  const volume = view.volume ? ` Its data volume ${view.volume}, if you kept it when removing it, stays on this computer until you delete it with docker volume rm.` : "";
-  if (!confirm(`Delete ${view.name}?${volume}`)) return;
+  const question = view.volume
+    ? t("main.custom.deleteConfirmVolume", {name: view.name, volume: view.volume})
+    : t("main.custom.deleteConfirm", {name: view.name});
+  if (!confirm(question)) return;
   try {
     await DeleteCustomService(slug);
     customViews = await ListCustomServices();
@@ -1467,7 +1469,7 @@ function renderImport(current: AppState) {
       <div class="main-content">
         ${topbar("settings", current)}
         <main class="page-content">
-          ${pageHead("Import from another tool", `<button class="compact-btn" data-view="settings">Back to Settings</button>`)}
+          ${pageHead(t("main.import.title"), `<button class="compact-btn" data-view="settings">${ht("main.import.backToSettings")}</button>`)}
           ${renderImportInput(importSource)}
           ${importPreview ? renderImportPreview(importPreview) : ""}
           ${importResult && importResult.saved.length ? renderImportSaved(importResult, importPreview, importDeployed, importLinks, importDeploys, importWaitsForDocker(current)) : ""}
@@ -1495,26 +1497,26 @@ async function readImportFiles(): Promise<ImportFile[]> {
   const files: ImportFile[] = [];
   const picked = Array.from(document.querySelector<HTMLInputElement>("#import-files")?.files || []);
   // Refuse by count and size before reading, so a huge file is never loaded.
-  if (picked.length > IMPORT_MAX_FILES) throw new Error(`At most ${IMPORT_MAX_FILES} files at a time.`);
+  if (picked.length > IMPORT_MAX_FILES) throw new Error(t("main.import.tooManyFiles", {n: IMPORT_MAX_FILES}));
   if (picked.reduce((n, f) => n + f.size, 0) > IMPORT_MAX_BYTES) {
-    throw new Error(`The files add up to more than ${IMPORT_MAX_BYTES / 1024} KiB.`);
+    throw new Error(t("main.import.tooLarge", {kib: IMPORT_MAX_BYTES / 1024}));
   }
   // Strict UTF-8: file.text() would turn bad bytes into U+FFFD, which the
   // backend's UTF-8 check could then not see.
   const decoder = new TextDecoder("utf-8", { fatal: true });
   for (const file of picked) {
     // Refuse before reading a file that alone is over the limit.
-    if (file.size > IMPORT_MAX_BYTES) throw new Error(`${file.name} is larger than 64 KiB; this is not a config file.`);
+    if (file.size > IMPORT_MAX_BYTES) throw new Error(t("main.import.fileTooLarge", {name: file.name}));
     let content: string;
     try {
       content = decoder.decode(await file.arrayBuffer());
     } catch {
-      throw new Error(`${file.name} is not UTF-8 text.`);
+      throw new Error(t("main.import.notUtf8", {name: file.name}));
     }
     files.push({ name: file.name, content });
   }
   const pasted = document.querySelector<HTMLTextAreaElement>("#import-paste")?.value || "";
-  if (pasted.trim()) files.push({ name: "pasted text", content: pasted });
+  if (pasted.trim()) files.push({ name: t("main.import.pastedText"), content: pasted });
   // A redraw empties the file picker, so a second preview (another tool picked,
   // say) reuses the files last previewed when nothing new was added.
   if (!files.length && importRequest) files.push(...importRequest.files);
@@ -1557,7 +1559,7 @@ async function runImportApply() {
     slug: el.dataset.importSlug || "", key: el.dataset.importKey || "", value: el.value,
   })));
   if (!slugs.length) {
-    showErrorToast({ scope: "import", error: "Tick at least one service." });
+    showErrorToast({ scope: "import", error: t("main.import.tickOne") });
     return;
   }
   for (const input of inputs) {
@@ -1574,7 +1576,7 @@ async function runImportApply() {
     await loadAppState();
     importLinks = {};
     importDeploys = {};
-    showInfoToast({ scope: "import", message: `Saved ${importResult.saved.length} service(s).` });
+    showInfoToast({ scope: "import", message: t("main.import.saved", {n: importResult.saved.length}) });
     renderImportIfShown();
   } catch (error) {
     showErrorToast({ scope: "import", error: String(error) });
@@ -1601,7 +1603,7 @@ async function runImportDeploy(slug: string) {
       setFeedback({ kind: "failed", text: gap });
       return;
     }
-    const outcome = await runCheckedDeploy(fields, saved.values, true, `Deploying ${name}...`, {
+    const outcome = await runCheckedDeploy(fields, saved.values, true, t("main.deploy.deploying", {name}), {
       confirmReplace: (message) => {
         return confirm(report?.summary ? `${message}\n\n${report.summary}` : message);
       },
@@ -1612,11 +1614,11 @@ async function runImportDeploy(slug: string) {
         if (approval) await DeployServiceWithAdminApproval(slug, {}, null, null, false, approval);
         else await DeployService(slug, {}, null, null);
         if (statuses === importDeploys) importDeployed = [...importDeployed, slug];
-        return { kind: "ok", text: "Deployed." };
+        return { kind: "ok", text: t("main.deploy.deployed") };
       },
     }, {
       savedSecrets: saved.savedSecrets,
-      localReplacement: `Deploy ${name} on this computer? Stop the old tool here first: two copies behind one connection earn as one.`,
+      localReplacement: t("main.import.replaceLocal", {name}),
     });
     if (outcome.kind === "missing") setFeedback(outcome);
     else if (outcome.kind === "blocked") setFeedback({ kind: "failed", text: outcome.message });
@@ -1697,17 +1699,17 @@ async function renderSettings(current: AppState) {
       <div class="main-content">
         ${topbar("settings", current)}
         <main class="page-content">
-          ${pageHead("Settings")}
+          ${pageHead(t("main.settings.title"))}
           ${languageState ? renderLanguageCard(languageState) : ""}
           <div id="mode-card-slot">${modeState ? renderModeCard(modeState, modeCardView, modeLeft) : ""}</div>
           <div id="runtime-settings-slot">${renderRuntimeSettings(runtime)}</div>
           <section class="card">
             <div class="card-header">
               <div>
-                <span class="card-title">Environment Variables</span>
-                <p class="muted compact-copy">Variables that affect this desktop node. Locked values are controlled by the app or OS.</p>
+                <span class="card-title">${ht("main.settings.env.title")}</span>
+                <p class="muted compact-copy">${ht("main.settings.env.help")}</p>
               </div>
-              <div class="save-row">${saveNoteSlot("save-settings-note")}<button class="primary compact-btn" id="save-settings">Save Variables</button></div>
+              <div class="save-row">${saveNoteSlot("save-settings-note")}<button class="primary compact-btn" id="save-settings">${ht("main.settings.env.save")}</button></div>
             </div>
             <div class="settings-list">
               ${settings.environment.map((item) => renderEnvSetting(item, item.key === "CASHPILOT_ISOLATION" ? renderFenceStatusLine(current.isolation, runtime, "small") : item.key === "CASHPILOT_RUNTIME_PROVIDER" ? runtimeProviderNote(runtime) : "")).join("")}
@@ -1717,8 +1719,8 @@ async function renderSettings(current: AppState) {
           <section class="card">
             <div class="card-header">
               <div>
-                <span class="card-title">Earnings Collection</span>
-                <p class="muted compact-copy">Credentials for automated earnings tracking. Manual/mobile-first services can be tracked without deploying a container.</p>
+                <span class="card-title">${ht("main.settings.collection.title")}</span>
+                <p class="muted compact-copy">${ht("main.settings.collection.help")}</p>
               </div>
             </div>
             <div class="collector-grid">
@@ -1729,10 +1731,10 @@ async function renderSettings(current: AppState) {
           <section class="card">
             <div class="card-header">
               <div>
-                <span class="card-title">Import from another tool</span>
-                <p class="muted compact-copy">Coming from money4band, CashFactory or InternetIncome? Bring your service logins over instead of typing them again.</p>
+                <span class="card-title">${ht("main.import.title")}</span>
+                <p class="muted compact-copy">${ht("main.settings.import.help")}</p>
               </div>
-              <button class="compact-btn" data-view="import">Import</button>
+              <button class="compact-btn" data-view="import">${ht("main.settings.import.open")}</button>
             </div>
           </section>
 
@@ -1838,11 +1840,11 @@ function wireRestore() {
   document.querySelectorAll<HTMLButtonElement>("[data-restore-discard]").forEach((button) => {
     button.addEventListener("click", async () => {
       const slug = button.dataset.restoreDiscard || "";
-      if (!confirm(`Delete the partial restore of ${slug}? CashPilot removes its container and the volumes the restore made, and nothing else. Then Deploy and Start accept it again.`)) return;
+      if (!confirm(t("main.restore.discardConfirm", {slug}))) return;
       button.disabled = true;
       try {
         await DiscardPartialRestore(slug);
-        showInfoToast({scope: "restore", message: `The partial restore of ${slug} was deleted.`});
+        showInfoToast({scope: "restore", message: t("main.restore.discarded", {slug})});
       } catch (error) {
         showErrorToast({scope: "restore", error: String(error)});
       }
@@ -1860,16 +1862,16 @@ function wireRestoreForm(form: HTMLFormElement | null, needsName: boolean) {
     event.preventDefault();
     const service = form.dataset.service || "";
     if (needsName && !typed?.value.trim()) {
-      showErrorToast(`Type ${service} to restore it from this file`);
+      showErrorToast(t("main.restore.typeName", {service}));
       return;
     }
     // Desktop has one user: this confirm takes the place of the web's password step.
-    if (!confirm(`Restore ${service} on this machine from this file? CashPilot creates its container and volumes, writes the backup, checks it and then starts it.`)) return;
+    if (!confirm(t("main.restore.confirm", {service}))) return;
     const secret = passphrase.value;
     passphrase.value = "";
     const button = form.querySelector<HTMLButtonElement>("button[type=submit]")!;
     button.disabled = true;
-    button.textContent = "Writing and checking\u2026";
+    button.textContent = t("main.restore.writing");
     try {
       const result = await RestoreStateBackup(form.dataset.token || "", secret, typed?.value || "");
       showInfoToast({scope: "restore", message: restoreResultText(service, result)});
@@ -1893,7 +1895,7 @@ function wireSecretSettings(environment: SettingsState["environment"]) {
       if (!input) return;
       const show = input.type === "password";
       input.type = show ? "text" : "password";
-      button.textContent = show ? "Hide" : "Show";
+      button.textContent = show ? t("main.secret.hide") : t("main.secret.show");
       button.setAttribute("aria-pressed", String(show));
     });
   });
@@ -1906,12 +1908,12 @@ function wireSecretSettings(environment: SettingsState["environment"]) {
       if (clear) {
         input.value = "";
         input.dataset.clear = "true";
-        input.placeholder = "Removed when you save.";
+        input.placeholder = t("main.secret.removedOnSave");
       } else {
         delete input.dataset.clear;
         input.placeholder = savedPlaceholder;
       }
-      button.textContent = clear ? "Keep" : "Remove";
+      button.textContent = clear ? t("main.secret.keep") : t("main.secret.remove");
       button.setAttribute("aria-pressed", String(clear));
     });
   });
@@ -1931,8 +1933,8 @@ function renderCollectorSetting(item: SettingsState["collectors"][number]) {
   return `
     <button class="collector-row" data-service="${escapeHtml(item.slug)}">
       <span>${escapeHtml(item.name)}</span>
-      <small>${escapeHtml(item.collector || "manual")}</small>
-      <strong class="${item.configured ? "configured" : ""}">${item.configured ? "Configured" : "Not configured"}</strong>
+      <small>${escapeHtml(item.collector || t("main.collector.manual"))}</small>
+      <strong class="${item.configured ? "configured" : ""}">${item.configured ? ht("main.collector.configured") : ht("main.collector.notConfigured")}</strong>
     </button>
   `;
 }
@@ -1973,30 +1975,30 @@ function renderBackgroundCard(background: BackgroundStatus | null, backgroundErr
   let title: string;
   let detail: string;
   if (unavailable) {
-    title = "Background earning unavailable";
-    detail = backgroundError || "The background helper can't be reached right now.";
+    title = t("main.background.unavailable.title");
+    detail = backgroundError || t("main.background.unavailable.detail");
   } else if (on && running) {
-    title = "Earning in the background";
-    detail = "CashPilot keeps your earners running after you close the window, and starts them automatically when you sign in.";
+    title = t("main.background.on.title");
+    detail = t("main.background.on.detail");
   } else if (on) {
-    title = "Starting in the background…";
-    detail = "The helper is registered with your operating system and will start momentarily.";
+    title = t("main.background.starting.title");
+    detail = t("main.background.starting.detail");
   } else {
-    title = "Off — earners stop when you quit";
-    detail = "Turn on to keep earning after you close CashPilot. Registers a per-user helper the OS keeps alive and restarts — no admin required.";
+    title = t("main.background.off.title");
+    detail = t("main.background.off.detail");
   }
   const statusClass = unavailable ? "is-unavailable" : on && running ? "is-on" : "";
   return `
     <section class="card">
       <div class="card-header">
         <div>
-          <span class="card-title">Background Earning</span>
-          <p class="muted compact-copy">Keep earning when CashPilot is closed. Your operating system keeps a per-user helper running and restarts it automatically — no admin rights, no separate service to manage.</p>
+          <span class="card-title">${ht("main.background.title")}</span>
+          <p class="muted compact-copy">${ht("main.background.help")}</p>
         </div>
       </div>
       <div class="bg-toggle-row">
-        <label class="switch" title="Keep earning in the background">
-          <input type="checkbox" id="bg-helper-toggle" role="switch" ${on ? "checked" : ""} ${unavailable ? "disabled" : ""} aria-label="Keep earning in the background" />
+        <label class="switch" title="${ht("main.background.toggle")}">
+          <input type="checkbox" id="bg-helper-toggle" role="switch" ${on ? "checked" : ""} ${unavailable ? "disabled" : ""} aria-label="${ht("main.background.toggle")}" />
           <span class="switch-track"><span class="switch-thumb"></span></span>
         </label>
         <div class="bg-toggle-status ${statusClass}">
@@ -2018,10 +2020,10 @@ async function toggleBackgroundHelper(event: Event) {
   try {
     if (enable) {
       await InstallBackgroundHelper();
-      showInfoToast({scope: "background", message: "Earning will continue after you close CashPilot."});
+      showInfoToast({scope: "background", message: t("main.background.turnedOn")});
     } else {
       await RemoveBackgroundHelper();
-      showInfoToast({scope: "background", message: "Background earning turned off."});
+      showInfoToast({scope: "background", message: t("main.background.turnedOff")});
     }
     // Re-render the active (Settings) view so the card reflects fresh OS state;
     // render() null-guards module state, then re-invokes renderSettings.
@@ -2052,7 +2054,7 @@ async function renderActivity(view?: ActivityView) {
       <div class="main-content">
         ${topbar("activity", state)}
         <main class="page-content">
-          ${pageHead("Activity")}
+          ${pageHead(t("main.activity.title"))}
           ${renderActivityPage(data, activityOpen, state.runtime)}
         </main>
         ${pageFoot()}
@@ -2097,7 +2099,7 @@ async function renderActivity(view?: ActivityView) {
     void renderActivity();
   });
   document.querySelector("#activity-delete")?.addEventListener("click", () => {
-    if (!window.confirm("Delete every Activity reading on this machine: counts, totals, addresses and alerts?")) return;
+    if (!window.confirm(t("main.activity.deleteConfirm"))) return;
     activityRequest++;
     activityOpen = {};
     // As on switch-off: no row opens until the delete is done, and the open
@@ -2110,7 +2112,7 @@ async function renderActivity(view?: ActivityView) {
     });
   });
   document.querySelector("#activity-networks")?.addEventListener("click", () => {
-    showInfoToast({scope: "activity", message: "Downloading the network table (about 11 MB)."});
+    showInfoToast({scope: "activity", message: t("main.activity.downloadingNetworks")});
     void run(() => RefreshActivityNetworks());
   });
   document.querySelectorAll<HTMLButtonElement>("[data-activity-expand]").forEach((button) => {
@@ -2176,34 +2178,34 @@ async function renderFleet() {
       <div class="main-content">
         ${topbar("fleet", state)}
         <main class="page-content">
-          ${pageHead("Fleet")}
+          ${pageHead(t("main.fleet.title"))}
           <section class="stats-grid">
-            ${metricCard("Workers", `${fleet.workers}`, "Desktop and server workers")}
-            ${metricCard("Mobiles", `${fleet.mobiles}`, "Registered mobile devices")}
-            ${metricCard("Online", `${fleet.online}`, "Devices currently reachable")}
-            ${metricCard("Services", `${fleet.services}`, "Available providers")}
+            ${metricCard(t("main.fleet.workers"), `${fleet.workers}`, t("main.fleet.workersCaption"))}
+            ${metricCard(t("main.fleet.mobiles"), `${fleet.mobiles}`, t("main.fleet.mobilesCaption"))}
+            ${metricCard(t("main.fleet.online"), `${fleet.online}`, t("main.fleet.onlineCaption"))}
+            ${metricCard(t("main.fleet.services"), `${fleet.services}`, t("main.fleet.servicesCaption"))}
           </section>
 
           <section class="card">
             <div class="card-header">
-              <span class="card-title">Add Worker or Mobile</span>
+              <span class="card-title">${ht("main.fleet.add.title")}</span>
             </div>
             ${renderFleetConnect(fleet, renderFleetSnippets(fleet))}
             <div class="fleet-form">
-              <input id="fleet-name" placeholder="Device name" />
+              <input id="fleet-name" placeholder="${ht("main.fleet.add.name")}" />
               <select id="fleet-kind">
-                <option value="worker">Worker</option>
-                <option value="mobile">Mobile</option>
+                <option value="worker">${ht("main.fleet.add.worker")}</option>
+                <option value="mobile">${ht("main.fleet.add.mobile")}</option>
               </select>
-              <input id="fleet-endpoint" placeholder="Endpoint or device note" />
-              <input id="fleet-services" placeholder="Services, comma-separated" />
-              <button class="primary compact-btn" id="add-fleet-device">Register</button>
+              <input id="fleet-endpoint" placeholder="${ht("main.fleet.add.endpoint")}" />
+              <input id="fleet-services" placeholder="${ht("main.fleet.add.services")}" />
+              <button class="primary compact-btn" id="add-fleet-device">${ht("main.fleet.add.register")}</button>
             </div>
           </section>
 
           <section class="card">
             <div class="card-header">
-              <span class="card-title">Devices</span>
+              <span class="card-title">${ht("main.fleet.devices")}</span>
             </div>
             <div class="fleet-list">
               ${fleet.devices.map((device) => renderFleetDevice(device) + (device.kind === "worker" ? workerCopiesSection(device.id, fleet.workerCommands?.[String(device.id)]) : "")).join("")}
@@ -2251,16 +2253,28 @@ function renderFleetDevice(device: FleetState["devices"][number]) {
       <div class="split">
         <div>
           <strong><span class="runtime-dot ${device.status === "online" ? "ok" : "warn"}"></span> ${escapeHtml(device.name)}</strong>
-          <p class="muted compact-copy">${escapeHtml(device.endpoint || "No endpoint")} · ${escapeHtml(device.os || "unknown")} ${escapeHtml(device.arch || "")} · ${escapeHtml(device.lastSeen || "never seen")}</p>
+          <p class="muted compact-copy">${escapeHtml(device.endpoint || t("main.fleet.device.noEndpoint"))} · ${escapeHtml(device.os || t("main.fleet.device.unknownOs"))} ${escapeHtml(device.arch || "")} · ${escapeHtml(device.lastSeen || t("main.fleet.device.neverSeen"))}</p>
         </div>
         <div class="device-actions">
-          <span class="badge">${escapeHtml(device.kind)}</span>
-          ${device.id > 0 ? `<button class="danger compact-btn" data-remove-device="${device.id}">Remove</button>` : ""}
+          <span class="badge">${escapeHtml(deviceKindLabel(device.kind))}</span>
+          ${device.id > 0 ? `<button class="danger compact-btn" data-remove-device="${device.id}">${ht("main.fleet.device.remove")}</button>` : ""}
         </div>
       </div>
-      <div class="badge-row">${(device.services || []).map((service) => `<span class="badge success">${escapeHtml(service)}</span>`).join("") || `<span class="badge">No services yet</span>`}</div>
+      <div class="badge-row">${(device.services || []).map((service) => `<span class="badge success">${escapeHtml(service)}</span>`).join("") || `<span class="badge">${ht("main.fleet.device.noServices")}</span>`}</div>
     </article>
   `;
+}
+
+// A device's kind on its badge. A kind this file does not know is shown as sent.
+function deviceKindLabel(kind: string) {
+  switch (kind) {
+    case "worker":
+      return t("main.fleet.device.kindWorker");
+    case "mobile":
+      return t("main.fleet.device.kindMobile");
+    default:
+      return kind;
+  }
 }
 
 // A Docker change on Fleet touches only the Proxies section. Redraw that section
@@ -2314,20 +2328,22 @@ function wireProxies() {
   });
   on("[data-proxy-test]", async (b) => {
     const result = await TestProxy(Number(b.dataset.proxyTest));
-    showInfoToast({scope: "proxy test", message: `Exit IP ${result.exitIp}${result.country ? ` (${result.country})` : ""}, in ${result.ms} ms.`});
+    showInfoToast({scope: "proxy test", message: result.country
+      ? t("main.proxy.testResultCountry", {ip: result.exitIp ?? "", country: result.country, ms: result.ms ?? ""})
+      : t("main.proxy.testResult", {ip: result.exitIp ?? "", ms: result.ms ?? ""})});
   });
   on("[data-proxy-delete]", async (b) => {
-    if (!confirm("Delete this proxy?")) return;
+    if (!confirm(t("main.proxy.deleteConfirm"))) return;
     await DeleteProxy(Number(b.dataset.proxyDelete));
   });
   on("[data-proxy-reset]", async (b) => {
     const started = await ResetProxyUsage(Number(b.dataset.proxyReset));
-    showInfoToast({scope: "proxy", message: started.length ? `New period started; started ${started.join(", ")}.` : "New period started."});
+    showInfoToast({scope: "proxy", message: started.length ? t("main.proxy.periodStartedWith", {started: started.join(", ")}) : t("main.proxy.periodStarted")});
   });
   on("[data-proxy-copy-stop]", (b) => StopProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyStop)));
   on("[data-proxy-copy-start]", (b) => StartProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyStart)));
   on("[data-proxy-copy-remove]", async (b) => {
-    if (!confirm("Remove this proxied copy?")) return;
+    if (!confirm(t("main.proxy.removeCopyConfirm"))) return;
     await RemoveProxiedCopy(b.dataset.slug || "", Number(b.dataset.proxyCopyRemove));
   });
   on("[data-proxy-run-deploy]", async () => {
@@ -2340,16 +2356,16 @@ function wireProxies() {
       if (slot) slot.innerHTML = deployNotice(kind, text);
     };
     if (!slug || !id) {
-      say("cancelled", "Choose a service and a proxy first. Nothing was deployed.");
+      say("cancelled", t("main.proxy.chooseFirst"));
       return;
     }
     const service = proxiesState?.candidates.find((item) => item.slug === slug)?.name || slug;
-    const proxy = proxyById(id)?.name || "the selected proxy";
-    await runDeployWithStatus(`Deploying ${service} through ${proxy}...`, say, async () => {
+    const proxy = proxyById(id)?.name || t("main.proxy.selected");
+    await runDeployWithStatus(t("main.proxy.deploying", {service, proxy}), say, async () => {
       const result = await DeployProxiedCopy(slug, id);
       return {
         kind: "ok",
-        text: `${service} is running through ${proxy}. Exit IP ${result.exitIp || "not seen yet"}.${result.warning ? ` ${result.warning}` : ""}`,
+        text: `${result.exitIp ? t("main.proxy.running", {service, proxy, ip: result.exitIp}) : t("main.proxy.runningNoIp", {service, proxy})}${result.warning ? ` ${result.warning}` : ""}`,
       };
     });
   });
@@ -2388,7 +2404,7 @@ async function commandWorkerCopy(button: HTMLButtonElement, fleet: FleetState) {
   const command = button.dataset.workerCopy || "";
   const instance = Number(button.dataset.instance || 1);
   const worker = fleet.devices.find((device) => device.id === workerId);
-  const question = copyCommandQuestion(command, slug, instance, worker?.name || "this worker", fleet.workerCommands?.[String(workerId)]?.copies || []);
+  const question = copyCommandQuestion(command, slug, instance, worker?.name || t("main.worker.this"), fleet.workerCommands?.[String(workerId)]?.copies || []);
   if (question && !confirm(question)) return;
   button.disabled = true;
   try {
@@ -2401,7 +2417,7 @@ async function commandWorkerCopy(button: HTMLButtonElement, fleet: FleetState) {
 }
 
 async function removeFleetDevice(id: number) {
-  if (!confirm("Remove this fleet device from CashPilot Desktop?")) return;
+  if (!confirm(t("main.fleet.removeConfirm"))) return;
   try {
     await RemoveFleetDevice(id);
     render();
@@ -2420,10 +2436,11 @@ function maybeResetScroll() {
   requestAnimationFrame(() => window.scrollTo({top: 0, left: 0}));
 }
 
-function changeCaption(pct: number, suffix: string) {
-  if (!pct || !Number.isFinite(pct)) return `No change ${suffix}`;
-  const arrow = pct > 0 ? "▲" : "▼";
-  return `${arrow} ${Math.abs(pct).toFixed(1)}% ${suffix}`;
+// The change against the day or the month before, as a caption under the amount.
+function changeCaption(pct: number, period: "day" | "month") {
+  if (!pct || !Number.isFinite(pct)) return period === "day" ? t("main.change.noneDay") : t("main.change.noneMonth");
+  const args = {arrow: pct > 0 ? "▲" : "▼", pct: Math.abs(pct).toFixed(1)};
+  return period === "day" ? t("main.change.day", args) : t("main.change.month", args);
 }
 
 function renderPointsSection(points: PointsBalance[]) {
@@ -2431,8 +2448,8 @@ function renderPointsSection(points: PointsBalance[]) {
     <section class="card points-panel">
       <div class="card-header">
         <div>
-          <span class="card-title">Points / rewards</span>
-          <p class="muted compact-copy">Not included in totals — these rewards have no market price yet.</p>
+          <span class="card-title">${ht("main.points.title")}</span>
+          <p class="muted compact-copy">${ht("main.points.help")}</p>
         </div>
       </div>
       <div class="earnings-breakdown">
@@ -2478,8 +2495,8 @@ function renderSetupWizard(current: AppState) {
       <div class="main-content">
         ${topbar("wizard", current)}
       <main class="page-content setup-content">
-        ${pageHead("Add services", `<button class="btn btn-ghost btn-sm" id="close-wizard">Back to dashboard</button>`)}
-        <p class="page-lede">Choose what to share, sign up through CashPilot, then deploy or track each provider.</p>
+        ${pageHead(t("main.wizard.title"), `<button class="btn btn-ghost btn-sm" id="close-wizard">${ht("main.wizard.backToDashboard")}</button>`)}
+        <p class="page-lede">${ht("main.wizard.lede")}</p>
         ${renderWizardProgress()}
         <section class="panel wizard-panel active">
           ${wizardStep === 1 ? renderWizardCategories(categories) : ""}
@@ -2488,8 +2505,8 @@ function renderSetupWizard(current: AppState) {
           ${wizardStep === 4 ? renderWizardSummary(selectedServices) : ""}
         </section>
         <div class="wizard-footer">
-          <button class="secondary" id="wizard-prev" ${wizardStep === 1 ? "disabled" : ""}>Back</button>
-          <button class="primary" id="wizard-next">${wizardStep === 4 ? "Go to Dashboard" : wizardStep === 3 ? "Summary" : "Next"}</button>
+          <button class="secondary" id="wizard-prev" ${wizardStep === 1 ? "disabled" : ""}>${ht("main.wizard.back")}</button>
+          <button class="primary" id="wizard-next">${wizardStep === 4 ? ht("main.wizard.goToDashboard") : wizardStep === 3 ? ht("main.wizard.toSummary") : ht("main.wizard.next")}</button>
         </div>
       </main>
         ${pageFoot()}
@@ -2625,7 +2642,7 @@ async function acceptSessionRisk(slug: string, textVersion: string) {
 
 async function revokeSessionRisk(slug: string) {
   const name = state?.services.find((svc) => svc.slug === slug)?.name || slug;
-  if (!confirm(`Withdraw your consent for ${name}? The setup card hides its install steps and asks again. This does not uninstall ${name}: remove it yourself if you no longer want it on this computer.`)) return;
+  if (!confirm(t("main.consent.withdrawConfirm", {name}))) return;
   try {
     applySessionConsents(await RevokeSessionRisk(slug), slug);
   } catch (error) {
@@ -2673,13 +2690,13 @@ async function recordPayout(service: Service, box: HTMLElement) {
   const field = (name: string) => box.querySelector<HTMLInputElement>(`[data-payout-field="${name}"]`)?.value.trim() || "";
   const amount = Number(field("amount"));
   if (!(amount > 0)) {
-    showErrorToast({scope: "cash-out", error: "Enter the amount that was cashed out."});
+    showErrorToast({scope: "cash-out", error: t("main.payout.enterAmount")});
     return;
   }
   try {
     const payout = await RecordPayout(service.slug, amount, field("currency"), field("method"), field("date"));
     if (payout.fxRateUsd === null || payout.fxRateUsd === undefined) {
-      showInfoToast({scope: "cash-out", message: "Recorded. There is no exchange rate for that day, so it is left out of the total."});
+      showInfoToast({scope: "cash-out", message: t("main.payout.noRate")});
     }
     await afterPayoutChange(service);
   } catch (error) {
@@ -2688,7 +2705,7 @@ async function recordPayout(service: Service, box: HTMLElement) {
 }
 
 async function removePayout(service: Service, id: number) {
-  if (!confirm("Remove this cash-out? It will no longer count toward what you earned all time.")) return;
+  if (!confirm(t("main.payout.removeConfirm"))) return;
   try {
     await RemovePayout(id);
     await afterPayoutChange(service);
@@ -2704,7 +2721,7 @@ async function afterPayoutChange(service: Service) {
 }
 
 function renderWizardProgress() {
-  const labels = ["Categories", "Services", "Setup", "Summary"];
+  const labels = [ht("main.wizard.step.categories"), ht("main.wizard.step.services"), ht("main.wizard.step.setup"), ht("main.wizard.step.summary")];
   return `
     <div class="wizard-progress">
       ${labels.map((label, index) => {
@@ -2723,12 +2740,12 @@ function renderWizardProgress() {
 
 function renderWizardCategories(categories: string[]) {
   return `
-    <h2>What would you like to share?</h2>
-    <p class="muted">Pick one or more categories and CashPilot will show matching services.</p>
+    <h2>${ht("main.wizard.categories.title")}</h2>
+    <p class="muted">${ht("main.wizard.categories.lede")}</p>
     <div class="wizard-category-grid">
       ${categories.map((category) => `
         <button class="wizard-category ${wizardCategories.includes(category) ? "selected" : ""}" data-category="${category}">
-          <strong>${escapeHtml(capitalize(category))}</strong>
+          <strong>${escapeHtml(wizardCategoryName(category))}</strong>
           <span>${escapeHtml(wizardCategoryCopy(category))}</span>
         </button>
       `).join("")}
@@ -2736,10 +2753,16 @@ function renderWizardCategories(categories: string[]) {
   `;
 }
 
+// A category card's title. The wizard has always written DePIN as "Depin"; the
+// catalog's kind names (kindLabel) give every other one the same word.
+function wizardCategoryName(category: string) {
+  return category === "depin" ? capitalize(category) : kindLabel(category) || capitalize(category);
+}
+
 function renderWizardServices(services: Service[]) {
   return `
-    <h2>Select services</h2>
-    <p class="muted">Choose providers to set up. Earnings vary by location, hardware, uptime, and demand, so CashPilot does not promise a fixed amount.</p>
+    <h2>${ht("main.wizard.services.title")}</h2>
+    <p class="muted">${ht("main.wizard.services.lede")}</p>
     <div class="wizard-service-grid">
       ${services.map((service) => `
         <button class="wizard-service ${wizardSelected.includes(service.slug) ? "selected" : ""}" data-wizard-service="${escapeHtml(service.slug)}">
@@ -2747,21 +2770,21 @@ function renderWizardServices(services: Service[]) {
           <div>
             <strong>${escapeHtml(service.name)}</strong>
             <span>${escapeHtml(service.shortDescription || service.category)}</span>
-            <small>${service.manualOnly ? "External app / tracking" : "Docker managed"}${service.requirements?.residentialIp ? " / Residential IP" : ""}</small>
+            <small>${service.manualOnly ? ht("main.wizard.services.manual") : ht("main.wizard.services.docker")}${service.requirements?.residentialIp ? ` / ${ht("main.wizard.services.residentialIp")}` : ""}</small>
           </div>
         </button>
-      `).join("") || `<p class="muted">No services match these categories.</p>`}
+      `).join("") || `<p class="muted">${ht("main.wizard.services.none")}</p>`}
     </div>
   `;
 }
 
 function renderWizardSetup(services: Service[]) {
   if (services.length === 0) {
-    return `<p class="muted">Go back and select at least one service.</p>`;
+    return `<p class="muted">${ht("main.wizard.setup.none")}</p>`;
   }
   return `
-    <h2>Configure and deploy</h2>
-    <p class="muted">Create an account first if needed, then enter the credentials CashPilot needs to deploy or collect earnings.</p>
+    <h2>${ht("main.wizard.setup.title")}</h2>
+    <p class="muted">${ht("main.wizard.setup.lede")}</p>
     ${composeSelectionExport(services)}
     <div class="wizard-setup-list">
       ${services.map((service) => renderWizardServiceSetup(service, state?.collectorFields, state?.hostname, state?.summary?.breakdown, deploymentOf(service.slug)?.customImage, state?.scaling?.[service.slug], deploymentOf(service.slug)?.instances, state?.route, wizardRouteDrafts[service.slug], state?.config?.sessionConsent, Boolean(deploymentOf(service.slug)), state?.workerTargets, wizardWhereDrafts[service.slug], wizardDeployFeedback[service.slug])).join("")}
@@ -2772,8 +2795,8 @@ function renderWizardSetup(services: Service[]) {
 function renderWizardSummary(services: Service[]) {
   return `
     <div class="wizard-summary">
-      <h2>Setup summary</h2>
-      <p class="muted">Return to the dashboard to monitor balances, status, logs, and payout progress.</p>
+      <h2>${ht("main.wizard.summary.title")}</h2>
+      <p class="muted">${ht("main.wizard.summary.lede")}</p>
       <div class="earnings-breakdown" id="wizard-runtime-summary">${wizardSummaryServices(services)}</div>
     </div>
   `;
@@ -2782,7 +2805,7 @@ function renderWizardSummary(services: Service[]) {
 function wizardSummaryServices(services: Service[]) {
   return services.map((service) => {
     const gap = state && wizardWhereDrafts[service.slug] == null && localDockerGap(service, state.runtime);
-    const status = service.manualOnly ? "Tracking" : gap ? "Check Docker" : "Ready";
+    const status = service.manualOnly ? ht("main.wizard.summary.tracking") : gap ? ht("main.wizard.summary.checkDocker") : ht("main.wizard.summary.ready");
     return `<div class="earning-chip"><span>${escapeHtml(service.name)}</span><strong>${status}</strong><small>${escapeHtml(service.category)}</small></div>`;
   }).join("");
 }
@@ -2819,7 +2842,7 @@ function readWizardWhere(slug: string): number | null {
 
 function missingWizardWorker(workerId: number | null): string {
   if (workerId === null || state?.workerTargets?.some((worker) => worker.id === workerId)) return "";
-  return "The selected worker is unavailable. Choose a target before deploying.";
+  return t("main.wizard.workerUnavailable");
 }
 
 function closeWizard() {
@@ -2851,7 +2874,7 @@ function markWizardSecretsSaved(slug: string, keys: string[]) {
   for (const input of wizardCredentialInputs(slug)) {
     if (input.type === "password" && keys.includes(input.dataset.wizardEnv || "")) {
       input.dataset.savedSecret = "true";
-      input.placeholder = "Saved";
+      input.placeholder = t("main.wizard.secretSaved");
     }
   }
 }
@@ -2866,7 +2889,7 @@ async function hydrateWizardForm(service: Service) {
       if (input.type === "password") {
         if (savedSecrets[key]) {
           input.dataset.savedSecret = "true";
-          input.placeholder = "Saved";
+          input.placeholder = t("main.wizard.secretSaved");
         }
       } else if (values[key]) {
         input.value = values[key];
@@ -2959,14 +2982,14 @@ async function runWizardAction(slug: string, action: string) {
   const invalid = workerId === null ? firstInvalidWizardInput(slug) : null;
   if (invalid && action === "save") {
     invalid.reportValidity();
-    if (output) output.textContent = `${invalid.dataset.wizardEnv} does not have the shape this provider expects.`;
+    if (output) output.textContent = t("main.wizard.badShape", {field: invalid.dataset.wizardEnv ?? ""});
     return;
   }
   if (action === "deploy") {
     invalid?.reportValidity();
     if (wizardDeploying.has(slug)) return;
     try {
-      await wizardDeploy(slug, workerId, invalid ? invalid.dataset.wizardEnv || "This field" : undefined);
+      await wizardDeploy(slug, workerId, invalid ? invalid.dataset.wizardEnv || t("main.wizard.thisField") : undefined);
     } finally {
       const settings = wizardDeploying.get(slug);
       if (settings) clearRequestSecrets(settings.values, settings.secretKeys, settings.wallet);
@@ -2993,7 +3016,7 @@ async function runWizardAction(slug: string, action: string) {
       setWizardDeployFeedback(slug, feedback);
     }
     if (action === "save") {
-      if (output) output.textContent = "Credentials saved.";
+      if (output) output.textContent = t("main.wizard.credentialsSaved");
       return;
     }
     const record = await CollectService(slug);
@@ -3002,7 +3025,7 @@ async function runWizardAction(slug: string, action: string) {
       facts.innerHTML = renderPayoutFacts(pool, balance);
     }
     if (output) {
-      const success = facts ? "Pool balance updated." : `Collected ${formatBalance(record.balance, record.currency)}`;
+      const success = facts ? t("main.wizard.poolUpdated") : t("main.service.collected", {amount: formatBalance(record.balance, record.currency)});
       output.textContent = record.error || success;
     }
     await loadAppState();
@@ -3102,13 +3125,13 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
   const replacesLocal = proxyId === null
     ? state?.deployments?.some((deployment) => deployment.slug === slug)
     : route?.recorded?.[slug] === proxyId;
-  const outcome = await runCheckedDeploy(fields, values, proxyId === null, `Deploying ${name}...`, {
+  const outcome = await runCheckedDeploy(fields, values, proxyId === null, t("main.deploy.deploying", {name}), {
     confirmReplace: (message) => confirm(message),
     adminStep: () => DeployAdminStep(slug),
     askConsent: (step) => askDeployConsent(panel, name, step),
     say,
     deploy: async (approval, worker) => {
-      if (!settings.open) return { kind: "cancelled", text: "Setup was closed. Nothing was deployed." };
+      if (!settings.open) return { kind: "cancelled", text: t("main.deploy.setupClosed") };
       const answer = await deployFromCard(slug, settings, worker, approval);
       if (answer.kind === "ok") clearRequestSecrets(values, secretKeys);
       return answer;
@@ -3116,11 +3139,11 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
   }, {
     workerId,
     workers: state?.workerTargets,
-    workerBusyText: (worker) => `Deploying ${name} to ${worker.name}...`,
+    workerBusyText: (worker) => t("main.deploy.deployingToWorker", {name, worker: worker.name}),
     invalidField,
     savedSecrets,
     localReplacement: replacesLocal
-      ? `Redeploy ${name} ${proxyId === null ? "on this computer" : "through this proxy"}? The existing node will be replaced. Its saved data is kept.`
+      ? proxyId === null ? t("main.deploy.redeployHere", {name}) : t("main.deploy.redeployProxy", {name})
       : undefined,
   }).catch((error) => {
     say("failed", deployErrorText(error));
@@ -3160,7 +3183,7 @@ async function deployFromCard(
       if (!outcome.result.credentialWarning) markWizardSecretsSaved(slug, typedSecrets);
       return { kind: "ok", text: workerDeployText(outcome.result) };
     }
-    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : t("main.deploy.nothingDeployed") };
   }
   if (wallet) return runWalletDeploy(slug, values, image, instances, wallet, secretKeys, typedSecrets);
   const outcome = await runRouteDeploy(slug, proxyId, image, instances, route, {
@@ -3174,11 +3197,11 @@ async function deployFromCard(
     }),
   });
   if (outcome.kind === "refused" || outcome.kind === "cancelled") {
-    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : "Nothing was deployed." };
+    return { kind: "cancelled", text: outcome.kind === "refused" ? outcome.message : t("main.deploy.nothingDeployed") };
   }
   markWizardSecretsSaved(slug, typedSecrets);
   const followUp = {
-    failure: "CashPilot could not refresh the app.",
+    failure: t("main.deploy.refreshFailed"),
     run: async () => {
       await loadAppState();
       return deviceLinkText(state?.services?.find((service) => service.slug === slug), values, state?.addedDevices?.[slug] || "", state?.retryingDevices?.[slug] || "");
@@ -3199,7 +3222,7 @@ async function deployFromCard(
     instancesInput.value = String(deployment.instances || 1);
     instancesInput.dataset.initial = String(deployment.instances || 1);
   }
-  return { kind: "ok", text: "Deployed.", followUp };
+  return { kind: "ok", text: t("main.deploy.deployed"), followUp };
 }
 
 // A wallet seed kept in a file (Sia's hostd; render/wallet.ts). The phrase is in this
@@ -3256,7 +3279,7 @@ async function runWalletDeploy(
 ): Promise<DeployAnswer> {
   const refusal = walletChoiceRefusal(choice);
   if (refusal) return refusal;
-  if (choice.mode === "generate") sayDeploy(slug, "busy", "Deploying, and creating a new wallet...");
+  if (choice.mode === "generate") sayDeploy(slug, "busy", t("main.wallet.creating"));
   const result = await sendCredentialRequest(values, secretKeys, (request) => {
     const requestChoice = { ...choice };
     choice.phrase = "";
@@ -3277,7 +3300,7 @@ async function runWalletDeploy(
   return {
     ...walletDeployAnswer(wallet, newWallet !== null),
     followUp: {
-      failure: "CashPilot could not refresh the app.",
+      failure: t("main.deploy.refreshFailed"),
       run: async () => { await loadAppState(); },
     },
   };
@@ -3305,7 +3328,7 @@ function fillNewWalletPanel() {
     fillNewWalletPanel();
   });
   panel.querySelector("[data-wallet-dismiss]")?.addEventListener("click", () => {
-    if (!confirm("Close without checking the words? CashPilot keeps no copy. You can show the phrase again from the dashboard.")) return;
+    if (!confirm(t("main.wallet.dismissConfirm"))) return;
     dropNewWalletPhrase();
     fillNewWalletPanel();
   });
@@ -3315,7 +3338,7 @@ function fillNewWalletPanel() {
     const typed = newWallet.positions.map((position) => inputs.find((input) => input.dataset.walletWord === String(position))?.value || "");
     inputs.forEach((input) => { input.value = ""; });
     if (!wordsMatch(newWallet.words, newWallet.positions, typed)) {
-      newWallet.error = "One of the words does not match. Check what you wrote down.";
+      newWallet.error = t("main.wallet.mismatch");
       fillNewWalletPanel();
       return;
     }
@@ -3414,7 +3437,7 @@ async function exportCompose(slugs: string[], arch: string, outputSlug: string) 
   const output = document.querySelector<HTMLPreElement>(`[data-output-slug="${outputSlug}"]`);
   try {
     const path = await ExportCompose(slugs, arch);
-    if (output) output.textContent = path ? `Saved ${path}` : "";
+    if (output) output.textContent = path ? t("main.compose.saved", {path}) : "";
   } catch (error) {
     if (output) output.textContent = String(error);
   }
@@ -3433,7 +3456,7 @@ async function askAboutRemoval(slug: string, serviceName: string): Promise<Remov
   try {
     plan = await PlanServiceRemoval(slug);
   } catch {
-    return confirm(`Remove ${serviceName}? This deletes its container and keeps any data it saved.`) ? {deleteData: false, allowCritical: false} : null;
+    return confirm(t("main.service.removeConfirm", {name: serviceName})) ? {deleteData: false, allowCritical: false} : null;
   }
   if (!confirm(removeConfirmText(serviceName, plan))) return null;
   const dataQuestion = deleteDataConfirmText(serviceName, plan);
@@ -3452,7 +3475,7 @@ async function runServiceAction(slug: string, action: string) {
     if (action === "collect") {
       const record = await CollectService(slug);
       await refreshState();
-      setOutput(record.error ? record.error : `Collected ${formatBalance(record.balance, record.currency)}`);
+      setOutput(record.error ? record.error : t("main.service.collected", {amount: formatBalance(record.balance, record.currency)}));
       return;
     }
     if (action === "logs") {
@@ -3461,11 +3484,11 @@ async function runServiceAction(slug: string, action: string) {
     }
     if (action === "stop") {
       await StopService(slug);
-      setOutput(`${slug} stopped.`);
+      setOutput(t("main.service.stopped", {slug}));
     }
     if (action === "start") {
       await StartService(slug);
-      setOutput(`${slug} started.`);
+      setOutput(t("main.service.started", {slug}));
     }
     if (action === "remove" && removal) {
       await RemoveService(slug, removal.deleteData, removal.allowCritical);
@@ -3474,12 +3497,12 @@ async function runServiceAction(slug: string, action: string) {
       // removals actually happened - the one fact they need after an irreversible act.
       await refreshState();
       setOutput(removal.deleteData
-        ? `${slug} and its saved data removed.`
-        : `${slug} removed. Its saved data is still on this computer. To delete it later, set ${slug} up again and remove it with its data.`);
+        ? t("main.service.removedWithData", {slug})
+        : t("main.service.removedKeptData", {slug}));
       return;
     }
     await refreshState();
-    setOutput(`${slug} ${action} complete.`);
+    setOutput(t("main.service.actionComplete", {slug, action}));
   } catch (error) {
     setOutput(String(error));
   }
@@ -3497,13 +3520,13 @@ async function runDriftAction(slug: string, action: string) {
       const panel = document.querySelector<HTMLElement>(`[data-drift-deploy-status="${slug}"]`);
       if (panel) panel.innerHTML = deployNotice(kind, text);
     };
-    if (!confirm(`Redeploy ${name}? It keeps the settings it was deployed with and its saved data.`)) {
-      say("cancelled", "Nothing was deployed.");
+    if (!confirm(t("main.drift.redeployConfirm", {name}))) {
+      say("cancelled", t("main.deploy.nothingDeployed"));
       return;
     }
-    const answer = await runDeployWithStatus(`Redeploying ${name}...`, say, async () => {
+    const answer = await runDeployWithStatus(t("main.drift.redeploying", {name}), say, async () => {
       await DeployService(slug, {}, null, null);
-      return { kind: "ok", text: `${name} redeployed.` };
+      return { kind: "ok", text: t("main.drift.redeployed", {name}) };
     });
     if (answer.kind === "ok") await refreshState().catch(() => undefined);
     return;
@@ -3513,7 +3536,7 @@ async function runDriftAction(slug: string, action: string) {
       await IgnoreDrift(slug);
       delete driftDeploys[slug];
       await refreshState();
-      setOutput(`${name}: warning ignored until the catalog changes it again.`);
+      setOutput(t("main.drift.ignored", {name}));
     } catch (error) {
       setOutput(String(error));
     }
@@ -3524,9 +3547,9 @@ async function runDriftAction(slug: string, action: string) {
 // the fenced network with the credentials, image and copies it already has.
 async function runEnableIsolation() {
   const names = state?.isolation?.outside || [];
-  if (!confirm(`Turn on LAN isolation? CashPilot redeploys ${names.length === 1 ? "1 running service" : `${names.length} running services`} onto its fenced network. Each keeps its settings and saved data, and is offline for a few seconds.`)) return;
+  if (!confirm(t("main.isolation.confirm", {n: names.length}))) return;
   try {
-    setOutput("Turning on LAN isolation...");
+    setOutput(t("main.isolation.turningOn"));
     const result = await EnableIsolation();
     await refreshState();
     const failed = Object.entries(result.failed || {});
@@ -3536,12 +3559,14 @@ async function runEnableIsolation() {
     const after = result.status;
     // The fence being up does not mean every service is behind it: say the fence is
     // applied, and name any service that did not move as still able to reach the LAN.
+    const fence = {mode: after?.mode || t("main.isolation.unknown"), state: after?.state || t("main.isolation.unknown"), error: after?.error ?? ""};
     const head = after && after.mode === "on" && after.state === "applied"
-      ? "The LAN fence is up."
-      : `Isolation is not in place (mode ${after?.mode || "unknown"}, fence ${after?.state || "unknown"}${after?.error ? `: ${after.error}` : ""}).`;
+      ? t("main.isolation.up")
+      : after?.error ? t("main.isolation.notInPlaceError", fence) : t("main.isolation.notInPlace", fence);
+    const movedList = moved.join(", ") || t("main.isolation.none");
     setOutput(failed.length
-      ? `${head} Moved behind it: ${moved.join(", ") || "none"}. Not moved, still able to reach your LAN: ${failed.map(([slug, why]) => `${slug} (${why})`).join("; ")}.`
-      : `${head} Moved behind it: ${moved.join(", ") || "none"}.`);
+      ? t("main.isolation.movedSome", {head, moved: movedList, failed: failed.map(([slug, why]) => `${slug} (${why})`).join("; ")})
+      : t("main.isolation.moved", {head, moved: movedList}));
   } catch (error) {
     setOutput(String(error));
   }
@@ -3558,7 +3583,7 @@ async function runCopyAction(slug: string, n: number, action: string) {
     if (action === "stop") await StopServiceCopy(slug, n);
     if (action === "start") await StartServiceCopy(slug, n);
     await refreshState();
-    setOutput(`${slug} #${n} ${action === "stop" ? "stopped" : "started"}.`);
+    setOutput(action === "stop" ? t("main.copy.stopped", {slug, n}) : t("main.copy.started", {slug, n}));
   } catch (error) {
     setOutput(String(error));
   }
@@ -3604,7 +3629,7 @@ function showToast(className: string, borderVar: string, title: string, message:
 function showErrorToast(payload: {scope?: string; error?: string} | string) {
   const scope = typeof payload === "object" && payload ? payload.scope ?? "" : "";
   const message = typeof payload === "object" && payload ? payload.error ?? "" : String(payload);
-  showToast("notification-item error", "--error", scope ? `${scope} error` : "Error", message);
+  showToast("notification-item error", "--error", scope ? t("main.toast.scopedError", {scope: scopeLabel(scope)}) : t("main.toast.error"), message);
 }
 
 // showInfoToast surfaces a backend app:notice — an informational advisory (e.g. a
@@ -3613,7 +3638,54 @@ function showErrorToast(payload: {scope?: string; error?: string} | string) {
 function showInfoToast(payload: {scope?: string; message?: string} | string) {
   const scope = typeof payload === "object" && payload ? payload.scope ?? "" : "";
   const message = typeof payload === "object" && payload ? payload.message ?? "" : String(payload);
-  showToast("notification-item", "--warning", scope ? `${scope} notice` : "Notice", message);
+  showToast("notification-item", "--warning", scope ? t("main.toast.scopedNotice", {scope: scopeLabel(scope)}) : t("main.toast.notice"), message);
+}
+
+// A toast's scope as its title says it. The scopes are this file's own and the
+// backend's (emitError, emitNotice); one this list does not know is shown as sent.
+function scopeLabel(scope: string) {
+  switch (scope) {
+    case "activity":
+      return t("main.scope.activity");
+    case "background":
+      return t("main.scope.background");
+    case "cash-out":
+      return t("main.scope.cashOut");
+    case "clipboard":
+      return t("main.scope.clipboard");
+    case "consent":
+      return t("main.scope.consent");
+    case "credentials":
+      return t("main.scope.credentials");
+    case "custom service":
+      return t("main.scope.customService");
+    case "fleet":
+      return t("main.scope.fleet");
+    case "import":
+      return t("main.scope.import");
+    case "language":
+      return t("main.scope.language");
+    case "mode":
+      return t("main.scope.mode");
+    case "proxies":
+      return t("main.scope.proxies");
+    case "proxy":
+      return t("main.scope.proxy");
+    case "proxy test":
+      return t("main.scope.proxyTest");
+    case "restore":
+      return t("main.scope.restore");
+    case "runtime":
+      return t("main.scope.runtime");
+    case "Server commands":
+      return t("main.scope.serverCommands");
+    case "settings":
+      return t("main.scope.settings");
+    case "worker":
+      return t("main.scope.worker");
+    default:
+      return scope;
+  }
 }
 
 function wireChrome() {
