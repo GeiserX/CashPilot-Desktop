@@ -61,6 +61,10 @@ import-time side effects — so a Node harness can import them. Everything else
 still lives in `main.ts`, which grabs `#app` at module scope and therefore cannot
 be imported by anything.
 
+The one shared state in `render/` is the locale in `render/i18n.ts`. It starts as
+English, and only `main.ts` changes it, with `setLocale`. A check that draws
+another language calls `setLocale` itself first.
+
 ```bash
 cd frontend && npm test        # compiles src/render/ and runs scripts/*_check.mjs
 ```

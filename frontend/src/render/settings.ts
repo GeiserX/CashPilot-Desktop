@@ -105,3 +105,20 @@ export function settingsSaveValues(fields: SettingField[]): Record<string, strin
   }
   return values;
 }
+
+/**
+ * The plain fields to fill back in after the settings page is drawn again: each
+ * one the user had typed into and not saved, keyed by name. A field whose saved
+ * value changed underneath (a Save, or another card) keeps the new value, so a
+ * redraw never puts back text that is no longer what the user was editing.
+ * Secrets are left out; their box starts empty on every draw.
+ */
+export function unsavedDrafts(before: SettingField[], after: SettingField[]): Map<string, string> {
+  const drawn = new Map(after.filter((f) => !f.secret && !f.readOnly).map((f) => [f.name, f.initial]));
+  const out = new Map<string, string>();
+  for (const f of before) {
+    if (f.secret || f.readOnly || f.initial === undefined || f.value === f.initial) continue;
+    if (drawn.has(f.name) && drawn.get(f.name) === f.initial) out.set(f.name, f.value);
+  }
+  return out;
+}

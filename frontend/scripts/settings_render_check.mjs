@@ -8,7 +8,7 @@
 //
 //   node scripts/settings_render_check.mjs      # against ./.harness-build
 
-import { renderEnvSetting, settingField, settingsSaveValues } from "../.harness-build/render/settings.js";
+import { renderEnvSetting, settingField, settingsSaveValues, unsavedDrafts } from "../.harness-build/render/settings.js";
 
 let failures = 0;
 let checks = 0;
@@ -83,6 +83,21 @@ check("join, then Save before Continue: the empty address and the hub are not se
 check("an edited plain field is sent", settingsSaveValues([plainField({value: "http://new.example:8080", initial: "http://old.example:8080"})]).upstreamUrl === "http://new.example:8080");
 check("a plain field cleared by hand is sent empty", settingsSaveValues([plainField({value: "", initial: "http://old.example:8080"})]).upstreamUrl === "");
 check("an untouched secret is still left out next to an untouched plain field", Object.keys(settingsSaveValues([field({}), plainField({value: "a", initial: "a"})])).length === 0);
+
+// A redraw (a language change, the background-helper toggle) draws the form from
+// the saved values again. A field typed into and not saved keeps the typed text,
+// unless its saved value changed underneath.
+{
+  const before = [plainField({value: "http://typed.example", initial: "http://old.example"}), plainField({name: "hostnamePrefix", value: "box", initial: "box"}), field({value: "typed-secret"})];
+  const same = [plainField({value: "http://old.example", initial: "http://old.example"}), plainField({name: "hostnamePrefix", value: "box", initial: "box"}), field({})];
+  const kept = unsavedDrafts(before, same);
+  check("a redraw keeps an unsaved edit", kept.get("upstreamUrl") === "http://typed.example", JSON.stringify([...kept]));
+  check("a redraw leaves an untouched field alone", !kept.has("hostnamePrefix"));
+  check("a redraw never refills a secret", !kept.has("upstreamKey"));
+  const saved = [plainField({value: "http://typed.example", initial: "http://typed.example"})];
+  check("a field whose saved value changed is not refilled", !unsavedDrafts(before, saved).has("upstreamUrl"));
+  check("a field no longer drawn is not refilled", unsavedDrafts(before, []).size === 0);
+}
 
 // The wiring between the two: Save reads each drawn input with settingField. The
 // input below is the one renderEnvSetting draws, parsed the way a browser would
