@@ -26,7 +26,11 @@ func sources(t *testing.T, visit func(path, text string)) {
 		name := d.Name()
 		if d.IsDir() {
 			switch name {
-			case "node_modules", ".git", ".harness-build", "dist", "wailsjs", "services", "e2e":
+			case "node_modules", ".git", ".harness-build", "dist", "wailsjs", "e2e":
+				return filepath.SkipDir
+			}
+			// The vendored catalog at the top, never internal/services.
+			if p == filepath.Join(root, "services") {
 				return filepath.SkipDir
 			}
 			return nil
@@ -65,8 +69,12 @@ func TestEveryKeyIsDefinedAndUsed(t *testing.T) {
 	used := map[string]bool{}
 	var missing []string
 	all := ""
+	scanned := map[string]bool{}
 	sources(t, func(path, text string) {
 		all += text
+		if rel, err := filepath.Rel(filepath.Join("..", ".."), filepath.Dir(path)); err == nil {
+			scanned[filepath.ToSlash(rel)] = true
+		}
 		for _, m := range callKey.FindAllStringSubmatch(text, -1) {
 			used[m[1]] = true
 			if _, ok := en[m[1]]; !ok {
@@ -76,6 +84,9 @@ func TestEveryKeyIsDefinedAndUsed(t *testing.T) {
 	})
 	if len(used) == 0 {
 		t.Fatal("found no key in the sources; the scan is broken")
+	}
+	if !scanned["internal/services"] {
+		t.Fatal("the scan skipped internal/services; it must read every Go package")
 	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
