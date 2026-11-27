@@ -387,7 +387,7 @@ function Test-Path { param([string]$LiteralPath) $LiteralPath.StartsWith('Cert:\
 function Remove-Item { param([string]$LiteralPath, [switch]$DeleteKey) if (-not $DeleteKey) { throw 'kept the private key' }; $global:deleted += $LiteralPath }
 `
 	signing, encryption, digest := guardianCertificates(t)
-	check := scriptRemoveGuardian + "\nif (-not $global:removed) { throw 'the guardian was not removed' }\n[Console]::Error.WriteLine('deleted=' + ($global:deleted -join ';'))\n"
+	check := scriptRemoveGuardian + "\nif (-not $global:removed) { throw 'the guardian was not removed' }\n"
 	code, out := runGuardianScript(t, mock, check, map[string]any{"id": digest}, signing, encryption, "objects")
 	if _, err := decodeOutput(out); code != 0 || err != nil {
 		t.Fatalf("exit %d, decode %v: %s", code, err, out)
