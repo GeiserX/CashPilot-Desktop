@@ -367,6 +367,11 @@ func (e *Engine) prepareGuest(ctx context.Context, progress securevm.Progress) e
 		return nil
 	}
 	progress("Restarting the Secure VM", -1)
+	// `tart stop` forces the guest off when it does not shut down in time, so
+	// flush its disk first.
+	c, cancel := context.WithTimeout(ctx, time.Minute)
+	_, _ = g.Exec(c, "", "/bin/sync")
+	cancel()
 	since := time.Now()
 	if err := e.request(RequestRestart); err != nil {
 		return err
