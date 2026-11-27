@@ -16,33 +16,34 @@
 import type { CustomDefinition, CustomEnv, CustomEnvView, CustomServiceView, Deployment, ScalingLimit, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { renderDeployPanel, type DeployFeedback } from "./deploy_consent.js";
+import { ht, t } from "./i18n.js";
 import { instancesSection } from "./instances.js";
 
 /** The words every custom service carries: it is the user's image, not a reviewed one. */
-export const UNTRUSTED_TEXT = "Added by you. CashPilot has not reviewed this image.";
+export function untrustedText(): string {
+  return t("custom.untrusted");
+}
 
 /** The badge on a custom service in the catalog and on the dashboard. */
 export function customBadge(service: Pick<Service, "custom"> | null | undefined): string {
   if (!service?.custom) return "";
-  return `<span class="badge warn" title="${escapeHtml(UNTRUSTED_TEXT)}">custom, not reviewed</span>`;
+  return `<span class="badge warn" title="${ht("custom.untrusted")}">${ht("custom.notReviewed")}</span>`;
 }
 
 /** What a custom service may do, said once in the editor and on its deploy card. */
 function restrictionsNote(): string {
-  return `<p class="muted compact-copy">It runs with the restrictions every catalog service gets: all capabilities dropped,
-    no-new-privileges, a process and a memory limit, never privileged, no host network, no devices, no ports and no
-    host folders. CashPilot cannot read its earnings, so it shows no balance.</p>`;
+  return `<p class="muted compact-copy">${ht("custom.restrictions")}</p>`;
 }
 
 function envRow(env: Partial<CustomEnvView> = {}): string {
   const stored = Boolean(env.secret && env.isSet);
   return `
     <div class="custom-env-row" data-custom-env-row>
-      <input data-custom-env-key type="text" spellcheck="false" autocomplete="off" placeholder="NAME" value="${escapeHtml(env.key || "")}" aria-label="Variable name" />
+      <input data-custom-env-key type="text" spellcheck="false" autocomplete="off" placeholder="NAME" value="${escapeHtml(env.key || "")}" aria-label="${ht("custom.variableName")}" />
       <input data-custom-env-value type="${env.secret ? "password" : "text"}"${env.secret ? ' autocomplete="new-password"' : ' autocomplete="off"'} spellcheck="false"
-        placeholder="${stored ? "stored, leave blank to keep" : "value"}" value="${env.secret ? "" : escapeHtml(env.value || "")}" aria-label="Value" />
-      <label class="custom-env-secret"><input data-custom-env-secret type="checkbox"${env.secret ? " checked" : ""} /> Secret</label>
-      <button class="btn btn-ghost btn-sm" data-custom-env-remove type="button">Remove</button>
+        placeholder="${stored ? ht("custom.storedKeep") : ht("custom.valuePlaceholder")}" value="${env.secret ? "" : escapeHtml(env.value || "")}" aria-label="${ht("custom.value")}" />
+      <label class="custom-env-secret"><input data-custom-env-secret type="checkbox"${env.secret ? " checked" : ""} /> ${ht("custom.secret")}</label>
+      <button class="btn btn-ghost btn-sm" data-custom-env-remove type="button">${ht("custom.remove")}</button>
     </div>
   `;
 }
@@ -67,24 +68,24 @@ export function renderCustomEditor(view: CustomServiceView | null): string {
     </label>`;
   return `
     <form class="custom-editor panel" data-custom-editor="${escapeHtml(v.slug)}" onsubmit="return false">
-      <h3>${view ? `Edit ${escapeHtml(view.name)}` : "Add custom service"}</h3>
-      <p class="tip">${escapeHtml(UNTRUSTED_TEXT)} Only add an image you trust: it runs on this computer.</p>
+      <h3>${view ? ht("custom.editTitle", { name: view.name }) : ht("custom.addTitle")}</h3>
+      <p class="tip">${ht("custom.untrusted")} ${ht("custom.onlyTrusted")}</p>
       <div class="credential-grid">
-        ${field("name", "Name", v.name, "My service", view ? `Internal name <code>${escapeHtml(view.slug)}</code>, which never changes.` : "")}
-        ${field("image", "Image", v.image, "publisher/image:1.2.3", "Docker Hub or any registry, with a tag or digest.")}
-        ${field("command", "Command (optional)", v.command, "--flag ${NAME}", "One line. ${NAME} is replaced by the variable's value.")}
-        ${field("dataPath", "Data path (optional)", v.dataPath, "/data", v.volume ? `Kept in the volume <code>${escapeHtml(v.volume)}</code>.` : "A path inside the container kept in a volume of its own.")}
-        ${field("memLimit", "Memory limit", v.memLimit, "512m", "From 32m to 16g.")}
+        ${field("name", t("custom.name"), v.name, t("custom.namePlaceholder"), view ? ht("custom.internalName", { slug: view.slug }) : "")}
+        ${field("image", t("custom.image"), v.image, "publisher/image:1.2.3", ht("custom.imageHelp"))}
+        ${field("command", t("custom.command"), v.command, "--flag ${NAME}", ht("custom.commandHelp", { placeholder: "${NAME}" }))}
+        ${field("dataPath", t("custom.dataPath"), v.dataPath, "/data", v.volume ? ht("custom.keptInVolume", { volume: v.volume }) : ht("custom.dataPathHelp"))}
+        ${field("memLimit", t("custom.memLimit"), v.memLimit, "512m", ht("custom.memLimitHelp", { min: "32m", max: "16g" }))}
       </div>
-      <h4>Environment variables</h4>
+      <h4>${ht("custom.envVars")}</h4>
       <div class="custom-env" data-custom-env>
         ${v.env.map((env) => envRow(env)).join("")}
       </div>
-      <button class="btn btn-ghost btn-sm" data-custom-env-add type="button">Add variable</button>
+      <button class="btn btn-ghost btn-sm" data-custom-env-add type="button">${ht("custom.addVariable")}</button>
       ${restrictionsNote()}
       <div class="actions left">
-        <button class="primary" data-custom-save type="button">${view ? "Save changes" : "Add service"}</button>
-        <button class="secondary" data-custom-cancel type="button">Cancel</button>
+        <button class="primary" data-custom-save type="button">${view ? ht("custom.saveChanges") : ht("custom.addService")}</button>
+        <button class="secondary" data-custom-cancel type="button">${ht("custom.cancel")}</button>
       </div>
       <pre class="output" data-custom-output></pre>
     </form>
@@ -135,14 +136,14 @@ export function renderCustomServicesSection(
         <div class="cell-sub cell-mono">${escapeHtml(view.image)}</div>
         <div class="cell-tags">
           ${customBadge({ custom: true })}
-          ${(view.warnings || []).map((w) => `<span class="badge warn" title="${escapeHtml(w)}">no version tag</span>`).join(" ")}
-          ${deployed.has(view.slug) ? `<span class="badge">deployed here</span>` : ""}
+          ${(view.warnings || []).map((w) => `<span class="badge warn" title="${escapeHtml(w)}">${ht("custom.noVersionTag")}</span>`).join(" ")}
+          ${deployed.has(view.slug) ? `<span class="badge">${ht("custom.deployedHere")}</span>` : ""}
         </div>
       </td>
       <td class="c-act"><div class="action-btns">
-        <button class="btn btn-primary btn-sm" data-service="${escapeHtml(view.slug)}">${deployed.has(view.slug) ? "Manage" : "Deploy"}</button>
-        <button class="btn btn-ghost btn-sm" data-custom-edit="${escapeHtml(view.slug)}">Edit</button>
-        <button class="btn btn-ghost btn-sm" data-custom-delete="${escapeHtml(view.slug)}"${deployed.has(view.slug) ? ' disabled title="Remove it from this computer first."' : ""}>Delete</button>
+        <button class="btn btn-primary btn-sm" data-service="${escapeHtml(view.slug)}">${deployed.has(view.slug) ? ht("custom.manage") : ht("custom.deploy")}</button>
+        <button class="btn btn-ghost btn-sm" data-custom-edit="${escapeHtml(view.slug)}">${ht("custom.edit")}</button>
+        <button class="btn btn-ghost btn-sm" data-custom-delete="${escapeHtml(view.slug)}"${deployed.has(view.slug) ? ` disabled title="${ht("custom.removeFirst")}"` : ""}>${ht("custom.delete")}</button>
       </div></td>
     </tr>
   `).join("");
@@ -150,10 +151,10 @@ export function renderCustomServicesSection(
   return `
     <section class="catalog-block custom-services">
       <div class="split">
-        <h3>Your custom services</h3>
-        ${editing ? "" : `<button class="btn btn-ghost btn-sm" data-custom-new>Add custom service</button>`}
+        <h3>${ht("custom.yourServices")}</h3>
+        ${editing ? "" : `<button class="btn btn-ghost btn-sm" data-custom-new>${ht("custom.addButton")}</button>`}
       </div>
-      <p class="muted compact-copy">Run an image the catalog does not list, from Docker Hub or any registry. ${escapeHtml(UNTRUSTED_TEXT)}</p>
+      <p class="muted compact-copy">${ht("custom.runIntro")} ${ht("custom.untrusted")}</p>
       ${loadError ? `<p class="tip">${escapeHtml(loadError)}</p>` : ""}
       ${editor}
       ${rows ? `<div class="table-scroll"><table class="catalog-table"><tbody>${rows}</tbody></table></div>` : ""}
@@ -177,12 +178,12 @@ export function renderCustomServiceCard(
         </div>
         ${customBadge(service)}
       </div>
-      <p class="tip">${escapeHtml(UNTRUSTED_TEXT)} Its image and variables are changed by editing it under Catalog, Your custom services.</p>
+      <p class="tip">${ht("custom.untrusted")} ${ht("custom.editUnderCatalog")}</p>
       ${restrictionsNote()}
       ${instancesSection(service, scaling, instances)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
-        <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}">Deploy</button>
+        <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}">${ht("custom.deploy")}</button>
       </div>
       ${renderDeployPanel(service.slug, deployFeedback)}
       <pre class="output wizard-output" data-output-slug="${escapeHtml(service.slug)}"></pre>

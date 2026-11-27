@@ -23,6 +23,7 @@
 import type { AdminStep, WorkerTarget } from "../wails";
 import { deployNeeds, type ServiceField } from "./fields.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /** The program Windows names in its permission prompt. */
 export const POWERSHELL_PATH = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
@@ -44,20 +45,25 @@ export function missingRequiredFields(
 export function missingFieldsNotice(missing: ServiceField[], retrySecret = false): string {
   return `
     <div class="deploy-notice warn" data-deploy-notice="missing" role="alert">
-      <p><strong>Fill in every field marked * first.</strong> Nothing was deployed.</p>
+      <p>${ht("deploy_consent.fillEveryField")}</p>
       <ul>${missing.map((field) => `<li data-missing-field="${escapeHtml(field.key)}">${escapeHtml(field.label)}</li>`).join("")}</ul>
-      ${retrySecret ? `<p>${RETRY_SECRET_TEXT}</p>` : ""}
+      ${retrySecret ? `<p>${ht("deploy_consent.retrySecret")}</p>` : ""}
     </div>`;
 }
 
-/** Plain words for the ranges a firewall rule blocks. */
-const RANGE_WORDS: Record<string, string> = {
-  "100.64.0.0/10": "shared carrier addresses, which Tailscale also uses",
-  "169.254.0.0/16": "link-local addresses, where cloud metadata services answer",
-};
+/** A range a firewall rule blocks, with plain words for the ones people meet. */
+function rangeText(net: string): string {
+  switch (net) {
+    case "100.64.0.0/10": return t("deploy_consent.range.cgnat", { net });
+    case "169.254.0.0/16": return t("deploy_consent.range.linkLocal", { net });
+    default: return net;
+  }
+}
 
 function rangesText(networks: string[]): string {
-  return networks.map((net) => (RANGE_WORDS[net] ? `${net} (${RANGE_WORDS[net]})` : net)).join(" and ");
+  const parts = networks.map(rangeText);
+  if (!parts.length) return "";
+  return parts.slice(1).reduce((first, second) => t("deploy_consent.rangesAnd", { first, second }), parts[0]);
 }
 
 /** What the admin-step screen says, line by line. */
@@ -74,29 +80,32 @@ export function adminConsentText(serviceName: string, step: AdminStep): AdminCon
   const rule = step.ruleName;
   const oldRule = step.removeRuleName;
   const program = step.program || serviceName;
-  const ruleChange = step.replaceRule
-    ? `CashPilot removes the existing outbound rule "${rule}" and recreates it under the same name.`
-    : `Windows adds one outbound firewall rule, "${rule}".`;
+  const service = serviceName;
+  const ranges = rangesText(step.networks || []);
+  let title: string;
+  if (rule && oldRule) title = t("deploy_consent.title.change", { service });
+  else if (oldRule) title = t("deploy_consent.title.remove", { service });
+  else if (step.replaceRule) title = t("deploy_consent.title.replace", { service });
+  else title = t("deploy_consent.title.add", { service });
   return {
-    title: rule && oldRule
-      ? `Change the Windows Firewall rules for ${serviceName}?`
-      : `${oldRule ? "Remove" : step.replaceRule ? "Replace" : "Add"} a Windows Firewall rule for ${serviceName}?`,
+    title,
     changes: [
-      oldRule ? `Before ${serviceName} starts, CashPilot removes the old outbound rule "${oldRule}". The new deployment no longer needs it.` : "",
-      rule ? `Before it starts, ${ruleChange} It blocks only ${serviceName}'s program (${program}) from reaching ${rangesText(step.networks || [])}.` : "",
+      oldRule ? t("deploy_consent.changes.removeOld", { service, oldRule }) : "",
+      rule
+        ? step.replaceRule
+          ? t("deploy_consent.changes.replace", { service, rule, program, ranges })
+          : t("deploy_consent.changes.add", { service, rule, program, ranges })
+        : "",
     ].filter(Boolean).join(" "),
-    prompt:
-      `Windows then ${rule && oldRule ? "shows a permission prompt for each rule" : "shows a permission prompt"}. It names Windows PowerShell (${POWERSHELL_PATH}), because CashPilot changes the firewall through it. ` +
-      "If your account is not an administrator, an administrator types their password there. " +
-      `Choose Yes to go ahead. If you choose No, ${oldRule || step.replaceRule ? "CashPilot stops the deploy" : "CashPilot adds no rule"} and ${serviceName} does not run. ` +
-      `If ${serviceName} was running, the deploy stopped it before the prompt, and it stays stopped until you deploy again and choose Yes.`,
-    after: rule
-      ? `No restart of Windows. The new rule stays while ${serviceName} is deployed, so later starts need no prompt while the rule is in place.`
-      : "No restart of Windows.",
-    undo: rule
-      ? `Removing ${serviceName} in CashPilot deletes the rule, with one more permission prompt. You can also delete it yourself in Windows Defender Firewall with Advanced Security, under Outbound Rules, "${rule}".`
-      : "Deploying a version that needs the old rule will ask to add it again.",
-    go: "Continue",
+    prompt: t("deploy_consent.prompt", {
+      prompts: rule && oldRule ? "each" : "one",
+      path: POWERSHELL_PATH,
+      onNo: oldRule || step.replaceRule ? "stop" : "noRule",
+      service,
+    }),
+    after: rule ? t("deploy_consent.after.rule", { service }) : t("deploy_consent.after.noRule"),
+    undo: rule ? t("deploy_consent.undo.rule", { service, rule }) : t("deploy_consent.undo.noRule"),
+    go: t("deploy_consent.continue"),
   };
 }
 
@@ -114,7 +123,7 @@ export function adminConsentScreen(serviceName: string, step: AdminStep): string
       </ul>
       <div class="gate-actions">
         <button class="btn btn-primary" data-deploy-consent="go">${escapeHtml(c.go)}</button>
-        <button class="btn btn-ghost" data-deploy-consent="cancel">Cancel</button>
+        <button class="btn btn-ghost" data-deploy-consent="cancel">${ht("deploy_consent.cancel")}</button>
       </div>
     </div>`;
 }
@@ -131,12 +140,14 @@ export function deployNotice(kind: "busy" | DeployAnswer["kind"], text: string, 
   const unfinished = kind === "failed" || kind === "partial";
   const tone = kind === "failed" ? "error" : kind === "cancelled" || kind === "partial" ? "warn" : kind === "ok" ? "ok" : "";
   const role = unfinished ? "alert" : "status";
-  const lead = unfinished && !worker ? "<strong>The deploy did not finish.</strong> " : "";
+  const lead = unfinished && !worker ? `${ht("deploy_consent.didNotFinish")} ` : "";
   return `<div class="deploy-notice ${tone}" data-deploy-notice="${kind}" role="${role}"><p>${lead}${escapeHtml(text)}</p></div>`;
 }
 
 /** What Cancel on the admin-step screen leaves behind. */
-export const CANCELLED_TEXT = "Nothing was deployed. You chose Cancel, so Windows was not asked for anything.";
+export function cancelledText(): string {
+  return t("deploy_consent.cancelled");
+}
 
 // app_credentials.go adds this code to the message that Wails rejects with.
 const DEPLOY_CREDENTIALS_SAVED = "[deploy_credentials_saved] ";
@@ -146,7 +157,7 @@ function deployErrorAnswer(error: unknown): DeployAnswer {
   if (text.startsWith(DEPLOY_CREDENTIALS_SAVED)) {
     return { kind: "partial", text: text.slice(DEPLOY_CREDENTIALS_SAVED.length) };
   }
-  return { kind: "failed", text: text || "CashPilot got no reason back. Check the service before trying Deploy again." };
+  return { kind: "failed", text: text || t("deploy_consent.noReason") };
 }
 
 /** The text of a rejected deploy: the backend's own reason, never an empty line. */
@@ -190,12 +201,11 @@ export type DeployStatus = { kind: "busy" | DeployAnswer["kind"]; text: string; 
 
 export type DeployFeedback = (DeployStatus | { kind: "missing"; missing: ServiceField[] }) & { retrySecret?: boolean };
 
-const RETRY_SECRET_TEXT = "Your secret changes were not saved. CashPilot will use them if you retry in this card.";
 
 export function renderDeployFeedback(status?: DeployFeedback): string {
   if (!status) return "";
   if (status.kind === "missing") return missingFieldsNotice(status.missing, status.retrySecret);
-  const text = status.retrySecret ? `${status.text} ${RETRY_SECRET_TEXT}` : status.text;
+  const text = status.retrySecret ? `${status.text} ${t("deploy_consent.retrySecret")}` : status.text;
   return deployNotice(status.kind, text, status.worker);
 }
 
@@ -242,19 +252,19 @@ export async function runCheckedDeploy(
 ): Promise<CheckedDeployOutcome> {
   const worker = target.workers?.find((candidate) => candidate.id === target.workerId);
   if (target.workerId != null && !worker) {
-    return { kind: "blocked", message: "The selected worker is no longer available. Choose a target and try again." };
+    return { kind: "blocked", message: t("deploy_consent.workerGone") };
   }
   // DeployToWorker validates the merged typed, saved and default settings in Go.
   if (!worker) {
     if (target.invalidField) {
-      const answer = { kind: "failed" as const, text: `${target.invalidField} does not have the shape this provider expects.` };
+      const answer = { kind: "failed" as const, text: t("deploy_consent.invalidShape", { field: target.invalidField }) };
       calls.say(answer.kind, answer.text);
       return { kind: "done", answer };
     }
     const missing = missingRequiredFields(fields, values, target.savedSecrets);
     if (missing.length) return { kind: "missing", missing };
     if (target.localReplacement && !(await calls.confirmReplace?.(target.localReplacement))) {
-      const answer = { kind: "cancelled" as const, text: "Nothing was deployed." };
+      const answer = { kind: "cancelled" as const, text: t("deploy_consent.nothingDeployed") };
       calls.say(answer.kind, answer.text);
       return { kind: "done", answer };
     }

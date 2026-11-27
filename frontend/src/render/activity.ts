@@ -9,45 +9,59 @@
 
 import type { ActivityDetail, ActivityRow, ActivityTop, ActivityView } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 import type { RuntimeInput } from "./runtime_state.js";
 
 export const UNKNOWN = "—";
 
-const STATUS: Record<string, [string, string]> = {
-  ok: ["ok", ""],
-  host_network: ["host network", "Shares the machine's network, and its connections could not be told apart from the machine's."],
-  no_network: ["no network", "Runs with networking off."],
-  sandboxed: ["sandboxed", "Runs under a sandboxed runtime (such as gVisor), whose network a helper cannot join."],
-  probe_failed: ["could not sample", "The helper did not produce a reading this round."],
-  skipped_budget: ["skipped", "The round ran out of time before reaching this container."],
-  native: ["native program", "Runs as a program on this machine, not in a container, so no helper can join its network."],
-};
+/** A row status's chip label and its title, or undefined for a status this file does not know. */
+function statusText(status: string): [string, string] | undefined {
+  switch (status) {
+    case "ok": return [t("activity.status.ok"), ""];
+    case "host_network": return [t("activity.status.hostNetwork"), t("activity.status.hostNetworkTitle")];
+    case "no_network": return [t("activity.status.noNetwork"), t("activity.status.noNetworkTitle")];
+    case "sandboxed": return [t("activity.status.sandboxed"), t("activity.status.sandboxedTitle")];
+    case "probe_failed": return [t("activity.status.probeFailed"), t("activity.status.probeFailedTitle")];
+    case "skipped_budget": return [t("activity.status.skipped"), t("activity.status.skippedTitle")];
+    case "native": return [t("activity.status.native"), t("activity.status.nativeTitle")];
+    default: return undefined;
+  }
+}
 
-/** Why a host-network earner could not be told apart, in plain words. */
-export const CGROUP_REASONS: Record<string, string> = {
-  cgroup_v1: "this machine uses cgroup v1; a host on cgroup v2 is needed",
-  cgroup_missing: "its cgroup was not found",
-  sock_diag_refused: "the kernel refused the socket list",
-  kernel_no_cgroup_id: "this kernel does not report a socket's cgroup",
-};
+/** Why a host-network earner could not be told apart, in plain words, or "". */
+export function cgroupReason(reason: string): string {
+  switch (reason) {
+    case "cgroup_v1": return t("activity.cgroup.v1");
+    case "cgroup_missing": return t("activity.cgroup.missing");
+    case "sock_diag_refused": return t("activity.cgroup.sockDiagRefused");
+    case "kernel_no_cgroup_id": return t("activity.cgroup.noCgroupId");
+    default: return "";
+  }
+}
 
-export const HOST_CGROUP_NOTE =
-  "host network, matched by cgroup: connections already closed (TIME_WAIT) are not seen; connection counters are machine-wide and not shown";
-export const FORWARDED_NOTE =
-  "Traffic an earner routes for VPN customers is forwarded by the kernel, not opened by the earner, and is not shown.";
+export function hostCgroupNote(): string {
+  return t("activity.hostCgroupNote");
+}
 
-const CLASS_LABEL: Record<string, string> = {
-  public: "internet",
-  infra: "DNS / Docker",
-  peer: "another earner",
-  docker_peer: "another container",
-  lan: "your LAN",
-  tailnet: "tailnet",
-  docker_host: "Docker host",
-  metadata: "cloud metadata",
-  link_local: "link-local",
-  multicast: "multicast",
-};
+export function forwardedNote(): string {
+  return t("activity.forwardedNote");
+}
+
+function classLabel(kind: string): string {
+  switch (kind) {
+    case "public": return t("activity.class.public");
+    case "infra": return t("activity.class.infra");
+    case "peer": return t("activity.class.peer");
+    case "docker_peer": return t("activity.class.dockerPeer");
+    case "lan": return t("activity.class.lan");
+    case "tailnet": return t("activity.class.tailnet");
+    case "docker_host": return t("activity.class.dockerHost");
+    case "metadata": return t("activity.class.metadata");
+    case "link_local": return t("activity.class.linkLocal");
+    case "multicast": return t("activity.class.multicast");
+    default: return "";
+  }
+}
 
 /** Only outbound rows of these kinds are the earner reaching into your networks. */
 const ALARM: Record<string, boolean> = { lan: true, tailnet: true, docker_host: true, docker_peer: true, metadata: true, link_local: true };
@@ -75,28 +89,28 @@ export function domId(container: string): string {
 }
 
 function isHostNetwork(row: ActivityRow): boolean {
-  return row.networkMode === "host" || row.reason === "host_cgroup" || row.status === "host_network" || Boolean(CGROUP_REASONS[row.reason]);
+  return row.networkMode === "host" || row.reason === "host_cgroup" || row.status === "host_network" || Boolean(cgroupReason(row.reason));
 }
 
 /** The status chip of one row. */
 export function statusChip(row: ActivityRow): string {
   if (row.status === "ok" && row.reason === "shared_namespace") {
-    return `<span class="activity-chip activity-chip-muted" title="This network belongs to a container that is not an earner (a VPN or Tailscale sidecar), which other apps may share. Only the counters are kept; no destinations and no alerts.">${escapeHtml(
-      "network of this container, used by " + (row.members || []).join(", "),
+    return `<span class="activity-chip activity-chip-muted" title="${ht("activity.sharedNamespaceTitle")}">${escapeHtml(
+      t("activity.sharedNamespace", { members: (row.members || []).join(", ") }),
     )}</span>`;
   }
   if (row.status === "ok" && row.reason === "host_cgroup") {
-    return `<span class="activity-chip activity-chip-info" title="${escapeHtml(FORWARDED_NOTE)}">${escapeHtml(HOST_CGROUP_NOTE)}</span>`;
+    return `<span class="activity-chip activity-chip-info" title="${escapeHtml(forwardedNote())}">${escapeHtml(hostCgroupNote())}</span>`;
   }
   if (row.status === "host_network") {
-    const why = CGROUP_REASONS[row.reason];
-    const text = why ? `host network: cannot be told apart (${why})` : "host network";
-    return `<span class="activity-chip activity-chip-muted" title="${escapeHtml(STATUS.host_network[1])}">${escapeHtml(text)}</span>`;
+    const why = cgroupReason(row.reason);
+    const text = why ? t("activity.hostNetworkWhy", { why }) : t("activity.status.hostNetwork");
+    return `<span class="activity-chip activity-chip-muted" title="${escapeHtml(t("activity.status.hostNetworkTitle"))}">${escapeHtml(text)}</span>`;
   }
-  const s = STATUS[row.status] || [row.status, ""];
+  const s = statusText(row.status) || [row.status, ""];
   let text = s[0];
-  if (row.members && row.members.length > 1) text = "shared with " + row.members.join(", ");
-  if (row.status === "probe_failed" && row.reason) text += ` (${row.reason})`;
+  if (row.members && row.members.length > 1) text = t("activity.sharedWith", { members: row.members.join(", ") });
+  if (row.status === "probe_failed" && row.reason) text = t("activity.withReason", { text, reason: row.reason });
   const cls = row.status === "ok" ? "" : ["sandboxed", "no_network", "native"].includes(row.status) ? " activity-chip-muted" : " activity-chip-warn";
   return `<span class="activity-chip${cls}" title="${escapeHtml(s[1])}">${escapeHtml(text)}</span>`;
 }
@@ -114,13 +128,13 @@ function topList(list: ActivityTop[] | null | undefined, label?: (v: string) => 
 function round(view: ActivityView, runtime?: Pick<RuntimeInput, "available">): string {
   const r = view.round;
   if (!view.enabled || !r || !r.at) return "";
-  if (r.workerStatus === "no_image") return `<span class="activity-chip activity-chip-warn">cannot sample: the helper image could not be pulled</span>`;
+  if (r.workerStatus === "no_image") return `<span class="activity-chip activity-chip-warn">${ht("activity.noImage")}</span>`;
   if (r.workerStatus === "no_runtime" && runtime?.available) {
-    return `<span class="activity-chip activity-chip-muted">last sample could not reach Docker. Docker is ready now, so the next sample, within 5 minutes, can run</span>`;
+    return `<span class="activity-chip activity-chip-muted">${ht("activity.dockerBack")}</span>`;
   }
-  if (r.workerStatus === "no_runtime") return `<span class="activity-chip activity-chip-warn">cannot sample: Docker is not reachable</span>`;
+  if (r.workerStatus === "no_runtime") return `<span class="activity-chip activity-chip-warn">${ht("activity.noDocker")}</span>`;
   if ((r.leftoverProbes || []).length) {
-    return `<span class="activity-chip activity-chip-warn" title="${escapeHtml(r.leftoverProbes.join(", "))}">${r.leftoverProbes.length} helper(s) Docker would not remove</span>`;
+    return `<span class="activity-chip activity-chip-warn" title="${escapeHtml(r.leftoverProbes.join(", "))}">${ht("activity.leftoverProbes", { n: r.leftoverProbes.length })}</span>`;
   }
   return "";
 }
@@ -141,20 +155,20 @@ export function renderActivityRow(row: ActivityRow, detail: ActivityDetail | nul
     `<td>${topList(row.topPorts)}</td>` +
     `<td>${topList(row.topAsn)}</td>` +
     `<td>${topList(row.topCc)}</td>` +
-    `<td>${row.alerts ? `<span class="activity-chip activity-chip-warn">${row.alerts}</span>` : alarm ? `<span class="activity-chip activity-chip-warn">LAN</span>` : ""}</td>` +
+    `<td>${row.alerts ? `<span class="activity-chip activity-chip-warn">${row.alerts}</span>` : alarm ? `<span class="activity-chip activity-chip-warn">${ht("activity.lanAlert")}</span>` : ""}</td>` +
     `</tr>`;
   if (open) {
     html += `<tr class="activity-detail-row"><td colspan="10"><div id="${domId(row.container)}" class="activity-detail">${
-      detail ? renderActivityDetail(detail, isHostNetwork(row)) : `<p class="muted">Loading</p>`
+      detail ? renderActivityDetail(detail, isHostNetwork(row)) : `<p class="muted">${ht("activity.loading")}</p>`
     }</div></td></tr>`;
   }
   return html;
 }
 
 function dimTable(title: string, rows: ActivityTop[], label?: (v: string) => string): string {
-  if (!rows || !rows.length) return `<div><h3 class="activity-h3">${escapeHtml(title)}</h3><p class="muted">none</p></div>`;
+  if (!rows || !rows.length) return `<div><h3 class="activity-h3">${escapeHtml(title)}</h3><p class="muted">${ht("activity.none")}</p></div>`;
   return `<div><h3 class="activity-h3">${escapeHtml(title)}</h3><table class="activity-dim"><tbody>${rows
-    .map((r) => `<tr><td>${escapeHtml(label ? label(r.value) : r.value || "unknown")}</td><td>${escapeHtml(String(r.sightings))}</td></tr>`)
+    .map((r) => `<tr><td>${escapeHtml(label ? label(r.value) : r.value || t("activity.unknown"))}</td><td>${escapeHtml(String(r.sightings))}</td></tr>`)
     .join("")}</tbody></table></div>`;
 }
 
@@ -163,27 +177,27 @@ export function renderActivityDetail(d: ActivityDetail, hostNetwork: boolean): s
   const raw = d.raw || [];
   const shown = raw.slice(0, 500);
   return (
-    (hostNetwork ? `<p class="muted">${escapeHtml(FORWARDED_NOTE)}</p>` : "") +
+    (hostNetwork ? `<p class="muted">${escapeHtml(forwardedNote())}</p>` : "") +
     `<div class="activity-dims">` +
-    dimTable("Ports", d.ports) +
-    dimTable("Networks", d.asn) +
-    dimTable("Country (registered)", d.cc) +
-    dimTable("Kind of destination", d.classes, (v) => CLASS_LABEL[v] || v) +
+    dimTable(t("activity.ports"), d.ports) +
+    dimTable(t("activity.networks"), d.asn) +
+    dimTable(t("activity.countryRegistered"), d.cc) +
+    dimTable(t("activity.kindOfDestination"), d.classes, (v) => classLabel(v) || v) +
     `</div>` +
-    `<details class="activity-raw"><summary>Destinations of the last ${escapeHtml(String(d.rawHours))} hours (${raw.length})</summary>` +
+    `<details class="activity-raw"><summary>${ht("activity.rawSummary", { hours: d.rawHours, count: raw.length })}</summary>` +
     (shown.length
-      ? `<table class="activity-dim"><thead><tr><th>Window (UTC)</th><th>Direction</th><th>Address</th><th>Port</th><th>Kind</th><th>Network</th><th>Country</th></tr></thead><tbody>` +
+      ? `<table class="activity-dim"><thead><tr><th>${ht("activity.col.window")}</th><th>${ht("activity.col.direction")}</th><th>${ht("activity.col.address")}</th><th>${ht("activity.col.port")}</th><th>${ht("activity.col.kind")}</th><th>${ht("activity.col.network")}</th><th>${ht("activity.col.country")}</th></tr></thead><tbody>` +
         shown
           .map(
             (r) =>
-              `<tr><td>${escapeHtml(new Date(r.windowEnd * 1000).toISOString().slice(11, 16))}</td><td>${r.dir === "in" ? "from" : "to"}</td><td>${escapeHtml(r.ip)}</td><td>${escapeHtml(
+              `<tr><td>${escapeHtml(new Date(r.windowEnd * 1000).toISOString().slice(11, 16))}</td><td>${r.dir === "in" ? ht("activity.dirFrom") : ht("activity.dirTo")}</td><td>${escapeHtml(r.ip)}</td><td>${escapeHtml(
                 `${r.proto}/${r.port}`,
-              )}</td><td>${escapeHtml(CLASS_LABEL[r.class] || r.class)}</td><td>${escapeHtml(r.asn || UNKNOWN)}</td><td>${escapeHtml(r.cc || UNKNOWN)}</td></tr>`,
+              )}</td><td>${escapeHtml(classLabel(r.class) || r.class)}</td><td>${escapeHtml(r.asn || UNKNOWN)}</td><td>${escapeHtml(r.cc || UNKNOWN)}</td></tr>`,
           )
           .join("") +
         `</tbody></table>` +
-        (raw.length > 500 ? `<p class="muted">Showing the newest 500 of ${raw.length} rows.</p>` : "")
-      : `<p class="muted">none</p>`) +
+        (raw.length > 500 ? `<p class="muted">${ht("activity.newest500", { n: raw.length })}</p>` : "")
+      : `<p class="muted">${ht("activity.none")}</p>`) +
     `</details>`
   );
 }
@@ -192,22 +206,22 @@ export function renderActivityDetail(d: ActivityDetail, hostNetwork: boolean): s
 export function renderActivityPage(view: ActivityView, open: Record<string, ActivityDetail | null>, runtime?: Pick<RuntimeInput, "available">): string {
   const nets = view.networks || ({ present: false } as ActivityView["networks"]);
   const days = [1, 7, 30]
-    .map((d) => `<option value="${d}"${view.days === d ? " selected" : ""}>${d === 1 ? "24 hours" : `${d} days`}</option>`)
+    .map((d) => `<option value="${d}"${view.days === d ? " selected" : ""}>${d === 1 ? ht("activity.24hours") : ht("activity.days", { n: d })}</option>`)
     .join("");
   const head =
-    `<section class="card activity-intro"><div class="card-header"><span class="card-title">What each earner talks to</span></div>` +
-    `<p class="muted">Every 5 minutes a short-lived helper reads which addresses and ports each earner is connected to, from the kernel's socket tables. It never reads what is inside the traffic. Remote addresses are kept 24 hours; counts and totals 35 days. Switching off deletes the addresses at once.</p>` +
+    `<section class="card activity-intro"><div class="card-header"><span class="card-title">${ht("activity.title")}</span></div>` +
+    `<p class="muted">${ht("activity.intro")}</p>` +
     `<div class="activity-controls">` +
-    `<label class="activity-switch"><input type="checkbox" id="activity-toggle"${view.enabled ? " checked" : ""}> ${view.enabled ? "on" : "off"}</label>` +
+    `<label class="activity-switch"><input type="checkbox" id="activity-toggle"${view.enabled ? " checked" : ""}> ${view.enabled ? ht("activity.on") : ht("activity.off")}</label>` +
     `<select id="activity-days">${days}</select>` +
-    `<button class="secondary compact-btn" id="activity-delete">Delete data</button>` +
+    `<button class="secondary compact-btn" id="activity-delete">${ht("activity.deleteData")}</button>` +
     round(view, runtime) +
     `</div>` +
     `<p class="muted activity-asn">${
       nets.present
-        ? `Network table: ${escapeHtml(String(nets.rows ?? UNKNOWN))} ranges, ${nets.ageSeconds == null ? UNKNOWN : Math.round(nets.ageSeconds / 86400)} days old. `
-        : "Network table not downloaded, so networks and countries read as unknown. "
-    }<button class="btn btn-link" id="activity-networks">Download now</button></p>` +
+        ? `${ht("activity.networkTable", { rows: String(nets.rows ?? UNKNOWN), age: nets.ageSeconds == null ? UNKNOWN : String(Math.round(nets.ageSeconds / 86400)) })} `
+        : `${ht("activity.noNetworkTable")} `
+    }<button class="btn btn-link" id="activity-networks">${ht("activity.downloadNow")}</button></p>` +
     `</section>`;
   const rows = view.containers || [];
   if (!rows.length) {
@@ -215,17 +229,17 @@ export function renderActivityPage(view: ActivityView, open: Record<string, Acti
       head +
       `<p class="muted">${
         view.enabled
-          ? "No windows yet. The first one arrives within 5 minutes of switching on; connection counts start with the second."
-          : "Activity is off."
+          ? ht("activity.noWindows")
+          : ht("activity.isOff")
       }</p>`
     );
   }
   return (
     head +
-    `<section class="card"><div class="card-header"><span class="card-title">Containers</span><span class="muted">Opens and failures are per 5 minutes. Peak is the most connections open at once.</span></div>` +
+    `<section class="card"><div class="card-header"><span class="card-title">${ht("activity.containers")}</span><span class="muted">${ht("activity.containersNote")}</span></div>` +
     `<div class="table-scroll"><table class="activity-table"><thead><tr>` +
-    `<th scope="col">Container</th><th scope="col">Status</th><th scope="col">Opens</th><th scope="col">Peak open</th><th scope="col">Failed</th>` +
-    `<th scope="col">Destinations</th><th scope="col">Top ports</th><th scope="col">Top networks</th><th scope="col" title="Country where the network is registered">Country (registered)</th><th scope="col">Alerts</th>` +
+    `<th scope="col">${ht("activity.col.container")}</th><th scope="col">${ht("activity.col.status")}</th><th scope="col">${ht("activity.col.opens")}</th><th scope="col">${ht("activity.col.peak")}</th><th scope="col">${ht("activity.col.failed")}</th>` +
+    `<th scope="col">${ht("activity.col.destinations")}</th><th scope="col">${ht("activity.col.topPorts")}</th><th scope="col">${ht("activity.col.topNetworks")}</th><th scope="col" title="${ht("activity.col.countryTitle")}">${ht("activity.countryRegistered")}</th><th scope="col">${ht("activity.col.alerts")}</th>` +
     `</tr></thead><tbody>` +
     rows.map((r) => {
       // Own keys only: a container named "constructor" is not an open row.

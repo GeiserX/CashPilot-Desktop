@@ -14,6 +14,7 @@
 import type { Deployment, EnvVar, Service, WalletChoice, WalletOutcome } from "../wails";
 import type { DeployAnswer } from "./deploy_consent.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /** The env entry of service whose value lives in a seed file, if any. */
 export function seedFileVar(service: Service | undefined | null): EnvVar | undefined {
@@ -31,7 +32,7 @@ export function phraseWords(phrase: string | null | undefined): string[] {
  */
 export function walletChoiceRefusal(choice: WalletChoice): DeployAnswer | null {
   if (choice.mode === "import" && phraseWords(choice.phrase).length === 0) {
-    return { kind: "cancelled", text: "Type the seed phrase of the wallet to use, or choose another option. Nothing was deployed." };
+    return { kind: "cancelled", text: t("wallet.typePhrase") };
   }
   return null;
 }
@@ -41,11 +42,11 @@ export function walletChoiceRefusal(choice: WalletChoice): DeployAnswer | null {
  * its new wallet's phrase is on screen now, for the one time it ever is.
  */
 export function walletDeployAnswer(wallet: WalletOutcome | null | undefined, shownOnce: boolean): DeployAnswer {
-  if (shownOnce) return { kind: "ok", text: "Deployed with a new wallet. Write its seed phrase down now: it is shown below, once." };
-  if (wallet?.migrated) return { kind: "ok", text: "Deployed. The node's seed phrase moved out of CashPilot's settings and the container's settings, into its data volume." };
-  if (wallet?.created) return { kind: "ok", text: "Deployed with the wallet you typed. CashPilot kept no copy of it." };
-  if (wallet) return { kind: "ok", text: "Deployed. The node kept its wallet." };
-  return { kind: "ok", text: "Deployed." };
+  if (shownOnce) return { kind: "ok", text: t("wallet.deployed.new") };
+  if (wallet?.migrated) return { kind: "ok", text: t("wallet.deployed.migrated") };
+  if (wallet?.created) return { kind: "ok", text: t("wallet.deployed.typed") };
+  if (wallet) return { kind: "ok", text: t("wallet.deployed.kept") };
+  return { kind: "ok", text: t("wallet.deployed.plain") };
 }
 
 /**
@@ -63,14 +64,14 @@ export function walletChoiceSection(service: Service, deployed: boolean): string
     </label>`;
   return `
     <fieldset class="wallet-choice" data-wallet-choice="${slug}">
-      <legend>Wallet</legend>
-      <p class="muted">The seed phrase is the wallet. CashPilot never stores it: it lives only in the node's data volume on this machine.</p>
-      ${deployed ? option("keep", "Keep this node's wallet", "The wallet the node already has stays as it is.", true) : ""}
-      ${option("generate", "Create a new wallet", "You are shown its 12 words once, to write down.", !deployed)}
-      ${option("import", "Use a wallet I already have", "Type its 12-word seed phrase.", false)}
+      <legend>${ht("wallet.legend")}</legend>
+      <p class="muted">${ht("wallet.intro")}</p>
+      ${deployed ? option("keep", ht("wallet.keep"), ht("wallet.keepHint"), true) : ""}
+      ${option("generate", ht("wallet.generate"), ht("wallet.generateHint"), !deployed)}
+      ${option("import", ht("wallet.import"), ht("wallet.importHint"), false)}
       <label class="wallet-phrase" data-wallet-phrase-box hidden>
-        <span>Seed phrase (12 words)</span>
-        <input data-wallet-phrase type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="12 words, separated by spaces" />
+        <span>${ht("wallet.phraseLabel")}</span>
+        <input data-wallet-phrase type="password" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="${ht("wallet.phrasePlaceholder")}" />
       </label>
     </fieldset>
   `;
@@ -93,8 +94,8 @@ export function pickPositions(total: number, count: number, rand: () => number):
 
 /** "Type words 4, 9 and 11". */
 export function positionsPrompt(positions: number[]): string {
-  if (positions.length <= 1) return `Type word ${positions.join("")}`;
-  return `Type words ${positions.slice(0, -1).join(", ")} and ${positions[positions.length - 1]}`;
+  if (positions.length <= 1) return t("wallet.typeWord", { n: positions.join("") });
+  return t("wallet.typeWords", { rest: positions.slice(0, -1).join(", "), last: String(positions[positions.length - 1]) });
 }
 
 /** Whether typed (one answer per position, in order) matches the words there. */
@@ -115,9 +116,9 @@ function wordList(words: string[]): string {
 export function walletAddressLine(address: string | null | undefined): string {
   if (!address) return "";
   return `
-    <p class="wallet-address">Wallet address:
+    <p class="wallet-address">${ht("wallet.address")}
       <code class="cell-mono">${escapeHtml(address)}</code>
-      <button class="btn btn-small secondary" data-wallet-copy="${escapeHtml(address)}">Copy</button>
+      <button class="btn btn-small secondary" data-wallet-copy="${escapeHtml(address)}">${ht("wallet.copy")}</button>
     </p>`;
 }
 
@@ -137,35 +138,37 @@ export function renderPhrasePanel(view: PhrasePanelView): string {
   if (view.step === "done") {
     return `
       <div class="wallet-panel" data-wallet-panel-view="done">
-        <p><strong>Done.</strong> Keep the paper somewhere safe. CashPilot keeps no copy of the words.</p>
+        <p>${ht("wallet.done")}</p>
         ${walletAddressLine(view.address)}
       </div>`;
   }
   if (view.step === "check") {
     return `
       <div class="wallet-panel" data-wallet-panel-view="check" role="alertdialog" aria-labelledby="wallet-check-${slug}">
-        <p id="wallet-check-${slug}"><strong>${escapeHtml(positionsPrompt(view.positions))}</strong> from what you wrote down.</p>
+        <p id="wallet-check-${slug}">${view.positions.length <= 1
+          ? ht("wallet.checkOne", { n: view.positions.join("") })
+          : ht("wallet.checkMany", { rest: view.positions.slice(0, -1).join(", "), last: String(view.positions[view.positions.length - 1]) })}</p>
         <div class="wallet-word-inputs">
           ${view.positions.map((position) => `
-            <label><span>Word ${position}</span>
+            <label><span>${ht("wallet.word", { n: String(position) })}</span>
               <input data-wallet-word="${position}" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" />
             </label>`).join("")}
         </div>
         ${view.error ? `<p class="error-text">${escapeHtml(view.error)}</p>` : ""}
         <div class="actions left">
-          <button class="primary" data-wallet-finish="${slug}">Finish</button>
-          <button class="secondary" data-wallet-back="${slug}">Show the words again</button>
+          <button class="primary" data-wallet-finish="${slug}">${ht("wallet.finish")}</button>
+          <button class="secondary" data-wallet-back="${slug}">${ht("wallet.showAgain")}</button>
         </div>
       </div>`;
   }
   return `
     <div class="wallet-panel" data-wallet-panel-view="show" role="alertdialog" aria-labelledby="wallet-show-${slug}">
-      <p id="wallet-show-${slug}"><strong>Write these 12 words down, in order, on paper.</strong> They are the wallet: anyone with them can spend it, and CashPilot keeps no copy. You can show them again from the service's page.</p>
+      <p id="wallet-show-${slug}">${ht("wallet.writeDown")}</p>
       ${wordList(view.words)}
       ${walletAddressLine(view.address)}
       <div class="actions left">
-        <button class="primary" data-wallet-written="${slug}">I wrote them down</button>
-        <button class="secondary" data-wallet-dismiss="${slug}">Close</button>
+        <button class="primary" data-wallet-written="${slug}">${ht("wallet.written")}</button>
+        <button class="secondary" data-wallet-dismiss="${slug}">${ht("wallet.close")}</button>
       </div>
     </div>`;
 }
@@ -181,25 +184,25 @@ export function renderRevealPanel(slug: string, name: string, view: RevealView):
   if (view.kind === "shown") {
     return `
       <div class="wallet-reveal" data-wallet-reveal-view="shown">
-        <p><strong>The wallet's seed phrase.</strong> It hides itself in a minute.</p>
+        <p>${ht("wallet.revealed")}</p>
         ${wordList(view.words)}
-        <button class="secondary" data-wallet-reveal-hide="${s}">Hide</button>
+        <button class="secondary" data-wallet-reveal-hide="${s}">${ht("wallet.hide")}</button>
       </div>`;
   }
   if (view.kind === "ask") {
     return `
       <div class="wallet-reveal" data-wallet-reveal-view="ask">
-        <label><span>To show the seed phrase, type <strong>${escapeHtml(name)}</strong></span>
+        <label><span>${ht("wallet.typeName", { name })}</span>
           <input data-wallet-reveal-name="${s}" type="text" autocomplete="off" spellcheck="false" autocapitalize="off"${view.busy ? " disabled" : ""} />
         </label>
         ${view.error ? `<p class="error-text">${escapeHtml(view.error)}</p>` : ""}
         <div class="actions left">
-          <button class="primary" data-wallet-reveal-show="${s}"${view.busy ? " disabled aria-busy=\"true\"" : ""}>Show</button>
-          <button class="secondary" data-wallet-reveal-hide="${s}">Cancel</button>
+          <button class="primary" data-wallet-reveal-show="${s}"${view.busy ? " disabled aria-busy=\"true\"" : ""}>${ht("wallet.show")}</button>
+          <button class="secondary" data-wallet-reveal-hide="${s}">${ht("wallet.cancel")}</button>
         </div>
       </div>`;
   }
-  return `<button class="btn btn-small secondary" data-wallet-reveal-start="${s}">Reveal seed phrase</button>`;
+  return `<button class="btn btn-small secondary" data-wallet-reveal-start="${s}">${ht("wallet.reveal")}</button>`;
 }
 
 /** The dashboard's wallet line under a deployed seed-file service. "" for any other. */
@@ -207,7 +210,7 @@ export function walletDetail(service: Service | undefined, deployment: Deploymen
   if (!service || !seedFileVar(service)) return "";
   return `
     <div class="wallet-detail">
-      ${walletAddressLine(deployment.walletAddress) || `<p class="muted">The wallet address shows here after the next deploy.</p>`}
+      ${walletAddressLine(deployment.walletAddress) || `<p class="muted">${ht("wallet.addressLater")}</p>`}
       <div data-wallet-reveal-slot="${escapeHtml(service.slug)}">${renderRevealPanel(service.slug, service.name, { kind: "idle" })}</div>
     </div>`;
 }

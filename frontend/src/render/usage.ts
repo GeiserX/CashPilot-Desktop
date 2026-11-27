@@ -13,6 +13,7 @@
 import type { UsageView } from "../wails";
 import { niceMax } from "./chart.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { escapeHtml } from "./format.js";
+import { ht, intlLocale, t } from "./i18n.js";
 
 type Series = (number | null)[];
 
@@ -46,8 +47,9 @@ export function formatRate(bytesPerSecond: number): string {
 /** A point's start in local time, "Nov 2 14:00". */
 export function pointLabel(unixSeconds: number): string {
   const d = new Date(unixSeconds * 1000);
-  const month = d.toLocaleString("en-US", { month: "short" });
-  return `${month} ${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const month = new Intl.DateTimeFormat(intlLocale(), { month: "short" }).format(d);
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return t("usage.pointLabel", { month, day: String(d.getDate()), time });
 }
 
 /**
@@ -158,13 +160,17 @@ function renderLineChart(view: UsageView, spec: ChartSpec): string {
   const aria = spec.lines.map((line) => {
     const i = lastIndex(line.values);
     const top = peak(line.values);
-    return `${line.label}: latest ${i < 0 ? "no reading" : mark(i) + spec.format(line.values[i] as number)}, peak ${top === null ? "no reading" : spec.format(top)}`;
+    return t("usage.lineAria", {
+      label: line.label,
+      latest: i < 0 ? t("usage.noReading") : mark(i) + spec.format(line.values[i] as number),
+      peak: top === null ? t("usage.noReading") : spec.format(top),
+    });
   }).join("; ");
 
   return `
     <figure class="usage-chart" data-usage-chart="${spec.id}">
       <figcaption><span class="usage-title">${escapeHtml(spec.title)}</span> <span class="usage-latest">${caption}</span></figcaption>
-      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(`${spec.title}, last ${view.days} days. ${aria}`)}">
+      <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(t("usage.chartAria", { title: spec.title, days: view.days, aria }))}">
         ${grid}${ends}${lines}${hovers}
       </svg>
     </figure>
@@ -177,19 +183,19 @@ function renderLineChart(view: UsageView, spec: ChartSpec): string {
  */
 export function renderUsagePanel(view: UsageView | null): string {
   if (!view) {
-    return `<div class="chart-empty"><span>Loading resource use…</span></div>`;
+    return `<div class="chart-empty"><span>${ht("usage.loading")}</span></div>`;
   }
   const containers = view.containers || [];
   const hasReading = [view.cpuPercent, view.memoryMb, view.rxRate, view.txRate].some((series) => series.some((v) => v !== null && v !== undefined));
   if (!containers.length || !hasReading) {
     return `
       <div class="chart-empty">
-        <strong>No resource readings in the last ${view.days} days</strong>
-        <span>CPU, memory and traffic per container appear here a few minutes after a service runs.</span>
+        <strong>${ht("usage.empty", { days: view.days })}</strong>
+        <span>${ht("usage.emptyHint")}</span>
       </div>
     `;
   }
-  const options = [`<option value=""${view.container === "" ? " selected" : ""}>All containers</option>`]
+  const options = [`<option value=""${view.container === "" ? " selected" : ""}>${ht("usage.allContainers")}</option>`]
     .concat(containers.map((c) => {
       const label = c.service && c.service !== c.name ? `${c.service} (${c.name})` : c.name;
       return `<option value="${escapeHtml(c.name)}"${view.container === c.name ? " selected" : ""}>${escapeHtml(label)}</option>`;
@@ -199,41 +205,41 @@ export function renderUsagePanel(view: UsageView | null): string {
     const rx = view.rxBytes[index];
     const tx = view.txBytes[index];
     if (rx === null || rx === undefined || tx === null || tx === undefined) return "";
-    return `${view.trafficPartial[index] ? "≥ " : ""}${formatBytes(rx)} down, ${formatBytes(tx)} up moved`;
+    return `${view.trafficPartial[index] ? "≥ " : ""}${t("usage.moved", { down: formatBytes(rx), up: formatBytes(tx) })}`;
   };
   const picked = containers.find((c) => c.name === view.container);
   const unmeasured = picked ? (picked.noCounters ? [picked] : []) : containers.filter((c) => c.noCounters);
   const note = unmeasured.length
     ? `<p class="block-meta usage-note">${picked
-      ? `This container's traffic cannot be read (host networking), so it has no network line.`
-      : `Network totals marked ≥ leave out ${escapeHtml(unmeasured.map((c) => c.service || c.name).join(", "))}, whose traffic cannot be read (host networking).`}</p>`
+      ? ht("usage.noCounters")
+      : ht("usage.leftOut", { names: unmeasured.map((c) => c.service || c.name).join(", ") })}</p>`
     : "";
   return `
     <div class="usage-controls">
-      <label class="block-meta" for="usage-container">Container</label>
+      <label class="block-meta" for="usage-container">${ht("usage.container")}</label>
       <select id="usage-container">${options}</select>
     </div>
     <div class="usage-grid">
       ${renderLineChart(view, {
         id: "cpu",
-        title: "CPU",
-        lines: [{ label: "CPU", values: view.cpuPercent, className: "usage-line-main" }],
+        title: t("usage.cpu"),
+        lines: [{ label: t("usage.cpu"), values: view.cpuPercent, className: "usage-line-main" }],
         format: formatCpu,
         partial: view.cpuPartial,
       })}
       ${renderLineChart(view, {
         id: "memory",
-        title: "Memory",
-        lines: [{ label: "Memory", values: view.memoryMb, className: "usage-line-main" }],
+        title: t("usage.memory"),
+        lines: [{ label: t("usage.memory"), values: view.memoryMb, className: "usage-line-main" }],
         format: formatMemory,
         partial: view.memoryPartial,
       })}
       ${renderLineChart(view, {
         id: "network",
-        title: "Network",
+        title: t("usage.network"),
         lines: [
-          { label: "Down", values: view.rxRate, className: "usage-line-main" },
-          { label: "Up", values: view.txRate, className: "usage-line-alt" },
+          { label: t("usage.down"), values: view.rxRate, className: "usage-line-main" },
+          { label: t("usage.up"), values: view.txRate, className: "usage-line-alt" },
         ],
         format: formatRate,
         partial: view.trafficPartial,
