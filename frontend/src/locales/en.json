@@ -2273,5 +2273,7 @@
   "go.macvm.noRosetta": "Could not install Rosetta in the Secure VM",
   "go.macvm.rosettaMissing": "Rosetta did not install in the Secure VM. Theta and UpRock need it. Check the internet connection and try again.",
   "go.macvm.appRefused": "The Secure VM refused {app}: {why}",
-  "go.macvm.noInstallApp": "Could not install {app} in the Secure VM"
+  "go.macvm.noInstallApp": "Could not install {app} in the Secure VM",
+  "main.security.title": "Security",
+  "main.scope.securevm": "Secure VM"
 }
