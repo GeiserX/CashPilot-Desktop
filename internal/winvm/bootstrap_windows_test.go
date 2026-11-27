@@ -131,10 +131,13 @@ func answerPowerShell(t *testing.T) map[string]string {
 	scripts := make(map[string]string)
 	for _, settings := range answer.Settings {
 		for _, command := range settings.Commands {
-			if !strings.HasPrefix(command.Path, "powershell.exe ") {
+			if !strings.HasPrefix(command.Path, "powershell") {
 				continue
 			}
-			_, script, ok := strings.Cut(command.Path, ` -Command "`)
+			_, script, ok := strings.Cut(command.Path, ` -C "`)
+			if !ok {
+				_, script, ok = strings.Cut(command.Path, ` -Command "`)
+			}
 			if !ok || !strings.HasSuffix(script, `"`) {
 				t.Fatalf("cannot extract PowerShell from answer command %d", command.Order)
 			}
