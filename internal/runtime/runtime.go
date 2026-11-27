@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/dockerhost"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -242,14 +244,21 @@ func (p *DockerProvider) EnableFence(ctx context.Context) (FenceStatus, error) {
 func (p *DockerProvider) Status(ctx context.Context) Status {
 	tools := detectTools()
 	ev := dockerEvidence{
-		goos:    goruntime.GOOS,
-		tools:   len(tools) > 0,
-		hostSet: os.Getenv("DOCKER_HOST") != "",
+		goos:  goruntime.GOOS,
+		tools: len(tools) > 0,
+		// A tcp context names a remote engine as DOCKER_HOST does, so one that does
+		// not answer gets the same words.
+		hostSet: os.Getenv("DOCKER_HOST") != "" || strings.HasPrefix(dockerhost.Resolve().Host, "tcp://"),
 	}
 	// A client is built without connecting, so building one fails only on a
-	// malformed DOCKER_HOST. Whether a runtime is installed is decided below, from
-	// what dialling its endpoint says.
+	// malformed DOCKER_HOST, a context's unreadable TLS files or an ssh context.
+	// Whether a runtime is installed is decided below, from what dialling its
+	// endpoint says.
 	cli, err := dockerClient()
+	var ssh *SSHContextError
+	if errors.As(err, &ssh) {
+		return Status{Kind: "existing-docker", Reason: ReasonUnreachable, Message: ssh.Error() + ", then click Check again.", Context: ssh.Context, Tools: tools}
+	}
 	if err != nil {
 		ev.host = p.hostHintsNow()
 		ev.install = knownInstallPath()
@@ -1278,9 +1287,10 @@ func memoryMB(mem container.MemoryStats) float64 {
 // dockerClient builds a Docker API client. With no host argument (or an empty one)
 // it connects where the docker CLI would: DOCKER_HOST through client.FromEnv, else
 // the current Docker context's endpoint, else the default socket or a runtime's
-// socket in the home folder (resolveDockerEndpoint). A non-empty host is a seam for
-// a future bundled-runtime provider that must talk to a specific socket/endpoint
-// instead of the ambient context; no current caller passes one.
+// socket in the home folder (dockerhost.Resolve). A current context that connects
+// over ssh is refused, never swapped for a local engine. A non-empty host is a
+// seam for a future bundled-runtime provider that must talk to a specific
+// socket/endpoint instead of the ambient context; no current caller passes one.
 //
 // There is no WithAPIVersionNegotiation option any more: the moby client negotiates
 // the API version by default, lazily on the first versioned request, so the old
@@ -1291,14 +1301,36 @@ func NewDockerClient() (*client.Client, error) { return dockerClient() }
 func dockerClient(host ...string) (*client.Client, error) {
 	opts := []client.Opt{client.FromEnv}
 	if len(host) > 0 && host[0] != "" {
-		opts = append(opts, client.WithHost(host[0]))
-	} else if ep := resolveDockerEndpoint(); ep.Host != "" {
-		opts = append(opts, client.WithHost(ep.Host))
-		if len(ep.TLS) == 3 {
-			opts = append(opts, client.WithTLSClientConfig(ep.TLS[0], ep.TLS[1], ep.TLS[2]))
-		}
+		return client.NewClientWithOpts(append(opts, client.WithHost(host[0]))...)
 	}
-	return client.NewClientWithOpts(opts...)
+	ep := dockerhost.Resolve()
+	if ep.SSH != "" {
+		return nil, &SSHContextError{Context: ep.Context}
+	}
+	if ep.Host == "" {
+		return client.NewClientWithOpts(opts...)
+	}
+	if ep.TLS != nil {
+		cfg, err := ep.TLS.Config()
+		if err != nil {
+			return nil, fmt.Errorf("could not read the TLS files of the Docker context %s: %w", ep.Context, err)
+		}
+		// Before WithHost, which sets up this transport for the context's address.
+		opts = append(opts, client.WithHTTPClient(&http.Client{
+			Transport:     &http.Transport{TLSClientConfig: cfg, MaxIdleConns: 6, IdleConnTimeout: 30 * time.Second},
+			CheckRedirect: client.CheckRedirect,
+		}))
+	}
+	return client.NewClientWithOpts(append(opts, client.WithHost(ep.Host))...)
+}
+
+// SSHContextError is the refusal of a current Docker context that connects over
+// ssh: the client cannot dial it, and a local engine in its place would run the
+// earners on a machine the user did not choose.
+type SSHContextError struct{ Context string }
+
+func (e *SSHContextError) Error() string {
+	return fmt.Sprintf("Your Docker context %s connects over ssh, which CashPilot cannot use. Switch to a local context with docker context use, or set DOCKER_HOST to that engine's tcp address", e.Context)
 }
 
 // maxPullLogLine caps a single progress line at 1 MiB. bufio.Scanner's default max
@@ -2066,7 +2098,7 @@ func detectTools() map[string]string {
 func dockerContext() string {
 	out, err := exec.Command("docker", "context", "show").Output()
 	if err != nil {
-		return resolveDockerEndpoint().Context
+		return dockerhost.Resolve().Context
 	}
 	return strings.TrimSpace(string(out))
 }

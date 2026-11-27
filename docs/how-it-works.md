@@ -316,7 +316,11 @@ through the Docker Go SDK with `client.FromEnv` + API-version negotiation
 Podman** (Podman exposes a Docker-compatible API). With no `DOCKER_HOST` it finds the
 engine the way the docker CLI does: the current Docker context, then the default
 socket, then the sockets colima, Docker Desktop and rootless Docker leave in the
-home folder (`docker_host.go:resolveDockerEndpoint`, macOS and Linux only).
+home folder (`internal/dockerhost`, macOS and Linux only). A tcp context keeps its
+TLS files and its SkipTLSVerify. An ssh context is refused with a message that names
+it: the client cannot connect over ssh, and a local engine in its place would run
+the services on another machine than the one the docker CLI uses. Switch to a local
+context, or set `DOCKER_HOST` to the engine's tcp address.
 Responsibilities:
 
 - **`Status`** probes the runtime, reports a friendly message when it's absent or

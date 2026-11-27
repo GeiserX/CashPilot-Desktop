@@ -6,12 +6,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/dockerhost"
 	"github.com/moby/moby/client"
 )
 
@@ -28,21 +33,28 @@ func dockerHostEnv(t *testing.T) string {
 	for _, key := range []string{"DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "COLIMA_HOME", "XDG_RUNTIME_DIR", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"} {
 		t.Setenv(key, "")
 	}
-	saved := defaultDockerSocket
-	defaultDockerSocket = filepath.Join(home, "no-default.sock")
-	t.Cleanup(func() { defaultDockerSocket = saved })
+	saved := dockerhost.DefaultSocket
+	dockerhost.DefaultSocket = filepath.Join(home, "no-default.sock")
+	t.Cleanup(func() { dockerhost.DefaultSocket = saved })
 	return home
 }
 
 // writeContext stores a context the way the docker CLI does.
 func writeContext(t *testing.T, home, name, host string, current bool) {
 	t.Helper()
+	writeContextTLS(t, home, name, host, false, current)
+}
+
+// writeContextTLS is writeContext with the context's SkipTLSVerify, and returns
+// the folder the context's TLS files go in.
+func writeContextTLS(t *testing.T, home, name, host string, skipVerify, current bool) string {
+	t.Helper()
 	sum := sha256.Sum256([]byte(name))
 	dir := filepath.Join(home, ".docker", "contexts", "meta", hex.EncodeToString(sum[:]))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	meta := `{"Name":"` + name + `","Metadata":{},"Endpoints":{"docker":{"Host":"` + host + `","SkipTLSVerify":false}}}`
+	meta := `{"Name":"` + name + `","Metadata":{},"Endpoints":{"docker":{"Host":"` + host + `","SkipTLSVerify":` + strconv.FormatBool(skipVerify) + `}}}`
 	if err := os.WriteFile(filepath.Join(dir, "meta.json"), []byte(meta), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +64,11 @@ func writeContext(t *testing.T, home, name, host string, current bool) {
 			t.Fatal(err)
 		}
 	}
+	tls := filepath.Join(home, ".docker", "contexts", "tls", hex.EncodeToString(sum[:]), "docker")
+	if err := os.MkdirAll(tls, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return tls
 }
 
 // fakeEngine serves /_ping on a unix socket, so the client can be shown to reach it.
@@ -96,14 +113,14 @@ func TestDockerClientFollowsTheCurrentContext(t *testing.T) {
 	if err := pingDefaultClient(t); err != nil {
 		t.Fatalf("the client did not reach the current context's engine: %v", err)
 	}
-	if ep := resolveDockerEndpoint(); ep.Context != "colima" || ep.Host != "unix://"+sock {
+	if ep := dockerhost.Resolve(); ep.Context != "colima" || ep.Host != "unix://"+sock {
 		t.Fatalf("resolved %+v, want context colima at %s", ep, sock)
 	}
 
 	// DOCKER_CONTEXT wins over config.json, as in the CLI.
 	writeContext(t, home, "other", "unix:///nowhere/docker.sock", false)
 	t.Setenv("DOCKER_CONTEXT", "other")
-	if got := resolveDockerEndpoint().Host; got != "unix:///nowhere/docker.sock" {
+	if got := dockerhost.Resolve().Host; got != "unix:///nowhere/docker.sock" {
 		t.Fatalf("DOCKER_CONTEXT=other resolved %q", got)
 	}
 
@@ -151,29 +168,75 @@ func TestDockerClientFindsARuntimeSocketInTheHomeFolder(t *testing.T) {
 		}
 	})
 
-	t.Run("an ssh context falls back to the sockets", func(t *testing.T) {
-		home := dockerHostEnv(t)
-		writeContext(t, home, "remote", "ssh://me@box", true)
-		fakeEngine(t, filepath.Join(home, ".colima", "default", "docker.sock"))
-		if err := pingDefaultClient(t); err != nil {
-			t.Fatalf("an ssh context hid the local socket: %v", err)
-		}
-	})
-
 	t.Run("the default socket keeps the client's default", func(t *testing.T) {
 		home := dockerHostEnv(t)
-		defaultDockerSocket = filepath.Join(home, "default.sock")
-		fakeEngine(t, defaultDockerSocket)
+		dockerhost.DefaultSocket = filepath.Join(home, "default.sock")
+		fakeEngine(t, dockerhost.DefaultSocket)
 		fakeEngine(t, filepath.Join(home, ".colima", "default", "docker.sock"))
-		if got := resolveDockerEndpoint().Host; got != "" {
+		if got := dockerhost.Resolve().Host; got != "" {
 			t.Fatalf("resolved %q while the default socket exists, want the client's default", got)
 		}
 	})
 
 	t.Run("nothing found keeps the client's default", func(t *testing.T) {
 		dockerHostEnv(t)
-		if got := resolveDockerEndpoint().Host; got != "" {
+		if got := dockerhost.Resolve().Host; got != "" {
 			t.Fatalf("resolved %q with no socket anywhere", got)
 		}
 	})
+}
+
+// A current context that connects over ssh is refused with words that name it.
+// Falling back to a local colima or Docker Desktop socket would run the earners on
+// this computer while the user's docker CLI points at another machine.
+func TestAnSSHContextIsRefusedNotSwappedForALocalSocket(t *testing.T) {
+	home := dockerHostEnv(t)
+	writeContext(t, home, "nas", "ssh://me@nas", true)
+	fakeEngine(t, filepath.Join(home, ".colima", "default", "docker.sock"))
+
+	var ssh *SSHContextError
+	if _, err := dockerClient(); !errors.As(err, &ssh) || ssh.Context != "nas" {
+		t.Fatalf("dockerClient = %v, want the ssh context refused", err)
+	}
+	st := NewDockerProvider().Status(context.Background())
+	if st.Available || st.Reason != ReasonUnreachable || !strings.Contains(st.Message, "context nas connects over ssh") || st.Context != "nas" {
+		t.Fatalf("Status = %+v, want the ssh context named as unusable", st)
+	}
+}
+
+// A tcp context that does not answer gets the unreachable-endpoint words, as a
+// DOCKER_HOST that does not answer does, not the local "start your runtime" text.
+func TestATCPContextThatDoesNotAnswerIsUnreachable(t *testing.T) {
+	home := dockerHostEnv(t)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	writeContext(t, home, "box", "tcp://"+addr, true)
+
+	st := NewDockerProvider().Status(context.Background())
+	if st.Reason != ReasonUnreachable || !strings.Contains(st.Message, "your Docker context names") {
+		t.Fatalf("Status = %+v, want the unreachable-endpoint words", st)
+	}
+}
+
+// A tcp context with SkipTLSVerify reaches an engine whose certificate this
+// computer does not trust, as the docker CLI does. Its cert.pem without a key.pem
+// is left out instead of failing the client.
+func TestATCPContextHonoursSkipTLSVerify(t *testing.T) {
+	home := dockerHostEnv(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Api-Version", "1.47")
+		_, _ = w.Write([]byte("OK"))
+	}))
+	t.Cleanup(srv.Close)
+	tls := writeContextTLS(t, home, "box", "tcp://"+strings.TrimPrefix(srv.URL, "https://"), true, true)
+	if err := os.WriteFile(filepath.Join(tls, "cert.pem"), []byte("a certificate without its key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := pingDefaultClient(t); err != nil {
+		t.Fatalf("the client did not reach the context's TLS engine: %v", err)
+	}
 }
