@@ -525,7 +525,7 @@
   "restore.discard": "Delete the partial restore",
   "restore.stuck": "A restore did not finish:",
   "restore.title": "Restore from a backup",
-  "restore.help": "Put a node identity or wallet back from a <code>{ext}</code> file made with a passphrase: Mysterium, ProxyBase or Anyone. The restore only creates a new container on this machine, and never writes over a service that is here. To replace one, download its backup first, then remove it and say yes to deleting its data. Files sealed to a key, Storj and Sia use the command line steps in the backup guide: {guide}",
+  "restore.help": "Put a node identity or wallet back from a <code>{ext}</code> file made with a passphrase (Mysterium, ProxyBase or Anyone). The restore only creates a new container on this machine, and never writes over a service that is here. To replace one, download its backup first, then remove it and say yes to deleting its data. Files sealed to a key, Storj and Sia use the command line steps in the backup guide: {guide}",
   "restore.choose": "Choose a backup file",
   "restore.volumeAt": "volume <code>{volume}</code> at <code>{target}</code>",
   "restore.typeIt": "To go on, type <strong>{service}</strong>:",

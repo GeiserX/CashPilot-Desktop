@@ -525,7 +525,7 @@
   "restore.discard": "Teilweise Wiederherstellung löschen",
   "restore.stuck": "Eine Wiederherstellung wurde nicht abgeschlossen:",
   "restore.title": "Aus einer Sicherung wiederherstellen",
-  "restore.help": "Spiele eine Node-Identität oder Wallet aus einer <code>{ext}</code>-Datei zurück, die mit einer Passphrase erstellt wurde: Mysterium, ProxyBase oder Anyone. Die Wiederherstellung erstellt nur einen neuen Container auf diesem Rechner und überschreibt nie einen Dienst, der hier ist. Um einen zu ersetzen, lade zuerst seine Sicherung herunter, entferne ihn dann und stimme dem Löschen seiner Daten zu. Für Dateien, die an einen Schlüssel gebunden sind, sowie Storj und Sia gelten die Befehlszeilenschritte in der Sicherungsanleitung: {guide}",
+  "restore.help": "Spiele eine Node-Identität oder Wallet aus einer <code>{ext}</code>-Datei zurück, die mit einer Passphrase erstellt wurde (Mysterium, ProxyBase oder Anyone). Die Wiederherstellung erstellt nur einen neuen Container auf diesem Rechner und überschreibt nie einen Dienst, der hier ist. Um einen zu ersetzen, lade zuerst seine Sicherung herunter, entferne ihn dann und stimme dem Löschen seiner Daten zu. Für Dateien, die an einen Schlüssel gebunden sind, sowie Storj und Sia gelten die Befehlszeilenschritte in der Sicherungsanleitung: {guide}",
   "restore.choose": "Sicherungsdatei auswählen",
   "restore.volumeAt": "Volume <code>{volume}</code> unter <code>{target}</code>",
   "restore.typeIt": "Um fortzufahren, tippe <strong>{service}</strong> ein:",

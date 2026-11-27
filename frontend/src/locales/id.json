@@ -525,7 +525,7 @@
   "restore.discard": "Hapus pemulihan yang tidak lengkap",
   "restore.stuck": "Sebuah pemulihan tidak selesai:",
   "restore.title": "Pulihkan dari cadangan",
-  "restore.help": "Kembalikan identitas node atau dompet dari file <code>{ext}</code> yang dibuat dengan frasa sandi: Mysterium, ProxyBase, atau Anyone. Pemulihan hanya membuat kontainer baru di mesin ini, dan tidak pernah menimpa layanan yang ada di sini. Untuk mengganti satu layanan, unduh dulu cadangannya, lalu hapus layanan itu dan setujui penghapusan datanya. File yang disegel ke sebuah kunci, Storj, dan Sia memakai langkah baris perintah di panduan cadangan: {guide}",
+  "restore.help": "Kembalikan identitas node atau dompet dari file <code>{ext}</code> yang dibuat dengan frasa sandi (Mysterium, ProxyBase, atau Anyone). Pemulihan hanya membuat kontainer baru di mesin ini, dan tidak pernah menimpa layanan yang ada di sini. Untuk mengganti satu layanan, unduh dulu cadangannya, lalu hapus layanan itu dan setujui penghapusan datanya. File yang disegel ke sebuah kunci, Storj, dan Sia memakai langkah baris perintah di panduan cadangan: {guide}",
   "restore.choose": "Pilih file cadangan",
   "restore.volumeAt": "volume <code>{volume}</code> di <code>{target}</code>",
   "restore.typeIt": "Untuk melanjutkan, ketik <strong>{service}</strong>:",

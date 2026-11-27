@@ -525,7 +525,7 @@
   "restore.discard": "Elimina il ripristino parziale",
   "restore.stuck": "Un ripristino non è terminato:",
   "restore.title": "Ripristina da un backup",
-  "restore.help": "Rimetti al suo posto un'identità di nodo o un wallet da un file <code>{ext}</code> creato con una passphrase: Mysterium, ProxyBase o Anyone. Il ripristino crea solo un nuovo container su questa macchina e non sovrascrive mai un servizio presente qui. Per sostituirne uno, scarica prima il suo backup, poi rimuovilo e conferma l'eliminazione dei suoi dati. I file sigillati con una chiave, Storj e Sia usano i passaggi da riga di comando della guida ai backup: {guide}",
+  "restore.help": "Rimetti al suo posto un'identità di nodo o un wallet da un file <code>{ext}</code> creato con una passphrase (Mysterium, ProxyBase o Anyone). Il ripristino crea solo un nuovo container su questa macchina e non sovrascrive mai un servizio presente qui. Per sostituirne uno, scarica prima il suo backup, poi rimuovilo e conferma l'eliminazione dei suoi dati. I file sigillati con una chiave, Storj e Sia usano i passaggi da riga di comando della guida ai backup: {guide}",
   "restore.choose": "Scegli un file di backup",
   "restore.volumeAt": "volume <code>{volume}</code> in <code>{target}</code>",
   "restore.typeIt": "Per continuare, digita <strong>{service}</strong>:",

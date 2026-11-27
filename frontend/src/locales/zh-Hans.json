@@ -525,7 +525,7 @@
   "restore.discard": "删除未完成的恢复",
   "restore.stuck": "有恢复未完成：",
   "restore.title": "从备份恢复",
-  "restore.help": "从使用密码短语创建的 <code>{ext}</code> 文件中恢复节点身份或钱包：Mysterium、ProxyBase 或 Anyone。恢复只会在这台机器上创建新容器，永远不会覆盖这里已有的服务。要替换某个服务，请先下载其备份，然后移除它并同意删除其数据。使用密钥加密的文件、Storj 和 Sia 请按照备份指南中的命令行步骤操作：{guide}",
+  "restore.help": "从使用密码短语创建的 <code>{ext}</code> 文件中恢复节点身份或钱包（Mysterium、ProxyBase 或 Anyone）。恢复只会在这台机器上创建新容器，永远不会覆盖这里已有的服务。要替换某个服务，请先下载其备份，然后移除它并同意删除其数据。使用密钥加密的文件、Storj 和 Sia 请按照备份指南中的命令行步骤操作：{guide}",
   "restore.choose": "选择备份文件",
   "restore.volumeAt": "卷 <code>{volume}</code>，位于 <code>{target}</code>",
   "restore.typeIt": "要继续，请输入 <strong>{service}</strong>：",
