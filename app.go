@@ -393,7 +393,11 @@ func (a *App) DomReady(ctx context.Context) {
 	fitMainWindow(ctx)
 	wailsruntime.WindowShow(ctx)
 	PositionMainWindowOnPrimaryScreen()
+	// Under the language lock, so a pick made while the menu is built cannot
+	// set its labels before the menu exists and then be drawn over.
+	languageMu.Lock()
 	InstallTrayIcon(a.trayIcon, i18n.T("tray.show"), i18n.T("tray.quit"))
+	languageMu.Unlock()
 	// A helper registered by another copy of the app follows this one (helper_follow.go).
 	go a.keepHelperOnThisCopy()
 }
