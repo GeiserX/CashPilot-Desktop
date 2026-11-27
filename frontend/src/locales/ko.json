@@ -1,7 +1,7 @@
 {
   "language.name": "한국어",
   "language.title": "언어",
-  "language.help": "CashPilot Desktop은 지원되는 경우 컴퓨터의 언어를 사용합니다. 여기에서 다른 언어를 선택하세요.",
+  "language.help": "CashPilot Desktop은 지원되는 경우 컴퓨터의 언어를 사용합니다. 여기에서 다른 언어를 선택할 수 있습니다.",
   "language.system": "시스템 언어({language})",
   "language.systemNone": "시스템 언어(지원되지 않아 영어 사용)",
   "language.error.unsupported": "CashPilot Desktop에는 코드가 {code}인 언어가 없습니다.",
