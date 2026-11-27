@@ -17,6 +17,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
+	"github.com/shirou/gopsutil/v4/host"
 )
 
 // AppSpec is one earner the Security page lists, as the app hands it over.
@@ -166,6 +167,9 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 			if age := time.Since(s.WrittenAt); age > 3*GuardInterval && st.Busy == "" {
 				st.Reason = i18n.T("go.macvm.guardStale", "age", age.Round(time.Minute).String())
 			}
+			if boot, err := host.BootTimeWithContext(ctx); err == nil {
+				fromBeforeBoot(&st, s.WrittenAt, time.Unix(int64(boot), 0))
+			}
 		} else {
 			st.Reason = i18n.T("go.macvm.guardSilent")
 		}
@@ -183,6 +187,18 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 	st.LowDisk = st.FreeDisk > 0 && st.FreeDisk < LowDisk
 	st.Apps = e.appList(ctx, st)
 	return st
+}
+
+// fromBeforeBoot drops a status that the guard wrote before this boot of the
+// Mac. Until the guard's first pass after the boot, the file still says what
+// it saw before the shutdown, for example "connected" while the VM is stopped.
+func fromBeforeBoot(st *securevm.Status, written, boot time.Time) {
+	if !written.Before(boot) {
+		return
+	}
+	st.Network, st.Reason = NetOff, i18n.T("go.macvm.guardBooting")
+	st.Changes, st.Blocked, st.BlockedSince = nil, nil, time.Time{}
+	st.StartError, st.GuestLimit = "", false
 }
 
 // appList maps the specs and the guest's read into the page's rows. The guest
