@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Lab only: start the Secure VM at host boot, before anyone logs in. Copy to
+     /Library/LaunchDaemons/org.cashpilot.lab.vm.plist (root:wheel 644) and
+     replace the CAPS words. start.sh starts tart as OWNER, cuts the guest's
+     port, loads the fence and lets the guard connect it on an exact match. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.cashpilot.lab.vm</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>LAB_DIR/start.sh</string>
+    <string>VM_NAME</string>
+    <string>STATE_DIR</string>
+    <string>DENY_FILE</string>
+    <string>SOFTNET_DIR</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>OWNER</key><string>OWNER_USER</string>
+    <key>RUNLOG</key><string>STATE_DIR/run.log</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <!-- tart outlives this script; without this launchd kills it when start.sh exits -->
+  <key>AbandonProcessGroup</key><true/>
+  <key>StandardOutPath</key><string>STATE_DIR/boot.log</string>
+  <key>StandardErrorPath</key><string>STATE_DIR/boot.log</string>
+</dict>
+</plist>
