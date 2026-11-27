@@ -1,3 +1,7 @@
+// The guard reads macOS paths and commands; on Windows the package only has to
+// build, and filepath would write these fixtures with backslashes.
+//go:build !windows
+
 package macvm
 
 import (
