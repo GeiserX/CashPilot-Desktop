@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-11-27
+
+### Added
+
+- **Windows: the Secure VM engine can build the VM, prove its network fence and remove it.** The window has no Secure VM button yet. This release adds the elevated roles it will use. Setup makes a Hyper-V VM with its own switch, NAT, firewall rule and vTPM, installs Windows from your ISO without a key prompt, and checks that the VM reaches the internet but not your network, your router or this PC. Remove takes off only what Setup made and lists everything it keeps and why. Windows allows one NAT network per PC, so Setup refuses to start while another NAT exists and names it. Setup and Remove write `setup.log` and `remove.log` in the VM's data folder.
+
 ## [2.0.0] - 2026-11-27
 
 ### Changed
