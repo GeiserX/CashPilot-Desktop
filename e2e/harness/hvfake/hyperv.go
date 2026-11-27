@@ -147,8 +147,10 @@ const (
 	fakeIfTunnel   = 15
 )
 
-// protocols are the NetTrans-class components a vNIC can carry.
-var protocols = []string{"ms_tcpip", "ms_tcpip6", "ms_lltdio", "ms_rspndr", "ms_lldp", "ms_implat"}
+// protocols are the NetTrans-class components Windows 11 binds to a new vNIC
+// (live run 5).
+var protocols = []string{"ms_tcpip", "ms_tcpip6", "ms_lltdio", "ms_rspndr", "ms_lldp", "ms_implat",
+	"ms_pppoe", "ms_rdma_ndk", "ms_netbt", "ms_ndisuio"}
 
 // New returns a host on a physical Ethernet network (192.0.2.0/24, its
 // router at .1, the host at .10), with a tailnet-style tunnel adapter that

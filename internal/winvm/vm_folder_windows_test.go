@@ -3,6 +3,7 @@
 package winvm
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,6 +49,20 @@ try {
 	for _, want := range []string{"private-refused", "hyperv-ok True", "other-owner-refused", "users-refused"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("exit %d, want %q in:\n%s", code, want, got)
+		}
+	}
+}
+
+// TestNetTransComponentsIncludeIPv4: the guard reads the installed protocols
+// to require IPv4 as the only one on our vNIC. On live run 5 it read them
+// from Control\Class, which refuses Administrators and holds no components
+// for SYSTEM, so every check said "protocols: unread" and Setup failed.
+func TestNetTransComponentsIncludeIPv4(t *testing.T) {
+	code, out := runFakePowerShell(t, netTransPS+"\n$ErrorActionPreference = 'Stop'\n(Get-NetTransComponents) -join ','\n")
+	got := strings.ToLower(string(out))
+	for _, want := range []string{"ms_tcpip", "ms_tcpip6"} {
+		if code != 0 || !slices.Contains(strings.Split(strings.TrimSpace(got), ","), want) {
+			t.Fatalf("exit %d, want %s among the protocols: %s", code, want, out)
 		}
 	}
 }

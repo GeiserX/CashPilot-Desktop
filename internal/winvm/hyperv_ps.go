@@ -110,7 +110,17 @@ function Find-ManagementAdapter($mo) {
 // into a value Diff flags. Enums are written with ToString, so the answer holds
 // their English names, never numbers or translated text. Integration services
 // are keyed by their ID.
-const scriptReadLive = portACLPrelude + firewallIdentityPS + `$o = [ordered]@{}
+// netTransPS lists the component IDs of every installed protocol (the
+// NetTrans class). They are under Control\Network: the Control\Class key of
+// the same GUID refuses Administrators and, read as SYSTEM, holds no
+// components (live run 5).
+const netTransPS = `function Get-NetTransComponents {
+  @(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Network\{4D36E975-E325-11CE-BFC1-08002BE10318}' -ErrorAction Stop |
+    ForEach-Object { [string]$_.GetValue('ComponentId') } | Where-Object { $_ })
+}
+`
+
+const scriptReadLive = portACLPrelude + firewallIdentityPS + netTransPS + `$o = [ordered]@{}
 $vm = @(Find-OurVM $in.vm)
 $o.vmExists = ($vm.Count -eq 1)
 if ($vm.Count -ne 1) { Write-Doc $o; exit 0 }
@@ -189,7 +199,7 @@ if ($idx -ne 0) {
     $bm = @{}
     foreach ($x in $b) { $bm[([string]$x.ComponentID).ToLower()] = [bool]$x.Enabled }
     $o.bindings = $bm
-    $nt = @(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4D36E975-E325-11CE-BFC1-08002BE10318}' -ErrorAction SilentlyContinue | ForEach-Object { $_.GetValue('ComponentId') } | Where-Object { $_ })
+    $nt = @(Get-NetTransComponents)
     if ($nt.Count -gt 0) { $o.protocolsOn = @($b | Where-Object { $_.Enabled -and ($nt -contains $_.ComponentID) } | ForEach-Object { ([string]$_.ComponentID).ToLower() }) }
   } catch { }
   try {

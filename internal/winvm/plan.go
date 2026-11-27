@@ -76,10 +76,14 @@ func Integration() map[string]bool {
 
 // BindingsOff are the components setup unbinds from the host vNIC of our switch,
 // by component ID: IPv6, the file server and client, the LLTD mapper I/O driver,
-// the LLTD responder, LLDP and the multiplexor protocol. Port ACLs filter IP only,
-// so a non-IP frame from the guest can reach these. The guard compares all seven.
+// the LLTD responder, LLDP, the multiplexor protocol, and the protocols Windows
+// 11 also binds to a new vNIC: PPPoE, NDK (RDMA), NetBIOS over TCP/IP and NDIS
+// user-mode I/O. Port ACLs filter IP only, so a non-IP frame from the guest can
+// reach these. IPv4 must be the only protocol left; the guard compares all
+// eleven.
 func BindingsOff() []string {
-	return []string{"ms_tcpip6", "ms_server", "ms_msclient", "ms_lltdio", "ms_rspndr", "ms_lldp", "ms_implat"}
+	return []string{"ms_tcpip6", "ms_server", "ms_msclient", "ms_lltdio", "ms_rspndr", "ms_lldp", "ms_implat",
+		"ms_pppoe", "ms_rdma_ndk", "ms_netbt", "ms_ndisuio"}
 }
 
 // StaticDeny is the fixed L2 Deny list (DESKTOP-VM.md §5): every private,
