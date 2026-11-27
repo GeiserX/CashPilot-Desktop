@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
 )
 
@@ -86,7 +87,7 @@ func (e *Engine) begin(action string) (securevm.Progress, func(error) error, err
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.busy != "" {
-		return nil, nil, fmt.Errorf("wait until %s finishes", e.busy)
+		return nil, nil, errors.New(i18n.T("go.macvm.busy", "action", e.busy))
 	}
 	e.busy, e.step, e.fraction, e.lastErr = action, "", -1, ""
 	progress := func(step string, fraction float64) {
@@ -163,13 +164,13 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 			st.ProvedAt, st.Proving, st.StartError, st.GuestLimit = s.ProvedAt, s.Proving, s.StartError, s.GuestLimit
 			st.FreeDisk, st.Blocked, st.BlockedSince = s.FreeDisk, s.Blocked, s.BlockedSince
 			if age := time.Since(s.WrittenAt); age > 3*GuardInterval && st.Busy == "" {
-				st.Reason = fmt.Sprintf("The guard has not checked the fence for %s. Restart the Mac if this stays.", age.Round(time.Minute))
+				st.Reason = i18n.T("go.macvm.guardStale", "age", age.Round(time.Minute).String())
 			}
 		} else {
-			st.Reason = "The guard has not reported yet."
+			st.Reason = i18n.T("go.macvm.guardSilent")
 		}
 		if st.GuestLimit {
-			st.StartError = "macOS lets a Mac run at most 2 macOS virtual machines at once. Stop one in the app that runs it, then press Start."
+			st.StartError = i18n.T("go.macvm.guestLimit")
 		}
 		var pr securevm.Proof
 		if ReadJSON(filepath.Join(e.P.State, ProofFile), &pr) == nil {
@@ -233,11 +234,11 @@ func (e *Engine) appList(ctx context.Context, st securevm.Status) []securevm.App
 			a.Placement = securevm.VM
 			a.Layers = securevm.GuestLayers()
 			if st.Network != NetConnected || st.Fence != FenceHeld {
-				a.Detail = "The Secure VM is cut off the network, so it does not earn now."
+				a.Detail = i18n.T("go.macvm.appCutOff")
 			} else if a.Running == securevm.No {
-				a.Detail = "It is not running in the Secure VM."
+				a.Detail = i18n.T("go.macvm.appNotRunning")
 			} else if a.SignedIn == securevm.No {
-				a.Detail = "It is not signed in. Press Sign in to open it in the Secure VM."
+				a.Detail = i18n.T("go.macvm.appSignedOut")
 			}
 		case s.OnHost:
 			a.Placement = securevm.Host
@@ -251,7 +252,7 @@ func (e *Engine) appList(ctx context.Context, st securevm.Status) []securevm.App
 // It returns what the role printed.
 func (e *Engine) adminStep(ctx context.Context, prompt string, args ...string) (string, error) {
 	if strings.ContainsAny(e.Exe, "\"\\") {
-		return "", errors.New("the app's path has a character the admin step does not pass")
+		return "", errors.New(i18n.T("go.macvm.badExePath"))
 	}
 	q := func(s string) string {
 		return `quoted form of "` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s) + `"`
@@ -269,9 +270,9 @@ func (e *Engine) adminStep(ctx context.Context, prompt string, args ...string) (
 	if err != nil {
 		msg := strings.TrimSpace(errb.String())
 		if strings.Contains(msg, "-128") {
-			return string(out), errors.New("the administrator prompt was cancelled, so nothing changed on this Mac")
+			return string(out), errors.New(i18n.T("go.macvm.adminCancelled"))
 		}
-		return string(out), fmt.Errorf("the admin step failed: %s", msg)
+		return string(out), errors.New(i18n.T("go.macvm.adminFailed", "detail", msg))
 	}
 	return string(out), nil
 }
@@ -287,14 +288,14 @@ func (e *Engine) Install(ctx context.Context, progress securevm.Progress) (err e
 	defer func() { err = end(err) }()
 	progress = tee(p, progress)
 
-	progress("Checking this Mac", -1)
+	progress(i18n.T("go.macvm.stepCheck"), -1)
 	if probs := Problems(Preflight(ctx, e.R, e.TartHome, !e.vmExists())); len(probs) > 0 {
 		return errors.New(strings.Join(probs, " "))
 	}
 	if err := os.MkdirAll(e.Tools.Dir, 0o700); err != nil {
 		return err
 	}
-	if err := FetchTools(ctx, e.Client, e.Tools, func(s string, f float64) { progress("Downloading the VM tools", f) }); err != nil {
+	if err := FetchTools(ctx, e.Client, e.Tools, func(s string, f float64) { progress(i18n.T("go.macvm.stepTools"), f) }); err != nil {
 		return err
 	}
 	if !e.vmExists() {
@@ -302,10 +303,10 @@ func (e *Engine) Install(ctx context.Context, progress securevm.Progress) (err e
 		if err := os.MkdirAll(filepath.Dir(ipsw), 0o755); err != nil {
 			return err
 		}
-		if err := Download(ctx, e.Client, IPSWPin, ipsw, func(s string, f float64) { progress("Downloading macOS for the VM", f) }); err != nil {
+		if err := Download(ctx, e.Client, IPSWPin, ipsw, func(s string, f float64) { progress(i18n.T("go.macvm.stepIPSW"), f) }); err != nil {
 			return err
 		}
-		if err := CreateVM(ctx, e.Tools.Tart, e.TartHome, ipsw, func(s string, f float64) { progress("Installing macOS in the VM", f) }); err != nil {
+		if err := CreateVM(ctx, e.Tools.Tart, e.TartHome, ipsw, func(s string, f float64) { progress(i18n.T("go.macvm.stepCreate"), f) }); err != nil {
 			return err
 		}
 		// The VM holds its own copy; the image only takes space now.
@@ -315,24 +316,24 @@ func (e *Engine) Install(ctx context.Context, progress securevm.Progress) (err e
 	// A root side from this version whose fence holds needs no second
 	// approval: Install only finishes the guest.
 	if !e.rootCurrent() {
-		progress("Waiting for your approval", -1)
+		progress(i18n.T("go.macvm.stepApproval"), -1)
 		u, err := user.Current()
 		if err != nil {
 			return err
 		}
 		since := time.Now()
-		if _, err := e.adminStep(ctx, "CashPilot needs your permission once to set up the Secure VM and its network fence.",
+		if _, err := e.adminStep(ctx, i18n.T("go.macvm.promptInstall"),
 			"install", "--owner", u.Username, "--tart-home", e.TartHome, "--tools", e.Tools.Dir, "--app-version", e.AppVersion); err != nil {
 			return err
 		}
 
-		progress("Proving the fence", -1)
+		progress(i18n.T("go.macvm.stepProve"), -1)
 		pr, err := e.waitProof(ctx, since, 30*time.Minute)
 		if err != nil {
 			return err
 		}
 		if !pr.Green {
-			return fmt.Errorf("the fence proof failed, so the Secure VM stays cut off the network: %s", pr.Why)
+			return errors.New(i18n.T("go.macvm.proofRed", "why", pr.Why))
 		}
 	}
 	if err := e.prepareGuest(ctx, progress); err != nil {
@@ -354,7 +355,7 @@ func (e *Engine) rootCurrent() bool {
 
 // prepareGuest makes the earner account and restarts the VM so it logs in.
 func (e *Engine) prepareGuest(ctx context.Context, progress securevm.Progress) error {
-	progress("Preparing the Secure VM", -1)
+	progress(i18n.T("go.macvm.stepPrepare"), -1)
 	g := e.guest()
 	if err := e.waitAgent(ctx, g); err != nil {
 		return err
@@ -366,7 +367,7 @@ func (e *Engine) prepareGuest(ctx context.Context, progress securevm.Progress) e
 	if !fresh {
 		return nil
 	}
-	progress("Restarting the Secure VM", -1)
+	progress(i18n.T("go.macvm.stepRestart"), -1)
 	// `tart stop` forces the guest off when it does not shut down in time, so
 	// flush its disk first.
 	c, cancel := context.WithTimeout(ctx, time.Minute)
@@ -385,7 +386,7 @@ func (e *Engine) prepareGuest(ctx context.Context, progress securevm.Progress) e
 			break
 		}
 		if time.Now().After(deadline) {
-			return errors.New("the Secure VM did not come back after its restart")
+			return errors.New(i18n.T("go.macvm.noComeback"))
 		}
 		if err := sleep(ctx, 5*time.Second); err != nil {
 			return err
@@ -398,7 +399,7 @@ func (e *Engine) waitAgent(ctx context.Context, g Guest) error {
 	deadline := time.Now().Add(agentWait)
 	for !g.Ready(ctx) {
 		if time.Now().After(deadline) {
-			return errors.New("the Secure VM does not answer. Press Start, then try again")
+			return errors.New(i18n.T("go.macvm.noAgent"))
 		}
 		if err := sleep(ctx, 5*time.Second); err != nil {
 			return err
@@ -413,7 +414,7 @@ func (e *Engine) request(name string) error {
 		return fmt.Errorf("unknown request %q", name)
 	}
 	if err := os.WriteFile(filepath.Join(e.P.Request, name), nil, 0o600); err != nil {
-		return fmt.Errorf("could not reach the Secure VM's guard: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("go.macvm.noGuard"), err)
 	}
 	return nil
 }
@@ -430,12 +431,12 @@ func (e *Engine) waitProof(ctx context.Context, since time.Time, limit time.Dura
 		}
 		if s, err := ReadStatus(e.P); err == nil && s.StartError != "" && s.WrittenAt.After(since) && !s.Proving {
 			if s.GuestLimit {
-				return pr, errors.New("macOS lets a Mac run at most 2 macOS virtual machines at once. Stop one in the app that runs it, then press Start")
+				return pr, errors.New(i18n.T("go.macvm.guestLimit"))
 			}
-			return pr, fmt.Errorf("the Secure VM did not start: %s", s.StartError)
+			return pr, errors.New(i18n.T("go.macvm.noStart", "detail", s.StartError))
 		}
 		if time.Now().After(deadline) {
-			return pr, errors.New("the fence proof did not finish in time. Press Verify to run it again")
+			return pr, errors.New(i18n.T("go.macvm.proofTimeout"))
 		}
 		if err := sleep(ctx, 3*time.Second); err != nil {
 			return pr, err
@@ -452,9 +453,9 @@ func (e *Engine) Verify(ctx context.Context, progress securevm.Progress) (pr sec
 	defer func() { err = end(err) }()
 	progress = tee(p, progress)
 	if _, ok := e.installed(); !ok {
-		return pr, errors.New("there is no Secure VM yet. Press Install first")
+		return pr, errors.New(i18n.T("go.macvm.notInstalled"))
 	}
-	progress("Proving the fence", -1)
+	progress(i18n.T("go.macvm.stepProve"), -1)
 	since := time.Now()
 	if err := e.request(RequestProve); err != nil {
 		return pr, err
@@ -470,21 +471,21 @@ func (e *Engine) Undo(ctx context.Context, progress securevm.Progress) (res secu
 	}
 	defer func() { err = end(err) }()
 	progress = tee(p, progress)
-	progress("Waiting for your approval", -1)
+	progress(i18n.T("go.macvm.stepApproval"), -1)
 	u, err := user.Current()
 	if err != nil {
 		return res, err
 	}
-	out, aerr := e.adminStep(ctx, "CashPilot needs your permission to remove the Secure VM and its network fence.",
+	out, aerr := e.adminStep(ctx, i18n.T("go.macvm.promptRemove"),
 		"remove", "--owner", u.Username, "--tart-home", e.TartHome, "--tools", e.Tools.Dir)
 	var rep RemoveReport
 	if jerr := json.Unmarshal([]byte(strings.TrimSpace(out)), &rep); jerr != nil {
 		if aerr != nil {
 			return res, aerr
 		}
-		return res, fmt.Errorf("the removal gave no report: %w", jerr)
+		return res, fmt.Errorf("%s: %w", i18n.T("go.macvm.noReport"), jerr)
 	}
-	progress("Checking that nothing is left", -1)
+	progress(i18n.T("go.macvm.stepLeft"), -1)
 	res = securevm.RemoveResult{Removed: rep.Removed, Kept: rep.Kept, Left: rep.Left}
 	for _, l := range e.leftAsUser(ctx) {
 		if !contains(res.Left, l) {
@@ -492,7 +493,7 @@ func (e *Engine) Undo(ctx context.Context, progress securevm.Progress) (res secu
 		}
 	}
 	if len(res.Left) > 0 {
-		return res, fmt.Errorf("the removal left %d thing(s) behind", len(res.Left))
+		return res, errors.New(i18n.T("go.macvm.leftBehind", "n", len(res.Left)))
 	}
 	return res, nil
 }
@@ -556,7 +557,7 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 		if _, ok := e.installed(); !ok || s.MacOS == nil {
 			return nil // nothing of it is in a VM
 		}
-		progress("Taking "+s.Name+" out of the Secure VM", -1)
+		progress(i18n.T("go.macvm.stepTakeOut", "app", s.Name), -1)
 		return e.guest().RemoveApp(ctx, slug, *s.MacOS)
 	}
 	if ok, why := securevm.Lock(s.Refused, s.MacOS != nil); !ok {
@@ -564,16 +565,16 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 	}
 	st, err := ReadStatus(e.P)
 	if err != nil || st.Network != NetConnected || st.Fence != FenceHeld {
-		return errors.New("the Secure VM is not on the network with its fence held. Check the Security page, then try again")
+		return errors.New(i18n.T("go.macvm.notHeld"))
 	}
 	g := e.guest()
 	if s.MacOS.Rosetta && g.HasRosetta(ctx) != securevm.Yes {
-		progress("Installing Rosetta in the Secure VM", -1)
+		progress(i18n.T("go.macvm.stepRosetta"), -1)
 		if err := g.Rosetta(ctx); err != nil {
 			return err
 		}
 	}
-	progress("Installing "+s.Name+" in the Secure VM", -1)
+	progress(i18n.T("go.macvm.stepInstallApp", "app", s.Name), -1)
 	return g.InstallApp(ctx, slug, *s.MacOS)
 }
 
@@ -591,11 +592,11 @@ func (e *Engine) OpenScreen(ctx context.Context, slug string) error {
 	}
 	b, err := os.ReadFile(filepath.Join(e.P.Owner, VNCFile))
 	if err != nil {
-		return errors.New("the Secure VM's screen is not available. Press Start, then try again")
+		return errors.New(i18n.T("go.macvm.noScreen"))
 	}
 	u := strings.TrimSpace(string(b))
 	if !vncURL.MatchString(u) {
-		return errors.New("the Secure VM's screen address is not valid. Press Start, then try again")
+		return errors.New(i18n.T("go.macvm.badScreen"))
 	}
 	_, err = e.R.Run(ctx, "/usr/bin/open", u)
 	return err
@@ -604,7 +605,7 @@ func (e *Engine) OpenScreen(ctx context.Context, slug string) error {
 // Start asks the guard to start the VM with the fence.
 func (e *Engine) Start(ctx context.Context) error {
 	if _, ok := e.installed(); !ok {
-		return errors.New("there is no Secure VM yet. Press Install first")
+		return errors.New(i18n.T("go.macvm.notInstalled"))
 	}
 	return e.request(RequestStart)
 }
@@ -617,7 +618,7 @@ func (e *Engine) Stop(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, TartExe(e.P.Bin), "stop", VMName)
 	cmd.Env = append(os.Environ(), "TART_HOME="+e.TartHome)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("could not stop the Secure VM: %s", strings.TrimSpace(string(out)))
+		return errors.New(i18n.T("go.macvm.noStop", "detail", strings.TrimSpace(string(out))))
 	}
 	return nil
 }
