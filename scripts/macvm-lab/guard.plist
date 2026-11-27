@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Lab only: the guard prototype as a root LaunchDaemon. Copy to
+     /Library/LaunchDaemons/org.cashpilot.lab.guard.plist (root:wheel 644) and
+     replace STATE_DIR and GUARD_PATH. RunAtLoad covers boot; StartInterval the
+     minute. launchd does not run a missed StartInterval during sleep: it runs
+     one pass at wake, which the guard sees as a gap > 90 s. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>org.cashpilot.lab.guard</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>GUARD_PATH</string>
+    <string>STATE_DIR</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>60</integer>
+  <key>StandardErrorPath</key><string>STATE_DIR/guard.err</string>
+</dict>
+</plist>
