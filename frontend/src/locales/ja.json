@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "ランタイム",
   "main.scope.serverCommands": "サーバー コマンド",
   "main.scope.settings": "設定",
-  "main.scope.worker": "ワーカー"
+  "main.scope.worker": "ワーカー",
+  "logs.wrap": "行を折り返す",
+  "logs.empty": "（ログなし）"
 }

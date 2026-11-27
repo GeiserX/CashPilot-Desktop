@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "runtime",
   "main.scope.serverCommands": "Mga server command",
   "main.scope.settings": "settings",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "I-wrap ang mga linya",
+  "logs.empty": "(walang logs)"
 }

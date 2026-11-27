@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "ambiente de execução",
   "main.scope.serverCommands": "comandos do servidor",
   "main.scope.settings": "configurações",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "Quebrar linhas",
+  "logs.empty": "(sem logs)"
 }

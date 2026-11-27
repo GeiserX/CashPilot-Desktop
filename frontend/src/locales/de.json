@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "Laufzeitumgebung",
   "main.scope.serverCommands": "Serverbefehle",
   "main.scope.settings": "Einstellungen",
-  "main.scope.worker": "Worker"
+  "main.scope.worker": "Worker",
+  "logs.wrap": "Zeilen umbrechen",
+  "logs.empty": "(keine Protokolle)"
 }

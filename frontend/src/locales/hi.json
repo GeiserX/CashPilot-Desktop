@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "रनटाइम",
   "main.scope.serverCommands": "सर्वर कमांड",
   "main.scope.settings": "सेटिंग्स",
-  "main.scope.worker": "वर्कर"
+  "main.scope.worker": "वर्कर",
+  "logs.wrap": "पंक्तियाँ लपेटें",
+  "logs.empty": "(कोई लॉग नहीं)"
 }

@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "运行时",
   "main.scope.serverCommands": "服务器命令",
   "main.scope.settings": "设置",
-  "main.scope.worker": "工作节点"
+  "main.scope.worker": "工作节点",
+  "logs.wrap": "自动换行",
+  "logs.empty": "（无日志）"
 }

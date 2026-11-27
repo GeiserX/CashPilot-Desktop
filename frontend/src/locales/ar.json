@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "بيئة التشغيل",
   "main.scope.serverCommands": "أوامر الخادم",
   "main.scope.settings": "الإعدادات",
-  "main.scope.worker": "العامل"
+  "main.scope.worker": "العامل",
+  "logs.wrap": "التفاف الأسطر",
+  "logs.empty": "(لا توجد سجلات)"
 }

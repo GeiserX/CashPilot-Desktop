@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "çalışma ortamı",
   "main.scope.serverCommands": "Sunucu komutları",
   "main.scope.settings": "ayarlar",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "Satırları kaydır",
+  "logs.empty": "(günlük yok)"
 }
