@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
@@ -65,16 +66,16 @@ func BuildDeploySpec(svc catalog.Service, in SpecInput) (DeploySpec, error) {
 		return DeploySpec{}, fmt.Errorf("%s has no Docker image, so a worker cannot run it", svc.Name)
 	}
 	if catalog.IsRetired(svc.Status) {
-		return DeploySpec{}, fmt.Errorf("%s is no longer available for deployment (%s)", svc.Name, svc.Status)
+		return DeploySpec{}, errors.New(i18n.T("go.workerapi.retired", "name", svc.Name, "status", svc.Status))
 	}
 	dc := svc.Docker
 	env := deployEnv(dc.Env, in)
 	if missing := missingRequired(dc.Env, env); len(missing) > 0 {
-		return DeploySpec{}, fmt.Errorf("missing required fields: %s", strings.Join(missing, ", "))
+		return DeploySpec{}, errors.New(i18n.T("go.workerapi.missingFields", "fields", strings.Join(missing, i18n.T("go.workerapi.fieldSeparator"))))
 	}
 	if invalid := invalidValues(dc.Env, env); len(invalid) > 0 {
 		// The value is never echoed: it may be a credential.
-		return DeploySpec{}, fmt.Errorf("invalid value for: %s", strings.Join(invalid, ", "))
+		return DeploySpec{}, errors.New(i18n.T("go.workerapi.invalidFields", "fields", strings.Join(invalid, i18n.T("go.workerapi.fieldSeparator"))))
 	}
 	custom := strings.TrimSpace(in.CustomImage)
 	if custom != "" && dc.FenceGated {
@@ -98,10 +99,10 @@ func BuildDeploySpec(svc catalog.Service, in SpecInput) (DeploySpec, error) {
 	}
 	if dc.FenceGated {
 		if !hasFeature(in.WorkerFeatures, "fence_gated") {
-			return DeploySpec{}, fmt.Errorf("this worker is too old to run %s behind the LAN fence. Update the worker first; a node it runs keeps running as it is until then", svc.Slug)
+			return DeploySpec{}, errors.New(i18n.T("go.workerapi.fenceTooOld", "service", svc.Slug))
 		}
 		if err := fenceGatedPorts(dc, env, ports); err != nil {
-			return DeploySpec{}, fmt.Errorf("invalid value for %s: %w. Nothing was deployed", svc.Slug, err)
+			return DeploySpec{}, wrapText(i18n.T("go.workerapi.fenceInvalid", "service", svc.Slug, "error", err), err)
 		}
 	}
 
@@ -187,9 +188,9 @@ func checkWorkerGPUGrant(svc catalog.Service, customImage string, grants map[str
 	// either side may be the older one: the Desktop's catalog ships apart from the
 	// worker's, so blaming the worker alone can send the owner to update the wrong one.
 	if ok && len(raw) > 0 && string(raw) != "null" {
-		return fmt.Errorf("This worker reported a different GPU grant for %s than this computer's catalog. Update whichever is older, the worker or this app, and wait for the worker's next heartbeat. Nothing was deployed", name)
+		return errors.New(i18n.T("go.workerapi.gpuMismatch", "name", name))
 	}
-	return fmt.Errorf("This worker did not report the catalog GPU grant for %s. Update the worker and wait for its next heartbeat. Nothing was deployed", name)
+	return errors.New(i18n.T("go.workerapi.gpuMissing", "name", name))
 }
 
 // sameGPUGrant reports whether a grant the worker reported is want, key for key,
@@ -450,3 +451,15 @@ func PickWorker(requested int64, online []int64) (int64, error) {
 	}
 	return 0, ErrChooseWorker
 }
+
+// textError is a translated message that still unwraps to the error it explains,
+// so errors.Is keeps matching the cause.
+type textError struct {
+	text  string
+	cause error
+}
+
+func (e *textError) Error() string { return e.text }
+func (e *textError) Unwrap() error { return e.cause }
+
+func wrapText(text string, cause error) error { return &textError{text: text, cause: cause} }

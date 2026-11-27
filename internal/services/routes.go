@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Route at deploy (web app/route_gate.py, docs/proxies.md "Route a service at
@@ -174,16 +175,16 @@ func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map
 	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
-		return ProxiedResult{}, fmt.Errorf("unknown service: %s", slug)
+		return ProxiedResult{}, errors.New(i18n.T("go.services.unknownService", "slug", slug))
 	}
 	if svc.ManualOnly {
-		return ProxiedResult{}, fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+		return ProxiedResult{}, errors.New(i18n.T("go.services.manual", "name", svc.Name))
 	}
 	if err := refuseRetired(svc); err != nil {
 		return ProxiedResult{}, err
 	}
 	if svc.Custom {
-		return ProxiedResult{}, fmt.Errorf("%s is a custom service: deploy it, then add a copy through the proxy on the Proxies page", svc.Name)
+		return ProxiedResult{}, errors.New(i18n.T("go.services.route.custom", "name", svc.Name))
 	}
 	if why := m.ProxyRefusal(slug); why != "" {
 		return ProxiedResult{}, errors.New(why)
@@ -194,7 +195,7 @@ func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map
 	if _, deployed, err := m.store.GetDeployment(slug); err != nil {
 		return ProxiedResult{}, err
 	} else if deployed {
-		return ProxiedResult{}, fmt.Errorf("%s already runs from this computer's own IP. Remove it first and deploy it again with the route, or keep it and add a copy through the proxy on the Proxies page", svc.Name)
+		return ProxiedResult{}, errors.New(i18n.T("go.services.route.ownIP", "name", svc.Name))
 	}
 	before, had, err := m.store.GetRoute(slug)
 	if err != nil {
@@ -202,11 +203,11 @@ func (m *Manager) DeployRouted(ctx context.Context, slug string, credentials map
 	}
 	if had && before != id {
 		if _, running := m.Route(slug); running {
-			return ProxiedResult{}, fmt.Errorf("%s runs through another proxy. Remove it, then deploy it again through this one", svc.Name)
+			return ProxiedResult{}, errors.New(i18n.T("go.services.route.otherProxy", "name", svc.Name))
 		}
 	}
 	if _, _, err := m.store.SetRoute(slug, id); err != nil {
-		return ProxiedResult{}, fmt.Errorf("could not record the route of %s, so nothing was deployed: %w", svc.Name, err)
+		return ProxiedResult{}, fmt.Errorf("%s: %w", i18n.T("go.services.route.notRecorded", "name", svc.Name), err)
 	}
 	result, err := m.runProxied(ctx, slug, id, svc, credentials, true)
 	if err != nil {

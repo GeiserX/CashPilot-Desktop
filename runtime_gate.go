@@ -2,11 +2,11 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	goruntime "runtime"
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
@@ -26,19 +26,15 @@ func dockerGap(svc catalog.Service, native bool, status runtime.Status, goos str
 	if native || status.Available || strings.TrimSpace(svc.Docker.Image) == "" {
 		return ""
 	}
-	where := "this computer"
-	if goos == "windows" {
-		where = "this PC"
-	}
 	name := strings.TrimSpace(svc.Name)
 	if name == "" {
 		name = svc.Slug
 	}
 	switch status.Reason {
 	case runtime.ReasonNotInstalled, "":
-		return fmt.Sprintf("Docker is not set up on %s yet, so %s cannot run here. Set up Docker shows how.", where, name)
+		return i18n.T("go.app.dockerGap.notInstalled", "os", goos, "name", name)
 	}
-	return fmt.Sprintf("Docker is not ready on %s yet, so %s cannot run here. Set up Docker shows what is missing.", where, name)
+	return i18n.T("go.app.dockerGap.notReady", "os", goos, "name", name)
 }
 
 // dockerGapFor is dockerGap for slug on this computer, read now. A slug the catalog
@@ -65,14 +61,14 @@ func (a *App) refuseWithoutDocker(slug string) error {
 	if gap == "" {
 		return nil
 	}
-	err := errors.New(gap + " Nothing was deployed.")
+	err := errors.New(i18n.T("go.app.dockerGap.refused", "gap", gap))
 	a.emitError("deploy", err)
 	return err
 }
 
 func runtimeNotification(status runtime.Status) *Notification {
 	if !status.Available && !status.NativeAvailable {
-		return &Notification{Runtime: true, Level: "warning", Title: "Runtime offline", Message: status.Message}
+		return &Notification{Runtime: true, Level: "warning", Title: i18n.T("go.app.notify.runtimeOffline.title"), Message: status.Message}
 	}
 	if notice, ok := dockerNotice(status); ok {
 		notice.Runtime = true
@@ -87,23 +83,21 @@ func dockerNotice(status runtime.Status) (Notification, bool) {
 	if status.Available && status.SetupTask != "" {
 		return Notification{
 			Level:   "warning",
-			Title:   "Docker setup needs you",
-			Message: status.SetupTask + " Use Set up Docker on the Dashboard or in Settings.",
+			Title:   i18n.T("go.app.notify.dockerSetup.title"),
+			Message: i18n.T("go.app.notify.dockerSetup.message", "task", status.SetupTask),
 		}, true
 	}
 	if status.Available || !status.NativeAvailable {
 		return Notification{}, false
 	}
-	only := "a few apps"
-	if names := status.NativeServices; len(names) == 1 {
-		only = names[0]
-	} else if len(names) > 1 {
-		only = strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	message := i18n.T("go.app.notify.dockerNotReady.fewApps")
+	if names := status.NativeServices; len(names) > 0 {
+		message = i18n.T("go.app.notify.dockerNotReady.message", "apps", joinNames(names))
 	}
 	return Notification{
 		Level:   "warning",
-		Title:   "Docker is not ready",
-		Message: "Without Docker only " + only + " can run on this computer. Use Set up Docker on the Dashboard or in Settings.",
+		Title:   i18n.T("go.app.notify.dockerNotReady.title"),
+		Message: message,
 	}, true
 }
 

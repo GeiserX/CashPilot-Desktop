@@ -19,12 +19,13 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
 
 	"golang.org/x/crypto/blake2b"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Words is how many words a Sia phrase has.
@@ -68,11 +69,11 @@ func Problem(phrase string, words int) string {
 func entropy(phrase string, words int) ([16]byte, error) {
 	var out [16]byte
 	if words != Words {
-		return out, fmt.Errorf("only %d-word phrases are supported", Words)
+		return out, errors.New(i18n.T("go.siaseed.onlyWords", "words", Words))
 	}
 	found := strings.Fields(Normalize(phrase))
 	if len(found) != words {
-		return out, fmt.Errorf("a seed phrase has %d words; this one has %d", words, len(found))
+		return out, errors.New(i18n.T("go.siaseed.wordCount", "want", words, "got", len(found)))
 	}
 	list := wordlist()
 	var unknown []string
@@ -81,11 +82,8 @@ func entropy(phrase string, words int) ([16]byte, error) {
 			unknown = append(unknown, strconv.Itoa(n+1))
 		}
 	}
-	if len(unknown) == 1 {
-		return out, fmt.Errorf("word %s is not a BIP-39 word. Check its spelling", unknown[0])
-	}
-	if len(unknown) > 1 {
-		return out, fmt.Errorf("words %s are not BIP-39 words. Check their spelling", strings.Join(unknown, ", "))
+	if len(unknown) > 0 {
+		return out, errors.New(i18n.T("go.siaseed.unknownWords", "count", len(unknown), "words", strings.Join(unknown, i18n.T("go.siaseed.wordSeparator"))))
 	}
 	// 12 words x 11 bits = 132 bits: 128 of entropy, then 4 of checksum.
 	var bits [17]byte
@@ -102,7 +100,7 @@ func entropy(phrase string, words int) ([16]byte, error) {
 	copy(out[:], bits[:16])
 	sum := sha256.Sum256(out[:])
 	if sum[0]>>4 != bits[16]>>4 {
-		return [16]byte{}, errors.New("the words are all valid, but the phrase does not check out. One of them is probably wrong")
+		return [16]byte{}, errors.New(i18n.T("go.siaseed.checksum"))
 	}
 	return out, nil
 }

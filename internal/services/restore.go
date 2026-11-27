@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
@@ -24,7 +25,7 @@ func (m *Manager) restoreTarget(slug string) (catalog.Service, runtime.RestorePr
 		return catalog.Service{}, nil, nil, errors.New("this backup is not of a service in this app's catalog")
 	}
 	if svc.ManualOnly {
-		return svc, nil, nil, fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+		return svc, nil, nil, errors.New(i18n.T("go.services.manual", "name", svc.Name))
 	}
 	if err := refuseRetired(svc); err != nil {
 		return svc, nil, nil, err
@@ -34,11 +35,11 @@ func (m *Manager) restoreTarget(slug string) (catalog.Service, runtime.RestorePr
 		return svc, nil, nil, err
 	}
 	if m.kindForService(svc) == nativeRuntimeKind {
-		return svc, nil, nil, fmt.Errorf("%s runs as a native program on this machine, so its identity is not in a Docker volume and the app cannot restore it. Use the command line steps in the backup guide", svc.Name)
+		return svc, nil, nil, errors.New(i18n.T("go.services.restore.native", "name", svc.Name))
 	}
 	provider, ok := m.providers[m.defaultKind].(runtime.RestoreProvider)
 	if !ok {
-		return svc, nil, nil, errors.New("this machine's container runtime cannot restore a backup")
+		return svc, nil, nil, errors.New(i18n.T("go.services.restore.unsupported"))
 	}
 	return svc, provider, targets, nil
 }
@@ -70,7 +71,7 @@ func (m *Manager) restoreRefusal(svc catalog.Service, slug string, credentials m
 	if _, deployed, err := m.store.GetDeployment(slug); err != nil {
 		return "", err
 	} else if deployed {
-		return fmt.Sprintf("%s is already deployed on this machine. A restore only creates a new one: back the running one up, remove it and say yes to deleting its data, then restore", svc.Name), nil
+		return i18n.T("go.services.restore.alreadyDeployed", "name", svc.Name), nil
 	}
 	if err := m.refuseHeld(slug, "restored"); err != nil {
 		return err.Error(), nil
@@ -79,7 +80,7 @@ func (m *Manager) restoreRefusal(svc catalog.Service, slug string, credentials m
 		return err.Error(), nil
 	}
 	if err := validateRequired(svc, credentials); err != nil {
-		return fmt.Sprintf("%s needs its settings first (%v). Fill them in on its deploy form and save them, then restore", svc.Name, err), nil
+		return i18n.T("go.services.restore.needsSettings", "name", svc.Name, "error", err), nil
 	}
 	if err := checkPublished(svc, credentials); err != nil {
 		return err.Error(), nil
@@ -93,10 +94,10 @@ func (m *Manager) restoreRefusal(svc catalog.Service, slug string, credentials m
 func (m *Manager) refuseHeld(slug, what string) error {
 	hold, err := m.store.RestoreHeld(slug)
 	if err != nil {
-		return fmt.Errorf("could not read whether a restore of %s is unfinished (%v), so it was not %s", slug, err, what)
+		return errors.New(i18n.T("go.services.restore.holdUnread", "slug", slug, "error", err, "what", what))
 	}
 	if hold != nil {
-		return fmt.Errorf("a restore of %s is running or did not finish, so its data may be half-written and it was not %s. If no restore is running, delete the partial restore under Settings, Restore from a backup, then restore the backup again", slug, what)
+		return errors.New(i18n.T("go.services.restore.held", "slug", slug, "what", what))
 	}
 	return nil
 }
@@ -115,7 +116,7 @@ func (m *Manager) Restore(ctx context.Context, slug string, credentials map[stri
 	if why, err := m.restoreRefusal(svc, slug, credentials); err != nil {
 		return runtime.RestoreResult{}, err
 	} else if why != "" {
-		return runtime.RestoreResult{}, fmt.Errorf("nothing was restored: %s", strings.TrimSuffix(why, "."))
+		return runtime.RestoreResult{}, errors.New(i18n.T("go.services.restore.nothingRestored", "why", strings.TrimSuffix(why, ".")))
 	}
 	held := false
 	m.store.RecordEvent(slug, "restore_start", "")
@@ -136,7 +137,7 @@ func (m *Manager) Restore(ctx context.Context, slug string, credentials map[stri
 		if held && len(res.Left) == 0 {
 			// The undo removed everything the restore made, so nothing is half-written.
 			if rerr := m.store.ReleaseRestore(slug); rerr != nil {
-				err = fmt.Errorf("%w The app could not lift its hold on %s (%v): delete the partial restore under Settings, Restore from a backup", err, svc.Name, rerr)
+				err = wrapText(i18n.T("go.services.restore.holdNotLifted", "error", err, "name", svc.Name, "cause", rerr), err)
 			}
 		}
 		m.store.RecordEvent(slug, "restore_error", err.Error())
@@ -148,7 +149,7 @@ func (m *Manager) Restore(ctx context.Context, slug string, credentials map[stri
 	}
 	deployment := store.Deployment{Slug: slug, ContainerID: res.ContainerID, Name: res.Name, Image: res.Image, Status: status, Runtime: defaultRuntimeKind}
 	if err := m.store.UpsertDeployment(deployment); err != nil {
-		return res, fmt.Errorf("%s was restored and is on this machine, but the app could not record it (%v). Refresh the dashboard", svc.Name, err)
+		return res, errors.New(i18n.T("go.services.restore.notRecorded", "name", svc.Name, "error", err))
 	}
 	_ = m.store.SetCustomImage(slug, "")
 	_ = m.store.SetInstances(slug, 1)
@@ -171,15 +172,15 @@ func (m *Manager) DiscardRestore(ctx context.Context, slug string) error {
 		return err
 	}
 	if hold == nil {
-		return fmt.Errorf("no restore of %s is unfinished on this machine", slug)
+		return errors.New(i18n.T("go.services.restore.noneUnfinished", "slug", slug))
 	}
 	provider, ok := m.providers[m.defaultKind].(runtime.RestoreProvider)
 	if !ok {
-		return errors.New("this machine's container runtime cannot restore a backup")
+		return errors.New(i18n.T("go.services.restore.unsupported"))
 	}
 	if _, err := provider.DiscardRestore(ctx, slug, hold.Volumes); err != nil {
 		m.store.RecordEvent(slug, "restore_error", err.Error())
-		return fmt.Errorf("the partial restore of %s was not deleted: %w", slug, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.services.restore.partialNotDeleted", "slug", slug), err)
 	}
 	if err := m.store.ReleaseRestore(slug); err != nil {
 		return err

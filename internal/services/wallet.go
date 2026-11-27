@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/siaseed"
 )
@@ -153,10 +155,10 @@ func (m *Manager) forgetStoredSeed(slug string, svc catalog.Service, address str
 func (m *Manager) RevealWalletSeed(ctx context.Context, slug string) (string, error) {
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
-		return "", fmt.Errorf("unknown service: %s", slug)
+		return "", errors.New(i18n.T("go.services.unknownService", "slug", slug))
 	}
 	if seedKey(svc) == "" {
-		return "", fmt.Errorf("%s keeps no wallet seed", svc.Name)
+		return "", errors.New(i18n.T("go.services.wallet.noSeed", "name", svc.Name))
 	}
 	reader, ok := m.providerForSlug(slug).(runtime.SeedReader)
 	if !ok {

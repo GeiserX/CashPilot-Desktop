@@ -15,6 +15,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // The GPU grant, as the web worker gives it (app/gpu.py):
@@ -54,15 +55,14 @@ const nvidiaVisible = "NVIDIA_VISIBLE_DEVICES"
 const toolkitURL = "https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html"
 
 // nvidiaHint is what to do when Docker cannot pass an NVIDIA GPU in.
-const nvidiaHint = "This computer's Docker cannot pass NVIDIA GPUs into containers: the NVIDIA Container Toolkit is missing, " +
-	"or Docker was not restarted after it was installed. Install it (" + toolkitURL + "), run " +
-	"`sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` " +
-	"(on Windows, update the NVIDIA driver and Docker Desktop with the WSL 2 backend), then deploy again."
+func nvidiaHint() string {
+	return i18n.T("go.runtime.gpu.nvidiaHint", "url", toolkitURL,
+		"command", "`sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker`")
+}
 
 // macNvidiaHint replaces nvidiaHint on a Mac, where no toolkit can help: Docker
 // Desktop and Podman run containers in a VM that gets no NVIDIA GPU.
-const macNvidiaHint = "Docker on a Mac cannot pass an NVIDIA GPU into a container. " +
-	"Run this miner on a Linux or Windows computer with an NVIDIA GPU, for example as a CashPilot worker."
+func macNvidiaHint() string { return i18n.T("go.runtime.gpu.macNvidiaHint") }
 
 // Where the host's GPUs are read. Vars so tests can point them at a fake tree.
 var (
@@ -142,24 +142,24 @@ func renderNumber(path string) int {
 // remote daemon can report the same hostname and kernel release.
 func sameKernel(facts daemonInfo) (bool, string) {
 	if gpuHostOS != "linux" {
-		return false, fmt.Sprintf("GPU detection is not implemented for %s; this says nothing about whether one exists", gpuHostOS)
+		return false, i18n.T("go.runtime.gpu.reason.notImplemented", "os", gpuHostOS)
 	}
 	release := readSysfs(osReleasePath)
 	if strings.Contains(release, "microsoft") {
-		return false, "this is WSL, where a GPU is not on the PCI bus CashPilot reads"
+		return false, i18n.T("go.runtime.gpu.reason.wsl")
 	}
 	if !daemonHostLocal(facts.DaemonHost) {
-		return false, "CashPilot reaches the container runtime through a network endpoint, so it may run on another computer, whose GPUs CashPilot cannot read"
+		return false, i18n.T("go.runtime.gpu.reason.remote")
 	}
 	if facts.Hostname == "" {
-		return false, "the container runtime did not say which computer it runs on"
+		return false, i18n.T("go.runtime.gpu.reason.unknownHost")
 	}
 	host, err := localHostname()
 	// The same name on another box (a homelab default such as "ubuntu") is not the
 	// same kernel: the release must match too when the daemon reports it.
 	otherKernel := facts.KernelVersion != "" && !strings.EqualFold(facts.KernelVersion, release)
 	if err != nil || !strings.EqualFold(strings.TrimSpace(host), facts.Hostname) || otherKernel {
-		return false, "the container runtime runs in a virtual machine or on another computer, whose GPUs CashPilot cannot read"
+		return false, i18n.T("go.runtime.gpu.reason.vm")
 	}
 	return true, ""
 }
@@ -182,7 +182,7 @@ func readHostGPUs(facts daemonInfo) hostGPUs {
 	}
 	devices, err := os.ReadDir(filepath.Join(sysfsRoot, "bus", "pci", "devices"))
 	if err != nil {
-		result.Reason = fmt.Sprintf("this computer's GPU devices could not be read (%v)", err)
+		result.Reason = i18n.T("go.runtime.gpu.reason.unreadable", "error", err)
 		return result
 	}
 	var failed []string
@@ -236,7 +236,7 @@ func readHostGPUs(facts daemonInfo) hostGPUs {
 		failed = append(failed, err.Error())
 	}
 	if len(failed) > 0 {
-		return hostGPUs{Vendors: map[string]*gpuVendor{}, Reason: fmt.Sprintf("part of this computer's GPU details could not be read (%s)", strings.Join(failed, "; "))}
+		return hostGPUs{Vendors: map[string]*gpuVendor{}, Reason: i18n.T("go.runtime.gpu.reason.partial", "failures", strings.Join(failed, "; "))}
 	}
 	result.KFD = err == nil
 	result.Conclusive = true
@@ -276,13 +276,13 @@ func (h hostGPUs) missing(grant catalog.GPUGrant) string {
 	}
 	label := gpuVendorNames[grant.Vendor]
 	if h.Vendors[grant.Vendor] == nil {
-		return fmt.Sprintf("This computer has no %s GPU CashPilot can pass in (it sees: %s)", label, h.describe())
+		return i18n.T("go.runtime.gpu.missing.vendor", "vendor", label, "sees", h.describe())
 	}
 	if grant.Vendor != "nvidia" && len(h.renderNodes(grant.Vendor)) == 0 {
-		return fmt.Sprintf("This computer's %s GPU has no render node CashPilot can pass in (/dev/dri/renderD128 to renderD135): its driver is not loaded, or the computer has more GPUs than CashPilot passes in", label)
+		return i18n.T("go.runtime.gpu.missing.renderNode", "vendor", label)
 	}
 	if grant.ROCm && !h.KFD {
-		return fmt.Sprintf("This computer's %s GPU has no %s: the ROCm driver (amdgpu with KFD) is not loaded", label, catalog.KFDDevice)
+		return i18n.T("go.runtime.gpu.missing.kfd", "vendor", label, "device", catalog.KFDDevice)
 	}
 	return ""
 }
@@ -307,21 +307,21 @@ func buildGPU(svc catalog.Service, slug string, instance int, facts daemonInfo) 
 		name = slug
 	}
 	if svc.Custom || catalog.IsCustomSlug(slug) {
-		return gpuResources{}, fmt.Errorf("%s is a custom service, and only a catalog entry gets a GPU. Nothing was deployed", name)
+		return gpuResources{}, errors.New(i18n.T("go.runtime.gpu.custom", "name", name))
 	}
 	if problems := catalog.GPUProblems(svc); len(problems) > 0 {
-		return gpuResources{}, fmt.Errorf("%s declares a GPU its catalog entry does not describe correctly (%s), so nothing was deployed", name, strings.Join(problems, "; "))
+		return gpuResources{}, errors.New(i18n.T("go.runtime.gpu.badEntry", "name", name, "problems", strings.Join(problems, "; ")))
 	}
 	grant, _ := svc.Docker.GPU.Grant()
 	if instance > 1 {
-		return gpuResources{}, fmt.Errorf("%s uses this computer's GPU and can run only one copy. Nothing was deployed", name)
+		return gpuResources{}, errors.New(i18n.T("go.runtime.gpu.oneCopy", "name", name))
 	}
 	if facts.OSType != "linux" {
-		return gpuResources{}, fmt.Errorf("%s needs a GPU in a Linux container, and this container runtime runs Windows containers. Nothing was deployed", name)
+		return gpuResources{}, errors.New(i18n.T("go.runtime.gpu.windowsContainers", "name", name))
 	}
 	host := readHostGPUs(facts)
 	if problem := host.missing(grant); problem != "" {
-		return gpuResources{}, fmt.Errorf("%s. Nothing was deployed; the running container was not touched", problem)
+		return gpuResources{}, errors.New(i18n.T("go.runtime.gpu.missingUntouched", "problem", problem))
 	}
 	if grant.Vendor == "nvidia" {
 		count := 1
@@ -334,7 +334,7 @@ func buildGPU(svc catalog.Service, slug string, instance int, facts daemonInfo) 
 		}, nil
 	}
 	if !host.Conclusive {
-		return gpuResources{}, fmt.Errorf("%s needs this computer's %s GPU, which CashPilot passes in only when the container runtime runs on this computer's own Linux kernel (%s). Nothing was deployed", name, gpuVendorNames[grant.Vendor], host.Reason)
+		return gpuResources{}, errors.New(i18n.T("go.runtime.gpu.notLocalKernel", "name", name, "vendor", gpuVendorNames[grant.Vendor], "reason", host.Reason))
 	}
 	var devices []container.DeviceMapping
 	for _, n := range grantDevices(grant, host) {
@@ -404,7 +404,7 @@ func stampGPUEnv(svc catalog.Service, env map[string]string, nvidia bool) error 
 	}
 	if len(set) > 0 {
 		sort.Strings(set)
-		return fmt.Errorf("%s was not deployed: CashPilot sets the %s variables itself, and this service sets %s. The running container was not touched", svc.Name, catalog.GPUEnvPrefix, strings.Join(set, ", "))
+		return errors.New(i18n.T("go.runtime.gpu.envSet", "name", svc.Name, "prefix", catalog.GPUEnvPrefix, "vars", strings.Join(set, ", ")))
 	}
 	if !nvidia {
 		env[nvidiaVisible] = "void"
@@ -421,15 +421,15 @@ func withGPUHint(err error) error {
 	switch {
 	case strings.Contains(reason, `could not select device driver "nvidia"`), strings.Contains(reason, "failed to discover GPU vendor from CDI"):
 		if gpuHostOS == "darwin" {
-			return fmt.Errorf("%w. %s", err, macNvidiaHint)
+			return fmt.Errorf("%w. %s", err, macNvidiaHint())
 		}
-		return fmt.Errorf("%w. %s", err, nvidiaHint)
+		return fmt.Errorf("%w. %s", err, nvidiaHint())
 	case strings.Contains(reason, "error gathering device information while adding custom device"):
 		if strings.Contains(reason, catalog.KFDDevice) {
-			return fmt.Errorf("%w. %s is missing on this computer: the ROCm driver (amdgpu with KFD) is not loaded", err, catalog.KFDDevice)
+			return wrapText(i18n.T("go.runtime.gpu.kfdMissing", "error", err, "device", catalog.KFDDevice), err)
 		}
 		if strings.Contains(reason, "/dev/dri/") {
-			return fmt.Errorf("%w. That render node is gone since CashPilot read it: a driver update or a reboot can number them again. Deploy again", err)
+			return wrapText(i18n.T("go.runtime.gpu.renderNodeGone", "error", err), err)
 		}
 	}
 	return err

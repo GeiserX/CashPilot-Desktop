@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // AdminStepFirewallRule is the Windows Firewall change a native deploy can need.
@@ -45,7 +47,7 @@ func (e *AdminApprovalNeeded) Error() string {
 	if name == "" {
 		name = e.Slug
 	}
-	return fmt.Sprintf("%s was not started: it needs a Windows Firewall rule change, and Windows asks for admin rights to make it. CashPilot explains that prompt before it shows: open %s in Catalog and click Deploy", name, name)
+	return i18n.T("go.runtime.firewall.approvalNeeded", "name", name)
 }
 
 // NameAdminApproval gives an AdminApprovalNeeded in err the display name, so its
@@ -126,10 +128,10 @@ func (step AdminStep) approvedBy(approval *AdminStep) bool {
 // ensureFirewallRule checks a rule before and after the Windows admin step.
 func ensureFirewallRule(slug, program string, nets []string, mayElevate bool, read func(string) (firewallState, error), elevate func(string) (ElevatedResult, error)) error {
 	name := firewallRuleName(slug, program)
-	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
+	what := i18n.T("go.runtime.firewall.what", "slug", slug, "networks", strings.Join(nets, ", "))
 	st, err := read(name)
 	if err != nil {
-		return fmt.Errorf("%s. CashPilot could not read the rule before the admin step: %w", what, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.firewall.readBeforeFailed", "what", what), err)
 	}
 	create, err := firewallNext(st, slug, program, nets, mayElevate, what)
 	if err != nil || !create {
@@ -140,7 +142,7 @@ func ensureFirewallRule(slug, program string, nets []string, mayElevate bool, re
 	}
 	st, err = read(name)
 	if err != nil {
-		return fmt.Errorf("%s. CashPilot could not verify the rule after the admin step: %w", what, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.firewall.verifyFailed", "what", what), err)
 	}
 	return verifyCreatedFirewallRule(st, program, nets, what)
 }
@@ -174,7 +176,7 @@ func firewallReadiness(st firewallState, program string, nets []string, what str
 // It names the fix and nothing else: the service runs as a program on Windows,
 // so there is no other way to run it from this card.
 func firewallNotEnforced(what, why string) error {
-	return fmt.Errorf("%s, and %s, so the rule would do nothing. Fix that, then click Deploy again", what, why)
+	return errors.New(i18n.T("go.runtime.firewall.notEnforced", "what", what, "why", why))
 }
 
 // firewallCreateFailed says why creating the rule failed. A No at the Windows
@@ -183,25 +185,25 @@ func firewallNotEnforced(what, why string) error {
 // the running instance, so the text never claims nothing changed.
 func firewallCreateFailed(slug string, nets []string, what string, err error) error {
 	if code, ok := ExitCodeOf(err); ok && code == ExitCancelled {
-		return fmt.Errorf("%s is not running: you chose No at the Windows permission prompt, so CashPilot did not add the Windows Firewall rule that blocks it from %s, and it never runs without that rule. If it was running before this deploy, CashPilot stopped it for the deploy, and it stays stopped. To run it, click Deploy again and choose Yes at the prompt", slug, strings.Join(nets, ", "))
+		return errors.New(i18n.T("go.runtime.firewall.declined", "slug", slug, "networks", strings.Join(nets, ", ")))
 	}
-	return fmt.Errorf("%s, and creating it failed (approve the Windows admin prompt and try again): %v", what, err)
+	return errors.New(i18n.T("go.runtime.firewall.createFailed", "what", what, "error", err))
 }
 
 func firewallRemoveFailed(name string, err error) error {
 	if code, ok := ExitCodeOf(err); ok && code == ExitCancelled {
-		return fmt.Errorf("you chose No at the Windows permission prompt. The Windows Firewall rule %q is still there. If the service was running, it was stopped before the prompt. Try again and choose Yes", name)
+		return errors.New(i18n.T("go.runtime.firewall.removeDeclined", "rule", strconv.Quote(name)))
 	}
-	return fmt.Errorf("the Windows Firewall rule %q is still there (approve the Windows admin prompt and remove again, or delete it yourself with Remove-NetFirewallRule -DisplayName %s): %w", name, psQuote(name), err)
+	return fmt.Errorf("%s: %w", i18n.T("go.runtime.firewall.removeFailed", "rule", strconv.Quote(name), "command", psQuote(name)), err)
 }
 
 func verifyCreatedFirewallRule(st firewallState, program string, nets []string, what string) error {
 	if !st.matches(program, nets) {
-		return fmt.Errorf("%s, and the rule is still not in place after creating it", what)
+		return errors.New(i18n.T("go.runtime.firewall.notInPlace", "what", what))
 	}
 	// The firewall can be switched off while the admin prompt waits.
 	if why := st.notEnforced(); why != "" {
-		return fmt.Errorf("%s. CashPilot checked the rule after the admin step and found that %s. Fix that, then click Deploy again", what, why)
+		return errors.New(i18n.T("go.runtime.firewall.switchedOff", "what", what, "why", why))
 	}
 	return nil
 }

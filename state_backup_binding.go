@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -58,10 +59,10 @@ func (a *App) stateBackups(deployments []store.Deployment) []statebackup.Row {
 // irreplaceable: a confirmation of either would be a confirmation of nothing.
 func (a *App) backupTarget(slug string) error {
 	if len(a.services.CriticalVolumes(slug)) == 0 {
-		return fmt.Errorf("%s keeps no irreplaceable state to back up", slug)
+		return errors.New(i18n.T("go.app.backup.error.nothingToBackUp", "slug", slug))
 	}
 	if _, ok, err := a.store.GetDeployment(slug); err != nil || !ok {
-		return fmt.Errorf("%s is not deployed on this machine", slug)
+		return errors.New(i18n.T("go.app.backup.error.notDeployed", "slug", slug))
 	}
 	return nil
 }
@@ -99,16 +100,16 @@ func (a *App) ExportStateBackup(slug, passphrase, passphraseRepeat, recipientPub
 	}
 	recipientPublicKey = strings.TrimSpace(recipientPublicKey)
 	if (passphrase == "") == (recipientPublicKey == "") {
-		return "", errors.New("give either a passphrase or a recipient public key, not both")
+		return "", errors.New(i18n.T("go.app.backup.error.oneSecret"))
 	}
 	if passphrase != "" {
 		// A typo gives a file nobody can open, and the export marks the service
 		// as backed up. Compared, never echoed.
 		if subtle.ConstantTimeCompare([]byte(passphrase), []byte(passphraseRepeat)) != 1 {
-			return "", errors.New("the two passphrases differ; type it again")
+			return "", errors.New(i18n.T("go.app.backup.error.passphrasesDiffer"))
 		}
 		if len([]rune(passphrase)) < statebackup.MinPassphraseLength {
-			return "", fmt.Errorf("the passphrase must be at least %d characters", statebackup.MinPassphraseLength)
+			return "", errors.New(i18n.T("go.app.backup.error.passphraseShort", "n", statebackup.MinPassphraseLength))
 		}
 	}
 	if err := a.backupTarget(slug); err != nil {
@@ -120,11 +121,11 @@ func (a *App) ExportStateBackup(slug, passphrase, passphraseRepeat, recipientPub
 		host = "desktop"
 	}
 	path, err := a.askWhereToSave(wailsruntime.SaveDialogOptions{
-		Title:                "Save encrypted backup",
+		Title:                i18n.T("go.app.backup.saveTitle"),
 		DefaultFilename:      fmt.Sprintf("cashpilot-%s-%s-%s.cpbackup", slug, host, time.Now().UTC().Format("20060102")),
 		CanCreateDirectories: true,
 		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "CashPilot backups (*.cpbackup)", Pattern: "*.cpbackup"},
+			{DisplayName: i18n.T("go.app.backup.filter", "pattern", "*.cpbackup"), Pattern: "*.cpbackup"},
 		},
 	})
 	if err != nil {
@@ -141,7 +142,7 @@ func (a *App) ExportStateBackup(slug, passphrase, passphraseRepeat, recipientPub
 	// Run the restore's own checks now, while the user can still act: a backup
 	// that cpbackup would refuse must not be saved and counted as one.
 	if _, err := statebackup.SplitArchives(payload); err != nil {
-		return "", fmt.Errorf("the backup was not saved, because a restore would refuse it: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.app.backup.error.wouldRefuse"), err)
 	}
 	bundle, err := statebackup.Seal(payload, passphrase, recipientPublicKey, map[string]any{
 		"slug":    slug,
@@ -152,17 +153,17 @@ func (a *App) ExportStateBackup(slug, passphrase, passphraseRepeat, recipientPub
 		return "", err
 	}
 	if err := os.WriteFile(path, bundle, 0o600); err != nil {
-		return "", fmt.Errorf("could not save the backup: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.app.backup.error.saveFailed"), err)
 	}
 	// A restore of this exact file needs no typed service name: this app made it,
 	// so it knows whose identity is inside (restore_binding.go).
 	sum := sha256.Sum256(bundle)
 	if err := a.store.RecordExportedBackup(hex.EncodeToString(sum[:]), slug, time.Now()); err != nil {
-		return path, fmt.Errorf("the backup was saved to %s, but the app could not record that it made it, so a restore of it will ask for the service name: %w", path, err)
+		return path, fmt.Errorf("%s: %w", i18n.T("go.app.backup.error.recordFailed", "path", path), err)
 	}
 	live, _ := a.services.StateFingerprint(a.ctx, slug)
 	if err := a.store.ConfirmStateBackup(slug, live, "export", time.Now()); err != nil {
-		return path, fmt.Errorf("the backup was saved to %s, but could not be recorded as confirmed: %w", path, err)
+		return path, fmt.Errorf("%s: %w", i18n.T("go.app.backup.error.confirmFailed", "path", path), err)
 	}
 	return path, nil
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"golang.org/x/sys/windows"
 )
@@ -31,7 +32,7 @@ func dockerDesktopExe() (string, error) {
 			return p, nil
 		}
 	}
-	return "", errors.New("Docker Desktop is not installed where its installer puts it")
+	return "", errors.New(i18n.T("go.app.setup.dockerDesktopMissing"))
 }
 
 // launchDockerDesktop starts Docker Desktop as this user, with no admin rights.

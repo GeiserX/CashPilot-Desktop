@@ -8,6 +8,8 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // A redeploy sets the running container aside instead of removing it: stopped, which
@@ -70,7 +72,7 @@ func recoverSetAside(ctx context.Context, cli *client.Client, name string) (stri
 		return "", nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("could not check %s: %w", aside, err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.checkFailed", "name", aside), err)
 	}
 	if left.Container.Config == nil {
 		return "", nil
@@ -83,25 +85,25 @@ func recoverSetAside(ctx context.Context, cli *client.Client, name string) (stri
 	switch {
 	case cerrdefs.IsNotFound(err):
 	case err != nil:
-		return "", fmt.Errorf("could not check %s: %w", name, err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.checkFailed", "name", name), err)
 	case held.Container.Config == nil || held.Container.Config.Labels[LabelService] != labels[LabelService] ||
 		instanceOf(held.Container.Config.Labels) != instanceOf(labels):
 		return "", nil
 	case held.Container.State == nil || held.Container.State.Status != container.StateCreated:
 		// Not forced: one that runs is not a leftover.
 		if _, err := cli.ContainerRemove(ctx, left.Container.ID, client.ContainerRemoveOptions{}); err != nil {
-			return "", fmt.Errorf("could not remove %s, left by a deploy that did not finish: %w", aside, err)
+			return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.removeLeftFailed", "name", aside), err)
 		}
-		return fmt.Sprintf("Removed %s, the container a deploy that did not finish had replaced. Its volumes were kept.", aside), nil
+		return i18n.T("go.runtime.aside.removedLeft", "name", aside), nil
 	default:
 		if _, err := cli.ContainerRemove(ctx, held.Container.ID, client.ContainerRemoveOptions{}); err != nil {
-			return "", fmt.Errorf("could not remove %s, which a deploy that did not finish made and never started: %w", name, err)
+			return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.removeUnstartedFailed", "name", name), err)
 		}
 	}
 	if _, err := cli.ContainerRename(ctx, left.Container.ID, client.ContainerRenameOptions{NewName: name}); err != nil {
-		return "", fmt.Errorf("could not put %s back as %s: %w", aside, name, err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.putBackFailed", "aside", aside, "name", name), err)
 	}
-	return fmt.Sprintf("Put back %s, which a deploy that did not finish had set aside as %s. It is stopped.", name, aside), nil
+	return i18n.T("go.runtime.aside.putBack", "name", name, "aside", aside), nil
 }
 
 // removeSetAside removes name's set-aside container, if a deploy that did not finish
@@ -114,7 +116,7 @@ func removeSetAside(ctx context.Context, cli *client.Client, name string, volume
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("could not check %s: %w", aside, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.checkFailed", "name", aside), err)
 	}
 	if left.Container.Config == nil {
 		return nil
@@ -123,7 +125,7 @@ func removeSetAside(ctx context.Context, cli *client.Client, name string, volume
 		return nil
 	}
 	if _, err := cli.ContainerRemove(ctx, left.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: volumes}); err != nil && !cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("could not remove %s, the container a deploy that did not finish had set aside: %w", aside, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.removeAsideFailed", "name", aside), err)
 	}
 	return nil
 }
@@ -141,7 +143,7 @@ func onlySetAside(ctx context.Context, cli inspectClient, name, slug string, n i
 		return container.InspectResponse{}, false, nil
 	}
 	if err != nil {
-		return container.InspectResponse{}, false, fmt.Errorf("could not check %s: %w", aside, err)
+		return container.InspectResponse{}, false, fmt.Errorf("%s: %w", i18n.T("go.runtime.aside.checkFailed", "name", aside), err)
 	}
 	if left.Container.Config == nil {
 		return container.InspectResponse{}, false, nil
@@ -179,28 +181,28 @@ func (p *DockerProvider) putBack(cli *client.Client, old container.InspectRespon
 	aside := name + setAsideSuffix
 	now, err := cli.ContainerInspect(ctx, old.ID, client.ContainerInspectOptions{})
 	if err != nil {
-		return fmt.Sprintf("The previous container could not be checked (%v): it is kept, stopped, as %s or %s, with its data. Deploy again", err, aside, name)
+		return i18n.T("go.runtime.aside.previousUnchecked", "error", err, "aside", aside, "name", name)
 	}
 	// A rename that failed after it happened (a timeout) left it set aside.
 	if strings.TrimPrefix(now.Container.Name, "/") != name {
 		if _, err := cli.ContainerRename(ctx, old.ID, client.ContainerRenameOptions{NewName: name}); err != nil {
-			return fmt.Sprintf("The previous container could not be put back (%v): it is kept, stopped, as %s, with its data. Rename it back to %s, or deploy again", err, aside, name)
+			return i18n.T("go.runtime.aside.previousNotPutBack", "error", err, "aside", aside, "name", name)
 		}
 	}
 	if !wasRunning {
-		return "The previous container was put back and is stopped, as it was"
+		return i18n.T("go.runtime.aside.previousStopped")
 	}
 	if gated {
 		// This deploy applied the fence and holds the reconcile lock, so the fence is
 		// in place; the node must be on it alone.
 		if problem := onlyOnFence(old); problem != "" {
-			return fmt.Sprintf("The previous container was put back and is kept stopped: it runs only behind the LAN fence, but %s", problem)
+			return i18n.T("go.runtime.aside.previousFenced", "problem", problem)
 		}
 	}
 	if _, err := cli.ContainerStart(ctx, old.ID, client.ContainerStartOptions{}); err != nil {
-		return fmt.Sprintf("The previous container was put back but could not be started again (%v)", err)
+		return i18n.T("go.runtime.aside.previousNotStarted", "error", err)
 	}
-	return "The previous container was put back and is running again"
+	return i18n.T("go.runtime.aside.previousRunning")
 }
 
 // refusedReplacement is Docker's refusal of a replacement, with what became of the

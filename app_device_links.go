@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // A registration the provider asked to retry is tried again this long after the
@@ -223,9 +224,9 @@ func (a *App) deviceLinkGaveUpNotifications() []Notification {
 		url := strings.ReplaceAll(svc.DeviceLink.URL, "${"+svc.DeviceLink.IDEnv+"}", neturl.PathEscape(row.DeviceID))
 		items = append(items, Notification{
 			Level: "warning",
-			Title: svc.Name + " device not on your account",
-			Message: strings.TrimSpace(svc.Name + " never accepted the device " + row.DeviceID +
-				" after a day of retries, so it earns for nobody. " + strings.TrimSpace(svc.DeviceLink.Steps) + " " + url),
+			Title: i18n.T("go.app.notify.unlinked.title", "name", svc.Name),
+			Message: strings.TrimSpace(i18n.T("go.app.notify.deviceGaveUp.message", "name", svc.Name, "device", row.DeviceID,
+				"steps", strings.TrimSpace(svc.DeviceLink.Steps), "url", url)),
 		})
 	}
 	return items

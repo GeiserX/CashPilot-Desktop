@@ -2,8 +2,9 @@ package main
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/noderead"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
@@ -31,7 +32,7 @@ func (a *App) readNodes(ctx context.Context, slug string) ([]noderead.Reading, e
 		if dep, found, err := a.store.GetDeployment(slug); err == nil && found && dep.Runtime == runtime.NativeRuntimeKind {
 			native, ok := noderead.NativeReaders[slug]
 			if !ok {
-				return nil, fmt.Errorf("CashPilot cannot read a native %s node", slug)
+				return nil, errors.New(i18n.T("go.app.node.nativeUnreadable", "slug", slug))
 			}
 			return noderead.ReadNative(ctx, native, reader), nil
 		}

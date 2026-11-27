@@ -8,6 +8,7 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/collectors"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 )
 
@@ -158,7 +159,7 @@ func (a *App) saveLocalDeployCredentials(slug string, values map[string]string, 
 		return false, nil
 	}
 	if err := a.saveSubmittedCredentials(slug, values); err != nil {
-		return false, fmt.Errorf("The service deployed, but CashPilot could not save its settings: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T("go.app.credentials.deployedNotSaved"), err)
 	}
 	return true, nil
 }
@@ -166,7 +167,7 @@ func (a *App) saveLocalDeployCredentials(slug string, values map[string]string, 
 type savedPartialDeployError struct{ cause error }
 
 func (e savedPartialDeployError) Error() string {
-	return e.cause.Error() + ". CashPilot saved your new credentials and will use them on retry."
+	return i18n.T("go.app.credentials.savedForRetry", "error", e.cause.Error())
 }
 
 func (e savedPartialDeployError) Unwrap() error { return e.cause }

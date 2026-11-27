@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
 )
@@ -78,7 +80,7 @@ func copyEnv(svc catalog.Service, env map[string]string, n int) (map[string]stri
 // container that only happens to have the name is refused like a missing one.
 func managedCopy(ctx context.Context, cli inspectClient, slug string, n int) (string, error) {
 	if n <= 1 {
-		return "", fmt.Errorf("copy 1 of %s is the service itself", slug)
+		return "", errors.New(i18n.T("go.runtime.copies.firstIsService", "slug", slug))
 	}
 	name := copyName(slug, n)
 	inspect, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
@@ -87,7 +89,7 @@ func managedCopy(ctx context.Context, cli inspectClient, slug string, n int) (st
 	}
 	cfg := inspect.Container.Config
 	if cfg == nil || !IsDesktopContainer(cfg.Labels) || cfg.Labels[LabelService] != slug || instanceOf(cfg.Labels) != n || IsProxied(cfg.Labels) {
-		return "", fmt.Errorf("%s is not copy %d of %s managed by CashPilot", name, n, slug)
+		return "", errors.New(i18n.T("go.runtime.copies.notCopy", "name", name, "n", n, "slug", slug))
 	}
 	return name, nil
 }

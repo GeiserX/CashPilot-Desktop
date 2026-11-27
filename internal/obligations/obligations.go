@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 const (
@@ -583,8 +584,8 @@ func cashoutItem(svc catalog.Service, f Facts, state map[Key]State, today time.T
 	bal, usd := balance, *f.BalanceUSD
 	item := Item{
 		Slug: slug, Name: name, Rule: CashOut, Kind: KindCashOut, Action: "withdraw",
-		Title:      "Cash out your " + name + " balance",
-		Loss:       "Money left at a provider can be lost if it bans the account, stalls payouts or closes.",
+		Title:      i18n.T("go.obligations.cashOut.title", "name", name),
+		Loss:       i18n.T("go.obligations.cashOut.loss"),
 		How:        strings.TrimSpace(svc.Cashout.Notes),
 		URL:        defaultURL(svc),
 		Occurrence: iso(start), Stage: stage,
@@ -682,9 +683,9 @@ func Evaluate(services []catalog.Service, facts map[string]Facts, state map[Key]
 		title := ""
 		switch k.Rule {
 		case WholeService:
-			title = "Every reminder"
+			title = i18n.T("go.obligations.muted.all")
 		case CashOut:
-			title = "Cash-out reminder"
+			title = i18n.T("go.obligations.muted.cashOut")
 		default:
 			for _, r := range svc.Obligations {
 				if r.ID == k.Rule {

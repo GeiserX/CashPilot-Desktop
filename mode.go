@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
 )
 
@@ -71,7 +72,7 @@ func (a *App) pairingStatus() *PairingStatus {
 	suspended := false
 	if p, err := a.cfg.Pairing(); err == nil && p.Suspended && !a.cfg.PairingSuperseded(p) {
 		suspended = true
-		out.ErrorCode, out.LastError = "unauthorized", refusedPairingMessage
+		out.ErrorCode, out.LastError = "unauthorized", refusedPairingMessage()
 	}
 	a.upstream.mu.Lock()
 	defer a.upstream.mu.Unlock()
@@ -139,7 +140,7 @@ func (a *App) StartAsLead() error {
 		return err
 	}
 	if a.cfg.Config().FirstRunComplete {
-		return errors.New("the first run is over; switch in Settings, under How this computer runs")
+		return errors.New(i18n.T("go.app.mode.firstRunOver"))
 	}
 	if a.joined() {
 		// The user joined, then came back to the choice: leave the server first.
@@ -198,7 +199,7 @@ func (a *App) JoinCashPilot(req JoinRequest) (JoinResult, error) {
 		return JoinResult{}, err
 	}
 	if a.pairingServer(current, errors.Is(err, config.ErrPairingSuperseded)) != "" && !current.Suspended && (current.Revision == "" || key.Worker != "") {
-		return JoinResult{}, errors.New("this computer is already joined to a CashPilot; switch to Run everything here first")
+		return JoinResult{}, errors.New(i18n.T("go.app.mode.alreadyJoined"))
 	}
 	return a.enrolPairing(a.ctx, req, current, "")
 }
@@ -273,7 +274,7 @@ func (a *App) enrolPairing(ctx context.Context, req JoinRequest, current config.
 		worker = ""
 	}
 	if err := a.cfg.PublishPairing(current.Revision, target.URL, false, config.PairingCredential{Worker: worker, Enrolment: req.Key}); err != nil {
-		return JoinResult{}, fmt.Errorf("saving the pairing: %w", err)
+		return JoinResult{}, fmt.Errorf("%s: %w", i18n.T("go.app.mode.savePairingFailed"), err)
 	}
 	a.stopUpstream()
 	a.recordPairing(target.URL, upstream.Failure{})
@@ -321,7 +322,7 @@ func (a *App) saveSettingsPairing(address string, hasAddress bool, key string, h
 	}
 	if address != before && address != "" {
 		if err := upstream.ValidateServerURL(address); err != nil {
-			return false, fmt.Errorf("pairing address: %w", err)
+			return false, fmt.Errorf("%s: %w", i18n.T("go.app.mode.pairingAddress"), err)
 		}
 	}
 	if address == before && !hasKey {
@@ -377,7 +378,7 @@ func (a *App) SwitchToLead() (LeaveResult, error) {
 	out := LeaveResult{ServerURL: a.pairingServer(p, errors.Is(err, config.ErrPairingSuperseded)), Name: a.upstreamPayload().Name}
 	if out.ServerURL == "" {
 		if !firewallRuleNeeded {
-			return out, errors.New("this computer already runs everything here")
+			return out, errors.New(i18n.T("go.app.mode.alreadyLead"))
 		}
 	} else if _, err := a.saveSettingsPairing("", true, "", true); err != nil {
 		return out, err
@@ -442,7 +443,7 @@ func (a *App) enrolSavedPairing(ctx context.Context) {
 		if !carry && url != p.ServerURL {
 			// 1.x points at another server with no key, as 1.x showed it. Nothing
 			// reports to either server until the user joins or leaves here.
-			a.recordPairing(url, upstream.Failure{Code: "no-key", Message: "No key is available for your CashPilot. Enter the enrolment key in Settings or join again."})
+			a.recordPairing(url, upstream.Failure{Code: "no-key", Message: i18n.T("go.app.pairing.noKey")})
 			return
 		}
 		if err := a.cfg.Update(func(c *config.AppConfig) {

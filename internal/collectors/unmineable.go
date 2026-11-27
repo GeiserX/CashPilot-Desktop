@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math"
 	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // unMineable pays in the coin the miner chose, so its public stats are keyed by
@@ -64,24 +65,24 @@ func unMineableAmount(raw json.RawMessage) (float64, bool) {
 func (r *Registry) collectUnMineable(ctx context.Context, credentials map[string]string) (Result, error) {
 	coin := strings.ToUpper(firstCredential(credentials, unMineableCoinKey))
 	if !unMineableCoin.MatchString(coin) {
-		return Result{}, collectorError{"auth", "Enter the ticker of the coin unMineable pays you, such as XMR, SHIB or DOGE."}
+		return Result{}, collectorError{"auth", i18n.T("go.collectors.unmineable.enterCoin", "provider", "unMineable", "examples", "XMR, SHIB or DOGE")}
 	}
 	address := firstCredential(credentials, unMineableAddressKey)
 	if !unMineableAddress.MatchString(address) {
-		return Result{}, collectorError{"auth", "Enter the " + coin + " payout address your miner uses on unMineable, without the coin, worker name or referral code."}
+		return Result{}, collectorError{"auth", i18n.T("go.collectors.unmineable.enterAddress", "coin", coin, "provider", "unMineable")}
 	}
 
 	endpoint := "https://api.unminable.com/v4/address/" + address + "?coin=" + url.QueryEscape(coin)
 	body, status, _, err := r.doRaw(ctx, http.MethodGet, endpoint, nil, nil, nil)
 	if err != nil {
 		// The request URL holds the payout address, so the transport error is not shown.
-		return Result{}, collectorError{"transient", "Could not read the unMineable balance. Try again shortly."}
+		return Result{}, collectorError{"transient", i18n.T("go.collectors.unmineable.readFailed", "provider", "unMineable")}
 	}
 
 	// The endpoint is public. A refused request says nothing about the address,
 	// whatever its body says, so it is checked before the pool's message.
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return Result{}, collectorError{"transient", fmt.Sprintf("unMineable returned HTTP %d.", status)}
+		return Result{}, collectorError{"transient", i18n.T("go.collectors.pool.httpPeriod", "provider", "unMineable", "status", status)}
 	}
 
 	var payload map[string]json.RawMessage
@@ -93,39 +94,39 @@ func (r *Registry) collectUnMineable(ctx context.Context, credentials map[string
 		_ = json.Unmarshal(payload["msg"], &message)
 		// Both come back as HTTP 404. Only a person can fix either one.
 		if strings.HasPrefix(message, "Invalid address") {
-			return Result{}, collectorError{"auth", "unMineable does not accept this address for " + coin + ". Check the address and the coin, and that the address is on a network unMineable pays for this coin."}
+			return Result{}, collectorError{"auth", i18n.T("go.collectors.unmineable.addressRefused", "provider", "unMineable", "coin", coin)}
 		}
 		if strings.HasPrefix(message, "Invalid or missing coin") {
-			return Result{}, collectorError{"auth", "unMineable does not list the coin " + coin + "."}
+			return Result{}, collectorError{"auth", i18n.T("go.collectors.unmineable.unknownCoin", "provider", "unMineable", "coin", coin)}
 		}
 	}
 
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		// A 429 or 5xx never gets here: the retries end in the transport error above.
-		return Result{}, fmt.Errorf("unMineable returned HTTP %d.", status)
+		return Result{}, errors.New(i18n.T("go.collectors.pool.httpPeriod", "provider", "unMineable", "status", status))
 	}
 
 	var data map[string]json.RawMessage
 	if success == nil || !*success || json.Unmarshal(payload["data"], &data) != nil || data == nil {
-		return Result{}, collectorError{"shape", "unMineable did not return address stats."}
+		return Result{}, collectorError{"shape", i18n.T("go.collectors.unmineable.noStats", "provider", "unMineable")}
 	}
 
 	// A fresh flag that is not a JSON boolean is a shape the collector does not
 	// know. It must not read as false: that would save the 0 of a fresh address.
 	var fresh *bool
 	if json.Unmarshal(data["fresh"], &fresh) != nil {
-		return Result{}, collectorError{"shape", "unMineable did not return a valid balance and payment threshold."}
+		return Result{}, collectorError{"shape", i18n.T("go.collectors.unmineable.badBalance", "provider", "unMineable")}
 	}
 	if fresh != nil && *fresh {
 		// Unknown cause, so no kind: a typo needs a person, while a miner that
 		// has not sent its first shares heals by itself. Never a 0 balance.
-		return Result{}, errors.New("unMineable has no record of this " + coin + " address yet. Check that it is exactly the address your miner uses; a miner that has not sent shares yet also shows this.")
+		return Result{}, errors.New(i18n.T("go.collectors.unmineable.noRecord", "provider", "unMineable", "coin", coin))
 	}
 
 	balance, balanceOK := unMineableAmount(data["balance"])
 	threshold, thresholdOK := unMineableAmount(data["payment_threshold"])
 	if fresh == nil || !balanceOK || !thresholdOK || threshold == 0 {
-		return Result{}, collectorError{"shape", "unMineable did not return a valid balance and payment threshold."}
+		return Result{}, collectorError{"shape", i18n.T("go.collectors.unmineable.badBalance", "provider", "unMineable")}
 	}
 
 	// The balance is accrued at unMineable until it pays the address, in the chosen coin.

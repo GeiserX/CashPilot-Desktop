@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // The risk disclosure for desktop apps installed in the user's own session
@@ -29,13 +31,13 @@ func (a *App) AcceptSessionRisk(slug, textVersion string) (map[string]config.Ses
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
-		return nil, fmt.Errorf("unknown service: %s", slug)
+		return nil, errors.New(i18n.T("go.app.unknownService", "slug", slug))
 	}
 	if !svc.ManualOnly {
-		return nil, fmt.Errorf("%s runs in a container that CashPilot manages, so it has no desktop app to accept", svc.Name)
+		return nil, errors.New(i18n.T("go.app.consent.container", "name", svc.Name))
 	}
 	if offComputer(svc.Platforms) {
-		return nil, fmt.Errorf("%s runs only on a phone or its own hardware, so it has no desktop app to accept", svc.Name)
+		return nil, errors.New(i18n.T("go.app.consent.offComputer", "name", svc.Name))
 	}
 	if err := checkConsentVersion(textVersion); err != nil {
 		return nil, err

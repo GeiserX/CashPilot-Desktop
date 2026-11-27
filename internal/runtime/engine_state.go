@@ -3,6 +3,8 @@ package runtime
 import (
 	"strings"
 	"sync/atomic"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Why the Docker engine is or is not ready, one code per state a person has to act
@@ -78,27 +80,27 @@ func classify(ev dockerEvidence) (string, string) {
 	win := ev.goos == "windows"
 	if ev.pingOK {
 		if strings.EqualFold(ev.osType, "windows") {
-			return ReasonWindowsContainers, "Docker Desktop is set to Windows containers. The apps CashPilot runs are Linux containers, so none of them can start there. Right-click the Docker icon next to the clock, choose \"Switch to Linux containers\", then click Check again."
+			return ReasonWindowsContainers, i18n.T("go.runtime.engine.windowsContainers")
 		}
-		return ReasonRunning, "Connected to a Docker-compatible runtime."
+		return ReasonRunning, i18n.T("go.runtime.engine.running")
 	}
 	h := ev.host
 	if ev.endpoint == endpointDenied {
 		return ReasonAccessDenied, accessDeniedMessage(win, h)
 	}
 	if ev.hostSet {
-		return ReasonUnreachable, "CashPilot cannot reach the Docker engine that DOCKER_HOST or your Docker context names. Check that it is running and reachable, then click Check again."
+		return ReasonUnreachable, i18n.T("go.runtime.engine.hostUnreachable", "var", "DOCKER_HOST")
 	}
 	if notInstalled(ev) {
 		if win {
-			return ReasonNotInstalled, "Docker Desktop is not installed. Install it with the guide below, then click Check again."
+			return ReasonNotInstalled, i18n.T("go.runtime.engine.desktopNotInstalled")
 		}
-		return ReasonNotInstalled, "Choose one of the supported runtimes below so CashPilot can run earning services on this machine."
+		return ReasonNotInstalled, i18n.T("go.runtime.engine.chooseRuntime")
 	}
-	const unreachable = "CashPilot cannot reach a Docker-compatible engine on this computer."
+	unreachable := i18n.T("go.runtime.engine.unreachable")
 	if !win {
 		if ev.install || ev.endpoint == endpointRefused {
-			return ReasonNotRunning, "A container runtime is installed, but it is not running yet. Start your runtime and try again."
+			return ReasonNotRunning, i18n.T("go.runtime.engine.notRunning")
 		}
 		return ReasonUnreachable, unreachable
 	}
@@ -106,33 +108,33 @@ func classify(ev dockerEvidence) (string, string) {
 	// for routine file renames alone (internal/winvm restartPending).
 	restart := ""
 	if h.RestartPending == HintYes {
-		restart = " Windows is also waiting for a restart. Restart the PC first."
+		restart = " " + i18n.T("go.runtime.engine.restartPending")
 	}
 	wsl := h.DockerBackend != "hyperv"
 	switch {
 	case h.Virtualization == HintNo:
-		return ReasonVirtualizationOff, "Virtualization is turned off in this PC's firmware (BIOS or UEFI), and Docker needs it. Restart into the firmware settings and turn on the setting called Intel Virtualization Technology, VT-x, AMD-V or SVM Mode." + restart
+		return ReasonVirtualizationOff, i18n.T("go.runtime.engine.virtualizationOff") + restart
 	case wsl && h.WSL == "missing":
-		return ReasonWSLMissing, "Docker needs WSL, the Linux layer built into Windows, and it is not installed. Open PowerShell as administrator, run wsl --install --no-distribution, then restart the PC." + restart
+		return ReasonWSLMissing, i18n.T("go.runtime.engine.wslMissing", "command", "wsl --install --no-distribution") + restart
 	case wsl && h.WSL == "outdated":
-		have := "too old"
+		message := i18n.T("go.runtime.engine.wslTooOld", "min", "2.1.5", "command", "wsl --update")
 		if h.WSLVersion != "" {
-			have = "version " + h.WSLVersion
+			message = i18n.T("go.runtime.engine.wslOutdated", "version", h.WSLVersion, "min", "2.1.5", "command", "wsl --update")
 		}
-		return ReasonWSLOutdated, "WSL on this PC is " + have + ", and Docker needs 2.1.5 or newer. Run wsl --update, then open Docker Desktop again." + restart
+		return ReasonWSLOutdated, message + restart
 	case h.DockerInstalled == HintYes && h.DockerStarted == HintNo && h.DockerRunning != HintYes:
-		return ReasonFirstStart, "Docker Desktop is installed but has not been opened on this account yet. Open it and accept Docker's terms. It is free for personal use and for small businesses." + restart
+		return ReasonFirstStart, i18n.T("go.runtime.engine.firstStart") + restart
 	case h.DockerRunning == HintYes:
-		return ReasonNotRunning, "Docker Desktop is open, but its engine is not running yet. It can take a minute or two. If Docker Desktop shows its terms or asks you to sign in, finish that first, then click Check again." + restart
+		return ReasonNotRunning, i18n.T("go.runtime.engine.engineStarting") + restart
 	}
 	if h.DockerInstalled == HintNo {
 		// A docker CLI is on PATH (scoop, a manual install) but Docker Desktop is not.
-		return ReasonUnreachable, "Docker Desktop is not installed and no Docker engine answers. If you use another runtime, start it, then click Check again." + restart
+		return ReasonUnreachable, i18n.T("go.runtime.engine.noEngine") + restart
 	}
 	if h.DockerInstalled != HintYes {
 		return ReasonUnreachable, unreachable + restart
 	}
-	return ReasonNotRunning, "Docker Desktop is installed, but its engine is not running. Open Docker Desktop, wait until it says the engine is running, then click Check again." + restart
+	return ReasonNotRunning, i18n.T("go.runtime.engine.engineStopped") + restart
 }
 
 // notInstalled is true only when nothing suggests a runtime exists: no CLI on
@@ -164,12 +166,12 @@ func notInstalled(ev dockerEvidence) bool {
 
 func accessDeniedMessage(win bool, h HostHints) string {
 	if !win {
-		return "The container runtime refused this account. On Linux, add your user to the docker group (sudo usermod -aG docker $USER), then sign out and back in."
+		return i18n.T("go.runtime.engine.deniedLinux", "command", "sudo usermod -aG docker $USER")
 	}
 	if h.DockerUsersListed == HintYes && h.DockerUsersToken != HintYes {
-		return "Your Windows account is in the docker-users group, but Windows applies a new group only after you sign in again. Sign out and back in, then click Check again."
+		return i18n.T("go.runtime.engine.deniedSignIn", "group", "docker-users")
 	}
-	return "Docker is running, but your Windows account may not use it. This happens when another account installed Docker Desktop. An administrator must add your account to the docker-users group, then you sign out and back in."
+	return i18n.T("go.runtime.engine.deniedWindows", "group", "docker-users")
 }
 
 // hostHintsNow returns the hints the app handed in, or none.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/activity"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
@@ -167,7 +168,7 @@ func (a *App) activityTick(ctx context.Context, now time.Time) {
 		a.emitError("activity", err)
 		return
 	} else if busy {
-		a.emitNotice("activity", activityBusyNotice)
+		a.emitNotice("activity", activityBusyNotice())
 	}
 	a.activity.mu.Lock()
 	a.activity.lastPurge = hour
@@ -331,7 +332,7 @@ func (a *App) activitySpikes(now time.Time, gen uint64) {
 			}
 		}
 	}
-	check := func(kind string, data map[string]series, floor float64, what string) {
+	check := func(kind string, data map[string]series, floor float64, what func(container string) string) {
 		names := make([]string, 0, len(data))
 		for c := range data {
 			names = append(names, c)
@@ -343,12 +344,16 @@ func (a *App) activitySpikes(now time.Time, gen uint64) {
 				history = append(history, data[c][h])
 			}
 			if activity.Spike(history, data[c][last], floor) {
-				a.activityWrite(gen, func() { a.raiseSpike(c, kind, c+" "+what+" in the last hour than 10 times its usual hour.", now) })
+				a.activityWrite(gen, func() { a.raiseSpike(c, kind, what(c), now) })
 			}
 		}
 	}
-	check("bytes", bytesBy, activity.SpikeBytesFloor, "moved more data")
-	check("opens", opensBy, activity.SpikeOpensFloor, "opened more connections")
+	check("bytes", bytesBy, activity.SpikeBytesFloor, func(c string) string {
+		return i18n.T("go.app.activity.spikeBytes", "container", c, "times", 10)
+	})
+	check("opens", opensBy, activity.SpikeOpensFloor, func(c string) string {
+		return i18n.T("go.app.activity.spikeOpens", "container", c, "times", 10)
+	})
 }
 
 func (a *App) raiseSpike(container, kind, message string, now time.Time) {
@@ -364,12 +369,12 @@ func (a *App) raiseSpike(container, kind, message string, now time.Time) {
 }
 
 // activityBusyNotice is shown when a delete could not empty the database log.
-const activityBusyNotice = "Activity: the database was busy, so deleted addresses stay in its log until a later checkpoint empties it; the hourly purge tries again."
+func activityBusyNotice() string { return i18n.T("go.app.activity.busy") }
 
 // refreshActivityNetworks downloads the network table. One at a time.
 func (a *App) refreshActivityNetworks(ctx context.Context) error {
 	if a.activity.geo == nil {
-		return errors.New("activity is not ready")
+		return errors.New(i18n.T("go.app.activity.notReady"))
 	}
 	if !a.activity.geoBusy.TryLock() {
 		return activity.ErrDownloadBusy

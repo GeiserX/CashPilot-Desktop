@@ -2,12 +2,13 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -50,7 +51,7 @@ func (a *App) removePayout(id int64) error {
 		return err
 	}
 	if !removed {
-		return errors.New("no cash-out with that id")
+		return errors.New(i18n.T("go.app.payout.notFound"))
 	}
 	return nil
 }
@@ -58,29 +59,29 @@ func (a *App) removePayout(id int64) error {
 func (a *App) recordPayout(slug string, amount float64, currency, method, date string, now time.Time) (store.Payout, error) {
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
-		return store.Payout{}, fmt.Errorf("unknown service %q", slug)
+		return store.Payout{}, errors.New(i18n.T("go.app.payout.unknownService", "slug", strconv.Quote(slug)))
 	}
 	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount <= 0 {
-		return store.Payout{}, errors.New("the amount must be more than zero")
+		return store.Payout{}, errors.New(i18n.T("go.app.payout.amount"))
 	}
 	method = strings.TrimSpace(method)
 	if len(method) > 40 {
-		return store.Payout{}, errors.New("the method can be at most 40 characters")
+		return store.Payout{}, errors.New(i18n.T("go.app.payout.methodLong", "n", 40))
 	}
 	today := now.Format("2006-01-02")
 	date = strings.TrimSpace(date)
 	if date != "" {
 		day, err := time.Parse("2006-01-02", date)
 		if err != nil {
-			return store.Payout{}, errors.New("the date must be a real day, YYYY-MM-DD")
+			return store.Payout{}, errors.New(i18n.T("go.app.payout.dateInvalid", "format", "YYYY-MM-DD"))
 		}
 		if day.Format("2006-01-02") > today {
-			return store.Payout{}, errors.New("the date cannot be in the future")
+			return store.Payout{}, errors.New(i18n.T("go.app.payout.dateFuture"))
 		}
 	}
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	if len(currency) > 12 {
-		return store.Payout{}, errors.New("the currency can be at most 12 characters")
+		return store.Payout{}, errors.New(i18n.T("go.app.payout.currencyLong", "n", 12))
 	}
 	if currency == "" {
 		for _, rec := range a.store.ListLatestEarnings() {

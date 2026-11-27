@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Field states, as the dry run shows them.
@@ -181,7 +182,7 @@ func appsFromJSON(files []*fileSettings, spec toolSpec, skipped *[]Skipped) []fo
 			}
 			reason := notCarriedReason(top, spec)
 			if reason == "" {
-				reason = "CashPilot does not read this setting."
+				reason = i18n.T("go.importers.skip.unread")
 			}
 			*skipped = append(*skipped, Skipped{Key: top, Reason: reason})
 		}
@@ -196,7 +197,7 @@ func appsFromJSON(files []*fileSettings, spec toolSpec, skipped *[]Skipped) []fo
 			}
 			aspec, known := spec.Apps.Values[appName]
 			if !known {
-				*skipped = append(*skipped, Skipped{Key: truncate(appName, 80), Reason: "CashPilot has no such service."})
+				*skipped = append(*skipped, Skipped{Key: truncate(appName, 80), Reason: i18n.T("go.importers.skip.noService")})
 				continue
 			}
 			values := map[string]Value{}
@@ -244,7 +245,7 @@ func appsFromEnv(files []*fileSettings, spec toolSpec, skipped *[]Skipped) []fou
 		if fs.kind == "proxies" {
 			reason := notCarriedReason("proxies.txt", spec)
 			if reason == "" {
-				reason = "Proxies are not imported."
+				reason = i18n.T("go.importers.skip.proxies")
 			}
 			*skipped = append(*skipped, Skipped{Key: fs.name, Reason: reason})
 		}
@@ -300,7 +301,7 @@ func appsFromEnv(files []*fileSettings, spec toolSpec, skipped *[]Skipped) []fou
 		}
 		reason := notCarriedReason(key, spec)
 		if reason == "" {
-			reason = "CashPilot does not read this setting."
+			reason = i18n.T("go.importers.skip.unread")
 		}
 		*skipped = append(*skipped, Skipped{Key: key, Reason: reason})
 	}
@@ -338,15 +339,15 @@ func BuildPreview(files []*fileSettings, source string, getService func(string) 
 
 	notices := []string{spec.Stop}
 	for _, s := range skipped {
-		if strings.Contains(s.Reason, "Proxies") {
-			notices = append(notices, "Proxy settings were found and left out. CashPilot deploys each service on this computer's own connection first; a proxied copy then runs beside it, and you can stop the original if you want the service on the proxy only. Add each proxy in the Proxies section of the Fleet page, then run copies of your services through it.")
+		// The catalog's English notes say "Proxies"; the built-in reason may be translated.
+		if strings.Contains(s.Reason, "Proxies") || s.Reason == i18n.T("go.importers.skip.proxies") {
+			notices = append(notices, i18n.T("go.importers.notice.proxies"))
 			break
 		}
 	}
 	for _, fs := range files {
 		if fs.kind == "devices" && fs.extraLines > 0 {
-			notices = append(notices, fmt.Sprintf("%s lists %d more device(s) after the first. They belonged to "+
-				"proxy copies and are not imported; only the first, your main device, is.", fs.name, fs.extraLines))
+			notices = append(notices, i18n.T("go.importers.notice.extraDevices", "name", fs.name, "count", fs.extraLines))
 		}
 	}
 	if skipped == nil {
@@ -367,11 +368,11 @@ func buildRow(app foundApp, svc catalog.Service, extra map[string]string) Row {
 		return row
 	}
 	if catalog.IsRetired(svc.Status) {
-		row.State, row.Reason, row.Selected = RowNotDeployable, "This service is no longer available.", false
+		row.State, row.Reason, row.Selected = RowNotDeployable, i18n.T("go.importers.row.retired"), false
 		return row
 	}
 	if svc.ManualOnly {
-		row.State, row.Reason, row.Selected = RowNotDeployable, "CashPilot tracks this service, but there is nothing to deploy for it.", false
+		row.State, row.Reason, row.Selected = RowNotDeployable, i18n.T("go.importers.row.manual"), false
 		return row
 	}
 
@@ -436,9 +437,9 @@ func buildRow(app foundApp, svc catalog.Service, extra map[string]string) Row {
 	}
 	switch {
 	case anyInvalid:
-		row.State, row.Reason = RowInvalid, "A value does not have the format this service needs."
+		row.State, row.Reason = RowInvalid, i18n.T("go.importers.row.invalid")
 	case anyMissingRequired:
-		row.State, row.Reason = RowMissingFields, "Fill in the fields marked below."
+		row.State, row.Reason = RowMissingFields, i18n.T("go.importers.row.missing")
 	default:
 		row.State, row.Reason = RowReady, ""
 	}
@@ -448,7 +449,7 @@ func buildRow(app foundApp, svc catalog.Service, extra map[string]string) Row {
 		row.Reason = app.spec.MissingNote
 	}
 	if row.OffInSource && row.State == RowReady {
-		row.Reason = "Turned off in the old tool. Tick it to bring it over anyway."
+		row.Reason = i18n.T("go.importers.row.disabled")
 	}
 	return row
 }
@@ -459,7 +460,7 @@ func Run(files []File, source string, getService func(string) (catalog.Service, 
 		source = "auto"
 	}
 	if source != "auto" && !isSource(source) {
-		return Preview{}, refuse("Unknown tool.")
+		return Preview{}, refuse(i18n.T("go.importers.refuse.unknownSource"))
 	}
 	read, err := ReadFiles(files, source)
 	if err != nil {

@@ -7,11 +7,13 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/noderead"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -191,7 +193,7 @@ func refuseRetired(svc catalog.Service) error {
 	if !catalog.IsRetired(svc.Status) {
 		return nil
 	}
-	return fmt.Errorf("%s is retired (status %q) and can no longer be deployed", svc.Name, svc.Status)
+	return errors.New(i18n.T("go.services.retired", "name", svc.Name, "status", strconv.Quote(svc.Status)))
 }
 
 // Deploy deploys slug from the image its deployment already uses: the catalog's, or
@@ -217,7 +219,7 @@ var imageRef = regexp.MustCompile(`^` +
 func ValidateImage(image string) error {
 	image = strings.TrimSpace(image)
 	if image != "" && (len(image) > 255 || !imageRef.MatchString(image)) {
-		return errors.New("image is not a valid image reference (repository[:tag][@digest])")
+		return errors.New(i18n.T("go.services.invalidImage", "format", "repository[:tag][@digest]"))
 	}
 	return nil
 }
@@ -366,10 +368,10 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
-		return store.Deployment{}, nil, fmt.Errorf("unknown service: %s", slug)
+		return store.Deployment{}, nil, errors.New(i18n.T("go.services.unknownService", "slug", slug))
 	}
 	if svc.ManualOnly {
-		return store.Deployment{}, nil, fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+		return store.Deployment{}, nil, errors.New(i18n.T("go.services.manual", "name", svc.Name))
 	}
 	if err := refuseRetired(svc); err != nil {
 		return store.Deployment{}, nil, err
@@ -379,7 +381,7 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		// changed by editing it, never in the deploy form, so neither the Image box nor
 		// typed credentials reach the container.
 		if opts.Image != nil && strings.TrimSpace(*opts.Image) != "" {
-			return store.Deployment{}, nil, errors.New("a custom service's image is changed by editing the service, not in the deploy form")
+			return store.Deployment{}, nil, errors.New(i18n.T("go.services.customImageInForm"))
 		}
 		empty := ""
 		opts.Image = &empty
@@ -430,7 +432,7 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		instances = *opts.Instances
 	}
 	if instances < 1 || instances > MaxInstances {
-		return store.Deployment{}, nil, fmt.Errorf("instances must be between 1 and %d", MaxInstances)
+		return store.Deployment{}, nil, errors.New(i18n.T("go.services.instancesRange", "max", MaxInstances))
 	}
 	limit := m.ScalingLimit(svc)
 	if instances > limit.Max {
@@ -452,12 +454,12 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 	if custom != "" && svc.Docker.FenceGated {
 		// It holds NET_ADMIN in its own namespace, so it runs only the image the
 		// catalog pins (web app/main.py _fence_gated_spec).
-		return store.Deployment{}, nil, fmt.Errorf("%s runs only the image the catalog pins, since it holds NET_ADMIN; clear the Image box to deploy it", svc.Name)
+		return store.Deployment{}, nil, errors.New(i18n.T("go.services.pinnedNetAdmin", "name", svc.Name))
 	}
 	if custom != "" && svc.Docker.GPU != nil {
 		// The GPU grant trusts the reviewed image the catalog pins, not whatever runs
 		// under its name (web app/orchestrator.py gpu_grant_for_deploy).
-		return store.Deployment{}, nil, fmt.Errorf("%s uses this computer's GPU and runs only the image the catalog pins; clear the Image box to deploy it", svc.Name)
+		return store.Deployment{}, nil, errors.New(i18n.T("go.services.pinnedGPU", "name", svc.Name))
 	}
 	if custom != "" {
 		// The chosen image replaces the catalog's and every per-architecture
@@ -503,7 +505,7 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 	// its leftover copies (a GPU entry's would share the one GPU) go on this deploy.
 	copier, _ := provider.(runtime.CopyProvider)
 	if instances > 1 && copier == nil {
-		return store.Deployment{}, nil, fmt.Errorf("%s cannot run more than once on the %s runtime", svc.Name, runtimeKind)
+		return store.Deployment{}, nil, errors.New(i18n.T("go.services.onceOnRuntime", "name", svc.Name, "runtime", runtimeKind))
 	}
 	var running []int
 	if copier != nil && (opts.Instances != nil || recordedCopies > 1 || limit.Max == 1) {
@@ -516,7 +518,7 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		// The routed copy runs the same device ids, so it goes before the service
 		// runs from this machine's own IP; a copy that cannot go stops the switch.
 		if err := m.removeProxied(ctx, slug, leaving); err != nil {
-			return store.Deployment{}, nil, fmt.Errorf("the copy of %s through proxy %d could not be removed first, so nothing was deployed: %w", svc.Name, leaving, err)
+			return store.Deployment{}, nil, fmt.Errorf("%s: %w", i18n.T("go.services.proxiedNotRemoved", "name", svc.Name, "proxy", leaving), err)
 		}
 	}
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
@@ -572,9 +574,9 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		if err != nil {
 			m.store.RecordEvent(slug, "deploy_error", fmt.Sprintf("copy %d: %v", n, err))
 			m.setCopies(slug, copies)
-			err = fmt.Errorf("copy %d of %s failed to start: %w", n, svc.Name, err)
+			err = fmt.Errorf("%s: %w", i18n.T("go.services.copyFailed", "copy", n, "name", svc.Name), err)
 			if n < instances {
-				err = fmt.Errorf("%w. CashPilot skipped the remaining copies", err)
+				err = wrapText(i18n.T("go.services.skippedRest", "error", err), err)
 			}
 			return deployment, nil, err
 		}
@@ -585,7 +587,7 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 			if err := copier.RemoveCopy(ctx, slug, n, m.stopTimeout(slug)); err != nil {
 				m.store.RecordEvent(slug, "remove_error", fmt.Sprintf("copy %d: %v", n, err))
 				m.setCopies(slug, copies)
-				return deployment, nil, fmt.Errorf("could not remove copy %d of %s: %w", n, svc.Name, err)
+				return deployment, nil, fmt.Errorf("%s: %w", i18n.T("go.services.copyNotRemoved", "copy", n, "name", svc.Name), err)
 			}
 			m.store.RecordEvent(slug, "removed", fmt.Sprintf("copy %d", n))
 		}
@@ -998,14 +1000,14 @@ func validateRequired(svc catalog.Service, credentials map[string]string) error 
 			}
 			value := credentials[item.Key]
 			if item.Required && strings.TrimSpace(value) == "" && strings.TrimSpace(item.Default) == "" {
-				return fmt.Errorf("missing required field: %s", label)
+				return errors.New(i18n.T("go.services.missingField", "field", label))
 			}
 			// A value the catalog constrains must match all of the pattern (and a port
 			// range must be well ordered) before it is deployed or saved. Only what the
 			// user supplied is checked; an empty value falls back to the default, which
 			// the catalog itself vouches for.
 			if !item.AcceptsValue(value) {
-				return fmt.Errorf("invalid value for field: %s", label)
+				return errors.New(i18n.T("go.services.invalidField", "field", label))
 			}
 		}
 	}
@@ -1044,7 +1046,7 @@ func (e unpublishableError) Unwrap() error { return e.err }
 func refusedDeploy(svc catalog.Service, err error) error {
 	var unpublishable unpublishableError
 	if errors.As(err, &unpublishable) {
-		return fmt.Errorf("%w. Nothing was deployed; a running %s was not touched", err, svc.Name)
+		return wrapText(i18n.T("go.services.nothingDeployed", "error", err, "name", svc.Name), err)
 	}
 	return err
 }
@@ -1058,10 +1060,10 @@ func isPortRange(value string) bool { return catalog.IsPortRange(value) }
 func (m *Manager) ValidateCredentials(slug string, credentials map[string]string) error {
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
-		return fmt.Errorf("unknown service: %s", slug)
+		return errors.New(i18n.T("go.services.unknownService", "slug", slug))
 	}
 	if svc.ManualOnly {
-		return fmt.Errorf("%s is tracked manually and has no Docker image", svc.Name)
+		return errors.New(i18n.T("go.services.manual", "name", svc.Name))
 	}
 	if err := refuseRetired(svc); err != nil {
 		return err
@@ -1098,3 +1100,15 @@ func (m *Manager) RequiredCredentialsMet(slug string, credentials map[string]str
 	}
 	return validateRequired(svc, credentials) == nil
 }
+
+// textError is a translated message that still unwraps to the error it explains,
+// so errors.Is keeps matching the cause.
+type textError struct {
+	text  string
+	cause error
+}
+
+func (e *textError) Error() string { return e.text }
+func (e *textError) Unwrap() error { return e.cause }
+
+func wrapText(text string, cause error) error { return &textError{text: text, cause: cause} }

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
@@ -48,7 +49,7 @@ var volumeName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 func RestoreTargets(svc catalog.Service) (map[string]string, error) {
 	critical := CriticalTargets(svc)
 	if len(critical) == 0 {
-		return nil, fmt.Errorf("%s keeps nothing a backup restores", svc.Name)
+		return nil, errors.New(i18n.T("go.runtime.restore.nothingToRestore", "name", svc.Name))
 	}
 	sources := map[string]string{}
 	for _, mapping := range svc.Docker.Volumes {
@@ -62,11 +63,11 @@ func RestoreTargets(svc catalog.Service) (map[string]string, error) {
 	for target := range critical {
 		source := sources[target]
 		if !volumeName.MatchString(source) {
-			return nil, fmt.Errorf("%s keeps its state in a host folder, so the app cannot restore it. Use the command line steps in the backup guide", svc.Name)
+			return nil, errors.New(i18n.T("go.runtime.restore.hostFolder", "name", svc.Name))
 		}
 		folder := statebackup.FolderName(target)
 		if folders[folder] {
-			return nil, fmt.Errorf("%s keeps two critical folders named %s, so a backup cannot tell them apart", svc.Name, folder)
+			return nil, errors.New(i18n.T("go.runtime.restore.twoFolders", "name", svc.Name, "folder", folder))
 		}
 		folders[folder] = true
 		found[target] = source
@@ -158,7 +159,7 @@ func (p *DockerProvider) RestoreRefusal(ctx context.Context, slug string, svc ca
 func (p *DockerProvider) RestoreState(ctx context.Context, req RestoreRequest) (RestoreResult, error) {
 	cli, err := dockerClient()
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("nothing was restored: %w", err)
+		return RestoreResult{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.restore.nothingRestored"), err)
 	}
 	defer cli.Close()
 	name := containerName(req.Spec.Slug)
@@ -195,29 +196,29 @@ func (p *DockerProvider) DiscardRestore(ctx context.Context, slug string, volume
 func restoreRefusal(ctx context.Context, cli restoreClient, slug string, targets map[string]string) (string, error) {
 	listed, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelService+"="+slug)})
 	if err != nil {
-		return "", fmt.Errorf("Docker would not list the containers on this machine: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.restore.listFailed"), err)
 	}
 	if len(listed.Items) > 0 {
-		return fmt.Sprintf("%s already has a container on this machine (%s). A restore only creates a new one: back it up, remove it and say yes to deleting its data, then restore", slug, strings.TrimPrefix(firstName(listed.Items[0].Names), "/")), nil
+		return i18n.T("go.runtime.restore.why.hasContainer", "slug", slug, "container", strings.TrimPrefix(firstName(listed.Items[0].Names), "/")), nil
 	}
 	name := containerName(slug)
 	for _, candidate := range []string{name, name + setAsideSuffix} {
 		_, err := cli.ContainerInspect(ctx, candidate, client.ContainerInspectOptions{})
 		if err == nil {
-			return fmt.Sprintf("a container named %s already exists on this machine", candidate), nil
+			return i18n.T("go.runtime.restore.why.nameExists", "name", candidate), nil
 		}
 		if !cerrdefs.IsNotFound(err) {
-			return fmt.Sprintf("the container name %s could not be checked, so it counts as taken (%v)", candidate, err), nil
+			return i18n.T("go.runtime.restore.why.nameUnchecked", "name", candidate, "error", err), nil
 		}
 	}
 	for _, target := range sortedNames(targets) {
 		volume := targets[target]
 		_, err := cli.VolumeInspect(ctx, volume, client.VolumeInspectOptions{})
 		if err == nil {
-			return fmt.Sprintf("the volume %s already exists on this machine. A restore never writes into an existing volume: if it holds nothing you need, remove it, then restore", volume), nil
+			return i18n.T("go.runtime.restore.why.volumeExists", "volume", volume), nil
 		}
 		if !cerrdefs.IsNotFound(err) {
-			return fmt.Sprintf("the volume %s could not be checked, so it counts as there (%v)", volume, err), nil
+			return i18n.T("go.runtime.restore.why.volumeUnchecked", "volume", volume, "error", err), nil
 		}
 	}
 	return "", nil
@@ -272,7 +273,7 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		if shown == "" {
 			shown = "nothing"
 		}
-		return RestoreResult{}, fmt.Errorf("this backup holds %s, but %s keeps %s. It is not a backup of %s", shown, svc.Name, strings.Join(want, ", "), svc.Name)
+		return RestoreResult{}, errors.New(i18n.T("go.runtime.restore.wrongBackup", "holds", shown, "name", svc.Name, "keeps", strings.Join(want, ", ")))
 	}
 	expected := map[string]map[string]statebackup.ManifestEntry{}
 	writes := map[string][]byte{}
@@ -287,16 +288,16 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 	}
 
 	if !p.restoring.TryLock() {
-		return RestoreResult{}, errors.New("nothing was restored: another restore is running. Try again when it ends")
+		return RestoreResult{}, errors.New(i18n.T("go.runtime.restore.busy"))
 	}
 	defer p.restoring.Unlock()
 
 	why, err := restoreRefusal(ctx, cli, slug, targets)
 	if err != nil {
-		return RestoreResult{}, fmt.Errorf("nothing was restored: %w", err)
+		return RestoreResult{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.restore.nothingRestored"), err)
 	}
 	if why != "" {
-		return RestoreResult{}, fmt.Errorf("nothing was restored: %s", strings.TrimSuffix(why, "."))
+		return RestoreResult{}, errors.New(i18n.T("go.runtime.restore.refused", "why", strings.TrimSuffix(why, ".")))
 	}
 
 	// The critical volumes are made new, and so is any other named volume the service
@@ -321,11 +322,11 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 	}
 	for volume := range nonces {
 		if nonces[volume], err = newNonce(); err != nil {
-			return RestoreResult{}, fmt.Errorf("nothing was restored: %w", err)
+			return RestoreResult{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.restore.nothingRestored"), err)
 		}
 	}
 	if err := req.Hold(nonces); err != nil {
-		return RestoreResult{}, fmt.Errorf("nothing was restored: the app could not record that a restore of %s is under way (%v)", svc.Name, err)
+		return RestoreResult{}, errors.New(i18n.T("go.runtime.restore.recordFailed", "name", svc.Name, "error", err))
 	}
 
 	gated := svc.Docker.FenceGated
@@ -338,14 +339,14 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		if gated {
 			stopped, err := p.fence.userStopped()
 			if err != nil {
-				return fmt.Errorf("the app could not read which fence-gated nodes are held (%v)", err)
+				return errors.New(i18n.T("go.runtime.restore.heldUnread", "error", err))
 			}
 			wasStopped = stopped[name]
 			// On disk before the container exists: the fence guard starts a created
 			// node that waits for the fence, and must never start this one
 			// half-written, now or after the app died mid-restore.
 			if err := p.fence.markStopped(name, true); err != nil {
-				return fmt.Errorf("the app could not hold %s until its data is checked (%v)", name, err)
+				return errors.New(i18n.T("go.runtime.restore.holdFailed", "name", name, "error", err))
 			}
 		}
 		for _, volume := range sortedNames(nonces) {
@@ -354,12 +355,12 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 				// Docker may have made it all the same (an answer cut off). The undo
 				// removes it only when it carries this restore's label.
 				made[volume] = nonces[volume]
-				return fmt.Errorf("Docker could not create the volume %s (%v)", volume, err)
+				return errors.New(i18n.T("go.runtime.restore.volumeCreateFailed", "volume", volume, "error", err))
 			}
 			if created.Volume.Labels[LabelRestore] != nonces[volume] {
 				// Docker hands back the volume that is there for a name that exists.
 				if critical[volume] {
-					return fmt.Errorf("the volume %s already existed, so it was not used", volume)
+					return errors.New(i18n.T("go.runtime.restore.volumeExisted", "volume", volume))
 				}
 				continue
 			}
@@ -369,41 +370,41 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		info, err := steps.create(ctx)
 		createdID = info.ContainerID
 		if err != nil {
-			return fmt.Errorf("Docker could not create %s (%v)", name, err)
+			return errors.New(i18n.T("go.runtime.restore.createFailed", "name", name, "error", err))
 		}
 		result.ContainerID, result.Image = info.ContainerID, info.Image
 		if why := notCreated(ctx, cli, createdID); why != "" {
-			return fmt.Errorf("%s %s, so it was not written to", name, why)
+			return errors.New(i18n.T("go.runtime.restore.notWritten", "name", name, "why", why))
 		}
 
 		for _, target := range result.Targets {
 			volume := targets[target]
 			got, err := cli.VolumeInspect(ctx, volume, client.VolumeInspectOptions{})
 			if err != nil || got.Volume.Labels[LabelRestore] != made[volume] {
-				return fmt.Errorf("another program replaced the volume %s after this restore made it, so it was not used", volume)
+				return errors.New(i18n.T("go.runtime.restore.volumeReplaced", "volume", volume))
 			}
 			// Into the folder that holds the mount point: the archive's entries sit
 			// under the folder's own name, so its first entry gives the volume's root
 			// the backup's owner and mode.
 			if _, err := cli.CopyToContainer(ctx, createdID, client.CopyToContainerOptions{DestinationPath: path.Dir(target), Content: bytes.NewReader(writes[target])}); err != nil {
-				return fmt.Errorf("Docker did not write the volume %s (%v)", volume, err)
+				return errors.New(i18n.T("go.runtime.restore.volumeWriteFailed", "volume", volume, "error", err))
 			}
 		}
 		for _, target := range result.Targets {
 			back, err := readBack(ctx, cli, createdID, target)
 			if err != nil {
-				return fmt.Errorf("%s could not be read back (%v)", target, err)
+				return errors.New(i18n.T("go.runtime.restore.readBackFailed", "target", target, "error", err))
 			}
 			found, err := statebackup.TreeManifest(back)
 			if err != nil {
-				return fmt.Errorf("%s could not be read back (%v)", target, err)
+				return errors.New(i18n.T("go.runtime.restore.readBackFailed", "target", target, "error", err))
 			}
 			if diff := statebackup.ManifestDifferences(expected[target], found); len(diff) > 0 {
 				shown := strings.Join(diff[:min(5, len(diff))], "; ")
 				if len(diff) > 5 {
-					shown += fmt.Sprintf("; and %d more", len(diff)-5)
+					shown += "; " + i18n.T("go.runtime.restore.andMore", "n", len(diff)-5)
 				}
-				return fmt.Errorf("%s does not read back as the backup: %s", target, shown)
+				return errors.New(i18n.T("go.runtime.restore.readBackDiffers", "target", target, "differences", shown))
 			}
 			for _, e := range found {
 				if e.Kind == "file" {
@@ -412,23 +413,23 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 			}
 		}
 		if why := notCreated(ctx, cli, createdID); why != "" {
-			return fmt.Errorf("%s %s before the restore finished", name, why)
+			return errors.New(i18n.T("go.runtime.restore.changedBeforeFinish", "name", name, "why", why))
 		}
 		// Every folder read back as the backup: the hold goes now, right before the start.
 		if err := req.Release(); err != nil {
-			return fmt.Errorf("the app could not record that the restore of %s finished, so it was not started (%v)", svc.Name, err)
+			return errors.New(i18n.T("go.runtime.restore.finishNotRecorded", "name", svc.Name, "error", err))
 		}
 		released = true
 		if !gated {
 			if err := steps.start(ctx); err != nil {
-				return fmt.Errorf("Docker could not start %s (%v)", name, withGPUHint(err))
+				return errors.New(i18n.T("go.runtime.restore.startFailed", "name", name, "error", withGPUHint(err)))
 			}
 			result.Started = true
 			return nil
 		}
 		// Last before the start: from here the fence guard may start it too.
 		if err := p.fence.markStopped(name, false); err != nil {
-			return fmt.Errorf("the app could not lift the hold on %s (%v)", name, err)
+			return errors.New(i18n.T("go.runtime.restore.releaseFailed", "name", name, "error", err))
 		}
 		if err := steps.start(ctx); err != nil {
 			// Its data is checked: it waits for the fence, and the guard starts it.
@@ -446,18 +447,18 @@ func (p *DockerProvider) restoreState(ctx context.Context, cli restoreClient, re
 		// No container of ours is left, so the stop record goes back to what it was.
 		_ = p.fence.markStopped(name, wasStopped)
 	}
-	msg := strings.TrimSuffix(failure.Error(), ".") + ". The restore was undone."
+	msg := i18n.T("go.runtime.restore.undone", "error", strings.TrimSuffix(failure.Error(), "."))
 	if len(left) > 0 && released {
 		// The hold went right before the start, and the start or the fence step after
 		// it failed. What the undo left needs the record back, or nothing lists it
 		// under Settings and nothing deletes it.
 		if err := req.Hold(nonces); err != nil {
-			msg += fmt.Sprintf(" Could not remove %s, and the app could not hold %s again (%v): remove them by hand with Docker before you deploy %s.", strings.Join(left, ", "), svc.Name, err, svc.Name)
+			msg += " " + i18n.T("go.runtime.restore.undoHoldFailed", "left", strings.Join(left, ", "), "name", svc.Name, "error", err)
 			return RestoreResult{Left: left}, &restoreError{msg: msg, left: left}
 		}
 	}
 	if len(left) > 0 {
-		msg += fmt.Sprintf(" Could not remove %s, so %s stays held: Deploy and Start refuse it until you delete the partial restore under Settings, Restore from a backup.", strings.Join(left, ", "), svc.Name)
+		msg += " " + i18n.T("go.runtime.restore.undoHeld", "left", strings.Join(left, ", "), "name", svc.Name)
 	}
 	return RestoreResult{Left: left}, &restoreError{msg: msg, left: left}
 }
@@ -479,14 +480,13 @@ func sameKeys(a map[string]string, b map[string][]byte) bool {
 func notCreated(ctx context.Context, cli restoreClient, id string) string {
 	got, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if err != nil {
-		return fmt.Sprintf("could not be checked (%v)", err)
+		return i18n.T("go.runtime.restore.notCreated.unchecked", "error", err)
 	}
 	if got.Container.State == nil || got.Container.State.Status != "created" {
-		status := "in an unknown state"
 		if got.Container.State != nil {
-			status = "is " + string(got.Container.State.Status)
+			return i18n.T("go.runtime.restore.notCreated.status", "status", string(got.Container.State.Status))
 		}
-		return status + ", not newly created"
+		return i18n.T("go.runtime.restore.notCreated.unknown")
 	}
 	return ""
 }
@@ -504,7 +504,7 @@ func readBack(ctx context.Context, cli restoreClient, id, target string) ([]byte
 		return nil, err
 	}
 	if len(data) > statebackup.MaxStateBytes {
-		return nil, errors.New("it reads back larger than a backup can be, so it is not the backup")
+		return nil, errors.New(i18n.T("go.runtime.restore.tooLarge"))
 	}
 	return data, nil
 }
@@ -565,16 +565,16 @@ func discardRestore(ctx context.Context, cli restoreClient, slug string, volumes
 	switch {
 	case err == nil:
 		if got.Container.Config == nil || !IsDesktopContainer(got.Container.Config.Labels) || got.Container.Config.Labels[LabelService] != slug {
-			return nil, fmt.Errorf("%s belongs to something else, so it was left as it is", name)
+			return nil, errors.New(i18n.T("go.runtime.restore.partial.foreign", "name", name))
 		}
 		if runsOrRestarts(got.Container) {
-			return nil, fmt.Errorf("%s is running, so the partial restore was not deleted. Stop it first", name)
+			return nil, errors.New(i18n.T("go.runtime.restore.partial.running", "name", name))
 		}
 		if _, err := cli.ContainerRemove(ctx, got.Container.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
-			return []string{name}, fmt.Errorf("could not remove %s: %w", name, err)
+			return []string{name}, fmt.Errorf("%s: %w", i18n.T("go.runtime.restore.partial.removeFailed", "name", name), err)
 		}
 	case !cerrdefs.IsNotFound(err):
-		return nil, fmt.Errorf("could not check %s: %w", name, err)
+		return nil, fmt.Errorf("%s: %w", i18n.T("go.runtime.restore.partial.checkFailed", "name", name), err)
 	}
 	var left []string
 	for _, volume := range sortedNames(volumes) {
@@ -583,7 +583,7 @@ func discardRestore(ctx context.Context, cli restoreClient, slug string, volumes
 		}
 	}
 	if len(left) > 0 {
-		return left, fmt.Errorf("could not delete the volume %s", strings.Join(left, ", "))
+		return left, errors.New(i18n.T("go.runtime.restore.partial.volumeDeleteFailed", "volumes", strings.Join(left, ", ")))
 	}
 	return nil, nil
 }

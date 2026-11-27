@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/stall"
 	"github.com/GeiserX/CashPilot-Desktop/internal/usage"
@@ -171,9 +172,9 @@ func (a *App) stallAlert(info runtime.ContainerInfo, s stall.Stall) StallAlert {
 // stallCopyLabel names a copy in an alert: "copy 2", or "proxied copy" (Copy 0).
 func stallCopyLabel(copyN int) string {
 	if copyN == 0 {
-		return "proxied copy"
+		return i18n.T("go.app.stall.proxiedCopy")
 	}
-	return fmt.Sprintf("copy %d", copyN)
+	return i18n.T("go.app.stall.copy", "n", copyN)
 }
 
 // stallServer is the CashPilot server that judges this computer's own copies for
@@ -222,17 +223,12 @@ func stallServerGrace(interval time.Duration) time.Duration {
 func stallMessage(name, copyLabel, container string, s stall.Stall) string {
 	mb := func(rate float64) string {
 		if rate < 0.1*stall.MB {
-			return "under 0.1 MB"
+			return i18n.T("go.app.stall.underMB", "mb", "0.1")
 		}
-		return fmt.Sprintf("%.1f MB", rate/stall.MB)
+		return i18n.T("go.app.stall.mb", "mb", fmt.Sprintf("%.1f", rate/stall.MB))
 	}
-	hours := fmt.Sprintf("%d hours", s.Hours)
-	if s.Hours == 1 {
-		hours = "1 hour"
-	}
-	return fmt.Sprintf("%s %s (%s) has sent %s an hour for %s, while its other copies on this computer sent %s an hour. "+
-		"It runs but gets almost no work. Look at its logs, and restart it if this lasts. CashPilot does not restart it by itself.",
-		name, copyLabel, container, mb(s.Sent), hours, mb(s.Peers))
+	return i18n.T("go.app.stall.message", "name", name, "copy", copyLabel, "container", container,
+		"sent", mb(s.Sent), "hours", s.Hours, "peers", mb(s.Peers))
 }
 
 // currentStalls is the current stall alerts, by service and copy.
@@ -258,7 +254,7 @@ func (a *App) stallNotifications() []Notification {
 	for _, al := range a.currentStalls() {
 		items = append(items, Notification{
 			Level:   "warning",
-			Title:   fmt.Sprintf("%s %s: almost no traffic", al.Service, stallCopyLabel(al.Copy)),
+			Title:   i18n.T("go.app.notify.stall.title", "service", al.Service, "copy", stallCopyLabel(al.Copy)),
 			Message: al.Message,
 		})
 	}

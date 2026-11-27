@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -79,7 +80,7 @@ func (m *Manager) proxier() (runtime.ProxyProvider, error) {
 	provider, _ := m.resolveProvider("")
 	p, ok := provider.(runtime.ProxyProvider)
 	if !ok {
-		return nil, errors.New("this runtime cannot run copies through a proxy; it needs Docker")
+		return nil, errors.New(i18n.T("go.services.proxy.needsDocker"))
 	}
 	return p, nil
 }
@@ -259,7 +260,7 @@ func (m *Manager) DeleteProxy(id int64) error {
 		return err
 	}
 	if len(copies) > 0 {
-		return errors.New("remove the copies running through this proxy first")
+		return errors.New(i18n.T("go.services.proxy.removeCopiesFirst"))
 	}
 	return m.store.DeleteProxy(id)
 }
@@ -320,11 +321,11 @@ func truncateText(s string, n int) string {
 func (m *Manager) ProxyRefusal(slug string) string {
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
-		return "Unknown service"
+		return i18n.T("go.services.proxy.unknownService")
 	}
 	dep, deployed, err := m.store.GetDeployment(slug)
 	if err != nil {
-		return "Could not read its deployment: " + err.Error()
+		return i18n.T("go.services.proxy.deploymentUnread", "error", err)
 	}
 	if deployed {
 		if err := refuseNonDocker(svc, dep); err != nil {
@@ -345,7 +346,7 @@ func (m *Manager) ProxyRefusal(slug string) string {
 // run a copy through a proxy. ProxyRefusal says it up front, DeployProxied enforces it.
 func refuseNonDocker(svc catalog.Service, dep store.Deployment) error {
 	if dep.Runtime != "" && dep.Runtime != defaultRuntimeKind {
-		return fmt.Errorf("%s runs on the %s runtime; only Docker can run a copy through a proxy", svc.Name, dep.Runtime)
+		return errors.New(i18n.T("go.services.proxy.dockerOnly", "name", svc.Name, "runtime", dep.Runtime))
 	}
 	return nil
 }
@@ -361,11 +362,11 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 		return ProxiedResult{}, err
 	}
 	if s.CappedAt != "" {
-		return ProxiedResult{}, errors.New(orText(s.CapReason, "This proxy reached its traffic cap"))
+		return ProxiedResult{}, errors.New(orText(s.CapReason, i18n.T("go.services.proxy.capReached")))
 	}
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
-		return ProxiedResult{}, fmt.Errorf("unknown service: %s", slug)
+		return ProxiedResult{}, errors.New(i18n.T("go.services.unknownService", "slug", slug))
 	}
 	if err := refuseRetired(svc); err != nil {
 		return ProxiedResult{}, err
@@ -375,7 +376,7 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 		return ProxiedResult{}, err
 	}
 	if !deployed {
-		return ProxiedResult{}, fmt.Errorf("deploy %s on this machine first; the proxied copy runs with its settings", svc.Name)
+		return ProxiedResult{}, errors.New(i18n.T("go.services.proxy.deployFirst", "name", svc.Name))
 	}
 	if err := refuseNonDocker(svc, dep); err != nil {
 		return ProxiedResult{}, err
@@ -421,7 +422,7 @@ func (m *Manager) runProxied(ctx context.Context, slug string, id int64, svc cat
 	m.proxy.proxyMu.Lock()
 	d, s, err := m.loadProxy(id)
 	if err == nil && s.CappedAt != "" {
-		err = errors.New(orText(s.CapReason, "This proxy reached its traffic cap"))
+		err = errors.New(orText(s.CapReason, i18n.T("go.services.proxy.capReached")))
 	}
 	hadRecord := false
 	if err == nil {
@@ -455,11 +456,11 @@ func (m *Manager) runProxied(ctx context.Context, slug string, id int64, svc cat
 	others := m.otherExits(id)
 	_, ownRuns := m.runningHere(slug)
 	if same := proxies.SameExit(slug, result.ExitIP, ownIP, ownRuns, others, id); len(same) > 0 {
-		result.Warning = fmt.Sprintf("%s already leaves from %s on %s. ", svc.Name, result.ExitIP, strings.Join(same, ", "))
+		where := strings.Join(same, i18n.T("go.services.proxy.exitSeparator"))
 		if limit := svc.Requirements.DevicesPerIP; limit != nil && *limit == 1 {
-			result.Warning += "Its provider allows one device per IP, so this copy earns nothing there."
+			result.Warning = i18n.T("go.services.proxy.sameExitOneDevice", "name", svc.Name, "ip", result.ExitIP, "where", where)
 		} else {
-			result.Warning += "Copies on one IP share its bandwidth, and the provider may limit devices per IP."
+			result.Warning = i18n.T("go.services.proxy.sameExitShared", "name", svc.Name, "ip", result.ExitIP, "where", where)
 		}
 	}
 	return result, nil
@@ -514,7 +515,7 @@ func (m *Manager) StopProxied(ctx context.Context, slug string, id int64) error 
 	}
 	// A flag left set would make the next reset start the copy again.
 	if err := m.store.SetProxiedCopyCapped(id, slug, false); err != nil {
-		return fmt.Errorf("the copy stopped, but could not be marked as stopped by you, so a cap reset could start it again: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("go.services.proxy.notMarkedStopped"), err)
 	}
 	m.store.RecordEvent(slug, "proxied_stopped", fmt.Sprintf("proxy %d", id))
 	return nil
@@ -530,7 +531,7 @@ func (m *Manager) StartProxied(ctx context.Context, slug string, id int64) error
 		return err
 	}
 	if s.CappedAt != "" {
-		return errors.New(orText(s.CapReason, "This proxy reached its traffic cap"))
+		return errors.New(orText(s.CapReason, i18n.T("go.services.proxy.capReached")))
 	}
 	p, err := m.proxier()
 	if err != nil {
@@ -600,7 +601,7 @@ func (m *Manager) releaseCapped(ctx context.Context, id int64, d proxies.Definit
 	m.proxy.lastMu.Unlock()
 	copies, err := m.store.ListProxiedCopies(id)
 	if err != nil {
-		return nil, fmt.Errorf("the cap was lifted, but its copies could not be listed to start them: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T("go.services.proxy.capLiftedNoList"), err)
 	}
 	var capped bool
 	for _, c := range copies {
@@ -611,7 +612,7 @@ func (m *Manager) releaseCapped(ctx context.Context, id int64, d proxies.Definit
 	}
 	p, err := m.proxier()
 	if err != nil {
-		return nil, fmt.Errorf("the cap was lifted, but its copies could not be started: %w", err)
+		return nil, fmt.Errorf("%s: %w", i18n.T("go.services.proxy.capLiftedNoStart"), err)
 	}
 	ownIP := detectOwnIP(ctx)
 	var started []string
@@ -896,9 +897,8 @@ func (m *Manager) stopCappedCopy(ctx context.Context, p runtime.ProxyProvider, i
 		if m.proxy.unstopped[id] == nil {
 			m.proxy.unstopped[id] = map[string]string{}
 		}
-		var pe *runtime.ProxyError
 		switch {
-		case err == nil, errors.As(err, &pe) && strings.HasPrefix(pe.Error(), "No proxied copy"):
+		case err == nil, runtime.IsNoProxiedCopy(err):
 			delete(m.proxy.unstopped[id], slug)
 		default:
 			m.proxy.unstopped[id][slug] = truncateText(maskSecrets(err.Error(), d), 200)

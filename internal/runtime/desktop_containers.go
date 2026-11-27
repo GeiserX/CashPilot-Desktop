@@ -8,6 +8,8 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // desktopRuntime is the cashpilot.runtime value CashPilot Desktop gives every
@@ -38,14 +40,15 @@ func workerContainer(c container.InspectResponse) bool {
 func otherMaker(name string, c container.InspectResponse) (who, manage, clear string) {
 	switch c.Config.Labels[labelDeployedBy] {
 	case "compose":
-		return fmt.Sprintf("%s was started from a CashPilot compose file, not by CashPilot Desktop", name),
-			"Manage it with docker compose", "Stop it with docker compose down first"
+		return i18n.T("go.runtime.other.compose.who", "name", name),
+			i18n.T("go.runtime.other.compose.manage", "command", "docker compose"),
+			i18n.T("go.runtime.other.compose.clear", "command", "docker compose down")
 	case "worker":
-		return fmt.Sprintf("%s was made by a CashPilot worker on this Docker, not by CashPilot Desktop", name),
-			"Manage it from that worker", "Deploy it from that worker, or remove it there first"
+		return i18n.T("go.runtime.other.worker.who", "name", name),
+			i18n.T("go.runtime.other.worker.manage"), i18n.T("go.runtime.other.worker.clear")
 	}
-	return fmt.Sprintf("%s was made by another CashPilot program on this Docker, not by CashPilot Desktop", name),
-		"Manage it with the program that made it", "Remove it with the program that made it first"
+	return i18n.T("go.runtime.other.program.who", "name", name),
+		i18n.T("go.runtime.other.program.manage"), i18n.T("go.runtime.other.program.clear")
 }
 
 // OtherCashPilotError refuses a deploy over a container another CashPilot made.
@@ -61,7 +64,7 @@ func refuseOtherCashPilot(name string, c container.InspectResponse) error {
 		return nil
 	}
 	who, _, clear := otherMaker(name, c)
-	return &OtherCashPilotError{msg: fmt.Sprintf("%s. It was left running. %s", who, clear)}
+	return &OtherCashPilotError{msg: i18n.T("go.runtime.other.leftRunning", "who", who, "clear", clear)}
 }
 
 // desktopOwned refuses an action on a container CashPilot Desktop did not create,
@@ -73,9 +76,9 @@ func desktopOwned(name string, c container.InspectResponse) error {
 	}
 	if workerContainer(c) {
 		who, manage, _ := otherMaker(name, c)
-		return fmt.Errorf("%s, so it was left as it is. %s", who, manage)
+		return errors.New(i18n.T("go.runtime.other.leftAsIs", "who", who, "manage", manage))
 	}
-	return fmt.Errorf("%s was not created by CashPilot Desktop, so it was left as it is", name)
+	return errors.New(i18n.T("go.runtime.other.notDesktops", "name", name))
 }
 
 // RemoveDesktopContainers stops and removes every container CashPilot Desktop
@@ -124,7 +127,7 @@ func RemoveDesktopContainers(ctx context.Context) ([]string, error) {
 		removed = append(removed, name)
 	}
 	if len(errs) > 0 {
-		return removed, fmt.Errorf("%d container(s) could not be removed: %w", len(errs), errors.Join(errs...))
+		return removed, fmt.Errorf("%s: %w", i18n.T("go.runtime.other.removeFailed", "n", len(errs)), errors.Join(errs...))
 	}
 	return removed, nil
 }

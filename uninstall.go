@@ -7,11 +7,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/bgservice"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/setupresume"
 	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
@@ -89,11 +91,11 @@ func runUninstallMain(removeEarners, deleteData bool, parseErr error) int {
 // is 1 when any failed, and every line says what happened.
 func runUninstall(ctx context.Context, s uninstallSteps, removeEarners, deleteData bool) int {
 	failed := false
-	fail := func(format string, args ...any) {
+	fail := func(message string) {
 		failed = true
-		fmt.Fprintf(s.out, "FAILED: "+format+"\n", args...)
+		fmt.Fprintln(s.out, i18n.T("go.app.uninstall.failed", "message", message))
 	}
-	say := func(format string, args ...any) { fmt.Fprintf(s.out, format+"\n", args...) }
+	say := func(message string) { fmt.Fprintln(s.out, message) }
 
 	// The background helper. Removing a Scheduled Task does not end the process it
 	// started, so it is stopped first. Status reads the exit code, never the text,
@@ -102,65 +104,65 @@ func runUninstall(ctx context.Context, s uninstallSteps, removeEarners, deleteDa
 		_ = stopper.Stop()
 	}
 	if st, err := s.agent.Status(); err != nil {
-		fail("could not read the background helper's registration: %v", err)
+		fail(i18n.T("go.app.uninstall.agentStatusFailed", "error", err))
 	} else if !st.Installed {
-		say("No background helper was registered.")
+		say(i18n.T("go.app.uninstall.noAgent"))
 	} else if err := s.agent.Uninstall(); err != nil {
-		fail("could not remove the background helper %s: %v", st.Label, err)
+		fail(i18n.T("go.app.uninstall.agentRemoveFailed", "label", st.Label, "error", err))
 	} else {
-		say("Removed the background helper (%s).", st.Label)
+		say(i18n.T("go.app.uninstall.agentRemoved", "label", st.Label))
 	}
 
 	if err := s.disarmRunOnce(); err != nil {
-		fail("could not remove the RunOnce value %s: %v", setupresume.ValueName, err)
+		fail(i18n.T("go.app.uninstall.runOnceFailed", "value", setupresume.ValueName, "error", err))
 	} else {
-		say("Removed the RunOnce value %s, if it was there.", setupresume.ValueName)
+		say(i18n.T("go.app.uninstall.runOnceRemoved", "value", setupresume.ValueName))
 	}
 
 	if removeEarners {
 		names, err := s.removeContainers(ctx)
 		if len(names) > 0 {
-			say("Removed %d container(s) CashPilot Desktop made: %s. Their volumes stay.", len(names), strings.Join(names, ", "))
+			say(i18n.T("go.app.uninstall.containersRemoved", "n", len(names), "names", strings.Join(names, ", ")))
 		}
 		if err != nil {
-			fail("could not remove the earning containers: %v. Start Docker and remove them with: docker rm -f $(docker ps -aq --filter label=cashpilot.runtime=existing-docker)", err)
+			fail(i18n.T("go.app.uninstall.containersFailed", "error", err, "command", "docker rm -f $(docker ps -aq --filter label=cashpilot.runtime=existing-docker)"))
 		} else if len(names) == 0 {
-			say("Found no container CashPilot Desktop made.")
+			say(i18n.T("go.app.uninstall.noContainers"))
 		}
 	} else {
-		say("Kept the earning containers, as asked. They keep running in Docker.")
+		say(i18n.T("go.app.uninstall.containersKept"))
 	}
 
 	if removeEarners || deleteData {
 		names, err := s.removeNative(ctx)
 		if len(names) > 0 {
-			say("Removed %d native earner(s) and their firewall rules: %s.", len(names), strings.Join(names, ", "))
+			say(i18n.T("go.app.uninstall.nativeRemoved", "n", len(names), "names", strings.Join(names, ", ")))
 		}
 		if err != nil {
-			fail("could not remove every native earner: %v", err)
+			fail(i18n.T("go.app.uninstall.nativeFailed", "error", err))
 		}
 	}
 
 	if deleteData {
 		if err := s.deleteSecrets(); err != nil {
-			fail("could not remove the saved keys from the system keychain: %v", err)
+			fail(i18n.T("go.app.uninstall.secretsFailed", "error", err))
 		} else {
-			say("Removed the saved keys from the system keychain (the Windows Credential Manager on Windows).")
+			say(i18n.T("go.app.uninstall.secretsRemoved"))
 		}
 		if err := safeDataDir(s.appDir); err != nil {
-			fail("did not delete the data folder: %v", err)
+			fail(i18n.T("go.app.uninstall.dataRefused", "error", err))
 		} else if err := s.removeAll(s.appDir); err != nil {
-			fail("could not delete the data folder %s: %v", s.appDir, err)
+			fail(i18n.T("go.app.uninstall.dataFailed", "path", s.appDir, "error", err))
 		} else {
-			say("Deleted the data folder %s.", s.appDir)
+			say(i18n.T("go.app.uninstall.dataDeleted", "path", s.appDir))
 		}
 	} else {
-		say("Kept your data in %s. Install CashPilot Desktop again, or open the portable exe, to use it.", s.appDir)
+		say(i18n.T("go.app.uninstall.dataKept", "path", s.appDir))
 	}
 
 	if s.secureVMDir != "" {
 		if _, err := os.Stat(s.secureVMDir); err == nil {
-			say("The Secure VM (Windows 11 Pro) was not removed. Its files are in %s.", s.secureVMDir)
+			say(i18n.T("go.app.uninstall.secureVMKept", "path", s.secureVMDir))
 		}
 	}
 
@@ -176,14 +178,14 @@ func runUninstall(ctx context.Context, s uninstallSteps, removeEarners, deleteDa
 // there to a folder full of other files.
 func safeDataDir(dir string) error {
 	if dir == "" || !filepath.IsAbs(dir) {
-		return fmt.Errorf("%q is not an absolute path", dir)
+		return errors.New(i18n.T("go.app.uninstall.notAbsolute", "path", strconv.Quote(dir)))
 	}
 	clean := filepath.Clean(dir)
 	if filepath.Dir(clean) == clean {
-		return fmt.Errorf("%s is the root of a drive", clean)
+		return errors.New(i18n.T("go.app.uninstall.driveRoot", "path", clean))
 	}
 	if home, err := os.UserHomeDir(); err == nil && samePath(clean, home) {
-		return fmt.Errorf("%s is your home folder", clean)
+		return errors.New(i18n.T("go.app.uninstall.homeFolder", "path", clean))
 	}
 	return nil
 }

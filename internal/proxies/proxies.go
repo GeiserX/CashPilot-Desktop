@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Kinds are the proxy types a tunnel can carry.
@@ -95,7 +96,7 @@ type InputError struct{ msg string }
 
 func (e *InputError) Error() string { return e.msg }
 
-func inputErr(format string, args ...any) error { return &InputError{fmt.Sprintf(format, args...)} }
+func inputErr(message string) error { return &InputError{message} }
 
 // IsInputError reports whether err is a definition the owner has to fix.
 func IsInputError(err error) bool {
@@ -125,11 +126,11 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 	out := Definition{}
 	out.Name = truncate(get("name", base.Name), 80)
 	if out.Name == "" {
-		return Definition{}, inputErr("Give the proxy a name")
+		return Definition{}, inputErr(i18n.T("go.proxies.input.name"))
 	}
 	out.Kind = strings.ToLower(get("kind", base.Kind))
 	if !contains(Kinds, out.Kind) {
-		return Definition{}, inputErr("The type must be socks5, http or tailscale")
+		return Definition{}, inputErr(i18n.T("go.proxies.input.kind"))
 	}
 	kept := map[string]bool{}
 	secret := func(field, stored string) string {
@@ -150,13 +151,13 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 		out.ExitNode = get("exit_node", base.ExitNode)
 		out.LoginServer = get("login_server", base.LoginServer)
 		if out.AuthKey == "" {
-			return Definition{}, inputErr("A Tailscale proxy needs an auth key")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.authKey"))
 		}
 		if !exitNodeRE.MatchString(out.ExitNode) {
-			return Definition{}, inputErr("Name the exit node by its Tailscale name or IP")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.exitNode"))
 		}
 		if out.LoginServer != "" && !loginServerRE.MatchString(out.LoginServer) {
-			return Definition{}, inputErr("The login server must be an https:// URL with no user name, password, query or fragment")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.loginServer"))
 		}
 		out.Username, out.Password = "", ""
 	} else {
@@ -167,10 +168,10 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 		}
 		out.Port = port
 		if !hostRE.MatchString(out.Host) {
-			return Definition{}, inputErr("The host must be a host name or an IPv4 address")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.host"))
 		}
 		if out.Port < 1 || out.Port > 65535 {
-			return Definition{}, inputErr("The port must be between 1 and 65535")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.port"))
 		}
 		out.AuthKey = ""
 	}
@@ -189,12 +190,12 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 	if capText != "" && capText != "0" {
 		gb, err := strconv.ParseFloat(capText, 64)
 		if err != nil {
-			return Definition{}, inputErr("The traffic cap is a number of GB, or empty for none")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.capNumber"))
 		}
 		// Below a megabyte the threshold rounds to nothing measurable and the
 		// first tick would stop every copy.
 		if gb < MinCapGB || gb > 1_000_000 {
-			return Definition{}, inputErr("The traffic cap must be between 0.001 and 1,000,000 GB")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.capRange"))
 		}
 		out.CapGB = &gb
 	}
@@ -203,22 +204,22 @@ func Clean(values map[string]string, existing *Definition) (Definition, error) {
 	if pctText != "" && pctText != "0" {
 		v, err := strconv.Atoi(pctText)
 		if err != nil {
-			return Definition{}, inputErr("The stop threshold is a percentage")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.thresholdNumber"))
 		}
 		pct = v
 	}
 	if pct < 10 || pct > 100 {
-		return Definition{}, inputErr("The stop threshold must be between 10 and 100 percent")
+		return Definition{}, inputErr(i18n.T("go.proxies.input.thresholdRange"))
 	}
 	out.CapThresholdPct = pct
 	resetText := get("reset_day", formatInt(base.ResetDay))
 	if resetText != "" && resetText != "0" {
 		day, err := strconv.Atoi(resetText)
 		if err != nil {
-			return Definition{}, inputErr("The reset day is a day of the month")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.resetNumber"))
 		}
 		if day < 1 || day > 28 {
-			return Definition{}, inputErr("The reset day must be between 1 and 28, so every month has it")
+			return Definition{}, inputErr(i18n.T("go.proxies.input.resetRange"))
 		}
 		out.ResetDay = &day
 	}
@@ -242,23 +243,25 @@ func refuseRetargetedSecret(existing, out Definition, kept map[string]bool) erro
 	// Only the fields the new kind uses: a kind change already wiped the rest.
 	var carried []string
 	if kept["username"] && out.Username != "" {
-		carried = append(carried, "user")
+		carried = append(carried, i18n.T("go.proxies.secret.user"))
 	}
 	if kept["password"] && out.Password != "" {
-		carried = append(carried, "password")
+		carried = append(carried, i18n.T("go.proxies.secret.password"))
 	}
 	if kept["auth_key"] && out.AuthKey != "" {
-		carried = append(carried, "auth key")
+		carried = append(carried, i18n.T("go.proxies.secret.authKey"))
 	}
 	if len(carried) == 0 || target(existing) == target(out) {
 		return nil
 	}
-	where, clear := "host or port", ", or tick Remove to save without it"
-	if out.Kind == "tailscale" {
-		where, clear = "login server", ""
+	secrets := carried[0]
+	for _, next := range carried[1:] {
+		secrets = i18n.T("go.proxies.secret.and", "first", secrets, "next", next)
 	}
-	return inputErr("The %s changed, so type the %s again%s. CashPilot never sends a stored secret to a server it was not entered for.",
-		where, strings.Join(carried, " and "), clear)
+	if out.Kind == "tailscale" {
+		return inputErr(i18n.T("go.proxies.retarget.loginServer", "secrets", secrets))
+	}
+	return inputErr(i18n.T("go.proxies.retarget.hostPort", "secrets", secrets))
 }
 
 // SecretValues are the secret values of a definition, for redacting messages.
@@ -370,41 +373,41 @@ func Refusal(svc catalog.Service) string {
 		name = svc.Slug
 	}
 	if name == "" {
-		name = "This service"
+		name = i18n.T("go.proxies.refusal.thisService")
 	}
 	dc := svc.Docker
 	if dc.NetworkMode == "host" {
-		return name + " uses the host's network, so it cannot be moved behind a proxy."
+		return i18n.T("go.proxies.refusal.hostNetwork", "name", name)
 	}
 	if strings.HasPrefix(dc.NetworkMode, "container:") {
-		return name + " joins another container's network, so it cannot be moved behind a proxy."
+		return i18n.T("go.proxies.refusal.containerNetwork", "name", name)
 	}
 	if dc.FenceGated {
-		return name + " runs only behind the LAN fence, so it cannot run through a proxy."
+		return i18n.T("go.proxies.refusal.fenceGated", "name", name)
 	}
 	if dc.PublishesPorts() {
-		return name + " publishes a port on the host, which a proxied copy cannot do."
+		return i18n.T("go.proxies.refusal.ports", "name", name)
 	}
 	if len(dc.Volumes) > 0 {
-		return name + " keeps data in a volume or host directory, which a proxied copy would share."
+		return i18n.T("go.proxies.refusal.volumes", "name", name)
 	}
 	if len(dc.Devices) > 0 {
-		return name + " needs a device on the host, which a proxied copy does not get."
+		return i18n.T("go.proxies.refusal.devices", "name", name)
 	}
 	if dc.GPU != nil {
-		return name + " needs this computer's GPU, which a proxied copy does not get."
+		return i18n.T("go.proxies.refusal.gpu", "name", name)
 	}
 	if dc.Privileged {
-		return name + " asks for a privileged container, which could change or bypass the tunnel's firewall, so it cannot run behind a proxy."
+		return i18n.T("go.proxies.refusal.privileged", "name", name)
 	}
 	if risky := RiskyCaps(dc.CapAdd); len(risky) > 0 {
-		return fmt.Sprintf("%s asks for %s, which would let it change or bypass the tunnel's firewall, so it cannot run behind a proxy.", name, strings.Join(risky, ", "))
+		return i18n.T("go.proxies.refusal.caps", "name", name, "caps", strings.Join(risky, ", "))
 	}
 	if p := svc.Requirements.ProxyProhibited; p != nil {
 		if p.Source != "" {
-			return fmt.Sprintf("%s's terms forbid running it through a proxy or VPN (%s).", name, p.Source)
+			return i18n.T("go.proxies.refusal.termsSource", "name", name, "source", p.Source)
 		}
-		return name + "'s terms forbid running it through a proxy or VPN."
+		return i18n.T("go.proxies.refusal.terms", "name", name)
 	}
 	return ""
 }
@@ -654,14 +657,14 @@ func SameExit(slug string, exitIP string, ownIP string, ownRuns bool, others []E
 	}
 	var found []string
 	if ownRuns && PublicIP(ownIP) == ip {
-		found = append(found, "this machine's own connection")
+		found = append(found, i18n.T("go.proxies.exit.ownConnection"))
 	}
 	for _, e := range others {
 		if e.ProxyID == self || e.Slug != slug || e.Rotating {
 			continue
 		}
 		if PublicIP(e.ExitIP) == ip {
-			found = append(found, fmt.Sprintf("proxy %d", e.ProxyID))
+			found = append(found, i18n.T("go.proxies.exit.proxy", "id", e.ProxyID))
 		}
 	}
 	return found

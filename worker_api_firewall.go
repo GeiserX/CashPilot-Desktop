@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	stdruntime "runtime"
+	"strconv"
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/filelock"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
@@ -180,7 +182,7 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 		return ServerCommandsState{}, err
 	}
 	if !firewallRuleNeeded {
-		return a.serverCommandsState(), errors.New("this computer needs no firewall rule for it")
+		return a.serverCommandsState(), errors.New(i18n.T("go.app.firewall.notNeeded"))
 	}
 	program, err := thisProgram()
 	if err != nil {
@@ -188,7 +190,7 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	}
 	owner, ok := filelock.Acquire(context.Background(), a.cfg.PairingPath()+".firewall-allow", 0)
 	if !ok {
-		return a.serverCommandsState(), errors.New("a firewall rule request is already in progress")
+		return a.serverCommandsState(), errors.New(i18n.T("go.app.firewall.busy"))
 	}
 	defer owner()
 	p, key, err := a.cfg.ReadPairingCredential(false)
@@ -202,7 +204,7 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 	}
 	err = a.cfg.UpdatePairing(p.Revision, func(next *config.Pairing) error {
 		if key.Worker == "" || next.Suspended || next.RemoveFirewall {
-			return errors.New("join your CashPilot and finish any pending firewall removal before allowing the rule")
+			return errors.New(i18n.T("go.app.firewall.joinFirst"))
 		}
 		next.FirewallProgram = program
 		p = *next
@@ -223,13 +225,13 @@ func (a *App) AllowServerCommandsThroughFirewall() (ServerCommandsState, error) 
 			return err
 		}
 		if !sameProgram(actual.Program, program) {
-			return errors.New("Windows did not confirm the rule for this program")
+			return errors.New(i18n.T("go.app.firewall.notConfirmed"))
 		}
 		return nil
 	})
 	a.syncWorkerAPI()
 	if err != nil {
-		return a.serverCommandsState(), fmt.Errorf("could not allow firewall rule %q: %w", serverCommandsRuleName(), errors.Join(runErr, err))
+		return a.serverCommandsState(), fmt.Errorf("%s: %w", i18n.T("go.app.firewall.allowFailed", "rule", strconv.Quote(serverCommandsRuleName())), errors.Join(runErr, err))
 	}
 	if a.ctx != nil {
 		a.startUpstream(a.ctx)
@@ -282,17 +284,17 @@ func (a *App) firewallCleanupStatus() string {
 	}
 	p, err := a.cfg.Pairing()
 	if err != nil {
-		return "Windows Firewall cleanup status is unknown."
+		return i18n.T("go.app.firewall.cleanupUnknown")
 	}
 	if p.Revision == "" || (p.ServerURL != "" && !p.RemoveFirewall) {
 		return ""
 	}
 	pending, err := a.probeFirewallRemoval(p.Revision)
 	if err != nil {
-		return "Windows Firewall could not be queried. Retry removal."
+		return i18n.T("go.app.firewall.cleanupQueryFailed")
 	}
 	if pending {
-		return "The CashPilot rule is still in Windows Firewall. Approve the administrator prompt to remove it."
+		return i18n.T("go.app.firewall.cleanupPending")
 	}
 	return ""
 }
@@ -312,7 +314,7 @@ func (a *App) removeServerCommandsRule() error {
 	}
 	err := a.removeFirewallRule()
 	if err != nil {
-		return fmt.Errorf("removal of Windows Firewall rule %q is pending: %w", serverCommandsRuleName(), err)
+		return fmt.Errorf("%s: %w", i18n.T("go.app.firewall.removalPending", "rule", strconv.Quote(serverCommandsRuleName())), err)
 	}
 	return nil
 }
@@ -341,7 +343,7 @@ func (a *App) removeFirewallRule() error {
 		return nil
 	}
 	if runErr == nil && err == nil {
-		err = errors.New("Windows still has the rule")
+		err = errors.New(i18n.T("go.app.firewall.stillThere"))
 	}
 	return errors.Join(runErr, err)
 }

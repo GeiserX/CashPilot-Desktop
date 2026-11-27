@@ -7,6 +7,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/setupresume"
 	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
@@ -76,7 +77,7 @@ func (a *App) RunSetupStep(op string, webDownload bool) (SetupStepResult, error)
 		return SetupStepResult{}, fmt.Errorf("%q is not a change the checklist makes", op)
 	}
 	if !setupMu.TryLock() {
-		return SetupStepResult{}, errors.New("another change is still running; wait for it to finish")
+		return SetupStepResult{}, errors.New(i18n.T("go.app.setup.busy"))
 	}
 	defer setupMu.Unlock()
 
@@ -87,7 +88,7 @@ func (a *App) RunSetupStep(op string, webDownload bool) (SetupStepResult, error)
 	row, found := findStep(dockerSteps(facts, status), stepID)
 	if !found || row.State != winvm.StepNeedsYou || row.Action.Op != op {
 		result.State = winvm.OutcomeFailed
-		result.Text = "Nothing ran: CashPilot read this PC again, and this step no longer asks for this change. The list below shows where it stands now."
+		result.Text = i18n.T("go.app.setup.stale")
 		return result, nil
 	}
 
@@ -99,7 +100,7 @@ func (a *App) RunSetupStep(op string, webDownload bool) (SetupStepResult, error)
 	if op == winvm.OpLinuxEngine && (out.State == winvm.OutcomeFailed || errors.Is(err, errDockerCliMissing)) {
 		// Docker's own menu always works: say how.
 		out = winvm.Outcome{State: winvm.OutcomeFallback, Code: out.Code,
-			Text: "CashPilot could not switch Docker Desktop itself. Do it from Docker's menu instead: " + row.Action.Manual}
+			Text: i18n.T("go.app.setup.switchFallback", "manual", row.Action.Manual)}
 	}
 	result.State, result.Text, result.Code, result.Retry, result.URL = out.State, out.Text, out.Code, out.Retry, out.URL
 	if err != nil && out.State != winvm.OutcomeCancelled {
@@ -117,7 +118,7 @@ func (a *App) RunSetupStep(op string, webDownload bool) (SetupStepResult, error)
 		reopens, jerr := a.beginFinish(stepID, finish)
 		if jerr != nil {
 			log.Printf("setup: %v", jerr)
-			result.Text += " CashPilot could not note where the setup stands, so open it yourself afterwards."
+			result.Text += " " + i18n.T("go.app.setup.journalFailed")
 		}
 		result.Reopens = reopens
 	}
@@ -198,10 +199,10 @@ func (a *App) armForFinish(finish string) error {
 	defer journalMu.Unlock()
 	j := a.cfg.Config().SetupJournal
 	if j == nil {
-		return errors.New("no setup step waits for a restart")
+		return errors.New(i18n.T("go.app.setup.noRestart"))
 	}
 	if finish == setupresume.FinishSignOut && j.Finish != setupresume.FinishSignOut {
-		return errors.New("no setup step waits for a sign-out")
+		return errors.New(i18n.T("go.app.setup.noSignOut"))
 	}
 	if err := a.runOnceKey().Arm(currentExe()); err != nil {
 		log.Printf("setup: Windows will not reopen CashPilot by itself: %v", err)

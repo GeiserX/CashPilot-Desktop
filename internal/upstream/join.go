@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Target is the CashPilot server a user wants this computer to join: its address
@@ -39,7 +41,7 @@ func ParseJoin(block, fieldURL, fieldKey string) (Target, error) {
 	if strings.TrimSpace(block) != "" {
 		u, k, found := parseBlock(block)
 		if !found {
-			return Target{}, errors.New("The pasted text has no CASHPILOT_UI_URL or CASHPILOT_API_KEY line. On your CashPilot, open Fleet, then Add a box, press Reveal API Key, then Copy, and paste it here.")
+			return Target{}, errors.New(i18n.T("go.upstream.parse.noLines", "urlVar", "CASHPILOT_UI_URL", "keyVar", "CASHPILOT_API_KEY"))
 		}
 		if u != "" {
 			t.URL = u
@@ -49,16 +51,16 @@ func ParseJoin(block, fieldURL, fieldKey string) (Target, error) {
 		}
 	}
 	if t.URL == "" {
-		return Target{}, errors.New("The address of your CashPilot is missing. It is the CASHPILOT_UI_URL line, for example http://192.168.1.10:8080.")
+		return Target{}, errors.New(i18n.T("go.upstream.parse.noURL", "urlVar", "CASHPILOT_UI_URL", "example", "http://192.168.1.10:8080"))
 	}
 	if t.Key == "" {
-		return Target{}, errors.New("The key is missing. It is the CASHPILOT_API_KEY line that Fleet, Add a box copies.")
+		return Target{}, errors.New(i18n.T("go.upstream.parse.noKey", "keyVar", "CASHPILOT_API_KEY"))
 	}
 	if hiddenKey(t.Key) {
-		return Target{}, errors.New("The key in the pasted text is hidden. On the Fleet page press Reveal API Key first, then Copy again.")
+		return Target{}, errors.New(i18n.T("go.upstream.parse.hiddenKey"))
 	}
 	if strings.ContainsAny(t.Key, " \t\r\n") {
-		return Target{}, errors.New("The key has spaces in it. Copy it again from Fleet, Add a box.")
+		return Target{}, errors.New(i18n.T("go.upstream.parse.keySpaces"))
 	}
 	u, err := normalizeURL(t.URL)
 	if err != nil {
@@ -120,7 +122,7 @@ func normalizeURL(raw string) (string, error) {
 		raw = "http://" + raw
 	}
 	u, err := url.Parse(raw)
-	bad := errors.New("That address does not look right. It should look like http://192.168.1.10:8080 or https://cashpilot.example.com.")
+	bad := errors.New(i18n.T("go.upstream.parse.badAddress", "lanExample", "http://192.168.1.10:8080", "httpsExample", "https://cashpilot.example.com"))
 	if err != nil || u.Hostname() == "" || strings.ContainsAny(u.Host, " \t") {
 		return "", bad
 	}
@@ -159,28 +161,28 @@ func Explain(err error, host, name string) Failure {
 	case errors.Is(err, ErrNotCashPilot):
 		return notCashPilot()
 	case errors.As(err, &dnsErr):
-		return Failure{"dns", "Cannot find " + host + ". Check the address for a typo, and that this computer can reach that network."}
+		return Failure{"dns", i18n.T("go.upstream.fail.dns", "host", host)}
 	case errors.As(err, &certErr), errors.As(err, &unknownAuth), errors.As(err, &hostErr), errors.As(err, &invalid):
-		return Failure{"certificate", host + " uses https, but its certificate is not valid. Use an address with a valid certificate, or the LAN or Tailscale address over http."}
+		return Failure{"certificate", i18n.T("go.upstream.fail.certificate", "host", host)}
 	case strings.Contains(err.Error(), "refusing a redirect"), strings.Contains(err.Error(), "after 10 redirects"):
-		return Failure{"address", host + " sends this computer to another address, and CashPilot does not send the key there. Use the address your CashPilot shows on its Fleet page."}
+		return Failure{"address", i18n.T("go.upstream.fail.redirect", "host", host)}
 	case strings.Contains(err.Error(), "refusing to contact"):
 		return ExplainAddress(err)
 	default:
-		return Failure{"unreachable", "Cannot reach " + host + ". Check that CashPilot is running there, and that this computer is on the same network or Tailscale."}
+		return Failure{"unreachable", i18n.T("go.upstream.fail.unreachable", "host", host)}
 	}
 }
 
 // ExplainAddress turns a ValidateServerURL refusal into a Failure.
 func ExplainAddress(err error) Failure {
 	if strings.Contains(err.Error(), "plain http") {
-		return Failure{"address", "Use https, or a LAN or Tailscale address. Plain http to a public address would send the key in clear text."}
+		return Failure{"address", i18n.T("go.upstream.fail.plainHTTP")}
 	}
-	return Failure{"address", "CashPilot does not send the key to that address. Use the address your CashPilot shows on its Fleet page."}
+	return Failure{"address", i18n.T("go.upstream.fail.address")}
 }
 
 func notCashPilot() Failure {
-	return Failure{"not-cashpilot", "That address answers, but it is not a CashPilot dashboard. Copy the address from your CashPilot's Fleet page, Add a box."}
+	return Failure{"not-cashpilot", i18n.T("go.upstream.fail.notCashPilot")}
 }
 
 func explainStatus(e *StatusError, name string) Failure {
@@ -188,20 +190,20 @@ func explainStatus(e *StatusError, name string) Failure {
 	switch {
 	case strings.Contains(body, "cashpilot desktop"):
 		// Desktop's own hub refuses another Desktop, and refuses everyone while off.
-		return Failure{"desktop", "That address is another CashPilot Desktop, not a CashPilot server. Join the CashPilot server instead."}
+		return Failure{"desktop", i18n.T("go.upstream.fail.desktop")}
 	case e.Code == http.StatusUnauthorized && (strings.Contains(body, "per-worker key") || strings.Contains(body, "enrollment was never completed")):
-		return Failure{"already-joined", "Your CashPilot already knows a computer called " + name + ". Remove " + name + " on its Fleet page, then connect again."}
+		return Failure{"already-joined", i18n.T("go.upstream.fail.alreadyJoined", "name", name)}
 	case e.Code == http.StatusUnauthorized || e.Code == http.StatusForbidden:
-		return Failure{"key-refused", "Your CashPilot refused the key. Copy it again from Fleet, Add a box, Reveal API Key."}
+		return Failure{"key-refused", i18n.T("go.upstream.fail.keyRefused")}
 	case e.Code == http.StatusServiceUnavailable && strings.Contains(body, "fleet key not configured"):
-		return Failure{"no-fleet-key", "Your CashPilot has no fleet key yet. Set CASHPILOT_API_KEY on the server, restart it, then connect again."}
+		return Failure{"no-fleet-key", i18n.T("go.upstream.fail.noFleetKey", "keyVar", "CASHPILOT_API_KEY")}
 	case (e.Code == http.StatusNotFound || e.Code == http.StatusMethodNotAllowed || e.Code == http.StatusUnprocessableEntity) && e.JSON:
 		// CashPilot answers JSON even for a route it lacks: a 404 there means a
 		// release from before workers could join, and a 422 one that does not
 		// accept this computer's report.
-		return Failure{"too-old", "Your CashPilot is too old to accept this computer. Update it, then connect again."}
+		return Failure{"too-old", i18n.T("go.upstream.fail.tooOld")}
 	case e.Code >= 500:
-		return Failure{"server-error", "Your CashPilot answered with an error (" + http.StatusText(e.Code) + "). Try again in a minute."}
+		return Failure{"server-error", i18n.T("go.upstream.fail.serverError", "status", http.StatusText(e.Code))}
 	default:
 		return notCashPilot()
 	}

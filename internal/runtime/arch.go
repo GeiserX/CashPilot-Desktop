@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/moby/moby/client"
 )
 
@@ -64,11 +65,16 @@ func ArchFamily(machine string) string {
 // ArchLabel is how a family reads to a person ("64-bit ARM"). An unknown family is
 // returned unchanged so a message never renders an empty gap.
 func ArchLabel(family string) string {
+	switch family {
+	case "arm64":
+		return i18n.T("go.runtime.arch.arm64")
+	case "arm":
+		return i18n.T("go.runtime.arch.arm")
+	case "":
+		return i18n.T("go.runtime.arch.unknown")
+	}
 	if label, ok := archLabel[family]; ok {
 		return label
-	}
-	if family == "" {
-		return "unknown"
 	}
 	return family
 }

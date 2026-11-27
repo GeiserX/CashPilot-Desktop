@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/noderead"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
@@ -187,7 +188,7 @@ func (r *Registry) collectRecord(ctx context.Context, slug string, credentials m
 	if fn, ok := collectorDispatch[slug]; ok {
 		result, err = fn(r, ctx, credentials)
 	} else {
-		err = fmt.Errorf("Collector for %s is not ported yet", slug)
+		err = errors.New(i18n.T("go.collectors.notPorted", "slug", slug))
 	}
 	if err != nil {
 		result = Result{Platform: slug, Balance: 0, Currency: "USD", Error: err.Error()}
@@ -224,7 +225,7 @@ const anyoneRewardsURL = "https://hb.anyone.tech/pb-19qeB0qlobop3QHOCiR_rQLUR7ph
 func (r *Registry) collectAnyone(ctx context.Context, credentials map[string]string) (Result, error) {
 	fingerprints := splitCSV(firstCredential(credentials, "ANYONE_FINGERPRINTS", "fingerprints"))
 	if len(fingerprints) == 0 {
-		return Result{}, fmt.Errorf("Anyone relay fingerprints are required")
+		return Result{}, errors.New(i18n.T("go.collectors.anyone.fingerprintsRequired", "provider", "Anyone"))
 	}
 	totalTokens := 0.0
 	for _, fingerprint := range fingerprints {
@@ -242,15 +243,15 @@ func (r *Registry) collectAnyone(ctx context.Context, credentials map[string]str
 		if status == http.StatusNotFound {
 			// Not "no rewards": the view answers 200 for any fingerprint. A 404
 			// means the node no longer routes this process id.
-			return Result{}, fmt.Errorf("Anyone relay-rewards process not found (404): the process id is stale or the node is down; check relayRewardsHyperbeamProcessId on dashboard.anyone.io")
+			return Result{}, errors.New(i18n.T("go.collectors.anyone.processNotFound", "site", "dashboard.anyone.io", "field", "relayRewardsHyperbeamProcessId", "provider", "Anyone"))
 		}
 		if status < 200 || status >= 300 {
-			return Result{}, fmt.Errorf("Anyone rewards view returned HTTP %d", status)
+			return Result{}, errors.New(i18n.T("go.collectors.anyone.http", "provider", "Anyone", "status", status))
 		}
 		// The view echoes the requested fingerprint; anything else is not its
 		// answer for this relay.
 		if resp.Fingerprint != fingerprint {
-			return Result{}, fmt.Errorf("Anyone rewards response for %s does not echo that fingerprint; the contract shape may have changed", fingerprint)
+			return Result{}, errors.New(i18n.T("go.collectors.anyone.noEcho", "provider", "Anyone", "fingerprint", fingerprint))
 		}
 		// The contract omits `reward` for a relay it never paid: a real zero.
 		if resp.Reward == nil || *resp.Reward == "" {
@@ -258,7 +259,7 @@ func (r *Registry) collectAnyone(ctx context.Context, credentials map[string]str
 		}
 		raw, err := strconv.ParseFloat(*resp.Reward, 64)
 		if err != nil {
-			return Result{}, fmt.Errorf("unexpected Anyone reward format %q", *resp.Reward)
+			return Result{}, errors.New(i18n.T("go.collectors.anyone.format", "provider", "Anyone", "value", strconv.Quote(*resp.Reward)))
 		}
 		totalTokens += raw / 1_000_000_000_000_000_000
 	}
@@ -272,7 +273,7 @@ func (r *Registry) collectAnyone(ctx context.Context, credentials map[string]str
 }
 
 func (r *Registry) collectBitping(ctx context.Context, credentials map[string]string) (Result, error) {
-	email, password, err := requirePair(credentials, "BITPING_EMAIL", "email", "BITPING_PASSWORD", "password", "Bitping email and password are required")
+	email, password, err := requirePair(credentials, "BITPING_EMAIL", "email", "BITPING_PASSWORD", "password", i18n.T("go.collectors.emailPasswordRequired", "provider", "Bitping"))
 	if err != nil {
 		return Result{}, err
 	}
@@ -281,7 +282,7 @@ func (r *Registry) collectBitping(ctx context.Context, credentials map[string]st
 		return Result{}, err
 	}
 	if status < 200 || status >= 300 {
-		return Result{}, fmt.Errorf("Bitping login returned HTTP %d", status)
+		return Result{}, errors.New(i18n.T("go.collectors.loginHTTP", "provider", "Bitping", "status", status))
 	}
 	token := ""
 	for _, cookie := range (&http.Response{Header: headers}).Cookies() {
@@ -296,7 +297,7 @@ func (r *Registry) collectBitping(ctx context.Context, credentials map[string]st
 		token, _ = login["token"].(string)
 	}
 	if token == "" {
-		return Result{}, fmt.Errorf("Bitping login did not return a token")
+		return Result{}, errors.New(i18n.T("go.collectors.noToken", "provider", "Bitping"))
 	}
 	var earnings struct {
 		USDEarnings float64 `json:"usdEarnings"`
@@ -310,7 +311,7 @@ func (r *Registry) collectBitping(ctx context.Context, credentials map[string]st
 func (r *Registry) collectBytelixir(ctx context.Context, credentials map[string]string) (Result, error) {
 	session := firstCredential(credentials, "BYTELIXIR_SESSION", "bytelixir_session", "session_cookie")
 	if session == "" {
-		return Result{}, fmt.Errorf("Bytelixir session cookie is required")
+		return Result{}, errors.New(i18n.T("go.collectors.sessionCookieRequired", "provider", "Bytelixir"))
 	}
 	cookies := []*http.Cookie{{Name: "bytelixir_session", Value: session}}
 	if remember := firstCredential(credentials, "BYTELIXIR_REMEMBER_WEB", "remember_web"); remember != "" {
@@ -324,7 +325,7 @@ func (r *Registry) collectBytelixir(ctx context.Context, credentials map[string]
 		return Result{}, err
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return Result{}, fmt.Errorf("Bytelixir session expired")
+		return Result{}, errors.New(i18n.T("go.collectors.sessionExpired", "provider", "Bytelixir"))
 	}
 	if status >= 200 && status < 300 {
 		if balance, ok := parseBytelixirBalance(string(body)); ok {
@@ -337,16 +338,16 @@ func (r *Registry) collectBytelixir(ctx context.Context, credentials map[string]
 		} `json:"data"`
 	}
 	if err := r.doJSONWithCookies(ctx, "GET", "https://dash.bytelixir.com/api/v1/user", nil, map[string]string{"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}, cookies, &api); err != nil {
-		return Result{}, fmt.Errorf("Could not parse Bytelixir dashboard balance: %w", err)
+		return Result{}, fmt.Errorf("%s: %w", i18n.T("go.collectors.parseBalanceFailed", "provider", "Bytelixir"), err)
 	}
 	balance, _ := strconv.ParseFloat(api.Data.Balance, 64)
-	return Result{Platform: "bytelixir", Balance: round(balance, 4), Currency: "USD", Error: "Withdrawable balance only; dashboard scrape did not expose total earned"}, nil
+	return Result{Platform: "bytelixir", Balance: round(balance, 4), Currency: "USD", Error: i18n.T("go.collectors.bytelixir.withdrawableOnly")}, nil
 }
 
 func (r *Registry) collectEarnApp(ctx context.Context, credentials map[string]string) (Result, error) {
 	oauthToken := firstCredential(credentials, "EARNAPP_OAUTH_TOKEN", "oauth_token")
 	if oauthToken == "" {
-		return Result{}, fmt.Errorf("EarnApp OAuth refresh token is required for earnings collection")
+		return Result{}, errors.New(i18n.T("go.collectors.oauthTokenRequired", "provider", "EarnApp"))
 	}
 	cookies := []*http.Cookie{
 		{Name: "auth", Value: "1"},
@@ -386,7 +387,7 @@ func (r *Registry) collectHoneygain(ctx context.Context, credentials map[string]
 	email := credentials["HONEYGAIN_EMAIL"]
 	password := credentials["HONEYGAIN_PASSWORD"]
 	if email == "" || password == "" {
-		return Result{}, fmt.Errorf("Honeygain email and password are required")
+		return Result{}, errors.New(i18n.T("go.collectors.emailPasswordRequired", "provider", "Honeygain"))
 	}
 	tokenReq := map[string]string{"email": email, "password": password}
 	var tokenResp struct {
@@ -398,7 +399,7 @@ func (r *Registry) collectHoneygain(ctx context.Context, credentials map[string]
 		return Result{}, err
 	}
 	if tokenResp.Data.AccessToken == "" {
-		return Result{}, fmt.Errorf("Honeygain login did not return an access token")
+		return Result{}, errors.New(i18n.T("go.collectors.noAccessToken", "provider", "Honeygain"))
 	}
 	var balanceResp struct {
 		Data struct {
@@ -418,11 +419,11 @@ func (r *Registry) collectEarnFM(ctx context.Context, credentials map[string]str
 	email := credentials["EARNFM_EMAIL"]
 	password := credentials["EARNFM_PASSWORD"]
 	if email == "" || password == "" {
-		return Result{}, fmt.Errorf("Earn.fm email and password are required for earnings collection")
+		return Result{}, errors.New(i18n.T("go.collectors.emailPasswordRequiredCollection", "provider", "Earn.fm"))
 	}
 	anonKey := os.Getenv("CASHPILOT_EARNFM_SUPABASE_ANON_KEY")
 	if anonKey == "" {
-		return Result{}, fmt.Errorf("CASHPILOT_EARNFM_SUPABASE_ANON_KEY must be configured to collect Earn.fm earnings")
+		return Result{}, errors.New(i18n.T("go.collectors.keyMustBeConfigured", "var", "CASHPILOT_EARNFM_SUPABASE_ANON_KEY", "provider", "Earn.fm"))
 	}
 	authReq := map[string]string{"email": email, "password": password}
 	headers := map[string]string{"apikey": anonKey}
@@ -433,7 +434,7 @@ func (r *Registry) collectEarnFM(ctx context.Context, credentials map[string]str
 		return Result{}, err
 	}
 	if authResp.AccessToken == "" {
-		return Result{}, fmt.Errorf("Earn.fm login did not return an access token")
+		return Result{}, errors.New(i18n.T("go.collectors.noAccessToken", "provider", "Earn.fm"))
 	}
 	var balanceResp struct {
 		Data struct {
@@ -449,7 +450,7 @@ func (r *Registry) collectEarnFM(ctx context.Context, credentials map[string]str
 func (r *Registry) collectGrass(ctx context.Context, credentials map[string]string) (Result, error) {
 	token := firstCredential(credentials, "GRASS_ACCESS_TOKEN", "access_token")
 	if token == "" {
-		return Result{}, fmt.Errorf("Grass access token is required")
+		return Result{}, errors.New(i18n.T("go.collectors.accessTokenRequired", "provider", "Grass"))
 	}
 	headers := grassHeaders(token)
 	var user struct {
@@ -464,10 +465,10 @@ func (r *Registry) collectGrass(ctx context.Context, credentials map[string]stri
 		return Result{}, err
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return Result{}, fmt.Errorf("Grass token expired")
+		return Result{}, errors.New(i18n.T("go.collectors.tokenExpired", "provider", "Grass"))
 	}
 	if status == http.StatusTooManyRequests {
-		return Result{}, fmt.Errorf("Grass API rate limited")
+		return Result{}, errors.New(i18n.T("go.collectors.rateLimited", "provider", "Grass"))
 	}
 	// Any other non-2xx (a 400/404/422, or the endpoint changing shape) must be an
 	// error, not a silent success: doJSONStatus leaves the out-struct zero-valued on
@@ -475,7 +476,7 @@ func (r *Registry) collectGrass(ctx context.Context, credentials map[string]stri
 	// overwrite the real balance. Every other collector routes non-2xx through
 	// doJSON, which converts it to an error; do the same here.
 	if status < 200 || status >= 300 {
-		return Result{}, fmt.Errorf("Grass returned unexpected status %d", status)
+		return Result{}, errors.New(i18n.T("go.collectors.unexpectedStatus", "provider", "Grass", "status", status))
 	}
 	if user.Result.Data.TotalPoints > 0 {
 		return Result{Platform: "grass", Balance: round(user.Result.Data.TotalPoints, 4), Currency: "GRASS"}, nil
@@ -494,12 +495,12 @@ func (r *Registry) collectGrass(ctx context.Context, credentials map[string]stri
 		return Result{}, err
 	}
 	if status == http.StatusTooManyRequests {
-		return Result{}, fmt.Errorf("Grass API rate limited")
+		return Result{}, errors.New(i18n.T("go.collectors.rateLimited", "provider", "Grass"))
 	}
 	// As with retrieveUser above: a non-2xx here leaves active zero-valued, so treat
 	// it as an error rather than booking a spurious Balance:0.
 	if status < 200 || status >= 300 {
-		return Result{}, fmt.Errorf("Grass returned unexpected status %d", status)
+		return Result{}, errors.New(i18n.T("go.collectors.unexpectedStatus", "provider", "Grass", "status", status))
 	}
 	total := 0.0
 	for _, device := range active.Result.Data {
@@ -518,7 +519,7 @@ func (r *Registry) collectIPRoyal(ctx context.Context, credentials map[string]st
 	email := firstCredential(credentials, "IPROYALPAWNS_EMAIL", "IPROYAL_EMAIL", "email")
 	password := firstCredential(credentials, "IPROYALPAWNS_PASSWORD", "IPROYAL_PASSWORD", "password")
 	if email == "" || password == "" {
-		return Result{}, fmt.Errorf("IPRoyal Pawns email and password are required")
+		return Result{}, errors.New(i18n.T("go.collectors.emailPasswordRequired", "provider", "IPRoyal Pawns"))
 	}
 	var login struct {
 		AccessToken string `json:"access_token"`
@@ -533,7 +534,7 @@ func (r *Registry) collectIPRoyal(ctx context.Context, credentials map[string]st
 		return Result{}, err
 	}
 	if login.AccessToken == "" {
-		return Result{}, fmt.Errorf("IPRoyal login did not return an access token")
+		return Result{}, errors.New(i18n.T("go.collectors.noAccessToken", "provider", "IPRoyal"))
 	}
 	var balance struct {
 		Balance float64 `json:"balance"`
@@ -545,7 +546,7 @@ func (r *Registry) collectIPRoyal(ctx context.Context, credentials map[string]st
 }
 
 func (r *Registry) collectMystNodes(ctx context.Context, credentials map[string]string) (Result, error) {
-	email, password, err := requirePair(credentials, "MYSTNODES_EMAIL", "email", "MYSTNODES_PASSWORD", "password", "MystNodes email and password are required")
+	email, password, err := requirePair(credentials, "MYSTNODES_EMAIL", "email", "MYSTNODES_PASSWORD", "password", i18n.T("go.collectors.emailPasswordRequired", "provider", "MystNodes"))
 	if err != nil {
 		return Result{}, err
 	}
@@ -556,7 +557,7 @@ func (r *Registry) collectMystNodes(ctx context.Context, credentials map[string]
 		return Result{}, err
 	}
 	if login.AccessToken == "" {
-		return Result{}, fmt.Errorf("MystNodes login did not return an access token")
+		return Result{}, errors.New(i18n.T("go.collectors.noAccessToken", "provider", "MystNodes"))
 	}
 	authHeaders := map[string]string{"Authorization": "Bearer " + login.AccessToken}
 	if r.readNodes != nil {
@@ -605,17 +606,20 @@ func (r *Registry) mystFromNodes(ctx context.Context, authHeaders map[string]str
 	if len(nodes) == 0 {
 		why := ""
 		if readErr != nil {
-			why = " (" + readErr.Error() + ")"
+			why = readErr.Error()
 		} else {
 			for _, n := range readings {
 				if n.Error != "" {
-					why = " (" + n.Error + ")"
+					why = n.Error
 					break
 				}
 			}
 		}
-		return Result{}, unreadError{fmt.Sprintf("No Mysterium node on this computer could be read%s. "+
-			"CashPilot reads the balance from the node itself, so it has to run here; MystNodes' cloud total covers the last 30 days only, so it is not used", why)}
+		message := i18n.T("go.collectors.myst.unread")
+		if why != "" {
+			message = i18n.T("go.collectors.myst.unreadWhy", "reason", why)
+		}
+		return Result{}, unreadError{message}
 	}
 	if err := r.collectMystPerNode(ctx, authHeaders, nodes); err != nil {
 		log.Printf("mysterium per-node earnings unavailable (node balances still collected): %v", err)
@@ -663,7 +667,7 @@ type mystNode struct {
 // the cloud's lifetime split, which comes back as 0, for the nodes they name.
 func (r *Registry) collectMystPerNode(ctx context.Context, authHeaders map[string]string, read []noderead.Reading) error {
 	if r.store == nil {
-		return fmt.Errorf("No store configured for per-node persistence")
+		return errors.New(i18n.T("go.collectors.noStore"))
 	}
 	var resp struct {
 		Nodes []struct {
@@ -756,18 +760,18 @@ func withNodeReadings(nodes []mystNode, read []noderead.Reading) []mystNode {
 func (r *Registry) collectPacketStream(ctx context.Context, credentials map[string]string) (Result, error) {
 	auth := firstCredential(credentials, "PACKETSTREAM_AUTH_TOKEN", "auth_token")
 	if auth == "" {
-		return Result{}, fmt.Errorf("PacketStream auth cookie is required")
+		return Result{}, errors.New(i18n.T("go.collectors.authCookieRequired", "provider", "PacketStream"))
 	}
 	body, status, _, err := r.doRaw(ctx, "GET", "https://app.packetstream.io/dashboard", nil, nil, []*http.Cookie{{Name: "auth", Value: auth}})
 	if err != nil {
 		return Result{}, err
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
-		return Result{}, fmt.Errorf("PacketStream authentication failed")
+		return Result{}, errors.New(i18n.T("go.collectors.authFailed", "provider", "PacketStream"))
 	}
 	balance, ok := parsePacketStreamBalance(string(body))
 	if !ok {
-		return Result{}, fmt.Errorf("Could not parse PacketStream balance from dashboard")
+		return Result{}, errors.New(i18n.T("go.collectors.parseBalanceFromDashboard", "provider", "PacketStream"))
 	}
 	return Result{Platform: "packetstream", Balance: round(balance, 4), Currency: "USD"}, nil
 }
@@ -775,7 +779,7 @@ func (r *Registry) collectPacketStream(ctx context.Context, credentials map[stri
 func (r *Registry) collectProxyRack(ctx context.Context, credentials map[string]string) (Result, error) {
 	apiKey := firstCredential(credentials, "API_KEY", "PROXYRACK_API_KEY", "api_key")
 	if apiKey == "" {
-		return Result{}, fmt.Errorf("ProxyRack API key is required")
+		return Result{}, errors.New(i18n.T("go.collectors.apiKeyRequired", "provider", "ProxyRack"))
 	}
 	var resp struct {
 		Data struct {
@@ -791,13 +795,13 @@ func (r *Registry) collectProxyRack(ctx context.Context, credentials map[string]
 }
 
 func (r *Registry) collectRepocket(ctx context.Context, credentials map[string]string) (Result, error) {
-	email, password, err := requirePair(credentials, "REPOCKET_EMAIL", "email", "REPOCKET_PASSWORD", "password", "Repocket email and password are required")
+	email, password, err := requirePair(credentials, "REPOCKET_EMAIL", "email", "REPOCKET_PASSWORD", "password", i18n.T("go.collectors.emailPasswordRequired", "provider", "Repocket"))
 	if err != nil {
 		return Result{}, err
 	}
 	firebaseKey := os.Getenv("CASHPILOT_REPOCKET_FIREBASE_KEY")
 	if firebaseKey == "" {
-		return Result{}, fmt.Errorf("CASHPILOT_REPOCKET_FIREBASE_KEY must be configured to collect Repocket earnings")
+		return Result{}, errors.New(i18n.T("go.collectors.keyMustBeConfigured", "var", "CASHPILOT_REPOCKET_FIREBASE_KEY", "provider", "Repocket"))
 	}
 	var login struct {
 		IDToken string `json:"idToken"`
@@ -806,7 +810,7 @@ func (r *Registry) collectRepocket(ctx context.Context, credentials map[string]s
 		return Result{}, err
 	}
 	if login.IDToken == "" {
-		return Result{}, fmt.Errorf("Repocket login did not return an ID token")
+		return Result{}, errors.New(i18n.T("go.collectors.noIDToken", "provider", "Repocket"))
 	}
 	var report struct {
 		CentsCredited float64 `json:"centsCredited"`
@@ -820,7 +824,7 @@ func (r *Registry) collectRepocket(ctx context.Context, credentials map[string]s
 func (r *Registry) collectSalad(ctx context.Context, credentials map[string]string) (Result, error) {
 	authCookie := firstCredential(credentials, "SALAD_AUTH_COOKIE", "auth_cookie")
 	if authCookie == "" {
-		return Result{}, fmt.Errorf("Salad auth cookie is required")
+		return Result{}, errors.New(i18n.T("go.collectors.authCookieRequired", "provider", "Salad"))
 	}
 	var balance struct {
 		CurrentBalance float64 `json:"currentBalance"`
@@ -856,7 +860,7 @@ func (r *Registry) collectStorj(ctx context.Context, credentials map[string]stri
 		if err := r.doJSON(ctx, "GET", apiURL+"/api/sno/estimated-payout", nil, nil, &payout); err != nil {
 			if err := r.doJSON(ctx, "GET", apiURL+"/api/sno", nil, nil, &payout); err != nil {
 				if len(urls) > 1 {
-					return Result{}, fmt.Errorf("Storagenode at %s: %w", apiURL, err)
+					return Result{}, fmt.Errorf("%s: %w", i18n.T("go.collectors.storagenodeAt", "url", apiURL), err)
 				}
 				return Result{}, err
 			}
@@ -869,7 +873,7 @@ func (r *Registry) collectStorj(ctx context.Context, credentials map[string]stri
 func (r *Registry) collectTraffmonetizer(ctx context.Context, credentials map[string]string) (Result, error) {
 	token := firstCredential(credentials, "TRAFFMONETIZER_TOKEN", "token")
 	if token == "" {
-		return Result{}, fmt.Errorf("Traffmonetizer token is required")
+		return Result{}, errors.New(i18n.T("go.collectors.tokenRequired", "provider", "Traffmonetizer"))
 	}
 	var resp struct {
 		Data struct {
@@ -890,7 +894,7 @@ func (r *Registry) collectTraffmonetizer(ctx context.Context, credentials map[st
 func (r *Registry) collectVast(ctx context.Context, credentials map[string]string) (Result, error) {
 	apiKey := firstCredential(credentials, "VAST_API_KEY", "vast_api_key", "api_key")
 	if apiKey == "" {
-		return Result{}, fmt.Errorf("Vast.ai API key is required")
+		return Result{}, errors.New(i18n.T("go.collectors.apiKeyRequired", "provider", "Vast.ai"))
 	}
 	var resp vastEarnings
 	headers := map[string]string{"Authorization": "Bearer " + apiKey, "Accept": "application/json"}
@@ -981,7 +985,7 @@ func (r *Registry) doJSON(ctx context.Context, method, url string, body any, hea
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("%s returned HTTP %d", url, status)
+		return errors.New(i18n.T("go.collectors.httpStatus", "url", url, "status", status))
 	}
 	return nil
 }
@@ -992,7 +996,7 @@ func (r *Registry) doJSONWithCookies(ctx context.Context, method, url string, bo
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("%s returned HTTP %d", url, status)
+		return errors.New(i18n.T("go.collectors.httpStatus", "url", url, "status", status))
 	}
 	return nil
 }
@@ -1086,7 +1090,7 @@ func (r *Registry) doWithRetry(ctx context.Context, method, url string, payload 
 		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 			// Rate-limited or a server-side error: retry. Capture Retry-After before
 			// draining, then drain (bounded) + close so the connection is reused.
-			lastErr = fmt.Errorf("%s returned HTTP %d", url, resp.StatusCode)
+			lastErr = errors.New(i18n.T("go.collectors.httpStatus", "url", url, "status", resp.StatusCode))
 			if after, ok := retryAfter(resp.Header); ok {
 				wait = after
 			}

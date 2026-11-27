@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
 )
@@ -91,7 +92,7 @@ func (a *App) runtimeStatus(visible []catalog.Service) runtime.Status {
 	steps := dockerSteps(a.hostCache().cached(), status)
 	status.SetupTask = dockerSetupTask(steps)
 	if goruntime.GOOS == "windows" && len(steps) == 0 && status.Available {
-		status.SetupTask = "CashPilot is checking Docker Desktop on this PC."
+		status.SetupTask = i18n.T("go.app.setup.checking")
 	}
 	return status
 }

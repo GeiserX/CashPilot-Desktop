@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/obligations"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
@@ -85,7 +86,7 @@ func (a *App) ReminderAction(slug, rule, action, occurrence string, days int) (R
 		return RemindersView{}, err
 	}
 	if joined, _ := a.remindersServer(); joined {
-		return RemindersView{}, errors.New("your CashPilot server keeps the reminders while this computer is joined to it; act on them there")
+		return RemindersView{}, errors.New(i18n.T("go.app.reminders.joined"))
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {

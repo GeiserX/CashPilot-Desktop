@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 )
@@ -93,7 +95,7 @@ func (p RemovalPlan) HasCritical() bool {
 
 // unknownCriticalHolds is what the user is told when the service has left the catalog,
 // so nothing can say whether its data matters.
-const unknownCriticalHolds = "This service is no longer in the catalog, so CashPilot cannot tell what this volume holds. It may be irreplaceable."
+func unknownCriticalHolds() string { return i18n.T("go.runtime.removal.unknownHolds") }
 
 // CriticalTargets maps the container paths a catalog entry marks unrecoverable to what
 // is lost if they are destroyed. The result is always non-nil, so a caller can tell
@@ -138,7 +140,7 @@ func planFromMounts(slug, name string, mounts []container.MountPoint, critical m
 			entry.Volume = true
 			if critical == nil {
 				entry.Critical = true
-				entry.Holds = unknownCriticalHolds
+				entry.Holds = unknownCriticalHolds()
 			} else if holds, ok := critical[target]; ok {
 				entry.Critical = true
 				entry.Holds = holds
@@ -194,5 +196,5 @@ func criticalRefusal(slug string, blocked []DataMount) error {
 	for _, v := range blocked {
 		parts = append(parts, fmt.Sprintf("%s (%s): %s", v.Source, v.Target, v.Holds))
 	}
-	return fmt.Errorf("%s keeps data that cannot be recovered, so it was not deleted: %s", slug, strings.Join(parts, "; "))
+	return errors.New(i18n.T("go.runtime.removal.critical", "slug", slug, "volumes", strings.Join(parts, "; ")))
 }
