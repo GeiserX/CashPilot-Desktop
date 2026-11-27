@@ -128,7 +128,7 @@ func Apply(upstream map[string][]byte, overlay *Overlay) (map[string][]byte, err
 	paths := sortedKeys(upstream)
 	for _, rel := range paths {
 		body := upstream[rel]
-		if strings.HasPrefix(filepath.Base(rel), "_") {
+		if underscored(rel) {
 			out[rel] = body
 			continue
 		}
@@ -409,4 +409,16 @@ func sortedKeys(m map[string][]byte) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// underscored reports whether any part of rel starts with "_": a file such as
+// _ratings.yml, or one inside a folder such as _i18n/. Those hold catalog-wide
+// data, not a service, so they are vendored as they are and never read as one.
+func underscored(rel string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if strings.HasPrefix(part, "_") {
+			return true
+		}
+	}
+	return false
 }
