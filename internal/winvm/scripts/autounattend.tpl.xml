@@ -31,7 +31,7 @@
           <WillShowUI>OnError</WillShowUI>
         </OSImage>
       </ImageInstall>
-      <UserData><AcceptEula>true</AcceptEula><FullName>CashPilot</FullName><Organization>CashPilot</Organization><ProductKey><Key>{{if .ProductKey}}{{x .ProductKey}}{{else}}00000-00000-00000-00000-00000{{end}}</Key><WillShowUI>OnError</WillShowUI></ProductKey></UserData>
+      <UserData><AcceptEula>true</AcceptEula><FullName>CashPilot</FullName><Organization>CashPilot</Organization><ProductKey>{{if .ProductKey}}<Key>{{x .ProductKey}}</Key><WillShowUI>OnError</WillShowUI>{{else}}<WillShowUI>Never</WillShowUI>{{end}}</ProductKey></UserData>
     </component>
   </settings>
   <settings pass="specialize">

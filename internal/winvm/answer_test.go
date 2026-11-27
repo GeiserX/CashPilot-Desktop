@@ -60,12 +60,13 @@ func TestAnswerFileEscapesAndChecks(t *testing.T) {
 func testPassword(n int) string { return "t" + strconv.Itoa(n) + strings.Repeat("Qz7", 6) }
 
 // TestAnswerFileNeverStopsAtTheKeyPage: a retail ISO holds several editions.
-// With the edition picked by index and no ProductKey element, Windows Setup
-// stops at its "Product key" page and waits for a person nobody shows it to
-// (live run 5). With no key, the file carries the all-zero placeholder, so
-// Setup takes the edition from the index; a real key replaces it.
+// With the edition picked by index, Windows Setup stopped at its "Product key"
+// page, both with no ProductKey element and with the all-zero key and
+// WillShowUI OnError, and waited for a person nobody shows it to (live run 5).
+// ProductKey with WillShowUI Never and no Key went straight to "Installing"
+// on the same ISO. A real key replaces it.
 func TestAnswerFileNeverStopsAtTheKeyPage(t *testing.T) {
-	const placeholder = "<ProductKey><Key>00000-00000-00000-00000-00000</Key><WillShowUI>OnError</WillShowUI></ProductKey>"
+	const placeholder = "<ProductKey><WillShowUI>Never</WillShowUI></ProductKey>"
 	b, err := testAnswer().Render()
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +81,7 @@ func TestAnswerFileNeverStopsAtTheKeyPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := string(b)
-	if !strings.Contains(x, "<Key>ABCDE-12345-FGHIJ-67890-KLMNO</Key>") || strings.Contains(x, "00000-00000") || strings.Count(x, "<ProductKey>") != 1 {
+	if !strings.Contains(x, "<ProductKey><Key>ABCDE-12345-FGHIJ-67890-KLMNO</Key><WillShowUI>OnError</WillShowUI></ProductKey>") || strings.Count(x, "<ProductKey>") != 1 {
 		t.Fatal("a given key must replace the placeholder, once")
 	}
 }

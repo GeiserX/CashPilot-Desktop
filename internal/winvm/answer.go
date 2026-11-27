@@ -28,7 +28,7 @@ var answerTpl = template.Must(template.New("autounattend").Funcs(template.FuncMa
 // AnswerFile is what goes into the guest's answer file.
 type AnswerFile struct {
 	ImageIndex     int
-	ProductKey     string // "": the all-zero placeholder, so Setup takes the edition from ImageIndex and never asks
+	ProductKey     string // "": no key and no key page, so Setup takes the edition from ImageIndex
 	ComputerName   string
 	TimeZone       string // a Windows time zone ID, "" for Setup's default
 	GuestMACDash   string // 00-15-5D-..

@@ -22,7 +22,7 @@ func TestEmbeddedScriptPins(t *testing.T) {
 		b    []byte
 		want string
 	}{
-		"autounattend.tpl.xml": {[]byte(answerTemplate), "170bba8c9437b74e9ec175706128e07dc6202ccd01f0f3d6cd36cc13fb9492b7"},
+		"autounattend.tpl.xml": {[]byte(answerTemplate), "12d904fae2fd4efc09c7be1e9cc3648803a29fbb359613467ff0e02b135e9484"},
 		"setup.ps1":            {setupPS1, "4a78fd10e3166d2901760767dfee813116bbe75203566741bd371ca18b7bf49a"},
 		"remove.ps1":           {removePS1, "86bbff0cdd377b44a88ced46de51ed18190cf927cdd3f747c57ba61764cc2570"},
 	} {
