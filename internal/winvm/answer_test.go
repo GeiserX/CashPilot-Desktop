@@ -58,3 +58,29 @@ func TestAnswerFileEscapesAndChecks(t *testing.T) {
 // testPassword is a made-up guest password for tests, built at run time from
 // its number so that no password-shaped literal sits in the source.
 func testPassword(n int) string { return "t" + strconv.Itoa(n) + strings.Repeat("Qz7", 6) }
+
+// TestAnswerFileNeverStopsAtTheKeyPage: a retail ISO holds several editions.
+// With the edition picked by index and no ProductKey element, Windows Setup
+// stops at its "Product key" page and waits for a person nobody shows it to
+// (live run 5). With no key, the file carries the all-zero placeholder, so
+// Setup takes the edition from the index; a real key replaces it.
+func TestAnswerFileNeverStopsAtTheKeyPage(t *testing.T) {
+	const placeholder = "<ProductKey><Key>00000-00000-00000-00000-00000</Key><WillShowUI>OnError</WillShowUI></ProductKey>"
+	b, err := testAnswer().Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), placeholder) {
+		t.Fatalf("with no key the answer file lacks %q", placeholder)
+	}
+	a := testAnswer()
+	a.ProductKey = "ABCDE-12345-FGHIJ-67890-KLMNO"
+	b, err = a.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := string(b)
+	if !strings.Contains(x, "<Key>ABCDE-12345-FGHIJ-67890-KLMNO</Key>") || strings.Contains(x, "00000-00000") || strings.Count(x, "<ProductKey>") != 1 {
+		t.Fatal("a given key must replace the placeholder, once")
+	}
+}
