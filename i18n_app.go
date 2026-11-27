@@ -4,6 +4,7 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
@@ -36,6 +37,11 @@ type LanguageState struct {
 	// and fills every key missing here.
 	Messages map[string]string `json:"messages"`
 }
+
+// languageMu keeps each read or save of the preference together with applying
+// it. Wails runs every bound call on its own goroutine, so two quick picks could
+// otherwise save one language and leave the other in use until a restart.
+var languageMu sync.Mutex
 
 // systemLocale is the OS's best supported locale, else the webview's.
 func systemLocale(webview []string) string {
@@ -76,6 +82,8 @@ func (a *App) GetLanguageState(webview []string) (LanguageState, error) {
 	if err := a.ready(); err != nil {
 		return LanguageState{}, err
 	}
+	languageMu.Lock()
+	defer languageMu.Unlock()
 	preference := a.cfg.Config().Language
 	system, active := a.applyLanguage(preference, webview)
 	return a.languageState(preference, system, active), nil
@@ -90,6 +98,8 @@ func (a *App) SetLanguage(code string, webview []string) (LanguageState, error) 
 	if code != "" && i18n.Match(code) != code {
 		return LanguageState{}, fmt.Errorf("%s", i18n.T("language.error.unsupported", "code", code))
 	}
+	languageMu.Lock()
+	defer languageMu.Unlock()
 	if err := a.cfg.Update(func(cfg *config.AppConfig) { cfg.Language = code }); err != nil {
 		return LanguageState{}, err
 	}
