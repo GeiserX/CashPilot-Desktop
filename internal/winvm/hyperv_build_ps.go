@@ -343,7 +343,7 @@ func blockFirewallID(n Names, owner string) string { return n.FirewallGroup + "-
 
 // firewallPrelude fingerprints the provider ID and the rule's match fields.
 // Enabled is checked separately because the proof temporarily changes it.
-const firewallIdentityPS = `function Get-FirewallIdentity($r) {
+const firewallIdentityPS = `function Get-FirewallIdentity($r, $iface = $null) {
   if (-not $r.InstanceID) { throw 'The firewall rule did not return a provider ID.' }
   $a = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $r
   $p = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $r
@@ -362,7 +362,7 @@ const firewallIdentityPS = `function Get-FirewallIdentity($r) {
     local = @($a.LocalAddress | Sort-Object); remote = @($a.RemoteAddress | Sort-Object)
     protocol = [string]$p.Protocol; localPort = @($p.LocalPort | Sort-Object); remotePort = @($p.RemotePort | Sort-Object)
     icmp = @($p.IcmpType | Sort-Object); dynamicTarget = [string]$p.DynamicTarget
-    iface = @($i.InterfaceAlias | Sort-Object); ifaceType = [string]$it.InterfaceType
+    iface = @(if ($null -ne $iface) { $iface } else { $i.InterfaceAlias | Sort-Object }); ifaceType = [string]$it.InterfaceType
     program = [string]$app.Program; package = [string]$app.Package; service = [string]$svc.Service
     auth = [string]$sec.Authentication; encryption = [string]$sec.Encryption; override = [string]$sec.OverrideBlockRules
     localUser = [string]$sec.LocalUser; remoteUser = [string]$sec.RemoteUser; remoteMachine = [string]$sec.RemoteMachine
@@ -691,7 +691,19 @@ Write-Doc @{ kept = '' }
 const scriptRemoveFirewall = firewallPrelude + `$rs = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue |
   Where-Object { $_.Name -ceq $in.id -and (Get-Owner ([string]$_.Description)) -ceq $in.owner })
 if ($rs.Count -gt 0) {
-  if ($rs.Count -ne 1 -or -not $in.identity -or (Get-FirewallIdentity $rs[0]) -cne $in.identity -or $rs[0].Enabled.ToString() -ne 'True') {
+  $identity = ''
+  if ($rs.Count -eq 1) {
+    $identity = Get-FirewallIdentity $rs[0]
+    # Removing the switch makes Windows rewrite the rule's interface to the
+    # GUID of the deleted vNIC. Only then, compare with the alias it had.
+    $ifs = @((Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rs[0]).InterfaceAlias)
+    $g = [guid]::Empty
+    if ($identity -cne $in.identity -and $in.alias -and $ifs.Count -eq 1 -and [guid]::TryParse([string]$ifs[0], [ref]$g) -and
+        @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object { [guid]$_.InterfaceGuid -eq $g }).Count -eq 0) {
+      $identity = Get-FirewallIdentity $rs[0] $in.alias
+    }
+  }
+  if ($rs.Count -ne 1 -or -not $in.identity -or $identity -cne $in.identity -or $rs[0].Enabled.ToString() -ne 'True') {
     Write-Doc @{ kept = 'the firewall rule differs from Setup' }; exit 0
   }
   Remove-NetFirewallRule -InputObject $rs[0]
@@ -1444,6 +1456,8 @@ func (b psBuilder) RemoveFirewall(ctx context.Context, p Plan) (string, error) {
 	}
 	err := b.call(ctx, scriptRemoveFirewall, map[string]string{
 		"group": p.Names.FirewallGroup, "id": blockFirewallID(p.Names, p.Owner), "owner": p.Owner, "identity": p.FirewallIdentity,
+		// Setup's rule names the host vNIC, which Hyper-V calls "vEthernet (<switch>)".
+		"alias": "vEthernet (" + p.Names.Switch + ")",
 	}, &w)
 	return w.Kept, err
 }

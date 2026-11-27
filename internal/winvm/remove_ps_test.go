@@ -305,3 +305,61 @@ function Remove-NetNat { $global:removed = $true }
 		t.Fatalf("WinNAT's own port pools kept the NAT: exit %d, %v: %s (%s)", code, err, out, doc)
 	}
 }
+
+// firewallRuleMock is Setup's rule with every filter Get-FirewallIdentity
+// reads. $alias is its interface filter, $adapters the host's adapter GUIDs.
+const firewallRuleMock = `
+param($owner, $alias, $adapters)
+function Get-NetFirewallRule {
+  [CmdletBinding()] param($Group, $Name)
+  [pscustomobject]@{ InstanceID = 'CashPilotVM-block-in-' + $owner; Name = 'CashPilotVM-block-in-' + $owner; Group = 'CashPilotVM'
+    Description = 'CashPilot Secure VM. cashpilot-owner=' + $owner; Direction = 'Inbound'; Action = 'Block'; Profile = 'Any'; Enabled = 'True'
+    EdgeTraversalPolicy = 'Block'; LooseSourceMapping = 'False'; LocalOnlyMapping = 'False' }
+}
+function Get-NetFirewallAddressFilter { [pscustomobject]@{ LocalAddress = 'Any'; RemoteAddress = 'Any' } }
+function Get-NetFirewallPortFilter { [pscustomobject]@{ Protocol = 'Any'; LocalPort = 'Any'; RemotePort = 'Any'; IcmpType = 'Any'; DynamicTarget = 'Any' } }
+function Get-NetFirewallInterfaceFilter { [pscustomobject]@{ InterfaceAlias = $alias } }
+function Get-NetFirewallApplicationFilter { [pscustomobject]@{ Program = 'Any'; Package = '' } }
+function Get-NetFirewallServiceFilter { [pscustomobject]@{ Service = 'Any' } }
+function Get-NetFirewallInterfaceTypeFilter { [pscustomobject]@{ InterfaceType = 'Any' } }
+function Get-NetFirewallSecurityFilter { [pscustomobject]@{ Authentication = 'NotRequired'; Encryption = 'NotRequired'; OverrideBlockRules = 'False'; LocalUser = 'Any'; RemoteUser = 'Any'; RemoteMachine = 'Any' } }
+function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) foreach ($g in @($adapters -split ',' | Where-Object { $_ })) { [pscustomobject]@{ InterfaceGuid = '{' + $g + '}' } } }
+$global:removed = $false
+function Remove-NetFirewallRule { [CmdletBinding()] param($InputObject) $global:removed = $true }
+`
+
+// TestRemoveFirewallScriptAcceptsTheDeletedVNIC: deleting the switch makes
+// Windows rewrite the rule's interface to the deleted vNIC's GUID, so the
+// identity recorded at Setup no longer matched and Remove left the rule (live
+// run 5). Remove accepts that rewrite only when no adapter has the GUID.
+func TestRemoveFirewallScriptAcceptsTheDeletedVNIC(t *testing.T) {
+	const alias = "vEthernet (CashPilotVM)"
+	const guid = "d06d4780-fd91-4a3a-b948-509c99ad604a"
+	code, out := runFakePowerShell(t, firewallRuleMock+"\n"+firewallPrelude+"\nWrite-Doc @{ id = (Get-FirewallIdentity (Get-NetFirewallRule)) }\n", tOwner, alias, "")
+	doc, err := decodeOutput(out)
+	var rec struct{ ID string }
+	if code != 0 || err != nil || decodeDoc(doc, &rec) != nil || rec.ID == "" {
+		t.Fatalf("recorded identity: exit %d, %v: %s", code, err, out)
+	}
+	arg := map[string]any{"group": "CashPilotVM", "id": "CashPilotVM-block-in-" + tOwner, "owner": tOwner, "identity": rec.ID, "alias": alias}
+	check := scriptRemoveFirewall + "\nif (-not $global:removed) { throw 'the rule was not removed' }\n"
+	for _, tc := range []struct{ name, iface, adapters string }{
+		{"vNIC still there", alias, guid},
+		{"vNIC deleted", guid, ""},
+	} {
+		code, out := runOwnedScriptWithFake(t, firewallRuleMock, check, arg, tOwner, tc.iface, tc.adapters)
+		doc, err := decodeOutput(out)
+		var got struct{ Kept string }
+		if code != 0 || err != nil || decodeDoc(doc, &got) != nil || got.Kept != "" {
+			t.Fatalf("%s: Remove left Setup's rule: exit %d, %v: %s (%s)", tc.name, code, err, out, doc)
+		}
+	}
+	for _, tc := range []struct{ name, iface, adapters string }{
+		{"rule moved to a live adapter", guid, guid},
+		{"rule moved to another alias", "Ethernet", ""},
+	} {
+		code, out := runOwnedScriptWithFake(t, firewallRuleMock, scriptRemoveFirewall, arg, tOwner, tc.iface, tc.adapters)
+		requireRemoveKept(t, code, out, "the firewall rule differs from Setup")
+		_ = tc.name
+	}
+}
