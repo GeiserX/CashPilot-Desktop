@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "середовище виконання",
   "main.scope.serverCommands": "Команди сервера",
   "main.scope.settings": "налаштування",
-  "main.scope.worker": "воркер"
+  "main.scope.worker": "воркер",
+  "logs.wrap": "Переносити рядки",
+  "logs.empty": "(журналів немає)"
 }

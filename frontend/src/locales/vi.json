@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "môi trường chạy",
   "main.scope.serverCommands": "lệnh từ máy chủ",
   "main.scope.settings": "cài đặt",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "Ngắt dòng",
+  "logs.empty": "(không có nhật ký)"
 }

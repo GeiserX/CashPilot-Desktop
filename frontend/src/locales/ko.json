@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "런타임",
   "main.scope.serverCommands": "서버 명령",
   "main.scope.settings": "설정",
-  "main.scope.worker": "워커"
+  "main.scope.worker": "워커",
+  "logs.wrap": "줄 바꿈",
+  "logs.empty": "(로그 없음)"
 }

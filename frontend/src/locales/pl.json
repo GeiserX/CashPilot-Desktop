@@ -2131,5 +2131,7 @@
   "main.scope.runtime": "środowisko",
   "main.scope.serverCommands": "Polecenia serwera",
   "main.scope.settings": "ustawienia",
-  "main.scope.worker": "worker"
+  "main.scope.worker": "worker",
+  "logs.wrap": "Zawijaj wiersze",
+  "logs.empty": "(brak logów)"
 }
