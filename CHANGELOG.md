@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Settings has a Language picker, and Desktop starts in your computer's language when it ships it.** Desktop reads the OS language list first: the display languages on Windows, then the user locale; AppleLanguages on macOS, which a per-app choice or `-AppleLanguages '(es)'` overrides; LANGUAGE, LC_ALL, LC_MESSAGES and LANG on Linux. The webview's languages come after. The first language we ship wins, matched by language and then region: es-MX gets Spanish, pt-PT gets Brazilian Portuguese, zh-TW gets Simplified Chinese. A choice in Settings is saved in `config.json` as `language` and applies at once, without a restart. The picker shows each language in its own name. The frontend and Go read the same file per locale, `frontend/src/locales/<code>.json`, with ICU plurals. A missing translation shows English. A translation of English that has changed since shows English too, by the source hash in `i18n/source-hashes/`. Arabic draws right to left, and amounts and times follow the language. This release adds the machinery and the picker; the screens move to the locale files next.
 
+### Fixed
+
+- **Logs show one entry per line.** Docker starts every line with a time in nanoseconds, so nearly every entry wrapped onto two or three lines. The time now shows in local time and in a dimmer colour: `HH:MM:SS` when every line is from today, else with the date. The full value is in its tooltip. A long line scrolls sideways, and every other entry has a faint band. **Wrap lines** wraps long lines instead, and the app remembers the choice. The web dashboard shows logs the same way (CashPilot #890).
+
 ## [2.0.0] - 2026-11-27
 
 ### Changed

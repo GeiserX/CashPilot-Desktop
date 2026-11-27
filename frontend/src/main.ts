@@ -148,6 +148,7 @@ import { renderFleetConnect } from "./render/fleet_reach";
 import { renderFenceStatusLine } from "./render/fence_status";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
+import { renderLogLines } from "./render/logs";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
 import type { CustomEnv, LanguageState, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
 import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, NotificationItem, PointsBalance, PreflightReport, RouteState, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WorkerTarget } from "./wails";
@@ -910,7 +911,7 @@ function renderDashboard(current: AppState) {
 
         ${current.fleet ? renderFleetSection(current.fleet) : ""}
 
-        <pre id="service-output" class="output dashboard-output"></pre>
+        <div id="service-output" class="output dashboard-output"></div>
         </main>
         ${pageFoot()}
       </div>
@@ -3479,7 +3480,7 @@ async function runServiceAction(slug: string, action: string) {
       return;
     }
     if (action === "logs") {
-      setOutput(await GetLogs(slug, 200));
+      setLogs(await GetLogs(slug, 200));
       return;
     }
     if (action === "stop") {
@@ -3577,7 +3578,7 @@ async function runEnableIsolation() {
 async function runCopyAction(slug: string, n: number, action: string) {
   try {
     if (action === "logs") {
-      setOutput(await GetCopyLogs(slug, n, 200));
+      setLogs(await GetCopyLogs(slug, n, 200));
       return;
     }
     if (action === "stop") await StopServiceCopy(slug, n);
@@ -3598,8 +3599,30 @@ async function refreshState() {
 }
 
 function setOutput(value: string) {
-  const out = document.querySelector<HTMLPreElement>("#service-output");
-  if (out) out.textContent = value;
+  const out = document.querySelector<HTMLElement>("#service-output");
+  if (!out) return;
+  out.classList.remove("output-logs", "log-wrap");
+  out.textContent = value;
+}
+
+const logWrapKey = "cashpilot-log-wrap";
+
+// A log goes into the same box as action messages, one entry per line.
+function setLogs(value: string) {
+  const out = document.querySelector<HTMLElement>("#service-output");
+  if (!out) return;
+  const wrap = localStorage.getItem(logWrapKey) === "1";
+  out.innerHTML = renderLogLines(value || "(no logs)", new Date(), wrap);
+  out.classList.add("output-logs");
+  out.classList.toggle("log-wrap", wrap);
+  out.querySelector<HTMLButtonElement>("[data-log-wrap]")?.addEventListener("click", (event) => {
+    const on = !out.classList.contains("log-wrap");
+    localStorage.setItem(logWrapKey, on ? "1" : "0");
+    out.classList.toggle("log-wrap", on);
+    (event.currentTarget as HTMLButtonElement).setAttribute("aria-pressed", String(on));
+    out.scrollTop = out.scrollHeight;
+  });
+  out.scrollTop = out.scrollHeight;
 }
 
 // showToast renders a non-intrusive, auto-dismissing toast into the bottom-right stack.

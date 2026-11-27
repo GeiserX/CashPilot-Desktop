@@ -406,6 +406,27 @@ section { margin-bottom: 28px; }
   white-space: pre-wrap;
 }
 .output:empty { display: none; }
+/* The dashboard's box is a div, so a log's rows can be blocks; it keeps the pre's font. */
+.dashboard-output { font-family: var(--font-mono); font-size: max(12px, 0.92em); }
+/* A log: one entry per line, long lines scroll sideways, and every other entry
+   gets a faint band so the eye can follow a line across. */
+.output-logs { max-height: 60vh; padding: 0 0 8px; white-space: normal; }
+.log-bar { position: sticky; top: 0; left: 0; z-index: 1; display: flex; justify-content: flex-end; padding: 6px; background: var(--bg-log); }
+.log-bar button { font-family: var(--font-ui); }
+.log-bar [aria-pressed="true"] { background: var(--bg-hover); border-color: var(--border-strong); }
+.log-lines { width: max-content; min-width: 100%; }
+.log-line { white-space: pre; padding: 0 6px; line-height: 1.6; }
+.log-line:nth-child(even) { background: color-mix(in srgb, var(--text-log) 6%, transparent); }
+.log-ts { display: inline-block; min-width: var(--log-ts); margin-right: 1.5ch; color: var(--text-muted); }
+/* Wrapped: a long entry continues under its message, not under its time. */
+.log-wrap .log-lines { width: auto; }
+.log-wrap .log-line {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-left: calc(var(--log-ts) + 1.5ch + 6px);
+  text-indent: calc(-1 * (var(--log-ts) + 1.5ch));
+}
+.log-wrap .log-ts { text-indent: 0; }
 
 /* ----- Figures strip -----
    One row of figures between hairlines. The balance leads at the largest size
