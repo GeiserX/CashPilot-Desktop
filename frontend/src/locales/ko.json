@@ -525,7 +525,7 @@
   "restore.discard": "불완전한 복원 삭제",
   "restore.stuck": "완료되지 않은 복원:",
   "restore.title": "백업에서 복원",
-  "restore.help": "암호 문구로 만든 <code>{ext}</code> 파일에서 노드 신원이나 지갑을 되돌립니다: Mysterium, ProxyBase 또는 Anyone. 복원은 이 머신에 새 컨테이너만 만들며, 여기 있는 서비스를 덮어쓰지 않습니다. 기존 서비스를 교체하려면 먼저 백업을 다운로드한 다음 서비스를 제거하고 데이터 삭제에 동의하십시오. 키로 암호화한 파일, Storj, Sia는 백업 가이드의 명령줄 단계를 사용하십시오: {guide}",
+  "restore.help": "암호 문구로 만든 <code>{ext}</code> 파일에서 노드 신원이나 지갑을 되돌립니다 (Mysterium, ProxyBase 또는 Anyone). 복원은 이 머신에 새 컨테이너만 만들며, 여기 있는 서비스를 덮어쓰지 않습니다. 기존 서비스를 교체하려면 먼저 백업을 다운로드한 다음 서비스를 제거하고 데이터 삭제에 동의하십시오. 키로 암호화한 파일, Storj, Sia는 백업 가이드의 명령줄 단계를 사용하십시오: {guide}",
   "restore.choose": "백업 파일 선택",
   "restore.volumeAt": "<code>{target}</code>의 볼륨 <code>{volume}</code>",
   "restore.typeIt": "계속하려면 <strong>{service}</strong>을(를) 입력하십시오:",

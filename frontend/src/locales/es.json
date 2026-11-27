@@ -525,7 +525,7 @@
   "restore.discard": "Borrar la restauración parcial",
   "restore.stuck": "Una restauración no terminó:",
   "restore.title": "Restaurar desde una copia de seguridad",
-  "restore.help": "Recupera una identidad de nodo o una billetera desde un archivo <code>{ext}</code> creado con una frase de contraseña: Mysterium, ProxyBase o Anyone. La restauración solo crea un contenedor nuevo en este equipo y nunca sobrescribe un servicio que ya esté aquí. Para sustituir uno, descarga antes su copia de seguridad, después quítalo y acepta borrar sus datos. Los archivos sellados con una clave, Storj y Sia siguen los pasos de línea de comandos de la guía de copias de seguridad: {guide}",
+  "restore.help": "Recupera una identidad de nodo o una billetera desde un archivo <code>{ext}</code> creado con una frase de contraseña (Mysterium, ProxyBase o Anyone). La restauración solo crea un contenedor nuevo en este equipo y nunca sobrescribe un servicio que ya esté aquí. Para sustituir uno, descarga antes su copia de seguridad, después quítalo y acepta borrar sus datos. Los archivos sellados con una clave, Storj y Sia siguen los pasos de línea de comandos de la guía de copias de seguridad: {guide}",
   "restore.choose": "Elegir un archivo de copia de seguridad",
   "restore.volumeAt": "volumen <code>{volume}</code> en <code>{target}</code>",
   "restore.typeIt": "Para continuar, escribe <strong>{service}</strong>:",

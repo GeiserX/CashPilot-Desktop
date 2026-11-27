@@ -525,7 +525,7 @@
   "restore.discard": "Yarım kalan geri yüklemeyi sil",
   "restore.stuck": "Bir geri yükleme tamamlanmadı:",
   "restore.title": "Yedekten geri yükle",
-  "restore.help": "Bir düğüm kimliğini veya cüzdanı parola ifadesiyle oluşturulmuş bir <code>{ext}</code> dosyasından geri getirin: Mysterium, ProxyBase veya Anyone. Geri yükleme yalnızca bu makinede yeni bir konteyner oluşturur ve burada bulunan bir hizmetin üzerine asla yazmaz. Birini değiştirmek için önce yedeğini indirin, ardından kaldırın ve verilerini silmeyi onaylayın. Bir anahtara mühürlenmiş dosyalar, Storj ve Sia için yedekleme rehberindeki komut satırı adımlarını kullanın: {guide}",
+  "restore.help": "Bir düğüm kimliğini veya cüzdanı parola ifadesiyle oluşturulmuş bir <code>{ext}</code> dosyasından geri getirin (Mysterium, ProxyBase veya Anyone). Geri yükleme yalnızca bu makinede yeni bir konteyner oluşturur ve burada bulunan bir hizmetin üzerine asla yazmaz. Birini değiştirmek için önce yedeğini indirin, ardından kaldırın ve verilerini silmeyi onaylayın. Bir anahtara mühürlenmiş dosyalar, Storj ve Sia için yedekleme rehberindeki komut satırı adımlarını kullanın: {guide}",
   "restore.choose": "Bir yedek dosyası seçin",
   "restore.volumeAt": "<code>{target}</code> konumundaki <code>{volume}</code> birimi",
   "restore.typeIt": "Devam etmek için <strong>{service}</strong> yazın:",
