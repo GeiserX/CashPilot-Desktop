@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/moby/moby/api/types/container"
 )
 
 // The uninstaller removes the containers CashPilot Desktop made and leaves every
@@ -79,6 +81,23 @@ func TestIsDesktopContainer(t *testing.T) {
 	} {
 		if got := IsDesktopContainer(tc.labels); got != tc.want {
 			t.Errorf("IsDesktopContainer(%v) = %v, want %v", tc.labels, got, tc.want)
+		}
+	}
+}
+
+// The refusal names who made the container, from its cashpilot.deployed-by
+// label, and a container with no such label is still another CashPilot's.
+func TestOtherMakerNamesWhoMadeIt(t *testing.T) {
+	for _, tc := range []struct{ by, who string }{
+		{"compose", "CashPilot compose file"},
+		{"worker", "CashPilot worker"},
+		{"", "another CashPilot program"},
+		{"something-new", "another CashPilot program"},
+	} {
+		c := container.InspectResponse{Config: &container.Config{Labels: map[string]string{LabelManaged: "true", labelDeployedBy: tc.by}}}
+		who, manage, clear := otherMaker("cashpilot-honeygain", c)
+		if !strings.Contains(who, tc.who) || !strings.HasPrefix(who, "cashpilot-honeygain ") || manage == "" || clear == "" {
+			t.Errorf("deployed-by %q: otherMaker = %q, %q, %q; want it to name %q", tc.by, who, manage, clear, tc.who)
 		}
 	}
 }

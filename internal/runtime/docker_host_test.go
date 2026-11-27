@@ -12,9 +12,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/dockerhost"
 	"github.com/moby/moby/client"
@@ -238,5 +240,40 @@ func TestATCPContextHonoursSkipTLSVerify(t *testing.T) {
 	}
 	if err := pingDefaultClient(t); err != nil {
 		t.Fatalf("the client did not reach the context's TLS engine: %v", err)
+	}
+}
+
+// Every call that opens a client refuses an ssh context too: reading a
+// container's logs must not fall back to a local engine either.
+func TestLogsMatchingRefusesAnSSHContext(t *testing.T) {
+	home := dockerHostEnv(t)
+	writeContext(t, home, "nas", "ssh://me@nas", true)
+	var ssh *SSHContextError
+	if _, err := NewDockerProvider().LogsMatching(context.Background(), "honeygain", time.Hour, regexp.MustCompile("."), 10); !errors.As(err, &ssh) {
+		t.Fatalf("LogsMatching = %v, want the ssh context refused", err)
+	}
+}
+
+// A tcp context whose ca.pem holds no certificate fails the client with words
+// that name the context, instead of a client that skips the check.
+func TestATCPContextWithABrokenCAFailsTheClient(t *testing.T) {
+	home := dockerHostEnv(t)
+	dir := writeContextTLS(t, home, "box", "tcp://10.0.0.5:2376", false, true)
+	if err := os.WriteFile(filepath.Join(dir, "ca.pem"), []byte("not a certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dockerClient(); err == nil || !strings.Contains(err.Error(), "TLS files of the Docker context box") {
+		t.Fatalf("dockerClient = %v, want the broken TLS files named", err)
+	}
+}
+
+// With no docker on the PATH, as for an app started from the Finder, the status
+// names the context the client resolved itself.
+func TestDockerContextWithoutTheCLI(t *testing.T) {
+	home := dockerHostEnv(t)
+	writeContext(t, home, "colima", "unix:///nowhere/docker.sock", true)
+	t.Setenv("PATH", t.TempDir())
+	if got := dockerContext(); got != "colima" {
+		t.Fatalf("dockerContext = %q, want colima from the context store", got)
 	}
 }

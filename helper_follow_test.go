@@ -187,3 +187,10 @@ func TestLogHelperReplace(t *testing.T) {
 	logHelperReplace(false, errors.New("boom"))
 	logHelperReplace(false, nil)
 }
+
+// The real processStart says false for a PID no process has.
+func TestProcessStartOfAProcessThatIsGone(t *testing.T) {
+	if started, ok := processStart(2147483646); ok {
+		t.Fatalf("processStart = %d, true for a PID no process has", started)
+	}
+}
