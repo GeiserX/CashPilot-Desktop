@@ -567,12 +567,8 @@ func TestPktmonStopDeletesTheCaptureWindowsRewrote(t *testing.T) {
 			if err := json.Unmarshal(arg, &in); err != nil {
 				return nil, err
 			}
-			// Keep the old file open so the new one cannot reuse its ID.
-			old, err := os.Open(in["etl"])
-			if err != nil {
-				return nil, err
-			}
-			defer old.Close()
+			// The old file lives on under another name, so the new one
+			// cannot reuse its ID.
 			if err := os.Rename(in["etl"], in["etl"]+".old"); err != nil {
 				return nil, err
 			}
