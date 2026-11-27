@@ -9,6 +9,7 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/activity"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -252,7 +253,7 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 			return ActivityView{}, saveErr
 		}
 		if delErr != nil {
-			return ActivityView{}, errors.New("Activity is off, but its remote addresses could not be deleted yet: " + delErr.Error())
+			return ActivityView{}, errors.New(i18n.T("go.app.activity.deleteFailed", "error", delErr.Error()))
 		}
 	}
 	if a.activity.deltas != nil && on != was {
@@ -272,7 +273,7 @@ func (a *App) SetActivityEnabled(on bool) (ActivityView, error) {
 func (a *App) deleteActivityRows(all bool) error {
 	busy, err := a.store.DeleteActivity(all)
 	if err == nil && busy {
-		a.emitNotice("activity", activityBusyNotice)
+		a.emitNotice("activity", activityBusyNotice())
 	}
 	return err
 }
@@ -314,7 +315,7 @@ func (a *App) activityNotifications() []Notification {
 	}
 	var out []Notification
 	for _, al := range alerts {
-		out = append(out, Notification{Level: "warning", Title: "Activity", Message: al.Message})
+		out = append(out, Notification{Level: "warning", Title: i18n.T("go.app.notify.activity.title"), Message: al.Message})
 	}
 	return out
 }

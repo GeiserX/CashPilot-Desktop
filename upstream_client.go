@@ -14,6 +14,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 	stdruntime "runtime"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
@@ -312,7 +313,7 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 		return false
 	}
 	if err != nil {
-		a.recordPairing(serverURL, upstream.Failure{Code: "keychain", Message: "CashPilot cannot read the saved key. Unlock the keychain or join again."})
+		a.recordPairing(serverURL, upstream.Failure{Code: "keychain", Message: i18n.T("go.app.pairing.keychain")})
 		return false
 	}
 	if pairing.Revision == "" {
@@ -324,7 +325,7 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	}
 	token := upstream.AuthToken(credential.Worker, enrolKey)
 	if err != nil || token == "" {
-		a.recordPairing(serverURL, upstream.Failure{Code: "no-key", Message: "No key is available for your CashPilot. Enter the enrolment key in Settings or join again."})
+		a.recordPairing(serverURL, upstream.Failure{Code: "no-key", Message: i18n.T("go.app.pairing.noKey")})
 		return false
 	}
 
@@ -415,7 +416,7 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	return again
 }
 
-const refusedPairingMessage = "Your CashPilot refused this computer's key. In Settings, switch to Run everything here and join again."
+func refusedPairingMessage() string { return i18n.T("go.app.pairing.refused") }
 
 // A response can only suspend the revision that sent the request.
 func (a *App) suspendRefusedPairing(revision, serverURL string, err error) bool {
@@ -435,7 +436,7 @@ func (a *App) suspendRefusedPairing(revision, serverURL string, err error) bool 
 		a.syncWorkerAPI()
 		return true
 	}
-	a.recordPairing(serverURL, upstream.Failure{Code: "unauthorized", Message: refusedPairingMessage})
+	a.recordPairing(serverURL, upstream.Failure{Code: "unauthorized", Message: refusedPairingMessage()})
 	return true
 }
 

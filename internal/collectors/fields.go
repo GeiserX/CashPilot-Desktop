@@ -1,6 +1,10 @@
 package collectors
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
+)
 
 // Field is one credential input the earnings collector needs and the deploy form
 // does not already ask for.
@@ -27,68 +31,72 @@ type Field struct {
 	Required    bool   `json:"required,omitempty"`
 }
 
-var collectorFields = map[string][]Field{
-	"2miners-etc": {
-		{Key: twoMinersETCAddressKey, Label: "ETC payout address", Required: true},
-	},
-	"anyone-protocol": {
-		{Key: "ANYONE_FINGERPRINTS", Label: "Relay fingerprints", Description: "Comma-separated relay fingerprints", Required: true},
-	},
-	"bitping": {
-		{Key: "BITPING_EMAIL", Label: "Bitping email", Description: "Email used for app.bitping.com", Required: true},
-		{Key: "BITPING_PASSWORD", Label: "Bitping password", Description: "Password used for app.bitping.com", Secret: true, Required: true},
-	},
-	"bytelixir": {
-		{Key: "BYTELIXIR_SESSION", Label: "Bytelixir session", Description: "bytelixir_session browser cookie", Secret: true, Required: true},
-		{Key: "BYTELIXIR_REMEMBER_WEB", Label: "Remember cookie", Description: "Optional remember_web cookie", Secret: true},
-		{Key: "BYTELIXIR_XSRF_TOKEN", Label: "XSRF token", Description: "Optional XSRF-TOKEN cookie", Secret: true},
-	},
-	"earnapp": {
-		{Key: "EARNAPP_OAUTH_TOKEN", Label: "OAuth refresh token", Description: "oauth-refresh-token browser cookie", Secret: true, Required: true},
-		{Key: "EARNAPP_BRD_SESS_ID", Label: "Bright Data session", Description: "Optional brd_sess_id cookie", Secret: true},
-	},
-	"earnfm": {
-		{Key: "EARNFM_EMAIL", Label: "Earn.fm email", Description: "Email used for app.earn.fm", Required: true},
-		{Key: "EARNFM_PASSWORD", Label: "Earn.fm password", Description: "Password used for app.earn.fm", Secret: true, Required: true},
-	},
-	"grass": {
-		{Key: "GRASS_ACCESS_TOKEN", Label: "Grass access token", Description: "accessToken from app.grass.io local storage", Secret: true, Required: true},
-	},
-	"herominers-kas": {
-		{Key: heroMinersKaspaAddressKey, Label: "Kaspa payout address", Required: true},
-	},
-	"mysterium": {
-		{Key: "MYSTNODES_EMAIL", Label: "MystNodes email", Description: "Email used for my.mystnodes.com", Required: true},
-		{Key: "MYSTNODES_PASSWORD", Label: "MystNodes password", Description: "Password used for my.mystnodes.com", Secret: true, Required: true},
-	},
-	"ocean": {
-		{Key: oceanAddressKey, Label: "BTC payout address", Required: true},
-	},
-	"packetstream": {
-		{Key: "PACKETSTREAM_AUTH_TOKEN", Label: "PacketStream auth cookie", Description: "auth cookie from app.packetstream.io", Secret: true, Required: true},
-	},
-	// The container reads RP_EMAIL and RP_API_KEY (the key shown on the Repocket
-	// bandwidth-earnings page). The collector signs in to Firebase with the ACCOUNT
-	// password instead, which the API key cannot replace, so it has to be asked for.
-	"repocket": {
-		{Key: "REPOCKET_EMAIL", Label: "Repocket account email", Description: "Email used for app.repocket.com (usually the same as the container's email)", Required: true},
-		{Key: "REPOCKET_PASSWORD", Label: "Repocket account password", Description: "Account password for app.repocket.com — NOT the API key the container uses", Secret: true, Required: true},
-	},
-	"salad": {
-		{Key: "SALAD_AUTH_COOKIE", Label: "Salad auth cookie", Description: "auth cookie from salad.com", Secret: true, Required: true},
-	},
-	"storj": {
-		{Key: "STORJ_API_URL", Label: "Storj API URL", Description: "Local node dashboard URL, default http://localhost:14002"},
-	},
-	"supportxmr": {
-		{Key: supportXMRAddressKey, Label: "Monero payout address", Required: true},
-	},
+// collectorFields is the table, built when read so its labels are in the current
+// language.
+func collectorFields() map[string][]Field {
+	return map[string][]Field{
+		"2miners-etc": {
+			{Key: twoMinersETCAddressKey, Label: i18n.T("go.collectors.field.payoutAddress", "coin", "ETC"), Required: true},
+		},
+		"anyone-protocol": {
+			{Key: "ANYONE_FINGERPRINTS", Label: i18n.T("go.collectors.field.fingerprints.label"), Description: i18n.T("go.collectors.field.fingerprints.description"), Required: true},
+		},
+		"bitping": {
+			{Key: "BITPING_EMAIL", Label: i18n.T("go.collectors.field.email", "name", "Bitping"), Description: i18n.T("go.collectors.field.emailFor", "site", "app.bitping.com"), Required: true},
+			{Key: "BITPING_PASSWORD", Label: i18n.T("go.collectors.field.password", "name", "Bitping"), Description: i18n.T("go.collectors.field.passwordFor", "site", "app.bitping.com"), Secret: true, Required: true},
+		},
+		"bytelixir": {
+			{Key: "BYTELIXIR_SESSION", Label: i18n.T("go.collectors.field.session", "name", "Bytelixir"), Description: i18n.T("go.collectors.field.browserCookie", "cookie", "bytelixir_session"), Secret: true, Required: true},
+			{Key: "BYTELIXIR_REMEMBER_WEB", Label: i18n.T("go.collectors.field.rememberCookie"), Description: i18n.T("go.collectors.field.optionalCookie", "cookie", "remember_web"), Secret: true},
+			{Key: "BYTELIXIR_XSRF_TOKEN", Label: i18n.T("go.collectors.field.xsrfToken", "name", "XSRF"), Description: i18n.T("go.collectors.field.optionalCookie", "cookie", "XSRF-TOKEN"), Secret: true},
+		},
+		"earnapp": {
+			{Key: "EARNAPP_OAUTH_TOKEN", Label: i18n.T("go.collectors.field.oauthToken"), Description: i18n.T("go.collectors.field.browserCookie", "cookie", "oauth-refresh-token"), Secret: true, Required: true},
+			{Key: "EARNAPP_BRD_SESS_ID", Label: i18n.T("go.collectors.field.session", "name", "Bright Data"), Description: i18n.T("go.collectors.field.optionalCookie", "cookie", "brd_sess_id"), Secret: true},
+		},
+		"earnfm": {
+			{Key: "EARNFM_EMAIL", Label: i18n.T("go.collectors.field.email", "name", "Earn.fm"), Description: i18n.T("go.collectors.field.emailFor", "site", "app.earn.fm"), Required: true},
+			{Key: "EARNFM_PASSWORD", Label: i18n.T("go.collectors.field.password", "name", "Earn.fm"), Description: i18n.T("go.collectors.field.passwordFor", "site", "app.earn.fm"), Secret: true, Required: true},
+		},
+		"grass": {
+			{Key: "GRASS_ACCESS_TOKEN", Label: i18n.T("go.collectors.field.accessToken", "name", "Grass"), Description: i18n.T("go.collectors.field.localStorage", "key", "accessToken", "site", "app.grass.io"), Secret: true, Required: true},
+		},
+		"herominers-kas": {
+			{Key: heroMinersKaspaAddressKey, Label: i18n.T("go.collectors.field.payoutAddress", "coin", "Kaspa"), Required: true},
+		},
+		"mysterium": {
+			{Key: "MYSTNODES_EMAIL", Label: i18n.T("go.collectors.field.email", "name", "MystNodes"), Description: i18n.T("go.collectors.field.emailFor", "site", "my.mystnodes.com"), Required: true},
+			{Key: "MYSTNODES_PASSWORD", Label: i18n.T("go.collectors.field.password", "name", "MystNodes"), Description: i18n.T("go.collectors.field.passwordFor", "site", "my.mystnodes.com"), Secret: true, Required: true},
+		},
+		"ocean": {
+			{Key: oceanAddressKey, Label: i18n.T("go.collectors.field.payoutAddress", "coin", "BTC"), Required: true},
+		},
+		"packetstream": {
+			{Key: "PACKETSTREAM_AUTH_TOKEN", Label: i18n.T("go.collectors.field.authCookie", "name", "PacketStream"), Description: i18n.T("go.collectors.field.authCookieFrom", "site", "app.packetstream.io"), Secret: true, Required: true},
+		},
+		// The container reads RP_EMAIL and RP_API_KEY (the key shown on the Repocket
+		// bandwidth-earnings page). The collector signs in to Firebase with the ACCOUNT
+		// password instead, which the API key cannot replace, so it has to be asked for.
+		"repocket": {
+			{Key: "REPOCKET_EMAIL", Label: i18n.T("go.collectors.field.accountEmail", "name", "Repocket"), Description: i18n.T("go.collectors.field.repocketEmail.description", "site", "app.repocket.com"), Required: true},
+			{Key: "REPOCKET_PASSWORD", Label: i18n.T("go.collectors.field.accountPassword", "name", "Repocket"), Description: i18n.T("go.collectors.field.repocketPassword.description", "site", "app.repocket.com"), Secret: true, Required: true},
+		},
+		"salad": {
+			{Key: "SALAD_AUTH_COOKIE", Label: i18n.T("go.collectors.field.authCookie", "name", "Salad"), Description: i18n.T("go.collectors.field.authCookieFrom", "site", "salad.com"), Secret: true, Required: true},
+		},
+		"storj": {
+			{Key: "STORJ_API_URL", Label: i18n.T("go.collectors.field.apiURL", "name", "Storj"), Description: i18n.T("go.collectors.field.storjURL.description", "url", "http://localhost:14002")},
+		},
+		"supportxmr": {
+			{Key: supportXMRAddressKey, Label: i18n.T("go.collectors.field.payoutAddress", "coin", "Monero"), Required: true},
+		},
+	}
 }
 
 // Fields returns the collector-only credential inputs for slug, or nil when the
 // service's collector needs nothing beyond the container's own environment.
 func Fields(slug string) []Field {
-	declared := collectorFields[slug]
+	declared := collectorFields()[slug]
 	if len(declared) == 0 {
 		return nil
 	}
@@ -99,17 +107,19 @@ func Fields(slug string) []Field {
 
 // AllFields returns a copy of the whole table, keyed by slug, for the frontend.
 func AllFields() map[string][]Field {
-	out := make(map[string][]Field, len(collectorFields))
-	for slug := range collectorFields {
-		out[slug] = Fields(slug)
+	table := collectorFields()
+	out := make(map[string][]Field, len(table))
+	for slug, declared := range table {
+		out[slug] = append([]Field(nil), declared...)
 	}
 	return out
 }
 
 // FieldSlugs lists the slugs that declare collector-only fields, sorted.
 func FieldSlugs() []string {
-	out := make([]string, 0, len(collectorFields))
-	for slug := range collectorFields {
+	table := collectorFields()
+	out := make([]string, 0, len(table))
+	for slug := range table {
 		out = append(out, slug)
 	}
 	sort.Strings(out)

@@ -36,6 +36,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // State is a producer verdict. "Earning" is not among them, and that is the point: no
@@ -211,7 +212,7 @@ func meansOrDefault(means string) string {
 	if m := strings.TrimSpace(collapseSpace(means)); m != "" {
 		return m
 	}
-	return "Its logs match a known problem for this service."
+	return i18n.T("go.health.matchedDefault")
 }
 
 // collapseSpace folds the newlines and runs of spaces that YAML folded scalars leave
@@ -240,9 +241,9 @@ func Assess(in Input) Report {
 	switch {
 	case in.ContainerState == "":
 		return report(in.Slug, StateNotChecked,
-			"We could not tell whether this service is running, so nothing here is judged.")
+			i18n.T("go.health.stateUnknown"))
 	case in.ContainerState != containerRunning && in.ContainerState != containerRestarting:
-		return report(in.Slug, StateNotChecked, "It is not running, so there is nothing to judge.")
+		return report(in.Slug, StateNotChecked, i18n.T("go.health.notRunning"))
 	}
 
 	state := StateNotChecked
@@ -257,16 +258,16 @@ func Assess(in Input) Report {
 	// A container the runtime is restarting right now is starting up far more than it
 	// is working, whatever its logs say.
 	if in.ContainerState == containerRestarting {
-		add(StateFailing, "It keeps restarting, so it never runs long enough to earn.")
+		add(StateFailing, i18n.T("go.health.restarting"))
 	}
 
 	switch {
 	case in.Native:
-		add(StateNotChecked, "This service runs directly on your computer rather than in a container, and these checks only work on a container.")
+		add(StateNotChecked, i18n.T("go.health.native"))
 	case len(in.Signals) == 0:
-		add(StateNotChecked, "CashPilot cannot yet tell from this service's own messages whether it is earning.")
+		add(StateNotChecked, i18n.T("go.health.noSignals"))
 	case !in.LogsRead:
-		add(StateNotChecked, "We could not read its logs, so nothing in them is judged.")
+		add(StateNotChecked, i18n.T("go.health.logsUnread"))
 		for _, hit := range in.WindowHits {
 			add(hit.State, hit.Means)
 		}
@@ -278,7 +279,7 @@ func Assess(in Input) Report {
 		if len(hits) == 0 {
 			// Not a pass. The patterns only cover the problems somebody has seen
 			// before, so their absence is the absence of evidence.
-			add(StateNotChecked, "Its logs show none of the known problems, which is not proof that it is earning.")
+			add(StateNotChecked, i18n.T("go.health.noHits"))
 		}
 	}
 

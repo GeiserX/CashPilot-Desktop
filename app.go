@@ -266,7 +266,7 @@ func (a *App) startCore(ctx context.Context) error {
 		func(on bool) {
 			if err := a.cfg.Update(func(c *config.AppConfig) { c.IsolationOn = on }); err != nil {
 				if !memoryFailing.Swap(true) {
-					a.emitError("isolation", fmt.Errorf("could not save that LAN isolation is on: %w", err))
+					a.emitError("isolation", fmt.Errorf("%s: %w", i18n.T("go.app.isolation.saveOnFailed"), err))
 				}
 				return
 			}
@@ -775,7 +775,7 @@ func (a *App) EnableIsolation() (IsolationResult, error) {
 		return IsolationResult{}, err
 	}
 	if a.fence == nil {
-		return IsolationResult{}, errors.New("this runtime has no LAN fence")
+		return IsolationResult{}, errors.New(i18n.T("go.app.isolation.noFence"))
 	}
 	status, err := a.fence.EnableFence(a.ctx)
 	if err != nil {
@@ -785,7 +785,7 @@ func (a *App) EnableIsolation() (IsolationResult, error) {
 	result := IsolationResult{Failed: map[string]string{}}
 	for _, slug := range status.Outside {
 		if _, known := a.catalog.Get(slug); !known {
-			result.Failed[slug] = "not a service CashPilot knows, so it was left as it is"
+			result.Failed[slug] = i18n.T("go.app.isolation.unknownService")
 			continue
 		}
 		if _, err := a.DeployService(slug, nil, nil, nil); err != nil {
@@ -841,7 +841,7 @@ func (a *App) IgnoreDrift(slug string) error {
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
-		return fmt.Errorf("unknown service: %s", slug)
+		return errors.New(i18n.T("go.app.unknownService", "slug", slug))
 	}
 	// One read-modify-write under the config lock: two Ignores at once must not drop
 	// one, and a field another writer changes meanwhile (a session consent) must not
@@ -1232,21 +1232,21 @@ func (a *App) GetSettingsState() (SettingsState, error) {
 	}
 	cfg := a.cfg.Config()
 	env := []EnvSetting{
-		{Key: "CASHPILOT_HOSTNAME_PREFIX", Label: "Hostname Prefix", Value: cfg.HostnamePrefix, Source: "Config", Help: "Containers are named <prefix>-<service> where supported."},
-		{Key: "CASHPILOT_COLLECT_INTERVAL", Label: "Collect Interval (min)", Value: strconv.Itoa(cfg.CollectIntervalMinutes), Source: "Config", Help: "Minutes between future automatic earnings collection runs."},
-		{Key: "CASHPILOT_DISPLAY_CURRENCY", Label: "Display Currency", Value: cfg.DisplayCurrency, Source: "Config", Help: "Currency used in the topbar and dashboard summaries."},
-		{Key: "CASHPILOT_API_KEY", Label: "Fleet API Key", Value: a.fleetKey, Source: "Config", Secret: true, ReadOnly: true, Help: "Bearer token used by external workers and mobile clients."},
-		{Key: "CASHPILOT_UI_URL", Label: "Desktop API URL", Value: a.fleetUIURL(), Source: "Runtime", ReadOnly: true, Help: "URL that external workers should use for CASHPILOT_UI_URL."},
-		{Key: "CASHPILOT_FLEET_SERVER", Label: "Accept workers (hub mode)", Value: strconv.FormatBool(cfg.FleetServerEnabled), Source: "Config", Help: "OFF by default, and that is the intended shape: CashPilot Desktop is a SPOKE. The CashPilot server is the hub. Turning this on lets other workers and phones report to THIS machine, which makes it a second source of truth for a fleet -- only do that if you are deliberately running Desktop as a hub instead of a CashPilot server."},
-		{Key: "CASHPILOT_FLEET_BIND", Label: "Fleet Bind Address", Value: cfg.FleetBindAddress, Source: "Config", Help: "Default 127.0.0.1 (this machine only). Set to 0.0.0.0 only to accept worker/mobile connections from your LAN — this exposes the API to your network, and (if metrics are enabled) also serves the UNAUTHENTICATED /metrics endpoint — your earnings and health totals — to anyone on your LAN."},
-		{Key: "CASHPILOT_FLEET_PORT", Label: "Fleet API Port", Value: strconv.Itoa(cfg.FleetPort), Source: "Config", Help: "Port used for external worker heartbeats."},
-		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: "Needs-fixing warnings", Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: "Config", Help: "On by default. Warns when a running container no longer matches what a redeploy would build from the current catalog (a capability, device, port, mount or setting added since). Set to false to turn the warnings off."},
-		{Key: "CASHPILOT_ISOLATION", Label: "LAN isolation", Value: runtime.FenceSetting(cfg.Isolation), Source: "Config", Help: isolationHelp(a.catalog.ListVisible())},
-		{Key: "TZ", Label: "System Timezone", Value: cfg.Timezone, Source: "Config", Help: "Timezone passed to future managed workers and mobile sync events."},
-		{Key: "CASHPILOT_UPSTREAM_URL", Label: "Pair with CashPilot server", Value: cfg.UpstreamURL, Source: "Config", Help: "Leave EMPTY to run everything here (standalone), the default. To join a CashPilot, use How this computer runs above: it tests the connection before it saves anything. While joined, this computer reports what it runs and stops collecting earnings itself; your CashPilot collects them and shows them. Use https, or plain http only to this machine, a LAN or Tailscale address, or a .local/.lan/.home.arpa/.internal/.ts.net name, so the pairing key never crosses the internet in clear text."},
-		{Key: "CASHPILOT_UPSTREAM_KEY", Label: "Pairing key", Value: a.upstreamEnrolmentKey(), Source: "Config", Secret: true, Help: "The CASHPILOT_API_KEY of the server above, used once to enrol. The server then issues this machine its own key, which is what authenticates every later heartbeat."},
-		{Key: "CASHPILOT_DATA_DIR", Label: "Data Directory", Value: a.cfg.DataDir(), Source: "Read-only", ReadOnly: true, Help: "Directory containing the local SQLite database."},
-		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: "Runtime provider (chosen)", Value: cfg.RuntimeProvider, Source: "Read-only", ReadOnly: true, Help: "The kind of runtime CashPilot is set to use. existing-docker means a Docker-compatible engine you install, such as Docker Desktop. It does not mean one is installed or running: the Runtime card above says that."},
+		{Key: "CASHPILOT_HOSTNAME_PREFIX", Label: i18n.T("go.app.settings.hostnamePrefix.label"), Value: cfg.HostnamePrefix, Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.hostnamePrefix.help")},
+		{Key: "CASHPILOT_COLLECT_INTERVAL", Label: i18n.T("go.app.settings.collectInterval.label"), Value: strconv.Itoa(cfg.CollectIntervalMinutes), Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.collectInterval.help")},
+		{Key: "CASHPILOT_DISPLAY_CURRENCY", Label: i18n.T("go.app.settings.displayCurrency.label"), Value: cfg.DisplayCurrency, Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.displayCurrency.help")},
+		{Key: "CASHPILOT_API_KEY", Label: i18n.T("go.app.settings.apiKey.label"), Value: a.fleetKey, Source: i18n.T("go.app.settings.source.config"), Secret: true, ReadOnly: true, Help: i18n.T("go.app.settings.apiKey.help")},
+		{Key: "CASHPILOT_UI_URL", Label: i18n.T("go.app.settings.uiUrl.label"), Value: a.fleetUIURL(), Source: i18n.T("go.app.settings.source.runtime"), ReadOnly: true, Help: i18n.T("go.app.settings.uiUrl.help", "var", "CASHPILOT_UI_URL")},
+		{Key: "CASHPILOT_FLEET_SERVER", Label: i18n.T("go.app.settings.fleetServer.label"), Value: strconv.FormatBool(cfg.FleetServerEnabled), Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.fleetServer.help")},
+		{Key: "CASHPILOT_FLEET_BIND", Label: i18n.T("go.app.settings.fleetBind.label"), Value: cfg.FleetBindAddress, Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.fleetBind.help")},
+		{Key: "CASHPILOT_FLEET_PORT", Label: i18n.T("go.app.settings.fleetPort.label"), Value: strconv.Itoa(cfg.FleetPort), Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.fleetPort.help")},
+		{Key: "CASHPILOT_DRIFT_WARNINGS", Label: i18n.T("go.app.settings.driftWarnings.label"), Value: strconv.FormatBool(!cfg.DriftWarningsOff), Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.driftWarnings.help")},
+		{Key: "CASHPILOT_ISOLATION", Label: i18n.T("go.app.settings.isolation.label"), Value: runtime.FenceSetting(cfg.Isolation), Source: i18n.T("go.app.settings.source.config"), Help: isolationHelp(a.catalog.ListVisible())},
+		{Key: "TZ", Label: i18n.T("go.app.settings.tz.label"), Value: cfg.Timezone, Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.tz.help")},
+		{Key: "CASHPILOT_UPSTREAM_URL", Label: i18n.T("go.app.settings.upstreamUrl.label"), Value: cfg.UpstreamURL, Source: i18n.T("go.app.settings.source.config"), Help: i18n.T("go.app.settings.upstreamUrl.help")},
+		{Key: "CASHPILOT_UPSTREAM_KEY", Label: i18n.T("go.app.settings.upstreamKey.label"), Value: a.upstreamEnrolmentKey(), Source: i18n.T("go.app.settings.source.config"), Secret: true, Help: i18n.T("go.app.settings.upstreamKey.help", "var", "CASHPILOT_API_KEY")},
+		{Key: "CASHPILOT_DATA_DIR", Label: i18n.T("go.app.settings.dataDir.label"), Value: a.cfg.DataDir(), Source: i18n.T("go.app.settings.source.readOnly"), ReadOnly: true, Help: i18n.T("go.app.settings.dataDir.help")},
+		{Key: "CASHPILOT_RUNTIME_PROVIDER", Label: i18n.T("go.app.settings.runtimeProvider.label"), Value: cfg.RuntimeProvider, Source: i18n.T("go.app.settings.source.readOnly"), ReadOnly: true, Help: i18n.T("go.app.settings.runtimeProvider.help", "provider", "existing-docker")},
 	}
 	collectors := make([]CollectorSetting, 0)
 	for _, svc := range a.catalog.ListVisible() {
@@ -1282,7 +1282,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	if value := strings.TrimSpace(values["displayCurrency"]); value != "" {
 		upper := strings.ToUpper(value)
 		if !isSupportedCurrency(upper) {
-			return SettingsState{}, fmt.Errorf("unsupported display currency: %s", value)
+			return SettingsState{}, errors.New(i18n.T("go.app.settings.error.currency", "value", value))
 		}
 		cfg.DisplayCurrency = upper
 	}
@@ -1313,7 +1313,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		case "on", "off":
 			cfg.Isolation = strings.ToLower(strings.TrimSpace(value))
 		default:
-			return SettingsState{}, fmt.Errorf("LAN isolation must be auto, on or off, not %q", value)
+			return SettingsState{}, errors.New(i18n.T("go.app.settings.error.isolation", "value", strconv.Quote(value)))
 		}
 		// Off forgets that isolation was on in this same save, so it holds even while
 		// Docker is unreachable and the reconcile below cannot run.
@@ -1326,21 +1326,21 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 		// keeps the loopback default via config.Normalize). A bad value stored verbatim
 		// would silently brick the fleet listener on the next launch, so reject it here.
 		if value != "localhost" && net.ParseIP(value) == nil {
-			return SettingsState{}, fmt.Errorf("invalid fleet bind address %q", value)
+			return SettingsState{}, errors.New(i18n.T("go.app.settings.error.fleetBind", "value", strconv.Quote(value)))
 		}
 		cfg.FleetBindAddress = value
 	}
 	if value := strings.TrimSpace(values["collectIntervalMinutes"]); value != "" {
 		minutes, err := strconv.Atoi(value)
 		if err != nil || minutes <= 0 {
-			return SettingsState{}, fmt.Errorf("collect interval must be a positive number")
+			return SettingsState{}, errors.New(i18n.T("go.app.settings.error.collectInterval"))
 		}
 		cfg.CollectIntervalMinutes = minutes
 	}
 	if value := strings.TrimSpace(values["fleetPort"]); value != "" {
 		port, err := strconv.Atoi(value)
 		if err != nil || port <= 0 || port > 65535 {
-			return SettingsState{}, fmt.Errorf("fleet API port must be between 1 and 65535")
+			return SettingsState{}, errors.New(i18n.T("go.app.settings.error.fleetPort", "min", "1", "max", "65535"))
 		}
 		cfg.FleetPort = port
 	}
@@ -1392,7 +1392,7 @@ func (a *App) SaveSettings(values map[string]string) (SettingsState, error) {
 	// a notice so the UI does not keep advertising a now-dead port to the user until
 	// the app is restarted.
 	if cfg.FleetPort != previousFleetPort || cfg.FleetBindAddress != previousFleetBind {
-		a.emitNotice("fleet-api", "Fleet API port/bind change takes effect after restarting the app.")
+		a.emitNotice("fleet-api", i18n.T("go.app.notice.fleetRestart"))
 	}
 	// A changed isolation setting is checked at once rather than at the next five-minute
 	// pass, so turning it off drops the filtering now and the dashboard says so.
@@ -1469,7 +1469,7 @@ func (a *App) AddFleetDevice(values map[string]string) (FleetState, error) {
 	}
 	name := strings.TrimSpace(values["name"])
 	if name == "" {
-		return FleetState{}, fmt.Errorf("device name is required")
+		return FleetState{}, errors.New(i18n.T("go.app.fleet.error.nameRequired"))
 	}
 	kind := strings.TrimSpace(values["kind"])
 	if kind != "mobile" && kind != "worker" {
@@ -1497,7 +1497,7 @@ func (a *App) RemoveFleetDevice(id int64) (FleetState, error) {
 		return FleetState{}, err
 	}
 	if id <= 0 {
-		return FleetState{}, fmt.Errorf("the local desktop device cannot be removed")
+		return FleetState{}, errors.New(i18n.T("go.app.fleet.error.removeLocal"))
 	}
 	a.fleetMu.Lock()
 	err := a.store.DeleteFleetDevice(id)
@@ -1543,7 +1543,7 @@ func (a *App) GetService(slug string) (catalog.Service, error) {
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
-		return catalog.Service{}, fmt.Errorf("unknown service: %s", slug)
+		return catalog.Service{}, errors.New(i18n.T("go.app.unknownService", "slug", slug))
 	}
 	return svc, nil
 }
@@ -1559,7 +1559,7 @@ func (a *App) PreflightService(slug string) (preflight.Report, error) {
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
-		return preflight.Report{}, fmt.Errorf("unknown service: %s", slug)
+		return preflight.Report{}, errors.New(i18n.T("go.app.unknownService", "slug", slug))
 	}
 	devices := a.store.ListFleetDevices()
 	fleet := make([]preflight.Device, 0, len(devices))
@@ -2182,8 +2182,8 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 		}
 		items = append(items, Notification{
 			Level:   "warning",
-			Title:   name + " update available",
-			Message: "The provider changed this service's image. Re-deploy it from the catalog so it keeps earning.",
+			Title:   i18n.T("go.app.notify.update.title", "name", name),
+			Message: i18n.T("go.app.notify.update.message"),
 		})
 	}
 	// Both come from the last local collection. While joined there is none, so
@@ -2192,7 +2192,7 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 	if !a.joined() {
 		for _, record := range earnings {
 			if record.Error != "" {
-				items = append(items, Notification{Level: "error", Title: record.Platform + " collector", Message: record.Error})
+				items = append(items, Notification{Level: "error", Title: i18n.T("go.app.notify.collector.title", "platform", record.Platform), Message: record.Error})
 			}
 		}
 		items = append(items, a.unlinkedDeviceNotifications(deployments)...)
@@ -2202,7 +2202,7 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 	items = append(items, a.activityNotifications()...)
 	items = append(items, a.stallNotifications()...)
 	if len(deployments) == 0 {
-		items = append(items, Notification{Level: "info", Title: "No services deployed", Message: "Use the setup wizard or register a mobile device to start tracking earnings."})
+		items = append(items, Notification{Level: "info", Title: i18n.T("go.app.notify.noServices.title"), Message: i18n.T("go.app.notify.noServices.message")})
 	}
 	return items
 }
@@ -2235,8 +2235,8 @@ func (a *App) unlinkedDeviceNotifications(deployments []store.Deployment) []Noti
 		}
 		items = append(items, Notification{
 			Level:   "warning",
-			Title:   svc.Name + " device not on your account",
-			Message: "It earns for nobody until you add it. " + strings.TrimSpace(svc.DeviceLink.Steps) + " " + strings.Join(lines, "; "),
+			Title:   i18n.T("go.app.notify.unlinked.title", "name", svc.Name),
+			Message: i18n.T("go.app.notify.unlinked.message", "steps", strings.TrimSpace(svc.DeviceLink.Steps), "devices", strings.Join(lines, "; ")),
 		})
 	}
 	return items
@@ -2540,11 +2540,11 @@ func (a *App) ExportCompose(slugs []string, arch string) (string, error) {
 		return "", err
 	}
 	path, err := a.askWhereToSave(wailsruntime.SaveDialogOptions{
-		Title:                "Save compose file",
+		Title:                i18n.T("go.app.compose.saveTitle"),
 		DefaultFilename:      "docker-compose.yml",
 		CanCreateDirectories: true,
 		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "Compose files (*.yml, *.yaml)", Pattern: "*.yml;*.yaml"},
+			{DisplayName: i18n.T("go.app.compose.filter", "patterns", "*.yml, *.yaml"), Pattern: "*.yml;*.yaml"},
 		},
 	})
 	if err != nil {
@@ -2554,7 +2554,7 @@ func (a *App) ExportCompose(slugs []string, arch string) (string, error) {
 		return "", nil
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
-		return "", fmt.Errorf("could not save the compose file: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.app.compose.saveFailed"), err)
 	}
 	return path, nil
 }

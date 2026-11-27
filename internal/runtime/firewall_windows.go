@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/windows"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // createNoWindow keeps PowerShell from flashing a console over the app.
@@ -116,10 +118,10 @@ func ensureFirewallBlockWith(slug, program string, nets []string, mayElevate boo
 // reading it without admin rights. A firewall that would ignore the rule is an
 // error, not "missing": no admin prompt can fix it, so the app must say what can.
 func firewallReady(slug, program string, nets []string) (ready, found bool, err error) {
-	what := fmt.Sprintf("%s was not started: it needs a Windows Firewall rule that blocks it from %s", slug, strings.Join(nets, ", "))
+	what := i18n.T("go.runtime.firewall.what", "slug", slug, "networks", strings.Join(nets, ", "))
 	st, err := readFirewallRule(firewallRuleName(slug, program))
 	if err != nil {
-		return false, false, fmt.Errorf("%s. CashPilot could not read the rule before the admin step: %w", what, err)
+		return false, false, fmt.Errorf("%s: %w", i18n.T("go.runtime.firewall.readBeforeFailed", "what", what), err)
 	}
 	ready, err = firewallReadiness(st, program, nets, what)
 	return ready, st.Found, err

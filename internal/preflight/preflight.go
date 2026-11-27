@@ -41,11 +41,11 @@
 package preflight
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // The four verdicts, worst first. Same vocabulary as the web repository, so a
@@ -125,10 +125,7 @@ func Assess(in Input) Report {
 	if reqs.ContainerProhibited {
 		findings = append(findings, Finding{
 			Verdict: EarnsNothing,
-			Message: "This provider forbids running its software in containers, on virtual machines, " +
-				"on home servers, or for money — which is exactly what CashPilot does. Their stated " +
-				"penalty is closing the account without notice and cancelling any pending payment. " +
-				"Deploying it here means accepting that risk knowingly.",
+			Message: i18n.T("go.preflight.prohibited"),
 		})
 	}
 
@@ -138,24 +135,19 @@ func Assess(in Input) Report {
 		// when it can see this computer has none of that vendor.
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,
-			Message: "This needs a supported graphics card, which CashPilot passes into the container. " +
-				"On Linux, when the container runtime runs on this computer, CashPilot refuses the deploy if it finds no such card. " +
-				"Elsewhere it cannot look, so check that your card and its driver are supported.",
+			Message: i18n.T("go.preflight.gpuPassed"),
 		})
 	} else if reqs.GPU {
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,
-			Message: "This needs a supported graphics card passed through to the container. " +
-				"Without one it will start and then sit idle, earning nothing.",
+			Message: i18n.T("go.preflight.gpu"),
 		})
 	}
 
 	if storage := strings.TrimSpace(reqs.MinStorage); storage != "" {
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,
-			Message: fmt.Sprintf("Needs at least %s of disk you can commit for months. Storage payouts build "+
-				"up slowly and part of the balance is held back and lost if the node is abandoned "+
-				"early — running one for a month is worse than not running it at all.", storage),
+			Message: i18n.T("go.preflight.storage", "storage", storage),
 		})
 	}
 
@@ -167,17 +159,14 @@ func Assess(in Input) Report {
 	if reqs.ResidentialIP && !reqs.VPSIP {
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,
-			Message: "This needs a home internet connection. On a rented server or datacentre " +
-				"connection it usually earns far less, or the account is banned outright. " +
-				"CashPilot cannot check what kind of connection you have, so this one is on you.",
+			Message: i18n.T("go.preflight.residential"),
 		})
 	}
 
 	if bandwidth := strings.TrimSpace(reqs.MinBandwidth); bandwidth != "" {
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,
-			Message: fmt.Sprintf("Wants at least %s. Below that it still runs, it just earns "+
-				"proportionally less. CashPilot does not measure your connection.", bandwidth),
+			Message: i18n.T("go.preflight.bandwidth", "bandwidth", bandwidth),
 		})
 	}
 
@@ -198,13 +187,7 @@ func Assess(in Input) Report {
 		case known && !supported:
 			findings = append(findings, Finding{
 				Verdict: EarnsNothing,
-				Message: fmt.Sprintf("This machine is %s (%s) and %s publishes no build for it, only %s. "+
-					"The container will not start: your container runtime pulls the wrong build and it "+
-					"dies with \"exec format error\". The one exception is a runtime that runs foreign "+
-					"images under emulation (Docker Desktop with Rosetta, or binfmt/qemu), which "+
-					"CashPilot cannot check.",
-					Label(Family(in.DaemonArch)), strings.TrimSpace(in.DaemonArch), name,
-					describeBuilds(svc.Docker)),
+				Message: i18n.T("go.preflight.arch.noBuild", "family", Label(Family(in.DaemonArch)), "arch", strings.TrimSpace(in.DaemonArch), "name", name, "builds", describeBuilds(svc.Docker)),
 			})
 		// The provider does publish a build for this CPU, but as a separate image that
 		// Desktop's deploy does not reach for. Reporting the build as a pass would be a
@@ -212,12 +195,7 @@ func Assess(in Input) Report {
 		case known && overrideImage(svc.Docker, in.DaemonArch) != "":
 			findings = append(findings, Finding{
 				Verdict: EarnsNothing,
-				Message: fmt.Sprintf("This machine is %s (%s). %s does publish a build for it, but as a "+
-					"separate image, and CashPilot deploys the x86-64 one. The container will not "+
-					"start: it dies with \"exec format error\". The one exception is a runtime that "+
-					"runs foreign images under emulation (Docker Desktop with Rosetta, or "+
-					"binfmt/qemu), which CashPilot cannot check.",
-					Label(Family(in.DaemonArch)), strings.TrimSpace(in.DaemonArch), name),
+				Message: i18n.T("go.preflight.arch.separateImage", "family", Label(Family(in.DaemonArch)), "arch", strings.TrimSpace(in.DaemonArch), "name", name),
 			})
 		}
 	}
@@ -242,17 +220,17 @@ func Assess(in Input) Report {
 	// Say what was NOT checked, so a clean result is not mistaken for a guarantee
 	// about things nobody looked at.
 	notChecked := []string{
-		"what kind of internet connection you have (home or datacentre)",
-		"your connection speed",
-		"how much disk you have free",
+		i18n.T("go.preflight.notChecked.connection"),
+		i18n.T("go.preflight.notChecked.speed"),
+		i18n.T("go.preflight.notChecked.disk"),
 	}
 	if strings.TrimSpace(svc.Docker.Image) != "" && !archChecked {
 		// No architecture reported, an unusual CPU, or an entry that declares no
 		// platforms. Say so instead of implying a pass.
-		notChecked = append(notChecked, "whether this image has a build for your CPU")
+		notChecked = append(notChecked, i18n.T("go.preflight.notChecked.arch"))
 	}
 	if len(peers) > 0 {
-		notChecked = append(notChecked, "whether your other machines use the same internet connection as this one")
+		notChecked = append(notChecked, i18n.T("go.preflight.notChecked.sharedLine"))
 	}
 
 	report := Report{
@@ -301,26 +279,17 @@ func fleetFindings(svc catalog.Service, peers []string, peerCount int) ([]Findin
 	case limit == nil:
 		return []Finding{{
 			Verdict: CheckYourself,
-			Message: fmt.Sprintf("%s already runs on %s. Nobody has documented how many devices this "+
-				"service allows on one internet connection, so if those machines share yours, "+
-				"CashPilot cannot tell you whether a second one earns or is wasted. Check the "+
-				"provider's terms first.", name, where),
+			Message: i18n.T("go.preflight.fleet.undocumented", "name", name, "machines", where),
 		}}, false
 	case *limit == 1:
 		return []Finding{{
 			Verdict: CheckYourself,
-			Message: fmt.Sprintf("%s already runs on %s, and it allows only one device per internet "+
-				"connection. If those machines share this connection, the provider sees one device "+
-				"either way: the second normally earns nothing, and some providers cancel the "+
-				"balance of accounts that do this.", name, where),
+			Message: i18n.T("go.preflight.fleet.onePerIP", "name", name, "machines", where),
 		}}, true
 	case *limit == 0:
 		return []Finding{{
 			Verdict: CheckYourself,
-			Message: fmt.Sprintf("%s already runs on %s. The provider sets no limit per internet "+
-				"connection, but if those machines share yours the instances still share one line, "+
-				"so expect the pair to earn roughly what one already does rather than double.",
-				name, where),
+			Message: i18n.T("go.preflight.fleet.noLimit", "name", name, "machines", where),
 		}}, false
 	default:
 		// Count the MACHINES, not the names shown in the sentence. Two machines can
@@ -332,9 +301,7 @@ func fleetFindings(svc catalog.Service, peers []string, peerCount int) ([]Findin
 		}
 		return []Finding{{
 			Verdict: CheckYourself,
-			Message: fmt.Sprintf("%s already runs on %s. It allows %d devices per internet connection "+
-				"and this would be number %d, so if those machines share this connection the extra "+
-				"one earns nothing.", name, where, *limit, instances),
+			Message: i18n.T("go.preflight.fleet.overLimit", "name", name, "machines", where, "limit", *limit, "n", instances),
 		}}, true
 	}
 }
@@ -362,7 +329,7 @@ func peersRunning(fleet []Device, slug string) (names []string, count int) {
 			count++
 			label := strings.TrimSpace(device.Name)
 			if label == "" {
-				label = "an unnamed machine"
+				label = i18n.T("go.preflight.unnamedMachine")
 			}
 			if !seen[label] {
 				seen[label] = true
@@ -383,22 +350,20 @@ func summary(verdict string, svc catalog.Service, sharedLineLoss bool) string {
 	if svc.Requirements.ContainerProhibited {
 		// "will earn nothing" is the right severity but the wrong words: the outcome
 		// here is a closed account and a cancelled balance, not a disappointing month.
-		return fmt.Sprintf("%s forbids being run this way. The risk is not low earnings — it is a "+
-			"closed account with any pending payment cancelled. You can still deploy it.", name)
+		return i18n.T("go.preflight.summary.prohibited", "name", name)
 	}
 	switch verdict {
 	case EarnsNothing:
-		return fmt.Sprintf("%s will most likely earn nothing here. You can deploy it anyway.", name)
+		return i18n.T("go.preflight.summary.nothing", "name", name)
 	case Reduced:
-		return fmt.Sprintf("%s will probably earn less here than the catalog range suggests.", name)
+		return i18n.T("go.preflight.summary.reduced", "name", name)
 	case CheckYourself:
 		if sharedLineLoss {
-			return fmt.Sprintf("%s may earn nothing here: another of your machines already runs it, "+
-				"and this provider counts devices per internet connection, not per machine.", name)
+			return i18n.T("go.preflight.summary.sharedLine", "name", name)
 		}
-		return fmt.Sprintf("%s should work, as long as the points below are true of your setup.", name)
+		return i18n.T("go.preflight.summary.check", "name", name)
 	}
-	return fmt.Sprintf("Nothing stands out — %s should work normally here.", name)
+	return i18n.T("go.preflight.summary.fine", "name", name)
 }
 
 func serviceName(svc catalog.Service) string {
@@ -408,5 +373,5 @@ func serviceName(svc catalog.Service) string {
 	if slug := strings.TrimSpace(svc.Slug); slug != "" {
 		return slug
 	}
-	return "This service"
+	return i18n.T("go.preflight.thisService")
 }

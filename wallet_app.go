@@ -2,10 +2,10 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -66,9 +66,6 @@ const (
 	walletRevealWindow = 10 * time.Minute
 )
 
-// errRevealName is the refusal of a reveal whose typed name is wrong.
-var errRevealName = errors.New("type the service's name exactly as shown to reveal its seed phrase")
-
 // RevealWalletSeed reads slug's wallet seed phrase back from the file in its data
 // volume, for the owner to write down.
 //
@@ -85,19 +82,19 @@ func (a *App) RevealWalletSeed(slug, typedName string) (string, error) {
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
-		return "", fmt.Errorf("unknown service: %s", slug)
+		return "", errors.New(i18n.T("go.app.unknownService", "slug", slug))
 	}
 	if !a.services.HasSeedFile(slug) {
-		return "", fmt.Errorf("%s keeps no wallet seed", svc.Name)
+		return "", errors.New(i18n.T("go.app.wallet.noSeed", "name", svc.Name))
 	}
 	if !a.walletRevealAllowed(slug, time.Now()) {
 		a.store.RecordEvent(slug, "wallet_reveal_refused", "too many tries")
-		return "", fmt.Errorf("the seed phrase was asked for %d times in %d minutes. Wait a few minutes, then try again", walletRevealLimit, int(walletRevealWindow/time.Minute))
+		return "", errors.New(i18n.T("go.app.wallet.tooMany", "times", walletRevealLimit, "minutes", int(walletRevealWindow/time.Minute)))
 	}
 	typed := strings.TrimSpace(typedName)
 	if !strings.EqualFold(typed, svc.Name) && !strings.EqualFold(typed, slug) {
 		a.store.RecordEvent(slug, "wallet_reveal_refused", "the typed name did not match")
-		return "", errRevealName
+		return "", errors.New(i18n.T("go.app.wallet.revealName"))
 	}
 	phrase, err := a.services.RevealWalletSeed(a.ctx, slug)
 	if err != nil {

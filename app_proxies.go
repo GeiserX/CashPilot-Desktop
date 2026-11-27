@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
@@ -211,7 +212,7 @@ func (a *App) proxyNotifications() []Notification {
 	}
 	var items []Notification
 	for _, n := range a.services.CapNotices() {
-		items = append(items, Notification{Level: "warning", Title: n.Name + " reached its traffic cap", Message: n.Message})
+		items = append(items, Notification{Level: "warning", Title: i18n.T("go.app.notify.proxyCap.title", "name", n.Name), Message: n.Message})
 	}
 	return items
 }

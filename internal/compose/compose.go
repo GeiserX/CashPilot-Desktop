@@ -32,12 +32,14 @@
 package compose
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"sort"
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"gopkg.in/yaml.v3"
@@ -101,7 +103,7 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 		return "", err
 	}
 	if len(slugs) == 0 {
-		return "", fmt.Errorf("choose at least one service to export")
+		return "", errors.New(i18n.T("go.compose.chooseOne"))
 	}
 
 	out := composeFile{Services: map[string]*composeService{}}
@@ -117,26 +119,26 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 		seen[slug] = true
 		svc, ok := src.Get(slug)
 		if !ok {
-			return "", fmt.Errorf("unknown service: %s", slug)
+			return "", errors.New(i18n.T("go.compose.unknownService", "slug", slug))
 		}
 		if catalog.IsRetired(svc.Status) {
-			return "", fmt.Errorf("%s is no longer available (%s), so there is nothing to export", svc.Name, svc.Status)
+			return "", errors.New(i18n.T("go.compose.retired", "name", svc.Name, "status", svc.Status))
 		}
 		if svc.Docker.FenceGated {
 			// Compose would start it on Docker's default bridge, where nothing keeps its
 			// NET_ADMIN namespace off the LAN (web app/compose_generator.py refuses too).
-			return "", fmt.Errorf("%s runs only behind CashPilot's LAN fence, so it has no compose export. Deploy it from the dashboard", svc.Name)
+			return "", errors.New(i18n.T("go.compose.fenceGated", "name", svc.Name))
 		}
 		if svc.Docker.UIPort != nil || svc.Docker.UDPPortRange != nil {
 			// The port it publishes follows a setting, and the file carries settings as
 			// .env placeholders: a published port written from today's value would part
 			// from the one the command uses as soon as the .env changes it.
-			return "", fmt.Errorf("%s publishes ports from its settings, which a compose file cannot follow, so it has no compose export. Deploy it from the dashboard", svc.Name)
+			return "", errors.New(i18n.T("go.compose.settingsPorts", "name", svc.Name))
 		}
 		if svc.Custom || catalog.IsCustomSlug(slug) {
 			// The export is built from catalog entries; a custom service's variables and
 			// command are the user's own and stay encrypted in the app's database.
-			return "", fmt.Errorf("%s is a custom service, and custom services are not exported", svc.Name)
+			return "", errors.New(i18n.T("go.compose.custom", "name", svc.Name))
 		}
 		block, keys, changeable, err := serviceBlock(svc, family, opts.Hostname, opts.GPUDevices)
 		if err != nil {
@@ -150,7 +152,7 @@ func Generate(src Source, slugs []string, opts Options) (string, error) {
 		}
 	}
 	if len(out.Services) == 0 {
-		return "", fmt.Errorf("choose at least one service to export")
+		return "", errors.New(i18n.T("go.compose.chooseOne"))
 	}
 
 	if volumes := namedVolumes(out.Services); len(volumes) > 0 {

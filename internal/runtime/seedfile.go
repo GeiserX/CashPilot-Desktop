@@ -9,10 +9,12 @@ import (
 	"io"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/siaseed"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
@@ -113,9 +115,21 @@ type WalletError struct {
 
 func (e *WalletError) Error() string { return e.Message }
 
-func walletErr(code, format string, args ...any) error {
-	return &WalletError{Code: code, Message: fmt.Sprintf(format, args...)}
+func walletErr(code, message string) error {
+	return &WalletError{Code: code, Message: message}
 }
+
+// textError is an error whose text is a whole translated sentence that names its
+// cause, and which still unwraps to that cause.
+type textError struct {
+	text  string
+	cause error
+}
+
+func (e *textError) Error() string { return e.text }
+func (e *textError) Unwrap() error { return e.cause }
+
+func wrapText(text string, cause error) error { return &textError{text: text, cause: cause} }
 
 // seedClient is the part of the Docker client the wallet steps need, so a test can
 // stand in for the daemon.
@@ -165,7 +179,7 @@ func walletAddress(svc catalog.Service, phrase string) string {
 // checkPhrase is siaseed.Problem as a WalletError.
 func checkPhrase(phrase string, words int) error {
 	if problem := siaseed.Problem(phrase, words); problem != "" {
-		return walletErr("wallet_phrase", "That seed phrase cannot be used: %s. Nothing was deployed.", problem)
+		return walletErr("wallet_phrase", i18n.T("go.runtime.wallet.badPhrase", "problem", problem))
 	}
 	return nil
 }
@@ -178,18 +192,18 @@ func CheckWalletRequest(svc catalog.Service, req *WalletRequest) error {
 		return nil
 	}
 	if problem := svc.SeedFileProblem(); problem != "" {
-		return fmt.Errorf("the catalog entry's seed_file is not valid (%s), so the wallet cannot be kept safely. Nothing was deployed", problem)
+		return errors.New(i18n.T("go.runtime.wallet.badSeedFile", "problem", problem))
 	}
 	switch req.Mode {
 	case WalletGenerate, WalletKeep, "":
 		return nil
 	case WalletImport:
 		if strings.TrimSpace(req.Phrase) == "" {
-			return walletErr("wallet_phrase", "Paste the seed phrase of the wallet to use. Nothing was deployed.")
+			return walletErr("wallet_phrase", i18n.T("go.runtime.wallet.pastePhrase"))
 		}
 		return checkPhrase(req.Phrase, item.SeedFile.Words)
 	}
-	return walletErr("wallet_mode", "Unknown wallet choice %q. Nothing was deployed.", req.Mode)
+	return walletErr("wallet_mode", i18n.T("go.runtime.wallet.unknownMode", "mode", strconv.Quote(req.Mode)))
 }
 
 // seedEnvValue is the value of key in Docker's []string{"KEY=value"}, or "".
@@ -215,7 +229,7 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 		return nil, err
 	}
 	if problem := svc.SeedFileProblem(); problem != "" {
-		return nil, fmt.Errorf("the catalog entry's seed_file is not valid (%s), so the wallet cannot be kept safely. Nothing was deployed", problem)
+		return nil, errors.New(i18n.T("go.runtime.wallet.badSeedFile", "problem", problem))
 	}
 	spec := *item.SeedFile
 	mode, pasted, stored := WalletKeep, "", ""
@@ -236,7 +250,7 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 		}
 	}
 	if volume == nil {
-		return nil, walletErr("wallet_volume", "This deploy mounts nothing at %s, where %s keeps its wallet. Nothing was deployed.", folder, svc.Name)
+		return nil, walletErr("wallet_volume", i18n.T("go.runtime.wallet.noMount", "folder", folder, "name", svc.Name))
 	}
 
 	helper, err := createFileHelper(ctx, cli, image, name+"-wallet", *volume, folder)
@@ -247,7 +261,7 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 
 	raw, err := readContainerFile(ctx, cli, helper, spec.Path)
 	if err != nil {
-		return nil, fmt.Errorf("could not read %s's wallet file (%v). Nothing was deployed", svc.Name, err)
+		return nil, errors.New(i18n.T("go.runtime.wallet.readFailedDeploy", "name", svc.Name, "error", err))
 	}
 	data, current, err := parseSeedFile(raw, spec.Key)
 	if err != nil {
@@ -255,7 +269,7 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 	}
 	if current != "" {
 		if mode == WalletImport && pasted != current {
-			return nil, walletErr("wallet_exists", "This node already has another wallet, and CashPilot does not replace one. Reveal its seed phrase from the service's page first; to change wallets, remove the service with its data. Nothing was deployed.")
+			return nil, walletErr("wallet_exists", i18n.T("go.runtime.wallet.existsReveal"))
 		}
 		return &WalletResult{Address: walletAddress(svc, current)}, nil
 	}
@@ -275,16 +289,16 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 	migrated := false
 	switch {
 	case legacy != "" && mode == WalletImport && pasted != legacy:
-		return nil, walletErr("wallet_exists", "This node already runs another wallet, and CashPilot does not replace one. Deploy it once with \"Keep this node's wallet\", which moves that wallet into its data volume, and reveal its seed phrase from the service's card; to change wallets, remove the service with its data. Nothing was deployed.")
+		return nil, walletErr("wallet_exists", i18n.T("go.runtime.wallet.existsLegacy"))
 	case legacy != "":
 		phrase, migrated = legacy, true
 	case mode == WalletImport:
 		phrase = pasted
 	case mode == WalletKeep:
-		return nil, walletErr("wallet_missing", "%s has no wallet yet. Deploy it from its card and choose a new wallet, or paste the seed phrase of the one you have. Nothing was deployed.", svc.Name)
+		return nil, walletErr("wallet_missing", i18n.T("go.runtime.wallet.missing", "name", svc.Name))
 	default:
 		if progress != nil {
-			progress("Creating a new wallet, offline")
+			progress(i18n.T("go.runtime.wallet.creating"))
 		}
 		phrase, address, err = generateWallet(ctx, cli, image, name+"-wallet-new", spec)
 		if err != nil {
@@ -298,17 +312,17 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 	data[spec.Key] = phrase
 	content, err := yaml.Marshal(data)
 	if err != nil {
-		return nil, errors.New("could not write the wallet file. Nothing was deployed")
+		return nil, errors.New(i18n.T("go.runtime.wallet.writeFailed"))
 	}
 	archive, err := secretFileTar(path.Base(spec.Path), content)
 	if err != nil {
-		return nil, errors.New("could not write the wallet file. Nothing was deployed")
+		return nil, errors.New(i18n.T("go.runtime.wallet.writeFailed"))
 	}
 	if progress != nil {
-		progress("Writing the wallet into " + svc.Name + "'s data volume")
+		progress(i18n.T("go.runtime.wallet.writing", "name", svc.Name))
 	}
 	if _, err := cli.CopyToContainer(ctx, helper, client.CopyToContainerOptions{DestinationPath: folder, Content: bytes.NewReader(archive)}); err != nil {
-		return nil, walletErr("wallet_write", "Docker did not write the wallet file (%v). Nothing was deployed.", err)
+		return nil, walletErr("wallet_write", i18n.T("go.runtime.wallet.dockerWriteFailed", "error", err))
 	}
 	// What the file held before this write: the bytes it had, or, when there was
 	// none, an empty mapping (hostd reads it as no settings, the next deploy as no
@@ -319,10 +333,10 @@ func prepareWallet(ctx context.Context, cli seedClient, svc catalog.Service, ima
 	}
 	back, err := readContainerFile(ctx, cli, helper, spec.Path)
 	if err != nil {
-		return nil, restoreSeedFile(cli, helper, folder, spec.Path, prior, walletErr("wallet_write", "The wallet file could not be read back (%v). Nothing was deployed.", err))
+		return nil, restoreSeedFile(cli, helper, folder, spec.Path, prior, walletErr("wallet_write", i18n.T("go.runtime.wallet.readBackFailed", "error", err)))
 	}
 	if _, got, err := parseSeedFile(back, spec.Key); err != nil || got != phrase {
-		return nil, restoreSeedFile(cli, helper, folder, spec.Path, prior, walletErr("wallet_write", "The wallet file did not read back as written. Nothing was deployed."))
+		return nil, restoreSeedFile(cli, helper, folder, spec.Path, prior, walletErr("wallet_write", i18n.T("go.runtime.wallet.readBackDiffers")))
 	}
 	if address == "" {
 		address = walletAddress(svc, phrase)
@@ -374,7 +388,7 @@ func restoreSeedFile(cli seedClient, helper, folder, file string, prior []byte, 
 
 // walletKept is cause with the line that the new wallet may still be in file.
 func walletKept(cause error, file string) error {
-	return fmt.Errorf("%w. The new wallet stays in %s in the node's data volume and its seed phrase was not shown: deploy again and keep this node's wallet, then reveal its seed phrase from the service's card", cause, file)
+	return wrapText(i18n.T("go.runtime.wallet.kept", "error", cause, "file", file), cause)
 }
 
 // createFileHelper creates, and never starts, a container that mounts volume at
@@ -397,7 +411,7 @@ func createFileHelper(ctx context.Context, cli seedClient, image, name string, v
 		HostConfig: helperHostConfig([]mount.Mount{volume}),
 	})
 	if err != nil {
-		return "", fmt.Errorf("could not create the helper that reads the wallet file (%v). Nothing was deployed", err)
+		return "", errors.New(i18n.T("go.runtime.wallet.helperFailed", "error", err))
 	}
 	return created.ID, nil
 }
@@ -426,10 +440,10 @@ func removeLeftoverHelper(ctx context.Context, cli seedClient, name string) erro
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("could not check %s (%v). Nothing was deployed", name, err)
+		return errors.New(i18n.T("go.runtime.wallet.checkFailed", "name", name, "error", err))
 	}
 	if got.Container.Config == nil || got.Container.Config.Labels[LabelWalletHelper] == "" {
-		return fmt.Errorf("%s belongs to something else, so the wallet helper cannot use the name. Remove or rename it. Nothing was deployed", name)
+		return errors.New(i18n.T("go.runtime.wallet.helperNameTaken", "name", name))
 	}
 	removeHelper(cli, got.Container.ID)
 	return nil
@@ -468,7 +482,7 @@ func generateWallet(ctx context.Context, cli seedClient, image, name string, spe
 		HostConfig: host,
 	})
 	if err != nil {
-		return "", "", walletErr("wallet_generate", "Docker could not create the container that makes a new wallet (%v). Nothing was deployed.", err)
+		return "", "", walletErr("wallet_generate", i18n.T("go.runtime.wallet.generate.createFailed", "error", err))
 	}
 	defer removeHelper(cli, created.ID)
 
@@ -477,38 +491,38 @@ func generateWallet(ctx context.Context, cli seedClient, image, name string, spe
 	// Registered before the start, so an exit that comes at once is not missed.
 	wait := cli.ContainerWait(waitCtx, created.ID, client.ContainerWaitOptions{Condition: container.WaitConditionNextExit})
 	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		return "", "", walletErr("wallet_generate", "Docker could not start the container that makes a new wallet (%v). Nothing was deployed.", err)
+		return "", "", walletErr("wallet_generate", i18n.T("go.runtime.wallet.generate.startFailed", "error", err))
 	}
 	select {
 	case res := <-wait.Result:
 		if res.StatusCode != 0 {
-			return "", "", walletErr("wallet_generate", "The node's image could not make a wallet (exit %d). Nothing was deployed.", res.StatusCode)
+			return "", "", walletErr("wallet_generate", i18n.T("go.runtime.wallet.generate.exit", "code", res.StatusCode))
 		}
 	case err := <-wait.Error:
-		return "", "", walletErr("wallet_generate", "Making a new wallet did not finish (%v). Nothing was deployed.", err)
+		return "", "", walletErr("wallet_generate", i18n.T("go.runtime.wallet.generate.unfinished", "error", err))
 	}
 	logs, err := cli.ContainerLogs(ctx, created.ID, client.ContainerLogsOptions{ShowStdout: true})
 	if err != nil {
-		return "", "", walletErr("wallet_generate", "The new wallet could not be read from its container (%v). Nothing was deployed.", err)
+		return "", "", walletErr("wallet_generate", i18n.T("go.runtime.wallet.generate.readFailed", "error", err))
 	}
 	defer logs.Close()
 	var stdout bytes.Buffer
 	if _, err := stdcopy.StdCopy(&stdout, io.Discard, io.LimitReader(logs, maxSeedFileBytes)); err != nil {
-		return "", "", walletErr("wallet_generate", "The new wallet could not be read from its container. Nothing was deployed.")
+		return "", "", walletErr("wallet_generate", i18n.T("go.runtime.wallet.generate.readEmpty"))
 	}
 	output := stdout.String()
 	stdout.Reset()
 	phraseRe, err1 := regexp.Compile(spec.PhrasePattern)
 	addressRe, err2 := regexp.Compile(spec.AddressPattern)
 	if err1 != nil || err2 != nil {
-		return "", "", errors.New("the catalog entry's seed_file patterns do not compile. Nothing was deployed")
+		return "", "", errors.New(i18n.T("go.runtime.wallet.patternsBroken"))
 	}
 	phrase := ""
 	if m := phraseRe.FindStringSubmatch(output); len(m) == 2 {
 		phrase = siaseed.Normalize(m[1])
 	}
 	if phrase == "" || siaseed.Problem(phrase, spec.Words) != "" {
-		return "", "", walletErr("wallet_generate", "The node's image did not print a wallet CashPilot could read. Nothing was deployed.")
+		return "", "", walletErr("wallet_generate", i18n.T("go.runtime.wallet.generate.unreadable"))
 	}
 	address := ""
 	if m := addressRe.FindStringSubmatch(output); len(m) == 2 {
@@ -555,7 +569,7 @@ func parseSeedFile(raw []byte, key string) (map[string]any, string, error) {
 	}
 	var data map[string]any
 	if err := yaml.Unmarshal(raw, &data); err != nil {
-		return nil, "", walletErr("wallet_file_invalid", "The node's config file is not a YAML mapping, so CashPilot did not change it. Fix or remove it, then deploy again. Nothing was deployed.")
+		return nil, "", walletErr("wallet_file_invalid", i18n.T("go.runtime.wallet.configNotMapping"))
 	}
 	value, _ := data[key].(string)
 	return data, siaseed.Normalize(value), nil
@@ -596,29 +610,29 @@ func (p *DockerProvider) ReadWalletSeed(ctx context.Context, slug string, svc ca
 func readWalletSeed(ctx context.Context, cli seedClient, slug string, svc catalog.Service) (string, error) {
 	item, ok := svc.SeedVar()
 	if !ok {
-		return "", walletErr("wallet_none", "%s keeps no wallet seed.", svc.Name)
+		return "", walletErr("wallet_none", i18n.T("go.runtime.wallet.none", "name", svc.Name))
 	}
 	name := containerName(slug)
 	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if cerrdefs.IsNotFound(err) {
-		return "", walletErr("wallet_missing", "%s is not deployed on this machine, so there is no wallet file to read.", svc.Name)
+		return "", walletErr("wallet_missing", i18n.T("go.runtime.wallet.notDeployed", "name", svc.Name))
 	}
 	if err != nil {
-		return "", fmt.Errorf("could not check %s: %w", name, err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.wallet.reveal.checkFailed", "name", name), err)
 	}
 	if got.Container.Config == nil || !IsDesktopContainer(got.Container.Config.Labels) || got.Container.Config.Labels[LabelService] != slug {
-		return "", fmt.Errorf("%s belongs to something else, so it was not read", name)
+		return "", errors.New(i18n.T("go.runtime.wallet.reveal.foreign", "name", name))
 	}
 	raw, err := readContainerFile(ctx, cli, got.Container.ID, item.SeedFile.Path)
 	if err != nil {
-		return "", fmt.Errorf("could not read %s's wallet file: %w", svc.Name, err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.wallet.reveal.readFailed", "name", svc.Name), err)
 	}
 	_, phrase, err := parseSeedFile(raw, item.SeedFile.Key)
 	if err != nil {
 		return "", err
 	}
 	if phrase == "" {
-		return "", walletErr("wallet_missing", "%s has no wallet file yet. Redeploy it to move its wallet into one.", svc.Name)
+		return "", walletErr("wallet_missing", i18n.T("go.runtime.wallet.noFileYet", "name", svc.Name))
 	}
 	return phrase, nil
 }

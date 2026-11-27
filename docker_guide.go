@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/setupresume"
 	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -119,7 +120,7 @@ func (a *App) beginFinish(step, finish string) (bool, error) {
 		c.SetupJournal = j
 	})
 	if err != nil {
-		return false, fmt.Errorf("could not save where the setup stands before the restart: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T("go.app.setup.saveBeforeRestart"), err)
 	}
 	if err := a.runOnceKey().Arm(exe); err != nil {
 		log.Printf("setup: Windows will not reopen CashPilot by itself: %v", err)
@@ -188,7 +189,7 @@ func (a *App) endSetup() error {
 		return nil
 	}
 	if err := a.runOnceKey().Disarm(); err != nil {
-		return fmt.Errorf("could not remove the RunOnce value, so the guided setup is not ended yet: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("go.app.setup.disarmFailed", "value", "RunOnce"), err)
 	}
 	if err := a.cfg.Update(func(c *config.AppConfig) { c.SetupJournal = nil }); err != nil {
 		return err

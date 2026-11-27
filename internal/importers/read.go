@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // The limits a pasted config is held to. Real files from these tools are a few KiB.
@@ -45,7 +47,7 @@ type Refused struct{ msg string }
 
 func (r *Refused) Error() string { return r.msg }
 
-func refuse(format string, args ...any) error { return &Refused{msg: fmt.Sprintf(format, args...)} }
+func refuse(message string) error { return &Refused{msg: message} }
 
 // File is one uploaded or pasted file as the frontend sends it.
 type File struct {
@@ -126,19 +128,19 @@ func splitLines(text string) []string {
 
 func checkText(name, content string) (string, error) {
 	if strings.ContainsRune(content, 0) {
-		return "", refuse("%s is not a text file.", name)
+		return "", refuse(i18n.T("go.importers.refuse.notText", "name", name))
 	}
 	if !utf8.ValidString(content) {
-		return "", refuse("%s is not a UTF-8 text file.", name)
+		return "", refuse(i18n.T("go.importers.refuse.notUTF8", "name", name))
 	}
 	content = strings.TrimLeft(content, "\ufeff")
 	lines := splitLines(content)
 	if len(lines) > MaxLines {
-		return "", refuse("%s has more than %d lines; this is not a config file.", name, MaxLines)
+		return "", refuse(i18n.T("go.importers.refuse.tooManyLines", "name", name, "max", MaxLines))
 	}
 	for _, line := range lines {
 		if len(line) > MaxLineBytes {
-			return "", refuse("%s has a line longer than %d KiB.", name, MaxLineBytes/1024)
+			return "", refuse(i18n.T("go.importers.refuse.longLine", "name", name, "max", MaxLineBytes/1024))
 		}
 	}
 	return content, nil
@@ -250,7 +252,7 @@ var errNotJSON = errors.New("not json")
 
 func (r *jsonReader) value(depth int) (any, error) {
 	if depth > MaxJSONDepth {
-		return nil, refuse("%s is nested too deeply; this is not a config file.", r.name)
+		return nil, refuse(i18n.T("go.importers.refuse.tooDeep", "name", r.name))
 	}
 	tok, err := r.dec.Token()
 	if err != nil {
@@ -272,7 +274,7 @@ func (r *jsonReader) value(depth int) (any, error) {
 				}
 				r.keys++
 				if r.keys > MaxJSONKeys {
-					return nil, refuse("%s has more than %d keys; this is not a config file.", r.name, MaxJSONKeys)
+					return nil, refuse(i18n.T("go.importers.refuse.tooManyKeys", "name", r.name, "max", MaxJSONKeys))
 				}
 				v, err := r.value(depth + 1)
 				if err != nil {
@@ -322,11 +324,11 @@ func parseJSON(name, text string) (*jsonObject, error) {
 		if errors.As(err, &refused) {
 			return nil, err
 		}
-		return nil, refuse("%s is not valid JSON.", name)
+		return nil, refuse(i18n.T("go.importers.refuse.badJSON", "name", name))
 	}
 	obj, ok := v.(*jsonObject)
 	if !ok {
-		return nil, refuse("%s is not a JSON object.", name)
+		return nil, refuse(i18n.T("go.importers.refuse.notObject", "name", name))
 	}
 	return obj, nil
 }
@@ -402,10 +404,10 @@ func cleanName(name string, i int) string {
 // ReadFiles checks and reads the uploaded files. source is "auto" or one of Sources.
 func ReadFiles(files []File, source string) ([]*fileSettings, error) {
 	if len(files) == 0 {
-		return nil, refuse("Add at least one file.")
+		return nil, refuse(i18n.T("go.importers.refuse.noFiles"))
 	}
 	if len(files) > MaxFiles {
-		return nil, refuse("At most %d files at a time.", MaxFiles)
+		return nil, refuse(i18n.T("go.importers.refuse.tooManyFiles", "max", MaxFiles))
 	}
 	total := 0
 	type checked struct{ name, text string }
@@ -414,7 +416,7 @@ func ReadFiles(files []File, source string) ([]*fileSettings, error) {
 		name := cleanName(f.Name, i+1)
 		total += len(f.Content)
 		if total > MaxTotalBytes {
-			return nil, refuse("The files add up to more than %d KiB.", MaxTotalBytes/1024)
+			return nil, refuse(i18n.T("go.importers.refuse.tooLarge", "max", MaxTotalBytes/1024))
 		}
 		text, err := checkText(name, f.Content)
 		if err != nil {
@@ -513,7 +515,7 @@ func DetectSource(files []*fileSettings, source string) (string, error) {
 		}
 	}
 	if seen["ambiguous"] {
-		return "", refuse("These files could come from more than one tool. Pick the tool you used.")
+		return "", refuse(i18n.T("go.importers.refuse.ambiguous"))
 	}
 	if isSource(source) {
 		var others []string
@@ -524,16 +526,15 @@ func DetectSource(files []*fileSettings, source string) (string, error) {
 		}
 		sort.Strings(others)
 		if len(others) > 0 {
-			return "", refuse("These files look like %s's, not %s's. Check the tool.",
-				sources.Tools.Values[others[0]].Name, sources.Tools.Values[source].Name)
+			return "", refuse(i18n.T("go.importers.refuse.otherTool", "found", sources.Tools.Values[others[0]].Name, "chosen", sources.Tools.Values[source].Name))
 		}
 		return source, nil
 	}
 	if len(seen) > 1 {
-		return "", refuse("These files come from different tools. Import one tool at a time.")
+		return "", refuse(i18n.T("go.importers.refuse.mixed"))
 	}
 	for t := range seen {
 		return t, nil
 	}
-	return "", refuse("Could not tell which tool wrote these files. Pick the tool you used.")
+	return "", refuse(i18n.T("go.importers.refuse.unknownTool"))
 }

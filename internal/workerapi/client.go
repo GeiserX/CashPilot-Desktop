@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Mount is one host path or named volume and where it goes in the container,
@@ -129,11 +131,11 @@ type Client struct {
 func ValidBaseURL(raw string) (string, error) {
 	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
 	if raw == "" {
-		return "", errors.New("this worker reported no address, so it only reports to this Desktop and cannot take commands")
+		return "", errors.New(i18n.T("go.workerapi.noAddress"))
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("this worker reported an address that is not an http or https URL (%q)", raw)
+		return "", errors.New(i18n.T("go.workerapi.badAddress", "address", strconv.Quote(raw)))
 	}
 	return raw, nil
 }
@@ -174,7 +176,7 @@ func (c *Client) DeployState(ctx context.Context, slug string) (DeployTargetStat
 	}
 	var exists bool
 	if raw, ok := out["exists"]; !ok || isNull(raw) || json.Unmarshal(raw, &exists) != nil {
-		return DeployTargetState{}, errors.New("the worker did not answer the container lookup")
+		return DeployTargetState{}, errors.New(i18n.T("go.workerapi.lookupNoAnswer"))
 	}
 	state := DeployTargetState{Checked: true, Exists: exists}
 	// Left out, the worker is older than CashPilot #831 and names no container. A
@@ -183,7 +185,7 @@ func (c *Client) DeployState(ctx context.Context, slug string) (DeployTargetStat
 	if raw, ok := out["expected_container"]; ok {
 		var id string
 		if isNull(raw) || json.Unmarshal(raw, &id) != nil || !ContainerRef(id) || (id != NoContainer) != exists {
-			return DeployTargetState{}, errors.New("the worker answered the container lookup with an ID this app cannot use; update the worker")
+			return DeployTargetState{}, errors.New(i18n.T("go.workerapi.lookupBadID"))
 		}
 		state.Container = id
 	}
@@ -296,7 +298,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	if err != nil {
 		failure := transportError(err, timeout)
 		if isDeploy && failure.Unknown {
-			failure.Message = "The worker deploy outcome is unknown. " + failure.Message
+			failure.Message = i18n.T("go.workerapi.deployUnknown", "message", failure.Message)
 		}
 		return failure
 	}
@@ -355,16 +357,16 @@ func transportError(err error, timeout time.Duration) *Error {
 	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 		var opErr *net.OpError
 		if errors.As(err, &opErr) && opErr.Op == "dial" {
-			return &Error{Status: 503, Message: "Could not reach the worker: it did not take the connection. Check that it runs and that this computer can reach its address."}
+			return &Error{Status: 503, Message: i18n.T("go.workerapi.unreachable")}
 		}
-		return &Error{Status: 504, Unknown: true, Message: fmt.Sprintf("The worker did not answer within %g s. It may still be working on it; check the worker.", timeout.Seconds())}
+		return &Error{Status: 504, Unknown: true, Message: i18n.T("go.workerapi.timeout", "seconds", fmt.Sprintf("%g", timeout.Seconds()))}
 	}
 	var opErr *net.OpError
 	var dnsErr *net.DNSError
 	if errors.As(err, &opErr) && opErr.Op == "dial" || errors.As(err, &dnsErr) {
-		return &Error{Status: 503, Message: "Could not reach the worker: it did not take the connection. Check that it runs and that this computer can reach its address."}
+		return &Error{Status: 503, Message: i18n.T("go.workerapi.unreachable")}
 	}
-	return &Error{Status: 504, Unknown: true, Message: "The connection to the worker dropped before it answered. It may still be working on it; check the worker."}
+	return &Error{Status: 504, Unknown: true, Message: i18n.T("go.workerapi.dropped")}
 }
 
 // forwardableCodes are the refusals the worker structures for the operator, with a
@@ -472,9 +474,9 @@ func clean(text string, env map[string]string) string {
 // failureText is what to say when the worker's answer has no reason that can be shown.
 func failureText(status int) string {
 	if status == 404 {
-		return "The worker does not know this request (HTTP 404); it may be older than this app, so update it"
+		return i18n.T("go.workerapi.http404")
 	}
-	return fmt.Sprintf("Worker request failed (HTTP %d); the worker's log has the reason", status)
+	return i18n.T("go.workerapi.httpFailed", "status", status)
 }
 
 // StopTimeout is how long the worker waits for a service to stop cleanly, read as

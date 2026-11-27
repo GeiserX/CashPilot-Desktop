@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/shirou/gopsutil/v4/process"
 )
 
@@ -274,7 +275,7 @@ func (p *NativeProcessProvider) Status(ctx context.Context) Status {
 	return Status{
 		Available: true,
 		Kind:      NativeRuntimeKind,
-		Message:   "Native process runtime is ready — runs earners as supervised native processes, no container runtime required.",
+		Message:   i18n.T("go.runtime.native.ready"),
 		Tools:     map[string]string{},
 	}
 }
@@ -287,7 +288,7 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 	svc := spec.Service
 	bin, ok := svc.NativeBinaryFor(p.goos, p.goarch)
 	if !ok {
-		return ContainerInfo{}, fmt.Errorf("%s has no native binary for %s/%s", svc.Name, p.goos, p.goarch)
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.native.noBinary", "name", svc.Name, "os", p.goos, "arch", p.goarch))
 	}
 	if spec.ExpectedContainer != nil {
 		// See DeployTarget: a running program cannot be named, so a checked deploy
@@ -297,7 +298,7 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 			return ContainerInfo{}, err
 		}
 		if has {
-			return ContainerInfo{}, fmt.Errorf("%s runs as a program on this computer, not in a container: %w", svc.Name, ErrNoDeployTarget)
+			return ContainerInfo{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.native.noContainer", "name", svc.Name), ErrNoDeployTarget)
 		}
 		if *spec.ExpectedContainer != NoContainer {
 			return ContainerInfo{}, &DeployTargetChanged{Actual: NoContainer}
@@ -337,7 +338,7 @@ func (p *NativeProcessProvider) Deploy(ctx context.Context, spec DeploySpec, pro
 	}
 
 	if progress != nil {
-		progress("Starting native process")
+		progress(i18n.T("go.runtime.native.starting"))
 	}
 	mp, err := p.launchProcess(spec.Slug, binPath, args, envSlice(env), svc.Docker.Resources, mayElevate && step.RuleName != "", registryDesc{URL: bin.URL, SHA256: bin.SHA256, Archive: bin.Archive, FirewallBlock: bin.FirewallBlock})
 	if err != nil {
@@ -369,10 +370,10 @@ func (p *NativeProcessProvider) Start(ctx context.Context, slug string) error {
 
 	e, ok := p.readRegistry().Entries[slug]
 	if !ok {
-		return fmt.Errorf("native service %q is not deployed", slug)
+		return errors.New(i18n.T("go.runtime.native.notDeployed", "slug", strconv.Quote(slug)))
 	}
 	if e.BinPath == "" || !fileExists(e.BinPath) {
-		return fmt.Errorf("native binary for %q is missing; redeploy it", slug)
+		return errors.New(i18n.T("go.runtime.native.binaryMissing", "slug", strconv.Quote(slug)))
 	}
 	// Already running as a live orphan we still recognise (identity match) -> no-op. A
 	// recycled pid fails the identity check and falls through to a fresh launch.
@@ -393,7 +394,7 @@ func (p *NativeProcessProvider) Stop(ctx context.Context, slug string, stopTimeo
 	reg := p.readRegistry()
 	e, ok := reg.Entries[slug]
 	if !ok {
-		return fmt.Errorf("native service %q is not running", slug)
+		return errors.New(i18n.T("go.runtime.native.notRunning", "slug", strconv.Quote(slug)))
 	}
 	// Only signal a recorded pid when the live process still matches the identity we
 	// persisted for it. If it doesn't (a recycled pid) we skip the signal — never

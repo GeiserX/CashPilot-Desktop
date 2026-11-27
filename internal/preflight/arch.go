@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // CPU architecture, folded to the three families a catalog entry can promise.
@@ -136,11 +137,16 @@ func runsOn(build, target Target) bool {
 
 // Label is how a family reads to a person.
 func Label(family string) string {
+	switch family {
+	case "arm64":
+		return i18n.T("go.preflight.arch.arm64")
+	case "arm":
+		return i18n.T("go.preflight.arch.arm")
+	case "":
+		return i18n.T("go.preflight.arch.unknown")
+	}
 	if label, ok := archLabels[family]; ok {
 		return label
-	}
-	if family == "" {
-		return "unknown"
 	}
 	return family
 }

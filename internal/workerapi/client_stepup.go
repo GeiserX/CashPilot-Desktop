@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf16"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // The approval a worker checks before it runs a service that keeps a wallet or node
@@ -33,7 +35,7 @@ var stepUpLabel = []byte("cashpilot-step-up-v1")
 // where the payload holds the action, the target, an expiry and a random nonce.
 func Sign(workerKey, action, target string, now time.Time) (string, error) {
 	if workerKey == "" {
-		return "", errors.New("this worker has not finished enrolling, so it cannot check a confirmation; wait for its next check-in and try again")
+		return "", errors.New(i18n.T("go.workerapi.notEnrolled"))
 	}
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {

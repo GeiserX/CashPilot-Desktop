@@ -4,10 +4,8 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
-
-// isolationHelpBase is the LAN isolation setting's help before the sentence on files.
-const isolationHelpBase = "auto (default), on or off. auto fences container earners off your LAN, this computer, a tailnet and cloud metadata on a new install, and leaves an upgraded one as it is until you turn isolation on from the dashboard. off deploys on Docker's default bridge, where earners can reach your LAN. Podman cannot be fenced yet: there auto deploys unfenced and on refuses container deploys. Takes effect on the next deploy."
 
 // isolationHelp is the LAN isolation help with what a container earner can read on
 // disk. The fence is about the network; a person also asks about their files. A
@@ -15,12 +13,11 @@ const isolationHelpBase = "auto (default), on or off. auto fences container earn
 // a named volume of its own, or a folder of this computer. The services that mount
 // a folder are read from the catalog, so the sentence follows it.
 func isolationHelp(services []catalog.Service) string {
-	files := "On disk, a container earner sees only its own data volume, which CashPilot mounts into it, and none of your files."
+	files := i18n.T("go.app.isolationHelp.filesVolumeOnly")
 	if names := hostFolderServices(services); len(names) > 0 {
-		files = "On disk, a container earner sees only what CashPilot mounts into it: its own data volume, and for " +
-			joinNames(names) + " the folders you choose for " + pronoun(len(names)) + ". It does not see the rest of your files."
+		files = i18n.T("go.app.isolationHelp.filesFolders", "names", joinNames(names), "n", len(names))
 	}
-	return isolationHelpBase + " " + files + " An app that runs outside Docker is not fenced and can read what your account can."
+	return i18n.T("go.app.isolationHelp.message", "base", i18n.T("go.app.isolationHelp.base"), "files", files)
 }
 
 // hostFolderServices names the container services whose deploy mounts a folder of
@@ -59,17 +56,11 @@ func mountsHostFolder(volume string) bool {
 
 func joinNames(names []string) string {
 	switch len(names) {
+	case 0:
+		return ""
 	case 1:
 		return names[0]
-	case 2:
-		return names[0] + " and " + names[1]
 	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}
-
-func pronoun(n int) string {
-	if n == 1 {
-		return "it"
-	}
-	return "them"
+	rest := strings.Join(names[:len(names)-1], i18n.T("go.app.list.separator"))
+	return i18n.T("go.app.list.and", "rest", rest, "last", names[len(names)-1])
 }

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -109,9 +110,9 @@ func (a *App) ChooseRestoreFile() (*RestorePreview, error) {
 		return nil, err
 	}
 	path, err := a.askWhichFile(wailsruntime.OpenDialogOptions{
-		Title: "Choose a backup to restore",
+		Title: i18n.T("go.app.restore.chooseTitle"),
 		Filters: []wailsruntime.FileFilter{
-			{DisplayName: "CashPilot backups (*.cpbackup)", Pattern: "*.cpbackup"},
+			{DisplayName: i18n.T("go.app.backup.filter", "pattern", "*.cpbackup"), Pattern: "*.cpbackup"},
 		},
 	})
 	if err != nil {
@@ -181,7 +182,7 @@ func (a *App) RestoreStateBackup(token, passphrase, typedName string) (runtime.R
 	delete(a.restoreFiles, token)
 	a.restoreMu.Unlock()
 	if !ok {
-		return runtime.RestoreResult{}, errors.New("choose the backup file again: the one chosen was already used or waited longer than 15 minutes")
+		return runtime.RestoreResult{}, errors.New(i18n.T("go.app.restore.error.expired", "minutes", 15))
 	}
 	data, header, sum, err := readRestoreFile(chosen.path)
 	if err != nil {
@@ -189,7 +190,7 @@ func (a *App) RestoreStateBackup(token, passphrase, typedName string) (runtime.R
 	}
 	slug := header.MetadataString("slug")
 	if sum != chosen.sha256 || slug != chosen.slug {
-		return runtime.RestoreResult{}, errors.New("the file changed since you chose it, so nothing was restored. Choose it again")
+		return runtime.RestoreResult{}, errors.New(i18n.T("go.app.restore.error.changed"))
 	}
 	known, err := a.exportedHere(sum, slug)
 	if err != nil {
@@ -199,15 +200,15 @@ func (a *App) RestoreStateBackup(token, passphrase, typedName string) (runtime.R
 	if err != nil {
 		return runtime.RestoreResult{}, err
 	} else if why != "" {
-		return runtime.RestoreResult{}, fmt.Errorf("nothing was restored: %s", strings.TrimSuffix(why, "."))
+		return runtime.RestoreResult{}, errors.New(i18n.T("go.app.restore.error.refused", "why", strings.TrimSuffix(why, ".")))
 	}
 	if needsName(known, runsOn) {
 		typed := strings.ToLower(strings.TrimSpace(typedName))
 		if typed == "" || (typed != strings.ToLower(slug) && typed != strings.ToLower(a.serviceName(slug))) {
 			if known {
-				return runtime.RestoreResult{}, fmt.Errorf("%s runs now on %s, and the app cannot tell whether that is the node in this file, so type %s to restore it here anyway", a.serviceName(slug), strings.Join(runsOn, ", "), a.serviceName(slug))
+				return runtime.RestoreResult{}, errors.New(i18n.T("go.app.restore.error.typeNameKnown", "name", a.serviceName(slug), "machines", strings.Join(runsOn, ", ")))
 			}
-			return runtime.RestoreResult{}, fmt.Errorf("this app did not make this file, so type %s to say whose identity is inside", a.serviceName(slug))
+			return runtime.RestoreResult{}, errors.New(i18n.T("go.app.restore.error.typeNameUnknown", "name", a.serviceName(slug)))
 		}
 	}
 	payload, err := statebackup.Open(data, passphrase, "")
@@ -287,7 +288,7 @@ func readRestoreFile(path string) ([]byte, statebackup.Header, string, error) {
 		return nil, statebackup.Header{}, "", err
 	}
 	if header.Mode != statebackup.ModePassphrase {
-		return nil, statebackup.Header{}, "", errors.New("this file is sealed to a key, not a passphrase. Its private key never goes through the app: restore it with the command line steps in the backup guide")
+		return nil, statebackup.Header{}, "", errors.New(i18n.T("go.app.restore.error.sealedToKey"))
 	}
 	sum := sha256.Sum256(data)
 	return data, header, hex.EncodeToString(sum[:]), nil
@@ -297,7 +298,7 @@ func readRestoreFile(path string) ([]byte, statebackup.Header, string, error) {
 func (a *App) exportedHere(sum, slug string) (bool, error) {
 	exported, ok, err := a.store.ExportedBackup(sum)
 	if err != nil {
-		return false, fmt.Errorf("could not read which backups this app made: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T("go.app.restore.error.readExported"), err)
 	}
 	return ok && exported == slug, nil
 }
@@ -338,7 +339,7 @@ func (a *App) restoreCheck(slug string, known bool, madeOn string) (string, []st
 		return why, runsOn, err
 	}
 	if fleetErr != nil {
-		return fmt.Sprintf("the app could not read which fleet machines run %s (%v), so it cannot tell whether this identity runs on one of them. Try again", a.serviceName(slug), fleetErr), nil, nil
+		return i18n.T("go.app.restore.why.fleetUnread", "name", a.serviceName(slug), "error", fleetErr), nil, nil
 	}
 	madeOn = strings.TrimSpace(madeOn)
 	if known || madeOn == "" {
@@ -346,7 +347,7 @@ func (a *App) restoreCheck(slug string, known bool, madeOn string) (string, []st
 	}
 	for _, name := range runsOn {
 		if strings.EqualFold(name, madeOn) {
-			return fmt.Sprintf("this file was made on %s, which still runs %s. Two machines on one identity look like one node to the provider, which may merge or ban them. Remove %s from %s first, then restore", name, a.serviceName(slug), a.serviceName(slug), name), runsOn, nil
+			return i18n.T("go.app.restore.why.stillRuns", "machine", name, "name", a.serviceName(slug)), runsOn, nil
 		}
 	}
 	return "", runsOn, nil

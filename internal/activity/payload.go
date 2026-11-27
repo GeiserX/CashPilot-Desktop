@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"sort"
 	"strings"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Caps on one sample, as the web UI applies them (app/activity_ui.py).
@@ -292,15 +294,26 @@ func Fit(w *Window) {
 var (
 	LanAlertClasses = []string{"lan", "tailnet", "docker_host", "docker_peer", "metadata", "link_local"}
 	MailPorts       = []int{25, 465, 587, 2525}
-	classLabels     = map[string]string{
-		"lan":         "your local network",
-		"tailnet":     "your tailnet",
-		"docker_host": "the Docker host itself",
-		"docker_peer": "another container on its Docker network (not an earner)",
-		"metadata":    "a cloud metadata address",
-		"link_local":  "a link-local address",
-	}
 )
+
+// classLabel names a destination class in an alert.
+func classLabel(class string) string {
+	switch class {
+	case "lan":
+		return i18n.T("go.activity.class.lan")
+	case "tailnet":
+		return i18n.T("go.activity.class.tailnet")
+	case "docker_host":
+		return i18n.T("go.activity.class.dockerHost")
+	case "docker_peer":
+		return i18n.T("go.activity.class.dockerPeer")
+	case "metadata":
+		return i18n.T("go.activity.class.metadata")
+	case "link_local":
+		return i18n.T("go.activity.class.linkLocal")
+	}
+	return ""
+}
 
 // Cooldowns per alert kind, in hours.
 const (
@@ -356,9 +369,8 @@ func AlertFindings(w Window) []Finding {
 			}
 		}
 		if len(mail) > 0 {
-			found = append(found, Finding{Kind: "activity_mail", Container: s.Container, Message: fmt.Sprintf(
-				"%s opened mail connections to %d destination(s) on the internet (port %s). Earners have no reason to send mail; this is how an exit node gets your address listed as a spam source.",
-				s.Container, len(mail), joinInts(sortedInts(ports)))})
+			found = append(found, Finding{Kind: "activity_mail", Container: s.Container, Message: i18n.T("go.activity.alert.mail",
+				"container", s.Container, "count", len(mail), "ports", joinInts(sortedInts(ports)))})
 		}
 		byClass := map[string][]Dest{}
 		for _, d := range s.Out {
@@ -389,12 +401,12 @@ func AlertFindings(w Window) []Finding {
 			}
 			var msg string
 			if cls == "metadata" {
-				msg = fmt.Sprintf("%s tried to reach a cloud metadata address (port %s). On a cloud server that address can hand out credentials for the whole account.", s.Container, joinInts(ports))
+				msg = i18n.T("go.activity.alert.metadata", "container", s.Container, "ports", joinInts(ports))
 			} else {
-				msg = fmt.Sprintf("%s tried to reach %s: %d destination(s), port %s.", s.Container, classLabels[cls], len(rows), joinInts(ports))
+				msg = i18n.T("go.activity.alert.lan", "container", s.Container, "class", classLabel(cls), "count", len(rows), "ports", joinInts(ports))
 			}
 			if pending {
-				msg += " Some were still pending (no answer yet), which usually means a firewall dropped them."
+				msg = i18n.T("go.activity.alert.pending", "message", msg)
 			}
 			found = append(found, Finding{Kind: "activity_lan", Container: s.Container, Detail: cls, Message: msg})
 		}

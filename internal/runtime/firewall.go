@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf16"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // A native binary's firewall_block is kept as one outbound Windows Firewall rule per
@@ -132,9 +134,9 @@ func parseFirewallState(out []byte) (firewallState, error) {
 func (st firewallState) notEnforced() string {
 	switch {
 	case st.FirewallOff:
-		return "Windows Firewall is off for the network this computer is on"
+		return i18n.T("go.runtime.firewall.off")
 	case st.LocalIgnored:
-		return "group policy makes Windows Firewall ignore rules created on this computer"
+		return i18n.T("go.runtime.firewall.policyIgnores")
 	}
 	return ""
 }

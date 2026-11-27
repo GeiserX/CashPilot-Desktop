@@ -40,6 +40,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
@@ -138,7 +139,23 @@ type ProxyError struct{ msg string }
 
 func (e *ProxyError) Error() string { return e.msg }
 
-func proxyErr(format string, args ...any) error { return &ProxyError{fmt.Sprintf(format, args...)} }
+func proxyErr(message string) error { return &ProxyError{message} }
+
+// noProxiedCopyError is the ProxyError for a copy that is not on this machine. Its
+// own type lets a caller tell it apart in any language (IsNoProxiedCopy).
+type noProxiedCopyError struct{ *ProxyError }
+
+func (e noProxiedCopyError) Unwrap() error { return e.ProxyError }
+
+func noProxiedCopy(slug string, proxyID int64) error {
+	return noProxiedCopyError{&ProxyError{i18n.T("go.runtime.proxy.noCopy", "slug", slug, "proxy", proxyID)}}
+}
+
+// IsNoProxiedCopy reports whether err says there is no such proxied copy here.
+func IsNoProxiedCopy(err error) bool {
+	var e noProxiedCopyError
+	return errors.As(err, &e)
+}
 
 // ProxyProvider is a runtime that can run proxied copies (Docker only).
 type ProxyProvider interface {
@@ -171,12 +188,12 @@ func IsProxied(labels map[string]string) bool {
 func TunnelImage() (string, error) {
 	if override := strings.TrimSpace(os.Getenv(tunnelImageEnv)); override != "" {
 		if err := exactImage(override); err != nil {
-			return "", proxyErr("%s is %q; %v", tunnelImageEnv, override, err)
+			return "", proxyErr(i18n.T("go.runtime.proxy.tunnelImageBad", "var", tunnelImageEnv, "value", strconv.Quote(override), "error", err))
 		}
 		return override, nil
 	}
 	if pinnedTunnelImage == "" {
-		return "", proxyErr("This build has no tunnel image pinned yet, so it cannot run a copy through a proxy. Set %s to an exact tag or digest of %s.", tunnelImageEnv, TunnelRepository)
+		return "", proxyErr(i18n.T("go.runtime.proxy.noTunnelImage", "var", tunnelImageEnv, "repository", TunnelRepository))
 	}
 	return pinnedTunnelImage, nil
 }
@@ -184,7 +201,7 @@ func TunnelImage() (string, error) {
 // exactImage refuses an image reference that can move: no tag, or a floating one.
 func exactImage(ref string) error {
 	if ValidateImageRef(ref) != nil {
-		return errors.New("give it an image reference")
+		return errors.New(i18n.T("go.runtime.proxy.image.empty"))
 	}
 	if strings.Contains(ref, "@sha256:") {
 		return nil
@@ -195,7 +212,7 @@ func exactImage(ref string) error {
 		tag = last[i+1:]
 	}
 	if floatingTags[strings.ToLower(tag)] {
-		return errors.New("give it an exact version tag or a digest, never a floating tag")
+		return errors.New(i18n.T("go.runtime.proxy.image.floating"))
 	}
 	return nil
 }
@@ -211,7 +228,7 @@ var imageRefRE = regexp.MustCompile(`^` +
 // ValidateImageRef refuses anything that is not a plain image reference.
 func ValidateImageRef(ref string) error {
 	if len(ref) > 255 || !imageRefRE.MatchString(ref) {
-		return errors.New("not an image reference")
+		return errors.New(i18n.T("go.runtime.proxy.image.invalid"))
 	}
 	return nil
 }
@@ -272,14 +289,14 @@ func resolveProxyIP(ctx context.Context, host string) (string, error) {
 	}
 	ips, err := lookupIPv4(ctx, host)
 	if err != nil {
-		return "", proxyErr("Cannot resolve the proxy host %q from this machine: %v", host, err)
+		return "", proxyErr(i18n.T("go.runtime.proxy.hostUnresolved", "host", strconv.Quote(host), "error", err))
 	}
 	for _, ip := range ips {
 		if v4 := ip.To4(); v4 != nil {
 			return v4.String(), nil
 		}
 	}
-	return "", proxyErr("The proxy host %q has no IPv4 address", host)
+	return "", proxyErr(i18n.T("go.runtime.proxy.hostNoIPv4", "host", strconv.Quote(host)))
 }
 
 var hostnameUnsafe = regexp.MustCompile(`[^a-z0-9-]`)
@@ -333,7 +350,7 @@ func tunnelSettingFiles(ctx context.Context, spec ProxySpec, ownIP, label string
 	switch spec.Kind {
 	case "tailscale":
 		if spec.AuthKey == "" || spec.ExitNode == "" {
-			return nil, proxyErr("A Tailscale proxy needs an auth key and an exit node")
+			return nil, proxyErr(i18n.T("go.runtime.proxy.tailscaleNeeds"))
 		}
 		files["auth_key"] = spec.AuthKey
 		files["exit_node"] = spec.ExitNode
@@ -348,11 +365,11 @@ func tunnelSettingFiles(ctx context.Context, spec ProxySpec, ownIP, label string
 		return files, nil
 	case "socks5", "http":
 	default:
-		return nil, proxyErr("Unknown proxy type %q", spec.Kind)
+		return nil, proxyErr(i18n.T("go.runtime.proxy.unknownType", "kind", strconv.Quote(spec.Kind)))
 	}
 	host := strings.TrimSpace(spec.Host)
 	if host == "" || spec.Port < 1 || spec.Port > 65535 {
-		return nil, proxyErr("A proxy needs a host and a port between 1 and 65535")
+		return nil, proxyErr(i18n.T("go.runtime.proxy.needsHostPort"))
 	}
 	ip, err := resolveProxyIP(ctx, host)
 	if err != nil {
@@ -483,7 +500,7 @@ func proxiedEnv(svc catalog.Service, env map[string]string, proxyID int64) (map[
 func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.ContainerCreateOptions, error) {
 	svc := req.Service
 	if why := proxies.Refusal(svc); why != "" {
-		return client.ContainerCreateOptions{}, proxyErr("%s", why)
+		return client.ContainerCreateOptions{}, proxyErr(why)
 	}
 	env, err := buildEnv(svc, req.Env), error(nil)
 	if !req.Routed {
@@ -494,12 +511,12 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 		if name == "" {
 			name = req.Slug
 		}
-		return client.ContainerCreateOptions{}, proxyErr("%s: %s", name, err)
+		return client.ContainerCreateOptions{}, proxyErr(name + ": " + err.Error())
 	}
 	// No GPU for a proxied copy (Refusal says so first), so it gets the void stamp
 	// like any container without an NVIDIA grant.
 	if err := stampGPUEnv(svc, env, false); err != nil {
-		return client.ContainerCreateOptions{}, proxyErr("%s", err)
+		return client.ContainerCreateOptions{}, proxyErr(err.Error())
 	}
 	stopTimeout := StopTimeoutSeconds(svc)
 	labels := containerLabels(req.Slug, 1)
@@ -531,7 +548,7 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 	host.Resources.Devices = nil
 	host.Resources.DeviceRequests = nil
 	if risky := proxies.RiskyCaps(host.CapAdd); len(risky) > 0 {
-		return client.ContainerCreateOptions{}, proxyErr("A proxied copy cannot hold %s: it could change or bypass its tunnel's firewall", strings.Join(risky, ", "))
+		return client.ContainerCreateOptions{}, proxyErr(i18n.T("go.runtime.proxy.riskyCaps", "caps", strings.Join(risky, ", ")))
 	}
 	return client.ContainerCreateOptions{Name: proxiedName(req.Slug, req.ProxyID), Config: cfg, HostConfig: host}, nil
 }
@@ -732,15 +749,15 @@ func waitReady(parent context.Context, d tunnelDocker, id string, timeout time.D
 		return Exit{}, err
 	}
 	if fenceErr != nil {
-		return Exit{}, proxyErr("Could not apply the LAN fence for the tunnel: %v", fenceErr)
+		return Exit{}, proxyErr(i18n.T("go.runtime.proxy.fenceFailed", "error", fenceErr))
 	}
 	tail := strings.Join(strings.Fields(d.logsTail(context.Background(), id, 5)), " ")
 	if len(tail) > 300 {
 		tail = tail[len(tail)-300:]
 	}
-	msg := fmt.Sprintf("The tunnel did not reach the internet through the proxy within %d s, so nothing was started behind it.", int(timeout.Seconds()))
+	msg := i18n.T("go.runtime.proxy.tunnelTimeout", "seconds", int(timeout.Seconds()))
 	if tail != "" {
-		msg += " Tunnel log: " + tail
+		msg += " " + i18n.T("go.runtime.proxy.tunnelLog", "log", tail)
 	}
 	return Exit{}, &ProxyError{msg}
 }
@@ -777,7 +794,7 @@ func startSidecar(ctx context.Context, d tunnelDocker, name, slug, network strin
 	_ = d.pull(ctx, image)
 	id, err := d.create(ctx, sidecarCreate(name, slug, proxyID, image, network))
 	if err != nil {
-		return "", Exit{}, &ProxyError{redact("The tunnel could not be created: "+err.Error(), spec.secrets())}
+		return "", Exit{}, &ProxyError{redact(i18n.T("go.runtime.proxy.tunnelCreateFailed", "error", err.Error()), spec.secrets())}
 	}
 	fail := func(err error) (string, Exit, error) {
 		removeQuietly(d, id, 2)
@@ -785,10 +802,10 @@ func startSidecar(ctx context.Context, d tunnelDocker, name, slug, network strin
 		if errors.As(err, &pe) {
 			return "", Exit{}, &ProxyError{redact(pe.msg, spec.secrets())}
 		}
-		return "", Exit{}, &ProxyError{redact("The tunnel could not start: "+err.Error(), spec.secrets())}
+		return "", Exit{}, &ProxyError{redact(i18n.T("go.runtime.proxy.tunnelStartFailed", "error", err.Error()), spec.secrets())}
 	}
 	if err := d.copyTo(ctx, id, tunnelSecretDir, archive); err != nil {
-		return fail(fmt.Errorf("could not hand the proxy settings to the tunnel container: %w", err))
+		return fail(fmt.Errorf("%s: %w", i18n.T("go.runtime.proxy.handSettingsFailed"), err))
 	}
 	if err := d.start(ctx, id); err != nil {
 		return fail(err)
@@ -833,11 +850,11 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	defer mu.Unlock()
 	facts := d.facts(ctx)
 	if facts.OSType != "" && facts.OSType != "linux" {
-		return Exit{}, proxyErr("Proxied copies need a Linux container runtime; this one runs %s containers.", facts.OSType)
+		return Exit{}, proxyErr(i18n.T("go.runtime.proxy.needsLinux", "os", facts.OSType))
 	}
 	image := ImageForArch(req.Service.Docker, facts.Architecture)
 	if image == "" {
-		return Exit{}, proxyErr("%s has no Docker image", req.Service.Name)
+		return Exit{}, proxyErr(i18n.T("go.runtime.proxy.noImage", "name", req.Service.Name))
 	}
 	// Built and checked before anything is touched: an entry-level refusal must not
 	// cost the copy that is running now.
@@ -849,11 +866,11 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	}
 	entrypoint, cmd, err := d.imageRuns(ctx, image)
 	if err != nil {
-		return Exit{}, fmt.Errorf("could not read what %s runs: %w", image, err)
+		return Exit{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.proxy.inspectImageFailed", "image", image), err)
 	}
 	probe, _ := earnerCreate(req, "check", image, facts.OSType)
 	if bootsInitSystem(entrypoint, cmd, probe.Config.Entrypoint, probe.Config.Cmd) {
-		return Exit{}, proxyErr("%s runs an init system as its main process, which CashPilot never runs", image)
+		return Exit{}, proxyErr(i18n.T("go.runtime.proxy.initImage", "image", image))
 	}
 	// Settings that cannot work (a host that does not resolve, no tunnel image) must
 	// not cost the copy running now either.
@@ -875,13 +892,13 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 		return Exit{}, err
 	} else if found {
 		if ins.Config == nil || !isOurs(ins.Config.Labels, req.Slug, pid) {
-			return Exit{}, proxyErr("A container named %s that CashPilot did not create is in the way", staged)
+			return Exit{}, proxyErr(i18n.T("go.runtime.proxy.stagedInTheWay", "name", staged))
 		}
 		// One younger than the sweep age belongs to a deploy still running, in this
 		// app or another one on the same Docker host; removing it would cut that
 		// deploy's tunnel after it may already have removed the old pair.
 		if created, perr := time.Parse(time.RFC3339Nano, ins.Created); perr == nil && time.Since(created) < staleTestTunnel {
-			return Exit{}, proxyErr("Another deploy of %s through proxy %d is under way; try again in a few minutes", req.Slug, pid)
+			return Exit{}, proxyErr(i18n.T("go.runtime.proxy.busy", "slug", req.Slug, "proxy", pid))
 		}
 		removeQuietly(d, ins.ID, 2)
 	}
@@ -910,12 +927,12 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	earnerID, err := d.create(ctx, opts)
 	if err != nil {
 		removeQuietly(d, sidecarID, 2)
-		return Exit{}, &ProxyError{redact("Docker refused the proxied copy: "+err.Error(), req.Proxy.secrets())}
+		return Exit{}, &ProxyError{redact(i18n.T("go.runtime.proxy.copyRefused", "error", err.Error()), req.Proxy.secrets())}
 	}
 	if err := d.start(ctx, earnerID); err != nil {
 		removeQuietly(d, earnerID, 2)
 		removeQuietly(d, sidecarID, 2)
-		return Exit{}, &ProxyError{redact("The proxied copy could not start: "+err.Error(), req.Proxy.secrets())}
+		return Exit{}, &ProxyError{redact(i18n.T("go.runtime.proxy.copyStartFailed", "error", err.Error()), req.Proxy.secrets())}
 	}
 	return exit, nil
 }
@@ -938,7 +955,7 @@ func stopProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int64
 		return false, err
 	}
 	if !p.earnerOK && !p.tunnelOK {
-		return false, proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
+		return false, noProxiedCopy(slug, proxyID)
 	}
 	wasRunning := (p.earnerOK && live(p.earner)) || (p.tunnelOK && live(p.tunnel))
 	if p.tunnelOK {
@@ -978,7 +995,7 @@ func startProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int6
 		return Exit{}, err
 	}
 	if !p.earnerOK || !p.tunnelOK {
-		return Exit{}, proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
+		return Exit{}, noProxiedCopy(slug, proxyID)
 	}
 	files, err := tunnelSecretFiles(ctx, spec, ownIP, fmt.Sprintf("%s-p%d", slug, proxyID))
 	if err != nil {
@@ -1006,7 +1023,7 @@ func startProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int6
 			return Exit{}, err
 		}
 		if err := d.copyTo(ctx, p.tunnelNm, tunnelSecretDir, archive); err != nil {
-			return Exit{}, proxyErr("Could not hand the proxy settings to the tunnel container: %v", err)
+			return Exit{}, proxyErr(i18n.T("go.runtime.proxy.handSettingsFailedCap", "error", err))
 		}
 	}
 	if err := d.start(ctx, p.tunnelNm); err != nil {
@@ -1018,7 +1035,7 @@ func startProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int6
 	}
 	earner, found, err := d.inspect(ctx, p.earnerName)
 	if err != nil || !found {
-		return Exit{}, proxyErr("The proxied copy of %s went away while its tunnel started", slug)
+		return Exit{}, proxyErr(i18n.T("go.runtime.proxy.copyWentAway", "slug", slug))
 	}
 	if earner.State != nil && earner.State.Status == "running" {
 		return exit, d.restart(ctx, p.earnerName, stopTimeoutOr(&earner, timeout))
@@ -1044,17 +1061,17 @@ func restartProxied(ctx context.Context, d tunnelDocker, slug string, proxyID in
 		return err
 	}
 	if !p.earnerOK || !p.tunnelOK {
-		return proxyErr("No proxied copy of %s through proxy %d on this machine", slug, proxyID)
+		return noProxiedCopy(slug, proxyID)
 	}
 	if p.tunnel.State == nil || p.tunnel.State.Status != "running" {
-		return proxyErr("The tunnel of %s is not running, so it was left as it was", p.earnerName)
+		return proxyErr(i18n.T("go.runtime.proxy.tunnelNotRunning", "name", p.earnerName))
 	}
 	out, err := d.readFile(ctx, p.tunnelNm, tunnelReadyFile)
 	if _, ready := parseReady(out); err != nil || !ready {
-		return proxyErr("The tunnel of %s has not proved its exit, so it was left as it was", p.earnerName)
+		return proxyErr(i18n.T("go.runtime.proxy.exitUnproved", "name", p.earnerName))
 	}
 	if p.earner.State == nil || p.earner.State.Status != "running" {
-		return proxyErr("%s is not running, so it was left as it was", p.earnerName)
+		return proxyErr(i18n.T("go.runtime.proxy.earnerNotRunning", "name", p.earnerName))
 	}
 	return d.restart(ctx, p.earnerName, stopTimeoutOr(p.earner, timeout))
 }
@@ -1312,7 +1329,7 @@ func testProxy(ctx context.Context, d tunnelDocker, spec ProxySpec, ownIP string
 	removeQuietly(d, id, 2)
 	exit.MS = time.Since(began).Milliseconds()
 	if proxies.PublicIP(exit.IP) == "" {
-		return Exit{}, proxyErr("The tunnel came up, but its exit address is not a public IP")
+		return Exit{}, proxyErr(i18n.T("go.runtime.proxy.exitNotPublic"))
 	}
 	return exit, nil
 }

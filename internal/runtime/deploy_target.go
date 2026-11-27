@@ -11,6 +11,8 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/client"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // NoContainer is the deploy target when no container has the deploy's name, as the
@@ -49,7 +51,7 @@ func (p *DockerProvider) DeployTarget(ctx context.Context, slug string) (string,
 		return NoContainer, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("could not look up the deploy container in Docker: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.target.lookupFailed"), err)
 	}
 	// Deploy refuses to replace another CashPilot's container, so naming it here
 	// would ask the user to approve a replacement that never happens.
@@ -67,7 +69,7 @@ func (p *NativeProcessProvider) DeployTarget(_ context.Context, slug string) (st
 		return "", err
 	}
 	if has {
-		return "", fmt.Errorf("%s runs as a program on this computer, not in a container: %w", slug, ErrNoDeployTarget)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.target.native", "name", slug), ErrNoDeployTarget)
 	}
 	return NoContainer, nil
 }
@@ -85,7 +87,7 @@ func (p *NativeProcessProvider) hasProgram(slug string) (bool, error) {
 	}
 	reg, err := p.readRegistryStrict()
 	if err != nil {
-		return false, fmt.Errorf("cannot read the record of programs on this computer, so nothing was replaced: %w", err)
+		return false, fmt.Errorf("%s: %w", i18n.T("go.runtime.target.registryUnread"), err)
 	}
 	return reg.Entries[slug] != nil, nil
 }

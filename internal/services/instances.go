@@ -2,9 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
@@ -97,11 +99,11 @@ func (m *Manager) setCopies(slug string, copies []runtime.ContainerInfo) {
 // cannot exist. Copy 1 is the service itself and goes through Stop/Start/Logs.
 func (m *Manager) copier(slug string, n int) (runtime.CopyProvider, error) {
 	if n < 2 || n > MaxInstances {
-		return nil, fmt.Errorf("copy must be between 2 and %d", MaxInstances)
+		return nil, errors.New(i18n.T("go.services.copyRange", "max", MaxInstances))
 	}
 	copier, ok := m.providerForSlug(slug).(runtime.CopyProvider)
 	if !ok {
-		return nil, fmt.Errorf("%s runs once on this runtime", slug)
+		return nil, errors.New(i18n.T("go.services.runsOnce", "slug", slug))
 	}
 	return copier, nil
 }

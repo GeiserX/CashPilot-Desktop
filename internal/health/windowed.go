@@ -12,6 +12,7 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/dockerhost"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // WindowReader reads hours of a service's logs, filtered, and the values its
@@ -104,11 +105,11 @@ func fillVars(text string, vars map[string]string) string {
 // home router can forward to, so a tunnel or point-to-point interface, or Docker's
 // and VMs' 172.16.0.0/12, gives the generic text instead.
 var lanAddress = func() string {
-	const unknown = "this computer's LAN address"
+	unknown := i18n.T("go.health.lanAddress.unknown")
 	// A remote Docker endpoint, from DOCKER_HOST or the current Docker context,
 	// runs the node on another machine, whose address this computer cannot know.
 	if remoteDocker(os.Getenv("DOCKER_HOST")) || dockerhost.Resolve().Remote() {
-		return "the LAN address of the machine running Docker"
+		return i18n.T("go.health.lanAddress.remoteDocker")
 	}
 	conn, err := net.Dial("udp", "192.0.2.1:9")
 	if err != nil {

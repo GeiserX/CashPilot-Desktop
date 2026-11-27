@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
@@ -93,10 +95,10 @@ const (
 // leadOnlyError is why this computer sends no commands to workers, or nil.
 func (a *App) leadOnlyError() error {
 	if a.joined() {
-		return errors.New("this computer is joined to your CashPilot, which sends the commands to its workers")
+		return errors.New(i18n.T("go.app.lead.joined"))
 	}
 	if !a.cfg.Config().FleetServerEnabled {
-		return errors.New("this Desktop does not accept workers. Turn on \"Accept workers\" in Settings first")
+		return errors.New(i18n.T("go.app.lead.notHub", "setting", i18n.T("go.app.settings.fleetServer.short")))
 	}
 	return nil
 }
@@ -106,11 +108,11 @@ func (a *App) leadOnlyError() error {
 func workerReason(device store.FleetDevice, online, keyKnown bool) string {
 	switch {
 	case !online:
-		return fmt.Sprintf("%s is offline, so it cannot take commands now.", device.Name)
+		return i18n.T("go.app.lead.reason.offline", "name", device.Name)
 	case strings.TrimSpace(device.Endpoint) == "":
-		return fmt.Sprintf("%s only reports to this Desktop: it set no CASHPILOT_WORKER_URL, so it cannot take commands.", device.Name)
+		return i18n.T("go.app.lead.reason.noURL", "name", device.Name, "var", "CASHPILOT_WORKER_URL")
 	case !keyKnown:
-		return fmt.Sprintf("%s joined before this Desktop could send commands. Remove it on the Fleet page: it joins again by itself within about 10 minutes, and then takes commands.", device.Name)
+		return i18n.T("go.app.lead.reason.oldKey", "name", device.Name, "minutes", 10)
 	}
 	if _, err := workerapi.ValidBaseURL(device.Endpoint); err != nil {
 		return fmt.Sprintf("%s: %v.", device.Name, err)
@@ -242,7 +244,7 @@ func (a *App) workerFor(id int64) (commandTarget, error) {
 		}
 	}
 	if !found || device.Kind != "worker" {
-		return commandTarget{}, fmt.Errorf("no Docker worker %d reports to this Desktop", id)
+		return commandTarget{}, errors.New(i18n.T("go.app.lead.noWorker", "id", id))
 	}
 	key, confirmed, err := a.store.FleetCommandKey(id)
 	if err != nil {
@@ -259,7 +261,7 @@ func (a *App) workerFor(id int64) (commandTarget, error) {
 	}
 	reports, err := a.store.FleetReports()
 	if err != nil {
-		return commandTarget{}, fmt.Errorf("could not read the selected worker's report: %w", err)
+		return commandTarget{}, fmt.Errorf("%s: %w", i18n.T("go.app.lead.readReportFailed"), err)
 	}
 	return commandTarget{
 		device: device,
@@ -284,7 +286,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	svc, ok := a.catalog.Get(slug)
 	if !ok {
-		return WorkerDeployResult{}, fmt.Errorf("unknown service: %s", slug)
+		return WorkerDeployResult{}, errors.New(i18n.T("go.app.unknownService", "slug", slug))
 	}
 	result := WorkerDeployResult{Worker: target.device.Name, WorkerIdentity: target.identity()}
 	// Every yes was given about one worker. Another one that took over the row (a
@@ -294,12 +296,10 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	// checked whenever the form sends one, not only with a flag.
 	if (req.ReplaceExisting || req.AllowSharedIdentity || req.Confirmed || req.WorkerIdentity != "") && req.WorkerIdentity != result.WorkerIdentity {
 		result.Ask = askWorkerChanged
-		result.Message = fmt.Sprintf("%s is not the worker you answered about: another CashPilot worker now reports under that name, at %s. Your answers so far do not count for it. Deploy %s to it?",
-			target.device.Name, target.device.Endpoint, svc.Name)
+		result.Message = i18n.T("go.app.lead.ask.otherWorker", "worker", target.device.Name, "address", target.device.Endpoint, "name", svc.Name)
 		if clientID := strings.TrimSpace(target.report.ClientID); clientID != "" && strings.HasPrefix(req.WorkerIdentity, clientID+"@") {
 			// The same worker, at a new address: that is where the deploy would go.
-			result.Message = fmt.Sprintf("%s now reports at a new address, %s. Your answers so far do not count for it. Deploy %s to it?",
-				target.device.Name, target.device.Endpoint, svc.Name)
+			result.Message = i18n.T("go.app.lead.ask.newAddress", "worker", target.device.Name, "address", target.device.Endpoint, "name", svc.Name)
 		}
 		return result, nil
 	}
@@ -327,7 +327,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	ctx := workerContext(a.ctx)
 	state, err := target.client.DeployState(ctx, slug)
 	if err != nil {
-		return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
+		return WorkerDeployResult{}, fmt.Errorf("%s: %w", i18n.T("go.app.lead.checkFailed", "name", svc.Name, "worker", target.device.Name), err)
 	}
 	checked, exists := state.Checked, state.Exists
 	// named: the worker names the container a deploy replaces (CashPilot #831), and
@@ -337,7 +337,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	// yes that named one covers only that container, never the bare flag: if the
 	// worker stops naming it (rolled back while the dialog was open), it asks again.
 	legacyYes := req.ReplaceExisting && req.ExpectedContainer == ""
-	replaceQuestion := fmt.Sprintf("Redeploy %s on %s? The existing container will be replaced, but its volumes are kept.", svc.Name, target.device.Name)
+	replaceQuestion := i18n.T("go.app.lead.ask.replace", "name", svc.Name, "worker", target.device.Name)
 	if named {
 		// The owner's yes covers only the container its question named.
 		if state.Container != workerapi.NoContainer && (!req.ReplaceExisting || req.ExpectedContainer != state.Container) {
@@ -345,7 +345,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 			result.ExpectedContainer = state.Container
 			result.Message = namedReplaceQuestion(svc.Name, target.device.Name, state.Container)
 			if req.ReplaceExisting && req.ExpectedContainer != "" {
-				result.Message = fmt.Sprintf("The %s container on %s changed since you approved replacing it.\n\n%s", svc.Name, target.device.Name, result.Message)
+				result.Message = i18n.T("go.app.lead.ask.changed", "name", svc.Name, "worker", target.device.Name) + "\n\n" + result.Message
 			}
 			return result, nil
 		}
@@ -353,7 +353,7 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		if !checked {
 			exists, err = target.client.LegacyDeployTargetExists(ctx, slug)
 			if err != nil {
-				return WorkerDeployResult{}, fmt.Errorf("could not check for an existing %s container on %s: %w", svc.Name, target.device.Name, err)
+				return WorkerDeployResult{}, fmt.Errorf("%s: %w", i18n.T("go.app.lead.checkFailed", "name", svc.Name, "worker", target.device.Name), err)
 			}
 		}
 		if exists || !checked {
@@ -361,11 +361,11 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 			result.Message = replaceQuestion
 			if !exists {
 				// An empty inventory can also mean a previous request is still deploying.
-				result.Message = fmt.Sprintf("Deploy %s on %s? This worker cannot confirm that the container is absent. If one exists when the deploy starts, it will be replaced and its volumes will be kept.", svc.Name, target.device.Name)
+				result.Message = i18n.T("go.app.lead.ask.unconfirmed", "name", svc.Name, "worker", target.device.Name)
 			}
-			result.Message += fmt.Sprintf(" Update CashPilot on %s so it can confirm the exact container before replacing it.", target.device.Name)
+			result.Message += " " + i18n.T("go.app.lead.ask.update", "worker", target.device.Name)
 			if req.ReplaceExisting {
-				result.Message = fmt.Sprintf("%s no longer names the %s container you approved replacing, so that yes does not count.\n\n%s", target.device.Name, svc.Name, result.Message)
+				result.Message = i18n.T("go.app.lead.ask.noLongerNames", "worker", target.device.Name, "name", svc.Name) + "\n\n" + result.Message
 			}
 			return result, nil
 		}
@@ -381,19 +381,17 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 		}
 		if others := a.boxesRunning(slug, target.device.ID); len(others) > 0 {
 			result.Ask = askIdentity
-			result.Message = fmt.Sprintf("The %s for %s already runs on %s. Two boxes on one device id look to the provider like one device, which it may merge or ban.",
-				envLabel(svc.Docker.Env, key), svc.Name, strings.Join(others, ", "))
+			result.Message = i18n.T("go.app.lead.ask.sharedIdentity", "field", envLabel(svc.Docker.Env, key), "name", svc.Name, "boxes", strings.Join(others, ", "))
 			return result, nil
 		}
 	}
 	critical := workerapi.KeepsIdentity(svc)
 	if image != "" && (critical || carriesID) && !req.Confirmed {
-		what := "runs with a device id the provider pays by"
-		if critical {
-			what = "keeps a wallet or node identity"
-		}
 		result.Ask = askStepUp
-		result.Message = fmt.Sprintf("%s %s, so running another image than the catalog's needs your yes. Whatever runs in its container can read or replace it.", svc.Name, what)
+		result.Message = i18n.T("go.app.lead.ask.stepUpDeviceID", "name", svc.Name)
+		if critical {
+			result.Message = i18n.T("go.app.lead.ask.stepUpIdentity", "name", svc.Name)
+		}
 		return result, nil
 	}
 	if critical && req.Confirmed {
@@ -433,20 +431,20 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 			if (named || freshNamed) && current != "" {
 				question := namedReplaceQuestion(svc.Name, target.device.Name, current)
 				if current == workerapi.NoContainer {
-					question = fmt.Sprintf("Deploy %s on %s? No %s container is there now.", svc.Name, target.device.Name, svc.Name)
+					question = i18n.T("go.app.lead.ask.noContainer", "name", svc.Name, "worker", target.device.Name)
 				}
 				result.Ask = askReplace
 				result.ExpectedContainer = current
-				result.Message = fmt.Sprintf("%s refused the deploy (%s): %s\n\n%s", target.device.Name, refused.Code, refused.Message, question)
+				result.Message = i18n.T("go.app.lead.ask.refused", "worker", target.device.Name, "code", refused.Code, "message", refused.Message) + "\n\n" + question
 				if !named {
-					result.Message = fmt.Sprintf("CashPilot on %s was updated during this deploy and now names the container it would replace.\n\n%s", target.device.Name, question)
+					result.Message = i18n.T("go.app.lead.ask.updatedDuring", "worker", target.device.Name) + "\n\n" + question
 				}
 				return result, nil
 			}
 			if refused.Code == askReplace && !legacyYes {
 				// A prior request can finish after the state read, even if its reply was lost.
 				result.Ask = askReplace
-				result.Message = replaceQuestion + fmt.Sprintf(" Update CashPilot on %s so it can confirm the exact container before replacing it.", target.device.Name)
+				result.Message = replaceQuestion + " " + i18n.T("go.app.lead.ask.update", "worker", target.device.Name)
 				return result, nil
 			}
 			return WorkerDeployResult{}, fmt.Errorf("%s: %s (%s)", target.device.Name, refused.Message, refused.Code)
@@ -462,13 +460,13 @@ func (a *App) DeployToWorker(slug string, req WorkerDeployRequest) (WorkerDeploy
 	}
 	result.ContainerID = answer.ContainerID
 	for _, k := range answer.KeptMounts {
-		result.Notes = append(result.Notes, fmt.Sprintf("%s stays on %s, where the running container keeps it, instead of %s", k.Target, k.Kept, k.Requested))
+		result.Notes = append(result.Notes, i18n.T("go.app.lead.keptMount", "target", k.Target, "kept", k.Kept, "requested", k.Requested))
 	}
 	if err := a.store.MarkFleetCopy(target.device.ID, slug, 1, "running"); err != nil {
 		a.emitError("worker-deploy", err)
 	}
 	if err := a.saveWorkerCredentials(slug, req.Values); err != nil {
-		result.CredentialWarning = "CashPilot could not save the credentials on this computer."
+		result.CredentialWarning = i18n.T("go.app.lead.credentialsNotSaved")
 		a.emitError("credentials", err)
 	}
 	return result, nil
@@ -481,7 +479,7 @@ const codeTargetChanged = "deploy_target_changed"
 // namedReplaceQuestion asks to replace the container id (a full Docker ID), named
 // by its short ID as docker ps shows it.
 func namedReplaceQuestion(service, worker, id string) string {
-	return fmt.Sprintf("Redeploy %s on %s? The existing container (%s) will be replaced, but its volumes are kept.", service, worker, id[:min(12, len(id))])
+	return i18n.T("go.app.lead.ask.replaceNamed", "name", service, "worker", worker, "container", id[:min(12, len(id))])
 }
 
 // boxesRunning names the other boxes that run slug: this computer, and every worker
@@ -489,7 +487,7 @@ func namedReplaceQuestion(service, worker, id string) string {
 func (a *App) boxesRunning(slug string, except int64) []string {
 	var names []string
 	if _, ok, err := a.store.GetDeployment(slug); err == nil && ok {
-		names = append(names, "this computer")
+		names = append(names, i18n.T("go.app.lead.thisComputer"))
 	}
 	devices, err := a.store.FleetDevices()
 	if err != nil {
@@ -527,7 +525,7 @@ func (a *App) CommandWorkerCopy(workerID int64, slug, command string, instance i
 		return "", err
 	}
 	if command != workerapi.CommandStop && command != workerapi.CommandStart && command != workerapi.CommandRestart && command != workerapi.CommandRemove {
-		return "", fmt.Errorf("unknown command %q: use stop, start, restart or remove", command)
+		return "", errors.New(i18n.T("go.app.lead.unknownCommand", "command", strconv.Quote(command)))
 	}
 	target, err := a.workerFor(workerID)
 	if err != nil {
@@ -543,17 +541,7 @@ func (a *App) CommandWorkerCopy(workerID int64, slug, command string, instance i
 	if err := a.store.MarkFleetCopy(target.device.ID, slug, instance, status); err != nil {
 		a.emitError("worker-command", err)
 	}
-	done := map[string]string{
-		workerapi.CommandStop:    "stopped",
-		workerapi.CommandStart:   "started",
-		workerapi.CommandRestart: "restarted",
-		workerapi.CommandRemove:  "removed; its data is kept for a later deploy",
-	}[command]
-	what := slug
-	if instance > 1 {
-		what = fmt.Sprintf("Copy %d of %s", instance, slug)
-	}
-	return fmt.Sprintf("%s on %s %s.", what, target.device.Name, done), nil
+	return i18n.T("go.app.lead.commandDone", "instance", instance, "slug", slug, "worker", target.device.Name, "command", command), nil
 }
 
 // workerContext bounds a call made with no app context (tests).

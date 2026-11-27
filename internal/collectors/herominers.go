@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
 	"regexp"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Kaspa mainnet uses 61 characters for Schnorr and script hashes, 63 for ECDSA.
@@ -22,7 +23,7 @@ const heroMinersKaspaAddressKey = "HEROMINERS_KAS_ADDRESS"
 
 func (r *Registry) collectHeroMinersKaspa(ctx context.Context, credentials map[string]string) (Result, error) {
 	address := firstCredential(credentials, heroMinersKaspaAddressKey)
-	addressError := collectorError{"auth", "Enter the full KAS payout address your miner uses on HeroMiners, with the kaspa: prefix and without the worker name."}
+	addressError := collectorError{"auth", i18n.T("go.collectors.herominers.enterAddress", "coin", "KAS", "provider", "HeroMiners", "prefix", "kaspa:")}
 	if !kaspaAddress.MatchString(address) {
 		return Result{}, addressError
 	}
@@ -31,10 +32,10 @@ func (r *Registry) collectHeroMinersKaspa(ctx context.Context, credentials map[s
 	body, status, _, err := r.doRaw(ctx, http.MethodGet, "https://kaspa.herominers.com/api/stats_address?"+query.Encode(), nil, nil, nil)
 	if err != nil {
 		// The request URL holds the payout address, so the transport error is not shown.
-		return Result{}, collectorError{"transient", "Could not read the HeroMiners pool balance. Try again shortly."}
+		return Result{}, collectorError{"transient", i18n.T("go.collectors.pool.readFailed", "provider", "HeroMiners")}
 	}
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		message := fmt.Sprintf("HeroMiners returned HTTP %d.", status)
+		message := i18n.T("go.collectors.pool.httpPeriod", "provider", "HeroMiners", "status", status)
 		// The endpoint is public. Only its JSON can reject an address.
 		if status == http.StatusUnauthorized || status == http.StatusForbidden {
 			return Result{}, collectorError{"transient", message}
@@ -44,10 +45,10 @@ func (r *Registry) collectHeroMinersKaspa(ctx context.Context, credentials map[s
 
 	var payload map[string]json.RawMessage
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return Result{}, collectorError{"shape", "HeroMiners did not return valid JSON."}
+		return Result{}, collectorError{"shape", i18n.T("go.collectors.pool.invalidJSON", "provider", "HeroMiners")}
 	}
 	if payload == nil {
-		return Result{}, collectorError{"shape", "HeroMiners did not return a JSON object."}
+		return Result{}, collectorError{"shape", i18n.T("go.collectors.pool.notObject", "provider", "HeroMiners")}
 	}
 
 	// Both errors come back as HTTP 200.
@@ -58,7 +59,7 @@ func (r *Registry) collectHeroMinersKaspa(ctx context.Context, credentials map[s
 	case hasError && providerError == "Invalid address":
 		return Result{}, addressError
 	case hasError && providerError == "Not found":
-		return Result{}, errors.New("HeroMiners has no record of this address yet. Check your payout address and wait for your first shares.")
+		return Result{}, errors.New(i18n.T("go.collectors.pool.noRecord", "provider", "HeroMiners"))
 	}
 
 	var stats map[string]json.RawMessage
@@ -66,7 +67,7 @@ func (r *Registry) collectHeroMinersKaspa(ctx context.Context, credentials map[s
 	statsErr := json.Unmarshal(payload["stats"], &stats)
 	balanceErr := json.Unmarshal(stats["balance"], &balance)
 	if hasError || statsErr != nil || stats == nil || balanceErr != nil || !heroMinersUnits.MatchString(balance) {
-		return Result{}, collectorError{"shape", "HeroMiners did not return a valid unpaid balance."}
+		return Result{}, collectorError{"shape", i18n.T("go.collectors.pool.badUnpaid", "provider", "HeroMiners")}
 	}
 
 	// The balance is in sompi, 100 million per KAS. It is accrued at the pool, not received.

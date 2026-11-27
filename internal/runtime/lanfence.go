@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
@@ -183,7 +184,7 @@ func isPodman(ctx context.Context, cli fenceAPI) bool {
 	return false
 }
 
-const podmanUnsupported = "CashPilot cannot fence earners off the LAN on Podman yet: its Docker-compatible API does not keep the network settings the fence relies on"
+func podmanUnsupported() string { return i18n.T("go.runtime.fence.podmanUnsupported") }
 
 // fence holds the cached status and serialises the helper: two helpers writing the
 // table at once would race on the same container name.
@@ -774,11 +775,11 @@ func runHelper(ctx context.Context, cli fenceAPI, action, subnet string, exits f
 	return parseFenceResult(helperLogs(ctx, cli, created.ID, true))
 }
 
-const fenceOffHint = "Set LAN isolation to off in Settings to deploy on Docker's default bridge instead, without the fence."
+func fenceOffHint() string { return i18n.T("go.runtime.fence.offHint") }
 
 // fenceGatedHint replaces fenceOffHint for a fence-gated earner, which isolation off
 // refuses outright: sending the user there would leave the node unable to run at all.
-const fenceGatedHint = "This service runs only behind the LAN fence, so setting LAN isolation to off would not let it run. Fix what stops the fence, then try again."
+func fenceGatedHint() string { return i18n.T("go.runtime.fence.gatedHint") }
 
 func (f *fence) setStatus(update func(*FenceStatus)) {
 	f.stateMu.Lock()
@@ -827,18 +828,18 @@ func (f *fence) applyLocked(ctx context.Context, cli fenceAPI) (fenceResult, err
 		if errors.Is(err, errFenceConflict) {
 			return fenceResult{}, err
 		}
-		return fenceResult{}, fmt.Errorf("The LAN fence could not be applied on this machine: %w.", err)
+		return fenceResult{}, fmt.Errorf("%s: %w.", i18n.T("go.runtime.fence.applyFailed"), err)
 	}
 	subnet, err := networkSubnet(net)
 	if err != nil {
-		return fenceResult{}, fmt.Errorf("The LAN fence could not be applied on this machine: %w.", err)
+		return fenceResult{}, fmt.Errorf("%s: %w.", i18n.T("go.runtime.fence.applyFailed"), err)
 	}
 	res, err := runHelper(ctx, cli, "apply", subnet, f.exitsFor(ctx, cli), true)
 	if err != nil {
-		return res, fmt.Errorf("The LAN fence could not be applied on this machine: %w.", err)
+		return res, fmt.Errorf("%s: %w.", i18n.T("go.runtime.fence.applyFailed"), err)
 	}
 	if !res.OK {
-		return res, fmt.Errorf("The LAN fence could not be applied on this machine (%s): %s.", res.Backend, res.Error)
+		return res, errors.New(i18n.T("go.runtime.fence.applyFailedBackend", "backend", res.Backend, "error", res.Error))
 	}
 	// Only now: reattaching starts an earner the removed network had stopped, and it
 	// must not run before the drops are in place.
@@ -985,12 +986,12 @@ func (f *fence) setOutside(mode string, earners []fenceEarner) {
 func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI, gated bool) (string, error) {
 	mode, _, _, err := f.mode(ctx, cli)
 	if err != nil {
-		return "", fmt.Errorf("could not check the LAN fence, so the running container was not touched: %w", err)
+		return "", fmt.Errorf("%s: %w", i18n.T("go.runtime.fence.checkFailed"), err)
 	}
 	f.setStatus(func(s *FenceStatus) { s.Mode = mode })
 	if mode == FenceModeUnsupported {
 		if f.chosen() == "on" {
-			return "", fmt.Errorf("LAN isolation is set to on, but %s. The running container was not touched. Set LAN isolation to auto or off in Settings to deploy on Podman's default network, without the fence", podmanUnsupported)
+			return "", errors.New(i18n.T("go.runtime.fence.podmanOn", "reason", podmanUnsupported()))
 		}
 		return "", nil
 	}
@@ -998,11 +999,11 @@ func (f *fence) networkForDeploy(ctx context.Context, cli fenceAPI, gated bool) 
 		return "", nil
 	}
 	if err := f.apply(ctx, cli); err != nil {
-		hint := fenceOffHint
+		hint := fenceOffHint()
 		if gated {
-			hint = fenceGatedHint
+			hint = fenceGatedHint()
 		}
-		return "", fmt.Errorf("%v The running container was not touched. %s", err, hint)
+		return "", errors.New(i18n.T("go.runtime.fence.applyFailedUntouched", "error", err, "hint", hint))
 	}
 	return FenceNetwork, nil
 }
@@ -1057,13 +1058,13 @@ func (f *fence) reconcile(ctx context.Context, cli fenceAPI) {
 		// The drops stay until every fence-gated earner is stopped; the next
 		// reconcile tries again.
 		f.setStatus(func(s *FenceStatus) {
-			s.State, s.Error = "failed", gatedErr.Error()+". The LAN fence was kept"
+			s.State, s.Error = "failed", i18n.T("go.runtime.fence.kept", "error", gatedErr.Error())
 		})
 	case mode == FenceModeOff && net != nil:
 		f.reduce(ctx, cli, net)
 	case mode == FenceModeUnsupported:
 		f.setStatus(func(s *FenceStatus) {
-			s.State, s.Backend, s.Error = "unsupported", "", withGatedErr(podmanUnsupported+".", gatedErr)
+			s.State, s.Backend, s.Error = "unsupported", "", withGatedErr(podmanUnsupported()+".", gatedErr)
 		})
 	default:
 		f.setStatus(func(s *FenceStatus) { s.State, s.Backend, s.Error = "n/a", "", withGatedErr("", gatedErr) })
@@ -1136,14 +1137,14 @@ func (f *fence) stopGated(ctx context.Context, cli fenceAPI, keep func(fenceEarn
 		}
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("could not stop %s, which runs only behind the LAN fence", strings.Join(failed, ", "))
+		return errors.New(i18n.T("go.runtime.fence.stopGatedFailed", "names", strings.Join(failed, ", ")))
 	}
 	return nil
 }
 
 func firstName(names []string) string {
 	if len(names) == 0 {
-		return "a fence-gated earner"
+		return i18n.T("go.runtime.fence.unnamedEarner")
 	}
 	return names[0]
 }
@@ -1164,10 +1165,10 @@ func (f *fence) refreshOutside(ctx context.Context, cli fenceAPI) {
 // earners it returns in Outside.
 func (f *fence) enable(ctx context.Context, cli fenceAPI) (FenceStatus, error) {
 	if f.chosen() == "off" {
-		return f.Status(), errors.New("LAN isolation is off in Settings. Set it to auto or on first")
+		return f.Status(), errors.New(i18n.T("go.runtime.fence.offInSettings"))
 	}
 	if isPodman(ctx, cli) {
-		return f.Status(), errors.New(podmanUnsupported + ".")
+		return f.Status(), errors.New(podmanUnsupported() + ".")
 	}
 	if err := f.apply(ctx, cli); err != nil {
 		return f.Status(), err

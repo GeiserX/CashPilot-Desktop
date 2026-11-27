@@ -23,6 +23,7 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/dockerhost"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -257,7 +258,7 @@ func (p *DockerProvider) Status(ctx context.Context) Status {
 	cli, err := dockerClient()
 	var ssh *SSHContextError
 	if errors.As(err, &ssh) {
-		return Status{Kind: "existing-docker", Reason: ReasonUnreachable, Message: ssh.Error() + ", then click Check again.", Context: ssh.Context, Tools: tools}
+		return Status{Kind: "existing-docker", Reason: ReasonUnreachable, Message: i18n.T("go.runtime.engine.sshThenCheck", "error", ssh.Error()), Context: ssh.Context, Tools: tools}
 	}
 	if err != nil {
 		ev.host = p.hostHintsNow()
@@ -301,12 +302,12 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 
 	svc := spec.Service
 	if svc.Docker.Image == "" {
-		return ContainerInfo{}, fmt.Errorf("%s has no Docker image", svc.Name)
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.noImage", "name", svc.Name))
 	}
 	// Two copies would share the same host directories and fight over the same host
 	// ports. The manager refuses this first; this is the backstop.
 	if spec.Instance > 1 && (len(svc.Docker.Volumes) > 0 || svc.Docker.PublishesPorts()) {
-		return ContainerInfo{}, fmt.Errorf("%s has volumes or published ports, so it runs once", svc.Name)
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.runsOnce", "name", svc.Name))
 	}
 
 	// Everything that can fail on the catalog entry alone is built and checked
@@ -326,7 +327,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 
 	env, err := copyEnv(svc, buildEnv(svc, spec.Env), spec.Instance)
 	if err != nil {
-		return ContainerInfo{}, fmt.Errorf("%s copy %d: %w", svc.Name, spec.Instance, err)
+		return ContainerInfo{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.copy", "name", svc.Name, "n", spec.Instance), err)
 	}
 	// The GPU comes from the catalog entry alone (gpu.go), and every container
 	// without an NVIDIA grant gets the void stamp.
@@ -339,7 +340,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	ports, bindings, err := buildServicePorts(svc.Docker, env)
 	if err != nil {
-		return ContainerInfo{}, fmt.Errorf("%s was not deployed: %w. The running container was not touched", svc.Name, err)
+		return ContainerInfo{}, fmt.Errorf("%s: %w. %s", i18n.T("go.runtime.deploy.notDeployed", "name", svc.Name), err, i18n.T("go.runtime.deploy.untouched"))
 	}
 	if err := checkRuntime(svc, facts.Runtimes); err != nil {
 		return ContainerInfo{}, err
@@ -373,7 +374,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// told plainly and the pull decides. Refusing here would block a machine whose
 	// entry merely has an out-of-date platform list.
 	if runs, known := HasBuildFor(svc.Docker, facts.Architecture); known && !runs && progress != nil {
-		progress(fmt.Sprintf("%s does not publish a %s build, so it may not start on this machine.", svc.Name, ArchLabel(ArchFamily(facts.Architecture))))
+		progress(i18n.T("go.runtime.deploy.noArchBuild", "name", svc.Name, "arch", ArchLabel(ArchFamily(facts.Architecture))))
 	}
 
 	if progress != nil {
@@ -389,13 +390,13 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// is nothing to be sure of, and the running container keeps earning.
 	inspected, err := cli.ImageInspect(ctx, image)
 	if err != nil {
-		return ContainerInfo{}, fmt.Errorf("could not read what %s runs: %w", image, err)
+		return ContainerInfo{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.inspectImageFailed", "image", image), err)
 	}
 	if inspected.Config == nil {
-		return ContainerInfo{}, fmt.Errorf("could not read what %s runs: the daemon returned no image config", image)
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.noImageConfig", "image", image))
 	}
 	if bootsInitSystem(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd) {
-		return ContainerInfo{}, fmt.Errorf("%s runs an init system as its main process (/sbin/init, usually systemd), which needs a privileged container with the host's cgroup tree. CashPilot never grants that, so the container would exit at once and restart forever. Use the image's non-init tag (often ':lite') or the catalog image", image)
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.initImage", "image", image, "tag", "':lite'"))
 	}
 	applyInit(hostConfig, bringsOwnInit(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd), facts.OSType)
 
@@ -429,7 +430,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// A deploy that did not finish may have left the old container set aside
 	// (setaside.go). It is settled first, so the name below is the one that counts.
 	if note, err := recoverSetAside(ctx, cli, name); err != nil {
-		return ContainerInfo{}, fmt.Errorf("%v. The running container was not touched", err)
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.errorUntouched", "error", err))
 	} else if note != "" && progress != nil {
 		progress(note)
 	}
@@ -446,7 +447,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// whatever holds the name.
 	live, inspectErr := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if inspectErr != nil && !cerrdefs.IsNotFound(inspectErr) {
-		return ContainerInfo{}, fmt.Errorf("could not check what holds %s, so it was left as it is: %w", name, inspectErr)
+		return ContainerInfo{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.checkHolderFailed", "name", name), inspectErr)
 	}
 	// A checked deploy replaces only the container its caller saw. Compared here,
 	// under the name's replace lock and the manager's deploy lock, after the image is
@@ -461,7 +462,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		}
 	}
 	if spec.CreateOnly && inspectErr == nil {
-		return ContainerInfo{}, fmt.Errorf("%s already exists, so nothing was restored. A restore only creates a new container", name)
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.restoreExists", "name", name))
 	}
 	aside := name + setAsideSuffix
 	setAside, wasRunning := false, false
@@ -476,19 +477,19 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		}
 		if live.Container.Config != nil {
 			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
-				return ContainerInfo{}, fmt.Errorf("%s already belongs to %s, not to copy %d of %s. It was left running; remove it or deploy under another name", name, owner, max(spec.Instance, 1), spec.Slug)
+				return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.nameTaken", "name", name, "owner", owner, "n", max(spec.Instance, 1), "slug", spec.Slug))
 			}
 		}
 		// recoverSetAside settled a leftover of ours, so whatever holds the name the
 		// old container is set aside under is not ours to remove.
 		if holder, err := cli.ContainerInspect(ctx, aside, client.ContainerInspectOptions{}); err == nil {
-			owner := "a container CashPilot did not deploy"
+			owner := i18n.T("go.runtime.deploy.foreignContainer")
 			if holder.Container.Config != nil && holder.Container.Config.Labels[LabelService] != "" {
 				owner = holder.Container.Config.Labels[LabelService]
 			}
-			return ContainerInfo{}, fmt.Errorf("%s was not replaced: %s, the name it is set aside under while its replacement starts, belongs to %s. It was left running; remove or rename that container, then deploy again", name, aside, owner)
+			return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.asideTaken", "name", name, "aside", aside, "owner", owner))
 		} else if !cerrdefs.IsNotFound(err) {
-			return ContainerInfo{}, fmt.Errorf("could not check %s, so %s was left as it is: %w", aside, name, err)
+			return ContainerInfo{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.checkAsideFailed", "aside", aside, "name", name), err)
 		}
 		// A custom service mounts only its own named volume, never a host directory, so
 		// it does not inherit what the container before it had mounted.
@@ -499,7 +500,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		}
 		for _, k := range kept {
 			if progress != nil {
-				progress(fmt.Sprintf("Keeping %s at %s, where its data already is (the catalog asked for %s).", k.Kept, k.Target, k.Requested))
+				progress(i18n.T("go.runtime.deploy.keepMount", "kept", k.Kept, "target", k.Target, "requested", k.Requested))
 			}
 		}
 		// The wallet goes into the volume the replacement will mount, and before the
@@ -514,7 +515,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		// after a failed stop is not replaced: the replacement would run beside it.
 		wasRunning = live.Container.State != nil && (live.Container.State.Running || live.Container.State.Restarting)
 		if progress != nil {
-			progress(fmt.Sprintf("Stopping %s (up to %ds to shut down cleanly)", name, stopTimeout))
+			progress(i18n.T("go.runtime.deploy.stopping", "name", name, "seconds", stopTimeout))
 		}
 		if _, err := cli.ContainerStop(ctx, live.Container.ID, client.ContainerStopOptions{Timeout: &stopTimeout}); err != nil {
 			// A fresh context: a cancelled deploy's stop may still have happened.
@@ -527,27 +528,27 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 			if ierr != nil {
 				// Whether it stopped is not known: one that ran is started again.
 				return ContainerInfo{}, refusedReplacement{
-					err:      fmt.Errorf("%s could not be stopped (%v), so it was not replaced", name, err),
+					err:      errors.New(i18n.T("go.runtime.deploy.stopFailed", "name", name, "error", err)),
 					restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name),
 				}
 			}
 			if still.Container.State == nil || runsOrRestarts(still.Container) {
-				return ContainerInfo{}, fmt.Errorf("%s could not be stopped (%v), so it was not replaced and is still running. Try again in a minute", name, err)
+				return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.stopFailedRunning", "name", name, "error", err))
 			}
 			if ctx.Err() != nil {
 				// The deploy was cancelled and the node did stop: one that ran starts again.
 				return ContainerInfo{}, refusedReplacement{
-					err:      fmt.Errorf("%s was not replaced: %w", name, ctx.Err()),
+					err:      fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.notReplaced", "name", name), ctx.Err()),
 					restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name),
 				}
 			}
 		}
 		if progress != nil {
-			progress(fmt.Sprintf("Setting %s aside as %s until its replacement runs", name, aside))
+			progress(i18n.T("go.runtime.deploy.settingAside", "name", name, "aside", aside))
 		}
 		if _, err := cli.ContainerRename(ctx, live.Container.ID, client.ContainerRenameOptions{NewName: aside}); err != nil {
 			return ContainerInfo{}, refusedReplacement{
-				err:      fmt.Errorf("%s could not be set aside: %w", name, err),
+				err:      fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.asideFailed", "name", name), err),
 				restored: p.putBack(cli, live.Container, wasRunning, svc.Docker.FenceGated, name),
 			}
 		}
@@ -561,7 +562,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 			// "created" state. A fresh context, so a cancelled deploy still cleans up.
 			_, rmErr := cli.ContainerRemove(context.Background(), createdID, client.ContainerRemoveOptions{Force: true})
 			if rmErr != nil && !cerrdefs.IsNotFound(rmErr) && setAside {
-				return refusedReplacement{err: err, restored: fmt.Sprintf("The previous container is kept, stopped, as %s, with its data: the refused one still holds %s (%v). Remove %s, then deploy again", aside, name, rmErr, name)}
+				return refusedReplacement{err: err, restored: i18n.T("go.runtime.deploy.previousKept", "aside", aside, "name", name, "error", rmErr)}
 			}
 		}
 		if !setAside {
@@ -615,7 +616,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		// since the replacement has fresh ones. One that cannot be removed only
 		// stays as a leftover: the next deploy or app start removes it.
 		if _, err := cli.ContainerRemove(context.Background(), live.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: custom}); err != nil && !cerrdefs.IsNotFound(err) && progress != nil {
-			progress(fmt.Sprintf("Could not remove %s, the container this one replaced (%v). The next deploy or app start removes it.", aside, err))
+			progress(i18n.T("go.runtime.deploy.removeAsideFailed", "aside", aside, "error", err))
 		}
 	}
 	if svc.Docker.FenceGated {
@@ -650,7 +651,7 @@ func (p *DockerProvider) settleWallet(ctx context.Context, cli *client.Client, s
 		// can run here, and a node started on a backup without the file would run no
 		// wallet. RestoreTargets refuses Sia today (its storage is a host folder);
 		// this keeps any later restore path from starting one unchecked.
-		return nil, fmt.Errorf("%s keeps its wallet seed in a file in its data volume, which a restore from the app does not check, so nothing was restored. Use the command line steps in the backup guide", spec.Service.Name)
+		return nil, errors.New(i18n.T("go.runtime.deploy.seedRestore", "name", spec.Service.Name))
 	}
 	return prepareWallet(ctx, cli, spec.Service, image, name, mounts, spec.Wallet, seedEnvValue(liveEnv, item.Key), progress)
 }
@@ -679,7 +680,7 @@ func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSecon
 		defer p.fence.reconcileMu.Unlock()
 		before, _ := p.fence.userStopped()
 		if err := p.fence.markStopped(name, true); err != nil && gated {
-			return fmt.Errorf("%s was not stopped: the stop could not be recorded (%v), and without that record CashPilot would start it again behind the LAN fence", name, err)
+			return errors.New(i18n.T("go.runtime.deploy.stopNotRecorded", "name", name, "error", err))
 		}
 		recorded = !before[name]
 	}
@@ -713,7 +714,7 @@ func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, n
 	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err != nil {
 		// Whether it is fence-gated cannot be known, so the start fails closed.
-		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.checkBeforeStart", "name", name), err)
 	}
 	if err := desktopOwned(name, got.Container); err != nil {
 		return err
@@ -744,7 +745,7 @@ func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, n
 func (p *DockerProvider) gatedStartProblem(ctx context.Context, cli *client.Client, name string) error {
 	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err != nil {
-		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.checkBeforeStart", "name", name), err)
 	}
 	var labels map[string]string
 	if got.Container.Config != nil {
@@ -758,10 +759,10 @@ func (p *DockerProvider) gatedStartProblem(ctx context.Context, cli *client.Clie
 		return err
 	}
 	if fenced != FenceNetwork {
-		return fmt.Errorf("%s runs only behind the LAN fence, and LAN isolation is %s here. Set it to auto or on in Settings first", name, p.fence.Status().Mode)
+		return errors.New(i18n.T("go.runtime.fence.gatedModeOff", "name", name, "mode", p.fence.Status().Mode))
 	}
 	if problem := onlyOnFence(got.Container); problem != "" {
-		return fmt.Errorf("%s runs only behind the LAN fence, but %s. Redeploy it from the dashboard, which puts it back on the fence", name, problem)
+		return errors.New(i18n.T("go.runtime.fence.gatedOffFence", "name", name, "problem", problem))
 	}
 	return nil
 }
@@ -775,18 +776,18 @@ func onlyOnFence(c container.InspectResponse) string {
 		if c.HostConfig != nil {
 			mode = string(c.HostConfig.NetworkMode)
 		}
-		return fmt.Sprintf("its network mode is %q", mode)
+		return i18n.T("go.runtime.fence.networkMode", "mode", strconv.Quote(mode))
 	}
 	if c.NetworkSettings == nil {
-		return "Docker did not say which networks it is attached to"
+		return i18n.T("go.runtime.fence.networksUnknown")
 	}
 	for name := range c.NetworkSettings.Networks {
 		if name != FenceNetwork {
-			return "it is also attached to " + name
+			return i18n.T("go.runtime.fence.alsoAttached", "network", name)
 		}
 	}
 	if _, ok := c.NetworkSettings.Networks[FenceNetwork]; !ok {
-		return "it is not attached to " + FenceNetwork
+		return i18n.T("go.runtime.fence.notAttached", "network", FenceNetwork)
 	}
 	return ""
 }
@@ -910,7 +911,7 @@ func (p *DockerProvider) Remove(ctx context.Context, slug string, opts RemoveOpt
 	}
 	for _, volume := range plan.Volumes {
 		if _, err := cli.VolumeRemove(ctx, volume.Source, client.VolumeRemoveOptions{Force: true}); err != nil {
-			return fmt.Errorf("container removed, but volume %s could not be deleted: %w", volume.Source, err)
+			return fmt.Errorf("%s: %w", i18n.T("go.runtime.deploy.volumeDeleteFailed", "volume", volume.Source), err)
 		}
 	}
 	return nil
@@ -1330,7 +1331,7 @@ func dockerClient(host ...string) (*client.Client, error) {
 type SSHContextError struct{ Context string }
 
 func (e *SSHContextError) Error() string {
-	return fmt.Sprintf("Your Docker context %s connects over ssh, which CashPilot cannot use. Switch to a local context with docker context use, or set DOCKER_HOST to that engine's tcp address", e.Context)
+	return i18n.T("go.runtime.engine.sshContext", "context", e.Context, "command", "docker context use", "var", "DOCKER_HOST")
 }
 
 // maxPullLogLine caps a single progress line at 1 MiB. bufio.Scanner's default max
@@ -1593,7 +1594,7 @@ func checkRuntime(svc catalog.Service, runtimes map[string]bool) error {
 		return nil
 	}
 	if runtimes == nil {
-		return fmt.Errorf("%s runs only under the %s runtime, and the container runtime did not say which runtimes it has. The running container was not touched", svc.Name, want)
+		return errors.New(i18n.T("go.runtime.deploy.runtimeUnknown", "name", svc.Name, "runtime", want))
 	}
 	if !runtimes[want] {
 		have := make([]string, 0, len(runtimes))
@@ -1601,7 +1602,7 @@ func checkRuntime(svc catalog.Service, runtimes map[string]bool) error {
 			have = append(have, name)
 		}
 		slices.Sort(have)
-		return fmt.Errorf("%s runs only under the %s runtime, which this container runtime does not provide (it has %s). The running container was not touched", svc.Name, want, strings.Join(have, ", "))
+		return errors.New(i18n.T("go.runtime.deploy.runtimeMissing", "name", svc.Name, "runtime", want, "have", strings.Join(have, ", ")))
 	}
 	return nil
 }
@@ -1620,17 +1621,17 @@ func fenceGateProblem(svc catalog.Service, host *container.HostConfig, fenced, o
 	why := ""
 	switch {
 	case osType != "linux":
-		why = "the container runtime runs Windows containers, which have no LAN fence"
+		why = i18n.T("go.runtime.fence.why.windows")
 	case string(host.NetworkMode) != "bridge" && string(host.NetworkMode) != FenceNetwork:
-		why = fmt.Sprintf("its network mode %q is outside the fence", host.NetworkMode)
+		why = i18n.T("go.runtime.fence.why.networkMode", "mode", strconv.Quote(string(host.NetworkMode)))
 	case mode == FenceModeUnsupported:
-		why = podmanUnsupported
+		why = podmanUnsupported()
 	case mode == FenceModeLegacy:
-		why = "LAN isolation is not on yet on this machine. Press \"Turn on isolation\" in the dashboard's notice, which moves the other earners behind the fence, then deploy it again"
+		why = i18n.T("go.runtime.fence.why.legacy")
 	default:
-		why = "LAN isolation is off in Settings. Set it to auto or on, then deploy it again"
+		why = i18n.T("go.runtime.fence.why.off")
 	}
-	return fmt.Sprintf("%s runs only behind the LAN fence: %s. The running container was not touched", svc.Name, why)
+	return i18n.T("go.runtime.fence.gatedRefused", "name", svc.Name, "why", why)
 }
 
 func buildMounts(raw []string, env map[string]string) []mount.Mount {
@@ -2130,54 +2131,54 @@ func InstallGuides() []InstallGuide {
 		{
 			ID:          "docker-desktop-macos",
 			Name:        "Docker Desktop",
-			Description: "The easiest option on macOS. Best compatibility if you already use Docker.",
+			Description: i18n.T("go.runtime.guide.dockerDesktopMacos.description"),
 			Platforms:   []string{"darwin"},
 			URL:         "https://www.docker.com/products/docker-desktop/",
-			Notes:       []string{"Recommended for most first-time users.", "Commercial use in larger organizations may need a paid Docker subscription."},
+			Notes:       []string{i18n.T("go.runtime.guide.recommended"), i18n.T("go.runtime.guide.dockerSubscription")},
 		},
 		{
 			ID:          "docker-desktop-windows",
 			Name:        "Docker Desktop",
-			Description: "The easiest option on Windows. Best compatibility if you already use Docker.",
+			Description: i18n.T("go.runtime.guide.dockerDesktopWindows.description"),
 			Platforms:   []string{"windows"},
 			URL:         "https://www.docker.com/products/docker-desktop/",
-			Notes:       []string{"Recommended for most first-time users.", "Requires WSL2 on Windows.", "Commercial use in larger organizations may need a paid Docker subscription."},
+			Notes:       []string{i18n.T("go.runtime.guide.recommended"), i18n.T("go.runtime.guide.dockerDesktopWindows.wsl2"), i18n.T("go.runtime.guide.dockerSubscription")},
 		},
 		{
 			ID:          "docker-engine",
 			Name:        "Docker Engine",
-			Description: "Native Linux container engine. Best first choice on Linux hosts.",
+			Description: i18n.T("go.runtime.guide.dockerEngine.description"),
 			Platforms:   []string{"linux"},
 			URL:         "https://docs.docker.com/engine/install/",
 			Commands:    linuxCommands(osName),
-			Notes:       []string{"After installation, add your user to the docker group or use rootless mode.", "Restart your session before retrying CashPilot Desktop."},
+			Notes:       []string{i18n.T("go.runtime.guide.dockerEngine.group"), i18n.T("go.runtime.guide.dockerEngine.restartSession")},
 		},
 		{
 			ID:          "colima",
 			Name:        "Colima",
-			Description: "Lightweight Docker-compatible runtime for macOS, built on Lima.",
+			Description: i18n.T("go.runtime.guide.colima.description"),
 			Platforms:   []string{"darwin"},
 			URL:         "https://colima.run/",
 			Commands:    []string{"brew install colima docker", "colima start --runtime docker"},
-			Notes:       []string{"Good Docker Desktop alternative on macOS.", "CashPilot Desktop will use the Docker context Colima activates."},
+			Notes:       []string{i18n.T("go.runtime.guide.colima.alternative"), i18n.T("go.runtime.guide.colima.context")},
 		},
 		{
 			ID:          "lima",
 			Name:        "Lima",
-			Description: "Linux VM manager for macOS. Useful if you want more control over the VM layer.",
+			Description: i18n.T("go.runtime.guide.lima.description"),
 			Platforms:   []string{"darwin"},
 			URL:         "https://lima-vm.io/",
 			Commands:    []string{"brew install lima docker", "limactl start template://docker"},
-			Notes:       []string{"More technical than Colima.", "Good stepping stone toward CashPilot's future managed VM runtime."},
+			Notes:       []string{i18n.T("go.runtime.guide.lima.technical"), i18n.T("go.runtime.guide.lima.steppingStone")},
 		},
 		{
 			ID:          "podman",
 			Name:        "Podman",
-			Description: "Rootless-first container runtime with a Docker-compatible API for many workflows.",
+			Description: i18n.T("go.runtime.guide.podman.description"),
 			Platforms:   []string{"darwin", "windows", "linux"},
 			URL:         "https://podman.io/docs/installation",
 			Commands:    []string{"podman machine init --now", "podman system service --time=0"},
-			Notes:       []string{"Docker API compatibility is good but not perfect.", "Some services that expect Docker-specific behavior may need testing."},
+			Notes:       []string{i18n.T("go.runtime.guide.podman.compatibility"), i18n.T("go.runtime.guide.podman.testing")},
 		},
 	}
 	filtered := make([]InstallGuide, 0, len(guides))

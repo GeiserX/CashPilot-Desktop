@@ -24,6 +24,7 @@ import (
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
 	"github.com/GeiserX/CashPilot-Desktop/internal/upstream"
@@ -189,11 +190,11 @@ func (a *App) syncWorkerAPI() {
 		a.workerAPI.elsewhere, a.workerAPI.problem = nil, ""
 		switch {
 		case firewallStatus == "unknown":
-			a.workerAPI.problem = "Windows Firewall could not be queried. This computer is not listening for server commands."
+			a.workerAPI.problem = i18n.T("go.app.commands.firewallUnknown")
 		case waitingForRule:
-			a.workerAPI.problem = "Waiting for the Windows Firewall rule. Until you allow it below, this computer does not listen, and your CashPilot cannot reach it."
+			a.workerAPI.problem = i18n.T("go.app.commands.firewallWaiting")
 		case wanted:
-			a.workerAPI.problem = "This computer has no private network or Tailscale address, so your CashPilot cannot reach it."
+			a.workerAPI.problem = i18n.T("go.app.commands.noAddress")
 		}
 		a.workerAPI.mu.Unlock()
 		return
@@ -229,7 +230,7 @@ func (a *App) syncWorkerAPI() {
 	a.workerAPI.elsewhere = elsewhere
 	a.workerAPI.problem = ""
 	if len(a.workerAPI.listeners) == 0 && len(elsewhere) == 0 && len(failures) > 0 {
-		a.workerAPI.problem = fmt.Sprintf("CashPilot could not listen on port %d: %s", workerAPIPort, failures[0])
+		a.workerAPI.problem = i18n.T("go.app.commands.listenFailed", "port", workerAPIPort, "error", failures[0])
 	}
 	a.workerAPI.mu.Unlock()
 }
@@ -998,7 +999,7 @@ func (a *App) serverCommandsState() ServerCommandsState {
 		FirewallNeeded: firewallRuleNeeded,
 		FirewallRule:   firewall == "ready",
 		FirewallStatus: firewall,
-		Opens:          fmt.Sprintf("incoming TCP port %d to CashPilot only, on networks Windows calls private, from %s", workerAPIPort, strings.Join(privateSubnets(), ", ")),
+		Opens:          i18n.T("go.app.commands.opens", "port", workerAPIPort, "subnets", strings.Join(privateSubnets(), ", ")),
 		Last:           a.lastServerCommand(),
 	}
 	if listening {
@@ -1026,7 +1027,7 @@ func (a *App) SetServerCommands(on bool) (ServerCommandsState, error) {
 		return ServerCommandsState{}, err
 	}
 	if !a.joined() {
-		return ServerCommandsState{}, errors.New("this computer is not joined to a CashPilot")
+		return ServerCommandsState{}, errors.New(i18n.T("go.app.commands.notJoined"))
 	}
 	if err := a.cfg.Update(func(c *config.AppConfig) { c.ServerCommandsOff, c.ServerCommandsChosen = !on, true }); err != nil {
 		return ServerCommandsState{}, err

@@ -26,6 +26,7 @@ import (
 	"unicode"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 const (
@@ -109,7 +110,7 @@ func splitImageRef(ref string) (repo, tag, digest string) {
 func CustomImageWarnings(image string) []string {
 	_, tag, digest := splitImageRef(image)
 	if digest == "" && (tag == "" || tag == "latest") {
-		return []string{CustomUnpinnedWarning}
+		return []string{i18n.T("go.services.custom.unpinned")}
 	}
 	return []string{}
 }
@@ -164,11 +165,11 @@ func printable(s string) bool {
 func ValidateCustom(in CustomDefinition, previous *CustomDefinition) (CustomDefinition, []string, error) {
 	name := strings.TrimSpace(in.Name)
 	if n := len([]rune(name)); n < 1 || n > customMaxName || !printable(name) {
-		return CustomDefinition{}, nil, fmt.Errorf("name must be 1 to %d printable characters", customMaxName)
+		return CustomDefinition{}, nil, errors.New(i18n.T("go.services.custom.name", "max", customMaxName))
 	}
 	image := strings.TrimSpace(in.Image)
 	if image == "" || ValidateImage(image) != nil {
-		return CustomDefinition{}, nil, errors.New("image is not a valid image reference (repository[:tag][@digest])")
+		return CustomDefinition{}, nil, errors.New(i18n.T("go.services.invalidImage", "format", "repository[:tag][@digest]"))
 	}
 	env, err := validateCustomEnv(in.Env, previous)
 	if err != nil {
@@ -176,12 +177,12 @@ func ValidateCustom(in CustomDefinition, previous *CustomDefinition) (CustomDefi
 	}
 	command := strings.TrimSpace(in.Command)
 	if len(command) > customMaxCommand || strings.ContainsAny(command, "\x00\n\r") {
-		return CustomDefinition{}, nil, fmt.Errorf("command must be one line of at most %d characters", customMaxCommand)
+		return CustomDefinition{}, nil, errors.New(i18n.T("go.services.custom.command", "max", customMaxCommand))
 	}
 	dataPath := strings.TrimSpace(in.DataPath)
 	if dataPath != "" && (!customDataPath.MatchString(dataPath) || path.Clean(dataPath) != dataPath || dataPath == "/" ||
 		strings.Contains("/"+dataPath+"/", "/../")) {
-		return CustomDefinition{}, nil, errors.New("data path must be an absolute path inside the container, like /data, with no '..'")
+		return CustomDefinition{}, nil, errors.New(i18n.T("go.services.custom.dataPath", "example", "/data", "parent", "'..'"))
 	}
 	mem, err := validateCustomMem(in.MemLimit)
 	if err != nil {
@@ -193,7 +194,7 @@ func ValidateCustom(in CustomDefinition, previous *CustomDefinition) (CustomDefi
 
 func validateCustomEnv(in []CustomEnv, previous *CustomDefinition) ([]CustomEnv, error) {
 	if len(in) > customMaxEnv {
-		return nil, fmt.Errorf("at most %d environment variables", customMaxEnv)
+		return nil, errors.New(i18n.T("go.services.custom.envMax", "max", customMaxEnv))
 	}
 	stored := map[string]string{}
 	if previous != nil {
@@ -208,13 +209,13 @@ func validateCustomEnv(in []CustomEnv, previous *CustomDefinition) ([]CustomEnv,
 	for _, item := range in {
 		key := strings.TrimSpace(item.Key)
 		if !customEnvKey.MatchString(key) {
-			return nil, errors.New("variable names start with a letter or _, then letters, digits or _ (at most 128 characters)")
+			return nil, errors.New(i18n.T("go.services.custom.envName", "max", 128))
 		}
 		if strings.HasPrefix(strings.ToUpper(key), catalog.GPUEnvPrefix) {
-			return nil, fmt.Errorf("CashPilot sets the %s variables itself, so %s cannot be set here", catalog.GPUEnvPrefix, key)
+			return nil, errors.New(i18n.T("go.services.custom.envGPU", "prefix", catalog.GPUEnvPrefix, "key", key))
 		}
 		if seen[key] {
-			return nil, fmt.Errorf("%s is set twice", key)
+			return nil, errors.New(i18n.T("go.services.custom.envTwice", "key", key))
 		}
 		seen[key] = true
 		value := item.Value
@@ -225,7 +226,7 @@ func validateCustomEnv(in []CustomEnv, previous *CustomDefinition) ([]CustomEnv,
 			value = old
 		}
 		if len(value) > customMaxEnvValue || strings.ContainsRune(value, 0) {
-			return nil, fmt.Errorf("the value of %s is too long or holds a NUL character", key)
+			return nil, errors.New(i18n.T("go.services.custom.envValue", "key", key))
 		}
 		out = append(out, CustomEnv{Key: key, Value: value, Secret: item.Secret})
 	}
@@ -239,21 +240,21 @@ func validateCustomMem(raw string) (string, error) {
 	}
 	match := customMemLimit.FindStringSubmatch(value)
 	if match == nil {
-		return "", errors.New("memory limit must look like 512m or 2g")
+		return "", errors.New(i18n.T("go.services.custom.memFormat", "small", "512m", "large", "2g"))
 	}
 	mb, err := strconv.Atoi(match[1])
 	if err != nil {
-		return "", errors.New("memory limit must be between 32m and 16g")
+		return "", errors.New(i18n.T("go.services.custom.memRange", "min", "32m", "max", "16g"))
 	}
 	if match[2] == "g" {
 		// Bound before multiplying: a huge g value would wrap into the valid range.
 		if mb > customMemMaxMB/1024 {
-			return "", errors.New("memory limit must be between 32m and 16g")
+			return "", errors.New(i18n.T("go.services.custom.memRange", "min", "32m", "max", "16g"))
 		}
 		mb *= 1024
 	}
 	if mb < customMemMinMB || mb > customMemMaxMB {
-		return "", errors.New("memory limit must be between 32m and 16g")
+		return "", errors.New(i18n.T("go.services.custom.memRange", "min", "32m", "max", "16g"))
 	}
 	return value, nil
 }
@@ -385,14 +386,14 @@ func (m *Manager) SaveCustom(slug string, in CustomDefinition) (CustomServiceVie
 	var previous *CustomDefinition
 	if slug != "" {
 		if !catalog.IsCustomSlug(slug) {
-			return CustomServiceView{}, fmt.Errorf("%s is not a custom service", slug)
+			return CustomServiceView{}, errors.New(i18n.T("go.services.custom.notCustom", "slug", slug))
 		}
 		def, ok, err := m.customDefinition(slug)
 		if err != nil {
 			return CustomServiceView{}, err
 		}
 		if !ok {
-			return CustomServiceView{}, fmt.Errorf("unknown custom service: %s", slug)
+			return CustomServiceView{}, errors.New(i18n.T("go.services.custom.unknown", "slug", slug))
 		}
 		previous = &def
 	}
@@ -433,23 +434,23 @@ func (m *Manager) DeleteCustom(ctx context.Context, slug string) error {
 	m.customMu.Lock()
 	defer m.customMu.Unlock()
 	if !catalog.IsCustomSlug(slug) {
-		return fmt.Errorf("%s is not a custom service", slug)
+		return errors.New(i18n.T("go.services.custom.notCustom", "slug", slug))
 	}
 	if m.customDeploying[slug] > 0 {
-		return errors.New("it is being deployed right now; wait for the deploy to finish")
+		return errors.New(i18n.T("go.services.custom.deploying"))
 	}
 	if _, ok, err := m.store.GetDeployment(slug); err != nil {
 		return err
 	} else if ok {
-		return errors.New("remove it from this computer first; it is still deployed here")
+		return errors.New(i18n.T("go.services.custom.stillDeployed"))
 	}
 	infos, err := m.List(ctx)
 	if err != nil {
-		return fmt.Errorf("cannot tell whether it still runs here: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("go.services.custom.cannotTell"), err)
 	}
 	for _, info := range infos {
 		if info.Slug == slug {
-			return errors.New("remove it from this computer first; a container of it still exists here")
+			return errors.New(i18n.T("go.services.custom.containerExists"))
 		}
 	}
 	if err := m.store.DeleteCustomService(slug); err != nil {

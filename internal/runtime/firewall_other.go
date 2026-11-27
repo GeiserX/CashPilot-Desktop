@@ -5,14 +5,15 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // ensureFirewallBlock refuses outside Windows: firewall_block is a Windows Firewall
 // rule, and a binary that asks for one must not start without it.
 func ensureFirewallBlock(slug, program string, nets []string) error {
 	_ = program
-	return fmt.Errorf("%s was not started: firewall_block %v is only implemented on Windows", slug, nets)
+	return errors.New(i18n.T("go.runtime.firewall.windowsOnly", "slug", slug, "networks", nets))
 }
 
 // ensureFirewallBlockWith refuses outside Windows, as ensureFirewallBlock does.

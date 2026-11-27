@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/importers"
 )
 
@@ -67,7 +68,7 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 		return ImportResult{}, err
 	}
 	if len(req.Slugs) == 0 {
-		return ImportResult{}, errors.New("Choose at least one service.")
+		return ImportResult{}, errors.New(i18n.T("go.app.import.chooseOne"))
 	}
 	preview, err := importers.Run(req.Files, req.Source, a.catalog.Get, req.Extra)
 	if err != nil {
@@ -95,14 +96,14 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 		seen[slug] = true
 		row, ok := bySlug[slug]
 		if !ok {
-			return ImportResult{}, fmt.Errorf("%.60s is not in these files.", slug)
+			return ImportResult{}, errors.New(i18n.T("go.app.import.notInFiles", "slug", fmt.Sprintf("%.60s", slug)))
 		}
 		if row.State != importers.RowReady {
-			return ImportResult{}, fmt.Errorf("%s cannot be imported yet: %s", row.Name, row.Reason)
+			return ImportResult{}, errors.New(i18n.T("go.app.import.notReady", "name", row.Name, "reason", row.Reason))
 		}
 		stored, err := a.store.GetCredentials(slug)
 		if err != nil {
-			return ImportResult{}, fmt.Errorf("could not read the saved credentials of %s: %w", row.Name, err)
+			return ImportResult{}, fmt.Errorf("%s: %w", i18n.T("go.app.import.readFailed", "name", row.Name), err)
 		}
 		merged := make(map[string]string, len(stored)+len(row.Env))
 		for k, v := range stored {
@@ -124,7 +125,7 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 		// A saved value that differs from the file next to a value filled from the
 		// file would pair one account's email with another's password.
 		if filled && len(kept) > 0 {
-			return ImportResult{}, fmt.Errorf("%s: %s saved here differs from the file, so the import would mix two logins. Fix it in Settings first.", row.Name, strings.Join(kept, ", "))
+			return ImportResult{}, errors.New(i18n.T("go.app.import.differs", "name", row.Name, "fields", strings.Join(kept, ", ")))
 		}
 		if err := a.services.ValidateCredentials(slug, merged); err != nil {
 			return ImportResult{}, fmt.Errorf("%s: %w", row.Name, err)
@@ -135,11 +136,11 @@ func (a *App) ApplyImport(req ImportApplyRequest) (ImportResult, error) {
 	for _, p := range todo {
 		if err := a.saveCredentials(p.slug, p.values); err != nil {
 			// Each service is its own write, so say which ones are already saved.
-			done := "nothing was saved"
+			done := i18n.T("go.app.import.nothingSaved")
 			if len(result.Saved) > 0 {
-				done = "already saved: " + strings.Join(result.Saved, ", ")
+				done = i18n.T("go.app.import.alreadySaved", "slugs", strings.Join(result.Saved, ", "))
 			}
-			return result, fmt.Errorf("saving %s failed (%s): %w", p.slug, done, err)
+			return result, fmt.Errorf("%s: %w", i18n.T("go.app.import.saveFailed", "slug", p.slug, "done", done), err)
 		}
 		result.Saved = append(result.Saved, p.slug)
 		if len(p.kept) > 0 {

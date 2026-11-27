@@ -8,6 +8,7 @@ import (
 	"log"
 	"sort"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/statebackup"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
@@ -89,7 +90,7 @@ func stateFingerprint(ctx context.Context, cli stateClient, name string, targets
 // on the day it is needed. Pause rather than stop, so a node keeps its uptime.
 func readState(ctx context.Context, cli stateClient, slug, name string, targets []string, limit int64) (payload []byte, read []string, err error) {
 	if len(targets) == 0 {
-		return nil, nil, fmt.Errorf("%s declares no critical volumes, so there is no irreplaceable state to export", slug)
+		return nil, nil, errors.New(i18n.T("go.runtime.state.noCritical", "slug", slug))
 	}
 	inspect, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	if err != nil {
@@ -102,7 +103,7 @@ func readState(ctx context.Context, cli stateClient, slug, name string, targets 
 	running := ctr.State != nil && ctr.State.Running && !ctr.State.Paused
 	if running {
 		if _, err := cli.ContainerPause(ctx, name, client.ContainerPauseOptions{}); err != nil {
-			return nil, nil, fmt.Errorf("could not pause %s for a consistent copy: %w", name, err)
+			return nil, nil, fmt.Errorf("%s: %w", i18n.T("go.runtime.state.pauseFailed", "name", name), err)
 		}
 		defer func() {
 			// Unpause even when the read failed: a paused earner shows as up and
@@ -113,7 +114,7 @@ func readState(ctx context.Context, cli stateClient, slug, name string, targets 
 					// A good backup next to a silently paused node is worse than
 					// no backup: say so instead of reporting success.
 					payload, read = nil, nil
-					err = fmt.Errorf("the backup was read but %s could not be unpaused: %w; run docker unpause %s", name, uerr, name)
+					err = wrapText(i18n.T("go.runtime.state.unpauseFailed", "name", name, "error", uerr), uerr)
 				}
 			}
 		}()
@@ -128,16 +129,16 @@ func readState(ctx context.Context, cli stateClient, slug, name string, targets 
 	for _, target := range sorted {
 		res, err := cli.CopyFromContainer(ctx, name, client.CopyFromContainerOptions{SourcePath: target})
 		if err != nil {
-			return nil, nil, fmt.Errorf("could not read %s: %w", target, err)
+			return nil, nil, fmt.Errorf("%s: %w", i18n.T("go.runtime.state.readFailed", "target", target), err)
 		}
 		chunk, err := io.ReadAll(io.LimitReader(res.Content, limit-int64(len(out))+1))
 		_ = res.Content.Close()
 		if err != nil {
-			return nil, nil, fmt.Errorf("could not read %s: %w", target, err)
+			return nil, nil, fmt.Errorf("%s: %w", i18n.T("go.runtime.state.readFailed", "target", target), err)
 		}
 		out = append(out, chunk...)
 		if int64(len(out)) > limit {
-			return nil, nil, fmt.Errorf("%s's state is larger than %d MB, too big to export here. That is a data folder, not an identity: Storj and Sia keep their whole storage folder there. Back up %s at the disk level with your own tools, then use I have a backup", slug, limit>>20, target)
+			return nil, nil, errors.New(i18n.T("go.runtime.state.tooLarge", "slug", slug, "mb", limit>>20, "target", target))
 		}
 		read = append(read, target)
 	}

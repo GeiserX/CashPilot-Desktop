@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
@@ -185,16 +186,12 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	if len(shape.CapDrop) > 0 {
 		want, have := toSet(capNames(dc.CapAdd)), heldCaps(shape)
 		if missing := minus(want, have); len(missing) > 0 {
-			pronoun := "it"
-			if len(missing) > 1 {
-				pronoun = "them"
-			}
-			found = append(found, fmt.Sprintf("missing %s, which the catalog now grants; the container was made without %s", strings.Join(missing, ", "), pronoun))
+			found = append(found, i18n.T("go.runtime.drift.missingCaps", "caps", strings.Join(missing, ", "), "n", len(missing)))
 		}
 		// Only what the runtime lists as added: on Podman a kept default capability is
 		// in neither list, and a custom default set there would make a guess wrong.
 		if extra := minus(toSet(shape.CapAdd), want); len(extra) > 0 {
-			found = append(found, fmt.Sprintf("still has %s, which the catalog no longer grants", strings.Join(extra, ", ")))
+			found = append(found, i18n.T("go.runtime.drift.extraCaps", "caps", strings.Join(extra, ", ")))
 		}
 	}
 
@@ -206,7 +203,7 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	}
 	haveDevices := toSet(shape.Devices)
 	if missing := minus(wantDevices, haveDevices); len(missing) > 0 {
-		found = append(found, fmt.Sprintf("missing device %s, which the catalog now passes in", strings.Join(missing, ", ")))
+		found = append(found, i18n.T("go.runtime.drift.missingDevice", "devices", strings.Join(missing, ", ")))
 	}
 	// An AMD or Intel grant's render nodes (and /dev/kfd for ROCm) are picked from
 	// the host at deploy (gpu.go), so they are the catalog's even though it names
@@ -223,12 +220,12 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 		}
 	}
 	if extra := minus(haveDevices, wantDevices); len(extra) > 0 {
-		found = append(found, fmt.Sprintf("still has device %s, which the catalog no longer passes in", strings.Join(extra, ", ")))
+		found = append(found, i18n.T("go.runtime.drift.extraDevice", "devices", strings.Join(extra, ", ")))
 	}
 	// A GPU device request only an NVIDIA grant makes. One left from a grant the
 	// catalog removed or changed keeps the GPU until a redeploy.
 	if extra := minus(toSet(shape.GPU), map[string]bool{"nvidia": nvidiaGrant}); len(extra) > 0 {
-		found = append(found, fmt.Sprintf("still has GPU access (%s device request), which the catalog no longer grants", strings.Join(extra, ", ")))
+		found = append(found, i18n.T("go.runtime.drift.extraGPU", "drivers", strings.Join(extra, ", ")))
 	}
 	// An AMD or Intel grant needs a render node; /dev/kfd alone is no GPU. A ROCm
 	// grant also needs /dev/kfd, which a container made before rocm was set lacks.
@@ -238,22 +235,22 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	}
 	switch {
 	case granted && ((nvidiaGrant && !slices.Contains(shape.GPU, "nvidia")) || (!nvidiaGrant && !hasRender)):
-		found = append(found, "missing GPU, which the catalog now passes in")
+		found = append(found, i18n.T("go.runtime.drift.missingGPU"))
 	case granted && grant.ROCm && !gpuDevices[catalog.KFDDevice]:
-		found = append(found, fmt.Sprintf("missing device %s, which the catalog now passes in", catalog.KFDDevice))
+		found = append(found, i18n.T("go.runtime.drift.missingDevice", "devices", catalog.KFDDevice))
 	}
 
 	// A container that reports no runtime is not judged: nothing is known.
 	if want := strings.TrimSpace(dc.Runtime); want != "" && shape.Runtime != "" && shape.Runtime != want {
-		found = append(found, fmt.Sprintf("runs under the %s runtime; the catalog requires %s", shape.Runtime, want))
+		found = append(found, i18n.T("go.runtime.drift.runtime", "have", shape.Runtime, "want", want))
 	}
 
 	if shape.Privileged && !dc.Privileged {
-		found = append(found, "runs privileged, which CashPilot no longer allows")
+		found = append(found, i18n.T("go.runtime.drift.privileged"))
 	}
 
 	if len(dc.Entrypoint) > 0 && !slices.Equal(shape.Entrypoint, dc.Entrypoint) {
-		found = append(found, "starts with a different entrypoint than the catalog declares")
+		found = append(found, i18n.T("go.runtime.drift.entrypoint"))
 	}
 
 	// Network mode, and the ports only where the container has its own network.
@@ -261,21 +258,21 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 	haveHost := shape.NetworkMode == "host"
 	switch {
 	case wantHost && !haveHost:
-		found = append(found, "uses its own network, but should share the host's")
+		found = append(found, i18n.T("go.runtime.drift.needsHostNetwork"))
 	case !wantHost && haveHost:
-		found = append(found, "shares the host's network")
+		found = append(found, i18n.T("go.runtime.drift.hostNetwork"))
 	case !wantHost:
 		want := catalogPortKeys(dc.Ports)
 		if dc.UIPort != nil {
 			want[fmt.Sprintf("%d/tcp", dc.UIPort.Port)] = true
 		}
 		if missing := minus(want, toSet(shape.Ports)); len(missing) > 0 {
-			found = append(found, fmt.Sprintf("does not publish port %s", strings.Join(missing, ", ")))
+			found = append(found, i18n.T("go.runtime.drift.missingPort", "ports", strings.Join(missing, ", ")))
 		}
 		// Which range is the user's setting, which the shape does not carry, so only
 		// a container publishing none of it is judged.
 		if dc.UDPPortRange != nil && !slices.ContainsFunc(shape.Ports, func(p string) bool { return strings.HasSuffix(p, "/udp") }) {
-			found = append(found, "publishes none of its UDP ports")
+			found = append(found, i18n.T("go.runtime.drift.noUDP"))
 		}
 	}
 
@@ -289,7 +286,7 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 		}
 	}
 	if missing := minus(wantMounts, toSet(shape.Mounts)); len(missing) > 0 {
-		found = append(found, fmt.Sprintf("has no mount at %s, which the catalog now declares", strings.Join(missing, ", ")))
+		found = append(found, i18n.T("go.runtime.drift.missingMount", "paths", strings.Join(missing, ", ")))
 	}
 
 	// Env: the keys a redeploy sets on its own, the ones with a default. Desktop puts
@@ -305,7 +302,7 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 		}
 	}
 	if missing := minus(wantEnv, toSet(shape.EnvKeys)); len(missing) > 0 {
-		found = append(found, fmt.Sprintf("has no %s setting, which the catalog now sets", strings.Join(missing, ", ")))
+		found = append(found, i18n.T("go.runtime.drift.missingSetting", "names", strings.Join(missing, ", ")))
 	}
 
 	// CashPilot's own images are pinned, so a different tag is an image a fix never
@@ -319,7 +316,7 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 		wRepo, wTag := splitRef(want)
 		hRepo, hTag := splitRef(shape.Image)
 		if wRepo == hRepo && wTag != "" && hTag != "" && wTag != hTag {
-			found = append(found, fmt.Sprintf("runs %s:%s; the catalog now pins %s", hRepo, hTag, wTag))
+			found = append(found, i18n.T("go.runtime.drift.imageTag", "repo", hRepo, "tag", hTag, "want", wTag))
 		}
 	}
 	return found

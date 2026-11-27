@@ -13,6 +13,8 @@ import (
 
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Fence-gated earners (Mysterium) get no Docker restart policy. With one, Docker
@@ -291,11 +293,11 @@ func (f *fence) refreshWaiting(ctx context.Context, cli fenceAPI) {
 func (f *fence) startGated(ctx context.Context, cli fenceAPI) error {
 	items, err := f.listManaged(ctx, cli)
 	if err != nil {
-		return fmt.Errorf("could not list the fence-gated earners to start them: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.fence.listGatedFailed"), err)
 	}
 	stopped, err := f.userStopped()
 	if err != nil {
-		return fmt.Errorf("could not read which fence-gated earners were stopped from CashPilot, so none was started: %w", err)
+		return fmt.Errorf("%s: %w", i18n.T("go.runtime.fence.readStoppedFailed"), err)
 	}
 	var failed []string
 	refused := map[string]bool{}
@@ -310,7 +312,7 @@ func (f *fence) startGated(ctx context.Context, cli fenceAPI) error {
 	}
 	f.setRefusedStarts(refused)
 	if len(failed) > 0 {
-		return fmt.Errorf("could not start %s behind the LAN fence", strings.Join(failed, ", "))
+		return errors.New(i18n.T("go.runtime.fence.startGatedFailed", "names", strings.Join(failed, ", ")))
 	}
 	return nil
 }
@@ -357,7 +359,7 @@ func (f *fence) pinGatedRestart(ctx context.Context, cli fenceAPI) error {
 		}
 	}
 	if len(failed) > 0 {
-		return fmt.Errorf("could not take Docker's restart policy off %s, so Docker may start it after a reboot before the LAN fence is back", strings.Join(failed, ", "))
+		return errors.New(i18n.T("go.runtime.fence.restartPolicyFailed", "names", strings.Join(failed, ", ")))
 	}
 	return nil
 }

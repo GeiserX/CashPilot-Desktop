@@ -4,11 +4,11 @@ import (
 	"crypto/sha3"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // deviceIDShape is the only id format a copy can derive its own from: hex in one case.
@@ -26,7 +26,7 @@ var deviceIDShape = regexp.MustCompile(`^(?:[0-9a-f]+|[0-9A-F]+)$`)
 // is refused rather than given a cloned identity.
 func copyDeviceID(deviceID, seed, pattern string) (string, error) {
 	if !deviceIDShape.MatchString(deviceID) {
-		return "", errors.New("its device id is not in a format a copy can derive its own from")
+		return "", errors.New(i18n.T("go.runtime.deviceID.badFormat"))
 	}
 	sum := sha3.SumSHAKE256([]byte(deviceID+"-"+seed), (len(deviceID)+1)/2)
 	derived := hex.EncodeToString(sum)[:len(deviceID)]
@@ -37,7 +37,7 @@ func copyDeviceID(deviceID, seed, pattern string) (string, error) {
 	if pattern != "" {
 		re, err := regexp.Compile(`^(?:` + pattern + `)$`)
 		if err != nil || !re.MatchString(derived) {
-			return "", errors.New("the device id derived for the copy does not match the catalog's format for it")
+			return "", errors.New(i18n.T("go.runtime.deviceID.derivedMismatch"))
 		}
 	}
 	return derived, nil
@@ -57,7 +57,7 @@ func renameDeviceIDs(svc catalog.Service, env map[string]string, seed string) er
 		if old == "" {
 			if item.Required {
 				// Empty is only safe where the service makes its own id when given none.
-				return fmt.Errorf("its deployment has no %s, so the copy cannot be given one of its own", item.Key)
+				return errors.New(i18n.T("go.runtime.deviceID.missing", "key", item.Key))
 			}
 			continue
 		}
