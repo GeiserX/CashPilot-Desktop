@@ -364,3 +364,20 @@ func TestRemoveFirewallScriptAcceptsTheDeletedVNIC(t *testing.T) {
 		_ = tc.name
 	}
 }
+
+// TestRemoveGuardianScriptAnswersOnlyItsDocument: Remove-HgsGuardian writes
+// to the output stream, so on live run 5 the answer was not base64, Remove
+// reported a failure after removing the guardian, and never finished.
+func TestRemoveGuardianScriptAnswersOnlyItsDocument(t *testing.T) {
+	const mock = `
+function Get-VM {}
+$global:removed = $false
+function Remove-HgsGuardian { [CmdletBinding()] param($InputObject, [switch]$Confirm) $global:removed = $true; 'UntrustedGuardian' }
+`
+	signing, encryption, digest := guardianCertificates(t)
+	code, out := runGuardianScript(t, mock, scriptRemoveGuardian+"\nif (-not $global:removed) { throw 'the guardian was not removed' }\n",
+		map[string]any{"id": digest}, signing, encryption, "objects")
+	if _, err := decodeOutput(out); code != 0 || err != nil {
+		t.Fatalf("exit %d, decode %v: %s", code, err, out)
+	}
+}

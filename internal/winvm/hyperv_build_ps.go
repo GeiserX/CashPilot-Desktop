@@ -718,7 +718,8 @@ const scriptRemoveGuardian = buildPrelude + `$g = @(Get-HgsGuardian -Name 'Untru
 if ($g.Count -gt 0) {
   if ($g.Count -ne 1 -or (Get-GuardianIdentity $g[0]) -cne $in.id) { throw 'The guardian changed since inventory.' }
   if (@(Get-VM | Where-Object { Test-GuardianUser $_ }).Count -gt 0) { throw 'A VM still needs the guardian.' }
-  Remove-HgsGuardian -InputObject $g[0] -Confirm:$false
+  # Remove-HgsGuardian writes to the output stream; the answer is the document alone.
+  $null = Remove-HgsGuardian -InputObject $g[0] -Confirm:$false
 }
 Write-Doc ([ordered]@{ ok = $true })
 `
