@@ -408,3 +408,29 @@ func TestApplyRefusesADigestThatCannotResolve(t *testing.T) {
 		}
 	})
 }
+
+// TestApplyVendorsUnderscoreFoldersAsTheyAre: services/_i18n/<locale>.yml holds the
+// catalog's translations, not a service. Apply must copy it byte for byte and never
+// read it as an entry, whatever shape it has. The body below is a YAML list, which
+// would fail to parse as a service.
+func TestApplyVendorsUnderscoreFoldersAsTheyAre(t *testing.T) {
+	body := []byte("- not a service\n- docker: image: x\n")
+	upstream := map[string][]byte{
+		"_i18n/es.yml":       body,
+		"_i18n/en.yml":       []byte("example.description: \"Shares bandwidth\"\n"),
+		"_ratings.yml":       []byte("example: 3\n"),
+		"bandwidth/live.yml": []byte(strings.Replace(liveEntry, "status: active", "status: dead", 1)),
+	}
+	out, err := applyWith(t, upstream, "", nil)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	for rel, want := range upstream {
+		if rel == "bandwidth/live.yml" {
+			continue
+		}
+		if !bytes.Equal(out[rel], want) {
+			t.Errorf("%s changed: got %q, want %q", rel, out[rel], want)
+		}
+	}
+}
