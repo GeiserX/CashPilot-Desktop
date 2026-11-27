@@ -487,34 +487,52 @@ export namespace catalog {
 	        this.rocm = source["rocm"];
 	    }
 	}
-	export class GuestWindows {
-	    process: string;
-	    publisher: string;
-	    downloadPage: string;
-	    signin: string;
+	export class GuestMarker {
+	    file?: string;
+	    key?: string;
+	    logWords?: string;
+	    process?: boolean;
 	
 	    static createFrom(source: any = {}) {
-	        return new GuestWindows(source);
+	        return new GuestMarker(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.file = source["file"];
+	        this.key = source["key"];
+	        this.logWords = source["logWords"];
 	        this.process = source["process"];
-	        this.publisher = source["publisher"];
-	        this.downloadPage = source["downloadPage"];
-	        this.signin = source["signin"];
 	    }
 	}
-	export class GuestConfig {
-	    windows?: GuestWindows;
+	export class GuestMacOS {
+	    app: string;
+	    process: string;
+	    teamId: string;
+	    download: string;
+	    sha256?: string;
+	    version?: string;
+	    rosetta?: boolean;
+	    signin: string;
+	    signedIn: GuestMarker;
+	    note?: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new GuestConfig(source);
+	        return new GuestMacOS(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.windows = this.convertValues(source["windows"], GuestWindows);
+	        this.app = source["app"];
+	        this.process = source["process"];
+	        this.teamId = source["teamId"];
+	        this.download = source["download"];
+	        this.sha256 = source["sha256"];
+	        this.version = source["version"];
+	        this.rosetta = source["rosetta"];
+	        this.signin = source["signin"];
+	        this.signedIn = this.convertValues(source["signedIn"], GuestMarker);
+	        this.note = source["note"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -535,6 +553,60 @@ export namespace catalog {
 		    return a;
 		}
 	}
+	export class GuestWindows {
+	    process: string;
+	    publisher: string;
+	    downloadPage: string;
+	    signin: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GuestWindows(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.process = source["process"];
+	        this.publisher = source["publisher"];
+	        this.downloadPage = source["downloadPage"];
+	        this.signin = source["signin"];
+	    }
+	}
+	export class GuestConfig {
+	    windows?: GuestWindows;
+	    macos?: GuestMacOS;
+	    refused?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new GuestConfig(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.windows = this.convertValues(source["windows"], GuestWindows);
+	        this.macos = this.convertValues(source["macos"], GuestMacOS);
+	        this.refused = source["refused"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
 	
 	
 	export class Mining {
@@ -3503,6 +3575,213 @@ export namespace runtime {
 	        this.Address = source["Address"];
 	        this.Phrase = source["Phrase"];
 	    }
+	}
+
+}
+
+export namespace securevm {
+	
+	export class App {
+	    slug: string;
+	    name: string;
+	    placement: string;
+	    canVm: boolean;
+	    locked: string;
+	    installed: string;
+	    running: string;
+	    signedIn: string;
+	    detail: string;
+	    note: string;
+	    layers: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new App(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	        this.placement = source["placement"];
+	        this.canVm = source["canVm"];
+	        this.locked = source["locked"];
+	        this.installed = source["installed"];
+	        this.running = source["running"];
+	        this.signedIn = source["signedIn"];
+	        this.detail = source["detail"];
+	        this.note = source["note"];
+	        this.layers = source["layers"];
+	    }
+	}
+	export class Cost {
+	    memoryGb: number;
+	    cores: number;
+	    diskGb: number;
+	    downloadGb: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Cost(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.memoryGb = source["memoryGb"];
+	        this.cores = source["cores"];
+	        this.diskGb = source["diskGb"];
+	        this.downloadGb = source["downloadGb"];
+	    }
+	}
+	export class ProofStep {
+	    id: string;
+	    kind: string;
+	    outcome: string;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProofStep(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.outcome = source["outcome"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class Proof {
+	    // Go type: time
+	    at: any;
+	    green: boolean;
+	    steps: ProofStep[];
+	    why: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Proof(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.at = this.convertValues(source["at"], null);
+	        this.green = source["green"];
+	        this.steps = this.convertValues(source["steps"], ProofStep);
+	        this.why = source["why"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class RemoveResult {
+	    removed: string[];
+	    kept: string[];
+	    left: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RemoveResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.removed = source["removed"];
+	        this.kept = source["kept"];
+	        this.left = source["left"];
+	    }
+	}
+	export class Status {
+	    platform: string;
+	    available: boolean;
+	    unavailable: string;
+	    installed: boolean;
+	    updateNeeded: boolean;
+	    unfinished: boolean;
+	    network: string;
+	    fence: string;
+	    reason: string;
+	    changes: string[];
+	    // Go type: time
+	    provedAt: any;
+	    proving: boolean;
+	    blocked?: number;
+	    // Go type: time
+	    blockedSince: any;
+	    busy: string;
+	    step: string;
+	    fraction: number;
+	    lastError: string;
+	    startError: string;
+	    guestLimit: boolean;
+	    freeDisk: number;
+	    lowDisk: boolean;
+	    cost: Cost;
+	    proof?: Proof;
+	    apps: App[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.platform = source["platform"];
+	        this.available = source["available"];
+	        this.unavailable = source["unavailable"];
+	        this.installed = source["installed"];
+	        this.updateNeeded = source["updateNeeded"];
+	        this.unfinished = source["unfinished"];
+	        this.network = source["network"];
+	        this.fence = source["fence"];
+	        this.reason = source["reason"];
+	        this.changes = source["changes"];
+	        this.provedAt = this.convertValues(source["provedAt"], null);
+	        this.proving = source["proving"];
+	        this.blocked = source["blocked"];
+	        this.blockedSince = this.convertValues(source["blockedSince"], null);
+	        this.busy = source["busy"];
+	        this.step = source["step"];
+	        this.fraction = source["fraction"];
+	        this.lastError = source["lastError"];
+	        this.startError = source["startError"];
+	        this.guestLimit = source["guestLimit"];
+	        this.freeDisk = source["freeDisk"];
+	        this.lowDisk = source["lowDisk"];
+	        this.cost = this.convertValues(source["cost"], Cost);
+	        this.proof = this.convertValues(source["proof"], Proof);
+	        this.apps = this.convertValues(source["apps"], App);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 
 }
