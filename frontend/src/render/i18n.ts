@@ -235,7 +235,7 @@ class Parser {
         break;
       }
       const start = this.pos;
-      while (this.pos < s.length && !"{ \n\t".includes(s[this.pos])) this.pos++;
+      while (this.pos < s.length && !"{ \n\t\r".includes(s[this.pos])) this.pos++;
       const sel = s.slice(start, this.pos);
       this.skipSpace();
       if (!sel || s[this.pos] !== "{") return null;
@@ -275,7 +275,8 @@ export function format(
   const p = new Parser(msg);
   const nodes = p.parse(false);
   if (!nodes || p.pos !== msg.length) return text(msg);
-  const numbers = new Intl.NumberFormat(locale);
+  // Every digit a fraction has, not Intl's default three.
+  const numbers = new Intl.NumberFormat(locale, { maximumFractionDigits: 15 });
   const out: string[] = [];
   const render = (list: Node[], n: number | null) => {
     for (const node of list) {

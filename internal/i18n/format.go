@@ -150,7 +150,7 @@ func (p *parser) argument() (node, bool) {
 			break
 		}
 		start := p.pos
-		for p.pos < len(p.src) && p.src[p.pos] != '{' && p.src[p.pos] != ' ' && p.src[p.pos] != '\n' && p.src[p.pos] != '\t' {
+		for p.pos < len(p.src) && !strings.ContainsRune("{ \n\t\r", rune(p.src[p.pos])) {
 			p.pos++
 		}
 		sel := p.src[start:p.pos]
@@ -259,7 +259,8 @@ func formatNumber[N int64 | float64](locale string, n N) string {
 	if err != nil {
 		return fmt.Sprint(n)
 	}
-	return message.NewPrinter(tag).Sprint(number.Decimal(n))
+	// Every digit a fraction has, not the pattern's default three.
+	return message.NewPrinter(tag).Sprint(number.Decimal(n, number.MaxFractionDigits(15)))
 }
 
 // PluralCategory is the CLDR cardinal category of a whole number in locale:
