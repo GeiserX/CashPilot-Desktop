@@ -11,25 +11,26 @@
 
 import type { StateBackupRow } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /** Why the card is asking, in words, never a colour alone. */
 export function backupStatusText(row: StateBackupRow): string {
   const day = String(row.confirmedAt || "").slice(0, 10);
   switch (row.state) {
     case "confirmed": {
-      const how = row.method === "export" ? " (saved from here)" : row.method === "restore" ? " (restored from that file)" : "";
-      let text = `Backup confirmed ${day}${how}`;
-      if (!row.tracksChanges) text += ". CashPilot cannot read this volume right now, so only the six-month limit applies";
-      return text;
+      const text = row.method === "export"
+        ? t("backups.confirmed.export", { day })
+        : row.method === "restore" ? t("backups.confirmed.restore", { day }) : t("backups.confirmed", { day });
+      return row.tracksChanges ? text : t("backups.confirmed.untracked", { confirmed: text });
     }
     case "changed":
-      return `The volume changed since the backup of ${day}. Back it up again`;
+      return t("backups.changed", { day });
     case "recheck":
-      return `Confirmed ${day}, before CashPilot could tell when the volume changes. Confirm it once more`;
+      return t("backups.recheck", { day });
     case "expired":
-      return `Last confirmed ${day}, more than six months ago`;
+      return t("backups.expired", { day });
     default:
-      return "No backup confirmed";
+      return t("backups.none");
   }
 }
 
@@ -39,12 +40,12 @@ function backupRow(row: StateBackupRow): string {
   const volumes = (row.volumes || []).map((v) => `
         <li><code>${escapeHtml(v.target)}</code><div class="backup-holds">${escapeHtml(v.holds)}</div></li>`).join("");
   const actions = (ok
-    ? `<button class="btn btn-ghost btn-sm" data-backup-action="undo" data-slug="${slug}">Undo</button>`
-    : `<button class="btn btn-ghost btn-sm" data-backup-action="confirm" data-slug="${slug}">I have a backup</button>`)
-    + `\n        <button class="btn btn-ghost btn-sm" data-backup-action="export" data-slug="${slug}">Download backup</button>`;
+    ? `<button class="btn btn-ghost btn-sm" data-backup-action="undo" data-slug="${slug}">${ht("backups.undo")}</button>`
+    : `<button class="btn btn-ghost btn-sm" data-backup-action="confirm" data-slug="${slug}">${ht("backups.haveBackup")}</button>`)
+    + `\n        <button class="btn btn-ghost btn-sm" data-backup-action="export" data-slug="${slug}">${ht("backups.download")}</button>`;
   return `
     <div class="attn-row ${ok ? "backup-ok" : "attn-warn"}" data-backup-row="${slug}">
-      <span class="attn-tag">${ok ? "Backed up" : "Back up"}</span>
+      <span class="attn-tag">${ok ? ht("backups.tag.ok") : ht("backups.tag.todo")}</span>
       <span class="attn-what">${escapeHtml(row.name || row.slug)}</span>
       <span class="attn-why">${escapeHtml(backupStatusText(row))}<ul class="backup-volumes">${volumes}</ul></span>
       <span class="attn-actions">${actions}</span>
@@ -59,9 +60,9 @@ export function renderStateBackups(rows: StateBackupRow[] | null | undefined): s
   const body = `<div class="attn-list">${list.map(backupRow).join("")}</div>`;
   if (!open) {
     return `
-    <section class="attention backups backups-quiet" aria-label="Backups">
+    <section class="attention backups backups-quiet" aria-label="${ht("backups.label")}">
       <details>
-        <summary class="muted">Backups confirmed for ${list.length} ${list.length === 1 ? "service" : "services"} with irreplaceable state</summary>
+        <summary class="muted">${ht("backups.quiet", { n: list.length })}</summary>
         ${body}
       </details>
     </section>`;
@@ -69,12 +70,9 @@ export function renderStateBackups(rows: StateBackupRow[] | null | undefined): s
   return `
     <section class="attention backups" aria-labelledby="backups-title">
       <div class="block-head">
-        <h2 class="block-title" id="backups-title">Back these up <span class="count">${open}</span></h2>
+        <h2 class="block-title" id="backups-title">${ht("backups.title")} <span class="count">${open}</span></h2>
       </div>
-      <p class="backup-intro">These services keep a node identity, a keystore or a wallet on this disk, and nothing else holds a copy.
-        CashPilot refuses to delete these volumes, but it cannot protect them from a wiped disk, a new machine or
-        <code>docker volume rm</code>. Keep a copy somewhere else, then mark it as backed up. CashPilot asks again when the
-        volume changes, and after six months.</p>
+      <p class="backup-intro">${ht("backups.intro", { command: "docker volume rm" })}</p>
       ${body}
     </section>`;
 }
@@ -87,12 +85,11 @@ export function backupExportForm(slug: string): string {
   const s = escapeHtml(slug);
   return `
     <form class="backup-form" data-slug="${s}">
-      <label><input type="radio" name="mode" value="passphrase" checked> Passphrase (12+ characters)</label>
-      <label><input type="radio" name="mode" value="recipient"> X25519 public key (hex)</label>
-      <input type="password" name="secret" autocomplete="new-password" required aria-label="Passphrase or public key">
-      <input type="password" name="secret_repeat" autocomplete="new-password" required placeholder="Repeat the passphrase" aria-label="Repeat the passphrase">
-      <button type="submit" class="btn btn-primary btn-sm">Encrypt and save</button>
-      <p class="backup-holds">Only the volumes above are read, with the service paused for the moment it takes. Lose the passphrase
-        or the private key and this file cannot be opened by anyone, CashPilot included.</p>
+      <label><input type="radio" name="mode" value="passphrase" checked> ${ht("backups.form.passphrase")}</label>
+      <label><input type="radio" name="mode" value="recipient"> ${ht("backups.form.recipient")}</label>
+      <input type="password" name="secret" autocomplete="new-password" required aria-label="${ht("backups.form.secret")}">
+      <input type="password" name="secret_repeat" autocomplete="new-password" required placeholder="${ht("backups.form.repeat")}" aria-label="${ht("backups.form.repeat")}">
+      <button type="submit" class="btn btn-primary btn-sm">${ht("backups.form.save")}</button>
+      <p class="backup-holds">${ht("backups.form.note")}</p>
     </form>`;
 }

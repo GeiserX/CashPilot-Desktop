@@ -10,32 +10,33 @@
 import type { StallAlert } from "../wails";
 import type { AttentionItem } from "./attention.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+import { intlLocale, ht, t } from "./i18n.js";
 
 /** "24 Nov, 14:00" in this computer's time zone, or "" for no time. */
 export function stallSince(since: number): string {
   if (!Number.isFinite(since) || since <= 0) return "";
   const d = new Date(since * 1000);
-  return `${d.getDate()} ${MONTHS[d.getMonth()]}, ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const month = new Intl.DateTimeFormat(intlLocale(), { month: "short" }).format(d);
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return t("stall.since", { day: d.getDate(), month, time });
 }
 
 export function stallItems(stalls: StallAlert[] | null | undefined): AttentionItem[] {
   return (stalls || []).map((s) => {
     const since = stallSince(s.since);
-    const why = `${escapeHtml(s.message)}${since ? ` Low since ${escapeHtml(since)}.` : ""}`;
+    const why = `${escapeHtml(s.message)}${since ? ` ${ht("stall.lowSince", { since })}` : ""}`;
     if (s.proxyId) {
       // A proxied copy has no Logs button: the logs route opens the service's own copies.
-      return { level: "warn", tag: "Almost no traffic", what: s.service || s.slug, where: "proxied copy", why, actions: "" };
+      return { level: "warn", tag: t("stall.tag"), what: s.service || s.slug, where: t("stall.proxiedCopy"), why, actions: "" };
     }
     const copyAttr = s.copy > 1 ? ` data-copy="${s.copy}"` : "";
     return {
       level: "warn",
-      tag: "Almost no traffic",
+      tag: t("stall.tag"),
       what: s.service || s.slug,
-      where: `copy ${s.copy}`,
+      where: t("stall.copy", { n: s.copy }),
       why,
-      actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(s.slug)}"${copyAttr}>Logs</button>`,
+      actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(s.slug)}"${copyAttr}>${ht("stall.logs")}</button>`,
     };
   });
 }

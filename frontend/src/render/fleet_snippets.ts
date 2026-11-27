@@ -8,6 +8,7 @@
 
 import type { FleetState } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht } from "./i18n.js";
 
 /** What the page shows in place of the key. */
 export const KEY_MASK = "••••";
@@ -25,11 +26,11 @@ export type FleetSnippet = "worker" | "mobile";
 export function renderFleetSnippets(fleet: Pick<FleetState, "workerSnippet" | "mobileSnippet" | "apiKey">): string {
   const block = (which: FleetSnippet, title: string, snippet: string) => `
               <div>
-                <div class="snippet-header"><strong>${title}</strong><button type="button" class="secondary compact-btn" data-fleet-copy="${which}">Copy</button></div>
+                <div class="snippet-header"><strong>${title}</strong><button type="button" class="secondary compact-btn" data-fleet-copy="${which}">${ht("fleet_snippets.copy")}</button></div>
                 <code>${escapeHtml(maskFleetKey(snippet, fleet.apiKey))}</code>
               </div>`;
   return `
-            <div class="fleet-snippets">${block("worker", "Docker worker", fleet.workerSnippet)}${block("mobile", "Mobile / companion", fleet.mobileSnippet)}
+            <div class="fleet-snippets">${block("worker", ht("fleet_snippets.worker"), fleet.workerSnippet)}${block("mobile", ht("fleet_snippets.mobile"), fleet.mobileSnippet)}
             </div>
-            <p class="muted compact-copy">The key is hidden here. Copy puts the real key in your clipboard.</p>`;
+            <p class="muted compact-copy">${ht("fleet_snippets.hidden")}</p>`;
 }

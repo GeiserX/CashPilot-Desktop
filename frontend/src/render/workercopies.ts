@@ -9,13 +9,14 @@
 
 import type { WorkerCommandsView, WorkerCopy } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 function copyName(copy: WorkerCopy): string {
-  return copy.instance > 1 ? `${copy.slug} (copy ${copy.instance})` : copy.slug;
+  return copy.instance > 1 ? t("workercopies.copyName", { slug: copy.slug, n: copy.instance }) : copy.slug;
 }
 
 function button(command: string, label: string, workerId: number, copy: WorkerCopy, disabled: boolean, kind = "secondary"): string {
-  return `<button class="${kind} compact-btn" data-worker-copy="${command}" data-worker-id="${workerId}" data-slug="${escapeHtml(copy.slug)}" data-instance="${copy.instance || 1}"${disabled ? " disabled" : ""}>${label}</button>`;
+  return `<button class="${kind} compact-btn" data-worker-copy="${command}" data-worker-id="${workerId}" data-slug="${escapeHtml(copy.slug)}" data-instance="${copy.instance || 1}"${disabled ? " disabled" : ""}>${escapeHtml(label)}</button>`;
 }
 
 /**
@@ -28,21 +29,21 @@ export function workerCopiesSection(workerId: number, view: WorkerCommandsView |
   const off = Boolean(view?.reason);
   const rows = copies.map((copy) => {
     const running = copy.status === "running";
-    const status = `<span class="badge ${running ? "success" : "warn"}">${escapeHtml(copy.status || "unknown")}</span>`;
+    const status = `<span class="badge ${running ? "success" : "warn"}">${escapeHtml(copy.status || t("workercopies.statusUnknown"))}</span>`;
     if (!copy.managed) {
       return `
       <div class="worker-copy">
         <span>${escapeHtml(copyName(copy))}</span> ${status}
-        <span class="muted compact-copy">Found by its image: CashPilot did not deploy it, so it takes no commands here.</span>
+        <span class="muted compact-copy">${ht("workercopies.unmanaged")}</span>
       </div>`;
     }
     const actions = running
-      ? button("stop", "Stop", workerId, copy, off) + button("restart", "Restart", workerId, copy, off)
-      : button("start", "Start", workerId, copy, off);
+      ? button("stop", t("workercopies.stop"), workerId, copy, off) + button("restart", t("workercopies.restart"), workerId, copy, off)
+      : button("start", t("workercopies.start"), workerId, copy, off);
     return `
       <div class="worker-copy">
         <span>${escapeHtml(copyName(copy))}</span> ${status}
-        <span class="device-actions">${actions}${button("remove", "Remove", workerId, copy, off, "danger")}</span>
+        <span class="device-actions">${actions}${button("remove", t("workercopies.remove"), workerId, copy, off, "danger")}</span>
       </div>`;
   }).join("");
   return `
@@ -60,8 +61,9 @@ export function workerCopiesSection(workerId: number, view: WorkerCommandsView |
  */
 export function copyCommandQuestion(command: string, slug: string, instance: number, workerName: string, copies: WorkerCopy[]): string | null {
   if (command !== "remove") return null;
-  if (instance > 1) return `Remove copy ${instance} of ${slug} from ${workerName}? This will stop and delete the container. Its data is kept.`;
+  if (instance > 1) return t("workercopies.removeCopy", { n: instance, slug, worker: workerName });
   const others = copies.filter((c) => c.slug === slug && c.managed && c.instance > 1).length;
-  const more = others > 0 ? ` Its ${others === 1 ? "other copy goes" : `${others} other copies go`} too.` : "";
-  return `Remove ${slug} from ${workerName}? This will stop and delete the container.${more} Its data is kept for a later deploy.`;
+  return others > 0
+    ? t("workercopies.removeWithCopies", { slug, worker: workerName, others })
+    : t("workercopies.removeService", { slug, worker: workerName });
 }

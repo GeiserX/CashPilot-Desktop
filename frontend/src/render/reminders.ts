@@ -12,26 +12,40 @@
 import type { ReminderItem, RemindersView } from "../wails";
 import type { AttentionItem } from "./attention.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, intlLocale, t } from "./i18n.js";
 
-const TAGS: Record<string, string> = { claim: "Claim", withdraw: "Withdraw", "keep-active": "Keep active" };
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** A reminder action's tag, or "" for one this file does not know. */
+function actionTag(action: string): string {
+  switch (action) {
+    case "claim":
+      return t("reminders.tag.claim");
+    case "withdraw":
+      return t("reminders.tag.withdraw");
+    case "keep-active":
+      return t("reminders.tag.keepActive");
+    default:
+      return "";
+  }
+}
 
 /** "22 Jan 2027" for a YYYY-MM-DD day, drawn as that day whatever the time zone. */
 export function reminderDate(iso: string): string {
   const [y, m, d] = String(iso || "").split("-").map(Number);
   if (!y || !m || !d || m > 12) return iso;
-  return `${d} ${MONTHS[m - 1]} ${y}`;
+  const month = new Intl.DateTimeFormat(intlLocale(), { month: "short", timeZone: "UTC" }).format(Date.UTC(y, m - 1, 1));
+  return t("reminders.date", { day: d, month, year: y });
 }
 
 /** "by 22 Jan 2027, 52 days", "… today", "… 3 days ago"; "" with no due date. */
 export function reminderWhen(item: ReminderItem): string {
   if (!item.due) return "";
-  const by = `by ${reminderDate(item.due)}${item.censored ? " or earlier" : ""}`;
+  const date = reminderDate(item.due);
+  const by = item.censored ? t("reminders.byOrEarlier", { date }) : t("reminders.by", { date });
   const n = item.daysLeft;
   if (n == null) return by;
-  if (n < 0) return `${by}, ${-n} day${n === -1 ? "" : "s"} ago`;
-  if (n === 0) return `${by}, today`;
-  return `${by}, ${n} day${n === 1 ? "" : "s"} left`;
+  if (n < 0) return t("reminders.ago", { by, n: -n });
+  if (n === 0) return t("reminders.today", { by });
+  return t("reminders.left", { by, n });
 }
 
 function urgent(item: ReminderItem): boolean {
@@ -44,10 +58,10 @@ function button(action: string, item: { slug: string; rule: string }, label: str
 
 function reminderRow(item: ReminderItem): string {
   const cash = item.kind === "cash-out";
-  let tag = TAGS[item.action] || "Act";
-  if (cash) tag = "Cash out";
-  if (item.stage === "overdue") tag = "Overdue";
-  if (item.stage === "recheck") tag = "Arrived?";
+  let tag = actionTag(item.action) || t("reminders.tag.act");
+  if (cash) tag = t("reminders.tag.cashOut");
+  if (item.stage === "overdue") tag = t("reminders.tag.overdue");
+  if (item.stage === "recheck") tag = t("reminders.tag.arrived");
   const level = item.stage === "overdue" ? "fail" : urgent(item) || item.stage === "recheck" ? "warn" : "ask";
 
   let what = escapeHtml(item.title);
@@ -57,24 +71,24 @@ function reminderRow(item: ReminderItem): string {
   const parts = [`<span class="mw-title">${what}</span>`];
   const when = reminderWhen(item);
   if (when) parts.push(`<span class="mw-when">${escapeHtml(when)}</span>`);
-  if (item.stage === "recheck") parts.push(`<span class="mw-loss">You marked this requested two weeks ago. Did the payout arrive?</span>`);
-  else if (item.stage === "overdue") parts.push(`<span class="mw-loss">The provider may already have written this off.</span>`);
+  if (item.stage === "recheck") parts.push(`<span class="mw-loss">${ht("reminders.recheck")}</span>`);
+  else if (item.stage === "overdue") parts.push(`<span class="mw-loss">${ht("reminders.overdue")}</span>`);
   parts.push(`<span class="mw-loss">${escapeHtml(item.loss)}</span>`);
-  if (item.how) parts.push(`<details class="mw-how"><summary>How</summary>${escapeHtml(item.how)}</details>`);
+  if (item.how) parts.push(`<details class="mw-how"><summary>${ht("reminders.how")}</summary>${escapeHtml(item.how)}</details>`);
 
   const actions: string[] = [];
-  if (item.url) actions.push(`<button class="btn btn-primary btn-sm" data-url="${escapeHtml(item.url)}">Open ${escapeHtml(item.name)}</button>`);
+  if (item.url) actions.push(`<button class="btn btn-primary btn-sm" data-url="${escapeHtml(item.url)}">${ht("reminders.open", { name: item.name })}</button>`);
   if (item.canDone) {
-    const label = item.stage === "recheck" ? "It arrived" : cash || item.action === "withdraw" ? "Requested" : "Done";
+    const label = item.stage === "recheck" ? t("reminders.arrivedButton") : cash || item.action === "withdraw" ? t("reminders.requested") : t("reminders.done");
     actions.push(button("done", item, label, ` data-occurrence="${escapeHtml(item.occurrence)}"`));
   }
-  if (item.canSnooze) actions.push(button("snooze", item, "Snooze a day", ` data-days="1"`));
+  if (item.canSnooze) actions.push(button("snooze", item, t("reminders.snoozeDay"), ` data-days="1"`));
   const more: string[] = [];
-  if (item.canSnooze) more.push(button("snooze", item, "Snooze a week", ` data-days="7"`));
-  more.push(button("mute", item, "Not for me"));
-  more.push(button("mute", { slug: item.slug, rule: "*" }, `Mute all ${item.name} reminders`));
-  if (item.source) more.push(`<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(item.source)}">Source, checked ${escapeHtml(item.checked)}</button>`);
-  actions.push(`<details class="mw-more"><summary class="btn btn-ghost btn-sm">More</summary><div class="mw-menu">${more.join("")}</div></details>`);
+  if (item.canSnooze) more.push(button("snooze", item, t("reminders.snoozeWeek"), ` data-days="7"`));
+  more.push(button("mute", item, t("reminders.notForMe")));
+  more.push(button("mute", { slug: item.slug, rule: "*" }, t("reminders.muteAll", { name: item.name })));
+  if (item.source) more.push(`<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(item.source)}">${ht("reminders.source", { day: item.checked })}</button>`);
+  actions.push(`<details class="mw-more"><summary class="btn btn-ghost btn-sm">${ht("reminders.more")}</summary><div class="mw-menu">${more.join("")}</div></details>`);
 
   return `
     <div class="attn-row attn-${level} mw-row" data-reminder="${escapeHtml(item.slug)}:${escapeHtml(item.rule)}">
@@ -90,31 +104,31 @@ export function renderReminders(view: RemindersView | null | undefined): string 
   if (!view) return "";
   if (view.joined) {
     return `
-    <section class="attention money-waiting attention-quiet" aria-label="Money waiting">
-      <p class="mw-note">Money waiting: your CashPilot server keeps the payout reminders while this computer is joined to it.</p>
+    <section class="attention money-waiting attention-quiet" aria-label="${ht("reminders.title")}">
+      <p class="mw-note">${ht("reminders.joined")}</p>
     </section>`;
   }
   const head = (count: string) => `
       <div class="block-head">
-        <h2 class="block-title" id="money-waiting-title">Money waiting${count}</h2>
+        <h2 class="block-title" id="money-waiting-title">${ht("reminders.title")}${count}</h2>
       </div>`;
   if (view.unknown) {
     return `
     <section class="attention money-waiting" aria-labelledby="money-waiting-title">${head("")}
-      <div class="attn-list"><div class="attn-row attn-warn"><span class="attn-tag">Unknown</span><span class="attn-what">Money waiting</span><span class="attn-why">Could not check the payout reminders. Refresh to try again.</span><span class="attn-actions"></span></div></div>
+      <div class="attn-list"><div class="attn-row attn-warn"><span class="attn-tag">${ht("reminders.tag.unknown")}</span><span class="attn-what">${ht("reminders.title")}</span><span class="attn-why">${ht("reminders.unknown")}</span><span class="attn-actions"></span></div></div>
     </section>`;
   }
   const items = view.items || [];
   const muted = view.muted || [];
   if (!items.length && !muted.length) return "";
   const foot = muted.length
-    ? `<div class="attn-foot mw-foot">Not for me: ${muted
-        .map((m) => `${escapeHtml(m.name)}, ${escapeHtml(m.title)} <button class="btn btn-ghost btn-sm" data-reminder-action="unmute" data-slug="${escapeHtml(m.slug)}" data-rule="${escapeHtml(m.rule)}">Unmute</button>`)
+    ? `<div class="attn-foot mw-foot">${ht("reminders.mutedList")} ${muted
+        .map((m) => `${escapeHtml(m.name)}, ${escapeHtml(m.title)} <button class="btn btn-ghost btn-sm" data-reminder-action="unmute" data-slug="${escapeHtml(m.slug)}" data-rule="${escapeHtml(m.rule)}">${ht("reminders.unmute")}</button>`)
         .join(" · ")}</div>`
     : "";
   return `
     <section class="attention money-waiting" aria-labelledby="money-waiting-title">${head(items.length ? ` <span class="count">${items.length}</span>` : "")}
-      <p class="mw-intro">Providers can take back money you leave too long. These are the steps that keep it yours.</p>
+      <p class="mw-intro">${ht("reminders.intro")}</p>
       ${items.length ? `<div class="attn-list">${items.map(reminderRow).join("")}</div>` : ""}
       ${foot}
     </section>`;
@@ -132,9 +146,9 @@ export function reminderAttention(view: RemindersView | null | undefined): Atten
   const list = due.map((i) => `${escapeHtml(i.name)}: ${escapeHtml(i.title)}, ${escapeHtml(reminderWhen(i))}`).join("; ");
   return [{
     level: overdue ? "fail" : "warn",
-    tag: overdue ? "Overdue" : "Deadline",
-    what: due.length === 1 ? due[0].name : `${due.length} reminders`,
-    why: `${list}. See Money waiting below.`,
+    tag: overdue ? t("reminders.tag.overdue") : t("reminders.tag.deadline"),
+    what: due.length === 1 ? due[0].name : t("reminders.count", { n: due.length }),
+    why: `${list}. ${ht("reminders.seeBelow")}`,
     actions: "",
   }];
 }

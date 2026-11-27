@@ -11,6 +11,7 @@
 
 import type { HealthScore, ProducerReport } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { t } from "./i18n.js";
 
 // renderHealthBadge renders a compact, color-coded pill for a deployed service's
 // rolling health: the 0-100 score plus uptime%. Colour tracks the score — green
@@ -28,11 +29,11 @@ export function renderHealthBadge(health: HealthScore | undefined): string {
   // loop — hence the honest "unstable" label. Unstable always shows the error tone.
   const unstable = crashes >= 3;
   const tone = unstable || score < 50 ? "tone-fail" : score < 80 ? "tone-warn" : "tone-ok";
-  const title = `Health ${score}/100 · ${uptime}% uptime · ${health.restarts} restarts · ${crashes} crashes · ${health.stops} stops`;
+  const title = t("health.title", { score, uptime, restarts: health.restarts, crashes, stops: health.stops });
   // Surface crashes in the visible pill (previously only in the tooltip) so a crash-looping
   // earner is legible at a glance, not just via hover.
-  const crashNote = crashes > 0 ? ` · ${crashes} crash${crashes === 1 ? "" : "es"}` : "";
-  const label = unstable ? `unstable · ${uptime}% up${crashNote}` : `${score} · ${uptime}% up${crashNote}`;
+  const crashNote = crashes > 0 ? ` · ${t("health.crashes", { n: crashes })}` : "";
+  const label = unstable ? `${t("health.unstable", { uptime })}${crashNote}` : `${t("health.score", { score, uptime })}${crashNote}`;
   return `<span class="badge badge-health ${tone}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
 }
 
@@ -67,7 +68,7 @@ export function renderProducerBadge(
   // looping, and the one thing to know about it, so it shows in either state.
   if (report.state === "account_disabled") {
     const reasons = (report.reasons || []).filter((r) => !!r).join(" ");
-    return badge("tone-fail", "account disabled", reasons || "The provider has disabled this account.");
+    return badge("tone-fail", t("health.accountDisabled"), reasons || t("health.accountDisabledTitle"));
   }
   if (containerState !== "running" && containerState !== "restarting") return "";
 
@@ -77,14 +78,14 @@ export function renderProducerBadge(
     // Amber for idle, red for a concrete failure: one is nobody buying, the
     // other is something the user can go and fix.
     const tone = report.state === "failing" ? "tone-fail" : "tone-warn";
-    return badge(tone, "not earning", title || "This service is running but not earning.");
+    return badge(tone, t("health.notEarning"), title || t("health.notEarningTitle"));
   }
   // Anything else, including a state this frontend does not know, is "we did not
   // check" -- the honest reading of an answer we cannot interpret.
   return badge(
     "tone-muted",
-    "earning not checked",
-    title || "CashPilot cannot tell whether this service is earning."
+    t("health.notChecked"),
+    title || t("health.notCheckedTitle")
   );
 }
 

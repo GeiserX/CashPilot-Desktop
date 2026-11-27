@@ -8,72 +8,84 @@
 
 import type { ServerCommand, ServerCommandsState } from "../wails";
 import { escapeHtml, relativeTime } from "./format.js"; // .js so the emitted ESM resolves in Node
+import { ht, t } from "./i18n.js";
 
-const ACTION_WORDS: Record<string, string> = {
-  deploy: "Deploy",
-  stop: "Stop",
-  start: "Start",
-  restart: "Restart",
-  remove: "Remove",
-};
+/** A command's verb, or "" for one this file does not know. */
+function actionWord(action: string): string {
+  switch (action) {
+    case "deploy":
+      return t("server_commands.action.deploy");
+    case "stop":
+      return t("server_commands.action.stop");
+    case "start":
+      return t("server_commands.action.start");
+    case "restart":
+      return t("server_commands.action.restart");
+    case "remove":
+      return t("server_commands.action.remove");
+    default:
+      return "";
+  }
+}
 
 /** One line about the last command: what, which service, when, and how it ended. */
 export function lastCommandLine(last: ServerCommand | null | undefined, now: number = Date.now()): string {
-  if (!last) return `<p class="pairing-line" data-server-last>No command received yet.</p>`;
-  const what = ACTION_WORDS[last.action] || last.action;
+  if (!last) return `<p class="pairing-line" data-server-last>${ht("server_commands.noCommand")}</p>`;
+  const what = actionWord(last.action) || last.action;
   const when = relativeTime(last.at, now);
-  const outcome = last.ok ? "done" : `refused: ${last.detail}`;
-  return `<p class="pairing-line${last.ok ? "" : " warn"}" data-server-last>Last command: <strong>${escapeHtml(what)} ${escapeHtml(last.slug)}</strong>${
-    when ? `, ${escapeHtml(when)}` : ""
-  } (${escapeHtml(outcome)}).</p>`;
+  const outcome = last.ok ? t("server_commands.done") : t("server_commands.refused", { detail: last.detail });
+  const line = when
+    ? ht("server_commands.lastWhen", { what, slug: last.slug, when, outcome })
+    : ht("server_commands.last", { what, slug: last.slug, outcome });
+  return `<p class="pairing-line${last.ok ? "" : " warn"}" data-server-last>${line}</p>`;
 }
 
 /** Whether the server can reach this computer now, in plain words. */
 function reachLine(state: ServerCommandsState): string {
   if (!state.on) {
-    return `<p class="pairing-line" data-server-reach>Off. ${escapeHtml(state.server)} can see what runs here, but cannot change it.</p>`;
+    return `<p class="pairing-line" data-server-reach>${ht("server_commands.off", { server: state.server })}</p>`;
   }
   if (state.serverTooOld) {
-    return `<p class="pairing-line warn" data-server-reach>${escapeHtml(state.server || "Your CashPilot")} is older than CashPilot 3.0.0, so it cannot send commands to this computer. It only sees what runs here. Update it to 3.0.0 or newer.</p>`;
+    return `<p class="pairing-line warn" data-server-reach>${ht("server_commands.tooOld", { server: state.server || t("server_commands.yourCashPilot") })}</p>`;
   }
   if (state.listening) {
-    return `<p class="pairing-line" data-server-reach>It reaches this computer at <code>${escapeHtml(state.url)}</code>, with the key it gave this computer when it joined.</p>`;
+    return `<p class="pairing-line" data-server-reach>${ht("server_commands.reaches", { url: state.url ?? "" })}</p>`;
   }
-  return `<p class="pairing-line warn" data-server-reach>${escapeHtml(state.problem || "Your CashPilot cannot reach this computer right now.")}</p>`;
+  return `<p class="pairing-line warn" data-server-reach>${escapeHtml(state.problem || t("server_commands.cannotReach"))}</p>`;
 }
 
 /** The Windows Firewall offer, only where a rule is needed and the switch is on. */
 function firewallLine(state: ServerCommandsState): string {
   if (!state.firewallNeeded || !state.on) return "";
   if (state.firewallStatus === "unknown") {
-    return `<p class="pairing-line warn" data-server-firewall>CashPilot could not read Windows Firewall. The rule status is unknown.</p>`;
+    return `<p class="pairing-line warn" data-server-firewall>${ht("server_commands.firewall.unknown")}</p>`;
   }
   if (state.firewallStatus === "removal-pending") {
-    return `<p class="pairing-line warn" data-server-firewall>Remove the old rule in Settings under How this computer runs.</p>`;
+    return `<p class="pairing-line warn" data-server-firewall>${ht("server_commands.firewall.removalPending")}</p>`;
   }
   if (state.firewallRule) {
-    return `<p class="pairing-line" data-server-firewall>Windows Firewall lets it in: ${escapeHtml(state.opens)}. Switching to Run everything here removes this rule.</p>`;
+    return `<p class="pairing-line" data-server-firewall>${ht("server_commands.firewall.rule", { opens: state.opens })}</p>`;
   }
-  const existing = state.firewallStatus === "different" ? "The rule in Windows does not match this installation. " : "";
-  return `<p class="pairing-line warn" data-server-firewall>${existing}CashPilot does not listen until Windows Firewall lets it in, so Windows shows no prompt of its own for it. Allowing opens ${escapeHtml(state.opens)}. If Windows already blocks CashPilot (Windows makes such a rule when someone presses Cancel on its own firewall prompt), allowing removes that block too, because a block wins over an allow. Windows asks for an administrator first.</p>
-    <div class="gate-actions"><button class="btn btn-ghost btn-sm" data-server-commands-firewall>Allow through Windows Firewall</button></div>`;
+  const existing = state.firewallStatus === "different" ? `${ht("server_commands.firewall.different")} ` : "";
+  return `<p class="pairing-line warn" data-server-firewall>${existing}${ht("server_commands.firewall.offer", { opens: state.opens })}</p>
+    <div class="gate-actions"><button class="btn btn-ghost btn-sm" data-server-commands-firewall>${ht("server_commands.firewall.allow")}</button></div>`;
 }
 
 /** The card. */
 export function renderServerCommands(state: ServerCommandsState, now: number = Date.now()): string {
-  const server = escapeHtml(state.server || "Your CashPilot");
+  const server = state.server || t("server_commands.yourCashPilot");
   return `
     <section class="card server-commands" aria-labelledby="server-commands-title" data-server-commands>
       <div class="card-header">
         <div>
-          <span class="card-title" id="server-commands-title">${server} can start and stop services on this computer</span>
-          <p class="muted compact-copy">It can deploy, stop, start, restart and remove the services of this computer's catalog, with the images CashPilot pins here. It cannot delete data that cannot be recovered, and it cannot change anything else on this computer.</p>
+          <span class="card-title" id="server-commands-title">${ht("server_commands.title", { server })}</span>
+          <p class="muted compact-copy">${ht("server_commands.help")}</p>
           ${reachLine(state)}
           ${firewallLine(state)}
           ${lastCommandLine(state.last, now)}
         </div>
-        <label class="switch" title="Let ${server} start and stop services on this computer">
-          <input type="checkbox" role="switch" data-server-commands-switch ${state.on ? "checked" : ""} aria-label="Let ${server} start and stop services on this computer" />
+        <label class="switch" title="${ht("server_commands.switch", { server })}">
+          <input type="checkbox" role="switch" data-server-commands-switch ${state.on ? "checked" : ""} aria-label="${ht("server_commands.switch", { server })}" />
           <span class="switch-track"><span class="switch-thumb"></span></span>
         </label>
       </div>

@@ -5,6 +5,7 @@
 
 import type { DailyPoint } from "../wails";
 import { escapeHtml, formatBalance } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /** The last `days` points that carry a real number. */
 export function chartWindow(points: DailyPoint[] | null | undefined, days: number): DailyPoint[] {
@@ -30,8 +31,8 @@ export function renderEarningsBars(points: DailyPoint[] | null | undefined, disp
   if (data.length === 0 || !data.some((point) => point.amount > 0)) {
     return `
       <div class="chart-empty">
-        <strong>No earnings in the last ${days} days</strong>
-        <span>Daily earnings in ${escapeHtml(displayCurrency)} appear here once a collected balance grows.</span>
+        <strong>${ht("chart.empty.title", { days })}</strong>
+        <span>${ht("chart.empty.body", { currency: displayCurrency })}</span>
       </div>
     `;
   }
@@ -63,7 +64,7 @@ export function renderEarningsBars(points: DailyPoint[] | null | undefined, disp
   }).join("");
   return `
     <div class="chart-shell">
-      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(`Earned per day, last ${data.length} days: ${data.map((point) => `${point.day} ${formatBalance(point.amount, displayCurrency)}`).join(", ")}`)}">
+      <svg class="earnings-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(t("chart.aria", { days: data.length, points: data.map((point) => `${point.day} ${formatBalance(point.amount, displayCurrency)}`).join(", ") }))}">
         ${grid}
         ${bars}
       </svg>

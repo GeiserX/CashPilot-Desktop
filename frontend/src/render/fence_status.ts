@@ -9,43 +9,40 @@
 
 import type { FenceStatus } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 import { runtimeState, type RuntimeInput } from "./runtime_state.js";
 
 type EngineReading = Pick<RuntimeInput, "available" | "reason">;
 
-function earners(n: number): string {
-  return n === 1 ? "1 running earner" : `${n} running earners`;
-}
-
 /** The fence's state in plain words, without the setting. */
 export function fenceStatusText(fence: FenceStatus, runtime: EngineReading): string {
   const { kind, label } = runtimeState(runtime);
-  if (kind === "unknown") return "Docker status is unknown. CashPilot could not confirm the LAN fence.";
+  if (kind === "unknown") return t("fence_status.unknown");
   const inside = (fence.inside || []).length;
   const outside = (fence.outside || []).length;
-  const outsideNote = outside ? ` ${earners(outside)} ${outside === 1 ? "is" : "are"} still outside it and can reach your LAN until redeployed.` : "";
+  const outsideNote = outside ? ` ${t("fence_status.outside", { n: outside })}` : "";
   switch (fence.mode) {
     case "on":
-      if (fence.state === "failed") return "Down: the fence could not be applied, so container deploys are refused. Needs attention says why.";
-      if (fence.state !== "applied") return "Not checked yet. CashPilot checks it at start, before each deploy and every five minutes.";
-      if (!inside && !outside) return "In place. No earner runs yet, so nothing is behind it.";
-      return `In place: ${earners(inside)} behind it.${outsideNote}`;
+      if (fence.state === "failed") return t("fence_status.on.failed");
+      if (fence.state !== "applied") return t("fence_status.notChecked");
+      if (!inside && !outside) return t("fence_status.on.empty");
+      return `${t("fence_status.on.inPlace", { n: inside })}${outsideNote}`;
     case "legacy":
       return outside
-        ? `Not in place: ${earners(outside)} can reach your LAN. Turn on isolation on the dashboard to fence ${outside === 1 ? "it" : "them"}.`
-        : "Not in place: this install deploys earners on Docker's default network, where they can reach your LAN. Set LAN isolation to on to fence the next deploy.";
+        ? t("fence_status.legacy.outside", { n: outside })
+        : t("fence_status.legacy.none");
     case "off":
-      return "Off: container earners use Docker's default network and can reach your LAN.";
+      return t("fence_status.off");
     case "unsupported":
-      return "Not fenced: CashPilot cannot fence earners on this container runtime (Podman).";
+      return t("fence_status.unsupported");
   }
   // A cached fence check can say n/a even after Docker has started.
-  if (fence.state === "failed") return "Not known: CashPilot could not check it. Needs attention says why.";
+  if (fence.state === "failed") return t("fence_status.failed");
   if (fence.state === "n/a" && kind !== "ready") {
-    const reason = kind === "not-running" ? "Docker is not running" : label;
-    return `No container earner runs now: ${reason}. The fence is set up when Docker runs, at the latest on the first deploy.`;
+    const reason = kind === "not-running" ? t("fence_status.dockerNotRunning") : label;
+    return t("fence_status.noEarner", { reason });
   }
-  return "Not checked yet. CashPilot checks it at start, before each deploy and every five minutes.";
+  return t("fence_status.notChecked");
 }
 
 /**
@@ -55,5 +52,5 @@ export function fenceStatusText(fence: FenceStatus, runtime: EngineReading): str
  */
 export function renderFenceStatusLine(fence: FenceStatus | null | undefined, runtime: EngineReading, tag: "p" | "small" = "p"): string {
   if (!fence) return "";
-  return `<${tag} class="muted compact-copy" data-fence-status="${escapeHtml(fence.mode || "unknown")}"><strong>LAN fence now</strong> (setting: ${escapeHtml(fence.setting || "auto")}). ${escapeHtml(fenceStatusText(fence, runtime))}</${tag}>`;
+  return `<${tag} class="muted compact-copy" data-fence-status="${escapeHtml(fence.mode || "unknown")}">${ht("fence_status.line", { setting: fence.setting || "auto" })} ${escapeHtml(fenceStatusText(fence, runtime))}</${tag}>`;
 }

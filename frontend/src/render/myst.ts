@@ -13,6 +13,7 @@
 
 import type { MystNode } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 // renderMystNodes turns the Mysterium per-node earnings blob — a JSON array of
 // MystNode the backend stashes under serviceDetails["mysterium"] — into a
@@ -34,18 +35,18 @@ export function renderMystNodes(json: string | undefined): string {
   const items = nodes.map((node) => {
     const label = (node.name || "").trim() || shortenIdentity(node.identity);
     const dotColor = node.online ? "var(--success)" : "var(--text-muted)";
-    const dot = `<span title="${node.online ? "online" : "offline"}" style="display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${dotColor};"></span>`;
+    const dot = `<span title="${node.online ? ht("myst.online") : ht("myst.offline")}" style="display:inline-block;width:8px;height:8px;border-radius:50%;flex:0 0 auto;background:${dotColor};"></span>`;
     return `
       <div style="display:flex;align-items:center;gap:0.6rem;font-size:0.82rem;padding:0.15rem 0;">
         <span style="display:flex;align-items:center;gap:0.4rem;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary);">${dot}${escapeHtml(label)}</span>
-        <span style="flex:0 0 auto;color:var(--text-muted);" title="Last 30 days">${escapeHtml(formatMyst(node.earnings30dMyst))} · 30d</span>
-        <span style="flex:0 0 auto;color:var(--text-secondary);" title="Lifetime">${escapeHtml(formatMyst(node.lifetimeMyst))} lifetime</span>
+        <span style="flex:0 0 auto;color:var(--text-muted);" title="${ht("myst.last30Title")}">${ht("myst.last30", { amount: formatMyst(node.earnings30dMyst) })}</span>
+        <span style="flex:0 0 auto;color:var(--text-secondary);" title="${ht("myst.lifetimeTitle")}">${ht("myst.lifetime", { amount: formatMyst(node.lifetimeMyst) })}</span>
       </div>
     `;
   }).join("");
   return `
     <div style="display:flex;flex-direction:column;gap:0.1rem;">
-      <span style="font-size:0.72rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.2rem;">Per-node earnings</span>
+      <span style="font-size:0.72rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--text-muted);margin-bottom:0.2rem;">${ht("myst.perNode")}</span>
       ${items}
     </div>
   `;
@@ -64,7 +65,7 @@ function formatMyst(value: number) {
 // empty identities are returned as-is (or a neutral placeholder).
 function shortenIdentity(identity: string) {
   const id = (identity || "").trim();
-  if (!id) return "unknown node";
+  if (!id) return t("myst.unknownNode");
   if (id.length <= 12) return id;
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
 }

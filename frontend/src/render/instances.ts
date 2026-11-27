@@ -13,6 +13,7 @@ import type { ScalingLimit, Service, ServiceCopy } from "../wails";
 import { rowButton } from "./actions.js";
 import { containerState } from "./attention.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /**
  * Render the Instances box for one service. `limit` is the backend's answer for this
@@ -26,7 +27,7 @@ export function instancesSection(service: Service, limit: ScalingLimit | null | 
   return `
     <div class="instances-choice">
       <label>
-        <span>Instances</span>
+        <span>${ht("instances.label")}</span>
         <input data-wizard-instances="${escapeHtml(service.slug)}" data-initial="${current}" type="number" min="1" max="${limit.max}" step="1" value="${current}"${locked ? " disabled" : ""} />
       </label>
       ${instancesHint(service, limit)}
@@ -36,16 +37,16 @@ export function instancesSection(service: Service, limit: ScalingLimit | null | 
 
 /** What the Instances box means for this provider, under the box. The web app's words. */
 export function instancesHint(service: Service, limit: ScalingLimit): string {
-  const name = escapeHtml(service.name);
+  const name = service.name;
   if (limit.max <= 1) {
     return limit.reason
-      ? `<p class="muted compact-copy instances-hint">${escapeHtml(limit.reason)} To run more, add machines on other connections.</p>`
+      ? `<p class="muted compact-copy instances-hint">${escapeHtml(limit.reason)} ${ht("instances.runMore")}</p>`
       : "";
   }
   if (service.requirements?.devicesPerIp === 0) {
-    return `<p class="muted compact-copy instances-hint">${name} allows several devices per IP, so each extra instance registers as its own device (<code>cashpilot-&lt;host&gt;-2</code>). They share this machine's connection: more instances add devices, not bandwidth.</p>`;
+    return `<p class="muted compact-copy instances-hint">${ht("instances.perIp", { name, device: "cashpilot-<host>-2" })}</p>`;
   }
-  return `<p class="muted compact-copy instances-hint">${name} does not document how many devices it allows per IP. Extra instances share this machine's connection and may earn nothing.</p>`;
+  return `<p class="muted compact-copy instances-hint">${ht("instances.undocumented", { name })}</p>`;
 }
 
 /**
@@ -85,14 +86,14 @@ export function copyRows(serviceName: string, copies: ServiceCopy[] | null | und
         </td>
         <td><span class="badge badge-${cls}"><span class="status-dot ${cls}"></span>${escapeHtml(copy.status)}</span></td>
         <td class="c-num"><span class="muted">&mdash;</span></td>
-        <td class="c-num"><span class="muted" title="A copy's balance is the service's, on its first row">&mdash;</span></td>
+        <td class="c-num"><span class="muted" title="${ht("instances.copyBalance")}">&mdash;</span></td>
         <td class="c-num">${copy.cpuPercent.toFixed(1)}%</td>
         <td class="c-num">${copy.memoryMb.toFixed(0)} MB</td>
         <td class="c-pay"></td>
         <td class="c-act">
           <div class="action-btns">
-            ${rowButton("logs", copy.slug, `Logs of copy ${n}`, n)}
-            ${running ? rowButton("stop", copy.slug, `Stop copy ${n}`, n) : noStart ? "" : rowButton("start", copy.slug, `Start copy ${n}`, n, dockerBlocked)}
+            ${rowButton("logs", copy.slug, t("instances.logs", { n }), n)}
+            ${running ? rowButton("stop", copy.slug, t("instances.stop", { n }), n) : noStart ? "" : rowButton("start", copy.slug, t("instances.start", { n }), n, dockerBlocked)}
           </div>
         </td>
       </tr>

@@ -4,6 +4,8 @@
 // Pure: takes the button and the timer, touches no global. main.ts passes the
 // real button; the check passes a plain object and a fake timer.
 
+import { t } from "./i18n.js"; // .js so the emitted ESM resolves in Node
+
 /**
  * Wire every [data-copy-text] button inside scope to copy its value, once per
  * button, so a second call on the same page adds no second listener. Used by the
@@ -39,8 +41,9 @@ export function flashCopied(
   button: { textContent: string | null },
   schedule: (reset: () => void, ms: number) => unknown = (reset, ms) => setTimeout(reset, ms),
 ): void {
-  button.textContent = "Copied";
+  const copied = t("copy.copied");
+  button.textContent = copied;
   schedule(() => {
-    if (button.textContent === "Copied") button.textContent = "Copy";
+    if (button.textContent === copied) button.textContent = t("copy.copy");
   }, COPIED_MS);
 }
