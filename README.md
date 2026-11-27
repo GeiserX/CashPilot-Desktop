@@ -8,6 +8,8 @@
   <a href="https://github.com/GeiserX/CashPilot-Desktop/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/CashPilot-Desktop?style=flat-square" alt="License"></a>
   <a href="https://github.com/GeiserX/CashPilot-Desktop/releases"><img src="https://img.shields.io/github/downloads/GeiserX/CashPilot-Desktop/total?style=flat-square&logo=github" alt="Downloads"></a>
   <a href="https://github.com/GeiserX/CashPilot-Desktop/stargazers"><img src="https://img.shields.io/github/stars/GeiserX/CashPilot-Desktop?style=flat-square&logo=github" alt="Stars"></a>
+  <a href="https://cashpilot.club"><img src="https://img.shields.io/badge/website-cashpilot.club-blue?style=flat-square" alt="Website"></a>
+  <a href="https://x.com/CashPilotClub"><img src="https://img.shields.io/badge/X-%40CashPilotClub-000000?style=flat-square&logo=x" alt="X"></a>
 </p>
 
 CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Windows and Linux that deploys and monitors passive-income and DePIN services. It packs CashPilot into one app with a system tray and a setup wizard, so you open an app instead of running the CashPilot container and a browser; the earning services themselves still run in Docker or Podman. It runs either as the full CashPilot dashboard (Run everything here) or as a box that joins a CashPilot server you already have (Join my CashPilot).
