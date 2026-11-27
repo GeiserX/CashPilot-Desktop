@@ -13,6 +13,16 @@ declare module "../wailsjs/go/main/App" {
   export function RemoveBackgroundHelper(): Promise<void>;
   export function BackgroundHelperStatus(): Promise<BackgroundStatus>;
   export function CheckRuntime(): Promise<RuntimeStatus>;
+  // The Secure VM (app_securevm.go). Install and Undo show macOS's
+  // administrator prompt; progress arrives as "securevm:progress" events.
+  export function SecureVMStatus(): Promise<SecureVMStatus>;
+  export function SecureVMInstall(): Promise<void>;
+  export function SecureVMVerify(): Promise<SecureVMProof>;
+  export function SecureVMUndo(): Promise<SecureVMRemoveResult>;
+  export function SecureVMPlace(slug: string, where: "host" | "vm"): Promise<void>;
+  export function SecureVMOpenScreen(slug: string): Promise<void>;
+  export function SecureVMStart(): Promise<void>;
+  export function SecureVMStop(): Promise<void>;
   // Reads this PC afresh (Windows only; elsewhere facts.supported is false).
   export function HostCheck(): Promise<HostCheckResult>;
   // Checks the local Docker Desktop pipes without reading the full checklist.
@@ -220,6 +230,67 @@ export interface FenceStatus {
   // Fence-gated earners that are down and that CashPilot starts itself once the
   // fence is confirmed. One the user stopped is not listed.
   waiting: string[] | null;
+}
+
+// SecureVMStatus mirrors securevm.Status, the shape both Secure VM engines report.
+export type SecureVMTri = "yes" | "no" | "unknown";
+export interface SecureVMProofStep {
+  id: string;
+  kind: "red" | "green" | "check" | string;
+  outcome: string;
+  detail: string;
+}
+export interface SecureVMProof {
+  at: string;
+  green: boolean;
+  steps: SecureVMProofStep[] | null;
+  why: string;
+}
+export interface SecureVMApp {
+  slug: string;
+  name: string;
+  placement: "host" | "vm" | "";
+  canVm: boolean;
+  locked: string;
+  installed: SecureVMTri;
+  running: SecureVMTri;
+  signedIn: SecureVMTri;
+  detail: string;
+  note: string;
+  layers: string[] | null;
+}
+export interface SecureVMStatus {
+  platform: string;
+  available: boolean;
+  unavailable: string;
+  installed: boolean;
+  updateNeeded: boolean;
+  unfinished: boolean;
+  network: "connected" | "disconnected" | "off" | "absent" | string;
+  fence: "held" | "cut" | "reprove-needed" | "unproven" | string;
+  reason: string;
+  changes: string[] | null;
+  provedAt: string;
+  proving: boolean;
+  // Packets the fence dropped since blockedSince; null is unknown.
+  blocked: number | null;
+  blockedSince: string;
+  busy: string;
+  step: string;
+  fraction: number;
+  lastError: string;
+  startError: string;
+  guestLimit: boolean;
+  freeDisk: number;
+  lowDisk: boolean;
+  cost: { memoryGb: number; cores: number; diskGb: number; downloadGb: number };
+  proof: SecureVMProof | null;
+  apps: SecureVMApp[] | null;
+}
+export interface SecureVMRemoveResult {
+  removed: string[] | null;
+  kept: string[] | null;
+  left: string[] | null;
 }
 
 export interface IsolationResult {

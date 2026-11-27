@@ -42,6 +42,12 @@ func main() {
 	// args we do not define (e.g. a macOS -psn_… process serial), and those must fall
 	// through to wails.Run rather than exit(2) the process. flag.Parse never mutates
 	// os.Args, so Wails still sees the full argument list.
+	// --macvm <role> runs the macOS Secure VM's root side and exits: the
+	// LaunchDaemon (daemon) or the admin step (install, remove). Its own flags
+	// follow the role, so it is read before the app's flags (internal/macvm).
+	if len(os.Args) > 2 && os.Args[1] == "--macvm" {
+		os.Exit(runMacVMMain(os.Args[2], os.Args[3:]))
+	}
 	fs := flag.NewFlagSet("cashpilot-desktop", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	daemon := fs.Bool("daemon", false, "run headless: supervise native earners and serve the loopback fleet API with no GUI window")
