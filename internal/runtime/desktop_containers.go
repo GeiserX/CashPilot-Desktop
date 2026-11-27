@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
 
@@ -21,6 +22,60 @@ const desktopRuntime = "existing-docker"
 // created: cashpilot.managed=true and cashpilot.runtime=existing-docker.
 func IsDesktopContainer(labels map[string]string) bool {
 	return labels[LabelManaged] == "true" && labels[LabelRuntime] == desktopRuntime
+}
+
+// workerContainer reports a container another CashPilot made on this Docker: it
+// carries cashpilot.managed=true but not Desktop's cashpilot.runtime. A CashPilot
+// worker, and a compose file Desktop exported, name their containers
+// cashpilot-<slug> too, so a name alone never proves the container is Desktop's.
+func workerContainer(c container.InspectResponse) bool {
+	return c.Config != nil && c.Config.Labels[LabelManaged] == "true" && !IsDesktopContainer(c.Config.Labels)
+}
+
+// otherMaker says who made a container another CashPilot made (workerContainer),
+// from its cashpilot.deployed-by label, and what the user can do with it: manage
+// it, or clear the name for a deploy here.
+func otherMaker(name string, c container.InspectResponse) (who, manage, clear string) {
+	switch c.Config.Labels[labelDeployedBy] {
+	case "compose":
+		return fmt.Sprintf("%s was started from a CashPilot compose file, not by CashPilot Desktop", name),
+			"Manage it with docker compose", "Stop it with docker compose down first"
+	case "worker":
+		return fmt.Sprintf("%s was made by a CashPilot worker on this Docker, not by CashPilot Desktop", name),
+			"Manage it from that worker", "Deploy it from that worker, or remove it there first"
+	}
+	return fmt.Sprintf("%s was made by another CashPilot program on this Docker, not by CashPilot Desktop", name),
+		"Manage it with the program that made it", "Remove it with the program that made it first"
+}
+
+// OtherCashPilotError refuses a deploy over a container another CashPilot made.
+// The worker API answers it with 409, so the server shows it as it is.
+type OtherCashPilotError struct{ msg string }
+
+func (e *OtherCashPilotError) Error() string { return e.msg }
+
+// refuseOtherCashPilot is the deploy's refusal of a container another CashPilot
+// made, and nil for any other container.
+func refuseOtherCashPilot(name string, c container.InspectResponse) error {
+	if !workerContainer(c) {
+		return nil
+	}
+	who, _, clear := otherMaker(name, c)
+	return &OtherCashPilotError{msg: fmt.Sprintf("%s. It was left running. %s", who, clear)}
+}
+
+// desktopOwned refuses an action on a container CashPilot Desktop did not create,
+// so a server command or a click by slug never reaches a worker's container with
+// the same name.
+func desktopOwned(name string, c container.InspectResponse) error {
+	if c.Config != nil && IsDesktopContainer(c.Config.Labels) {
+		return nil
+	}
+	if workerContainer(c) {
+		who, manage, _ := otherMaker(name, c)
+		return fmt.Errorf("%s, so it was left as it is. %s", who, manage)
+	}
+	return fmt.Errorf("%s was not created by CashPilot Desktop, so it was left as it is", name)
 }
 
 // RemoveDesktopContainers stops and removes every container CashPilot Desktop

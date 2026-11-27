@@ -606,7 +606,7 @@ func readWalletSeed(ctx context.Context, cli seedClient, slug string, svc catalo
 	if err != nil {
 		return "", fmt.Errorf("could not check %s: %w", name, err)
 	}
-	if got.Container.Config == nil || got.Container.Config.Labels[LabelService] != slug {
+	if got.Container.Config == nil || !IsDesktopContainer(got.Container.Config.Labels) || got.Container.Config.Labels[LabelService] != slug {
 		return "", fmt.Errorf("%s belongs to something else, so it was not read", name)
 	}
 	raw, err := readContainerFile(ctx, cli, got.Container.ID, item.SeedFile.Path)

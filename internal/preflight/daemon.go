@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/moby/moby/client"
 )
 
@@ -22,12 +23,13 @@ const daemonProbeTimeout = 3 * time.Second
 // binary's own architecture instead would be a guess dressed as a check, so an
 // unreachable runtime returns "" and the assessment says the CPU was not checked.
 //
-// Works with Docker and with Podman, which serves the same API over DOCKER_HOST.
+// It asks the same daemon the rest of the app uses (runtime.NewDockerClient), so a
+// colima or other context-only engine is found here too.
 func DaemonArch(ctx context.Context) string {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	cli, err := client.NewClientWithOpts(client.FromEnv)
+	cli, err := runtime.NewDockerClient()
 	if err != nil {
 		return ""
 	}

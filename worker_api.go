@@ -49,7 +49,8 @@ import (
 // Only the key the server issued to this computer at the join opens it. The shared
 // key every box enrols with does not. It listens on private LAN and Tailscale
 // addresses only (worker_api_net.go) and refuses a request from any other source.
-// It runs only while joined and the dashboard switch is on, which it is by default.
+// It runs only while joined and the dashboard switch is on, which it is by default
+// after a first join; a pairing carried over from 1.x starts with it off.
 
 // workerAPIRescan is how often the API re-reads the config and the machine's
 // addresses: a join or a leave saved by the other process, a new DHCP lease, a
@@ -607,6 +608,11 @@ func (a *App) handleWorkerDeployTarget(w http.ResponseWriter, r *http.Request) {
 	var copies *services.OtherCopiesError
 	if errors.As(err, &copies) {
 		detail(w, http.StatusConflict, copies.Error())
+		return
+	}
+	var other *runtime.OtherCashPilotError
+	if errors.As(err, &other) {
+		detail(w, http.StatusConflict, other.Error())
 		return
 	}
 	if errors.Is(err, runtime.ErrNoDeployTarget) {

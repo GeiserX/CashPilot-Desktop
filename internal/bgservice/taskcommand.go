@@ -33,6 +33,21 @@ exit 0
 `
 }
 
+// taskStateScript is the PowerShell that prints the State number of the scheduled
+// task taskName (folder\name), and prints nothing when there is no such task.
+// Task Scheduler's states are numbers (4 is running), the same in every Windows
+// language.
+func taskStateScript(taskName string) string {
+	return strings.Replace(taskCommandScript(taskName),
+		"foreach ($a in $task.Definition.Actions) { if ($a.Type -eq 0 -and $a.Path) { [Console]::Out.Write($a.Path); break } }",
+		"[Console]::Out.Write([string]$task.State)", 1)
+}
+
+// taskStateRunning reports whether taskStateScript printed the running state, 4.
+func taskStateRunning(out string) bool {
+	return strings.TrimSpace(strings.TrimPrefix(out, "\ufeff")) == "4"
+}
+
 // parseTaskCommand turns what taskCommandScript printed into a path: trimmed,
 // and without the quotes a task made by hand may put around it.
 func parseTaskCommand(out string) string {

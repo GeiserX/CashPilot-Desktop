@@ -1059,7 +1059,7 @@ func TestTwoDeploysOfOneCopyTakeTurns(t *testing.T) {
 // The live test removes fixed names before it runs; a container of the operator's
 // under one of those names must stop it instead of being removed.
 func TestTheLiveTestNeverRemovesAContainerItDidNotCreate(t *testing.T) {
-	ours := map[string]string{LabelManaged: "true", LabelService: "mp-live", LabelProxy: "1"}
+	ours := map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: "mp-live", LabelProxy: "1"}
 	containers := map[string]map[string]string{"cashpilot-mp-live-p1": ours, "cp-mp-live-gost": {"com.example": "mine"}}
 	inspect := func(name string) (map[string]string, bool, error) {
 		labels, ok := containers[name]

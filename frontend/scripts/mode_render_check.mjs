@@ -109,6 +109,10 @@ for (const [code, message] of [
   check("success says collection stops", text(html).includes("stops logging in to your provider accounts"));
   check("success says history copied once", text(html).includes("copied to your CashPilot once"));
   check("success offers continue", html.includes('id="join-continue"'));
+  check("switch off: says the server cannot deploy here", text(html).includes("cannot deploy or remove services here") && !text(html).includes("can also deploy"), text(html));
+  const on = renderJoinOutcome({ ...ok, serverCommandsOn: true });
+  check("switch on: says the server can deploy here", text(on).includes("can also deploy, stop and remove services here") && text(on).includes("turn off the switch on the dashboard"), text(on));
+  check("the app still adds and removes apps", text(on).includes("add and remove earning apps here"));
   check("no hub line when the hub was off", !text(html).includes("workers and phones"));
   const hub = renderJoinOutcome({ ...ok, hubWasOn: true, hubDevices: ["nas-worker", "<b>phone</b>"] });
   check("hub line when the hub was on", text(hub).includes("no longer accepts workers and phones"));
@@ -129,6 +133,10 @@ for (const [code, message] of [
   check("banner shows the last error", text(bad).includes("Last try failed: Cannot reach 192.168.1.10:8080."), text(bad));
   const never = pairingLine({ ...good, lastHeartbeat: "" }, now);
   check("no heartbeat yet is said", text(never).includes("No heartbeat has reached it yet"), never);
+  const refused = pairingLine({ ...good, lastError: "Your CashPilot refused this computer's key.", errorCode: "unauthorized" }, now);
+  check("a refusal after heartbeats keeps the last heartbeat", text(refused).includes("Last heartbeat 2 minutes ago") && text(refused).includes("Last try failed"), text(refused));
+  const restarted = pairingLine({ ...good, lastHeartbeat: "", lastError: "Your CashPilot refused this computer's key.", errorCode: "unauthorized" }, now);
+  check("a failing link with no heartbeat since start never says none ever arrived", text(restarted).includes("since CashPilot started") && !text(restarted).includes("yet"), text(restarted));
   const xss = renderJoinedBanner({ ...good, serverUrl: `http://x"><script>`, lastError: "<i>e</i>" }, now);
   check("banner escapes", !xss.includes("<script>") && !xss.includes("<i>e</i>"), xss);
 }

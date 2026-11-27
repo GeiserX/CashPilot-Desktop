@@ -30,6 +30,7 @@ func (f *fakeStateDaemon) ContainerInspect(_ context.Context, _ string, _ client
 	labels := map[string]string{}
 	if f.managed {
 		labels[LabelManaged] = "true"
+		labels[LabelRuntime] = desktopRuntime
 	}
 	return client.ContainerInspectResult{Container: container.InspectResponse{
 		ID:     "c0ffee",

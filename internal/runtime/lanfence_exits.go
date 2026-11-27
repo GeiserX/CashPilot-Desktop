@@ -124,7 +124,7 @@ func (f *fence) exitsFor(ctx context.Context, cli fenceAPI) fenceExits {
 // keeps the drops: an exception the fence is not sure of is never written.
 func fenceTunnels(ctx context.Context, cli fenceAPI) []string {
 	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRole+"="+RoleTunnel),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime, LabelRole+"="+RoleTunnel),
 	})
 	if err != nil {
 		return nil
@@ -133,7 +133,7 @@ func fenceTunnels(ctx context.Context, cli fenceAPI) []string {
 	for _, c := range list.Items {
 		// Filtered by the daemon already; checked again so a runtime that ignores a
 		// filter cannot give an earner a tunnel's exception.
-		if c.Labels[LabelManaged] != "true" || c.Labels[LabelRole] != RoleTunnel || c.State != container.StateRunning {
+		if !IsDesktopContainer(c.Labels) || c.Labels[LabelRole] != RoleTunnel || c.State != container.StateRunning {
 			continue
 		}
 		read := func(name string) string { return readTunnelFile(ctx, cli, c.ID, name) }

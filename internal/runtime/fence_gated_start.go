@@ -223,7 +223,7 @@ func (f *fence) waitsForFence(c container.Summary, stopped map[string]bool) bool
 }
 
 func (f *fence) listManaged(ctx context.Context, cli fenceAPI) ([]container.Summary, error) {
-	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true")})
+	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime)})
 	if err != nil {
 		return nil, err
 	}

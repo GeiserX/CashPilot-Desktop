@@ -5,12 +5,14 @@ package bgservice
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf16"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -95,6 +97,61 @@ func (a *windowsAgent) Stop() error {
 		return fmt.Errorf("schtasks /end: %v: %s", err, strings.TrimSpace(out))
 	}
 	return nil
+}
+
+// Replace ends the running helper, registers execPath and runs the task. The task
+// ignores a start while an instance runs (MultipleInstancesPolicy IgnoreNew), so
+// it waits until Task Scheduler no longer reports the old instance running. A
+// task that is not running makes /end fail, which is fine. If the state query
+// itself fails, Replace still registers and runs the new copy, and reports the
+// query error: /end has already stopped the old helper, so returning early would
+// leave no helper running. If the new registration cannot be written, Replace
+// starts the old one again.
+func (a *windowsAgent) Replace(execPath string, args []string) error {
+	_ = a.Stop()
+	var queryErr error
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+		running, err := a.taskRunning()
+		if err != nil {
+			queryErr = fmt.Errorf("could not read the helper task state: %w", err)
+			break
+		}
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the helper task %s did not stop", a.taskName)
+		}
+	}
+	if err := a.Install(execPath, args); err != nil {
+		// Install failed before or at /create, so the old registration is still
+		// there: start it again rather than leave no helper running.
+		if out, runErr := runSchtasks("/run", "/tn", a.taskName); runErr != nil {
+			return errors.Join(queryErr, err, fmt.Errorf("schtasks /run: %v: %s", runErr, strings.TrimSpace(out)))
+		}
+		return errors.Join(queryErr, err)
+	}
+	if out, err := runSchtasks("/run", "/tn", a.taskName); err != nil {
+		return errors.Join(queryErr, fmt.Errorf("schtasks /run: %v: %s", err, strings.TrimSpace(out)))
+	}
+	return queryErr
+}
+
+// taskRunning asks Task Scheduler whether the task runs now. It reads the task's
+// State number through PowerShell, which is the same in every Windows language;
+// schtasks prints its status in the system language.
+func (a *windowsAgent) taskRunning() (bool, error) {
+	exe, err := runtime.PowerShellExe()
+	if err != nil {
+		return false, err
+	}
+	cmd := exec.Command(exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(taskStateScript(a.taskName)))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} // CREATE_NO_WINDOW
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("read the state of the scheduled task %s: %w", a.taskName, err)
+	}
+	return taskStateRunning(string(out)), nil
 }
 
 // RegisteredCommand reads the executable the task starts, or "" when there is no

@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // The v1.5.0..v1.6.0 subjects, as they are on main, plus the kinds of commit a
@@ -289,7 +292,7 @@ func TestAMajorReleaseOpensWithBeforeYouUpgrade(t *testing.T) {
 	}
 	before := section(t, body, "## Before you upgrade", "## Download")
 	for _, want := range []string{
-		"[docs/whats-new-2.0.md](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/docs/whats-new-2.0.md)",
+		"[the 2.0 section of UPGRADING.md](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/UPGRADING.md#20)",
 		"before you upgrade from v1.7.0",
 		"- Drop the old pairing (#9)\n",
 		"- Move the config (#12)\n",
@@ -306,7 +309,7 @@ func TestAMajorReleaseOpensWithBeforeYouUpgrade(t *testing.T) {
 func TestAMajorReleaseWithNoBreakingCommitStillLinksTheGuide(t *testing.T) {
 	body := Render(Release{Repo: "GeiserX/CashPilot-Desktop", Tag: "v3.0.0", Prev: "v2.4.1", Commits: v160, Assets: allAssets})
 	before := section(t, body, "## Before you upgrade", "## Download")
-	if !strings.Contains(before, "docs/whats-new-3.0.md") || strings.Contains(before, "- ") {
+	if !strings.Contains(before, "UPGRADING.md#30)") || strings.Contains(before, "- ") {
 		t.Errorf("want the guide link and no list:\n%s", before)
 	}
 }
@@ -352,6 +355,116 @@ func gitRepo(t *testing.T, messages ...string) func(args ...string) string {
 	return g
 }
 
+// changelog20 is a CHANGELOG.md with a 2.0.0 entry between two others.
+const changelog20 = `# Changelog
+
+## [Unreleased]
+
+- Not released yet.
+
+## [2.0.0] - 2026-11-27
+
+### Changed
+
+- **Server commands need CashPilot 3.0.** See [the docs](docs/configuration.md#server), [./UPGRADING.md](./UPGRADING.md), [the 1.0 entry](#100) and [the site](https://example.com/x).
+
+## [1.0.0] - 2026-11-01
+
+- The first stable release.
+`
+
+// writeChangelog writes changelog20 as CHANGELOG.md in the current folder.
+func writeChangelog(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile("CHANGELOG.md", []byte(changelog20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The notes of a release are its CHANGELOG.md entry, after the upgrade link and
+// the downloads. Its relative links point into the tagged tree.
+func TestRunPutsTheChangelogEntryUnderWhatChanged(t *testing.T) {
+	gitRepo(t, "feat(release)!: CashPilot Desktop 2.0 (#378)", "fix: keep the key off the page (#332)")
+	writeChangelog(t)
+	out, err := run([]string{"-tag", "v2.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out, "## Before you upgrade\n\nThis is a major release.") || !strings.Contains(out, "UPGRADING.md#20)") {
+		t.Errorf("the notes of a major must open with the link to its UPGRADING.md section:\n%s", out)
+	}
+	changes := section(t, out, "## What changed for you", "<details>")
+	for _, want := range []string{
+		"### Changed\n\n- **Server commands need CashPilot 3.0.**",
+		"[the docs](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/docs/configuration.md#server)",
+		"[./UPGRADING.md](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/UPGRADING.md)",
+		"[the 1.0 entry](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/CHANGELOG.md#100)",
+		"[the site](https://example.com/x)",
+	} {
+		if !strings.Contains(changes, want) {
+			t.Errorf("What changed for you lacks %q:\n%s", want, changes)
+		}
+	}
+	for _, gone := range []string{"Not released yet", "first stable release", "Keep the key off the page", "## [2.0.0]"} {
+		if strings.Contains(changes, gone) {
+			t.Errorf("What changed for you holds %q, which is not the 2.0.0 entry:\n%s", gone, changes)
+		}
+	}
+}
+
+// A major release with no changelog entry stops before anything is published:
+// nobody should upgrade into one with only a commit list to read.
+func TestRunFailsOnAMajorReleaseWithNoChangelogEntry(t *testing.T) {
+	gitRepo(t, "feat(release)!: CashPilot Desktop 3.0 (#999)")
+	writeChangelog(t)
+	if out, err := run([]string{"-tag", "v2.0.0", "-prev", "v1.7.0"}); err != nil {
+		t.Fatalf("the 2.0.0 entry is there: %v\n%s", err, out)
+	}
+	for _, tag := range []string{"v3.0.0"} {
+		if _, err := run([]string{"-tag", tag, "-prev", "v1.7.0"}); err == nil || !strings.Contains(err.Error(), "no \"## [3.0.0]\" entry") {
+			t.Errorf("%s: run = %v, want the missing entry named", tag, err)
+		}
+	}
+	// A minor or patch release with no entry lists its commits, as before.
+	out, err := run([]string{"-tag", "v1.8.0", "-prev", "v1.7.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(section(t, out, "## What changed for you", "<details>"), "Nothing you will notice") {
+		t.Errorf("a release with no entry should fall back to its commits:\n%s", out)
+	}
+}
+
+func TestChangelogEntry(t *testing.T) {
+	for version, want := range map[string]string{
+		"2.0.0": "### Changed",
+		"1.0.0": "- The first stable release.",
+		"2.0":   "",
+		"9.9.9": "",
+	} {
+		got := changelogEntry(changelog20, version)
+		if want == "" && got != "" || want != "" && !strings.HasPrefix(got, want) {
+			t.Errorf("changelogEntry(%q) = %q, want it to start with %q", version, got, want)
+		}
+	}
+	if strings.Contains(changelogEntry(changelog20, "2.0.0"), "first stable") {
+		t.Error("an entry runs into the next one")
+	}
+}
+
+// The shipped changelog has the entry of the current major, so its release
+// can be cut.
+func TestTheShippedChangelogHasTheCurrentMajorsEntry(t *testing.T) {
+	raw, err := os.ReadFile("../../CHANGELOG.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := fmt.Sprintf("%d.0.0", currentMajor(t))
+	if changelogEntry(string(raw), version) == "" {
+		t.Fatalf("CHANGELOG.md has no \"## [%s]\" entry", version)
+	}
+}
+
 // withTitles stands in text for the shipped titles.txt for one test.
 func withTitles(t *testing.T, text string) {
 	t.Helper()
@@ -367,12 +480,13 @@ func TestRunListsTheBreakingCommitsOfAMajorRelease(t *testing.T) {
 		"feat(app): move the config (#12)\n\nBREAKING CHANGE: config.json moved to the app folder",
 		" feat!: a subject auto-tag does not match (#13)",
 	)
+	writeChangelog(t)
 	out, err := run([]string{"-tag", "v2.0.0"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := section(t, out, "## Before you upgrade", "## Download")
-	for _, want := range []string{"docs/whats-new-2.0.md", "from v1.7.0", "- Drop the old pairing (#9)\n", "- Move the config (#12)\n"} {
+	for _, want := range []string{"UPGRADING.md#20)", "from v1.7.0", "- Drop the old pairing (#9)\n", "- Move the config (#12)\n"} {
 		if !strings.Contains(before, want) {
 			t.Errorf("Before you upgrade lacks %q:\n%s", want, before)
 		}
@@ -392,6 +506,7 @@ func TestRunListsABreakingCommitInsideAMergedBranch(t *testing.T) {
 	g("commit", "-q", "--allow-empty", "-m", "feat(fleet)!: drop the old pairing")
 	g("checkout", "-q", "main")
 	g("merge", "-q", "--no-ff", "-m", "Merge pull request #5 from x/pairing", "pairing")
+	writeChangelog(t)
 	out, err := run([]string{"-tag", "v2.0.0"})
 	if err != nil {
 		t.Fatal(err)
@@ -477,5 +592,98 @@ func TestParseTitles(t *testing.T) {
 func TestTheShippedTitlesFileParses(t *testing.T) {
 	if _, err := parseTitles(titlesFile); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// githubAnchor is the anchor GitHub gives a Markdown heading: lower case, spaces
+// to hyphens, and every other character but letters, digits, hyphens and
+// underscores dropped. A repeated heading gets "-1", "-2" and so on.
+func githubAnchor(heading string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(heading)) {
+		switch {
+		case r == ' ':
+			b.WriteRune('-')
+		case r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// upgradingAnchors lists the anchors of every heading in UPGRADING.md.
+func upgradingAnchors(t *testing.T) map[string]bool {
+	t.Helper()
+	text, err := os.ReadFile("../../UPGRADING.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors := map[string]bool{}
+	seen := map[string]int{}
+	inFence := false
+	for _, line := range strings.Split(string(text), "\n") {
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+		}
+		if inFence || !strings.HasPrefix(line, "#") {
+			continue
+		}
+		heading := strings.TrimLeft(line, "#")
+		if !strings.HasPrefix(heading, " ") {
+			continue
+		}
+		a := githubAnchor(heading)
+		if n := seen[a]; n > 0 {
+			anchors[fmt.Sprintf("%s-%d", a, n)] = true
+		} else {
+			anchors[a] = true
+		}
+		seen[a]++
+	}
+	return anchors
+}
+
+// currentMajor reads the major version from package.json, the version file the
+// release bumps.
+func currentMajor(t *testing.T) int {
+	t.Helper()
+	text, err := os.ReadFile("../../package.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`"version":\s*"(\d+)\.`).FindSubmatch(text)
+	if m == nil {
+		t.Fatal("package.json has no version")
+	}
+	major, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return major
+}
+
+// The release notes of a major link its section of UPGRADING.md. A missing
+// section would send every reader to the top of the page, so it fails here.
+func TestUpgradingHasASectionForEveryMajorTheNotesLink(t *testing.T) {
+	anchors := upgradingAnchors(t)
+	majors := map[int]bool{1: true, 2: true, currentMajor(t): true}
+	for major := range majors {
+		link := upgradingLink(major)
+		anchor := link[strings.Index(link, "#")+1:]
+		if !anchors[anchor] {
+			t.Errorf("the notes of v%d.0.0 link %s, but UPGRADING.md has no heading \"## %d.0\"", major, link, major)
+		}
+	}
+}
+
+func TestGithubAnchorDropsTheDotOfAVersion(t *testing.T) {
+	for heading, want := range map[string]string{
+		" 2.0":                              "20",
+		" Before you upgrade to 2.0":        "before-you-upgrade-to-20",
+		" Earners can't reach your network": "earners-cant-reach-your-network",
+	} {
+		if got := githubAnchor(heading); got != want {
+			t.Errorf("githubAnchor(%q) = %q, want %q", heading, got, want)
+		}
 	}
 }

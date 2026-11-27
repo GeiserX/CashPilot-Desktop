@@ -168,7 +168,7 @@ func TestTheRunningContainersSeedMovesIntoTheFile(t *testing.T) {
 		Config: &container.Config{
 			Image:  "ghcr.io/siafoundation/hostd",
 			Env:    []string{siaSeedKey + "=" + seedPhraseA, "HOSTD_API_PASSWORD=x"},
-			Labels: map[string]string{"cashpilot.managed": "true", "cashpilot.service": siaSlug},
+			Labels: map[string]string{"cashpilot.managed": "true", "cashpilot.runtime": "existing-docker", "cashpilot.service": siaSlug},
 		},
 	}); err != nil {
 		t.Fatalf("create the old container: %v", err)

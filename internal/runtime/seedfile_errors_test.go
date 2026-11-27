@@ -336,7 +336,7 @@ func TestAnUndoThatFailsSaysTheWalletStays(t *testing.T) {
 func TestTheRevealRefusesWhatItCannotRead(t *testing.T) {
 	own := client.ContainerCreateOptions{
 		Name:       "cashpilot-sia-hostd",
-		Config:     &container.Config{Labels: map[string]string{LabelService: "sia-hostd"}},
+		Config:     &container.Config{Labels: map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: "sia-hostd"}},
 		HostConfig: &container.HostConfig{Mounts: seedMounts},
 	}
 	cases := []struct {

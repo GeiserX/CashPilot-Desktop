@@ -2,8 +2,13 @@ package health
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -215,5 +220,33 @@ func TestARemoteDockerHostIsNeverNamedAsThisComputer(t *testing.T) {
 	t.Setenv("DOCKER_HOST", "ssh://me@nas")
 	if got := lanAddress(); got != "the LAN address of the machine running Docker" {
 		t.Fatalf("lanAddress with a remote DOCKER_HOST = %q", got)
+	}
+}
+
+// A current Docker context on another machine counts as remote too: the app
+// started from the Finder has no DOCKER_HOST, and the hint must not name this
+// computer's address for a node that runs on a NAS.
+func TestARemoteDockerContextIsNeverNamedAsThisComputer(t *testing.T) {
+	config := t.TempDir()
+	for _, key := range []string{"DOCKER_HOST", "DOCKER_CONTEXT"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("DOCKER_CONFIG", config)
+	sum := sha256.Sum256([]byte("nas"))
+	meta := filepath.Join(config, "contexts", "meta", hex.EncodeToString(sum[:]))
+	if err := os.MkdirAll(meta, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(meta, "meta.json"), []byte(`{"Name":"nas","Endpoints":{"docker":{"Host":"tcp://192.168.1.50:2375"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(config, "config.json"), []byte(`{"currentContext":"nas"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if goruntime.GOOS == "windows" {
+		t.Skip("Windows keeps the client's default pipe")
+	}
+	if got := lanAddress(); got != "the LAN address of the machine running Docker" {
+		t.Fatalf("lanAddress with a remote Docker context = %q", got)
 	}
 }

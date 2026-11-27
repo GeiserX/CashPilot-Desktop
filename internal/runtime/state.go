@@ -96,8 +96,8 @@ func readState(ctx context.Context, cli stateClient, slug, name string, targets 
 		return nil, nil, err
 	}
 	ctr := inspect.Container
-	if ctr.Config == nil || ctr.Config.Labels[LabelManaged] != "true" {
-		return nil, nil, fmt.Errorf("%s is not managed by CashPilot", name)
+	if err := desktopOwned(name, ctr); err != nil {
+		return nil, nil, err
 	}
 	running := ctr.State != nil && ctr.State.Running && !ctr.State.Paused
 	if running {

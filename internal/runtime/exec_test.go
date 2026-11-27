@@ -58,7 +58,7 @@ func (f *fakeExec) ExecInspect(_ context.Context, execID string, _ client.ExecIn
 }
 
 func summary(id, slug, state string, labels map[string]string) container.Summary {
-	l := map[string]string{LabelManaged: "true", LabelService: slug}
+	l := map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: slug}
 	for k, v := range labels {
 		l[k] = v
 	}

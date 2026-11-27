@@ -37,3 +37,24 @@ func TestParseTaskCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestTaskStateScriptPrintsTheStateNumber(t *testing.T) {
+	s := taskStateScript(`CashPilot\Helper`)
+	if !strings.Contains(s, "[Console]::Out.Write([string]$task.State)") {
+		t.Fatalf("the script does not print the task state:\n%s", s)
+	}
+	if strings.Contains(s, "Definition.Actions") {
+		t.Fatal("the script still prints the task's command")
+	}
+	if !strings.Contains(s, `GetFolder('\CashPilot').GetTask('Helper')`) || !strings.Contains(s, "-2147024894") {
+		t.Fatal("the script does not ask for the task, or does not read a missing task as none")
+	}
+}
+
+func TestTaskStateRunning(t *testing.T) {
+	for out, want := range map[string]bool{"4": true, "4\r\n": true, "\ufeff4": true, "3": false, "": false, "1": false} {
+		if got := taskStateRunning(out); got != want {
+			t.Errorf("taskStateRunning(%q) = %v, want %v", out, got, want)
+		}
+	}
+}

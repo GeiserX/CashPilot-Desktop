@@ -313,14 +313,29 @@ See §5. `exchange.Service` caches crypto→USD (CoinGecko) and USD→fiat
 interface; `DockerProvider` is the only implementation. It talks to the engine
 through the Docker Go SDK with `client.FromEnv` + API-version negotiation
 (`runtime.go:dockerClient`), which is what makes it work against **both Docker and
-Podman** (Podman exposes a Docker-compatible API). Responsibilities:
+Podman** (Podman exposes a Docker-compatible API). With no `DOCKER_HOST` it finds the
+engine the way the docker CLI does: the current Docker context, then the default
+socket, then the sockets colima, Docker Desktop and rootless Docker leave in the
+home folder (`internal/dockerhost`, macOS and Linux only). A tcp context keeps its
+TLS files and its SkipTLSVerify. An ssh context is refused with a message that names
+it: the client cannot connect over ssh, and a local engine in its place would run
+the services on another machine than the one the docker CLI uses. Switch to a local
+context, or set `DOCKER_HOST` to the engine's tcp address.
+Responsibilities:
 
 - **`Status`** probes the runtime, reports a friendly message when it's absent or
   not running, and lists which CLIs exist (`docker`, `podman`, `colima`,
   `limactl`, `nerdctl`) via `detectTools`.
+- **Ownership:** a container is Desktop's only when it carries both
+  `cashpilot.managed=true` and `cashpilot.runtime=existing-docker`
+  (`IsDesktopContainer`). A CashPilot worker on the same Docker uses the same
+  `cashpilot-<slug>` names and `cashpilot.managed=true`, but never
+  `cashpilot.runtime`. So every listing asks for both labels. A start, stop,
+  restart, remove or log read by slug refuses a container without them, and a
+  redeploy refuses a worker's container.
 - **`Deploy`** pulls the image, then creates+starts a container named
-  `cashpilot-<slug>` with CashPilot labels (`cashpilot.managed=true`, etc.),
-  `unless-stopped` restart policy, and env/ports/volumes/caps from the catalog
+  `cashpilot-<slug>` with CashPilot labels (`cashpilot.managed=true`,
+  `cashpilot.runtime=existing-docker`, etc.), `unless-stopped` restart policy, and env/ports/volumes/caps from the catalog
   entry. A fence-gated earner (Mysterium) gets restart policy `no` instead, and the
   app starts it itself right after it has applied the LAN fence
   (`fence_gated_start.go`). Bind vs named volumes are distinguished by

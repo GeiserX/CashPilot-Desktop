@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/dockerhost"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -242,14 +244,21 @@ func (p *DockerProvider) EnableFence(ctx context.Context) (FenceStatus, error) {
 func (p *DockerProvider) Status(ctx context.Context) Status {
 	tools := detectTools()
 	ev := dockerEvidence{
-		goos:    goruntime.GOOS,
-		tools:   len(tools) > 0,
-		hostSet: os.Getenv("DOCKER_HOST") != "",
+		goos:  goruntime.GOOS,
+		tools: len(tools) > 0,
+		// A tcp context names a remote engine as DOCKER_HOST does, so one that does
+		// not answer gets the same words.
+		hostSet: os.Getenv("DOCKER_HOST") != "" || strings.HasPrefix(dockerhost.Resolve().Host, "tcp://"),
 	}
 	// A client is built without connecting, so building one fails only on a
-	// malformed DOCKER_HOST. Whether a runtime is installed is decided below, from
-	// what dialling its endpoint says.
+	// malformed DOCKER_HOST, a context's unreadable TLS files or an ssh context.
+	// Whether a runtime is installed is decided below, from what dialling its
+	// endpoint says.
 	cli, err := dockerClient()
+	var ssh *SSHContextError
+	if errors.As(err, &ssh) {
+		return Status{Kind: "existing-docker", Reason: ReasonUnreachable, Message: ssh.Error() + ", then click Check again.", Context: ssh.Context, Tools: tools}
+	}
 	if err != nil {
 		ev.host = p.hostHintsNow()
 		ev.install = knownInstallPath()
@@ -462,6 +471,9 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// fails after it: the owner was never shown it (WalletResult.Undo).
 	defer func() { retErr = wallet.Undo(retErr) }()
 	if inspectErr == nil {
+		if err := refuseOtherCashPilot(name, live.Container); err != nil {
+			return ContainerInfo{}, err
+		}
 		if live.Container.Config != nil {
 			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
 				return ContainerInfo{}, fmt.Errorf("%s already belongs to %s, not to copy %d of %s. It was left running; remove it or deploy under another name", name, owner, max(spec.Instance, 1), spec.Slug)
@@ -652,6 +664,11 @@ func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSecon
 	name := containerName(slug)
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	got, inspectErr := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if inspectErr == nil {
+		if err := desktopOwned(name, got.Container); err != nil {
+			return err
+		}
+	}
 	gated := inspectErr == nil && got.Container.Config != nil && p.fence.isGated(got.Container.Config.Labels)
 	recorded := false // this call wrote the stop record
 	if gated || inspectErr != nil {
@@ -697,6 +714,9 @@ func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, n
 	if err != nil {
 		// Whether it is fence-gated cannot be known, so the start fails closed.
 		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+	}
+	if err := desktopOwned(name, got.Container); err != nil {
+		return err
 	}
 	if got.Container.Config == nil || !p.fence.isGated(got.Container.Config.Labels) {
 		return start()
@@ -919,6 +939,9 @@ func containerLogs(ctx context.Context, name string, lines int) (string, error) 
 		return "", err
 	}
 	defer cli.Close()
+	if err := ownedForLogs(ctx, cli, name); err != nil {
+		return "", err
+	}
 	if lines <= 0 {
 		lines = 200
 	}
@@ -942,6 +965,16 @@ func containerLogs(ctx context.Context, name string, lines int) (string, error) 
 	return stripDockerLogHeaders(raw), nil
 }
 
+// ownedForLogs refuses the logs of a container CashPilot Desktop did not create.
+// A missing container is left to the logs call, which reports it as before.
+func ownedForLogs(ctx context.Context, cli *client.Client, name string) error {
+	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		return nil
+	}
+	return desktopOwned(name, got.Container)
+}
+
 // LogsMatching returns the newest `lines` log lines of the last `since` that match
 // `match`. The window is streamed and filtered here, so megabytes of a chatty
 // service's logs are never held at once.
@@ -956,6 +989,9 @@ func logsMatching(ctx context.Context, name string, since time.Duration, match *
 		return "", err
 	}
 	defer cli.Close()
+	if err := ownedForLogs(ctx, cli, name); err != nil {
+		return "", err
+	}
 	reader, err := cli.ContainerLogs(ctx, name, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
@@ -1017,7 +1053,7 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	defer cli.Close()
 	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true"),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime),
 	})
 	if err != nil {
 		return nil, err
@@ -1027,7 +1063,9 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	// the first copy or counts copies may see them.
 	items := list.Items[:0:0]
 	for _, c := range list.Items {
-		if !IsProxied(c.Labels) {
+		// Checked again, so a runtime that ignores a filter cannot list a container a
+		// CashPilot worker made on the same Docker.
+		if IsDesktopContainer(c.Labels) && !IsProxied(c.Labels) {
 			items = append(items, c)
 		}
 	}
@@ -1247,11 +1285,12 @@ func memoryMB(mem container.MemoryStats) float64 {
 }
 
 // dockerClient builds a Docker API client. With no host argument (or an empty one)
-// it reads the connection from the environment via client.FromEnv — the default
-// Docker context / DOCKER_HOST — exactly as before. A non-empty host is a seam for
-// a future bundled-runtime provider that must talk to a specific socket/endpoint
-// instead of the ambient context; no current caller passes one, so today's behavior
-// is unchanged.
+// it connects where the docker CLI would: DOCKER_HOST through client.FromEnv, else
+// the current Docker context's endpoint, else the default socket or a runtime's
+// socket in the home folder (dockerhost.Resolve). A current context that connects
+// over ssh is refused, never swapped for a local engine. A non-empty host is a
+// seam for a future bundled-runtime provider that must talk to a specific
+// socket/endpoint instead of the ambient context; no current caller passes one.
 //
 // There is no WithAPIVersionNegotiation option any more: the moby client negotiates
 // the API version by default, lazily on the first versioned request, so the old
@@ -1262,9 +1301,36 @@ func NewDockerClient() (*client.Client, error) { return dockerClient() }
 func dockerClient(host ...string) (*client.Client, error) {
 	opts := []client.Opt{client.FromEnv}
 	if len(host) > 0 && host[0] != "" {
-		opts = append(opts, client.WithHost(host[0]))
+		return client.NewClientWithOpts(append(opts, client.WithHost(host[0]))...)
 	}
-	return client.NewClientWithOpts(opts...)
+	ep := dockerhost.Resolve()
+	if ep.SSH != "" {
+		return nil, &SSHContextError{Context: ep.Context}
+	}
+	if ep.Host == "" {
+		return client.NewClientWithOpts(opts...)
+	}
+	if ep.TLS != nil {
+		cfg, err := ep.TLS.Config()
+		if err != nil {
+			return nil, fmt.Errorf("could not read the TLS files of the Docker context %s: %w", ep.Context, err)
+		}
+		// Before WithHost, which sets up this transport for the context's address.
+		opts = append(opts, client.WithHTTPClient(&http.Client{
+			Transport:     &http.Transport{TLSClientConfig: cfg, MaxIdleConns: 6, IdleConnTimeout: 30 * time.Second},
+			CheckRedirect: client.CheckRedirect,
+		}))
+	}
+	return client.NewClientWithOpts(append(opts, client.WithHost(ep.Host))...)
+}
+
+// SSHContextError is the refusal of a current Docker context that connects over
+// ssh: the client cannot dial it, and a local engine in its place would run the
+// earners on a machine the user did not choose.
+type SSHContextError struct{ Context string }
+
+func (e *SSHContextError) Error() string {
+	return fmt.Sprintf("Your Docker context %s connects over ssh, which CashPilot cannot use. Switch to a local context with docker context use, or set DOCKER_HOST to that engine's tcp address", e.Context)
 }
 
 // maxPullLogLine caps a single progress line at 1 MiB. bufio.Scanner's default max
@@ -1821,8 +1887,8 @@ func managedContainerMounts(ctx context.Context, cli inspectClient, name string)
 		return nil, err
 	}
 	ctr := inspect.Container
-	if ctr.Config == nil || ctr.Config.Labels[LabelManaged] != "true" {
-		return nil, fmt.Errorf("%s is not managed by CashPilot", name)
+	if err := desktopOwned(name, ctr); err != nil {
+		return nil, err
 	}
 	return ctr.Mounts, nil
 }
@@ -2026,10 +2092,13 @@ func detectTools() map[string]string {
 	return tools
 }
 
+// dockerContext is the Docker CLI's current context. An app started from the
+// Finder has no docker on its PATH, so on macOS and Linux it falls back to the
+// context the client itself resolved.
 func dockerContext() string {
 	out, err := exec.Command("docker", "context", "show").Output()
 	if err != nil {
-		return ""
+		return dockerhost.Resolve().Context
 	}
 	return strings.TrimSpace(string(out))
 }

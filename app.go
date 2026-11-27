@@ -329,10 +329,14 @@ func (a *App) startCore(ctx context.Context) error {
 	if a.window {
 		a.recoverServerCommandsFirewall()
 	}
+	// While joined, the server deploys and stops services here (worker_api.go).
+	// Before the heartbeat loop, as a join does (mode.go): the loop's first
+	// answer resends at once only when this process already knows the command
+	// address. Started the other way round, a new helper whose window holds
+	// the port left the server without an address for one heartbeat, a minute.
+	a.startWorkerAPI(ctx)
 	// Report to the server when this Desktop is paired.
 	a.startUpstream(ctx)
-	// While joined, the server deploys and stops services here (worker_api.go).
-	a.startWorkerAPI(ctx)
 	// The window and the background helper each run the steps above from their
 	// own copy of the config: follow a join or a switch the other one saved.
 	a.startConfigSync(ctx)

@@ -24,7 +24,7 @@ const setAsideSuffix = "-replaced"
 // A service slugged "foo-replaced" is not foo's: its name is its own copy's name.
 func setAsideBase(name string, labels map[string]string) (string, bool) {
 	base, ok := strings.CutSuffix(strings.TrimPrefix(name, "/"), setAsideSuffix)
-	if !ok || labels[LabelManaged] != "true" || labels[LabelService] == "" || IsProxied(labels) {
+	if !ok || !IsDesktopContainer(labels) || labels[LabelService] == "" || IsProxied(labels) {
 		return "", false
 	}
 	return base, base == copyName(labels[LabelService], instanceOf(labels))
@@ -39,7 +39,7 @@ func (p *DockerProvider) RecoverSetAside(ctx context.Context) {
 		return
 	}
 	defer cli.Close()
-	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true")})
+	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime)})
 	if err != nil {
 		return
 	}
