@@ -324,21 +324,28 @@ function applyLanguage(next: LanguageState | null) {
   }
 }
 
-// Only the latest pick counts: a second pick made before the first answer comes
-// back supersedes it, so an answer arriving late cannot switch the screen back.
+// Picks reach Go one at a time and in order, so the saved choice is always
+// the last one made. A pick that a later one has superseded is not drawn.
 let languageRequest = 0;
+let languageQueue: Promise<void> = Promise.resolve();
 
-async function chooseLanguage(code: string) {
+function chooseLanguage(code: string) {
   const request = ++languageRequest;
+  languageQueue = languageQueue.then(() => pickLanguage(code, request));
+  return languageQueue;
+}
+
+async function pickLanguage(code: string, request: number) {
   let next: LanguageState;
   try {
     next = await SetLanguage(code, webviewLanguages());
   } catch (error) {
-    if (request !== languageRequest) return;
     showErrorToast({scope: "language", error: String(error)});
-    // The picker goes back to the language still in use.
-    const select = document.querySelector<HTMLSelectElement>("#language-select");
-    if (select) select.value = languageState?.preference ?? "";
+    // Draw what Go holds now, so the picker and the page match the saved choice.
+    if (request === languageRequest) {
+      await loadLanguage();
+      render();
+    }
     return;
   }
   if (request !== languageRequest) return;
