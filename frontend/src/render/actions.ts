@@ -4,6 +4,7 @@
 // Pure: returns HTML.
 
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { t } from "./i18n.js";
 
 const ICON = {
   collect: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>',
@@ -21,7 +22,7 @@ const ICON = {
 export function rowButton(action: "collect" | "logs" | "stop" | "start" | "remove", slug: string, label: string, copy = 1, blocked = ""): string {
   const copyAttr = copy > 1 ? ` data-copy="${copy}"` : "";
   const danger = action === "remove" ? " btn-danger-icon" : "";
-  const title = blocked ? `${label}: ${blocked}` : label;
+  const title = blocked ? t("actions.blockedTitle", { label, reason: blocked }) : label;
   return `<button class="btn btn-icon${danger}" data-row-action="${action}" data-slug="${escapeHtml(slug)}"${copyAttr}${blocked ? " disabled" : ""} title="${escapeHtml(title)}" aria-label="${escapeHtml(label)}">${ICON[action]}</button>`;
 }
 

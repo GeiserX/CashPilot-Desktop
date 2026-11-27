@@ -12,6 +12,7 @@
 
 import type { RatingItem, RatingResult, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /** The published method, on the web docs. */
 export const RATINGS_URL = "https://geiserx.github.io/CashPilot/ratings/";
@@ -20,9 +21,9 @@ const GRADES = new Set(["A", "B", "C", "D", "F"]);
 
 /** The letter as a badge; its tooltip is the thin-evidence note and the worst con. */
 export function gradeBadge(r: RatingResult | null | undefined): string {
-  if (!r || !r.rated || !GRADES.has(r.grade)) return `<span class="muted">not rated</span>`;
+  if (!r || !r.rated || !GRADES.has(r.grade)) return `<span class="muted">${ht("rating.notRated")}</span>`;
   const top = [
-    r.thinEvidence ? `Thin evidence: ${r.unknownCount} criteria unchecked.` : "",
+    r.thinEvidence ? t("rating.thinEvidence", { n: r.unknownCount }) : "",
     r.topCons?.[0]?.text || "",
   ].filter(Boolean).join(" ");
   return `<span class="grade-badge grade-${r.grade.toLowerCase()}" title="${escapeHtml(top)}">${escapeHtml(r.grade)}</span>`;
@@ -30,21 +31,21 @@ export function gradeBadge(r: RatingResult | null | undefined): string {
 
 function cited(item: RatingItem): string {
   const source = item.source.startsWith("https://")
-    ? `<button class="text-link" data-url="${escapeHtml(item.source)}">source</button>, `
+    ? `<button class="text-link" data-url="${escapeHtml(item.source)}">${ht("rating.source")}</button>, `
     : "";
-  return `<li>${escapeHtml(item.text)} <span class="rating-src">${source}checked ${escapeHtml(item.checkedOn)}</span></li>`;
+  return `<li>${escapeHtml(item.text)} <span class="rating-src">${source}${ht("rating.checked", { day: item.checkedOn })}</span></li>`;
 }
 
 /** The rating block of a service card. Empty for a service the user added. */
 export function ratingBlock(service: Service): string {
   if (service.custom) return "";
   const r = service.ratingResult;
-  const how = `<button class="text-link" data-url="${escapeHtml(RATINGS_URL + "#" + encodeURIComponent(service.slug || ""))}">How we grade</button>`;
+  const how = `<button class="text-link" data-url="${escapeHtml(RATINGS_URL + "#" + encodeURIComponent(service.slug || ""))}">${ht("rating.how")}</button>`;
   if (!r || !r.rated || !GRADES.has(r.grade)) {
     return `
       <div class="detail-block rating-block">
-        <strong class="detail-title">Rating</strong>
-        <p class="muted">Not rated yet. ${how}</p>
+        <strong class="detail-title">${ht("rating.title")}</strong>
+        <p class="muted">${ht("rating.notRatedYet")} ${how}</p>
       </div>`;
   }
   const caps = (r.caps || []).map((c) => `<li>${escapeHtml(c.reason)}</li>`).join("");
@@ -52,10 +53,10 @@ export function ratingBlock(service: Service): string {
   const pros = (r.pros || []).map(cited).join("");
   return `
     <div class="detail-block rating-block">
-      <strong class="detail-title">Rating</strong>
+      <strong class="detail-title">${ht("rating.title")}</strong>
       <div class="rating-head">${gradeBadge(r)} <span class="rating-score">${escapeHtml(r.summary || "")}</span> ${how}</div>
       ${caps ? `<ul class="rating-caps">${caps}</ul>` : ""}
-      ${cons ? `<div class="rating-label">Top cons</div><ul class="rating-list">${cons}</ul>` : ""}
-      ${pros ? `<details class="rating-pros"><summary>Pros (${(r.pros || []).length})</summary><ul class="rating-list">${pros}</ul></details>` : ""}
+      ${cons ? `<div class="rating-label">${ht("rating.topCons")}</div><ul class="rating-list">${cons}</ul>` : ""}
+      ${pros ? `<details class="rating-pros"><summary>${ht("rating.pros", { n: (r.pros || []).length })}</summary><ul class="rating-list">${pros}</ul></details>` : ""}
     </div>`;
 }

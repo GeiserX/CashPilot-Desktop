@@ -9,6 +9,7 @@
 
 import type { Service, WorkerDeployResult, WorkerTarget } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 import { seedFileVar } from "./wallet.js";
 
 /**
@@ -26,32 +27,32 @@ export function whereChoiceSection(service: Service, targets: WorkerTarget[] | n
   if (seedFileVar(service)) {
     // The seed phrase is the wallet, and it never travels to a worker (workerapi.BuildDeploySpec):
     // the node runs where its wallet file is made, so the card's wallet choice applies here.
-    return `<p class="muted compact-copy where-hint" data-where-local="${slug}">Where: this computer. ${escapeHtml(service.name)} keeps its wallet seed phrase in a file on the machine that runs it, so it runs only on this computer for now.</p>`;
+    return `<p class="muted compact-copy where-hint" data-where-local="${slug}">${ht("where.local", { name: service.name })}</p>`;
   }
   const workers = targets || [];
   const ready = workers.filter((t) => t.online && !t.reason);
   const unavailable = draft != null && !ready.some((t) => t.id === draft);
   const picked = unavailable ? workers.find((t) => t.id === draft) : undefined;
   if (ready.length === 0 && !unavailable) {
-    return `<p class="muted compact-copy where-hint" data-where-none="${slug}">Where: this computer. No worker is online.</p>`;
+    return `<p class="muted compact-copy where-hint" data-where-none="${slug}">${ht("where.none")}</p>`;
   }
   const options = [
-    `<option value="">This computer</option>`,
-    unavailable ? `<option value="${draft}" selected disabled>${picked ? `Worker ${escapeHtml(picked.name)}` : "Selected worker"} (unavailable)</option>` : "",
+    `<option value="">${ht("where.thisComputer")}</option>`,
+    unavailable ? `<option value="${draft}" selected disabled>${picked ? ht("where.workerUnavailable", { name: picked.name }) : ht("where.selectedUnavailable")}</option>` : "",
     ...ready.map((t) => {
-      const runs = (t.services || []).includes(service.slug) ? " (runs it now)" : "";
-      return `<option value="${t.id}"${draft === t.id ? " selected" : ""}>Worker ${escapeHtml(t.name)}${runs}</option>`;
+      const label = (t.services || []).includes(service.slug) ? ht("where.workerRuns", { name: t.name }) : ht("where.worker", { name: t.name });
+      return `<option value="${t.id}"${draft === t.id ? " selected" : ""}>${label}</option>`;
     }),
   ].join("");
   const waiting = workers.filter((t) => t.online && t.reason);
   return `
     <div class="where-choice">
       <label>
-        <span>Where</span>
+        <span>${ht("where.label")}</span>
         <select data-wizard-where="${slug}">${options}</select>
       </label>
-      <p class="muted compact-copy where-hint">A worker gets the values above with this deploy and keeps none of them. It runs one copy, from its own IP.</p>
-      ${unavailable ? `<p class="muted compact-copy where-hint">${escapeHtml(picked?.reason || "The selected worker is unavailable.")} Choose a target before deploying.</p>` : ""}
+      <p class="muted compact-copy where-hint">${ht("where.hint")}</p>
+      ${unavailable ? `<p class="muted compact-copy where-hint">${escapeHtml(picked?.reason || t("where.unavailable"))} ${ht("where.chooseTarget")}</p>` : ""}
       ${waiting.map((t) => `<p class="muted compact-copy where-hint">${escapeHtml(t.reason)}</p>`).join("")}
     </div>
   `;
@@ -109,12 +110,12 @@ export async function runWorkerDeploy(
   calls: WorkerDeployCalls,
 ): Promise<WorkerDeployOutcome> {
   if (!worker.online || worker.reason) {
-    return { kind: "refused", message: `${worker.reason || "The selected worker is unavailable."} Choose a target before deploying.` };
+    return { kind: "refused", message: `${worker.reason || t("where.unavailable")} ${t("where.chooseTarget")}` };
   }
   if (proxyId !== null || (instances !== null && instances > 1)) {
     return {
       kind: "refused",
-      message: "A deploy to a worker runs one copy, from the worker's own IP. Set Route to Direct and Instances to 1, or choose This computer. Nothing was deployed.",
+      message: t("where.refused"),
     };
   }
   const yes: WorkerDeployYes = { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "", workerIdentity: "" };
@@ -132,7 +133,7 @@ export async function runWorkerDeploy(
     const asker = result.workerIdentity || "";
     if (result.ask === "worker_changed" && asker !== yes.workerIdentity) {
       if (last) break;
-      const message = result.message || `Another worker now reports as ${worker.name}, so your answers so far do not count. Deploy ${slug} to it?`;
+      const message = result.message || t("where.workerChanged", { worker: worker.name, slug });
       if (!calls.confirm(message)) return { kind: "cancelled" };
       Object.assign(yes, { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "", workerIdentity: asker });
       continue;
@@ -141,7 +142,7 @@ export async function runWorkerDeploy(
       if (last) break;
       yes.replaceExisting = false;
       yes.expectedContainer = "";
-      const message = result.message || `Redeploy ${slug} on ${worker.name}? The existing container will be replaced, but its volumes are kept.`;
+      const message = result.message || t("where.replace", { slug, worker: worker.name });
       if (!calls.confirm(message)) return { kind: "cancelled" };
       yes.replaceExisting = true;
       yes.expectedContainer = container;
@@ -150,26 +151,27 @@ export async function runWorkerDeploy(
     }
     if (result.ask === "identity_in_use" && !yes.allowSharedIdentity) {
       if (last) break;
-      if (!calls.confirm(`${result.message}\n\nDeploy anyway?`)) return { kind: "cancelled" };
+      if (!calls.confirm(`${result.message}\n\n${t("where.deployAnyway")}`)) return { kind: "cancelled" };
       yes.allowSharedIdentity = true;
       yes.workerIdentity = asker;
       continue;
     }
     if (result.ask === "step_up_required" && !yes.confirmed) {
       if (last) break;
-      if (!calls.confirm(`${result.message}\n\nDeploy it anyway?`)) return { kind: "cancelled" };
+      if (!calls.confirm(`${result.message}\n\n${t("where.deployItAnyway")}`)) return { kind: "cancelled" };
       yes.confirmed = true;
       yes.workerIdentity = asker;
       continue;
     }
-    if (result.ask) return { kind: "refused", message: `${result.message} Nothing was deployed.` };
+    if (result.ask) return { kind: "refused", message: `${result.message} ${t("where.nothingDeployed")}` };
     return { kind: "deployed", result };
   }
-  return { kind: "refused", message: "The deploy kept asking the same question, or the container on the worker kept changing. Nothing was deployed." };
+  return { kind: "refused", message: t("where.keptAsking") };
 }
 
 /** What the setup card says after a deploy to a worker. */
 export function workerDeployText(result: Partial<WorkerDeployResult>): string {
-  const notes = (result.notes || []).map((n) => `Kept: ${n}.`);
-  return [`Deployed to ${result.worker || "the worker"}. The Fleet page shows it after the worker's next check-in.`, ...notes, result.credentialWarning].filter(Boolean).join("\n\n");
+  const notes = (result.notes || []).map((n) => t("where.kept", { note: n }));
+  const deployed = result.worker ? t("where.deployedTo", { worker: result.worker }) : t("where.deployedToWorker");
+  return [deployed, ...notes, result.credentialWarning].filter(Boolean).join("\n\n");
 }

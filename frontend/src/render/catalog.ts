@@ -11,6 +11,7 @@
 
 import type { Deployment, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 import { customImageBadge } from "./image.js";
 import { containerState } from "./attention.js";
 import { customBadge } from "./custom.js";
@@ -31,10 +32,28 @@ export function estimateText(service: Service): string {
 function statusDot(status: string): string {
   const state = containerState(status);
   const cls = state === "ok" ? "running" : state === "fail" ? "stopped" : "unknown";
-  return `<span class="status-dot ${cls}" title="Deployed here: ${escapeHtml(status || "unknown")}"></span> `;
+  return `<span class="status-dot ${cls}" title="${ht("catalog.deployedHere", { status: status || t("catalog.unknown") })}"></span> `;
 }
 
-const KIND: Record<string, string> = { bandwidth: "Bandwidth", depin: "DePIN", storage: "Storage", compute: "Compute", mining: "Mining", custom: "Custom" };
+/** A catalog kind's name, or "" for a kind this file does not know. */
+export function kindLabel(category: string): string {
+  switch (category) {
+    case "bandwidth":
+      return t("catalog.kind.bandwidth");
+    case "depin":
+      return t("catalog.kind.depin");
+    case "storage":
+      return t("catalog.kind.storage");
+    case "compute":
+      return t("catalog.kind.compute");
+    case "mining":
+      return t("catalog.kind.mining");
+    case "custom":
+      return t("catalog.kind.custom");
+    default:
+      return "";
+  }
+}
 
 const ALWAYS_LISTED = ["bandwidth", "depin", "storage", "compute"];
 
@@ -52,42 +71,47 @@ export function wizardCategoryChoices(services: Pick<Service, "category">[]): st
   return [...ALWAYS_LISTED, "mining"].filter((category) => services.some((svc) => svc.category === category));
 }
 
-const WIZARD_COPY: Record<string, string> = {
-  bandwidth: "Share your internet connection",
-  depin: "Run decentralized infrastructure",
-  storage: "Rent out disk space",
-  compute: "Share CPU or GPU power",
-  mining: "Mine with your own hardware, or track a pool you already mine on",
-};
-
 /** The line under a wizard category card's title. */
 export function wizardCategoryCopy(category: string): string {
-  return WIZARD_COPY[category] || "Available providers";
+  switch (category) {
+    case "bandwidth":
+      return t("catalog.wizard.bandwidth");
+    case "depin":
+      return t("catalog.wizard.depin");
+    case "storage":
+      return t("catalog.wizard.storage");
+    case "compute":
+      return t("catalog.wizard.compute");
+    case "mining":
+      return t("catalog.wizard.mining");
+    default:
+      return t("catalog.wizard.other");
+  }
 }
 
 /** "update available": the catalog changed the image, or the user edited a custom service's. */
 export function outdatedBadge(service: Pick<Service, "custom"> | undefined): string {
   const title = service?.custom
-    ? "You changed this service's image since it was deployed. Redeploy it to apply."
-    : "The provider changed this service's image. Re-deploy from the catalog to keep earning.";
-  return `<span class="badge warn" title="${title}">update available</span>`;
+    ? ht("catalog.outdated.custom")
+    : ht("catalog.outdated.catalog");
+  return `<span class="badge warn" title="${title}">${ht("catalog.outdated.badge")}</span>`;
 }
 
 export function catalogRow(service: Service, deployment: Deployment | undefined, outdated: boolean): string {
   const deployed = Boolean(deployment);
   const signupUrl = service.referral?.signupUrl || service.website;
   const main = service.manualOnly
-    ? signupUrl ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">Visit</button>` : ""
-    : `<button class="btn ${deployed ? "btn-ghost" : "btn-primary"} btn-sm" data-service="${escapeHtml(service.slug)}">${deployed ? "Manage" : "Add"}</button>`;
+    ? signupUrl ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">${ht("catalog.visit")}</button>` : ""
+    : `<button class="btn ${deployed ? "btn-ghost" : "btn-primary"} btn-sm" data-service="${escapeHtml(service.slug)}">${deployed ? ht("catalog.manage") : ht("catalog.add")}</button>`;
   // No account to sign up for (referral.account: false): the link is the provider's site.
   const signup = signupUrl && !service.manualOnly
-    ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">${hasAccount(service) ? "Sign up" : "Visit"}</button>`
+    ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(signupUrl)}">${hasAccount(service) ? ht("catalog.signUp") : ht("catalog.visit")}</button>`
     : "";
   // Visit and Sign up open the signup page. Where the signup never reads the code
   // from the link (Dawn's extension), the code sits right beside them, or a user
   // who signs up from this row credits nobody.
   const entry = (service.referral?.codeEntry || "").trim();
-  const code = signupUrl && entry ? codeEntryCopy(service, `Code ${escapeHtml(entry)}`) : "";
+  const code = signupUrl && entry ? codeEntryCopy(service, ht("catalog.code", { code: entry })) : "";
   const tags = [
     customBadge(service),
     customImageBadge(deployment?.customImage),
@@ -98,12 +122,12 @@ export function catalogRow(service: Service, deployment: Deployment | undefined,
   return `
     <tr class="catalog-row" data-catalog-open="${escapeHtml(service.slug)}">
       <td class="c-name">
-        <button type="button" class="svc-name svc-open" data-catalog-open-name title="Open ${escapeHtml(service.name)}'s setup">${deployment ? statusDot(deployment.status) : ""}${escapeHtml(service.name)}</button>
+        <button type="button" class="svc-name svc-open" data-catalog-open-name title="${ht("catalog.openSetup", { name: service.name })}">${deployment ? statusDot(deployment.status) : ""}${escapeHtml(service.name)}</button>
         <div class="cell-sub">${escapeHtml(service.shortDescription || service.description)}</div>
         ${tags ? `<div class="cell-tags">${tags}</div>` : ""}
       </td>
-      <td>${escapeHtml(KIND[service.category] || service.category)}</td>
-      <td class="cell-sub-wrap">${escapeHtml((service.platforms || []).join(", ") || "none listed")}</td>
+      <td>${escapeHtml(kindLabel(service.category) || service.category)}</td>
+      <td class="cell-sub-wrap">${escapeHtml((service.platforms || []).join(", ") || t("catalog.noPlatforms"))}</td>
       <td class="c-num">${escapeHtml(estimateText(service))}</td>
       <td class="c-grade">${gradeBadge(service.ratingResult)}</td>
       <td class="c-act"><div class="action-btns">${main}${signup}${code}</div></td>
@@ -120,15 +144,15 @@ export function renderCatalogTable(services: Service[], deployments: Deployment[
     ? `<tr class="group-row"><th colspan="6">${escapeHtml(title)} <span class="count">${list.length}</span></th></tr>
        ${list.map((svc) => catalogRow(svc, deployedBy.get(svc.slug), outdatedSet.has(svc.slug))).join("")}`
     : "";
-  if (!services.length) return `<p class="block-empty">No service matches.</p>`;
+  if (!services.length) return `<p class="block-empty">${ht("catalog.noMatch")}</p>`;
   return `
     <table class="catalog-table">
       <thead>
-        <tr><th>Service</th><th>Kind</th><th>Runs on</th><th class="c-num">Est. per month</th><th class="c-grade">Grade</th><th class="c-act"></th></tr>
+        <tr><th>${ht("catalog.col.service")}</th><th>${ht("catalog.col.kind")}</th><th>${ht("catalog.col.runsOn")}</th><th class="c-num">${ht("catalog.col.estimate")}</th><th class="c-grade">${ht("catalog.col.grade")}</th><th class="c-act"></th></tr>
       </thead>
       <tbody>
-        ${group("Deployed here", here)}
-        ${group("Not running", rest)}
+        ${group(t("catalog.group.here"), here)}
+        ${group(t("catalog.group.rest"), rest)}
       </tbody>
     </table>
   `;

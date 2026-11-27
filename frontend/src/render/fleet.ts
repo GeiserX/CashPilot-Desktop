@@ -8,6 +8,7 @@
 
 import type { FleetView } from "../wails";
 import { escapeHtml, formatBalance, relativeTime } from "./format.js";  // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, raw } from "./i18n.js";
 
 /**
  * Render the paired server's account-level figures.
@@ -39,17 +40,15 @@ export function renderFleetSection(fleet: FleetView, now: number = Date.now()): 
     <section class="card fleet-panel">
       <div class="card-header">
         <div>
-          <span class="card-title">Across your CashPilot account</span>
+          <span class="card-title">${ht("fleet.title")}</span>
           <p class="muted compact-copy">
-            What the platforms this machine runs earned on your account over the last
-            ${escapeHtml(String(fleet.windowDays || 30))} days, reported by
-            <code>${escapeHtml(fleet.serverUrl)}</code>${age ? ` &middot; ${escapeHtml(age)}` : ""}.
-            ${shared ? `${shared} of these run on more than one machine, so the figure is the account's, not this machine's.` : ""}
+            ${ht("fleet.window", { days: String(fleet.windowDays || 30), server: fleet.serverUrl, age: raw(age ? ` &middot; ${escapeHtml(age)}` : "") })}
+            ${shared ? ht("fleet.shared", { n: shared }) : ""}
           </p>
         </div>
         <div class="fleet-total">
           <strong>${money(fleet.totalUsd)}</strong>
-          <small>${fleet.totalUsd === null || fleet.totalUsd === undefined ? "nothing collected yet" : "known platforms only"}</small>
+          <small>${fleet.totalUsd === null || fleet.totalUsd === undefined ? ht("fleet.nothingYet") : ht("fleet.knownOnly")}</small>
         </div>
       </div>
       <div class="earnings-breakdown">
@@ -61,17 +60,17 @@ export function renderFleetSection(fleet: FleetView, now: number = Date.now()): 
             <div class="earning-chip${p.shared ? " shared" : ""}">
               <span>${escapeHtml(p.slug)}</span>
               <strong>${money(p.usd)}</strong>
-              ${p.shared ? `<small title="More than one machine on your fleet runs this, so the provider reports one balance for all of them.">shared</small>` : ""}
+              ${p.shared ? `<small title="${ht("fleet.sharedTitle")}">${ht("fleet.sharedTag")}</small>` : ""}
             </div>
           `,
                 )
                 .join("")
-            : `<p class="muted">This server has no figures for the platforms on this machine yet.</p>`
+            : `<p class="muted">${ht("fleet.noFigures")}</p>`
         }
       </div>
       ${
         withoutReadings.length
-          ? `<p class="muted compact-copy">No reading at all for ${escapeHtml(withoutReadings.join(", "))} &mdash; usually a collector that does not exist yet, or credentials never entered. They are missing from the total rather than counted as zero.</p>`
+          ? `<p class="muted compact-copy">${ht("fleet.noReading", { slugs: withoutReadings.join(", ") })}</p>`
           : ""
       }
     </section>

@@ -1,3 +1,5 @@
+import { t } from "./i18n.js"; // .js so the emitted ESM resolves in Node
+
 interface FirewallActions {
   allow(): Promise<unknown>;
   refresh(): Promise<void>;
@@ -7,10 +9,10 @@ interface FirewallActions {
 
 export function wireServerCommandsFirewall(scope: ParentNode, actions: FirewallActions): void {
   scope.querySelector<HTMLButtonElement>("[data-server-commands-firewall]")?.addEventListener("click", () => {
-    actions.setOutput("Waiting for the Windows administrator prompt...");
+    actions.setOutput(t("server_commands_wire.waiting"));
     void actions.allow().then(
       () => {
-        actions.setOutput("Windows Firewall now lets your CashPilot reach this computer.");
+        actions.setOutput(t("server_commands_wire.allowed"));
         return actions.refresh();
       },
       (error) => actions.notice(String(error)),

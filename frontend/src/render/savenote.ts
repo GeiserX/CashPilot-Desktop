@@ -6,6 +6,7 @@
 // page passed in, so a check runs the same flow the button runs.
 
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node
+import { ht } from "./i18n.js";
 
 export type SaveNote =
   | { state: "saving" }
@@ -15,9 +16,9 @@ export type SaveNote =
 /** The note's inner HTML. Empty before the first save. */
 export function renderSaveNote(note: SaveNote | null): string {
   if (!note) return "";
-  if (note.state === "saving") return `<span class="save-note" data-save-note="saving">Saving…</span>`;
-  if (note.state === "saved") return `<span class="save-note save-note-ok" data-save-note="saved">Saved</span>`;
-  return `<span class="save-note save-note-fail" data-save-note="failed">Not saved: ${escapeHtml(note.error)}</span>`;
+  if (note.state === "saving") return `<span class="save-note" data-save-note="saving">${ht("savenote.saving")}</span>`;
+  if (note.state === "saved") return `<span class="save-note save-note-ok" data-save-note="saved">${ht("savenote.saved")}</span>`;
+  return `<span class="save-note save-note-fail" data-save-note="failed">${ht("savenote.failed", { error: note.error })}</span>`;
 }
 
 /** The empty slot the note goes into: a live region, so a screen reader says it too. */

@@ -16,6 +16,7 @@
 // Pure: takes the service and the backend's map, returns the fields to render.
 
 import type { CollectorField, Service } from "../wails";
+import { t } from "./i18n.js"; // .js so the emitted ESM resolves in Node
 
 /**
  * earnings marks a field only the earnings collector reads. The deploy never
@@ -35,7 +36,7 @@ export function deployNeeds(field: ServiceField): boolean {
  */
 export function fieldMark(field: ServiceField): string {
   if (deployNeeds(field)) return " *";
-  return field.required && field.earnings ? " (for earnings)" : "";
+  return field.required && field.earnings ? ` ${t("fields.forEarnings")}` : "";
 }
 
 /** Strip HTML tags from a catalog description before it goes into a placeholder. */

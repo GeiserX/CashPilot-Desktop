@@ -15,6 +15,7 @@
 // Pure: takes the plan the backend read off the live container, returns text.
 
 import type { DataMount, RemovalPlan } from "../wails";
+import { t } from "./i18n.js"; // .js so the emitted ESM resolves in Node
 
 // mounts is the defensive read of a Go slice, which marshals to null when empty.
 function mounts(list: DataMount[] | null | undefined): DataMount[] {
@@ -40,19 +41,19 @@ export function planHasCritical(plan: RemovalPlan): boolean {
  * to go near it.
  */
 export function removeConfirmText(serviceName: string, plan: RemovalPlan): string {
-  const lines = [`Remove ${serviceName}?`, ""];
+  const lines = [t("removal.remove.title", { service: serviceName }), ""];
   const volumes = deletableVolumes(plan);
   const binds = mounts(plan.binds);
   if (volumes.length === 0 && binds.length === 0) {
-    lines.push("This stops and deletes its container. Nothing else is stored for it.");
+    lines.push(t("removal.remove.nothingElse"));
     return lines.join("\n");
   }
-  lines.push("This stops and deletes its container. Its saved data stays on this computer, so you can set the service up again later.");
+  lines.push(t("removal.remove.dataStays"));
   if (volumes.length > 0) {
-    lines.push("", "You will be asked next whether to delete that data too. If you keep it, the only way to delete it later is to set the service up again and remove it with its data.");
+    lines.push("", t("removal.remove.askedNext"));
   }
   if (binds.length > 0) {
-    lines.push("", "These folders are never touched:");
+    lines.push("", t("removal.remove.folders"));
     for (const bind of binds) lines.push(`  ${bind.source}`);
   }
   return lines.join("\n");
@@ -69,18 +70,18 @@ export function deleteDataConfirmText(serviceName: string, plan: RemovalPlan): s
   const volumes = deletableVolumes(plan);
   if (volumes.length === 0) return null;
 
-  const lines = [`Also delete ${serviceName}'s saved data?`, ""];
+  const lines = [t("removal.data.title", { service: serviceName }), ""];
   if (planHasCritical(plan)) {
-    lines.push("Some of it cannot be recovered. There is no backup and no way to recreate it.");
+    lines.push(t("removal.data.critical"));
   } else {
-    lines.push("The service would start from scratch the next time you deploy it.");
+    lines.push(t("removal.data.fromScratch"));
   }
-  lines.push("", "What would be deleted:");
+  lines.push("", t("removal.data.list"));
   for (const volume of volumes) {
     lines.push(`  ${volume.source} (${volume.target})`);
     if (volume.holds) lines.push(`    ${volume.holds}`);
   }
-  lines.push("", "Choose Cancel to keep it.");
+  lines.push("", t("removal.data.cancel"));
   return lines.join("\n");
 }
 

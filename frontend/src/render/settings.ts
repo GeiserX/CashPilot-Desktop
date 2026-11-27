@@ -4,6 +4,7 @@
 
 import type { EnvSetting } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht } from "./i18n.js";
 
 /** The SaveSettings key a setting's input posts under. */
 export function envInputName(key: string) {
@@ -45,15 +46,15 @@ function secretInput(item: EnvSetting): string {
   const common = `type="password" autocomplete="new-password" spellcheck="false" aria-label="${escapeHtml(item.label)}"`;
   if (item.readOnly) {
     return `<span class="secret-field">
-        <input ${common} readonly placeholder="${saved ? "Saved. Use Copy to get it." : "Not set"}" />
-        ${saved ? `<button type="button" class="secondary compact-btn" data-secret-copy="${escapeHtml(item.key)}">Copy</button>` : ""}
+        <input ${common} readonly placeholder="${saved ? ht("settings.secret.savedCopy") : ht("settings.secret.notSet")}" />
+        ${saved ? `<button type="button" class="secondary compact-btn" data-secret-copy="${escapeHtml(item.key)}">${ht("settings.secret.copy")}</button>` : ""}
       </span>`;
   }
-  const placeholder = saved ? "Saved. Leave blank to keep it, or type a new one." : "Not set";
+  const placeholder = saved ? ht("settings.secret.savedKeep") : ht("settings.secret.notSet");
   return `<span class="secret-field">
         <input data-setting="${escapeHtml(envInputName(item.key))}" data-secret ${common} placeholder="${placeholder}" />
-        <button type="button" class="secondary compact-btn" data-secret-toggle aria-pressed="false">Show</button>
-        ${saved ? `<button type="button" class="secondary compact-btn" data-secret-clear aria-pressed="false">Remove</button>` : ""}
+        <button type="button" class="secondary compact-btn" data-secret-toggle aria-pressed="false">${ht("settings.secret.show")}</button>
+        ${saved ? `<button type="button" class="secondary compact-btn" data-secret-clear aria-pressed="false">${ht("settings.secret.remove")}</button>` : ""}
       </span>`;
 }
 

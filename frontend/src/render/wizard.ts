@@ -19,6 +19,7 @@
 
 import type { CollectorField, RouteState, ScalingLimit, Service, ServiceEarning, SessionConsent, WorkerTarget } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht } from "./i18n.js";
 import { fieldMark, serviceFormFields } from "./fields.js";
 import { composeExportControl, credentialHint, referralNote, serviceFacts, signupButton } from "./details.js";
 import { ratingBlock } from "./rating.js";
@@ -93,28 +94,28 @@ export function renderWizardServiceSetup(
           <h3>${escapeHtml(service.name)}</h3>
           <p class="muted">${escapeHtml(service.shortDescription || service.description)}</p>
         </div>
-        <span class="pill">${service.manualOnly ? "manual" : "docker"}</span>
+        <span class="pill">${service.manualOnly ? ht("wizard.pill.manual") : ht("wizard.pill.docker")}</span>
       </div>
       <div class="signup-strip">
         ${signupButton(service)}
-        ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">Provider dashboard</button>` : ""}
-        ${gated ? "" : `<button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">${pool ? "Web setup guide" : "Setup guide"}</button>`}
+        ${dashboardUrl ? `<button class="secondary" data-url="${escapeHtml(dashboardUrl)}">${ht("wizard.providerDashboard")}</button>` : ""}
+        ${gated ? "" : `<button class="secondary" data-url="https://geiserx.github.io/CashPilot/guides/${escapeHtml(service.slug)}/">${pool ? ht("wizard.webGuide") : ht("wizard.guide")}</button>`}
       </div>
       ${referralNote(service)}
       ${ratingBlock(service)}
       ${gated
         ? `<div data-session-slot="${escapeHtml(service.slug)}">${renderSessionSlot(service, consent)}</div>`
-        : pool ? `<p class="tip">Check pool balance saves the address and reads the unpaid balance your mining pool holds for this address.</p>`
-        : service.manualOnly ? `<p class="tip">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>` : ""}
+        : pool ? `<p class="tip">${ht("wizard.poolTip")}</p>`
+        : service.manualOnly ? `<p class="tip">${ht("wizard.manualTip")}</p>` : ""}
       ${credentialHint(service)}
       <div class="credential-grid">
         ${fields.map((item) => `
           <label>
-            <span>${escapeHtml(item.label)}${fieldMark(item)}</span>
+            <span>${escapeHtml(item.label)}${escapeHtml(fieldMark(item))}</span>
             <input data-wizard-env="${escapeHtml(item.key)}" type="${item.secret ? "password" : "text"}"${item.secret ? ' autocomplete="new-password"' : ""}${item.pattern ? ` pattern="${escapeHtml(item.pattern)}"` : ""} placeholder="${escapeHtml(item.description)}" value="${item.secret ? "" : escapeHtml((item.default || "").replaceAll("{hostname}", hostname || "desktop"))}" />
-            ${item.secret ? '<small class="muted">Leave blank to keep a saved value. Enter a new value to replace it.</small>' : ""}
+            ${item.secret ? `<small class="muted">${ht("wizard.secretHint")}</small>` : ""}
           </label>
-        `).join("") || `<p class="muted">No credentials are required by the catalog for this service.</p>`}
+        `).join("") || `<p class="muted">${ht("wizard.noCredentials")}</p>`}
       </div>
       ${walletChoiceSection(service, Boolean(deployed))}
       ${instancesSection(service, scaling, instances)}
@@ -124,9 +125,9 @@ export function renderWizardServiceSetup(
       ${minerFee(service)}
       <div data-preflight-slug="${escapeHtml(service.slug)}"></div>
       <div class="actions left">
-        ${pool ? "" : `<button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">Save Credentials</button>`}
-        <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>Deploy</button>
-        <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">${pool ? "Check pool balance" : "Collect Earnings"}</button>
+        ${pool ? "" : `<button class="secondary" data-wizard-action="save" data-slug="${escapeHtml(service.slug)}">${ht("wizard.save")}</button>`}
+        <button class="primary" data-wizard-action="deploy" data-slug="${escapeHtml(service.slug)}" ${service.manualOnly ? "disabled" : ""}>${ht("wizard.deploy")}</button>
+        <button class="secondary" data-wizard-action="collect" data-slug="${escapeHtml(service.slug)}">${pool ? ht("wizard.checkPool") : ht("wizard.collect")}</button>
       </div>
       ${renderDeployPanel(service.slug, deployFeedback)}
       ${composeExportControl(service)}

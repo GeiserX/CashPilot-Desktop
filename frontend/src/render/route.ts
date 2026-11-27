@@ -9,6 +9,7 @@
 
 import type { ProxiedResult, RouteState, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /**
  * Render the Route box for one service, or "" when there is nothing to choose.
@@ -24,25 +25,26 @@ export function routeChoiceSection(service: Service, route: RouteState | null | 
   const refusal = route.refusals?.[service.slug] || "";
   const proxies = route.proxies || [];
   if (refusal) {
-    return `<p class="muted compact-copy route-hint">Route: this computer's own IP. ${escapeHtml(refusal)}</p>`;
+    return `<p class="muted compact-copy route-hint">${ht("route.ownIp")} ${escapeHtml(refusal)}</p>`;
   }
   if (proxies.length === 0 && !route.proxiedOnly) return "";
   const current = draft !== undefined ? draft : route.recorded?.[service.slug];
   const options = [
-    route.proxiedOnly ? "" : `<option value="">Direct: this computer's own IP</option>`,
+    route.proxiedOnly ? "" : `<option value="">${ht("route.direct")}</option>`,
     ...proxies.map((p) => {
       const exit = [p.exitIp, p.country ? `(${p.country})` : ""].filter(Boolean).join(" ");
-      const label = `Through ${p.name || `proxy ${p.id}`}${exit ? `, exit ${exit}` : ""}`;
+      const proxy = p.name || t("route.proxyN", { id: p.id });
+      const label = exit ? t("route.throughExit", { proxy, exit }) : t("route.through", { proxy });
       return `<option value="${p.id}"${current === p.id ? " selected" : ""}>${escapeHtml(label)}</option>`;
     }),
   ].join("");
   return `
     <div class="route-choice">
       <label>
-        <span>Route</span>
+        <span>${ht("route.label")}</span>
         <select data-wizard-route="${slug}">${options}</select>
       </label>
-      <p class="muted compact-copy route-hint">A route through one of your proxies applies from the first start, so ${escapeHtml(service.name)} never runs from this computer's own IP. It hides that IP from the service's traffic, not from the provider's website or your earnings login.${route.proxiedOnly ? " This computer runs services only through a proxy." : ""}</p>
+      <p class="muted compact-copy route-hint">${ht("route.hint", { name: service.name })}${route.proxiedOnly ? ` ${ht("route.proxiedOnly")}` : ""}</p>
     </div>
   `;
 }
@@ -73,8 +75,10 @@ export function leavesRoute(slug: string, route: RouteState | null | undefined):
 
 /** What the setup card says after a routed deploy: where it leaves, then the device-link step. */
 export function routedDeployText(result: Partial<ProxiedResult>, link: string): string {
-  const where = result.exitIp ? ` It leaves from ${result.exitIp}${result.country ? ` (${result.country})` : ""}.` : "";
-  return [`Deployed through the proxy.${where}`, result.warning || "", link].filter(Boolean).join("\n\n");
+  const where = !result.exitIp ? ""
+    : result.country ? ` ${t("route.leavesFromCountry", { ip: result.exitIp, country: result.country })}`
+    : ` ${t("route.leavesFrom", { ip: result.exitIp })}`;
+  return [`${t("route.deployed")}${where}`, result.warning || "", link].filter(Boolean).join("\n\n");
 }
 
 /** What a deploy from the setup card ran, or why it ran nothing. */
@@ -108,12 +112,12 @@ export async function runRouteDeploy<D, R>(
   if (proxyId !== null && (image || (instances !== null && instances > 1))) {
     return {
       kind: "refused",
-      message: "A service routed through a proxy runs the catalog image, once. Clear the Image box and set Instances to 1, or choose this computer's own IP. Nothing was deployed.",
+      message: t("route.refused"),
     };
   }
   const leaving = proxyId === null && leavesRoute(slug, route);
   // From this computer's own IP, the provider sees that IP: only the owner's yes switches it.
-  if (leaving && !calls.confirm(`${slug} runs through a proxy on this computer. Running it from this computer's own IP shows that IP to the provider. Switch it?`)) {
+  if (leaving && !calls.confirm(t("route.confirmLeave", { slug }))) {
     return { kind: "cancelled" };
   }
   if (proxyId !== null) return { kind: "routed", result: await calls.routed(proxyId) };

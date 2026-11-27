@@ -1,4 +1,5 @@
 import { formatBalance } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { t } from "./i18n.js";
 
 /**
  * The headline total, rendered honestly.
@@ -61,9 +62,9 @@ export function totalText(
  * old, not one that is absent.
  */
 export function totalCaption(summary: TotalSummaryLike | null | undefined): string {
-  if (!totalIsKnown(summary)) return "Balances could not be priced — check your display currency";
-  if (summary?.ratesStale) return "Rates may be stale";
-  return "Across convertible services";
+  if (!totalIsKnown(summary)) return t("total.caption.unpriced");
+  if (summary?.ratesStale) return t("total.caption.stale");
+  return t("total.caption.ok");
 }
 
 /**
@@ -86,12 +87,14 @@ export function allTimeNote(summary: LifetimeSummaryLike | null | undefined, dis
   if (!summary || !("paidOut" in summary)) return "";
   const paid = summary.paidOut;
   if (paid === null || paid === undefined || !Number.isFinite(paid)) {
-    return "Earned all time: cash-outs could not be read";
+    return t("total.allTime.unread");
   }
   const unpriced = summary.unpricedPayouts || 0;
   if (!(paid > 0) && unpriced === 0) return "";
   const all = summary.earnedAllTime;
   const allText = typeof all === "number" && Number.isFinite(all) ? formatBalance(all, displayCurrency) : UNKNOWN_TOTAL;
-  const unpricedText = unpriced > 0 ? `, plus ${unpriced} cash-out${unpriced === 1 ? "" : "s"} with no rate` : "";
-  return `Earned all time ${allText} (${formatBalance(paid, displayCurrency)} cashed out${unpricedText})`;
+  const paidText = formatBalance(paid, displayCurrency);
+  return unpriced > 0
+    ? t("total.allTime.unpriced", { all: allText, paid: paidText, n: unpriced })
+    : t("total.allTime", { all: allText, paid: paidText });
 }
