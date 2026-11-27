@@ -18,21 +18,39 @@
 
 import type { PreflightReport, RuntimeStatus, Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 import { runtimeState, setupDockerButton } from "./runtime_state.js";
 
 /** The four verdicts, in the same vocabulary the Go side and the web app use. */
-const TONES: Record<string, { label: string; color: string; tint: string }> = {
-  will_earn_nothing: { label: "will earn nothing here", color: "var(--error)", tint: "rgba(248, 113, 113, 0.14)" },
-  reduced_earnings: { label: "will earn less here", color: "var(--warning)", tint: "rgba(245, 158, 11, 0.14)" },
-  check_these: { label: "check these", color: "var(--warning)", tint: "rgba(245, 158, 11, 0.14)" },
-  looks_fine: { label: "looks fine", color: "var(--success)", tint: "rgba(34, 197, 94, 0.12)" },
+const TONES: Record<string, { color: string; tint: string }> = {
+  will_earn_nothing: { color: "var(--error)", tint: "rgba(248, 113, 113, 0.14)" },
+  reduced_earnings: { color: "var(--warning)", tint: "rgba(245, 158, 11, 0.14)" },
+  check_these: { color: "var(--warning)", tint: "rgba(245, 158, 11, 0.14)" },
+  looks_fine: { color: "var(--success)", tint: "rgba(34, 197, 94, 0.12)" },
 };
 
 /** An unrecognised verdict still renders, in neutral colours and with no claim. */
 const NEUTRAL = { label: "", color: "var(--warning)", tint: "rgba(245, 158, 11, 0.10)" };
 
+/** A known verdict's badge words. */
+function verdictLabel(verdict: string): string {
+  switch (verdict) {
+    case "will_earn_nothing":
+      return t("preflight.verdict.willEarnNothing");
+    case "reduced_earnings":
+      return t("preflight.verdict.reducedEarnings");
+    case "check_these":
+      return t("preflight.verdict.checkThese");
+    case "looks_fine":
+      return t("preflight.verdict.looksFine");
+    default:
+      return "";
+  }
+}
+
 function tone(verdict: string) {
-  return TONES[verdict] || NEUTRAL;
+  const known = TONES[verdict];
+  return known ? { ...known, label: verdictLabel(verdict) } : NEUTRAL;
 }
 
 /** Why a local Docker deploy cannot proceed, or "" if Docker is ready or unneeded. */
@@ -41,11 +59,11 @@ export function localDockerGap(service: Service | undefined, runtime: RuntimeSta
   if (!service.custom && runtime.nativeServices?.includes(service.name)) return "";
   switch (runtimeState(runtime).kind) {
     case "unknown":
-      return "Docker status is unknown. Check Docker before deploying on this computer.";
+      return t("preflight.gap.unknown");
     case "not-installed":
-      return `Docker is not set up on this computer yet, so ${service.name} cannot run here.`;
+      return t("preflight.gap.notInstalled", { service: service.name });
     default:
-      return `Docker is not ready on this computer yet, so ${service.name} cannot run here.`;
+      return t("preflight.gap.notReady", { service: service.name });
   }
 }
 
@@ -62,16 +80,16 @@ export function minerFee(service: Service | undefined): string {
   if (!mining) return "";
   const fee = typeof mining.devFeePercent === "number" && Number.isFinite(mining.devFeePercent) ? mining.devFeePercent : null;
   const headline = fee === null
-    ? "Miner fee: not stated in the catalog. Check the miner's own terms before you deploy."
-    : `Miner fee: ${escapeHtml(String(fee))}% of hashing time goes to the miner's developers.`;
+    ? ht("preflight.fee.notStated")
+    : ht("preflight.fee.stated", { fee: String(fee) });
   const pool = mining.poolFeeNote?.trim() ? `<p class="preflight-summary">${escapeHtml(mining.poolFeeNote.trim())}</p>` : "";
   // Only an external payout reaches the user's wallet. An internal one (Kryptex)
   // stays in the pool's account until the user asks for it.
   const payout = service?.payout?.model === "internal"
-    ? "The pool keeps your balance in its account until you request a withdrawal. Check the balance on the pool dashboard."
-    : "The pool holds what you mine until your payout threshold, then pays your wallet.";
+    ? ht("preflight.payout.internal")
+    : ht("preflight.payout.external");
   const source = mining.devFeeSource?.startsWith("https://")
-    ? `<div><button class="btn btn-ghost btn-sm" data-url="${escapeHtml(mining.devFeeSource)}">Miner fee source</button></div>`
+    ? `<div><button class="btn btn-ghost btn-sm" data-url="${escapeHtml(mining.devFeeSource)}">${ht("preflight.fee.source")}</button></div>`
     : "";
   return `
     <section class="preflight" data-miner-fee style="border-inline-start: 3px solid var(--border-strong); background: var(--accent-soft);">
@@ -114,17 +132,17 @@ export function renderPreflight(report: PreflightReport | null | undefined, work
   // Always rendered when the backend named anything: the honest half of a clean
   // result is the list of things nobody looked at.
   const unchecked = notChecked.length
-    ? `<p class="muted preflight-unchecked">Not checked: ${escapeHtml(notChecked.join("; "))}.</p>`
+    ? `<p class="muted preflight-unchecked">${ht("preflight.notChecked", { items: notChecked.join("; ") })}</p>`
     : "";
 
   return `
     <section class="preflight" style="border-inline-start: 3px solid ${verdict.color}; background: ${verdict.tint};">
       <div class="preflight-head">
-        <strong>Before you deploy</strong>
+        <strong>${ht("preflight.title")}</strong>
         ${badge}
       </div>
       <p class="preflight-summary">${escapeHtml(summary)}</p>
-      ${dockerGap || report?.blocking ? `<p class="preflight-blocked" data-preflight-blocked>Deploy is refused until then. ${setupDockerButton()}</p>` : ""}
+      ${dockerGap || report?.blocking ? `<p class="preflight-blocked" data-preflight-blocked>${ht("preflight.refused")} ${setupDockerButton()}</p>` : ""}
       ${list}
       ${unchecked}
     </section>

@@ -23,6 +23,7 @@
 
 import type { RuntimeStatus } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 export type RuntimeInput = Pick<RuntimeStatus, "available" | "nativeAvailable" | "message"> &
   Partial<Pick<RuntimeStatus, "reason" | "nativeServices" | "setupTask">>;
@@ -37,19 +38,19 @@ export interface RuntimeState {
 
 /** The state in a few words, from the engine's reason code (internal/runtime/engine_state.go). */
 export function runtimeState(runtime: Pick<RuntimeInput, "available" | "reason">): RuntimeState {
-  if (runtime.available) return { kind: "ready", label: "Ready" };
+  if (runtime.available) return { kind: "ready", label: t("runtime_state.label.ready") };
   switch (runtime.reason || "") {
     case "not-installed":
-      return { kind: "not-installed", label: "Docker is not installed" };
+      return { kind: "not-installed", label: t("runtime_state.label.notInstalled") };
     case "not-running":
     case "first-start-pending":
-      return { kind: "not-running", label: "Docker is installed but not running" };
+      return { kind: "not-running", label: t("runtime_state.label.notRunning") };
     case "unreachable":
     case "":
-      return { kind: "unknown", label: "Unknown whether Docker is installed" };
+      return { kind: "unknown", label: t("runtime_state.label.unknown") };
   }
   // windows-containers, access-denied, wsl-missing, wsl-outdated, virtualization-off
-  return { kind: "not-ready", label: "Docker cannot run yet" };
+  return { kind: "not-ready", label: t("runtime_state.label.notReady") };
 }
 
 /**
@@ -63,13 +64,13 @@ export function dockerBlocked(runtime: Pick<RuntimeInput, "available" | "reason"
   if (runtime.available) return "";
   switch (runtimeState(runtime).kind) {
     case "unknown":
-      return "CashPilot could not check Docker on this computer. Open Runtime to check it again.";
+      return t("runtime_state.blocked.unknown");
     case "not-installed":
-      return "Docker is not set up on this computer. Open Runtime to set it up.";
+      return t("runtime_state.blocked.notInstalled");
     case "not-running":
-      return "Docker is installed but not running. Open Runtime to start it.";
+      return t("runtime_state.blocked.notRunning");
     default:
-      return "Docker cannot run on this computer yet. Open Runtime to see what it needs.";
+      return t("runtime_state.blocked.notReady");
   }
 }
 
@@ -80,19 +81,19 @@ export function dockerBlocked(runtime: Pick<RuntimeInput, "available" | "reason"
 export function dockerBlockedNote(runtime: Pick<RuntimeInput, "available" | "reason">): string {
   const why = dockerBlocked(runtime);
   if (!why) return "";
-  const label = runtimeState(runtime).kind === "unknown" ? "Check Docker" : "Set up Docker";
+  const label = runtimeState(runtime).kind === "unknown" ? ht("runtime_state.checkDocker") : ht("runtime_state.setUpDocker");
   return `<p class="docker-blocked compact-copy" data-docker-blocked role="note">${escapeHtml(why)} <button class="btn btn-ghost btn-sm" data-view="runtime">${label}</button></p>`;
 }
 
-/** "A", "A and B", "A, B and C". */
-function nameList(names: string[]): string {
+/** "A", "A and B", "A, B and C". Plain text: escape it before an innerHTML sink. */
+export function nameList(names: string[]): string {
   if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return t("runtime_state.nameList", { rest: names.slice(0, -1).join(", "), last: names[names.length - 1] });
 }
 
 /** The button that opens the runtime page. main.ts's view wiring reads data-view. */
 export function setupDockerButton(ready = false, size = "btn-sm"): string {
-  const label = ready ? "Show runtime" : "Set up Docker";
+  const label = ready ? ht("runtime_state.showRuntime") : ht("runtime_state.setUpDocker");
   return `<button class="btn ${ready ? "btn-ghost" : "btn-primary"} ${size}" data-view="runtime">${label}</button>`;
 }
 
@@ -100,9 +101,7 @@ export function setupDockerButton(ready = false, size = "btn-sm"): string {
 function withoutDocker(runtime: RuntimeInput): string {
   const native = runtime.nativeServices ?? [];
   if (!runtime.nativeAvailable || native.length === 0) return "";
-  return native.length === 1
-    ? `Without it only ${escapeHtml(native[0])} can run here.`
-    : `Without it only ${escapeHtml(nameList(native))} can run here.`;
+  return ht("runtime_state.withoutDocker", { names: nameList(native) });
 }
 
 export interface RuntimeAttention {
@@ -125,8 +124,8 @@ export function runtimeAttention(runtime: RuntimeInput, containers: boolean): Ru
   if (runtime.available) {
     return runtime.setupTask ? {
       level: "warn",
-      tag: "Set up",
-      what: "Docker on this computer",
+      tag: t("runtime_state.attention.tag.setUp"),
+      what: t("runtime_state.attention.what.dockerHere"),
       why: escapeHtml(runtime.setupTask),
       actions,
     } : null;
@@ -135,19 +134,19 @@ export function runtimeAttention(runtime: RuntimeInput, containers: boolean): Ru
   if (runtime.reason !== undefined && state.kind === "unknown") {
     return {
       level: "warn",
-      tag: "Unknown",
-      what: "Docker",
-      why: escapeHtml(runtime.message || "CashPilot could not check Docker."),
+      tag: t("runtime_state.attention.tag.unknown"),
+      what: t("runtime_state.attention.what.docker"),
+      why: escapeHtml(runtime.message || t("runtime_state.attention.couldNotCheck")),
       actions,
     };
   }
-  const message = escapeHtml(runtime.message || "Docker is not reachable.");
+  const message = escapeHtml(runtime.message || t("runtime_state.attention.notReachable"));
   if (!runtime.nativeAvailable) {
     return {
       level: "fail",
-      tag: "Offline",
-      what: "Runtime",
-      why: `${escapeHtml(runtime.message || "Neither Docker nor the native runtime can run anything.")} Services cannot start until it is back.`,
+      tag: t("runtime_state.attention.tag.offline"),
+      what: t("runtime_state.attention.what.runtime"),
+      why: `${escapeHtml(runtime.message || t("runtime_state.attention.nothingRuns"))} ${ht("runtime_state.attention.servicesWait")}`,
       actions,
     };
   }
@@ -156,20 +155,20 @@ export function runtimeAttention(runtime: RuntimeInput, containers: boolean): Ru
     // every container service is.
     return {
       level: "fail",
-      tag: "Offline",
-      what: "Container runtime",
-      why: `${message} Container services cannot start until it is back; native ones keep running.`,
+      tag: t("runtime_state.attention.tag.offline"),
+      what: t("runtime_state.attention.what.containerRuntime"),
+      why: `${message} ${ht("runtime_state.attention.containersWait")}`,
       actions,
     };
   }
   // Nothing that ran has stopped, so this is not an outage: it is the setup a
   // person skipped on first run, and most apps wait for it.
-  const why = state.kind === "not-installed" ? "Docker is not set up yet." : runtime.message || `${state.label}.`;
+  const why = state.kind === "not-installed" ? t("runtime_state.attention.notSetUpYet") : runtime.message || t("runtime_state.attention.stateSentence", { state: state.label });
   return {
     level: "warn",
-    tag: "Set up",
-    what: "Docker",
-    why: `${escapeHtml(why)} Most apps need Docker. ${withoutDocker(runtime)}`.trim(),
+    tag: t("runtime_state.attention.tag.setUp"),
+    what: t("runtime_state.attention.what.docker"),
+    why: `${escapeHtml(why)} ${ht("runtime_state.attention.mostAppsNeedDocker")} ${withoutDocker(runtime)}`.trim(),
     actions,
   };
 }
@@ -185,13 +184,13 @@ export function renderRuntimeSettings(runtime: RuntimeInput): string {
     <section class="card" aria-labelledby="runtime-settings-title" data-runtime-settings="${state.kind}">
       <div class="card-header">
         <div>
-          <span class="card-title" id="runtime-settings-title">Runtime</span>
-          <p class="muted compact-copy">What runs the apps on this computer. Most apps run in Docker.</p>
+          <span class="card-title" id="runtime-settings-title">${ht("runtime_state.settings.title")}</span>
+          <p class="muted compact-copy">${ht("runtime_state.settings.help")}</p>
         </div>
         ${setupDockerButton(!setupNeeded)}
       </div>
       <div class="runtime-card ${tone}">
-        <strong>Docker: ${escapeHtml(state.label)}</strong>
+        <strong>${ht("runtime_state.settings.state", { state: state.label })}</strong>
         ${runtime.message ? `<span>${escapeHtml(runtime.message)}</span>` : ""}
         ${ready && runtime.setupTask ? `<small>${escapeHtml(runtime.setupTask)}</small>` : ""}
         ${native ? `<small>${native}</small>` : ""}
@@ -203,5 +202,5 @@ export function renderRuntimeSettings(runtime: RuntimeInput): string {
 /** The line under the read-only "Runtime provider" setting: the chosen kind is not the state. */
 export function runtimeProviderNote(runtime: RuntimeInput): string {
   const state = runtimeState(runtime);
-  return `<small class="muted compact-copy" data-runtime-provider-state="${state.kind}"><strong>Docker now:</strong> ${escapeHtml(state.label)}. The value above is the kind CashPilot uses, not a sign that Docker is there.</small>`;
+  return `<small class="muted compact-copy" data-runtime-provider-state="${state.kind}">${ht("runtime_state.providerNote", { state: state.label })}</small>`;
 }

@@ -18,6 +18,8 @@
 import type { FirmwareRestart, GuideStep, HostCheckResult, RuntimeStatus, SetupResumeView, SetupStepResult } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { outcomeHtml, stepConfirm, stepRestart, stepRunning, stepSignOut } from "./dockersteps.js";
+import { ht, t } from "./i18n.js";
+import { nameList } from "./runtime_state.js";
 
 export type GuideView =
   | "list"
@@ -67,18 +69,23 @@ export interface GuideModel {
   finishing?: boolean;
 }
 
-export const STATE_LABEL: Record<string, string> = {
-  done: "Done",
-  "needs-you": "Needs you",
-  blocked: "Waits for an earlier step",
-  unknown: "Not known",
-  note: "Worth knowing",
-};
+/** The row states this file draws; any other state draws as unknown. */
+const STATES = new Set(["done", "needs-you", "blocked", "unknown", "note"]);
 
-/** "A", "A and B", "A, B and C". */
-function nameList(names: string[]): string {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+/** A row state in a few words, as plain text. */
+export function stateLabel(state: string): string {
+  switch (state) {
+    case "done":
+      return t("dockerguide.state.done");
+    case "needs-you":
+      return t("dockerguide.state.needsYou");
+    case "blocked":
+      return t("dockerguide.state.blocked");
+    case "note":
+      return t("dockerguide.state.note");
+    default:
+      return t("dockerguide.state.unknown");
+  }
 }
 
 /**
@@ -101,7 +108,7 @@ export function engineAnswers(steps: GuideStep[] | null): boolean {
  * click cannot start a second reading and the user sees that one is under way.
  */
 export function checkAgainButton(id: string, checking: boolean, cls = "btn btn-ghost btn-lg"): string {
-  return `<button class="${cls}" id="${escapeHtml(id)}" data-guide-check ${checking ? 'disabled aria-busy="true"' : ""}>${checking ? "Checking…" : "Check again"}</button>`;
+  return `<button class="${cls}" id="${escapeHtml(id)}" data-guide-check ${checking ? 'disabled aria-busy="true"' : ""}>${checking ? ht("dockerguide.checking") : ht("dockerguide.checkAgain")}</button>`;
 }
 
 /** The progress line while waiting for Docker's engine, and how the wait ended. */
@@ -109,20 +116,20 @@ export function waitLine(model: Pick<GuideModel, "waiting" | "waitResult" | "ste
   let text = "";
   let tone = "";
   if (model.waiting !== null) {
-    text = `Waiting for Docker's engine to start: ${Math.min(model.waiting, START_LIMIT_SECONDS)} s of ${START_LIMIT_SECONDS / 60} min.`;
+    text = t("dockerguide.wait.waiting", { seconds: Math.min(model.waiting, START_LIMIT_SECONDS), minutes: START_LIMIT_SECONDS / 60 });
   } else if (model.waitResult === "answered" || model.waitResult === "checklist-answered") {
-    text = "CashPilot connected to Docker Desktop earlier.";
+    text = t("dockerguide.wait.connectedEarlier");
     if (engineAnswers(model.steps)) {
       text = model.waitResult === "answered"
-        ? "Docker's engine answered."
-        : "Docker's engine answered during the checklist check.";
+        ? t("dockerguide.wait.answered")
+        : t("dockerguide.wait.answeredDuringCheck");
       tone = "ok";
     }
   } else if (model.waitResult === "timeout") {
-    text = `Docker's engine did not answer within ${START_LIMIT_SECONDS / 60} minutes. Look at Docker Desktop's window: it may show its terms or a message. Then click Check again.`;
+    text = t("dockerguide.wait.timeout", { minutes: START_LIMIT_SECONDS / 60 });
     tone = "warn";
   } else if (model.waitResult === "failed") {
-    text = "CashPilot could not start Docker Desktop. Open it from the Start menu, then click Check again.";
+    text = t("dockerguide.wait.startFailed");
     tone = "warn";
   }
   return `<p class="docker-guide-wait ${tone}" data-guide-wait aria-live="polite">${escapeHtml(text)}</p>`;
@@ -145,7 +152,7 @@ function actionHtml(step: GuideStep, model: GuideModel): string {
     case "elevated":
     case "run": {
       // The button opens the change's confirm screen; nothing runs from here.
-      const page = a.url ? `<button class="btn btn-ghost btn-sm" data-guide-url="${escapeHtml(a.url)}">Open the download page</button>` : "";
+      const page = a.url ? `<button class="btn btn-ghost btn-sm" data-guide-url="${escapeHtml(a.url)}">${ht("dockerguide.openDownloadPage")}</button>` : "";
       return `<button class="btn btn-secondary btn-sm" data-guide-action="step" data-guide-op="${escapeHtml(a.op)}" data-guide-step="${escapeHtml(step.id)}" ${busy ? "disabled" : ""}>${label}</button>${page}`;
     }
   }
@@ -153,22 +160,22 @@ function actionHtml(step: GuideStep, model: GuideModel): string {
 }
 
 function stepHtml(step: GuideStep, index: number, all: GuideStep[], model: GuideModel): string {
-  const state = STATE_LABEL[step.state] ? step.state : "unknown";
+  const state = STATES.has(step.state) ? step.state : "unknown";
   let waits = "";
   if (state === "blocked" && step.blockedBy) {
     const at = all.findIndex((s) => s.id === step.blockedBy);
     const dep = all[at];
-    waits = dep ? `<small class="docker-step-waits">First finish step ${at + 1}: ${escapeHtml(dep.title)}.</small>` : "";
+    waits = dep ? `<small class="docker-step-waits">${ht("dockerguide.firstFinishStep", { n: at + 1, title: dep.title })}</small>` : "";
   }
   const help = step.help
-    ? `<details class="docker-step-help"><summary>Where to find it</summary><p>${escapeHtml(step.help)}</p>${
-        step.helpUrl ? `<button class="text-link" data-guide-url="${escapeHtml(step.helpUrl)}">Microsoft's guide to turning on virtualization</button>` : ""
+    ? `<details class="docker-step-help"><summary>${ht("dockerguide.whereToFind")}</summary><p>${escapeHtml(step.help)}</p>${
+        step.helpUrl ? `<button class="text-link" data-guide-url="${escapeHtml(step.helpUrl)}">${ht("dockerguide.microsoftGuide")}</button>` : ""
       }</details>`
     : "";
   return `<li class="docker-step" data-step="${escapeHtml(step.id)}" data-state="${state}">
       <span class="docker-step-number">${index + 1}</span>
       <div class="docker-step-body">
-        <div class="docker-step-head"><strong>${escapeHtml(step.title)}</strong><span class="docker-step-state ${state}">${STATE_LABEL[state]}</span></div>
+        <div class="docker-step-head"><strong>${escapeHtml(step.title)}</strong><span class="docker-step-state ${state}">${escapeHtml(stateLabel(state))}</span></div>
         <p>${escapeHtml(step.text)}</p>
         ${waits}
         ${state === "done" ? "" : outcomeHtml(model.outcomes?.[step.id], step.id)}
@@ -180,31 +187,31 @@ function stepHtml(step: GuideStep, index: number, all: GuideStep[], model: Guide
 
 function resumeBanner(resume: SetupResumeView | null): string {
   if (!resume || !resume.active) return "";
-  const stop = `<button class="btn btn-ghost btn-sm" data-guide-action="cancel-setup">Stop guiding me after restarts</button>`;
+  const stop = `<button class="btn btn-ghost btn-sm" data-guide-action="cancel-setup">${ht("dockerguide.resume.stop")}</button>`;
   // The sign-in is proven by RunOnce, or by a token that already carries the
   // group (Go's SignedIn): then nothing asks for a sign-out again.
   const signInProven = resume.fromRunOnce || !!resume.signedIn;
   if (resume.finish === "signout" && resume.restarted === "no" && !signInProven) {
     return `<div class="docker-guide-resume warn" data-resume="sign-out">
-        <strong>Sign out to finish</strong>
-        <span>Your account joined the docker-users group. Windows applies it after you sign out and back in.</span>
-        <div class="docker-step-actions"><button class="btn btn-secondary btn-sm" data-guide-action="finish-signout">Sign out…</button>${stop}</div>
+        <strong>${ht("dockerguide.resume.signOutTitle")}</strong>
+        <span>${ht("dockerguide.resume.signOutBody")}</span>
+        <div class="docker-step-actions"><button class="btn btn-secondary btn-sm" data-guide-action="finish-signout">${ht("dockerguide.resume.signOut")}</button>${stop}</div>
       </div>`;
   }
   if (resume.restarted === "no" && !(resume.finish === "signout" && signInProven)) {
     const again = resume.step === "a2"
-      ? `<button class="btn btn-secondary btn-sm" data-guide-action="firmware" data-guide-step="a2">Restart into BIOS</button>`
-      : `<button class="btn btn-secondary btn-sm" data-guide-action="finish-restart">Restart…</button>`;
+      ? `<button class="btn btn-secondary btn-sm" data-guide-action="firmware" data-guide-step="a2">${ht("dockerguide.resume.restartIntoBios")}</button>`
+      : `<button class="btn btn-secondary btn-sm" data-guide-action="finish-restart">${ht("dockerguide.resume.restart")}</button>`;
     return `<div class="docker-guide-resume warn" data-resume="same-boot">
-        <strong>Restart to finish</strong>
-        <span>This PC has not restarted since you chose to. Restart it to finish the step you started.</span>
+        <strong>${ht("dockerguide.resume.restartTitle")}</strong>
+        <span>${ht("dockerguide.resume.restartBody")}</span>
         <div class="docker-step-actions">${again}${stop}</div>
       </div>`;
   }
   const signedIn = resume.finish === "signout" && resume.restarted === "no";
   const said = resume.restarted === "yes"
-    ? "Welcome back. The PC restarted, and CashPilot checked every step again."
-    : signedIn ? "Welcome back. You signed in again, and CashPilot checked every step again." : "CashPilot checked every step again.";
+    ? ht("dockerguide.resume.restarted")
+    : signedIn ? ht("dockerguide.resume.signedIn") : ht("dockerguide.resume.checked");
   return `<div class="docker-guide-resume ok" data-resume="${resume.restarted === "yes" ? "new-boot" : signedIn ? "signed-in" : "unknown"}">
       <span>${said}</span>
       <div class="docker-step-actions">${stop}</div>
@@ -213,47 +220,46 @@ function resumeBanner(resume: SetupResumeView | null): string {
 
 function summary(model: GuideModel): string {
   if (model.checkFailed) {
-    return `<p class="docker-guide-summary">Docker Desktop's current status is unknown.</p>`;
+    return `<p class="docker-guide-summary">${ht("dockerguide.summary.unknown")}</p>`;
   }
   if (engineAnswers(model.steps) && model.steps?.some((step) => step.id === "a9" && step.state === "done")) {
-    return `<p class="docker-guide-summary ok">Docker Desktop is ready on this PC.</p>`;
+    return `<p class="docker-guide-summary ok">${ht("dockerguide.summary.ready")}</p>`;
   }
   if (!model.steps) {
-    return `<p class="docker-guide-summary">Checking this PC…</p>`;
+    return `<p class="docker-guide-summary">${ht("dockerguide.summary.checking")}</p>`;
   }
   // A note is advice that blocks nothing, so it is not a step to finish.
   const steps = model.steps.filter((s) => s.state !== "note");
   const done = steps.filter((s) => s.state === "done").length;
   const needs = steps.filter((s) => s.state === "needs-you").length;
-  const tail = needs === 0 ? "" : needs === 1 ? " One step needs you." : ` ${needs} steps need you.`;
-  return `<p class="docker-guide-summary">${done} of ${steps.length} steps done.${tail}</p>`;
+  const tail = needs === 0 ? "" : ` ${ht("dockerguide.summary.needs", { n: needs })}`;
+  return `<p class="docker-guide-summary">${ht("dockerguide.summary.done", { done, total: steps.length })}${tail}</p>`;
 }
 
 /** The skip screen's words: what still runs without Docker, honestly. */
 export function skipText(native: string[] | null | undefined): string {
   const names = native ?? [];
   if (names.length === 0) {
-    return "Without Docker, no app in the catalog runs on this computer.";
+    return ht("dockerguide.skip.none");
   }
-  const runs = names.length === 1 ? `only ${escapeHtml(names[0])} runs` : `only ${escapeHtml(nameList(names))} run`;
-  return `Without Docker, ${runs} on this computer. Every other app in the catalog needs Docker and stays unavailable until it runs.`;
+  return ht("dockerguide.skip.some", { n: names.length, names: nameList(names) });
 }
 
 /** The confirm screen before a restart into the BIOS. busy: Restart now was clicked. */
 export function firmwareConfirm(busy = false): string {
   return `
     <div class="docker-guide-confirm" data-guide-view="firmware-confirm" role="alertdialog" aria-labelledby="fw-title">
-      <h2 id="fw-title">Restart into the BIOS now?</h2>
+      <h2 id="fw-title">${ht("dockerguide.firmware.title")}</h2>
       <ul class="mode-effects">
-        <li>Your PC restarts now, straight into its firmware settings (BIOS or UEFI).</li>
-        <li>Windows closes every open app. Save your work first: work you have not saved can be lost.</li>
-        <li>In the BIOS, turn on Intel Virtualization Technology, VT-x, AMD-V or SVM Mode, then save and exit (often F10).</li>
-        <li>When you sign in to Windows again, CashPilot opens this checklist and checks every step again.</li>
+        <li>${ht("dockerguide.firmware.restarts")}</li>
+        <li>${ht("dockerguide.firmware.unsaved")}</li>
+        <li>${ht("dockerguide.firmware.whatToTurnOn")}</li>
+        <li>${ht("dockerguide.firmware.reopens")}</li>
       </ul>
-      <p class="muted compact-copy">CashPilot never changes BIOS settings itself. You make the change in the BIOS.</p>
+      <p class="muted compact-copy">${ht("dockerguide.firmware.neverChanges")}</p>
       <div class="gate-actions">
-        <button class="btn btn-primary" data-guide-action="firmware-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? "Restarting…" : "Restart now"}</button>
-        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>Cancel</button>
+        <button class="btn btn-primary" data-guide-action="firmware-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? ht("dockerguide.restarting") : ht("dockerguide.restartNow")}</button>
+        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>${ht("dockerguide.cancel")}</button>
       </div>
     </div>`;
 }
@@ -261,15 +267,15 @@ export function firmwareConfirm(busy = false): string {
 /** The fallback when Windows could not restart into the BIOS. */
 export function firmwareFailed(result: FirmwareRestart | null): string {
   const reopen = result?.reopens
-    ? "When you sign in again, CashPilot opens this checklist by itself."
-    : "When you sign in again, open CashPilot: it picks up this checklist where you left it.";
+    ? ht("dockerguide.firmwareFailed.reopens")
+    : ht("dockerguide.firmwareFailed.reopenYourself");
   return `
     <div class="docker-guide-confirm" data-guide-view="firmware-failed" role="alert">
-      <h2>This PC could not restart into its BIOS by itself</h2>
-      <p>It may have an older BIOS, or Windows did not allow it. Nothing restarted.</p>
-      <p data-fw-fallback="advanced-startup">On a UEFI PC, Windows can open the BIOS for you. Save your work, then open Settings, System, Recovery, and click Restart now next to Advanced startup. On the blue screen, choose Troubleshoot, Advanced options, UEFI Firmware Settings, then Restart.</p>
-      <p data-fw-fallback="power-on-key">If that option is not there, restart the PC yourself and press the BIOS key as soon as it powers on: often F2 or Del, F10 or Esc on HP, F1 on some Lenovo PCs. ${reopen}</p>
-      <div class="gate-actions"><button class="btn btn-ghost" data-guide-action="back">Back to the checklist</button></div>
+      <h2>${ht("dockerguide.firmwareFailed.title")}</h2>
+      <p>${ht("dockerguide.firmwareFailed.why")}</p>
+      <p data-fw-fallback="advanced-startup">${ht("dockerguide.firmwareFailed.advancedStartup")}</p>
+      <p data-fw-fallback="power-on-key">${ht("dockerguide.firmwareFailed.powerOnKey")} ${reopen}</p>
+      <div class="gate-actions"><button class="btn btn-ghost" data-guide-action="back">${ht("dockerguide.backToChecklist")}</button></div>
     </div>`;
 }
 
@@ -277,12 +283,12 @@ export function firmwareFailed(result: FirmwareRestart | null): string {
 export function skipScreen(native: string[] | null | undefined): string {
   return `
     <div class="docker-guide-confirm" data-guide-view="skip">
-      <h2>Use native apps only?</h2>
+      <h2>${ht("dockerguide.skip.title")}</h2>
       <p>${skipText(native)}</p>
-      <p class="muted compact-copy">You can come back to this checklist at any time: click the runtime status at the top of the app.</p>
+      <p class="muted compact-copy">${ht("dockerguide.skip.comeBack")}</p>
       <div class="gate-actions">
-        <button class="btn btn-primary" data-guide-action="skip-go">Use native apps only</button>
-        <button class="btn btn-ghost" data-guide-action="back">Back to the checklist</button>
+        <button class="btn btn-primary" data-guide-action="skip-go">${ht("dockerguide.skip.go")}</button>
+        <button class="btn btn-ghost" data-guide-action="back">${ht("dockerguide.backToChecklist")}</button>
       </div>
     </div>`;
 }
@@ -302,17 +308,17 @@ export function renderDockerGuide(model: GuideModel): string {
   if (model.view === "skip" && native.length > 0) return `<section class="docker-guide">${skipScreen(native)}</section>`;
   const steps = model.steps ?? [];
   const skip = native.length > 0 && !model.runtime.available
-    ? `<button class="btn btn-ghost btn-lg" data-guide-action="skip">Skip, use native apps only</button>`
+    ? `<button class="btn btn-ghost btn-lg" data-guide-action="skip">${ht("dockerguide.skip.button")}</button>`
     : "";
   return `
     <section class="docker-guide" data-guide-view="list" aria-labelledby="docker-guide-title">
-      <h2 id="docker-guide-title">Set up Docker on this PC</h2>
-      <p class="muted compact-copy">CashPilot checks each thing Docker needs. It changes nothing by itself: every action waits for your click.</p>
+      <h2 id="docker-guide-title">${ht("dockerguide.title")}</h2>
+      <p class="muted compact-copy">${ht("dockerguide.intro")}</p>
       ${resumeBanner(model.resume)}
       ${summary(model)}
       <ol class="docker-steps">${steps.map((s, i) => stepHtml(s, i, steps, model)).join("")}</ol>
       ${waitLine(model)}
-      ${model.checkFailed ? '<p class="docker-guide-wait warn" role="status">CashPilot could not refresh the Docker checklist. Click Check again to retry.</p>' : ""}
+      ${model.checkFailed ? `<p class="docker-guide-wait warn" role="status">${ht("dockerguide.refreshFailed")}</p>` : ""}
       <div class="gate-actions">
         ${checkAgainButton("docker-guide-check", model.checking || model.waiting !== null)}
         ${skip}

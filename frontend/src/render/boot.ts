@@ -14,6 +14,7 @@
 // its draw functions, so the checks run the boot the window runs.
 
 import { escapeHtml } from "./format.js";
+import { ht, t } from "./i18n.js";
 
 /**
  * The exact text of errStillStarting in app.go. A Wails binding rejects with an Error
@@ -39,15 +40,15 @@ export function isStillStarting(error: unknown): boolean {
 
 /** The calm page shown while the Go side starts. titlebar is the window's own bar. */
 export function renderStarting(titlebar: string): string {
-  return `${titlebar}<main class="center" data-boot="starting"><section class="panel"><h1>Starting CashPilot…</h1><p>The first start on this computer can take a minute.</p></section></main>`;
+  return `${titlebar}<main class="center" data-boot="starting"><section class="panel"><h1>${ht("boot.starting.title")}</h1><p>${ht("boot.starting.body")}</p></section></main>`;
 }
 
 /** The failed page, with the error and a Try again button. */
 export function renderFailed(titlebar: string, error: unknown): string {
   const text = isStillStarting(error)
-    ? `CashPilot did not finish starting within ${BOOT_WAIT_MS / 1000} seconds. It keeps checking: this page moves on by itself when CashPilot is ready.`
+    ? t("boot.failed.slow", { seconds: BOOT_WAIT_MS / 1000 })
     : errorText(error);
-  return `${titlebar}<main class="center" data-boot="failed"><section class="panel"><h1>CashPilot failed to start</h1><pre>${escapeHtml(text)}</pre><div class="gate-actions"><button class="btn btn-primary" type="button" data-boot-retry>Try again</button></div></section></main>`;
+  return `${titlebar}<main class="center" data-boot="failed"><section class="panel"><h1>${ht("boot.failed.title")}</h1><pre>${escapeHtml(text)}</pre><div class="gate-actions"><button class="btn btn-primary" type="button" data-boot-retry>${ht("boot.failed.retry")}</button></div></section></main>`;
 }
 
 export interface BootSteps {

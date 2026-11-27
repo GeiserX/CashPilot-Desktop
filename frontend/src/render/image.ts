@@ -14,6 +14,7 @@
 
 import type { Service } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht } from "./i18n.js";
 
 /**
  * Render the Advanced section with the Image box for one service. `customImage` is
@@ -24,17 +25,15 @@ export function imageChoiceSection(service: Service, customImage: string | null 
   if (service.manualOnly) return "";
   const catalogImage = service.docker?.image || "";
   const chosen = customImage || "";
-  const name = escapeHtml(service.name);
   return `
     <details class="image-choice"${chosen ? " open" : ""}>
-      <summary>Advanced</summary>
+      <summary>${ht("image.advanced")}</summary>
       <label>
-        <span>Image</span>
+        <span>${ht("image.label")}</span>
         <input data-wizard-image="${escapeHtml(service.slug)}" data-initial="${escapeHtml(chosen)}" type="text" spellcheck="false" autocomplete="off" placeholder="${escapeHtml(catalogImage)}" value="${escapeHtml(chosen)}" />
       </label>
-      <p class="muted compact-copy">Leave blank to use the catalog image${catalogImage ? ` (<code>${escapeHtml(catalogImage)}</code>)` : ""}.
-        A custom image receives your ${name} credentials and runs with exactly what the catalog grants ${name}:
-        no extra capabilities, devices or ports. CashPilot keeps it on every redeploy until you clear this box.</p>
+      <p class="muted compact-copy">${catalogImage ? ht("image.blankCatalog", { image: catalogImage }) : ht("image.blank")}
+        ${ht("image.customNote", { name: service.name })}</p>
     </details>
   `;
 }
@@ -52,5 +51,5 @@ export function imageChoice(value: string, initial: string): string | null {
 /** The badge on a deployment running a chosen image; nothing when it follows the catalog. */
 export function customImageBadge(customImage: string | null | undefined): string {
   if (!customImage) return "";
-  return ` <span class="badge" title="${escapeHtml(customImage)}">custom image</span>`;
+  return ` <span class="badge" title="${escapeHtml(customImage)}">${ht("image.customBadge")}</span>`;
 }

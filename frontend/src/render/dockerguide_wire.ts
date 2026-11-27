@@ -15,6 +15,7 @@
 import type { FirmwareRestart, HostCheckResult, SetupResumeView, SetupStepResult } from "../wails";
 import { START_LIMIT_SECONDS, engineAnswers, renderDockerGuide, setupFinished, waitLine, type GuideModel } from "./dockerguide.js";
 import { runLine } from "./dockersteps.js";
+import { t } from "./i18n.js";
 
 export interface DockerGuideDeps {
   hostCheck(): Promise<HostCheckResult>;
@@ -217,7 +218,7 @@ export class DockerGuide {
     try {
       result = await this.deps.runSetupStep(op, web);
     } catch (error) {
-      result = { step, op, state: "failed", text: `CashPilot could not run this change: ${String(error)}`, reopens: false };
+      result = { step, op, state: "failed", text: t("dockerguide_wire.runFailed", { error: String(error) }), reopens: false };
     }
     done = true;
     this.model.running = null;

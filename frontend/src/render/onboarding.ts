@@ -14,7 +14,8 @@
 
 import type { RuntimeStatus } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
-import { runtimeState } from "./runtime_state.js";
+import { ht } from "./i18n.js";
+import { nameList, runtimeState } from "./runtime_state.js";
 
 export interface RuntimeCard {
   /** "ok" only when Docker answers with Linux containers. */
@@ -29,12 +30,6 @@ type CardInput = Pick<RuntimeStatus, "available" | "message" | "context"> & {
   reason?: string;
 };
 
-/** "A", "A and B", "A, B and C". */
-function nameList(names: string[]): string {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
 export function runtimeCard(runtime: CardInput, opts: { checking?: boolean } = {}): RuntimeCard {
   const native = runtime.nativeServices ?? [];
   const unknown = runtime.reason !== undefined && runtimeState(runtime).kind === "unknown";
@@ -42,27 +37,26 @@ export function runtimeCard(runtime: CardInput, opts: { checking?: boolean } = {
   let title: string;
   let body: string;
   if (!runtime.available && opts.checking) {
-    title = "Checking this computer";
-    body = "CashPilot is reading what this computer has, so it can say exactly what Docker needs.";
+    title = ht("onboarding.checking.title");
+    body = ht("onboarding.checking.body");
   } else if (runtime.available) {
     tone = "ok";
-    title = "Runtime ready";
+    title = ht("onboarding.ready.title");
     body = escapeHtml(runtime.message);
   } else if (native.length > 0) {
-    const only = native.length === 1 ? `only ${escapeHtml(native[0])} runs` : `only ${escapeHtml(nameList(native))} run`;
     // The title says most apps need Docker; the body says it once more, at most,
     // in the reason's own words, never in three sentences.
-    const next = runtime.message ? escapeHtml(runtime.message) : "Set up Docker with the guide below, then click Check again.";
-    title = unknown ? "Docker status unknown" : "Docker needed for most apps";
-    body = `Without Docker, ${only} on this computer. ${next}`;
+    const next = runtime.message ? escapeHtml(runtime.message) : ht("onboarding.native.next");
+    title = unknown ? ht("onboarding.unknown.title") : ht("onboarding.native.title");
+    body = `${ht("onboarding.native.body", { n: native.length, names: nameList(native) })} ${next}`;
   } else {
-    title = unknown ? "Docker status unknown" : "Runtime setup needed";
+    title = unknown ? ht("onboarding.unknown.title") : ht("onboarding.setup.title");
     body = escapeHtml(runtime.message);
   }
   const html = `<div class="runtime-card ${tone}">
             <strong>${title}</strong>
             <span>${body}</span>
-            ${runtime.context ? `<small>Docker context: ${escapeHtml(runtime.context)}</small>` : ""}
+            ${runtime.context ? `<small>${ht("onboarding.context", { context: runtime.context })}</small>` : ""}
           </div>`;
   return { tone, canContinue: runtime.available || (native.length > 0 && !opts.checking), html };
 }

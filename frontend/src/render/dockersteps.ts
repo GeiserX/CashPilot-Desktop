@@ -17,10 +17,13 @@
 
 import type { SetupStepResult } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 
 /** What one change's confirm screen says. */
 export interface StepConsent {
   title: string;
+  /** The running screen's heading: the title as a statement. */
+  heading: string;
   /** What will change on this PC. */
   changes: string;
   /** Whether a Windows permission prompt shows, and what it names. */
@@ -38,86 +41,95 @@ export interface StepConsent {
 }
 
 /** The prompt line of every change made with admin rights. */
-export const ELEVATED_PROMPT =
-  "Windows shows a permission prompt. It names Windows PowerShell, because CashPilot makes this change through Windows PowerShell. If your account is not an administrator, an administrator types their password there.";
+export function elevatedPrompt(): string {
+  return t("dockersteps.elevatedPrompt");
+}
 
-const RESTART_AFTER = "Windows needs a restart to finish. CashPilot asks you first: nothing restarts until you click Restart now.";
+function restartAfter(): string {
+  return t("dockersteps.restartAfter");
+}
 
-export const CONSENT: Record<string, StepConsent> = {
-  "wsl-install": {
-    title: "Turn on WSL?",
-    changes:
-      "Windows turns on WSL, its built-in Linux layer, and the Virtual Machine Platform feature WSL needs. CashPilot runs wsl --install --no-distribution, so no Linux distribution such as Ubuntu is installed: Docker brings its own.",
-    prompt: ELEVATED_PROMPT,
-    after: RESTART_AFTER,
-    undo: "To undo, open Settings, System, Optional features, More Windows features, turn off Windows Subsystem for Linux and Virtual Machine Platform, then restart.",
-    running: "Windows is turning on WSL",
-    go: "Turn on WSL",
-  },
-  "wsl-update": {
-    title: "Update WSL?",
-    changes: "Windows updates WSL to its newest version with wsl --update. Your Linux distributions and their files stay as they are.",
-    prompt: ELEVATED_PROMPT,
-    after: "Usually no restart is needed. If Windows asks for one, CashPilot asks you first. If Docker Desktop is open, close and reopen it afterwards.",
-    undo: "CashPilot cannot roll WSL back. Older versions are on Microsoft's WSL releases page on GitHub.",
-    running: "Windows is updating WSL",
-    go: "Update WSL",
-  },
-  "docker-install": {
-    title: "Install Docker Desktop?",
-    changes:
-      "A window opens where winget, Windows' app installer, downloads Docker Desktop from Docker and starts its installer. You answer winget's questions in that window. CashPilot never accepts Docker's terms for you: you read and accept them in Docker Desktop when it first opens.",
-    prompt:
-      "The Docker Desktop installer asks Windows for permission itself, so that prompt names Docker Desktop Installer, not CashPilot. If this PC has no winget, CashPilot opens Docker's download page instead.",
-    after: "The installer may ask you to restart or sign out. CashPilot does not restart anything itself.",
-    undo: "To undo, open Settings, Apps, Installed apps, find Docker Desktop and click Uninstall.",
-    choices:
-      "When Docker's installer asks how to install, keep the recommended Per-user installation with WSL 2: CashPilot's checklist expects the WSL 2 backend. Leave Allow Windows Containers off: the apps run as Linux containers.",
-    running: "Docker Desktop is installing in winget's window. Finish there; CashPilot waits",
-    go: "Open the installer",
-  },
-  "docker-users": {
-    title: "Add your account to docker-users?",
-    changes:
-      "Windows adds your account, and only yours, to the docker-users group, so Docker Desktop lets you use it. CashPilot names your account by its ID (SID), read before the permission prompt, so it is your account that joins even when an administrator types their password.",
-    prompt: ELEVATED_PROMPT,
-    after: "Windows applies a new group only after you sign out and back in; a restart works too. CashPilot asks you first: nothing signs you out until you click.",
-    undo: "To undo, an administrator opens Computer Management, Local Users and Groups, Groups, docker-users, and removes your account.",
-    running: "Windows is adding your account to docker-users",
-    go: "Add my account",
-  },
-  "linux-engine": {
-    title: "Switch Docker to Linux containers?",
-    changes:
-      "Docker Desktop switches from Windows containers to Linux containers. This changes all your Docker work, not only CashPilot's: Windows containers you run stop, and their images stay but do not show until you switch back.",
-    prompt: "No Windows permission prompt: this is your own Docker Desktop setting.",
-    after: "No restart. Docker's engine restarts, which takes a minute or two.",
-    undo: "To switch back, right-click the Docker icon next to the clock and choose Switch to Windows containers.",
-    running: "Docker Desktop is switching to Linux containers",
-    go: "Switch to Linux containers",
-  },
-  "hypervisor-launch": {
-    title: "Turn Windows' hypervisor back on?",
-    changes:
-      "CashPilot first tries to read Windows' boot option hypervisorlaunchtype. If the read works and it is already auto, nothing changes and no restart follows. Otherwise Windows sets it to auto (with bcdedit), so its hypervisor starts at boot, as WSL 2 and Docker need. Older VirtualBox, VMware or Android emulator versions may have turned it off. Once it is on, they run on top of it and may be slower, and very old versions may not start their machines: update them to their newest versions.",
-    prompt: ELEVATED_PROMPT,
-    after:
-      "A restart is needed only if CashPilot changed the boot option. Then CashPilot asks you first: nothing restarts until you click Restart now. If the read showed it was already auto, no restart follows.",
-    undo: "To undo, open PowerShell as administrator, run bcdedit /set hypervisorlaunchtype off, and restart. WSL 2 and Docker then stop working again.",
-    running: "Windows is turning its hypervisor back on",
-    go: "Turn it back on",
-  },
-  "lanmanserver-auto": {
-    title: "Set the Server service to Automatic?",
-    changes:
-      "Windows sets its Server service (LanmanServer) to start automatically, and starts it now. Docker Desktop needs it. The same service shares this PC's files and printers with your network, if you turned sharing on.",
-    prompt: ELEVATED_PROMPT,
-    after: "No restart is needed.",
-    undo: "To undo, open Services, find Server, and set its Startup type back to Manual or Disabled.",
-    running: "Windows is setting the Server service to Automatic",
-    go: "Set it to Automatic",
-  },
-};
+/** Every change's confirm screen, keyed by op, in the current language. */
+export function consents(): Record<string, StepConsent> {
+  const prompt = elevatedPrompt();
+  return {
+    "wsl-install": {
+      title: t("dockersteps.wslInstall.title"),
+      heading: t("dockersteps.wslInstall.heading"),
+      changes: t("dockersteps.wslInstall.changes", { command: "wsl --install --no-distribution" }),
+      prompt,
+      after: restartAfter(),
+      undo: t("dockersteps.wslInstall.undo"),
+      running: t("dockersteps.wslInstall.running"),
+      go: t("dockersteps.wslInstall.go"),
+    },
+    "wsl-update": {
+      title: t("dockersteps.wslUpdate.title"),
+      heading: t("dockersteps.wslUpdate.heading"),
+      changes: t("dockersteps.wslUpdate.changes", { command: "wsl --update" }),
+      prompt,
+      after: t("dockersteps.wslUpdate.after"),
+      undo: t("dockersteps.wslUpdate.undo"),
+      running: t("dockersteps.wslUpdate.running"),
+      go: t("dockersteps.wslUpdate.go"),
+    },
+    "docker-install": {
+      title: t("dockersteps.dockerInstall.title"),
+      heading: t("dockersteps.dockerInstall.heading"),
+      changes: t("dockersteps.dockerInstall.changes"),
+      prompt: t("dockersteps.dockerInstall.prompt"),
+      after: t("dockersteps.dockerInstall.after"),
+      undo: t("dockersteps.dockerInstall.undo"),
+      choices: t("dockersteps.dockerInstall.choices"),
+      running: t("dockersteps.dockerInstall.running"),
+      go: t("dockersteps.dockerInstall.go"),
+    },
+    "docker-users": {
+      title: t("dockersteps.dockerUsers.title"),
+      heading: t("dockersteps.dockerUsers.heading"),
+      changes: t("dockersteps.dockerUsers.changes"),
+      prompt,
+      after: t("dockersteps.dockerUsers.after"),
+      undo: t("dockersteps.dockerUsers.undo"),
+      running: t("dockersteps.dockerUsers.running"),
+      go: t("dockersteps.dockerUsers.go"),
+    },
+    "linux-engine": {
+      title: t("dockersteps.linuxEngine.title"),
+      heading: t("dockersteps.linuxEngine.heading"),
+      changes: t("dockersteps.linuxEngine.changes"),
+      prompt: t("dockersteps.linuxEngine.prompt"),
+      after: t("dockersteps.linuxEngine.after"),
+      undo: t("dockersteps.linuxEngine.undo"),
+      running: t("dockersteps.linuxEngine.running"),
+      go: t("dockersteps.linuxEngine.go"),
+    },
+    "hypervisor-launch": {
+      title: t("dockersteps.hypervisorLaunch.title"),
+      heading: t("dockersteps.hypervisorLaunch.heading"),
+      changes: t("dockersteps.hypervisorLaunch.changes"),
+      prompt,
+      after: t("dockersteps.hypervisorLaunch.after"),
+      undo: t("dockersteps.hypervisorLaunch.undo", { command: "bcdedit /set hypervisorlaunchtype off" }),
+      running: t("dockersteps.hypervisorLaunch.running"),
+      go: t("dockersteps.hypervisorLaunch.go"),
+    },
+    "lanmanserver-auto": {
+      title: t("dockersteps.lanmanserverAuto.title"),
+      heading: t("dockersteps.lanmanserverAuto.heading"),
+      changes: t("dockersteps.lanmanserverAuto.changes"),
+      prompt,
+      after: t("dockersteps.lanmanserverAuto.after"),
+      undo: t("dockersteps.lanmanserverAuto.undo"),
+      running: t("dockersteps.lanmanserverAuto.running"),
+      go: t("dockersteps.lanmanserverAuto.go"),
+    },
+  };
+}
+
+function consentFor(op: string): StepConsent | undefined {
+  return consents()[op];
+}
 
 /** How long Go waits for each change, in minutes (winvm.SetupTimeout). */
 export const SETUP_MINUTES: Record<string, number> = {
@@ -132,14 +144,15 @@ export function setupMinutes(op: string): number {
 }
 
 /** The words of the direct-download retry on a WSL change. */
-export const WEB_DOWNLOAD_NOTE =
-  "This time WSL downloads straight from Microsoft's GitHub page instead of the Microsoft Store (wsl --web-download).";
+export function webDownloadNote(): string {
+  return t("dockersteps.webDownloadNote", { command: "wsl --web-download" });
+}
 
 /** The confirm screen before a change. busy: Go ahead was clicked. */
 export function stepConfirm(op: string, web: boolean, busy = false): string {
-  const c = CONSENT[op];
+  const c = consentFor(op);
   if (!c) return "";
-  const retry = web ? `<li data-consent="web-download">${escapeHtml(WEB_DOWNLOAD_NOTE)}</li>` : "";
+  const retry = web ? `<li data-consent="web-download">${escapeHtml(webDownloadNote())}</li>` : "";
   return `
     <div class="docker-guide-confirm" data-guide-view="step-confirm" data-op="${escapeHtml(op)}" role="alertdialog" aria-labelledby="step-title">
       <h2 id="step-title">${escapeHtml(c.title)}</h2>
@@ -151,77 +164,79 @@ export function stepConfirm(op: string, web: boolean, busy = false): string {
         <li data-consent="after">${escapeHtml(c.after)}</li>
         <li data-consent="undo">${escapeHtml(c.undo)}</li>
       </ul>
-      <p class="muted compact-copy">It stops by itself if it takes longer than ${setupMinutes(op)} minutes.</p>
+      <p class="muted compact-copy">${ht("dockersteps.stopsAfter", { minutes: setupMinutes(op) })}</p>
       <div class="gate-actions">
         <button class="btn btn-primary" data-guide-action="step-go" ${busy ? 'disabled aria-busy="true"' : ""}>${escapeHtml(c.go)}</button>
-        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>Cancel</button>
+        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>${ht("dockersteps.cancel")}</button>
       </div>
     </div>`;
 }
 
 /** The progress line while a change runs. */
 export function runLine(op: string, seconds: number): string {
-  const c = CONSENT[op];
-  const what = c ? c.running : "CashPilot is making the change";
-  return `<p class="docker-guide-wait" data-guide-run aria-live="polite">${escapeHtml(`${what}: ${seconds} s so far. CashPilot stops waiting after ${setupMinutes(op)} minutes.`)}</p>`;
+  const c = consentFor(op);
+  const what = c ? c.running : t("dockersteps.makingChangeRunning");
+  return `<p class="docker-guide-wait" data-guide-run aria-live="polite">${escapeHtml(t("dockersteps.runLine", { what, seconds, minutes: setupMinutes(op) }))}</p>`;
 }
 
 /** The screen while a change runs. */
 export function stepRunning(op: string, seconds: number, elevated: boolean): string {
-  const c = CONSENT[op];
+  const c = consentFor(op);
   const prompt = elevated
-    ? `<p>If Windows shows a permission prompt naming Windows PowerShell, it is this change: choose Yes to go ahead, or No to stop.</p>`
+    ? `<p>${ht("dockersteps.runningPrompt")}</p>`
     : "";
   return `
     <div class="docker-guide-confirm" data-guide-view="step-running" data-op="${escapeHtml(op)}" aria-busy="true">
-      <h2>${escapeHtml(c ? c.title.replace(/\?$/, "") : "Making the change")}</h2>
+      <h2>${escapeHtml(c ? c.heading : t("dockersteps.makingChange"))}</h2>
       ${prompt}
       ${runLine(op, seconds)}
     </div>`;
 }
 
-const UNSAVED = "Windows closes every open app. Save your work first: work you have not saved can be lost.";
+function unsaved(): string {
+  return ht("dockersteps.unsaved");
+}
 
 function reopenLine(result: Pick<SetupStepResult, "reopens"> | null): string {
   return result?.reopens
-    ? "When you sign in again, CashPilot opens this checklist by itself and checks every step again."
-    : "When you sign in again, open CashPilot: it picks up this checklist where you left it.";
+    ? t("dockersteps.reopens")
+    : t("dockersteps.reopenYourself");
 }
 
 /** The screen that asks for the restart a change needs. busy: Restart now was clicked. */
 export function stepRestart(result: SetupStepResult | null, busy = false): string {
-  const said = result?.text ? `<p>${escapeHtml(result.text)}</p>` : `<p>A change you made waits for a restart.</p>`;
+  const said = result?.text ? `<p>${escapeHtml(result.text)}</p>` : `<p>${ht("dockersteps.restart.waits")}</p>`;
   return `
     <div class="docker-guide-confirm" data-guide-view="step-restart" role="alertdialog" aria-labelledby="restart-title">
-      <h2 id="restart-title">Restart to finish</h2>
+      <h2 id="restart-title">${ht("dockersteps.restart.title")}</h2>
       ${said}
       <ul class="mode-effects">
-        <li>Restart now restarts your PC at once. ${UNSAVED}</li>
+        <li>${ht("dockersteps.restart.now")} ${unsaved()}</li>
         <li>${escapeHtml(reopenLine(result))}</li>
       </ul>
       <div class="gate-actions">
-        <button class="btn btn-primary" data-guide-action="restart-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? "Restarting…" : "Restart now"}</button>
-        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>Later</button>
+        <button class="btn btn-primary" data-guide-action="restart-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? ht("dockersteps.restarting") : ht("dockersteps.restartNow")}</button>
+        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>${ht("dockersteps.later")}</button>
       </div>
     </div>`;
 }
 
 /** The screen that asks for the sign-out the docker-users change needs. */
 export function stepSignOut(result: SetupStepResult | null, busy = false): string {
-  const said = result?.text ? `<p>${escapeHtml(result.text)}</p>` : `<p>Your account joined the docker-users group, and Windows applies it after you sign out and back in.</p>`;
+  const said = result?.text ? `<p>${escapeHtml(result.text)}</p>` : `<p>${ht("dockersteps.signout.joined")}</p>`;
   return `
     <div class="docker-guide-confirm" data-guide-view="step-signout" role="alertdialog" aria-labelledby="signout-title">
-      <h2 id="signout-title">Sign out and back in to finish</h2>
+      <h2 id="signout-title">${ht("dockersteps.signout.title")}</h2>
       ${said}
       <ul class="mode-effects">
-        <li>Sign out now signs you out of Windows at once. ${UNSAVED}</li>
-        <li>${escapeHtml(reopenLine(result))} It then checks that Windows gave your account the group.</li>
-        <li>Restart instead does the same, through a restart.</li>
+        <li>${ht("dockersteps.signout.now")} ${unsaved()}</li>
+        <li>${escapeHtml(reopenLine(result))} ${ht("dockersteps.signout.checksGroup")}</li>
+        <li>${ht("dockersteps.signout.restartInstead")}</li>
       </ul>
       <div class="gate-actions">
-        <button class="btn btn-primary" data-guide-action="signout-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? "Signing out…" : "Sign out now"}</button>
-        <button class="btn btn-secondary" data-guide-action="restart-go" ${busy ? "disabled" : ""}>Restart instead</button>
-        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>Later</button>
+        <button class="btn btn-primary" data-guide-action="signout-go" ${busy ? 'disabled aria-busy="true"' : ""}>${busy ? ht("dockersteps.signingOut") : ht("dockersteps.signOutNow")}</button>
+        <button class="btn btn-secondary" data-guide-action="restart-go" ${busy ? "disabled" : ""}>${ht("dockersteps.restartInsteadButton")}</button>
+        <button class="btn btn-ghost" data-guide-action="back" ${busy ? "disabled" : ""}>${ht("dockersteps.later")}</button>
       </div>
     </div>`;
 }
@@ -229,10 +244,10 @@ export function stepSignOut(result: SetupStepResult | null, busy = false): strin
 /** Why the last try of a change did not finish, on its row, with the retry it offers. */
 export function outcomeHtml(result: SetupStepResult | undefined, step: string): string {
   if (!result) return "";
-  const code = result.code && !result.text.includes(result.code) ? ` (code ${result.code})` : "";
+  const code = result.code && !result.text.includes(result.code) ? ` ${t("dockersteps.code", { code: result.code })}` : "";
   const retry =
     result.retry === "web-download"
-      ? `<button class="btn btn-secondary btn-sm" data-guide-action="step" data-guide-op="${escapeHtml(result.op)}" data-guide-step="${escapeHtml(step)}" data-guide-web="1">Try again with a direct download</button>`
+      ? `<button class="btn btn-secondary btn-sm" data-guide-action="step" data-guide-op="${escapeHtml(result.op)}" data-guide-step="${escapeHtml(step)}" data-guide-web="1">${ht("dockersteps.retryDirect")}</button>`
       : "";
   return `<p class="docker-step-reason ${result.state === "policy" ? "warn" : ""}" data-outcome="${escapeHtml(result.state)}">${escapeHtml(result.text + code)}</p>${retry}`;
 }
