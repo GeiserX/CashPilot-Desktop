@@ -10,6 +10,8 @@ package securevm
 import (
 	"context"
 	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Network and Fence values. They are the guard's own words, which winvm's
@@ -47,12 +49,12 @@ type Status struct {
 	Installed bool `json:"installed"`
 	// UpdateNeeded is set when the installed VM's root side came from another
 	// version of the app; Install runs again to update it, and re-proves.
-	UpdateNeeded bool   `json:"updateNeeded"`
+	UpdateNeeded bool `json:"updateNeeded"`
 	// Unfinished is set when Install made the VM and its fence but stopped
 	// before the guest was ready; Install runs again to finish it.
 	Unfinished bool   `json:"unfinished"`
-	Network      string `json:"network"`
-	Fence        string `json:"fence"`
+	Network    string `json:"network"`
+	Fence      string `json:"fence"`
 	// Reason is one line for the user about Network and Fence.
 	Reason   string    `json:"reason"`
 	Changes  []string  `json:"changes"`
@@ -190,29 +192,22 @@ type Engine interface {
 	Stop(ctx context.Context) error
 }
 
-// Lock rules every engine shares. host-only reasons are shown beside a
-// disabled "Secure VM" choice.
-const (
-	LockTerms    = "Its terms forbid or warn against VMs, so it runs only on this computer."
-	LockUnsigned = "Refused: the app is not signed by its developer, so CashPilot does not install it."
-	LockNoGuest  = "It has no app that runs in the Secure VM on this computer."
-)
-
 // GuestLayers are the layers an earner in the VM gets.
 func GuestLayers() []string { return []string{LayerSecureVM, LayerVMFence} }
 
-// Lock is the shared rule for whether an earner may go into the VM. refused
+// Lock is the shared rule, and its reason is shown beside a disabled
+// "Secure VM" choice. Lock is the shared rule for whether an earner may go into the VM. refused
 // is the catalog's guest.refused ("terms" or "unsigned"; a service whose terms
 // forbid containers counts as "terms"); hasGuest is whether this platform's
 // guest block exists.
 func Lock(refused string, hasGuest bool) (canVM bool, locked string) {
 	switch {
 	case refused == "terms":
-		return false, LockTerms
+		return false, i18n.T("go.securevm.lockTerms")
 	case refused == "unsigned":
-		return false, LockUnsigned
+		return false, i18n.T("go.securevm.lockUnsigned")
 	case !hasGuest:
-		return false, LockNoGuest
+		return false, i18n.T("go.securevm.lockNoGuest")
 	}
 	return true, ""
 }

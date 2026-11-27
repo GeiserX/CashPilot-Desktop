@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 )
 
 // Check is one thing this Mac needs before Install. Problem is "" when it is
@@ -24,20 +26,20 @@ func Preflight(ctx context.Context, r Runner, tartHome string, creating bool) []
 	add := func(id, problem string) { out = append(out, Check{ID: id, Problem: problem}) }
 
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
-		add("apple-silicon", "The Secure VM needs a Mac with Apple silicon (M1 or newer).")
+		add("apple-silicon", i18n.T("go.macvm.needAppleSilicon"))
 		return out
 	}
 	add("apple-silicon", "")
 
 	ver, _ := r.Run(ctx, "/usr/bin/sw_vers", "-productVersion")
 	if major := hostMajor(ver); major < MinHostMajor {
-		add("macos", fmt.Sprintf("The Secure VM needs macOS %d or newer. This Mac runs macOS %s. Update macOS in System Settings, then try again.", MinHostMajor, strings.TrimSpace(ver)))
+		add("macos", i18n.T("go.macvm.needMacOS", "need", MinHostMajor, "have", strings.TrimSpace(ver)))
 	} else {
 		add("macos", "")
 	}
 
 	if total, err := totalRAM(ctx, r); err == nil && total < NeedRAM {
-		add("memory", fmt.Sprintf("The Secure VM needs a Mac with at least %s of memory. This Mac has %s.", gib(NeedRAM), gib(total)))
+		add("memory", i18n.T("go.macvm.needMemory", "need", gib(NeedRAM), "have", gib(total)))
 	} else {
 		add("memory", "")
 	}
@@ -48,7 +50,7 @@ func Preflight(ctx context.Context, r Runner, tartHome string, creating bool) []
 		case err != nil:
 			add("disk", "")
 		case free < NeedFreeDisk:
-			add("disk", fmt.Sprintf("The Secure VM needs %s of free disk space and this Mac has %s. Free some space, then try again.", gib(NeedFreeDisk), gib(free)))
+			add("disk", i18n.T("go.macvm.needDisk", "need", gib(NeedFreeDisk), "have", gib(free)))
 		default:
 			add("disk", "")
 		}
@@ -56,7 +58,7 @@ func Preflight(ctx context.Context, r Runner, tartHome string, creating bool) []
 
 	// Our own VM, when it runs (a repair or an update), is not another guest.
 	if n := RunningGuests(ctx, r) - ownGuest(ctx, r); n >= 2 {
-		add("guests", fmt.Sprintf("macOS lets a Mac run at most 2 macOS virtual machines at once, and %d run now. Stop one in the app that runs it, then try again.", n))
+		add("guests", i18n.T("go.macvm.guestLimitNow", "n", n))
 	} else {
 		add("guests", "")
 	}

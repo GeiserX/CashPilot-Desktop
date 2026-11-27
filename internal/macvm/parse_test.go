@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
 )
 
@@ -159,9 +160,9 @@ func TestLock(t *testing.T) {
 		why      string
 	}{
 		{"", true, true, ""},
-		{"terms", true, false, securevm.LockTerms},
-		{"unsigned", false, false, securevm.LockUnsigned},
-		{"", false, false, securevm.LockNoGuest},
+		{"terms", true, false, i18n.T("go.securevm.lockTerms")},
+		{"unsigned", false, false, i18n.T("go.securevm.lockUnsigned")},
+		{"", false, false, i18n.T("go.securevm.lockNoGuest")},
 	} {
 		ok, why := securevm.Lock(c.refused, c.hasGuest)
 		if ok != c.ok || why != c.why {
