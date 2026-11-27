@@ -471,14 +471,14 @@ const scriptBootKeys = buildPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
 $cs = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter ("Name='" + $in.vm + "'")
 if (-not $cs) { throw 'The VM was not found.' }
 if ($vm.State.ToString() -ne 'Running') { Start-VM -VM $vm }
-$kb = $null; $sent = 0
+$kb = $null
 for ($i = 0; $i -lt 40; $i++) {
   if ($i % 4 -eq 3) { $null = Get-OwnedVM $in.vm $in.owner }
   if (-not $kb) { $kb = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_Keyboard -ErrorAction SilentlyContinue }
-  if ($kb) { try { Invoke-CimMethod -InputObject $kb -MethodName TypeKey -Arguments @{ keyCode = [uint32]13 } | Out-Null; $sent++ } catch { } }
+  if ($kb) { try { Invoke-CimMethod -InputObject $kb -MethodName TypeKey -Arguments @{ keyCode = [uint32]13 } | Out-Null } catch { } }
   Start-Sleep -Milliseconds 500
 }
-Write-Doc ([ordered]@{ ok = $true; sent = $sent })
+Write-Doc ([ordered]@{ ok = $true })
 `
 
 // scriptEjectDVDs removes only the journaled attachments on the owned VM.

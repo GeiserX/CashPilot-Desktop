@@ -279,7 +279,8 @@ func TestParsePcapng(t *testing.T) {
 func TestBootKeysStartsTheVMAndPressesAtOnce(t *testing.T) {
 	const mock = `
 $global:log = @()
-function Get-OwnedVM { param($id, $owner) [pscustomobject]@{ State = $(if ($global:started) { 'Running' } else { 'Off' }) } }
+param($vmId, $owner)
+function Get-VM { [pscustomobject]@{ Id = $vmId; Notes = ('cashpilot-owner=' + $owner); State = $(if ($global:started) { 'Running' } else { 'Off' }) } }
 function Get-CimInstance { [CmdletBinding()] param($Namespace, $ClassName, $Filter) [pscustomobject]@{ Name = 'vm' } }
 function Start-VM { param($VM) $global:started = $true; $global:log += 'start' }
 function Get-CimAssociatedInstance { [CmdletBinding()] param($InputObject, $ResultClassName) if ($global:started) { [pscustomobject]@{ Kind = 'keyboard' } } }
@@ -287,11 +288,21 @@ function Invoke-CimMethod { [CmdletBinding()] param($InputObject, $MethodName, $
 function Start-Sleep { param([int]$Milliseconds, [int]$Seconds) $global:log += ('sleep' + ($Milliseconds + 1000 * $Seconds)) }
 `
 	check := scriptBootKeys + "\nWrite-Host ('LOG ' + ($global:log -join ','))\n"
-	code, out := runOwnedScriptWithFake(t, mock, check, map[string]any{"vm": tVMID, "owner": tOwner})
+	code, out := runOwnedScriptWithFake(t, mock, check, map[string]any{"vm": tVMID, "owner": tOwner}, tVMID, tOwner)
 	s := string(out)
 	i := strings.Index(s, "LOG ")
 	if code != 0 || i < 0 {
 		t.Fatalf("exit %d: %s", code, out)
+	}
+	// The builder decodes the answer strictly, so an extra field fails the
+	// install as it did on live run 5 ("unknown field").
+	var w okWire
+	doc, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s[:i]))
+	if err == nil {
+		err = decodeDoc(doc, &w)
+	}
+	if err != nil || !w.OK {
+		t.Fatalf("the answer does not decode as the builder reads it: %v (%q)", err, s[:i])
 	}
 	log := strings.Split(strings.TrimSpace(s[i+4:]), ",")
 	if len(log) < 2 || log[0] != "start" || log[1] != "key" {
