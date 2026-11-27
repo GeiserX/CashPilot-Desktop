@@ -13,7 +13,7 @@ import (
 
 // callKey finds a literal key in a call: t("x"), ht("x"), i18n.T("x"),
 // i18n.TL(locale, "x"). Keys are literal by rule, so this sees every one.
-var callKey = regexp.MustCompile(`(?:\bh?t|\bi18n\.T|\bi18n\.TL\([^,()]+,)\(\s*"([a-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)"`)
+var callKey = regexp.MustCompile(`(?:\bh?t\(|\bi18n\.T\(|\bi18n\.TL\([^,()]+,)\s*"([a-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)"`)
 
 // sources walks the code that can use a key: the frontend and the Go tree.
 func sources(t *testing.T, visit func(path, text string)) {
@@ -103,5 +103,22 @@ func TestEveryKeyIsDefinedAndUsed(t *testing.T) {
 	sort.Strings(unused)
 	if len(unused) > 0 {
 		t.Errorf("keys in en.json that no code uses:\n  %s", strings.Join(unused, "\n  "))
+	}
+}
+
+// The scan finds a key in each call form the code uses.
+func TestCallKeyFindsEveryCallForm(t *testing.T) {
+	for _, src := range []string{
+		`t("a.b")`, `ht("a.b", {n})`, `i18n.T("a.b", "n", 1)`, `i18n.TL(locale, "a.b")`, `i18n.TL(i18n.Default, "a.b")`,
+	} {
+		m := callKey.FindStringSubmatch(src)
+		if m == nil || m[1] != "a.b" {
+			t.Errorf("%s: found %v, want a.b", src, m)
+		}
+	}
+	for _, src := range []string{`format("a.b")`, `cat("a.b")`} {
+		if m := callKey.FindStringSubmatch(src); m != nil {
+			t.Errorf("%s: found %v, want nothing", src, m)
+		}
 	}
 }
