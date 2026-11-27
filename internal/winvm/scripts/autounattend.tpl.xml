@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The Secure VM's answer file. Every value comes from Go, XML-escaped. The
      passwords here are temporary: the first PowerShell Direct session sets the
-     real ones and deletes Windows Setup's copies of this file. -->
+     real ones and deletes Windows Setup's copies of this file. Setup refuses
+     the whole file at specialize if a RunSynchronous Path passes 259
+     characters, so those commands stay short. -->
 <unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
   <settings pass="windowsPE">
     <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -60,7 +62,7 @@
     </component>
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <RunSynchronous>
-        <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>powershell.exe -NoProfile -NonInteractive -Command "$i = (Get-NetAdapter | Where-Object { $_.MacAddress -eq '{{x .GuestMACDash}}' }).ifIndex; Get-NetNeighbor -InterfaceIndex $i -IPAddress {{x .Gateway}} -ErrorAction SilentlyContinue | Remove-NetNeighbor -Confirm:$false; New-NetNeighbor -InterfaceIndex $i -IPAddress {{x .Gateway}} -LinkLayerAddress {{x .HostMACDash}} -State Permanent"</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>powershell -NoP -NonI -C "Get-NetAdapter|? MacAddress -eq '{{x .GuestMACDash}}'|%{$p=@{InterfaceIndex=$_.ifIndex;IPAddress='{{x .Gateway}}'};Remove-NetNeighbor @p -Confirm:$false -EA 0;New-NetNeighbor @p -LinkLayerAddress {{x .HostMACDash}} -State Permanent}"</Path></RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>powercfg /change standby-timeout-ac 0</Path></RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add"><Order>3</Order><Path>powercfg /change monitor-timeout-ac 0</Path></RunSynchronousCommand>
         <RunSynchronousCommand wcm:action="add"><Order>4</Order><Path>powercfg /hibernate off</Path></RunSynchronousCommand>

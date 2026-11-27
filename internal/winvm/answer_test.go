@@ -1,10 +1,13 @@
 package winvm
 
 import (
+	"bytes"
+	"encoding/xml"
 	"net/netip"
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // xmlSpecial is every character the answer file must escape.
@@ -28,7 +31,7 @@ func TestAnswerFileEscapesAndChecks(t *testing.T) {
 	}
 	x := string(b)
 	for _, want := range []string{testPassword(1) + "&lt;&amp;&gt;&#34;&#39;", "<NextHopAddress>172.31.250.1</NextHopAddress>",
-		"-IPAddress 172.31.250.1 -LinkLayerAddress 00-15-5D-00-00-02", "<ComputerName>CASHPILOT-VM</ComputerName>"} {
+		"MacAddress -eq '00-15-5D-0A-00-02'", "IPAddress='172.31.250.1'", "-LinkLayerAddress 00-15-5D-00-00-02 -State Permanent", "<ComputerName>CASHPILOT-VM</ComputerName>"} {
 		if !strings.Contains(x, want) {
 			t.Errorf("the answer file lacks %q", want)
 		}
@@ -83,5 +86,46 @@ func TestAnswerFileNeverStopsAtTheKeyPage(t *testing.T) {
 	x := string(b)
 	if !strings.Contains(x, "<ProductKey><Key>ABCDE-12345-FGHIJ-67890-KLMNO</Key><WillShowUI>OnError</WillShowUI></ProductKey>") || strings.Count(x, "<ProductKey>") != 1 {
 		t.Fatal("a given key must replace the placeholder, once")
+	}
+}
+
+// TestAnswerFileCommandsFitSetupsLimit: Windows Setup caps a RunSynchronous
+// Path at 259 characters and refuses the whole answer file at specialize when
+// one is longer ("Value is invalid", then "The computer restarted
+// unexpectedly"). On live run 5 the gateway neighbour command had 380
+// characters, so no Windows install finished. Every command must fit with
+// the longest values the checks allow.
+func TestAnswerFileCommandsFitSetupsLimit(t *testing.T) {
+	a := testAnswer()
+	a.GuestMACDash, a.HostMACDash = "00-15-5D-FF-FF-FE", "00-15-5D-FF-FF-FD"
+	a.GuestIP, a.Gateway, a.PrefixLen = netip.MustParseAddr("255.255.255.253"), netip.MustParseAddr("255.255.255.254"), 8
+	b, err := a.Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := xml.NewDecoder(bytes.NewReader(b))
+	var stack []string
+	n := 0
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			break
+		}
+		switch e := tok.(type) {
+		case xml.StartElement:
+			stack = append(stack, e.Name.Local)
+		case xml.EndElement:
+			stack = stack[:len(stack)-1]
+		case xml.CharData:
+			if len(stack) >= 2 && stack[len(stack)-1] == "Path" && stack[len(stack)-2] == "RunSynchronousCommand" {
+				n++
+				if c := utf8.RuneCount(e); c > 259 {
+					t.Errorf("a RunSynchronous Path has %d characters, over Setup's 259: %s", c, e)
+				}
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("no RunSynchronous Path found")
 	}
 }
