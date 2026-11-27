@@ -150,7 +150,7 @@ for (const leavePath of ["Leave button", "clear address"]) {
     },
   });
   const app = { innerHTML: "", querySelectorAll: () => [] };
-  const pageOutput = { textContent: "" };
+  const pageOutput = { textContent: "", classList: { remove() {}, add() {}, toggle() {} } };
   const button = new EventTarget();
   const toasts = [];
   let toastStack;
