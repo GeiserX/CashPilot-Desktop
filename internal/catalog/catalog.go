@@ -28,6 +28,10 @@ type Catalog struct {
 	// whenever that table changes so every lookup by slug finds them.
 	mu     sync.RWMutex
 	custom []Service
+
+	// translations are the catalog's texts per locale (services/_i18n), current
+	// ones only. Localized reads them; nothing else does.
+	translations map[string]map[string]string
 }
 
 // CustomPrefix starts every custom service's slug, and no catalog slug may use it:
@@ -823,6 +827,9 @@ func Load() (*Catalog, error) {
 		if walkErr != nil {
 			return walkErr
 		}
+		if entry.IsDir() && path != root && strings.HasPrefix(entry.Name(), "_") {
+			return filepath.SkipDir // _i18n holds translations, not services
+		}
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") || strings.HasPrefix(entry.Name(), "_") {
 			return nil
 		}
@@ -856,7 +863,9 @@ func Load() (*Catalog, error) {
 	}
 	rules, rulesErr := os.ReadFile(filepath.Join(root, RatingRulesFile))
 	applyRatings(services, rules, rulesErr)
-	return newCatalog(services), nil
+	cat := newCatalog(services)
+	cat.translations = loadTranslations(os.DirFS(root), ".")
+	return cat, nil
 }
 
 func LoadEmbedded(fsys fs.FS) (*Catalog, error) {
@@ -864,7 +873,9 @@ func LoadEmbedded(fsys fs.FS) (*Catalog, error) {
 	if err != nil || len(services) == 0 {
 		return Load()
 	}
-	return newCatalog(services), nil
+	cat := newCatalog(services)
+	cat.translations = loadTranslations(fsys, "services")
+	return cat, nil
 }
 
 // List is every catalog entry, then the user's custom services.
@@ -995,6 +1006,9 @@ func loadFromFS(fsys fs.FS, root string) ([]Service, error) {
 	err := fs.WalkDir(fsys, root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if entry.IsDir() && path != root && strings.HasPrefix(entry.Name(), "_") {
+			return fs.SkipDir // _i18n holds translations, not services
 		}
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") || strings.HasPrefix(entry.Name(), "_") {
 			return nil
