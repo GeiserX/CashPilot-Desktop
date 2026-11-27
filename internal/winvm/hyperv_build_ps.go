@@ -696,11 +696,13 @@ if ($rs.Count -gt 0) {
     $identity = Get-FirewallIdentity $rs[0]
     # Removing the switch makes Windows rewrite the rule's interface to the
     # GUID of the deleted vNIC. Only then, compare with the alias it had.
-    $ifs = @((Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rs[0]).InterfaceAlias)
-    $g = [guid]::Empty
-    if ($identity -cne $in.identity -and $in.alias -and $ifs.Count -eq 1 -and [guid]::TryParse([string]$ifs[0], [ref]$g) -and
-        @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object { [guid]$_.InterfaceGuid -eq $g }).Count -eq 0) {
-      $identity = Get-FirewallIdentity $rs[0] $in.alias
+    if ($identity -cne $in.identity -and $in.alias) {
+      $ifs = @((Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rs[0]).InterfaceAlias)
+      $g = [guid]::Empty
+      if ($ifs.Count -eq 1 -and [guid]::TryParse([string]$ifs[0], [ref]$g) -and
+          @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object { [guid]$_.InterfaceGuid -eq $g }).Count -eq 0) {
+        $identity = Get-FirewallIdentity $rs[0] $in.alias
+      }
     }
   }
   if ($rs.Count -ne 1 -or -not $in.identity -or $identity -cne $in.identity -or $rs[0].Enabled.ToString() -ne 'True') {

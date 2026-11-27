@@ -30,13 +30,14 @@ param($owner)
 function Get-NetFirewallRule {
   [pscustomobject]@{ Name = 'CashPilotVM-block-in-' + $owner; Description = 'CashPilot Secure VM. cashpilot-owner=' + $owner; Enabled = 'True'; InstanceID = 'x' }
 }
+function Get-NetFirewallInterfaceFilter { [pscustomobject]@{ InterfaceAlias = 'vEthernet (CashPilotVM)' } }
 function Remove-NetFirewallRule { throw 'would remove the changed firewall rule' }
 `
 	// Supply a different live digest so the test exercises the removal guard.
 	script := firewallPrelude + "\nfunction Get-FirewallIdentity($r) { 'live-changed' }\n" +
 		strings.TrimPrefix(scriptRemoveFirewall, firewallPrelude)
 	code, out := runOwnedScriptWithFake(t, mock, script,
-		map[string]any{"group": "CashPilotVM", "id": "CashPilotVM-block-in-" + tOwner, "owner": tOwner, "identity": "recorded"}, tOwner)
+		map[string]any{"group": "CashPilotVM", "id": "CashPilotVM-block-in-" + tOwner, "owner": tOwner, "identity": "recorded", "alias": "vEthernet (CashPilotVM)"}, tOwner)
 	requireRemoveKept(t, code, out, "the firewall rule differs from Setup")
 }
 
