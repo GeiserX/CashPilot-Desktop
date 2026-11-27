@@ -152,7 +152,13 @@ export function renderJoinOutcome(result: JoinResult): string {
 /** One line on the link: the last heartbeat, and the last error in plain words. */
 export function pairingLine(pairing: PairingStatus, now: number = Date.now()): string {
   const beat = pairing.lastHeartbeat ? relativeTime(pairing.lastHeartbeat, now) : "";
-  const last = beat ? `Last heartbeat ${escapeHtml(beat)}.` : "No heartbeat has reached it yet.";
+  // The last success is kept in memory only, so after a restart a failing link
+  // may have had heartbeats before: say "since", not "yet".
+  const last = beat
+    ? `Last heartbeat ${escapeHtml(beat)}.`
+    : pairing.lastError
+      ? "No heartbeat has reached it since CashPilot started."
+      : "No heartbeat has reached it yet.";
   const error = pairing.lastError
     ? ` <span class="pairing-error" data-code="${escapeHtml(pairing.errorCode)}">Last try failed: ${escapeHtml(pairing.lastError)}</span>`
     : "";

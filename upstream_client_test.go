@@ -436,3 +436,36 @@ func TestARefusedWorkerKeyRequiresRejoin(t *testing.T) {
 		t.Errorf("failure should explain how to rejoin, got %q", message)
 	}
 }
+
+// After a refusal suspends the pairing, the dashboard still shows when the last
+// heartbeat got through, so it does not say none ever reached the server.
+func TestASuspendedPairingKeepsItsLastHeartbeat(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) > 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writeJSON(w, http.StatusOK, upstream.Response{Status: "ok"})
+	}))
+	defer srv.Close()
+
+	app := newPayloadTestApp(t, nil)
+	publishTestPairing(t, app, srv.URL, "worker-key")
+	cli := &upstream.Client{HTTP: srv.Client()}
+	app.sendUpstream(t.Context(), cli, srv.URL, "shared")
+	if beat := app.pairingStatus().LastHeartbeat; beat == "" {
+		t.Fatal("the accepted heartbeat was not recorded")
+	}
+	app.sendUpstream(t.Context(), cli, srv.URL, "shared")
+	if p, err := app.cfg.Pairing(); err != nil || !p.Suspended {
+		t.Fatalf("the refusal did not suspend the pairing: %+v, %v", p, err)
+	}
+	status := app.pairingStatus()
+	if status.LastHeartbeat == "" {
+		t.Errorf("a suspended pairing lost its last heartbeat: %+v", status)
+	}
+	if status.ErrorCode != "unauthorized" || !strings.Contains(status.LastError, "join again") {
+		t.Errorf("a suspended pairing must still say why: %+v", status)
+	}
+}

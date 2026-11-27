@@ -133,6 +133,10 @@ for (const [code, message] of [
   check("banner shows the last error", text(bad).includes("Last try failed: Cannot reach 192.168.1.10:8080."), text(bad));
   const never = pairingLine({ ...good, lastHeartbeat: "" }, now);
   check("no heartbeat yet is said", text(never).includes("No heartbeat has reached it yet"), never);
+  const refused = pairingLine({ ...good, lastError: "Your CashPilot refused this computer's key.", errorCode: "unauthorized" }, now);
+  check("a refusal after heartbeats keeps the last heartbeat", text(refused).includes("Last heartbeat 2 minutes ago") && text(refused).includes("Last try failed"), text(refused));
+  const restarted = pairingLine({ ...good, lastHeartbeat: "", lastError: "Your CashPilot refused this computer's key.", errorCode: "unauthorized" }, now);
+  check("a failing link with no heartbeat since start never says none ever arrived", text(restarted).includes("since CashPilot started") && !text(restarted).includes("yet"), text(restarted));
   const xss = renderJoinedBanner({ ...good, serverUrl: `http://x"><script>`, lastError: "<i>e</i>" }, now);
   check("banner escapes", !xss.includes("<script>") && !xss.includes("<i>e</i>"), xss);
 }
