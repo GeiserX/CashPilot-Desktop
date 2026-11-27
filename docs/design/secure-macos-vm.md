@@ -405,12 +405,51 @@ The guest checks for macOS updates on its own, with automatic download on.
 
 | Item | Why open | What closes it |
 |---|---|---|
-| M6, VNC modifier keys from our own client | VZ's VNC server ignored Shift and Command from `vncdotool` | Test another client library, or keep the pasteboard path |
 | M9, the traffic tile | The bridge byte counters are the plan. We did not read them under the cap | One run that compares the bridge counters with the guest's own counters |
-| M11, UpRock's red state | We saw only the signed-in log | A fresh install, read before sign-in |
-| M12, Teneo | "IP not eligible" on our line | A test from another residential IP |
-| M13, guest updates | Automatic download is on in the test bed | Decision 7, then the image setting |
-| M10, the new autostart path after a login | Loaded by hand, not yet through a real login | The next guest reboot |
+| M12, Teneo | "IP not eligible" on our line, in the lab and in the app's own VM | A test from another residential IP |
+| Grass sign-in | Grass asks for an emailed code and a reCAPTCHA. A person must tick the box | Nothing in the app can close it. The Sign in button opens the VM's screen for the user |
+| A second internet line | The guard learns the host's own public IPs from echo services. A home with two lines shows the second one only when the host's traffic leaves through it | A list of extra addresses the user can add, or a check that asks through each route |
+| Host shutdown | Tart dies when the owner's session ends, so the guest stops without a clean shutdown. We saw no lost data | A guard step that stops the guest before the session ends |
 | Phase 2, Code-Hex/vz | Not built | A Go prototype that boots the guest with our own filter and no setuid helper |
 | M10, Theta and UpRock on Rosetta | Both are x86_64 only, and macOS warns that Intel apps will stop opening | An arm64 build from each vendor, or both leave the set |
 | A macOS update on the host | Cannot be run on demand | The re-proof after each change of the host's macOS build |
+
+Closed by the app's own build (§7):
+
+- M6, VNC modifier keys: the pasteboard path is the design. Text goes into the earner's pasteboard through the guest agent, and the app's Paste menu takes it.
+- M10, autostart after a login: after a reboot of the Mac, all five earners started at the earner's login.
+- M11, UpRock's red state: a fresh install logs "not logged in". The reader now judges only UpRock's last sign-in line, so that line reads as signed out.
+- M13, guest updates: `provision.sh` turns off automatic macOS downloads and installs (decision 7).
+
+## 7. The app's own build on a real Mac
+
+We installed the app as a user does, on a Mac with Apple silicon and macOS 26, and made the VM from the Security page.
+
+**The fence proof** was green, with the red step first:
+
+| Step | Kind | Outcome |
+|---|---|---|
+| The test listener on this Mac | check | passed |
+| A hole opened on purpose | red | reached: gateway, LAN, router and own public IP |
+| The packet filter alone | green | blocked: none of 4 targets arrived, and pf counted the drops |
+| Tart's network filter alone | green | blocked: none of 4 targets arrived |
+| The whole fence | green | blocked: none of 11 targets arrived |
+| This Mac's local services (Bonjour) | green | blocked |
+| The VM reaches the internet | check | passed |
+| No shared folder, clipboard or audio | check | passed |
+
+**A reboot of the Mac.** Times count from `shutdown -r`:
+
+| Time | What happened |
+|---|---|
+| +24 s | the kernel booted |
+| +128 s | the guard started the VM and cut its port from the bridge |
+| +130 s | the guard loaded the fence |
+| +134 s | the guard connected the VM: the running fence matched the proven one |
+| +243 s | all five earners ran in the earner's session |
+
+Wipter, Teneo and Theta came back signed in. UpRock did not. Its log said `keyring probe timed out, falling back to file store`. Under the boot load, UpRock's keychain check took too long. UpRock then made an empty credentials file, used that file from then on and lost the sign-in that was in the keychain. `install-app.sh` now makes that file before UpRock's first start, so UpRock always uses the file. After a guest restart, UpRock logged `auto login done` with no error.
+
+A status file written before the shutdown said "connected" until the guard's first pass after the boot. The page now shows such a status as stopped.
+
+**The earners in the VM:** Wipter signed in and online. UpRock signed in and earning. Teneo signed in, with "IP not eligible". Theta runs. Grass waits for its reCAPTCHA.
