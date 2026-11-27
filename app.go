@@ -228,7 +228,8 @@ func (a *App) startCore(ctx context.Context) error {
 	}
 	a.cfg = cfg
 	// Go text (errors, notices, the tray) follows the saved language, else the OS.
-	a.applyLanguage(cfg.Config().Language, nil)
+	system, active := a.applyLanguage(cfg.Config().Language, nil)
+	log.Printf("i18n: OS languages %q, matched %q, saved %q, using %s", i18n.Detect(), system, cfg.Config().Language, active)
 
 	st, err := store.Open(cfg.DataDir())
 	if err != nil {
