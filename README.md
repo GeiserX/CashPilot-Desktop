@@ -23,7 +23,7 @@ CashPilot Desktop is at 2.0 and does not update itself: get new versions from th
 ## Features
 
 - **One-click deploys** -- Pick an earner with a container image from the catalog and the app sets up its container; the wizard helps you install Docker
-- **LAN isolation** -- New Docker installs fence earners off your LAN, tailnets, cloud metadata, this computer and your public IPs, or refuse the deploy ([docs](docs/configuration.md#lan-isolation))
+- **LAN isolation** -- The app can fence earners off your home network, so they reach the internet and nothing else: not your LAN, a tailnet, cloud metadata, this computer or your public IPs ([docs](docs/configuration.md#lan-isolation))
 - **One fleet** -- Join your CashPilot server as one more box, or be the hub that Docker workers and the [Android companion](https://github.com/GeiserX/CashPilot-android/releases) report to
 - **Server commands** -- Your CashPilot server (3.0.0 or newer) can deploy, stop and remove services here, behind a switch ([docs](docs/configuration.md#the-server-starts-and-stops-services-here))
 - **Real-time monitoring** -- Live earnings, service health, container stats and node uptime, with a menu-bar summary on macOS
