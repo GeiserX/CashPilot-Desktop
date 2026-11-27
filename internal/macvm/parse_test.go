@@ -169,3 +169,13 @@ func TestLock(t *testing.T) {
 		}
 	}
 }
+
+func TestErrLineIsOneShortLine(t *testing.T) {
+	long := strings.Repeat("chown: /Users/earner/Library/x: Operation not permitted\n", 50) + "could not create the earner account\n"
+	if got := errLine(long); got != "could not create the earner account" {
+		t.Fatalf("the script's last line must win: %q", got)
+	}
+	if got := errLine(strings.Repeat("é", 400)); len([]rune(got)) != 301 {
+		t.Fatalf("a long line is cut at 300 runes: %d", len([]rune(got)))
+	}
+}
