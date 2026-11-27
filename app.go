@@ -703,7 +703,8 @@ func (a *App) GetAppState() (AppState, error) {
 	return AppState{
 		Config:           a.cfg.Config(),
 		Runtime:          runtimeStatus,
-		Services:         visible,
+		// The services' text in the user's language; everything else reads English.
+		Services:         a.catalog.Localized(visible, i18n.Current()),
 		Deployments:      deployments,
 		OutdatedServices: a.outdatedServices(deployments),
 		Earnings:         earnings,
@@ -1534,7 +1535,7 @@ func (a *App) ListServices() ([]catalog.Service, error) {
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
-	return a.catalog.ListVisible(), nil
+	return a.catalog.Localized(a.catalog.ListVisible(), i18n.Current()), nil
 }
 
 func (a *App) GetService(slug string) (catalog.Service, error) {
