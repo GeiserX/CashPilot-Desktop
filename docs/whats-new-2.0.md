@@ -21,7 +21,9 @@ commands here. Under CashPilot 2.x, Desktop 2.0 still listens on TCP 8086
 while the switch is on, but a server that never listed `desktop_commands`
 never learns the address. A server that stops listing it, for example after
 a downgrade to 2.x, can still get the address in one more heartbeat. The
-heartbeat after that leaves it out.
+heartbeat after that leaves it out. The window and the background helper
+each send their own heartbeats, so each can send that one. To stop server
+commands before a downgrade, turn the switch off first.
 
 - Desktop 2.0 sends its command address only when the server's previous
   heartbeat answer said that it can command a Desktop safely. CashPilot 3.0.0
