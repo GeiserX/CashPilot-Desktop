@@ -10,13 +10,15 @@
 #       next boot on.
 #       After this the base is reached only through `tart exec`.
 #   provision.sh autostart <app-path> <short-name>
-#       for an earner app that registers no login item of its own: a root-owned
-#       LaunchAgent in the earner's library opens it (in the background) at
-#       every earner login. Root-owned, so the earner user cannot change it.
+#       for an earner app that registers no login item of its own: a
+#       LaunchAgent in /Library/LaunchAgents opens it (in the background) at
+#       every GUI login. The folder and the file belong to root, so the earner
+#       user cannot change or delete them. Only `earner` logs in to the guest.
 #   provision.sh earner
 #       per clone, over `tart exec -i`: creates the standard user `earner` and
 #       logs it in automatically. Passwords arrive on stdin, one per line, so
-#       they never show in `ps` or in a shell history:
+#       they never show in `ps` or in a shell history (`sysadminctl -password -`
+#       reads the password from stdin):
 #         line 1: the earner password
 #         line 2: the same password as /etc/kcpassword bytes, in hex (kcpassword.py)
 set -eu
@@ -72,9 +74,8 @@ exit 0
 fi
 
 if [ "$MODE" = autostart ]; then
-APP="$2"; NAME="$3"; LA=/Users/earner/Library/LaunchAgents
+APP="$2"; NAME="$3"; LA=/Library/LaunchAgents
 [ -d "$APP" ] || { echo "no app at $APP" >&2; exit 1; }
-mkdir -p "$LA"; chown earner:staff "$LA"
 cat > "$LA/org.cashpilot.earner.$NAME.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -84,6 +85,7 @@ cat > "$LA/org.cashpilot.earner.$NAME.plist" <<PLIST
   <key>ProgramArguments</key>
   <array><string>/usr/bin/open</string><string>-g</string><string>$APP</string></array>
   <key>RunAtLoad</key><true/>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict>
 </plist>
 PLIST
@@ -97,11 +99,11 @@ read -r EARNER_PW
 read -r KCPW_HEX
 # The earner account: standard, no admin, logs in by itself
 if ! id earner >/dev/null 2>&1; then
-  sysadminctl -addUser earner -fullName "Earner" -password "$EARNER_PW" -home /Users/earner
+  printf '%s\n' "$EARNER_PW" | sysadminctl -addUser earner -fullName "Earner" -password - -home /Users/earner
   createhomedir -c -u earner >/dev/null 2>&1 || true
 fi
 dseditgroup -o checkmember -m earner admin >/dev/null 2>&1 && { echo "earner is admin" >&2; exit 1; }
-printf '%s' "$KCPW_HEX" | xxd -r -p > /etc/kcpassword
+(umask 077; printf '%s' "$KCPW_HEX" | xxd -r -p > /etc/kcpassword)
 chown root:wheel /etc/kcpassword; chmod 600 /etc/kcpassword
 defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser earner
 

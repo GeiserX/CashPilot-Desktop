@@ -27,7 +27,11 @@ DIR="$1"
 LOG="$DIR/guard.log"
 now=$(date +%s)
 last=$(cat "$DIR/last-pass" 2>/dev/null || echo 0)
-boot=$(sysctl -n kern.boottime | sed 's/.*sec = \([0-9]*\).*/\1/')
+# kern.boottime reads "{ sec = 1795805031, usec = 764984 } ...". Anchor on the
+# first field: a greedy match would take usec. An unreadable value counts as a
+# fresh boot, so the pass cuts first.
+boot=$(sysctl -n kern.boottime | sed -n 's/^{ sec = \([0-9][0-9]*\),.*/\1/p')
+case "$boot" in ''|*[!0-9]*) boot=$now ;; esac
 echo "$now" > "$DIR/last-pass"
 log() { echo "$(date '+%Y-%m-%dT%H:%M:%S%z') $*" >> "$LOG"; }
 
@@ -49,6 +53,10 @@ member() { ifconfig "$br" 2>/dev/null | grep -q "member: $port "; }
 
 mode=pass
 if [ "$last" -lt "$boot" ] || [ $((now - last)) -gt 90 ]; then mode=boot; fi
+# Boot and wake: cut before any check runs.
+if [ "$mode" = boot ] && member; then
+  ifconfig "$br" deletem "$port" && log "boot/wake: $port cut from $br before the check"
+fi
 
 drift=""
 pfctl -s info 2>/dev/null | grep -q 'Status: Enabled' || drift="$drift pf-off"
@@ -69,9 +77,6 @@ gw=$(ifconfig "$br" 2>/dev/null | awk '/inet / {print $2; exit}')
 pfctl -a "$ANCHOR" -sr 2>/dev/null | grep -q "label \"cp-host-gw\"" &&
   pfctl -a "$ANCHOR" -sr 2>/dev/null | grep "cp-host-gw" | grep -q " to $gw " || drift="$drift wrong-gateway"
 
-if [ "$mode" = boot ] && member; then
-  ifconfig "$br" deletem "$port" && log "boot/wake: $port cut from $br before the check"
-fi
 if [ -n "$drift" ]; then
   if member; then ifconfig "$br" deletem "$port" && log "MISMATCH:$drift; $port cut from $br"; else log "MISMATCH:$drift; staying cut"; fi
   exit 0

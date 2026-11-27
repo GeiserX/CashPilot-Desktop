@@ -47,6 +47,14 @@ echo "vm=$vm mac=$mac block=$block"
 
 members() { for b in $(ifconfig -l | tr ' ' '\n' | grep '^bridge1[0-9][0-9]$'); do ifconfig "$b" | awk -v b="$b" '/member: vmenet/ {print b, $2}'; done; }
 before=$(members)
+# Until the fence is loaded, a failure stops the guest: launchd lets tart outlive
+# this script, so an early exit must not leave it running unfenced.
+if as_owner tart list | awk -v v="$vm" '$1 == "local" && $2 == v && $NF == "running" {f=1} END {exit !f}'; then
+  echo "$vm is already running; leaving it to the guard"; exit 0
+fi
+handed_off=0
+cleanup() { [ "$handed_off" = 1 ] || { echo "start failed; stopping $vm"; as_owner tart stop "$vm" >/dev/null 2>&1 || true; }; }
+trap cleanup EXIT
 as_owner nohup tart run "$vm" ${TART_DISPLAY:---no-graphics} --no-audio --no-clipboard \
   --net-softnet-block "$block" > "${RUNLOG:-/tmp/run-$vm.log}" 2>&1 &
 # Our port is the vmenet member that was not there before the start. It shows
@@ -70,6 +78,7 @@ sudo sh -c "pfctl -a com.apple/cashpilot -sr 2>/dev/null | sed 's/ on bridge1[0-
   printf 'VM_MAC=%s\nANCHOR=com.apple/cashpilot\nSOFTNET_BLOCK=%s\n' '$mac' '$block' > '$dir/desired.env'
   echo '$br $port' > '$dir/port'; echo 0 > '$dir/last-pass'"
 echo "fence loaded on $br gw=$gw subnet=$subnet"
+handed_off=1
 [ "$guard" = --no-guard ] && exit 0
 sudo /bin/sh "$here/guard.sh" "$dir"
-tail -2 "$dir/guard.log"
+sudo tail -2 "$dir/guard.log"

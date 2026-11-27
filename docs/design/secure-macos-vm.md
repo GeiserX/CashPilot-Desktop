@@ -53,7 +53,7 @@ The fence is proven red, then green, at install, before any earner exists.
   - `cp-lab`, a throwaway guest. It ran the fence and device tests.
   - `cp-earn`, the test bed. It runs the five earners and stays on.
   - One vanilla guest from Cirrus Labs' public image, for M6 only, at 4 GB.
-- Accounts: `cpadmin` (admin, password random per build, rotated per clone) and `earner` (standard user, autologin). Passwords came in on stdin, never as arguments.
+- Accounts: `cpadmin` (admin, password random per build, rotated per clone) and `earner` (standard user, autologin). Passwords came in on stdin. Our first run gave the earner password to `sysadminctl` as an argument, where `ps` can see it. The script now uses `-password -`, which reads stdin.
 - Probes ran in the guest through `tart exec`, which needs no guest network.
 - Canaries ran on the host and on a second box on the LAN. The host canaries listened on its gateway, LAN, Wi-Fi, tailnet, loopback, IPv6 link-local and ULA addresses, and on a link-local metadata address. A Bonjour canary service also ran on the host. A positive control ran first each time: a token sent from the host side had to arrive.
 - The lab scripts are in `scripts/macvm-lab/`. They hold no addresses: each run takes them as arguments.
@@ -196,6 +196,8 @@ After each drift was undone exactly, the next pass reconnected the port. After D
 
 The guard decides "wake" from a gap of more than 90 s since its last pass. A sleep of 2 s did not count as a wake. That is acceptable, because every pass checks the whole fence.
 
+During the lab the guard read the boot time wrongly: its `sed` took the `usec` field of `kern.boottime`. So every boot cut we saw came from `start.sh`, and every wake cut came from the 90 s rule. The parse is fixed, and the guard now cuts before it runs any check.
+
 **Answer:** yes. **Design:** no change. A drift can last up to 60 s. The guard never reads the guest.
 
 ### M5. Persistence
@@ -243,6 +245,8 @@ Packer typed capital letters and symbols. Our own VNC client (`vncdotool`) could
 | Autologin | `/etc/kcpassword` (root, mode 600) and `autoLoginUser earner`. It survives guest and host reboots |
 | FileVault in the guest | off. Autologin does not work with it on |
 | Admin password rotated (`sysadminctl -resetPasswordFor`) | the new one works (`dscl . -authonly`), the old one is refused |
+| A user created through `tart exec` (`sysadminctl -addUser … -password -`) | created, and the password from stdin works |
+| The same user deleted through `tart exec` | refused with `eDSPermissionError` (-14120), by `sysadminctl -deleteUser` and by `dscl . -delete`, also with the admin's credentials. Changing the record works |
 | `security add-generic-password` over SSH | fails: "User interaction is not allowed" |
 | The same through `launchctl asuser <earner uid>` | works |
 
@@ -303,14 +307,14 @@ The guest shows "Support Ending for Intel-based Apps" for Theta: that version "w
 
 Apps go to `/Applications`, owned by root. So they cannot update themselves. Grass shows a banner asking to turn on Auto Update. We left it off.
 
-Grass, Teneo and UpRock registered their own login items in `earner`'s session. Wipter and Theta did not. For those, `provision.sh autostart` writes a root-owned LaunchAgent in `earner`'s library that runs `open -g <app>` at login.
+Grass, Teneo and UpRock registered their own login items in `earner`'s session. Wipter and Theta did not. For those, `provision.sh autostart` writes a LaunchAgent in `/Library/LaunchAgents` that runs `open -g <app>` at login. Root owns the folder and the file, so `earner` cannot change or delete it. Our first version put it in `earner`'s own library. `earner` owns that folder, so it could delete the file. Both agents load in `earner`'s GUI domain and exit 0.
 
 **Answer:** yes. **Design:**
 
 - The catalog pins URL, SHA-256 and Team ID per app. A failed check refuses the app.
 - Rosetta is installed in the image.
 - CashPilot updates the apps from the catalog pin.
-- Apps without a login item get the root-owned LaunchAgent.
+- Apps without a login item get a LaunchAgent in `/Library/LaunchAgents`.
 
 ### M11. Sign-in markers
 
@@ -383,7 +387,7 @@ The guest checks for macOS updates on its own, with automatic download on.
 4. **The boot daemon** starts Tart with `launchctl asuser <owner uid>` and sets `AbandonProcessGroup` (M5).
 5. **The admin password** is rotated after each clone, and the passwords live in the host's Keychain (M7).
 6. **Rosetta** goes in the image. Two earners are x86_64 only, and Apple warns that such apps will stop opening (M10).
-7. **Autostart:** a root-owned LaunchAgent in `earner`'s library for apps with no login item of their own (M10).
+7. **Autostart:** a LaunchAgent in `/Library/LaunchAgents` for apps with no login item of their own (M10).
 8. **App updates** come from the catalog pin. The apps are root-owned and cannot update themselves (M10).
 9. **The user's window** uses a client that sends modifier keys, such as Apple's Screen Sharing. Sign-in text that needs Shift goes through the earner's pasteboard and the app's Paste menu. The pasteboard is cleared after each use (M6).
 10. **The bandwidth slider** is an upload limit. The tile does not count blocked packets (M9).
@@ -406,6 +410,8 @@ The guest checks for macOS updates on its own, with automatic download on.
 | M11, UpRock's red state | We saw only the signed-in log | A fresh install, read before sign-in |
 | M12, Teneo | "IP not eligible" on our line | A test from another residential IP |
 | M13, guest updates | Automatic download is on in the test bed | Decision 7, then the image setting |
+| M7, deleting a guest user | The guest agent cannot delete a user record. A locked, hidden test user is left in the test bed | Find which right the deletion needs (likely a TCC grant or an admin with a Secure Token), or never create extra users |
+| M10, the new autostart path after a login | Loaded by hand, not yet through a real login | The next guest reboot |
 | Phase 2, Code-Hex/vz | Not built | A Go prototype that boots the guest with our own filter and no setuid helper |
 | M10, Theta and UpRock on Rosetta | Both are x86_64 only, and macOS warns that Intel apps will stop opening | An arm64 build from each vendor, or both leave the set |
 | A macOS update on the host | Cannot be run on demand | The re-proof after each change of the host's macOS build |

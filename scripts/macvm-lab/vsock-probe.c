@@ -10,6 +10,7 @@
 // side of `tart exec` dials the guest, so the guest agent's own port must show
 // up as a listener the host can reach (Tart uses port 8080).
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,8 +48,16 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc != 4) { fprintf(stderr, "usage: %s <cid> <first> <last> | listen <port>\n", argv[0]); return 2; }
-  unsigned cid = (unsigned)atoi(argv[1]);
-  unsigned first = (unsigned)strtoul(argv[2], NULL, 10), last = (unsigned)strtoul(argv[3], NULL, 10);
+  unsigned long v[3];
+  for (int i = 0; i < 3; i++) {
+    char *end; errno = 0;
+    v[i] = strtoul(argv[i + 1], &end, 10);
+    if (errno || end == argv[i + 1] || *end || argv[i + 1][0] == '-' || v[i] > UINT_MAX) {
+      fprintf(stderr, "not a number: %s\n", argv[i + 1]); return 2;
+    }
+  }
+  unsigned cid = (unsigned)v[0], first = (unsigned)v[1], last = (unsigned)v[2];
+  if (first > last) { fprintf(stderr, "first port %u is above last port %u\n", first, last); return 2; }
   unsigned open = 0, refused = 0, other = 0;
   int other_errno = 0;
   for (unsigned p = first; p <= last; p++) {

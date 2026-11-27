@@ -21,6 +21,19 @@ url=$1 want_sha=$2 want_team=$3 name=${4:-$(basename "$url" | sed 's/%20/ /g; s/
 dl=/Users/Shared/cp-dl; mkdir -p "$dl"; f="$dl/$name"
 mnt=""
 refuse() { [ -n "$mnt" ] && hdiutil detach "$mnt" >/dev/null 2>&1; echo "RESULT refused: $*"; exit 1; }
+# Copy under a temporary name first, so a failed copy keeps the old version.
+place() {
+  dst="/Applications/$(basename "$1")"; tmp="/Applications/.cp-new-$(basename "$1")"
+  rm -rf "$tmp"
+  ditto "$1" "$tmp" || { rm -rf "$tmp"; refuse "copy failed"; }
+  chown -R root:wheel "$tmp" || { rm -rf "$tmp"; refuse "chown failed"; }
+  rm -rf "$dst" && mv "$tmp" "$dst" || refuse "move into /Applications failed"
+  echo "installed $dst"
+}
+pkg_install() {
+  out=$(installer -pkg "$1" -target / 2>&1) || refuse "pkg install failed: $(echo "$out" | tail -1)"
+  echo "$out" | tail -1
+}
 /usr/bin/curl -fsSL -m 600 -o "$f" "$url" || refuse "download failed"
 sha=$(shasum -a 256 "$f" | awk '{print $1}')
 echo "file $name size=$(stat -f %z "$f") sha256=$sha"
@@ -54,21 +67,16 @@ case "$f" in
     app=$(find "$mnt" -maxdepth 1 -name '*.app' | head -1)
     pkg=$(find "$mnt" -maxdepth 1 -name '*.pkg' | head -1)
     if [ -n "$app" ]; then
-      check "$app"
-      rm -rf "/Applications/$(basename "$app")"
-      ditto "$app" "/Applications/$(basename "$app")"
-      chown -R root:wheel "/Applications/$(basename "$app")"
-      echo "installed /Applications/$(basename "$app")"
+      check "$app"; place "$app"
     elif [ -n "$pkg" ]; then
-      check "$pkg"; installer -pkg "$pkg" -target / | tail -1
+      check "$pkg"; pkg_install "$pkg"
     else refuse "no .app or .pkg in the dmg"; fi
     hdiutil detach "$mnt" >/dev/null 2>&1 ;;
-  *.pkg) check "$f"; installer -pkg "$f" -target / | tail -1 ;;
+  *.pkg) check "$f"; pkg_install "$f" ;;
   *.zip)
     x=$(mktemp -d /tmp/cpzip.XXXX); ditto -x -k "$f" "$x"
     app=$(find "$x" -maxdepth 2 -name '*.app' | head -1); [ -n "$app" ] || refuse "no .app in the zip"
-    check "$app"; rm -rf "/Applications/$(basename "$app")"; ditto "$app" "/Applications/$(basename "$app")"
-    chown -R root:wheel "/Applications/$(basename "$app")"; echo "installed /Applications/$(basename "$app")" ;;
+    check "$app"; place "$app" ;;
   *) refuse "unknown file type" ;;
 esac
 echo "RESULT ok"

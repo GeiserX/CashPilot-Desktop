@@ -33,6 +33,9 @@ enable_pf() {
 case "${1:-}" in
 up)
   ifc="$2"; gw="$3"; denyfile="$4"; subnet="$5"; kbit="${6:-0}"
+  # A missing deny file must stop us before pf changes. (grep's own status
+  # cannot tell: a file with only comments makes it exit 1, and that is fine.)
+  [ -f "$denyfile" ] && [ -r "$denyfile" ] || { echo "cannot read deny file: $denyfile" >&2; exit 1; }
   extra=$(grep -v '^[[:space:]]*#' "$denyfile" | tr '\n' ' ')
   {
     echo "table <cp_deny> const { $(echo $fixed_deny) $extra }"

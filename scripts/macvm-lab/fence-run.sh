@@ -20,11 +20,17 @@ start=$(date +%s)
 tart exec -i "$vm" /bin/sh -c "$(cat "$here/probe.sh")" probe "$tok" < "$out/$step.targets" > "$out/$step.probe.tsv"
 sleep 2
 : > "$out/$step.arrivals"
+# grep exits 1 for "no match", which is the green case. Anything else (a log
+# that is missing or unreadable, ssh failing) means we did not look, so the
+# step is inconclusive, never "0 arrivals".
+lost=""
 for c in "$@"; do
+  rc=0
   case "$c" in
-    *:*) ssh -o ConnectTimeout=5 "${c%%:*}" "grep -F '$tok' '${c#*:}'" >> "$out/$step.arrivals" 2>/dev/null || true ;;
-    *)   grep -F "$tok" "$c" >> "$out/$step.arrivals" 2>/dev/null || true ;;
+    *:*) ssh -o ConnectTimeout=5 "${c%%:*}" "if test -r '${c#*:}'; then grep -F '$tok' '${c#*:}'; else exit 2; fi" >> "$out/$step.arrivals" 2>/dev/null || rc=$? ;;
+    *)   if [ -r "$c" ]; then grep -F "$tok" "$c" >> "$out/$step.arrivals" 2>/dev/null || rc=$?; else rc=2; fi ;;
   esac
+  [ "$rc" -le 1 ] || lost="$lost $c"
 done
 echo "# step=$step token=$tok took=$(( $(date +%s) - start ))s"
 while IFS=$'\t' read -r label kind target port result; do
@@ -33,3 +39,4 @@ while IFS=$'\t' read -r label kind target port result; do
 done < "$out/$step.probe.tsv" | tee "$out/$step.table"
 n=$(grep -c ARRIVED "$out/$step.table" || true)
 echo "# arrivals: $n"
+if [ -n "$lost" ]; then echo "# INCONCLUSIVE: could not read canary log(s):$lost"; exit 3; fi
