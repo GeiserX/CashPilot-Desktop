@@ -283,6 +283,54 @@ func TestParsePktmonComponents(t *testing.T) {
 	}
 }
 
+// pktmonListLive has the shape of pktmon list --json on Windows 11 (live run
+// 5, addresses replaced): each NIC has its own entry and an NDIS twin, type
+// Miniport with a SecondaryId, under the same ID.
+const pktmonListLive = `[{"Group":"Adapters","Components":[
+{"Name":"VMS ExtMp #4","DriverName":"vmswitch.sys","Type":"Extension Miniport","Id":152,"Properties":[{"Name":"ifIndex","Value":28},{"Name":"Switch name","Value":"cpd-svm-1"}],"Counters":[]},
+{"Name":"VMS ExtMp #4","DriverName":"vmswitch.sys","Type":"Miniport","Id":152,"SecondaryId":149,"Properties":[{"Name":"NdisMedium","Value":"Ethernet"},{"Name":"ifIndex","Value":28}],"Counters":[]},
+{"Name":"VMS Ext Filter","DriverName":"vmswitch.sys","Type":"Filter","Id":150,"Properties":[{"Name":"ifIndex","Value":29}],"Counters":[]},
+{"Name":"vEthernet (cpd-svm-1)","DriverName":"vmswitch.sys","Type":"Host vNic","Id":168,"Properties":[{"Name":"Ext ifIndex","Value":28},{"Name":"Switch name","Value":"cpd-svm-1"},{"Name":"ifIndex","Value":30}],"Counters":[]},
+{"Name":"Host vNic #4","DriverName":"VmsProxyHNic.sys","Type":"Miniport","Id":168,"SecondaryId":153,"Properties":[{"Name":"NdisMedium","Value":"Ethernet"},{"Name":"ifIndex","Value":30}],"Counters":[]}]},
+{"Group":"Adapters","Components":[
+{"Name":"Microsoft NetVsc Nic","DriverName":"NetVsc.sys","Type":"NetVsc","Id":74,"Properties":[{"Name":"ifIndex","Value":11}],"Counters":[]},
+{"Name":"Microsoft NetVsc Nic","DriverName":"netvsc.sys","Type":"Miniport","Id":74,"SecondaryId":5,"Properties":[{"Name":"ifIndex","Value":11}],"Counters":[]}]}]`
+
+// TestReconcilePktmonWithWindowsOutput: on live run 5 every proof step broke
+// with "pktmon trace NIC 74 (NetVsc.sys) differs from the pre-capture
+// inventory". The list names a component in words and adds an NDIS twin; the
+// ETL names it by number, driver file and a description. Both must agree on
+// ID, type, driver and interface, and a changed interface must still fail.
+func TestReconcilePktmonWithWindowsOutput(t *testing.T) {
+	want, err := parsePktmonComponents([]byte(pktmonListLive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Event 20 and 30 of the ETL the proof captured, as scriptPktmonStop sends them.
+	etl := []pktComp{
+		{ID: 168, Type: 6, Driver: "vmswitch.sys", Name: "cpd-svm-1", IfIndex: 30},
+		{ID: 152, Type: 7, Driver: "vmswitch.sys", Name: "", IfIndex: 28},
+		{ID: 74, Type: 9, Driver: "NetVsc.sys", Name: "Microsoft Hyper-V Network Adapter", IfIndex: 11},
+		{ID: 169, Type: 10, Driver: "http.sys", Name: "HTTP", IfIndex: 30},
+	}
+	if err := reconcilePktmon(want, etl); err != nil {
+		t.Fatalf("the same NICs did not reconcile: %v (inventory %+v)", err, want)
+	}
+	moved := slices.Clone(etl)
+	moved[2].IfIndex = 12
+	if err := reconcilePktmon(want, moved); err == nil {
+		t.Fatal("a NIC on another interface was accepted")
+	}
+	other := slices.Clone(etl)
+	other[0].Driver = "other.sys"
+	if err := reconcilePktmon(want, other); err == nil {
+		t.Fatal("a NIC with another driver was accepted")
+	}
+	if err := reconcilePktmon(want, etl[1:]); err == nil {
+		t.Fatal("a trace missing a NIC was accepted")
+	}
+}
+
 // TestProberSeam runs each Prober script once: the holes, the canary with
 // its firewall rule, and a pktmon capture read from a pcapng.
 func TestProberSeam(t *testing.T) {
@@ -582,7 +630,7 @@ function Get-WinEvent {
   }
   $pktmon = '4d4f80d9-c8bd-4d73-bb5b-19c90402c5ac'
   $other = '9b79ee91-b5fd-41c0-a243-4248e266e9d0'
-  New-Metadata $pktmon 20 @(4, 2, 'Ethernet')
+  New-Metadata $pktmon 20 @(4, 2, 'e1d.sys', 'Ethernet')
   New-Metadata $pktmon 30 @(4, 1, 7)
   New-Metadata $other 30 @(4, 1, 99)
   New-Metadata $other 100 @(1)
@@ -606,7 +654,7 @@ function Get-WinEvent {
 			if err := decodeDoc(doc, &got); err != nil {
 				t.Fatal(err)
 			}
-			want := []pktComp{{ID: 4, Type: 2, Name: "Ethernet", IfIndex: 7}}
+			want := []pktComp{{ID: 4, Type: 2, Driver: "e1d.sys", Name: "Ethernet", IfIndex: 7}}
 			if !slices.Equal(got.Components, want) || got.Filtered != (filtered == "yes") {
 				t.Fatalf("metadata = %+v, want components %+v and filtered=%s", got, want, filtered)
 			}

@@ -13,10 +13,12 @@ import (
 // Reading pktmon's output without its text, which Windows translates: the
 // component list as JSON, and each component's packets as pcapng.
 
-// pktComp is one pktmon component.
+// pktComp is one pktmon component. Name is for messages only: pktmon list
+// and the ETL describe the same component with different names (live run 5).
 type pktComp struct {
 	ID      int
 	Name    string
+	Driver  string
 	IfIndex int
 	Type    int
 }
@@ -24,7 +26,9 @@ type pktComp struct {
 // maxPktmonList caps the component list.
 const maxPktmonList = 1 << 20
 
-// pktmonNICType uses the types in the PktMon ETW component event.
+// pktmonNICType uses the types in the PktMon ETW component event. pktmon list
+// names them in words: "Host vNic", "Extension Miniport", "NetVsc" (live run
+// 5), beside the names in the ETW manifest.
 func pktmonNICType(v any) int {
 	if n, ok := jsonInt(v); ok {
 		return n
@@ -33,15 +37,15 @@ func pktmonNICType(v any) int {
 	switch strings.ToLower(strings.NewReplacer(" ", "", "-", "", "_", "").Replace(s)) {
 	case "miniport":
 		return 2
-	case "vmsvmnic":
+	case "vmsvmnic", "vmnic":
 		return 5
-	case "vmsminiport":
+	case "vmsminiport", "hostvnic":
 		return 6
-	case "vmsextminiport":
+	case "vmsextminiport", "extensionminiport":
 		return 7
 	case "vmsprotocolnic":
 		return 8
-	case "netvscminiport":
+	case "netvscminiport", "netvsc":
 		return 9
 	}
 	return 0
@@ -61,6 +65,10 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 		return nil, fmt.Errorf("could not read the pktmon component list: %w", err)
 	}
 	out := map[int]pktComp{}
+	// pktmon list gives a component a second entry, its NDIS view: type
+	// Miniport, with a SecondaryId. The ETL describes the first entry, so a
+	// twin counts only for a component that has no other entry.
+	twin := map[int]bool{}
 	var walk func(v any, depth int)
 	walk = func(v any, depth int) {
 		if depth > 16 {
@@ -73,7 +81,7 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 			}
 		case map[string]any:
 			var c pktComp
-			hasID := false
+			hasID, secondary := false, false
 			for k, e := range x {
 				switch strings.ToLower(k) {
 				case "id":
@@ -84,6 +92,10 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 					c.Type = pktmonNICType(e)
 				case "name":
 					c.Name, _ = e.(string)
+				case "drivername":
+					c.Driver, _ = e.(string)
+				case "secondaryid":
+					secondary = true
 				case "ifindex":
 					c.IfIndex, _ = jsonInt(e)
 				case "properties":
@@ -102,7 +114,10 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 				}
 			}
 			if hasID && c.Name != "" && c.ID > 0 && c.isNIC() {
-				out[c.ID] = c
+				if _, seen := out[c.ID]; !seen || (twin[c.ID] && !secondary) {
+					out[c.ID] = c
+					twin[c.ID] = secondary
+				}
 			}
 			for _, e := range x {
 				walk(e, depth+1)
@@ -125,8 +140,9 @@ func reconcilePktmon(want map[int]pktComp, actual []pktComp) error {
 			continue
 		}
 		expected, ok := want[got.ID]
-		if !ok || got.Type != expected.Type || got.Name != expected.Name || got.IfIndex != expected.IfIndex {
-			return fmt.Errorf("pktmon trace NIC %d (%s) differs from the pre-capture inventory", got.ID, got.Name)
+		if !ok || got.Type != expected.Type || !strings.EqualFold(got.Driver, expected.Driver) || got.IfIndex != expected.IfIndex {
+			return fmt.Errorf("pktmon trace NIC %d (%s, type %d, %s, interface %d) differs from the pre-capture inventory (%s, type %d, %s, interface %d)",
+				got.ID, got.Name, got.Type, got.Driver, got.IfIndex, expected.Name, expected.Type, expected.Driver, expected.IfIndex)
 		}
 		seen[got.ID] = true
 	}

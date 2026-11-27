@@ -123,7 +123,9 @@ foreach ($event in @($metadata | Where-Object { $_.Id -eq 30 })) {
 $components = @(foreach ($event in @($metadata | Where-Object { $_.Id -eq 20 })) {
   $p = $event.Properties
   $id = [int]$p[0].Value
-  @{ id = $id; type = [int]$p[1].Value; name = [string]$p[2].Value; ifIndex = [int]$indices[$id] }
+  # Event 20 holds the ID, the type, the driver file and a description.
+  $name = ''; if ($p.Count -gt 3) { $name = [string]$p[3].Value }
+  @{ id = $id; type = [int]$p[1].Value; driver = [string]$p[2].Value; name = $name; ifIndex = [int]$indices[$id] }
 })
 Write-Doc ([ordered]@{
   components = $components
