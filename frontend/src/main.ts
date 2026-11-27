@@ -7,6 +7,14 @@ import {
   WindowToggleMaximise,
 } from "../wailsjs/runtime/runtime";
 import {
+  SecureVMInstall,
+  SecureVMOpenScreen,
+  SecureVMPlace,
+  SecureVMStart,
+  SecureVMStatus,
+  SecureVMStop,
+  SecureVMUndo,
+  SecureVMVerify,
   AddFleetDevice,
   CommandWorkerCopy,
   DeployToWorker,
@@ -136,6 +144,8 @@ import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
+import { renderSecureVM } from "./render/securevm";
+import type { SecureVMRemoveResult, SecureVMStatus as SecureVMReading } from "./wails";
 import { guidesBesideChecklist, loadRuntimePage, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
 import { dockerBlockedNote, renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
 import { instancesChoice } from "./render/instances";
@@ -177,7 +187,7 @@ let dockerGuide: DockerGuide | null = null;
 let modeCardView: ModeCardView = "summary";
 let modeState: ModeState | null = null;
 let modeLeft: LeaveResult | null = null;
-type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity" | "import" | "runtime";
+type View = "dashboard" | "wizard" | "catalog" | "settings" | "fleet" | "activity" | "import" | "runtime" | "security";
 
 let activeView: View = "dashboard";
 let wizardStep = 1;
@@ -523,6 +533,10 @@ function render() {
     renderRuntimeView(state);
     return;
   }
+  if (activeView === "security") {
+    renderSecurityView(state);
+    return;
+  }
   renderDashboard(state);
 }
 
@@ -654,6 +668,101 @@ function renderRuntimeView(current: AppState) {
       if (!holder || !state) return;
       dockerGuide = new DockerGuide(holder, guideDeps(() => showView("dashboard")), {resume, result});
     },
+  });
+}
+
+// The Security page: the Secure VM, its fence proof and where each earner
+// runs (render/securevm.ts). It reads the status every few seconds while open,
+// because Install and Verify run for minutes and the guard changes it alone.
+let secureVM: SecureVMReading | null = null;
+let secureVMAskUndo = false;
+let secureVMRemoval: SecureVMRemoveResult | null = null;
+let secureVMTimer: number | undefined;
+
+function renderSecurityView(current: AppState) {
+  root.innerHTML = withChrome(`
+    <div class="app-layout">
+      <div class="main-content">
+        ${topbar("security", current)}
+        <main class="page-content">
+          ${pageHead("Security")}
+          <div id="securevm-slot">${renderSecureVM(secureVM, { askUndo: secureVMAskUndo, removal: secureVMRemoval })}</div>
+        </main>
+        ${pageFoot()}
+      </div>
+    </div>
+  `);
+  wireChrome();
+  wireShellNav();
+  maybeResetScroll();
+  wireSecureVM();
+  void refreshSecureVM();
+  if (secureVMTimer === undefined) {
+    secureVMTimer = window.setInterval(() => {
+      if (activeView !== "security" || !document.querySelector("#securevm-slot")) {
+        window.clearInterval(secureVMTimer);
+        secureVMTimer = undefined;
+        return;
+      }
+      void refreshSecureVM();
+    }, 3000);
+  }
+}
+
+async function refreshSecureVM() {
+  try {
+    secureVM = await SecureVMStatus();
+  } catch (error) {
+    showErrorToast({scope: "securevm", error: String(error)});
+    return;
+  }
+  const slot = document.querySelector<HTMLDivElement>("#securevm-slot");
+  if (!slot || activeView !== "security") return;
+  slot.innerHTML = renderSecureVM(secureVM, { askUndo: secureVMAskUndo, removal: secureVMRemoval });
+  wireSecureVM();
+}
+
+// runSecureVM starts an action and redraws at once, so the page shows it busy;
+// the action's own result redraws again when it ends.
+function runSecureVM(action: () => Promise<unknown>) {
+  const done = action().catch((error) => showErrorToast({scope: "securevm", error: String(error)}));
+  window.setTimeout(() => void refreshSecureVM(), 300);
+  void done.then(() => refreshSecureVM());
+}
+
+function wireSecureVM() {
+  const slot = document.querySelector<HTMLDivElement>("#securevm-slot");
+  if (!slot) return;
+  slot.querySelectorAll<HTMLButtonElement>("[data-securevm-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      switch (button.dataset.securevmAction) {
+        case "install": secureVMRemoval = null; runSecureVM(SecureVMInstall); break;
+        case "verify": runSecureVM(SecureVMVerify); break;
+        case "start": runSecureVM(SecureVMStart); break;
+        case "stop": runSecureVM(SecureVMStop); break;
+        case "screen": runSecureVM(() => SecureVMOpenScreen("")); break;
+        case "undo-ask": secureVMAskUndo = true; void refreshSecureVM(); break;
+        case "undo-cancel": secureVMAskUndo = false; void refreshSecureVM(); break;
+        case "undo":
+          secureVMAskUndo = false;
+          runSecureVM(async () => {
+            secureVMRemoval = await SecureVMUndo().catch((error) => {
+              showErrorToast({scope: "securevm", error: String(error)});
+              return null;
+            });
+          });
+          break;
+      }
+    });
+  });
+  slot.querySelectorAll<HTMLButtonElement>("[data-securevm-place]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const where = button.dataset.securevmPlace === "vm" ? "vm" : "host";
+      runSecureVM(() => SecureVMPlace(button.dataset.slug || "", where));
+    });
+  });
+  slot.querySelectorAll<HTMLButtonElement>("[data-securevm-signin]").forEach((button) => {
+    button.addEventListener("click", () => runSecureVM(() => SecureVMOpenScreen(button.dataset.securevmSignin || "")));
   });
 }
 
@@ -1238,7 +1347,7 @@ function wireShellNav(scope: ParentNode = document) {
   scope.querySelectorAll<HTMLButtonElement>("[data-view]").forEach((button) => {
     button.addEventListener("click", () => {
       const next = button.dataset.view;
-      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import" || next === "runtime") {
+      if (next === "dashboard" || next === "wizard" || next === "catalog" || next === "settings" || next === "fleet" || next === "activity" || next === "import" || next === "runtime" || next === "security") {
         ({ step: wizardStep, drafts: wizardRouteDrafts } = wizardAfterNav(next, wizardStep));
         wizardWhereDrafts = {};
         resetScrollAfterRender = true;

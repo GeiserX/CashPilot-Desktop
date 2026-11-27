@@ -36,4 +36,22 @@
 #                                 # installer, as Windows prints it; MANDATORY
 #     download_page: "https://..."  # the vendor's official page; MUST be HTTPS
 #     signin: console             # console (by hand in the VM window) | none
+#   macos:                        # the macOS guest (docs/design/secure-macos-vm.md)
+#     app: "Wipter.app"           # the bundle the download puts in /Applications
+#     process: "Wipter"           # executable name pgrep matches in the guest
+#     team_id: "55Y88XCDLZ"       # expected Developer ID Team ID; MANDATORY
+#     download: "https://..."     # the vendor's .dmg, .pkg or .zip; MUST be HTTPS
+#     sha256: "..."               # pin, when the vendor serves a versioned file
+#     version: "8.1.0"            # the pinned version, with sha256
+#     rosetta: true               # Intel-only: the guest installs Rosetta first
+#     signin: console             # console (by hand on the VM's screen) | none
+#     signed_in:                  # how the guest read tells a signed-in app
+#       file: "x/y.json"          # under the earner's ~/Library/Application Support
+#       key: "..."                # ...holding this JSON key, or
+#       log_words: "..."          # ...a log holding these words, or
+#       process: true             # no account: running is enough
+#     note: "..."                 # what the user should know before placing it
+#   refused: terms | unsigned     # never in a Secure VM, and no OS block: the
+#                                 # provider's terms forbid or warn against VMs,
+#                                 # or its app has no developer signature
 #   # vm_stance: <what the vendor says about VMs>, <URL>, read <date>  (a comment)

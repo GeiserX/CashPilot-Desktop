@@ -1,0 +1,5 @@
+# --- Desktop-only (catalog-overlay/append/bandwidth/spide.yml) ----------
+# Never in the Secure VM: its macOS app carries no developer signature, so the
+# macOS lab's trust check refused it (docs/design/secure-macos-vm.md, M10).
+guest:
+  refused: unsigned
