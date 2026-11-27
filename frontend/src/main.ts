@@ -117,7 +117,7 @@ import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
 import { renderRestoreCard, renderRestorePreview, restoreResultText } from "./render/restore";
-import { renderEnvSetting, settingField, settingsSaveValues } from "./render/settings";
+import { renderEnvSetting, settingField, settingsSaveValues, unsavedDrafts, type SettingField } from "./render/settings";
 import { runSave, saveNoteSlot } from "./render/savenote";
 import { renderEarningsBars } from "./render/chart";
 import { renderUsagePanel } from "./render/usage";
@@ -324,13 +324,25 @@ function applyLanguage(next: LanguageState | null) {
   }
 }
 
+// Only the latest pick counts: a second pick made before the first answer comes
+// back supersedes it, so an answer arriving late cannot switch the screen back.
+let languageRequest = 0;
+
 async function chooseLanguage(code: string) {
+  const request = ++languageRequest;
+  let next: LanguageState;
   try {
-    applyLanguage(await SetLanguage(code, webviewLanguages()));
+    next = await SetLanguage(code, webviewLanguages());
   } catch (error) {
+    if (request !== languageRequest) return;
     showErrorToast({scope: "language", error: String(error)});
+    // The picker goes back to the language still in use.
+    const select = document.querySelector<HTMLSelectElement>("#language-select");
+    if (select) select.value = languageState?.preference ?? "";
     return;
   }
+  if (request !== languageRequest) return;
+  applyLanguage(next);
   // Everything on screen is drawn from the new language at once.
   render();
 }
@@ -1617,6 +1629,18 @@ async function runImportDeploy(slug: string) {
   }
 }
 
+function drawnSettingFields() {
+  return Array.from(document.querySelectorAll<HTMLInputElement>("[data-setting]")).map(settingField);
+}
+
+function restoreSettingDrafts(before: SettingField[]) {
+  const keep = unsavedDrafts(before, drawnSettingFields());
+  for (const input of document.querySelectorAll<HTMLInputElement>("[data-setting]")) {
+    const value = keep.get(input.dataset.setting || "");
+    if (value !== undefined) input.value = value;
+  }
+}
+
 async function renderSettings(current: AppState) {
   const request = ++settingsRequest;
   let settings: SettingsState;
@@ -1655,6 +1679,9 @@ async function renderSettings(current: AppState) {
   if (request !== settingsRequest || activeView !== "settings") return;
   current = state ?? current;
   const { runtime } = current;
+  // A redraw on this page (a language change, the background-helper toggle)
+  // keeps what the user typed and did not save yet.
+  const drafts = drawnSettingFields();
   // The consents are read from the live state, not from `current`: a Withdraw
   // during the awaits above already changed them, and drawing the older map would
   // bring the withdrawn row back.
@@ -1712,6 +1739,7 @@ async function renderSettings(current: AppState) {
       </div>
     </div>
   `);
+  restoreSettingDrafts(drafts);
   wireChrome();
   wireShellNav();
   maybeResetScroll();
