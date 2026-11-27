@@ -1247,11 +1247,11 @@ func memoryMB(mem container.MemoryStats) float64 {
 }
 
 // dockerClient builds a Docker API client. With no host argument (or an empty one)
-// it reads the connection from the environment via client.FromEnv — the default
-// Docker context / DOCKER_HOST — exactly as before. A non-empty host is a seam for
+// it connects where the docker CLI would: DOCKER_HOST through client.FromEnv, else
+// the current Docker context's endpoint, else the default socket or a runtime's
+// socket in the home folder (resolveDockerEndpoint). A non-empty host is a seam for
 // a future bundled-runtime provider that must talk to a specific socket/endpoint
-// instead of the ambient context; no current caller passes one, so today's behavior
-// is unchanged.
+// instead of the ambient context; no current caller passes one.
 //
 // There is no WithAPIVersionNegotiation option any more: the moby client negotiates
 // the API version by default, lazily on the first versioned request, so the old
@@ -1263,6 +1263,11 @@ func dockerClient(host ...string) (*client.Client, error) {
 	opts := []client.Opt{client.FromEnv}
 	if len(host) > 0 && host[0] != "" {
 		opts = append(opts, client.WithHost(host[0]))
+	} else if ep := resolveDockerEndpoint(); ep.Host != "" {
+		opts = append(opts, client.WithHost(ep.Host))
+		if len(ep.TLS) == 3 {
+			opts = append(opts, client.WithTLSClientConfig(ep.TLS[0], ep.TLS[1], ep.TLS[2]))
+		}
 	}
 	return client.NewClientWithOpts(opts...)
 }
@@ -2026,10 +2031,13 @@ func detectTools() map[string]string {
 	return tools
 }
 
+// dockerContext is the Docker CLI's current context. An app started from the
+// Finder has no docker on its PATH, so on macOS and Linux it falls back to the
+// context the client itself resolved.
 func dockerContext() string {
 	out, err := exec.Command("docker", "context", "show").Output()
 	if err != nil {
-		return ""
+		return resolveDockerEndpoint().Context
 	}
 	return strings.TrimSpace(string(out))
 }

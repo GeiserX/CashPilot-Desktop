@@ -313,7 +313,11 @@ See §5. `exchange.Service` caches crypto→USD (CoinGecko) and USD→fiat
 interface; `DockerProvider` is the only implementation. It talks to the engine
 through the Docker Go SDK with `client.FromEnv` + API-version negotiation
 (`runtime.go:dockerClient`), which is what makes it work against **both Docker and
-Podman** (Podman exposes a Docker-compatible API). Responsibilities:
+Podman** (Podman exposes a Docker-compatible API). With no `DOCKER_HOST` it finds the
+engine the way the docker CLI does: the current Docker context, then the default
+socket, then the sockets colima, Docker Desktop and rootless Docker leave in the
+home folder (`docker_host.go:resolveDockerEndpoint`, macOS and Linux only).
+Responsibilities:
 
 - **`Status`** probes the runtime, reports a friendly message when it's absent or
   not running, and lists which CLIs exist (`docker`, `podman`, `colima`,
