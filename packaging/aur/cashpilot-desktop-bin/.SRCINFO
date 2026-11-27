@@ -1,5 +1,5 @@
 pkgbase = cashpilot-desktop-bin
-	pkgdesc = Deploy and monitor passive-income and DePIN services in Docker or Podman
+	pkgdesc = Deploy and track bandwidth sharing, DePIN, mining, GPU and storage earners in Docker or Podman
 	pkgver = 0.32.0
 	pkgrel = 1
 	url = https://github.com/GeiserX/CashPilot-Desktop
@@ -22,6 +22,6 @@ pkgbase = cashpilot-desktop-bin
 	source = cashpilot-desktop.desktop
 	sha256sums = 770a5b6ad26b67defb9b906c5ff3f0f92e03e75c94c1b92e3e70d0360fe23456
 	sha256sums = c2327d215ffa8d33ebe80ec9a6d58ae5b6cd62c329d980f2739da1f19fe8586c
-	sha256sums = 4e591ce3a6888464b0cefd50fb74e8f2c680f182e7b1ec25a038f2ad041412f1
+	sha256sums = 8d7796596e15e1431b2513ae8da5e919dfa057131495b7a1e074ff122b0934ed
 
 pkgname = cashpilot-desktop-bin

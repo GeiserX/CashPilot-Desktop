@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=CashPilot Desktop
-Comment=Deploy and monitor passive-income and DePIN services
+Comment=Deploy and track bandwidth sharing, DePIN, mining, GPU and storage earners
 Exec=cashpilot-desktop
 Icon=cashpilot-desktop
 Terminal=false

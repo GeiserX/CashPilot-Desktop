@@ -5,7 +5,7 @@ cask "cashpilot-desktop" do
 
   url "https://github.com/GeiserX/CashPilot-Desktop/releases/download/v#{version}/CashPilot-Desktop-darwin-arm64.zip"
   name "CashPilot Desktop"
-  desc "Deploy and monitor passive-income and DePIN services in Docker or Podman"
+  desc "Deploy and track bandwidth sharing, DePIN, mining, GPU and storage earners"
   homepage "https://github.com/GeiserX/CashPilot-Desktop"
 
   livecheck do
