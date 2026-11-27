@@ -196,7 +196,7 @@ func toContainer(r container.InspectResponse) Container {
 // Earners is every running container this app manages.
 func (e *DockerEngine) Earners(ctx context.Context) ([]Container, error) {
 	list, err := e.Client.ContainerList(ctx, client.ContainerListOptions{
-		Filters: make(client.Filters).Add("label", "cashpilot.managed=true").Add("status", "running"),
+		Filters: make(client.Filters).Add("label", "cashpilot.managed=true", "cashpilot.runtime=existing-docker").Add("status", "running"),
 	})
 	if err != nil {
 		return nil, err

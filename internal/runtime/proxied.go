@@ -801,7 +801,7 @@ func startSidecar(ctx context.Context, d tunnelDocker, name, slug, network strin
 }
 
 func isOurs(labels map[string]string, slug string, proxyID int64) bool {
-	return labels[LabelManaged] == "true" && labels[LabelService] == slug && labels[LabelProxy] == strconv.FormatInt(proxyID, 10)
+	return IsDesktopContainer(labels) && labels[LabelService] == slug && labels[LabelProxy] == strconv.FormatInt(proxyID, 10)
 }
 
 type proxiedPair struct {
@@ -1084,13 +1084,13 @@ func removeProxied(ctx context.Context, d tunnelDocker, slug string, proxyID int
 }
 
 func removeAllProxied(ctx context.Context, d tunnelDocker, slug string) ([]string, error) {
-	found, err := d.list(ctx, LabelManaged+"=true", LabelService+"="+slug, LabelProxy)
+	found, err := d.list(ctx, LabelManaged+"=true", LabelRuntime+"="+desktopRuntime, LabelService+"="+slug, LabelProxy)
 	if err != nil {
 		return nil, err
 	}
 	var mine []container.Summary
 	for _, c := range found {
-		if c.Labels[LabelService] == slug && c.Labels[LabelManaged] == "true" && c.Labels[LabelProxy] != "" {
+		if c.Labels[LabelService] == slug && IsDesktopContainer(c.Labels) && c.Labels[LabelProxy] != "" {
 			mine = append(mine, c)
 		}
 	}
@@ -1162,7 +1162,7 @@ const staleTestTunnel = 5 * time.Minute
 // tunnels as old: a deploy is past its ready timeout by then, so the deploy that
 // staged it died, and it holds the proxy login while no status read reports it.
 func sweepTestTunnels(ctx context.Context, d tunnelDocker, now time.Time) {
-	if staged, err := d.list(ctx, LabelManaged+"=true", LabelRole+"="+RoleTunnel, LabelProxy); err == nil {
+	if staged, err := d.list(ctx, LabelManaged+"=true", LabelRuntime+"="+desktopRuntime, LabelRole+"="+RoleTunnel, LabelProxy); err == nil {
 		for _, c := range staged {
 			if c.Labels[LabelProxy] != "" && strings.HasSuffix(summaryName(c), stagedSuffix) && now.Sub(time.Unix(c.Created, 0)) >= staleTestTunnel {
 				id, perr := strconv.ParseInt(c.Labels[LabelProxy], 10, 64)
@@ -1179,7 +1179,7 @@ func sweepTestTunnels(ctx context.Context, d tunnelDocker, now time.Time) {
 			}
 		}
 	}
-	found, err := d.list(ctx, LabelManaged+"=true", LabelRole+"="+RoleTunnel, LabelService+"="+testTunnelSlug)
+	found, err := d.list(ctx, LabelManaged+"=true", LabelRuntime+"="+desktopRuntime, LabelRole+"="+RoleTunnel, LabelService+"="+testTunnelSlug)
 	if err != nil {
 		return
 	}
@@ -1207,7 +1207,7 @@ func readProxied(ctx context.Context, d tunnelDocker, act bool) ([]ProxiedCopy, 
 	}
 	proxiedSwap.Lock()
 	defer proxiedSwap.Unlock()
-	found, err := d.list(ctx, LabelManaged+"=true", LabelProxy)
+	found, err := d.list(ctx, LabelManaged+"=true", LabelRuntime+"="+desktopRuntime, LabelProxy)
 	if err != nil {
 		return nil, err
 	}
@@ -1217,7 +1217,7 @@ func readProxied(ctx context.Context, d tunnelDocker, act bool) ([]ProxiedCopy, 
 	}
 	pairs := map[key]map[string]container.Summary{}
 	for _, c := range found {
-		if c.Labels[LabelManaged] != "true" || strings.HasSuffix(summaryName(c), stagedSuffix) {
+		if !IsDesktopContainer(c.Labels) || strings.HasSuffix(summaryName(c), stagedSuffix) {
 			continue // a staged tunnel is not part of a copy until it is promoted
 		}
 		id, err := strconv.ParseInt(c.Labels[LabelProxy], 10, 64)

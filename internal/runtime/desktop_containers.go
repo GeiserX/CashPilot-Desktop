@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
 
@@ -21,6 +22,27 @@ const desktopRuntime = "existing-docker"
 // created: cashpilot.managed=true and cashpilot.runtime=existing-docker.
 func IsDesktopContainer(labels map[string]string) bool {
 	return labels[LabelManaged] == "true" && labels[LabelRuntime] == desktopRuntime
+}
+
+// workerContainer reports a container another CashPilot made on this Docker: it
+// carries cashpilot.managed=true but not Desktop's cashpilot.runtime. A CashPilot
+// worker names its containers cashpilot-<slug> too, so a name alone never proves
+// the container is Desktop's.
+func workerContainer(c container.InspectResponse) bool {
+	return c.Config != nil && c.Config.Labels[LabelManaged] == "true" && !IsDesktopContainer(c.Config.Labels)
+}
+
+// desktopOwned refuses a start or a stop of a container CashPilot Desktop did not
+// create, so a server command or a click by slug never reaches a worker's
+// container with the same name.
+func desktopOwned(name string, c container.InspectResponse) error {
+	if c.Config != nil && IsDesktopContainer(c.Config.Labels) {
+		return nil
+	}
+	if workerContainer(c) {
+		return fmt.Errorf("%s was made by a CashPilot worker on this Docker, not by CashPilot Desktop, so it was left as it is", name)
+	}
+	return fmt.Errorf("%s was not created by CashPilot Desktop, so it was left as it is", name)
 }
 
 // RemoveDesktopContainers stops and removes every container CashPilot Desktop

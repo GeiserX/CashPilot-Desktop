@@ -37,7 +37,7 @@ func TestADeployMovesTheReplacedContainersSeedIntoItsFile(t *testing.T) {
 		Config: &container.Config{
 			Image:  seedService().Docker.Image,
 			Env:    []string{"HOSTD_WALLET_SEED=" + testPhraseA, "HOSTD_API_PASSWORD=pw"},
-			Labels: map[string]string{LabelManaged: "true", LabelService: "sia-hostd"},
+			Labels: map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: "sia-hostd"},
 		},
 	}); err != nil {
 		t.Fatalf("create the old node: %v", err)

@@ -167,7 +167,7 @@ func tunnelSummary(id string, ip string, labels map[string]string) container.Sum
 // format: "src:udp" for Tailscale, "src:tcp:proxy_ip:port" for SOCKS5 and HTTP. One
 // whose settings cannot be read gets none and keeps the drops.
 func TestTunnelEntry(t *testing.T) {
-	tunnel := map[string]string{LabelManaged: "true", LabelRole: RoleTunnel}
+	tunnel := map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelRole: RoleTunnel}
 	files := func(m map[string]string) func(string) string { return func(n string) string { return m[n] } }
 	c := tunnelSummary("t", "172.30.0.5", tunnel)
 	for _, tc := range []struct {
@@ -199,7 +199,7 @@ func TestTunnelEntry(t *testing.T) {
 // files through the archive API. An earner carrying the same files, and a stopped
 // tunnel, get none: the daemon's label filter is checked again.
 func TestFenceHandsTheHelperTheTunnels(t *testing.T) {
-	tunnel := map[string]string{LabelManaged: "true", LabelRole: RoleTunnel, LabelService: "honeygain"}
+	tunnel := map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelRole: RoleTunnel, LabelService: "honeygain"}
 	asMap := func(c container.Summary, state string) map[string]any {
 		return map[string]any{
 			"Id": c.ID, "Names": []string{"/" + c.ID}, "State": state, "Labels": c.Labels,
@@ -213,7 +213,7 @@ func TestFenceHandsTheHelperTheTunnels(t *testing.T) {
 			asMap(tunnelSummary("ts", "172.30.0.6", tunnel), "running"),
 			asMap(tunnelSummary("sk", "172.30.0.5", tunnel), "running"),
 			asMap(tunnelSummary("gone", "172.30.0.7", tunnel), "exited"),
-			asMap(tunnelSummary("earner", "172.30.0.8", map[string]string{LabelManaged: "true", LabelService: "honeygain"}), "running"),
+			asMap(tunnelSummary("earner", "172.30.0.8", map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: "honeygain"}), "running"),
 		},
 		tunnelFiles: map[string]map[string]string{
 			"ts": {"kind": "tailscale"}, "sk": socks, "gone": {"kind": "tailscale"}, "earner": socks,

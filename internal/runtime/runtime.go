@@ -462,6 +462,9 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// fails after it: the owner was never shown it (WalletResult.Undo).
 	defer func() { retErr = wallet.Undo(retErr) }()
 	if inspectErr == nil {
+		if workerContainer(live.Container) {
+			return ContainerInfo{}, fmt.Errorf("%s was made by a CashPilot worker on this Docker, not by CashPilot Desktop. It was left running; deploy it from that worker, or remove it there first", name)
+		}
 		if live.Container.Config != nil {
 			if owner := otherOwner(live.Container.Config.Labels, spec.Slug, spec.Instance); owner != "" {
 				return ContainerInfo{}, fmt.Errorf("%s already belongs to %s, not to copy %d of %s. It was left running; remove it or deploy under another name", name, owner, max(spec.Instance, 1), spec.Slug)
@@ -652,6 +655,11 @@ func (p *DockerProvider) Stop(ctx context.Context, slug string, stopTimeoutSecon
 	name := containerName(slug)
 	timeout := stopTimeoutForContainer(ctx, cli, name, stopTimeoutSeconds)
 	got, inspectErr := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if inspectErr == nil {
+		if err := desktopOwned(name, got.Container); err != nil {
+			return err
+		}
+	}
 	gated := inspectErr == nil && got.Container.Config != nil && p.fence.isGated(got.Container.Config.Labels)
 	recorded := false // this call wrote the stop record
 	if gated || inspectErr != nil {
@@ -697,6 +705,9 @@ func (p *DockerProvider) startGuarded(ctx context.Context, cli *client.Client, n
 	if err != nil {
 		// Whether it is fence-gated cannot be known, so the start fails closed.
 		return fmt.Errorf("could not check %s before starting it: %w", name, err)
+	}
+	if err := desktopOwned(name, got.Container); err != nil {
+		return err
 	}
 	if got.Container.Config == nil || !p.fence.isGated(got.Container.Config.Labels) {
 		return start()
@@ -919,6 +930,9 @@ func containerLogs(ctx context.Context, name string, lines int) (string, error) 
 		return "", err
 	}
 	defer cli.Close()
+	if err := ownedForLogs(ctx, cli, name); err != nil {
+		return "", err
+	}
 	if lines <= 0 {
 		lines = 200
 	}
@@ -942,6 +956,16 @@ func containerLogs(ctx context.Context, name string, lines int) (string, error) 
 	return stripDockerLogHeaders(raw), nil
 }
 
+// ownedForLogs refuses the logs of a container CashPilot Desktop did not create.
+// A missing container is left to the logs call, which reports it as before.
+func ownedForLogs(ctx context.Context, cli *client.Client, name string) error {
+	got, err := cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	if err != nil {
+		return nil
+	}
+	return desktopOwned(name, got.Container)
+}
+
 // LogsMatching returns the newest `lines` log lines of the last `since` that match
 // `match`. The window is streamed and filtered here, so megabytes of a chatty
 // service's logs are never held at once.
@@ -956,6 +980,9 @@ func logsMatching(ctx context.Context, name string, since time.Duration, match *
 		return "", err
 	}
 	defer cli.Close()
+	if err := ownedForLogs(ctx, cli, name); err != nil {
+		return "", err
+	}
 	reader, err := cli.ContainerLogs(ctx, name, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
@@ -1017,7 +1044,7 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	defer cli.Close()
 	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true"),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime),
 	})
 	if err != nil {
 		return nil, err
@@ -1027,7 +1054,9 @@ func (p *DockerProvider) List(ctx context.Context) ([]ContainerInfo, error) {
 	// the first copy or counts copies may see them.
 	items := list.Items[:0:0]
 	for _, c := range list.Items {
-		if !IsProxied(c.Labels) {
+		// Checked again, so a runtime that ignores a filter cannot list a container a
+		// CashPilot worker made on the same Docker.
+		if IsDesktopContainer(c.Labels) && !IsProxied(c.Labels) {
 			items = append(items, c)
 		}
 	}
@@ -1826,8 +1855,8 @@ func managedContainerMounts(ctx context.Context, cli inspectClient, name string)
 		return nil, err
 	}
 	ctr := inspect.Container
-	if ctr.Config == nil || ctr.Config.Labels[LabelManaged] != "true" {
-		return nil, fmt.Errorf("%s is not managed by CashPilot", name)
+	if ctr.Config == nil || !IsDesktopContainer(ctr.Config.Labels) {
+		return nil, fmt.Errorf("%s was not created by CashPilot Desktop, so it was left as it is", name)
 	}
 	return ctr.Mounts, nil
 }

@@ -322,9 +322,16 @@ Responsibilities:
 - **`Status`** probes the runtime, reports a friendly message when it's absent or
   not running, and lists which CLIs exist (`docker`, `podman`, `colima`,
   `limactl`, `nerdctl`) via `detectTools`.
+- **Ownership:** a container is Desktop's only when it carries both
+  `cashpilot.managed=true` and `cashpilot.runtime=existing-docker`
+  (`IsDesktopContainer`). A CashPilot worker on the same Docker uses the same
+  `cashpilot-<slug>` names and `cashpilot.managed=true`, but never
+  `cashpilot.runtime`. So every listing asks for both labels. A start, stop,
+  restart, remove or log read by slug refuses a container without them, and a
+  redeploy refuses a worker's container.
 - **`Deploy`** pulls the image, then creates+starts a container named
-  `cashpilot-<slug>` with CashPilot labels (`cashpilot.managed=true`, etc.),
-  `unless-stopped` restart policy, and env/ports/volumes/caps from the catalog
+  `cashpilot-<slug>` with CashPilot labels (`cashpilot.managed=true`,
+  `cashpilot.runtime=existing-docker`, etc.), `unless-stopped` restart policy, and env/ports/volumes/caps from the catalog
   entry. A fence-gated earner (Mysterium) gets restart policy `no` instead, and the
   app starts it itself right after it has applied the LAN fence
   (`fence_gated_start.go`). Bind vs named volumes are distinguished by

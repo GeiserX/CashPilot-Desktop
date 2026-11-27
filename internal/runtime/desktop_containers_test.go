@@ -89,3 +89,64 @@ func TestRemoveDesktopContainersReportsADownDocker(t *testing.T) {
 		t.Fatal("a Docker that does not answer gave no error")
 	}
 }
+
+// A CashPilot worker on the same Docker names its containers cashpilot-<slug> too
+// and labels them cashpilot.managed=true, but never cashpilot.runtime. Desktop must
+// not list such a container as its own, and no start, stop, restart, remove, log
+// read or redeploy by slug may reach it. The fake daemon ignores the runtime
+// filter, so the listing also proves the check after the daemon's answer.
+func TestAWorkersContainerIsNeverDesktops(t *testing.T) {
+	docker := startHarnessDocker(t)
+	p := NewDockerProvider()
+	ctx := context.Background()
+	spec := func(slug string) DeploySpec {
+		return DeploySpec{Slug: slug, Service: commandService, Env: map[string]string{"TOKEN": "t"}}
+	}
+	for _, slug := range []string{"cmd-example", "worker-probe"} {
+		if _, err := p.Deploy(ctx, spec(slug), nil); err != nil {
+			t.Fatalf("Deploy %s: %v", slug, err)
+		}
+	}
+	worker := containerName("worker-probe")
+	docker.SetLabel(worker, LabelRuntime, "")
+
+	docker.ResetCalls()
+	list, err := p.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var names []string
+	for _, c := range list {
+		names = append(names, c.Name)
+	}
+	if !slices.Equal(names, []string{containerName("cmd-example")}) {
+		t.Errorf("List = %v, want only Desktop's own container", names)
+	}
+	for _, call := range docker.CallsWithQuery() {
+		if strings.HasPrefix(call, "GET /containers/json") && !strings.Contains(call, url.QueryEscape(LabelRuntime+"="+desktopRuntime)) {
+			t.Errorf("list %q does not ask the daemon for Desktop's runtime label", call)
+		}
+	}
+
+	docker.ResetCalls()
+	for name, op := range map[string]func() error{
+		"Stop":    func() error { return p.Stop(ctx, "worker-probe", 1) },
+		"Start":   func() error { return p.Start(ctx, "worker-probe") },
+		"Restart": func() error { return p.Restart(ctx, "worker-probe", 1) },
+		"Remove":  func() error { return p.Remove(ctx, "worker-probe", RemoveOptions{}) },
+		"Logs":    func() error { _, err := p.Logs(ctx, "worker-probe", 10); return err },
+		"Deploy":  func() error { _, err := p.Deploy(ctx, spec("worker-probe"), nil); return err },
+	} {
+		if err := op(); err == nil || !strings.Contains(err.Error(), worker) {
+			t.Errorf("%s of the worker's container: err = %v, want a refusal naming it", name, err)
+		}
+	}
+	for _, call := range docker.Calls() {
+		if strings.Contains(call, "/containers/"+worker+"/") && !strings.HasPrefix(call, "GET /containers/"+worker+"/json") {
+			t.Errorf("Desktop acted on the worker's container: %s", call)
+		}
+	}
+	if c, ok := docker.Container(worker); !ok || c.State != "running" {
+		t.Fatalf("the worker's container changed: %+v, present %v", c, ok)
+	}
+}

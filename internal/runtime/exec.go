@@ -57,7 +57,7 @@ func (p *DockerProvider) ExecRunning(ctx context.Context, slug string, cmd []str
 
 func execRunning(ctx context.Context, cli execClient, slug string, cmd []string, timeout time.Duration) ([]noderead.Output, error) {
 	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelService+"="+slug),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime, LabelService+"="+slug),
 	})
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func execRunning(ctx context.Context, cli execClient, slug string, cmd []string,
 		// Filtered by the daemon already; checked again so a runtime that ignores a
 		// filter cannot have the command run in another service's container.
 		// A proxied copy is read on its own, never as copy 1 of the service.
-		if c.Labels[LabelService] != slug || c.Labels[LabelManaged] != "true" || string(c.State) != "running" || IsProxied(c.Labels) {
+		if c.Labels[LabelService] != slug || !IsDesktopContainer(c.Labels) || string(c.State) != "running" || IsProxied(c.Labels) {
 			continue
 		}
 		out := noderead.Output{Instance: instanceOf(c.Labels)}
