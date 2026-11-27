@@ -18,7 +18,10 @@ what changed.
 
 "Reports only" means that the server shows what runs here, but cannot run
 commands here. Under CashPilot 2.x, Desktop 2.0 still listens on TCP 8086
-while the switch is on, but the server never learns the address.
+while the switch is on, but a server that never listed `desktop_commands`
+never learns the address. A server that stops listing it, for example after
+a downgrade to 2.x, can still get the address in one more heartbeat. The
+heartbeat after that leaves it out.
 
 - Desktop 2.0 sends its command address only to a server whose heartbeat
   answer says that it can command a Desktop safely. CashPilot 3.0.0 sends that
@@ -71,8 +74,10 @@ These steps apply to a computer that was joined to a CashPilot server in 1.x.
 1. Start CashPilot while your server is reachable. When the window starts,
    it moves the pairing to `pairing.json` if the server answers. The
    background helper cannot do it. If the server was down, quit CashPilot
-   from the tray and start it again. Until the move, this computer keeps
-   reporting with its old key.
+   from the tray and start it again. On a first upgrade from 1.x, this
+   computer keeps reporting with its old key until the move. After a return
+   to 1.x and back, it does not report until the window applies the 1.x
+   choice (step 4 of "Before you upgrade").
 2. If the background helper is on, sign out and sign in again, or restart the
    computer. The helper then runs 2.0 too.
 3. Turn on server commands if you want them. They start off after an upgrade

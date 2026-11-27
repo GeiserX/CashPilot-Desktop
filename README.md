@@ -20,7 +20,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
 
 In 2.0, a CashPilot server that this computer joined can deploy, stop, start, restart and remove services here. Some changes need a step from you:
 
-- **Server commands need CashPilot 3.0.0 or newer.** Under an older server, Desktop 2.0 only reports. It still listens on TCP 8086 while the switch is on, but the server never learns the address. Desktop 1.7.0 also only reports under CashPilot 3.0.0, so upgrade the server first.
+- **Server commands need CashPilot 3.0.0 or newer.** Under an older server, Desktop 2.0 only reports. It still listens on TCP 8086 while the switch is on, but a server that never listed `desktop_commands` never learns the address. A server that stops listing it, for example after a downgrade to 2.x, can still get the address in one more heartbeat. The heartbeat after that leaves it out. Desktop 1.7.0 also only reports under CashPilot 3.0.0, so upgrade the server first.
 - **Server commands start off after an upgrade from 1.x.** Turn them on with the dashboard switch. A first join in 2.0 starts with them on.
 - **A return to 1.x needs a new join.** 2.0 moves the pairing to `pairing.json` and deletes the 1.x keys. After an upgrade back to 2.0, the window applies the join or Leave you made in 1.x when it first starts, and server commands start off. Turn them on with the dashboard switch.
 - **A refused key needs a new join by hand.** Desktop no longer joins again by itself after HTTP 401.
