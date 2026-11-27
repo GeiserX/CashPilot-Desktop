@@ -2133,5 +2133,6 @@
   "main.scope.settings": "instellingen",
   "main.scope.worker": "worker",
   "logs.wrap": "Regels afbreken",
-  "logs.empty": "(geen logboeken)"
+  "logs.empty": "(geen logboeken)",
+  "go.importers.refuse.m4bEncrypted": "{name} is een versleuteld money4band 5.0-bestand. Voer `m4b config edit` uit, kopieer de ontsleutelde JSON die het opent en plak die hier."
 }

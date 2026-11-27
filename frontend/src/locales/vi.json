@@ -2133,5 +2133,6 @@
   "main.scope.settings": "cài đặt",
   "main.scope.worker": "worker",
   "logs.wrap": "Ngắt dòng",
-  "logs.empty": "(không có nhật ký)"
+  "logs.empty": "(không có nhật ký)",
+  "go.importers.refuse.m4bEncrypted": "{name} là tệp money4band 5.0 đã được mã hóa. Hãy chạy `m4b config edit`, sao chép JSON đã giải mã mà lệnh này mở ra, rồi dán vào đây."
 }
