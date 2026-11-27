@@ -69,7 +69,7 @@ export function renderRestorePreview(p: RestorePreview): string {
       <ul>${creates}</ul>
       <p class="muted compact-copy">${ht("restore.neverOverwrites", { service: name })}</p>
       ${refused}${origin}${elsewhere}${confirmName}
-      <input type="password" name="passphrase" autocomplete="off" required aria-label="${ht("restore.passphrase")}" placeholder="${ht("restore.passphrase")}">
+      <input type="password" name="passphrase" autocomplete="off" required aria-label="${ht("restore.phrase")}" placeholder="${ht("restore.phrase")}">
       <button type="submit" class="btn btn-primary btn-sm"${p.ok ? "" : " disabled"}>${ht("restore.restore")}</button>
     </form>`;
 }
