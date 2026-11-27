@@ -242,6 +242,14 @@
       "want": "It's {literal} and #"
     },
     {
+      "locale": "fr",
+      "msg": "{n, plural, =1 {une heure} one {# heure} other {# heures}}",
+      "args": {
+        "n": 1.5
+      },
+      "want": "1,5 heures"
+    },
+    {
       "locale": "en",
       "msg": "This '{isn''t}' obvious",
       "args": {},
