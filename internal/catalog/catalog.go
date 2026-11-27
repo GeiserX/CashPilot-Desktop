@@ -351,6 +351,10 @@ type DockerConfig struct {
 	// no iptables-nft and no kernel WireGuard, so the node starts there and carries
 	// nothing.
 	Runtime string `json:"runtime" yaml:"runtime"`
+	// RuntimeReason says in one sentence why Runtime is required. The web UI's
+	// Fleet page shows it where the runtime choice is locked; Desktop offers no
+	// runtime choice, so it only carries the text.
+	RuntimeReason string `json:"runtimeReason,omitempty" yaml:"runtime_reason"`
 	// UIPort publishes a WebUI port on each address the named env var lists
 	// (comma separated), instead of a static ports entry. See UIBindings.
 	UIPort *UIPort `json:"uiPort,omitempty" yaml:"ui_port"`
