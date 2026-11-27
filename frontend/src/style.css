@@ -101,6 +101,11 @@
   --transition: 100ms linear;
 }
 
+/* The mono fonts have no Arabic, and Arabic text set in a monospace fallback
+   draws its letters unjoined. Arabic takes the UI font for every mono line;
+   digits stay aligned through tabular-nums on body. */
+:root:lang(ar) { --font-mono: var(--font-ui); }
+
 /* ----- Base ----- */
 *, *::before, *::after { box-sizing: border-box; }
 
