@@ -23,9 +23,10 @@ never learns the address. A server that stops listing it, for example after
 a downgrade to 2.x, can still get the address in one more heartbeat. The
 heartbeat after that leaves it out.
 
-- Desktop 2.0 sends its command address only to a server whose heartbeat
-  answer says that it can command a Desktop safely. CashPilot 3.0.0 sends that
-  answer. An older server never gets the address. While the switch is on, the
+- Desktop 2.0 sends its command address only when the server's previous
+  heartbeat answer said that it can command a Desktop safely. CashPilot 3.0.0
+  sends that answer. An older server never gets the address, except in the one
+  heartbeat after a downgrade described above. While the switch is on, the
   dashboard card says that the server is older than CashPilot 3.0.0.
 - Desktop 1.7.0 has no server commands. It stays report-only under CashPilot
   3.0.0, so you can upgrade the server first.
