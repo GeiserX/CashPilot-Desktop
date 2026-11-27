@@ -112,7 +112,7 @@ import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
 import { stallItems } from "./render/stall";
-import { adminConsentScreen, CANCELLED_TEXT, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
+import { adminConsentScreen, cancelledText, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
 import { serviceFormFields } from "./render/fields";
 import { renderStallServerNote } from "./render/stall_server";
 import { backupExportForm, renderStateBackups } from "./render/backups";
@@ -1620,7 +1620,7 @@ async function runImportDeploy(slug: string) {
     });
     if (outcome.kind === "missing") setFeedback(outcome);
     else if (outcome.kind === "blocked") setFeedback({ kind: "failed", text: outcome.message });
-    else if (outcome.kind === "cancelled") setFeedback({ kind: "cancelled", text: CANCELLED_TEXT });
+    else if (outcome.kind === "cancelled") setFeedback({ kind: "cancelled", text: cancelledText() });
     if (outcome.kind !== "done" || outcome.answer.kind !== "ok" || statuses !== importDeploys) return;
     await loadAppState().catch(() => {});
     const creds = await GetCredentials(slug).catch(() => null);
@@ -3138,7 +3138,7 @@ async function wizardDeploy(slug: string, workerId: number | null, invalidField?
     form?.querySelector<HTMLInputElement>('[aria-invalid="true"]')?.focus();
     return;
   }
-  if (outcome.kind === "cancelled") say("cancelled", CANCELLED_TEXT);
+  if (outcome.kind === "cancelled") say("cancelled", cancelledText());
   else say("failed", outcome.message);
 }
 

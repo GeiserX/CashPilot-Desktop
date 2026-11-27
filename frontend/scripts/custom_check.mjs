@@ -18,7 +18,8 @@
 //
 //   node scripts/custom_check.mjs      # against ./.harness-build
 
-import { customDefinitionFrom, keepsLiveEditor, renderCustomEditor, renderCustomServiceCard, renderCustomServicesSection, UNTRUSTED_TEXT } from "../.harness-build/render/custom.js";
+import { customDefinitionFrom, keepsLiveEditor, renderCustomEditor, renderCustomServiceCard, renderCustomServicesSection, untrustedText } from "../.harness-build/render/custom.js";
+const UNTRUSTED_TEXT = untrustedText();
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 import { renderCatalogTable } from "../.harness-build/render/catalog.js";
 import { renderServicesTable } from "../.harness-build/render/services.js";

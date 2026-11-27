@@ -11,6 +11,7 @@
 import { deployNotice, type DeployStatus } from "./deploy_consent.js";
 import type { FenceStatus, HealthScore, ProducerReport, ServiceCopy } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { ht, t } from "./i18n.js";
 import { dockerBlocked, dockerBlockedNote, runtimeAttention, type RuntimeInput } from "./runtime_state.js";
 
 export interface AttentionInput {
@@ -56,10 +57,8 @@ export function containerState(status: string): "ok" | "warn" | "fail" {
 // isolation off refuses: it says that earner stays stopped until the fence is back.
 function gatedNote(slugs: string[], nameOf: (slug: string) => string): string {
   if (!slugs.length) return "";
-  const names = slugs.map((slug) => escapeHtml(nameOf(slug))).join(", ");
-  return slugs.length === 1
-    ? ` ${names} runs only behind the fence, so isolation off would not start it: it stays stopped until the fence is back.`
-    : ` ${names} run only behind the fence, so isolation off would not start them: they stay stopped until the fence is back.`;
+  const names = slugs.map((slug) => nameOf(slug)).join(", ");
+  return ` ${ht("attention.gated", { n: slugs.length, names })}`;
 }
 
 export function attentionItems(input: AttentionInput): AttentionItem[] {
@@ -87,15 +86,15 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   );
   for (const slug of disabled) {
     const svc = input.services.find((s) => s.slug === slug);
-    const name = escapeHtml(nameOf(slug));
+    const name = nameOf(slug);
     const support = /^https:\/\//.test(svc?.supportUrl || "") ? svc!.supportUrl! : "";
     items.push({
       level: "fail",
-      tag: "Account disabled",
+      tag: t("attention.tag.disabled"),
       what: nameOf(slug),
-      why: `${name} turned this account off, so it earns nothing and no balance can be read. Restarting will not help: contact ${name} to get it back. CashPilot leaves its containers as they are. Once ${name} turns the account back on, remove the service and deploy it again.`,
+      why: ht("attention.disabled", { name }),
       actions: support
-        ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(support)}">Contact ${name}</button>`
+        ? `<button class="btn btn-ghost btn-sm" data-url="${escapeHtml(support)}">${ht("attention.contact", { name })}</button>`
         : "",
     });
   }
@@ -113,16 +112,14 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       const fenced = fence?.mode === "on";
       items.push({
         level: "warn",
-        tag: "Waiting",
+        tag: t("attention.tag.waiting"),
         what: nameOf(slug),
-        why: `runs only behind the LAN fence, so CashPilot starts it itself, never Docker. ${
-          fence?.state === "applied" && fence.error
-            ? `The fence is in place, but CashPilot reports: ${escapeHtml(fence.error)}. It tries again at the next fence check, within five minutes.`
-            : fenced
-              ? "It starts as soon as CashPilot has confirmed the fence."
-              : "LAN isolation is not on here, so it stays stopped until isolation is on and the fence is in place."
-        } While CashPilot is not running, nothing starts it: after this computer restarts, it stays stopped until CashPilot starts.`,
-        actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(slug)}">Logs</button>`,
+        why: fence?.state === "applied" && fence.error
+          ? ht("attention.waiting.error", { error: fence.error })
+          : fenced
+            ? ht("attention.waiting.fenced")
+            : ht("attention.waiting.notOn"),
+        actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(slug)}">${ht("attention.logs")}</button>`,
       });
       return;
     }
@@ -130,12 +127,14 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     const wait = native ? "" : blockedAttr;
     items.push({
       level: st,
-      tag: st === "fail" ? "Down" : "Degraded",
+      tag: st === "fail" ? t("attention.tag.down") : t("attention.tag.degraded"),
       what: nameOf(slug),
-      where: copy > 1 ? `copy ${copy}` : undefined,
-      why: `container is ${escapeHtml(status || "unknown")}${name ? ` (<code>${escapeHtml(name)}</code>)` : ""}`,
-      actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(slug)}"${copyAttr}>Logs</button>
-        <button class="btn btn-primary btn-sm" data-row-action="start" data-slug="${escapeHtml(slug)}"${copyAttr}${wait}>Start</button>`,
+      where: copy > 1 ? t("attention.copy", { n: copy }) : undefined,
+      why: name
+        ? ht("attention.containerIsNamed", { status: status || t("attention.unknown"), name })
+        : ht("attention.containerIs", { status: status || t("attention.unknown") }),
+      actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(slug)}"${copyAttr}>${ht("attention.logs")}</button>
+        <button class="btn btn-primary btn-sm" data-row-action="start" data-slug="${escapeHtml(slug)}"${copyAttr}${wait}>${ht("attention.start")}</button>`,
       blocked: native ? undefined : blockedNote || undefined,
     });
   };
@@ -147,7 +146,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   for (const dep of input.deployments) {
     const crashes = input.health?.[dep.slug]?.crashes ?? 0;
     if (crashes >= 3 && !disabled.has(dep.slug)) {
-      items.push({ level: "warn", tag: "Unstable", what: nameOf(dep.slug), why: `${crashes} crashes in the last 7 days`, actions: "" });
+      items.push({ level: "warn", tag: t("attention.tag.unstable"), what: nameOf(dep.slug), why: ht("attention.crashes", { n: crashes }), actions: "" });
     }
   }
 
@@ -158,23 +157,23 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       // service runs on this machine). New credentials would not help.
       items.push({
         level: "warn",
-        tag: "No node read",
+        tag: t("attention.tag.noNodeRead"),
         what: nameOf(record.platform),
         why: escapeHtml(record.error),
-        actions: `<button class="btn btn-ghost btn-sm" data-row-action="collect" data-slug="${escapeHtml(record.platform)}">Retry</button>`,
+        actions: `<button class="btn btn-ghost btn-sm" data-row-action="collect" data-slug="${escapeHtml(record.platform)}">${ht("attention.retry")}</button>`,
       });
       continue;
     }
     items.push({
       level: "warn",
-      tag: "No reading",
+      tag: t("attention.tag.noReading"),
       what: nameOf(record.platform),
-      why: `CashPilot could not read this balance: ${escapeHtml(record.error)}`,
+      why: ht("attention.couldNotRead", { error: record.error }),
       // A timeout or a provider outage clears on a retry; a rejected login needs
       // the credentials. The message cannot always tell which, so offer both.
-      actions: `<button class="btn btn-ghost btn-sm" data-row-action="collect" data-slug="${escapeHtml(record.platform)}">Retry</button>${
+      actions: `<button class="btn btn-ghost btn-sm" data-row-action="collect" data-slug="${escapeHtml(record.platform)}">${ht("attention.retry")}</button>${
         known(record.platform)
-          ? `\n        <button class="btn btn-ghost btn-sm" data-open-service="${escapeHtml(record.platform)}">Fix credentials</button>`
+          ? `\n        <button class="btn btn-ghost btn-sm" data-open-service="${escapeHtml(record.platform)}">${ht("attention.fixCredentials")}</button>`
           : ""
       }`,
     });
@@ -188,11 +187,11 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     const status = input.driftDeploys?.[slug];
     items.push({
       level: "fail",
-      tag: "Needs fixing",
+      tag: t("attention.tag.needsFixing"),
       what: nameOf(slug),
-      why: `container does not match the catalog: ${found.map((d) => escapeHtml(d)).join("; ")}. Redeploy it: CashPilot keeps the settings it was deployed with.`,
-      actions: `<button class="btn btn-primary btn-sm" data-drift-action="redeploy" data-slug="${s}"${blockedAttr}>Redeploy</button>
-        <button class="btn btn-ghost btn-sm" data-drift-action="ignore" data-slug="${s}" title="Stop warning about this service until the catalog changes it again">Ignore</button>`,
+      why: ht("attention.drift", { found: found.join("; ") }),
+      actions: `<button class="btn btn-primary btn-sm" data-drift-action="redeploy" data-slug="${s}"${blockedAttr}>${ht("attention.redeploy")}</button>
+        <button class="btn btn-ghost btn-sm" data-drift-action="ignore" data-slug="${s}" title="${ht("attention.ignoreTitle")}">${ht("attention.ignore")}</button>`,
       deployStatus: `<div data-drift-deploy-status="${s}">${status ? deployNotice(status.kind, status.text) : ""}</div>`,
       blocked: blockedNote || undefined,
     });
@@ -204,17 +203,17 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     // The check itself failed (Docker did not answer), so no mode was settled.
     items.push({
       level: "fail",
-      tag: "Fence unknown",
-      what: "LAN isolation",
-      why: `CashPilot could not check the fence that keeps earners off your LAN${fence.error ? `: ${escapeHtml(fence.error)}` : "."} Container deploys are refused until it can.`,
+      tag: t("attention.tag.fenceUnknown"),
+      what: t("attention.lanIsolation"),
+      why: fence.error ? ht("attention.fenceUnknown.error", { error: fence.error }) : ht("attention.fenceUnknown"),
       actions: "",
     });
   } else if (fence && fence.mode === "on" && fence.state === "failed") {
     items.push({
       level: "fail",
-      tag: "Fence down",
-      what: "LAN isolation",
-      why: `the fence that keeps earners off your LAN could not be applied${fence.error ? `: ${escapeHtml(fence.error)}` : "."} Container deploys are refused until it can be. To deploy other earners without it, set LAN isolation to off in Settings.${gatedNote(fence.waiting || [], nameOf)}`,
+      tag: t("attention.tag.fenceDown"),
+      what: t("attention.lanIsolation"),
+      why: `${fence.error ? ht("attention.fenceDown.error", { error: fence.error }) : ht("attention.fenceDown")}${gatedNote(fence.waiting || [], nameOf)}`,
       actions: "",
     });
   } else if (fence && fence.mode === "unsupported") {
@@ -222,10 +221,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
     // with no switch, because no switch can fix it.
     items.push({
       level: "warn",
-      tag: "Not fenced",
-      what: "LAN isolation",
-      why: `${fence.error ? escapeHtml(fence.error.replace(/\.\s*$/, "")) : "CashPilot cannot fence earners off the LAN on this container runtime"}. Container earners run on its default network and can reach your LAN and this computer.${
-        fence.setting === "on" ? " With LAN isolation set to on, container deploys are refused; set it to auto or off in Settings to deploy without the fence." : ""
+      tag: t("attention.tag.notFenced"),
+      what: t("attention.lanIsolation"),
+      why: `${fence.error ? ht("attention.notFenced.error", { error: fence.error.replace(/\.\s*$/, "") }) : ht("attention.notFenced")}${
+        fence.setting === "on" ? ` ${ht("attention.notFenced.settingOn")}` : ""
       }`,
       actions: "",
     });
@@ -233,15 +232,15 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   const outside = fence && fence.mode !== "off" && fence.mode !== "unsupported" ? fence.outside || [] : [];
   if (outside.length) {
     const stopped = fence?.outsideStopped || [];
-    const names = outside.map((slug) => escapeHtml(nameOf(slug))).join(", ");
+    const names = outside.map((slug) => nameOf(slug)).join(", ");
     items.push({
       level: "warn",
-      tag: "Exposed",
-      what: outside.length === 1 ? nameOf(outside[0]) : `${outside.length} services`,
-      why: `${names} can reach your LAN and this computer. Turn on isolation to redeploy ${outside.length === 1 ? "it" : "them"} onto CashPilot's fenced network, with the same settings and data.${
-        stopped.length ? ` Stopped services (${stopped.map((slug) => escapeHtml(nameOf(slug))).join(", ")}) are left alone and move on their next deploy.` : ""
+      tag: t("attention.tag.exposed"),
+      what: outside.length === 1 ? nameOf(outside[0]) : t("attention.nServices", { n: outside.length }),
+      why: `${ht("attention.exposed", { n: outside.length, names })}${
+        stopped.length ? ` ${ht("attention.exposedStopped", { names: stopped.map((slug) => nameOf(slug)).join(", ") })}` : ""
       }`,
-      actions: `<button class="btn btn-primary btn-sm" data-isolation-action="enable"${blockedAttr}>Turn on isolation</button>`,
+      actions: `<button class="btn btn-primary btn-sm" data-isolation-action="enable"${blockedAttr}>${ht("attention.turnOnIsolation")}</button>`,
       blocked: blockedNote || undefined,
     });
   }
@@ -249,10 +248,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   for (const slug of input.outdated || []) {
     items.push({
       level: "warn",
-      tag: "Outdated",
+      tag: t("attention.tag.outdated"),
       what: nameOf(slug),
-      why: "runs an image that no longer matches the catalog. Re-deploy it to update.",
-      actions: known(slug) ? `<button class="btn btn-ghost btn-sm" data-open-service="${escapeHtml(slug)}">Open</button>` : "",
+      why: ht("attention.outdated"),
+      actions: known(slug) ? `<button class="btn btn-ghost btn-sm" data-open-service="${escapeHtml(slug)}">${ht("attention.open")}</button>` : "",
     });
   }
 
@@ -278,11 +277,11 @@ export function renderAttention(items: AttentionItem[], up: number, total: numbe
   return `
     <section class="attention${items.length ? "" : " attention-quiet"}" aria-labelledby="attention-title">
       <div class="block-head">
-        <h2 class="block-title" id="attention-title">Needs attention${items.length ? ` <span class="count">${items.length}</span>` : ""}</h2>
+        <h2 class="block-title" id="attention-title">${ht("attention.title")}${items.length ? ` <span class="count">${items.length}</span>` : ""}</h2>
       </div>
       ${items.length
         ? `<div class="attn-list">${rows}</div>`
-        : `<p class="attn-clear">Nothing needs you. ${up} of ${total} container${total === 1 ? "" : "s"} up.</p>`}
+        : `<p class="attn-clear">${ht("attention.allClear", { up, total })}</p>`}
       ${completedDeploys.length ? `<div class="drift-deploy-results">${completedDeploys.map((result) => deployNotice(result.kind, result.text)).join("")}</div>` : ""}
     </section>
   `;

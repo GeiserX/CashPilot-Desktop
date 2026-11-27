@@ -28,6 +28,7 @@
 import type { Payout, Service } from "../wails";
 import { coinAmount, escapeHtml, miningBalancePrecision } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { stripHtml } from "./fields.js";
+import { ht, t } from "./i18n.js";
 
 /** What an undocumented value looks like. Never 0, never an empty cell. */
 export const UNKNOWN = "—";
@@ -99,28 +100,28 @@ export function payoutFacts(service: Service, balance?: Balance | null): Fact[] 
   const poolTerms = pool ? service.payment?.minimumPayout?.trim() : "";
   const facts: Fact[] = [
     {
-      label: pool ? "Payout terms" : "Minimum to cash out",
+      label: pool ? t("details.payoutTerms") : t("details.minimum"),
       value: poolTerms || minimumText,
     },
-    { label: "Paid by", value: (service.payment?.methods || []).join(", ") || UNKNOWN },
-    { label: "Paid out", value: (service.payment?.frequency || "").trim() || UNKNOWN },
+    { label: t("details.paidBy"), value: (service.payment?.methods || []).join(", ") || UNKNOWN },
+    { label: t("details.paidOut"), value: (service.payment?.frequency || "").trim() || UNKNOWN },
   ];
 
   const poolNotes = pool ? service.cashout?.notes?.trim() : "";
-  if (poolNotes) facts.push({ label: "Payout notes", value: poolNotes });
+  if (poolNotes) facts.push({ label: t("details.payoutNotes"), value: poolNotes });
 
   if (balance && Number.isFinite(balance.amount)) {
     if (pool) {
       const unit = balance.currency.trim().toUpperCase();
       const amount = miningBalancePrecision(unit) === undefined ? coinAmount(balance.amount) : trimNumber(balance.amount, unit);
-      facts.push({ label: "Unpaid pool balance", value: `${amount} ${unit}`.trim() });
+      facts.push({ label: t("details.unpaidPool"), value: `${amount} ${unit}`.trim() });
     }
     const threshold = minimumIn(service, balance.currency);
     if (threshold !== null) {
       const remaining = threshold - balance.amount;
-      const reached = pool ? "Minimum reached. Check the pool's payout terms." : "Nothing — this can be cashed out now";
+      const reached = pool ? t("details.poolReached") : t("details.reached");
       facts.push({
-        label: pool ? "Still to minimum payout" : "Still to go",
+        label: pool ? t("details.stillToPoolMinimum") : t("details.stillToGo"),
         value: remaining <= 0 ? reached : `${trimNumber(remaining, balance.currency)} ${(balance.currency || "").trim().toUpperCase()}`.trim(),
       });
     }
@@ -132,11 +133,11 @@ export function payoutFacts(service: Service, balance?: Balance | null): Fact[] 
 export function disclosureFacts(service: Service): Fact[] {
   const disclosure = service.disclosure || ({} as Service["disclosure"]);
   return [
-    { label: "What it sells", value: text(disclosure.sells) },
-    { label: "Other people's traffic", value: text(disclosure.thirdPartyTraffic) },
-    { label: "What it collects", value: text(disclosure.dataCollected) },
-    { label: "Risk to your connection", value: text(disclosure.ispRisk) },
-    { label: "Account rules", value: text(disclosure.accountRules) },
+    { label: t("details.sells"), value: text(disclosure.sells) },
+    { label: t("details.thirdPartyTraffic"), value: text(disclosure.thirdPartyTraffic) },
+    { label: t("details.dataCollected"), value: text(disclosure.dataCollected) },
+    { label: t("details.ispRisk"), value: text(disclosure.ispRisk) },
+    { label: t("details.accountRules"), value: text(disclosure.accountRules) },
   ];
 }
 
@@ -157,10 +158,10 @@ function text(value: string | undefined | null): string {
  * relay that needs only a wallet) gets "Visit site" instead: "Create account" sent
  * people looking for an account form that does not exist. The web app does the same.
  */
-export function signupButton(service: Service, label = "Create account"): string {
+export function signupButton(service: Service, label = t("details.createAccount")): string {
   const url = (service.referral?.signupUrl || "").trim() || (service.website || "").trim();
   if (!url) return "";
-  const text = hasAccount(service) ? label : "Visit site";
+  const text = hasAccount(service) ? label : t("details.visitSite");
   return `<button class="primary" data-url="${escapeHtml(url)}">${escapeHtml(text)}</button>`;
 }
 
@@ -185,12 +186,12 @@ export function referralNote(service: Service): string {
   if (!service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
   // The new user's bonus first, when the catalog records one: it is the reason to use the link.
   const referee = (service.referral.bonus?.referee || "").trim();
-  const bonus = referee ? `<strong>New-user bonus with this link:</strong> ${escapeHtml(referee)}. ` : "";
+  const bonus = referee ? `${ht("details.bonus", { bonus: referee })} ` : "";
   const entry = (service.referral.codeEntry || "").trim();
   const typed = entry
-    ? `<p class="referral-code">When ${escapeHtml(service.name)} asks for a referral code, type <code>${escapeHtml(entry)}</code>. The link does not fill it in. ${codeEntryCopy(service, "Copy")}</p>`
+    ? `<p class="referral-code">${ht("details.typeCode", { name: service.name, code: entry })} ${codeEntryCopy(service, ht("details.copy"))}</p>`
     : "";
-  return `${typed}<p class="referral-note">${bonus}Referral link: the CashPilot maintainer may earn a commission from it, which helps keep CashPilot free and maintained.</p>`;
+  return `${typed}<p class="referral-note">${bonus}${ht("details.referralNote")}</p>`;
 }
 
 /**
@@ -201,7 +202,7 @@ export function referralNote(service: Service): string {
 export function codeEntryCopy(service: Pick<Service, "name" | "referral">, label: string): string {
   const entry = (service.referral?.codeEntry || "").trim();
   if (!entry || !service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
-  const name = escapeHtml(`Copy ${service.name}'s referral code ${entry}`);
+  const name = escapeHtml(t("details.copyCodeLabel", { name: service.name, code: entry }));
   return `<button type="button" class="secondary compact-btn" data-copy-text="${escapeHtml(entry)}" aria-label="${name}" title="${name}">${label}</button>`;
 }
 
@@ -217,13 +218,13 @@ export function deviceLinkText(service: Service | undefined, values: Record<stri
   const id = (values[link?.idEnv || ""] || "").trim();
   if (!link || !id) return "";
   // The deploy added it through the provider's API (ProxyRack with its API key).
-  if (addedId === id) return ["Added to your account", id].join("\n");
+  if (addedId === id) return [t("details.addedToAccount"), id].join("\n");
   const url = (link.url || "").replace(/\$\{(\w+)\}/g, (_, key: string) => encodeURIComponent((values[key] || "").trim()));
   // The provider did not know the new device yet; the app keeps trying to add it.
   const retrying = retryingId === id
-    ? "The provider does not know this new device yet. CashPilot keeps trying to add it for a day and tells you if it cannot."
+    ? t("details.retryingLink")
     : "";
-  return ["Link this device to your account", retrying || link.steps.trim(), id, url].filter(Boolean).join("\n");
+  return [t("details.linkDevice"), retrying || link.steps.trim(), id, url].filter(Boolean).join("\n");
 }
 
 /** One block of label/value rows. */
@@ -239,7 +240,7 @@ function factList(title: string, facts: Fact[]): string {
 }
 
 export function renderPayoutFacts(service: Service, balance?: Balance | null): string {
-  return factList("Getting paid", payoutFacts(service, balance));
+  return factList(t("details.gettingPaid"), payoutFacts(service, balance));
 }
 
 /** Payout and disclosure together, as they appear under a service's setup card. */
@@ -247,7 +248,7 @@ export function serviceFacts(service: Service, balance?: Balance | null): string
   return `
     <div class="service-details">
       <div class="detail-block" data-payout-facts>${renderPayoutFacts(service, balance)}</div>
-      <div class="detail-block">${factList("What it does with your machine", disclosureFacts(service))}</div>
+      <div class="detail-block">${factList(t("details.withYourMachine"), disclosureFacts(service))}</div>
       <div class="detail-block payout-ledger" data-payouts-slug="${escapeHtml(service.slug)}">${payoutLedger(service, undefined)}</div>
     </div>
   `;
@@ -270,35 +271,35 @@ export function payoutLedger(service: Service, payouts: Payout[] | null | undefi
   const slug = escapeHtml(service.slug);
   let list: string;
   if (payouts === undefined) {
-    return `<strong class="detail-title">Cashed out</strong><p class="muted">Loading cash-outs…</p>`;
+    return `<strong class="detail-title">${ht("details.cashedOut")}</strong><p class="muted">${ht("details.loadingPayouts")}</p>`;
   }
   if (payouts === null) {
-    list = `<p class="tip">Cash-outs could not be loaded.</p>`;
+    list = `<p class="tip">${ht("details.payoutsFailed")}</p>`;
   } else if (payouts.length === 0) {
-    list = `<p class="muted">None recorded.</p>`;
+    list = `<p class="muted">${ht("details.noneRecorded")}</p>`;
   } else {
     list = `<dl class="detail-facts">${payouts
       .map((payout) => {
         const what = `${trimNumber(payout.amount, payout.currency || "")} ${(payout.currency || "").toUpperCase()}${payout.method ? ` · ${payout.method}` : ""}`;
-        const unpriced = payout.fxRateUsd === null || payout.fxRateUsd === undefined ? " (no rate for that day, left out of the total)" : "";
-        return `<div class="detail-fact"><dt>${escapeHtml(payout.paidOn)}</dt><dd>${escapeHtml(what + unpriced)} <button class="secondary" data-remove-payout="${escapeHtml(String(payout.id))}" data-slug="${slug}">Remove</button></dd></div>`;
+        const unpriced = payout.fxRateUsd === null || payout.fxRateUsd === undefined;
+        return `<div class="detail-fact"><dt>${escapeHtml(payout.paidOn)}</dt><dd>${escapeHtml(unpriced ? t("details.unpriced", { what }) : what)} <button class="secondary" data-remove-payout="${escapeHtml(String(payout.id))}" data-slug="${slug}">${ht("details.remove")}</button></dd></div>`;
       })
       .join("")}</dl>`;
   }
   const unit = minimumUnit(service);
   return `
-    <strong class="detail-title">Cashed out</strong>
+    <strong class="detail-title">${ht("details.cashedOut")}</strong>
     ${list}
     <details class="payout-record">
-      <summary>Record a cash-out</summary>
+      <summary>${ht("details.recordPayout")}</summary>
       <div class="credential-grid">
-        <label><span>Amount *</span><input data-payout-field="amount" type="number" step="any" min="0" placeholder="e.g. 37.54" /></label>
-        <label><span>Currency</span><input data-payout-field="currency" type="text" maxlength="12" placeholder="${escapeHtml(unit || "same as the balance")}" /></label>
-        <label><span>Date</span><input data-payout-field="date" type="date" /></label>
-        <label><span>Method or note</span><input data-payout-field="method" type="text" maxlength="40" placeholder="e.g. PayPal" /></label>
+        <label><span>${ht("details.amount")}</span><input data-payout-field="amount" type="number" step="any" min="0" placeholder="${ht("details.example", { example: "37.54" })}" /></label>
+        <label><span>${ht("details.currency")}</span><input data-payout-field="currency" type="text" maxlength="12" placeholder="${escapeHtml(unit || t("details.sameAsBalance"))}" /></label>
+        <label><span>${ht("details.date")}</span><input data-payout-field="date" type="date" /></label>
+        <label><span>${ht("details.method")}</span><input data-payout-field="method" type="text" maxlength="40" placeholder="${ht("details.example", { example: "PayPal" })}" /></label>
       </div>
-      <div class="actions left"><button class="primary" data-record-payout="${slug}">Save cash-out</button></div>
-      <small class="muted">For a cash-out CashPilot did not see, such as one made before it was installed. It counts toward what you earned all time.</small>
+      <div class="actions left"><button class="primary" data-record-payout="${slug}">${ht("details.savePayout")}</button></div>
+      <small class="muted">${ht("details.payoutHelp")}</small>
     </details>
   `;
 }
@@ -314,16 +315,16 @@ export function composeSelectionExport(services: Service[]): string {
   return `
     <div class="compose-export">
       <label class="compose-arch">
-        <span>Compose file for</span>
+        <span>${ht("details.composeFor")}</span>
         <select data-compose-arch="selection">
-          <option value="">This machine</option>
-          <option value="amd64">x86-64 (amd64)</option>
-          <option value="arm64">64-bit ARM (Raspberry Pi 4/5, Apple silicon)</option>
-          <option value="arm">32-bit ARM (Raspberry Pi 2/3)</option>
+          <option value="">${ht("details.arch.thisMachine")}</option>
+          <option value="amd64">${ht("details.arch.amd64")}</option>
+          <option value="arm64">${ht("details.arch.arm64")}</option>
+          <option value="arm">${ht("details.arch.arm")}</option>
         </select>
       </label>
       <button class="secondary" data-compose-export-selection="${exportable.map((service) => escapeHtml(service.slug)).join(" ")}">
-        Export all ${exportable.length} as one compose file
+        ${ht("details.exportAll", { n: exportable.length })}
       </button>
       <pre class="output compose-output" data-output-slug="compose-selection"></pre>
     </div>
@@ -344,16 +345,16 @@ export function composeExportControl(service: Service): string {
   return `
     <div class="compose-export">
       <label class="compose-arch">
-        <span>Compose file for</span>
+        <span>${ht("details.composeFor")}</span>
         <select data-compose-arch="${slug}">
-          <option value="">This machine</option>
-          <option value="amd64">x86-64 (amd64)</option>
-          <option value="arm64">64-bit ARM (Raspberry Pi 4/5, Apple silicon)</option>
-          <option value="arm">32-bit ARM (Raspberry Pi 2/3)</option>
+          <option value="">${ht("details.arch.thisMachine")}</option>
+          <option value="amd64">${ht("details.arch.amd64")}</option>
+          <option value="arm64">${ht("details.arch.arm64")}</option>
+          <option value="arm">${ht("details.arch.arm")}</option>
         </select>
       </label>
-      <button class="secondary" data-compose-export="${slug}">Export compose file</button>
-      <small class="muted">Runs this service without CashPilot. Your credentials stay out of the file.</small>
+      <button class="secondary" data-compose-export="${slug}">${ht("details.exportCompose")}</button>
+      <small class="muted">${ht("details.composeHelp")}</small>
     </div>
   `;
 }
