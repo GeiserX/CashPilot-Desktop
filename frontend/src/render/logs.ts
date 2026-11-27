@@ -5,6 +5,7 @@
 // dashboard shows logs the same way (CashPilot app/static/js/app.js logEntries).
 
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node
+import { ht } from "./i18n.js";
 
 export interface LogEntry {
   /** The time as Docker wrote it, or "" for a line without one. */
@@ -50,7 +51,7 @@ export function renderLogLines(text: string, now: Date, wrap: boolean): string {
     })
     .join("");
   return (
-    `<div class="log-bar"><button type="button" class="btn btn-ghost btn-sm" data-log-wrap aria-pressed="${wrap}">Wrap lines</button></div>` +
+    `<div class="log-bar"><button type="button" class="btn btn-ghost btn-sm" data-log-wrap aria-pressed="${wrap}">${ht("logs.wrap")}</button></div>` +
     `<div class="log-lines" style="--log-ts:${width}ch">${rows}</div>`
   );
 }

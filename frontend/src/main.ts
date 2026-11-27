@@ -3626,7 +3626,7 @@ function setLogs(value: string) {
   const out = document.querySelector<HTMLElement>("#service-output");
   if (!out) return;
   const wrap = logWrapOn();
-  out.innerHTML = renderLogLines(value || "(no logs)", new Date(), wrap);
+  out.innerHTML = renderLogLines(value || t("logs.empty"), new Date(), wrap);
   out.classList.add("output-logs");
   out.classList.toggle("log-wrap", wrap);
   out.querySelector<HTMLButtonElement>("[data-log-wrap]")?.addEventListener("click", (event) => {
