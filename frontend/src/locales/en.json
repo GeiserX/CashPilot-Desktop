@@ -539,7 +539,7 @@
   "restore.refused": "This machine cannot restore it now: {why}",
   "restore.creates": "<code>{file}</code>: restoring <strong>{service}</strong> creates a new container <code>{container}</code> with:",
   "restore.neverOverwrites": "It never writes over anything: {service} must not be on this machine and these volumes must not exist. The backup is written, read back and compared before the container first starts.",
-  "restore.passphrase": "Passphrase of the backup",
+  "restore.phrase": "Passphrase of the backup",
   "restore.restore": "Restore",
   "restore.result.started": "{service} was restored ({n, plural, one {{n} file} other {{n} files}}, checked against the backup) and started.",
   "restore.result.waiting": "{service} was restored ({n, plural, one {{n} file} other {{n} files}}, checked against the backup). It waits for the LAN fence and starts once it holds.",
