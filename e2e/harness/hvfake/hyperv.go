@@ -1349,7 +1349,7 @@ func (f *HyperV) TaskRunning(name string) bool {
 var (
 	accountRe = regexp.MustCompile(`<LocalAccount[^>]*><Name>([a-z]+)</Name><Group>[^<]*</Group><Password><Value>([^<]*)</Value>`)
 	answerGW  = regexp.MustCompile(`<NextHopAddress>([0-9.]+)</NextHopAddress>`)
-	answerARP = regexp.MustCompile(`New-NetNeighbor -InterfaceIndex \$i -IPAddress ([0-9.]+) -LinkLayerAddress ([0-9A-Fa-f-]{17})`)
+	answerARP = regexp.MustCompile(`IPAddress='([0-9.]+)'\};Remove-NetNeighbor @p -Confirm:\$false -EA 0;New-NetNeighbor @p -LinkLayerAddress ([0-9A-Fa-f-]{17}) -State Permanent`)
 )
 
 // applyAnswer is Windows Setup at the first start: the accounts and the
