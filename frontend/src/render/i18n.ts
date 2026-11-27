@@ -165,14 +165,21 @@ class Parser {
           continue;
         }
         if (this.pos + 1 < s.length && "{}#".includes(s[this.pos + 1])) {
-          const end = s.indexOf("'", this.pos + 1);
-          if (end < 0) {
-            text += s.slice(this.pos + 1);
-            this.pos = s.length;
-            continue;
+          // A quoted span runs to the next lone apostrophe; two apostrophes
+          // inside it are one, as everywhere else.
+          this.pos++;
+          while (this.pos < s.length) {
+            if (s[this.pos] === "'") {
+              if (s[this.pos + 1] === "'") {
+                text += "'";
+                this.pos += 2;
+                continue;
+              }
+              this.pos++;
+              break;
+            }
+            text += s[this.pos++];
           }
-          text += s.slice(this.pos + 1, end);
-          this.pos = end + 1;
           continue;
         }
         text += c;
