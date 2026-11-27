@@ -14,6 +14,7 @@
 
 import type { SessionConsent, Service } from "../wails";
 import { escapeHtml } from "./format.js";
+import { ht, t } from "./i18n.js";
 
 /**
  * The version of the text below. Bump it with every change to the text.
@@ -56,7 +57,7 @@ export function consentIsCurrent(consent: SessionConsent | null | undefined, sec
 /** The day a consent was given, as YYYY-MM-DD (UTC), or "an unknown date". */
 export function consentDay(consent: SessionConsent): string {
   const at = Date.parse(consent.acceptedAt);
-  return Number.isNaN(at) ? "an unknown date" : new Date(at).toISOString().slice(0, 10);
+  return Number.isNaN(at) ? t("session.unknownDate") : new Date(at).toISOString().slice(0, 10);
 }
 
 /**
@@ -70,25 +71,25 @@ export function consentDay(consent: SessionConsent): string {
  * version the consent stores.
  */
 export function renderSessionDisclosure(service: Service, secureVM = false): string {
-  const name = escapeHtml(service.name);
+  const name = service.name;
   const slug = escapeHtml(service.slug);
   return `
     <div class="session-risk" data-session-disclosure="${slug}">
-      <h4>Run ${name} in your own session on this computer?</h4>
-      <p>Earning apps sell your internet connection to other people. Their code is closed, and most of them ask for admin rights. They also update themselves. In your own session, nothing stands between these apps and your computer. If an app is hostile, or a bad update reaches it, the app can:</p>
+      <h4>${ht("session.disclosure.title", { name })}</h4>
+      <p>${ht("session.disclosure.intro")}</p>
       <ul>
-        <li>reach every device on your home network, such as your router's settings page, a NAS, cameras, printers and other computers.</li>
-        <li>reach your Tailscale, VPN or work network.</li>
-        <li>read your files, your browsers and the passwords that your browsers save.</li>
-        <li>read the logins that CashPilot keeps for your earning accounts, and connect to CashPilot itself.</li>
-        <li>install other software, because most of these apps run as administrator.</li>
+        <li>${ht("session.disclosure.risk.network")}</li>
+        <li>${ht("session.disclosure.risk.vpn")}</li>
+        <li>${ht("session.disclosure.risk.files")}</li>
+        <li>${ht("session.disclosure.risk.logins")}</li>
+        <li>${ht("session.disclosure.risk.software")}</li>
       </ul>
-      ${secureVM ? `<p data-session-vm-line>The app can also change the protection of your Secure VM. When you set up the Secure VM, your Windows account got full control of Hyper-V. Apps in this session run as you. CashPilot detects the change and disconnects the VM within one minute.</p>` : ""}
-      <p>Do not turn off antivirus scanning for the folder of an app. Some apps ask you to do this.</p>
-      <p>Wherever an earning app runs, other people's traffic leaves through your internet address. Your internet provider may forbid this. If a buyer uses your connection for abuse, the abuse is traced to your address.</p>
+      ${secureVM ? `<p data-session-vm-line>${ht("session.disclosure.secureVM")}</p>` : ""}
+      <p>${ht("session.disclosure.antivirus")}</p>
+      <p>${ht("session.disclosure.traffic")}</p>
       <div class="session-accept">
-        <label class="session-tick"><input type="checkbox" data-session-tick="${slug}" /> I understand these risks for ${name}.</label>
-        <button class="primary compact-btn" data-session-accept="${slug}" data-session-version="${escapeHtml(sessionDisclosureVersion(secureVM))}" disabled>Run in my session</button>
+        <label class="session-tick"><input type="checkbox" data-session-tick="${slug}" /> ${ht("session.disclosure.understand", { name })}</label>
+        <button class="primary compact-btn" data-session-accept="${slug}" data-session-version="${escapeHtml(sessionDisclosureVersion(secureVM))}" disabled>${ht("session.disclosure.accept")}</button>
       </div>
     </div>
   `;
@@ -100,20 +101,20 @@ export function renderSessionDisclosure(service: Service, secureVM = false): str
  * steps, the setup guide and a way to withdraw.
  */
 export function renderSessionSlot(service: Service, consent: SessionConsent | null | undefined, secureVM = false): string {
-  const name = escapeHtml(service.name);
+  const name = service.name;
   const slug = escapeHtml(service.slug);
   if (!consentIsCurrent(consent, secureVM)) {
     const stale = consent
-      ? `<p class="tip" data-session-stale>You accepted an older version of this text on ${escapeHtml(consentDay(consent))}. The text changed, so read it again before you install ${name}.</p>`
+      ? `<p class="tip" data-session-stale>${ht("session.slot.stale", { day: consentDay(consent), name })}</p>`
       : "";
     return `${stale}${renderSessionDisclosure(service, secureVM)}`;
   }
   return `
-    <p class="tip" data-session-install="${slug}">Install this provider's native app, then save collector credentials here so CashPilot can track earnings.</p>
+    <p class="tip" data-session-install="${slug}">${ht("session.slot.install")}</p>
     <div class="session-accepted">
-      <button class="secondary compact-btn" data-url="https://geiserx.github.io/CashPilot/guides/${slug}/">Setup guide</button>
-      <span class="muted">You accepted the risks of running ${name} in your own session on ${escapeHtml(consentDay(consent!))}.</span>
-      <button class="danger compact-btn" data-session-revoke="${slug}">Withdraw</button>
+      <button class="secondary compact-btn" data-url="https://geiserx.github.io/CashPilot/guides/${slug}/">${ht("session.slot.guide")}</button>
+      <span class="muted">${ht("session.slot.accepted", { name, day: consentDay(consent!) })}</span>
+      <button class="danger compact-btn" data-session-revoke="${slug}">${ht("session.withdraw")}</button>
     </div>
   `;
 }
@@ -135,20 +136,20 @@ export function renderSessionConsentCard(
     <div class="row session-consent-row" data-session-consent="${escapeHtml(slug)}">
       <div>
         <strong>${escapeHtml(nameOf(slug))}</strong>
-        <p class="muted compact-copy">Accepted on ${escapeHtml(consentDay(consent))}, text version ${escapeHtml(consent.textVersion)}.${consentIsCurrent(consent, secureVM) ? "" : " The text changed since then, so the setup card asks again."}</p>
+        <p class="muted compact-copy">${ht("session.card.acceptedOn", { day: consentDay(consent), version: consent.textVersion })}${consentIsCurrent(consent, secureVM) ? "" : ` ${ht("session.card.textChanged")}`}</p>
       </div>
-      <button class="danger compact-btn" data-session-revoke="${escapeHtml(slug)}">Withdraw</button>
+      <button class="danger compact-btn" data-session-revoke="${escapeHtml(slug)}">${ht("session.withdraw")}</button>
     </div>
   `).join("");
   return `
     <section class="card" data-session-consent-card>
       <div class="card-header">
         <div>
-          <span class="card-title">Isolation</span>
-          <p class="muted compact-copy">Desktop apps that you chose to run in your own session. CashPilot does not fence these apps. If you withdraw your consent, the setup card hides the install steps and asks again. Withdrawing does not uninstall the app.</p>
+          <span class="card-title">${ht("session.card.title")}</span>
+          <p class="muted compact-copy">${ht("session.card.help")}</p>
         </div>
       </div>
-      ${rows || `<p class="muted" data-session-consent-empty>You did not accept the risks for any desktop app.</p>`}
+      ${rows || `<p class="muted" data-session-consent-empty>${ht("session.card.empty")}</p>`}
     </section>
   `;
 }

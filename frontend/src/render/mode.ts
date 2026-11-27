@@ -8,6 +8,7 @@
 
 import type { JoinResult, LeaveResult, ModeState, PairingStatus } from "../wails";
 import { escapeHtml, relativeTime } from "./format.js"; // .js so the emitted ESM resolves in Node
+import { ht, t } from "./i18n.js";
 
 export type Mode = "lead" | "follower" | "";
 
@@ -23,11 +24,11 @@ export interface FirstRunStep {
  */
 export function firstRunSteps(path: Mode): FirstRunStep[] {
   const steps: FirstRunStep[] = [
-    { id: "welcome", label: "Welcome" },
-    { id: "mode", label: "How it runs" },
+    { id: "welcome", label: t("mode.step.welcome") },
+    { id: "mode", label: t("mode.step.mode") },
   ];
-  if (path === "follower") steps.push({ id: "join", label: "Join" });
-  steps.push({ id: "runtime", label: "Runtime" });
+  if (path === "follower") steps.push({ id: "join", label: t("mode.step.join") });
+  steps.push({ id: "runtime", label: t("mode.step.runtime") });
   return steps;
 }
 
@@ -40,41 +41,48 @@ export function renderGateSteps(steps: FirstRunStep[], activeId: string): string
       return `<li class="gate-step ${cls}" data-step="${escapeHtml(s.id)}"><span class="wizard-step-number">${i + 1}</span>${escapeHtml(s.label)}</li>`;
     })
     .join("");
-  return `<ol class="gate-steps" aria-label="Step ${active + 1} of ${steps.length}">${items}</ol>`;
+  return `<ol class="gate-steps" aria-label="${ht("mode.stepOf", { n: active + 1, total: steps.length })}">${items}</ol>`;
 }
 
 /** First run, step 1. "Get started" is the screen's only control. */
 export function renderWelcome(): string {
   return `
-    <h1 class="gate-title">Welcome to CashPilot</h1>
-    <p class="gate-lede">Let your spare resources earn in the background while CashPilot handles setup, monitoring, and payouts from one place.</p>
+    <h1 class="gate-title">${ht("mode.welcome.title")}</h1>
+    <p class="gate-lede">${ht("mode.welcome.lede")}</p>
     <div class="gate-actions">
-      <button class="btn btn-primary btn-lg" id="get-started">Get started</button>
+      <button class="btn btn-primary btn-lg" id="get-started">${ht("mode.welcome.start")}</button>
     </div>
   `;
 }
 
-export const LEAD_TITLE = "Run everything here";
-export const FOLLOWER_TITLE = "Join my CashPilot";
+/** The name of the lead mode, as plain text. */
+export function leadTitle(): string {
+  return t("mode.leadTitle");
+}
+
+/** The name of the follower mode, as plain text. */
+export function followerTitle(): string {
+  return t("mode.followerTitle");
+}
 
 /** The two cards of the first-run choice. Nothing is pre-selected. */
 export function renderModeChoice(): string {
   return `
-    <h1 class="gate-title">How will this computer run?</h1>
-    <p class="gate-lede">Pick one. You can switch later in Settings.</p>
+    <h1 class="gate-title">${ht("mode.choice.title")}</h1>
+    <p class="gate-lede">${ht("mode.choice.lede")}</p>
     <div class="mode-choice">
       <button class="mode-card" data-mode-choice="lead">
-        <strong>${LEAD_TITLE}</strong>
-        <span>This computer collects your earnings, shows the dashboard and runs its earning apps. No CashPilot server needed.</span>
-        <small>Pick this if you do not run CashPilot anywhere else.</small>
+        <strong>${escapeHtml(leadTitle())}</strong>
+        <span>${ht("mode.choice.lead.body")}</span>
+        <small>${ht("mode.choice.lead.hint")}</small>
       </button>
       <button class="mode-card" data-mode-choice="follower">
-        <strong>${FOLLOWER_TITLE}</strong>
-        <span>This computer runs earning apps for a CashPilot server you already have. The server shows the earnings.</span>
-        <small>Pick this if you already run the CashPilot dashboard on a server or another computer.</small>
+        <strong>${escapeHtml(followerTitle())}</strong>
+        <span>${ht("mode.choice.follower.body")}</span>
+        <small>${ht("mode.choice.follower.hint")}</small>
       </button>
     </div>
-    <p class="muted compact-copy">Not sure? Pick ${LEAD_TITLE}.</p>
+    <p class="muted compact-copy">${ht("mode.choice.notSure", { lead: leadTitle() })}</p>
   `;
 }
 
@@ -87,26 +95,26 @@ export function renderModeChoice(): string {
 export function renderJoinForm(): string {
   return `
     <form class="join-form" id="join-form" autocomplete="off">
-      <p class="gate-lede">On your CashPilot, open <strong>Fleet</strong>, then <strong>Add a box</strong>. Press <strong>Reveal API Key</strong>, then <strong>Copy</strong>, and paste it here.</p>
+      <p class="gate-lede">${ht("mode.join.lede")}</p>
       <label class="join-field">
-        <span>Paste from Add a box</span>
+        <span>${ht("mode.join.paste")}</span>
         <textarea name="block" rows="4" spellcheck="false" autocomplete="off" placeholder="CASHPILOT_UI_URL=http://192.168.1.10:8080&#10;CASHPILOT_API_KEY=..."></textarea>
       </label>
       <details class="join-typed">
-        <summary>Type them instead</summary>
+        <summary>${ht("mode.join.typeInstead")}</summary>
         <label class="join-field">
-          <span>Address of your CashPilot</span>
+          <span>${ht("mode.join.address")}</span>
           <input name="url" type="text" spellcheck="false" autocomplete="off" placeholder="http://192.168.1.10:8080" />
         </label>
         <label class="join-field">
-          <span>Key (CASHPILOT_API_KEY)</span>
+          <span>${ht("mode.join.key", { var: "CASHPILOT_API_KEY" })}</span>
           <input name="key" type="password" spellcheck="false" autocomplete="off" />
         </label>
       </details>
       <div id="join-result" aria-live="polite"></div>
       <div class="gate-actions">
-        <button type="submit" class="btn btn-primary btn-lg" id="join-connect">Connect</button>
-        <button type="button" class="btn btn-ghost btn-lg" id="join-back">Back</button>
+        <button type="submit" class="btn btn-primary btn-lg" id="join-connect">${ht("mode.join.connect")}</button>
+        <button type="button" class="btn btn-ghost btn-lg" id="join-back">${ht("mode.join.back")}</button>
       </div>
     </form>
   `;
@@ -117,34 +125,34 @@ export function renderJoinOutcome(result: JoinResult): string {
   if (!result.ok) {
     return `
       <div class="join-outcome warn" role="alert" data-code="${escapeHtml(result.code)}">
-        <strong>Not connected</strong>
+        <strong>${ht("mode.outcome.notConnected")}</strong>
         <span>${escapeHtml(result.message)}</span>
-        <small>Nothing was saved.</small>
+        <small>${ht("mode.outcome.nothingSaved")}</small>
       </div>
     `;
   }
   const devices = result.hubDevices || [];
   const hub = result.hubWasOn
-    ? `<li>This computer no longer accepts workers and phones.${
-        devices.length ? ` Point these at your CashPilot instead: ${devices.map(escapeHtml).join(", ")}.` : ""
+    ? `<li>${ht("mode.outcome.hubOff")}${
+        devices.length ? ` ${ht("mode.outcome.pointTheseInstead", { devices: devices.join(", ") })}` : ""
       }</li>`
     : "";
   return `
     <div class="join-outcome ok" data-code="ok">
-      <strong>Connected to ${escapeHtml(result.serverHost)}</strong>
-      <span>This computer now appears in your CashPilot Fleet page as <strong>${escapeHtml(result.name)}</strong>.</span>
+      <strong>${ht("mode.outcome.connectedTo", { host: result.serverHost })}</strong>
+      <span>${ht("mode.outcome.appearsAs", { name: result.name })}</span>
       <ul class="mode-effects">
-        <li>Your CashPilot reads the earnings now. This computer stops logging in to your provider accounts.</li>
-        <li>Your earnings history from this computer is copied to your CashPilot once.</li>
+        <li>${ht("mode.outcome.serverReads")}</li>
+        <li>${ht("mode.outcome.historyCopied")}</li>
         <li>${
           result.serverCommandsOn
-            ? "Your CashPilot can also deploy, stop and remove services here, if it runs version 3.0 or newer. To stop that, turn off the switch on the dashboard."
-            : "Your CashPilot cannot deploy or remove services here. To allow it, turn on the switch on the dashboard."
+            ? ht("mode.outcome.commandsOn")
+            : ht("mode.outcome.commandsOff")
         }</li>
-        <li>You can also add and remove earning apps here, in this app.</li>
+        <li>${ht("mode.outcome.addHere")}</li>
         ${hub}
       </ul>
-      <div class="gate-actions"><button type="button" class="btn btn-primary btn-lg" id="join-continue">Continue</button></div>
+      <div class="gate-actions"><button type="button" class="btn btn-primary btn-lg" id="join-continue">${ht("mode.continue")}</button></div>
     </div>
   `;
 }
@@ -155,12 +163,12 @@ export function pairingLine(pairing: PairingStatus, now: number = Date.now()): s
   // The last success is kept in memory only, so after a restart a failing link
   // may have had heartbeats before: say "since", not "yet".
   const last = beat
-    ? `Last heartbeat ${escapeHtml(beat)}.`
+    ? ht("mode.pairing.lastHeartbeat", { when: beat })
     : pairing.lastError
-      ? "No heartbeat has reached it since CashPilot started."
-      : "No heartbeat has reached it yet.";
+      ? ht("mode.pairing.noneSinceStart")
+      : ht("mode.pairing.noneYet");
   const error = pairing.lastError
-    ? ` <span class="pairing-error" data-code="${escapeHtml(pairing.errorCode)}">Last try failed: ${escapeHtml(pairing.lastError)}</span>`
+    ? ` <span class="pairing-error" data-code="${escapeHtml(pairing.errorCode)}">${ht("mode.pairing.lastTryFailed", { error: pairing.lastError })}</span>`
     : "";
   return `<p class="pairing-line ${pairing.lastError ? "warn" : "ok"}">${last}${error}</p>`;
 }
@@ -175,11 +183,11 @@ export function renderJoinedBanner(pairing: PairingStatus, now: number = Date.no
     <section class="card joined-banner" aria-labelledby="joined-title">
       <div class="card-header">
         <div>
-          <span class="card-title" id="joined-title">Joined to your CashPilot</span>
-          <p class="muted compact-copy">Your earnings are shown on your CashPilot at <code>${escapeHtml(pairing.serverUrl)}</code>. It logs in to your provider accounts; this computer runs the earning apps and reports what runs here. The figures below are what this computer collected before it joined.</p>
+          <span class="card-title" id="joined-title">${ht("mode.joined.title")}</span>
+          <p class="muted compact-copy">${ht("mode.joined.body", { url: pairing.serverUrl })}</p>
           ${pairingLine(pairing, now)}
         </div>
-        <button class="btn btn-ghost btn-sm" data-url="${escapeHtml(pairing.serverUrl)}">Open your CashPilot</button>
+        <button class="btn btn-ghost btn-sm" data-url="${escapeHtml(pairing.serverUrl)}">${ht("mode.joined.open")}</button>
       </div>
     </section>
   `;
@@ -194,9 +202,10 @@ export function renderJoinedBanner(pairing: PairingStatus, now: number = Date.no
 function hubStillOn(state: ModeState): string {
   if (!state.hubOn) return "";
   const devices = state.hubDevices || [];
-  return `<p class="pairing-line warn" data-hub-still-on>This computer still accepts workers and phones${
-    devices.length ? `: ${devices.map(escapeHtml).join(", ")}` : ""
-  }. Point them at your CashPilot, then turn off <strong>Accept workers (hub mode)</strong> under Environment Variables.</p>`;
+  const text = devices.length
+    ? ht("mode.hubStillOn.devices", { devices: devices.join(", ") })
+    : ht("mode.hubStillOn.plain");
+  return `<p class="pairing-line warn" data-hub-still-on>${text}</p>`;
 }
 
 /** The screen the Settings card "How this computer runs" shows. */
@@ -213,59 +222,59 @@ export function renderModeCard(state: ModeState, view: ModeCardView, left: Leave
   if (view === "confirm-join") {
     const devices = state.hubDevices || [];
     body = `
-      <p><strong>Join my CashPilot instead?</strong> Here is what happens:</p>
+      <p>${ht("mode.confirmJoin.title")}</p>
       <ul class="mode-effects">
-        <li>Earning apps on this computer keep running. Nothing is redeployed.</li>
-        <li>Your earnings history here is copied to your CashPilot once. The copy here stays.</li>
-        <li>This computer stops collecting earnings. Your CashPilot collects them. Your saved provider logins stay here, encrypted.</li>
-        ${state.hubOn ? `<li>This computer stops accepting workers and phones.${devices.length ? ` Point these at your CashPilot: ${devices.map(escapeHtml).join(", ")}.` : ""}</li>` : ""}
+        <li>${ht("mode.confirmJoin.keepRunning")}</li>
+        <li>${ht("mode.confirmJoin.historyCopied")}</li>
+        <li>${ht("mode.confirmJoin.stopsCollecting")}</li>
+        ${state.hubOn ? `<li>${ht("mode.confirmJoin.hubOff")}${devices.length ? ` ${ht("mode.confirmJoin.pointThese", { devices: devices.join(", ") })}` : ""}</li>` : ""}
       </ul>
       <div class="gate-actions">
-        <button class="btn btn-primary" data-mode-action="join">Continue</button>
-        <button class="btn btn-ghost" data-mode-action="summary">Cancel</button>
+        <button class="btn btn-primary" data-mode-action="join">${ht("mode.continue")}</button>
+        <button class="btn btn-ghost" data-mode-action="summary">${ht("mode.cancel")}</button>
       </div>`;
   } else if (view === "join") {
     body = renderJoinForm();
   } else if (view === "confirm-lead") {
     body = `
-      <p><strong>Run everything here instead?</strong> Here is what happens:</p>
+      <p>${ht("mode.confirmLead.title")}</p>
       <ul class="mode-effects">
-        <li>Earning apps on this computer keep running.</li>
-        <li>This computer stops reporting to <code>${escapeHtml(server)}</code> and forgets its keys.</li>
-        <li>Your CashPilot can no longer start and stop services on this computer.</li>
-        <li>This computer starts collecting earnings again, with the provider logins saved here.</li>
-        <li>Your CashPilot keeps a row for <strong>${escapeHtml(state.name)}</strong>. Remove it on its Fleet page.</li>
-        <li>The days while joined stay on your CashPilot. They are not copied back here.</li>
+        <li>${ht("mode.confirmLead.keepRunning")}</li>
+        <li>${ht("mode.confirmLead.stopsReporting", { server })}</li>
+        <li>${ht("mode.confirmLead.noCommands")}</li>
+        <li>${ht("mode.confirmLead.startsCollecting")}</li>
+        <li>${ht("mode.confirmLead.keepsRow", { name: state.name })}</li>
+        <li>${ht("mode.confirmLead.daysStay")}</li>
       </ul>
       <div class="gate-actions">
-        <button class="btn btn-primary" data-mode-action="leave">Switch to ${LEAD_TITLE}</button>
-        <button class="btn btn-ghost" data-mode-action="summary">Cancel</button>
+        <button class="btn btn-primary" data-mode-action="leave">${ht("mode.switchTo", { title: leadTitle() })}</button>
+        <button class="btn btn-ghost" data-mode-action="summary">${ht("mode.cancel")}</button>
       </div>`;
   } else if (view === "left" && left) {
     body = `
       <div class="join-outcome ${left.firewallError ? "warn" : "ok"}">
-        <strong>${left.firewallError ? "Firewall cleanup is pending" : "This computer runs everything here again"}</strong>
-        <span>Now remove <strong>${escapeHtml(left.name)}</strong> on the Fleet page of your CashPilot at <code>${escapeHtml(left.serverUrl)}</code>.</span>
+        <strong>${left.firewallError ? ht("mode.left.firewallPending") : ht("mode.left.runsHereAgain")}</strong>
+        <span>${ht("mode.left.removeRow", { name: left.name, server: left.serverUrl })}</span>
       </div>
-      ${left.firewallError ? `<p class="pairing-line warn" data-left-firewall>${escapeHtml(left.firewallError)} You can delete it in Windows Defender Firewall.</p>` : ""}
-      <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="summary">OK</button></div>`;
+      ${left.firewallError ? `<p class="pairing-line warn" data-left-firewall>${escapeHtml(left.firewallError)} ${ht("mode.left.deleteInFirewall")}</p>` : ""}
+      <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="summary">${ht("mode.ok")}</button></div>`;
   } else if (following) {
     body = `
-      <p><strong>${FOLLOWER_TITLE}.</strong> This computer runs earning apps for your CashPilot at <code>${escapeHtml(server)}</code>, which collects and shows the earnings.</p>
+      <p>${ht("mode.summary.follower", { title: followerTitle(), server })}</p>
       ${state.pairing ? pairingLine(state.pairing, now) : ""}
       ${hubStillOn(state)}
-      <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="confirm-lead">Switch to ${LEAD_TITLE}</button></div>`;
+      <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="confirm-lead">${ht("mode.switchTo", { title: leadTitle() })}</button></div>`;
   } else {
     body = `
-      <p><strong>${LEAD_TITLE}.</strong> This computer collects your earnings, shows the dashboard and runs its earning apps.</p>
-      <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="confirm-join">Switch to ${FOLLOWER_TITLE}</button></div>`;
+      <p>${ht("mode.summary.lead", { title: leadTitle() })}</p>
+      <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="confirm-join">${ht("mode.switchTo", { title: followerTitle() })}</button></div>`;
   }
   const cleanup = state.firewallCleanup ? `
     <p class="pairing-line warn" data-firewall-cleanup>${escapeHtml(state.firewallCleanup)}</p>
-    <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="firewall-cleanup">Retry firewall removal</button></div>` : "";
+    <div class="gate-actions"><button class="btn btn-ghost" data-mode-action="firewall-cleanup">${ht("mode.retryFirewall")}</button></div>` : "";
   return `
     <section class="card mode-settings" id="mode-card" data-view="${escapeHtml(view)}">
-      <div class="card-header"><div><span class="card-title">How this computer runs</span></div></div>
+      <div class="card-header"><div><span class="card-title">${ht("mode.card.title")}</span></div></div>
       <div class="mode-card-body">${body}${cleanup}</div>
     </section>
   `;

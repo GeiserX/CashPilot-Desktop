@@ -14,6 +14,8 @@
 // (and Linux) Minimise, Maximise and Close at the top right, each 46x32 as
 // Windows draws them. On Windows the dots did not read as window controls.
 
+import { ht } from "./i18n.js"; // .js so the emitted ESM resolves in Node
+
 /** Which layout the title bar uses. Linux has no single native layout, so it uses Windows'. */
 export type WindowPlatform = "mac" | "windows";
 
@@ -25,9 +27,9 @@ export function windowPlatform(userAgent: string): WindowPlatform {
 function macControls(): string {
   return `
       <div class="traffic-lights">
-        <button class="traffic close" data-window-action="close" aria-label="Close" title="Close"></button>
-        <button class="traffic minimise" data-window-action="minimise" aria-label="Minimise" title="Minimise"></button>
-        <button class="traffic maximise" data-window-action="maximise" aria-label="Maximise" title="Maximise"></button>
+        <button class="traffic close" data-window-action="close" aria-label="${ht("chrome.close")}" title="${ht("chrome.close")}"></button>
+        <button class="traffic minimise" data-window-action="minimise" aria-label="${ht("chrome.minimise")}" title="${ht("chrome.minimise")}"></button>
+        <button class="traffic maximise" data-window-action="maximise" aria-label="${ht("chrome.maximise")}" title="${ht("chrome.maximise")}"></button>
       </div>`;
 }
 
@@ -38,6 +40,7 @@ const GLYPH = {
   close: `<path d="M0.5 0.5l9 9M9.5 0.5l-9 9" />`,
 };
 
+/** label is HTML-escaped text: it goes into attributes. */
 function winButton(action: keyof typeof GLYPH, label: string): string {
   return `<button class="win-ctl ${action}" type="button" data-window-action="${action}" aria-label="${label}" title="${label}"><svg viewBox="0 0 10 10" aria-hidden="true" focusable="false">${GLYPH[action]}</svg></button>`;
 }
@@ -45,7 +48,7 @@ function winButton(action: keyof typeof GLYPH, label: string): string {
 function windowsControls(): string {
   return `
       <div class="window-controls">
-        ${winButton("minimise", "Minimise")}${winButton("maximise", "Maximise")}${winButton("close", "Close")}
+        ${winButton("minimise", ht("chrome.minimise"))}${winButton("maximise", ht("chrome.maximise"))}${winButton("close", ht("chrome.close"))}
       </div>`;
 }
 

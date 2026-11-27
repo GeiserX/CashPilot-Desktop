@@ -26,9 +26,15 @@
 //
 //   node scripts/dockersteps_render_check.mjs      # against ./.harness-build
 
-import { CONSENT, ELEVATED_PROMPT, WEB_DOWNLOAD_NOTE, runLine, stepConfirm, stepRestart, stepSignOut } from "../.harness-build/render/dockersteps.js";
+import { consents, elevatedPrompt, runLine, stepConfirm, stepRestart, stepSignOut, webDownloadNote } from "../.harness-build/render/dockersteps.js";
 import { renderDockerGuide } from "../.harness-build/render/dockerguide.js";
 import { DockerGuide } from "../.harness-build/render/dockerguide_wire.js";
+
+// The words come from functions now, so nothing is translated at import. The
+// harness runs in English.
+const CONSENT = consents();
+const ELEVATED_PROMPT = elevatedPrompt();
+const WEB_DOWNLOAD_NOTE = webDownloadNote();
 
 let failures = 0;
 let checks = 0;

@@ -5,6 +5,7 @@
 // Pure: returns HTML.
 
 import { gatePage, type WindowPlatform } from "./chrome.js"; // .js so the emitted ESM resolves in Node
+import { ht } from "./i18n.js";
 import { firstRunSteps, renderGateSteps, renderJoinForm, renderModeChoice, renderWelcome, type Mode } from "./mode.js";
 
 export type FirstRunScreen = "welcome" | "mode" | "join";
@@ -34,7 +35,7 @@ export function firstRunScreen(screen: FirstRunScreen, view: FirstRunView): stri
   }
   return gatePage(view.bar, `
     ${steps}
-    <h1 class="gate-title">Join my CashPilot</h1>
+    <h1 class="gate-title">${ht("firstrun.joinTitle")}</h1>
     ${renderJoinForm()}
   `, { wide: true, platform: view.platform });
 }

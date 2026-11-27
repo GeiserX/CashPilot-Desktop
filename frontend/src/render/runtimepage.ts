@@ -10,7 +10,7 @@
 // Pure apart from the deps it is given.
 
 import type { AppState, HostCheckResult, InstallGuide, NotificationItem, RuntimeStatus, SetupResumeView } from "../wails";
-import { escapeHtml } from "./format.js";
+import { ht, t } from "./i18n.js";
 
 export interface RuntimePageDeps {
   /** The page is still on screen; a reading that lands after it left draws nothing. */
@@ -25,14 +25,19 @@ export interface RuntimePageDeps {
   showChecklist(result: HostCheckResult, resume: SetupResumeView | null): void;
 }
 
+// One object each, because withRuntimeReading tells the unknown reading by
+// identity. The words are getters, so they are read in the language current
+// when the reading is drawn, never frozen at import.
 export const unknownRuntime: RuntimeStatus = {
   available: false, nativeAvailable: false, nativeServices: null,
-  reason: "", message: "Unknown. CashPilot could not check Docker on this computer.",
+  reason: "", get message() { return t("runtimepage.unknown.message"); },
   kind: "", context: "", version: "", tools: null,
 };
 
 export const unknownRuntimeNotice: NotificationItem = {
-  runtime: true, level: "warning", title: "Docker status unknown", message: unknownRuntime.message,
+  runtime: true, level: "warning",
+  get title() { return t("runtimepage.unknown.title"); },
+  get message() { return unknownRuntime.message; },
 };
 
 type RuntimeSnapshot = Pick<AppState, "runtime" | "notifications">;
@@ -55,8 +60,8 @@ export function guidesBesideChecklist(guides: InstallGuide[], checklist: boolean
 /** The note in the checklist's slot when the reading failed. */
 export function runtimeCheckFailed(error: unknown): string {
   return `<div class="docker-guide-wait warn" data-runtime-check-failed role="status">
-      <p>CashPilot could not check this computer: ${escapeHtml(String(error))}. The install guides below are shown without that check.</p>
-      <button class="btn btn-secondary btn-sm" data-runtime-recheck>Check again</button>
+      <p>${ht("runtimepage.checkFailed", { error: String(error) })}</p>
+      <button class="btn btn-secondary btn-sm" data-runtime-recheck>${ht("runtimepage.checkAgain")}</button>
     </div>`;
 }
 
