@@ -21,8 +21,10 @@ type commandsServer struct {
 	// plan, when set, decides per heartbeat (1, 2, ...) whether the answer lists
 	// the feature, in place of modern.
 	plan func(n int) bool
-	mu   sync.Mutex
-	urls []string
+	// failing, while set, answers every heartbeat with HTTP 500 after recording it.
+	failing atomic.Bool
+	mu      sync.Mutex
+	urls    []string
 }
 
 func newCommandsServer(t *testing.T) *commandsServer {
@@ -39,6 +41,10 @@ func newCommandsServer(t *testing.T) *commandsServer {
 		s.urls = append(s.urls, body.URL)
 		n := len(s.urls)
 		s.mu.Unlock()
+		if s.failing.Load() {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
 		reply := map[string]any{"status": "ok", "worker_id": 1, "fleet_exits": []string{}}
 		modern := s.modern.Load()
 		if s.plan != nil {
@@ -198,5 +204,55 @@ func TestFollowUpThatLosesTheFeatureSendsAgainWithoutTheURL(t *testing.T) {
 	app.sendUpstreamLoop(t.Context(), client, server.URL)
 	if got := server.take(); !slices.Equal(got, []string{commandURL, "", commandURL, ""}) {
 		t.Fatalf("flips that end on a listing: URLs %q, want four heartbeats", got)
+	}
+}
+
+// A failed heartbeat confirms nothing, so it ends the last answer's effect: a
+// server rolled back to 2.x that keeps failing gets the command URL in one
+// heartbeat at most, never on every attempt. The card does not call a server
+// that failed too old, and a recovered server gets the URL in the same turn.
+func TestAFailedHeartbeatForgetsTheCommandFeature(t *testing.T) {
+	useAddrs(t, "192.168.1.30")
+	oldNeeded := firewallRuleNeeded
+	t.Cleanup(func() { firewallRuleNeeded = oldNeeded })
+	firewallRuleNeeded = false
+	server := newCommandsServer(t)
+	server.modern.Store(true)
+	app := newAppUnderTest(t)
+	t.Cleanup(app.stopUpstream)
+	publishTestPairing(t, app.App, server.URL, testWorkerKey)
+	app.syncWorkerAPI()
+	t.Cleanup(func() { app.closeWorkerListeners(nil) })
+	const commandURL = "http://192.168.1.30:8086"
+	client := &upstream.Client{HTTP: server.Client()}
+	turn := func() []string {
+		t.Helper()
+		app.sendUpstreamLoop(t.Context(), client, server.URL)
+		return server.take()
+	}
+	if got := turn(); !slices.Equal(got, []string{"", commandURL}) {
+		t.Fatalf("modern server: URLs %q, want none then %q", got, commandURL)
+	}
+
+	// The server starts failing: the first failed heartbeat still carried the URL
+	// (the last answer listed the feature), and no later one does.
+	server.failing.Store(true)
+	if got := turn(); len(got) == 0 || got[0] != commandURL {
+		t.Fatalf("first failing turn: URLs %q, want the URL first", got)
+	}
+	for i := range 2 {
+		got := turn()
+		if len(got) == 0 || slices.Contains(got, commandURL) {
+			t.Fatalf("failing server, turn %d: URLs %q, want heartbeats without the URL", i, got)
+		}
+	}
+	if state := app.serverCommandsState(); state.ServerTooOld {
+		t.Errorf("failing server: card says the server is too old: %+v", state)
+	}
+
+	// The server answers again and lists the feature: the URL goes out in the same turn.
+	server.failing.Store(false)
+	if got := turn(); !slices.Equal(got, []string{"", commandURL}) {
+		t.Fatalf("recovered server: URLs %q, want none then %q", got, commandURL)
 	}
 }

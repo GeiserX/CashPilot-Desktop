@@ -102,6 +102,22 @@ func TestCheckedLookupNamesTheContainerWithoutReadingLogs(t *testing.T) {
 	}
 }
 
+// A CashPilot worker's container under the same name is not one a deploy here
+// can replace, so the lookup refuses it with 409 and the worker's words instead
+// of naming it for the user to approve.
+func TestCheckedLookupRefusesAWorkersContainer(t *testing.T) {
+	app := joinedApp(t)
+	if w := call(t, app, http.MethodPost, "/api/containers/honeygain/deploy", testWorkerKey, honeygainSpec(t, app)); w.Code != http.StatusOK {
+		t.Fatalf("deploy: %d %s", w.Code, w.Body.String())
+	}
+	app.Docker.SetLabel("cashpilot-honeygain", runtime.LabelRuntime, "")
+	app.Docker.SetLabel("cashpilot-honeygain", "cashpilot.deployed-by", "worker")
+	w := call(t, app, http.MethodGet, checkedPath, testWorkerKey, nil)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "CashPilot worker") {
+		t.Fatalf("lookup of a worker's container: %d %s; want 409 saying a worker made it", w.Code, w.Body.String())
+	}
+}
+
 func TestCheckedDeployCreatesAndReplacesOnlyTheApprovedContainer(t *testing.T) {
 	app := joinedApp(t)
 	// A first deploy expects no container.

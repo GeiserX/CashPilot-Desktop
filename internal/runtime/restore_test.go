@@ -199,7 +199,7 @@ func (r *restoreRun) restore(t *testing.T, svc catalog.Service, archives map[str
 			stopped, _ := r.p.fence.userStopped()
 			r.stoppedAtCreate = stopped[containerName(svc.Slug)]
 			r.daemon.containers[containerName(svc.Slug)] = &container.InspectResponse{
-				ID: "c1", Config: &container.Config{Labels: map[string]string{LabelService: svc.Slug}},
+				ID: "c1", Config: &container.Config{Labels: map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: svc.Slug}},
 				State: &container.State{Status: container.StateCreated},
 			}
 			return ContainerInfo{ContainerID: "c1", Image: svc.Docker.Image}, nil
@@ -435,7 +435,7 @@ func TestRestoreUndoesAVolumeWhoseCreateErrored(t *testing.T) {
 
 func TestDiscardRestoreRemovesOnlyWhatTheRestoreMade(t *testing.T) {
 	d := newFakeRestoreDaemon()
-	d.containers["cashpilot-keeper"] = &container.InspectResponse{ID: "c1", Config: &container.Config{Labels: map[string]string{LabelService: "keeper"}}, State: &container.State{Status: container.StateCreated}}
+	d.containers["cashpilot-keeper"] = &container.InspectResponse{ID: "c1", Config: &container.Config{Labels: map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: "keeper"}}, State: &container.State{Status: container.StateCreated}}
 	d.volumes["keeper-data"] = map[string]string{LabelRestore: "n1"}
 	d.volumes["keeper-config"] = map[string]string{LabelRestore: "other"}
 	left, err := discardRestore(context.Background(), d, "keeper", map[string]string{"keeper-data": "n1", "keeper-config": "n2", "gone": "n3"})

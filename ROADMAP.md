@@ -35,7 +35,7 @@
 
 - [x] Fleet heartbeat API (token-authenticated worker/mobile heartbeats; desktop-as-master, loopback by default)
 - [x] Fleet status display (nodes, services, earnings)
-- [ ] Remote deploy from master to this Desktop node
+- [x] Remote deploy from a joined CashPilot server to this Desktop (2.0, needs CashPilot 3.0.0)
 - [ ] Flight sheets — pre-built service bundles deployable with one click
 
 ## Milestone 4 — Smart Features

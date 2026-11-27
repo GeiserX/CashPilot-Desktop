@@ -421,7 +421,7 @@ func staleEndpoint(e fenceEarner, currentID string) bool {
 }
 
 func listEarners(ctx context.Context, cli fenceAPI) ([]fenceEarner, error) {
-	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true")})
+	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime)})
 	if err != nil {
 		return nil, err
 	}
@@ -1114,7 +1114,7 @@ func fencedAlone(e fenceEarner) bool {
 // reconcile that applies the fence starts the node again (startGated). An error means
 // one may still be running, and the caller must keep the fence.
 func (f *fence) stopGated(ctx context.Context, cli fenceAPI, keep func(fenceEarner) bool) error {
-	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true")})
+	res, err := cli.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime)})
 	if err != nil {
 		return fmt.Errorf("could not list the fence-gated earners: %w", err)
 	}

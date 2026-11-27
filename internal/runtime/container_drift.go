@@ -85,7 +85,7 @@ func (p *DockerProvider) ContainerShapes(ctx context.Context) ([]ContainerShape,
 func containerShapes(ctx context.Context, cli shapeClient) ([]ContainerShape, error) {
 	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true"),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime),
 	})
 	if err != nil {
 		return nil, err

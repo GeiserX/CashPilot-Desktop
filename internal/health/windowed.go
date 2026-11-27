@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/dockerhost"
 )
 
 // WindowReader reads hours of a service's logs, filtered, and the values its
@@ -104,9 +105,9 @@ func fillVars(text string, vars map[string]string) string {
 // and VMs' 172.16.0.0/12, gives the generic text instead.
 var lanAddress = func() string {
 	const unknown = "this computer's LAN address"
-	// A remote Docker endpoint runs the node on another machine, whose address
-	// this computer cannot know.
-	if remoteDocker(os.Getenv("DOCKER_HOST")) {
+	// A remote Docker endpoint, from DOCKER_HOST or the current Docker context,
+	// runs the node on another machine, whose address this computer cannot know.
+	if remoteDocker(os.Getenv("DOCKER_HOST")) || dockerhost.Resolve().Remote() {
 		return "the LAN address of the machine running Docker"
 	}
 	conn, err := net.Dial("udp", "192.0.2.1:9")

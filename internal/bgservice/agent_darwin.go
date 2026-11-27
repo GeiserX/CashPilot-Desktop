@@ -35,23 +35,44 @@ func (a *darwinAgent) stdoutPath() string { return filepath.Join(a.logDir, "help
 func (a *darwinAgent) stderrPath() string { return filepath.Join(a.logDir, "helper.err.log") }
 
 func (a *darwinAgent) Install(execPath string, args []string) error {
-	plistPath, err := a.plistPath()
+	plistPath, err := a.writePlist(execPath, args)
 	if err != nil {
 		return err
 	}
+	return a.load(plistPath)
+}
+
+// writePlist writes the LaunchAgent plist for execPath. It writes a temporary
+// file and renames it into place, so a failed write (a full disk) never leaves a
+// truncated plist that launchd cannot load at the next login.
+func (a *darwinAgent) writePlist(execPath string, args []string) (string, error) {
+	plistPath, err := a.plistPath()
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
-		return fmt.Errorf("create LaunchAgents dir: %w", err)
+		return "", fmt.Errorf("create LaunchAgents dir: %w", err)
 	}
 	if a.logDir != "" {
 		if err := os.MkdirAll(a.logDir, 0o700); err != nil {
-			return fmt.Errorf("create log dir: %w", err)
+			return "", fmt.Errorf("create log dir: %w", err)
 		}
 	}
 	content := plistLaunchAgent(a.label, execPath, args, a.stdoutPath(), a.stderrPath())
-	if err := os.WriteFile(plistPath, []byte(content), 0o644); err != nil {
-		return fmt.Errorf("write plist: %w", err)
+	tmp := plistPath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("write plist: %w", err)
 	}
+	if err := os.Rename(tmp, plistPath); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("write plist: %w", err)
+	}
+	return plistPath, nil
+}
 
+// load bootstraps the plist into the user's launchd domain.
+func (a *darwinAgent) load(plistPath string) error {
 	// bootstrap is the modern per-user-domain load; fall back to the legacy load -w on
 	// older macOS. The plist is left on disk either way so a reboot reloads it.
 	target := fmt.Sprintf("gui/%d", os.Getuid())
@@ -101,6 +122,21 @@ func (a *darwinAgent) Status() (Status, error) {
 		st.Running = launchctlPrintRunning(out)
 	}
 	return st, nil
+}
+
+// Replace writes the plist for execPath, unloads the job, which stops the
+// running helper, and loads the job again. The write comes first, so a failed
+// write leaves the running helper loaded. launchd keeps the program of a loaded
+// job even after its plist changes, and kickstart restarts that program, so the
+// job is unloaded before the load. bootout fails when the job is not loaded,
+// which is fine. RunAtLoad starts the new file.
+func (a *darwinAgent) Replace(execPath string, args []string) error {
+	plistPath, err := a.writePlist(execPath, args)
+	if err != nil {
+		return err
+	}
+	_, _ = runLaunchctl("bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), a.label))
+	return a.load(plistPath)
 }
 
 func runLaunchctl(args ...string) (string, error) {

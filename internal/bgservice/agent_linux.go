@@ -114,6 +114,18 @@ func (a *linuxAgent) Status() (Status, error) {
 	return st, nil
 }
 
+// Replace installs execPath, then restarts the unit. enable --now leaves a running
+// unit alone, so without the restart the old process keeps running.
+func (a *linuxAgent) Replace(execPath string, args []string) error {
+	if err := a.Install(execPath, args); err != nil {
+		return err
+	}
+	if out, err := runSystemctlUser("restart", a.unitName); err != nil {
+		return fmt.Errorf("systemctl --user restart %s: %v: %s", a.unitName, err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 func runSystemctlUser(args ...string) (string, error) {
 	full := append([]string{"--user"}, args...)
 	out, err := exec.Command("systemctl", full...).CombinedOutput()

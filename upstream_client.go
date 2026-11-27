@@ -81,7 +81,7 @@ type upstreamState struct {
 	// (upstream.TakesCommands). Until it does, the heartbeat reports no command URL:
 	// web v2.10.x would take the URL as a command target and deploy here without
 	// replacement approval or the seed-phrase guard. commandsKnown is false until
-	// the first answer since the loop started.
+	// the first answer since the loop started or since a heartbeat failed.
 	takesCommands bool
 	commandsKnown bool
 	// The pairing's health, for the dashboard and Settings (pairingStatus), so a
@@ -359,6 +359,16 @@ func (a *App) sendUpstream(ctx context.Context, client *upstream.Client, serverU
 	}
 	resp, err := client.Send(ctx, serverURL, token, payload)
 	release()
+	if err != nil {
+		// A failed heartbeat confirms nothing, so the last answer stops counting:
+		// a server rolled back to 2.x that keeps failing gets the command URL in
+		// one heartbeat at most. Unknown, as at the loop's start, so the card does
+		// not call the server too old, and the next answer that lists the feature
+		// sends the URL again at once.
+		a.upstream.mu.Lock()
+		a.upstream.takesCommands, a.upstream.commandsKnown = false, false
+		a.upstream.mu.Unlock()
+	}
 	if a.suspendRefusedPairing(pairing.Revision, serverURL, err) || ctx.Err() != nil {
 		return false
 	}

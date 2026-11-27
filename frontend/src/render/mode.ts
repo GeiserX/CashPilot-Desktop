@@ -136,7 +136,12 @@ export function renderJoinOutcome(result: JoinResult): string {
       <ul class="mode-effects">
         <li>Your CashPilot reads the earnings now. This computer stops logging in to your provider accounts.</li>
         <li>Your earnings history from this computer is copied to your CashPilot once.</li>
-        <li>You still add and remove earning apps here, in this app.</li>
+        <li>${
+          result.serverCommandsOn
+            ? "Your CashPilot can also deploy, stop and remove services here, if it runs version 3.0 or newer. To stop that, turn off the switch on the dashboard."
+            : "Your CashPilot cannot deploy or remove services here. To allow it, turn on the switch on the dashboard."
+        }</li>
+        <li>You can also add and remove earning apps here, in this app.</li>
         ${hub}
       </ul>
       <div class="gate-actions"><button type="button" class="btn btn-primary btn-lg" id="join-continue">Continue</button></div>
@@ -147,7 +152,13 @@ export function renderJoinOutcome(result: JoinResult): string {
 /** One line on the link: the last heartbeat, and the last error in plain words. */
 export function pairingLine(pairing: PairingStatus, now: number = Date.now()): string {
   const beat = pairing.lastHeartbeat ? relativeTime(pairing.lastHeartbeat, now) : "";
-  const last = beat ? `Last heartbeat ${escapeHtml(beat)}.` : "No heartbeat has reached it yet.";
+  // The last success is kept in memory only, so after a restart a failing link
+  // may have had heartbeats before: say "since", not "yet".
+  const last = beat
+    ? `Last heartbeat ${escapeHtml(beat)}.`
+    : pairing.lastError
+      ? "No heartbeat has reached it since CashPilot started."
+      : "No heartbeat has reached it yet.";
   const error = pairing.lastError
     ? ` <span class="pairing-error" data-code="${escapeHtml(pairing.errorCode)}">Last try failed: ${escapeHtml(pairing.lastError)}</span>`
     : "";

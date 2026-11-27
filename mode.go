@@ -66,9 +66,12 @@ func (a *App) pairingStatus() *PairingStatus {
 	out := &PairingStatus{ServerURL: serverURL}
 	// A suspended revision that a 1.x save superseded is not the pairing shown:
 	// the address waiting in config.json has its own status.
+	// A suspended pairing still shows when its last heartbeat got through, so the
+	// refusal does not read as if none ever did.
+	suspended := false
 	if p, err := a.cfg.Pairing(); err == nil && p.Suspended && !a.cfg.PairingSuperseded(p) {
+		suspended = true
 		out.ErrorCode, out.LastError = "unauthorized", refusedPairingMessage
-		return out
 	}
 	a.upstream.mu.Lock()
 	defer a.upstream.mu.Unlock()
@@ -82,7 +85,9 @@ func (a *App) pairingStatus() *PairingStatus {
 		return t.Format(time.RFC3339)
 	}
 	out.LastHeartbeat, out.LastAttempt = stamp(a.upstream.lastOK), stamp(a.upstream.lastAttempt)
-	out.LastError, out.ErrorCode = a.upstream.lastFailure.Message, a.upstream.lastFailure.Code
+	if !suspended {
+		out.LastError, out.ErrorCode = a.upstream.lastFailure.Message, a.upstream.lastFailure.Code
+	}
 	return out
 }
 
@@ -171,6 +176,9 @@ type JoinResult struct {
 	// HubDevices lists the workers and phones to point at the server instead.
 	HubWasOn   bool     `json:"hubWasOn"`
 	HubDevices []string `json:"hubDevices"`
+	// ServerCommandsOn is the server commands switch after the join: on for a
+	// first join, off when the join carried a 1.x pairing over.
+	ServerCommandsOn bool `json:"serverCommandsOn"`
 }
 
 // JoinCashPilot makes this computer a follower of a CashPilot server. It reads the
@@ -275,6 +283,7 @@ func (a *App) enrolPairing(ctx context.Context, req JoinRequest, current config.
 		a.startUpstream(a.ctx)
 	}
 	out.OK, out.WorkerID = true, resp.WorkerID
+	out.ServerCommandsOn = !a.cfg.Config().ServerCommandsOff
 	return out, nil
 }
 

@@ -2496,6 +2496,7 @@ export namespace main {
 	    workerId: number;
 	    hubWasOn: boolean;
 	    hubDevices: string[];
+	    serverCommandsOn: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new JoinResult(source);
@@ -2512,6 +2513,7 @@ export namespace main {
 	        this.workerId = source["workerId"];
 	        this.hubWasOn = source["hubWasOn"];
 	        this.hubDevices = source["hubDevices"];
+	        this.serverCommandsOn = source["serverCommandsOn"];
 	    }
 	}
 	export class LeaveResult {

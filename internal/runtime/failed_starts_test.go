@@ -26,7 +26,7 @@ func inspected(name string, labels map[string]string, status container.Container
 }
 
 func earnerLabels(slug string) map[string]string {
-	return map[string]string{LabelManaged: "true", LabelService: slug}
+	return map[string]string{LabelManaged: "true", LabelRuntime: desktopRuntime, LabelService: slug}
 }
 
 // THE RULE: Docker's own sign of a start it could not make is an exited container
@@ -58,6 +58,7 @@ func TestFailedStartReadsDockersSign(t *testing.T) {
 		{"a proxied copy", inspected("cashpilot-honeygain-p3", proxied, container.StateExited, goferError, container.RestartPolicyUnlessStopped), false},
 		{"a tunnel", inspected("cashpilot-tunnel-p3", tunnel, container.StateExited, goferError, container.RestartPolicyUnlessStopped), false},
 		{"no service label", inspected("cashpilot-x", map[string]string{LabelManaged: "true"}, container.StateExited, goferError, container.RestartPolicyUnlessStopped), false},
+		{"a CashPilot worker's", inspected("cashpilot-honeygain", map[string]string{LabelManaged: "true", LabelService: "honeygain"}, container.StateExited, goferError, container.RestartPolicyUnlessStopped), false},
 		{"not ours", inspected("someone-else", map[string]string{LabelService: "honeygain"}, container.StateExited, goferError, container.RestartPolicyUnlessStopped), false},
 	}
 	for _, tc := range cases {

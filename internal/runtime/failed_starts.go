@@ -46,7 +46,7 @@ func (p *DockerProvider) FailedStarts(ctx context.Context) ([]FailedStart, error
 	defer cli.Close()
 	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true").Add("status", string(container.StateExited)),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime).Add("status", string(container.StateExited)),
 	})
 	if err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func (p *DockerProvider) FailedStarts(ctx context.Context) ([]FailedStart, error
 	for _, c := range list.Items {
 		// The daemon filtered already; checked again so a runtime that ignores a
 		// filter cannot hand back a running container or someone else's.
-		if c.State != container.StateExited || c.Labels[LabelManaged] != "true" || c.Labels[LabelService] == "" || IsProxied(c.Labels) {
+		if c.State != container.StateExited || !IsDesktopContainer(c.Labels) || c.Labels[LabelService] == "" || IsProxied(c.Labels) {
 			continue
 		}
 		name := strings.TrimPrefix(firstName(c.Names), "/")
@@ -91,7 +91,7 @@ func failedStart(c container.InspectResponse) (FailedStart, bool) {
 		return FailedStart{}, false
 	}
 	labels := c.Config.Labels
-	if labels[LabelManaged] != "true" || labels[LabelService] == "" || IsProxied(labels) {
+	if !IsDesktopContainer(labels) || labels[LabelService] == "" || IsProxied(labels) {
 		return FailedStart{}, false
 	}
 	return FailedStart{

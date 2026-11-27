@@ -769,6 +769,7 @@ export interface JoinResult {
   workerId: number;
   hubWasOn: boolean;
   hubDevices: string[] | null;
+  serverCommandsOn: boolean;
 }
 
 // What to do on the server after leaving it (Go LeaveResult).

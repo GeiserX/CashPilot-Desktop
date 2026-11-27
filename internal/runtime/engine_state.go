@@ -66,7 +66,7 @@ type dockerEvidence struct {
 	pingOK   bool
 	osType   string        // the daemon's Ostype header, when the ping answered
 	endpoint endpointState // when the ping failed
-	hostSet  bool          // DOCKER_HOST names an endpoint, so it is not the default local one
+	hostSet  bool          // DOCKER_HOST or a tcp context names an endpoint, so it is not the default local one
 	tools    bool          // a runtime CLI is on PATH
 	install  bool          // a runtime's files sit at a known path (macOS and Linux)
 	host     HostHints
@@ -87,7 +87,7 @@ func classify(ev dockerEvidence) (string, string) {
 		return ReasonAccessDenied, accessDeniedMessage(win, h)
 	}
 	if ev.hostSet {
-		return ReasonUnreachable, "CashPilot cannot reach the Docker engine that DOCKER_HOST names. Check that it is running and reachable, then click Check again."
+		return ReasonUnreachable, "CashPilot cannot reach the Docker engine that DOCKER_HOST or your Docker context names. Check that it is running and reachable, then click Check again."
 	}
 	if notInstalled(ev) {
 		if win {

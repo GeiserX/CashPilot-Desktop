@@ -7,13 +7,16 @@
 // offer yet, and found no word on the two warnings Windows shows for an unsigned
 // file. So the body now has three parts, in this order:
 //
-//  0. Before you upgrade, on a major release only: a link to
-//     docs/whats-new-<major>.0.md and the breaking changes, so nobody upgrades
+//  0. Before you upgrade, on a major release only: a link to the major's
+//     section of UPGRADING.md and the breaking changes, so nobody upgrades
 //     into one blind.
 //  1. Download: which file to take for each system, the steps to run it, and the
 //     two Windows warnings with what to click and why they appear.
-//  2. What changed for you: only feat and fix commits, minus the scopes that are
-//     not something a user can reach (see hiddenScopes).
+//  2. What changed for you: the release's entry in CHANGELOG.md, "## [1.2.3]".
+//     A release with no entry (the daily run cuts versions nobody wrote an entry
+//     for) lists its feat and fix commits instead, minus the scopes that are not
+//     something a user can reach (see hiddenScopes). A major release must have
+//     its entry: the run fails without one.
 //  3. Every commit subject, for developers, in a collapsed <details> block.
 //
 // Usage (the release workflow runs it after the builds, on the files it publishes):
@@ -57,6 +60,10 @@ type Release struct {
 	// "Before you upgrade".
 	Breaking []string
 	Assets   []string // the file names the release publishes
+
+	// Changelog is the release's CHANGELOG.md entry, links made absolute; ""
+	// when the changelog has none.
+	Changelog string
 
 	// WindowsSigned says the Windows files carry a code signature. The release
 	// workflow sets it: the build signs them exactly when WINDOWS_SIGN_CERT is set.
@@ -257,6 +264,13 @@ func findAsset(assets []string, suffix string) string {
 	return ""
 }
 
+// upgradingLink is the path, with its anchor, of a major's section in
+// UPGRADING.md. Each major has the heading "## <major>.0" there, and GitHub
+// drops the dot from the anchor, so "## 2.0" is "#20".
+func upgradingLink(major int) string {
+	return fmt.Sprintf("UPGRADING.md#%d0", major)
+}
+
 // writeBeforeYouUpgrade opens the notes of a major release: what to read first,
 // and every breaking change, so a "feat!:" does not hide under "New".
 func writeBeforeYouUpgrade(b *strings.Builder, r Release) {
@@ -264,9 +278,9 @@ func writeBeforeYouUpgrade(b *strings.Builder, r Release) {
 	if !ok {
 		return
 	}
-	doc := fmt.Sprintf("docs/whats-new-%d.0.md", major)
+	doc := upgradingLink(major)
 	b.WriteString("## Before you upgrade\n\n")
-	fmt.Fprintf(b, "This is a major release. Some changes need a step from you. Read [%s](https://github.com/%s/blob/%s/%s) before you upgrade from %s.\n", doc, r.Repo, r.Tag, doc, r.Prev)
+	fmt.Fprintf(b, "This is a major release. Some changes need a step from you. Read [the %d.0 section of UPGRADING.md](https://github.com/%s/blob/%s/%s) before you upgrade from %s.\n", major, r.Repo, r.Tag, doc, r.Prev)
 	if len(r.Breaking) > 0 {
 		b.WriteString("\nThe changes that can break how you use the app today:\n\n")
 		for _, subject := range r.Breaking {
@@ -331,6 +345,12 @@ func writeDownloads(b *strings.Builder, r Release) {
 }
 
 func writeChanges(b *strings.Builder, r Release) {
+	if r.Changelog != "" {
+		b.WriteString("\n## What changed for you\n\n")
+		b.WriteString(r.Changelog)
+		b.WriteString("\n")
+		return
+	}
 	groups := map[string][]string{}
 	for _, subject := range r.Commits {
 		if heading, text, ok := forPeople(subject); ok {
@@ -367,6 +387,65 @@ func writeDeveloperList(b *strings.Builder, r Release) {
 		fmt.Fprintf(b, "\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n", r.Repo, r.Prev, r.Tag)
 	}
 	b.WriteString("\n</details>\n")
+}
+
+// changelogEntry is the body of the "## [version]" entry of a Keep a Changelog
+// file, trimmed, or "" when it has none.
+func changelogEntry(text, version string) string {
+	var lines []string
+	in := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "## ") {
+			if in {
+				break
+			}
+			in = strings.HasPrefix(line, "## ["+version+"]")
+			continue
+		}
+		if in {
+			lines = append(lines, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// mdLink is the target of a Markdown link.
+var mdLink = regexp.MustCompile(`\]\(([^)\s]+)\)`)
+
+// absoluteLinks points the relative links of a changelog entry into the tagged
+// tree, so they work on the release page: "docs/x.md" becomes the file at the
+// tag, and "#anchor" the heading in CHANGELOG.md.
+func absoluteLinks(text, repo, tag string) string {
+	return mdLink.ReplaceAllStringFunc(text, func(m string) string {
+		target := mdLink.FindStringSubmatch(m)[1]
+		for _, scheme := range []string{"http://", "https://", "mailto:"} {
+			if strings.HasPrefix(target, scheme) {
+				return m
+			}
+		}
+		if strings.HasPrefix(target, "#") {
+			target = "CHANGELOG.md" + target
+		}
+		return fmt.Sprintf("](https://github.com/%s/blob/%s/%s)", repo, tag, strings.TrimPrefix(target, "./"))
+	})
+}
+
+// readChangelog reads the release's entry from CHANGELOG.md in the current
+// folder. A major release must have one: its notes are the upgrade's record.
+func readChangelog(r Release) (string, error) {
+	raw, err := os.ReadFile("CHANGELOG.md")
+	if err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	version := strings.TrimPrefix(r.Tag, "v")
+	entry := changelogEntry(string(raw), version)
+	if entry == "" {
+		if _, major := majorBump(r.Tag, r.Prev); major {
+			return "", fmt.Errorf("%s is a major release and CHANGELOG.md has no \"## [%s]\" entry: write it before the release", r.Tag, version)
+		}
+		return "", nil
+	}
+	return absoluteLinks(entry, r.Repo, r.Tag), nil
 }
 
 func git(args ...string) (string, error) {
@@ -473,6 +552,9 @@ func run(args []string) (string, error) {
 	}
 	for _, a := range fs.Args() {
 		r.Assets = append(r.Assets, filepath.Base(a))
+	}
+	if r.Changelog, err = readChangelog(r); err != nil {
+		return "", err
 	}
 	return Render(r), nil
 }

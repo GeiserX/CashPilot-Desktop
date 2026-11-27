@@ -86,7 +86,7 @@ func managedCopy(ctx context.Context, cli inspectClient, slug string, n int) (st
 		return "", err
 	}
 	cfg := inspect.Container.Config
-	if cfg == nil || cfg.Labels[LabelManaged] != "true" || cfg.Labels[LabelService] != slug || instanceOf(cfg.Labels) != n || IsProxied(cfg.Labels) {
+	if cfg == nil || !IsDesktopContainer(cfg.Labels) || cfg.Labels[LabelService] != slug || instanceOf(cfg.Labels) != n || IsProxied(cfg.Labels) {
 		return "", fmt.Errorf("%s is not copy %d of %s managed by CashPilot", name, n, slug)
 	}
 	return name, nil
@@ -100,7 +100,7 @@ func (p *DockerProvider) Copies(ctx context.Context, slug string) ([]int, error)
 	defer cli.Close()
 	list, err := cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelService+"="+slug),
+		Filters: make(client.Filters).Add("label", LabelManaged+"=true", LabelRuntime+"="+desktopRuntime, LabelService+"="+slug),
 	})
 	if err != nil {
 		return nil, err

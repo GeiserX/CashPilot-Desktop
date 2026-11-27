@@ -1,7 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/bgservice"
@@ -9,69 +12,185 @@ import (
 
 type fakeHelperAgent struct {
 	registered string
-	readErr    error
-	installs   []string
+	statusErr  error
+	replaceErr error
+	replaces   []string
 	args       [][]string
 }
 
-func (f *fakeHelperAgent) Install(exe string, args []string) error {
-	f.installs = append(f.installs, exe)
+func (f *fakeHelperAgent) Install(exe string, args []string) error { f.registered = exe; return nil }
+func (f *fakeHelperAgent) Uninstall() error                        { f.registered = ""; return nil }
+func (f *fakeHelperAgent) Status() (bgservice.Status, error) {
+	return bgservice.Status{Installed: f.registered != ""}, f.statusErr
+}
+func (f *fakeHelperAgent) Replace(exe string, args []string) error {
+	if f.replaceErr != nil {
+		return f.replaceErr
+	}
+	f.replaces = append(f.replaces, exe)
 	f.args = append(f.args, args)
 	f.registered = exe
 	return nil
 }
-func (f *fakeHelperAgent) Uninstall() error { f.registered = ""; return nil }
-func (f *fakeHelperAgent) Status() (bgservice.Status, error) {
-	return bgservice.Status{Installed: f.registered != ""}, nil
+
+// plainAgent cannot replace a helper.
+type plainAgent struct{ fakeHelperAgent }
+
+func (p *plainAgent) Replace() {}
+
+const (
+	installed = `/Applications/CashPilot.app/Contents/MacOS/CashPilot`
+	portable  = `/Users/u/Downloads/CashPilot.app/Contents/MacOS/CashPilot`
+)
+
+// liveProcesses fakes processStart: pid -> start time of a process that runs.
+func liveProcesses(t *testing.T, live map[int]int64) {
+	t.Helper()
+	old := processStart
+	processStart = func(pid int) (int64, bool) { s, ok := live[pid]; return s, ok }
+	t.Cleanup(func() { processStart = old })
 }
-func (f *fakeHelperAgent) RegisteredCommand() (string, error) { return f.registered, f.readErr }
 
-func TestFollowThisCopyMovesAHelperThatStartsAnotherCopy(t *testing.T) {
-	portable := `C:\Users\u\Downloads\CashPilot-Desktop-windows-amd64.exe`
-	installed := `C:\Users\u\AppData\Local\Programs\CashPilot Desktop\CashPilot Desktop.exe`
-	agent := &fakeHelperAgent{registered: portable}
-
-	moved, err := followThisCopy(agent, installed)
-	if err != nil || !moved {
-		t.Fatalf("followThisCopy = %v, %v; want true, nil", moved, err)
-	}
-	if agent.registered != installed || len(agent.installs) != 1 || len(agent.args[0]) != 1 || agent.args[0][0] != "--daemon" {
-		t.Fatalf("registration %q, installs %v args %v; want the installed copy with --daemon", agent.registered, agent.installs, agent.args)
-	}
-
-	// Opening the same copy again changes nothing.
-	if moved, err := followThisCopy(agent, installed); err != nil || moved || len(agent.installs) != 1 {
-		t.Fatalf("second open: moved %v, err %v, installs %v; want no change", moved, err, agent.installs)
-	}
-
-	// The portable copy opened afterwards takes the helper back.
-	if moved, _ := followThisCopy(agent, portable); !moved || agent.registered != portable {
-		t.Fatalf("portable copy opened later: moved %v, registered %q", moved, agent.registered)
+func writeRecord(t *testing.T, dir string, rec helperRecord) {
+	t.Helper()
+	data, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(dir, helperRecordFile), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestFollowThisCopyNeverRegistersAHelperTheUserDidNotAskFor(t *testing.T) {
+func TestReplaceOlderHelperReplacesA1xHelper(t *testing.T) {
+	liveProcesses(t, nil)
+	agent := &fakeHelperAgent{registered: installed}
+	// A 1.x helper never writes the record.
+	replaced, err := replaceOlderHelper(agent, installed, t.TempDir(), "2.0.0")
+	if err != nil || !replaced || len(agent.replaces) != 1 || agent.replaces[0] != installed {
+		t.Fatalf("1.x helper: replaced %v, err %v, replaces %v; want one replace with this copy", replaced, err, agent.replaces)
+	}
+	if len(agent.args[0]) != 1 || agent.args[0][0] != "--daemon" {
+		t.Fatalf("args %v; want --daemon", agent.args[0])
+	}
+}
+
+func TestReplaceOlderHelperLeavesAHelperThatRunsThisCopy(t *testing.T) {
+	dir := t.TempDir()
+	liveProcesses(t, map[int]int64{4242: 1700})
+	writeRecord(t, dir, helperRecord{Version: "2.0.0", Exe: installed, PID: 4242, Started: 1700})
+	agent := &fakeHelperAgent{registered: installed}
+	if replaced, err := replaceOlderHelper(agent, installed, dir, "2.0.0"); err != nil || replaced || len(agent.replaces) != 0 {
+		t.Fatalf("current helper: replaced %v, err %v; want nothing", replaced, err)
+	}
+}
+
+func TestReplaceOlderHelperDoesNotTrustARecordOfAnotherProcess(t *testing.T) {
+	cases := map[string]struct {
+		live map[int]int64
+		rec  helperRecord
+	}{
+		// 2.0 -> 1.x -> 2.0: the 2.0 helper that wrote the record is gone, and a
+		// 1.x helper runs from the same path.
+		"writer exited":     {nil, helperRecord{Version: "2.0.0", Exe: installed, PID: 4242, Started: 1700}},
+		"pid reused":        {map[int]int64{4242: 9999}, helperRecord{Version: "2.0.0", Exe: installed, PID: 4242, Started: 1700}},
+		"older version":     {map[int]int64{4242: 1700}, helperRecord{Version: "1.9.0", Exe: installed, PID: 4242, Started: 1700}},
+		"another copy":      {map[int]int64{4242: 1700}, helperRecord{Version: "2.0.0", Exe: portable, PID: 4242, Started: 1700}},
+		"no start recorded": {map[int]int64{4242: 1700}, helperRecord{Version: "2.0.0", Exe: installed, PID: 4242}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			liveProcesses(t, c.live)
+			writeRecord(t, dir, c.rec)
+			agent := &fakeHelperAgent{registered: installed}
+			if replaced, err := replaceOlderHelper(agent, installed, dir, "2.0.0"); err != nil || !replaced {
+				t.Fatalf("replaced %v, err %v; want a replace", replaced, err)
+			}
+		})
+	}
+}
+
+func TestReplaceOlderHelperReadsAGarbledRecordAsNone(t *testing.T) {
+	dir := t.TempDir()
+	liveProcesses(t, nil)
+	if err := os.WriteFile(filepath.Join(dir, helperRecordFile), []byte("2.0.0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if replaced, err := replaceOlderHelper(&fakeHelperAgent{registered: installed}, installed, dir, "2.0.0"); err != nil || !replaced {
+		t.Fatalf("replaced %v, err %v; want a replace", replaced, err)
+	}
+}
+
+func TestReplaceOlderHelperNeverRegistersAHelperTheUserDidNotAskFor(t *testing.T) {
 	agent := &fakeHelperAgent{}
-	if moved, err := followThisCopy(agent, `C:\x\CashPilot Desktop.exe`); err != nil || moved || len(agent.installs) != 0 {
-		t.Fatalf("no helper registered: moved %v, err %v, installs %v; want nothing", moved, err, agent.installs)
+	if replaced, err := replaceOlderHelper(agent, installed, t.TempDir(), "2.0.0"); err != nil || replaced || len(agent.replaces) != 0 {
+		t.Fatalf("no helper registered: replaced %v, err %v; want nothing", replaced, err)
+	}
+	if replaced, _ := replaceOlderHelper(&plainAgent{fakeHelperAgent{registered: installed}}, installed, t.TempDir(), "2.0.0"); replaced {
+		t.Fatal("an agent that cannot replace was replaced")
+	}
+	if replaced, _ := replaceOlderHelper(agent, "", t.TempDir(), "2.0.0"); replaced {
+		t.Fatal("replaced with no executable path")
 	}
 }
 
-func TestFollowThisCopyLeavesTheHelperWhenItCannotRead(t *testing.T) {
-	agent := &fakeHelperAgent{registered: `C:\old.exe`, readErr: errors.New("powershell failed")}
-	if moved, err := followThisCopy(agent, `C:\new.exe`); err == nil || moved || len(agent.installs) != 0 {
-		t.Fatalf("unreadable task: moved %v, err %v, installs %v; want the error and no change", moved, err, agent.installs)
+func TestReplaceOlderHelperReportsFailures(t *testing.T) {
+	liveProcesses(t, nil)
+	boom := errors.New("boom")
+
+	if _, err := replaceOlderHelper(&fakeHelperAgent{registered: installed, statusErr: boom}, installed, t.TempDir(), "2.0.0"); !errors.Is(err, boom) {
+		t.Fatalf("status error: err %v; want boom", err)
 	}
-	var plain bgservice.Agent = &plainAgent{}
-	if moved, err := followThisCopy(plain, `C:\new.exe`); err != nil || moved {
-		t.Fatalf("agent without CommandReporter: moved %v, err %v", moved, err)
+	if replaced, err := replaceOlderHelper(&fakeHelperAgent{registered: installed, replaceErr: boom}, installed, t.TempDir(), "2.0.0"); replaced || !errors.Is(err, boom) {
+		t.Fatalf("replace error: replaced %v, err %v; want false, boom", replaced, err)
+	}
+	// A record that cannot be read (here a folder) leaves the helper alone.
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, helperRecordFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	agent := &fakeHelperAgent{registered: installed}
+	if replaced, err := replaceOlderHelper(agent, installed, dir, "2.0.0"); replaced || err == nil || len(agent.replaces) != 0 {
+		t.Fatalf("unreadable record: replaced %v, err %v; want false and an error", replaced, err)
 	}
 }
 
-type plainAgent struct{ installs int }
+func TestWriteHelperRecordNamesThisProcess(t *testing.T) {
+	old := appVersion
+	appVersion = "v2.0.0"
+	t.Cleanup(func() { appVersion = old })
+	dir := t.TempDir()
+	writeHelperRecord(dir)
 
-func (p *plainAgent) Install(string, []string) error { p.installs++; return nil }
-func (p *plainAgent) Uninstall() error               { return nil }
-func (p *plainAgent) Status() (bgservice.Status, error) {
-	return bgservice.Status{Installed: true}, nil
+	exe, _ := os.Executable()
+	data, err := os.ReadFile(filepath.Join(dir, helperRecordFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec helperRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Version != "2.0.0" || rec.Exe != exe || rec.PID != os.Getpid() || rec.Started == 0 {
+		t.Fatalf("record %+v; want 2.0.0, %s, pid %d and a start time", rec, exe, os.Getpid())
+	}
+	// The real processStart finds this process with the recorded start time.
+	if current, err := helperIsCurrent(dir, exe, "2.0.0"); err != nil || !current {
+		t.Fatalf("helperIsCurrent = %v, %v; want true for this live process", current, err)
+	}
+}
+
+func TestWriteHelperRecordLogsAFolderItCannotWrite(t *testing.T) {
+	writeHelperRecord(filepath.Join(t.TempDir(), "missing"))
+}
+
+func TestLogHelperReplace(t *testing.T) {
+	logHelperReplace(true, nil)
+	logHelperReplace(false, errors.New("boom"))
+	logHelperReplace(false, nil)
+}
+
+// The real processStart says false for a PID no process has.
+func TestProcessStartOfAProcessThatIsGone(t *testing.T) {
+	if started, ok := processStart(2147483646); ok {
+		t.Fatalf("processStart = %d, true for a PID no process has", started)
+	}
 }
