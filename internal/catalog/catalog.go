@@ -122,7 +122,7 @@ type Service struct {
 	// Guest marks a desktop-only app that may run inside the Secure VM
 	// (docs/design/secure-windows-vm.md). It is Desktop-only, appended from
 	// catalog-overlay/. Nil means the app is never offered in the VM. A service with
-	// requirements.container_prohibited never carries one. Nothing reads it yet.
+	// requirements.container_prohibited never carries one. internal/securevm reads it.
 	Guest *GuestConfig `json:"-" yaml:"guest"`
 	// RatingResult is the grade computed from services/_ratings.yml, or "not rated".
 	// Nil for a custom service, which nobody has reviewed. Never read from YAML.
@@ -516,8 +516,41 @@ type NativeBinary struct {
 }
 
 // GuestConfig is the guest: block: how an app runs inside the Secure VM, per guest OS.
+// Refused, when set, says why the app may never run in a Secure VM, and then the
+// block holds no OS entry: "terms" (the provider forbids or warns against VMs) or
+// "unsigned" (no developer signature, so CashPilot does not install it).
 type GuestConfig struct {
 	Windows *GuestWindows `json:"windows,omitempty" yaml:"windows"`
+	MacOS   *GuestMacOS   `json:"macos,omitempty" yaml:"macos"`
+	Refused string        `json:"refused,omitempty" yaml:"refused"`
+}
+
+// GuestMacOS describes one app inside the macOS guest (docs/design/secure-macos-vm.md).
+// CashPilot downloads Download inside the guest, checks SHA256 (when the vendor
+// serves a versioned file), the Team ID and Gatekeeper, and installs App into
+// /Applications as root. Process is the executable name pgrep matches. SignedIn is
+// the marker that shows a signed-in account; it is read as presence only.
+type GuestMacOS struct {
+	App      string      `json:"app" yaml:"app"`
+	Process  string      `json:"process" yaml:"process"`
+	TeamID   string      `json:"teamId" yaml:"team_id"`
+	Download string      `json:"download" yaml:"download"`
+	SHA256   string      `json:"sha256,omitempty" yaml:"sha256"`
+	Version  string      `json:"version,omitempty" yaml:"version"`
+	Rosetta  bool        `json:"rosetta,omitempty" yaml:"rosetta"`
+	Signin   string      `json:"signin" yaml:"signin"`
+	SignedIn GuestMarker `json:"signedIn" yaml:"signed_in"`
+	Note     string      `json:"note,omitempty" yaml:"note"`
+}
+
+// GuestMarker is how the guest read tells a signed-in app: a file under the earner's
+// ~/Library/Application Support (File), with a JSON key in it (Key) or a log line
+// holding words (LogWords), or a running process (Process) for an app with no account.
+type GuestMarker struct {
+	File     string `json:"file,omitempty" yaml:"file"`
+	Key      string `json:"key,omitempty" yaml:"key"`
+	LogWords string `json:"logWords,omitempty" yaml:"log_words"`
+	Process  bool   `json:"process,omitempty" yaml:"process"`
 }
 
 // GuestWindows describes one app inside the Windows guest. Process is the executable

@@ -11,6 +11,7 @@ import {usage} from '../models';
 import {preflight} from '../models';
 import {importers} from '../models';
 import {proxies} from '../models';
+import {securevm} from '../models';
 import {setupresume} from '../models';
 
 export function AcceptSessionRisk(arg1:string,arg2:string):Promise<Record<string, config.SessionConsent>>;
@@ -168,6 +169,22 @@ export function SaveCustomService(arg1:string,arg2:services.CustomDefinition):Pr
 export function SaveProxy(arg1:number,arg2:Record<string, string>):Promise<proxies.View>;
 
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
+
+export function SecureVMInstall():Promise<void>;
+
+export function SecureVMOpenScreen(arg1:string):Promise<void>;
+
+export function SecureVMPlace(arg1:string,arg2:string):Promise<void>;
+
+export function SecureVMStart():Promise<void>;
+
+export function SecureVMStatus():Promise<securevm.Status>;
+
+export function SecureVMStop():Promise<void>;
+
+export function SecureVMUndo():Promise<securevm.RemoveResult>;
+
+export function SecureVMVerify():Promise<securevm.Proof>;
 
 export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
 

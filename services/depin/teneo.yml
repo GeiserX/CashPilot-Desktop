@@ -133,3 +133,21 @@ rating:
     kind: terms
     source: https://teneo-protocol.ai/beacon
     checked_on: "2026-11-27"
+
+# --- Desktop-only (catalog-overlay/append/depin/teneo.yml) ------------------
+# Secure VM (macOS): the Teneo Beacon desktop app, proven in the macOS lab
+# (docs/design/secure-macos-vm.md). The SHA-256 matches the GitHub release.
+# vm_stance: none found. https://github.com/TeneoProtocolAI/teneo-node-app-release-beta,
+#   read 2026-11-27.
+guest:
+  macos:
+    app: "Teneo Beacon.app"
+    process: "teneo-node"
+    team_id: "5A4KV93G7B"
+    download: "https://github.com/TeneoProtocolAI/teneo-node-app-release-beta/releases/download/v0.4.9/Teneo.Beacon_0.4.9_universal.dmg"
+    sha256: "489a6ec37f8feff5d511e8754b5d7b4360e00f7666ee9b6a3611f2e6876beb23"
+    version: "0.4.9"
+    signin: console
+    signed_in:
+      file: "teneo.node/.token"
+    note: "Teneo can refuse some home connections with \"IP not eligible\"."
