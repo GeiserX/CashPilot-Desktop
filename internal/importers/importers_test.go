@@ -5,6 +5,14 @@ package importers
 // web repository's tests/fixtures/importers): each tool's own format, fake values.
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 )
@@ -508,6 +517,87 @@ func TestNoTwoToolsShareAMarker(t *testing.T) {
 			seen[key] = name
 		}
 	}
+}
+
+// --- money4band 5.0 encrypted user-config.json ---
+
+// m4b5Encrypted is content as money4band 5.0 writes user-config.json to disk: the
+// whole file becomes "M4B_ENCRYPTED:" plus one Fernet token of the JSON dumped with
+// indent=4 (money4band/core/crypto.py encrypt_dict at tag 5.0.0). The key is thrown
+// away: only the layout matters here.
+func m4b5Encrypted(t *testing.T, content string) string {
+	t.Helper()
+	var data any
+	if err := json.Unmarshal([]byte(content), &data); err != nil {
+		t.Fatal(err)
+	}
+	plain, err := json.MarshalIndent(data, "", "    ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := make([]byte, 32) // Fernet: signing key, then encryption key
+	iv := make([]byte, aes.BlockSize)
+	if _, err := rand.Read(key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rand.Read(iv); err != nil {
+		t.Fatal(err)
+	}
+	pad := aes.BlockSize - len(plain)%aes.BlockSize
+	plain = append(plain, bytes.Repeat([]byte{byte(pad)}, pad)...)
+	block, err := aes.NewCipher(key[16:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed := make([]byte, len(plain))
+	cipher.NewCBCEncrypter(block, iv).CryptBlocks(sealed, plain)
+	token := []byte{0x80}
+	token = binary.BigEndian.AppendUint64(token, uint64(time.Now().Unix()))
+	token = append(append(token, iv...), sealed...)
+	mac := hmac.New(sha256.New, key[:16])
+	mac.Write(token)
+	token = mac.Sum(token)
+	return "M4B_ENCRYPTED:" + base64.URLEncoding.EncodeToString(token)
+}
+
+const m4b5Refusal = "user-config.json is an encrypted money4band 5.0 file. Run `m4b config edit`, " +
+	"copy the decrypted JSON it opens, and paste it here."
+
+func TestAnEncryptedMoney4band5FileIsRefusedWithHowToDecrypt(t *testing.T) {
+	content := m4b5Encrypted(t, fixtures(t, "money4band/user-config.json")[0].Content)
+	for _, source := range []string{"auto", "money4band", "cashfactory"} {
+		_, err := Run([]File{{Name: "user-config.json", Content: content}}, source, getService(t), nil)
+		var r *Refused
+		if !errors.As(err, &r) || r.Error() != m4b5Refusal {
+			t.Errorf("%s: got %v, want %q", source, err, m4b5Refusal)
+		}
+	}
+}
+
+func TestABigEncryptedFileGetsTheSameMessageNotTheLineCap(t *testing.T) {
+	// One token on one line: a filled-in config passes the 8 KiB line cap.
+	var data map[string]any
+	if err := json.Unmarshal([]byte(fixtures(t, "money4band/user-config.json")[0].Content), &data); err != nil {
+		t.Fatal(err)
+	}
+	data["padding"] = strings.Repeat("x", 9000)
+	raw, _ := json.Marshal(data)
+	content := m4b5Encrypted(t, string(raw))
+	if len(content) <= MaxLineBytes {
+		t.Fatalf("token is %d bytes, want more than %d", len(content), MaxLineBytes)
+	}
+	_, err := ReadFiles([]File{{Name: "user-config.json", Content: content}}, "auto")
+	var r *Refused
+	if !errors.As(err, &r) || r.Error() != m4b5Refusal {
+		t.Errorf("got %v, want %q", err, m4b5Refusal)
+	}
+}
+
+func TestAnEncryptedFileBesideAPlainEnvIsStillRefused(t *testing.T) {
+	content := m4b5Encrypted(t, fixtures(t, "money4band/user-config.json")[0].Content)
+	files := append([]File{{Name: "user-config.json", Content: content + "\n"}}, fixtures(t, "money4band/generated.env")...)
+	_, err := Run(files, "auto", getService(t), nil)
+	refusedWith(t, err, "m4b config edit")
 }
 
 // --- Hostile input ---

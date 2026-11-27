@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Logs show one entry per line.** Docker starts every line with a time in nanoseconds, so nearly every entry wrapped onto two or three lines. The time now shows in local time and in a dimmer colour: `HH:MM:SS` when every line is from today, else with the date. The full value is in its tooltip. A long line scrolls sideways, and every other entry has a faint band. **Wrap lines** wraps long lines instead, and the app remembers the choice. The web dashboard shows logs the same way (CashPilot #890).
+- **Import says how to decrypt an encrypted money4band 5.0 config.** money4band 5.0 writes `user-config.json` as `M4B_ENCRYPTED:` and one Fernet token. Import read that as an empty `.env`: it said it could not tell the tool, or showed an empty table when money4band was picked. A big config hit the 8 KiB line cap instead. Import now refuses the file and says to run `m4b config edit` and paste the decrypted JSON it opens.
 
 ## [2.0.0] - 2026-11-27
 
