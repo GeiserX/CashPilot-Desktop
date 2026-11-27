@@ -275,10 +275,14 @@ func parsePcapng(b []byte) ([]pktInfo, error) {
 		return nil, errors.New("capture has no interface evidence")
 	}
 	if !hasPacketData {
-		return nil, errors.New("capture has no packet data to verify the export")
+		return nil, errNoPacketData
 	}
 	return out, nil
 }
+
+// errNoPacketData: an export with headers and no packet. It cannot show that
+// pktmon captured on that NIC at all.
+var errNoPacketData = errors.New("capture has no packet data to verify the export")
 
 // parseFrame reads one Ethernet or raw IP frame.
 func parseFrame(link uint16, f []byte) (pktInfo, bool) {

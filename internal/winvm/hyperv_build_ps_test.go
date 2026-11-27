@@ -618,6 +618,62 @@ func TestPktmonStopDeletesTheCaptureWindowsRewrote(t *testing.T) {
 	}
 }
 
+// TestIdleNICsDoNotBreakTheCapture: on setup 1j every proof step broke with
+// "component 68: capture has no packet data", because the extension adapter
+// of another, idle VM switch saw nothing in 30 seconds. An idle NIC's
+// silence proves nothing either way, and a packet on any NIC but ours still
+// counts as leaving. What must show packets is the path the probe itself
+// takes: each component of our vNIC, and at least one physical NIC (an
+// unplugged Ethernet port beside a working Wi-Fi is idle too).
+func TestIdleNICsDoNotBreakTheCapture(t *testing.T) {
+	ctx := context.Background()
+	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},{"Id":5,"Name":"Wi-Fi","Type":2,"ifIndex":9},{"Id":9,"Name":"vEthernet","Type":6,"ifIndex":20},{"Id":68,"Name":"VMS ExtMp #3","Type":7,"ifIndex":99}]}]`
+	const metadata = `{"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7},{"id":5,"type":2,"name":"Wi-Fi","ifIndex":9},{"id":9,"type":6,"name":"vEthernet","ifIndex":20},{"id":68,"type":7,"name":"","ifIndex":99}]}`
+	traffic := pcapng(ipv4TCP(netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.50"), 45000))
+	for _, tc := range []struct {
+		name  string
+		empty []int
+		ok    bool
+	}{
+		{"idle foreign switch", []int{68}, true},
+		{"one idle physical NIC", []int{4}, true},
+		{"every physical NIC idle", []int{4, 5}, false},
+		{"idle vNIC", []int{9}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true}`)
+			mockCaptureStart(h, r)
+			p := &psProber{h: h, owner: tOwner, switchID: "c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e", tmp: filepath.Join(t.TempDir(), proofDir)}
+			capture, err := p.Pktmon(ctx, []PktFilter{{Addr: netip.MustParseAddr("192.0.2.50")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := capture.(*psCapture).dir
+			var files []string
+			for _, id := range []int{4, 5, 9, 68} {
+				path := filepath.Join(dir, "c"+strconv.Itoa(id)+".pcapng")
+				data := traffic
+				if slices.Contains(tc.empty, id) {
+					data = pcapng()
+				}
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, `{"id":`+strconv.Itoa(id)+`,"path":`+jsonQuote(path)+`}`)
+			}
+			r.answers = append(r.answers, metadata, `{"files":[`+strings.Join(files, ",")+`]}`)
+			recs, err := capture.Stop(ctx)
+			if tc.ok {
+				if err != nil || len(recs) != 4-len(tc.empty) {
+					t.Fatalf("Stop = %d records, %v; want one per NIC that saw the packet", len(recs), err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "no packet data") {
+				t.Fatalf("Stop = %v, want the empty export refused", err)
+			}
+		})
+	}
+}
+
 func TestHeaderOnlyPktmonExportLeavesProofUnproven(t *testing.T) {
 	ctx := context.Background()
 	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},{"Id":9,"Name":"vEthernet","Type":6,"ifIndex":20}]}]`

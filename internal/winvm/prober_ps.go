@@ -522,6 +522,7 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		files[f.ID] = f.Path
 	}
 	var out []PktRecord
+	silentPhysical, physicalSaw := 0, false
 	for _, id := range want {
 		path := files[id]
 		if path == "" {
@@ -537,8 +538,22 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 			return nil, err
 		}
 		pkts, err := parsePcapng(b)
+		if errors.Is(err, errNoPacketData) && class != "vnic" {
+			// An idle NIC, such as the extension adapter of another VM's
+			// switch or an unplugged Ethernet port, sees nothing in a step
+			// (setup 1j). Its silence proves nothing either way, and a packet
+			// on it still counts as leaving. The probe's own path must show
+			// packets: every component of our vNIC, and one physical NIC.
+			if class == "physical" && silentPhysical == 0 {
+				silentPhysical = id
+			}
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("component %d: %w", id, err)
+		}
+		if class == "physical" {
+			physicalSaw = true
 		}
 		for _, k := range pkts {
 			r := PktRecord{Component: cp.Name, Class: class, Src: k.Src, Dst: k.Dst, Proto: k.Proto, Port: k.Port}
@@ -546,6 +561,9 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 				out = append(out, r)
 			}
 		}
+	}
+	if silentPhysical != 0 && !physicalSaw {
+		return nil, fmt.Errorf("component %d: %w", silentPhysical, errNoPacketData)
 	}
 	return out, nil
 }
