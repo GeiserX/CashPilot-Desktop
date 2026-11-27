@@ -36,6 +36,10 @@ var (
 	proxySchemeRE = regexp.MustCompile(`^[a-z0-9]+$`)
 )
 
+// money4band 5.0 writes user-config.json as this prefix plus one Fernet token of the
+// whole JSON (money4band/core/crypto.py at tag 5.0.0). Only its own key reads it.
+const m4bEncryptedPrefix = "M4B_ENCRYPTED:"
+
 // shellSpecial is what a shell would do something with in an unquoted word.
 // InternetIncome runs every value through `eval "echo $value"`, so an unquoted value
 // holding any of these is not the value its tool actually used.
@@ -134,6 +138,10 @@ func checkText(name, content string) (string, error) {
 		return "", refuse(i18n.T("go.importers.refuse.notUTF8", "name", name))
 	}
 	content = strings.TrimLeft(content, "\ufeff")
+	// Before the line cap: the token is one line, and a filled-in config passes 8 KiB.
+	if strings.HasPrefix(strings.TrimLeftFunc(content, unicode.IsSpace), m4bEncryptedPrefix) {
+		return "", refuse(i18n.T("go.importers.refuse.m4bEncrypted", "name", name))
+	}
 	lines := splitLines(content)
 	if len(lines) > MaxLines {
 		return "", refuse(i18n.T("go.importers.refuse.tooManyLines", "name", name, "max", MaxLines))
