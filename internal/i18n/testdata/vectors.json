@@ -251,6 +251,30 @@
     },
     {
       "locale": "en",
+      "msg": "{n, plural, other {# items}}",
+      "args": {
+        "n": 0.0001
+      },
+      "want": "0.0001 items"
+    },
+    {
+      "locale": "de",
+      "msg": "{n, plural, other {# Stunden}}",
+      "args": {
+        "n": 0.1
+      },
+      "want": "0,1 Stunden"
+    },
+    {
+      "locale": "en",
+      "msg": "{n, plural, one\r\n{# box} other\r\n{# boxes}}",
+      "args": {
+        "n": 2
+      },
+      "want": "2 boxes"
+    },
+    {
+      "locale": "en",
       "msg": "This '{isn''t}' obvious",
       "args": {},
       "want": "This {isn't} obvious"
