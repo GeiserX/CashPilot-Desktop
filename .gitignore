@@ -20,6 +20,7 @@ build/windows/*
 !build/windows/installer/
 build/windows/installer/*
 !build/windows/installer/project.nsi
+!build/windows/installer/i18n.nsh
 .DS_Store
 .omc/
 pnpm-lock.yaml

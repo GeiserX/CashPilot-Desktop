@@ -52,7 +52,7 @@ ManifestDPIAware true
 !define MUI_UNICON "..\icon.ico"
 !define MUI_ABORTWARNING
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXECUTABLE}"
-!define MUI_FINISHPAGE_RUN_TEXT "Open CashPilot Desktop"
+!define MUI_FINISHPAGE_RUN_TEXT "$(FINISHRUN)"
 !define MUI_UNFINISHPAGE_NOAUTOCLOSE
 
 !insertmacro MUI_PAGE_WELCOME
@@ -63,7 +63,10 @@ ManifestDPIAware true
 UninstPage custom un.OptionsPage un.OptionsPageLeave
 !insertmacro MUI_UNPAGE_INSTFILES
 
-!insertmacro MUI_LANGUAGE "English"
+# Every language NSIS has of the 20 the app ships, and the installer's own
+# strings in each, from frontend/src/locales (go run ./cmd/i18nnsis). NSIS picks
+# the Windows display language, and English when it has no match.
+!include "${__FILEDIR__}\i18n.nsh"
 
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\CashPilot-Desktop-setup.exe"
@@ -101,7 +104,7 @@ Section
 
     !insertmacro wails.webview2runtime
 
-    DetailPrint "Closing CashPilot Desktop if it runs from $INSTDIR"
+    DetailPrint "$(CLOSING)"
     !insertmacro StopInstalledCopies
 
     SetOutPath $INSTDIR
@@ -158,27 +161,27 @@ FunctionEnd
 # The one question the uninstaller asks: what to remove besides the app.
 # Both boxes start empty, so the default keeps the earners and the data.
 Function un.OptionsPage
-    !insertmacro MUI_HEADER_TEXT "Choose what else to remove" "The app, its shortcuts and its background helper are always removed."
+    !insertmacro MUI_HEADER_TEXT "$(OPTIONS_TITLE)" "$(OPTIONS_SUBTITLE)"
     nsDialogs::Create 1018
     Pop $0
     ${If} $0 == error
         Abort
     ${EndIf}
 
-    ${NSD_CreateLabel} 0 0 100% 24u "CashPilot Desktop will be removed from $INSTDIR. It can also remove the earning apps it started, and your data. Leave a box empty to keep that part."
+    ${NSD_CreateLabel} 0 0 100% 24u "$(OPTIONS_INTRO)"
     Pop $0
 
-    ${NSD_CreateCheckbox} 0 30u 100% 12u "&Stop and remove the earning apps CashPilot Desktop started"
+    ${NSD_CreateCheckbox} 0 30u 100% 12u "$(OPTIONS_REMOVEEARNERS)"
     Pop $RemoveEarnersBox
-    ${NSD_CreateLabel} 12u 43u -12u 26u "Only the containers CashPilot Desktop made, and its native earning apps. Other containers are not touched. Docker volumes stay. Left empty, the containers keep running."
+    ${NSD_CreateLabel} 12u 43u -12u 26u "$(OPTIONS_REMOVEEARNERSHELP)"
     Pop $0
     ${If} $RemoveEarners == 1
         ${NSD_Check} $RemoveEarnersBox
     ${EndIf}
 
-    ${NSD_CreateCheckbox} 0 74u 100% 12u "&Delete my CashPilot data"
+    ${NSD_CreateCheckbox} 0 74u 100% 12u "$(OPTIONS_DELETEDATA)"
     Pop $DeleteDataBox
-    ${NSD_CreateLabel} 12u 87u -12u 26u "Settings, the earnings database, logs and saved logins. Left empty, they stay, and a new install or the portable exe finds them again."
+    ${NSD_CreateLabel} 12u 87u -12u 26u "$(OPTIONS_DELETEDATAHELP)"
     Pop $0
     ${If} $DeleteData == 1
         ${NSD_Check} $DeleteDataBox
@@ -186,7 +189,7 @@ Function un.OptionsPage
 
     # This page is the last one before the removal starts.
     GetDlgItem $0 $HWNDPARENT 1
-    SendMessage $0 ${WM_SETTEXT} 0 "STR:&Uninstall"
+    SendMessage $0 ${WM_SETTEXT} 0 "STR:$(OPTIONS_UNINSTALL)"
 
     nsDialogs::Show
 FunctionEnd
@@ -209,7 +212,7 @@ FunctionEnd
 Section "uninstall"
     SetShellVarContext current
 
-    DetailPrint "Closing CashPilot Desktop if it runs from $INSTDIR"
+    DetailPrint "$(CLOSING)"
     !insertmacro StopInstalledCopies
 
     # What only the app knows about: the background helper, the RunOnce value,
@@ -228,10 +231,10 @@ Section "uninstall"
         StrCpy $0 "missing"
     ${EndIf}
     ${If} $0 != 0
-        DetailPrint "The app's cleanup did not finish (result: $0). The lines above say what is left."
+        DetailPrint "$(CLEANUPFAILED)"
         SetErrorLevel 2
         ${IfNot} ${Silent}
-            MessageBox MB_ICONEXCLAMATION|MB_OK "Some parts could not be removed. The list of details says which."
+            MessageBox MB_ICONEXCLAMATION|MB_OK "$(SOMEPARTSLEFT)"
         ${EndIf}
     ${EndIf}
 
