@@ -136,7 +136,12 @@ export function renderJoinOutcome(result: JoinResult): string {
       <ul class="mode-effects">
         <li>Your CashPilot reads the earnings now. This computer stops logging in to your provider accounts.</li>
         <li>Your earnings history from this computer is copied to your CashPilot once.</li>
-        <li>You still add and remove earning apps here, in this app.</li>
+        <li>${
+          result.serverCommandsOn
+            ? "Your CashPilot can also deploy, stop and remove services here, if it runs version 3.0 or newer. To stop that, turn off the switch on the dashboard."
+            : "Your CashPilot cannot deploy or remove services here. To allow it, turn on the switch on the dashboard."
+        }</li>
+        <li>You can also add and remove earning apps here, in this app.</li>
         ${hub}
       </ul>
       <div class="gate-actions"><button type="button" class="btn btn-primary btn-lg" id="join-continue">Continue</button></div>

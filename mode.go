@@ -171,6 +171,9 @@ type JoinResult struct {
 	// HubDevices lists the workers and phones to point at the server instead.
 	HubWasOn   bool     `json:"hubWasOn"`
 	HubDevices []string `json:"hubDevices"`
+	// ServerCommandsOn is the server commands switch after the join: on for a
+	// first join, off when the join carried a 1.x pairing over.
+	ServerCommandsOn bool `json:"serverCommandsOn"`
 }
 
 // JoinCashPilot makes this computer a follower of a CashPilot server. It reads the
@@ -275,6 +278,7 @@ func (a *App) enrolPairing(ctx context.Context, req JoinRequest, current config.
 		a.startUpstream(a.ctx)
 	}
 	out.OK, out.WorkerID = true, resp.WorkerID
+	out.ServerCommandsOn = !a.cfg.Config().ServerCommandsOff
 	return out, nil
 }
 

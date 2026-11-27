@@ -170,6 +170,9 @@ func TestFreshJoinStartsWithServerCommandsOn(t *testing.T) {
 	if app.cfg.Config().ServerCommandsOff {
 		t.Fatal("a fresh join left server commands off")
 	}
+	if !res.ServerCommandsOn {
+		t.Fatal("the join answer says server commands are off; its text would tell the user the server cannot deploy here")
+	}
 	if n := listening(app); n != 1 {
 		t.Fatalf("%d listeners after a fresh join, want 1", n)
 	}
