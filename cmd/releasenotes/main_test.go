@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode"
 )
 
 // The v1.5.0..v1.6.0 subjects, as they are on main, plus the kinds of commit a
@@ -289,7 +292,7 @@ func TestAMajorReleaseOpensWithBeforeYouUpgrade(t *testing.T) {
 	}
 	before := section(t, body, "## Before you upgrade", "## Download")
 	for _, want := range []string{
-		"[docs/whats-new-2.0.md](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/docs/whats-new-2.0.md)",
+		"[the 2.0 section of UPGRADING.md](https://github.com/GeiserX/CashPilot-Desktop/blob/v2.0.0/UPGRADING.md#20)",
 		"before you upgrade from v1.7.0",
 		"- Drop the old pairing (#9)\n",
 		"- Move the config (#12)\n",
@@ -306,7 +309,7 @@ func TestAMajorReleaseOpensWithBeforeYouUpgrade(t *testing.T) {
 func TestAMajorReleaseWithNoBreakingCommitStillLinksTheGuide(t *testing.T) {
 	body := Render(Release{Repo: "GeiserX/CashPilot-Desktop", Tag: "v3.0.0", Prev: "v2.4.1", Commits: v160, Assets: allAssets})
 	before := section(t, body, "## Before you upgrade", "## Download")
-	if !strings.Contains(before, "docs/whats-new-3.0.md") || strings.Contains(before, "- ") {
+	if !strings.Contains(before, "UPGRADING.md#30)") || strings.Contains(before, "- ") {
 		t.Errorf("want the guide link and no list:\n%s", before)
 	}
 }
@@ -372,7 +375,7 @@ func TestRunListsTheBreakingCommitsOfAMajorRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := section(t, out, "## Before you upgrade", "## Download")
-	for _, want := range []string{"docs/whats-new-2.0.md", "from v1.7.0", "- Drop the old pairing (#9)\n", "- Move the config (#12)\n"} {
+	for _, want := range []string{"UPGRADING.md#20)", "from v1.7.0", "- Drop the old pairing (#9)\n", "- Move the config (#12)\n"} {
 		if !strings.Contains(before, want) {
 			t.Errorf("Before you upgrade lacks %q:\n%s", want, before)
 		}
@@ -477,5 +480,98 @@ func TestParseTitles(t *testing.T) {
 func TestTheShippedTitlesFileParses(t *testing.T) {
 	if _, err := parseTitles(titlesFile); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// githubAnchor is the anchor GitHub gives a Markdown heading: lower case, spaces
+// to hyphens, and every other character but letters, digits, hyphens and
+// underscores dropped. A repeated heading gets "-1", "-2" and so on.
+func githubAnchor(heading string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(heading)) {
+		switch {
+		case r == ' ':
+			b.WriteRune('-')
+		case r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// upgradingAnchors lists the anchors of every heading in UPGRADING.md.
+func upgradingAnchors(t *testing.T) map[string]bool {
+	t.Helper()
+	text, err := os.ReadFile("../../UPGRADING.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors := map[string]bool{}
+	seen := map[string]int{}
+	inFence := false
+	for _, line := range strings.Split(string(text), "\n") {
+		if strings.HasPrefix(line, "```") {
+			inFence = !inFence
+		}
+		if inFence || !strings.HasPrefix(line, "#") {
+			continue
+		}
+		heading := strings.TrimLeft(line, "#")
+		if !strings.HasPrefix(heading, " ") {
+			continue
+		}
+		a := githubAnchor(heading)
+		if n := seen[a]; n > 0 {
+			anchors[fmt.Sprintf("%s-%d", a, n)] = true
+		} else {
+			anchors[a] = true
+		}
+		seen[a]++
+	}
+	return anchors
+}
+
+// currentMajor reads the major version from package.json, the version file the
+// release bumps.
+func currentMajor(t *testing.T) int {
+	t.Helper()
+	text, err := os.ReadFile("../../package.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`"version":\s*"(\d+)\.`).FindSubmatch(text)
+	if m == nil {
+		t.Fatal("package.json has no version")
+	}
+	major, err := strconv.Atoi(string(m[1]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return major
+}
+
+// The release notes of a major link its section of UPGRADING.md. A missing
+// section would send every reader to the top of the page, so it fails here.
+func TestUpgradingHasASectionForEveryMajorTheNotesLink(t *testing.T) {
+	anchors := upgradingAnchors(t)
+	majors := map[int]bool{1: true, 2: true, currentMajor(t): true}
+	for major := range majors {
+		link := upgradingLink(major)
+		anchor := link[strings.Index(link, "#")+1:]
+		if !anchors[anchor] {
+			t.Errorf("the notes of v%d.0.0 link %s, but UPGRADING.md has no heading \"## %d.0\"", major, link, major)
+		}
+	}
+}
+
+func TestGithubAnchorDropsTheDotOfAVersion(t *testing.T) {
+	for heading, want := range map[string]string{
+		" 2.0":                              "20",
+		" Before you upgrade to 2.0":        "before-you-upgrade-to-20",
+		" Earners can't reach your network": "earners-cant-reach-your-network",
+	} {
+		if got := githubAnchor(heading); got != want {
+			t.Errorf("githubAnchor(%q) = %q, want %q", heading, got, want)
+		}
 	}
 }

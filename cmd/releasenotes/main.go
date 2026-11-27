@@ -7,8 +7,8 @@
 // offer yet, and found no word on the two warnings Windows shows for an unsigned
 // file. So the body now has three parts, in this order:
 //
-//  0. Before you upgrade, on a major release only: a link to
-//     docs/whats-new-<major>.0.md and the breaking changes, so nobody upgrades
+//  0. Before you upgrade, on a major release only: a link to the major's
+//     section of UPGRADING.md and the breaking changes, so nobody upgrades
 //     into one blind.
 //  1. Download: which file to take for each system, the steps to run it, and the
 //     two Windows warnings with what to click and why they appear.
@@ -257,6 +257,13 @@ func findAsset(assets []string, suffix string) string {
 	return ""
 }
 
+// upgradingLink is the path, with its anchor, of a major's section in
+// UPGRADING.md. Each major has the heading "## <major>.0" there, and GitHub
+// drops the dot from the anchor, so "## 2.0" is "#20".
+func upgradingLink(major int) string {
+	return fmt.Sprintf("UPGRADING.md#%d0", major)
+}
+
 // writeBeforeYouUpgrade opens the notes of a major release: what to read first,
 // and every breaking change, so a "feat!:" does not hide under "New".
 func writeBeforeYouUpgrade(b *strings.Builder, r Release) {
@@ -264,9 +271,9 @@ func writeBeforeYouUpgrade(b *strings.Builder, r Release) {
 	if !ok {
 		return
 	}
-	doc := fmt.Sprintf("docs/whats-new-%d.0.md", major)
+	doc := upgradingLink(major)
 	b.WriteString("## Before you upgrade\n\n")
-	fmt.Fprintf(b, "This is a major release. Some changes need a step from you. Read [%s](https://github.com/%s/blob/%s/%s) before you upgrade from %s.\n", doc, r.Repo, r.Tag, doc, r.Prev)
+	fmt.Fprintf(b, "This is a major release. Some changes need a step from you. Read [the %d.0 section of UPGRADING.md](https://github.com/%s/blob/%s/%s) before you upgrade from %s.\n", major, r.Repo, r.Tag, doc, r.Prev)
 	if len(r.Breaking) > 0 {
 		b.WriteString("\nThe changes that can break how you use the app today:\n\n")
 		for _, subject := range r.Breaking {

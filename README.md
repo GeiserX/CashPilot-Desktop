@@ -16,30 +16,7 @@ CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Window
   <img src="docs/images/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
 </p>
 
-## What's new in 2.0
-
-In 2.0, a CashPilot server that this computer joined can deploy, stop, start, restart and remove services here. Some changes need a step from you:
-
-- **Server commands need CashPilot 3.0.0 or newer.** Under an older server, Desktop 2.0 only reports. It still listens on TCP 8086 while the switch is on, but a server that never listed `desktop_commands` never learns the address. A server that stops listing it, for example after a downgrade to 2.x, can still get the address in one more heartbeat. The heartbeat after that leaves it out. The window and the background helper each send their own heartbeats, so each can send that one. To stop server commands before a downgrade, turn the switch off first. Desktop 1.7.0 also only reports under CashPilot 3.0.0, so upgrade the server first.
-- **Server commands start off after an upgrade from 1.x.** Turn them on with the dashboard switch. A first join in 2.0 starts with them on.
-- **A return to 1.x needs a new join.** 2.0 moves the pairing to `pairing.json` and deletes the 1.x keys. After an upgrade back to 2.0, the window applies the join or Leave you made in 1.x when it first starts, and server commands start off. Turn them on with the dashboard switch.
-- **A refused key needs a new join by hand.** Desktop no longer joins again by itself after HTTP 401.
-- **`NVIDIA_` variables are refused.** Remove them from your custom services before you upgrade.
-- **Custom services get no GPU.** A custom service that uses an NVIDIA GPU through Docker's nvidia default runtime runs without it after its next deploy. Run that workload outside CashPilot, or ask for a catalog entry.
-
-Desktop does not update itself: download 2.0 from the [releases page](https://github.com/GeiserX/CashPilot-Desktop/releases). The steps before and after the upgrade: [What's new in 2.0](docs/whats-new-2.0.md).
-
-## What's new in 1.0
-
-1.0 is the first stable release, after about 130 releases since May 2026. Nothing breaks on upgrade. The highlights:
-
-- **Earners can't reach your LAN.** On a new install, bridge-networked earners run on a fenced network that drops private ranges, tailnets, cloud metadata, this computer, its public IP and the public IPs of your other CashPilot boxes. If the fence can't be written, the deploy is refused, and the app rewrites it every five minutes. Upgraded installs turn it on with one button. Mysterium's container runs only behind the fence, and its deploy is refused where the fence can't be applied. Not covered: Podman, a native (no-Docker) Mysterium node, a public IP with no CashPilot box on it, the minutes before the first public-IP lookup, and the gap after a firewall reload until the next rewrite ([limits](docs/configuration.md#lan-isolation)).
-- **Earn on more IPs.** Run extra copies of a service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy. If the proxy dies the copy stops. It never falls back to your IP.
-- **Your node identities are safe.** Removing a service keeps its data, an unrecoverable volume is never deleted without a separate yes, and encrypted backups take one click.
-- **42 graded services**, vendored from the web catalog, with a check before deploy that says what would stop a service earning here.
-- **Signed and notarized on macOS**, with builds for Windows and Linux. Pairs with a CashPilot server, web 2.0 included, or acts as the hub for workers and Android phones. The [Android companion](https://github.com/GeiserX/CashPilot-android/releases) reaches 1.0 at the same time.
-
-Full list, upgrade notes and known limits: [What's new in 1.0](docs/whats-new-1.0.md).
+CashPilot Desktop is at 2.0 and does not update itself: get new versions from the [releases page](https://github.com/GeiserX/CashPilot-Desktop/releases). What changed in each major version, and the steps to upgrade: [UPGRADING.md](UPGRADING.md).
 
 ## Features
 
@@ -47,12 +24,17 @@ Full list, upgrade notes and known limits: [What's new in 1.0](docs/whats-new-1.
 - **System tray (macOS)** -- Runs quietly in the background with quick-access status and earnings summary; menu-bar icon is macOS-only today (Windows/Linux planned)
 - **Real-time monitoring** -- Live earnings, service health, container stats, and node uptime
 - **Multi-node fleet** -- Aggregate view across your entire CashPilot fleet from a single window
+- **Server commands** -- A CashPilot server that this computer joined can deploy, stop, start, restart and remove services here. It needs CashPilot 3.0.0 or newer on the server, and a switch on the dashboard card turns it on or off ([docs](docs/configuration.md#the-server-starts-and-stops-services-here))
+- **Hub for workers and phones** -- Desktop can also be the hub: workers and the [Android companion](https://github.com/GeiserX/CashPilot-android/releases) report to it instead of to a CashPilot server
 - **Activity (opt-in)** -- Which destinations each earner talks to, whether it reaches into your network or sends mail; off by default, remote addresses kept 24 hours ([details](docs/activity.md))
 - **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
-- **Custom services** -- Run any image from Docker Hub or another registry that the catalog does not list, with the same restrictions as catalog services ([docs](docs/custom-services.md))
+- **Custom services** -- Run any image from Docker Hub or another registry that the catalog does not list, with the same restrictions as catalog services. A custom service gets no GPU and may not set an `NVIDIA_` variable ([docs](docs/custom-services.md))
 - **Proxied copies** -- Run extra copies of a deployed service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy, so one computer earns on several IPs; a dead proxy stops the copy instead of leaking ([docs](docs/proxies.md))
-- **LAN isolation** -- New installs fence bridge-networked container earners, Mysterium's container included, off your LAN, this computer, a tailnet and cloud metadata; an upgraded install turns it on with one button ([docs](docs/configuration.md#lan-isolation))
+- **LAN isolation** -- New installs fence bridge-networked container earners off private ranges, tailnets, cloud metadata, this computer, its public IP and the public IPs of your other CashPilot boxes. If the fence can't be written, the deploy is refused, and the app rewrites it every five minutes. Mysterium's container runs only behind the fence, and its deploy is refused where the fence can't be applied. An upgraded install turns it on with one button. Not covered: Podman, a native (no-Docker) Mysterium node, a public IP with no CashPilot box on it, the minutes before the first public-IP lookup, and the gap after a firewall reload until the next rewrite ([docs](docs/configuration.md#lan-isolation))
+- **Node identities kept safe** -- Removing a service keeps its data, an unrecoverable volume is never deleted without a separate yes, and encrypted backups take one click ([docs](docs/backup.md))
 - **Provider grades** -- Every catalog provider gets a letter grade from the same published criteria as the web app, with its cons and their sources ([how we grade](https://geiserx.github.io/CashPilot/ratings/))
+- **GPU miners** -- A catalog miner gets the GPU that its catalog entry declares, and only this computer's catalog decides that. GPU support is in beta
+- **Check before deploy** -- Before a deploy, the app says what would stop a service earning on this computer
 - **Import from another tool** -- Bring service logins over from money4band, CashFactory or InternetIncome after a dry run ([docs](docs/migrate/money4band.md))
 - **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
 - **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
@@ -93,6 +75,7 @@ CashPilot bundles a catalog of 49 active passive-income services across multiple
 - [How it works](docs/how-it-works.md): the full design, grounded in the code
 - [FAQ](docs/faq.md): earnings, safety, Docker, crashes, several machines
 - [Development](docs/development.md): prerequisites, dev workflow, build, tests
+- [For AI agents](https://geiserx.github.io/CashPilot/for-ai-agents/): how an AI assistant can offer CashPilot's referral sign-ups to its user
 
 ## Related projects
 
