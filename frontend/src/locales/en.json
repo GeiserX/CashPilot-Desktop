@@ -667,6 +667,7 @@
   "topbar.fleet": "Fleet",
   "topbar.activity": "Activity",
   "topbar.catalog": "Catalog",
+  "topbar.security": "Security",
   "topbar.settings": "Settings",
   "topbar.main": "Main",
   "topbar.addService": "Add service",

@@ -314,6 +314,38 @@ export function SaveSettings(arg1) {
   return window['go']['main']['App']['SaveSettings'](arg1);
 }
 
+export function SecureVMInstall() {
+  return window['go']['main']['App']['SecureVMInstall']();
+}
+
+export function SecureVMOpenScreen(arg1) {
+  return window['go']['main']['App']['SecureVMOpenScreen'](arg1);
+}
+
+export function SecureVMPlace(arg1, arg2) {
+  return window['go']['main']['App']['SecureVMPlace'](arg1, arg2);
+}
+
+export function SecureVMStart() {
+  return window['go']['main']['App']['SecureVMStart']();
+}
+
+export function SecureVMStatus() {
+  return window['go']['main']['App']['SecureVMStatus']();
+}
+
+export function SecureVMStop() {
+  return window['go']['main']['App']['SecureVMStop']();
+}
+
+export function SecureVMUndo() {
+  return window['go']['main']['App']['SecureVMUndo']();
+}
+
+export function SecureVMVerify() {
+  return window['go']['main']['App']['SecureVMVerify']();
+}
+
 export function SetActivityEnabled(arg1) {
   return window['go']['main']['App']['SetActivityEnabled'](arg1);
 }

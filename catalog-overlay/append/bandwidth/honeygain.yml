@@ -1,0 +1,6 @@
+# --- Desktop-only (catalog-overlay/append/bandwidth/honeygain.yml) ----------
+# Never in the Secure VM: Honeygain warns that a flawed setup triggers its fraud
+# checks and may get the account banned.
+#   https://honeygain.zendesk.com/hc/en-us/articles/360013096900, read 2026-11-25.
+guest:
+  refused: terms
