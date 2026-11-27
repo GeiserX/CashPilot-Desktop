@@ -66,7 +66,7 @@ defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser earner
 # Skip the per-user Setup Assistant screens.
 v=$(sw_vers -productVersion); b=$(sw_vers -buildVersion)
 sa=/Users/earner/Library/Preferences/com.apple.SetupAssistant.plist
-mkdir -p /Users/earner/Library/Preferences
+mkdir -p /Users/earner/Library/Preferences/ByHost
 for k in DidSeeCloudSetup DidSeePrivacy DidSeeSiriSetup DidSeeScreenTime DidSeeAppearanceSetup \
          DidSeeTouchIDSetup DidSeeAccessibility DidSeeActivationLock DidSeeIntelligence \
          DidSeeApplePaySetup DidSeeSyncSetup DidSeeSyncSetup2 DidSeeTrueTonePrivacy DidSeeTermsOfAddress; do
@@ -81,8 +81,14 @@ defaults write "$sa" SkipFirstLoginOptimization -bool true
 # `defaults -currentHost`, so write the ByHost file by path.
 hw=$(ioreg -rd1 -c IOPlatformExpertDevice | awk -F'"' '/IOPlatformUUID/{print $4}')
 [ -n "$hw" ] || { echo "could not read the guest's hardware UUID" >&2; exit 1; }
-mkdir -p /Users/earner/Library/Preferences/ByHost
-defaults write "/Users/earner/Library/Preferences/ByHost/com.apple.screensaver.$hw" idleTime -int 0
-chown -R earner:staff /Users/earner/Library
+ss="/Users/earner/Library/Preferences/ByHost/com.apple.screensaver.$hw.plist"
+defaults write "$ss" idleTime -int 0
+# Only what this script wrote: after the first login, macOS keeps folders in
+# the Library that even root may not chown.
+chown earner:staff /Users/earner/Library /Users/earner/Library/Preferences \
+  /Users/earner/Library/Preferences/ByHost "$sa" "$ss"
 touch "$done_marker"
+# CashPilot restarts the guest next, and `tart stop` may force it off: flush
+# first, or the last writes are lost.
+sync
 echo "PROVISIONED new $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
