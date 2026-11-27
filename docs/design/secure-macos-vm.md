@@ -411,6 +411,7 @@ The guest checks for macOS updates on its own, with automatic download on.
 | M12, Teneo | "IP not eligible" on our line | A test from another residential IP |
 | M13, guest updates | Automatic download is on in the test bed | Decision 7, then the image setting |
 | M7, deleting a guest user | The guest agent cannot delete a user record. A locked, hidden test user is left in the test bed | Find which right the deletion needs (likely a TCC grant or an admin with a Secure Token), or never create extra users |
+| M6, the base provisioning after the review fixes | DNS is now set on every network service after Remote Login is off, and nothing re-ran it on a fresh image | The next base build: check DNS and Remote Login after a reboot |
 | M10, the new autostart path after a login | Loaded by hand, not yet through a real login | The next guest reboot |
 | Phase 2, Code-Hex/vz | Not built | A Go prototype that boots the guest with our own filter and no setuid helper |
 | M10, Theta and UpRock on Rosetta | Both are x86_64 only, and macOS warns that Intel apps will stop opening | An arm64 build from each vendor, or both leave the set |
