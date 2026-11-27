@@ -83,6 +83,8 @@ export function GetEarningsSummary():Promise<main.EarningsSummary>;
 
 export function GetFleetState():Promise<main.FleetState>;
 
+export function GetLanguageState(arg1:Array<string>):Promise<main.LanguageState>;
+
 export function GetLogs(arg1:string,arg2:number):Promise<string>;
 
 export function GetModeState():Promise<main.ModeState>;
@@ -168,6 +170,8 @@ export function SaveProxy(arg1:number,arg2:Record<string, string>):Promise<proxi
 export function SaveSettings(arg1:Record<string, string>):Promise<main.SettingsState>;
 
 export function SetActivityEnabled(arg1:boolean):Promise<main.ActivityView>;
+
+export function SetLanguage(arg1:string,arg2:Array<string>):Promise<main.LanguageState>;
 
 export function SetServerCommands(arg1:boolean):Promise<main.ServerCommandsState>;
 

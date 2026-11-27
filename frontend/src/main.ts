@@ -93,7 +93,11 @@ import {
   RunSetupStep,
   RestartNow,
   SignOutNow,
+  GetLanguageState,
+  SetLanguage,
 } from "../wailsjs/go/main/App";
+import { currentLocale, setLocale, textDirection } from "./render/i18n";
+import { renderLanguageCard } from "./render/language";
 import { renderFleetSection } from "./render/fleet";
 import { renderServerCommands } from "./render/server_commands";
 import { wireServerCommandsFirewall } from "./render/server_commands_wire";
@@ -145,10 +149,12 @@ import { renderFenceStatusLine } from "./render/fence_status";
 import { deleteDataConfirmText, removalChoice, removeConfirmText, type RemovalChoice } from "./render/removal";
 import { customDefinitionFrom, customEnvRow, keepsLiveEditor, renderCustomServicesSection } from "./render/custom";
 import { IMPORT_MAX_BYTES, IMPORT_MAX_FILES, importChoices, importFilesProblem, renderImportInput, renderImportPreview, renderImportSaved } from "./render/importer";
-import type { CustomEnv, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
+import type { CustomEnv, LanguageState, CustomServiceView, ImportFile, ImportPreview, ImportRequest, ImportResult, ProxiesState, ProxyView } from "./wails";
 import type { ActivityDetail, AdminStep, ActivityView, AppState, BackgroundStatus, Deployment, FleetState, HostCheckResult, InstallGuide, JoinResult, LeaveResult, ModeState, NotificationItem, PointsBalance, PreflightReport, RouteState, RuntimeStatus, Service, SessionConsent, SettingsState, SetupResumeView, UnfinishedRestore, UsageView, WalletChoice, WorkerTarget } from "./wails";
 
 let state: AppState | null = null;
+// The language picker's state, from Go. null until the first read.
+let languageState: LanguageState | null = null;
 let selectedService: Service | null = null;
 let onboardingStep: "welcome" | "mode" | "join" | "runtime" = "welcome";
 // The path the first run is on: "lead" (Run everything here), "follower" (Join my
@@ -267,6 +273,7 @@ const boot = createBoot({
   wireChrome,
   load: async () => {
     wireBackendEvents();
+    await loadLanguage();
     await loadAppState();
     await applySetupResume();
     render();
@@ -291,6 +298,41 @@ function completeRuntimeCheck(request: number) {
   if (request < runtimeCheckCompleted) return false;
   runtimeCheckCompleted = request;
   return true;
+}
+
+// The language comes from Go: the saved choice, else the OS language, else the
+// webview's. A failed read keeps English, which is bundled.
+async function loadLanguage() {
+  try {
+    applyLanguage(await GetLanguageState(webviewLanguages()));
+  } catch {
+    applyLanguage(null);
+  }
+}
+
+function webviewLanguages(): string[] {
+  return [...(navigator.languages ?? [])];
+}
+
+function applyLanguage(next: LanguageState | null) {
+  languageState = next;
+  setLocale(next?.active ?? "en", next?.messages ?? {});
+  const html = document.documentElement;
+  if (html) {
+    html.lang = currentLocale();
+    html.dir = textDirection();
+  }
+}
+
+async function chooseLanguage(code: string) {
+  try {
+    applyLanguage(await SetLanguage(code, webviewLanguages()));
+  } catch (error) {
+    showErrorToast({scope: "language", error: String(error)});
+    return;
+  }
+  // Everything on screen is drawn from the new language at once.
+  render();
 }
 
 // The Go backend emits these after background collection cycles and deployment
@@ -1622,6 +1664,7 @@ async function renderSettings(current: AppState) {
         ${topbar("settings", current)}
         <main class="page-content">
           ${pageHead("Settings")}
+          ${languageState ? renderLanguageCard(languageState) : ""}
           <div id="mode-card-slot">${modeState ? renderModeCard(modeState, modeCardView, modeLeft) : ""}</div>
           <div id="runtime-settings-slot">${renderRuntimeSettings(runtime)}</div>
           <section class="card">
@@ -1673,6 +1716,7 @@ async function renderSettings(current: AppState) {
   wireShellNav();
   maybeResetScroll();
   document.querySelector("#save-settings")?.addEventListener("click", () => void saveSettingsFromForm());
+  document.querySelector<HTMLSelectElement>("#language-select")?.addEventListener("change", (event) => void chooseLanguage((event.target as HTMLSelectElement).value));
   wireSecretSettings(settings.environment);
   document.querySelector<HTMLInputElement>("#bg-helper-toggle")?.addEventListener("change", (event) => void toggleBackgroundHelper(event));
   wireRestore();
@@ -3508,12 +3552,12 @@ function showToast(className: string, borderVar: string, title: string, message:
   if (!stack) {
     stack = document.createElement("div");
     stack.id = "toast-stack";
-    stack.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:9999;display:grid;gap:8px;width:320px;max-width:calc(100vw - 32px);";
+    stack.style.cssText = "position:fixed;bottom:16px;inset-inline-end:16px;z-index:9999;display:grid;gap:8px;width:320px;max-width:calc(100vw - 32px);";
     document.body.appendChild(stack);
   }
   const toast = document.createElement("div");
   toast.className = className;
-  toast.style.cssText = `border-left-color:var(${borderVar});background:var(--bg-secondary);box-shadow:0 18px 60px rgba(0,0,0,0.45);`;
+  toast.style.cssText = `border-inline-start-color:var(${borderVar});background:var(--bg-secondary);box-shadow:0 18px 60px rgba(0,0,0,0.45);`;
   toast.innerHTML = `<span>${escapeHtml(title)}</span><small>${escapeHtml(message)}</small>`;
   stack.appendChild(toast);
   setTimeout(() => toast.remove(), 8000);

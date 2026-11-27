@@ -1,0 +1,352 @@
+{
+  "format": [
+    {
+      "locale": "en",
+      "msg": "Plain text",
+      "args": {},
+      "want": "Plain text"
+    },
+    {
+      "locale": "en",
+      "msg": "Hello {name}",
+      "args": {
+        "name": "Ada"
+      },
+      "want": "Hello Ada"
+    },
+    {
+      "locale": "en",
+      "msg": "Hello {name}",
+      "args": {},
+      "want": "Hello {name}"
+    },
+    {
+      "locale": "en",
+      "msg": "{count, plural, one {# box} other {# boxes}}",
+      "args": {
+        "count": 1
+      },
+      "want": "1 box"
+    },
+    {
+      "locale": "en",
+      "msg": "{count, plural, one {# box} other {# boxes}}",
+      "args": {
+        "count": 3
+      },
+      "want": "3 boxes"
+    },
+    {
+      "locale": "en",
+      "msg": "{count, plural, =0 {No boxes} one {# box} other {# boxes}}",
+      "args": {
+        "count": 0
+      },
+      "want": "No boxes"
+    },
+    {
+      "locale": "en",
+      "msg": "{count, plural, one {# box} other {# boxes}}",
+      "args": {
+        "count": 1000
+      },
+      "want": "1,000 boxes"
+    },
+    {
+      "locale": "de",
+      "msg": "{count, plural, one {# Box} other {# Boxen}}",
+      "args": {
+        "count": 1000
+      },
+      "want": "1.000 Boxen"
+    },
+    {
+      "locale": "fr",
+      "msg": "{count, plural, one {# appareil} other {# appareils}}",
+      "args": {
+        "count": 0
+      },
+      "want": "0 appareil"
+    },
+    {
+      "locale": "pl",
+      "msg": "{n, plural, one {# plik} few {# pliki} many {# plików} other {# pliku}}",
+      "args": {
+        "n": 1
+      },
+      "want": "1 plik"
+    },
+    {
+      "locale": "pl",
+      "msg": "{n, plural, one {# plik} few {# pliki} many {# plików} other {# pliku}}",
+      "args": {
+        "n": 3
+      },
+      "want": "3 pliki"
+    },
+    {
+      "locale": "pl",
+      "msg": "{n, plural, one {# plik} few {# pliki} many {# plików} other {# pliku}}",
+      "args": {
+        "n": 5
+      },
+      "want": "5 plików"
+    },
+    {
+      "locale": "pl",
+      "msg": "{n, plural, one {# plik} few {# pliki} many {# plików} other {# pliku}}",
+      "args": {
+        "n": 22
+      },
+      "want": "22 pliki"
+    },
+    {
+      "locale": "ru",
+      "msg": "{n, plural, one {# файл} few {# файла} many {# файлов} other {# файла}}",
+      "args": {
+        "n": 21
+      },
+      "want": "21 файл"
+    },
+    {
+      "locale": "ru",
+      "msg": "{n, plural, one {# файл} few {# файла} many {# файлов} other {# файла}}",
+      "args": {
+        "n": 11
+      },
+      "want": "11 файлов"
+    },
+    {
+      "locale": "uk",
+      "msg": "{n, plural, one {# файл} few {# файли} many {# файлів} other {# файлу}}",
+      "args": {
+        "n": 4
+      },
+      "want": "4 файли"
+    },
+    {
+      "locale": "ar",
+      "msg": "{n, plural, zero {لا شيء} one {واحد} two {اثنان} few {# قليل} many {# كثير} other {# آخر}}",
+      "args": {
+        "n": 0
+      },
+      "want": "لا شيء"
+    },
+    {
+      "locale": "ar",
+      "msg": "{n, plural, zero {لا شيء} one {واحد} two {اثنان} few {# قليل} many {# كثير} other {# آخر}}",
+      "args": {
+        "n": 2
+      },
+      "want": "اثنان"
+    },
+    {
+      "locale": "ar",
+      "msg": "{n, plural, zero {لا شيء} one {واحد} two {اثنان} few {# قليل} many {# كثير} other {# آخر}}",
+      "args": {
+        "n": 5
+      },
+      "want": "5 قليل"
+    },
+    {
+      "locale": "ar",
+      "msg": "{n, plural, zero {لا شيء} one {واحد} two {اثنان} few {# قليل} many {# كثير} other {# آخر}}",
+      "args": {
+        "n": 11
+      },
+      "want": "11 كثير"
+    },
+    {
+      "locale": "ar",
+      "msg": "{n, plural, zero {لا شيء} one {واحد} two {اثنان} few {# قليل} many {# كثير} other {# آخر}}",
+      "args": {
+        "n": 100
+      },
+      "want": "100 آخر"
+    },
+    {
+      "locale": "ja",
+      "msg": "{n, plural, other {#個}}",
+      "args": {
+        "n": 1
+      },
+      "want": "1個"
+    },
+    {
+      "locale": "hi",
+      "msg": "{n, plural, one {# फ़ाइल} other {# फ़ाइलें}}",
+      "args": {
+        "n": 0
+      },
+      "want": "0 फ़ाइल"
+    },
+    {
+      "locale": "fil",
+      "msg": "{n, plural, one {# file} other {# na file}}",
+      "args": {
+        "n": 4
+      },
+      "want": "4 na file"
+    },
+    {
+      "locale": "fil",
+      "msg": "{n, plural, one {# file} other {# na file}}",
+      "args": {
+        "n": 3
+      },
+      "want": "3 file"
+    },
+    {
+      "locale": "pt-BR",
+      "msg": "{n, plural, one {# item} other {# itens}}",
+      "args": {
+        "n": 0
+      },
+      "want": "0 item"
+    },
+    {
+      "locale": "en",
+      "msg": "{kind, select, worker {A worker} phone {A phone} other {A device}} joined",
+      "args": {
+        "kind": "phone"
+      },
+      "want": "A phone joined"
+    },
+    {
+      "locale": "en",
+      "msg": "{kind, select, worker {A worker} other {A device}} joined",
+      "args": {
+        "kind": "tv"
+      },
+      "want": "A device joined"
+    },
+    {
+      "locale": "en",
+      "msg": "{n, plural, one {{name} has # copy} other {{name} has # copies}}",
+      "args": {
+        "n": 2,
+        "name": "Pawns"
+      },
+      "want": "Pawns has 2 copies"
+    },
+    {
+      "locale": "fr",
+      "msg": "Ouvrir l'application",
+      "args": {},
+      "want": "Ouvrir l'application"
+    },
+    {
+      "locale": "en",
+      "msg": "It''s '{literal}' and #",
+      "args": {},
+      "want": "It's {literal} and #"
+    },
+    {
+      "locale": "en",
+      "msg": "Broken {name",
+      "args": {
+        "name": "x"
+      },
+      "want": "Broken {name"
+    },
+    {
+      "locale": "en",
+      "msg": "{n, plural, one {# x}}",
+      "args": {
+        "n": 1
+      },
+      "want": "{n, plural, one {# x}}"
+    }
+  ],
+  "match": [
+    {
+      "tags": [
+        "es-MX"
+      ],
+      "want": "es"
+    },
+    {
+      "tags": [
+        "es_ES.UTF-8@euro"
+      ],
+      "want": "es"
+    },
+    {
+      "tags": [
+        "pt-PT"
+      ],
+      "want": "pt-BR"
+    },
+    {
+      "tags": [
+        "pt"
+      ],
+      "want": "pt-BR"
+    },
+    {
+      "tags": [
+        "zh-TW"
+      ],
+      "want": "zh-Hans"
+    },
+    {
+      "tags": [
+        "zh-Hant-HK"
+      ],
+      "want": "zh-Hans"
+    },
+    {
+      "tags": [
+        "zh_CN"
+      ],
+      "want": "zh-Hans"
+    },
+    {
+      "tags": [
+        "tl-PH"
+      ],
+      "want": "fil"
+    },
+    {
+      "tags": [
+        "in"
+      ],
+      "want": "id"
+    },
+    {
+      "tags": [
+        "DE-at"
+      ],
+      "want": "de"
+    },
+    {
+      "tags": [
+        "sv-SE",
+        "nb",
+        "fr-CA"
+      ],
+      "want": "fr"
+    },
+    {
+      "tags": [
+        "C",
+        "POSIX",
+        ""
+      ],
+      "want": ""
+    },
+    {
+      "tags": [
+        "sv"
+      ],
+      "want": ""
+    },
+    {
+      "tags": [
+        "en-GB",
+        "es"
+      ],
+      "want": "en"
+    }
+  ]
+}

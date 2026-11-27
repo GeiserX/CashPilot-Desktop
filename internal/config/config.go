@@ -129,6 +129,9 @@ type AppConfig struct {
 	// it opens again. It is written before the restart and cleared when the flow
 	// finishes or the user cancels it. nil when no setup is under way.
 	SetupJournal *SetupJournal `json:"setupJournal,omitempty"`
+	// Language is the locale the user picked in Settings (a code from
+	// internal/i18n.Locales), or empty to follow the OS language.
+	Language string `json:"language,omitempty"`
 	// ServerCommandsOff is the dashboard switch "<server> can start and stop
 	// services on this computer", turned off. The zero value is on, so joining a
 	// server turns the server-commands API on; joining again keeps the user's choice.

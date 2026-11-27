@@ -471,6 +471,22 @@ export namespace catalog {
 	    }
 	}
 	
+	export class GPU {
+	    vendor: string;
+	    count?: any;
+	    rocm?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new GPU(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.vendor = source["vendor"];
+	        this.count = source["count"];
+	        this.rocm = source["rocm"];
+	    }
+	}
 	export class GuestWindows {
 	    process: string;
 	    publisher: string;
@@ -1156,8 +1172,10 @@ export namespace config {
 	    sessionConsent?: Record<string, SessionConsent>;
 	    mode?: string;
 	    setupJournal?: SetupJournal;
+	    language?: string;
 	    serverCommandsOff?: boolean;
 	    serverCommandsChosen?: boolean;
+	    pairingRevision?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1189,8 +1207,10 @@ export namespace config {
 	        this.sessionConsent = this.convertValues(source["sessionConsent"], SessionConsent, true);
 	        this.mode = source["mode"];
 	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
+	        this.language = source["language"];
 	        this.serverCommandsOff = source["serverCommandsOff"];
 	        this.serverCommandsChosen = source["serverCommandsChosen"];
+	        this.pairingRevision = source["pairingRevision"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1231,6 +1251,25 @@ export namespace health {
 	        this.slug = source["slug"];
 	        this.state = source["state"];
 	        this.reasons = source["reasons"];
+	    }
+	}
+
+}
+
+export namespace i18n {
+	
+	export class Language {
+	    code: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Language(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.name = source["name"];
 	    }
 	}
 
@@ -2155,11 +2194,11 @@ export namespace main {
 	export class CredentialView {
 	    values: Record<string, string>;
 	    savedSecrets: Record<string, boolean>;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new CredentialView(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.values = source["values"];
@@ -2515,6 +2554,44 @@ export namespace main {
 	        this.hubDevices = source["hubDevices"];
 	        this.serverCommandsOn = source["serverCommandsOn"];
 	    }
+	}
+	export class LanguageState {
+	    preference: string;
+	    active: string;
+	    system: string;
+	    languages: i18n.Language[];
+	    messages: Record<string, string>;
+	
+	    static createFrom(source: any = {}) {
+	        return new LanguageState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.preference = source["preference"];
+	        this.active = source["active"];
+	        this.system = source["system"];
+	        this.languages = this.convertValues(source["languages"], i18n.Language);
+	        this.messages = source["messages"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class LeaveResult {
 	    serverUrl: string;

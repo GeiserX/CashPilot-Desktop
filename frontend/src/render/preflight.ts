@@ -74,7 +74,7 @@ export function minerFee(service: Service | undefined): string {
     ? `<div><button class="btn btn-ghost btn-sm" data-url="${escapeHtml(mining.devFeeSource)}">Miner fee source</button></div>`
     : "";
   return `
-    <section class="preflight" data-miner-fee style="border-left: 3px solid var(--border-strong); background: var(--accent-soft);">
+    <section class="preflight" data-miner-fee style="border-inline-start: 3px solid var(--border-strong); background: var(--accent-soft);">
       <strong>${headline}</strong>
       ${pool}
       <p class="muted preflight-unchecked">${payout}</p>
@@ -105,7 +105,7 @@ export function renderPreflight(report: PreflightReport | null | undefined, work
         ${findings
           .map((finding) => {
             const row = tone(finding.verdict);
-            return `<li style="border-left: 3px solid ${row.color};">${escapeHtml(finding.message)}</li>`;
+            return `<li style="border-inline-start: 3px solid ${row.color};">${escapeHtml(finding.message)}</li>`;
           })
           .join("")}
       </ul>`
@@ -118,7 +118,7 @@ export function renderPreflight(report: PreflightReport | null | undefined, work
     : "";
 
   return `
-    <section class="preflight" style="border-left: 3px solid ${verdict.color}; background: ${verdict.tint};">
+    <section class="preflight" style="border-inline-start: 3px solid ${verdict.color}; background: ${verdict.tint};">
       <div class="preflight-head">
         <strong>Before you deploy</strong>
         ${badge}

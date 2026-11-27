@@ -1,0 +1,11 @@
+{
+  "language.name": "日本語",
+  "language.title": "言語",
+  "language.help": "CashPilot Desktop は、対応していればコンピューターの言語で表示します。ここで別の言語を選べます。",
+  "language.system": "システムの言語（{language}）",
+  "language.systemNone": "システムの言語（非対応のため英語）",
+  "language.error.unsupported": "CashPilot Desktop にはコード {code} の言語はありません。",
+  "tray.show": "CashPilot Desktop を表示",
+  "tray.quit": "CashPilot Desktop を終了",
+  "time.justNow": "たった今"
+}
