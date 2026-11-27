@@ -525,7 +525,7 @@
   "restore.discard": "Supprimer la restauration partielle",
   "restore.stuck": "Une restauration ne s'est pas terminée :",
   "restore.title": "Restaurer depuis une sauvegarde",
-  "restore.help": "Remettez en place une identité de nœud ou un portefeuille depuis un fichier <code>{ext}</code> créé avec une phrase secrète : Mysterium, ProxyBase ou Anyone. La restauration crée uniquement un nouveau conteneur sur cette machine, et n'écrase jamais un service présent ici. Pour en remplacer un, téléchargez d'abord sa sauvegarde, puis supprimez-le et acceptez de supprimer ses données. Les fichiers scellés avec une clé, Storj et Sia utilisent les étapes en ligne de commande du guide de sauvegarde : {guide}",
+  "restore.help": "Remettez en place une identité de nœud ou un portefeuille depuis un fichier <code>{ext}</code> créé avec une phrase secrète (Mysterium, ProxyBase ou Anyone). La restauration crée uniquement un nouveau conteneur sur cette machine, et n'écrase jamais un service présent ici. Pour en remplacer un, téléchargez d'abord sa sauvegarde, puis supprimez-le et acceptez de supprimer ses données. Les fichiers scellés avec une clé, Storj et Sia utilisent les étapes en ligne de commande du guide de sauvegarde : {guide}",
   "restore.choose": "Choisir un fichier de sauvegarde",
   "restore.volumeAt": "volume <code>{volume}</code> dans <code>{target}</code>",
   "restore.typeIt": "Pour continuer, saisissez <strong>{service}</strong> :",

@@ -525,7 +525,7 @@
   "restore.discard": "Xóa phần khôi phục dở dang",
   "restore.stuck": "Một lần khôi phục chưa hoàn tất:",
   "restore.title": "Khôi phục từ bản sao lưu",
-  "restore.help": "Đưa danh tính nút hoặc ví trở lại từ tệp <code>{ext}</code> được tạo bằng cụm mật khẩu: Mysterium, ProxyBase hoặc Anyone. Việc khôi phục chỉ tạo một container mới trên máy này, và không bao giờ ghi đè lên dịch vụ đang có ở đây. Để thay thế một dịch vụ, hãy tải bản sao lưu của nó trước, rồi gỡ nó và đồng ý xóa dữ liệu. Tệp được niêm phong bằng khóa, Storj và Sia dùng các bước dòng lệnh trong hướng dẫn sao lưu: {guide}",
+  "restore.help": "Đưa danh tính nút hoặc ví trở lại từ tệp <code>{ext}</code> được tạo bằng cụm mật khẩu (Mysterium, ProxyBase hoặc Anyone). Việc khôi phục chỉ tạo một container mới trên máy này, và không bao giờ ghi đè lên dịch vụ đang có ở đây. Để thay thế một dịch vụ, hãy tải bản sao lưu của nó trước, rồi gỡ nó và đồng ý xóa dữ liệu. Tệp được niêm phong bằng khóa, Storj và Sia dùng các bước dòng lệnh trong hướng dẫn sao lưu: {guide}",
   "restore.choose": "Chọn tệp sao lưu",
   "restore.volumeAt": "volume <code>{volume}</code> tại <code>{target}</code>",
   "restore.typeIt": "Để tiếp tục, hãy nhập <strong>{service}</strong>:",

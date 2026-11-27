@@ -525,7 +525,7 @@
   "restore.discard": "Excluir a restauração parcial",
   "restore.stuck": "Uma restauração não terminou:",
   "restore.title": "Restaurar de um backup",
-  "restore.help": "Recupere uma identidade de nó ou uma carteira a partir de um arquivo <code>{ext}</code> criado com uma frase-senha: Mysterium, ProxyBase ou Anyone. A restauração só cria um contêiner novo nesta máquina e nunca sobrescreve um serviço que já esteja aqui. Para substituir um, baixe antes o backup dele, depois remova-o e aceite excluir os dados. Arquivos selados com uma chave, Storj e Sia seguem os passos de linha de comando do guia de backup: {guide}",
+  "restore.help": "Recupere uma identidade de nó ou uma carteira a partir de um arquivo <code>{ext}</code> criado com uma frase-senha (Mysterium, ProxyBase ou Anyone). A restauração só cria um contêiner novo nesta máquina e nunca sobrescreve um serviço que já esteja aqui. Para substituir um, baixe antes o backup dele, depois remova-o e aceite excluir os dados. Arquivos selados com uma chave, Storj e Sia seguem os passos de linha de comando do guia de backup: {guide}",
   "restore.choose": "Escolher um arquivo de backup",
   "restore.volumeAt": "volume <code>{volume}</code> em <code>{target}</code>",
   "restore.typeIt": "Para continuar, digite <strong>{service}</strong>:",

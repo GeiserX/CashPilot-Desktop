@@ -525,7 +525,7 @@
   "restore.discard": "Burahin ang bahagyang restore",
   "restore.stuck": "May restore na hindi natapos:",
   "restore.title": "I-restore mula sa backup",
-  "restore.help": "Ibalik ang node identity o wallet mula sa <code>{ext}</code> file na ginawa gamit ang passphrase: Mysterium, ProxyBase o Anyone. Gumagawa lang ng bagong container sa makinang ito ang restore, at hindi kailanman pumapatong sa serbisyong nandito na. Para palitan ang isa, i-download muna ang backup nito, saka alisin ito at sumagot ng oo sa pagbura ng data nito. Para sa mga file na naka-seal sa isang key, Storj at Sia, gamitin ang mga hakbang sa command line sa backup guide: {guide}",
+  "restore.help": "Ibalik ang node identity o wallet mula sa <code>{ext}</code> file na ginawa gamit ang passphrase (Mysterium, ProxyBase o Anyone). Gumagawa lang ng bagong container sa makinang ito ang restore, at hindi kailanman pumapatong sa serbisyong nandito na. Para palitan ang isa, i-download muna ang backup nito, saka alisin ito at sumagot ng oo sa pagbura ng data nito. Para sa mga file na naka-seal sa isang key, Storj at Sia, gamitin ang mga hakbang sa command line sa backup guide: {guide}",
   "restore.choose": "Pumili ng backup file",
   "restore.volumeAt": "volume <code>{volume}</code> sa <code>{target}</code>",
   "restore.typeIt": "Para magpatuloy, i-type ang <strong>{service}</strong>:",

@@ -525,7 +525,7 @@
   "restore.discard": "Gedeeltelijk herstel verwijderen",
   "restore.stuck": "Een herstel is niet voltooid:",
   "restore.title": "Herstellen vanuit een back-up",
-  "restore.help": "Zet een node-identiteit of wallet terug vanuit een <code>{ext}</code>-bestand dat met een wachtwoordzin is gemaakt: Mysterium, ProxyBase of Anyone. Het herstel maakt alleen een nieuwe container op deze machine en overschrijft nooit een dienst die hier staat. Om er een te vervangen, download je eerst de back-up, verwijder je hem en zeg je ja tegen het verwijderen van zijn gegevens. Voor bestanden die aan een sleutel zijn gekoppeld, en voor Storj en Sia, gebruik je de stappen op de opdrachtregel in de back-uphandleiding: {guide}",
+  "restore.help": "Zet een node-identiteit of wallet terug vanuit een <code>{ext}</code>-bestand dat met een wachtwoordzin is gemaakt (Mysterium, ProxyBase of Anyone). Het herstel maakt alleen een nieuwe container op deze machine en overschrijft nooit een dienst die hier staat. Om er een te vervangen, download je eerst de back-up, verwijder je hem en zeg je ja tegen het verwijderen van zijn gegevens. Voor bestanden die aan een sleutel zijn gekoppeld, en voor Storj en Sia, gebruik je de stappen op de opdrachtregel in de back-uphandleiding: {guide}",
   "restore.choose": "Kies een back-upbestand",
   "restore.volumeAt": "volume <code>{volume}</code> op <code>{target}</code>",
   "restore.typeIt": "Typ <strong>{service}</strong> om door te gaan:",

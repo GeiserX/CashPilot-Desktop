@@ -525,7 +525,7 @@
   "restore.discard": "Usuń częściowe przywracanie",
   "restore.stuck": "Przywracanie nie zostało ukończone:",
   "restore.title": "Przywróć z kopii zapasowej",
-  "restore.help": "Przywróć tożsamość węzła lub portfel z pliku <code>{ext}</code> utworzonego z hasłem: Mysterium, ProxyBase lub Anyone. Przywracanie tylko tworzy nowy kontener na tej maszynie i nigdy nie nadpisuje usługi, która już tu jest. Aby ją zastąpić, najpierw pobierz jej kopię zapasową, potem ją usuń i zgódź się na usunięcie jej danych. Pliki zaszyfrowane kluczem, Storj i Sia wymagają kroków w wierszu poleceń z przewodnika po kopiach zapasowych: {guide}",
+  "restore.help": "Przywróć tożsamość węzła lub portfel z pliku <code>{ext}</code> utworzonego z hasłem (Mysterium, ProxyBase lub Anyone). Przywracanie tylko tworzy nowy kontener na tej maszynie i nigdy nie nadpisuje usługi, która już tu jest. Aby ją zastąpić, najpierw pobierz jej kopię zapasową, potem ją usuń i zgódź się na usunięcie jej danych. Pliki zaszyfrowane kluczem, Storj i Sia wymagają kroków w wierszu poleceń z przewodnika po kopiach zapasowych: {guide}",
   "restore.choose": "Wybierz plik kopii zapasowej",
   "restore.volumeAt": "wolumen <code>{volume}</code> w <code>{target}</code>",
   "restore.typeIt": "Aby kontynuować, wpisz <strong>{service}</strong>:",
