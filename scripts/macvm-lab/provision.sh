@@ -59,9 +59,6 @@ pmset -a sleep 0 displaysleep 0 disksleep 0 powernap 0 >/dev/null
 systemsetup -setsleep Off >/dev/null 2>&1 || true
 defaults write /Library/Preferences/com.apple.screensaver loginWindowIdleTime 0
 mdutil -a -i off >/dev/null 2>&1 || true
-# DNS: the fence blocks the gateway, and the gateway's DNS would also resolve
-# the host's private names. Use public resolvers instead.
-networksetup -setdnsservers Ethernet 9.9.9.9 149.112.112.112
 # No remote doors, Gatekeeper on
 launchctl disable system/com.apple.screensharing 2>/dev/null || true
 launchctl bootout system/com.apple.screensharing 2>/dev/null || true
@@ -69,12 +66,20 @@ spctl --status | grep -q "assessments enabled" || { echo "Gatekeeper is off" >&2
 # Remote Login off from the next boot on. The running sshd keeps the caller's
 # session, so the build can still shut the guest down cleanly.
 launchctl disable system/com.openssh.sshd
+# DNS: the fence blocks the gateway, and the gateway's DNS would also resolve
+# the host's private names. Use public resolvers on every network service.
+networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r svc; do
+  networksetup -setdnsservers "$svc" 9.9.9.9 149.112.112.112
+done
 echo "base provisioned: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 exit 0
 fi
 
 if [ "$MODE" = autostart ]; then
 APP="$2"; NAME="$3"; LA=/Library/LaunchAgents
+case "$NAME" in ''|*[!a-z0-9-]*) echo "name must be lowercase letters, digits and -" >&2; exit 1 ;; esac
+case "$APP" in /Applications/*.app) ;; *) echo "app must be /Applications/<name>.app" >&2; exit 1 ;; esac
+case "$APP" in *..*|*'&'*|*'<'*|*'>'*) echo "app path has a character we do not write into XML" >&2; exit 1 ;; esac
 [ -d "$APP" ] || { echo "no app at $APP" >&2; exit 1; }
 cat > "$LA/org.cashpilot.earner.$NAME.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -98,10 +103,10 @@ fi
 read -r EARNER_PW
 read -r KCPW_HEX
 # The earner account: standard, no admin, logs in by itself
-if ! id earner >/dev/null 2>&1; then
-  printf '%s\n' "$EARNER_PW" | sysadminctl -addUser earner -fullName "Earner" -password - -home /Users/earner
-  createhomedir -c -u earner >/dev/null 2>&1 || true
-fi
+# A second run would write a kcpassword for a password the account does not have.
+id earner >/dev/null 2>&1 && { echo "earner already exists; this mode runs once per clone" >&2; exit 1; }
+printf '%s\n' "$EARNER_PW" | sysadminctl -addUser earner -fullName "Earner" -password - -home /Users/earner
+createhomedir -c -u earner >/dev/null 2>&1 || true
 dseditgroup -o checkmember -m earner admin >/dev/null 2>&1 && { echo "earner is admin" >&2; exit 1; }
 (umask 077; printf '%s' "$KCPW_HEX" | xxd -r -p > /etc/kcpassword)
 chown root:wheel /etc/kcpassword; chmod 600 /etc/kcpassword

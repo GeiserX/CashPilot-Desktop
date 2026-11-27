@@ -18,9 +18,11 @@
 # It prints one line per check, then "RESULT ok" or "RESULT refused: <why>".
 set -u
 url=$1 want_sha=$2 want_team=$3 name=${4:-$(basename "$url" | sed 's/%20/ /g; s/+/ /g')}
-dl=/Users/Shared/cp-dl; mkdir -p "$dl"; f="$dl/$name"
+# Root's own staging folder: the earner user cannot plant a file or a symlink here.
+dl=$(mktemp -d /private/var/tmp/cp-dl.XXXXXX) || { echo "RESULT refused: no staging folder"; exit 1; }
+f="$dl/$name"
 mnt=""
-refuse() { [ -n "$mnt" ] && hdiutil detach "$mnt" >/dev/null 2>&1; echo "RESULT refused: $*"; exit 1; }
+refuse() { [ -n "$mnt" ] && hdiutil detach "$mnt" >/dev/null 2>&1; rm -rf "$dl"; echo "RESULT refused: $*"; exit 1; }
 # Copy under a temporary name first, so a failed copy keeps the old version.
 place() {
   dst="/Applications/$(basename "$1")"; tmp="/Applications/.cp-new-$(basename "$1")"
@@ -57,7 +59,9 @@ check() { # $1 = path of .app or .pkg
   esac
   echo "gatekeeper: $(echo "$ga" | tr '\n' ' ')"
   [ "$want_team" = - ] || [ "$team" = "$want_team" ] || refuse "team id '$team' is not '$want_team'"
-  echo "$ga" | grep -q ': accepted' || refuse "Gatekeeper rejects it"
+  # spctl's first line is exactly "<path>: accepted". Matching the whole line
+  # keeps a file name that contains ": accepted" from passing.
+  [ "$(echo "$ga" | head -1)" = "$1: accepted" ] || refuse "Gatekeeper rejects it"
 }
 
 case "$f" in
@@ -79,4 +83,5 @@ case "$f" in
     check "$app"; place "$app" ;;
   *) refuse "unknown file type" ;;
 esac
+rm -rf "$dl"
 echo "RESULT ok"

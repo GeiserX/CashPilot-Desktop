@@ -31,9 +31,15 @@ variable "admin_user" {
   type    = string
   default = "cpadmin"
 }
+# Hex only: it is quoted into one shell command below, and it shows in the build
+# guest's process list while that command runs. Each clone rotates it.
 variable "admin_password" {
   type      = string
   sensitive = true
+  validation {
+    condition     = can(regex("^[0-9a-f]{16,}$", var.admin_password))
+    error_message = "admin_password must be at least 16 lowercase hex digits (openssl rand -hex 12)."
+  }
 }
 # The tart-guest-agent binary (darwin, from its GitHub release) and its SHA-256.
 variable "agent" { type = string }

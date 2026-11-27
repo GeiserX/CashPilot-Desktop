@@ -57,9 +57,10 @@ if echo "$list" | awk -v v="$vm" '$1 == "local" && $2 == v && $NF == "running" {
 fi
 handed_off=0; br=""; port=""; tart_pid=""
 cleanup() {
+  set +e
   [ "$handed_off" = 1 ] && return 0
   echo "start failed; cutting and stopping $vm"
-  [ -n "$port" ] && sudo ifconfig "$br" deletem "$port" 2>/dev/null
+  [ -n "$port" ] && { sudo ifconfig "$br" deletem "$port" 2>/dev/null || true; }
   as_owner tart stop "$vm" >/dev/null 2>&1 && return 0
   [ -n "$tart_pid" ] && kill "$tart_pid" 2>/dev/null
   pkill -f "tart run $vm( |\$)" 2>/dev/null
@@ -83,7 +84,9 @@ gw=$(ifconfig "$br" | awk '/inet / {print $2; exit}')
 mask=$(ifconfig "$br" | awk '/inet / {print $4; exit}')
 bits=$(python3 -I -c 'import sys; print(bin(int(sys.argv[1],16)).count("1"))' "$mask")
 subnet=$(python3 -I -c 'import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1]+"/"+sys.argv[2], strict=False))' "$gw" "$bits")
-sudo "$here/fence-pf.sh" up "$br" "$gw" "$deny" "$subnet" >/dev/null 2>&1
+# The state folder is root's, so the redirect happens inside the root shell.
+sudo sh -c '"$0" up "$1" "$2" "$3" "$4" > "$5/fence.log" 2>&1' "$here/fence-pf.sh" "$br" "$gw" "$deny" "$subnet" "$dir" ||
+  { sudo cat "$dir/fence.log" >&2; exit 1; }
 sudo sh -c "pfctl -a com.apple/cashpilot -sr 2>/dev/null | sed 's/ on bridge1[0-9][0-9] / on BRIDGE /' > '$dir/desired.rules'
   pfctl -a com.apple/cashpilot -t cp_deny -T show 2>/dev/null | tr -d ' ' | sort > '$dir/desired.table'
   printf 'VM_MAC=%s\nANCHOR=com.apple/cashpilot\nSOFTNET_BLOCK=%s\n' '$mac' '$block' > '$dir/desired.env'
