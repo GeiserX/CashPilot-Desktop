@@ -79,13 +79,19 @@ export interface WorkerDeployCalls {
 /**
  * The owner's yes so far. expectedContainer is the container a replacement yes was
  * for: the full Docker ID its question named, "" when the worker names none.
+ * workerIdentity is the worker the questions were about (its client ID and address,
+ * from WorkerDeployResult.workerIdentity): every yes counts only for that worker.
  */
 export interface WorkerDeployYes {
   confirmed: boolean;
   allowSharedIdentity: boolean;
   replaceExisting: boolean;
   expectedContainer: string;
+  workerIdentity: string;
 }
+
+/** How many deploy calls one Deploy click makes at most. */
+const MAX_ROUNDS = 8;
 
 /**
  * Deploy from the setup card to a worker. The worker runs one copy from its own IP,
@@ -111,30 +117,49 @@ export async function runWorkerDeploy(
       message: "A deploy to a worker runs one copy, from the worker's own IP. Set Route to Direct and Instances to 1, or choose This computer. Nothing was deployed.",
     };
   }
-  const yes: WorkerDeployYes = { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "" };
+  const yes: WorkerDeployYes = { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "", workerIdentity: "" };
   // Each question is asked at most once, except a replacement: a yes covers only the
   // container its question named ("" for an older worker that names none), so a
   // question about another one, or about none after a named one, is asked again.
-  for (let round = 0; round < 8; round++) {
+  // And every yes covers only the worker that asked: when another worker reports
+  // under the selected worker's name, each yes so far is dropped and that worker's
+  // own questions are asked.
+  for (let round = 0; round < MAX_ROUNDS; round++) {
     const result = await calls.deploy({ ...yes });
+    // The last round has no call left to send a yes with, so it shows no question.
+    const last = round === MAX_ROUNDS - 1;
     const container = result.expectedContainer || "";
+    const asker = result.workerIdentity || "";
+    if (result.ask === "worker_changed" && asker !== yes.workerIdentity) {
+      if (last) break;
+      const message = result.message || `Another worker now reports as ${worker.name}, so your answers so far do not count. Deploy ${slug} to it?`;
+      if (!calls.confirm(message)) return { kind: "cancelled" };
+      Object.assign(yes, { confirmed: false, allowSharedIdentity: false, replaceExisting: false, expectedContainer: "", workerIdentity: asker });
+      continue;
+    }
     if (result.ask === "replace_existing" && (!yes.replaceExisting || container !== yes.expectedContainer)) {
+      if (last) break;
       yes.replaceExisting = false;
       yes.expectedContainer = "";
       const message = result.message || `Redeploy ${slug} on ${worker.name}? The existing container will be replaced, but its volumes are kept.`;
       if (!calls.confirm(message)) return { kind: "cancelled" };
       yes.replaceExisting = true;
       yes.expectedContainer = container;
+      yes.workerIdentity = asker;
       continue;
     }
     if (result.ask === "identity_in_use" && !yes.allowSharedIdentity) {
+      if (last) break;
       if (!calls.confirm(`${result.message}\n\nDeploy anyway?`)) return { kind: "cancelled" };
       yes.allowSharedIdentity = true;
+      yes.workerIdentity = asker;
       continue;
     }
     if (result.ask === "step_up_required" && !yes.confirmed) {
+      if (last) break;
       if (!calls.confirm(`${result.message}\n\nDeploy it anyway?`)) return { kind: "cancelled" };
       yes.confirmed = true;
+      yes.workerIdentity = asker;
       continue;
     }
     if (result.ask) return { kind: "refused", message: `${result.message} Nothing was deployed.` };

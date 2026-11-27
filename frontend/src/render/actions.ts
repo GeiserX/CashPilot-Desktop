@@ -13,10 +13,15 @@ const ICON = {
   remove: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>',
 };
 
-/** One icon button in a row. The label is the title AND the accessible name. */
-export function rowButton(action: "collect" | "logs" | "stop" | "start" | "remove", slug: string, label: string, copy = 1): string {
+/**
+ * One icon button in a row. The label is the title AND the accessible name.
+ * `blocked` is why it cannot run now (render/runtime_state.ts dockerBlocked): the
+ * button is then disabled and its title says why.
+ */
+export function rowButton(action: "collect" | "logs" | "stop" | "start" | "remove", slug: string, label: string, copy = 1, blocked = ""): string {
   const copyAttr = copy > 1 ? ` data-copy="${copy}"` : "";
   const danger = action === "remove" ? " btn-danger-icon" : "";
-  return `<button class="btn btn-icon${danger}" data-row-action="${action}" data-slug="${escapeHtml(slug)}"${copyAttr} title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${ICON[action]}</button>`;
+  const title = blocked ? `${label}: ${blocked}` : label;
+  return `<button class="btn btn-icon${danger}" data-row-action="${action}" data-slug="${escapeHtml(slug)}"${copyAttr}${blocked ? " disabled" : ""} title="${escapeHtml(title)}" aria-label="${escapeHtml(label)}">${ICON[action]}</button>`;
 }
 

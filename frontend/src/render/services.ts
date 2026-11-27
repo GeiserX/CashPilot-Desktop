@@ -23,6 +23,7 @@ import { containerState } from "./attention.js";
 import { customBadge } from "./custom.js";
 import { outdatedBadge } from "./catalog.js";
 import { walletDetail } from "./wallet.js";
+import { dockerBlocked, type RuntimeInput } from "./runtime_state.js";
 
 export const SERVICE_COLUMNS = 8;
 
@@ -39,6 +40,8 @@ export interface ServicesTableInput {
   producerStates?: Record<string, ProducerReport> | null;
   copies?: Record<string, ServiceCopy[]> | null;
   displayCurrency: string;
+  /** The shared Docker status: Start on a container waits for Docker. */
+  runtime?: Pick<RuntimeInput, "available" | "reason">;
 }
 
 /** Status as a square and a word, the web console's form. */
@@ -57,13 +60,14 @@ export function balanceCell(
   item: ServiceEarning | undefined,
   record: { balance: number; currency: string; error?: string } | undefined,
   displayCurrency: string,
+  pool = false,
 ): string {
   const error = item?.error || record?.error;
   if (error) {
     return `<span title="${escapeHtml(error)}">&mdash;</span><div class="cell-sub cell-sub-warn">no reading</div>`;
   }
   if (item) {
-    const native = formatBalance(item.balance, item.currency);
+    const native = formatBalance(item.balance, item.currency, pool);
     // balanceDisplay of 0 on a convertible platform is a missing rate, not a
     // zero balance: fall back to the native figure and name its currency.
     if (item.convertible && item.balanceDisplay !== 0) {
@@ -74,7 +78,7 @@ export function balanceCell(
     if (item.convertible && item.balance === 0) return escapeHtml(native);
     return `${escapeHtml(native)}<div class="cell-sub">${item.convertible ? "no rate, shown as is" : "not converted"}</div>`;
   }
-  if (record) return escapeHtml(formatBalance(record.balance, record.currency));
+  if (record) return escapeHtml(formatBalance(record.balance, record.currency, pool));
   return `<span class="muted">&mdash;</span>`;
 }
 
@@ -111,6 +115,7 @@ export function renderServicesTable(input: ServicesTableInput): string {
     `;
   }
   const outdatedSet = new Set(input.outdated || []);
+  const blocked = input.runtime ? dockerBlocked(input.runtime) : "";
   const nameOf = (slug: string) => services.find((svc) => svc.slug === slug)?.name || itemBy.get(slug)?.name || slug;
 
   const rows = deployments.map((deployment) => {
@@ -139,7 +144,7 @@ export function renderServicesTable(input: ServicesTableInput): string {
         </td>
         <td>${statusCell(deployment.status, instances)}${tags ? `<div class="cell-tags">${tags}</div>` : ""}</td>
         <td class="c-num">${renderHealthBadge(input.health?.[slug]) || `<span class="muted">&mdash;</span>`}</td>
-        <td class="c-num c-bal">${custom ? `<span class="muted" title="CashPilot has no collector for a custom service. Check its earnings on the provider's site.">&mdash;</span><div class="cell-sub">no collector</div>` : balanceCell(itemBy.get(slug), recordBy.get(slug), displayCurrency)}</td>
+        <td class="c-num c-bal">${custom ? `<span class="muted" title="CashPilot has no collector for a custom service. Check its earnings on the provider's site.">&mdash;</span><div class="cell-sub">no collector</div>` : balanceCell(itemBy.get(slug), recordBy.get(slug), displayCurrency, service?.collector?.accrual === "pool")}</td>
         <td class="c-num">${deployment.cpuPercent.toFixed(1)}%</td>
         <td class="c-num">${deployment.memoryMb.toFixed(0)} MB</td>
         <td class="c-pay">${payoutCell(itemBy.get(slug))}</td>
@@ -147,12 +152,12 @@ export function renderServicesTable(input: ServicesTableInput): string {
           <div class="action-btns">
             ${custom ? "" : rowButton("collect", slug, "Collect balance now")}
             ${rowButton("logs", slug, "Logs")}
-            ${running ? rowButton("stop", slug, "Stop") : disabledAccount ? "" : rowButton("start", slug, "Start")}
+            ${running ? rowButton("stop", slug, "Stop") : disabledAccount ? "" : rowButton("start", slug, "Start", 1, deployment.runtime === "native" ? "" : blocked)}
             ${rowButton("remove", slug, "Remove")}
           </div>
         </td>
       </tr>
-      ${copyRows(name, copies, disabledAccount)}
+      ${copyRows(name, copies, disabledAccount, blocked)}
       ${nodeDetail ? `<tr class="detail-row"><td colspan="${SERVICE_COLUMNS}">${nodeDetail}</td></tr>` : ""}
     `;
   });
@@ -163,7 +168,7 @@ export function renderServicesTable(input: ServicesTableInput): string {
         <td class="c-name"><span class="svc-name">${escapeHtml(nameOf(slug))}</span><div class="cell-sub">not run by this machine</div></td>
         <td><span class="badge badge-external"><span class="status-dot external"></span>Elsewhere</span></td>
         <td class="c-num"><span class="muted">&mdash;</span></td>
-        <td class="c-num c-bal">${balanceCell(itemBy.get(slug), recordBy.get(slug), displayCurrency)}</td>
+        <td class="c-num c-bal">${balanceCell(itemBy.get(slug), recordBy.get(slug), displayCurrency, services.find((svc) => svc.slug === slug)?.collector?.accrual === "pool")}</td>
         <td class="c-num"><span class="muted">&mdash;</span></td>
         <td class="c-num"><span class="muted">&mdash;</span></td>
         <td class="c-pay">${payoutCell(itemBy.get(slug))}</td>

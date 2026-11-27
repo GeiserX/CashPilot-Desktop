@@ -11,7 +11,7 @@
 import { deployNotice, type DeployStatus } from "./deploy_consent.js";
 import type { FenceStatus, HealthScore, ProducerReport, ServiceCopy } from "../wails";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
-import { runtimeAttention, type RuntimeInput } from "./runtime_state.js";
+import { dockerBlocked, dockerBlockedNote, runtimeAttention, type RuntimeInput } from "./runtime_state.js";
 
 export interface AttentionInput {
   runtime: RuntimeInput;
@@ -40,6 +40,8 @@ export interface AttentionItem {
   actions: string;
   /** Already-escaped HTML for a deploy result under the row. */
   deployStatus?: string;
+  /** Already-escaped HTML: why the row's action waits for Docker, with the way there. */
+  blocked?: string;
 }
 
 /** The web console's reading of a container state: up, down or somewhere between. */
@@ -64,6 +66,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   const items: AttentionItem[] = [];
   const nameOf = (slug: string) => input.services.find((s) => s.slug === slug)?.name || slug;
   const known = (slug: string) => input.services.some((s) => s.slug === slug);
+  // Start, Redeploy and Turn on isolation run containers: they wait for Docker.
+  const blocked = dockerBlocked(input.runtime);
+  const blockedAttr = blocked ? ` disabled title="${escapeHtml(blocked)}"` : "";
+  const blockedNote = dockerBlockedNote(input.runtime);
 
   // No Docker engine answers: always a row, with the way to the Docker setup
   // (render/runtime_state.ts), so "Nothing needs you" never shows then.
@@ -99,7 +105,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
   // container to start by hand.
   const fence = input.isolation;
   const waiting = new Set(fence?.waiting || []);
-  const down = (slug: string, name: string, status: string, copy: number) => {
+  const down = (slug: string, name: string, status: string, copy: number, native = false) => {
     if (disabled.has(slug)) return;
     const st = containerState(status);
     if (st === "ok") return;
@@ -121,6 +127,7 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       return;
     }
     const copyAttr = copy > 1 ? ` data-copy="${copy}"` : "";
+    const wait = native ? "" : blockedAttr;
     items.push({
       level: st,
       tag: st === "fail" ? "Down" : "Degraded",
@@ -128,10 +135,11 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       where: copy > 1 ? `copy ${copy}` : undefined,
       why: `container is ${escapeHtml(status || "unknown")}${name ? ` (<code>${escapeHtml(name)}</code>)` : ""}`,
       actions: `<button class="btn btn-ghost btn-sm" data-row-action="logs" data-slug="${escapeHtml(slug)}"${copyAttr}>Logs</button>
-        <button class="btn btn-primary btn-sm" data-row-action="start" data-slug="${escapeHtml(slug)}"${copyAttr}>Start</button>`,
+        <button class="btn btn-primary btn-sm" data-row-action="start" data-slug="${escapeHtml(slug)}"${copyAttr}${wait}>Start</button>`,
+      blocked: native ? undefined : blockedNote || undefined,
     });
   };
-  for (const dep of input.deployments) down(dep.slug, dep.name, dep.status, 1);
+  for (const dep of input.deployments) down(dep.slug, dep.name, dep.status, 1, dep.runtime === "native");
   for (const list of Object.values(input.copies || {})) {
     for (const copy of list) down(copy.slug, copy.name, copy.status, copy.instance);
   }
@@ -183,9 +191,10 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       tag: "Needs fixing",
       what: nameOf(slug),
       why: `container does not match the catalog: ${found.map((d) => escapeHtml(d)).join("; ")}. Redeploy it: CashPilot keeps the settings it was deployed with.`,
-      actions: `<button class="btn btn-primary btn-sm" data-drift-action="redeploy" data-slug="${s}">Redeploy</button>
+      actions: `<button class="btn btn-primary btn-sm" data-drift-action="redeploy" data-slug="${s}"${blockedAttr}>Redeploy</button>
         <button class="btn btn-ghost btn-sm" data-drift-action="ignore" data-slug="${s}" title="Stop warning about this service until the catalog changes it again">Ignore</button>`,
       deployStatus: `<div data-drift-deploy-status="${s}">${status ? deployNotice(status.kind, status.text) : ""}</div>`,
+      blocked: blockedNote || undefined,
     });
   }
 
@@ -232,7 +241,8 @@ export function attentionItems(input: AttentionInput): AttentionItem[] {
       why: `${names} can reach your LAN and this computer. Turn on isolation to redeploy ${outside.length === 1 ? "it" : "them"} onto CashPilot's fenced network, with the same settings and data.${
         stopped.length ? ` Stopped services (${stopped.map((slug) => escapeHtml(nameOf(slug))).join(", ")}) are left alone and move on their next deploy.` : ""
       }`,
-      actions: `<button class="btn btn-primary btn-sm" data-isolation-action="enable">Turn on isolation</button>`,
+      actions: `<button class="btn btn-primary btn-sm" data-isolation-action="enable"${blockedAttr}>Turn on isolation</button>`,
+      blocked: blockedNote || undefined,
     });
   }
 
@@ -262,6 +272,7 @@ export function renderAttention(items: AttentionItem[], up: number, total: numbe
       <span class="attn-what">${escapeHtml(i.what)}${i.where ? ` <span class="attn-where">${escapeHtml(i.where)}</span>` : ""}</span>
       <span class="attn-why">${i.why}</span>
       <span class="attn-actions">${i.actions}</span>
+      ${i.blocked || ""}
       ${i.deployStatus || ""}
     </div>`).join("");
   return `

@@ -133,7 +133,16 @@ func Assess(in Input) Report {
 	}
 
 	// Hardware the container cannot conjure.
-	if reqs.GPU {
+	if reqs.GPU && svc.Docker.GPU != nil {
+		// CashPilot passes the GPU in (internal/runtime/gpu.go) and refuses the deploy
+		// when it can see this computer has none of that vendor.
+		findings = append(findings, Finding{
+			Verdict: CheckYourself,
+			Message: "This needs a supported graphics card, which CashPilot passes into the container. " +
+				"On Linux, when the container runtime runs on this computer, CashPilot refuses the deploy if it finds no such card. " +
+				"Elsewhere it cannot look, so check that your card and its driver are supported.",
+		})
+	} else if reqs.GPU {
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,
 			Message: "This needs a supported graphics card passed through to the container. " +
@@ -152,7 +161,9 @@ func Assess(in Input) Report {
 
 	// Connection type. Desktop cannot see whether this machine sits on a home line or
 	// in a datacentre, so this stays an explicitly unverified precondition rather
-	// than being dressed up as a check.
+	// than being dressed up as a check. For the same reason requirements.hosting_note,
+	// which the web app shows only on a worker that reports a hosting connection, is
+	// never a finding here.
 	if reqs.ResidentialIP && !reqs.VPSIP {
 		findings = append(findings, Finding{
 			Verdict: CheckYourself,

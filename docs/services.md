@@ -2,7 +2,7 @@
 
 > Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
 
-CashPilot bundles a catalog of 45 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
+CashPilot bundles a catalog of 49 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
 
 ## Before you start: how bandwidth-sharing works
 
@@ -35,6 +35,7 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 | [Repocket](https://link.repocket.com/b1zM) | ✅ | ❌ | 5 | Undocumented | Gift Cards, Crypto |
 | [Storj](https://storj.dev/node/get-started/setup) | ✅ | ✅ | Unlimited | Undocumented \*\* | Crypto (STORJ) |
 | [Traffmonetizer](https://traffmonetizer.io/?aff=2111758) | ✅ | ✅ \*\*\* | Unlimited | Unlimited | Crypto (USDT), PayPal |
+| [unMineable (CPU mining, paid in your coin)](https://unmineable.com/?ref=awk6-j1z0) | ✅ | ✅ \*\*\*\* | No account | Undocumented | Crypto (the coin you pick) |
 | [URnetwork](https://ur.io/c?bonus=1Q3G19) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
 
 > **Undocumented** means the provider publishes no per-IP device limit, not that
@@ -49,6 +50,8 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 > \*\* Storj nodes on the same /24 subnet share data allocation, reducing per-node earnings.
 >
 > \*\*\* Traffmonetizer's Terms of Service require a residential IP; running it on a VPS may not comply with those terms, so check before you deploy.
+>
+> \*\*\*\* Some hosting providers, including Hetzner Cloud, prohibit mining, so check your provider's terms before you deploy unMineable on a VPS. Every unMineable worker CashPilot deploys carries CashPilot's referral code (#awk6-j1z0), which lowers your platform fee from 1% to 0.75% and pays CashPilot's maintainer 0.25% of your mining rewards. The electricity can cost more than the coins earned.
 
 ## Browser Extension / Desktop Only
 
@@ -58,7 +61,7 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 |---------|:-:|:-:|:-:|:-:|--------|--------|
 | [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3) | ✅ | ❌ | Unlimited | Undocumented | PayPal | Active |
 | [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
-| [Dawn Internet](https://dawninternet.com/?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
+| [Dawn Internet](https://infrastructure.finance/validator-extension?code=2QLQV97F) | ✅ | ❌ | Unlimited | 1 | Crypto (DAWN) | Active |
 | [Deeper Network](https://shop.deeper.network?sca_ref=12020100.q8Vxm3SliA) | ✅ | ❌ | Unlimited | 1 | Crypto (DPR) | Active |
 | [Ebesucher](https://www.ebesucher.com/?ref=geiserx) | ✅ | ✅ | Unlimited | 1 | PayPal | Active |
 | [Gradient Network](https://app.gradient.network/signup?referralCode=YSKMY7) | ✅ | ❌ | Unlimited | 1 | Crypto (GRADIENT) | Broken: node rewards ended August 2025 |
@@ -75,6 +78,8 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 | [Uprock](https://link.uprock.com/i/33e8492e) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
 | [Wipter](https://wipter.com/register?via=FB1373FBDA) | ✅ | ❌ | Unlimited | Undocumented | PayPal, Crypto | Active |
 
+> Dawn Internet's link does not pass the code on. Create the account in the DAWN Validator extension and enter referral code `2QLQV97F` when it asks.
+
 ## GPU Compute
 
 GPU-intensive computing services. Requires compatible hardware.
@@ -84,8 +89,10 @@ GPU-intensive computing services. Requires compatible hardware.
 | [Flux](https://runonflux.io) | ✅ | ❌ | 220GB | Crypto (FLUX) | Active |
 | [Golem Network](https://golem.network) | ✅ | ❌ | 20GB | Crypto (GLM) | Active |
 | [io.net](https://io.net) | ✅ | ✅ | N/A | Crypto (IO) | Active |
+| [Kryptex Pool (Pearl)](https://pool.kryptex.com/?ref=2444cca8) | ✅ | ✅ (NVIDIA) | N/A | BTC balance in your Kryptex account | Beta |
 | [Nosana](https://nosana.io) | ✅ | ✅ | 50GB | Crypto (NOS) | Active |
 | [Salad](https://salad.io) | ✅ | ✅ | N/A | PayPal, Gift Cards | Active |
+| [SRBMiner-Multi (GPU mining)](https://github.com/doktor83/SRBMiner-Multi/releases) | ✅ | ✅ (NVIDIA) | N/A | Crypto (PRL, ZANO or RVN), paid by your pool | Beta |
 | [Vast.ai](https://cloud.vast.ai/?ref_id=452772) | ✅ | ✅ | 100GB | Wise, PayPal, Stripe | Active |
 
 > **Note:** Earnings vary widely by location, hardware, and demand.

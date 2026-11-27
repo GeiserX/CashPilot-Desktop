@@ -69,6 +69,17 @@ type Container struct {
 	CapDrop     []string
 	SecurityOpt []string
 	Tmpfs       map[string]string
+	// DeviceRequests and Devices are the HostConfig fields of the same names (a GPU
+	// grant), as the create sent them.
+	DeviceRequests []DeviceRequest
+	Devices        []string
+}
+
+// DeviceRequest is one HostConfig device request (an NVIDIA GPU).
+type DeviceRequest struct {
+	Driver       string     `json:"Driver"`
+	Count        int        `json:"Count"`
+	Capabilities [][]string `json:"Capabilities"`
 }
 
 // PortBinding is one host binding of a published port.
@@ -432,10 +443,14 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 			LogConfig struct {
 				Type string `json:"Type"`
 			} `json:"LogConfig"`
-			CapDrop     []string          `json:"CapDrop"`
-			SecurityOpt []string          `json:"SecurityOpt"`
-			Tmpfs       map[string]string `json:"Tmpfs"`
-			Mounts      []struct {
+			CapDrop        []string          `json:"CapDrop"`
+			SecurityOpt    []string          `json:"SecurityOpt"`
+			Tmpfs          map[string]string `json:"Tmpfs"`
+			DeviceRequests []DeviceRequest   `json:"DeviceRequests"`
+			Devices        []struct {
+				PathOnHost string `json:"PathOnHost"`
+			} `json:"Devices"`
+			Mounts []struct {
 				Type   string `json:"Type"`
 				Source string `json:"Source"`
 				Target string `json:"Target"`
@@ -481,6 +496,11 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		CapDrop:       body.HostConfig.CapDrop,
 		SecurityOpt:   body.HostConfig.SecurityOpt,
 		Tmpfs:         body.HostConfig.Tmpfs,
+
+		DeviceRequests: body.HostConfig.DeviceRequests,
+	}
+	for _, dev := range body.HostConfig.Devices {
+		c.Devices = append(c.Devices, dev.PathOnHost)
 	}
 	if why := d.refuseNextStart[name]; name != "" && why != "" {
 		delete(d.refuseNextStart, name)

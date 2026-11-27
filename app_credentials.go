@@ -183,6 +183,8 @@ func formatBindingError(err error) any {
 
 // A worker deploy saves the nonblank fields supplied for the successful attempt.
 // The current stored values fill the other fields, as they do for the worker spec.
+// Like Save Credentials, it is a later save than a local deploy already running,
+// so that deploy keeps it instead of saving its own form over it.
 func (a *App) saveWorkerCredentials(slug string, values map[string]string) error {
 	typed := map[string]string{}
 	for key, value := range values {
@@ -193,6 +195,7 @@ func (a *App) saveWorkerCredentials(slug string, values map[string]string) error
 	if len(typed) == 0 {
 		return nil
 	}
+	lock := a.deployCredentialsLock(slug)
 	a.credentialsMu.Lock()
 	defer a.credentialsMu.Unlock()
 	stored, err := a.store.GetCredentials(slug)
@@ -202,5 +205,9 @@ func (a *App) saveWorkerCredentials(slug string, values map[string]string) error
 	merged := make(map[string]string, len(stored)+len(typed))
 	maps.Copy(merged, stored)
 	maps.Copy(merged, typed)
-	return a.saveCredentials(slug, merged)
+	if err := a.saveCredentials(slug, merged); err != nil {
+		return err
+	}
+	lock.explicitSaves++
+	return nil
 }

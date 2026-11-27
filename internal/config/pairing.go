@@ -31,6 +31,13 @@ type PairingCredential struct {
 
 var ErrPairingChanged = errors.New("the pairing changed")
 
+// ErrPairingSuperseded means config.json does not hold the revision's marker
+// (AppConfig.PairingRevision): 1.x saved config.json after this version
+// published the revision, or a publication stopped between its config.json
+// and pairing.json writes. The revision's credential
+// stays unused until the window carries the 1.x choice over or keeps the revision.
+var ErrPairingSuperseded = errors.New("an older version changed the pairing")
+
 func (m *Manager) PairingPath() string { return filepath.Join(m.appDir, "pairing.json") }
 
 func (m *Manager) lockPairing() (Pairing, func(), error) {
@@ -92,23 +99,139 @@ func (m *Manager) PublishPairing(previous, serverURL string, removeFirewall bool
 			return err
 		}
 	}
+	// Mark config.json first: a revision is never live without its marker, so
+	// a missing marker always means 1.x saved the file. When pairing.json cannot
+	// be written, the marker goes back, so a revision that 1.x superseded stays
+	// superseded and the next start tries the publication again.
+	unmark, err := m.markPairing(next)
+	if err != nil {
+		return err
+	}
 	if err := m.savePairing(next); err != nil {
+		unmark()
 		return err
 	}
 	m.clearPairingCredential(current)
 	if next.ServerURL == "" && key.Enrolment == "" {
 		m.clearPairingCredential(next)
 	}
-	// Retire the pre-revision credentials after a successful migration or Leave.
+	// Retire the pre-revision credentials after every publication: a migration,
+	// a Leave, or a pairing 1.x made after a downgrade. This version never writes
+	// them. A failed deletion cannot repeat a carry-over, because the marker
+	// above already records this revision.
+	for _, user := range []string{keyringUserUpstreamEnrol, keyringUserUpstreamWorker} {
+		_ = credentials.Delete(keyringService, user)
+	}
+	for _, name := range []string{workerKeyFile, workerKeyFile + ".generation", ".upstream_enrolment_key"} {
+		dropFallback(filepath.Join(m.appDir, name))
+	}
 	if previous == "" {
-		for _, user := range []string{keyringUserUpstreamEnrol, keyringUserUpstreamWorker} {
-			_ = credentials.Delete(keyringService, user)
-		}
-		for _, name := range []string{workerKeyFile, workerKeyFile + ".generation", ".upstream_enrolment_key", "server-commands-firewall.json"} {
-			dropFallback(filepath.Join(m.appDir, name))
-		}
+		dropFallback(filepath.Join(m.appDir, "server-commands-firewall.json"))
 	}
 	return nil
+}
+
+// KeepPairing marks the revision as this version's again after a 1.x save that
+// left the pairing as it was.
+func (m *Manager) KeepPairing(revision string) error {
+	current, release, err := m.lockPairing()
+	defer release()
+	if err != nil {
+		return err
+	}
+	if revision == "" || current.Revision != revision {
+		return ErrPairingChanged
+	}
+	_, err = m.markPairing(current)
+	return err
+}
+
+// markPairing writes the revision's marker into config.json and copies its
+// server into upstreamUrl and mode, so 1.x after a downgrade shows the same
+// pairing, and a 1.x change to it can be told from a save that kept it. unmark
+// puts the three fields back as they were (best effort).
+func (m *Manager) markPairing(p Pairing) (unmark func(), err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	release, err := m.lockConfig()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	// A file that cannot be read or parsed stops the publication before
+	// anything is written: marking it from this Manager's copy could replace a
+	// 1.x choice this Manager never read, and no rollback could restore it.
+	if _, err := m.reloadLocked(); err != nil {
+		return nil, err
+	}
+	was, next := m.cfg, m.cfg
+	next.PairingRevision, next.UpstreamURL, next.Mode = p.Revision, p.ServerURL, ModeLead
+	if p.ServerURL != "" {
+		next.Mode = ModeFollower
+	}
+	if err := m.persist(next); err != nil {
+		return nil, err
+	}
+	m.cfg = next
+	if m.supersededSeen == p.Revision {
+		m.supersededSeen = ""
+	}
+	return func() {
+		_ = m.Update(func(c *AppConfig) {
+			c.PairingRevision, c.UpstreamURL, c.Mode = was.PairingRevision, was.UpstreamURL, was.Mode
+		})
+	}, nil
+}
+
+// markerOnDisk reads the marker from config.json. The background helper keeps
+// its own copy of the file, which can predate the window's last publication.
+// ok is false when the file cannot be read; the copy in memory is used then.
+func (m *Manager) markerOnDisk() (marker string, ok bool) {
+	raw, err := os.ReadFile(m.path)
+	if err != nil {
+		return "", false
+	}
+	var file struct {
+		PairingRevision string `json:"pairingRevision"`
+	}
+	if json.Unmarshal(raw, &file) != nil {
+		return "", false
+	}
+	return file.PairingRevision, true
+}
+
+// afterMarkerReadForTest, when set by a test, runs in PairingSuperseded between
+// its read of config.json and the state change.
+var afterMarkerReadForTest func()
+
+// PairingSuperseded reports whether config.json lacks the revision's marker
+// (ErrPairingSuperseded). On disk, only the revision's own marker counts. An
+// empty one means 1.x saved config.json; another revision's means a
+// publication stopped between its two writes. When config.json cannot be
+// read, the copy in memory can predate the window's last publication, so any
+// marker there counts: 1.x does not make the file unreadable. A revision this
+// Manager already read as superseded on disk, by a credential read, a load or a
+// Reload, stays superseded then.
+func (m *Manager) PairingSuperseded(p Pairing) bool {
+	// The read and the state change happen under one lock, so a Reload cannot
+	// record a newer read in between and be undone by this older one.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	marker, ok := m.markerOnDisk()
+	if afterMarkerReadForTest != nil {
+		afterMarkerReadForTest()
+	}
+	if !ok {
+		return m.cfg.PairingRevision == "" || m.supersededSeen == p.Revision
+	}
+	if marker != p.Revision {
+		m.supersededSeen = p.Revision
+		return true
+	}
+	if m.supersededSeen == p.Revision {
+		m.supersededSeen = ""
+	}
+	return false
 }
 
 // UpdatePairing changes only the named revision. The callback can compare the
@@ -137,13 +260,23 @@ func (m *Manager) UpdatePairing(revision string, change func(*Pairing) error) er
 	return err
 }
 
+// writePairingFile writes pairing.json. Tests replace it to make the write fail.
+var writePairingFile = writeFileAtomic
+
+// FailPairingWritesForTest makes every pairing.json write return err until
+// restore runs. Not safe while other goroutines publish.
+func FailPairingWritesForTest(err error) (restore func()) {
+	writePairingFile = func(string, []byte) error { return err }
+	return func() { writePairingFile = writeFileAtomic }
+}
+
 func (m *Manager) savePairing(p Pairing) error {
 	// Match Reload's lock order, so a reload that saw the previous file cannot
 	// overwrite the new in-memory view after publication.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	raw, _ := json.Marshal(p)
-	if err := writeFileAtomic(m.PairingPath(), raw); err != nil {
+	if err := writePairingFile(m.PairingPath(), raw); err != nil {
 		return err
 	}
 	m.pairing = p
@@ -185,6 +318,11 @@ func (m *Manager) ReadPairingCredential(promote bool) (Pairing, PairingCredentia
 	defer release()
 	if err != nil || p.Revision == "" {
 		return p, key, err
+	}
+	// The pairing lock orders this read after a whole publication, which marks
+	// config.json before it writes pairing.json.
+	if m.PairingSuperseded(p) {
+		return p, key, ErrPairingSuperseded
 	}
 	user, path := m.credentialSlot(p)
 	if raw, err := credentials.Get(keyringService, user); err == nil &&

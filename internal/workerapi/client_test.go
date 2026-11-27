@@ -131,6 +131,19 @@ func TestAStructuredRefusalKeepsItsCode(t *testing.T) {
 	}
 }
 
+func TestRemovingAGoneCopyShowsTheWorkersOwnWords(t *testing.T) {
+	srv, _ := newFakeWorker(t, 404, `{"detail":{"error":"copy_not_found","message":"Instance 2 of honeygain not found"}}`)
+	c := &Client{BaseURL: srv.URL, Key: "k"}
+	err := c.Command(context.Background(), "honeygain", CommandRemove, 2, time.Second)
+	var werr *Error
+	if !errors.As(err, &werr) || werr.Status != 404 || werr.Code != "copy_not_found" {
+		t.Fatalf("err = %#v", err)
+	}
+	if werr.Message != "Instance 2 of honeygain not found" {
+		t.Fatalf("message = %q: the worker knows the request and is newer, so it must not say to update it", werr.Message)
+	}
+}
+
 func TestAnUnvettedAnswerIsNotShown(t *testing.T) {
 	for status, body := range map[int]string{
 		500: `{"detail":"Traceback ... /secret/path"}`,
@@ -237,6 +250,10 @@ func TestDeployStateDistinguishesAnOlderWorkerFromLookupFailure(t *testing.T) {
 		{name: "ID with no container", status: 200, body: `{"exists":false,"expected_container":"` + id + `"}`, wantErr: true},
 		{name: "none with a container", status: 200, body: `{"exists":true,"expected_container":"none"}`, wantErr: true},
 		{name: "not a string", status: 200, body: `{"exists":true,"expected_container":7}`, wantErr: true},
+		// An explicit null is not an older worker leaving the field out: it is a worker
+		// that answered without a usable ID.
+		{name: "explicit null, absent", status: 200, body: `{"exists":false,"expected_container":null}`, wantErr: true},
+		{name: "explicit null, existing", status: 200, body: `{"exists":true,"expected_container":null}`, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

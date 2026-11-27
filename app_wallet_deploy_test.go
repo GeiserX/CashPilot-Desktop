@@ -39,7 +39,8 @@ func TestANewSiaWalletIsMadeOfflineAndShownOnce(t *testing.T) {
 			continue
 		}
 		generators++
-		if c.NetworkMode != "none" || c.LogDriver != "json-file" || len(c.Env) != 0 ||
+		// Its only variable is the GPU void stamp: never a credential.
+		if c.NetworkMode != "none" || c.LogDriver != "json-file" || strings.Join(c.Env, ",") != "NVIDIA_VISIBLE_DEVICES=void" ||
 			strings.Join(c.CapDrop, ",") != "ALL" || c.Tmpfs["/data"] == "" || strings.Join(c.Cmd, " ") != "seed" {
 			t.Errorf("the generator is not offline, local-logged, unprivileged and diskless: %+v", c)
 		}

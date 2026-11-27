@@ -31,6 +31,7 @@ import {
   referralNote,
   signupButton,
 } from "../.harness-build/render/details.js";
+import { catalogRow } from "../.harness-build/render/catalog.js";
 import { readFileSync } from "node:fs";
 
 let failures = 0;
@@ -226,6 +227,20 @@ check("2Miners shows its adjustable payout threshold", valueOf(twoMinersPayout, 
 check("2Miners shows one pool unit as unpaid", valueOf(twoMinersPayout, "Unpaid pool balance") === "0.000000001 ETC", twoMinersPayout);
 check("2Miners counts down to its lowest threshold in pool units", valueOf(twoMinersPayout, "Still to minimum payout") === "0.099999999 ETC", twoMinersPayout);
 
+// unMineable pays in the coin the miner picks, so the catalog states no fixed minimum.
+const unmineable = {
+  ...ocean,
+  slug: "unmineable",
+  payment: { methods: ["crypto"], minimumPayout: "Set per coin by unMineable (0.03 XMR on 2026-11-26)" },
+  cashout: { method: "auto", notes: "unMineable pays your address once your balance reaches the coin's payment threshold." },
+};
+const unMineablePayout = payoutFacts(unmineable, { amount: 0.00000001, currency: "LTC" });
+check("unMineable shows its per-coin payout terms", valueOf(unMineablePayout, "Payout terms") === unmineable.payment.minimumPayout, unMineablePayout);
+check("unMineable shows one unit of the chosen coin as unpaid", valueOf(unMineablePayout, "Unpaid pool balance") === "0.00000001 LTC", unMineablePayout);
+const unlistedCoin = payoutFacts(unmineable, { amount: 0.00001, currency: "ADA" });
+check("unMineable shows a small balance in an unlisted coin", valueOf(unlistedCoin, "Unpaid pool balance") === "0.00001 ADA", unlistedCoin);
+check("unMineable has no countdown to a minimum it does not state", valueOf(unMineablePayout, "Still to minimum payout") === undefined, unMineablePayout);
+
 const undocumented = payoutFacts({
   ...honeygain,
   payment: {methods: [], frequency: "", currency: ""},
@@ -356,6 +371,52 @@ const withBonus = referralNote({
 check("the note leads with the new user's bonus", withBonus.includes("New-user bonus with this link:") && withBonus.includes("$3"), withBonus);
 check("the bonus text is escaped", !withBonus.includes("<b>") && withBonus.includes("&lt;b&gt;"), withBonus);
 check("no bonus recorded, no bonus line", !note.includes("New-user bonus"), note);
+
+// A code typed by hand (referral.code_entry): Dawn's extension and Gradient's form
+// never read it from the link, so the note names it and offers a Copy button.
+const dawn = {
+  ...honeygain,
+  slug: "dawn",
+  name: "Dawn Internet",
+  referral: {signupUrl: "https://dawninternet.com/?code=2QLQV97F", code: "2QLQV97F", codeEntry: "2QLQV97F"},
+};
+const typed = referralNote(dawn);
+check(
+  "a typed code is named next to the signup button",
+  typed.includes("When Dawn Internet asks for a referral code, type <code>2QLQV97F</code>."),
+  typed,
+);
+check("a typed code has a Copy button that copies it", /data-copy-text="2QLQV97F"[^>]*>Copy<\/button>/.test(typed), typed);
+check("the typed code comes before the commission note", typed.indexOf("2QLQV97F") < typed.indexOf("Referral link:"), typed);
+check("a link that carries its code asks nobody to type it", !note.includes("data-copy-text") && !note.includes("referral-code"), note);
+check(
+  "a catalog synced before code_entry existed renders as before",
+  referralNote({...dawn, referral: {signupUrl: dawn.referral.signupUrl, code: "2QLQV97F"}}) ===
+    referralNote({...dawn, referral: {signupUrl: dawn.referral.signupUrl, code: "2QLQV97F", codeEntry: ""}}) &&
+    !referralNote({...dawn, referral: {signupUrl: dawn.referral.signupUrl, code: "2QLQV97F"}}).includes("data-copy-text"),
+);
+check(
+  "a typed code is escaped",
+  !referralNote({...dawn, referral: {...dawn.referral, codeEntry: '"><b>x'}}).includes("<b>x"),
+);
+check(
+  "the Copy button is a small typed button that says what it copies",
+  typed.includes('<button type="button" class="secondary compact-btn" data-copy-text="2QLQV97F" aria-label="Copy Dawn Internet&#039;s referral code 2QLQV97F"'),
+  typed,
+);
+
+// The catalog row: Dawn is manual-only, so its row has only Visit, which opens the
+// signup page. The code must sit beside it, or a signup from the row credits nobody.
+const dawnRow = catalogRow({...dawn, manualOnly: true}, undefined, false);
+check("a manual-only row with a typed code keeps its referral Visit", dawnRow.includes('data-url="https://dawninternet.com/?code=2QLQV97F">Visit</button>'), dawnRow);
+check(
+  "a manual-only row with a typed code shows the code beside Visit",
+  dawnRow.indexOf(">Visit</button>") < dawnRow.indexOf('data-copy-text="2QLQV97F"') && dawnRow.includes(">Code 2QLQV97F</button>"),
+  dawnRow,
+);
+const dockerDawnRow = catalogRow({...dawn, manualOnly: false}, undefined, false);
+check("a Sign up row with a typed code shows the code beside Sign up", dockerDawnRow.includes(">Code 2QLQV97F</button>"), dockerDawnRow);
+check("a row whose link carries its code asks nobody to type it", !catalogRow(honeygain, undefined, false).includes("data-copy-text"));
 
 // ---------------------------------------------------------------------------
 // The device link: after a deploy, a provider that pays a device only once its id

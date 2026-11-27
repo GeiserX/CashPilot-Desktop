@@ -521,6 +521,22 @@ export namespace catalog {
 	}
 	
 	
+	export class Mining {
+	    devFeePercent?: number;
+	    devFeeSource: string;
+	    poolFeeNote: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Mining(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.devFeePercent = source["devFeePercent"];
+	        this.devFeeSource = source["devFeeSource"];
+	        this.poolFeeNote = source["poolFeeNote"];
+	    }
+	}
 	export class NativeBinary {
 	    os: string;
 	    arch: string;
@@ -856,6 +872,7 @@ export namespace catalog {
 	export class Referral {
 	    signupUrl: string;
 	    code: string;
+	    codeEntry: string;
 	    program?: boolean;
 	    bonus: ReferralBonus;
 	    account?: boolean;
@@ -868,6 +885,7 @@ export namespace catalog {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.signupUrl = source["signupUrl"];
 	        this.code = source["code"];
+	        this.codeEntry = source["codeEntry"];
 	        this.program = source["program"];
 	        this.bonus = this.convertValues(source["bonus"], ReferralBonus);
 	        this.account = source["account"];
@@ -965,6 +983,7 @@ export namespace catalog {
 	    collector: CollectorMetadata;
 	    payout: Payout;
 	    disclosure: Disclosure;
+	    mining?: Mining;
 	    deviceLink?: DeviceLink;
 	    resurrectionChecked: string;
 	    ratingResult?: RatingResult;
@@ -998,6 +1017,7 @@ export namespace catalog {
 	        this.collector = this.convertValues(source["collector"], CollectorMetadata);
 	        this.payout = this.convertValues(source["payout"], Payout);
 	        this.disclosure = this.convertValues(source["disclosure"], Disclosure);
+	        this.mining = this.convertValues(source["mining"], Mining);
 	        this.deviceLink = this.convertValues(source["deviceLink"], DeviceLink);
 	        this.resurrectionChecked = source["resurrectionChecked"];
 	        this.ratingResult = this.convertValues(source["ratingResult"], RatingResult);
@@ -1137,6 +1157,7 @@ export namespace config {
 	    mode?: string;
 	    setupJournal?: SetupJournal;
 	    serverCommandsOff?: boolean;
+	    serverCommandsChosen?: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1169,6 +1190,7 @@ export namespace config {
 	        this.mode = source["mode"];
 	        this.setupJournal = this.convertValues(source["setupJournal"], SetupJournal);
 	        this.serverCommandsOff = source["serverCommandsOff"];
+	        this.serverCommandsChosen = source["serverCommandsChosen"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1728,6 +1750,7 @@ export namespace main {
 	    firewallStatus: string;
 	    opens: string;
 	    last?: ServerCommand;
+	    serverTooOld: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new ServerCommandsState(source);
@@ -1745,6 +1768,7 @@ export namespace main {
 	        this.firewallStatus = source["firewallStatus"];
 	        this.opens = source["opens"];
 	        this.last = this.convertValues(source["last"], ServerCommand);
+	        this.serverTooOld = source["serverTooOld"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2832,6 +2856,7 @@ export namespace main {
 	    allowSharedIdentity: boolean;
 	    replaceExisting: boolean;
 	    expectedContainer: string;
+	    workerIdentity: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployRequest(source);
@@ -2846,6 +2871,7 @@ export namespace main {
 	        this.allowSharedIdentity = source["allowSharedIdentity"];
 	        this.replaceExisting = source["replaceExisting"];
 	        this.expectedContainer = source["expectedContainer"];
+	        this.workerIdentity = source["workerIdentity"];
 	    }
 	}
 	export class WorkerDeployResult {
@@ -2856,6 +2882,7 @@ export namespace main {
 	    notes: string[];
 	    credentialWarning?: string;
 	    expectedContainer?: string;
+	    workerIdentity?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WorkerDeployResult(source);
@@ -2870,6 +2897,7 @@ export namespace main {
 	        this.notes = source["notes"];
 	        this.credentialWarning = source["credentialWarning"];
 	        this.expectedContainer = source["expectedContainer"];
+	        this.workerIdentity = source["workerIdentity"];
 	    }
 	}
 	

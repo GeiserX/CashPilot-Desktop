@@ -33,6 +33,9 @@ function reachLine(state: ServerCommandsState): string {
   if (!state.on) {
     return `<p class="pairing-line" data-server-reach>Off. ${escapeHtml(state.server)} can see what runs here, but cannot change it.</p>`;
   }
+  if (state.serverTooOld) {
+    return `<p class="pairing-line warn" data-server-reach>${escapeHtml(state.server || "Your CashPilot")} is older than CashPilot 3.0.0, so it cannot send commands to this computer. It only sees what runs here. Update it to 3.0.0 or newer.</p>`;
+  }
   if (state.listening) {
     return `<p class="pairing-line" data-server-reach>It reaches this computer at <code>${escapeHtml(state.url)}</code>, with the key it gave this computer when it joined.</p>`;
   }

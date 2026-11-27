@@ -26,7 +26,7 @@
 // Pure: takes catalog data, returns HTML strings, touches no global.
 
 import type { Payout, Service } from "../wails";
-import { escapeHtml, miningBalancePrecision } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
+import { coinAmount, escapeHtml, miningBalancePrecision } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { stripHtml } from "./fields.js";
 
 /** What an undocumented value looks like. Never 0, never an empty cell. */
@@ -112,7 +112,8 @@ export function payoutFacts(service: Service, balance?: Balance | null): Fact[] 
   if (balance && Number.isFinite(balance.amount)) {
     if (pool) {
       const unit = balance.currency.trim().toUpperCase();
-      facts.push({ label: "Unpaid pool balance", value: `${trimNumber(balance.amount, unit)} ${unit}`.trim() });
+      const amount = miningBalancePrecision(unit) === undefined ? coinAmount(balance.amount) : trimNumber(balance.amount, unit);
+      facts.push({ label: "Unpaid pool balance", value: `${amount} ${unit}`.trim() });
     }
     const threshold = minimumIn(service, balance.currency);
     if (threshold !== null) {
@@ -175,13 +176,33 @@ export function hasAccount(service: Pick<Service, "referral">): boolean {
  * should not have to find a README section to learn the maintainer may earn from it.
  * Only where the catalog has a referral code, since a bare signup URL is not a
  * referral link. The web app renders the same note (app.js referralNote).
+ *
+ * Some signups never read the code from the link (Dawn's extension asks for it):
+ * referral.code_entry is then the code to type, shown first with a Copy button, so
+ * a user who signs up from here still credits the referral.
  */
 export function referralNote(service: Service): string {
   if (!service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
   // The new user's bonus first, when the catalog records one: it is the reason to use the link.
   const referee = (service.referral.bonus?.referee || "").trim();
   const bonus = referee ? `<strong>New-user bonus with this link:</strong> ${escapeHtml(referee)}. ` : "";
-  return `<p class="referral-note">${bonus}Referral link: the CashPilot maintainer may earn a commission from it, which helps keep CashPilot free and maintained.</p>`;
+  const entry = (service.referral.codeEntry || "").trim();
+  const typed = entry
+    ? `<p class="referral-code">When ${escapeHtml(service.name)} asks for a referral code, type <code>${escapeHtml(entry)}</code>. The link does not fill it in. ${codeEntryCopy(service, "Copy")}</p>`
+    : "";
+  return `${typed}<p class="referral-note">${bonus}Referral link: the CashPilot maintainer may earn a commission from it, which helps keep CashPilot free and maintained.</p>`;
+}
+
+/**
+ * The Copy button for a code typed by hand (referral.codeEntry), or "" when the
+ * link carries the code. label is already HTML. The accessible name says what it
+ * copies. The catalog row uses it beside Visit and Sign up too (render/catalog.ts).
+ */
+export function codeEntryCopy(service: Pick<Service, "name" | "referral">, label: string): string {
+  const entry = (service.referral?.codeEntry || "").trim();
+  if (!entry || !service.referral?.code || !(service.referral.signupUrl || "").trim()) return "";
+  const name = escapeHtml(`Copy ${service.name}'s referral code ${entry}`);
+  return `<button type="button" class="secondary compact-btn" data-copy-text="${escapeHtml(entry)}" aria-label="${name}" title="${name}">${label}</button>`;
 }
 
 /**

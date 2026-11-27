@@ -391,6 +391,9 @@ func Refusal(svc catalog.Service) string {
 	if len(dc.Devices) > 0 {
 		return name + " needs a device on the host, which a proxied copy does not get."
 	}
+	if dc.GPU != nil {
+		return name + " needs this computer's GPU, which a proxied copy does not get."
+	}
 	if dc.Privileged {
 		return name + " asks for a privileged container, which could change or bypass the tunnel's firewall, so it cannot run behind a proxy."
 	}

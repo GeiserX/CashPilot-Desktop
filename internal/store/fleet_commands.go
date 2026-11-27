@@ -30,6 +30,9 @@ type FleetReport struct {
 	ClientID   string           `json:"clientId"`
 	Containers []FleetContainer `json:"containers"`
 	Features   []string         `json:"features"`
+	// GPUGrants is the heartbeat's gpu_grants, by slug, each grant as the worker
+	// sent it. nil when the heartbeat had none.
+	GPUGrants map[string]json.RawMessage `json:"gpuGrants,omitempty"`
 }
 
 // SetFleetDeviceIssuedKey stores a freshly issued per-worker key: its hash for the

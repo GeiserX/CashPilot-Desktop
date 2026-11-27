@@ -1100,6 +1100,14 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 		if !pool {
 			return platformDelta(plat, fromDay, toDay)
 		}
+		// A period is one balance identity (on unMineable, one address in one
+		// coin), so it is priced in its own currency, not the latest one.
+		periodCur := func(reading store.DailyBalance) string {
+			if reading.Currency != "" {
+				return reading.Currency
+			}
+			return perCur[plat]
+		}
 		start := sort.Search(len(history), func(i int) bool { return history[i].Day > fromDay })
 		var baseline store.DailyBalance
 		haveBaseline := start > 0
@@ -1114,14 +1122,14 @@ func (a *App) computeEarningsSummary(earnings []store.EarningsRecord) EarningsSu
 			}
 			if seen && reading.PoolAddressHash != last.PoolAddressHash {
 				if haveBaseline {
-					accrued += balanceDelta(baseline, last, perCur[plat])
+					accrued += balanceDelta(baseline, last, periodCur(baseline))
 				}
 				baseline, haveBaseline = reading, true
 			}
 			last, seen = reading, true
 		}
 		if haveBaseline {
-			accrued += balanceDelta(baseline, last, perCur[plat])
+			accrued += balanceDelta(baseline, last, periodCur(baseline))
 		}
 		return accrued
 	}
@@ -1564,7 +1572,7 @@ func (a *App) DeployService(slug string, values map[string]string, image *string
 
 type deployCredentialsLock struct {
 	deploy        sync.Mutex
-	explicitSaves uint64 // guarded by App.credentialsMu
+	explicitSaves uint64 // Save Credentials and worker deploy saves; guarded by App.credentialsMu
 }
 
 func (a *App) deployCredentialsLock(slug string) *deployCredentialsLock {
@@ -2512,6 +2520,9 @@ func (a *App) ExportCompose(slugs []string, arch string) (string, error) {
 	body, err := compose.Generate(a.catalog, slugs, compose.Options{
 		Arch:     arch,
 		Hostname: runtime.DeviceHostname(),
+		GPUDevices: func(grant catalog.GPUGrant) ([]string, error) {
+			return runtime.HostGPUDevices(a.ctx, grant)
+		},
 	})
 	if err != nil {
 		return "", err

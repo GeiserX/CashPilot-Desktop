@@ -408,6 +408,9 @@ export interface WorkerDeployRequest {
   replaceExisting: boolean;
   // The container a replaceExisting yes was for (WorkerDeployResult.expectedContainer).
   expectedContainer: string;
+  // The worker the yes answers (WorkerDeployResult.workerIdentity); a yes counts
+  // only for that worker.
+  workerIdentity: string;
 }
 
 // WorkerDeployResult mirrors the Go WorkerDeployResult. With ask set nothing was
@@ -427,6 +430,9 @@ export interface WorkerDeployResult {
   // With ask replace_existing: the container the question is about, "none" or a
   // full Docker ID; absent when the worker cannot name it.
   expectedContainer?: string;
+  // The worker the question is about: its client ID and address. With ask
+  // worker_changed, another worker now reports under the selected worker's name.
+  workerIdentity?: string;
 }
 
 // WorkerCopy mirrors store.FleetContainer: one copy a worker's heartbeat listed.
@@ -794,6 +800,9 @@ export interface ServerCommandsState {
   firewallStatus?: string;
   opens: string;
   last: ServerCommand | null;
+  // The server's last heartbeat answer did not list the command feature, so the
+  // heartbeat reports no URL and the server only sees what runs here.
+  serverTooOld?: boolean;
 }
 
 export interface SessionConsent {
@@ -1058,6 +1067,9 @@ export interface Service {
   referral: {
     signupUrl: string;
     code: string;
+    // The code to type by hand where the signup does not read it from the link
+    // (Dawn's extension). "" or absent when the link carries it.
+    codeEntry?: string;
     program: boolean | null;
     bonus: { referrer: string; referee: string };
     // false: the provider has no account to sign up for, so the link is labelled
@@ -1106,6 +1118,10 @@ export interface Service {
     ispRisk: string;
     accountRules: string;
   };
+  // A miner's own fee (services/_schema.yml mining:), shown before deploy. Null for
+  // anything that is not a miner. devFeePercent null means the catalog states no
+  // usable fee, which is never 0%. devFeeSource is "" unless it is https://.
+  mining?: { devFeePercent: number | null; devFeeSource: string; poolFeeNote: string } | null;
   // Set for providers that pay a device only once its id is added to the account.
   deviceLink: { idEnv: string; url: string; steps: string } | null;
   resurrectionChecked: string;

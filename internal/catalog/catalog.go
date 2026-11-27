@@ -43,6 +43,7 @@ func IsCustomSlug(slug string) bool {
 // SetCustom replaces the user's custom services. Each must carry the custom- prefix
 // and Custom set; anything else is dropped, so a custom definition can never shadow
 // or stand in for a catalog entry.
+// A mining: block is held to the same rules as a catalog entry's.
 func (c *Catalog) SetCustom(services []Service) {
 	kept := make([]Service, 0, len(services))
 	for _, svc := range services {
@@ -52,6 +53,7 @@ func (c *Catalog) SetCustom(services []Service) {
 		if _, clash := c.bySlug[svc.Slug]; clash {
 			continue
 		}
+		svc.Mining = normalizeMining(svc.Slug, svc.Mining)
 		kept = append(kept, svc)
 	}
 	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Name < kept[j].Name })
@@ -93,6 +95,9 @@ type Service struct {
 	Collector        CollectorMetadata `json:"collector" yaml:"collector"`
 	Payout           Payout            `json:"payout" yaml:"payout"`
 	Disclosure       Disclosure        `json:"disclosure" yaml:"disclosure"`
+	// Mining is a miner's own fee (services/_schema.yml `mining:`), which the deploy
+	// wizard shows before the miner runs. Nil for anything that is not a miner.
+	Mining *Mining `json:"mining" yaml:"mining"`
 	// DeviceLink is set for providers that pay a device only once the user adds its
 	// id to their account by hand (EarnApp, ProxyRack). Nil means nothing to link.
 	DeviceLink *DeviceLink `json:"deviceLink" yaml:"device_link"`
@@ -131,6 +136,11 @@ type Referral struct {
 	// that drops the code from signup_url is detectable rather than silent. Referral
 	// attribution is revenue: losing it loses money, and it fails invisibly.
 	Code string `json:"code" yaml:"code"`
+	// CodeEntry is the code the user must type by hand, set when the provider's signup
+	// does not read it from the link (Dawn's extension asks for it). It equals Code;
+	// the UI shows it with a Copy button next to the signup button, or a user who signs
+	// up from the app credits nobody.
+	CodeEntry string `json:"codeEntry" yaml:"code_entry"`
 	// Program is three-valued on purpose and absent is NOT false: true means the
 	// provider was verified to run a referral programme (true with no Code is an
 	// actionable gap), false means it was verified not to, nil means nobody has
@@ -142,6 +152,12 @@ type Referral struct {
 	// SignupURL "Visit", never "Create account" or "Sign up". nil means an account
 	// is needed.
 	Account *bool `json:"account" yaml:"account"`
+	// Referrer and Referee state the split when the code is a setting rather than
+	// a signup bonus (unMineable's "#code" after the worker name). Parsed for
+	// parity and never sent to the frontend: the web UI shows only Bonus, and the
+	// entry's mining.pool_fee_note already discloses the split before deploy.
+	Referrer string `json:"-" yaml:"referrer"`
+	Referee  string `json:"-" yaml:"referee"`
 }
 
 // CodeAttributesURL reports whether a referral code is ANCHORED in a signup URL,
@@ -351,6 +367,9 @@ type DockerConfig struct {
 	// to the kernel, so only devices the runtime allow-lists may be requested, and
 	// only by the service whose own entry declares them.
 	Devices []string `json:"devices" yaml:"devices"`
+	// GPU is the GPU the deploy passes in (gpu.go). Read from this computer's own
+	// catalog, never from a deploy request. Not sent to the frontend.
+	GPU *GPU `json:"-" yaml:"gpu"`
 	// HealthSignals are log patterns that say whether the service is EARNING, which
 	// container health cannot see. For services with no collector it is the only
 	// signal there is.
@@ -567,6 +586,23 @@ type Requirements struct {
 	Note            string           `json:"note" yaml:"note"`
 	// NoteColumn says which column Note is a footnote for (vps_ip, devices_per_ip).
 	NoteColumn string `json:"noteColumn" yaml:"note_column"`
+	// HostingNote is the web app's advice for a worker that reports a hosting
+	// connection. It is read so the vendored entry loads, and never shown: Desktop
+	// cannot see what kind of connection this computer is on (internal/preflight),
+	// so it never reaches the frontend.
+	HostingNote string `json:"-" yaml:"hosting_note"`
+}
+
+// Mining is the `mining:` block of a miner (services/_schema.yml).
+type Mining struct {
+	// DevFeePercent is the share of hashing time the miner gives its developers.
+	// Nil means the catalog does not state a usable fee, which is never 0%.
+	DevFeePercent *float64 `json:"devFeePercent" yaml:"dev_fee_percent"`
+	// DevFeeSource is the https:// link that states the fee; anything else is
+	// cleared at load.
+	DevFeeSource string `json:"devFeeSource" yaml:"dev_fee_source"`
+	// PoolFeeNote explains the default pool's fees and payout threshold.
+	PoolFeeNote string `json:"poolFeeNote" yaml:"pool_fee_note"`
 }
 
 // ProxyProhibited is requirements.proxy_prohibited: the provider's own terms that
@@ -658,10 +694,30 @@ func normalize(svc *Service) {
 	if !strings.HasPrefix(svc.SupportURL, "https://") {
 		svc.SupportURL = ""
 	}
+	svc.Mining = normalizeMining(svc.Slug, svc.Mining)
 	svc.Docker.HealthSignals = normalizeSignals(svc.Slug, svc.Docker.HealthSignals)
 	if svc.Docker.HealthProbe != nil {
 		svc.Docker.HealthProbe = jsonSafe(svc.Docker.HealthProbe).(map[string]any)
 	}
+}
+
+// normalizeMining returns a copy of m held to the web catalog's rules, nil for nil.
+// Catalog entries and custom services both pass through it.
+func normalizeMining(slug string, m *Mining) *Mining {
+	if m == nil {
+		return nil
+	}
+	out := *m
+	// The web catalog allows a fee from 0 to 10 percent. Anything else, NaN
+	// included, is shown as not stated rather than as a number nobody checked.
+	if fee := out.DevFeePercent; fee != nil && !(*fee >= 0 && *fee <= 10) {
+		log.Printf("catalog: %s: mining.dev_fee_percent %v is not from 0 to 10, shown as not stated", slug, *fee)
+		out.DevFeePercent = nil
+	}
+	if !strings.HasPrefix(out.DevFeeSource, "https://") {
+		out.DevFeeSource = ""
+	}
+	return &out
 }
 
 // jsonSafe turns the map[any]any that yaml.v3 produces for a nested mapping with a
