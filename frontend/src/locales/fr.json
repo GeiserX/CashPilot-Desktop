@@ -2133,5 +2133,6 @@
   "main.scope.settings": "paramètres",
   "main.scope.worker": "worker",
   "logs.wrap": "Retour à la ligne",
-  "logs.empty": "(aucun journal)"
+  "logs.empty": "(aucun journal)",
+  "go.importers.refuse.m4bEncrypted": "{name} est un fichier money4band 5.0 chiffré. Exécutez `m4b config edit`, copiez le JSON déchiffré qu'il ouvre, puis collez-le ici."
 }
