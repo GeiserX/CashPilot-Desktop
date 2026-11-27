@@ -284,6 +284,17 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 			st.Network = NetAbsent
 		}
 		st.Reason = "The guard cannot prove which VM belongs to this install. Run Repair or Remove VM."
+		// Boot and Resume still take the recorded adapter off. Disconnect
+		// itself acts only on the VM with the recorded ID and owner tag, and
+		// cutting the network is the safe side.
+		if st.Network != NetAbsent && m != Periodic && !(retrying && d.proofLock(now)) {
+			if err := d.HV.Disconnect(ctx, p.VMID, p.Owner, p.AdapterID); err != nil {
+				d.logf("disconnect failed: %v", err)
+				st.Reason += " The guard could not disconnect the recorded adapter: " + err.Error()
+			} else {
+				st.Network = NetDisconnected
+			}
+		}
 		return st, leftOff
 	}
 

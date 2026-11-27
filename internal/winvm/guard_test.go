@@ -1591,3 +1591,29 @@ func TestGuardReconnectsToRecordedSwitchAfterRename(t *testing.T) {
 		t.Fatalf("the adapter connected to %q, want %q", sw, r.p.SwitchID)
 	}
 }
+
+// TestGuardBootDisconnectsWhenItCannotReadTheInventory: Boot and Resume must
+// take the recorded adapter off even when the inventory read fails, as they
+// did before the inventory gate. A Pass leaves it as it is.
+func TestGuardBootDisconnectsWhenItCannotReadTheInventory(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	if !r.connectedNow() {
+		t.Fatal("the rig's VM is not connected")
+	}
+	r.f.FailNext("Inventory", errors.New("fake Hyper-V: WMI is not answering"))
+	m := r.mark()
+	r.d.Pass(ctx)
+	if !r.connectedNow() || slices.Contains(r.since(m), "Disconnect") {
+		t.Fatalf("a Pass whose inventory failed disconnected: %v", r.since(m))
+	}
+	r.f.FailNext("Inventory", errors.New("fake Hyper-V: WMI is not answering"))
+	m = r.mark()
+	st := r.d.Boot(ctx)
+	if r.connectedNow() || st.Network != winvm.NetDisconnected {
+		t.Fatalf("Boot left the VM on the network (%s) when the inventory failed: %v", st.Network, r.since(m))
+	}
+	if slices.Contains(r.since(m), "Connect") {
+		t.Fatalf("Boot connected without an inventory: %v", r.since(m))
+	}
+}
