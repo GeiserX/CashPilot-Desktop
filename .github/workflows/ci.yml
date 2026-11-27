@@ -120,6 +120,17 @@ jobs:
         working-directory: frontend
         run: npm test
 
+      # Every locale must carry every English key, with the same placeholders.
+      # scripts/i18n_check.py is the check every CashPilot repo runs, copied
+      # unchanged from GeiserX/CashPilot. A translation whose English changed
+      # since is reported as stale and still passes: the app shows English for
+      # that key until it is translated again.
+      - name: Translation parity
+        run: >-
+          python3 scripts/i18n_check.py frontend/src/locales/en.json
+          $(ls frontend/src/locales/*.json | grep -v '/en.json$')
+          --hashes-dir i18n/source-hashes
+
       - name: Build
         working-directory: frontend
         run: npx vite build
