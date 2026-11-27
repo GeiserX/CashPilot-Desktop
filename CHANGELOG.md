@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Logs show one entry per line.** Docker starts every line with a time in nanoseconds, so nearly every entry wrapped onto two or three lines. The time now shows in local time and in a dimmer colour: `HH:MM:SS` when every line is from today, else with the date. The full value is in its tooltip. A long line scrolls sideways, and every other entry has a faint band. **Wrap lines** wraps long lines instead, and the app remembers the choice. The web dashboard shows logs the same way (CashPilot #873).
+
 ## [2.0.0] - 2026-11-27
 
 ### Changed
