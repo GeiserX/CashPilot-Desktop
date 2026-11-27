@@ -50,13 +50,23 @@ func (g Guest) Exec(ctx context.Context, stdin, script string, args ...string) (
 	cmd.Stderr = &errb
 	out, err := cmd.Output()
 	if err != nil {
-		msg := strings.TrimSpace(errb.String())
+		msg := errLine(errb.String())
 		if msg == "" {
-			msg = lastLine(string(out))
+			msg = errLine(string(out))
 		}
 		return string(out), fmt.Errorf("%w: %s", err, msg)
 	}
 	return string(out), nil
+}
+
+// errLine is the guest's failure as the page shows it: our scripts say why in
+// their last line, and a tool's stderr can run to pages.
+func errLine(s string) string {
+	l := lastLine(s)
+	if r := []rune(l); len(r) > 300 {
+		l = string(r[:300]) + "…"
+	}
+	return l
 }
 
 func lastLine(s string) string {
