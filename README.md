@@ -12,7 +12,7 @@
 
 <p align="center"><strong>Every earner, every box, one view.</strong><br><a href="https://cashpilot.club">cashpilot.club</a> · <a href="https://x.com/CashPilotClub">@CashPilotClub on X</a></p>
 
-CashPilot Desktop is CashPilot as a desktop app for macOS (Apple Silicon), Windows and Linux. It deploys and tracks the software that earns from your spare bandwidth, compute and disk (bandwidth sharing, DePIN nodes, crypto mining, GPU compute and storage), and on a new install it fences the Docker earners off your LAN and this computer. It runs as the full CashPilot dashboard (Run everything here) or as one more box in a CashPilot fleet you already have (Join my CashPilot). Earners with a container image run in Docker or Podman, and the app tracks the browser-extension and desktop-only ones.
+CashPilot Desktop is CashPilot as a desktop app for macOS (Apple Silicon), Windows and Linux. It deploys and tracks the software that earns from your spare bandwidth, compute and disk (bandwidth sharing, DePIN nodes, crypto mining, GPU compute and storage). CashPilot can fence the apps it runs off your home network, so they reach the internet and nothing else. It runs as the full CashPilot dashboard (Run everything here) or as one more box in a CashPilot fleet you already have (Join my CashPilot). Earners with a container image run in Docker or Podman, and the app tracks the browser-extension and desktop-only ones.
 
 <p align="center">
   <img src="docs/images/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
