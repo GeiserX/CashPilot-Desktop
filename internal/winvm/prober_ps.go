@@ -276,6 +276,7 @@ type goCanary struct {
 	once    sync.Once
 	closeMu sync.Mutex
 	done    chan struct{}
+	readers sync.WaitGroup
 }
 
 func (c *goCanary) serve() {
@@ -285,7 +286,9 @@ func (c *goCanary) serve() {
 		if err != nil {
 			return
 		}
+		c.readers.Add(1)
 		go func(conn net.Conn) {
+			defer c.readers.Done()
 			defer conn.Close()
 			conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			b, _ := io.ReadAll(io.LimitReader(conn, tokenRead))
@@ -310,6 +313,9 @@ func (c *goCanary) Close() error {
 	c.once.Do(func() {
 		c.ln.Close()
 		<-c.done
+		// A connection accepted before the close records its token after
+		// it: wait for each reader (5 s at most), so Arrived is complete.
+		c.readers.Wait()
 	})
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()

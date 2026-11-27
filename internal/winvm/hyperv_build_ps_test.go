@@ -1157,3 +1157,32 @@ function New-NetNeighbor {
 		t.Fatalf("exit %d: %s", code, out)
 	}
 }
+
+// TestCanaryCloseWaitsForAcceptedConnections: a connection the host
+// accepted before Close may send its token after it. Close must wait for
+// it, or a green step misses an arrival the fence let through.
+func TestCanaryCloseWaitsForAcceptedConnections(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &goCanary{ln: ln, done: make(chan struct{})}
+	go c.serve()
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // the canary has accepted it
+	const tok = "cpd-0123456789abcdef"
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		conn.Write([]byte(tok))
+		conn.Close()
+	}()
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := c.Arrived(); !slices.Contains(got, tok) {
+		t.Fatalf("Arrived after Close = %v, want the token sent after the close began", got)
+	}
+}

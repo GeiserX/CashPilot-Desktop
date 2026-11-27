@@ -759,8 +759,12 @@ func (ps *probeSet) collect(ctx context.Context, e *Evidence) {
 		}
 	}
 	for _, c := range ps.canaries {
+		// Close first: it stops accepting and waits for every connection
+		// already accepted to record its token.
+		if err := c.Close(); err != nil {
+			ps.errs = append(ps.errs, "canary cleanup: "+err.Error())
+		}
 		split(c.Arrived())
-		c.Close()
 	}
 	for i, c := range ps.ext {
 		if got := c.Arrived(); len(got) > ps.extFrom[i] {
@@ -972,7 +976,7 @@ func (r *proofRun) ipv6(ctx context.Context, red StepSpec, tok string) ([]StepRe
 	if err != nil {
 		return both(fmt.Errorf("canary: %w", err)), nil
 	}
-	r.holes.push("IPv6 canary", func(context.Context) error { cn.Close(); return nil })
+	r.holes.push("IPv6 canary", func(context.Context) error { return cn.Close() })
 	ps := r.watch(ctx, tok, nil, []PktFilter{{Addr: ll, Proto: "TCP", Port: to.Port()}}).alsoWatch(cn)
 	r.tcp(ctx, to, tok, &e)
 	ps.collect(ctx, &e)
