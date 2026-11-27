@@ -103,14 +103,13 @@ func (a *darwinAgent) Status() (Status, error) {
 	return st, nil
 }
 
-// Restart stops the running helper and starts it again from the file the plist
-// names. launchd reads the plist path afresh, so the new process runs the new build.
-func (a *darwinAgent) Restart() error {
-	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), a.label)
-	if out, err := runLaunchctl("kickstart", "-k", target); err != nil {
-		return fmt.Errorf("launchctl kickstart -k %s: %v: %s", target, err, strings.TrimSpace(out))
-	}
-	return nil
+// Replace unloads the job, which stops the running helper, then installs execPath.
+// launchd keeps the program of a loaded job even after its plist changes, and
+// kickstart restarts that program, so the job is unloaded first. bootout fails
+// when the job is not loaded, which is fine. RunAtLoad starts the new file.
+func (a *darwinAgent) Replace(execPath string, args []string) error {
+	_, _ = runLaunchctl("bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), a.label))
+	return a.Install(execPath, args)
 }
 
 func runLaunchctl(args ...string) (string, error) {

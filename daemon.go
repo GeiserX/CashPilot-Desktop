@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/config"
 )
 
 // runDaemon runs CashPilot headless: it brings the app core up (the native-earner
@@ -31,6 +33,13 @@ func runDaemon() error {
 
 	app := NewApp()
 
+	// The window compares this record with itself and replaces a helper that runs
+	// an older build or another copy (helper_follow.go). It is written before the
+	// core starts, so a window that opens meanwhile does not replace this helper.
+	if dir, err := config.AppDataDir(); err == nil {
+		writeHelperRecord(dir)
+	}
+
 	log.Println("cashpilot: starting daemon (headless native-earner supervisor + fleet API, no GUI)")
 	if err := app.startCore(ctx); err != nil {
 		// A fatal core failure (config/store/catalog) may have left part of the engine
@@ -40,9 +49,6 @@ func runDaemon() error {
 		return fmt.Errorf("daemon core init failed: %w", err)
 	}
 
-	// The window compares this with its own version and restarts a helper that
-	// still runs an older build after an update (helper_follow.go).
-	writeHelperVersion(app.cfg.AppDir())
 	log.Println("cashpilot: daemon started; supervising native earners — send SIGINT/SIGTERM to stop")
 	<-ctx.Done()
 	log.Println("cashpilot: signal received, shutting down daemon")

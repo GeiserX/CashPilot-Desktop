@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf16"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
@@ -97,16 +98,48 @@ func (a *windowsAgent) Stop() error {
 	return nil
 }
 
-// Restart ends the running helper and runs the task again. The installer already
-// does this after an update; this covers a helper that still runs an older copy.
-func (a *windowsAgent) Restart() error {
-	if err := a.Stop(); err != nil {
+// Replace ends the running helper, registers execPath and runs the task. The task
+// ignores a start while an instance runs (MultipleInstancesPolicy IgnoreNew), so
+// it waits until Task Scheduler no longer reports the old instance running. A
+// task that is not running makes /end fail, which is fine.
+func (a *windowsAgent) Replace(execPath string, args []string) error {
+	_ = a.Stop()
+	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(500 * time.Millisecond) {
+		running, err := a.taskRunning()
+		if err != nil {
+			return err
+		}
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the helper task %s did not stop", a.taskName)
+		}
+	}
+	if err := a.Install(execPath, args); err != nil {
 		return err
 	}
 	if out, err := runSchtasks("/run", "/tn", a.taskName); err != nil {
 		return fmt.Errorf("schtasks /run: %v: %s", err, strings.TrimSpace(out))
 	}
 	return nil
+}
+
+// taskRunning asks Task Scheduler whether the task runs now. It reads the task's
+// State number through PowerShell, which is the same in every Windows language;
+// schtasks prints its status in the system language.
+func (a *windowsAgent) taskRunning() (bool, error) {
+	exe, err := runtime.PowerShellExe()
+	if err != nil {
+		return false, err
+	}
+	cmd := exec.Command(exe, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(taskStateScript(a.taskName)))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} // CREATE_NO_WINDOW
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("read the state of the scheduled task %s: %w", a.taskName, err)
+	}
+	return taskStateRunning(string(out)), nil
 }
 
 // RegisteredCommand reads the executable the task starts, or "" when there is no
