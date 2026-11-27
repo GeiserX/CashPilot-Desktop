@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
 )
 
@@ -24,12 +25,10 @@ func (a *App) secureVMEngine() (securevm.Engine, error) {
 		return nil, secureVMErr
 	}
 	if secureVM == nil {
-		return nil, errNoSecureVM
+		return nil, errors.New(i18n.T("go.securevm.unavailable"))
 	}
 	return secureVM, nil
 }
-
-var errNoSecureVM = errors.New("the Secure VM is not available on this system yet")
 
 // secureVMApps is every earner the Security page lists: those with a guest
 // block, and those whose terms keep them on this computer.

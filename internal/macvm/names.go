@@ -143,4 +143,6 @@ func VMDir(tartHome string) string { return filepath.Join(tartHome, "vms", VMNam
 
 // PreparedFile marks a guest whose earner account is ready. It lives in the
 // VM's own folder, so removing the VM removes it.
-func PreparedFile(tartHome string) string { return filepath.Join(VMDir(tartHome), "cashpilot-prepared") }
+func PreparedFile(tartHome string) string {
+	return filepath.Join(VMDir(tartHome), "cashpilot-prepared")
+}
