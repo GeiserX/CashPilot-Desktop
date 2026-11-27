@@ -243,6 +243,12 @@
     },
     {
       "locale": "en",
+      "msg": "This '{isn''t}' obvious",
+      "args": {},
+      "want": "This {isn't} obvious"
+    },
+    {
+      "locale": "en",
       "msg": "Broken {name",
       "args": {
         "name": "x"
