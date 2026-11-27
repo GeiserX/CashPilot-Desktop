@@ -2133,5 +2133,6 @@
   "main.scope.settings": "ayarlar",
   "main.scope.worker": "worker",
   "logs.wrap": "Satırları kaydır",
-  "logs.empty": "(günlük yok)"
+  "logs.empty": "(günlük yok)",
+  "go.importers.refuse.m4bEncrypted": "{name} şifrelenmiş bir money4band 5.0 dosyası. `m4b config edit` komutunu çalıştırın, açtığı şifresi çözülmüş JSON'u kopyalayın ve buraya yapıştırın."
 }

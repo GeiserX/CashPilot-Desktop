@@ -2133,5 +2133,6 @@
   "main.scope.settings": "налаштування",
   "main.scope.worker": "воркер",
   "logs.wrap": "Переносити рядки",
-  "logs.empty": "(журналів немає)"
+  "logs.empty": "(журналів немає)",
+  "go.importers.refuse.m4bEncrypted": "{name} — зашифрований файл money4band 5.0. Виконайте `m4b config edit`, скопіюйте розшифрований JSON, який відкриється, і вставте його сюди."
 }
