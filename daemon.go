@@ -40,6 +40,9 @@ func runDaemon() error {
 		return fmt.Errorf("daemon core init failed: %w", err)
 	}
 
+	// The window compares this with its own version and restarts a helper that
+	// still runs an older build after an update (helper_follow.go).
+	writeHelperVersion(app.cfg.AppDir())
 	log.Println("cashpilot: daemon started; supervising native earners — send SIGINT/SIGTERM to stop")
 	<-ctx.Done()
 	log.Println("cashpilot: signal received, shutting down daemon")

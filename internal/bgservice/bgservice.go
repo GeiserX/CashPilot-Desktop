@@ -60,6 +60,14 @@ type Stopper interface {
 	Stop() error
 }
 
+// Restarter is an Agent that can restart the helper it registered, so the process
+// runs the file the registration starts now. An update replaces that file under a
+// running helper on macOS and Linux, and the old process keeps running until the
+// next sign-in. The window restarts it (helper_follow.go).
+type Restarter interface {
+	Restart() error
+}
+
 // CommandReporter is an Agent that can read back which executable its
 // registration starts. It returns "" when nothing is registered. The app uses it
 // to keep the helper on the copy the user opens (helper_follow.go).

@@ -97,6 +97,18 @@ func (a *windowsAgent) Stop() error {
 	return nil
 }
 
+// Restart ends the running helper and runs the task again. The installer already
+// does this after an update; this covers a helper that still runs an older copy.
+func (a *windowsAgent) Restart() error {
+	if err := a.Stop(); err != nil {
+		return err
+	}
+	if out, err := runSchtasks("/run", "/tn", a.taskName); err != nil {
+		return fmt.Errorf("schtasks /run: %v: %s", err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 // RegisteredCommand reads the executable the task starts, or "" when there is no
 // task. It asks Task Scheduler through PowerShell and reads UTF-8, because the
 // path can hold any character of the user's name and schtasks writes in the

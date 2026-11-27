@@ -114,6 +114,14 @@ func (a *linuxAgent) Status() (Status, error) {
 	return st, nil
 }
 
+// Restart stops the running helper and starts the unit's file again.
+func (a *linuxAgent) Restart() error {
+	if out, err := runSystemctlUser("restart", a.unitName); err != nil {
+		return fmt.Errorf("systemctl --user restart %s: %v: %s", a.unitName, err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 func runSystemctlUser(args ...string) (string, error) {
 	full := append([]string{"--user"}, args...)
 	out, err := exec.Command("systemctl", full...).CombinedOutput()

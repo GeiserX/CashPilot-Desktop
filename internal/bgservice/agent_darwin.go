@@ -103,6 +103,16 @@ func (a *darwinAgent) Status() (Status, error) {
 	return st, nil
 }
 
+// Restart stops the running helper and starts it again from the file the plist
+// names. launchd reads the plist path afresh, so the new process runs the new build.
+func (a *darwinAgent) Restart() error {
+	target := fmt.Sprintf("gui/%d/%s", os.Getuid(), a.label)
+	if out, err := runLaunchctl("kickstart", "-k", target); err != nil {
+		return fmt.Errorf("launchctl kickstart -k %s: %v: %s", target, err, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 func runLaunchctl(args ...string) (string, error) {
 	out, err := exec.Command("launchctl", args...).CombinedOutput()
 	return string(out), err

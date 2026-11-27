@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -46,8 +48,50 @@ func samePath(a, b string) bool {
 	return a == b
 }
 
-// keepHelperOnThisCopy runs followThisCopy for the window. A failure is logged
-// only: the helper keeps its old path, which is what happened before.
+// helperVersionFile is the file in the data folder where a running helper
+// records the version it started as (writeHelperVersion).
+const helperVersionFile = "helper-version"
+
+// writeHelperVersion records the version this helper started as, so the window
+// can tell when the helper still runs an older build. 1.x helpers never write it.
+func writeHelperVersion(dir string) {
+	if err := os.WriteFile(filepath.Join(dir, helperVersionFile), []byte(AppVersion()), 0o600); err != nil {
+		log.Printf("background helper: could not record its version: %v", err)
+	}
+}
+
+// restartOlderHelper restarts a running helper that started as another build
+// than version. An update replaces the file under a running helper on macOS and
+// Linux, and the old process keeps running until the next sign-in. Both then send
+// heartbeats as this computer: the server's Fleet row swaps between the two
+// versions, and once server commands are on, its address comes and goes, because
+// a 1.x helper sends none. The restart starts the registered file, which is the
+// new build. It reports whether it restarted. A build that does not know its own
+// version (a development build) changes nothing.
+func restartOlderHelper(agent bgservice.Agent, dir, version string) (bool, error) {
+	restarter, ok := agent.(bgservice.Restarter)
+	if !ok || version == "" {
+		return false, nil
+	}
+	st, err := agent.Status()
+	if err != nil || !st.Installed || !st.Running {
+		return false, err
+	}
+	recorded, err := os.ReadFile(filepath.Join(dir, helperVersionFile))
+	if err == nil && strings.TrimSpace(string(recorded)) == version {
+		return false, nil
+	}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	if err := restarter.Restart(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// keepHelperOnThisCopy runs followThisCopy and then restartOlderHelper for the
+// window. A failure is logged only: the helper keeps running as it did before.
 func (a *App) keepHelperOnThisCopy() {
 	agent, err := a.backgroundAgent()
 	if err != nil {
@@ -64,5 +108,13 @@ func (a *App) keepHelperOnThisCopy() {
 	}
 	if moved {
 		log.Printf("background helper: now starts %s, the copy that was opened", exe)
+	}
+	restarted, err := restartOlderHelper(agent, a.cfg.AppDir(), AppVersion())
+	if err != nil {
+		log.Printf("background helper: could not restart it on this build: %v", err)
+		return
+	}
+	if restarted {
+		log.Printf("background helper: restarted, because it ran another build than %s", AppVersion())
 	}
 }

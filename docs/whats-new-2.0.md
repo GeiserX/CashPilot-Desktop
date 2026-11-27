@@ -81,8 +81,10 @@ These steps apply to a computer that was joined to a CashPilot server in 1.x.
    computer keeps reporting with its old key until the move. After a return
    to 1.x and back, it does not report until the window applies the 1.x
    choice (step 4 of "Before you upgrade").
-2. If the background helper is on, sign out and sign in again, or restart the
-   computer. The helper then runs 2.0 too.
+2. If the background helper is on, the window restarts it when it opens, so
+   the helper runs 2.0 too. Until then, the old helper keeps running and sends
+   its own heartbeats, and the server's Fleet page swaps between 1.x and 2.0
+   for this computer.
 3. Turn on server commands if you want them. They start off after an upgrade
    from 1.x, because an upgrade is not a choice to allow them. Use the switch
    on the dashboard card. A computer that joins for the first time in 2.0
