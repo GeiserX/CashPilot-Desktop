@@ -3,6 +3,7 @@ package i18n
 import (
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -143,7 +144,7 @@ func TestStaleTranslationShowsEnglish(t *testing.T) {
 		}
 		return nil, os.ErrNotExist
 	}
-	loaded, err := load(read, filepath.Join, "l", "h")
+	loaded, err := load(read, path.Join, "l", "h") // the fake files use slashes on every OS
 	if err != nil {
 		t.Fatal(err)
 	}
