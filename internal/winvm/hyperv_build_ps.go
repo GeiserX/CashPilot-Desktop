@@ -718,8 +718,17 @@ const scriptRemoveGuardian = buildPrelude + `$g = @(Get-HgsGuardian -Name 'Untru
 if ($g.Count -gt 0) {
   if ($g.Count -ne 1 -or (Get-GuardianIdentity $g[0]) -cne $in.id) { throw 'The guardian changed since inventory.' }
   if (@(Get-VM | Where-Object { Test-GuardianUser $_ }).Count -gt 0) { throw 'A VM still needs the guardian.' }
-  # Remove-HgsGuardian writes to the output stream; the answer is the document alone.
-  $null = Remove-HgsGuardian -InputObject $g[0] -Confirm:$false
+  $thumbs = @(foreach ($c in @($g[0].SigningCertificate, $g[0].EncryptionCertificate)) {
+    [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String((ConvertTo-GuardianCertificateBase64 $c 'guardian'))).Thumbprint
+  })
+  # Remove-HgsGuardian warns that it leaves the guardian's two certificates.
+  # A non-interactive PowerShell prints the warning on standard output, where
+  # only the answer document may go. Remove deletes those certificates itself.
+  $null = Remove-HgsGuardian -InputObject $g[0] -Confirm:$false -WarningAction SilentlyContinue
+  foreach ($t in $thumbs) {
+    $p = 'Cert:\LocalMachine\Shielded VM Local Certificates\' + $t
+    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -DeleteKey }
+  }
 }
 Write-Doc ([ordered]@{ ok = $true })
 `
