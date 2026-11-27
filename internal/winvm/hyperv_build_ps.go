@@ -700,7 +700,7 @@ if ($rs.Count -gt 0) {
       $ifs = @((Get-NetFirewallInterfaceFilter -AssociatedNetFirewallRule $rs[0]).InterfaceAlias)
       $g = [guid]::Empty
       if ($ifs.Count -eq 1 -and [guid]::TryParse([string]$ifs[0], [ref]$g) -and
-          @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object { [guid]$_.InterfaceGuid -eq $g }).Count -eq 0) {
+          @(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object { $x = [guid]::Empty; [guid]::TryParse([string]$_.InterfaceGuid, [ref]$x) -and $x -eq $g }).Count -eq 0) {
         $identity = Get-FirewallIdentity $rs[0] $in.alias
       }
     }
@@ -718,17 +718,11 @@ const scriptRemoveGuardian = buildPrelude + `$g = @(Get-HgsGuardian -Name 'Untru
 if ($g.Count -gt 0) {
   if ($g.Count -ne 1 -or (Get-GuardianIdentity $g[0]) -cne $in.id) { throw 'The guardian changed since inventory.' }
   if (@(Get-VM | Where-Object { Test-GuardianUser $_ }).Count -gt 0) { throw 'A VM still needs the guardian.' }
-  $thumbs = @(foreach ($c in @($g[0].SigningCertificate, $g[0].EncryptionCertificate)) {
-    [Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String((ConvertTo-GuardianCertificateBase64 $c 'guardian'))).Thumbprint
-  })
   # Remove-HgsGuardian warns that it leaves the guardian's two certificates.
   # A non-interactive PowerShell prints the warning on standard output, where
-  # only the answer document may go. Remove deletes those certificates itself.
+  # only the answer document may go. The certificates stay: a copy or backup
+  # of the VM needs them to start, and Remove reports them as kept.
   $null = Remove-HgsGuardian -InputObject $g[0] -Confirm:$false -WarningAction SilentlyContinue
-  foreach ($t in $thumbs) {
-    $p = 'Cert:\LocalMachine\Shielded VM Local Certificates\' + $t
-    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -DeleteKey }
-  }
 }
 Write-Doc ([ordered]@{ ok = $true })
 `
@@ -1048,8 +1042,10 @@ func validNATID(id string) bool {
 
 // matchesRecordedNAT: Windows keys a NAT's InstanceID by its name and store
 // ("name;0"), so no NAT has an identity apart from its name. Ownership is the
-// exact name, ID and prefix Setup recorded; Setup records only a NAT it made,
-// because it refuses any NAT it finds before it creates one.
+// exact name, ID and prefix Setup recorded. The first Setup records only a NAT
+// it made, because it refuses any NAT it finds. A rerun adopts the NAT with
+// the recorded name and prefix, and so does Remove: Windows cannot tell it
+// from a NAT someone else made later with the same name and prefix.
 func matchesRecordedNAT(nat, recorded LiveNAT) bool {
 	return validNATID(recorded.ID) && nat.ID == recorded.ID &&
 		strings.EqualFold(nat.Name, recorded.Name) && nat.Prefix.Masked() == recorded.Prefix

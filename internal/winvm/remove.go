@@ -23,6 +23,10 @@ type RemoveDeps struct {
 	// Dir is Names.DataDir.
 	Dir  string
 	Logf func(format string, args ...any)
+	// Finish, if set, sees the result before Remove releases the host lock,
+	// and only while desired.json remains: a Remove that did not finish, or
+	// kept the plan for a retry. The data folder is still there to log into.
+	Finish func(RemoveResult, error)
 }
 
 // RemoveResult is what Remove did: what it removed or put back, what it kept
@@ -32,6 +36,14 @@ type RemoveResult struct {
 	Kept    []string `json:"kept"`
 	Left    []string `json:"left"`
 }
+
+// guardianCertificatesKept: Remove-HgsGuardian leaves the guardian's two
+// certificates, with their private keys, and Remove leaves them too. A copy
+// or backup of the VM needs them to start its vTPM, and nothing on the host
+// tells Remove that no such copy exists.
+const guardianCertificatesKept = `the vTPM guardian's two certificates, "Shielded VM Signing Certificate (UntrustedGuardian)" and ` +
+	`"Shielded VM Encryption Certificate (UntrustedGuardian)", in Cert:\LocalMachine\Shielded VM Local Certificates. ` +
+	`A copy or backup of the VM needs them to start. If you keep no copy, delete both in certlm.msc`
 
 const proofDir = "proof"
 const guardDir = "guard"
@@ -45,6 +57,14 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 		return res, err
 	}
 	defer unlock()
+	defer func() {
+		if d.Finish == nil {
+			return
+		}
+		if _, err := os.Lstat(filepath.Join(d.Dir, PlanFile)); err == nil {
+			d.Finish(res, retErr)
+		}
+	}()
 	owner := ""
 	defer func() {
 		res.Left = append(res.Left, unknownData(d.Dir)...)
@@ -252,6 +272,7 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 			fail("guardian", err)
 		} else {
 			res.Removed = append(res.Removed, "the vTPM guardian")
+			res.Kept = append(res.Kept, guardianCertificatesKept)
 		}
 	}
 

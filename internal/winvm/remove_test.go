@@ -7,10 +7,12 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/e2e/harness/hvfake"
 	"github.com/GeiserX/CashPilot-Desktop/internal/winvm"
@@ -48,8 +50,8 @@ func TestRemoveAfterBuildLeavesTheHostAsItWas(t *testing.T) {
 	dir := build(t, f)
 	res := remove(t, f, dir)
 	diffObjects(t, before, f.Objects())
-	if len(res.Left) != 0 || len(res.Kept) != 0 {
-		t.Fatalf("left %v, kept %v", res.Left, res.Kept)
+	if len(res.Left) != 0 || len(res.Kept) != 1 || !strings.Contains(res.Kept[0], "Shielded VM Local Certificates") {
+		t.Fatalf("left %v, kept %v (want only the guardian certificates)", res.Left, res.Kept)
 	}
 	ents, _ := os.ReadDir(dir)
 	if len(ents) != 0 {
@@ -197,6 +199,66 @@ func TestRemoveResumesAfterAFailure(t *testing.T) {
 	}
 	remove(t, f, dir)
 	diffObjects(t, before, f.Objects())
+}
+
+// TestRemoveFinishSeesOnlyAnUnfinishedRemove: the bootstrap starts Remove
+// with no standard error, so Finish is where its result is logged. Finish
+// runs while desired.json remains, with the full result and the error, and
+// before the host lock is released, so the next Remove cannot start between
+// them. A finished Remove calls no Finish: its folder is gone.
+func TestRemoveFinishSeesOnlyAnUnfinishedRemove(t *testing.T) {
+	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
+	dir := build(t, f)
+	var calls int
+	var got winvm.RemoveResult
+	var gotErr, lockErr error
+	d := winvm.RemoveDeps{HV: f, Dir: dir, Finish: func(res winvm.RemoveResult, err error) {
+		calls++
+		got, gotErr = res, err
+		if runtime.GOOS == "windows" {
+			// Another Remove must wait for the host lock while Finish runs.
+			ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				_, err := winvm.Remove(ctx, winvm.RemoveDeps{HV: f, Dir: t.TempDir()}, winvm.ProductNames())
+				done <- err
+			}()
+			lockErr = <-done
+		}
+	}}
+	f.FailNext("RemoveSwitch", errors.New("injected"))
+	_, err := winvm.Remove(context.Background(), d, winvm.ProductNames())
+	if err == nil || calls != 1 || gotErr == nil || !strings.Contains(gotErr.Error(), "injected") {
+		t.Fatalf("Remove %v; Finish ran %d times with %v", err, calls, gotErr)
+	}
+	if !slices.ContainsFunc(got.Removed, func(s string) bool { return strings.HasPrefix(s, "the VM ") }) {
+		t.Fatalf("Finish saw removed %v, want the VM", got.Removed)
+	}
+	if runtime.GOOS == "windows" && !errors.Is(lockErr, context.DeadlineExceeded) {
+		t.Fatalf("a second Remove did not wait for the lock while Finish ran: %v", lockErr)
+	}
+	if _, err := winvm.Remove(context.Background(), d, winvm.ProductNames()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("a finished Remove called Finish (%d calls)", calls)
+	}
+}
+
+// TestRemoveReportsTheGuardianCertificatesItKeeps: Windows leaves the
+// guardian's two certificates when the guardian goes, and so does Remove,
+// because a copy or backup of the VM needs them. The result says where they
+// are, so the owner can delete them.
+func TestRemoveReportsTheGuardianCertificatesItKeeps(t *testing.T) {
+	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
+	res := remove(t, f, build(t, f))
+	if !slices.Contains(res.Removed, "the vTPM guardian") ||
+		!slices.ContainsFunc(res.Kept, func(s string) bool { return strings.Contains(s, `Cert:\LocalMachine\Shielded VM Local Certificates`) }) {
+		t.Fatalf("removed %v, kept %v", res.Removed, res.Kept)
+	}
 }
 
 // TestRemoveWithoutAPlanTouchesNothing: with no desired.json this install

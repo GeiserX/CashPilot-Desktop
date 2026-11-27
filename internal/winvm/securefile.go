@@ -133,11 +133,17 @@ func readCapped(path string, max int64, trusted bool) ([]byte, error) {
 }
 
 // OpenAppend creates a recorded log or appends to a previously recorded one.
-func OpenAppend(path string) (*os.File, error) {
+func OpenAppend(path string) (*os.File, error) { return openAppend(path, true) }
+
+// AppendLog is OpenAppend in a folder that already has its file journal. It
+// never starts a journal, so it cannot claim a folder Setup did not make.
+func AppendLog(path string) (*os.File, error) { return openAppend(path, false) }
+
+func openAppend(path string, newJournal bool) (*os.File, error) {
 	artifactMu.Lock()
 	defer artifactMu.Unlock()
 	dir, rel := filepath.Dir(path), filepath.Base(path)
-	j, err := openArtifactLog(dir, true)
+	j, err := openArtifactLog(dir, newJournal)
 	if err != nil {
 		return nil, err
 	}

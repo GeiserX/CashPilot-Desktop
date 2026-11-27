@@ -4,7 +4,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -369,22 +368,18 @@ func TestRemoveFirewallScriptAcceptsTheDeletedVNIC(t *testing.T) {
 // TestRemoveGuardianScriptAnswersOnlyItsDocument: Remove-HgsGuardian warns
 // that it leaves the guardian's two certificates. A non-interactive
 // PowerShell prints the warning on standard output, so on live run 5 the
-// answer was not base64 and Remove never finished; every Setup and Remove
-// also left two certificates with private keys in the machine store. Remove
-// now answers only its document and deletes exactly those two certificates.
+// answer was not base64 and Remove never finished. Remove now answers only
+// its document.
 func TestRemoveGuardianScriptAnswersOnlyItsDocument(t *testing.T) {
 	const mock = `
 function Get-VM {}
 $global:removed = $false
-$global:deleted = @()
 function Remove-HgsGuardian {
   [CmdletBinding()] param($InputObject, [switch]$Confirm)
   $global:removed = $true
   Write-Warning 'The guardian has been removed successfully. Manually remove the following certificates associated with the guardian.'
   'UntrustedGuardian'
 }
-function Test-Path { param([string]$LiteralPath) $LiteralPath.StartsWith('Cert:\LocalMachine\Shielded VM Local Certificates\') }
-function Remove-Item { param([string]$LiteralPath, [switch]$DeleteKey) if (-not $DeleteKey) { throw 'kept the private key' }; $global:deleted += $LiteralPath }
 `
 	signing, encryption, digest := guardianCertificates(t)
 	check := scriptRemoveGuardian + "\nif (-not $global:removed) { throw 'the guardian was not removed' }\n"
@@ -394,9 +389,10 @@ function Remove-Item { param([string]$LiteralPath, [switch]$DeleteKey) if (-not 
 	}
 }
 
-// TestRemoveGuardianScriptDeletesItsCertificates: the two thumbprints Remove
-// deletes are the guardian's own.
-func TestRemoveGuardianScriptDeletesItsCertificates(t *testing.T) {
+// TestRemoveGuardianScriptKeepsItsCertificates: the guardian's certificates
+// carry the private keys a copy or backup of the VM needs to start its vTPM.
+// Remove deletes the guardian and leaves them, and the Go side reports them.
+func TestRemoveGuardianScriptKeepsItsCertificates(t *testing.T) {
 	const mock = `
 function Get-VM {}
 $global:deleted = @()
@@ -405,14 +401,9 @@ function Test-Path { param([string]$LiteralPath) $true }
 function Remove-Item { param([string]$LiteralPath, [switch]$DeleteKey) $global:deleted += $LiteralPath }
 `
 	signing, encryption, digest := guardianCertificates(t)
-	check := scriptRemoveGuardian + "\nthrow ('deleted=' + ($global:deleted -join ';'))\n"
-	_, out := runGuardianScript(t, mock, check, map[string]any{"id": digest}, signing, encryption, "bytes")
-	for _, c := range []string{signing, encryption} {
-		der, _ := base64.StdEncoding.DecodeString(c)
-		sum := sha1.Sum(der)
-		want := `Cert:\LocalMachine\Shielded VM Local Certificates\` + strings.ToUpper(hex.EncodeToString(sum[:]))
-		if !strings.Contains(string(out), want) {
-			t.Fatalf("Remove did not delete %s: %s", want, out)
-		}
+	check := scriptRemoveGuardian + "\nif ($global:deleted.Count -gt 0) { throw ('deleted=' + ($global:deleted -join ';')) }\n"
+	code, out := runGuardianScript(t, mock, check, map[string]any{"id": digest}, signing, encryption, "bytes")
+	if _, err := decodeOutput(out); code != 0 || err != nil {
+		t.Fatalf("Remove deleted the guardian's certificates: exit %d, decode %v: %s", code, err, out)
 	}
 }

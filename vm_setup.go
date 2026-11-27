@@ -246,32 +246,39 @@ func runVMRemove(ctx context.Context, dir string, mk func(winvm.Names) winvm.Rem
 		d.Dir = n.DataDir
 	}
 	var report bytes.Buffer
-	out := io.MultiWriter(&report, bestEffort{errOut})
-	d.Logf = log.New(out, "", log.LstdFlags).Printf
-	res, err := winvm.Remove(ctx, d, n)
-	for _, x := range res.Removed {
-		fmt.Fprintln(out, "removed:", x)
-	}
-	for _, x := range res.Kept {
-		fmt.Fprintln(out, "kept:", x)
-	}
-	for _, x := range res.Left {
-		fmt.Fprintln(out, "left:", x)
-	}
-	if err != nil {
-		fmt.Fprintln(out, "vm-remove:", err)
-	}
-	// desired.json stays until Remove finishes. Only then is the folder gone
-	// or about to go, so only an unfinished Remove writes its log.
-	if _, serr := os.Stat(filepath.Join(d.Dir, winvm.PlanFile)); serr == nil {
-		if f, ferr := winvm.OpenAppend(filepath.Join(d.Dir, removeLogFile)); ferr == nil {
-			fmt.Fprintf(f, "%s remove:\n", time.Now().Format("2006/01/02 15:04:05"))
-			_, _ = f.Write(report.Bytes())
-			_ = f.Close()
+	d.Logf = log.New(io.MultiWriter(&report, bestEffort{errOut}), "", log.LstdFlags).Printf
+	// Remove calls Finish under its lock and only while desired.json remains,
+	// so only a Remove that did not finish writes its log.
+	d.Finish = func(res winvm.RemoveResult, err error) {
+		f, ferr := winvm.AppendLog(filepath.Join(d.Dir, removeLogFile))
+		if ferr != nil {
+			return
 		}
+		fmt.Fprintf(f, "%s remove:\n", time.Now().Format("2006/01/02 15:04:05"))
+		_, _ = f.Write(report.Bytes())
+		writeRemoveResult(f, res, err)
+		_ = f.Close()
 	}
+	res, err := winvm.Remove(ctx, d, n)
+	writeRemoveResult(bestEffort{errOut}, res, err)
 	if err != nil {
 		return vmExitFailed
 	}
 	return vmExitOK
+}
+
+// writeRemoveResult prints what Remove removed, kept and left, and its error.
+func writeRemoveResult(w io.Writer, res winvm.RemoveResult, err error) {
+	for _, x := range res.Removed {
+		fmt.Fprintln(w, "removed:", x)
+	}
+	for _, x := range res.Kept {
+		fmt.Fprintln(w, "kept:", x)
+	}
+	for _, x := range res.Left {
+		fmt.Fprintln(w, "left:", x)
+	}
+	if err != nil {
+		fmt.Fprintln(w, "vm-remove:", err)
+	}
 }
