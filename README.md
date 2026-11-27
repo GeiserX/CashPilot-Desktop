@@ -12,7 +12,7 @@
 
 <p align="center"><strong>Every earner, every box, one view.</strong><br><a href="https://cashpilot.club">cashpilot.club</a> · <a href="https://x.com/CashPilotClub">@CashPilotClub on X</a></p>
 
-CashPilot Desktop is CashPilot as a desktop app for macOS (Apple Silicon), Windows and Linux. It deploys and tracks the software that earns from your spare bandwidth, compute and disk (bandwidth sharing, DePIN nodes, crypto mining, GPU compute and storage), and on a new install it fences the Docker earners off your LAN and this computer. It runs as the full CashPilot dashboard (Run everything here) or as one more box in a CashPilot fleet you already have (Join my CashPilot). The earners themselves run in Docker or Podman.
+CashPilot Desktop is CashPilot as a desktop app for macOS (Apple Silicon), Windows and Linux. It deploys and tracks the software that earns from your spare bandwidth, compute and disk (bandwidth sharing, DePIN nodes, crypto mining, GPU compute and storage), and on a new install it fences the Docker earners off your LAN and this computer. It runs as the full CashPilot dashboard (Run everything here) or as one more box in a CashPilot fleet you already have (Join my CashPilot). Earners with a container image run in Docker or Podman, and the app tracks the browser-extension and desktop-only ones.
 
 <p align="center">
   <img src="docs/images/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
@@ -22,7 +22,7 @@ CashPilot Desktop is at 2.0 and does not update itself: get new versions from th
 
 ## Features
 
-- **One-click deploys** -- Pick an earner from the catalog and the app sets up its container; the setup wizard helps you install Docker if it is missing
+- **One-click deploys** -- Pick an earner with a container image from the catalog and the app sets up its container; the wizard helps you install Docker
 - **LAN isolation** -- New Docker installs fence earners off your LAN, tailnets, cloud metadata, this computer and your public IPs, or refuse the deploy ([docs](docs/configuration.md#lan-isolation))
 - **One fleet** -- Join your CashPilot server as one more box, or be the hub that Docker workers and the [Android companion](https://github.com/GeiserX/CashPilot-android/releases) report to
 - **Server commands** -- Your CashPilot server (3.0.0 or newer) can deploy, stop and remove services here, behind a switch ([docs](docs/configuration.md#the-server-starts-and-stops-services-here))

@@ -18,7 +18,7 @@ source=("cashpilot-desktop-${pkgver}.tar.gz::https://github.com/GeiserX/CashPilo
         'cashpilot-desktop.desktop')
 sha256sums=('770a5b6ad26b67defb9b906c5ff3f0f92e03e75c94c1b92e3e70d0360fe23456'
             'c2327d215ffa8d33ebe80ec9a6d58ae5b6cd62c329d980f2739da1f19fe8586c'
-            '4e591ce3a6888464b0cefd50fb74e8f2c680f182e7b1ec25a038f2ad041412f1')
+            '8d7796596e15e1431b2513ae8da5e919dfa057131495b7a1e074ff122b0934ed')
 
 package() {
   install -Dm755 "CashPilot Desktop" "${pkgdir}/usr/bin/cashpilot-desktop"
