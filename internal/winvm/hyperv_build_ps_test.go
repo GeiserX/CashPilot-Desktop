@@ -278,8 +278,8 @@ func TestParsePcapng(t *testing.T) {
 // The key script now starts the VM itself and presses for 20 seconds.
 func TestBootKeysStartsTheVMAndPressesAtOnce(t *testing.T) {
 	const mock = `
-$global:log = @()
 param($vmId, $owner)
+$global:log = @()
 function Get-VM { [pscustomobject]@{ Id = $vmId; Notes = ('cashpilot-owner=' + $owner); State = $(if ($global:started) { 'Running' } else { 'Off' }) } }
 function Get-CimInstance { [CmdletBinding()] param($Namespace, $ClassName, $Filter) [pscustomobject]@{ Name = 'vm' } }
 function Start-VM { param($VM) $global:started = $true; $global:log += 'start' }
