@@ -105,3 +105,9 @@ rating:
     kind: our_experience
     source: https://github.com/GeiserX/CashPilot/blob/main/services/bandwidth/spide.yml
     checked_on: "2026-11-04"
+
+# --- Desktop-only (catalog-overlay/append/bandwidth/spide.yml) ----------
+# Never in the Secure VM: its macOS app carries no developer signature, so the
+# macOS lab's trust check refused it (docs/design/secure-macos-vm.md, M10).
+guest:
+  refused: unsigned

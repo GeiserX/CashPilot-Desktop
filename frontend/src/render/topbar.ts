@@ -16,6 +16,7 @@ function tabs(): Array<[string, string]> {
     ["fleet", t("topbar.fleet")],
     ["activity", t("topbar.activity")],
     ["catalog", t("topbar.catalog")],
+    ["security", t("topbar.security")],
     ["settings", t("topbar.settings")],
   ];
 }

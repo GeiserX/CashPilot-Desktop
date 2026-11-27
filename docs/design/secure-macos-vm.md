@@ -1,6 +1,6 @@
 # ADR: one Secure VM (macOS guest) for desktop-only earners
 
-- **Status:** proposed. The lab ran on 2026-11-27. Every question has a lab answer, and the fence held 0 arrivals before and after a host reboot. One decision is not ours to make: Apple's licence excludes "relay service" use of a macOS guest (M8, decision 1). Until Sergio rules on it, nothing here ships. §6 lists the other open items.
+- **Status:** accepted. The lab ran on 2026-11-27, and `internal/macvm` builds it. Decision 1 is made: the Secure VM is for personal, non-commercial use, and the app says so before Install. The guest is made by writing the agent into its disk before its first boot, not by typing through Setup Assistant (M6). §6 lists what stays open.
 - **Scope:** macOS hosts on Apple silicon only. Exactly one macOS guest. Only for services that have no Docker or native path.
 - **Overrides:** `docs/research/vm-isolation.md:120` ("Do not build a VM orchestrator"), for this one case, the same way `docs/design/secure-windows-vm.md` does on Windows. The reason is security, not earnings. The rule that CashPilot never runs inside a guest stays. `docs/design/managed-runtime.md` (a Linux VM for containers) is not affected.
 
@@ -9,7 +9,7 @@ Words used here:
 - **Host:** the user's Mac. **Guest:** the macOS VM inside it.
 - **Tart:** the command-line VM manager that drives Apple's Virtualization.framework (VZ). **Softnet:** Tart's helper that filters the guest's packets in user space before they reach the host's network.
 - **vmnet:** the macOS service that gives a VM a NAT network. It shows on the host as a `bridgeNNN` interface. The guest's own port on that bridge is a `vmenetN` member.
-- **pf:** the macOS packet filter. Our rules live in the anchor `com.apple/cashpilot`.
+- **pf:** the macOS packet filter. Our rules live in the anchor `com.apple/cashpilot-vm`.
 - **L1, L2:** the fence layers. L1 is softnet. L2 is the pf anchor.
 - **The cut:** `ifconfig <bridge> deletem <vmenet>`. It takes the guest's port off the bridge, so no frame moves.
 - **The guest agent:** `tart-guest-agent`, a root daemon in the guest. `tart exec` reaches it over virtio-vsock, not over the network.
@@ -34,10 +34,10 @@ The fence is proven red, then green, at install, before any earner exists.
 
 | # | Question | Proposal |
 |---|---|---|
-| 1 | The macOS licence (§4, M8) | **Open, your call.** Apple's licence allows two macOS guests per Mac for development, testing, macOS Server or "personal, non-commercial use", and excludes "relay service" use. A bandwidth earner is a relay service. We see no way to read it that allows this. |
+| 1 | The macOS licence (§4, M8) | **Decided:** personal, non-commercial use only. Apple's licence allows two macOS guests per Mac for development, testing, macOS Server or "personal, non-commercial use", and excludes "relay service" use. The Secure VM is opt-in, one per Mac, and the user installs it for their own Mac. |
 | 2 | Tart and softnet licences | Download pinned releases on demand, like the native earners. Do not bundle them. Both allow our use (M8). |
 | 3 | SUID softnet | Accept it for phase 1. It is the only setuid binary we add, root-owned, in a root-owned folder. Phase 2 can remove it (M8). |
-| 4 | Setup Assistant | Automate it over VZ's VNC, with the user's window as the fallback (M6). |
+| 4 | Setup Assistant | **Decided: skip it.** Before the first boot, the admin step writes the guest agent, its LaunchDaemon and `.AppleSetupDone` into the guest's Data volume. The guest boots straight to the login window with no account. CashPilot then makes the standard user `earner` through the agent (M6). |
 | 5 | FileVault in the guest | Off. Autologin needs it off. The host's FileVault covers the guest's disk image (M7). |
 | 6 | Earner set | Wipter, Grass, Teneo, Theta and UpRock. Unsigned apps are refused (M10). |
 | 7 | macOS updates in the guest | Turn off automatic OS downloads in the image and keep the background security data updates. CashPilot moves the guest to a new macOS version when it re-proves the fence (M13). |
@@ -234,8 +234,10 @@ Packer typed capital letters and symbols. Our own VNC client (`vncdotool`) could
 **Answer:** build from Apple's IPSW. The Cirrus image is made for CI, and every point above breaks our design. **Design:**
 
 - Pin the IPSW URL and its hash.
-- The base provisioning (`provision.sh base`) installs the agent and keeps the guest awake. It turns Spotlight indexing and Screen Sharing off, checks Gatekeeper, sets public DNS and turns Remote Login off from the next boot on.
-- Setup Assistant is automated. When the build fails, the user finishes it in the window.
+- `tart create --from-ipsw` installs macOS. Before the first boot, the admin step attaches the disk image (`hdiutil attach -nomount`), finds the APFS volume with the Data role and writes three files into it: the agent, its LaunchDaemon (`--run-rpc` only) and `private/var/db/.AppleSetupDone`. Every write refuses a path through a link.
+- The guest boots with no account: no admin, no password, no SSH. Root reaches it only through the agent over vsock.
+- After the green proof, `internal/macvm/scripts/provision.sh` makes the standard user `earner` with a random password that is never kept, turns on its autologin, keeps the guest awake, turns Spotlight, Screen Sharing and Remote Login off, checks Gatekeeper, sets public DNS, turns automatic macOS upgrades off and sets UTC.
+- This replaces Packer and the Setup Assistant typing, which succeeded in 1 of 3 builds.
 
 ### M7. Accounts, FileVault and Keychain
 
@@ -254,7 +256,7 @@ Every clone of a base shares the base's admin password until it is rotated.
 
 **Answer:** yes. **Design:**
 
-- The first `tart exec` after a clone rotates the admin password. The passwords live in the host's Keychain, never in a file.
+- There is no admin account in the guest, so there is no admin password to rotate or keep. The earner's password is random and used once, for its kcpassword.
 - Anything that needs the earner's Keychain runs through `launchctl asuser`.
 
 ### M8. Licences and limits
@@ -385,7 +387,7 @@ The guest checks for macOS updates on its own, with automatic download on.
 2. **pf kills the guest's states** when it loads (M1).
 3. **Public DNS in the image.** The gateway is blocked, and its DNS would answer private names (M1).
 4. **The boot daemon** starts Tart with `launchctl asuser <owner uid>` and sets `AbandonProcessGroup` (M5).
-5. **The admin password** is rotated after each clone, and the passwords live in the host's Keychain (M7).
+5. **No admin account in the guest.** The agent and `.AppleSetupDone` are written into the disk before the first boot (M6, M7).
 6. **Rosetta** goes in the image. Two earners are x86_64 only, and Apple warns that such apps will stop opening (M10).
 7. **Autostart:** a LaunchAgent in `/Library/LaunchAgents` for apps with no login item of their own (M10).
 8. **App updates** come from the catalog pin. The apps are root-owned and cannot update themselves (M10).
@@ -403,15 +405,11 @@ The guest checks for macOS updates on its own, with automatic download on.
 
 | Item | Why open | What closes it |
 |---|---|---|
-| M8, Apple's licence | "Relay service" is excluded | Sergio's decision 1 |
-| M6, reliable Setup Assistant automation | 1 of 3 builds succeeded | A build that waits on screen states, not on fixed delays, and 5 green builds in a row |
 | M6, VNC modifier keys from our own client | VZ's VNC server ignored Shift and Command from `vncdotool` | Test another client library, or keep the pasteboard path |
 | M9, the traffic tile | The bridge byte counters are the plan. We did not read them under the cap | One run that compares the bridge counters with the guest's own counters |
 | M11, UpRock's red state | We saw only the signed-in log | A fresh install, read before sign-in |
 | M12, Teneo | "IP not eligible" on our line | A test from another residential IP |
 | M13, guest updates | Automatic download is on in the test bed | Decision 7, then the image setting |
-| M7, deleting a guest user | The guest agent cannot delete a user record. A locked, hidden test user is left in the test bed | Find which right the deletion needs (likely a TCC grant or an admin with a Secure Token), or never create extra users |
-| M6, the base provisioning after the review fixes | DNS is now set on every network service after Remote Login is off, and nothing re-ran it on a fresh image | The next base build: check DNS and Remote Login after a reboot |
 | M10, the new autostart path after a login | Loaded by hand, not yet through a real login | The next guest reboot |
 | Phase 2, Code-Hex/vz | Not built | A Go prototype that boots the guest with our own filter and no setuid helper |
 | M10, Theta and UpRock on Rosetta | Both are x86_64 only, and macOS warns that Intel apps will stop opening | An arm64 build from each vendor, or both leave the set |

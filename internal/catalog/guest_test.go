@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -24,9 +25,24 @@ func guestProblems(services []Service) []string {
 		if svc.Requirements.ContainerProhibited {
 			problems = append(problems, fmt.Sprintf("%s: container_prohibited forbids VMs, so it must not have a guest block", svc.Slug))
 		}
+		if r := svc.Guest.Refused; r != "" {
+			if r != "terms" && r != "unsigned" {
+				problems = append(problems, fmt.Sprintf("%s: guest.refused %q is not terms or unsigned", svc.Slug, r))
+			}
+			if svc.Guest.Windows != nil || svc.Guest.MacOS != nil {
+				problems = append(problems, fmt.Sprintf("%s: a refused guest block must name no OS", svc.Slug))
+			}
+			continue
+		}
+		if svc.Guest.Windows == nil && svc.Guest.MacOS == nil {
+			problems = append(problems, fmt.Sprintf("%s: guest block has no windows or macos entry", svc.Slug))
+			continue
+		}
+		if m := svc.Guest.MacOS; m != nil {
+			problems = append(problems, macGuestProblems(svc.Slug, m)...)
+		}
 		w := svc.Guest.Windows
 		if w == nil {
-			problems = append(problems, fmt.Sprintf("%s: guest block has no windows entry", svc.Slug))
 			continue
 		}
 		if strings.TrimSpace(w.Process) == "" {
@@ -43,6 +59,48 @@ func guestProblems(services []Service) []string {
 		}
 	}
 	return problems
+}
+
+var teamID = regexp.MustCompile(`^[A-Z0-9]{10}$`)
+var sha256Hex = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+func macGuestProblems(slug string, m *GuestMacOS) []string {
+	var p []string
+	if !strings.HasSuffix(m.App, ".app") || strings.Contains(m.App, "/") {
+		p = append(p, fmt.Sprintf("%s: guest.macos.app %q is not a bundle name", slug, m.App))
+	}
+	if strings.TrimSpace(m.Process) == "" {
+		p = append(p, fmt.Sprintf("%s: guest.macos.process is empty", slug))
+	}
+	if !teamID.MatchString(m.TeamID) {
+		p = append(p, fmt.Sprintf("%s: guest.macos.team_id %q is not a Team ID", slug, m.TeamID))
+	}
+	if u, err := url.Parse(m.Download); err != nil || u.Scheme != "https" || u.Host == "" {
+		p = append(p, fmt.Sprintf("%s: guest.macos.download %q is not an HTTPS URL", slug, m.Download))
+	}
+	if m.SHA256 != "" && !sha256Hex.MatchString(m.SHA256) {
+		p = append(p, fmt.Sprintf("%s: guest.macos.sha256 is not 64 hex digits", slug))
+	}
+	if m.Signin != "console" && m.Signin != "none" {
+		p = append(p, fmt.Sprintf("%s: guest.macos.signin %q is not console or none", slug, m.Signin))
+	}
+	mk := m.SignedIn
+	switch {
+	case mk.Process && (mk.File != "" || mk.Key != "" || mk.LogWords != ""):
+		p = append(p, fmt.Sprintf("%s: guest.macos.signed_in mixes process with a file", slug))
+	case !mk.Process && mk.File == "":
+		p = append(p, fmt.Sprintf("%s: guest.macos.signed_in names no marker", slug))
+	case mk.Key != "" && mk.LogWords != "":
+		p = append(p, fmt.Sprintf("%s: guest.macos.signed_in has both a key and log words", slug))
+	case strings.Contains(mk.File, "..") || strings.HasPrefix(mk.File, "/"):
+		p = append(p, fmt.Sprintf("%s: guest.macos.signed_in.file must stay under Application Support", slug))
+	}
+	for _, v := range []string{m.App, m.Process, mk.File, mk.Key, mk.LogWords} {
+		if strings.ContainsAny(v, "'\"`$\n") {
+			p = append(p, fmt.Sprintf("%s: guest.macos value %q holds a quote, backslash or $", slug, v))
+		}
+	}
+	return p
 }
 
 func TestGuestBlocksFollowTheSecureVMRules(t *testing.T) {
@@ -125,5 +183,41 @@ func TestStrictDecodeRefusesAMisspelledGuestKey(t *testing.T) {
 	bad := strings.Replace(good, "download_page", "downlaod_page", 1)
 	if _, err := decode(bad); err == nil {
 		t.Fatal("a misspelled key inside guest.windows decoded without an error")
+	}
+}
+
+// The macOS guest blocks: every earner the macOS lab proved, and the refusals.
+func TestMacOSGuestSetMatchesTheLab(t *testing.T) {
+	want := map[string]bool{"wipter": true, "grass": true, "teneo": true, "theta-edge": true, "uprock": true}
+	refused := map[string]string{"honeygain": "terms", "spide": "unsigned", "noderr": "unsigned"}
+	for _, svc := range realCatalog(t).List() {
+		if svc.Guest == nil {
+			continue
+		}
+		if svc.Guest.MacOS != nil && !want[svc.Slug] {
+			t.Errorf("%s has a guest.macos block the lab never proved", svc.Slug)
+		}
+		if svc.Guest.MacOS != nil {
+			delete(want, svc.Slug)
+		}
+		if r, ok := refused[svc.Slug]; ok && svc.Guest.Refused == r {
+			delete(refused, svc.Slug)
+		}
+	}
+	for slug := range want {
+		t.Errorf("%s has no guest.macos block", slug)
+	}
+	for slug, r := range refused {
+		t.Errorf("%s is not refused (%s)", slug, r)
+	}
+}
+
+func TestMacGuestRulesCatchBadFields(t *testing.T) {
+	m := &GuestMacOS{App: "x", Process: "", TeamID: "abc", Download: "http://x", Signin: "auto", SHA256: "zz", SignedIn: GuestMarker{File: "../x"}}
+	got := strings.Join(macGuestProblems("x", m), "\n")
+	for _, want := range []string{"not a bundle name", "process is empty", "not a Team ID", "not an HTTPS URL", "not 64 hex", "not console or none", "under Application Support"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q in:\n%s", want, got)
+		}
 	}
 }

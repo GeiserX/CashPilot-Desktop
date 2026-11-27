@@ -16,3 +16,14 @@ guest:
     publisher: "CN=ByteCrafted LLC, O=ByteCrafted LLC, L=Wilmington, S=Delaware, C=US, SERIALNUMBER=2866135, OID.2.5.4.15=Private Organization, OID.1.3.6.1.4.1.311.60.2.1.2=Delaware, OID.1.3.6.1.4.1.311.60.2.1.3=US"
     download_page: "https://wipter.com/en"
     signin: console
+  # macOS: proven in the macOS lab (docs/design/secure-macos-vm.md, M10 and
+  # M11). The vendor serves only a "latest" file, so no SHA-256 is pinned; the
+  # Team ID and Gatekeeper checks still apply.
+  macos:
+    app: "Wipter.app"
+    process: "Wipter"
+    team_id: "55Y88XCDLZ"
+    download: "https://provider-assets.wipter.com/latest/mac/arm64/wipter-app-arm64.dmg"
+    signin: console
+    signed_in:
+      file: "wipter-app/secure-credentials.json"

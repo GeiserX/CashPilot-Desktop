@@ -1,0 +1,18 @@
+# --- Desktop-only (catalog-overlay/append/depin/theta-edge.yml) -------------
+# Secure VM (macOS): proven in the macOS lab (docs/design/secure-macos-vm.md).
+# Intel only, so it runs under Rosetta. It has no account: the node wallet lives
+# in the guest, so "signed in" is the node running.
+# vm_stance: none found in the setup docs. https://docs.thetatoken.org, read 2026-11-27.
+guest:
+  macos:
+    app: "Theta Edge Node.app"
+    process: "Theta Edge Node"
+    team_id: "5Q394YSNFN"
+    download: "https://s3.us-east-2.amazonaws.com/assets.thetatoken.org/apps/pgnbec/Theta%20Edge%20Node-5.2.15-mac.zip"
+    sha256: "beabbce82b5aea29b49840007f701feaab3e4e69bf7f75c8694e47470c5f3f6e"
+    version: "5.2.15"
+    rosetta: true
+    signin: none
+    signed_in:
+      process: true
+    note: "Theta runs other people's compute jobs, and downloads about 2.4 GB of tools into the Secure VM to do it. It needs Rosetta."
