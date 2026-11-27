@@ -1,0 +1,12 @@
+# GitGuardian configuration.
+# https://docs.gitguardian.com/ggshield-docs/reference/secret/scan
+#
+# i18n/source-hashes/<code>.json maps each message key to the first 12 hex
+# digits of the SHA-256 of its English text. The values look random, so a key
+# named like a secret (restore.passphrase) reads as a keystore password. The
+# files are generated from public English text and hold nothing else.
+version: 2
+
+secret:
+  ignored-paths:
+    - "i18n/source-hashes/**"
