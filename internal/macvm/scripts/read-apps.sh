@@ -21,7 +21,10 @@ while IFS='|' read -r slug app proc kind file arg; do
       process) sig=$run ;;
       file) if [ -s "$f" ]; then sig=y; else sig=n; fi ;;
       key) if [ -s "$f" ] && /usr/bin/grep -qF "\"$arg\"" "$f"; then sig=y; else sig=n; fi ;;
-      log) if [ -s "$f" ] && /usr/bin/grep -qiF "$arg" "$f"; then sig=y; else sig=n; fi ;;
+      # The last line with the words decides, and "not <words>" is a no:
+      # UpRock logs "not logged in" until it is.
+      log) last=""; [ -s "$f" ] && last=$(/usr/bin/grep -iF "$arg" "$f" | /usr/bin/tail -n 1)
+           if [ -n "$last" ] && ! printf '%s' "$last" | /usr/bin/grep -qiF "not $arg"; then sig=y; else sig=n; fi ;;
     esac
   fi
   echo "$slug|$inst|$run|$sig"
