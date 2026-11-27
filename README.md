@@ -8,11 +8,11 @@
   <a href="https://github.com/GeiserX/CashPilot-Desktop/blob/main/LICENSE"><img src="https://img.shields.io/github/license/GeiserX/CashPilot-Desktop?style=flat-square" alt="License"></a>
   <a href="https://github.com/GeiserX/CashPilot-Desktop/releases"><img src="https://img.shields.io/github/downloads/GeiserX/CashPilot-Desktop/total?style=flat-square&logo=github" alt="Downloads"></a>
   <a href="https://github.com/GeiserX/CashPilot-Desktop/stargazers"><img src="https://img.shields.io/github/stars/GeiserX/CashPilot-Desktop?style=flat-square&logo=github" alt="Stars"></a>
-  <a href="https://cashpilot.club"><img src="https://img.shields.io/badge/website-cashpilot.club-blue?style=flat-square" alt="Website"></a>
-  <a href="https://x.com/CashPilotClub"><img src="https://img.shields.io/badge/X-%40CashPilotClub-000000?style=flat-square&logo=x" alt="X"></a>
 </p>
 
-CashPilot Desktop is a local-first desktop app for macOS (Apple Silicon), Windows and Linux that deploys and monitors passive-income and DePIN services. It packs CashPilot into one app with a system tray and a setup wizard, so you open an app instead of running the CashPilot container and a browser; the earning services themselves still run in Docker or Podman. It runs either as the full CashPilot dashboard (Run everything here) or as a box that joins a CashPilot server you already have (Join my CashPilot).
+<p align="center"><strong>Every earner, every box, one view.</strong><br><a href="https://cashpilot.club">cashpilot.club</a> · <a href="https://x.com/CashPilotClub">@CashPilotClub on X</a></p>
+
+CashPilot Desktop is CashPilot as a desktop app for macOS (Apple Silicon), Windows and Linux. It deploys and tracks the software that earns from your spare bandwidth, compute and disk (bandwidth sharing, DePIN nodes, crypto mining, GPU compute and storage), and on a new install it fences the Docker earners off your LAN and this computer. It runs as the full CashPilot dashboard (Run everything here) or as one more box in a CashPilot fleet you already have (Join my CashPilot). The earners themselves run in Docker or Podman.
 
 <p align="center">
   <img src="docs/images/screenshots/02-dashboard.png" alt="CashPilot Desktop dashboard" width="80%">
@@ -22,25 +22,16 @@ CashPilot Desktop is at 2.0 and does not update itself: get new versions from th
 
 ## Features
 
-- **One-click install** -- No Docker knowledge required; the app handles container setup for you
-- **System tray (macOS)** -- Runs quietly in the background with quick-access status and earnings summary; menu-bar icon is macOS-only today (Windows/Linux planned)
-- **Real-time monitoring** -- Live earnings, service health, container stats, and node uptime
-- **Multi-node fleet** -- Aggregate view across your entire CashPilot fleet from a single window
-- **Server commands** -- A CashPilot server that this computer joined can deploy, stop, start, restart and remove services here. It needs CashPilot 3.0.0 or newer on the server, and a switch on the dashboard card turns it on or off ([docs](docs/configuration.md#the-server-starts-and-stops-services-here))
-- **Hub for workers and phones** -- Desktop can also be the hub: workers and the [Android companion](https://github.com/GeiserX/CashPilot-android/releases) report to it instead of to a CashPilot server
-- **Activity (opt-in)** -- Which destinations each earner talks to, whether it reaches into your network or sends mail; off by default, remote addresses kept 24 hours ([details](docs/activity.md))
-- **Guided setup wizard** -- Step-by-step onboarding with Docker detection and installation guidance
-- **Custom services** -- Run any image from Docker Hub or another registry that the catalog does not list, with the same restrictions as catalog services. A custom service gets no GPU and may not set an `NVIDIA_` variable ([docs](docs/custom-services.md))
-- **Proxied copies** -- Run extra copies of a deployed service through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy, so one computer earns on several IPs; a dead proxy stops the copy instead of leaking ([docs](docs/proxies.md))
-- **LAN isolation** -- New installs fence bridge-networked container earners off private ranges, tailnets, cloud metadata, this computer, its public IP and the public IPs of your other CashPilot boxes. If the fence can't be written, the deploy is refused, and the app rewrites it every five minutes. Mysterium's container runs only behind the fence, and its deploy is refused where the fence can't be applied. An upgraded install turns it on with one button. Not covered: Podman, a native (no-Docker) Mysterium node, a public IP with no CashPilot box on it, the minutes before the first public-IP lookup, and the gap after a firewall reload until the next rewrite ([docs](docs/configuration.md#lan-isolation))
-- **Node identities kept safe** -- Removing a service keeps its data, an unrecoverable volume is never deleted without a separate yes, and encrypted backups take one click ([docs](docs/backup.md))
-- **Provider grades** -- Every catalog provider gets a letter grade from the same published criteria as the web app, with its cons and their sources ([how we grade](https://geiserx.github.io/CashPilot/ratings/))
-- **GPU miners** -- A catalog miner gets the GPU that its catalog entry declares, and only this computer's catalog decides that. GPU support is in beta
-- **Check before deploy** -- Before a deploy, the app says what would stop a service earning on this computer
-- **Import from another tool** -- Bring service logins over from money4band, CashFactory or InternetIncome after a dry run ([docs](docs/migrate/money4band.md))
-- **Cross-platform** -- Native builds for macOS (ARM64), Windows (x64), and Linux (x64)
-- **Lightweight** -- Minimal resource usage thanks to native Go backend with webview frontend
-- **Secure** -- Credentials encrypted at rest with AES-256-GCM; master key in the OS keychain. From the first release after v0.20.5 the macOS build is signed with a Developer ID certificate and notarized by Apple; Windows signing is planned.
+- **One-click deploys** -- Pick an earner from the catalog and the app sets up its container; the setup wizard helps you install Docker if it is missing
+- **LAN isolation** -- New Docker installs fence earners off your LAN, tailnets, cloud metadata, this computer and your public IPs, or refuse the deploy ([docs](docs/configuration.md#lan-isolation))
+- **One fleet** -- Join your CashPilot server as one more box, or be the hub that Docker workers and the [Android companion](https://github.com/GeiserX/CashPilot-android/releases) report to
+- **Server commands** -- Your CashPilot server (3.0.0 or newer) can deploy, stop and remove services here, behind a switch ([docs](docs/configuration.md#the-server-starts-and-stops-services-here))
+- **Real-time monitoring** -- Live earnings, service health, container stats and node uptime, with a menu-bar summary on macOS
+- **Activity (opt-in)** -- Which destinations each earner talks to, and whether it reaches into your network or sends mail; remote addresses kept 24 hours ([details](docs/activity.md))
+- **Proxied copies** -- Run extra copies through a SOCKS5, HTTP CONNECT or Tailscale exit-node proxy, so one computer earns on several IPs ([docs](docs/proxies.md))
+- **Node identities kept safe** -- Removing a service keeps its data, and encrypted backups take one click ([docs](docs/backup.md))
+- **Provider grades** -- Every catalog provider gets a letter grade on the web app's published criteria ([how we grade](https://geiserx.github.io/CashPilot/ratings/))
+- **Secure storage** -- Credentials encrypted at rest with AES-256-GCM and the master key in the OS keychain; the macOS build is signed and notarized by Apple
 
 ## Quick start
 
@@ -55,7 +46,7 @@ Platform notes, system requirements and the full walkthrough are in [Getting sta
 
 ## Supported services
 
-CashPilot bundles a catalog of 49 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). Some links below are affiliate/referral links -- see the [disclosure](docs/services.md#disclosure). Read [how bandwidth-sharing works](docs/services.md#before-you-start-how-bandwidth-sharing-works) before you opt in; per-service limits, payouts and caveats are in [docs/services.md](docs/services.md).
+CashPilot bundles a catalog of 49 active services in five groups: bandwidth sharing, DePIN, GPU compute, crypto mining and storage (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). Some links below are affiliate/referral links -- see the [disclosure](docs/services.md#disclosure). Read [how bandwidth-sharing works](docs/services.md#before-you-start-how-bandwidth-sharing-works) before you opt in; per-service limits, payouts and caveats are in [docs/services.md](docs/services.md).
 
 - **Docker-deployable:** [Anyone Protocol](https://anyone.io), [Bitping](https://app.bitping.com), [Earn.fm](https://earn.fm/ref/GEISYB91), [EarnApp](https://earnapp.com/i/TSMD9wSm), [Honeygain](https://dashboard.honeygain.com/ref/SERGIB4014), [IPRoyal Pawns](https://pawns.app?r=19266874), [MystNodes](https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE), [PacketStream](https://packetstream.io/?psr=7xgZ), [ProxyBase](https://peer.proxybase.org/dashboard/signup?referral=nXzS3c6iTO), [ProxyBase Markets](https://proxybase.xyz?referral=nXzS3c6iTO), [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ), [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn), [Repocket](https://link.repocket.com/b1zM), [Sia hostd](https://docs.sia.tech/provide-storage/setting-up-hostd/docker), [Storj](https://storj.dev/node/get-started/setup), [Traffmonetizer](https://traffmonetizer.io/?aff=2111758), [URnetwork](https://ur.io/c?bonus=1Q3G19)
 - **Browser extension / desktop only:** [Bytebenefit](https://bytebenefit.io/invited?ref=Brl4z3), [Bytelixir](https://bytelixir.com/r/OYEIRE0VSZBZ), [Dawn Internet](https://infrastructure.finance/validator-extension?code=2QLQV97F), [Deeper Network](https://shop.deeper.network?sca_ref=12020100.q8Vxm3SliA), [Ebesucher](https://www.ebesucher.com/?ref=geiserx), [Grass](https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE), [Helium](https://helium.com), [Nodepay](https://app.nodepay.ai/register?ref=0wzzyznen64j9zx), [Noderr Micronodes](https://micronodes.noderr.xyz/), [Nodle](https://nodle.com), [PassiveApp](https://passiveapp.com/i/bqpC4M), [Sentinel dVPN](https://sentinel.co), [Spide](https://spide.network/register.html?f3bc51), [Teneo Protocol](https://dashboard.teneo.pro/auth/signup?referralCode=CAqef), [Theta Edge Node](https://thetatoken.org), [Titan Network](https://edge.titannet.info/signup?inviteCode=2GKKJ495), [Uprock](https://link.uprock.com/i/33e8492e), [Wipter](https://wipter.com/register?via=FB1373FBDA)
@@ -83,9 +74,9 @@ CashPilot bundles a catalog of 49 active passive-income services across multiple
 
 | Project | Type | Description |
 |---------|------|-------------|
-| [CashPilot](https://github.com/GeiserX/CashPilot) | Backend | Multi-service passive income aggregator and fleet manager |
-| [CashPilot-android](https://github.com/GeiserX/CashPilot-android) | Android Agent | Monitoring agent for passive income apps on Android |
-| [cashpilot-mcp](https://github.com/GeiserX/cashpilot-mcp) | MCP Server | Monitor earnings from AI assistants via Model Context Protocol |
+| [CashPilot](https://github.com/GeiserX/CashPilot) | Server | Self-hosted dashboard and Docker worker for every earner and every box |
+| [CashPilot-android](https://github.com/GeiserX/CashPilot-android) | Android agent | Watches the earning apps on your phone and reports them to your fleet |
+| [cashpilot-mcp](https://github.com/GeiserX/cashpilot-mcp) | MCP server | Gives your AI agent your earnings, your fleet and control of your earners |
 | [cashpilot-ha](https://github.com/GeiserX/cashpilot-ha) | Home Assistant | Earnings and service status sensors for your smart home |
 
 ## License

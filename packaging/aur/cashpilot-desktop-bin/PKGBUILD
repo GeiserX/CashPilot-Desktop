@@ -3,7 +3,7 @@
 pkgname=cashpilot-desktop-bin
 pkgver=0.32.0
 pkgrel=1
-pkgdesc='Deploy and monitor passive-income and DePIN services in Docker or Podman'
+pkgdesc='Deploy and track bandwidth sharing, DePIN, mining, GPU and storage earners in Docker or Podman'
 arch=('x86_64')
 url='https://github.com/GeiserX/CashPilot-Desktop'
 license=('GPL-3.0-or-later')
