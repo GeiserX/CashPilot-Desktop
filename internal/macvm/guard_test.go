@@ -263,7 +263,7 @@ func (p psRunner) Run(context.Context, string, ...string) (string, error) { retu
 
 func TestDevicesOffReadsTartThroughItsWrapper(t *testing.T) {
 	tart := TartExe(testBin)
-	wrapper := "/usr/bin/sudo -u sergio -H /usr/bin/env -i PATH=" + testBin + " HOME=/Users/sergio " + tart + " run " + VMName + " --vnc-experimental --no-audio --no-clipboard --net-softnet-block @host"
+	wrapper := "/usr/bin/sudo -u owner -H /usr/bin/env -i PATH=" + testBin + " HOME=/Users/owner " + tart + " run " + VMName + " --vnc-experimental --no-audio --no-clipboard --net-softnet-block @host"
 	own := tart + " run " + VMName + " --vnc-experimental --no-audio --no-clipboard --net-softnet-block @host"
 	for name, c := range map[string]struct {
 		ps string
