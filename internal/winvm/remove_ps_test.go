@@ -324,7 +324,7 @@ function Get-NetFirewallApplicationFilter { [pscustomobject]@{ Program = 'Any'; 
 function Get-NetFirewallServiceFilter { [pscustomobject]@{ Service = 'Any' } }
 function Get-NetFirewallInterfaceTypeFilter { [pscustomobject]@{ InterfaceType = 'Any' } }
 function Get-NetFirewallSecurityFilter { [pscustomobject]@{ Authentication = 'NotRequired'; Encryption = 'NotRequired'; OverrideBlockRules = 'False'; LocalUser = 'Any'; RemoteUser = 'Any'; RemoteMachine = 'Any' } }
-function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) foreach ($g in @($adapters -split ',' | Where-Object { $_ })) { [pscustomobject]@{ InterfaceGuid = '{' + $g + '}' } } }
+function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) foreach ($g in @($adapters -split ',' | Where-Object { $_ })) { [pscustomobject]@{ InterfaceGuid = $(if ($g -eq 'null') { $null } else { '{' + $g + '}' }) } } }
 $global:removed = $false
 function Remove-NetFirewallRule { [CmdletBinding()] param($InputObject) $global:removed = $true }
 `
@@ -347,6 +347,8 @@ func TestRemoveFirewallScriptAcceptsTheDeletedVNIC(t *testing.T) {
 	for _, tc := range []struct{ name, iface, adapters string }{
 		{"vNIC still there", alias, guid},
 		{"vNIC deleted", guid, ""},
+		// Some hidden adapters have no interface GUID; the check must not throw on them.
+		{"vNIC deleted, an adapter without a GUID", guid, "null"},
 	} {
 		code, out := runOwnedScriptWithFake(t, firewallRuleMock, check, arg, tOwner, tc.iface, tc.adapters)
 		doc, err := decodeOutput(out)

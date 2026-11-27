@@ -36,6 +36,14 @@ func remove(t *testing.T, f *hvfake.HyperV, dir string) winvm.RemoveResult {
 	return res
 }
 
+// keptBesidesCertificates is kept without the guardian's certificates, which
+// every Remove of a guardian keeps.
+func keptBesidesCertificates(kept []string) []string {
+	return slices.DeleteFunc(slices.Clone(kept), func(s string) bool {
+		return strings.Contains(s, `Cert:\LocalMachine\Shielded VM Local Certificates`)
+	})
+}
+
 func diffObjects(t *testing.T, before, after []string) {
 	t.Helper()
 	if !slices.Equal(before, after) {
@@ -50,8 +58,8 @@ func TestRemoveAfterBuildLeavesTheHostAsItWas(t *testing.T) {
 	dir := build(t, f)
 	res := remove(t, f, dir)
 	diffObjects(t, before, f.Objects())
-	if len(res.Left) != 0 || len(res.Kept) != 1 || !strings.Contains(res.Kept[0], "Shielded VM Local Certificates") {
-		t.Fatalf("left %v, kept %v (want only the guardian certificates)", res.Left, res.Kept)
+	if len(res.Left) != 0 || len(keptBesidesCertificates(res.Kept)) != 0 {
+		t.Fatalf("left %v, kept %v", res.Left, res.Kept)
 	}
 	ents, _ := os.ReadDir(dir)
 	if len(ents) != 0 {
@@ -319,7 +327,7 @@ func TestRemoveFindsRenamedObjects(t *testing.T) {
 			}
 			res := remove(t, f, dir)
 			diffObjects(t, before, f.Objects())
-			if len(res.Left) != 0 || len(res.Kept) != 0 {
+			if len(res.Left) != 0 || len(keptBesidesCertificates(res.Kept)) != 0 {
 				t.Fatalf("left %v, kept %v", res.Left, res.Kept)
 			}
 		})
