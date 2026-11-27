@@ -97,7 +97,7 @@ func TestBuildProvesAndConnects(t *testing.T) {
 	calls := f.Calls()
 	order := []string{"Inventory", "EnsureSwitch", "SetBindings", "EnsureNAT", "EnsureFirewall", "SetHostNeighbor",
 		"EnsureGuardian", "WriteAnswerISO", "CreateVM", "SetIntegration", "AddDeny",
-		"AddHyperVAdmin", "Start", "Guest", "EjectDVDs", "RegisterGuardTask", "Canary", "StartGuardTask"}
+		"AddHyperVAdmin", "BootKeys", "Guest", "EjectDVDs", "RegisterGuardTask", "Canary", "StartGuardTask"}
 	last := -1
 	for _, m := range order {
 		i := indexOf(calls, m)
@@ -108,6 +108,11 @@ func TestBuildProvesAndConnects(t *testing.T) {
 			t.Fatalf("%s came before %s; calls: %v", m, order[slices.Index(order, m)-1], calls)
 		}
 		last = i
+	}
+	// The Gen 2 boot prompt lasts about 5 seconds. A Start in its own process
+	// before the keys missed it on real Windows, so the keys start the VM.
+	if slices.Contains(calls[:indexOf(calls, "BootKeys")], "Start") {
+		t.Fatalf("the install started the VM apart from its boot keys; calls: %v", calls)
 	}
 	if lock, err := os.ReadFile(filepath.Join(dir, winvm.ProofFile)); err != nil || len(lock) == 0 {
 		t.Fatalf("proof.json not written: %v", err)
@@ -301,7 +306,7 @@ func (w *failAfter) Guest(ctx context.Context, vmID, owner string, c winvm.Cred,
 func TestBuildResumesAfterEachStep(t *testing.T) {
 	methods := []string{"Inventory", "ReadHostNet", "EnsureSwitch", "EnsureNAT", "SetBindings", "EnsureFirewall",
 		"SetHostNeighbor", "EnsureGuardian", "WriteAnswerISO", "CreateVM", "SetIntegration", "ReadLive", "AddDeny",
-		"AddHyperVAdmin", "Start", "BootKeys", "EjectDVDs", "RegisterGuardTask",
+		"AddHyperVAdmin", "BootKeys", "EjectDVDs", "RegisterGuardTask",
 		"Connect", "Canary", "Pktmon", "AddAllow", "RemoveAllow", "SetL3", "SetBinding", "HVListener",
 		"StartGuardTask", "Disconnect"}
 	for _, m := range methods {

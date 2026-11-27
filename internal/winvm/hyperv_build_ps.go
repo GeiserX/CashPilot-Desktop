@@ -463,13 +463,22 @@ try {
 Write-Doc ([ordered]@{ ok = $true })
 `
 
-// scriptBootKeys presses Enter once a second for 10 seconds through the VM's
-// synthetic keyboard, for the "press any key to boot from CD" prompt.
-const scriptBootKeys = buildPrelude + `$cs = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter ("Name='" + $in.vm + "'")
+// scriptBootKeys starts the VM and presses Enter every half second for 20
+// seconds through its synthetic keyboard, for the "press any key to boot from
+// CD" prompt. On live run 5 a separate start and key script missed the prompt
+// once in four: PowerShell took longer to start than the prompt stays up.
+const scriptBootKeys = buildPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+$cs = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter ("Name='" + $in.vm + "'")
 if (-not $cs) { throw 'The VM was not found.' }
-$kb = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_Keyboard
-for ($i = 0; $i -lt 10; $i++) { $null = Get-OwnedVM $in.vm $in.owner; try { Invoke-CimMethod -InputObject $kb -MethodName TypeKey -Arguments @{ keyCode = [uint32]13 } | Out-Null } catch { }; Start-Sleep -Seconds 1 }
-Write-Doc ([ordered]@{ ok = $true })
+if ($vm.State.ToString() -ne 'Running') { Start-VM -VM $vm }
+$kb = $null; $sent = 0
+for ($i = 0; $i -lt 40; $i++) {
+  if ($i % 4 -eq 3) { $null = Get-OwnedVM $in.vm $in.owner }
+  if (-not $kb) { $kb = Get-CimAssociatedInstance -InputObject $cs -ResultClassName Msvm_Keyboard -ErrorAction SilentlyContinue }
+  if ($kb) { try { Invoke-CimMethod -InputObject $kb -MethodName TypeKey -Arguments @{ keyCode = [uint32]13 } | Out-Null; $sent++ } catch { } }
+  Start-Sleep -Milliseconds 500
+}
+Write-Doc ([ordered]@{ ok = $true; sent = $sent })
 `
 
 // scriptEjectDVDs removes only the journaled attachments on the owned VM.
@@ -1241,7 +1250,7 @@ func (b psBuilder) WriteAnswerISO(ctx context.Context, path string, xml []byte) 
 	return b.ok(ctx, scriptWriteAnswerISO, map[string]string{"path": path, "xml": base64.StdEncoding.EncodeToString(xml)})
 }
 
-// BootKeys presses Enter once a second for 10 seconds.
+// BootKeys starts the VM and presses Enter every half second for 20 seconds.
 func (b psBuilder) BootKeys(ctx context.Context, vmID, owner string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err

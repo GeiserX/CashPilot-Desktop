@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -267,6 +268,46 @@ func TestParsePcapng(t *testing.T) {
 		if _, err := parsePcapng(b); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// TestBootKeysStartsTheVMAndPressesAtOnce: the boot prompt shows for about
+// 5 seconds. On live run 5 the VM was started by one script and the keys
+// came from a second one, which once started too late; the install then sat
+// at "No operating system was loaded" and Setup waited its full two hours.
+// The key script now starts the VM itself and presses for 20 seconds.
+func TestBootKeysStartsTheVMAndPressesAtOnce(t *testing.T) {
+	const mock = `
+$global:log = @()
+function Get-OwnedVM { param($id, $owner) [pscustomobject]@{ State = $(if ($global:started) { 'Running' } else { 'Off' }) } }
+function Get-CimInstance { [CmdletBinding()] param($Namespace, $ClassName, $Filter) [pscustomobject]@{ Name = 'vm' } }
+function Start-VM { param($VM) $global:started = $true; $global:log += 'start' }
+function Get-CimAssociatedInstance { [CmdletBinding()] param($InputObject, $ResultClassName) if ($global:started) { [pscustomobject]@{ Kind = 'keyboard' } } }
+function Invoke-CimMethod { [CmdletBinding()] param($InputObject, $MethodName, $Arguments) $global:log += 'key' }
+function Start-Sleep { param([int]$Milliseconds, [int]$Seconds) $global:log += ('sleep' + ($Milliseconds + 1000 * $Seconds)) }
+`
+	check := scriptBootKeys + "\nWrite-Host ('LOG ' + ($global:log -join ','))\n"
+	code, out := runOwnedScriptWithFake(t, mock, check, map[string]any{"vm": tVMID, "owner": tOwner})
+	s := string(out)
+	i := strings.Index(s, "LOG ")
+	if code != 0 || i < 0 {
+		t.Fatalf("exit %d: %s", code, out)
+	}
+	log := strings.Split(strings.TrimSpace(s[i+4:]), ",")
+	if len(log) < 2 || log[0] != "start" || log[1] != "key" {
+		t.Fatalf("the VM must start and get its first key with no wait in between: %v", log)
+	}
+	keys, waited := 0, 0
+	for _, e := range log {
+		if e == "key" {
+			keys++
+		} else if ms, ok := strings.CutPrefix(e, "sleep"); ok {
+			n, _ := strconv.Atoi(ms)
+			waited += n
+		}
+	}
+	if keys < 30 || waited < 15000 || waited/keys > 1000 {
+		t.Fatalf("%d keys over %d ms; want a key at least every second for 15 s", keys, waited)
 	}
 }
 

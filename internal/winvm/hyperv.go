@@ -86,8 +86,10 @@ type Builder interface {
 	AddHyperVAdmin(ctx context.Context, sid string) (added bool, err error)
 	// WriteAnswerISO writes the answer file onto a new ISO at path.
 	WriteAnswerISO(ctx context.Context, path string, xml []byte) error
-	// BootKeys presses a key once a second for 10 seconds, for the Gen 2
-	// "press any key to boot from CD" prompt.
+	// BootKeys starts the VM and presses a key every half second for 20
+	// seconds, for the Gen 2 "press any key to boot from CD" prompt. The prompt
+	// shows for about 5 seconds, so the keys start in the same process as the
+	// start.
 	BootKeys(ctx context.Context, vmID, owner string) error
 	// EjectDVDs removes the attachments setup recorded.
 	EjectDVDs(ctx context.Context, vmID, owner string, dvds []OwnedDVD) error

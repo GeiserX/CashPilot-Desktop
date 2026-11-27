@@ -1263,15 +1263,22 @@ func (f *HyperV) WriteAnswerISO(_ context.Context, path string, xml []byte) erro
 	return nil
 }
 
-// BootKeys is the Gen 2 boot keypress.
+// BootKeys starts the VM and answers the Gen 2 boot prompt.
 func (f *HyperV) BootKeys(_ context.Context, vmID, owner string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("BootKeys"); err != nil {
 		return err
 	}
-	_, err := f.vm(vmID)
-	return err
+	vm, err := f.vm(vmID)
+	if err != nil {
+		return err
+	}
+	if vm.answer != nil {
+		f.applyAnswer(vm)
+	}
+	vm.state, vm.booted = "Running", true
+	return nil
 }
 
 // EjectDVDs removes the VM's DVD drives.

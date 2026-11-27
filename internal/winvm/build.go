@@ -888,13 +888,12 @@ func (b *builder) install(ctx context.Context) error {
 		return err
 	}
 	if live.VMState != "Running" {
-		if err := b.HV.Start(ctx, b.p.VMID, b.p.Owner); err != nil {
-			return err
-		}
+		start := b.HV.Start
 		if st != nil && live.DVDs > 0 {
-			if err := b.HV.BootKeys(ctx, b.p.VMID, b.p.Owner); err != nil {
-				return err
-			}
+			start = b.HV.BootKeys // starts the VM and answers the boot prompt
+		}
+		if err := start(ctx, b.p.VMID, b.p.Owner); err != nil {
+			return err
 		}
 	}
 	creds := []Cred{{User: guestUser, Password: b.sp.AdminPassword}}

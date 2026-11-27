@@ -177,7 +177,7 @@ func TestRemoveLeavesAForeignNATAndTask(t *testing.T) {
 }
 
 func TestRemoveAfterAHalfBuild(t *testing.T) {
-	for _, m := range []string{"EnsureNAT", "EnsureGuardian", "CreateVM", "Start", "RegisterGuardTask"} {
+	for _, m := range []string{"EnsureNAT", "EnsureGuardian", "CreateVM", "BootKeys", "RegisterGuardTask"} {
 		t.Run(m, func(t *testing.T) {
 			f := hvfake.New()
 			f.SetHyperVAdmin(testUserSID, true)
