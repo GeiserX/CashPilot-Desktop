@@ -88,6 +88,18 @@ case "$f" in
 esac
 rm -rf "$dl"
 [ -d "/Applications/$want_app" ] || { echo "RESULT refused: the installer did not put $want_app in /Applications"; exit 1; }
+# UpRock keeps its sign-in in the keychain, unless its credentials file exists.
+# Under boot load its keychain probe can time out: it then makes that file
+# empty, uses it from then on, and the sign-in is lost. A file made before its
+# first start makes it use the file every time. An UpRock that ran before keeps
+# the store it has.
+if [ "$slug" = uprock ] && id earner >/dev/null 2>&1; then
+  ud="/Users/earner/Library/Application Support/UpRock"
+  if [ ! -e "$ud" ]; then
+    sudo -u earner /bin/sh -c 'umask 077; mkdir -p "$1" && printf "{}\n" > "$1/credentials.json"' sh "$ud" \
+      && echo "made UpRock's credentials file"
+  fi
+fi
 la="/Library/LaunchAgents/org.cashpilot.earner.$slug.plist"
 cat > "$la" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
