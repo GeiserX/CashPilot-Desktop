@@ -142,6 +142,10 @@ export function GetFleetState() {
   return window['go']['main']['App']['GetFleetState']();
 }
 
+export function GetLanguageState(arg1) {
+  return window['go']['main']['App']['GetLanguageState'](arg1);
+}
+
 export function GetLogs(arg1, arg2) {
   return window['go']['main']['App']['GetLogs'](arg1, arg2);
 }
@@ -312,6 +316,10 @@ export function SaveSettings(arg1) {
 
 export function SetActivityEnabled(arg1) {
   return window['go']['main']['App']['SetActivityEnabled'](arg1);
+}
+
+export function SetLanguage(arg1, arg2) {
+  return window['go']['main']['App']['SetLanguage'](arg1, arg2);
 }
 
 export function SetServerCommands(arg1) {
