@@ -49,17 +49,28 @@ members() { for b in $(ifconfig -l | tr ' ' '\n' | grep '^bridge1[0-9][0-9]$'); 
 before=$(members)
 # Until the fence is loaded, a failure stops the guest: launchd lets tart outlive
 # this script, so an early exit must not leave it running unfenced.
-if as_owner tart list | awk -v v="$vm" '$1 == "local" && $2 == v && $NF == "running" {f=1} END {exit !f}'; then
+# A guest that already runs is the guard's. If tart cannot even list, we do not
+# know, so we stop here without touching anything.
+list=$(as_owner tart list) || { echo "tart list failed; not starting $vm"; exit 1; }
+if echo "$list" | awk -v v="$vm" '$1 == "local" && $2 == v && $NF == "running" {f=1} END {exit !f}'; then
   echo "$vm is already running; leaving it to the guard"; exit 0
 fi
-handed_off=0
-cleanup() { [ "$handed_off" = 1 ] || { echo "start failed; stopping $vm"; as_owner tart stop "$vm" >/dev/null 2>&1 || true; }; }
+handed_off=0; br=""; port=""; tart_pid=""
+cleanup() {
+  [ "$handed_off" = 1 ] && return 0
+  echo "start failed; cutting and stopping $vm"
+  [ -n "$port" ] && sudo ifconfig "$br" deletem "$port" 2>/dev/null
+  as_owner tart stop "$vm" >/dev/null 2>&1 && return 0
+  [ -n "$tart_pid" ] && kill "$tart_pid" 2>/dev/null
+  pkill -f "tart run $vm( |\$)" 2>/dev/null
+  echo "tart stop failed; killed the tart process"
+}
 trap cleanup EXIT
 as_owner nohup tart run "$vm" ${TART_DISPLAY:---no-graphics} --no-audio --no-clipboard \
   --net-softnet-block "$block" > "${RUNLOG:-/tmp/run-$vm.log}" 2>&1 &
+tart_pid=$!
 # Our port is the vmenet member that was not there before the start. It shows
 # before the guest has booted, so the cut lands before the guest sends a frame.
-br=""; port=""
 for _ in $(seq 1 600); do
   new=$(members | while read -r l; do case "$before" in (*"$l"*) ;; (*) echo "$l" ;; esac; done | head -1)
   [ -n "$new" ] && { br=${new% *}; port=${new#* }; break; }

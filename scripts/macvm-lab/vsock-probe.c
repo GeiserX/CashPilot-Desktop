@@ -52,7 +52,7 @@ int main(int argc, char **argv) {
   for (int i = 0; i < 3; i++) {
     char *end; errno = 0;
     v[i] = strtoul(argv[i + 1], &end, 10);
-    if (errno || end == argv[i + 1] || *end || argv[i + 1][0] == '-' || v[i] > UINT_MAX) {
+    if (errno || end == argv[i + 1] || *end || strchr(argv[i + 1], '-') || v[i] > UINT_MAX) {
       fprintf(stderr, "not a number: %s\n", argv[i + 1]); return 2;
     }
   }

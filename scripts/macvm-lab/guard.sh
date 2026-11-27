@@ -31,7 +31,8 @@ last=$(cat "$DIR/last-pass" 2>/dev/null || echo 0)
 # first field: a greedy match would take usec. An unreadable value counts as a
 # fresh boot, so the pass cuts first.
 boot=$(sysctl -n kern.boottime | sed -n 's/^{ sec = \([0-9][0-9]*\),.*/\1/p')
-case "$boot" in ''|*[!0-9]*) boot=$now ;; esac
+bad_boot=0
+case "$boot" in ''|*[!0-9]*) bad_boot=1; boot=0 ;; esac
 echo "$now" > "$DIR/last-pass"
 log() { echo "$(date '+%Y-%m-%dT%H:%M:%S%z') $*" >> "$LOG"; }
 
@@ -52,7 +53,7 @@ if [ -z "$port" ]; then log "no guest port found (VM off?)"; exit 0; fi
 member() { ifconfig "$br" 2>/dev/null | grep -q "member: $port "; }
 
 mode=pass
-if [ "$last" -lt "$boot" ] || [ $((now - last)) -gt 90 ]; then mode=boot; fi
+if [ "$bad_boot" = 1 ] || [ "$last" -lt "$boot" ] || [ $((now - last)) -gt 90 ]; then mode=boot; fi
 # Boot and wake: cut before any check runs.
 if [ "$mode" = boot ] && member; then
   ifconfig "$br" deletem "$port" && log "boot/wake: $port cut from $br before the check"
