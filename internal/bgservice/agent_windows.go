@@ -5,6 +5,7 @@ package bgservice
 import (
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -101,13 +102,18 @@ func (a *windowsAgent) Stop() error {
 // Replace ends the running helper, registers execPath and runs the task. The task
 // ignores a start while an instance runs (MultipleInstancesPolicy IgnoreNew), so
 // it waits until Task Scheduler no longer reports the old instance running. A
-// task that is not running makes /end fail, which is fine.
+// task that is not running makes /end fail, which is fine. If the state query
+// itself fails, Replace still registers and runs the new copy, and reports the
+// query error: /end has already stopped the old helper, so returning early would
+// leave no helper running.
 func (a *windowsAgent) Replace(execPath string, args []string) error {
 	_ = a.Stop()
+	var queryErr error
 	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(500 * time.Millisecond) {
 		running, err := a.taskRunning()
 		if err != nil {
-			return err
+			queryErr = fmt.Errorf("could not read the helper task state: %w", err)
+			break
 		}
 		if !running {
 			break
@@ -117,12 +123,12 @@ func (a *windowsAgent) Replace(execPath string, args []string) error {
 		}
 	}
 	if err := a.Install(execPath, args); err != nil {
-		return err
+		return errors.Join(queryErr, err)
 	}
 	if out, err := runSchtasks("/run", "/tn", a.taskName); err != nil {
-		return fmt.Errorf("schtasks /run: %v: %s", err, strings.TrimSpace(out))
+		return errors.Join(queryErr, fmt.Errorf("schtasks /run: %v: %s", err, strings.TrimSpace(out)))
 	}
-	return nil
+	return queryErr
 }
 
 // taskRunning asks Task Scheduler whether the task runs now. It reads the task's

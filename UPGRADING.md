@@ -335,7 +335,7 @@ catalog that rules out eight services. SOCKS5 and HTTP carry TCP only. See
   shared when more than one machine runs it. The first pairing copies this
   machine's earnings history to the server, so its past days count too.
   Unlinking leaves your local history as it was. Desktop 1.0 works alongside
-  [CashPilot web 2.0](https://geiserx.github.io/CashPilot/whats-new-2.0/),
+  [CashPilot web 2.0](https://github.com/GeiserX/CashPilot/blob/main/UPGRADING.md#20-change-the-image-tags),
   which keeps the worker heartbeat, enrollment and history import routes
   compatible.
 - **Use Desktop as the hub instead.** Turn it on in Settings, and workers and
