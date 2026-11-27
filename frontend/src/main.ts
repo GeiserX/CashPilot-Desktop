@@ -3581,15 +3581,19 @@ function setOutput(value: string) {
 }
 
 const logWrapKey = "cashpilot-log-wrap";
-// The choice is only remembered: a webview that refuses storage still shows logs.
-let logWrapFallback = false;
+// Read once from storage, then kept here: a webview that refuses to read or
+// write storage still shows logs and still honours the toggle.
+let logWrap: boolean | null = null;
 
 function logWrapOn(): boolean {
-  try {
-    return localStorage.getItem(logWrapKey) === "1";
-  } catch {
-    return logWrapFallback;
+  if (logWrap === null) {
+    try {
+      logWrap = localStorage.getItem(logWrapKey) === "1";
+    } catch {
+      logWrap = false;
+    }
   }
+  return logWrap;
 }
 
 // A log goes into the same box as action messages, one entry per line.
@@ -3602,7 +3606,7 @@ function setLogs(value: string) {
   out.classList.toggle("log-wrap", wrap);
   out.querySelector<HTMLButtonElement>("[data-log-wrap]")?.addEventListener("click", (event) => {
     const on = !out.classList.contains("log-wrap");
-    logWrapFallback = on;
+    logWrap = on;
     try {
       localStorage.setItem(logWrapKey, on ? "1" : "0");
     } catch {
