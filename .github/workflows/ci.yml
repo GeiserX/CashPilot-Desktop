@@ -122,7 +122,10 @@ jobs:
 
       # Every locale must carry every English key, with the same placeholders.
       # scripts/i18n_check.py is the check every CashPilot repo runs, copied
-      # unchanged from GeiserX/CashPilot. A translation whose English changed
+      # unchanged from GeiserX/CashPilot, the same check the nightly translation
+      # sync runs. It compares the placeholders inside each select branch, so a
+      # translation must nest its select and plural as the English does, or the
+      # sync skips this repo. A translation whose English changed
       # since is reported as stale and still passes: the app shows English for
       # that key until it is translated again.
       - name: Translation parity
