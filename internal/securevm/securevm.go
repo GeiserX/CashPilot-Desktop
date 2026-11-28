@@ -201,6 +201,14 @@ type Engine interface {
 	Stop(ctx context.Context) error
 }
 
+// MayStillRun wraps a failed placement after which the earner may still run
+// in the VM, so its copy on this computer must stay stopped. Its message is
+// the wrapped error's.
+type MayStillRun struct{ Err error }
+
+func (m MayStillRun) Error() string { return m.Err.Error() }
+func (m MayStillRun) Unwrap() error { return m.Err }
+
 // GuestLayers are the layers an earner in the VM gets.
 func GuestLayers() []string { return []string{LayerSecureVM, LayerVMFence} }
 

@@ -655,7 +655,18 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 		}
 	}
 	progress(i18n.T("go.macvm.stepInstallApp", "app", s.Name), -1)
-	return g.InstallApp(ctx, slug, *s.MacOS)
+	if err := g.InstallApp(ctx, slug, *s.MacOS); err != nil {
+		// The app can start before the install reports its error. Unless
+		// the guest says it is not running, it may run there now.
+		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		got, rerr := g.ReadApps(c, map[string]catalog.GuestMacOS{slug: *s.MacOS})
+		cancel()
+		if rerr != nil || got[slug].Running != securevm.No {
+			return securevm.MayStillRun{Err: err}
+		}
+		return err
+	}
+	return nil
 }
 
 // OpenScreen opens the VM's screen in Screen Sharing, with the earner's app
