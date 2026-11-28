@@ -300,6 +300,30 @@ func (w *failAfter) Guest(ctx context.Context, vmID, owner string, c winvm.Cred,
 	return err
 }
 
+// TestBuildCutsTheVMWhenTheGuardTaskDoesNotStart: Setup connects a proven VM
+// before it starts the guard task. If the task does not start, no guard runs,
+// so Setup must take the VM off the network itself.
+func TestBuildCutsTheVMWhenTheGuardTaskDoesNotStart(t *testing.T) {
+	f := hvfake.New()
+	f.SetHyperVAdmin(testUserSID, true)
+	d := buildDeps(t, f, t.TempDir())
+	f.FailNext("StartGuardTask", errors.New("injected"))
+	res, err := winvm.Build(context.Background(), d, setupParams())
+	if err == nil {
+		t.Fatal("Setup passed with the guard task not started")
+	}
+	l, lerr := f.ReadLive(context.Background(), winvm.ProductNames(), res.Plan.VMID, res.Plan.SwitchID)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
+	if slices.ContainsFunc(l.Adapters, func(a winvm.LiveAdapter) bool { return a.SwitchID != "" }) {
+		t.Fatalf("the VM stays on the network with no guard: %v", err)
+	}
+	if res.Status.Network == winvm.NetConnected {
+		t.Fatalf("Setup reports %q with no guard running", res.Status.Network)
+	}
+}
+
 // TestBuildResumesAfterEachStep fails each seam call once, runs setup again,
 // and checks the second run finishes with one VM and one switch, and that
 // Remove VM then puts the host back exactly as it was.

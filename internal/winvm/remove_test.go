@@ -337,6 +337,39 @@ func TestRemoveWithoutAPlanLeavesNoFileOfItsOwn(t *testing.T) {
 	}
 }
 
+// sharingHV stages its script like stagingHV, while another writer records a
+// file of its own in the same folder, as the PowerShell bootstrap of a lab
+// Setup does outside the Go mutation lock.
+type sharingHV struct{ stagingHV }
+
+func (s sharingHV) Inventory(ctx context.Context, n winvm.Names, known winvm.KnownIDs, userSID string) (winvm.Inventory, error) {
+	if err := winvm.WriteArtifact(filepath.Join(s.dir, "lab-guest.cred"), []byte("cred")); err != nil {
+		return winvm.Inventory{}, err
+	}
+	return s.stagingHV.Inventory(ctx, n, known, userSID)
+}
+
+// TestRemoveWithoutAPlanKeepsAnotherWritersFile: a file that another writer
+// records while the listing runs is not the Remove's own, so it stays.
+func TestRemoveWithoutAPlanKeepsAnotherWritersFile(t *testing.T) {
+	f := hvfake.New()
+	dir := t.TempDir()
+	if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: sharingHV{stagingHV{f, dir}}, Dir: dir}, winvm.ProductNames()); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{".cashpilot-files.jsonl", "lab-guest.cred"}; !slices.Equal(names, want) {
+		t.Fatalf("the folder holds %v after Remove, want %v", names, want)
+	}
+}
+
 // TestRemoveKeepsTheGuardianAKeyProtectorUses: a VM with a local key protector
 // and no vTPM (encrypted state only) still needs the guardian.
 func TestRemoveKeepsTheGuardianAKeyProtectorUses(t *testing.T) {

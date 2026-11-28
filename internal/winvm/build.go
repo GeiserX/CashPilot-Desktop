@@ -1082,7 +1082,16 @@ func (b *builder) proveAndBoot(ctx context.Context) (BuildResult, error) {
 	gd := GuardDeps{HV: b.HV, Echo: b.Echo, Now: b.Now, Dir: b.Dir, Logf: b.Logf}
 	res.Status = gd.Boot(context.WithoutCancel(ctx))
 	if err := b.HV.StartGuardTask(context.WithoutCancel(ctx), b.n, b.p.Owner); err != nil {
-		return res, errors.Join(proofErr, fmt.Errorf("the guard task did not start: %w", err))
+		// Boot may have connected the VM, and no guard runs now to keep
+		// it in line, so take it off the network before returning.
+		errs := []error{proofErr, fmt.Errorf("the guard task did not start: %w", err)}
+		if derr := b.HV.Disconnect(context.WithoutCancel(ctx), b.p.VMID, b.p.Owner, b.p.AdapterID); derr != nil {
+			errs = append(errs, fmt.Errorf("the VM could not be taken off the network: %w", derr))
+		} else {
+			res.Status.Network = NetDisconnected
+			res.Status.Reason = "the guard task did not start"
+		}
+		return res, errors.Join(errs...)
 	}
 	return res, proofErr
 }

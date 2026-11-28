@@ -304,6 +304,10 @@ func Judge(s StepSpec, e Evidence) StepResult {
 		switch {
 		case escaped(true):
 			r.Outcome, r.Detail = Leak, "something got through the fence"
+		case s.Witness != WitnessDelivered && e.Delivered:
+			// Only the steps that open the port to the host may see a frame
+			// reach the host's vNIC. Anywhere else it got through the fence.
+			r.Outcome, r.Detail = Leak, "a probe frame reached this PC's vNIC through the fence"
 		case e.Err != "":
 			r.Outcome, r.Detail = Unproven, "the probe could not run: "+e.Err
 		case s.Witness == WitnessDrops && e.DropDelta == 0:
