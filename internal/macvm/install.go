@@ -174,7 +174,12 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 	// The guard stops only the VM it was installed for. A request for another
 	// owner or Tart folder would leave that VM running with no guard, so it
 	// must remove the old one first.
-	if old, err := d.loadInstall(); err == nil && (old.Owner != inst.Owner || filepath.Clean(old.TartHome) != filepath.Clean(inst.TartHome)) {
+	// A record that cannot be read names no VM to stop, so it stops here too.
+	old, lerr := d.loadInstall()
+	if lerr != nil && !errors.Is(lerr, errNoInstall) {
+		return fmt.Errorf("could not read the installed Secure VM record, so remove the Secure VM first: %w", lerr)
+	}
+	if lerr == nil && (old.Owner != inst.Owner || filepath.Clean(old.TartHome) != filepath.Clean(inst.TartHome)) {
 		return fmt.Errorf("a Secure VM is already installed for %s in %s; remove it first", old.Owner, old.TartHome)
 	}
 	hadGuard := false

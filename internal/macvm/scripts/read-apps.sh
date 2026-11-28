@@ -10,6 +10,22 @@
 base="/Users/earner/Library/Application Support"
 uid=$(id -u earner 2>/dev/null) || uid=""
 as_earner() { /usr/bin/sudo -n -u earner "$@"; }
+# marker prints y for a marker with content, n for a missing or empty one, and
+# u when the earner cannot look: an unreadable file, a broken symlink, a
+# folder on the way it cannot open, or a sudo that failed.
+marker() {
+  m=$(as_earner /bin/sh -c '
+    f=$1
+    if [ -f "$f" ] && [ -r "$f" ]; then
+      if [ -s "$f" ]; then echo y; else echo n; fi
+      exit 0
+    fi
+    if [ -e "$f" ] || [ -L "$f" ]; then echo u; exit 0; fi
+    d=${f%/*}
+    while [ -n "$d" ] && [ ! -d "$d" ]; do d=${d%/*}; done
+    if [ -x "${d:-/}" ]; then echo n; else echo u; fi' sh "$1") || m=u
+  case "$m" in y|n) echo "$m" ;; *) echo u ;; esac
+}
 while IFS='|' read -r slug app proc kind file arg; do
   [ -n "$slug" ] || continue
   inst=n; run=u; sig=u
@@ -22,17 +38,17 @@ while IFS='|' read -r slug app proc kind file arg; do
       process) sig=$run ;;
       # The markers are in the earner's own folder, where the app can put a
       # symlink, so they are read with the earner's rights, never root's.
-      file) if as_earner /bin/test -s "$f"; then sig=y; else sig=n; fi ;;
+      file) sig=$(marker "$f") ;;
       # grep exits 1 for no match and 2 when it cannot read the file: a
       # file the app replaced under us proves nothing, so that is unknown.
-      key) sig=n
-           if as_earner /bin/test -s "$f"; then
+      key) sig=$(marker "$f")
+           if [ "$sig" = y ]; then
              as_earner /usr/bin/grep -qF "\"$arg\"" "$f"
              case $? in 0) sig=y ;; 1) sig=n ;; *) sig=u ;; esac
            fi ;;
       # The last line with the words decides, and "not <words>" is a no.
-      log) sig=n
-           if as_earner /bin/test -s "$f"; then
+      log) sig=$(marker "$f")
+           if [ "$sig" = y ]; then
              lines=$(as_earner /usr/bin/grep -iF "$arg" "$f")
              case $? in
                0) last=$(printf '%s\n' "$lines" | /usr/bin/tail -n 1)
