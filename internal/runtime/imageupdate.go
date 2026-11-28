@@ -49,12 +49,9 @@ var settleLookTimeout = 30 * time.Second
 var imageRemoveTimeout = 2 * time.Minute
 
 // settleLineBytes caps one log line a check period keeps while it waits for the
-// line's end. A longer line is judged in parts.
-const settleLineBytes = 64 << 10
-
-// settleLineOverlap is how much of a line cut at settleLineBytes the next part
-// starts with, so a signal that straddles the cut still matches.
-const settleLineOverlap = 1 << 10
+// line's end. A pattern can span a whole line, so a longer line cannot be
+// judged in parts: the log reads as unreadable, and unknown is not clean.
+const settleLineBytes = 1 << 20
 
 // FollowRef is the reference an image update checks and deploys for svc: the tag
 // that its image names, without the digest. ok is false for an image that names
@@ -276,7 +273,7 @@ func failureSignal(ctx context.Context, cli *client.Client, id string, svc catal
 		return "", false
 	}
 	defer reader.Close()
-	if err := demuxLog(reader, scan); err != nil {
+	if err := demuxLog(reader, scan); err != nil || scan.overlong {
 		return "", false
 	}
 	scan.flush()
@@ -290,10 +287,12 @@ type scannedSignal struct {
 	hit, unlessHit bool
 }
 
-// signalScan judges a log line by line as it is written to it.
+// signalScan judges a log line by line as it is written to it. overlong is a
+// line past settleLineBytes, which it cannot judge.
 type signalScan struct {
-	signals []scannedSignal
-	line    []byte
+	signals  []scannedSignal
+	line     []byte
+	overlong bool
 }
 
 func (s *signalScan) Write(p []byte) (int, error) {
@@ -303,10 +302,8 @@ func (s *signalScan) Write(p []byte) (int, error) {
 			continue
 		}
 		if len(s.line) >= settleLineBytes {
-			// A long line goes on: the next part starts with the end of this one.
-			tail := append([]byte(nil), s.line[len(s.line)-settleLineOverlap:]...)
-			s.flush()
-			s.line = append(s.line, tail...)
+			s.overlong = true
+			continue
 		}
 		s.line = append(s.line, b)
 	}

@@ -301,18 +301,32 @@ func TestAFailureLineAnywhereInTheLogCounts(t *testing.T) {
 	}
 }
 
-// A line longer than the scan keeps is judged in parts that overlap, so a
-// failure signal cut by a part's end still counts.
-func TestAFailureSignalAcrossALongLinesCutCounts(t *testing.T) {
+// A pattern can span a whole line (Storj's "ping satellite.*failed to dial"),
+// so a long line is judged whole. One past the cap cannot be judged, and the
+// check fails rather than pass a log it did not read.
+func TestALogLineIsJudgedWholeAndOneTooLongFailsTheCheck(t *testing.T) {
 	fastSettle(t)
-	svc := withSignal("")
-	docker, p, _ := deployPinned(t, svc)
-	// The cut falls inside the signal: "canno" ends one part, "t be reached" starts the next.
-	docker.SetLogs(strings.Repeat("x", settleLineBytes-5) + "cannot be reached\n")
-	_, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
+	spanning := withSignal("")
+	spanning.Docker.HealthSignals[0].Pattern = "ping satellite.*failed to dial"
+	docker, p, _ := deployPinned(t, spanning)
+	docker.SetLogs("ping satellite " + strings.Repeat("x", 200<<10) + " failed to dial storage node\n")
+	_, err := p.Deploy(context.Background(), updateSpec(spanning, newBuild), nil)
 	var undone *ImageUpdateUndone
 	if !errors.As(err, &undone) || !strings.Contains(err.Error(), "It cannot start") {
-		t.Fatalf("a failure signal across the cut of a long line: %v; want undone", err)
+		t.Fatalf("a signal spread over a 200 KB line: %v; want undone by the signal", err)
+	}
+	svc := withSignal("")
+	docker, p, _ = deployPinned(t, svc)
+	docker.SetLogs(strings.Repeat("x", settleLineBytes+1) + "\nall good\n")
+	_, err = p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
+	if !errors.As(err, &undone) || !strings.Contains(err.Error(), "did not describe") {
+		t.Fatalf("a line too long to judge: %v; want undone as unreadable", err)
+	}
+	// The control: the same log with its long line under the cap passes.
+	docker, p, _ = deployPinned(t, svc)
+	docker.SetLogs(strings.Repeat("x", settleLineBytes-1) + "\nall good\n")
+	if _, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil); err != nil {
+		t.Fatalf("a long line under the cap: %v", err)
 	}
 }
 

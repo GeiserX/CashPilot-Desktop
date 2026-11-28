@@ -175,8 +175,9 @@ func TestNotifyOnlyChangesNoContainerAndTheDailyRunRunsOnce(t *testing.T) {
 	}
 }
 
-// A daily run cut short (the app quits) does not count as the day's run: the
-// apps it never reached are checked at the next start.
+// A daily run cut short (the app quits, or the process dies) does not count as
+// the day's run: the day is stamped only when the run ends, so the apps it
+// never reached are checked at the next start.
 func TestADailyRunCutShortLeavesTheDayDue(t *testing.T) {
 	app, tag := updatesUnderTest(t)
 	if _, err := app.SaveImageUpdates(imageupdates.Notify, 0, nil); err != nil {
@@ -185,13 +186,17 @@ func TestADailyRunCutShortLeavesTheDayDue(t *testing.T) {
 	app.Docker.SetImage(tag, buildTwo, "sha256:d2")
 	before := app.cfg.Config().ImageUpdates.LastRun
 	cut, cancel := context.WithCancel(context.Background())
-	cancel()
-	release, ok := app.reserveImageUpdates(context.Background())
-	if !ok {
-		t.Fatal("the locks should be free")
+	defer cancel()
+	midRun := "unread"
+	app.Docker.BeforeCall("POST /images/create", func() {
+		// In the middle of the run: a process that died here left this stamp.
+		midRun = app.cfg.Config().ImageUpdates.LastRun
+		cancel()
+	})
+	app.runImageUpdates(cut, false)
+	if midRun != before {
+		t.Fatalf("the day was stamped %q before the run ended (was %q)", midRun, before)
 	}
-	app.runReservedImageUpdates(cut, false)
-	release()
 	if got := app.cfg.Config().ImageUpdates.LastRun; got != before {
 		t.Fatalf("a cut run stamped the day: %q, was %q", got, before)
 	}
@@ -341,14 +346,14 @@ func TestAnAppWithNetworkRightsIsLeftToItsPin(t *testing.T) {
 	if err := app.store.UpsertDeployment(store.Deployment{Slug: "mysterium", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
-	if why := app.imageUpdateBlocker("mysterium", imageUpdateDrift{}); why != i18n.T("go.imageupdates.blocker.pinnedRights") {
+	if why := app.imageUpdateBlocker("mysterium", "", imageUpdateDrift{}); why != i18n.T("go.imageupdates.blocker.pinnedRights") {
 		t.Fatalf("a fence-gated app: %q", why)
 	}
 	// The control: an app with no such rights is not held by it.
 	if err := app.store.UpsertDeployment(store.Deployment{Slug: "honeygain", Status: "running"}); err != nil {
 		t.Fatal(err)
 	}
-	if why := app.imageUpdateBlocker("honeygain", imageUpdateDrift{}); why != "" {
+	if why := app.imageUpdateBlocker("honeygain", "", imageUpdateDrift{}); why != "" {
 		t.Fatalf("an app with no extra rights: %q", why)
 	}
 }
@@ -390,11 +395,17 @@ func TestACustomAppWithDataInAnImageVolumeIsLeftToTheOwner(t *testing.T) {
 		}
 	}
 	// Mounts that could not be read are not clean: the replacement would take
-	// an anonymous volume with the old container.
-	if why := app.imageUpdateBlocker(plain, imageUpdateDrift{loose: map[string][]string{}}); why != i18n.T("go.imageupdates.blocker.mountsUnread") {
-		t.Fatalf("a custom app whose mounts were not read: %q", why)
+	// an anonymous volume with the old container. The check reads the container
+	// the update replaces, so another clean one of the app's (a copy set aside)
+	// does not stand in for it.
+	id, _ := app.Docker.Container("cashpilot-" + plain)
+	if id.ID == "" {
+		t.Fatal("the plain app has no container")
 	}
-	if why := app.imageUpdateBlocker(plain, imageUpdateDrift{loose: map[string][]string{plain: nil}}); why != "" {
+	if why := app.imageUpdateBlocker(plain, id.ID, imageUpdateDrift{loose: map[string][]string{"ctr-set-aside": nil}}); why != i18n.T("go.imageupdates.blocker.mountsUnread") {
+		t.Fatalf("a custom app whose container was not read: %q", why)
+	}
+	if why := app.imageUpdateBlocker(plain, id.ID, imageUpdateDrift{loose: map[string][]string{id.ID: nil}}); why != "" {
 		t.Fatalf("a custom app read with no loose folder: %q", why)
 	}
 }
