@@ -301,8 +301,9 @@ func (s stagingHV) Inventory(ctx context.Context, n winvm.Names, known winvm.Kno
 
 // TestRemoveWithoutAPlanLeavesNoFileOfItsOwn: a Remove with no desired.json
 // touches nothing, so it must not leave the scripts it staged to list the
-// host either. A third Remove on real Windows left two scripts and a new
-// journal in the instance folder. Files it did not write stay, and listed.
+// host either. A third Remove on real Windows left two scripts in the
+// instance folder. The journal stays: a Setup's bootstrap may be writing to
+// it at the same time. Files it did not write stay, and listed.
 func TestRemoveWithoutAPlanLeavesNoFileOfItsOwn(t *testing.T) {
 	for _, earlier := range []bool{false, true} {
 		t.Run("earlier file "+strconv.FormatBool(earlier), func(t *testing.T) {
@@ -326,11 +327,11 @@ func TestRemoveWithoutAPlanLeavesNoFileOfItsOwn(t *testing.T) {
 			for _, e := range entries {
 				names = append(names, e.Name())
 			}
-			want := []string{}
+			want := []string{".cashpilot-files.jsonl"}
 			if earlier {
-				want = []string{".cashpilot-files.jsonl", "state.json"}
+				want = append(want, "state.json")
 			}
-			if !slices.Equal(names, want) && !(len(names) == 0 && len(want) == 0) {
+			if !slices.Equal(names, want) {
 				t.Fatalf("the folder holds %v after Remove, want %v", names, want)
 			}
 		})
