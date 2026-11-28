@@ -49,8 +49,8 @@ func Preflight(ctx context.Context, r Runner, tartHome string, creating bool) []
 		switch {
 		case err != nil:
 			add("disk", "")
-		case free < NeedFreeDisk:
-			add("disk", i18n.T("go.macvm.needDisk", "need", gib(NeedFreeDisk), "have", gib(free)))
+		case free < NeedFreeDisk-keptIPSW(tartHome):
+			add("disk", i18n.T("go.macvm.needDisk", "need", gib(NeedFreeDisk-keptIPSW(tartHome)), "have", gib(free)))
 		default:
 			add("disk", "")
 		}
@@ -63,6 +63,24 @@ func Preflight(ctx context.Context, r Runner, tartHome string, creating bool) []
 		add("guests", "")
 	}
 	return out
+}
+
+// keptIPSW is how much of the restore image an earlier try already wrote: a
+// retry needs that much less free space. It counts at most the image's size.
+func keptIPSW(tartHome string) int64 {
+	var have int64
+	for _, p := range []string{IPSWPath(tartHome), IPSWPath(tartHome) + ".part"} {
+		if fi, err := os.Lstat(p); err == nil && fi.Mode().IsRegular() && fi.Size() > have {
+			have = fi.Size()
+		}
+	}
+	if IPSWPin.Size > 0 && have > IPSWPin.Size {
+		have = IPSWPin.Size
+	}
+	if have > NeedFreeDisk {
+		return 0
+	}
+	return have
 }
 
 // Problems is the checks that are not met.
