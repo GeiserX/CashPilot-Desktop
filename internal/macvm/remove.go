@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // RemoveRequest names what Remove deletes beyond the root side.
@@ -37,7 +38,9 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 			ierr = nil
 		}
 	}
-	if req.TartHome == "" {
+	// The install record names the Tart folder the VM really lives in. The
+	// app's own idea of it only stands in when there is no record.
+	if ierr == nil && inst.TartHome != "" {
 		req.TartHome = inst.TartHome
 	}
 	// The guard uses the fence, the tools and the state. While it runs,
@@ -63,6 +66,13 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 		}
 		// A Tart that did not stop keeps the disk busy.
 		_, _ = d.R.Run(ctx, "/usr/bin/pkill", "-f", "tart run "+VMName+"( |$)")
+		// The fence must outlive the VM: a VM that still runs keeps its pf
+		// rules and everything a second Remove needs.
+		if err := d.waitVMGone(ctx); err != nil {
+			rep.Left = append(rep.Left, VMName+" did not stop, so CashPilot kept its fence: "+err.Error())
+			rep.Left = append(rep.Left, d.Leftovers(ctx, req, inst)...)
+			return rep
+		}
 	}
 	if _, err := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-F", "all"); err == nil {
 		did("the pf anchor " + Anchor)
@@ -70,7 +80,13 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 	// The pf token and the saved Internet Sharing file are what a second
 	// Remove needs to finish, so the state folder stays when either step fails.
 	keepState := false
-	if tok, err := os.ReadFile(d.state(PFToken)); err == nil {
+	unread := func(name string, err error) {
+		keepState = true
+		rep.Left = append(rep.Left, d.state(name)+" could not be read, so CashPilot kept it: "+err.Error())
+	}
+	if tok, err := os.ReadFile(d.state(PFToken)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		unread(PFToken, err)
+	} else if err == nil {
 		if t := strings.TrimSpace(string(tok)); t != "" {
 			if _, err := d.R.Run(ctx, "/sbin/pfctl", "-X", t); err == nil {
 				did("CashPilot's pf reference")
@@ -80,7 +96,9 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 			}
 		}
 	}
-	if orig, err := os.ReadFile(d.state(SharingOrig)); err == nil {
+	if orig, err := os.ReadFile(d.state(SharingOrig)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		unread(SharingOrig, err)
+	} else if err == nil {
 		switch {
 		case string(orig) == "absent":
 			if err := os.Remove(SharingPlist); err == nil || errors.Is(err, os.ErrNotExist) {
@@ -111,27 +129,57 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 	} else if err := os.RemoveAll(d.P.Root); err == nil {
 		did(d.P.Root)
 	}
+	// The owner's own files go with the owner's permissions, never root's: a
+	// folder the owner swaps for a link during the removal then cannot lead
+	// the delete outside what the owner may delete anyway.
+	var owned []string
 	if req.TartHome != "" {
-		vm := VMDir(req.TartHome)
-		if _, err := os.Lstat(vm); err == nil && safeOwnerPath(vm, inst.OwnerHome, req.TartHome) {
-			if os.RemoveAll(vm) == nil {
-				did(vm)
-			}
-		}
 		ipsw := IPSWPath(req.TartHome)
-		for _, p := range []string{ipsw, ipsw + ".part"} {
-			if _, err := os.Lstat(p); err == nil && os.Remove(p) == nil {
-				did(p)
-			}
+		owned = append(owned, VMDir(req.TartHome), ipsw, ipsw+".part")
+	}
+	if req.Tools != "" {
+		owned = append(owned, req.Tools)
+	}
+	for _, p := range owned {
+		tartRoot := req.TartHome
+		if p == req.Tools {
+			tartRoot = "" // the tool cache lives in the owner's home
+		}
+		if _, err := os.Lstat(p); err != nil || !safeOwnerPath(p, inst.OwnerHome, tartRoot) || inst.Owner == "" {
+			continue
+		}
+		if _, err := asOwner(ctx, d.R, inst, d.P.Bin, "/bin/rm", "-rf", "--", p); err == nil {
+			did(p)
 		}
 	}
-	if req.Tools != "" && safeOwnerPath(req.Tools, inst.OwnerHome, "") {
-		if _, err := os.Lstat(req.Tools); err == nil && os.RemoveAll(req.Tools) == nil {
-			did(req.Tools)
-		}
-	}
-	rep.Left = d.Leftovers(ctx, req, inst)
+	rep.Left = append(rep.Left, d.Leftovers(ctx, req, inst)...)
 	return rep
+}
+
+// vmGoneWait is how long Remove waits for Tart to exit before it keeps the fence.
+var vmGoneWait = 15 * time.Second
+
+// waitVMGone waits until no Tart runs the VM. A process list that cannot be
+// read counts as still running.
+func (d *Daemon) waitVMGone(ctx context.Context) error {
+	deadline := time.Now().Add(vmGoneWait)
+	for {
+		ps, err := d.R.Run(ctx, "/bin/ps", "-axww", "-o", "args=")
+		if err == nil && !strings.Contains(ps, "tart run "+VMName) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("could not read the process list: %w", err)
+			}
+			return errors.New("its Tart process still runs")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 // safeOwnerPath keeps a root delete inside the owner's home or Tart folder.

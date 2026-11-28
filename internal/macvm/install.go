@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
@@ -190,15 +191,38 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 			return err
 		}
 	}
-	_ = os.RemoveAll(filepath.Join(d.P.Bin, TartApp))
-	if _, err := d.R.Run(ctx, "/usr/bin/ditto", filepath.Join(tart, TartApp), filepath.Join(d.P.Bin, TartApp)); err != nil {
+	// The new tools go in beside the old ones first. The old ones stay as
+	// .old until the new guard starts, and come back if anything fails before
+	// that, so a failed update leaves the old guard with its own tools. This
+	// runs before the deferred reload of the old guard.
+	var swapped []string
+	defer func() {
+		for _, name := range swapped {
+			cur := filepath.Join(d.P.Bin, name)
+			old := cur + ".old"
+			if done {
+				_ = os.RemoveAll(old)
+				continue
+			}
+			if _, err := os.Lstat(old); err == nil {
+				_ = os.RemoveAll(cur)
+				_ = os.Rename(old, cur)
+			}
+		}
+	}()
+	staged := func(name string) string { return filepath.Join(d.P.Bin, name+".new") }
+	_ = os.RemoveAll(staged(TartApp))
+	if _, err := d.R.Run(ctx, "/usr/bin/ditto", filepath.Join(tart, TartApp), staged(TartApp)); err != nil {
+		return err
+	}
+	if _, err := d.R.Run(ctx, "/usr/sbin/chown", "-R", "root:wheel", staged(TartApp)); err != nil {
 		return err
 	}
 	for _, x := range []struct {
 		src, name string
 		mode      os.FileMode
 	}{{self, DaemonExe, 0o755}, {filepath.Join(softnet, SoftnetExe), SoftnetExe, 0o755 | os.ModeSetuid}} {
-		dst := filepath.Join(d.P.Bin, x.name)
+		dst := staged(x.name)
 		_ = os.Remove(dst)
 		if err := copyFile(x.src, dst, 0o700); err != nil {
 			return err
@@ -210,8 +234,18 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 			return err
 		}
 	}
-	if _, err := d.R.Run(ctx, "/usr/sbin/chown", "-R", "root:wheel", filepath.Join(d.P.Bin, TartApp)); err != nil {
-		return err
+	for _, name := range []string{TartApp, DaemonExe, SoftnetExe} {
+		cur := filepath.Join(d.P.Bin, name)
+		_ = os.RemoveAll(cur + ".old")
+		if _, err := os.Lstat(cur); err == nil {
+			if err := os.Rename(cur, cur+".old"); err != nil {
+				return err
+			}
+		}
+		swapped = append(swapped, name)
+		if err := os.Rename(staged(name), cur); err != nil {
+			return err
+		}
 	}
 	// The agent is written into the VM's disk, so the VM must not run.
 	if err := d.stopForInstall(ctx, inst); err != nil {
@@ -288,16 +322,38 @@ func (d *Daemon) stopForInstall(ctx context.Context, inst Install) error {
 }
 
 // removeDaemon unloads the daemon if it is loaded, and waits until it is gone.
+// Only launchd's own "no such service" counts as gone: a probe that failed for
+// another reason, or was cancelled, proves nothing.
 func (d *Daemon) removeDaemon(ctx context.Context) error {
-	if _, err := d.R.Run(ctx, "/bin/launchctl", "print", "system/"+Label); err != nil {
-		return nil
+	gone, err := d.daemonGone(ctx)
+	if err != nil || gone {
+		return err
 	}
 	_, _ = d.R.Run(ctx, "/bin/launchctl", "bootout", "system/"+Label)
 	for i := 0; i < 50; i++ {
-		if _, err := d.R.Run(ctx, "/bin/launchctl", "print", "system/"+Label); err != nil {
-			return nil
+		if gone, err := d.daemonGone(ctx); err != nil || gone {
+			return err
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 	return errors.New("the old Secure VM daemon did not stop")
+}
+
+// launchdNoService is launchctl's exit code for a service that is not loaded.
+const launchdNoService = 113
+
+// daemonGone is whether launchd has no job Label.
+func (d *Daemon) daemonGone(ctx context.Context) (bool, error) {
+	_, err := d.R.Run(ctx, "/bin/launchctl", "print", "system/"+Label)
+	if err == nil {
+		return false, nil
+	}
+	if cerr := ctx.Err(); cerr != nil {
+		return false, cerr
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == launchdNoService {
+		return true, nil
+	}
+	return false, fmt.Errorf("could not ask launchd about %s: %w", Label, err)
 }

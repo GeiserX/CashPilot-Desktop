@@ -71,8 +71,12 @@ func Main(role string, args []string, appVersion string, stdout io.Writer) int {
 		return 0
 	case "remove":
 		rep := d.Remove(ctx, RemoveRequest{Owner: *owner, TartHome: *tartHome, Tools: *tools})
-		_ = json.NewEncoder(stdout).Encode(rep)
-		if len(rep.Left) > 0 {
+		// Exit 0 even when something is left: the app runs this through
+		// AppleScript, which drops stdout on a nonzero exit, and the report is
+		// how the page lists what is left. A failed admin prompt never gets
+		// here, so it stays a separate error.
+		if err := json.NewEncoder(stdout).Encode(rep); err != nil {
+			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
 		return 0
