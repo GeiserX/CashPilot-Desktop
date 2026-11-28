@@ -42,6 +42,8 @@ func TestNewManagerAppliesDefaults(t *testing.T) {
 		Timezone:               "UTC",
 		FleetBindAddress:       "127.0.0.1",
 		FleetPort:              8085,
+		// A new install updates its apps by itself (image_updates_test.go).
+		ImageUpdates: &ImageUpdates{Mode: ImageUpdatesAuto, Hour: ImageUpdatesDefaultHour},
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("unexpected default config:\n got %+v\nwant %+v", cfg, want)

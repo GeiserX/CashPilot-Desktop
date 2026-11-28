@@ -268,6 +268,20 @@ type DeployOptions struct {
 	// runtime.DeploySpec.ExpectedContainer); nil replaces whatever runs, as the
 	// Deploy button does.
 	ExpectedContainer *string
+	// FollowTag and SettleSeconds are an app image update (internal/imageupdates):
+	// see runtime.DeploySpec. Only the first copy is deployed this way; the update
+	// leaves a service with more copies alone.
+	FollowTag     bool
+	SettleSeconds int
+	// ExpectImage is the build the update's check found: see runtime.DeploySpec.
+	ExpectImage string
+	// CheckedAt, when set, is the moment the update's check began. The deploy is
+	// refused when the owner stopped the service since then or it is not running
+	// now, and it holds the lock a Stop takes, so a Stop pressed during the update
+	// waits for it and is never undone by the check period.
+	CheckedAt time.Time
+	// ImageUpdate, when set, receives what the update did with the old image.
+	ImageUpdate func(*runtime.ImageUpdateResult)
 }
 
 // DeployTarget names the container a deploy of slug would replace: its full ID, or
@@ -365,6 +379,13 @@ func (m *Manager) DeployWith(ctx context.Context, slug string, credentials map[s
 // If the first copy starts and a later step fails, it returns the deployment with
 // the error and no wallet result.
 func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map[string]string, opts DeployOptions) (store.Deployment, *runtime.WalletResult, error) {
+	if !opts.CheckedAt.IsZero() {
+		// Before the deploy lock, as RestartStuck takes them.
+		defer m.stops.lock(slug)()
+		if m.stops.since(slug, opts.CheckedAt) || !m.runningNow(ctx, slug) {
+			return store.Deployment{}, nil, errors.New(i18n.T("go.services.update.stopped", "slug", slug))
+		}
+	}
 	defer m.lockDeploy(slug)()
 	svc, ok := m.catalog.Get(slug)
 	if !ok {
@@ -522,12 +543,15 @@ func (m *Manager) DeployWallet(ctx context.Context, slug string, credentials map
 		}
 	}
 	m.store.RecordEvent(slug, "pull_start", deploySource(ctx, provider, svc, runtimeKind))
-	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet, AdminApproval: opts.AdminApproval, ExpectedContainer: opts.ExpectedContainer}, func(message string) {
+	info, err := provider.Deploy(ctx, runtime.DeploySpec{Slug: slug, Service: svc, Env: credentials, Wallet: wallet, AdminApproval: opts.AdminApproval, ExpectedContainer: opts.ExpectedContainer, FollowTag: opts.FollowTag, SettleSeconds: opts.SettleSeconds, ExpectImage: opts.ExpectImage}, func(message string) {
 		m.store.RecordEvent(slug, "runtime_progress", message)
 	})
 	if err != nil {
 		m.store.RecordEvent(slug, "deploy_error", err.Error())
 		return store.Deployment{}, nil, err
+	}
+	if opts.ImageUpdate != nil && info.ImageUpdate != nil {
+		opts.ImageUpdate(info.ImageUpdate)
 	}
 
 	deployment := store.Deployment{
@@ -1116,3 +1140,34 @@ func (e *textError) Error() string { return e.text }
 func (e *textError) Unwrap() error { return e.cause }
 
 func wrapText(text string, cause error) error { return &textError{text: text, cause: cause} }
+
+// ImageChecker is a runtime that can say whether a service's tag has a newer build
+// (runtime.DockerProvider).
+type ImageChecker interface {
+	CheckImage(ctx context.Context, slug string, svc catalog.Service) (runtime.ImageCheck, error)
+}
+
+// CheckImage pulls the tag slug's image follows and compares it with what runs.
+// ok is false when slug runs on a runtime with images to follow: the native one.
+func (m *Manager) CheckImage(ctx context.Context, slug string) (check runtime.ImageCheck, ok bool, err error) {
+	svc, found := m.catalog.Get(slug)
+	if !found {
+		return runtime.ImageCheck{}, false, errors.New(i18n.T("go.services.unknownService", "slug", slug))
+	}
+	if svc.Custom {
+		revealed, release, err := m.holdCustom(slug)
+		if err != nil {
+			return runtime.ImageCheck{}, false, err
+		}
+		defer release()
+		svc = revealed
+	}
+	// A service that runs an image the user chose is left out by the caller.
+	provider, runtimeKind := m.resolveProvider(m.kindForService(svc))
+	checker, can := provider.(ImageChecker)
+	if !can || runtimeKind == nativeRuntimeKind {
+		return runtime.ImageCheck{}, false, nil
+	}
+	check, err = checker.CheckImage(ctx, slug, svc)
+	return check, err == nil, err
+}

@@ -140,6 +140,43 @@ declare module "../wailsjs/go/main/App" {
   // reminder of the service; occurrence "" is the current one.
   export function GetReminders(): Promise<RemindersView>;
   export function ReminderAction(slug: string, rule: string, action: string, occurrence: string, days: number): Promise<RemindersView>;
+  // App image updates (app_image_updates.go). apps maps a slug to its own
+  // choice; "" follows the choice for every app.
+  export function GetImageUpdates(): Promise<ImageUpdatesView>;
+  export function SaveImageUpdates(mode: string, hour: number, apps: Record<string, string>): Promise<ImageUpdateSettings>;
+  export function RunImageUpdates(): Promise<void>;
+}
+
+export interface ImageUpdateSettings {
+  mode: string;
+  hour: number;
+  services?: Record<string, string> | null;
+  // The one-click offer to turn updates on, on an upgraded install.
+  offer?: boolean;
+  // YYYY-MM-DD of the last daily run.
+  lastRun?: string;
+}
+
+export interface ImageUpdateRow {
+  id: number;
+  at: string;
+  slug: string;
+  name: string;
+  result: string;
+  oldImage: string;
+  newImage: string;
+  oldDigest: string;
+  newDigest: string;
+  detail: string;
+  cleared: boolean;
+}
+
+export interface ImageUpdatesView {
+  settings: ImageUpdateSettings;
+  settleSeconds: number;
+  apps: { slug: string; name: string }[] | null;
+  history: ImageUpdateRow[] | null;
+  running: boolean;
 }
 
 export interface ProxyCapView {

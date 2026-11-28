@@ -84,6 +84,8 @@ export function GetEarningsSummary():Promise<main.EarningsSummary>;
 
 export function GetFleetState():Promise<main.FleetState>;
 
+export function GetImageUpdates():Promise<main.ImageUpdatesView>;
+
 export function GetLanguageState(arg1:Array<string>):Promise<main.LanguageState>;
 
 export function GetLogs(arg1:string,arg2:number):Promise<string>;
@@ -160,11 +162,15 @@ export function RevealWalletSeed(arg1:string,arg2:string):Promise<string>;
 
 export function RevokeSessionRisk(arg1:string):Promise<Record<string, config.SessionConsent>>;
 
+export function RunImageUpdates():Promise<void>;
+
 export function RunSetupStep(arg1:string,arg2:boolean):Promise<main.SetupStepResult>;
 
 export function SaveCredentials(arg1:string,arg2:Record<string, string>):Promise<void>;
 
 export function SaveCustomService(arg1:string,arg2:services.CustomDefinition):Promise<services.CustomServiceView>;
+
+export function SaveImageUpdates(arg1:string,arg2:number,arg3:Record<string, string>):Promise<config.ImageUpdates>;
 
 export function SaveProxy(arg1:number,arg2:Record<string, string>):Promise<proxies.View>;
 
