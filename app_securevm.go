@@ -112,9 +112,9 @@ func (a *App) SecureVMUndo() (securevm.RemoveResult, error) {
 }
 
 // SecureVMPlace puts an earner in the Secure VM ("vm") or takes it out ("host").
-// One earner runs in one place: once the guest copy is in, a deployment of
-// it on this computer stops, and taking the guest copy out starts that
-// deployment again. The deployment and its data stay either way.
+// One earner runs in one place. A deployment of it on this computer stops
+// before the guest copy goes in, and starts again when the guest copy is out
+// or did not go in. The deployment and its data stay either way.
 func (a *App) SecureVMPlace(slug, where string) error {
 	e, err := a.secureVMEngine()
 	if err != nil {
@@ -124,16 +124,22 @@ func (a *App) SecureVMPlace(slug, where string) error {
 	if p != securevm.VM && p != securevm.Host {
 		return errors.New(`where must be "vm" or "host"`)
 	}
+	here := a.store != nil && a.services != nil && a.deployedHere(slug)
+	if here && p == securevm.VM {
+		if err := a.StopService(slug); err != nil {
+			return err
+		}
+	}
 	if err := e.Place(a.bg(), slug, p, a.secureVMProgress); err != nil {
+		if here && p == securevm.VM {
+			_ = a.StartService(slug)
+		}
 		return err
 	}
-	if a.store == nil || a.services == nil || !a.deployedHere(slug) {
-		return nil
+	if here && p == securevm.Host {
+		return a.StartService(slug)
 	}
-	if p == securevm.VM {
-		return a.StopService(slug)
-	}
-	return a.StartService(slug)
+	return nil
 }
 
 // SecureVMOpenScreen shows the Secure VM's screen, with slug's app in front.
