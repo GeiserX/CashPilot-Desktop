@@ -73,6 +73,13 @@ type Container struct {
 	// grant), as the create sent them.
 	DeviceRequests []DeviceRequest
 	Devices        []string
+	// ImageID is the ID of the build the container was created from, which
+	// inspect reports as its Image, as Docker does (SetImage).
+	ImageID string
+	// RestartCount and Health are what inspect reports: how often Docker
+	// restarted it, and its image health check's status ("" for none).
+	RestartCount int
+	Health       string
 }
 
 // DeviceRequest is one HostConfig device request (an NVIDIA GPU).
@@ -147,6 +154,82 @@ type Docker struct {
 	// created is every container ever created, as it was created, removed ones
 	// included (Created).
 	created []Container
+	// builds are what SetImage made of a reference: the build a pull of it gets.
+	// crashing holds the build IDs whose containers Docker restarts right after
+	// each start (SetCrashing). removedImages lists every image deleted.
+	builds        map[string]Build
+	crashing      map[string]bool
+	removedImages []string
+	// onImageInspect runs after each image inspect is answered (OnImageInspect).
+	onImageInspect func(ref string)
+	// failLogs makes every log read answer a server error (FailLogs).
+	failLogs bool
+}
+
+// Build is the image a reference points at: its ID and its registry digest.
+type Build struct {
+	ID     string
+	Digest string
+}
+
+// SetImage points ref (repository:tag) at a build, as a registry moving a tag
+// does: the next pull and inspect of ref get it. Without it a ref's ID is
+// "sha256:" plus the ref.
+func (d *Docker) SetImage(ref, id, digest string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.builds == nil {
+		d.builds = map[string]Build{}
+	}
+	d.builds[ref] = Build{ID: id, Digest: digest}
+}
+
+// OnImageInspect runs fn after each image inspect is answered, outside the lock:
+// a test moves a tag there, between a deploy's check of the image and its create.
+func (d *Docker) OnImageInspect(fn func(ref string)) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.onImageInspect = fn
+}
+
+// SetCrashing makes every container of build id crash after each start: Docker
+// restarts it, so inspect shows a restart count.
+func (d *Docker) SetCrashing(id string, crash bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.crashing == nil {
+		d.crashing = map[string]bool{}
+	}
+	d.crashing[id] = crash
+}
+
+// SetHealth sets a container's image health check status ("unhealthy").
+func (d *Docker) SetHealth(name, status string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if c := d.find(name); c != nil {
+		c.Health = status
+	}
+}
+
+// RemovedImages lists the images deleted, in order.
+func (d *Docker) RemovedImages() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.removedImages...)
+}
+
+// build is the build ref names. The caller holds the lock.
+func (d *Docker) build(ref string) Build {
+	if b, ok := d.builds[ref]; ok {
+		return b
+	}
+	for _, b := range d.builds {
+		if b.ID == ref {
+			return b
+		}
+	}
+	return Build{ID: "sha256:" + ref}
 }
 
 // NewDocker starts the fake daemon on a loopback TCP port.
@@ -197,6 +280,14 @@ func (d *Docker) SetPullError(message string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.pullError = message
+}
+
+// FailLogs makes a log read of an app's container answer a server error, as a
+// daemon that cannot read its log does. The fence and wallet helpers still answer.
+func (d *Docker) FailLogs(fail bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.failLogs = fail
 }
 
 // SetLogs replaces the log text the fake streams back.
@@ -363,6 +454,8 @@ func (d *Docker) handle(w http.ResponseWriter, r *http.Request) {
 		})
 	case path == "/images/create":
 		d.pull(w, r)
+	case strings.HasPrefix(path, "/images/") && r.Method == http.MethodDelete:
+		d.removeImage(w, strings.TrimPrefix(path, "/images/"))
 	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
 		d.image(w, strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json"))
 	case path == "/containers/create":
@@ -419,10 +512,39 @@ func (d *Docker) pull(w http.ResponseWriter, r *http.Request) {
 // daemon set down after the pull, a digest ref) still reaches the same steps a
 // real daemon would.
 func (d *Docker) image(w http.ResponseWriter, ref string) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"Id":     "sha256:" + ref,
+	d.mu.Lock()
+	b := d.build(ref)
+	after := d.onImageInspect
+	d.mu.Unlock()
+	if after != nil {
+		defer after(ref)
+	}
+	answer := map[string]any{
+		"Id":     b.ID,
 		"Config": map[string]any{"Entrypoint": []string{"entrypoint"}},
-	})
+	}
+	if b.Digest != "" {
+		repo := ref
+		if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+			repo = ref[:i]
+		}
+		answer["RepoDigests"] = []string{repo + "@" + b.Digest}
+	}
+	writeJSON(w, http.StatusOK, answer)
+}
+
+// removeImage deletes an image no container uses, as Docker does without force.
+func (d *Docker) removeImage(w http.ResponseWriter, id string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, c := range d.containers {
+		if c.ImageID == id {
+			writeJSON(w, http.StatusConflict, map[string]string{"message": "conflict: unable to delete " + id + " - image is being used by running container " + c.ID})
+			return
+		}
+	}
+	d.removedImages = append(d.removedImages, id)
+	writeJSON(w, http.StatusOK, []map[string]string{{"Deleted": id}})
 }
 
 func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
@@ -481,6 +603,7 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		ID:          fmt.Sprintf("ctr%09d", d.nextID),
 		Name:        name,
 		Image:       body.Image,
+		ImageID:     d.build(body.Image).ID,
 		State:       "created",
 		Labels:      body.Labels,
 		Env:         body.Env,
@@ -596,6 +719,11 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 		text := d.logs
 		c := d.find(id)
 		found := c != nil
+		if found && d.failLogs && c.Labels["cashpilot.probe"] == "" && c.Labels["cashpilot.wallet-helper"] == "" {
+			d.mu.Unlock()
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "cannot read the log"})
+			return
+		}
 		if found && c.Labels["cashpilot.probe"] == "fence" {
 			// The LAN fence helper prints one JSON result: the table is in place.
 			text = `{"backend":"nft","ok":true,"changed":true,"error":"","present":true,"matches":true,"counters":{}}` + "\n"
@@ -644,13 +772,18 @@ func (d *Docker) inspect(w http.ResponseWriter, id string) {
 	for _, m := range c.Mounts {
 		mounts = append(mounts, map[string]any{"Type": "volume", "Name": m.Source, "Destination": m.Target, "RW": true})
 	}
+	state := map[string]any{"Status": c.State, "Running": c.State == "running", "Restarting": c.State == "restarting", "Error": c.StateError}
+	if c.Health != "" {
+		state["Health"] = map[string]any{"Status": c.Health}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"Id":     c.ID,
-		"Name":   "/" + c.Name,
-		"Image":  c.Image,
-		"State":  map[string]any{"Status": c.State, "Running": c.State == "running", "Error": c.StateError},
-		"Config": map[string]any{"Image": c.Image, "Labels": c.Labels, "Env": c.Env, "Cmd": c.Cmd},
-		"Mounts": mounts,
+		"Id":           c.ID,
+		"Name":         "/" + c.Name,
+		"Image":        c.ImageID,
+		"RestartCount": c.RestartCount,
+		"State":        state,
+		"Config":       map[string]any{"Image": c.Image, "Labels": c.Labels, "Env": c.Env, "Cmd": c.Cmd},
+		"Mounts":       mounts,
 		"HostConfig": map[string]any{
 			"NetworkMode": c.NetworkMode, "Runtime": c.Runtime, "PortBindings": c.PortBindings,
 			"RestartPolicy": map[string]any{"Name": c.RestartPolicy},
@@ -866,6 +999,9 @@ func (d *Docker) setState(w http.ResponseWriter, id, state string) {
 	c.State = state
 	if state == "running" {
 		c.StateError = ""
+		if d.crashing[c.ImageID] {
+			c.RestartCount++
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

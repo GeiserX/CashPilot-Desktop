@@ -142,6 +142,10 @@ export function GetFleetState() {
   return window['go']['main']['App']['GetFleetState']();
 }
 
+export function GetImageUpdates() {
+  return window['go']['main']['App']['GetImageUpdates']();
+}
+
 export function GetLanguageState(arg1) {
   return window['go']['main']['App']['GetLanguageState'](arg1);
 }
@@ -294,6 +298,10 @@ export function RevokeSessionRisk(arg1) {
   return window['go']['main']['App']['RevokeSessionRisk'](arg1);
 }
 
+export function RunImageUpdates() {
+  return window['go']['main']['App']['RunImageUpdates']();
+}
+
 export function RunSetupStep(arg1, arg2) {
   return window['go']['main']['App']['RunSetupStep'](arg1, arg2);
 }
@@ -304,6 +312,10 @@ export function SaveCredentials(arg1, arg2) {
 
 export function SaveCustomService(arg1, arg2) {
   return window['go']['main']['App']['SaveCustomService'](arg1, arg2);
+}
+
+export function SaveImageUpdates(arg1, arg2, arg3) {
+  return window['go']['main']['App']['SaveImageUpdates'](arg1, arg2, arg3);
 }
 
 export function SaveProxy(arg1, arg2) {

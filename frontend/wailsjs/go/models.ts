@@ -1164,6 +1164,26 @@ export namespace collectors {
 
 export namespace config {
 	
+	export class ImageUpdates {
+	    mode: string;
+	    hour: number;
+	    services?: Record<string, string>;
+	    offer?: boolean;
+	    lastRun?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageUpdates(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mode = source["mode"];
+	        this.hour = source["hour"];
+	        this.services = source["services"];
+	        this.offer = source["offer"];
+	        this.lastRun = source["lastRun"];
+	    }
+	}
 	export class SetupJournal {
 	    flow: string;
 	    step: string;
@@ -1248,6 +1268,7 @@ export namespace config {
 	    serverCommandsOff?: boolean;
 	    serverCommandsChosen?: boolean;
 	    pairingRevision?: string;
+	    imageUpdates?: ImageUpdates;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppConfig(source);
@@ -1283,6 +1304,7 @@ export namespace config {
 	        this.serverCommandsOff = source["serverCommandsOff"];
 	        this.serverCommandsChosen = source["serverCommandsChosen"];
 	        this.pairingRevision = source["pairingRevision"];
+	        this.imageUpdates = this.convertValues(source["imageUpdates"], ImageUpdates);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1303,6 +1325,7 @@ export namespace config {
 		    return a;
 		}
 	}
+	
 	
 
 }
@@ -2465,6 +2488,109 @@ export namespace main {
 		    return a;
 		}
 	}
+	export class ImageUpdateApp {
+	    slug: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageUpdateApp(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.slug = source["slug"];
+	        this.name = source["name"];
+	    }
+	}
+	export class ImageUpdateRow {
+	    id: number;
+	    // Go type: time
+	    at: any;
+	    slug: string;
+	    result: string;
+	    oldImage: string;
+	    newImage: string;
+	    oldDigest: string;
+	    newDigest: string;
+	    detail: string;
+	    cleared: boolean;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageUpdateRow(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.at = this.convertValues(source["at"], null);
+	        this.slug = source["slug"];
+	        this.result = source["result"];
+	        this.oldImage = source["oldImage"];
+	        this.newImage = source["newImage"];
+	        this.oldDigest = source["oldDigest"];
+	        this.newDigest = source["newDigest"];
+	        this.detail = source["detail"];
+	        this.cleared = source["cleared"];
+	        this.name = source["name"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageUpdatesView {
+	    settings: config.ImageUpdates;
+	    settleSeconds: number;
+	    apps: ImageUpdateApp[];
+	    history: ImageUpdateRow[];
+	    running: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageUpdatesView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.settings = this.convertValues(source["settings"], config.ImageUpdates);
+	        this.settleSeconds = source["settleSeconds"];
+	        this.apps = this.convertValues(source["apps"], ImageUpdateApp);
+	        this.history = this.convertValues(source["history"], ImageUpdateRow);
+	        this.running = source["running"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ImportApplyRequest {
 	    source: string;
 	    files: importers.File[];
@@ -3420,6 +3546,22 @@ export namespace runtime {
 	        this.inside = source["inside"];
 	        this.outsideStopped = source["outsideStopped"];
 	        this.waiting = source["waiting"];
+	    }
+	}
+	export class ImageUpdateResult {
+	    OldImage: string;
+	    NewImage: string;
+	    OldKept: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageUpdateResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.OldImage = source["OldImage"];
+	        this.NewImage = source["NewImage"];
+	        this.OldKept = source["OldKept"];
 	    }
 	}
 	export class InstallGuide {
