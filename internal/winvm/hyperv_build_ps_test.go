@@ -674,6 +674,59 @@ func TestIdleNICsDoNotBreakTheCapture(t *testing.T) {
 	}
 }
 
+// A physical NIC can be idle for a whole step: the gateway red control's
+// path never leaves the host, and the lab's only NIC sent nothing for 39 s
+// (setup 1o). Its own packet counters tell idle from missed: unchanged
+// across the capture, its empty export is the truth; changed, the capture
+// missed what it carried.
+func TestASilentPhysicalNICIsJudgedByItsCounters(t *testing.T) {
+	ctx := context.Background()
+	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},{"Id":5,"Name":"Wi-Fi","Type":2,"ifIndex":9},{"Id":9,"Name":"vEthernet","Type":6,"ifIndex":20}]}]`
+	const components = `"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7},{"id":5,"type":2,"name":"Wi-Fi","ifIndex":9},{"id":9,"type":6,"name":"vEthernet","ifIndex":20}]`
+	traffic := pcapng(ipv4TCP(netip.MustParseAddr("192.0.2.10"), netip.MustParseAddr("192.0.2.50"), 45000))
+	for _, tc := range []struct {
+		name          string
+		empty         []int
+		before, after string
+		ok            bool
+	}{
+		{"every physical NIC idle by its counters", []int{4, 5}, `{"7":100,"9":50}`, `{"7":100,"9":50}`, true},
+		{"a silent NIC whose counters moved", []int{5}, `{"7":100,"9":50}`, `{"7":180,"9":51}`, false},
+		{"no counters: one physical NIC must show packets", []int{4, 5}, `{}`, `{}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true,"stats":`+tc.before+`}`)
+			mockCaptureStart(h, r)
+			p := &psProber{h: h, owner: tOwner, switchID: "c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e", tmp: filepath.Join(t.TempDir(), proofDir)}
+			capture, err := p.Pktmon(ctx, []PktFilter{{Addr: netip.MustParseAddr("192.0.2.50")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := capture.(*psCapture).dir
+			var files []string
+			for _, id := range []int{4, 5, 9} {
+				path := filepath.Join(dir, "c"+strconv.Itoa(id)+".pcapng")
+				data := traffic
+				if slices.Contains(tc.empty, id) {
+					data = pcapng()
+				}
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, `{"id":`+strconv.Itoa(id)+`,"path":`+jsonQuote(path)+`}`)
+			}
+			r.answers = append(r.answers, `{`+components+`,"stats":`+tc.after+`}`, `{"files":[`+strings.Join(files, ",")+`]}`)
+			_, err = capture.Stop(ctx)
+			if tc.ok && err != nil {
+				t.Fatalf("Stop = %v; an idle NIC by its own counters is not a broken capture", err)
+			}
+			if !tc.ok && (err == nil || !strings.Contains(err.Error(), "component")) {
+				t.Fatalf("Stop = %v, want the silent NIC refused", err)
+			}
+		})
+	}
+}
+
 // pktmon logs a host vNIC's packets under its NDIS twin, the SecondaryId of
 // its Miniport entry, and exports its own entry with headers only (setup 1k:
 // component 314 empty, its twin 299 full). The vNIC counts as seen when

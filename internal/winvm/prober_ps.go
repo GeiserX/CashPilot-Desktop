@@ -88,24 +88,42 @@ if ($LASTEXITCODE -ne 0) { throw ('pktmon list failed: ' + $LASTEXITCODE) }
 Write-Doc ([ordered]@{ list = $list })
 `
 
+// nicPacketsPrelude reads each adapter's packet counters, by ifIndex. Taken
+// before the capture starts and after it stops, they tell an idle NIC from
+// one whose packets the capture missed.
+const nicPacketsPrelude = `function Get-NICPackets {
+  $o = @{}
+  foreach ($a in @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue)) {
+    $s = Get-NetAdapterStatistics -Name $a.Name -IncludeHidden -ErrorAction SilentlyContinue
+    if ($s) {
+      $o[[string]$a.ifIndex] = [uint64]$s.ReceivedUnicastPackets + [uint64]$s.ReceivedMulticastPackets + [uint64]$s.ReceivedBroadcastPackets +
+        [uint64]$s.SentUnicastPackets + [uint64]$s.SentMulticastPackets + [uint64]$s.SentBroadcastPackets
+    }
+  }
+  $o
+}
+`
+
 // Pktmon filters are shared across the host. Capture without changing them,
 // then verify from the ETL metadata that no filter narrowed the capture.
-const scriptPktmonStart = buildPrelude + `if (Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue) { throw 'A pktmon session is already running.' }
+const scriptPktmonStart = buildPrelude + nicPacketsPrelude + `if (Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue) { throw 'A pktmon session is already running.' }
 $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
+$stats = Get-NICPackets
 & $pm start --capture --comp nics --pkt-size 128 -f $in.etl | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ('pktmon start failed: ' + $LASTEXITCODE) }
 Start-Sleep -Seconds 3
-Write-Doc ([ordered]@{ ok = $true })
+Write-Doc ([ordered]@{ ok = $true; stats = $stats })
 `
 
 // PktMon ETW event 20 describes a component, while 100 and 110
 // describe IPv4 and IPv6 packet filters. These event IDs are independent of
 // the Windows display language.
-const scriptPktmonStop = buildPrelude + diskIdentityPrelude + `$s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
+const scriptPktmonStop = buildPrelude + diskIdentityPrelude + nicPacketsPrelude + `$s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
 if ($s.Count -ne 1 -or [string]$s[0].LocalFilePath -ne $in.etl -or [CpdDisk]::Identify($in.etl) -cne $in.etlId) { throw 'The running pktmon capture is not the one this proof started.' }
 $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
 & $pm stop | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
+$stats = Get-NICPackets
 # Windows PowerShell 5.1 can return no matches for the ETL when the
 # hashtable includes ProviderName. Check the publisher GUID on the results.
 $pktmonProvider = [guid]'4d4f80d9-c8bd-4d73-bb5b-19c90402c5ac'
@@ -131,6 +149,7 @@ $components = @(foreach ($event in @($metadata | Where-Object { $_.Id -eq 20 }))
 Write-Doc ([ordered]@{
   components = $components
   filtered = [bool]($metadata | Where-Object { $_.Id -eq 100 -or $_.Id -eq 110 } | Select-Object -First 1)
+  stats = $stats
 })
 `
 
@@ -440,14 +459,21 @@ func (p *psProber) Pktmon(ctx context.Context, filters []PktFilter) (Capture, er
 	if err := j.record(etlRel, ""); err != nil {
 		return nil, err
 	}
-	if err := p.h.ok(ctx, scriptPktmonStart, map[string]string{"etl": etl}); err != nil {
+	var started struct {
+		OK    bool           `json:"ok"`
+		Stats map[int]uint64 `json:"stats"`
+	}
+	if err := p.h.call(ctx, scriptPktmonStart, map[string]string{"etl": etl}, &started); err != nil {
 		return nil, err
+	}
+	if !started.OK {
+		return nil, errors.New("pktmon start did not report success")
 	}
 	id, err := j.note(etlRel)
 	if err != nil {
 		return nil, err
 	}
-	return &psCapture{p: p, dir: dir, etl: etl, etlID: id, root: root, rel: rel, filters: filters, comps: comps, host: host}, nil
+	return &psCapture{p: p, dir: dir, etl: etl, etlID: id, root: root, rel: rel, filters: filters, comps: comps, host: host, before: started.Stats}, nil
 }
 
 type psCapture struct {
@@ -460,14 +486,16 @@ type psCapture struct {
 	filters []PktFilter
 	comps   map[int]pktComp
 	host    HostNet
+	before  map[int]uint64 // each adapter's packet counters before the capture
 }
 
 // Stop stops the capture, classifies each NIC component by the host's view of
 // its interface, and reads the packets each one saw.
 func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	var lw struct {
-		Components []pktComp `json:"components"`
-		Filtered   bool      `json:"filtered"`
+		Components []pktComp      `json:"components"`
+		Filtered   bool           `json:"filtered"`
+		Stats      map[int]uint64 `json:"stats"`
 	}
 	if err := c.p.h.call(ctx, scriptPktmonStop, map[string]string{"etl": c.etl, "etlId": c.etlID}, &lw); err != nil {
 		return nil, err
@@ -586,8 +614,11 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	// An idle NIC, such as the extension adapter of another VM's switch or
 	// an unplugged Ethernet port, sees nothing in a step (setup 1j). Its
 	// silence proves nothing either way, and a packet on it still counts as
-	// leaving. The probe's own path must show packets: our vNIC, and at
-	// least one physical NIC.
+	// leaving. Our vNIC must show packets. A silent physical NIC is idle
+	// when its own counters did not move across the capture (setup 1o: the
+	// gateway step never leaves the host). If they moved, the capture
+	// missed what it carried. Without counters, at least one physical NIC
+	// must show packets.
 	silentPhysical, physicalSaw := 0, false
 	for _, nic := range slices.Sorted(maps.Keys(saw)) {
 		switch classes[nic] {
@@ -596,9 +627,16 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 				return nil, fmt.Errorf("component %d: %w", nic, errNoPacketData)
 			}
 		case "physical":
-			if saw[nic] {
+			ifx := comps[nic].IfIndex
+			before, ok1 := c.before[ifx]
+			after, ok2 := lw.Stats[ifx]
+			switch {
+			case saw[nic]:
 				physicalSaw = true
-			} else if silentPhysical == 0 {
+			case ok1 && ok2 && before == after:
+			case ok1 && ok2:
+				return nil, fmt.Errorf("component %d: the NIC carried %d packets that the capture does not show", nic, after-before)
+			case silentPhysical == 0:
 				silentPhysical = nic
 			}
 		}
