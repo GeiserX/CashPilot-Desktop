@@ -1181,6 +1181,15 @@ func (s *Store) migrate() error {
 	if _, err = s.execWrite(proxiesDDL); err != nil {
 		return err
 	}
+	// After proxiesDDL, which makes the table on a new database. A copy recorded
+	// before this column has no ticks (services.copyTickRefusal).
+	if has, err := s.columnExists("proxied_copies", "acknowledged"); err != nil {
+		return err
+	} else if !has {
+		if _, err := s.execWrite(`ALTER TABLE proxied_copies ADD COLUMN acknowledged TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
 	if _, err = s.execWrite(routesDDL); err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // Proxies the owner runs copies of services through (internal/proxies). The
@@ -22,6 +23,7 @@ const proxiesDDL = `
 		slug TEXT NOT NULL,
 		stopped_by_cap INTEGER NOT NULL DEFAULT 0,
 		created_at TEXT NOT NULL,
+		acknowledged TEXT NOT NULL DEFAULT '',
 		PRIMARY KEY (proxy_id, slug)
 	);
 `
@@ -38,10 +40,13 @@ type Proxy struct {
 }
 
 // ProxiedCopy is the record of a copy of a service running through a proxy.
+// Acknowledged are the owner's ticks it was added with (proxies.Acknowledgements);
+// a copy added before a tick existed has none.
 type ProxiedCopy struct {
 	ProxyID      int64
 	Slug         string
 	StoppedByCap bool
+	Acknowledged []string
 }
 
 // InsertProxy stores a new proxy and returns its id.
@@ -135,13 +140,14 @@ func (s *Store) ListProxies() ([]Proxy, error) {
 	return out, rows.Err()
 }
 
-// SaveProxiedCopy records a copy of slug through a proxy.
-func (s *Store) SaveProxiedCopy(proxyID int64, slug string) error {
+// SaveProxiedCopy records a copy of slug through a proxy, with the owner's ticks it
+// was added with. Adding it again replaces them.
+func (s *Store) SaveProxiedCopy(proxyID int64, slug string, acknowledged []string) error {
 	_, err := s.execWrite(`
-		INSERT INTO proxied_copies(proxy_id, slug, stopped_by_cap, created_at)
-		VALUES(?, ?, 0, datetime('now'))
-		ON CONFLICT(proxy_id, slug) DO UPDATE SET stopped_by_cap = 0
-	`, proxyID, slug)
+		INSERT INTO proxied_copies(proxy_id, slug, stopped_by_cap, created_at, acknowledged)
+		VALUES(?, ?, 0, datetime('now'), ?)
+		ON CONFLICT(proxy_id, slug) DO UPDATE SET stopped_by_cap = 0, acknowledged = excluded.acknowledged
+	`, proxyID, slug, strings.Join(acknowledged, ","))
 	return err
 }
 
@@ -169,7 +175,7 @@ func (s *Store) DeleteProxiedCopiesOf(slug string) error {
 
 // ListProxiedCopies returns the copy records, of one proxy when proxyID > 0.
 func (s *Store) ListProxiedCopies(proxyID int64) ([]ProxiedCopy, error) {
-	query := `SELECT proxy_id, slug, stopped_by_cap FROM proxied_copies`
+	query := `SELECT proxy_id, slug, stopped_by_cap, acknowledged FROM proxied_copies`
 	var args []any
 	if proxyID > 0 {
 		query += ` WHERE proxy_id = ?`
@@ -184,10 +190,15 @@ func (s *Store) ListProxiedCopies(proxyID int64) ([]ProxiedCopy, error) {
 	for rows.Next() {
 		var c ProxiedCopy
 		var capped int
-		if err := rows.Scan(&c.ProxyID, &c.Slug, &capped); err != nil {
+		var acks string
+		if err := rows.Scan(&c.ProxyID, &c.Slug, &capped, &acks); err != nil {
 			return nil, err
 		}
 		c.StoppedByCap = capped != 0
+		c.Acknowledged = []string{}
+		if acks != "" {
+			c.Acknowledged = strings.Split(acks, ",")
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
