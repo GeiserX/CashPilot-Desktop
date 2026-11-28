@@ -138,6 +138,11 @@ type SystemInfo struct {
 	// web worker reports it. The server deploys a GPU entry to this computer only
 	// when its own catalog's grant matches this one.
 	GPUGrants map[string]catalog.GPUSpec `json:"gpu_grants"`
+	// EarnerSecrets is CASHPILOT_EARNER_SECRETS as the web worker reports it: "file"
+	// keeps earner credentials out of Docker's container config, "env" does not, and
+	// "unavailable" is a build without the start program. The server's Settings page
+	// shows it per machine.
+	EarnerSecrets string `json:"earner_secrets,omitempty"`
 }
 
 // Response is what the server sends back.

@@ -47,3 +47,6 @@ pnpm-lock.yaml
 
 # Compiled output for the browser-free render harness (frontend/scripts/*.mjs).
 /frontend/.harness-build/
+
+# Build output of go generate ./internal/shimbin (the earner start program).
+internal/shimbin/bin/cashpilot-env-*
