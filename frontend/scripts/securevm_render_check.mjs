@@ -117,6 +117,12 @@ check("a red proof says the VM stays cut off", red.includes('data-securevm-proof
 check("a leak is shown as LEAKED", /data-proof-outcome="leak"[\s\S]*LEAKED/.test(red));
 check("proof steps have plain names", red.includes("A hole opened on purpose") && red.includes("The whole fence"), red);
 check("a red step that went red reads as expected", /data-proof-outcome="went-red"[\s\S]*reached, as it should/.test(red));
+const winWords = renderSecureVM(base({ proof: { at: "2026-11-27T11:00:00Z", green: true, why: "", steps: [
+  { id: "red-tunnel", kind: "red", outcome: "n/a", detail: "" },
+  { id: "function", kind: "function", outcome: "held", detail: "" },
+] } }), { now });
+check("a step that does not apply says so in words", /data-proof-outcome="n\/a"[\s\S]*does not apply on this computer/.test(winWords) && !winWords.includes(">n/a<"), winWords);
+check("the earner's path step has a plain kind", /\(the earner(&#039;|')s path\)/.test(winWords) && !winWords.includes("(function)"), winWords);
 
 // 4. Undo
 const ask = renderSecureVM(base(), { now, askUndo: true });

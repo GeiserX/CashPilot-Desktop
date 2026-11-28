@@ -692,9 +692,9 @@ func (d *Daemon) Prove(ctx context.Context) securevm.Proof {
 	okFunc := false
 	if out, err := d.guestRun(ctx, p.inst, "", functionScript); err == nil && strings.Contains(out, "internet-ok") && strings.Contains(out, "dns-ok") {
 		okFunc = true
-		p.add("function", securevm.KindCheck, securevm.Held, "the guest reaches the internet and public DNS")
+		p.add("function", securevm.KindFunction, securevm.Held, "the guest reaches the internet and public DNS")
 	} else {
-		p.add("function", securevm.KindCheck, securevm.Broken, "the guest does not reach the internet through the fence")
+		p.add("function", securevm.KindFunction, securevm.Broken, "the guest does not reach the internet through the fence")
 	}
 	okDevices, why := d.devicesOff(ctx, p.inst)
 	if okDevices {
