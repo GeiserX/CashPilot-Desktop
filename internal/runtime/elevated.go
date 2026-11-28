@@ -154,11 +154,11 @@ type SecureVMStub struct {
 const ExitBadHash = 13
 
 var (
-	stubPath  = regexp.MustCompile(`^[A-Za-z]:\\[^"'` + "`" + `$;&|<>*?\r\n]{0,240}$`)
+	stubPath  = regexp.MustCompile(`^[A-Za-z]:\\[^"'‘’‚‛“”„` + "`" + `$;&|<>*?\r\n]{0,240}$`)
 	stubHash  = regexp.MustCompile(`^[0-9A-F]{64}$`)
 	stubName  = regexp.MustCompile(`^[a-z]+\.ps1$`)
 	stubParam = regexp.MustCompile(`^[A-Z][A-Za-z]{0,31}$`)
-	stubValue = regexp.MustCompile(`^[^"'` + "`" + `$;&|<>*?\r\n]{0,260}$`)
+	stubValue = regexp.MustCompile(`^[^"'‘’‚‛“”„` + "`" + `$;&|<>*?\r\n]{0,260}$`)
 )
 
 // Build writes the stub. Every value is checked against a strict grammar

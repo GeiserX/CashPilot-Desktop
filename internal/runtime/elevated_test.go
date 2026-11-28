@@ -80,6 +80,10 @@ func TestSecureVMStubRefusesBadValues(t *testing.T) {
 		"dollar in a value":        func(s *SecureVMStub) { s.Args = [][2]string{{"Exe", `C:\$env:x`}} },
 		"bad parameter name":       func(s *SecureVMStub) { s.Args = [][2]string{{"exe; calc", `C:\a`}} },
 		"newline in a value":       func(s *SecureVMStub) { s.Args = [][2]string{{"Exe", "C:\\a\ncalc"}} },
+		// PowerShell 5.1 ends a single-quoted string at a typographic quote too.
+		"typographic quote in a value":         func(s *SecureVMStub) { s.Args = [][2]string{{"Exe", "C:\\a\u2019; calc; \u2018"}} },
+		"typographic quote in the data folder": func(s *SecureVMStub) { s.DataDir = "C:\\O\u2019Brien" },
+		"typographic double quote":             func(s *SecureVMStub) { s.Args = [][2]string{{"Exe", "C:\\a\u201d"}} },
 	}
 	for name, edit := range bad {
 		s := ok
