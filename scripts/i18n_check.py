@@ -850,6 +850,9 @@ def placeholders(text: str) -> frozenset:
         values = [a or b for a, b in _ATTR_VALUE.findall(_HREF.sub("", m.group(3)))]
         return here + (" " + " ".join(values) + " " if values else "")
 
+    # The markers use \x02 and \x03, so the text's own copies of those
+    # characters become U+FFFD first: only the markers below hold them.
+    text = text.replace("\x02", "�").replace("\x03", "�")
     text = _TAG.sub(tag, text)
     body = _SHELL.sub(lambda m: mark(("shell", m.group(1))), text)
     # In an ICU plural or select, "{{" is a branch opening on an argument
