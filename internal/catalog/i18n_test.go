@@ -147,3 +147,45 @@ func TestTranslationsAreReadOnFirstUseOnly(t *testing.T) {
 		t.Fatalf("read %v; want only %v, each once", got, want)
 	}
 }
+
+// The loader drops a health signal the web catalog rejects, so the signals after
+// it move up one index. A translation keyed by the old index must not land on the
+// signal that now sits there: a field takes a translation only while it holds the
+// English that the translation was made from.
+func TestATranslationNeverLandsOnAnotherItemAfterTheLoaderDropsOne(t *testing.T) {
+	svc := `name: Demo
+slug: demo
+category: bandwidth
+status: active
+description: Shares your bandwidth.
+docker:
+  image: example/demo:1.0.0
+  health_signals:
+    - pattern: "stuck"
+      means: The node is stuck.
+      restart: true
+    - pattern: "denied"
+      means: The account is blocked.
+`
+	h := sourceHash
+	fsys := fstest.MapFS{
+		"services/bandwidth/demo.yml": {Data: []byte(svc)},
+		"services/_i18n/en.yml": {Data: []byte(`demo.docker.health_signals.0.means: The node is stuck.
+demo.docker.health_signals.1.means: The account is blocked.
+`)},
+		"services/_i18n/es.yml": {Data: []byte(`demo.docker.health_signals.0.means: {text: "El nodo está atascado.", source: "` + h("The node is stuck.") + `"}
+demo.docker.health_signals.1.means: {text: "La cuenta está bloqueada.", source: "` + h("The account is blocked.") + `"}
+`)},
+	}
+	cat, err := LoadEmbedded(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	english, _ := cat.Get("demo")
+	if len(english.Docker.HealthSignals) != 1 {
+		t.Fatalf("the loader should drop the restart signal with no window, got %d signals", len(english.Docker.HealthSignals))
+	}
+	if got := cat.LocalizedOne(english, "es").Docker.HealthSignals[0].Means; got != "The account is blocked." {
+		t.Fatalf("the remaining signal says %q; the old index 0 translation belongs to the dropped signal, so it must stay English", got)
+	}
+}
