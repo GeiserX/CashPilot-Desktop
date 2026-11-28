@@ -693,6 +693,11 @@ func TestASilentPhysicalNICIsJudgedByItsCounters(t *testing.T) {
 		{"every physical NIC idle by its counters", []int{4, 5}, `{"7":100,"9":50}`, `{"7":100,"9":50}`, true},
 		{"a silent NIC whose counters moved", []int{5}, `{"7":100,"9":50}`, `{"7":180,"9":51}`, false},
 		{"no counters: one physical NIC must show packets", []int{4, 5}, `{}`, `{}`, false},
+		// The green step: every probe drops at the port, and a quiet guest
+		// sends nothing else, so our vNIC saw nothing (setup 1p).
+		{"our vNIC idle by its counters", []int{9}, `{"7":100,"9":50,"20":8}`, `{"7":180,"9":60,"20":8}`, true},
+		{"our vNIC silent while its counters moved", []int{9}, `{"7":100,"9":50,"20":8}`, `{"7":180,"9":60,"20":9}`, false},
+		{"our vNIC silent with no counters", []int{9}, `{}`, `{}`, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true,"stats":`+tc.before+`}`)
@@ -1008,6 +1013,7 @@ function Get-WinEvent {
 			var got struct {
 				Components []pktComp
 				Filtered   bool
+				Stats      map[int]uint64
 			}
 			if err := decodeDoc(doc, &got); err != nil {
 				t.Fatal(err)

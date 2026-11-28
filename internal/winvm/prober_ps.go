@@ -614,31 +614,33 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 	// An idle NIC, such as the extension adapter of another VM's switch or
 	// an unplugged Ethernet port, sees nothing in a step (setup 1j). Its
 	// silence proves nothing either way, and a packet on it still counts as
-	// leaving. Our vNIC must show packets. A silent physical NIC is idle
-	// when its own counters did not move across the capture (setup 1o: the
-	// gateway step never leaves the host). If they moved, the capture
-	// missed what it carried. Without counters, at least one physical NIC
-	// must show packets.
+	// leaving. Our vNIC and the physical NICs are the probe's path, so their
+	// silence must be explained: a NIC whose own counters did not move
+	// across the capture was idle (setup 1o: the gateway step never leaves
+	// the host; setup 1p: in the green step every probe drops at the port).
+	// If they moved, the capture missed what it carried. Without counters,
+	// our vNIC must show packets, and so must at least one physical NIC.
 	silentPhysical, physicalSaw := 0, false
 	for _, nic := range slices.Sorted(maps.Keys(saw)) {
-		switch classes[nic] {
-		case "vnic":
-			if !saw[nic] {
-				return nil, fmt.Errorf("component %d: %w", nic, errNoPacketData)
-			}
-		case "physical":
-			ifx := comps[nic].IfIndex
-			before, ok1 := c.before[ifx]
-			after, ok2 := lw.Stats[ifx]
-			switch {
-			case saw[nic]:
-				physicalSaw = true
-			case ok1 && ok2 && before == after:
-			case ok1 && ok2:
-				return nil, fmt.Errorf("component %d: the NIC carried %d packets that the capture does not show", nic, after-before)
-			case silentPhysical == 0:
-				silentPhysical = nic
-			}
+		class := classes[nic]
+		if class != "vnic" && class != "physical" {
+			continue
+		}
+		if saw[nic] {
+			physicalSaw = physicalSaw || class == "physical"
+			continue
+		}
+		ifx := comps[nic].IfIndex
+		before, ok1 := c.before[ifx]
+		after, ok2 := lw.Stats[ifx]
+		switch {
+		case ok1 && ok2 && before == after:
+		case ok1 && ok2:
+			return nil, fmt.Errorf("component %d: the NIC carried %d packets that the capture does not show", nic, after-before)
+		case class == "vnic":
+			return nil, fmt.Errorf("component %d: %w", nic, errNoPacketData)
+		case silentPhysical == 0:
+			silentPhysical = nic
 		}
 	}
 	if silentPhysical != 0 && !physicalSaw {
