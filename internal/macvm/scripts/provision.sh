@@ -51,10 +51,13 @@ if [ -f "$done_marker" ]; then
   exit 0
 fi
 if ! id earner >/dev/null 2>&1; then
-  printf '%s\n' "$EARNER_PW" | sysadminctl -addUser earner -fullName "Earner" -password - -home /Users/earner >/dev/null 2>&1 || true
-  id earner >/dev/null 2>&1 || { echo "could not create the earner account" >&2; exit 1; }
+  # The login password goes first: a run that stops before the account exists
+  # writes both again with a new password, so an account never lacks its
+  # login password.
   (umask 077; printf '%s' "$KCPW_HEX" | xxd -r -p > /etc/kcpassword)
   chown root:wheel /etc/kcpassword; chmod 600 /etc/kcpassword
+  printf '%s\n' "$EARNER_PW" | sysadminctl -addUser earner -fullName "Earner" -password - -home /Users/earner >/dev/null 2>&1 || true
+  id earner >/dev/null 2>&1 || { echo "could not create the earner account" >&2; exit 1; }
 fi
 # An account from a stopped run keeps its first password; a second kcpassword
 # would be for a password the account does not have.

@@ -119,9 +119,6 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 	if err != nil {
 		return err
 	}
-	if err := d.removeDaemon(ctx); err != nil {
-		return err
-	}
 	for _, dir := range []string{d.P.Root, d.P.Bin, d.P.State} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -130,15 +127,6 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 			return err
 		}
 		if err := os.Chmod(dir, 0o755); err != nil {
-			return err
-		}
-	}
-	for _, dir := range []string{d.P.Request, d.P.Owner} {
-		_ = os.RemoveAll(dir)
-		if err := os.Mkdir(dir, 0o700); err != nil {
-			return err
-		}
-		if err := os.Chown(dir, uid, -1); err != nil {
 			return err
 		}
 	}
@@ -166,6 +154,42 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 	if self, err = filepath.EvalSymlinks(self); err != nil {
 		return err
 	}
+	inst := Install{
+		Owner: req.Owner, OwnerUID: uid, OwnerHome: home, TartHome: req.TartHome, MAC: cfg.MAC,
+		InstalledAt: d.now(), Tart: TartPin.Version, Softnet: SoftnetPin.Version, App: req.AppVer,
+	}
+	// Only now, with every archive checked, the old guard goes. On a repair or
+	// an update the VM runs under it, so the VM stops at once: nothing must run
+	// unguarded. A later failure loads the old guard again.
+	hadGuard := false
+	if _, err := os.Stat(d.P.Plist); err == nil {
+		hadGuard = true
+	}
+	if err := d.removeDaemon(ctx); err != nil {
+		return err
+	}
+	done := false
+	defer func() {
+		if !done && hadGuard {
+			if _, err := os.Stat(d.P.Plist); err == nil {
+				_, _ = d.R.Run(context.WithoutCancel(ctx), "/bin/launchctl", "bootstrap", "system", d.P.Plist)
+			}
+		}
+	}()
+	if _, err := os.Stat(TartExe(d.P.Bin)); err == nil {
+		if err := d.stopForInstall(ctx, inst); err != nil {
+			return err
+		}
+	}
+	for _, dir := range []string{d.P.Request, d.P.Owner} {
+		_ = os.RemoveAll(dir)
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			return err
+		}
+		if err := os.Chown(dir, uid, -1); err != nil {
+			return err
+		}
+	}
 	_ = os.RemoveAll(filepath.Join(d.P.Bin, TartApp))
 	if _, err := d.R.Run(ctx, "/usr/bin/ditto", filepath.Join(tart, TartApp), filepath.Join(d.P.Bin, TartApp)); err != nil {
 		return err
@@ -189,23 +213,9 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 	if _, err := d.R.Run(ctx, "/usr/sbin/chown", "-R", "root:wheel", filepath.Join(d.P.Bin, TartApp)); err != nil {
 		return err
 	}
-	inst := Install{
-		Owner: req.Owner, OwnerUID: uid, OwnerHome: home, TartHome: req.TartHome, MAC: cfg.MAC,
-		InstalledAt: d.now(), Tart: TartPin.Version, Softnet: SoftnetPin.Version, App: req.AppVer,
-	}
-	// A second Install (a repair, or an update of the tools) finds the VM
-	// running: stop it, since the agent is written into its disk.
-	if run, err := d.running(ctx, inst); err == nil && run {
-		d.stopVM(ctx, inst)
-		for i := 0; i < 60; i++ {
-			if run, err = d.running(ctx, inst); err != nil || !run {
-				break
-			}
-			time.Sleep(time.Second)
-		}
-	}
-	if run, err := d.running(ctx, inst); err != nil || run {
-		return errors.New("the VM did not stop, and it must not run while CashPilot writes the guest agent into its disk. Restart the Mac, then try again")
+	// The agent is written into the VM's disk, so the VM must not run.
+	if err := d.stopForInstall(ctx, inst); err != nil {
+		return err
 	}
 	if err := Inject(ctx, d.R, filepath.Join(VMDir(req.TartHome), "disk.img"), filepath.Join(agent, "tart-guest-agent")); err != nil {
 		return fmt.Errorf("could not prepare the guest: %w", err)
@@ -254,7 +264,26 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 	if _, err := d.R.Run(ctx, "/bin/launchctl", "bootstrap", "system", d.P.Plist); err != nil {
 		return fmt.Errorf("could not start the Secure VM's guard: %w", err)
 	}
+	done = true
 	d.logf("install: done for %s, VM %s, MAC %s, deny %v", req.Owner, VMName, cfg.MAC, deny)
+	return nil
+}
+
+// stopForInstall stops the VM and waits until Tart no longer lists it as
+// running.
+func (d *Daemon) stopForInstall(ctx context.Context, inst Install) error {
+	if run, err := d.running(ctx, inst); err == nil && run {
+		d.stopVM(ctx, inst)
+		for i := 0; i < 60; i++ {
+			if run, err = d.running(ctx, inst); err != nil || !run {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	if run, err := d.running(ctx, inst); err != nil || run {
+		return errors.New("the VM did not stop, and it must not run while CashPilot writes the guest agent into its disk. Restart the Mac, then try again")
+	}
 	return nil
 }
 
