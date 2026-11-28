@@ -200,7 +200,7 @@ func (a *App) runReservedImageUpdates(ctx context.Context, force bool) (outcomes
 		if !imageupdates.AnythingOn(settings) || !imageupdates.Due(settings, time.Now()) {
 			return nil, false
 		}
-		due := false
+		due, before := false, ""
 		// Decide again and stamp in one write, from the file: the window and the
 		// helper never both run the day.
 		if err := a.cfg.Update(func(cfg *config.AppConfig) {
@@ -209,7 +209,7 @@ func (a *App) runReservedImageUpdates(ctx context.Context, force bool) (outcomes
 			if !imageupdates.AnythingOn(settings) || !imageupdates.Due(settings, now) {
 				return
 			}
-			due = true
+			due, before = true, settings.LastRun
 			settings.LastRun = imageupdates.Today(now)
 			stamped := settings
 			cfg.ImageUpdates = &stamped
@@ -220,6 +220,19 @@ func (a *App) runReservedImageUpdates(ctx context.Context, force bool) (outcomes
 		if !due {
 			return nil, false
 		}
+		// A run cut short (the app quits) does not count as the day's run: the
+		// apps it never reached are checked at the next start.
+		stamp := settings.LastRun
+		defer func() {
+			if ctx.Err() == nil {
+				return
+			}
+			_ = a.cfg.Update(func(cfg *config.AppConfig) {
+				if cfg.ImageUpdates != nil && cfg.ImageUpdates.LastRun == stamp {
+					cfg.ImageUpdates.LastRun = before
+				}
+			})
+		}()
 	}
 	var slugs []string
 	for _, dep := range a.store.ListDeployments() {
@@ -239,9 +252,6 @@ func (a *App) runReservedImageUpdates(ctx context.Context, force bool) (outcomes
 }
 
 func (a *App) imageUpdateHooks() imageupdates.Hooks {
-	// Read once per run, not once per app: each read inspects every container.
-	var drift imageUpdateDrift
-	var driftOnce sync.Once
 	return imageupdates.Hooks{
 		Check: func(ctx context.Context, slug string) (imageupdates.Check, bool, error) {
 			check, ok, err := a.services.CheckImage(ctx, slug)
@@ -258,10 +268,13 @@ func (a *App) imageUpdateHooks() imageupdates.Hooks {
 			}, true, nil
 		},
 		Blocker: func(ctx context.Context, slug string) string {
-			driftOnce.Do(func() {
-				drift = imageUpdateDrift{found: a.services.ContainerDrift(ctx), loose: a.services.LooseMounts(ctx)}
-			})
-			return a.imageUpdateBlocker(slug, drift)
+			// Read for each app, right after its check: an earlier app's update
+			// takes minutes, and the owner can redeploy another app meanwhile.
+			loose, err := a.services.LooseMounts(ctx)
+			if err != nil {
+				loose = nil
+			}
+			return a.imageUpdateBlocker(slug, imageUpdateDrift{found: a.services.ContainerDrift(ctx), loose: loose})
 		},
 		Deploy: func(_ context.Context, slug, containerID, newImage string, checkedAt time.Time) (imageupdates.DeployResult, bool, error) {
 			var result imageupdates.DeployResult
@@ -295,7 +308,7 @@ func (a *App) imageUpdateHooks() imageupdates.Hooks {
 
 // imageUpdateDrift is how the running containers differ from what a redeploy
 // builds (found), and the folders of custom apps a new container would start
-// empty (loose), by slug.
+// empty (loose), by slug. A custom app missing from loose was not read.
 type imageUpdateDrift struct {
 	found map[string][]string
 	loose map[string][]string
@@ -334,8 +347,16 @@ func (a *App) imageUpdateBlocker(slug string, drift imageUpdateDrift) string {
 	if found := drift.found[slug]; len(found) > 0 {
 		return i18n.T("go.imageupdates.blocker.drift", "what", strings.Join(found, "; "))
 	}
-	if loose := drift.loose[slug]; len(loose) > 0 {
-		return i18n.T("go.imageupdates.blocker.imageVolume", "paths", strings.Join(loose, ", "))
+	if inCatalog && (svc.Custom || catalog.IsCustomSlug(slug)) {
+		loose, read := drift.loose[slug]
+		if !read {
+			// Unknown is not clean: the replacement would take an anonymous
+			// volume with the old container.
+			return i18n.T("go.imageupdates.blocker.mountsUnread")
+		}
+		if len(loose) > 0 {
+			return i18n.T("go.imageupdates.blocker.imageVolume", "paths", strings.Join(loose, ", "))
+		}
 	}
 	return ""
 }
