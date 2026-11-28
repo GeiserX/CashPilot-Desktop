@@ -41,23 +41,26 @@ while IFS='|' read -r slug app proc kind file arg; do
       file) sig=$(marker "$f") ;;
       # grep exits 1 for no match and 2 when it cannot read the file: a
       # file the app replaced under us proves nothing, so that is unknown.
+      # The answer is printed inside the earner's shell, so a sudo that
+      # fails prints nothing and reads as unknown, never as a no.
       key) sig=$(marker "$f")
            if [ "$sig" = y ]; then
-             as_earner /usr/bin/grep -qF "\"$arg\"" "$f"
-             case $? in 0) sig=y ;; 1) sig=n ;; *) sig=u ;; esac
+             sig=$(as_earner /bin/sh -c '/usr/bin/grep -qF -- "$1" "$2"
+               case $? in 0) echo y ;; 1) echo n ;; *) echo u ;; esac' sh "\"$arg\"" "$f") || sig=u
            fi ;;
       # The last line with the words decides, and "not <words>" is a no.
       log) sig=$(marker "$f")
            if [ "$sig" = y ]; then
-             lines=$(as_earner /usr/bin/grep -iF "$arg" "$f")
-             case $? in
-               0) last=$(printf '%s\n' "$lines" | /usr/bin/tail -n 1)
-                  if printf '%s' "$last" | /usr/bin/grep -qiF "not $arg"; then sig=n; else sig=y; fi ;;
-               1) sig=n ;;
-               *) sig=u ;;
-             esac
+             sig=$(as_earner /bin/sh -c 'l=$(/usr/bin/grep -iF -- "$1" "$2")
+               case $? in
+                 0) last=$(printf "%s\n" "$l" | /usr/bin/tail -n 1)
+                    if printf "%s" "$last" | /usr/bin/grep -qiF -- "not $1"; then echo n; else echo y; fi ;;
+                 1) echo n ;;
+                 *) echo u ;;
+               esac' sh "$arg" "$f") || sig=u
            fi ;;
     esac
   fi
+  case "$sig" in y|n|u) ;; *) sig=u ;; esac
   echo "$slug|$inst|$run|$sig"
 done
