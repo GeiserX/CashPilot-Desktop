@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "它没有在 Secure VM 中运行。",
   "go.macvm.appSignedOut": "它还没有登录。点按“登录”在 Secure VM 中打开它。",
   "go.macvm.badExePath": "应用的路径中有管理员步骤无法传递的字符。",
-  "go.macvm.adminCancelled": "管理员提示已取消，所以这台 Mac 上没有任何变化。",
+  "go.macvm.adminCancelled": "管理员提示已取消，所以 CashPilot 没有设置或移除任何需要管理员权限的内容。",
   "go.macvm.adminFailed": "管理员步骤失败：{detail}",
   "go.macvm.stepCheck": "正在检查这台 Mac",
   "go.macvm.stepTools": "正在下载 VM 工具",

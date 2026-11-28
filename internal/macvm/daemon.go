@@ -52,9 +52,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 		st := d.Pass(ctx, false)
 		// Only a new start applies a new deny list. It runs also when the cut
 		// had to stop the VM: restart checks that the VM stopped first.
-		if slicesContains(st.Changes, "own-ip") {
+		if slicesContains(st.Changes, "own-ip") && !d.restartPending {
+			d.restartPending, d.restartAt = true, time.Time{}
+		}
+		if d.restartPending && !d.now().Before(d.restartAt) {
 			d.logf("restarting %s with the new deny list", VMName)
 			d.restart(ctx)
+			if d.startErr == nil {
+				d.restartPending = false
+			} else {
+				d.restartAt = d.now().Add(time.Minute)
+			}
 		}
 		if st.Fence == FenceReprove && st.Network != NetOff {
 			d.logf("macOS or a tool changed: proving the fence again")
@@ -160,6 +168,13 @@ func PublicIPv4(ctx context.Context) ([]netip.Addr, error) {
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
+			continue
+		}
+		// An error page can hold an address too, and a wrong address in the
+		// deny list would block an unrelated host.
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			lastErr = errors.New(u + " answered " + resp.Status)
 			continue
 		}
 		// An address is at most 15 bytes and a newline; read to the end, and

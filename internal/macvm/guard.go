@@ -40,6 +40,11 @@ type Daemon struct {
 	// proof. The guard then treats the verdict on disk as unproven, until a
 	// new green verdict is written.
 	distrust bool
+	// restartPending holds a restart for a new deny list until a start
+	// works: a VM that a failed restart left off shows no drift, so nothing
+	// else would ask again. restartAt spaces the tries.
+	restartPending bool
+	restartAt      time.Time
 	// startErr is the last start's error, nil after a start that worked.
 	startErr error
 }
@@ -125,6 +130,33 @@ func (d *Daemon) locate(ctx context.Context, bs []Bridge, inst Install, desired 
 		}
 	}
 	return Bridge{}, ""
+}
+
+// stopUnlocated handles a VM whose port cannot be found: a running VM must
+// stop, or it could still be on the network. It reports the VM off only when
+// Tart confirms that it does not run, and true then. A VM that may still run
+// shows as online with the fence unknown, never as isolated.
+func (d *Daemon) stopUnlocated(ctx context.Context, inst Install, st *Status) bool {
+	if run, err := d.running(ctx, inst); err == nil && !run {
+		st.Network = NetOff
+		return true
+	}
+	d.stopVM(ctx, inst)
+	if run, err := d.running(ctx, inst); err == nil && !run {
+		st.Network = NetOff
+		st.Reason = joinReason(st.Reason, "the Secure VM was stopped, because its port could not be found")
+		return false
+	}
+	st.Network, st.Fence = NetConnected, FenceUnknown
+	st.Reason = joinReason(st.Reason, "its port could not be found, and the Secure VM did not stop, so it may still be on the network")
+	return false
+}
+
+func joinReason(a, b string) string {
+	if a == "" {
+		return b
+	}
+	return a + "; " + b
 }
 
 func (d *Daemon) bridges(ctx context.Context) ([]Bridge, error) {
@@ -402,17 +434,7 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 			}
 			return st
 		}
-		// No port to cut: a running VM must stop, or it could still be on
-		// the network.
-		if run, rerr := d.running(ctx, inst); rerr != nil || run {
-			d.stopVM(ctx, inst)
-			if run, rerr = d.running(ctx, inst); rerr == nil && !run {
-				st.Network = NetOff
-				st.Reason += "; the Secure VM was stopped, because its port could not be found"
-			} else {
-				st.Reason += "; its port could not be found, and the Secure VM did not stop"
-			}
-		}
+		d.stopUnlocated(ctx, inst, &st)
 		return st
 	}
 	build := ""
@@ -424,12 +446,15 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 		ok, fence, why = false, FenceUnproven, "the last proof could not be cleared before a new one"
 	}
 	if l.Port == "" {
-		// A stopped VM shows the proof's scope too: a proof from another
-		// macOS build is not held.
-		st.Network, st.Fence = NetOff, fence
-		st.Reason = "the Secure VM is not running"
-		if !ok {
-			st.Reason += "; " + why
+		// No port found: the VM is off only once Tart says so. A stopped VM
+		// shows the proof's scope too: a proof from another macOS build is
+		// not held.
+		st.Network, st.Fence = NetDisconnected, fence
+		if d.stopUnlocated(ctx, inst, &st) {
+			st.Reason = "the Secure VM is not running"
+			if !ok {
+				st.Reason += "; " + why
+			}
 		}
 		return st
 	}
@@ -491,6 +516,14 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 			again, err := d.Read(ctx, inst, desired)
 			if err != nil || len(Drift(again, desired, d.P.Bin)) > 0 || again.Port != l.Port {
 				st.Network, st.Fence, st.Reason = NetDisconnected, FenceCut, "the fence changed during the check, so the Secure VM stays cut"
+				// Something put a port back on in the meantime: take it off.
+				if again.Port != "" && again.Member {
+					net, terr := d.takeOff(ctx, inst, again)
+					st.Network = net
+					if terr != nil {
+						st.Reason += "; " + terr.Error()
+					}
+				}
 				d.logf("match, but the fence changed before the connect; staying cut")
 				return st
 			}

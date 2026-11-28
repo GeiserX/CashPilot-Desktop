@@ -1,7 +1,10 @@
 package macvm
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -240,5 +243,68 @@ func TestInstallResultNeedsACleanExit(t *testing.T) {
 	}
 	if err := installResult("RESULT refused: wrong team\n", errors.New("exit status 1"), "Wipter"); err == nil || !strings.Contains(err.Error(), "wrong team") {
 		t.Fatalf("a refusal keeps its reason: %v", err)
+	}
+}
+
+func TestVNCAddressMustBeTheLoopbackOnly(t *testing.T) {
+	if !vncExact.MatchString("vnc://:s3cret-word@127.0.0.1:5900") {
+		t.Fatal("Tart's own address must pass")
+	}
+	for _, u := range []string{
+		"vnc://attacker.example/@127.0.0.1:5900",
+		"vnc://a@b@127.0.0.1:5900",
+		"vnc://:pw@127.0.0.1:5900/more",
+		"x vnc://:pw@127.0.0.1:5900",
+		"vnc://:pw@127.0.0.1.attacker.example:5900",
+	} {
+		if vncExact.MatchString(u) {
+			t.Errorf("%q must not pass", u)
+		}
+	}
+}
+
+func TestPublicIPv4IgnoresAnErrorPage(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("198.51.100.9\n"))
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("203.0.113.5\n"))
+	}))
+	defer good.Close()
+	old := echoServices
+	echoServices = []string{bad.URL, good.URL}
+	defer func() { echoServices = old }()
+	got, err := PublicIPv4(context.Background())
+	if err != nil || len(got) != 1 || got[0].String() != "203.0.113.5" {
+		t.Fatalf("an address from an error page must not count: %v %v", got, err)
+	}
+}
+
+func TestAttachedWholeSkipsSlices(t *testing.T) {
+	out := "<dict>\n\t<key>dev-entry</key>\n\t<string>/dev/disk7s1</string>\n</dict><dict>\n\t<key>dev-entry</key>\n\t<string>/dev/disk7</string>\n</dict>"
+	if m := attachedWhole.FindStringSubmatch(out); m == nil || m[1] != "disk7" {
+		t.Fatalf("the whole disk must be found, not a slice: %v", m)
+	}
+}
+
+func TestTartHomeIsAbsolute(t *testing.T) {
+	t.Setenv("TART_HOME", "rel/tart")
+	if h := TartHome("/Users/a"); !filepath.IsAbs(h) {
+		t.Fatalf("TART_HOME must be stored absolute: %s", h)
+	}
+}
+
+func TestRunsOurTartMatchesOnlyOurBinary(t *testing.T) {
+	bin := "/Library/Application Support/CashPilot/SecureVM/bin"
+	wrapper := "/usr/bin/sudo -u a -H /usr/bin/env -i PATH=" + bin + " " + TartExe(bin) + " run " + VMName + " --no-audio"
+	other := "/Users/b/tart.app/Contents/MacOS/tart run " + VMName + " --no-audio"
+	ours := TartExe(bin) + " run " + VMName + " --vnc-experimental"
+	if runsOurTart(wrapper+"\n"+other+"\n"+TartExe(bin)+" run "+VMName+"-2", bin) {
+		t.Fatal("a wrapper, another Tart or another VM must not match")
+	}
+	if !runsOurTart(other+"\n  "+ours+"\n", bin) {
+		t.Fatal("our Tart running our VM must match")
 	}
 }

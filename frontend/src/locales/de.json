@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Sie läuft nicht in der Secure VM.",
   "go.macvm.appSignedOut": "Sie ist nicht angemeldet. Klicke auf Anmelden, um sie in der Secure VM zu öffnen.",
   "go.macvm.badExePath": "Der Pfad der App enthält ein Zeichen, das der Administratorschritt nicht weitergibt.",
-  "go.macvm.adminCancelled": "Die Administratorabfrage wurde abgebrochen, deshalb hat sich auf diesem Mac nichts geändert.",
+  "go.macvm.adminCancelled": "Die Administrator-Abfrage wurde abgebrochen. CashPilot hat daher nichts eingerichtet oder entfernt, das Administratorrechte braucht.",
   "go.macvm.adminFailed": "Der Administratorschritt ist fehlgeschlagen: {detail}",
   "go.macvm.stepCheck": "Dieser Mac wird geprüft",
   "go.macvm.stepTools": "Die VM-Werkzeuge werden heruntergeladen",

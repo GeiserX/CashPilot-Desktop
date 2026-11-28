@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Hij draait niet in de Secure VM.",
   "go.macvm.appSignedOut": "Hij is niet aangemeld. Klik op Aanmelden om hem in de Secure VM te openen.",
   "go.macvm.badExePath": "Het pad van de app bevat een teken dat de beheerdersstap niet doorgeeft.",
-  "go.macvm.adminCancelled": "De beheerdersvraag is geannuleerd, dus er is niets veranderd op deze Mac.",
+  "go.macvm.adminCancelled": "De beheerdersvraag is geannuleerd, dus CashPilot heeft niets ingesteld of verwijderd waarvoor beheerdersrechten nodig zijn.",
   "go.macvm.adminFailed": "De beheerdersstap is mislukt: {detail}",
   "go.macvm.stepCheck": "Deze Mac controleren",
   "go.macvm.stepTools": "De VM-tools downloaden",

@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Secure VM'de çalışmıyor.",
   "go.macvm.appSignedOut": "Oturum açık değil. Secure VM'de açmak için Oturum aç'a basın.",
   "go.macvm.badExePath": "Uygulamanın yolunda yönetici adımının aktarmadığı bir karakter var.",
-  "go.macvm.adminCancelled": "Yönetici istemi iptal edildi, bu yüzden bu Mac'te hiçbir şey değişmedi.",
+  "go.macvm.adminCancelled": "Yönetici istemi iptal edildi, bu yüzden CashPilot yönetici hakları gerektiren hiçbir şeyi kurmadı veya kaldırmadı.",
   "go.macvm.adminFailed": "Yönetici adımı başarısız oldu: {detail}",
   "go.macvm.stepCheck": "Bu Mac denetleniyor",
   "go.macvm.stepTools": "VM araçları indiriliyor",

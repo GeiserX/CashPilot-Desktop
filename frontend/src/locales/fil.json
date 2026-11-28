@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Hindi ito tumatakbo sa Secure VM.",
   "go.macvm.appSignedOut": "Hindi ito naka-sign in. Pindutin ang Mag-sign in para buksan ito sa Secure VM.",
   "go.macvm.badExePath": "May character ang path ng app na hindi ipinapasa ng hakbang ng administrator.",
-  "go.macvm.adminCancelled": "Kinansela ang hiling ng administrator, kaya walang nagbago sa Mac na ito.",
+  "go.macvm.adminCancelled": "Kinansela ang prompt ng administrator, kaya walang na-set up o tinanggal ang CashPilot na nangangailangan ng karapatan ng administrator.",
   "go.macvm.adminFailed": "Nabigo ang hakbang ng administrator: {detail}",
   "go.macvm.stepCheck": "Sinusuri ang Mac na ito",
   "go.macvm.stepTools": "Dina-download ang mga tool ng VM",

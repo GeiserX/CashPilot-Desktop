@@ -1,8 +1,10 @@
 package macvm
 
 import (
+	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"testing"
 )
 
@@ -25,5 +27,21 @@ func TestKilledByUs(t *testing.T) {
 	}
 	if killedByUs(exec.Command("/bin/sh", "-c", "exit 0").Run()) {
 		t.Fatal("a capture that ended cleanly by itself was accepted")
+	}
+}
+
+func TestCanaryKeepsOnlyRegisteredTokens(t *testing.T) {
+	c := &canary{got: map[string]bool{}, want: map[string]int{}}
+	tok := newToken()
+	c.expect(tok)
+	c.note([]byte(tok + "-gateway/tcp\n" + newToken() + "-gateway/tcp\nnoise " + tok))
+	for i := 0; i < 2*maxLabels; i++ {
+		c.note([]byte(fmt.Sprintf("%s-flood%d", tok, i)))
+	}
+	if got := c.arrived(tok); !slices.Contains(got, "gateway/tcp") || len(got) != maxLabels {
+		t.Fatalf("the canary must keep the registered token's labels, bounded: %d %v", len(got), got[:3])
+	}
+	if len(c.got) != maxLabels {
+		t.Fatalf("an unregistered token or noise was kept: %d entries", len(c.got))
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -72,8 +73,10 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 				did("the VM " + VMName)
 			}
 		}
-		// A Tart that did not stop keeps the disk busy.
-		_, _ = d.R.Run(ctx, "/usr/bin/pkill", "-f", "tart run "+VMName+"( |$)")
+		// A Tart that did not stop keeps the disk busy. Only our own Tart
+		// binary running our VM is stopped, never a same-named VM of another
+		// Tart.
+		_, _ = d.R.Run(ctx, "/usr/bin/pkill", "-f", ourTartRun(d.P.Bin))
 		// The fence must outlive the VM: a VM that still runs keeps its pf
 		// rules and everything a second Remove needs.
 		if err := d.waitVMGone(ctx); err != nil {
@@ -98,6 +101,11 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 		if t := strings.TrimSpace(string(tok)); t != "" {
 			if _, err := d.R.Run(ctx, "/sbin/pfctl", "-X", t); err == nil {
 				did("CashPilot's pf reference")
+				// A released token cannot be released again, so a second
+				// Remove must not find it.
+				if err := os.Remove(d.state(PFToken)); err != nil {
+					keepState = true
+				}
 			} else {
 				keepState = true
 				rep.Left = append(rep.Left, "CashPilot's pf reference could not be released: "+err.Error())
@@ -111,6 +119,10 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 		case string(orig) == "absent":
 			if err := os.Remove(SharingPlist); err == nil || errors.Is(err, os.ErrNotExist) {
 				did("softnet's DHCP setting in " + SharingPlist)
+				// Done once: a second Remove must not undo a later change.
+				if err := os.Remove(d.state(SharingOrig)); err != nil {
+					keepState = true
+				}
 			} else {
 				keepState = true
 				rep.Left = append(rep.Left, SharingPlist+" could not be removed: "+err.Error())
@@ -118,6 +130,9 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 		default:
 			if err := WriteAtomic(SharingPlist, orig, 0o644); err == nil {
 				did("put back " + SharingPlist + " as it was")
+				if err := os.Remove(d.state(SharingOrig)); err != nil {
+					keepState = true
+				}
 			} else {
 				keepState = true
 				rep.Left = append(rep.Left, SharingPlist+" could not be put back: "+err.Error())
@@ -169,11 +184,27 @@ var vmGoneWait = 15 * time.Second
 
 // waitVMGone waits until no Tart runs the VM. A process list that cannot be
 // read counts as still running.
+// ourTartRun matches the command line of our Tart running our VM, from its
+// start, so a wrapper that only mentions it does not match.
+func ourTartRun(bin string) string {
+	return "^" + regexp.QuoteMeta(TartExe(bin)+" run "+VMName) + "( |$)"
+}
+
+func runsOurTart(ps, bin string) bool {
+	re := regexp.MustCompile(ourTartRun(bin))
+	for _, l := range strings.Split(ps, "\n") {
+		if re.MatchString(strings.TrimSpace(l)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *Daemon) waitVMGone(ctx context.Context) error {
 	deadline := time.Now().Add(vmGoneWait)
 	for {
 		ps, err := d.R.Run(ctx, "/bin/ps", "-axww", "-o", "args=")
-		if err == nil && !strings.Contains(ps, "tart run "+VMName) {
+		if err == nil && !runsOurTart(ps, d.P.Bin) {
 			return nil
 		}
 		if time.Now().After(deadline) {

@@ -3710,6 +3710,7 @@ export namespace securevm {
 	    installed: boolean;
 	    updateNeeded: boolean;
 	    unfinished: boolean;
+	    leftovers: boolean;
 	    network: string;
 	    fence: string;
 	    reason: string;
@@ -3744,6 +3745,7 @@ export namespace securevm {
 	        this.installed = source["installed"];
 	        this.updateNeeded = source["updateNeeded"];
 	        this.unfinished = source["unfinished"];
+	        this.leftovers = source["leftovers"];
 	        this.network = source["network"];
 	        this.fence = source["fence"];
 	        this.reason = source["reason"];

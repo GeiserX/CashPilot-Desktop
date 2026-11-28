@@ -171,13 +171,18 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 	// Only now, with every archive checked, the old guard goes. On a repair or
 	// an update the VM runs under it, so the VM stops at once: nothing must run
 	// unguarded. A later failure loads the old guard again.
+	// The guard stops only the VM it was installed for. A request for another
+	// owner or Tart folder would leave that VM running with no guard, so it
+	// must remove the old one first.
+	if old, err := d.loadInstall(); err == nil && (old.Owner != inst.Owner || filepath.Clean(old.TartHome) != filepath.Clean(inst.TartHome)) {
+		return fmt.Errorf("a Secure VM is already installed for %s in %s; remove it first", old.Owner, old.TartHome)
+	}
 	hadGuard := false
 	if _, err := os.Stat(d.P.Plist); err == nil {
 		hadGuard = true
 	}
-	if err := d.removeDaemon(ctx); err != nil {
-		return err
-	}
+	// The way back is in place before the old guard goes: a removal that
+	// fails half way loads it again too.
 	done := false
 	defer func() {
 		if !done && hadGuard {
@@ -186,6 +191,9 @@ func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
 			}
 		}
 	}()
+	if err := d.removeDaemon(ctx); err != nil {
+		return err
+	}
 	if _, err := os.Stat(TartExe(d.P.Bin)); err == nil {
 		if err := d.stopForInstall(ctx, inst); err != nil {
 			return err

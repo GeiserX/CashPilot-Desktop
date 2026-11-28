@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "แอปนี้ไม่ได้ทำงานใน Secure VM",
   "go.macvm.appSignedOut": "แอปนี้ยังไม่ได้ลงชื่อเข้าใช้ กด ลงชื่อเข้าใช้ เพื่อเปิดใน Secure VM",
   "go.macvm.badExePath": "เส้นทางของแอปมีอักขระที่ขั้นตอนผู้ดูแลระบบส่งต่อไม่ได้",
-  "go.macvm.adminCancelled": "คำขอผู้ดูแลระบบถูกยกเลิก จึงไม่มีอะไรเปลี่ยนบน Mac เครื่องนี้",
+  "go.macvm.adminCancelled": "คำขอผู้ดูแลระบบถูกยกเลิก CashPilot จึงไม่ได้ตั้งค่าหรือลบสิ่งใดที่ต้องใช้สิทธิ์ผู้ดูแลระบบ",
   "go.macvm.adminFailed": "ขั้นตอนผู้ดูแลระบบล้มเหลว: {detail}",
   "go.macvm.stepCheck": "กำลังตรวจ Mac เครื่องนี้",
   "go.macvm.stepTools": "กำลังดาวน์โหลดเครื่องมือของ VM",
