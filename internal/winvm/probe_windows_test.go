@@ -64,44 +64,60 @@ func TestSnapshotReadsThisPC(t *testing.T) {
 // these facts unknown, so this test gives each script its own generous deadline:
 // it checks the script and its parser, not the speed.
 func TestCIMScriptsOnThisPC(t *testing.T) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("the private script directory requires elevation")
+	}
+	checkCIMReads(t, systemProbes{}.cpu, systemProbes{}.features)
+}
+
+func TestCIMReadsThroughWMI(t *testing.T) {
+	checkCIMReads(t, unelevatedWMI.cpu, unelevatedWMI.features)
+}
+
+func checkCIMReads(t *testing.T, cpu, features func(context.Context) (func(*HostFacts), error)) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	start := time.Now()
-	apply, err := systemProbes{}.cpu(ctx)
+	apply, err := cpu(ctx)
 	if err != nil {
-		t.Fatalf("the CPU script failed after %v: %v", time.Since(start), err)
+		t.Fatalf("the CPU probe failed after %v: %v", time.Since(start), err)
 	}
 	f := unknownFacts("windows")
 	apply(&f)
-	t.Logf("CPU script took %v: hypervisor %s, arch %s", time.Since(start), f.HypervisorPresent, f.Arch)
+	t.Logf("CPU probe took %v: hypervisor %s, arch %s", time.Since(start), f.HypervisorPresent, f.Arch)
 	if f.HypervisorPresent == Unknown || f.Arch == "unknown" {
-		t.Errorf("the CPU script answered without HypervisorPresent or Architecture: %+v", f)
+		t.Errorf("the CPU probe answered without HypervisorPresent or Architecture: %+v", f)
 	}
 	if f.LastBoot == "" || f.Model == "" {
-		t.Errorf("the CPU script answered without the boot time or the machine: boot %q, maker %q, model %q", f.LastBoot, f.Manufacturer, f.Model)
+		t.Errorf("the CPU probe answered without the boot time or the machine: boot %q, maker %q, model %q", f.LastBoot, f.Manufacturer, f.Model)
 	}
 
 	start = time.Now()
-	apply, err = systemProbes{}.features(ctx)
+	apply, err = features(ctx)
 	if err != nil {
-		t.Fatalf("the feature script failed after %v: %v", time.Since(start), err)
+		t.Fatalf("the feature probe failed after %v: %v", time.Since(start), err)
 	}
 	f = unknownFacts("windows")
 	apply(&f)
 	raw, _ := json.Marshal(map[string]Tri{"wsl": f.WSLFeature, "vmp": f.VMPlatformFeature})
-	t.Logf("feature script took %v: %s", time.Since(start), raw)
+	t.Logf("feature probe took %v: %s", time.Since(start), raw)
 	if f.WSLFeature == Unknown || f.VMPlatformFeature == Unknown {
-		t.Errorf("the feature script answered without the feature states: %s", raw)
+		t.Errorf("the feature probe answered without the feature states: %s", raw)
 	}
 }
 
 // The CIM reads run System32's Windows PowerShell by its full path, never the
 // bare name PATH would resolve.
 func TestCIMRunsPowerShellByItsFullPath(t *testing.T) {
-	cmd, err := cimCommand(context.Background(), "exit 0")
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		t.Skip("the private script directory requires elevation")
+	}
+	cmd, release, err := cimCommand(context.Background(), "exit 0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer release()
 	dir, err := windows.GetSystemDirectory()
 	if err != nil {
 		t.Fatal(err)

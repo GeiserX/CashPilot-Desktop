@@ -406,15 +406,16 @@ const FreeRAMReserve = 1 * GiB
 
 // VMHostInput is what the Secure-VM checks read, on top of HostFacts.
 type VMHostInput struct {
-	NATs         []netip.Prefix // every NetNat's internal prefix
-	Subnet       netip.Prefix   // the /29 setup means to use
+	NATs         []LiveNAT // every NetNat on the host
+	RecordedNAT  LiveNAT   // name, provider ID and prefix from the journal, if any
 	Net          HostNet
 	OurSwitchID  string // "" before the switch exists
 	Network      CurrentNetwork
 	InstalledRAM uint64 // 0 means unknown
 	FreeRAM      uint64 // 0 means unknown
 	GuestMemory  uint64 // 0 means DefaultGuestMemory
-	// MinHostRAM is 0 for the product. Only a lab build lowers it.
+	// MinHostRAM is 0 for the product. Only a lab build lowers it: a product
+	// build ignores it.
 	MinHostRAM uint64
 	// GCS is the GuestCommunicationServices key names; nil means not read.
 	GCS []string
@@ -429,7 +430,7 @@ type VMHostCheck struct {
 
 // Secure-VM check IDs.
 const (
-	CheckNATOverlap   = "nat-overlap"
+	CheckNATExists    = "nat-exists"
 	CheckDefaultRoute = "default-route"
 	CheckMetered      = "metered"
 	CheckInstalledRAM = "installed-ram"
@@ -445,8 +446,8 @@ type VMHostReport struct {
 	GCSBaseline []string      `json:"gcsBaseline"`
 }
 
-// CheckVMHost runs the checks the Secure VM needs before it is built: no NetNat
-// on our /29, the internet leaving through a physical-class adapter, a network
+// CheckVMHost runs the checks the Secure VM needs before it is built: no foreign
+// NetNat, the internet leaving through a physical-class adapter, a network
 // that is not metered, enough installed and free RAM, and a readable list of
 // hv_sock services to compare against later.
 func CheckVMHost(in VMHostInput) VMHostReport {
@@ -455,13 +456,7 @@ func CheckVMHost(in VMHostInput) VMHostReport {
 		r.Checks = append(r.Checks, VMHostCheck{ID: id, OK: ok, Detail: detail})
 	}
 
-	if checkSubnet(in.Subnet) != nil {
-		add(CheckNATOverlap, Unknown, "no subnet chosen yet")
-	} else if n := overlapping(in.Subnet, in.NATs); n.IsValid() {
-		add(CheckNATOverlap, No, fmt.Sprintf("a NAT on this PC (%s) overlaps %s", n, in.Subnet))
-	} else {
-		add(CheckNATOverlap, Yes, "")
-	}
+	r.Checks = append(r.Checks, checkHostNAT(in.NATs, in.RecordedNAT))
 
 	if len(in.Net.Interfaces) == 0 && len(in.Net.Routes) == 0 && len(in.Net.Egress) == 0 {
 		add(CheckDefaultRoute, Unknown, "could not read the routes")
@@ -480,8 +475,9 @@ func CheckVMHost(in VMHostInput) VMHostReport {
 		add(CheckMetered, Yes, "")
 	}
 
+	// Only a lab build (winvmlab) may lower the floor.
 	minRAM := in.MinHostRAM
-	if minRAM == 0 {
+	if minRAM == 0 || !labBuild {
 		minRAM = MinHostRAM
 	}
 	guest := in.GuestMemory
@@ -507,6 +503,25 @@ func CheckVMHost(in VMHostInput) VMHostReport {
 		}
 	}
 	return r
+}
+
+const foreignNATRemedy = "Windows supports only one NAT network. CashPilot will not change or remove it. If you no longer need it, remove it yourself. Otherwise, keep it and skip Secure VM."
+
+func checkHostNAT(nats []LiveNAT, recorded LiveNAT) VMHostCheck {
+	for _, nat := range nats {
+		if matchesRecordedNAT(nat, recorded) {
+			// The journal can account for at most one NAT.
+			recorded.ID = ""
+			continue
+		}
+		prefix := "an unknown prefix"
+		if nat.Prefix.IsValid() {
+			prefix = nat.Prefix.String()
+		}
+		return VMHostCheck{ID: CheckNATExists, OK: No,
+			Detail: fmt.Sprintf("A NAT network named %q already exists on %s. %s", nat.Name, prefix, foreignNATRemedy)}
+	}
+	return VMHostCheck{ID: CheckNATExists, OK: Yes}
 }
 
 func ramCheck(have, need uint64) (Tri, string) {

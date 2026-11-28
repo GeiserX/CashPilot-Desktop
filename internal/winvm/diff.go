@@ -11,39 +11,42 @@ import (
 // LiveState is one reading of everything the guard compares. The reader that
 // fills it comes later, behind the Hyper-V seam; this type and Diff are pure.
 type LiveState struct {
-	VMExists      bool            `json:"vmExists"`
-	VMState       string          `json:"vmState"`
-	Adapters      []LiveAdapter   `json:"adapters"` // every adapter on the VM
-	ACLs          []ACL           `json:"acls"`     // as Hyper-V lists them: Meter rows included, a Both rule as an Inbound and an Outbound row
-	ExtACLs       int             `json:"extAcls"`  // must be 0
-	DhcpGuard     bool            `json:"dhcpGuard"`
-	RouterGuard   bool            `json:"routerGuard"`
-	MacSpoofing   bool            `json:"macSpoofing"`
-	StaticMAC     string          `json:"staticMac"`
-	ProcCount     int             `json:"procCount"`
-	ProcMax       int             `json:"procMax"`
-	ProcWeight    int             `json:"procWeight"`
-	ExposeVirt    bool            `json:"exposeVirt"`
-	MemoryBytes   uint64          `json:"memoryBytes"`
-	DynamicMemory bool            `json:"dynamicMemory"`
-	Checkpoints   string          `json:"checkpoints"`
-	AutoStart     string          `json:"autoStart"`
-	Integration   map[string]bool `json:"integration"` // by service ID
-	DVDs          int             `json:"dvds"`
-	Disks         int             `json:"disks"`
-	Passthrough   []string        `json:"passthrough"` // GPU-P, DDA, COM paths, USB: must be empty
-	SwitchType    string          `json:"switchType"`
-	SwitchPorts   int             `json:"switchPorts"` // VM adapters on our switch: 1 while ours is connected, 0 while it is not
-	VNICIfIndex   int             `json:"vnicIfIndex"`
-	VNICMAC       string          `json:"vnicMac"`
-	Bindings      map[string]bool `json:"bindings"`    // component ID -> enabled, on our vNIC
-	ProtocolsOn   []string        `json:"protocolsOn"` // enabled NetTrans-class components on our vNIC; ms_tcpip is always among them
-	NATs          []LiveNAT       `json:"nats"`        // every NetNat on the host
-	Firewall      []LiveRule      `json:"firewall"`    // rules of our group
-	HostNeighbor  *Neighbor       `json:"hostNeighbor"`
-	Enhanced      bool            `json:"enhancedSession"`
-	GCS           []string        `json:"gcs"` // GuestCommunicationServices key names; nil means not read, empty means none
-	HostBuild     string          `json:"hostBuild"`
+	VMExists            bool            `json:"vmExists"`
+	VMState             string          `json:"vmState"`
+	Adapters            []LiveAdapter   `json:"adapters"` // every adapter on the VM
+	ACLs                []ACL           `json:"acls"`     // as Hyper-V lists them: Meter rows included, a Both rule as an Inbound and an Outbound row
+	PortACLs            []PortACL       `json:"portAcls,omitempty"`
+	ExtACLs             int             `json:"extAcls"` // must be 0
+	DhcpGuard           bool            `json:"dhcpGuard"`
+	RouterGuard         bool            `json:"routerGuard"`
+	MacSpoofing         bool            `json:"macSpoofing"`
+	StaticMAC           string          `json:"staticMac"`
+	ProcCount           int             `json:"procCount"`
+	ProcMax             int             `json:"procMax"`
+	ProcWeight          int             `json:"procWeight"`
+	ExposeVirt          bool            `json:"exposeVirt"`
+	MemoryBytes         uint64          `json:"memoryBytes"`
+	DynamicMemory       bool            `json:"dynamicMemory"`
+	Checkpoints         string          `json:"checkpoints"`
+	AutoStart           string          `json:"autoStart"`
+	Integration         map[string]bool `json:"integration"` // by service ID
+	DVDs                int             `json:"dvds"`
+	Disks               int             `json:"disks"`
+	Passthrough         []string        `json:"passthrough"` // GPU-P, DDA, COM paths, USB: must be empty
+	SwitchType          string          `json:"switchType"`
+	SwitchPorts         int             `json:"switchPorts"` // VM adapters on our switch: 1 while ours is connected, 0 while it is not
+	ManagementDHCP      bool            `json:"managementDhcp,omitempty"`
+	ManagementAdapterID string          `json:"managementAdapterId,omitempty"`
+	VNICIfIndex         int             `json:"vnicIfIndex"`
+	VNICMAC             string          `json:"vnicMac"`
+	Bindings            map[string]bool `json:"bindings"`    // component ID -> enabled, on our vNIC
+	ProtocolsOn         []string        `json:"protocolsOn"` // enabled NetTrans-class components on our vNIC; ms_tcpip is always among them
+	NATs                []LiveNAT       `json:"nats"`        // every NetNat on the host
+	Firewall            []LiveRule      `json:"firewall"`    // rules of our group
+	HostNeighbor        *Neighbor       `json:"hostNeighbor"`
+	Enhanced            bool            `json:"enhancedSession"`
+	GCS                 []string        `json:"gcs"` // GuestCommunicationServices key names; nil means not read, empty means none
+	HostBuild           string          `json:"hostBuild"`
 }
 
 // LiveAdapter is one network adapter on the VM. SwitchID is empty while the
@@ -56,12 +59,14 @@ type LiveAdapter struct {
 
 // LiveNAT is one NetNat.
 type LiveNAT struct {
+	ID     string       `json:"id,omitempty"`
 	Name   string       `json:"name"`
 	Prefix netip.Prefix `json:"prefix"`
 }
 
 // LiveRule is one firewall rule of our group, with the interface it applies to.
 type LiveRule struct {
+	Identity  string `json:"identity,omitempty"`
 	Direction string `json:"direction"`
 	Action    string `json:"action"`
 	Enabled   bool   `json:"enabled"`
@@ -194,6 +199,12 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 		wantPorts = 1
 	}
 	cmp("switchPorts", wantPorts, live.SwitchPorts)
+	if p.ManagementAdapterID != "" && !strings.EqualFold(live.ManagementAdapterID, p.ManagementAdapterID) {
+		add("managementAdapter", p.ManagementAdapterID, live.ManagementAdapterID)
+	}
+	if p.ManagementAdapterID != "" && live.ManagementDHCP {
+		add("managementDHCP", "disabled", "enabled or unread")
+	}
 	if m, _ := NormalizeMAC(live.VNICMAC); m != p.HostVNICMAC {
 		add("vnicMac", p.HostVNICMAC, live.VNICMAC)
 	}
@@ -223,8 +234,11 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 	// Our NAT exactly, and no other NAT on our /29.
 	ours := 0
 	for _, n := range live.NATs {
-		if n.Name == p.Names.NAT {
+		if strings.EqualFold(n.Name, p.Names.NAT) {
 			ours++
+			if p.NATID != "" && n.ID != p.NATID {
+				add("nat", p.NATID, n.ID)
+			}
 			if n.Prefix.Masked() != p.Subnet {
 				add("nat", p.Subnet, n.Prefix)
 			}
@@ -237,7 +251,10 @@ func Diff(p Plan, live LiveState, d Dynamic) []Change {
 	}
 
 	// One rule in our group: inbound, block, enabled, on our vNIC.
-	wantRule := LiveRule{Direction: "Inbound", Action: "Block", Enabled: true, IfIndex: live.VNICIfIndex}
+	wantRule := LiveRule{Direction: "Inbound", Action: "Block", Enabled: true, IfIndex: live.VNICIfIndex, Identity: p.FirewallIdentity}
+	if p.FirewallIdentity == "" && len(live.Firewall) == 1 {
+		wantRule.Identity = live.Firewall[0].Identity // older plans lack a recorded fingerprint
+	}
 	if len(live.Firewall) != 1 || live.VNICIfIndex == 0 || live.Firewall[0] != wantRule {
 		add("firewall", fmt.Sprintf("%+v", []LiveRule{wantRule}), fmt.Sprintf("%+v", live.Firewall))
 	}

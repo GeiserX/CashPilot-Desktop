@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Secure VM's answer file. Every value comes from Go, XML-escaped. The
+     passwords here are temporary: the first PowerShell Direct session sets the
+     real ones and deletes Windows Setup's copies of this file. Setup refuses
+     the whole file at specialize if a RunSynchronous Path passes 259
+     characters, so those commands stay short. -->
+<unattend xmlns="urn:schemas-microsoft-com:unattend" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>0409:00000409</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID><WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>260</Size></CreatePartition>
+            <CreatePartition wcm:action="add"><Order>2</Order><Type>MSR</Type><Size>16</Size></CreatePartition>
+            <CreatePartition wcm:action="add"><Order>3</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>System</Label></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter></ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+        <WillShowUI>OnError</WillShowUI>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom><MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>{{.ImageIndex}}</Value></MetaData></InstallFrom>
+          <InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo>
+          <WillShowUI>OnError</WillShowUI>
+        </OSImage>
+      </ImageInstall>
+      <UserData><AcceptEula>true</AcceptEula><FullName>CashPilot</FullName><Organization>CashPilot</Organization><ProductKey>{{if .ProductKey}}<Key>{{x .ProductKey}}</Key><WillShowUI>OnError</WillShowUI>{{else}}<WillShowUI>Never</WillShowUI>{{end}}</ProductKey></UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>{{x .ComputerName}}</ComputerName>{{if .TimeZone}}<TimeZone>{{x .TimeZone}}</TimeZone>{{end}}
+    </component>
+    <component name="Microsoft-Windows-TCPIP" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <Interfaces>
+        <Interface wcm:action="add">
+          <Identifier>{{x .GuestMACDash}}</Identifier>
+          <Ipv4Settings><DhcpEnabled>false</DhcpEnabled><RouterDiscoveryEnabled>false</RouterDiscoveryEnabled></Ipv4Settings>
+          <Ipv6Settings><DhcpEnabled>false</DhcpEnabled><RouterDiscoveryEnabled>false</RouterDiscoveryEnabled></Ipv6Settings>
+          <UnicastIpAddresses><IpAddress wcm:action="add" wcm:keyValue="1">{{x .GuestIP}}/{{.PrefixLen}}</IpAddress></UnicastIpAddresses>
+          <Routes><Route wcm:action="add"><Identifier>0</Identifier><Prefix>0.0.0.0/0</Prefix><NextHopAddress>{{x .Gateway}}</NextHopAddress><Metric>10</Metric></Route></Routes>
+        </Interface>
+      </Interfaces>
+    </component>
+    <component name="Microsoft-Windows-DNS-Client" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <Interfaces>
+        <Interface wcm:action="add">
+          <Identifier>{{x .GuestMACDash}}</Identifier>
+          <DNSServerSearchOrder><IpAddress wcm:action="add" wcm:keyValue="1">1.1.1.1</IpAddress><IpAddress wcm:action="add" wcm:keyValue="2">9.9.9.9</IpAddress></DNSServerSearchOrder>
+          <EnableAdapterDomainNameRegistration>false</EnableAdapterDomainNameRegistration><DisableDynamicUpdate>true</DisableDynamicUpdate>
+        </Interface>
+      </Interfaces>
+    </component>
+    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add"><Order>1</Order><Path>powershell -NoP -NonI -C "Get-NetAdapter|? MacAddress -eq '{{x .GuestMACDash}}'|%{$p=@{InterfaceIndex=$_.ifIndex;IPAddress='{{x .Gateway}}'};Remove-NetNeighbor @p -Confirm:$false -EA 0;New-NetNeighbor @p -LinkLayerAddress {{x .HostMACDash}} -State Permanent}"</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>2</Order><Path>powercfg /change standby-timeout-ac 0</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>3</Order><Path>powercfg /change monitor-timeout-ac 0</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>4</Order><Path>powercfg /hibernate off</Path></RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add"><Order>5</Order><Path>reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\Personalization" /v NoLockScreen /t REG_DWORD /d 1 /f</Path></RunSynchronousCommand>
+      </RunSynchronous>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <InputLocale>0409:00000409</InputLocale><SystemLocale>en-US</SystemLocale><UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <OOBE>
+        <HideEULAPage>true</HideEULAPage><HideOEMRegistrationScreen>true</HideOEMRegistrationScreen><HideOnlineAccountScreens>true</HideOnlineAccountScreens>
+        <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE><HideLocalAccountScreen>true</HideLocalAccountScreen><ProtectYourPC>3</ProtectYourPC>
+      </OOBE>
+      <UserAccounts>
+        <LocalAccounts>
+          <LocalAccount wcm:action="add"><Name>cpadmin</Name><Group>Administrators</Group><Password><Value>{{x .AdminPassword}}</Value><PlainText>true</PlainText></Password></LocalAccount>
+          <LocalAccount wcm:action="add"><Name>earner</Name><Group>Users</Group><Password><Value>{{x .EarnerPassword}}</Value><PlainText>true</PlainText></Password></LocalAccount>
+        </LocalAccounts>
+      </UserAccounts>
+      <AutoLogon><Enabled>true</Enabled><Username>earner</Username><Password><Value>{{x .EarnerPassword}}</Value><PlainText>true</PlainText></Password><LogonCount>9999999</LogonCount></AutoLogon>
+    </component>
+  </settings>
+</unattend>

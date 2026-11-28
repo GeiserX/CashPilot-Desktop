@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/base64"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -21,7 +20,12 @@ func runPS(t *testing.T, timeout time.Duration, script string) (string, uint32, 
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(script)).CombinedOutput()
+	cmd, release, err := filePowerShellCommand(ctx, "", script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("PowerShell ran past %v", timeout)
 	}

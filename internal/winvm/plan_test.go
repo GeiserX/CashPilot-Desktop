@@ -19,7 +19,6 @@ var update = flag.Bool("update", false, "rewrite the golden desired.json files")
 func testOptions(n Names) Options {
 	return Options{
 		Names:       n,
-		VHDXDir:     `D:\CashPilotVM`,
 		Subnet:      testSubnet,
 		HostVNICMAC: "00-15-5D-00-00-01",
 		GuestMAC:    "00:15:5d:00:00:02",
@@ -37,7 +36,6 @@ func testPlan(t testing.TB, edit func(*Plan)) Plan {
 	p.VMID = "aaaaaaaa-0000-4000-8000-000000000001"
 	p.AdapterID = "aaaaaaaa-0000-4000-8000-000000000002"
 	p.SwitchID = ourSwitchID
-	p.RecordEnhancedSession(true)
 	p.SetGCSBaseline([]string{"999e53d4-3d5c-4c3e-8779-bed06ec056e1", "{a5201c21-2770-4c11-a68e-f182edb29220}"})
 	p.HostBuild = "26100.1000"
 	if edit != nil {
@@ -179,49 +177,6 @@ func assertUniquePrefixes(t *testing.T, acls []ACL) {
 // The Repair trap: setup turned Enhanced Session off, so on Repair the live
 // value reads false. The original (true) must survive, or removal would leave
 // it off for good.
-func TestEnhancedSessionOriginalSurvivesRepair(t *testing.T) {
-	first, err := NewPlan(testOptions(ProductNames()), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first.RecordEnhancedSession(true)
-
-	b, err := first.Marshal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadPlan(b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repair, err := NewPlan(testOptions(ProductNames()), &loaded)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repair.RecordEnhancedSession(false) // what the host reads now
-	if repair.EnhancedSessionOriginal == nil || !*repair.EnhancedSessionOriginal {
-		t.Fatalf("after Repair the original is %v, want true", repair.EnhancedSessionOriginal)
-	}
-	// The copy is its own: changing the old plan does not reach the new one.
-	*loaded.EnhancedSessionOriginal = false
-	if !*repair.EnhancedSessionOriginal {
-		t.Errorf("the Repair plan shares the old plan's pointer")
-	}
-
-	// The keep policy never records one.
-	lab1, _ := LabNames(1)
-	keep := testOptions(lab1)
-	keep.EnhancedSession = ESKeep
-	k, err := NewPlan(keep, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	k.RecordEnhancedSession(true)
-	if k.EnhancedSessionOriginal != nil {
-		t.Errorf("ESKeep recorded an original")
-	}
-}
-
 func TestRepairCarriesIdentity(t *testing.T) {
 	prev := testPlan(t, func(p *Plan) { p.CreatedGuardian = true })
 	next, err := NewPlan(testOptions(ProductNames()), &prev)
@@ -289,28 +244,25 @@ func TestLoadPlanRefusesALooserOrBrokenFile(t *testing.T) {
 		return b
 	}
 	cases := map[string][]byte{
-		"unknown field":      bytes.Replace(good, []byte(`"version": 1,`), []byte(`"version": 1, "allow": true,`), 1),
-		"trailing data":      append(slices.Clone(good), []byte(`{}`)...),
-		"oversize":           append(slices.Clone(good), bytes.Repeat([]byte(" "), maxPlanBytes)...),
-		"other version":      edit(func(p *Plan) { p.Version = 2 }),
-		"mac spoofing":       edit(func(p *Plan) { p.MacSpoofing = true }),
-		"no dhcp guard":      edit(func(p *Plan) { p.DhcpGuard = false }),
-		"no router guard":    edit(func(p *Plan) { p.RouterGuard = false }),
-		"nested virt":        edit(func(p *Plan) { p.ExposeVirt = true }),
-		"no ipv6 deny":       edit(func(p *Plan) { p.StaticDeny = p.StaticDeny[:len(p.StaticDeny)-1] }),
-		"extra static row":   edit(func(p *Plan) { p.StaticDeny = append(p.StaticDeny, pfx("8.8.8.0/24")) }),
-		"binding dropped":    edit(func(p *Plan) { p.BindingsOff = p.BindingsOff[1:] }),
-		"kvp on":             edit(func(p *Plan) { p.Integration[ISKVP] = true }),
-		"checkpoints on":     edit(func(p *Plan) { p.Checkpoints = "Standard" }),
-		"autostart":          edit(func(p *Plan) { p.AutoStart = "Start" }),
-		"gateway moved":      edit(func(p *Plan) { p.Gateway = addr("172.20.0.14") }),
-		"subnet outside":     edit(func(p *Plan) { p.Subnet = pfx("192.0.2.0/29") }),
-		"bad names":          edit(func(p *Plan) { p.Names.DataDir = `C:\Users\Public` }),
-		"bad vm id":          edit(func(p *Plan) { p.VMID = "x; Remove-VM *" }),
-		"keep with original": edit(func(p *Plan) { p.EnhancedSession = ESKeep }),
-		"product keeps es":   edit(func(p *Plan) { p.EnhancedSession = ESKeep; p.EnhancedSessionOriginal = nil }),
-		"unnormalized gcs":   edit(func(p *Plan) { p.GCSBaseline = []string{"abc"} }),
-		"vhdx injection":     edit(func(p *Plan) { p.VHDXDir = `D:\x"; calc; "` }),
+		"unknown field":    bytes.Replace(good, []byte(`"version": 1,`), []byte(`"version": 1, "allow": true,`), 1),
+		"trailing data":    append(slices.Clone(good), []byte(`{}`)...),
+		"oversize":         append(slices.Clone(good), bytes.Repeat([]byte(" "), maxPlanBytes)...),
+		"other version":    edit(func(p *Plan) { p.Version = 2 }),
+		"mac spoofing":     edit(func(p *Plan) { p.MacSpoofing = true }),
+		"no dhcp guard":    edit(func(p *Plan) { p.DhcpGuard = false }),
+		"no router guard":  edit(func(p *Plan) { p.RouterGuard = false }),
+		"nested virt":      edit(func(p *Plan) { p.ExposeVirt = true }),
+		"no ipv6 deny":     edit(func(p *Plan) { p.StaticDeny = p.StaticDeny[:len(p.StaticDeny)-1] }),
+		"extra static row": edit(func(p *Plan) { p.StaticDeny = append(p.StaticDeny, pfx("8.8.8.0/24")) }),
+		"binding dropped":  edit(func(p *Plan) { p.BindingsOff = p.BindingsOff[1:] }),
+		"kvp on":           edit(func(p *Plan) { p.Integration[ISKVP] = true }),
+		"checkpoints on":   edit(func(p *Plan) { p.Checkpoints = "Standard" }),
+		"autostart":        edit(func(p *Plan) { p.AutoStart = "Start" }),
+		"gateway moved":    edit(func(p *Plan) { p.Gateway = addr("172.20.0.14") }),
+		"subnet outside":   edit(func(p *Plan) { p.Subnet = pfx("192.0.2.0/29") }),
+		"bad names":        edit(func(p *Plan) { p.Names.DataDir = `C:\Users\Public` }),
+		"bad vm id":        edit(func(p *Plan) { p.VMID = "x; Remove-VM *" }),
+		"unnormalized gcs": edit(func(p *Plan) { p.GCSBaseline = []string{"abc"} }),
 	}
 	for name, b := range cases {
 		if _, err := LoadPlan(b); err == nil {
@@ -337,8 +289,6 @@ func TestPlanRoundTrip(t *testing.T) {
 func TestNewPlanRefusesBadOptions(t *testing.T) {
 	cases := map[string]func(*Options){
 		"bad names":         func(o *Options) { o.Names.VM = "other-vm" },
-		"relative vhdx":     func(o *Options) { o.VHDXDir = `CashPilotVM` },
-		"dotdot vhdx":       func(o *Options) { o.VHDXDir = `D:\a\..\Windows` },
 		"subnet /24":        func(o *Options) { o.Subnet = pfx("172.20.0.0/24") },
 		"subnet unmasked":   func(o *Options) { o.Subnet = pfx("172.20.0.9/29") },
 		"subnet off 172/12": func(o *Options) { o.Subnet = pfx("10.0.0.0/29") },
@@ -414,4 +364,50 @@ func TestWantACLsKeepsAnExitUnderATunnel(t *testing.T) {
 		}
 	}
 	assertUniquePrefixes(t, acls)
+}
+
+// TestEnhancedSessionPolicyChangesRoundTrip: every plan NewPlan writes loads
+// again across each change of policy on a lab instance.
+func TestEnhancedSessionPolicyChangesRoundTrip(t *testing.T) {
+	lab, _ := LabNames(1)
+	opts := func(es ESPolicy) Options { o := testOptions(lab); o.EnhancedSession = es; return o }
+	roundTrip := func(name string, p Plan) {
+		t.Helper()
+		b, err := p.Marshal()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		q, err := LoadPlan(b)
+		if err != nil {
+			t.Fatalf("%s: the plan NewPlan wrote does not load: %v", name, err)
+		}
+		if !reflect.DeepEqual(p, q) {
+			t.Fatalf("%s: round trip changed the plan", name)
+		}
+	}
+	off, err := NewPlan(opts(ESOff), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip("off", off)
+	keep, err := NewPlan(opts(ESKeep), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip("keep", keep)
+	keepToOff, err := NewPlan(opts(ESOff), &keep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip("keep then off", keepToOff)
+	offToOff, err := NewPlan(opts(ESOff), &off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip("off then off", offToOff)
+	offToKeep, err := NewPlan(opts(ESKeep), &off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip("off then keep", offToKeep)
 }

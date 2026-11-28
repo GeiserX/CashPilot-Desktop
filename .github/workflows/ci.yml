@@ -80,9 +80,21 @@ jobs:
         if: matrix.race && !matrix.coverage
         run: go test -race ./...
 
+      # On Windows, internal/winvm starts hundreds of PowerShell processes.
+      # Run beside the other packages, it more than doubled the root
+      # package's time and pushed it past the 10-minute test timeout, while
+      # each package alone takes about 3 minutes. So it runs on its own.
       - name: Test
         if: '!matrix.race'
-        run: go test ./...
+        shell: bash
+        run: |
+          go test $(go list ./... | grep -v '/internal/winvm$')
+          go test ./internal/winvm/
+
+      # The Secure VM's lab build (winvmlab) honours lab settings a product
+      # build refuses; its tests prove the gate from the other side.
+      - name: Test (Secure VM lab build)
+        run: go test -tags winvmlab ./internal/winvm/
 
       - name: Upload coverage to Codecov
         if: matrix.coverage

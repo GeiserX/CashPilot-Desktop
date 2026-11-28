@@ -36,12 +36,8 @@ func hidden(ctx context.Context, name string, args ...string) *exec.Cmd {
 
 // cimCommand runs script in System32's Windows PowerShell, by its full path,
 // never from PATH.
-func cimCommand(ctx context.Context, script string) (*exec.Cmd, error) {
-	ps, err := runtime.PowerShellExe()
-	if err != nil {
-		return nil, err
-	}
-	return hidden(ctx, ps, "-NoProfile", "-NonInteractive", "-EncodedCommand", psEncode(script)), nil
+func cimCommand(ctx context.Context, script string) (*exec.Cmd, func(), error) {
+	return filePowerShellCommand(ctx, "", script)
 }
 
 func (systemProbes) supported() bool { return true }
@@ -83,20 +79,28 @@ func (systemProbes) processor(context.Context) (func(*HostFacts), error) {
 		windows.IsProcessorFeaturePresent(windows.PF_SECOND_LEVEL_ADDRESS_TRANSLATION)), nil
 }
 
-// cpu and features run their CIM scripts in an unelevated, hidden PowerShell.
+// An unelevated app reads the same facts directly through WMI. PowerShell
+// scripts require access to the Administrators-only directory.
 func (systemProbes) cpu(ctx context.Context) (func(*HostFacts), error) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return unelevatedWMI.cpu(ctx)
+	}
 	return runCIM(ctx, cpuScript)
 }
 
 func (systemProbes) features(ctx context.Context) (func(*HostFacts), error) {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return unelevatedWMI.features(ctx)
+	}
 	return runCIM(ctx, featureScript)
 }
 
 func runCIM(ctx context.Context, script string) (func(*HostFacts), error) {
-	cmd, err := cimCommand(ctx, script)
+	cmd, release, err := cimCommand(ctx, script)
 	if err != nil {
 		return nil, err
 	}
+	defer release()
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, cimError(ctx.Err(), err)

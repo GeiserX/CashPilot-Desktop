@@ -56,6 +56,9 @@ func psQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
+// EncodeCommand encodes the fixed script for the visible Docker installer window.
+func EncodeCommand(script string) string { return psEncode(script) }
+
 // psEncode is the -EncodedCommand form of a script: base64 of its UTF-16LE bytes.
 func psEncode(script string) string {
 	units := utf16.Encode([]rune(script))

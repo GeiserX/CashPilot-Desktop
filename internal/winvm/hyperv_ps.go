@@ -77,7 +77,32 @@ function Write-Doc($o) {
   $j = ConvertTo-Json -InputObject $o -Compress -Depth 8
   [Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($j)))
 }
+function Get-Owner([string]$s) {
+  if ($s -cmatch '(?:^| )cashpilot-owner=([0-9a-f]{32})$') { return $Matches[1] }
+  return ''
+}
 function Find-OurVM($id) { Get-VM | Where-Object { $_.Id.ToString() -eq $id } }
+function Get-OwnedVM([string]$id, [string]$owner) {
+  $vm = @(Find-OurVM $id)
+  if (-not $owner -or $vm.Count -ne 1 -or (Get-Owner ([string]$vm[0].Notes)) -cne $owner) { throw 'The owned VM was not found.' }
+  $vm[0]
+}
+function Get-RecordedVMAdapter([string]$id, [string]$owner, [string]$adapterId, [bool]$only) {
+  $vm = Get-OwnedVM $id $owner
+  $all = @(Get-VMNetworkAdapter -VM $vm)
+  $a = @($all | Where-Object { (($_.Id -split '\\')[-1]) -eq $adapterId })
+  if (-not $adapterId -or $a.Count -ne 1) { throw 'The recorded VM adapter was not found and was left unchanged.' }
+  if ($only -and $all.Count -ne 1) { throw 'The VM has another adapter and was left unchanged.' }
+  $a[0]
+}
+function Find-ManagementAdapter($mo) {
+  $dev = ([string]$mo.DeviceId).Trim('{}')
+  $guid = ([string]$mo.InterfaceGuid).Trim('{}')
+  @(Get-NetAdapter -IncludeHidden | Where-Object {
+    ($dev -and (([string]$_.DeviceId).Trim('{}') -eq $dev -or ([string]$_.InterfaceGuid).Trim('{}') -eq $dev)) -or
+    ($guid -and ([string]$_.InterfaceGuid).Trim('{}') -eq $guid)
+  })
+}
 `
 
 // scriptReadLive reads everything Diff compares. Each part has its own try, so a
@@ -85,7 +110,17 @@ function Find-OurVM($id) { Get-VM | Where-Object { $_.Id.ToString() -eq $id } }
 // into a value Diff flags. Enums are written with ToString, so the answer holds
 // their English names, never numbers or translated text. Integration services
 // are keyed by their ID.
-const scriptReadLive = hvPrelude + `$o = [ordered]@{}
+// netTransPS lists the component IDs of every installed protocol (the
+// NetTrans class). They are under Control\Network: the Control\Class key of
+// the same GUID refuses Administrators and, read as SYSTEM, holds no
+// components (live run 5).
+const netTransPS = `function Get-NetTransComponents {
+  @(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Network\{4D36E975-E325-11CE-BFC1-08002BE10318}' -ErrorAction Stop |
+    ForEach-Object { [string]$_.GetValue('ComponentId') } | Where-Object { $_ })
+}
+`
+
+const scriptReadLive = portACLPrelude + firewallIdentityPS + netTransPS + `$o = [ordered]@{}
 $vm = @(Find-OurVM $in.vm)
 $o.vmExists = ($vm.Count -eq 1)
 if ($vm.Count -ne 1) { Write-Doc $o; exit 0 }
@@ -102,6 +137,9 @@ try {
   $o.acls = @(Get-VMNetworkAdapterAcl -VM $vm | ForEach-Object {
     [ordered]@{ action = $_.Action.ToString(); direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress; local = [string]$_.LocalAddress }
   })
+} catch { }
+try {
+  $o.portAcls = @(Get-VMNetworkAdapter -VM $vm | ForEach-Object { Get-PortACLs $_ } | ForEach-Object { Export-PortACL $_ })
 } catch { }
 try { $o.extAcls = @(Get-VMNetworkAdapterExtendedAcl -VM $vm).Count } catch { }
 try {
@@ -135,21 +173,19 @@ try { foreach ($p in @(Get-VMComPort -VM $vm)) { if ($p.Path) { $pt += 'com:' + 
 $o.passthrough = @($pt)
 $idx = 0
 try {
-  $sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
+  $sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId })
   if ($sw.Count -eq 1) {
     $sw = $sw[0]
     $o.switchType = $sw.SwitchType.ToString()
     $o.switchPorts = @(Get-VMNetworkAdapter -All | Where-Object { (-not $_.IsManagementOs) -and ($_.SwitchId -eq $sw.Id) }).Count
     $mo = @(Get-VMNetworkAdapter -ManagementOS | Where-Object { $_.SwitchId -eq $sw.Id })
     if ($mo.Count -eq 1) {
-      $dev = ([string]$mo[0].DeviceId).Trim('{}')
-      $na = @(Get-NetAdapter -IncludeHidden | Where-Object { ([string]$_.DeviceID).Trim('{}') -eq $dev })
-      if ($na.Count -ne 1) {
-        $mac = ([string]$mo[0].MacAddress).ToUpper()
-        $na = @(Get-NetAdapter -IncludeHidden | Where-Object { (([string]$_.MacAddress) -replace '-', '').ToUpper() -eq $mac })
-      }
+      $na = @(Find-ManagementAdapter $mo[0])
       if ($na.Count -eq 1) {
         $idx = [int]$na[0].ifIndex
+        $o.managementAdapterId = [string]$mo[0].Id
+        $ipif = @(Get-NetIPInterface -InterfaceIndex $idx -AddressFamily IPv4)
+        $o.managementDhcp = ($ipif.Count -ne 1 -or $ipif[0].Dhcp.ToString() -ne 'Disabled')
         $o.vnicIfIndex = $idx
         $o.vnicMac = [string]$na[0].MacAddress
       }
@@ -158,19 +194,19 @@ try {
 } catch { }
 if ($idx -ne 0) {
   try {
-    $na = @(Get-NetAdapter -IncludeHidden | Where-Object { $_.ifIndex -eq $idx })[0]
+    $na = @(Find-ManagementAdapter $mo[0])[0]
     $b = @(Get-NetAdapterBinding -Name $na.Name -IncludeHidden -AllBindings)
     $bm = @{}
     foreach ($x in $b) { $bm[([string]$x.ComponentID).ToLower()] = [bool]$x.Enabled }
     $o.bindings = $bm
-    $nt = @(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4D36E975-E325-11CE-BFC1-08002BE10318}' -ErrorAction SilentlyContinue | ForEach-Object { $_.GetValue('ComponentId') } | Where-Object { $_ })
+    $nt = @(Get-NetTransComponents)
     if ($nt.Count -gt 0) { $o.protocolsOn = @($b | Where-Object { $_.Enabled -and ($nt -contains $_.ComponentID) } | ForEach-Object { ([string]$_.ComponentID).ToLower() }) }
   } catch { }
   try {
     $o.neighbors = @(Get-NetNeighbor -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.State.ToString() -eq 'Permanent' } | ForEach-Object { [ordered]@{ ip = [string]$_.IPAddress; mac = [string]$_.LinkLayerAddress; state = $_.State.ToString() } })
   } catch { }
 }
-try { $o.nats = @(Get-NetNat -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } }) } catch { }
+try { $o.nats = @(Get-NetNat -ErrorAction SilentlyContinue | ForEach-Object { [ordered]@{ id = [string]$_.InstanceID; name = [string]$_.Name; prefix = [string]$_.InternalIPInterfaceAddressPrefix } }) } catch { }
 try {
   $o.firewall = @(Get-NetFirewallRule -Group $in.group -ErrorAction SilentlyContinue | ForEach-Object {
     $r = $_
@@ -183,7 +219,7 @@ try {
         if ($na.Count -eq 1) { $fi = [int]$na[0].ifIndex }
       }
     }
-    [ordered]@{ direction = $r.Direction.ToString(); action = $r.Action.ToString(); enabled = ($r.Enabled.ToString() -eq 'True'); ifIndex = $fi }
+    [ordered]@{ direction = $r.Direction.ToString(); action = $r.Action.ToString(); enabled = ($r.Enabled.ToString() -eq 'True'); ifIndex = $fi; identity = (Get-FirewallIdentity $r) }
   })
 } catch { }
 try { $o.enhancedSession = [bool](Get-VMHost).EnableEnhancedSessionMode } catch { }
@@ -209,13 +245,12 @@ $o.physical = $phys
 $physG = @{}
 foreach ($a in @(Get-NetAdapter -Physical)) { $physG[([string]$a.InterfaceGuid).Trim('{}').ToLower()] = $true }
 $mos = @{}
-$mosMac = @{}
 $sws = @{}
 try {
   foreach ($m in @(Get-VMNetworkAdapter -ManagementOS)) {
     if ($m.SwitchId) {
-      $mos[([string]$m.DeviceId).Trim('{}').ToLower()] = $m.SwitchId.ToString()
-      $mosMac[([string]$m.MacAddress).ToUpper()] = $m.SwitchId.ToString()
+      $na = @(Find-ManagementAdapter $m)
+      if ($na.Count -eq 1) { $mos[[int]$na[0].ifIndex] = $m.SwitchId.ToString() }
     }
   }
   foreach ($s in @(Get-VMSwitch)) { $sws[$s.Id.ToString()] = $s }
@@ -234,9 +269,7 @@ foreach ($a in @(Get-NetAdapter -IncludeHidden)) {
   $sid = ''
   $st = ''
   $ext = $false
-  $k = ([string]$a.DeviceID).Trim('{}').ToLower()
-  $km = (([string]$a.MacAddress) -replace '-', '').ToUpper()
-  if ($mos.ContainsKey($k)) { $sid = $mos[$k] } elseif ($mosMac.ContainsKey($km)) { $sid = $mosMac[$km] }
+  if ($mos.ContainsKey([int]$a.ifIndex)) { $sid = $mos[[int]$a.ifIndex] }
   if ($sid) {
     if ($sws.ContainsKey($sid)) {
       $s = $sws[$sid]
@@ -341,72 +374,45 @@ try {
 Write-Doc $o
 `
 
-// scriptDisconnect disconnects every adapter of the VM and reports how many
-// still have a switch.
-const scriptDisconnect = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
-foreach ($x in $a) { Disconnect-VMNetworkAdapter -VMNetworkAdapter $x }
-$left = @(Get-VMNetworkAdapter -VM $vm[0] | Where-Object { $_.SwitchName }).Count
-Write-Doc ([ordered]@{ adapters = $a.Count; connected = $left })
+// scriptDisconnect disconnects only the adapter recorded at Setup.
+const scriptDisconnect = hvPrelude + `$a = Get-RecordedVMAdapter $in.vm $in.owner $in.adapter $false
+Disconnect-VMNetworkAdapter -VMNetworkAdapter $a
+$vm = Get-OwnedVM $in.vm $in.owner
+$all = @(Get-VMNetworkAdapter -VM $vm)
+$left = @($all | Where-Object { $_.SwitchName }).Count
+Write-Doc ([ordered]@{ adapters = $all.Count; connected = $left })
 `
 
 // scriptConnect connects the VM's one adapter to the one Internal switch with
-// the given name. It refuses a VM with more adapters, a missing or doubled
+// the recorded ID. It refuses a VM with more adapters, a missing or doubled
 // switch, and a switch of any other type.
-const scriptConnect = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
-if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-$sw = @(Get-VMSwitch | Where-Object { $_.Name -eq $in.switch })
-if ($sw.Count -ne 1) { throw 'The switch was not found exactly once.' }
+const scriptConnect = hvPrelude + `$a = Get-RecordedVMAdapter $in.vm $in.owner $in.adapter $true
+$sw = @(Get-VMSwitch | Where-Object { $_.Id.ToString() -eq $in.switchId })
+if ($sw.Count -ne 1 -or (Get-Owner ([string]$sw[0].Notes)) -cne $in.owner) { throw 'The owned switch was not found.' }
 if ($sw[0].SwitchType.ToString() -ne 'Internal') { throw 'The switch is not an Internal switch.' }
-Connect-VMNetworkAdapter -VMNetworkAdapter $a[0] -VMSwitch $sw[0]
+Connect-VMNetworkAdapter -VMNetworkAdapter $a -VMSwitch $sw[0]
 Write-Doc ([ordered]@{ switchId = $sw[0].Id.ToString() })
 `
 
 // scriptStart starts the VM unless it already runs, and reports its state.
-const scriptStart = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-if ($vm[0].State.ToString() -ne 'Running') { Start-VM -VM $vm[0] }
-$vm = @(Find-OurVM $in.vm)
-Write-Doc ([ordered]@{ state = $vm[0].State.ToString() })
-`
-
-// scriptAddDeny adds one Deny Both row per remote on the VM's one adapter, then
-// lists the adapter's Deny rows so Go can check that each one is there.
-const scriptAddDeny = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
-if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-foreach ($r in @($in.remotes)) { Add-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] -RemoteIPAddress $r -Direction Both -Action Deny }
-Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
-`
-
-// scriptRemoveDeny removes the Deny rows of each remote from the VM's one
-// adapter, both directions, then lists the Deny rows left. A /32 matches
-// whether Hyper-V lists it bare or with its /32.
-const scriptRemoveDeny = hvPrelude + `$vm = @(Find-OurVM $in.vm)
-if ($vm.Count -ne 1) { throw 'The VM was not found.' }
-$a = @(Get-VMNetworkAdapter -VM $vm[0])
-if ($a.Count -ne 1) { throw 'The VM must have exactly one network adapter.' }
-$rs = @($in.remotes | ForEach-Object { ([string]$_) -replace '/32$', '' })
-@(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { ($_.Action.ToString() -eq 'Deny') -and ($rs -contains (([string]$_.RemoteAddress) -replace '/32$', '')) }) | Remove-VMNetworkAdapterAcl
-Write-Doc ([ordered]@{ deny = @(Get-VMNetworkAdapterAcl -VMNetworkAdapter $a[0] | Where-Object { $_.Action.ToString() -eq 'Deny' } | ForEach-Object { [ordered]@{ direction = $_.Direction.ToString(); remote = [string]$_.RemoteAddress } }) })
+const scriptStart = hvPrelude + `$vm = Get-OwnedVM $in.vm $in.owner
+if ($vm.State.ToString() -ne 'Running') { Start-VM -VM $vm }
+$vm = Get-OwnedVM $in.vm $in.owner
+Write-Doc ([ordered]@{ state = $vm.State.ToString() })
 `
 
 // hvScripts is every script the seam runs, by method, for the parser test.
 var hvScripts = map[string]string{
-	"ReadLive":     scriptReadLive,
-	"ReadHostNet":  scriptReadHostNet,
-	"ReadNetwork":  scriptReadNetwork,
-	"DropCounters": scriptDropCounters,
-	"Usage":        scriptUsage,
-	"Disconnect":   scriptDisconnect,
-	"Connect":      scriptConnect,
-	"Start":        scriptStart,
-	"AddDeny":      scriptAddDeny,
-	"RemoveDeny":   scriptRemoveDeny,
+	"ReadLive":       scriptReadLive,
+	"ReadHostNet":    scriptReadHostNet,
+	"ReadNetwork":    scriptReadNetwork,
+	"DropCounters":   scriptDropCounters,
+	"Usage":          scriptUsage,
+	"Disconnect":     scriptDisconnect,
+	"Connect":        scriptConnect,
+	"AddPortACLs":    scriptAddPortACLs,
+	"RemovePortACLs": scriptRemovePortACLs,
+	"Start":          scriptStart,
 }
 
 // checkVMID accepts only a GUID.
@@ -508,19 +514,22 @@ func hvArg(arg []byte) string { return hvArgEnv + "=" + base64.StdEncoding.Encod
 
 // ReadLive reads the live state of our VM, switch, vNIC, NAT, firewall group
 // and host settings.
-func (h *psHost) ReadLive(ctx context.Context, n Names, vmID string) (LiveState, error) {
+func (h *psHost) ReadLive(ctx context.Context, n Names, vmID, switchID string) (LiveState, error) {
 	if err := n.Validate(); err != nil {
 		return LiveState{}, err
 	}
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return LiveState{}, err
 	}
+	if err := checkVMID("switch ID", switchID); err != nil {
+		return LiveState{}, err
+	}
 	var w liveWire
 	arg := struct {
 		VM     string `json:"vm"`
-		Switch string `json:"switch"`
+		Switch string `json:"switchId"`
 		Group  string `json:"group"`
-	}{vmID, n.Switch, n.FirewallGroup}
+	}{vmID, switchID, n.FirewallGroup}
 	if err := h.call(ctx, scriptReadLive, arg, &w); err != nil {
 		return LiveState{}, err
 	}
@@ -530,35 +539,38 @@ func (h *psHost) ReadLive(ctx context.Context, n Names, vmID string) (LiveState,
 // liveWire is scriptReadLive's answer. A part the script could not read is
 // absent, and live() turns it into a value Diff flags.
 type liveWire struct {
-	VMExists      *bool           `json:"vmExists"`
-	VMState       *string         `json:"vmState"`
-	Adapters      []adapterWire   `json:"adapters"`
-	ACLs          []aclWire       `json:"acls"`
-	ExtACLs       *int            `json:"extAcls"`
-	ProcCount     *int            `json:"procCount"`
-	ProcMax       *int            `json:"procMax"`
-	ProcWeight    *int            `json:"procWeight"`
-	ExposeVirt    *bool           `json:"exposeVirt"`
-	MemoryBytes   *uint64         `json:"memoryBytes"`
-	DynamicMemory *bool           `json:"dynamicMemory"`
-	Checkpoints   *string         `json:"checkpoints"`
-	AutoStart     *string         `json:"autoStart"`
-	Integration   map[string]bool `json:"integration"`
-	DVDs          *int            `json:"dvds"`
-	Disks         *int            `json:"disks"`
-	Passthrough   []string        `json:"passthrough"`
-	SwitchType    *string         `json:"switchType"`
-	SwitchPorts   *int            `json:"switchPorts"`
-	VNICIfIndex   *int            `json:"vnicIfIndex"`
-	VNICMAC       *string         `json:"vnicMac"`
-	Bindings      map[string]bool `json:"bindings"`
-	ProtocolsOn   []string        `json:"protocolsOn"`
-	Neighbors     []neighborWire  `json:"neighbors"`
-	NATs          []natWire       `json:"nats"`
-	Firewall      []LiveRule      `json:"firewall"`
-	Enhanced      *bool           `json:"enhancedSession"`
-	GCS           []string        `json:"gcs"`
-	HostBuild     *string         `json:"hostBuild"`
+	VMExists            *bool           `json:"vmExists"`
+	VMState             *string         `json:"vmState"`
+	Adapters            []adapterWire   `json:"adapters"`
+	PortACLs            []PortACL       `json:"portAcls"`
+	ACLs                []aclWire       `json:"acls"`
+	ExtACLs             *int            `json:"extAcls"`
+	ProcCount           *int            `json:"procCount"`
+	ProcMax             *int            `json:"procMax"`
+	ProcWeight          *int            `json:"procWeight"`
+	ExposeVirt          *bool           `json:"exposeVirt"`
+	MemoryBytes         *uint64         `json:"memoryBytes"`
+	DynamicMemory       *bool           `json:"dynamicMemory"`
+	Checkpoints         *string         `json:"checkpoints"`
+	AutoStart           *string         `json:"autoStart"`
+	Integration         map[string]bool `json:"integration"`
+	DVDs                *int            `json:"dvds"`
+	Disks               *int            `json:"disks"`
+	Passthrough         []string        `json:"passthrough"`
+	SwitchType          *string         `json:"switchType"`
+	SwitchPorts         *int            `json:"switchPorts"`
+	ManagementDHCP      *bool           `json:"managementDhcp"`
+	ManagementAdapterID string          `json:"managementAdapterId"`
+	VNICIfIndex         *int            `json:"vnicIfIndex"`
+	VNICMAC             *string         `json:"vnicMac"`
+	Bindings            map[string]bool `json:"bindings"`
+	ProtocolsOn         []string        `json:"protocolsOn"`
+	Neighbors           []neighborWire  `json:"neighbors"`
+	NATs                []natWire       `json:"nats"`
+	Firewall            []LiveRule      `json:"firewall"`
+	Enhanced            *bool           `json:"enhancedSession"`
+	GCS                 []string        `json:"gcs"`
+	HostBuild           *string         `json:"hostBuild"`
 }
 
 type adapterWire struct {
@@ -585,6 +597,7 @@ type neighborWire struct {
 }
 
 type natWire struct {
+	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Prefix string `json:"prefix"`
 }
@@ -636,6 +649,7 @@ func (w liveWire) live() (LiveState, error) {
 		l.ACLs = append(l.ACLs, ACL{Action: a.Action, Direction: a.Direction, Remote: aclRemote(a)})
 	}
 
+	l.PortACLs = w.PortACLs
 	l.ExtACLs = intOr(w.ExtACLs, -1)
 	l.ProcCount = intOr(w.ProcCount, -1)
 	l.ProcMax = intOr(w.ProcMax, -1)
@@ -661,6 +675,8 @@ func (w liveWire) live() (LiveState, error) {
 	}
 	l.SwitchType = strOr(w.SwitchType, unread)
 	l.SwitchPorts = intOr(w.SwitchPorts, -1)
+	l.ManagementDHCP = boolOr(w.ManagementDHCP, true)
+	l.ManagementAdapterID = w.ManagementAdapterID
 	l.VNICIfIndex = intOr(w.VNICIfIndex, 0)
 	l.VNICMAC = strOr(w.VNICMAC, "")
 	if w.Bindings != nil {
@@ -675,7 +691,7 @@ func (w liveWire) live() (LiveState, error) {
 	l.HostNeighbor = pickNeighbor(w.Neighbors)
 	for _, n := range w.NATs {
 		p, _ := parsePrefixOrAddr(n.Prefix)
-		l.NATs = append(l.NATs, LiveNAT{Name: n.Name, Prefix: p})
+		l.NATs = append(l.NATs, LiveNAT{ID: n.ID, Name: n.Name, Prefix: p})
 	}
 	if w.NATs != nil && l.NATs == nil {
 		l.NATs = []LiveNAT{}
@@ -964,7 +980,7 @@ func (h *psHost) Usage(ctx context.Context, vmID string) (Usage, error) {
 }
 
 // Disconnect takes every adapter of the VM off its switch.
-func (h *psHost) Disconnect(ctx context.Context, vmID string) error {
+func (h *psHost) Disconnect(ctx context.Context, vmID, owner, adapterID string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
@@ -972,9 +988,13 @@ func (h *psHost) Disconnect(ctx context.Context, vmID string) error {
 		Adapters  int `json:"adapters"`
 		Connected int `json:"connected"`
 	}
-	arg := struct {
-		VM string `json:"vm"`
-	}{vmID}
+	if err := checkVMID("VM adapter ID", adapterID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
+	arg := map[string]string{"vm": vmID, "owner": owner, "adapter": adapterID}
 	if err := h.call(ctx, scriptDisconnect, arg, &w); err != nil {
 		return err
 	}
@@ -984,41 +1004,45 @@ func (h *psHost) Disconnect(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// Connect puts the VM's one adapter on our Internal switch, found by name.
-func (h *psHost) Connect(ctx context.Context, vmID, switchName string) error {
+// Connect puts the VM's one adapter on the recorded Internal switch.
+func (h *psHost) Connect(ctx context.Context, vmID, switchID, owner, adapterID string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
-	if !objectName.MatchString(switchName) {
-		return fmt.Errorf("switch name %q is not allowed", switchName)
+	if err := checkVMID("switch ID", switchID); err != nil {
+		return err
+	}
+	if err := checkVMID("VM adapter ID", adapterID); err != nil {
+		return err
+	}
+	if err := checkOwner(owner); err != nil {
+		return err
 	}
 	var w struct {
 		SwitchID string `json:"switchId"`
 	}
-	arg := struct {
-		VM     string `json:"vm"`
-		Switch string `json:"switch"`
-	}{vmID, switchName}
+	arg := map[string]string{"vm": vmID, "switchId": switchID, "owner": owner, "adapter": adapterID}
 	if err := h.call(ctx, scriptConnect, arg, &w); err != nil {
 		return err
 	}
-	if !guidRe.MatchString(w.SwitchID) {
-		return fmt.Errorf("the connect did not report a switch ID (%q)", w.SwitchID)
+	if !strings.EqualFold(w.SwitchID, switchID) {
+		return fmt.Errorf("the connect reported switch ID %q, want %q", w.SwitchID, switchID)
 	}
 	return nil
 }
 
 // Start starts the VM and checks that it runs.
-func (h *psHost) Start(ctx context.Context, vmID string) error {
+func (h *psHost) Start(ctx context.Context, vmID, owner string) error {
 	if err := checkVMID("VM ID", vmID); err != nil {
 		return err
 	}
 	var w struct {
 		State string `json:"state"`
 	}
-	arg := struct {
-		VM string `json:"vm"`
-	}{vmID}
+	if err := checkOwner(owner); err != nil {
+		return err
+	}
+	arg := map[string]string{"vm": vmID, "owner": owner}
 	if err := h.call(ctx, scriptStart, arg, &w); err != nil {
 		return err
 	}
@@ -1038,17 +1062,21 @@ const maxDenyTotal = 16 * maxDenyRows
 
 // checkDenies accepts only masked IPv4 prefixes, at most maxDenyTotal, with no
 // repeat, and returns each one as Hyper-V writes it: a /32 as a bare address.
-// The guard only manages its own IPv4 rows; IPv6 is one static row.
+// The guard only manages its own IPv4 rows; IPv6 is one static row, ::/0,
+// which setup places and nothing removes.
 func checkDenies(ps []netip.Prefix) ([]string, error) {
 	if len(ps) == 0 || len(ps) > maxDenyTotal {
 		return nil, fmt.Errorf("%d prefixes; one call takes 1 to %d", len(ps), maxDenyTotal)
 	}
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
-		if !p.IsValid() || !p.Addr().Is4() || p != p.Masked() {
-			return nil, fmt.Errorf("prefix %v is not a masked IPv4 prefix", p)
+		s := p.String()
+		if p != allIPv6 {
+			if !p.IsValid() || !p.Addr().Is4() || p != p.Masked() {
+				return nil, fmt.Errorf("prefix %v is not a masked IPv4 prefix", p)
+			}
+			s = aclArg(p)
 		}
-		s := aclArg(p)
 		if slices.Contains(out, s) {
 			return nil, fmt.Errorf("prefix %v is listed twice", p)
 		}
@@ -1057,6 +1085,9 @@ func checkDenies(ps []netip.Prefix) ([]string, error) {
 	return out, nil
 }
 
+// allIPv6 is the static Deny over all of IPv6.
+var allIPv6 = netip.MustParsePrefix("::/0")
+
 // aclArg is a prefix as Get-VMNetworkAdapterAcl lists it: a /32 as a bare
 // address, anything else in CIDR form.
 func aclArg(p netip.Prefix) string {
@@ -1064,100 +1095,6 @@ func aclArg(p netip.Prefix) string {
 		return p.Addr().String()
 	}
 	return p.String()
-}
-
-// denyWire is the Deny rows a write script lists after it ran.
-type denyWire struct {
-	Deny []struct {
-		Direction string `json:"direction"`
-		Remote    string `json:"remote"`
-	} `json:"deny"`
-}
-
-// hasBoth is whether the rows hold remote in both directions, as one Both rule
-// is listed. Rows compare as prefixes, so a /32 listed bare or as a.b.c.d/32
-// is the same row.
-func (w denyWire) hasBoth(remote netip.Prefix) (in, out bool) {
-	for _, r := range w.Deny {
-		if p, err := parsePrefixOrAddr(r.Remote); err != nil || p.Masked() != remote {
-			continue
-		}
-		switch strings.ToLower(r.Direction) {
-		case "inbound":
-			in = true
-		case "outbound":
-			out = true
-		case "both":
-			in, out = true, true
-		}
-	}
-	return in, out
-}
-
-// denyBatches runs script once per batch of at most maxDenyRows prefixes, and
-// hands each batch and the rows listed after it to check.
-func (h *psHost) denyBatches(ctx context.Context, script, vmID string, ps []netip.Prefix, rs []string, check func([]netip.Prefix, denyWire) error) error {
-	for i := 0; i < len(ps); i += maxDenyRows {
-		j := min(i+maxDenyRows, len(ps))
-		var w denyWire
-		arg := struct {
-			VM      string   `json:"vm"`
-			Remotes []string `json:"remotes"`
-		}{vmID, rs[i:j]}
-		if err := h.call(ctx, script, arg, &w); err != nil {
-			return err
-		}
-		if err := check(ps[i:j], w); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// AddDeny adds a Deny Both row for each prefix and checks that each one is
-// there afterwards.
-func (h *psHost) AddDeny(ctx context.Context, vmID string, ps []netip.Prefix) error {
-	if err := checkVMID("VM ID", vmID); err != nil {
-		return err
-	}
-	rs, err := checkDenies(ps)
-	if err != nil {
-		return err
-	}
-	return h.denyBatches(ctx, scriptAddDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
-		for _, p := range batch {
-			if in, out := w.hasBoth(p); !in || !out {
-				return fmt.Errorf("the Deny for %s is not in place after the add", aclArg(p))
-			}
-		}
-		return nil
-	})
-}
-
-// RemoveDeny removes the Deny rows of each prefix and checks that none is left.
-// It refuses a static Deny: only the guard's own rows ever go, and a static row
-// gone is drift that only Repair puts back.
-func (h *psHost) RemoveDeny(ctx context.Context, vmID string, ps []netip.Prefix) error {
-	if err := checkVMID("VM ID", vmID); err != nil {
-		return err
-	}
-	rs, err := checkDenies(ps)
-	if err != nil {
-		return err
-	}
-	for _, p := range ps {
-		if slices.Contains(StaticDeny(), p) {
-			return fmt.Errorf("the static Deny %v is never removed", p)
-		}
-	}
-	return h.denyBatches(ctx, scriptRemoveDeny, vmID, ps, rs, func(batch []netip.Prefix, w denyWire) error {
-		for _, p := range batch {
-			if in, out := w.hasBoth(p); in || out {
-				return fmt.Errorf("a Deny for %s is still there after the remove", aclArg(p))
-			}
-		}
-		return nil
-	})
 }
 
 // sleepCtx waits d, or until ctx ends.

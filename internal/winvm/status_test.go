@@ -48,8 +48,8 @@ func TestStatusRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	ents, _ := os.ReadDir(dir)
-	if len(ents) != 1 || ents[0].Name() != StatusFile {
-		t.Fatalf("the folder holds %v, want only %s", ents, StatusFile)
+	if len(ents) != 2 || ents[0].Name() != artifactLogName || ents[1].Name() != StatusFile {
+		t.Fatalf("the folder holds %v, want the file journal and %s", ents, StatusFile)
 	}
 }
 

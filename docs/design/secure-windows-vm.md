@@ -30,11 +30,11 @@ The fence is proven red, then green, at install, before any earner exists.
 | # | Question | Decision |
 |---|---|---|
 | 1 | Who holds Hyper-V rights | Setup adds the user to Hyper-V Administrators (`S-1-5-32-578`). The lab showed what this gives (Q6). The setup text says it plainly. |
-| 2 | Enhanced Session | Off for the whole host. Setup records the old value. Removal restores it. |
+| 2 | Enhanced Session | The host owner turns it off before product Setup. The setting applies to the whole host. |
 | 3 | Code signing | **Phase 2 ships unsigned.** We buy no certificate for now. The release job signs when the secrets exist and skips the step otherwise, so a missing certificate never fails the Windows release. Windows shows a SmartScreen warning on download, and the wizard and `docs/secure-vm.md` explain it. The admin prompt is not affected: it elevates `powershell.exe` (`RunElevated`, `internal/runtime/firewall_windows.go`), so it shows "Windows PowerShell" with Microsoft as the verified publisher. It never says "Unknown publisher" for CashPilot. The cost of a certificate is still open. |
 | 4 | 90-day trial | Only as a small "testing only" link, never the default. |
 | 5 | Honeygain | Stays out of the VM. |
-| 6 | Minimum host | 12 GB RAM and 100 GB free on the chosen drive. |
+| 6 | Minimum host | 12 GB RAM and 100 GB free on the instance data volume. |
 | 7 | Live test | By hand on a lab host for each release that touches `internal/winvm`. No self-hosted runner. |
 | 8 | Is the VM worth a licence | Build it. The wizard shows the licence cost against the expected earnings before the key screen. |
 | 9 | Guest edition | A Home or a Pro key is accepted. Q15 proved that the answer file, autologon and PowerShell Direct work on Home. |

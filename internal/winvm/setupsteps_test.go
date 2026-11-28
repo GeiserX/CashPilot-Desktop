@@ -162,11 +162,10 @@ func TestScriptsRunSystemToolsWithALimit(t *testing.T) {
 
 func decodeLauncher(t *testing.T, args []string) string {
 	t.Helper()
-	m := regexp.MustCompile(`-EncodedCommand ([A-Za-z0-9+/=]+)'`).FindStringSubmatch(strings.Join(args, " "))
-	if m == nil {
+	if len(args) != 2 {
 		t.Fatalf("no encoded script in %q", args)
 	}
-	b, err := base64.StdEncoding.DecodeString(m[1])
+	b, err := base64.StdEncoding.DecodeString(args[1])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +192,7 @@ func TestDockerUsersTakesTheSIDAsAParameter(t *testing.T) {
 			t.Errorf("the docker-users script lacks %q", want)
 		}
 	}
-	args, err := runtime.ElevatedArgs(s, longSID, false)
+	args, err := runtime.ElevatedArgs(s, longSID, true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -54,11 +54,15 @@ func runVMGuardMain(dir, once string) int {
 		fmt.Fprintln(os.Stderr, "vm-guard:", err)
 		return 2
 	}
+	if err := winvm.CheckCreatedDirectory(d); err != nil {
+		fmt.Fprintln(os.Stderr, "vm-guard:", err)
+		return 2
+	}
 	logger := openGuardLog(d, once != "")
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	deps := winvm.GuardDeps{
-		HV:   winvm.NewHost(),
+		HV:   winvm.NewHost(d),
 		Echo: winvm.DefaultEcho(),
 		Now:  time.Now,
 		Dir:  d,
@@ -133,7 +137,7 @@ func (r *rotatingLog) Write(b []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if fi, err := os.Stat(r.path); err == nil && fi.Size()+int64(len(b)) > r.max {
-		if err := os.Rename(r.path, r.path+".1"); err != nil {
+		if err := winvm.RotateJournaledLog(r.path); err != nil {
 			return len(b), nil
 		}
 	}

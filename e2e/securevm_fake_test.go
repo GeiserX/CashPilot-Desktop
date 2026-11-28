@@ -31,7 +31,7 @@ func build(t *testing.T, f *hvfake.HyperV, staticARP bool) winvm.Plan {
 func diffNow(t *testing.T, f *hvfake.HyperV, p winvm.Plan) []winvm.Change {
 	t.Helper()
 	ctx := context.Background()
-	live, err := f.ReadLive(ctx, p.Names, p.VMID)
+	live, err := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func fenceHolds(t *testing.T, f *hvfake.HyperV, p winvm.Plan) error {
 	var canaries []winvm.Canary
 	var filters []winvm.PktFilter
 	for _, to := range targets {
-		c, err := f.Canary(ctx, to.Addr(), to.Port(), "tok")
+		c, err := f.Canary(ctx, to.Addr(), to.Port(), netip.MustParsePrefix("192.0.2.11/32"))
 		if err != nil {
 			return err
 		}
@@ -160,19 +160,19 @@ func TestFakeHyperVRedSteps(t *testing.T) {
 
 	// The own-IP Deny must go before an Allow on the same prefix.
 	gw := netip.PrefixFrom(p.Gateway, 32)
-	if err := f.AddDeny(ctx, p.VMID, []netip.Prefix{gw}); err != nil {
+	if err := f.AddDeny(ctx, p.VMID, p.Owner, []netip.Prefix{gw}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.AddAllow(ctx, p.VMID, gw); err == nil || !strings.Contains(err.Error(), "0x800700B7") {
 		t.Fatalf("an Allow beside a Deny on one prefix: %v", err)
 	}
-	if err := f.RemoveDeny(ctx, p.VMID, []netip.Prefix{gw}); err != nil {
+	if err := f.RemoveDeny(ctx, p.VMID, p.Owner, []netip.Prefix{gw}); err != nil {
 		t.Fatal(err)
 	}
 
 	// Red 4: L2 and L3 both open for the gateway, and the canary hears it.
 	// With L3 back on, the same probe is stopped by the host firewall alone.
-	c, _ := f.Canary(ctx, p.Gateway, 40010, "red4")
+	c, _ := f.Canary(ctx, p.Gateway, 40010, netip.PrefixFrom(p.GuestIP, 32))
 	defer c.Close()
 	if err := f.AddAllow(ctx, p.VMID, gw); err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestFakeHyperVRedSteps(t *testing.T) {
 	if len(c.Arrived()) != 0 {
 		t.Fatal("L3 alone did not hold")
 	}
-	if err := f.SetL3(ctx, p.Names, false); err != nil {
+	if err := f.SetL3(ctx, p.Names, p.Owner, false); err != nil {
 		t.Fatal(err)
 	}
 	f.TCP(ctx, netip.AddrPortFrom(p.Gateway, 40010), "red4")
@@ -238,15 +238,15 @@ func TestFakeHyperVIPv6Stack(t *testing.T) {
 	p := buildFenced(t, f)
 	ll := f.VNICLinkLocal(p.Names.Switch)
 	to := netip.AddrPortFrom(ll, 40020)
-	c, _ := f.Canary(ctx, ll, to.Port(), "v6")
+	c, _ := f.Canary(ctx, ll, to.Port(), netip.MustParsePrefix("fe80::/10"))
 	defer c.Close()
-	live, _ := f.ReadLive(ctx, p.Names, p.VMID)
+	live, _ := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	f.TCP(ctx, to, "v6")
 	if len(c.Arrived()) != 0 {
 		t.Fatal("the planned fence let IPv6 reach the host")
 	}
-	f.RemoveDeny(ctx, p.VMID, []netip.Prefix{netip.MustParsePrefix("::/0")})
-	f.SetL3(ctx, p.Names, false)
+	f.RemoveDeny(ctx, p.VMID, p.Owner, []netip.Prefix{netip.MustParsePrefix("::/0")})
+	f.SetL3(ctx, p.Names, p.Owner, false)
 	f.SetBinding(ctx, live.VNICIfIndex, "ms_tcpip6", true)
 	f.TCP(ctx, to, "v6")
 	if len(c.Arrived()) != 1 {
@@ -296,14 +296,14 @@ func TestFakeHyperVFaultHooks(t *testing.T) {
 
 	boom := errors.New("boom")
 	f.FailNext("ReadLive", boom)
-	if _, err := f.ReadLive(ctx, p.Names, p.VMID); !errors.Is(err, boom) {
+	if _, err := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID); !errors.Is(err, boom) {
 		t.Fatalf("FailNext: %v", err)
 	}
-	if _, err := f.ReadLive(ctx, p.Names, p.VMID); err != nil {
+	if _, err := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID); err != nil {
 		t.Fatalf("FailNext fails only once: %v", err)
 	}
 
-	live, _ := f.ReadLive(ctx, p.Names, p.VMID)
+	live, _ := f.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	f.SetBinding(ctx, live.VNICIfIndex, "ms_rspndr", true)
 	if !slices.ContainsFunc(diffNow(t, f, p), func(c winvm.Change) bool { return c.Field == "bindings" }) {
 		t.Fatal("SetBinding: a binding back on is not drift")
@@ -321,7 +321,7 @@ func TestFakeHyperVFaultHooks(t *testing.T) {
 	if !slices.ContainsFunc(diffNow(t, f, p), func(c winvm.Change) bool { return c.Field == "acl" }) {
 		t.Fatal("SetRoute: a new tunnel route did not ask for a Deny")
 	}
-	f.AddDeny(ctx, p.VMID, []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
+	f.AddDeny(ctx, p.VMID, p.Owner, []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
 	if cs := diffNow(t, f, p); len(cs) != 0 {
 		t.Fatalf("with the tunnel Deny added: %+v", cs)
 	}
@@ -343,7 +343,7 @@ func TestFakeHyperVFaultHooks(t *testing.T) {
 	}
 
 	// Disconnect and the switch-port count Diff expects.
-	f.Disconnect(ctx, p.VMID)
+	f.Disconnect(ctx, p.VMID, p.Owner, p.AdapterID)
 	if cs := diffNow(t, f, p); len(cs) != 0 {
 		t.Fatalf("a disconnected VM with the right config: %+v", cs)
 	}
