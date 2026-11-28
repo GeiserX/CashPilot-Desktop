@@ -40,6 +40,19 @@ func Download(ctx context.Context, client *http.Client, pin Pin, dest string, pr
 			return err
 		}
 		have = n
+		// A run that stopped between the last byte and the rename left the
+		// whole file: asking for more would get 416 every time.
+		if have > 0 && hex.EncodeToString(h.Sum(nil)) == pin.SHA256 {
+			return os.Rename(part, dest)
+		}
+		// A full-size partial with the wrong hash can never become right.
+		if pin.Size > 0 && have >= pin.Size {
+			if err := os.Remove(part); err != nil {
+				return err
+			}
+			have = 0
+			h.Reset()
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pin.URL, nil)
 	if err != nil {
@@ -273,9 +286,13 @@ func Inject(ctx context.Context, r Runner, disk, agent string) (err error) {
 	if whole != "" {
 		// The disk is attached even when it holds no macOS volume, so the
 		// detach covers that error too.
+		// A disk that stays attached must stop the install: the guard would
+		// start a VM on a disk the host still holds.
 		defer func() {
 			if _, derr := r.Run(context.WithoutCancel(ctx), "/usr/bin/hdiutil", "detach", whole); derr != nil {
-				_, _ = r.Run(context.WithoutCancel(ctx), "/usr/bin/hdiutil", "detach", "-force", whole)
+				if _, ferr := r.Run(context.WithoutCancel(ctx), "/usr/bin/hdiutil", "detach", "-force", whole); ferr != nil && err == nil {
+					err = fmt.Errorf("could not release the VM's disk: %w", ferr)
+				}
 			}
 		}()
 	}
