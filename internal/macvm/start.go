@@ -147,6 +147,19 @@ func (d *Daemon) Start(ctx context.Context, opt StartOptions) error {
 		return fmt.Errorf("could not cut the new guest port: %w", err)
 	}
 	d.logf("start: cut %s from %s", port, br)
+	// Another VM that starts in the same moment adds a port too, and the port
+	// that showed first need not be ours. A second new port within the settle
+	// time means the two cannot be told apart: stop ours, give the other VM
+	// its port back, and fail, so the daemon starts again.
+	if other := d.settle(ctx, beforeSet, br+" "+port); other != "" {
+		d.logf("start: %s also showed, so %s cannot be told apart; stopping %s", other, port, VMName)
+		d.stopVM(ctx, inst)
+		started = true // stopped already
+		if _, err := d.R.Run(ctx, "/sbin/ifconfig", port); err == nil {
+			_, _ = d.R.Run(ctx, "/sbin/ifconfig", br, "addm", port)
+		}
+		return errPortAmbiguous
+	}
 	bs, err := d.bridges(ctx)
 	if err != nil {
 		return err
@@ -172,6 +185,31 @@ func (d *Daemon) Start(ctx context.Context, opt StartOptions) error {
 	return nil
 }
 
+// portSettle is how long a start watches for a second new port after it cut
+// the first one.
+const portSettle = 2 * time.Second
+
+// errPortAmbiguous means two VMs added a port at once, so the start could not
+// tell which one is the Secure VM's.
+var errPortAmbiguous = errors.New("another virtual machine started at the same moment, so CashPilot could not tell which network port is the Secure VM's")
+
+// settle watches the bridges for portSettle and returns a new vmenet member
+// other than cut, or "" when none showed.
+func (d *Daemon) settle(ctx context.Context, before map[string]bool, cut string) string {
+	end := d.now().Add(portSettle)
+	for d.now().Before(end) {
+		if after, err := d.bridges(ctx); err == nil {
+			if other := OtherNewMember(before, MemberSet(after), cut); other != "" {
+				return other
+			}
+		}
+		if sleep(ctx, 100*time.Millisecond) != nil {
+			return ""
+		}
+	}
+	return ""
+}
+
 // loadFence loads the pf anchor for bridge, turns pf on with our own
 // reference, and kills the guest's old states, so every flow meets the new
 // rules (lab trap M1-A3).
@@ -195,8 +233,14 @@ func (d *Daemon) loadAnchor(ctx context.Context, rules string, subnet netip.Pref
 		return err
 	}
 	if subnet.IsValid() {
-		_, _ = d.R.Run(ctx, "/sbin/pfctl", "-k", subnet.String())
-		_, _ = d.R.Run(ctx, "/sbin/pfctl", "-k", "0.0.0.0/0", "-k", subnet.String())
+		// A state left from before the reload would let its flow skip the
+		// new rules, so a failed clear fails the reload.
+		if _, err := d.R.Run(ctx, "/sbin/pfctl", "-k", subnet.String()); err != nil {
+			return fmt.Errorf("pf could not clear the guest's old states: %w", err)
+		}
+		if _, err := d.R.Run(ctx, "/sbin/pfctl", "-k", "0.0.0.0/0", "-k", subnet.String()); err != nil {
+			return fmt.Errorf("pf could not clear the guest's old states: %w", err)
+		}
 	}
 	return nil
 }
@@ -218,7 +262,12 @@ func (d *Daemon) enablePF(ctx context.Context) error {
 		text += err.Error()
 	}
 	if m := regexp.MustCompile(`Token : (\d+)`).FindStringSubmatch(text); m != nil {
-		_ = WriteAtomic(tokPath, []byte(m[1]+"\n"), 0o600)
+		// Remove releases the reference by this token; one that cannot be
+		// saved is released now, or it would keep pf on for good.
+		if werr := WriteAtomic(tokPath, []byte(m[1]+"\n"), 0o600); werr != nil {
+			_, _ = d.R.Run(ctx, "/sbin/pfctl", "-X", m[1])
+			return fmt.Errorf("could not save the pf reference: %w", werr)
+		}
 	}
 	info, _ = d.R.Run(ctx, "/sbin/pfctl", "-s", "info")
 	if !strings.Contains(info, "Status: Enabled") {
