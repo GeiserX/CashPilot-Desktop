@@ -235,6 +235,16 @@ The test also asserts at least 20 services loaded, so a broken loader can't turn
 the check into a silent no-op. This is the enforcement gate for the repo rule
 "external images: pinned digests, never `:latest`".
 
+**App image updates follow the pin's tag.** The pin stays the known-good build
+that a fresh deploy and a manual Redeploy install. `internal/imageupdates` decides,
+and `runtime.FollowRef` names the tag a pin carries. A catalog pin with no tag
+follows `latest`. A custom image pinned by digest alone is not followed. An
+update deploys with `DeploySpec.FollowTag`, `SettleSeconds` (120) and
+`ExpectImage` (the image ID the check found). The runtime refuses a tag that
+moved since the check, watches the new container, and puts the old one back when
+it fails (`runtime.ImageUpdateUndone`). A build that was undone is held in the
+`image_updates` table and never tried again.
+
 ### `internal/collectors` — earnings collectors (the dispatch pattern)
 
 `collectors.Registry` (`internal/collectors/collectors.go:Registry`) fetches a

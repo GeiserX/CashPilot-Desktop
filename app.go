@@ -329,6 +329,8 @@ func (a *App) startCore(ctx context.Context) error {
 	a.startDeviceLinkRetry(ctx)
 	// What each earner talks to, when the owner switched Activity on.
 	a.startActivitySampler(ctx)
+	// New builds of the apps' images, once a day (app_image_updates.go).
+	a.startImageUpdates(ctx)
 	// Resolve an interrupted Windows rule change before opening the worker API.
 	if a.window {
 		a.recoverServerCommandsFirewall()
@@ -2202,6 +2204,7 @@ func (a *App) notifications(status runtime.Status, earnings []store.EarningsReco
 	items = append(items, a.proxyNotifications()...)
 	items = append(items, a.activityNotifications()...)
 	items = append(items, a.stallNotifications()...)
+	items = append(items, a.imageUpdateNotifications(deployments)...)
 	if len(deployments) == 0 {
 		items = append(items, Notification{Level: "info", Title: i18n.T("go.app.notify.noServices.title"), Message: i18n.T("go.app.notify.noServices.message")})
 	}

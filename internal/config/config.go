@@ -150,7 +150,30 @@ type AppConfig struct {
 	// choice over, Config shows the 1.x pairing from this file and the revision
 	// gives no credential (ErrPairingSuperseded).
 	PairingRevision string `json:"pairingRevision,omitempty"`
+	// ImageUpdates is the app image update setting (internal/imageupdates). A new
+	// install starts on Update automatically; an install from before it gets Off
+	// with an offer to turn it on (load), so an upgrade never turns it on.
+	ImageUpdates *ImageUpdates `json:"imageUpdates,omitempty"`
 }
+
+// ImageUpdates is what the user chose for app image updates.
+type ImageUpdates struct {
+	// Mode is "off", "notify" or "auto" for every app; Services overrides it per app.
+	Mode     string            `json:"mode"`
+	Hour     int               `json:"hour"`
+	Services map[string]string `json:"services,omitempty"`
+	// Offer shows the one-click offer to turn updates on, on an upgraded install.
+	Offer bool `json:"offer,omitempty"`
+	// LastRun is the local date (YYYY-MM-DD) of the last daily run.
+	LastRun string `json:"lastRun,omitempty"`
+}
+
+// The defaults of ImageUpdates.
+const (
+	ImageUpdatesDefaultHour = 4
+	ImageUpdatesAuto        = "auto"
+	ImageUpdatesOff         = "off"
+)
 
 // SetupJournal says where a guided setup stood before a restart. It only says
 // where to land: every check runs again on resume, because the machine is the
@@ -525,7 +548,10 @@ func (m *Manager) load() error {
 	defer release()
 	raw, err := os.ReadFile(m.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return m.persist(applyDefaults(m.cfg))
+		// A new install: app image updates start on Update automatically.
+		m.cfg = applyDefaults(m.cfg)
+		m.cfg.ImageUpdates = &ImageUpdates{Mode: ImageUpdatesAuto, Hour: ImageUpdatesDefaultHour}
+		return m.persist(m.cfg)
 	}
 	if err != nil {
 		return err
@@ -535,7 +561,12 @@ func (m *Manager) load() error {
 		return err
 	}
 	m.cfg, m.saved = applyDefaults(cfg), raw
-	if inferMode(&m.cfg) {
+	upgraded := m.cfg.ImageUpdates == nil
+	if upgraded {
+		// An install from before app image updates: off, with the offer.
+		m.cfg.ImageUpdates = &ImageUpdates{Mode: ImageUpdatesOff, Hour: ImageUpdatesDefaultHour, Offer: true}
+	}
+	if inferMode(&m.cfg) || upgraded {
 		// Written once, so the answer holds even if the address is cleared later
 		// by hand: from now on only the user's own switch changes the mode.
 		if err := m.persist(m.cfg); err != nil {
