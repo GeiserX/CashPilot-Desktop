@@ -13,10 +13,12 @@
 //   9. A CHOICE MADE IN THE BOX OUTLIVES A REDRAW OF THE CARD, A PROXY AND DIRECT ALIKE.
 //  10. A ROUTED DEPLOY SHOWS THE DEVICE-LINK STEP, AS A DIRECT ONE DOES.
 //  11. A PICK NEVER OUTLIVES ITS WIZARD VISIT: LEAVING BY A TAB OR COMING BACK DROPS IT.
+//  12. A SERVICE WHOSE TERMS FORBID A PROXY SHOWS ITS OWNER TICK IN THE BOX, AND THE
+//      ROUTED DEPLOY SENDS ONLY ITS CHECKED TICKS.
 //
 //   node scripts/route_check.mjs      # against ./.harness-build
 
-import { leavesRoute, routeChoice, routeChoiceSection, routedDeployText, runRouteDeploy, wizardAfterNav } from "../.harness-build/render/route.js";
+import { leavesRoute, routeAcks, routeChoice, routeChoiceSection, routedDeployText, runRouteDeploy, wizardAfterNav } from "../.harness-build/render/route.js";
 import { renderWizardServiceSetup } from "../.harness-build/render/wizard.js";
 
 let failures = 0;
@@ -141,6 +143,21 @@ for (const proxyId of [null, 3]) {
   const back = wizardAfterNav("wizard", 3);
   check("RULE 11: coming back drops the pick and starts at step 1", Object.keys(back.drafts).length === 0 && back.step === 1, JSON.stringify(back));
   check("RULE 11: the setup card then shows the recorded route", /<option value="3" selected>/.test(routeChoiceSection(honeygain, route, back.drafts.honeygain)));
+}
+
+// 12. The owner tick.
+{
+// A root whose querySelectorAll answers with the ticks given, as the DOM would.
+const ticks = (attr, items) => ({ querySelectorAll: (sel) => (sel === `[${attr}]` ? items : []) });
+  const risky = routeChoiceSection(honeygain, { ...route, needs: { honeygain: ["account_risk"] } });
+  check("RULE 12: the tick is in the box", /<input type="checkbox" data-wizard-route-ack="honeygain" value="account_risk">/.test(risky), risky);
+  check("RULE 12: it says the account may be suspended", risky.includes("Your Honeygain account may be suspended"), risky);
+  check("RULE 12: no needs, no tick", !box.includes("data-wizard-route-ack"));
+  const root = ticks("data-wizard-route-ack", [
+    { checked: true, dataset: { wizardRouteAck: "honeygain" }, value: "account_risk" },
+    { checked: false, dataset: { wizardRouteAck: "honeygain" }, value: "other" },
+  ]);
+  check("RULE 12: the routed deploy sends the checked tick only", JSON.stringify(routeAcks(root, "honeygain")) === '["account_risk"]');
 }
 
 if (failures) {

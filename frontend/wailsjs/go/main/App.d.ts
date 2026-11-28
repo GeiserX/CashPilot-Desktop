@@ -46,13 +46,13 @@ export function DeleteProxy(arg1:number):Promise<void>;
 
 export function DeployAdminStep(arg1:string):Promise<runtime.AdminStep>;
 
-export function DeployProxiedCopy(arg1:string,arg2:number):Promise<services.ProxiedResult>;
+export function DeployProxiedCopy(arg1:string,arg2:number,arg3:Array<string>):Promise<services.ProxiedResult>;
 
 export function DeployService(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any):Promise<store.Deployment>;
 
 export function DeployServiceLeavingRoute(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any):Promise<store.Deployment>;
 
-export function DeployServiceRouted(arg1:string,arg2:Record<string, string>,arg3:number):Promise<services.ProxiedResult>;
+export function DeployServiceRouted(arg1:string,arg2:Record<string, string>,arg3:number,arg4:Array<string>):Promise<services.ProxiedResult>;
 
 export function DeployServiceWallet(arg1:string,arg2:Record<string, string>,arg3:any,arg4:any,arg5:main.WalletChoice):Promise<main.WalletDeployResult>;
 

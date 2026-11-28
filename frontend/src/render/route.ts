@@ -45,8 +45,21 @@ export function routeChoiceSection(service: Service, route: RouteState | null | 
         <select data-wizard-route="${slug}">${options}</select>
       </label>
       <p class="muted compact-copy route-hint">${ht("route.hint", { name: service.name })}${route.proxiedOnly ? ` ${ht("route.proxiedOnly")}` : ""}</p>
+      ${(route.needs?.[service.slug] || []).map((key) => `<label class="muted compact-copy route-hint"><input type="checkbox" data-wizard-route-ack="${slug}" value="${escapeHtml(key)}"> ${escapeHtml(ackText(key))}</label>`).join("")}
     </div>
   `;
+}
+
+/** The words of one tick a service needs behind a proxy (proxies.Acknowledgements). */
+export function ackText(key: string): string {
+  return key === "account_risk" ? t("proxies.ack.accountRisk") : key;
+}
+
+/** The ticks the Route box of slug holds, checked, inside root. */
+export function routeAcks(root: ParentNode, slug: string): string[] {
+  return [...root.querySelectorAll<HTMLInputElement>("[data-wizard-route-ack]")]
+    .filter((el) => el.checked && el.dataset.wizardRouteAck === slug)
+    .map((el) => el.value);
 }
 
 /** The proxy id to deploy through, or null for this computer's own IP. */
