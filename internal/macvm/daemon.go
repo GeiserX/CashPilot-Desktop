@@ -50,13 +50,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 		next = d.now().Add(GuardInterval)
 		st := d.Pass(ctx, false)
-		if (slicesContains(st.Changes, "own-ip") || slicesContains(st.Changes, "softnet")) && st.Network != NetOff {
-			// The block list must change, or softnet runs with a wrong one:
-			// both are fixed only by a new start, which records a new fence.
-			if slicesContains(st.Changes, "own-ip") {
-				d.logf("restarting %s with the new deny list", VMName)
-				d.restart(ctx)
-			}
+		// Only a new start applies a new deny list. It runs also when the cut
+		// had to stop the VM: restart checks that the VM stopped first.
+		if slicesContains(st.Changes, "own-ip") {
+			d.logf("restarting %s with the new deny list", VMName)
+			d.restart(ctx)
 		}
 		if st.Fence == FenceReprove && st.Network != NetOff {
 			d.logf("macOS or a tool changed: proving the fence again")
@@ -131,10 +129,15 @@ func (d *Daemon) takeRequests() []string {
 		return nil
 	}
 	var out []string
+	// A request counts once: only a plain file, and only after its removal,
+	// so an entry that cannot be removed never runs again at every poll.
 	for _, e := range entries {
-		_ = os.Remove(filepath.Join(d.P.Request, e.Name()))
-		if IsRequest(e.Name()) && !slicesContains(out, e.Name()) {
-			out = append(out, e.Name())
+		name := e.Name()
+		if err := os.Remove(filepath.Join(d.P.Request, name)); err != nil {
+			continue
+		}
+		if e.Type().IsRegular() && IsRequest(name) && !slicesContains(out, name) {
+			out = append(out, name)
 		}
 	}
 	return out
