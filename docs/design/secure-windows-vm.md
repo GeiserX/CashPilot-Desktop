@@ -1,6 +1,6 @@
 # ADR: one Secure VM (Windows 11 Pro) for desktop-only earners
 
-- **Status:** accepted. The lab ran on 2026-11-24 and 2026-11-25. Three questions wait for a host reboot or a host sleep (Q5 reboot part, Q8, Q16). Three lab results are not proven yet: Q3 (unbinding `ms_tcpip6` alone), Q4 (the locale-free drop-counter read) and Q13 (narrow listeners without registration). §6 lists them with every other open item.
+- **Status:** accepted. The lab ran on 2026-11-24 and 2026-11-25. A live run of the real engine on 2026-11-27 closed Q3 (unbinding `ms_tcpip6` alone) and Q4 (the locale-free drop-counter read). It also closed the host reboot part of Q5 and the boot trigger of Q8. It answered Q13 for the narrow listeners, with one finding. Q16 still waits for a host sleep. §6 lists every open item.
 - **Scope:** Windows hosts only. Exactly one Hyper-V VM. Only for services that have no Docker or native path.
 - **Overrides:** `docs/research/vm-isolation.md:120` ("Do not build a VM orchestrator"), for this one case. The rule that CashPilot never runs inside a guest stays. `docs/design/managed-runtime.md` (a Linux VM for containers) is not affected.
 
@@ -53,6 +53,7 @@ The fence is proven red, then green, at install, before any earner exists.
 - Guest accounts came only from the answer file: `cpadmin` (Administrators) and `earner` (Users), with autologon for `earner`. The passwords were random. They sat in a machine-DPAPI file that only Administrators and SYSTEM can read.
 - Probes ran in the guest over PowerShell Direct. A positive control ran first each time.
 - At the end we removed every throwaway VM, disk, switch, NAT, rule, task, user and file.
+- The live run on 2026-11-27 used the engine itself (`docs/secure-vm-live-run.md`). Its test host was a disposable Windows 11 Pro 26H2 VM on the same lab host, with nested virtualization, 4 vCPU and 8 GB of static memory. The engine built its Secure VM inside it with 4 GB. The test host ran no other workload, and we rebooted it for Q5 and Q8. Read-only inventories of the lab host before and after the run matched, with zero unexpected differences.
 
 ---
 
@@ -62,17 +63,17 @@ The fence is proven red, then green, at install, before any earner exists.
 |---|---|---|---|
 | Q1 | **Yes.** Static neighbour entries on both sides and no Allow rule: forwarding works, and the gateway's ports are dead. | Without entries, the guest's ARP for the gateway stays `Incomplete`, and there is no internet. With the guest entry alone, the host's ARP for the guest stays `Incomplete`. With both, the internet works, and the egress is the host's IP. With L3 off, the gateway TCP canary, ports 135 and 445, ICMP and the LAN all time out. | **This is the chosen ARP fix.** Both entries are needed. The host's `vEthernet` MAC goes into `desired.json`. |
 | Q2 | Extended ACLs work on client Windows 11 and **do not touch ARP**. | With the gateway Allow plus an extended Deny of TCP and UDP to the gateway, ARP stays `Reachable`, and the internet works. The TCP and UDP canaries get nothing. ICMP still passes. An extended Deny with any protocol also leaves ARP alone. A simple Deny beats an extended Allow. | Kept as the documented fallback. Not used. |
-| Q3 | L3 leaves WinNAT working. **Outbound host-firewall rules do not filter forwarded traffic.** IPv6 to the host's link-local address is a real path. | An outbound Block for 1.0.0.1 blocks the host itself, not the guest. With an L2 Allow for a LAN server, the server answers even with L3 on. Over IPv6 the guest reaches a canary on the host's link-local `vEthernet` address when `::/0` and L3 are off (red). `::/0` alone blocks it. L3 alone blocks it. **Unbinding `ms_tcpip6` alone is not proven:** its only run was broken (§4, Q3). The guest has no IPv6 default route. | L2 is the only filter for the LAN. L3 protects only the host. The proof gains an **IPv6 red step**. The unbinding stays, but no green step relies on it until it is proven. |
-| Q4 | **No.** Meter ACLs never count packets that a Deny drops. | 10 MB to an allowed address read 11 MB. 10 MB of UDP to a denied range read 0 MB. Meter rows also count in whole megabytes. The per-adapter drop counter **Outgoing FailedSecurityPolicy** counted exactly +1000 for 1000 denied datagrams, +37 for 37 denied connects and +0 for 500 allowed ones. We read it through the localized performance-counter path. **The locale-free read is not proven yet** (§4, Q4). | **Drop Meter ACLs.** The tile reads the drop counter and says "blocked packets". |
-| Q5 | **Partly.** Everything survives a VM stop and guest reboots. A host reboot and a feature update are not tested. | The sorted ACL list was identical across a VM stop. The host neighbour entry and the L3 rule are in `PersistentStore`. The guest's static ARP survived four guest reboots. | None yet. The re-proof after each Windows build change stays. **Needs a host reboot.** |
+| Q3 | L3 leaves WinNAT working. **Outbound host-firewall rules do not filter forwarded traffic.** IPv6 to the host's link-local address is a real path. **Unbinding `ms_tcpip6` alone closes it.** | An outbound Block for 1.0.0.1 blocks the host itself, not the guest. With an L2 Allow for a LAN server, the server answers even with L3 on. Over IPv6 the guest reaches a canary on the host's link-local `vEthernet` address when `::/0` and L3 are off (red). `::/0` alone blocks it. L3 alone blocks it. In the live run, with `::/0` and L3 opened and `ms_tcpip6` unbound, the probe's frames reached the host adapter and nothing arrived (green). With `ms_tcpip6` bound, the same probe arrived (red). The guest has no IPv6 default route. | L2 is the only filter for the LAN. L3 protects only the host. The proof has an **IPv6 red step** and an **IPv6 stack-off green step**, so every Setup repeats this test. |
+| Q4 | **No.** Meter ACLs never count packets that a Deny drops. | 10 MB to an allowed address read 11 MB. 10 MB of UDP to a denied range read 0 MB. Meter rows also count in whole megabytes. The per-adapter drop counter **Outgoing FailedSecurityPolicy** counted exactly +1000 for 1000 denied datagrams, +37 for 37 denied connects and +0 for 500 allowed ones. The live run read it locale-free on the Spanish host: the WMI class counted +1000 for 1000 denied datagrams and +0 for 500 allowed ones, and so did PDH with the English names. | **Drop Meter ACLs.** The tile reads the drop counter through the WMI class, with PDH English names as the fallback, and says "blocked packets". |
+| Q5 | **Yes, except a feature update.** Everything survives a VM stop, guest reboots and a host reboot. A feature update is not tested. | The sorted ACL list was identical across a VM stop. The host neighbour entry and the L3 rule are in `PersistentStore`. The guest's static ARP survived four guest reboots. In the live run, the port ACLs, host neighbour entries, firewall rule, NAT and adapter bindings were identical before and after a reboot of the test host. | None. The re-proof after each Windows build change stays. |
 | Q6 | **Yes, for a standard account.** | A standard user in Hyper-V Administrators, at medium integrity in a fresh logon, ran `Get-VM`, disconnect and connect, and PowerShell Direct. **It saw every VM on the host, including VMs that are not ours.** Without the group, every call failed with a permission error. We could not test the non-elevated admin case or `vmconnect` without a desktop session. | The setup text says "full control of Hyper-V and of every VM on this PC". |
-| Q7 | **Yes.** WinNAT coexists with WSL2 and with a second NetNat. | Two NetNats with separate prefixes both forwarded traffic on build 26300. A WSL2 distro in NAT mode reached the internet at the same time. So did another account's WSL in mirrored mode. Docker Desktop was installed but not running. | The preflight blocks only an **overlapping** NetNat prefix. It picks a free /29. |
-| Q8 | **Partly.** The guard logic works as SYSTEM. The boot trigger is not tested. | Run by hand with the VM off, the guard disconnected, compared, connected and started the VM. The guest logged on `earner` by itself, and PassiveApp started. After we removed one Deny, the guard logged `MISMATCH: acl` and stayed disconnected. When we restored the Deny, it reconnected. | `desired.json` holds the switch name, because a disconnect clears it. **Needs a host reboot.** |
+| Q7 | **Yes.** WinNAT coexists with WSL2 and with a second NetNat. | Two NetNats with separate prefixes both forwarded traffic on build 26300. A WSL2 distro in NAT mode reached the internet at the same time. So did another account's WSL in mirrored mode. Docker Desktop was installed but not running. | Setup still refuses to start while any other NetNat exists (`nat-exists`), and names it. Windows keys a NAT by its name, so Setup cannot prove which install made a NAT. It picks a free /29. |
+| Q8 | **Yes.** The guard logic works as SYSTEM, and the boot trigger starts the VM. | Run by hand with the VM off, the guard disconnected, compared, connected and started the VM. The guest logged on `earner` by itself, and PassiveApp started. After we removed one Deny, the guard logged `MISMATCH: acl` and stayed disconnected. When we restored the Deny, it reconnected. In the live run, after a reboot of the test host, the guard task started at boot, connected the adapter and started the VM within 49 seconds of boot. | `desired.json` holds the switch name, because a disconnect clears it. |
 | Q9 | **No.** Apps installed in `cpadmin`'s session do not start for `earner`. | PassiveApp installs per user, into the installer's `%LOCALAPPDATA%`. Wipter with `/S /allusers` goes to Program Files, but its autostart is a per-user Run key that the app writes later. After the switch back to `earner`, nothing ran. Installed or first started in `earner`'s session, neither app needed admin. PassiveApp then wrote its Run key and started after a reboot. | **Install mode runs in `earner`'s session.** An admin installer gets the UAC prompt with `cpadmin`'s credentials. The password is rotated after. |
 | Q10 | **Yes.** | With KVP, Guest Service Interface and VSS off, PowerShell Direct works, and so does `Copy-Item -ToSession`. With `vmicvmsession` disabled and stopped in the guest, it fails (red), then works again. KVP that was on during setup left the host's name in the guest's registry. | **KVP off before the first boot.** Integration services are picked by ID, never by name. |
 | Q11 | **Yes, for traffic that leaves on the physical NIC. Not always.** | After NAT, red 3 (own public IP) showed on the physical NIC, with the destination and port intact. Red 2 (the router) left through the **Tailscale** adapter, because a tailnet subnet route for the LAN has metric 0. pktmon also logs each L2 drop at the VM's port. | Capture on **all NICs** (`--comp nics`), filtered on destination and port. The pktmon drop records count as green evidence. |
 | Q12 | Tailscale, WireGuard and OpenVPN TAP all show as non-physical. Work VPN clients were not tested. | All three have `ConnectorPresent=False` and `Virtual=True`. **On a host whose LAN NIC sits under an External vSwitch, the default route uses `vEthernet (<switch>)`, which is not physical either.** | The physical test also accepts a `vEthernet` that is bound to an External switch over a physical NIC. |
-| Q13 | **No reachable listener was found.** Registration is proven necessary only for the wildcard listener. | `GuestCommunicationServices` held only the two "VM Session Service" entries. The guest's connections to both were refused. Our own registered listener was reached when bound to the wildcard ID, to `HV_GUID_CHILDREN` or to the guest's own VM ID (red). Without the registry entry, the wildcard listener was refused. We did not test the other two bindings without the entry. | The guard's registry compare is a valid signal for wildcard listeners. The narrow bindings stay open (§6). |
+| Q13 | **No reachable listener was found.** Registration is needed to accept a guest for all three bindings. **A listener bound to the guest's own VM ID keeps accepting after its registration is deleted.** | `GuestCommunicationServices` held only the two "VM Session Service" entries. The guest's connections to both were refused. Our own registered listener was reached when bound to the wildcard ID, to `HV_GUID_CHILDREN` or to the guest's own VM ID (red). Without the registry entry, the wildcard listener was refused. In the live run, a `HV_GUID_CHILDREN` listener could bind with no entry. It accepted the guest with the entry, refused it after we deleted the entry, and accepted it again when the entry came back. An own-VM-ID bind with no entry was refused. A listener bound while the entry existed still accepted the guest after we deleted it. | The guard's registry compare sees wildcard and `HV_GUID_CHILDREN` listeners. It cannot see an own-VM-ID listener that outlives its entry (§6). |
 | Q14 | **Yes, for the VM's upload.** | With a cap of 10 Mbit/s, upload fell from 62 to 9.6 Mbit/s. Download was not capped (338, then 250 Mbit/s). A value of 0 removed the cap (56 Mbit/s). | The slider is labelled "upload limit". |
 | Q15 | **Yes, for Home and for Pro.** | With the network on, setup skipped OOBE and asked for no Microsoft account. It created two local accounts and logged on `earner` by itself. PowerShell Direct works. `Panther\unattend-original.xml` keeps both passwords in **plain text**. | Delete both Panther files. Machine settings go in `specialize`, not in `FirstLogonCommands`. |
 | Q16 | **Not run.** | The lab host offers S3 sleep only. Hibernation is off, and the hypervisor refuses hybrid sleep. | **Needs a host sleep.** |
@@ -140,13 +141,14 @@ Add-VMNetworkAdapterExtendedAcl -VMNetworkAdapter $a -Action Deny -Direction Out
   - The guest has only a link-local address and no `::/0` route. The lab line has no global IPv6.
   - Red: with the `::/0` Deny removed, L3 off and `ms_tcpip6` bound on the `vEthernet`, the guest **reached a canary on the host's link-local address**.
   - Green: L3 alone stopped it. The `::/0` Deny alone stopped it.
-  - **Unbinding `ms_tcpip6` alone is not proven.** Its only run was broken. The target address kept the host's own scope ID, and the guest's scope ID was added after it. So every probe in that run failed with "host not found" or "no route", the red step included. A run with the fixed target went red, but it did not repeat the unbinding case.
+  - The first run of the unbinding case was broken. The target address kept the host's own scope ID, and the guest's scope ID was added after it. So every probe in that run failed with "host not found" or "no route", the red step included.
+  - The live run on 2026-11-27 repeated it inside the proof. Before the red probe, the proof adds a guest neighbour entry for the host's link-local address, because the `::/0` Deny drops the neighbour solicitation. Red (`ipv6-red`): `ms_tcpip6` bound, an L2 Allow for the host's link-local address and L3 off. The canary got the token. Green (`ipv6-stack-off`): the same, but `ms_tcpip6` unbound. pktmon showed the frames delivered past the VM's port, nothing arrived, and the drop counter did not move. Every Setup and Repair runs both steps.
 
 **Answer:** L3 keeps forwarding. The host firewall gives no second filter for forwarded traffic. WinNAT alone does not close IPv6, because the link-local path to the host is real. **Design:**
 
 - L2 is the only filter for everything beyond the host. L3 guards the host's own addresses.
 - The proof gains an IPv6 red step. It drops `::/0` and binds `ms_tcpip6` for a moment, then sees the link-local canary arrive. Green is the normal layout.
-- `ms_tcpip6` stays unbound in the normal layout. Its own red/green test is open (§6). Until it passes, the UI credits the link-local path to L2 and L3 only.
+- `ms_tcpip6` stays unbound in the normal layout. The stack-off green step proves that the unbinding alone closes the link-local path, so the link-local path has three layers: L2, L3 and the unbinding.
 - We could not see what WinNAT does with global IPv6, because the lab line has none.
 
 ### Q4. Counting blocked traffic
@@ -169,7 +171,7 @@ So Meter ACLs do not count drops. The drop counter does.
 - The planned read is that WMI class.
 - The fallback is PDH with the English counter names (`PdhAddEnglishCounterW`), which works on any locale.
 - The instance name holds the VM name and the localized adapter name. The reader matches it on the VM name and the adapter ID.
-- Before the tile ships, a live run must show the chosen read go up by the number of denied packets (red) and stay flat for allowed ones (green).
+- The live run on 2026-11-27 showed both reads on the Spanish host, on the test VM's adapter. Baseline: 0. After 1000 UDP datagrams to a denied address, the WMI class and PDH with English names both read `out=1000` (red). After 500 datagrams to an allowed address, both still read 1000 (green). The class returned one instance for the adapter, and the localized instance name (`<vm>_Adaptador de red_<vm id>--<adapter id>`) matched on the VM name and the adapter ID.
 
 pktmon logs the same drops at the VM's port as `DropReason: Failed security policy`.
 
@@ -184,7 +186,8 @@ pktmon logs the same drops at the VM's port as `DropReason: Failed security poli
 ### Q5. Persistence
 
 - Tested: the sorted ACL list (30 rows) was identical after `Stop-VM`. `Get-NetNeighbor -PolicyStore PersistentStore` lists the host entry. `Get-NetFirewallRule -PolicyStore PersistentStore` lists the L3 rule. The NetNat object persists. The guest's static ARP entry survived four guest reboots: the internet still worked in the Q1 layout, which has no Allow rule.
-- Not tested: a host reboot and a feature update. The reboot is scripted and waits for a lab window (§6). A feature update cannot be run on demand. The re-proof after each change of the host's Windows build stays in the design.
+- Host reboot, in the live run on 2026-11-27: we rebooted the test host with a proven Secure VM. Snapshots before and after compared the port ACLs, the host neighbour entries, the firewall rule, the NAT and the adapter bindings. They were identical. Only the boot time and the guard's usage counters changed.
+- Not tested: a feature update. It cannot be run on demand. The re-proof after each change of the host's Windows build stays in the design.
 
 ### Q6. Hyper-V Administrators without elevation
 
@@ -211,7 +214,7 @@ A throwaway local user ran a probe through a scheduled task, which gives a fresh
 - Another account's WSL in mirrored mode ran throughout. It mirrored our `vEthernet` into its VM: an "FSE Switch (vEthernet (<our switch>))" network appeared. The L2 Deny on the gateway covers this.
 - Docker Desktop 4.73.1 is installed, but we did not start its engine, because it needs an interactive session.
 
-**Answer:** yes, on build 26300, with prefixes that do not overlap. **Design:** the preflight no longer blocks on "another NetNat". It blocks only a NetNat whose prefix overlaps ours, and it picks a free /29. The live test adds a run with Docker Desktop started.
+**Answer:** yes, on build 26300, with prefixes that do not overlap. **Design:** Setup still refuses to start while any other NetNat exists (`nat-exists`). Its message names the NAT and its prefix and says that CashPilot will not change or remove it. Windows keys a NAT by its name, so a NAT has no identity apart from its name, and Setup cannot prove that a NAT is someone else's. A user who no longer needs the other NAT removes it, and Setup then picks a free /29. The live test adds a run with Docker Desktop started.
 
 ### Q8. The guard starts the VM
 
@@ -229,7 +232,9 @@ Start-VM issued
 - **Green:** we restored the Deny and ran the guard. The adapter was connected again.
 - `Disconnect-VMNetworkAdapter` clears `SwitchName`, so the reconnect must name the switch.
 
-**Answer:** partly. The logic works. A host reboot must show whether the boot trigger starts the VM before anyone signs in. The run is scripted and waits (§6).
+Live run on 2026-11-27: we rebooted the test host with a proven Secure VM. The guard task started at boot, connected the adapter and started the VM within 49 seconds of boot. The live VM had no earners, so we did not check that apps start in the guest.
+
+**Answer:** yes. The boot trigger starts the VM. The guest's apps after a host reboot are checked on the first VM with earners (§6).
 
 ### Q9. Install mode
 
@@ -341,10 +346,22 @@ The test listener was C#, loaded with `Add-Type`. The socket was `AF_HYPERV` (34
 - The same registered, own-VM-ID binding was refused in run 1 and connected in run 2. In run 1 the entry had just been created. So a new entry can take a moment to apply.
 - A listener bound to another VM's ID refused our guest.
 
+**Live run, 2026-11-27.** The same listener ran on the test host, against the engine's own Secure VM, with one new service GUID per binding. Each binding went through four stages: bind with no entry, register and connect, delete the entry and connect, register again and connect.
+
+| Binding | Bind with no entry | Registered | Entry deleted | Registered again |
+|---|---|---|---|---|
+| `HV_GUID_CHILDREN` | the bind succeeds | **connected** (red) | refused (green) | **connected** |
+| the guest's own VM ID | the bind is refused (`WSAEACCES`) | **connected** (red) | **connected** | **connected** |
+
+- For `HV_GUID_CHILDREN`, the entry decides: a bound listener accepts the guest only while its entry exists.
+- For the own VM ID, the entry is checked at bind time only. A listener bound while the entry existed still accepted the guest after we deleted the entry.
+- We deleted every test entry at the end, and the registry held none of them.
+
 **Answer:** no host listener was reachable. **Design:**
 
 - The guard compares the registered list on every pass. Any change is drift.
-- That compare is a proven signal for wildcard listeners only. The narrow bindings get their own red/green test (§6) before the UI calls VMBus closed by test.
+- That compare is a proven signal for wildcard and `HV_GUID_CHILDREN` listeners.
+- It cannot see an own-VM-ID listener that a host process bound while its entry existed and kept after it deleted the entry. This stays open (§6).
 - The live test repeats Q13 with Docker Desktop running.
 
 ### Q14. Bandwidth cap
@@ -422,14 +439,14 @@ Hibernation stays untested unless we turn it on for the test.
 ## 5. Changes to the design
 
 1. **ARP:** static neighbour entries on both sides, with no gateway Allow (Q1). The guest entry goes in `specialize`. The host `vEthernet` MAC goes into `desired.json`.
-2. **Blocked-packet counters:** the Meter ACLs are removed. The tile reads `OutgoingFailedSecurityPolicy` and `IncomingFailedSecurityPolicy`. The planned read is the class `Win32_PerfRawData_NvspNicDropReasonsStats_HyperVVirtualNetworkAdapterDropReasons`, with PDH English counter names as the fallback. Neither read is proven yet (Q4). The tile says "packets".
+2. **Blocked-packet counters:** the Meter ACLs are removed. The tile reads `OutgoingFailedSecurityPolicy` and `IncomingFailedSecurityPolicy`. The read is the class `Win32_PerfRawData_NvspNicDropReasonsStats_HyperVVirtualNetworkAdapterDropReasons`, with PDH English counter names as the fallback. The live run proved both on a Spanish host (Q4). The tile says "packets".
 3. **The proof:**
    - pktmon captures on all NICs (`--comp nics`) and waits 3 s first (Q11).
    - Red 3 swaps the own-IP Deny for an Allow and back (Q11).
-   - A new IPv6 red step targets the host's link-local canary (Q3).
+   - A new IPv6 red step targets the host's link-local canary, and an IPv6 stack-off green step repeats it with `ms_tcpip6` unbound (Q3).
    - Green requires no arrival **and** a rising `FailedSecurityPolicy` (Q4).
 4. **The physical-adapter test** accepts the host `vEthernet` of an External switch that is bound to a physical NIC (Q12).
-5. **NetNat preflight:** it blocks only on an overlapping prefix (Q7).
+5. **NetNat preflight:** Setup refuses to start while any other NetNat exists, and names it (Q7).
 6. **Install mode:** it stays in `earner`'s session. Admin installers get UAC with `cpadmin`'s credentials (Q9).
 7. **Integration services:** KVP, Guest Service Interface and VSS go off before the first boot. Every integration service is selected by ID. Every localized name is read through a stable ID or an English name, never through text in the host's language (Q10, Q4).
 8. **The first PowerShell Direct session:** it deletes `Panther\unattend.xml` and `Panther\unattend-original.xml`, rotates both passwords, rewrites the autologon LSA secret, and removes the DVD drives and the answer ISO (Q15).
@@ -444,13 +461,10 @@ Hibernation stays untested unless we turn it on for the test.
 
 | Item | Why open | What closes it |
 |---|---|---|
-| Q5, the host reboot part | A reboot also restarts the other VMs on the lab host | One scripted reboot. The before and after snapshots compare ACLs, NAT, the firewall group, a persistent neighbour entry and the bindings. |
-| Q8 | Same reboot | The same run. The guard task logs the boot time and the first sign-in, and we check the guest's apps. |
 | Q16 | A sleep pauses the other VMs | One scripted S3 sleep with a wake timer |
 | Q5, the feature update part | Cannot be run on demand | The re-proof after each change of the host's Windows build stays |
-| Q3, unbinding `ms_tcpip6` alone | Its only run was broken (Q3) | A red/green run: record the host's link-local address before the unbinding, add a guest neighbour entry, and require pktmon to show the frames delivered with no arrival |
-| Q4, the locale-free drop-counter read | The WMI class returned no instances. Only the localized `Get-Counter` path was seen counting. | A live run of the WMI read, and of the PDH English-name fallback, red then green |
-| Q13, `HV_GUID_CHILDREN` and own-VM-ID listeners without registration | Never run unregistered | Per binding: register and connect (red), delete the entry and be refused (green), register again and connect |
+| Q8, the guest's apps after a host reboot | The live VM had no earners | Reboot the host of the first Secure VM with earners and check that each app starts and signs in |
+| Q13, an own-VM-ID listener that outlives its entry | The registry compare cannot see it (Q13) | A guard check that does not depend on the registry, or a decision that an administrator on the host is out of scope |
 | Q6, the admin account that is not elevated, and `vmconnect` | Needs an interactive desktop | The manual live test |
 | Q7 and Q13 with Docker Desktop running | Its engine needs an interactive session | The manual live test |
 | Q12, work VPN clients | No client in the lab | Test when one is available |
