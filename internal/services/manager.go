@@ -710,8 +710,10 @@ func (m *Manager) PlanRemoval(ctx context.Context, slug string) (runtime.Removal
 func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCritical bool) error {
 	defer m.lockDeploy(slug)()
 	if id, ok := m.Route(slug); ok {
-		// No container of its own and no volumes: its copy is the service. The
-		// route stays recorded, so a later deploy from this machine's IP still asks.
+		// No container of its own: its copy is the service. Its volumes stay, as a
+		// proxied copy's do (docs/proxies.md): the plan the UI asks with reads the
+		// service's own container, finds none, and so never offers to delete data.
+		// The route stays recorded, so a later deploy from this machine's IP still asks.
 		if err := m.removeProxied(ctx, slug, id); err != nil {
 			m.store.RecordEvent(slug, "remove_error", err.Error())
 			return err
@@ -741,7 +743,9 @@ func (m *Manager) Remove(ctx context.Context, slug string, deleteData, allowCrit
 		}
 	}
 	// Proxied copies go first, earners before their tunnels, so no tunnel is left
-	// running for a service the app no longer shows.
+	// running for a service the app no longer shows. Their own volumes stay, even
+	// with deleteData: the plan above names the service's volumes only, and a copy
+	// added again keeps its identity (docs/proxies.md).
 	if err := m.removeAllProxied(ctx, slug); err != nil {
 		m.store.RecordEvent(slug, "remove_error", "proxied copies: "+err.Error())
 		return err

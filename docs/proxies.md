@@ -166,18 +166,34 @@ A service is refused, with the reason, when its catalog entry needs:
 
 - host networking, or another container's network;
 - published ports;
-- volumes or host directories;
+- host directories (a named volume is fine, see below);
 - devices (Mysterium needs `/dev/net/tun` and UDP);
 - this computer's GPU (`docker.gpu`, a GPU miner);
 - privileged mode, or the capabilities `NET_ADMIN`, `NET_RAW` or `SYS_ADMIN`
   (Bitping asks for `NET_RAW`);
 - terms that forbid proxies or VPNs: `requirements.proxy_prohibited` in the
-  catalog, with a link to the provider's own terms.
+  catalog, with a link to the provider's own terms;
+- terms that forbid running it in a container (`requirements.container_prohibited`).
 
-With today's catalog that rules out EarnApp, URnetwork, ProxyBase Markets,
-Bitping, Mysterium, Storj, Sia, Anyone Protocol, and the two GPU miners,
-SRBMiner-Multi and Kryptex Pool (Pearl). Services that need UDP do
-not work through SOCKS5 or HTTP CONNECT; a Tailscale exit node carries UDP.
+With today's catalog that rules out EarnApp (its terms), Bitping, Mysterium,
+Storj, Sia, Anyone Protocol, and the two GPU miners, SRBMiner-Multi and Kryptex
+Pool (Pearl). Services that need UDP do not work through SOCKS5 or HTTP
+CONNECT; a Tailscale exit node carries UDP.
+
+## Volumes of its own
+
+A volume holds the device's identity: a key, a wallet, a session. A copy that
+shared the original's volume would be the same device on two addresses. So
+each named volume of a copy gets its own name, `<volume>-p<proxy id>`. The new
+volume starts empty, so the provider sees a new device. This is how URnetwork
+and ProxyBase Markets run through a proxy. A service routed through a proxy
+from its deploy has no original, so it keeps the volume names of its catalog
+entry.
+
+Removing a copy, or the service with its copies, keeps the copies' volumes, so
+a copy has the same identity if you add it again. Removing a routed service
+keeps its volumes too. Delete them by hand (`docker volume rm`) when you are
+done with them for good.
 
 ## Editing a proxy
 
