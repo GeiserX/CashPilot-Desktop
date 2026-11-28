@@ -270,7 +270,7 @@ func passedFence(r PktRecord, green bool) bool {
 	switch r.Class {
 	case "physical", "tunnel":
 		return true
-	case "vmport", "vnic":
+	case "vmport", "vnic", "switch":
 		return false
 	}
 	return green
@@ -737,6 +737,8 @@ func (ps *probeSet) collect(ctx context.Context, e *Evidence) {
 			switch rec.Class {
 			case "vmport", "vnic":
 				e.Delivered = true
+			case "switch":
+				// Inside our switch, before the vNIC: no evidence either way.
 			default:
 				e.Left = append(e.Left, rec)
 			}
@@ -968,6 +970,14 @@ func (r *proofRun) ipv6(ctx context.Context, red StepSpec, tok string) ([]StepRe
 	if err := r.l3Off(ctx); err != nil {
 		return both(err), nil
 	}
+	// The guest finds the host's address by a neighbour solicitation to its
+	// solicited-node multicast address, which the ::/0 Deny still drops, so
+	// the probe would never leave the guest (setup 1l). A static entry in
+	// the guest changes nothing in the fence, and the next step needs it too:
+	// with the stack off the host answers no solicitation at all.
+	if err := r.G.Neighbor(ctx, ll, r.p.HostVNICMAC); err != nil {
+		return both(fmt.Errorf("the guest could not add its neighbour entry: %w", err)), nil
+	}
 	to := netip.AddrPortFrom(ll, r.port())
 	// One canary for both steps, opened while the address exists.
 	// The guest's link-local address is its own; any fe80:: source reaches
@@ -982,15 +992,10 @@ func (r *proofRun) ipv6(ctx context.Context, red StepSpec, tok string) ([]StepRe
 	ps.collect(ctx, &e)
 	results := []StepResult{Judge(red, e)}
 
-	// Stack off alone: the Allow stays and L3 stays off. The host no longer
-	// answers neighbour solicitations, so the guest gets a static entry for
-	// the recorded address first, or the probe would never leave it.
+	// Stack off alone: the Allow stays, L3 stays off, and the guest keeps
+	// its static entry for the host's address.
 	if err := r.P.SetBinding(ctx, ifx, "ms_tcpip6", false); err != nil {
 		e2.Err = err.Error()
-		return append(results, Judge(off, e2)), nil
-	}
-	if err := r.G.Neighbor(ctx, ll, r.p.HostVNICMAC); err != nil {
-		e2.Err = "the guest could not add its neighbour entry: " + err.Error()
 		return append(results, Judge(off, e2)), nil
 	}
 	tok2 := r.token()

@@ -733,6 +733,74 @@ func TestVNICPacketsUnderItsTwinCount(t *testing.T) {
 	}
 }
 
+// Setup 1l on real Windows, with the VM on its switch:
+//   - pktmon logs the VM's port ("VM Nic", no ifIndex of its own) before
+//     the port ACL drops a packet there, and our switch's extension
+//     adapter sees what passes to the host vNIC. Neither is past the fence,
+//     and neither shows delivery, but they read as unplaceable and tunnel,
+//     so every green step was a leak.
+//   - a fresh guest downloading updates filled a 64 MiB export in one
+//     step, and the whole proof broke on the size cap.
+func TestProofCaptureOnABusyRealSwitch(t *testing.T) {
+	ctx := context.Background()
+	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},` +
+		`{"Id":9,"Name":"vEthernet (cpd)","Type":"Host vNic","DriverName":"vmswitch.sys","Properties":[{"Name":"Ext ifIndex","Value":28},{"Name":"ifIndex","Value":20}]},` +
+		`{"Id":9,"Name":"Host vNic #4","Type":"Miniport","DriverName":"VmsProxyHNic.sys","SecondaryId":99,"Properties":[{"Name":"ifIndex","Value":20}]},` +
+		`{"Id":12,"Name":"VMS ExtMp #4","Type":"Extension Miniport","DriverName":"vmswitch.sys","Properties":[{"Name":"ifIndex","Value":28}]},` +
+		`{"Id":12,"Name":"VMS ExtMp #4","Type":"Miniport","DriverName":"vmswitch.sys","SecondaryId":13,"Properties":[{"Name":"ifIndex","Value":28}]},` +
+		`{"Id":15,"Name":"cpd-svm-1","Type":"VM Nic","DriverName":"vmswitch.sys","Properties":[{"Name":"Ext ifIndex","Value":28}]}]}]`
+	const metadata = `{"components":[{"id":4,"type":2,"name":"Ethernet","ifIndex":7},{"id":9,"type":6,"driver":"vmswitch.sys","name":"cpd","ifIndex":20},` +
+		`{"id":12,"type":7,"driver":"vmswitch.sys","name":"","ifIndex":28},{"id":15,"type":5,"driver":"vmswitch.sys","name":"cpd-svm-1","ifIndex":0}]}`
+	src, dst, other := netip.MustParseAddr("172.31.250.2"), netip.MustParseAddr("192.0.2.50"), netip.MustParseAddr("192.0.2.20")
+	probe, noise := ipv4TCP(src, dst, 45000), ipv4TCP(src, other, 443)
+	for _, tc := range []struct {
+		name string
+		busy int // noise packets before the probe on the physical NIC
+	}{
+		{"our switch's own components", 1},
+		{"an export over 64 MiB", 1 << 20},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, r, _ := newSeam(`{"list":`+jsonQuote(list)+`}`, cannedHostNet, `{"ok":true}`)
+			mockCaptureStart(h, r)
+			p := &psProber{h: h, owner: tOwner, switchID: "c3d4e5f6-a7b8-49c0-8d1e-2f3a4b5c6d7e", tmp: filepath.Join(t.TempDir(), proofDir)}
+			capture, err := p.Pktmon(ctx, []PktFilter{{Addr: dst, Proto: "TCP", Port: 45000}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := capture.(*psCapture).dir
+			physical := make([][]byte, 0, tc.busy+1)
+			for range tc.busy {
+				physical = append(physical, noise)
+			}
+			data := map[int][]byte{
+				4:  pcapng(append(physical, probe)...),
+				9:  pcapng(),
+				99: pcapng(noise),
+				12: pcapng(),
+				13: pcapng(probe),
+				15: pcapng(probe, noise),
+			}
+			var files []string
+			for _, id := range []int{4, 9, 12, 13, 15, 99} {
+				path := filepath.Join(dir, "c"+strconv.Itoa(id)+".pcapng")
+				if err := os.WriteFile(path, data[id], 0o600); err != nil {
+					t.Fatal(err)
+				}
+				files = append(files, `{"id":`+strconv.Itoa(id)+`,"path":`+jsonQuote(path)+`}`)
+			}
+			r.answers = append(r.answers, metadata, `{"files":[`+strings.Join(files, ",")+`]}`)
+			run := proofRun{Runner: Runner{Sleep: func(context.Context, time.Duration) error { return nil }}}
+			ps := probeSet{r: &run, capture: capture}
+			var e Evidence
+			ps.collect(ctx, &e)
+			if e.Err != "" || e.Delivered || len(e.Left) != 1 || e.Left[0].Class != "physical" {
+				t.Fatalf("evidence = %+v; want the probe out of the physical NIC only, and no delivery from the VM's side of the switch", e)
+			}
+		})
+	}
+}
+
 func TestHeaderOnlyPktmonExportLeavesProofUnproven(t *testing.T) {
 	ctx := context.Background()
 	const list = `[{"Components":[{"Id":4,"Name":"Ethernet","Type":2,"ifIndex":7},{"Id":9,"Name":"vEthernet","Type":6,"ifIndex":20}]}]`

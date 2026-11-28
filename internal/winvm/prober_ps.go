@@ -526,6 +526,13 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		defer func() { _ = j.remove(rel) }()
 		files[f.ID] = f.Path
 	}
+	// Our switch's extension adapter is named by our vNIC's own entry.
+	ext := 0
+	for _, cp := range comps {
+		if !cp.Twin && cp.ExtIfIndex > 0 && componentClass(c.host, c.p.switchID, cp.IfIndex) == "vnic" {
+			ext = cp.ExtIfIndex
+		}
+	}
 	var out []PktRecord
 	// A NIC and its twin are one NIC: it saw packets when either did.
 	saw, classes := map[int]bool{}, map[int]string{}
@@ -536,6 +543,13 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 			nic = cp.Of
 		}
 		class := componentClass(c.host, c.p.switchID, cp.IfIndex)
+		if ext > 0 && (cp.IfIndex == ext || (cp.IfIndex <= 0 && cp.ExtIfIndex == ext)) {
+			// The VM's port and our switch's extension adapter. pktmon
+			// logs a packet at the port before the port ACL drops it
+			// (setup 1l), so neither shows a packet past the fence, nor
+			// one delivered to the host: the vNIC does.
+			class = "switch"
+		}
 		classes[nic] = class
 		if _, ok := saw[nic]; !ok {
 			saw[nic] = false
@@ -550,11 +564,17 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 		if err := j.verify(filepath.Join(c.rel, filepath.Base(path))); err != nil {
 			return nil, err
 		}
-		b, err := readCapped(path, 64<<20, true)
+		f, err := openRegular(path, true)
 		if err != nil {
 			return nil, err
 		}
-		pkts, err := parsePcapng(b)
+		err = scanPcapng(f, func(k pktInfo) {
+			r := PktRecord{Component: cp.Name, Class: class, Src: k.Src, Dst: k.Dst, Proto: k.Proto, Port: k.Port}
+			if matchFilters(c.filters, r) {
+				out = append(out, r)
+			}
+		})
+		f.Close()
 		if errors.Is(err, errNoPacketData) {
 			continue
 		}
@@ -562,12 +582,6 @@ func (c *psCapture) Stop(ctx context.Context) ([]PktRecord, error) {
 			return nil, fmt.Errorf("component %d: %w", id, err)
 		}
 		saw[nic] = true
-		for _, k := range pkts {
-			r := PktRecord{Component: cp.Name, Class: class, Src: k.Src, Dst: k.Dst, Proto: k.Proto, Port: k.Port}
-			if matchFilters(c.filters, r) {
-				out = append(out, r)
-			}
-		}
 	}
 	// An idle NIC, such as the extension adapter of another VM's switch or
 	// an unplugged Ethernet port, sees nothing in a step (setup 1j). Its

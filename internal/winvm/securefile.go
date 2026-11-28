@@ -105,23 +105,11 @@ var errNotRegular = errors.New("not a regular file")
 // refused. The owner is read from the open handle, so it is the owner of what
 // is read.
 func readCapped(path string, max int64, trusted bool) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openRegular(path, trusted)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: %w", filepath.Base(path), errNotRegular)
-	}
-	if trusted {
-		if err := ownedByAdmin(f); err != nil {
-			return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
-		}
-	}
 	b, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil {
 		return nil, err
@@ -130,6 +118,27 @@ func readCapped(path string, max int64, trusted bool) ([]byte, error) {
 		return nil, fmt.Errorf("%s is over the %d byte cap", filepath.Base(path), max)
 	}
 	return b, nil
+}
+
+// openRegular opens a regular file, owned by Administrators or SYSTEM when
+// trusted.
+func openRegular(path string, trusted bool) (*os.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err == nil && !fi.Mode().IsRegular() {
+		err = errNotRegular
+	}
+	if err == nil && trusted {
+		err = ownedByAdmin(f)
+	}
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	return f, nil
 }
 
 // OpenAppend creates a recorded log or appends to a previously recorded one.

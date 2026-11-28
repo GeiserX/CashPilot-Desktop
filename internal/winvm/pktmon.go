@@ -1,10 +1,13 @@
 package winvm
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -28,6 +31,10 @@ type pktComp struct {
 	// So the proof exports both and counts them as one NIC.
 	Twin bool
 	Of   int
+	// ExtIfIndex is the interface of the switch's extension adapter, on
+	// the switch's host vNIC and VM ports. A VM port has no ifIndex of its
+	// own, so this is what places it on a switch (setup 1l).
+	ExtIfIndex int
 }
 
 // maxPktmonList caps the component list.
@@ -114,8 +121,11 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 								continue
 							}
 							name, _ := m["Name"].(string)
-							if strings.EqualFold(name, "ifindex") {
+							switch {
+							case strings.EqualFold(name, "ifindex"):
 								c.IfIndex, _ = jsonInt(m["Value"])
+							case strings.EqualFold(name, "ext ifindex"):
+								c.ExtIfIndex, _ = jsonInt(m["Value"])
 							}
 						}
 					}
@@ -129,7 +139,7 @@ func parsePktmonComponents(b []byte) (map[int]pktComp, error) {
 				// A NIC's own entry, or another NIC, always wins over a twin.
 				if secondary && secondaryID > 0 && secondaryID != c.ID {
 					if _, seen := out[secondaryID]; !seen {
-						out[secondaryID] = pktComp{ID: secondaryID, Name: c.Name, Driver: c.Driver, IfIndex: c.IfIndex, Type: 2, Twin: true, Of: c.ID}
+						out[secondaryID] = pktComp{ID: secondaryID, Name: c.Name, Driver: c.Driver, IfIndex: c.IfIndex, Type: 2, Twin: true, Of: c.ID, ExtIfIndex: c.ExtIfIndex}
 					}
 				}
 			}
@@ -196,91 +206,130 @@ const (
 	pcapEPB       = 0x00000006
 	linkEthernet  = 1
 	linkRaw       = 101
-	maxPcapBlocks = 1 << 20
+	maxPcapBlocks = 1 << 26
+	maxPcapBlock  = 1 << 20
 )
 
-// parsePcapng reads the IPv4 and IPv6 TCP and UDP packets of a pcapng file,
-// in either byte order. It skips other packet types when it reads addresses.
-// Every export must show packet data: headers alone cannot prove that a quiet
-// component was captured completely.
+// parsePcapng reads the IPv4 and IPv6 TCP and UDP packets of a pcapng file.
 func parsePcapng(b []byte) ([]pktInfo, error) {
-	if len(b) == 0 {
-		return nil, errors.New("empty capture export")
-	}
-	if len(b) < 28 || binary.LittleEndian.Uint32(b) != pcapSHB {
-		return nil, errors.New("missing capture section header")
-	}
 	var out []pktInfo
+	if err := scanPcapng(bytes.NewReader(b), func(p pktInfo) { out = append(out, p) }); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// scanPcapng reads a pcapng stream, in either byte order, one block at a
+// time, and calls keep for each IPv4 and IPv6 TCP and UDP packet. A busy
+// guest fills an export past 64 MiB in one proof step (setup 1l), so the
+// memory it takes is one block, whatever the file's size. Every export must
+// show packet data: headers alone cannot prove that a quiet component was
+// captured completely.
+func scanPcapng(r io.Reader, keep func(pktInfo)) error {
+	br := bufio.NewReaderSize(r, 1<<16)
 	var bo binary.ByteOrder = binary.LittleEndian
 	var links []uint16
+	var block []byte
 	hasInterface, hasPacketData := false, false
-	for n := 0; len(b) > 0; n++ {
-		if n > maxPcapBlocks || len(b) < 12 {
-			return nil, errors.New("the capture is cut short")
+blocks:
+	for n := 0; ; n++ {
+		var hdr [12]byte
+		if _, err := io.ReadFull(br, hdr[:8]); err != nil {
+			switch {
+			case n > 0 && err == io.EOF:
+			case n == 0 && err == io.EOF:
+				return errors.New("empty capture export")
+			case n == 0:
+				return errors.New("missing capture section header")
+			default:
+				return errors.New("the capture is cut short")
+			}
+			break blocks
 		}
-		if binary.LittleEndian.Uint32(b) == pcapSHB {
-			switch binary.LittleEndian.Uint32(b[8:]) {
+		if n > maxPcapBlocks {
+			return errors.New("the capture has too many blocks")
+		}
+		shb := binary.LittleEndian.Uint32(hdr[:]) == pcapSHB
+		if n == 0 && !shb {
+			return errors.New("missing capture section header")
+		}
+		head := 8
+		if shb {
+			if _, err := io.ReadFull(br, hdr[8:]); err != nil {
+				return errors.New("the capture is cut short")
+			}
+			switch binary.LittleEndian.Uint32(hdr[8:]) {
 			case 0x1A2B3C4D:
 				bo = binary.LittleEndian
 			case 0x4D3C2B1A:
 				bo = binary.BigEndian
 			default:
-				return nil, errors.New("the capture has an unknown byte order")
+				return errors.New("the capture has an unknown byte order")
 			}
-			links = nil
+			links, head = nil, 12
 		}
-		typ, ln := bo.Uint32(b), int(bo.Uint32(b[4:]))
-		if ln < 12 || ln%4 != 0 || ln > len(b) {
-			return nil, errors.New("the capture has a broken block")
+		typ, ln := bo.Uint32(hdr[:]), int(bo.Uint32(hdr[4:]))
+		if ln < 12 || ln%4 != 0 || ln > maxPcapBlock {
+			return errors.New("the capture has a broken block")
 		}
-		if bo.Uint32(b[ln-4:]) != uint32(ln) || (typ == pcapSHB && ln < 28) {
-			return nil, errors.New("the capture has an invalid block length")
+		if typ == pcapSHB && ln < 28 {
+			return errors.New("the capture has an invalid block length")
 		}
-		body := b[8 : ln-4]
+		if cap(block) < ln {
+			block = make([]byte, ln)
+		}
+		block = block[:ln]
+		copy(block, hdr[:head])
+		if _, err := io.ReadFull(br, block[head:]); err != nil {
+			return errors.New("the capture has a broken block")
+		}
+		if bo.Uint32(block[ln-4:]) != uint32(ln) {
+			return errors.New("the capture has an invalid block length")
+		}
+		body := block[8 : ln-4]
 		switch typ {
 		case pcapIDB:
 			if len(body) < 8 {
-				return nil, errors.New("the capture has a broken interface block")
+				return errors.New("the capture has a broken interface block")
 			}
 			link := bo.Uint16(body)
 			if link != linkEthernet && link != linkRaw {
-				return nil, fmt.Errorf("unsupported capture interface link type %d", link)
+				return fmt.Errorf("unsupported capture interface link type %d", link)
 			}
 			if bo.Uint16(body[2:]) != 0 {
-				return nil, errors.New("invalid capture interface header")
+				return errors.New("invalid capture interface header")
 			}
 			hasInterface = true
 			links = append(links, link)
 		case pcapEPB:
 			if len(body) < 20 {
-				return nil, errors.New("the capture has a broken packet block")
+				return errors.New("the capture has a broken packet block")
 			}
 			ifc, capLen := int(bo.Uint32(body)), int(bo.Uint32(body[12:]))
 			if ifc >= len(links) || capLen > len(body)-20 {
-				return nil, errors.New("the capture has a packet with no interface or a bad length")
+				return errors.New("the capture has a packet with no interface or a bad length")
 			}
 			hasPacketData = hasPacketData || capLen > 0
 			if p, ok := parseFrame(links[ifc], body[20:20+capLen]); ok {
-				out = append(out, p)
+				keep(p)
 			}
 		case pcapSPB:
 			if len(body) < 4 || len(links) == 0 {
-				return nil, errors.New("the capture has a broken simple packet block")
+				return errors.New("the capture has a broken simple packet block")
 			}
 			hasPacketData = hasPacketData || (bo.Uint32(body) > 0 && len(body) > 4)
 			if p, ok := parseFrame(links[0], body[4:]); ok {
-				out = append(out, p)
+				keep(p)
 			}
 		}
-		b = b[ln:]
 	}
 	if !hasInterface {
-		return nil, errors.New("capture has no interface evidence")
+		return errors.New("capture has no interface evidence")
 	}
 	if !hasPacketData {
-		return nil, errNoPacketData
+		return errNoPacketData
 	}
-	return out, nil
+	return nil
 }
 
 // errNoPacketData: an export with headers and no packet. It cannot show that

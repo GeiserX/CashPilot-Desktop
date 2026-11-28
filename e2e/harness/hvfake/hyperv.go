@@ -2064,6 +2064,12 @@ func (f *HyperV) guest() (*fakeVM, *fakeSwitch, bool) {
 }
 
 // denied is the port ACL verdict for dst: the longest matching row decides.
+// solicitedNode is ff02::1:ffXX:XXXX for the low 24 bits of a.
+func solicitedNode(a netip.Addr) netip.Addr {
+	b := a.As16()
+	return netip.AddrFrom16([16]byte{0xff, 0x02, 11: 0x01, 12: 0xff, 13: b[13], 14: b[14], 15: b[15]})
+}
+
 func (f *HyperV) denied(a *fakeAdapter, dst netip.Addr) bool {
 	if f.mutant {
 		return false
@@ -2133,6 +2139,15 @@ func (f *HyperV) send(proto string, to netip.AddrPort, token string, n int) (pas
 	// that ARP.
 	if dst.Is4() && (dst == s.gateway || !s.subnet.Contains(dst)) {
 		if _, static := f.guestARP[s.gateway]; !static && f.denied(a, s.gateway) {
+			return drop()
+		}
+	}
+	// An IPv6 neighbour solicitation goes to the target's solicited-node
+	// multicast address, which the ::/0 Deny drops even when an Allow covers
+	// the target itself (setup 1l). Without a static entry the probe never
+	// leaves the guest.
+	if dst.Is6() && dst.IsLinkLocalUnicast() {
+		if _, static := f.guestARP[dst.WithZone("")]; !static && f.denied(a, solicitedNode(dst)) {
 			return drop()
 		}
 	}

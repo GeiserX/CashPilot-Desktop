@@ -240,7 +240,7 @@ type PktFilter struct {
 // PktRecord is one packet pktmon saw.
 type PktRecord struct {
 	Component string     `json:"component"`
-	Class     string     `json:"class"` // "physical", "tunnel", "vnic" or "vmport"
+	Class     string     `json:"class"` // "physical", "tunnel", "vnic", "vmport" or "switch"
 	Src       netip.Addr `json:"src"`
 	Dst       netip.Addr `json:"dst"`
 	Proto     string     `json:"proto"`
