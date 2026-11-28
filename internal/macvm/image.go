@@ -270,14 +270,18 @@ func Inject(ctx context.Context, r Runner, disk, agent string) (err error) {
 		return fmt.Errorf("could not open the VM's disk: %w", err)
 	}
 	whole, slices, err := attachedDisk(ctx, out)
+	if whole != "" {
+		// The disk is attached even when it holds no macOS volume, so the
+		// detach covers that error too.
+		defer func() {
+			if _, derr := r.Run(context.WithoutCancel(ctx), "/usr/bin/hdiutil", "detach", whole); derr != nil {
+				_, _ = r.Run(context.WithoutCancel(ctx), "/usr/bin/hdiutil", "detach", "-force", whole)
+			}
+		}()
+	}
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if _, derr := r.Run(context.WithoutCancel(ctx), "/usr/bin/hdiutil", "detach", whole); derr != nil {
-			_, _ = r.Run(context.WithoutCancel(ctx), "/usr/bin/hdiutil", "detach", "-force", whole)
-		}
-	}()
 	vol, err := dataVolume(ctx, r, slices)
 	if err != nil {
 		return err
