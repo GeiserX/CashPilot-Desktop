@@ -77,6 +77,10 @@ type App struct {
 	restoreFiles map[string]restoreFile
 	// credentialsMu serializes read-merge-write operations on saved credentials.
 	credentialsMu sync.Mutex
+	// secureVMPlaceMu holds one Secure VM placement at a time, from the stop
+	// of the copy on this computer to its restart, so two placements of an
+	// earner cannot leave it running in both places.
+	secureVMPlaceMu sync.Mutex
 	// fleetKey is the fleet bearer token held in memory for the per-request auth
 	// check. It is loaded once at Startup by ensureFleetAPIKey from the OS keychain
 	// (0600 file fallback) so the token is never persisted in config.json and the
