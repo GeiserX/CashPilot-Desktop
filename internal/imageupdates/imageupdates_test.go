@@ -229,6 +229,22 @@ func TestRunGoesOnAfterAnErrorAndPausesAfterAnUpdate(t *testing.T) {
 	}
 }
 
+// Docker recreated the app even when the history write failed: the pause still
+// follows, so the next app is not recreated right after it.
+func TestRunPausesAfterARecreateWhoseRowCannotBeWritten(t *testing.T) {
+	f := newFake(map[string]Check{"a": moved("a"), "b": moved("b")})
+	f.undo["b"] = true
+	h := f.hooks()
+	h.Record = func(Record) error { return errors.New("the disk is full") }
+	got := Run(context.Background(), h, config.ImageUpdates{Mode: Auto}, []string{"a", "b"})
+	if got["a"] != "error" || got["b"] != "error" {
+		t.Fatalf("outcomes %v; want the write errors reported", got)
+	}
+	if len(f.slept) != 2 {
+		t.Fatalf("slept %v; want a gap after the update and after the undo", f.slept)
+	}
+}
+
 func TestSettings(t *testing.T) {
 	n := Normalize(&config.ImageUpdates{Mode: "sometimes", Hour: 30, Services: map[string]string{"a": Notify, "b": "bad", "": Auto}})
 	if n.Mode != Off || n.Hour != config.ImageUpdatesDefaultHour || len(n.Services) != 1 || n.Services["a"] != Notify {

@@ -380,7 +380,12 @@ function wireBackendEvents() {
   });
   // Background/startup failures the Go side reports via app:error had no listener,
   // so ~every background error was silently dropped. Surface them to the user.
-  EventsOn("imageupdates:changed", () => { if (activeView === "settings") void loadImageUpdates(); });
+  // A finished run can change the bell too (an undone or a new build), so the
+  // app state is read again on every page.
+  EventsOn("imageupdates:changed", () => {
+    void onBackendEvent();
+    if (activeView === "settings") void loadImageUpdates();
+  });
   EventsOn("app:error", (payload) => showErrorToast(payload));
   EventsOn("app:notice", (payload) => showInfoToast(payload));
   // Windows reopened CashPilot after a restart while this window was open.
@@ -1796,6 +1801,7 @@ function imageUpdateDraft(): Record<string, string> | null {
 }
 
 async function loadImageUpdates(draft: Record<string, string> | null = null) {
+  imageUpdateEdits.holdDraft(draft);
   const load = imageUpdateEdits.beginLoad();
   let html: string;
   let failed = false;
@@ -1813,10 +1819,11 @@ async function loadImageUpdates(draft: Record<string, string> | null = null) {
   // saved yet, and when a reload failed: the error replaces only an empty slot.
   if (slot.childElementCount > 0 && (failed || !imageUpdateEdits.canRedraw())) return;
   slot.innerHTML = html;
-  if (draft) {
+  const kept = imageUpdateEdits.takeDraft();
+  if (kept) {
     slot.querySelectorAll<HTMLSelectElement>("select").forEach((el) => {
       const key = el.id || `app:${el.dataset.imageUpdatesApp}`;
-      if (key in draft) el.value = draft[key];
+      if (key in kept) el.value = kept[key];
     });
   }
   if (slot.dataset.wired) return;

@@ -238,12 +238,15 @@ func Run(ctx context.Context, h Hooks, s config.ImageUpdates, slugs []string) ma
 			break
 		}
 		outcome, err := UpdateService(ctx, h, slug, EffectiveMode(s, slug))
+		// Docker recreated the app even when its history row could not be
+		// written, so the pause follows what Docker did, not the error.
+		recreated := outcome == Updated || outcome == RolledBack
 		if err != nil {
 			log.Printf("image updates: check of %s failed: %v", slug, err)
 			outcome = "error"
 		}
 		outcomes[slug] = outcome
-		if outcome == Updated || outcome == RolledBack {
+		if recreated {
 			sleep(ctx, h, Gap)
 		}
 	}

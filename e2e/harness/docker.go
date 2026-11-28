@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	goruntime "runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -158,6 +159,7 @@ type Docker struct {
 	// crashing holds the build IDs whose containers Docker restarts right after
 	// each start (SetCrashing). removedImages lists every image deleted.
 	builds        map[string]Build
+	imageVolumes  map[string][]string
 	crashing      map[string]bool
 	removedImages []string
 	// onImageInspect runs after each image inspect is answered (OnImageInspect).
@@ -170,6 +172,9 @@ type Docker struct {
 type Build struct {
 	ID     string
 	Digest string
+	// Repo is the repository of the reference SetImage named, so an inspect by
+	// image ID or by a digest reference still names the right repository.
+	Repo string
 }
 
 // SetImage points ref (repository:tag) at a build, as a registry moving a tag
@@ -181,7 +186,19 @@ func (d *Docker) SetImage(ref, id, digest string) {
 	if d.builds == nil {
 		d.builds = map[string]Build{}
 	}
-	d.builds[ref] = Build{ID: id, Digest: digest}
+	d.builds[ref] = Build{ID: id, Digest: digest, Repo: repoOf(ref)}
+}
+
+// SetImageVolumes makes build id declare VOLUME paths, as an image's Dockerfile
+// does: each container of it gets an anonymous volume at each path that its
+// create did not mount.
+func (d *Docker) SetImageVolumes(id string, paths ...string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.imageVolumes == nil {
+		d.imageVolumes = map[string][]string{}
+	}
+	d.imageVolumes[id] = paths
 }
 
 // OnImageInspect runs fn after each image inspect is answered, outside the lock:
@@ -524,13 +541,22 @@ func (d *Docker) image(w http.ResponseWriter, ref string) {
 		"Config": map[string]any{"Entrypoint": []string{"entrypoint"}},
 	}
 	if b.Digest != "" {
-		repo := ref
-		if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
-			repo = ref[:i]
+		repo := b.Repo
+		if repo == "" {
+			repo = repoOf(ref)
 		}
 		answer["RepoDigests"] = []string{repo + "@" + b.Digest}
 	}
 	writeJSON(w, http.StatusOK, answer)
+}
+
+// repoOf is the repository of an image reference, without its tag or digest.
+func repoOf(ref string) string {
+	repo, _, _ := strings.Cut(ref, "@")
+	if i := strings.LastIndex(repo, ":"); i > strings.LastIndex(repo, "/") {
+		repo = repo[:i]
+	}
+	return repo
 }
 
 // removeImage deletes an image no container uses, as Docker does without force.
@@ -634,6 +660,13 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 			c.Mounts = append(c.Mounts, Mount{Source: m.Source, Target: m.Target})
 			// The daemon creates a named volume on first use.
 			d.volumes[m.Source] = true
+		}
+	}
+	for _, p := range d.imageVolumes[c.ImageID] {
+		if !slices.ContainsFunc(c.Mounts, func(m Mount) bool { return m.Target == p }) {
+			anon := fmt.Sprintf("%064x", d.nextID*1000+len(c.Mounts))
+			c.Mounts = append(c.Mounts, Mount{Source: anon, Target: p})
+			d.volumes[anon] = true
 		}
 	}
 	if name == "" {

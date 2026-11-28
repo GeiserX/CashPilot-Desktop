@@ -149,4 +149,16 @@ export class ImageUpdateEdits {
    */
   beginLoad(): number { return ++this.loads; }
   isLatest(load: number): boolean { return load === this.loads; }
+  private pending: Record<string, string> | null = null;
+  /**
+   * Keeps the unsaved choices a page redraw carries until a load draws them,
+   * whichever load that is: a newer load with no draft of its own still puts
+   * them back, instead of drawing the saved ones over them.
+   */
+  holdDraft(draft: Record<string, string> | null): void { if (draft) this.pending = draft; }
+  takeDraft(): Record<string, string> | null {
+    const draft = this.pending;
+    this.pending = null;
+    return draft;
+  }
 }

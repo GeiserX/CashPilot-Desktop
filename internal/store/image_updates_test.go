@@ -89,6 +89,13 @@ func TestImageUpdatesLatestAndCleared(t *testing.T) {
 	if held, _ := s.ImageUpdateSeen("a", "sha256:3", "rolled_back"); !held {
 		t.Fatal("clearing released the held build")
 	}
+	// A cleared offer does not hide the same build offered again.
+	if seen, _ := s.ImageUpdateSeen("a", "sha256:1", "available"); seen {
+		t.Fatal("a cleared offer still counts, so the same build offered again never reaches the bell")
+	}
+	if seen, _ := s.ImageUpdateSeen("b", "sha256:2", "failed"); !seen {
+		t.Fatal("an offer nobody cleared no longer counts")
+	}
 	// A newer row comes back into the bell.
 	if err := s.RecordImageUpdate(ImageUpdate{Slug: "a", Result: "available", NewImage: "sha256:4"}); err != nil {
 		t.Fatal(err)
