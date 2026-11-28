@@ -35,12 +35,27 @@ place() {
   rm -rf "$tmp"
   ditto "$1" "$tmp" || { rm -rf "$tmp"; refuse "copy failed"; }
   chown -R root:wheel "$tmp" || { rm -rf "$tmp"; refuse "chown failed"; }
-  rm -rf "$dst" && mv "$tmp" "$dst" || refuse "move into /Applications failed"
+  # The old version moves aside and comes back if the new one cannot take its place.
+  old="/Applications/.cp-old-$(basename "$1")"
+  rm -rf "$old"
+  if [ -e "$dst" ]; then mv "$dst" "$old" || { rm -rf "$tmp"; refuse "could not move the old version aside"; }; fi
+  if ! mv "$tmp" "$dst"; then
+    [ -e "$old" ] && mv "$old" "$dst"
+    rm -rf "$tmp"; refuse "move into /Applications failed"
+  fi
+  rm -rf "$old"
   echo "installed $dst"
 }
+# A pkg names no app, so check what it left: the named app, written by this
+# install, signed by the expected team and accepted by Gatekeeper.
 pkg_install() {
+  a="/Applications/$want_app"
+  before=$(stat -f %c "$a/Contents/Info.plist" 2>/dev/null || echo none)
   out=$(installer -pkg "$1" -target / 2>&1) || refuse "pkg install failed: $(echo "$out" | tail -1)"
   echo "$out" | tail -1
+  [ -d "$a" ] || refuse "the installer did not put $want_app in /Applications"
+  [ "$(stat -f %c "$a/Contents/Info.plist" 2>/dev/null || echo none)" != "$before" ] || refuse "the package did not install $want_app"
+  check "$a"
 }
 /usr/bin/curl -fsSL -m 600 -o "$f" "$url" || refuse "download failed"
 sha=$(shasum -a 256 "$f" | awk '{print $1}')
