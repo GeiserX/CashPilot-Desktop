@@ -2279,5 +2279,7 @@
   "go.macvm.appRefused": "La Secure VM a refusé {app} : {why}",
   "go.macvm.noInstallApp": "Impossible d'installer {app} dans la Secure VM",
   "main.security.title": "Sécurité",
-  "main.scope.securevm": "Secure VM"
+  "main.scope.securevm": "Secure VM",
+  "go.macvm.noFront": "L'écran de la Secure VM est ouvert, mais {app} n'est pas passée au premier plan. Ouvrez-la depuis le dossier Applications de la Secure VM.",
+  "securevm.unread": "Statut inconnu : CashPilot n'a pas pu le lire. Il réessaie dans quelques secondes."
 }

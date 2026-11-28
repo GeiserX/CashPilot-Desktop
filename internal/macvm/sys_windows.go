@@ -18,3 +18,5 @@ func freeBytes(string) (int64, error) { return 0, errors.New("not on Windows") }
 func statOwner(os.FileInfo) (int, bool) { return 0, false }
 
 func ownGroup() *syscall.SysProcAttr { return nil }
+
+func rootLock(string) (func(), error) { return func() {}, nil }

@@ -1,7 +1,10 @@
 package macvm
 
 import (
+	"errors"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +63,8 @@ func TestRuleCountersAndBlocked(t *testing.T) {
 	out := `block drop in quick log on bridge100 inet from any to 192.168.64.1 label "cp-host-gw"
   [ Evaluations: 10  Packets: 3  Bytes: 180  States: 0 ]
   [ Inserted: uid 0 pid 1 State Creations: 0 ]
+block drop in quick on bridge100 inet6 all
+  [ Evaluations: 10  Packets: 50  Bytes: 4000  States: 0 ]
 block drop in quick log on bridge100 inet from any to <cp_deny> label "cp-deny"
   [ Evaluations: 10  Packets: 4  Bytes: 240  States: 0 ]
 pass in quick on bridge100 inet all flags S/SA keep state label "cp-internet"
@@ -143,11 +148,18 @@ func TestHostMajor(t *testing.T) {
 }
 
 func TestSafeOwnerPath(t *testing.T) {
-	if !safeOwnerPath("/Users/a/.tart/vms/CashPilot-VM", "/Users/a", "") {
+	// safeOwnerPath resolves the real parent folder, so the home is a real
+	// folder of the test and not a path on the machine that runs it.
+	root := t.TempDir()
+	home := filepath.Join(root, "a")
+	if err := os.MkdirAll(filepath.Join(home, ".tart", "vms"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !safeOwnerPath(filepath.Join(home, ".tart", "vms", "CashPilot-VM"), home, "") {
 		t.Fatal("inside the home is safe")
 	}
-	for _, p := range []string{"/Users/a", "/Users/ab/x", "/Users/a/../b/x", "/", "/Library"} {
-		if safeOwnerPath(p, "/Users/a", "") {
+	for _, p := range []string{home, filepath.Join(root, "ab", "x"), home + "/../b/x", "/", "/Library"} {
+		if safeOwnerPath(p, home, "") {
 			t.Errorf("%s must not be deletable", p)
 		}
 	}
@@ -201,5 +213,32 @@ func TestStatusFromBeforeBootIsDropped(t *testing.T) {
 	fromBeforeBoot(&st, boot.Add(time.Minute), boot)
 	if st.Network != NetConnected || st.Blocked == nil || st.Reason != "" {
 		t.Fatalf("a status from after the boot changed: %+v", st)
+	}
+}
+
+func TestStagedNameDropsTheQuery(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://example.com/dl/Theta%20Edge.dmg":          "Theta Edge.dmg",
+		"https://example.com/dl/Wipter.pkg?channel=stable": "Wipter.pkg",
+		"https://example.com/dl/UpRock.zip#latest":         "UpRock.zip",
+	} {
+		if got, err := stagedName(in); err != nil || got != want {
+			t.Errorf("stagedName(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := stagedName("https://example.com/"); err == nil {
+		t.Error("a URL with no file must be refused")
+	}
+}
+
+func TestInstallResultNeedsACleanExit(t *testing.T) {
+	if err := installResult("RESULT ok\n", nil, "Wipter"); err != nil {
+		t.Fatalf("a clean ok must pass: %v", err)
+	}
+	if err := installResult("RESULT ok\n", errors.New("signal: killed"), "Wipter"); err == nil {
+		t.Fatal("ok followed by a Tart error is not confirmed")
+	}
+	if err := installResult("RESULT refused: wrong team\n", errors.New("exit status 1"), "Wipter"); err == nil || !strings.Contains(err.Error(), "wrong team") {
+		t.Fatalf("a refusal keeps its reason: %v", err)
 	}
 }

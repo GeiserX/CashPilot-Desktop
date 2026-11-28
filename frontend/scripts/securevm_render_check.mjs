@@ -12,7 +12,7 @@
 //
 //   node scripts/securevm_render_check.mjs      # against ./.harness-build
 
-import { renderSecureVM, renderSecureVMRemoval, secureVMGreen } from "../.harness-build/render/securevm.js";
+import { renderSecureVM, renderSecureVMRemoval, secureVMGreen, unreadSecureVM } from "../.harness-build/render/securevm.js";
 import { t } from "../.harness-build/render/i18n.js";
 
 let failures = 0;
@@ -106,6 +106,12 @@ const unf = renderSecureVM(base({ unfinished: true }), { now });
 check("an unfinished setup offers to finish it", unf.includes("data-securevm-unfinished") && unf.includes('data-securevm-action="install"'), unf);
 check("a finished setup offers no finish", !green.includes("data-securevm-unfinished"));
 check("no update needed offers no update", !green.includes("data-securevm-update") && !green.includes('data-securevm-action="install"'));
+
+// A failed refresh: the last reading must not stay on screen as held.
+const stale = unreadSecureVM(base({ apps: [app({ placement: "vm", installed: "yes", running: "yes", signedIn: "yes", layers: ["secure-vm", "vm-fence"] })] }));
+const unread = renderSecureVM(stale, { now });
+check("a failed refresh drops the held reading", !secureVMGreen(stale) && unread.includes('data-securevm-state="unread"') && !unread.includes(t("securevm.fence.held")) && !unread.includes(t("securevm.network.connected")), unread);
+check("a failed refresh shows the apps as unknown", !unread.includes(t("securevm.appState", { installed: t("securevm.tri.yes"), running: t("securevm.tri.yes"), signedIn: t("securevm.tri.yes") })), unread);
 
 // Proof
 const proof = { at: "2026-11-27T11:00:00Z", green: false, why: "a host address answered", steps: [

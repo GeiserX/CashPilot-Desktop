@@ -2279,5 +2279,7 @@
   "go.macvm.appRefused": "Secure VM odrzuciła {app}: {why}",
   "go.macvm.noInstallApp": "Nie udało się zainstalować {app} w Secure VM",
   "main.security.title": "Bezpieczeństwo",
-  "main.scope.securevm": "Secure VM"
+  "main.scope.securevm": "Secure VM",
+  "go.macvm.noFront": "Ekran Secure VM jest otwarty, ale {app} nie pojawiła się na wierzchu. Otwórz ją z folderu Aplikacje w Secure VM.",
+  "securevm.unread": "Status nieznany: CashPilot nie mógł go odczytać. Spróbuje ponownie za kilka sekund."
 }

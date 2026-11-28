@@ -254,9 +254,9 @@ func (d *Daemon) enablePF(ctx context.Context) error {
 	if tok, err := os.ReadFile(tokPath); err == nil && strings.TrimSpace(string(tok)) != "" && strings.Contains(info, strings.TrimSpace(string(tok))) {
 		return nil
 	}
-	out, err := d.R.Run(ctx, "/sbin/pfctl", "-E")
-	// pfctl -E prints its token on standard error; Exec puts stderr in the
-	// error only on failure, so read both.
+	// pfctl -E prints its token on standard error, and Exec returns stderr
+	// only inside a failure, so the shell folds it into the output.
+	out, err := d.R.Run(ctx, "/bin/sh", "-c", "/sbin/pfctl -E 2>&1")
 	text := out
 	if err != nil {
 		text += err.Error()

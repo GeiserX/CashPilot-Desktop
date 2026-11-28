@@ -20,10 +20,24 @@ while IFS='|' read -r slug app proc kind file arg; do
     case "$kind" in
       process) sig=$run ;;
       file) if [ -s "$f" ]; then sig=y; else sig=n; fi ;;
-      key) if [ -s "$f" ] && /usr/bin/grep -qF "\"$arg\"" "$f"; then sig=y; else sig=n; fi ;;
+      # grep exits 1 for no match and 2 when it cannot read the file: a
+      # file the app replaced under us proves nothing, so that is unknown.
+      key) sig=n
+           if [ -s "$f" ]; then
+             /usr/bin/grep -qF "\"$arg\"" "$f"
+             case $? in 0) sig=y ;; 1) sig=n ;; *) sig=u ;; esac
+           fi ;;
       # The last line with the words decides, and "not <words>" is a no.
-      log) last=""; [ -s "$f" ] && last=$(/usr/bin/grep -iF "$arg" "$f" | /usr/bin/tail -n 1)
-           if [ -n "$last" ] && ! printf '%s' "$last" | /usr/bin/grep -qiF "not $arg"; then sig=y; else sig=n; fi ;;
+      log) sig=n
+           if [ -s "$f" ]; then
+             lines=$(/usr/bin/grep -iF "$arg" "$f")
+             case $? in
+               0) last=$(printf '%s\n' "$lines" | /usr/bin/tail -n 1)
+                  if printf '%s' "$last" | /usr/bin/grep -qiF "not $arg"; then sig=n; else sig=y; fi ;;
+               1) sig=n ;;
+               *) sig=u ;;
+             esac
+           fi ;;
     esac
   fi
   echo "$slug|$inst|$run|$sig"
