@@ -2134,7 +2134,7 @@
   "main.scope.worker": "工作节点",
   "logs.wrap": "自动换行",
   "logs.empty": "（无日志）",
-  "go.importers.refuse.m4bEncrypted": "{name} 是加密的 money4band 5.0 文件。请运行 `m4b config edit`，复制它打开的已解密 JSON，然后粘贴到这里。",
+  "go.importers.refuse.m4bEncrypted": "{name} 是加密的 money4band 5.0 文件。请在 money4band 文件夹中，用适合你系统的发布文件运行 `config edit`（例如 `./Money4Band-linux-amd64 config edit`），或从源码运行 `python run.py config edit`。复制它打开的已解密 JSON，然后粘贴到这里。",
   "installer.finishRun": "打开 CashPilot Desktop",
   "installer.closing": "如果 CashPilot Desktop 正从 {dir} 运行，正在将其关闭",
   "installer.options.title": "选择还要移除的内容",

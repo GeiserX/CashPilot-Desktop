@@ -2134,7 +2134,7 @@
   "main.scope.worker": "воркер",
   "logs.wrap": "Переносити рядки",
   "logs.empty": "(журналів немає)",
-  "go.importers.refuse.m4bEncrypted": "{name} — зашифрований файл money4band 5.0. Виконайте `m4b config edit`, скопіюйте розшифрований JSON, який відкриється, і вставте його сюди.",
+  "go.importers.refuse.m4bEncrypted": "{name} — зашифрований файл money4band 5.0. У теці money4band виконайте `config edit` з випущеним файлом для вашої системи (наприклад, `./Money4Band-linux-amd64 config edit`) або `python run.py config edit`, якщо запускаєте з вихідного коду. Скопіюйте розшифрований JSON, який відкриється, і вставте його сюди.",
   "installer.finishRun": "Відкрити CashPilot Desktop",
   "installer.closing": "Закриття CashPilot Desktop, якщо він запущений з {dir}",
   "installer.options.title": "Виберіть, що ще видалити",

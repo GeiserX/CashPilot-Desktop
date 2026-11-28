@@ -2134,7 +2134,7 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Bungkus baris",
   "logs.empty": "(tidak ada log)",
-  "go.importers.refuse.m4bEncrypted": "{name} adalah file money4band 5.0 yang terenkripsi. Jalankan `m4b config edit`, salin JSON terdekripsi yang dibukanya, lalu tempel di sini.",
+  "go.importers.refuse.m4bEncrypted": "{name} adalah file money4band 5.0 yang terenkripsi. Di folder money4band Anda, jalankan `config edit` dengan file rilis untuk sistem Anda (misalnya `./Money4Band-linux-amd64 config edit`), atau `python run.py config edit` jika dari kode sumber. Salin JSON terdekripsi yang dibukanya, lalu tempel di sini.",
   "installer.finishRun": "Buka CashPilot Desktop",
   "installer.closing": "Menutup CashPilot Desktop jika berjalan dari {dir}",
   "installer.options.title": "Pilih apa lagi yang akan dihapus",

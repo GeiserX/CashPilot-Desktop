@@ -2134,7 +2134,7 @@
   "main.scope.worker": "ワーカー",
   "logs.wrap": "行を折り返す",
   "logs.empty": "（ログなし）",
-  "go.importers.refuse.m4bEncrypted": "{name} は暗号化された money4band 5.0 のファイルです。`m4b config edit` を実行し、開かれた復号済みの JSON をコピーして、ここに貼り付けてください。",
+  "go.importers.refuse.m4bEncrypted": "{name} は暗号化された money4band 5.0 のファイルです。money4band のフォルダーで、お使いのシステム向けのリリース ファイルで `config edit` を実行するか (例: `./Money4Band-linux-amd64 config edit`)、ソースから使う場合は `python run.py config edit` を実行してください。開かれた復号済みの JSON をコピーして、ここに貼り付けてください。",
   "installer.finishRun": "CashPilot Desktop を開く",
   "installer.closing": "{dir} から実行中の場合は CashPilot Desktop を終了しています",
   "installer.options.title": "ほかに削除するものを選択",
