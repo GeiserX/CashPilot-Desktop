@@ -351,6 +351,15 @@ async function pickLanguage(code: string, request: number) {
   }
   if (request !== languageRequest) return;
   applyLanguage(next);
+  // The catalog text and the reminders come from Go in the language Go holds,
+  // so read the state again: without this they stay in the old language until
+  // the next background refresh. A failed read still switches the page.
+  try {
+    await loadAppState();
+  } catch {
+    // The next state read brings the catalog text in the new language.
+  }
+  if (request !== languageRequest) return;
   // Everything on screen is drawn from the new language at once.
   render();
 }
