@@ -120,6 +120,17 @@ type DeploySpec struct {
 	// compares it with the live container while it holds the name's replace lock,
 	// and refuses with *DeployTargetChanged before it touches anything.
 	ExpectedContainer *string
+	// FollowTag runs the build of the tag the image names (FollowRef), not the
+	// pinned digest: an app image update (imageupdate.go).
+	FollowTag bool
+	// SettleSeconds, on a deploy that replaces a container, watches the new one that
+	// long. One that stops, restarts, turns unhealthy or logs a catalog failure
+	// signal is removed and the old container is put back (*ImageUpdateUndone).
+	SettleSeconds int
+	// ExpectImage, when set, is the image ID the update's check found. A tag that
+	// moved to another build since is refused before anything changes, so the
+	// build that is watched, undone and held is the one the check named.
+	ExpectImage string
 }
 
 type ContainerInfo struct {
@@ -150,6 +161,8 @@ type ContainerInfo struct {
 	// the stall check read beside the service's own copies: its counters are its
 	// tunnel's, and ContainerID is the tunnel's, the container they belong to.
 	ProxyID int64 `json:"-"`
+	// ImageUpdate is what a deploy with SettleSeconds did with the old image.
+	ImageUpdate *ImageUpdateResult `json:"-"`
 }
 
 type DockerProvider struct {
@@ -324,6 +337,13 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	// manifest is matched against — so runtime.GOARCH would be the wrong question.
 	facts := daemonFacts(ctx, cli)
 	image := ImageForArch(svc.Docker, facts.Architecture)
+	if spec.FollowTag {
+		ref, ok := FollowRef(svc, facts.Architecture)
+		if !ok {
+			return ContainerInfo{}, errors.New(i18n.T("go.runtime.update.noTag", "name", svc.Name))
+		}
+		image = ref
+	}
 
 	env, err := copyEnv(svc, buildEnv(svc, spec.Env), spec.Instance)
 	if err != nil {
@@ -394,6 +414,9 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	}
 	if inspected.Config == nil {
 		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.noImageConfig", "image", image))
+	}
+	if spec.ExpectImage != "" && inspected.ID != spec.ExpectImage {
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.update.moved", "image", image))
 	}
 	if bootsInitSystem(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd) {
 		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.initImage", "image", image, "tag", "':lite'"))
@@ -600,6 +623,18 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		}
 		return ContainerInfo{}, rollBack(withGPUHint(err), madeID)
 	}
+	if spec.ExpectImage != "" {
+		// Docker read the tag again at create time, and another pull may have moved
+		// it since the check above. The new container must hold the checked build;
+		// another one is undone without being held, since nobody tried it.
+		made, ierr := cli.ContainerInspect(ctx, created.ID, client.ContainerInspectOptions{})
+		if ierr != nil {
+			return ContainerInfo{}, rollBack(ierr, created.ID)
+		}
+		if made.Container.Image != spec.ExpectImage {
+			return ContainerInfo{}, rollBack(errors.New(i18n.T("go.runtime.update.movedAtCreate", "image", image)), created.ID)
+		}
+	}
 	if spec.CreateOnly {
 		// Nothing was set aside (the name was free), so there is nothing to put back.
 		return ContainerInfo{Slug: spec.Slug, ContainerID: created.ID, Name: name, Image: image, Status: "created", Instance: 1}, nil
@@ -607,8 +642,20 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if progress != nil {
 		progress("Starting " + name)
 	}
+	// The check period reads the new container's log from its start on.
+	started := time.Now().Add(-time.Second)
 	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return ContainerInfo{}, rollBack(withGPUHint(err), created.ID)
+	}
+	var update *ImageUpdateResult
+	if spec.SettleSeconds > 0 && setAside {
+		if progress != nil {
+			progress(i18n.T("go.runtime.update.watching", "name", name, "seconds", spec.SettleSeconds))
+		}
+		if err := settle(ctx, cli, created.ID, name, svc, spec.SettleSeconds, started); err != nil {
+			return ContainerInfo{}, &ImageUpdateUndone{err: rollBack(err, created.ID)}
+		}
+		update = &ImageUpdateResult{OldImage: live.Container.Image, NewImage: inspected.ID}
 	}
 	if setAside {
 		// The replacement runs, so the old container goes. Its named volumes stay; a
@@ -617,6 +664,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		// stays as a leftover: the next deploy or app start removes it.
 		if _, err := cli.ContainerRemove(context.Background(), live.Container.ID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: custom}); err != nil && !cerrdefs.IsNotFound(err) && progress != nil {
 			progress(i18n.T("go.runtime.deploy.removeAsideFailed", "aside", aside, "error", err))
+		}
+		// After an update that passed its check, the old build goes too, unless
+		// another container still uses it. A plain redeploy keeps it, as before.
+		if update != nil && update.OldImage != "" && update.OldImage != update.NewImage {
+			update.OldKept = removeOldImage(cli, update.OldImage)
 		}
 	}
 	if svc.Docker.FenceGated {
@@ -635,6 +687,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		Status:      "running",
 		Instance:    max(spec.Instance, 1),
 		Wallet:      wallet,
+		ImageUpdate: update,
 	}, nil
 }
 

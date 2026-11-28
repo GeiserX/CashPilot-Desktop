@@ -31,6 +31,40 @@ Set `CASHPILOT_PROXIED_ONLY=true` to run services only through a proxy: the app 
 | `fleetPort` | `8085` | Port of the fleet API |
 | `metricsEnabled` | `false` | Opt-in Prometheus `/metrics` endpoint on the fleet API, without authentication |
 | `isolation` | empty (`auto`) | LAN isolation for container earners: `auto`, `on` or `off`. See [LAN isolation](#lan-isolation) |
+| `imageUpdates` | `auto` at 04:00 on a new install | App image updates: `off`, `notify` or `auto`, the hour, and a choice per app. See [App image updates](#app-image-updates) |
+
+## App image updates
+
+Most apps follow a tag, such as `latest`. The provider ships each new build
+under the same tag. With app image updates on, CashPilot checks those tags once a
+day and installs a new build by itself.
+
+Open **Settings > App image updates**. Pick one choice for every app, and give an
+app its own choice if you want:
+
+- **Off** checks nothing.
+- **Notify only** checks the tags and puts a notice in the bell. It changes no
+  container.
+- **Update automatically** installs a new build, then watches the new container
+  for 2 minutes. The check fails if the container stops, Docker restarts it, its
+  health check turns unhealthy, or its log shows a known failure line of the app.
+  Then CashPilot removes it and starts the old container again. That build is
+  never tried again. Only a newer one is.
+
+The check runs at 04:00 by default, in this computer's time zone. **Check now**
+runs it at once. A new install starts on **Update automatically**. An install
+upgraded from a release before app image updates stays **Off**, and the card
+offers one button to turn them on.
+
+CashPilot leaves an app to you when an update would change more than its image.
+That is the case when the app is stopped, runs several copies or runs through a
+proxy. It is also the case when the app runs an image you chose, or differs from
+what a redeploy builds. The history table says why.
+
+Every app has a known-good build pinned in the catalog. A fresh deploy and the
+**Redeploy** button install that build. An update installs the newer build of its
+tag. So a Redeploy can take an app back to its pinned build, and the next daily
+check moves it forward again.
 
 ## LAN isolation
 
