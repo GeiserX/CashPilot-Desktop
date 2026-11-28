@@ -28,3 +28,19 @@ func statOwner(fi os.FileInfo) (int, bool) {
 
 // ownGroup starts a child in its own process group.
 func ownGroup() *syscall.SysProcAttr { return &syscall.SysProcAttr{Setpgid: true} }
+
+// rootLock holds an exclusive lock on dir until unlock is called. Root
+// Install and Remove both take it, so a second app process or a direct CLI
+// call waits instead of tearing down what the other is setting up. The lock
+// is on the folder itself, so it leaves no file behind.
+func rootLock(dir string) (unlock func(), err error) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+}

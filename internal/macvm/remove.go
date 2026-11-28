@@ -31,6 +31,14 @@ type RemoveReport struct {
 func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 	var rep RemoveReport
 	did := func(what string) { rep.Removed = append(rep.Removed, what) }
+	// An install that runs now must finish before anything is torn down. With
+	// no parent folder there is no install to wait for.
+	if unlock, err := rootLock(filepath.Dir(d.P.Root)); err == nil {
+		defer unlock()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		rep.Left = append(rep.Left, "CashPilot could not take the install lock, so it removed nothing: "+err.Error())
+		return rep
+	}
 	inst, ierr := d.loadInstall()
 	if ierr != nil && req.Owner != "" {
 		if uid, home, err := lookupOwner(req.Owner); err == nil {

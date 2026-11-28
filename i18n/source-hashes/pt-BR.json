@@ -2279,5 +2279,7 @@
   "go.macvm.appRefused": "e97798987a90",
   "go.macvm.noInstallApp": "491e6cf80a73",
   "main.security.title": "8f6fb4eb7f42",
-  "main.scope.securevm": "78c6df4c1c58"
+  "main.scope.securevm": "78c6df4c1c58",
+  "go.macvm.noFront": "e658d36aaff2",
+  "securevm.unread": "6cbd517614f1"
 }

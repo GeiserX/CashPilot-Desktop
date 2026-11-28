@@ -2279,5 +2279,7 @@
   "go.macvm.appRefused": "Tinanggihan ng Secure VM ang {app}: {why}",
   "go.macvm.noInstallApp": "Hindi ma-install ang {app} sa Secure VM",
   "main.security.title": "Seguridad",
-  "main.scope.securevm": "Secure VM"
+  "main.scope.securevm": "Secure VM",
+  "go.macvm.noFront": "Bukas na ang screen ng Secure VM, pero hindi lumabas sa harap ang {app}. Buksan ito mula sa folder na Applications sa Secure VM.",
+  "securevm.unread": "Hindi alam ang status: hindi ito nabasa ng CashPilot. Susubukan ulit nito sa loob ng ilang segundo."
 }

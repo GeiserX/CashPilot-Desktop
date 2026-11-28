@@ -32,6 +32,7 @@ type fakeHost struct {
 	cutFails  bool // deletem fails
 	calls     []string
 	dropCount int
+	failCall  string // this call prints its normal output and still fails
 }
 
 const (
@@ -41,9 +42,17 @@ const (
 	testPort = "vmenet0"
 )
 
-func (h *fakeHost) Run(_ context.Context, name string, args ...string) (string, error) {
+func (h *fakeHost) Run(ctx context.Context, name string, args ...string) (string, error) {
 	call := strings.TrimSpace(name + " " + strings.Join(args, " "))
 	h.calls = append(h.calls, call)
+	out, err := h.run(call)
+	if err == nil && call == h.failCall {
+		return out, errors.New("fake host: " + call + " failed")
+	}
+	return out, err
+}
+
+func (h *fakeHost) run(call string) (string, error) {
 	switch {
 	case call == "/sbin/ifconfig -l":
 		return "lo0 en0 bridge0 bridge100 vmenet0", nil
@@ -167,7 +176,7 @@ func TestPassAtBootCutsBeforeItChecks(t *testing.T) {
 	firstCheck := slices.IndexFunc(h.calls, func(c string) bool {
 		return strings.HasPrefix(c, "/sbin/pfctl") || strings.HasPrefix(c, "/bin/ps")
 	})
-	if cut < 0 || add < 0 || cut > add || firstCheck < cut {
+	if cut < 0 || firstCheck < 0 || add < 0 || cut >= firstCheck || firstCheck >= add {
 		t.Fatalf("boot must cut first, then check, then connect: %v", h.calls)
 	}
 }
@@ -199,6 +208,58 @@ func TestPassCutsOnEveryDrift(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPassCutsWhenAPFReadFails(t *testing.T) {
+	for what, call := range map[string]string{
+		"info":         "/sbin/pfctl -s info",
+		"main-ruleset": "/sbin/pfctl -sr",
+		"rules":        "/sbin/pfctl -a " + Anchor + " -sr",
+		"table":        "/sbin/pfctl -a " + Anchor + " -t cp_deny -T show",
+	} {
+		t.Run(what, func(t *testing.T) {
+			d, h := guardFixture(t)
+			h.member = false
+			h.failCall = call
+			st := d.Pass(context.Background(), false)
+			if st.Network == NetConnected || h.member || !slices.Contains(st.Changes, "unread-"+what) {
+				t.Fatalf("a failed %s read must keep the port cut: %+v %v", what, st, h.calls)
+			}
+		})
+	}
+}
+
+func TestEnablePFSavesTheTokenFromStandardError(t *testing.T) {
+	root := t.TempDir()
+	p := PathsAt(root, filepath.Join(root, "plist"))
+	if err := os.MkdirAll(p.State, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Exec returns only stdout on success, and pfctl -E prints its token on
+	// stderr, so the token reaches the output only through the shell's 2>&1.
+	d := &Daemon{P: p, R: runnerFunc(func(call string) (string, error) {
+		switch call {
+		case "/bin/sh -c /sbin/pfctl -E 2>&1":
+			return "No ALTQ support in kernel\npf enabled\nToken : 4242\n", nil
+		case "/sbin/pfctl -E", "/sbin/pfctl -s References":
+			return "", nil
+		case "/sbin/pfctl -s info":
+			return "Status: Enabled for 0 days", nil
+		}
+		return "", fmt.Errorf("unexpected %q", call)
+	})}
+	if err := d.enablePF(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tok, err := os.ReadFile(filepath.Join(p.State, PFToken)); err != nil || string(tok) != "4242\n" {
+		t.Fatalf("the pf reference token was not saved: %q %v", tok, err)
+	}
+}
+
+type runnerFunc func(call string) (string, error)
+
+func (f runnerFunc) Run(_ context.Context, name string, args ...string) (string, error) {
+	return f(strings.TrimSpace(name + " " + strings.Join(args, " ")))
 }
 
 func TestPassTwoSoftnetsForOurMACIsDrift(t *testing.T) {
@@ -465,5 +526,29 @@ func TestKeptIPSWCountsAPartialDownload(t *testing.T) {
 	}
 	if got := keptIPSW(home); got != 4096 {
 		t.Fatalf("a 4096-byte partial, got %d", got)
+	}
+}
+
+func TestRemoveWaitsForTheInstallLock(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "SecureVM")
+	p := PathsAt(root, filepath.Join(t.TempDir(), "plist"))
+	unlock, err := rootLock(filepath.Dir(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Daemon{P: p, R: runnerFunc(func(string) (string, error) { return "", errors.New("fake host: no commands") })}
+	done := make(chan struct{})
+	go func() { d.Remove(context.Background(), RemoveRequest{}); close(done) }()
+	select {
+	case <-done:
+		unlock()
+		t.Fatal("Remove ran while an install held the lock")
+	case <-time.After(300 * time.Millisecond):
+	}
+	unlock()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Remove did not run after the lock was released")
 	}
 }

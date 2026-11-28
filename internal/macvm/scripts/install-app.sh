@@ -57,7 +57,9 @@ pkg_install() {
   [ "$(stat -f %c "$a/Contents/Info.plist" 2>/dev/null || echo none)" != "$before" ] || refuse "the package did not install $want_app"
   check "$a"
 }
-/usr/bin/curl -fsSL -m 600 -o "$f" "$url" || refuse "download failed"
+# HTTPS only, also after a redirect: the checks below come later, and a plain
+# HTTP hop would let anyone on the path change the bytes first.
+/usr/bin/curl -fsSL --proto '=https' --proto-redir '=https' -m 600 -o "$f" "$url" || refuse "download failed"
 sha=$(shasum -a 256 "$f" | awk '{print $1}')
 echo "file $name size=$(stat -f %z "$f") sha256=$sha"
 [ "$want_sha" = - ] || [ "$sha" = "$want_sha" ] || refuse "sha256 mismatch"
@@ -96,10 +98,13 @@ case "$f" in
     elif [ -n "$pkg" ]; then
       check "$pkg"; pkg_install "$pkg"
     else refuse "no .app or .pkg in the dmg"; fi
-    hdiutil detach "$mnt" >/dev/null 2>&1 ;;
+    # A mount left behind holds guest disk, and every retry would add one.
+    hdiutil detach "$mnt" >/dev/null 2>&1 || hdiutil detach -force "$mnt" >/dev/null 2>&1 || refuse "could not detach the dmg"
+    rmdir "$mnt" 2>/dev/null; mnt="" ;;
   *.pkg) check "$f"; pkg_install "$f" ;;
   *.zip)
-    x=$(mktemp -d /tmp/cpzip.XXXX); ditto -x -k "$f" "$x"
+    x=$(mktemp -d /tmp/cpzip.XXXX) || refuse "no folder to unzip into"
+    ditto -x -k "$f" "$x" || refuse "could not unzip the download"
     app=$(find "$x" -maxdepth 2 -name '*.app' | head -1); [ -n "$app" ] || refuse "no .app in the zip"
     named "$app"; check "$app"; place "$app" ;;
   *) refuse "unknown file type" ;;
@@ -114,8 +119,12 @@ rm -rf "$dl"; [ -n "$x" ] && rm -rf "$x"
 if [ "$slug" = uprock ] && id earner >/dev/null 2>&1; then
   ud="/Users/earner/Library/Application Support/UpRock"
   if [ ! -e "$ud" ]; then
-    sudo -u earner /bin/sh -c 'umask 077; mkdir -p "$1" && printf "{}\n" > "$1/credentials.json"' sh "$ud" \
-      && echo "made UpRock's credentials file"
+    # The folder appears only with its file in it, so a failed write leaves
+    # nothing that a retry would take for UpRock's own store.
+    sudo -u earner /bin/sh -c 'umask 077; mkdir -p "$(dirname "$1")" && t=$(mktemp -d "$1.cp-XXXXXX") || exit 1
+      printf "{}\n" > "$t/credentials.json" && mv "$t" "$1" || { rm -rf "$t"; exit 1; }' sh "$ud" \
+      || { echo "RESULT refused: could not make UpRock's credentials file"; exit 1; }
+    echo "made UpRock's credentials file"
   fi
 fi
 la="/Library/LaunchAgents/org.cashpilot.earner.$slug.plist"
@@ -135,7 +144,8 @@ PLIST
 chown root:wheel "$la" && chmod 644 "$la" || { echo "RESULT refused: could not set up $la"; exit 1; }
 # Open it now when the earner is logged in; otherwise its next login does.
 if uid=$(id -u earner 2>/dev/null) && [ "$(stat -f %u /dev/console)" = "$uid" ]; then
-  launchctl asuser "$uid" /usr/bin/sudo -u earner /usr/bin/open -g "/Applications/$want_app" || true
+  launchctl asuser "$uid" /usr/bin/sudo -u earner /usr/bin/open -g "/Applications/$want_app" \
+    || { echo "RESULT refused: it is installed, but it did not open"; exit 1; }
   echo "opened in the earner's session"
 fi
 echo "RESULT ok"

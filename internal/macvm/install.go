@@ -106,6 +106,15 @@ func stageArchive(ctx context.Context, src, dir string, pin Pin) (string, error)
 //  4. installs and loads the daemon, which starts the VM with the fence and
 //     keeps it cut off until the proof is green.
 func (d *Daemon) Install(ctx context.Context, req InstallRequest) error {
+	parent := filepath.Dir(d.P.Root)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return err
+	}
+	unlock, err := rootLock(parent)
+	if err != nil {
+		return fmt.Errorf("could not take the install lock: %w", err)
+	}
+	defer unlock()
 	uid, home, err := lookupOwner(req.Owner)
 	if err != nil {
 		return err

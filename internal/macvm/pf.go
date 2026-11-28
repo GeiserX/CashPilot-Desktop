@@ -131,10 +131,15 @@ func RuleCounters(out string) map[string]uint64 {
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		l := sc.Text()
-		if i := strings.Index(l, `label "`); i >= 0 && !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "\t") {
-			rest := l[i+len(`label "`):]
-			if j := strings.IndexByte(rest, '"'); j >= 0 {
-				label = rest[:j]
+		if l != "" && !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "\t") {
+			// Each rule header sets the label afresh, so the counters of
+			// an unlabeled rule never land on the rule before it.
+			label = ""
+			if i := strings.Index(l, `label "`); i >= 0 {
+				rest := l[i+len(`label "`):]
+				if j := strings.IndexByte(rest, '"'); j >= 0 {
+					label = rest[:j]
+				}
 			}
 			continue
 		}

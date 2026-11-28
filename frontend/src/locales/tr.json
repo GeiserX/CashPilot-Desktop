@@ -2279,5 +2279,7 @@
   "go.macvm.appRefused": "Secure VM, {app} uygulamasını reddetti: {why}",
   "go.macvm.noInstallApp": "{app}, Secure VM'e kurulamadı",
   "main.security.title": "Güvenlik",
-  "main.scope.securevm": "Secure VM"
+  "main.scope.securevm": "Secure VM",
+  "go.macvm.noFront": "Secure VM'in ekranı açık, ancak {app} öne gelmedi. Onu Secure VM'deki Uygulamalar klasöründen açın.",
+  "securevm.unread": "Durum bilinmiyor: CashPilot onu okuyamadı. Birkaç saniye içinde yeniden dener."
 }
