@@ -53,6 +53,7 @@ type Engine struct {
 	lastErr  string
 	apps     map[string]AppState
 	appsAt   time.Time
+	appsGen  int // each action's end moves it, so a read from before it is dropped
 }
 
 // NewEngine is the product engine for the user running the app.
@@ -103,6 +104,7 @@ func (e *Engine) begin(action string) (securevm.Progress, func(error) error, err
 			e.lastErr = err.Error()
 		}
 		e.appsAt = time.Time{}
+		e.appsGen++
 		e.mu.Unlock()
 		return err
 	}
@@ -220,7 +222,7 @@ func (e *Engine) appList(ctx context.Context, st securevm.Status) []securevm.App
 	running := st.Network == NetConnected || st.Network == NetDisconnected
 	e.mu.Lock()
 	fresh := time.Since(e.appsAt) < 30*time.Second
-	states := e.apps
+	states, gen := e.apps, e.appsGen
 	e.mu.Unlock()
 	if running && !fresh && st.Busy == "" {
 		guestApps := map[string]catalog.GuestMacOS{}
@@ -233,11 +235,16 @@ func (e *Engine) appList(ctx context.Context, st securevm.Status) []securevm.App
 			c, cancel := context.WithTimeout(ctx, 20*time.Second)
 			got, err := e.guest().ReadApps(c, guestApps)
 			cancel()
+			// A failed read confirms nothing, so the rows show unknown until
+			// the next read; the time still spaces the reads 30 s apart.
+			states = nil
 			if err == nil {
 				states = got
 			}
 			e.mu.Lock()
-			e.apps, e.appsAt = states, time.Now()
+			if e.appsGen == gen {
+				e.apps, e.appsAt = states, time.Now()
+			}
 			e.mu.Unlock()
 		}
 	}
@@ -588,8 +595,9 @@ func (e *Engine) spec(slug string) (AppSpec, error) {
 	return AppSpec{}, fmt.Errorf("unknown app %q", slug)
 }
 
-// Place puts an earner in the VM or takes it out. The app moves the host
-// side; this is the guest side only.
+// Place puts an earner in the VM or takes it out. This is the guest side
+// only: the app then stops or starts the earner's deployment on this
+// computer (App.SecureVMPlace).
 func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placement, progress securevm.Progress) (err error) {
 	s, err := e.spec(slug)
 	if err != nil {
@@ -628,13 +636,18 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 // OpenScreen opens the VM's screen in Screen Sharing, with the earner's app
 // in front when slug names one.
 func (e *Engine) OpenScreen(ctx context.Context, slug string) error {
+	// The screen opens even when the app does not come to the front, so the
+	// user can open it by hand, but the page says that it did not.
+	var noFront error
 	if slug != "" {
 		s, err := e.spec(slug)
 		if err != nil {
 			return err
 		}
 		if s.MacOS != nil {
-			_ = e.guest().Front(ctx, *s.MacOS)
+			if ferr := e.guest().Front(ctx, *s.MacOS); ferr != nil {
+				noFront = errors.New(i18n.T("go.macvm.noFront", "app", s.Name))
+			}
 		}
 	}
 	b, err := os.ReadFile(filepath.Join(e.P.Owner, VNCFile))
@@ -645,8 +658,10 @@ func (e *Engine) OpenScreen(ctx context.Context, slug string) error {
 	if !vncURL.MatchString(u) {
 		return errors.New(i18n.T("go.macvm.badScreen"))
 	}
-	_, err = e.R.Run(ctx, "/usr/bin/open", u)
-	return err
+	if _, err = e.R.Run(ctx, "/usr/bin/open", u); err != nil {
+		return err
+	}
+	return noFront
 }
 
 // Start asks the guard to start the VM with the fence.

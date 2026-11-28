@@ -144,7 +144,7 @@ import { imageChoice } from "./render/image";
 import { runtimeCard } from "./render/onboarding";
 import { checkAgainButton, setupFinished } from "./render/dockerguide";
 import { DockerGuide, type DockerGuideDeps } from "./render/dockerguide_wire";
-import { renderSecureVM } from "./render/securevm";
+import { renderSecureVM, unreadSecureVM } from "./render/securevm";
 import type { SecureVMRemoveResult, SecureVMStatus as SecureVMReading } from "./wails";
 import { guidesBesideChecklist, loadRuntimePage, unknownRuntime, unknownRuntimeNotice, withRuntimeReading } from "./render/runtimepage";
 import { dockerBlockedNote, renderRuntimeSettings, runtimeProviderNote, runtimeState } from "./render/runtime_state";
@@ -714,7 +714,11 @@ function renderSecurityView(current: AppState) {
         secureVMTimer = undefined;
         return;
       }
-      void refreshSecureVM();
+      // A read can take longer than the tick; another one then would only
+      // queue up behind it.
+      if (secureVMPolling) return;
+      secureVMPolling = true;
+      void refreshSecureVM().finally(() => { secureVMPolling = false; });
     }, 3000);
   }
 }
@@ -722,6 +726,7 @@ function renderSecurityView(current: AppState) {
 // secureVMSeq numbers each read, so a slow read that ends after a newer one
 // cannot draw the older status over it.
 let secureVMSeq = 0;
+let secureVMPolling = false;
 
 async function refreshSecureVM() {
   const seq = ++secureVMSeq;
@@ -729,8 +734,11 @@ async function refreshSecureVM() {
   try {
     status = await SecureVMStatus();
   } catch (error) {
-    if (seq === secureVMSeq) showErrorToast({scope: "securevm", error: String(error)});
-    return;
+    if (seq !== secureVMSeq) return;
+    showErrorToast({scope: "securevm", error: String(error)});
+    // The last reading is stale now: show it as unread until a read works.
+    if (!secureVM) return;
+    status = unreadSecureVM(secureVM);
   }
   if (seq !== secureVMSeq) return;
   secureVM = status;

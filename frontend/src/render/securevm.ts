@@ -103,6 +103,15 @@ function bytesGB(n: number): string {
 }
 
 /** Whether the VM is online with its proven fence: the only green state. */
+/**
+ * unreadSecureVM is the reading to show after a refresh failed: the last
+ * status no longer says how the VM is now, so nothing on it reads as held.
+ */
+export function unreadSecureVM(s: SecureVMStatus): SecureVMStatus {
+  const unknown = { installed: "unknown", running: "unknown", signedIn: "unknown" } as const;
+  return { ...s, fence: "unread", reason: "", apps: (s.apps || []).map((a) => ({ ...a, ...unknown, detail: "" })) };
+}
+
 export function secureVMGreen(s: SecureVMStatus): boolean {
   return s.network === "connected" && s.fence === "held";
 }
@@ -115,6 +124,9 @@ function sentence(s: string): string {
 }
 
 function stateLine(s: SecureVMStatus): string {
+  if (s.fence === "unread") {
+    return `<p class="text-warn" data-securevm-state="unread"><strong>${ht("securevm.unread")}</strong></p>`;
+  }
   const tone = secureVMGreen(s) ? "" : s.network === "off" ? "muted" : "text-warn";
   const net = networkLabel(s.network);
   const fence = fenceLabel(s.fence);

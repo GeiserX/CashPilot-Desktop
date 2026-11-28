@@ -72,6 +72,7 @@ type Live struct {
 	Table       string
 	Softnet     []string // the args of every softnet that serves our MAC
 	TartRunning bool
+	PFUnread    []string // the pf reads that failed; their values are not observed
 }
 
 // Read reads the live fence for inst.
@@ -84,14 +85,21 @@ func (d *Daemon) Read(ctx context.Context, inst Install, desired Desired) (Live,
 	l.Bridges = bs
 	l.Bridge, l.Port = d.locate(ctx, bs, inst, desired)
 	l.Member = l.Port != "" && l.Bridge.HasMember(l.Port)
-	info, _ := d.R.Run(ctx, "/sbin/pfctl", "-s", "info")
-	l.PFEnabled = strings.Contains(info, "Status: Enabled")
-	main, _ := d.R.Run(ctx, "/sbin/pfctl", "-sr")
-	l.MainAnchor = slices.Contains(strings.Split(main, "\n"), `anchor "com.apple/*" all`)
-	l.RawRules, _ = d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-sr")
+	// A failed pfctl can still print text that matches the fence, so each
+	// failure is recorded and counts as drift: the port never goes on from
+	// a reading that was not made.
+	pf := func(what string, args ...string) string {
+		out, err := d.R.Run(ctx, "/sbin/pfctl", args...)
+		if err != nil {
+			l.PFUnread = append(l.PFUnread, what)
+		}
+		return out
+	}
+	l.PFEnabled = strings.Contains(pf("info", "-s", "info"), "Status: Enabled")
+	l.MainAnchor = slices.Contains(strings.Split(pf("main-ruleset", "-sr"), "\n"), `anchor "com.apple/*" all`)
+	l.RawRules = pf("rules", "-a", Anchor, "-sr")
 	l.Rules = NormalizeRules(l.RawRules)
-	t, _ := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-t", "cp_deny", "-T", "show")
-	l.Table = NormalizeTable(t)
+	l.Table = NormalizeTable(pf("table", "-a", Anchor, "-t", "cp_deny", "-T", "show"))
 	l.Softnet, err = d.softnets(ctx, inst.MAC)
 	if err != nil {
 		return l, err
@@ -211,6 +219,9 @@ func SoftnetMatches(line, bin, block string) bool {
 // Drift is every way live differs from desired. Empty means an exact match.
 func Drift(l Live, desired Desired, bin string) []string {
 	var d []string
+	for _, what := range l.PFUnread {
+		d = append(d, "unread-"+what)
+	}
 	if !l.PFEnabled {
 		d = append(d, "pf-off")
 	}

@@ -2279,5 +2279,7 @@
   "go.macvm.appRefused": "Secure VM đã từ chối {app}: {why}",
   "go.macvm.noInstallApp": "Không cài được {app} vào Secure VM",
   "main.security.title": "Bảo mật",
-  "main.scope.securevm": "Secure VM"
+  "main.scope.securevm": "Secure VM",
+  "go.macvm.noFront": "Màn hình của Secure VM đã mở, nhưng {app} không hiện lên phía trước. Hãy mở nó từ thư mục Ứng dụng trong Secure VM.",
+  "securevm.unread": "Trạng thái không rõ: CashPilot không đọc được. CashPilot sẽ thử lại sau vài giây."
 }

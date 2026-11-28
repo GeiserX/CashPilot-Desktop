@@ -7,8 +7,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"time"
 
@@ -149,8 +151,32 @@ func (g Guest) InstallApp(ctx context.Context, slug string, m catalog.GuestMacOS
 	if sha == "" {
 		sha = "-"
 	}
-	name := strings.ReplaceAll(m.Download[strings.LastIndex(m.Download, "/")+1:], "%20", " ")
+	name, err := stagedName(m.Download)
+	if err != nil {
+		return fmt.Errorf("%s: %w", i18n.T("go.macvm.noInstallApp", "app", m.App), err)
+	}
 	out, err := g.Exec(ctx, "", installAppScript, m.Download, sha, m.TeamID, name, m.App, slug)
+	return installResult(out, err, m.App)
+}
+
+// stagedName is the file name the guest saves a download under: the last
+// segment of the URL path, without the query or the fragment, because its
+// extension tells the installer the type.
+func stagedName(download string) (string, error) {
+	u, err := url.Parse(download)
+	if err != nil {
+		return "", err
+	}
+	name := path.Base(u.Path)
+	if name == "." || name == "/" {
+		return "", errors.New("the download URL names no file")
+	}
+	return name, nil
+}
+
+// installResult reads install-app.sh's RESULT line. "ok" counts only when
+// Tart also returned without an error, or the end was never confirmed.
+func installResult(out string, err error, app string) error {
 	result := ""
 	for _, l := range strings.Split(out, "\n") {
 		if strings.HasPrefix(l, "RESULT ") {
@@ -158,14 +184,14 @@ func (g Guest) InstallApp(ctx context.Context, slug string, m catalog.GuestMacOS
 		}
 	}
 	switch {
-	case result == "ok":
+	case result == "ok" && err == nil:
 		return nil
 	case strings.HasPrefix(result, "refused: "):
-		return errors.New(i18n.T("go.macvm.appRefused", "app", m.App, "why", strings.TrimPrefix(result, "refused: ")))
+		return errors.New(i18n.T("go.macvm.appRefused", "app", app, "why", strings.TrimPrefix(result, "refused: ")))
 	case err != nil:
-		return fmt.Errorf("%s: %w", i18n.T("go.macvm.noInstallApp", "app", m.App), err)
+		return fmt.Errorf("%s: %w", i18n.T("go.macvm.noInstallApp", "app", app), err)
 	}
-	return errors.New(i18n.T("go.macvm.noInstallApp", "app", m.App))
+	return errors.New(i18n.T("go.macvm.noInstallApp", "app", app))
 }
 
 // RemoveApp stops an earner and takes it out of the guest. Its own data (the
