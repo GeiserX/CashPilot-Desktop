@@ -411,3 +411,41 @@ func TestProofVMBusReadsThroughListenerClose(t *testing.T) {
 	}
 	t.Fatal("the proof missed a connection reported when the listener closed")
 }
+
+// lateListener publishes what it took only from the third read on, as the
+// real listener does from its own goroutine after the guest's Send returns.
+type lateListener struct {
+	winvm.HVListener
+	reads int
+}
+
+func (l *lateListener) Received() []string {
+	l.reads++
+	if l.reads < 3 {
+		return nil
+	}
+	return l.HVListener.Received()
+}
+
+type lateObservation struct{ winvm.Prober }
+
+func (p lateObservation) HVListener(ctx context.Context, vm, service string, register bool) (winvm.HVListener, error) {
+	l, err := p.Prober.HVListener(ctx, vm, service, register)
+	if err != nil {
+		return nil, err
+	}
+	return &lateListener{HVListener: l}, nil
+}
+
+// TestProofVMBusRedWaitsForTheHostToSeeTheToken: the guest's Send returns
+// before the host listener has recorded the token. The red control must wait
+// for it, not call a working control broken.
+func TestProofVMBusRedWaitsForTheHostToSeeTheToken(t *testing.T) {
+	_, p, r, h, tg := proofRig(t)
+	r.P = lateObservation{r.P}
+	rs, _ := r.Run(context.Background(), p, h, tg)
+	i := slices.IndexFunc(rs, func(r winvm.StepResult) bool { return r.ID == winvm.StepVMBusRed })
+	if i < 0 || rs[i].Outcome != winvm.WentRed {
+		t.Fatalf("VMBus red with a listener that records late = %+v, want went-red", rs[i])
+	}
+}

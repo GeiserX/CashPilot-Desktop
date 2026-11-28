@@ -1049,6 +1049,13 @@ func (r *proofRun) vmbus(ctx context.Context, red StepSpec, tok string) ([]StepR
 			break
 		}
 	}
+	// The guest's Send returns before the host listener records the token
+	// from its own goroutine: wait up to 5 seconds for the host to see it.
+	for try := 0; e.Err == "" && try < 25 && !slices.Contains(l.Received(), tok); try++ {
+		if err := r.sleep(ctx, 200*time.Millisecond); err != nil {
+			e.Err = err.Error()
+		}
+	}
 	for _, got := range l.Received() {
 		if got == tok {
 			e.Arrived = append(e.Arrived, got)
