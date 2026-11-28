@@ -29,9 +29,9 @@ type Catalog struct {
 	mu     sync.RWMutex
 	custom []Service
 
-	// translations are the catalog's texts per locale (services/_i18n), current
-	// ones only. Localized reads them; nothing else does.
-	translations map[string]map[string]string
+	// translations reads the catalog's texts per locale (services/_i18n), current
+	// ones only, on first use. Localized reads them; nothing else does.
+	translations *translationSource
 }
 
 // CustomPrefix starts every custom service's slug, and no catalog slug may use it:
@@ -864,7 +864,7 @@ func Load() (*Catalog, error) {
 	rules, rulesErr := os.ReadFile(filepath.Join(root, RatingRulesFile))
 	applyRatings(services, rules, rulesErr)
 	cat := newCatalog(services)
-	cat.translations = loadTranslations(os.DirFS(root), ".")
+	cat.translations = newTranslationSource(os.DirFS(root), ".")
 	return cat, nil
 }
 
@@ -874,7 +874,7 @@ func LoadEmbedded(fsys fs.FS) (*Catalog, error) {
 		return Load()
 	}
 	cat := newCatalog(services)
-	cat.translations = loadTranslations(fsys, "services")
+	cat.translations = newTranslationSource(fsys, "services")
 	return cat, nil
 }
 

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,44 +25,64 @@ type translation struct {
 	Source string `yaml:"source"`
 }
 
-// loadTranslations reads root/_i18n. A translation whose source hash is not the
-// hash of today's English, or that is empty, is left out, so the English shows.
-// A missing or unreadable folder means no translations, never a failed catalog.
-func loadTranslations(fsys fs.FS, root string) map[string]map[string]string {
-	dir := path.Join(root, I18nDir)
-	entries, err := fs.ReadDir(fsys, dir)
+// translationSource is where a catalog reads its translations from. It parses a
+// locale's file the first time a screen asks for that locale, never at Load:
+// parsing all 19 files took about a second, and the app and its tests load the
+// catalog far more often than they show it in another language.
+type translationSource struct {
+	fsys fs.FS
+	dir  string // the _i18n folder inside fsys
+
+	mu       sync.Mutex
+	english  map[string]string            // en.yml, read with the first locale
+	byLocale map[string]map[string]string // locale -> current translations; nil = none
+}
+
+func newTranslationSource(fsys fs.FS, root string) *translationSource {
+	return &translationSource{fsys: fsys, dir: path.Join(root, I18nDir), byLocale: map[string]map[string]string{}}
+}
+
+// texts returns the current translations for locale. A translation whose source
+// hash is not the hash of today's English, or that is empty, is left out, so the
+// English shows. A missing or unreadable file means no translations, never an error.
+func (s *translationSource) texts(locale string) map[string]string {
+	if s == nil || locale == "" || locale == "en" || strings.ContainsAny(locale, `/\.`) {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if m, ok := s.byLocale[locale]; ok {
+		return m
+	}
+	m := s.read(locale)
+	s.byLocale[locale] = m
+	return m
+}
+
+func (s *translationSource) read(locale string) map[string]string {
+	if s.english == nil {
+		raw, err := fs.ReadFile(s.fsys, path.Join(s.dir, "en.yml"))
+		if err != nil || yaml.Unmarshal(raw, &s.english) != nil || s.english == nil {
+			s.english = map[string]string{}
+		}
+	}
+	raw, err := fs.ReadFile(s.fsys, path.Join(s.dir, locale+".yml"))
 	if err != nil {
 		return nil
 	}
-	var english map[string]string
-	if raw, err := fs.ReadFile(fsys, path.Join(dir, "en.yml")); err != nil || yaml.Unmarshal(raw, &english) != nil {
+	var target map[string]translation
+	if yaml.Unmarshal(raw, &target) != nil {
 		return nil
 	}
-	out := map[string]map[string]string{}
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || !strings.HasSuffix(name, ".yml") || name == "en.yml" {
+	m := map[string]string{}
+	for key, tr := range target {
+		en, ok := s.english[key]
+		if !ok || tr.Text == "" || tr.Source != sourceHash(en) {
 			continue
 		}
-		raw, err := fs.ReadFile(fsys, path.Join(dir, name))
-		if err != nil {
-			continue
-		}
-		var target map[string]translation
-		if yaml.Unmarshal(raw, &target) != nil {
-			continue
-		}
-		m := map[string]string{}
-		for key, tr := range target {
-			en, ok := english[key]
-			if !ok || tr.Text == "" || tr.Source != sourceHash(en) {
-				continue
-			}
-			m[key] = tr.Text
-		}
-		out[strings.TrimSuffix(name, ".yml")] = m
+		m[key] = tr.Text
 	}
-	return out
+	return m
 }
 
 func sourceHash(english string) string {
@@ -75,7 +96,7 @@ func sourceHash(english string) string {
 // translation writes into. Logic must keep reading the English entries; only text
 // for the screen goes through here.
 func (c *Catalog) Localized(services []Service, locale string) []Service {
-	texts := c.translations[locale]
+	texts := c.translations.texts(locale)
 	if len(texts) == 0 {
 		return services
 	}
@@ -88,7 +109,7 @@ func (c *Catalog) Localized(services []Service, locale string) []Service {
 
 // LocalizedOne is Localized for one service.
 func (c *Catalog) LocalizedOne(svc Service, locale string) Service {
-	if texts := c.translations[locale]; len(texts) > 0 {
+	if texts := c.translations.texts(locale); len(texts) > 0 {
 		return localize(svc, texts)
 	}
 	return svc
