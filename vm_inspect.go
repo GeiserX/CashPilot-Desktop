@@ -42,7 +42,7 @@ type vmInspectReport struct {
 func runVMInspectMain(planPath string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), vmInspectTimeout)
 	defer cancel()
-	return runVMInspect(ctx, winvm.NewHost(), planPath, os.Stdout, os.Stderr)
+	return runVMInspect(ctx, winvm.NewHost(""), planPath, os.Stdout, os.Stderr)
 }
 
 // runVMInspect reads through r, which is only a winvm.Reader: nothing here can
@@ -62,7 +62,7 @@ func runVMInspect(ctx context.Context, r winvm.Reader, planPath string, out, err
 	rep := vmInspectReport{VM: p.Names.VM, VMID: p.VMID, Errors: map[string]string{}}
 	fail := func(what string, err error) { rep.Errors[what] = err.Error() }
 
-	if l, err := r.ReadLive(ctx, p.Names, p.VMID); err != nil {
+	if l, err := r.ReadLive(ctx, p.Names, p.VMID, p.SwitchID); err != nil {
 		fail("live", err)
 	} else {
 		rep.Live = &l

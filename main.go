@@ -62,6 +62,10 @@ func main() {
 	// It never opens a window. --once boot|pass runs one routine, for the lab.
 	guard := fs.String(vmGuardFlag, "", "run the Secure VM's guard on this data folder; no window")
 	once := fs.String(vmGuardOnceFlag, "", "with --vm-guard: run one routine (boot or pass) and exit")
+	// --vm-setup <params.json> and --vm-remove <data folder> are the Secure VM's
+	// elevated setup and removal, run by the admin bootstraps (vm_setup.go).
+	setup := fs.String(vmSetupFlag, "", "build or repair the Secure VM from this params file and prove its fence; admin only, no window")
+	remove := fs.String(vmRemoveFlag, "", "remove the Secure VM of this data folder; admin only, no window")
 	// --uninstall-cleanup is what the Windows uninstaller runs before it deletes the
 	// files: it removes the background helper, the RunOnce value and, when asked,
 	// the earning containers and the user's data (uninstall.go). No window.
@@ -75,6 +79,9 @@ func main() {
 	}
 	if *guard != "" {
 		os.Exit(vmGuardMain(*guard, *once, parseErr, runVMGuardMain))
+	}
+	if *setup != "" || *remove != "" {
+		os.Exit(vmSetupMain(*setup, *remove, parseErr))
 	}
 
 	if *uninstall {

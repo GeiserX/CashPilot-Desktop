@@ -36,7 +36,7 @@ var guardInterval = GuardInterval
 const resumeGap = GuardInterval + GuardInterval/2
 
 const (
-	maxStateBytes = 256 << 10
+	maxStateBytes = maxPlanBytes
 	maxLockBytes  = 4 << 10
 )
 
@@ -69,10 +69,13 @@ type GuardState struct {
 	// tunnels) that were in place. One of them gone later was removed by someone
 	// else: the guard does not put it back, so Diff sees it and the VM is cut
 	// off until Repair.
-	Denied []netip.Prefix `json:"denied"`
+	Denied   []netip.Prefix `json:"denied"`
+	PortACLs []PortACL      `json:"portAcls,omitempty"`
 	// VMID is the VM of the last plan the guard could read. When the plan cannot
 	// be read later, the guard still takes that VM off the network.
-	VMID string `json:"vmId"`
+	VMID  string `json:"vmId"`
+	Owner string `json:"owner,omitempty"`
+	Names *Names `json:"names,omitempty"`
 	// Cut is set once the guard took the VM off the network because its fence
 	// changed. It holds across passes and guard processes until Boot or Resume
 	// runs the exact check again (Repair, a reboot, a resume or a new guard), so
@@ -219,34 +222,82 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	}()
 
 	gs := d.loadState()
-	// failClosed takes the VM of the last plan that could be read off the
-	// network, when the plan now gives no VM to check, and adds until to the
-	// reason. The state stays as it was for when the plan is back.
-	failClosed := func(until string) {
-		if gs.VMID == "" {
-			return
+	// Even without a readable plan, a prior identity is usable only when
+	// the VM still carries the saved owner tag.
+	failClosed := func(until string, plan *Plan) {
+		names, vmID, owner, adapterID := gs.Names, gs.VMID, gs.Owner, gs.AdapterID
+		if plan != nil {
+			names, vmID, owner, adapterID = &plan.Names, plan.VMID, plan.Owner, plan.AdapterID
+			if gs.Names != nil && *gs.Names == plan.Names && gs.Owner == owner {
+				if vmID == "" {
+					vmID = gs.VMID
+				}
+				if adapterID == "" && strings.EqualFold(gs.VMID, vmID) {
+					adapterID = gs.AdapterID
+				}
+			}
 		}
 		st.Fence, st.Network = FenceCut, NetConnected
-		if err := d.HV.Disconnect(ctx, gs.VMID); err != nil {
-			d.logf("disconnect failed: %v", err)
-		} else {
-			st.Network = NetDisconnected
+		var owned string
+		if names != nil && ownerRe.MatchString(owner) {
+			inv, err := d.HV.Inventory(ctx, *names, KnownIDs{VM: vmID, Owner: owner}, "")
+			if err == nil {
+				owned = adopt(inv.VMs, vmID, owner)
+				if len(inv.VMs) == 0 {
+					st.Network = NetAbsent
+					return
+				}
+			} else {
+				d.logf("list VMs: %v", err)
+			}
 		}
+		if owned == "" {
+			st.Reason += " The guard cannot tell which VM belongs to this install. Run Repair or Remove VM."
+			return
+		}
+		vmID = owned
+		if err := d.HV.Disconnect(ctx, vmID, owner, adapterID); err != nil {
+			d.logf("disconnect failed: %v", err)
+			st.Reason += " The guard could not disconnect the recorded adapter: " + err.Error()
+			return
+		}
+		st.Network = NetDisconnected
 		st.Reason += " The VM stays off the network until " + until + "."
 	}
 	p, err := d.loadPlan()
 	if err != nil {
 		st.Reason = "Could not read the VM's desired state, so the guard cannot check it: " + err.Error()
 		d.logf("%s", st.Reason)
-		failClosed("the guard can read it again")
+		failClosed("the guard can read it again", nil)
 		return st, leftOff
 	}
 	st.VM, st.ProvedAt = p.Names.VM, p.ProvedAt
 	if p.VMID == "" || p.AdapterID == "" || p.SwitchID == "" {
 		st.Reason = "The VM is not built yet."
-		failClosed("its desired state names it again")
+		failClosed("its desired state names it again", &p)
 		return st, leftOff
 	}
+	inv, err := d.HV.Inventory(ctx, p.Names, KnownIDs{VM: p.VMID, Switch: p.SwitchID}, "")
+	if err != nil || adopt(inv.VMs, p.VMID, p.Owner) == "" {
+		st.Fence, st.Network = FenceCut, NetConnected
+		if err == nil && len(inv.VMs) == 0 {
+			st.Network = NetAbsent
+		}
+		st.Reason = "The guard cannot prove which VM belongs to this install. Run Repair or Remove VM."
+		// Boot and Resume still take the recorded adapter off. Disconnect
+		// itself acts only on the VM with the recorded ID and owner tag, and
+		// cutting the network is the safe side.
+		if st.Network != NetAbsent && m != Periodic && !(retrying && d.proofLock(now)) {
+			if err := d.HV.Disconnect(ctx, p.VMID, p.Owner, p.AdapterID); err != nil {
+				d.logf("disconnect failed: %v", err)
+				st.Reason += " The guard could not disconnect the recorded adapter: " + err.Error()
+			} else {
+				st.Network = NetDisconnected
+			}
+		}
+		return st, leftOff
+	}
+
 	gs = gs.forPlan(p)
 	defer func() {
 		if mem != nil {
@@ -268,7 +319,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 
 	connected := true // unknown until read: assume the worst
 	disconnect := func() {
-		if err := d.HV.Disconnect(ctx, p.VMID); err != nil {
+		if err := d.HV.Disconnect(ctx, p.VMID, p.Owner, p.AdapterID); err != nil {
 			d.logf("disconnect failed: %v", err)
 			return
 		}
@@ -292,7 +343,7 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	// left off here gets the boot routine's exact check.
 	if lock {
 		st.Reason = Decide(m, Inputs{ProofLock: true}).Reason
-		l, err := d.HV.ReadLive(ctx, p.Names, p.VMID)
+		l, err := d.HV.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 		if err == nil && connected {
 			connected = anyConnected(l)
 		}
@@ -336,13 +387,13 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	// 2. Add the missing Denies the guard manages and remove its expired ones.
 	// Never on a partial reading: a host reading that failed would make every
 	// host Deny look expired.
-	live, lErr := d.HV.ReadLive(ctx, p.Names, p.VMID)
+	live, lErr := d.HV.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	var notAdded, notRemoved []netip.Prefix
 	if lErr == nil && hErr == nil && live.VMExists {
 		var changed bool
 		changed, notAdded, notRemoved = d.refreshDenies(ctx, p, live, dyn, &gs)
 		if changed {
-			live, lErr = d.HV.ReadLive(ctx, p.Names, p.VMID)
+			live, lErr = d.HV.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 		}
 	}
 
@@ -444,8 +495,13 @@ func (d GuardDeps) routine(ctx context.Context, m Mode, retrying bool, mem *cutM
 	if reason != "" && (!connected || startErr != nil) {
 		st.Reason = reason
 	}
-	if gs.Cut && !connected {
+	switch {
+	case gs.Cut && !connected:
 		st.Reason = cutReason(gs.CutChanges)
+	case gs.Cut:
+		// The cut holds but Disconnect failed: the VM is still on the network,
+		// so the status must not say it is cut off.
+		st.Reason = "The VM's protection changed, but the guard could not take the VM off the network. It tries again at its next check."
 	}
 	if st.Reason == "" && !connected && lErr == nil && live.VMExists {
 		st.Reason = "The VM is off the network. The guard checks its protection again and connects it at its next check."
@@ -533,17 +589,17 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 	off := func() bool {
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), undoTimeout)
 		defer cancel()
-		if err := d.HV.Disconnect(uctx, p.VMID); err != nil {
+		if err := d.HV.Disconnect(uctx, p.VMID, p.Owner, p.AdapterID); err != nil {
 			d.logf("disconnect failed: %v", err)
 			return true
 		}
 		return false
 	}
-	if err := d.HV.Connect(ctx, p.VMID, p.Names.Switch); err != nil {
+	if err := d.HV.Connect(ctx, p.VMID, p.SwitchID, p.Owner, p.AdapterID); err != nil {
 		d.logf("connect failed: %v", err)
 		return off(), false, nil, nil
 	}
-	live, err := d.HV.ReadLive(ctx, p.Names, p.VMID)
+	live, err := d.HV.ReadLive(ctx, p.Names, p.VMID, p.SwitchID)
 	if err != nil {
 		d.logf("read live state after connect: %v", err)
 		return off(), false, nil, nil
@@ -556,7 +612,7 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 	}
 	d.logf("connected: the fence matches the proven one")
 	if start && live.VMState != "Running" {
-		if err := d.HV.Start(ctx, p.VMID); err != nil {
+		if err := d.HV.Start(ctx, p.VMID, p.Owner); err != nil {
 			// A start that failed (often too little free memory) is a stop to
 			// retry, not a VM that is up. The VM goes off the network again and
 			// the routine reports it off, so Run's next tick runs the whole boot
@@ -577,6 +633,9 @@ func (d GuardDeps) connect(ctx context.Context, p Plan, dyn Dynamic, start bool)
 // placed before that is now missing stays missing: someone removed it, and
 // Diff must see that.
 func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dyn Dynamic, gs *GuardState) (changed bool, notAdded, notRemoved []netip.Prefix) {
+	if requireRecordedAdapter(p, live) != nil || live.PortACLs == nil {
+		return false, nil, nil // Diff reports the changed or unread adapter.
+	}
 	base := map[netip.Prefix]bool{}
 	for _, a := range p.WantACLs(Dynamic{}) {
 		base[a.Remote] = true
@@ -619,7 +678,9 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 	// Add before remove, so a wider new Deny is in place before the narrower
 	// ones it covers go. When the add fails, nothing is removed in this pass.
 	if len(add) > 0 {
-		if err := d.HV.AddDeny(ctx, p.VMID, add); err != nil {
+		rows, err := d.HV.AddPortACLs(ctx, p, "Deny", add)
+		gs.PortACLs = append(gs.PortACLs, rows...)
+		if err != nil {
 			d.logf("add Deny %v failed: %v", add, err)
 			notAdded = add
 		} else {
@@ -635,11 +696,20 @@ func (d GuardDeps) refreshDenies(ctx context.Context, p Plan, live LiveState, dy
 		case notAdded != nil:
 			notRemoved = remove
 		default:
-			if err := d.HV.RemoveDeny(ctx, p.VMID, remove); err != nil {
+			var rows []PortACL
+			for _, a := range live.PortACLs {
+				if slices.Contains(remove, a.prefix()) && (slices.Contains(p.PortACLs, a) || slices.Contains(gs.PortACLs, a)) {
+					rows = append(rows, a)
+				}
+			}
+			if err := d.HV.RemovePortACLs(ctx, p, rows); err != nil {
 				d.logf("remove Deny %v failed: %v", remove, err)
 				notRemoved = remove
 			} else {
-				d.logf("removed expired Deny %v", remove)
+				gs.PortACLs = slices.DeleteFunc(gs.PortACLs, func(a PortACL) bool {
+					return slices.Contains(remove, a.prefix())
+				})
+				d.logf("checked expired Deny %v", remove)
 			}
 			changed = true
 		}
@@ -717,7 +787,7 @@ func (gs GuardState) forPlan(p Plan) GuardState {
 	if !strings.EqualFold(gs.AdapterID, p.AdapterID) {
 		gs = GuardState{OwnIPs: gs.OwnIPs, LastBuild: gs.LastBuild, AdapterID: p.AdapterID, Cut: gs.Cut, CutChanges: gs.CutChanges}
 	}
-	gs.VMID = p.VMID
+	gs.VMID, gs.Owner, gs.Names = p.VMID, p.Owner, &p.Names
 	return gs
 }
 

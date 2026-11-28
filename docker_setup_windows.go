@@ -38,7 +38,7 @@ func (systemSetupRunner) installDocker(ctx context.Context) (runtime.ElevatedRes
 	if err != nil {
 		return runtime.ElevatedResult{}, err
 	}
-	cmd := exec.Command(ps, "-NoProfile", "-EncodedCommand", winvm.EncodeCommand(winvm.DockerInstallScript))
+	cmd := exec.Command(ps, "-NoProfile", "-EncodedCommand", runtime.EncodeCommand(winvm.DockerInstallScript))
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NEW_CONSOLE}
 	if err := cmd.Start(); err != nil {
 		return runtime.ElevatedResult{}, err

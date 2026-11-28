@@ -8,7 +8,6 @@
     "guardTask": "\\CashPilot\\VMGuard",
     "dataDir": "C:\\ProgramData\\CashPilot"
   },
-  "vhdxDir": "D:\\CashPilotVM",
   "vmId": "",
   "adapterId": "",
   "switchId": "",
@@ -59,11 +58,16 @@
     "ms_lltdio",
     "ms_rspndr",
     "ms_lldp",
-    "ms_implat"
+    "ms_implat",
+    "ms_pppoe",
+    "ms_rdma_ndk",
+    "ms_netbt",
+    "ms_ndisuio"
   ],
   "enhancedSession": "off",
-  "enhancedSessionOriginal": null,
   "createdGuardian": false,
+  "owner": "",
+  "addedAdminSids": [],
   "gcsBaseline": [],
   "hostBuild": "",
   "provedAt": "0001-01-01T00:00:00Z"

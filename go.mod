@@ -10,6 +10,7 @@ require (
 	github.com/moby/moby/client v0.6.3
 	github.com/shirou/gopsutil/v4 v4.26.10
 	github.com/wailsapp/wails/v2 v2.17.1
+	github.com/yusufpapurcu/wmi v1.2.4
 	github.com/zalando/go-keyring v0.2.8
 	golang.org/x/crypto v0.59.0
 	golang.org/x/sys v0.50.0
@@ -65,7 +66,6 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
-	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.68.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect

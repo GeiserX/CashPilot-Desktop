@@ -128,8 +128,8 @@ func TestGuardLogRotates(t *testing.T) {
 		t.Fatalf("guard.log.1: %v %v", old, err)
 	}
 	ents, _ := os.ReadDir(dir)
-	if len(ents) != 2 {
-		t.Fatalf("the folder holds %d files, want 2", len(ents))
+	if len(ents) != 3 {
+		t.Fatalf("the folder holds %d files, want two logs and the file journal", len(ents))
 	}
 }
 

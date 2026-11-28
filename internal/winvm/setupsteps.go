@@ -374,7 +374,3 @@ func SetupOutcome(op string, res runtime.ElevatedResult, err error, timedOut, we
 	}
 	return Outcome{State: OutcomeFailed, Code: hex, Text: fmt.Sprintf("Windows reported code %s, and nothing was confirmed as changed.", hex)}
 }
-
-// EncodeCommand is the -EncodedCommand form of a script, for the window that
-// runs DockerInstallScript.
-func EncodeCommand(script string) string { return psEncode(script) }
