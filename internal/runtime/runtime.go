@@ -492,6 +492,11 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 			return ContainerInfo{}, &DeployTargetChanged{Actual: actual}
 		}
 	}
+	// An update replaces only a copy that runs: a stop Docker took after the
+	// manager's check keeps the container's ID, and an update would start it.
+	if spec.SettleSeconds > 0 && inspectErr == nil && (live.Container.State == nil || !live.Container.State.Running) {
+		return ContainerInfo{}, errors.New(i18n.T("go.runtime.update.notRunning", "name", name))
+	}
 	if spec.CreateOnly && inspectErr == nil {
 		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.restoreExists", "name", name))
 	}

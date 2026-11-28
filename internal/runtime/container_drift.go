@@ -285,16 +285,7 @@ func ShapeDrift(svc catalog.Service, shape ContainerShape, customImage string) [
 		}
 	}
 
-	wantMounts := map[string]bool{}
-	for _, raw := range dc.Volumes {
-		parts := strings.Split(raw, ":")
-		if len(parts) > 1 {
-			if target := strings.TrimRight(parts[1], "/"); target != "" {
-				wantMounts[target] = true
-			}
-		}
-	}
-	if missing := minus(wantMounts, toSet(shape.Mounts)); len(missing) > 0 {
+	if missing := minus(volumeTargets(dc.Volumes), toSet(shape.Mounts)); len(missing) > 0 {
 		found = append(found, i18n.T("go.runtime.drift.missingMount", "paths", strings.Join(missing, ", ")))
 	}
 
@@ -453,6 +444,32 @@ func toSet(values []string) map[string]bool {
 		set[v] = true
 	}
 	return set
+}
+
+// volumeTargets are the container paths of volume mappings ("source:/path").
+func volumeTargets(volumes []string) map[string]bool {
+	targets := map[string]bool{}
+	for _, raw := range volumes {
+		parts := strings.Split(raw, ":")
+		if len(parts) > 1 {
+			if target := strings.TrimRight(parts[1], "/"); target != "" {
+				targets[target] = true
+			}
+		}
+	}
+	return targets
+}
+
+// LooseMounts are the folders a custom app's container mounts that a redeploy
+// does not: the image's own VOLUMEs. Each is an anonymous volume, so a new
+// container starts it empty, and the old one goes with the old container
+// (Deploy removes a custom app's container with its anonymous volumes). A
+// catalog service has none: a redeploy keeps the volumes the catalog declares.
+func LooseMounts(svc catalog.Service, shape ContainerShape) []string {
+	if !svc.Custom && !catalog.IsCustomSlug(svc.Slug) {
+		return nil
+	}
+	return minus(toSet(shape.Mounts), volumeTargets(svc.Docker.Volumes))
 }
 
 // minus is the sorted members of a that b lacks.

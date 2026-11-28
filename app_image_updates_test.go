@@ -2,13 +2,18 @@ package main
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/filelock"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/imageupdates"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
+	"github.com/GeiserX/CashPilot-Desktop/internal/services"
+	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
 // The app image updates against the fake Docker: the decisions of
@@ -236,5 +241,123 @@ func TestAStopAfterTheCheckRefusesTheUpdate(t *testing.T) {
 	}
 	if c, _ := app.Docker.Container("cashpilot-honeygain"); c.ID != id || c.State == "running" {
 		t.Fatalf("the update touched the stopped app: %+v", c)
+	}
+}
+
+// Check now takes the run before it answers: a run the helper holds is
+// reported as busy, never acknowledged as started.
+func TestCheckNowIsRefusedWhileAnotherRunHoldsTheLock(t *testing.T) {
+	app, _ := updatesUnderTest(t)
+	release, ok := filelock.Acquire(context.Background(), filepath.Join(app.cfg.DataDir(), "image_updates.lock"), 0)
+	if !ok {
+		t.Fatal("cannot take the lock file")
+	}
+	err := app.RunImageUpdates()
+	release()
+	if err == nil || !strings.Contains(err.Error(), i18n.T("go.imageupdates.running")) {
+		t.Fatalf("Check now while the helper runs: %v; want the busy error", err)
+	}
+	imageUpdateRun.Lock()
+	err = app.RunImageUpdates()
+	imageUpdateRun.Unlock()
+	if err == nil {
+		t.Fatal("Check now while this process runs was acknowledged")
+	}
+}
+
+// The window hears of a finished run only once both locks are free, so its
+// reload never reads the finished run as running.
+func TestTheRunIsAnnouncedAfterItsLocksAreFree(t *testing.T) {
+	app, tag := updatesUnderTest(t)
+	app.Docker.SetImage(tag, buildTwo, "sha256:d2")
+	announced := make(chan bool, 2)
+	saved := announceImageUpdates
+	announceImageUpdates = func(a *App) {
+		view, err := a.GetImageUpdates()
+		free := err == nil && !view.Running
+		if release, ok := filelock.Acquire(context.Background(), filepath.Join(a.cfg.DataDir(), "image_updates.lock"), 0); ok {
+			release()
+		} else {
+			free = false
+		}
+		announced <- free
+	}
+	t.Cleanup(func() { announceImageUpdates = saved })
+
+	app.runImageUpdates(context.Background(), true)
+	if free := <-announced; !free {
+		t.Fatal("the run was announced while it still held a lock")
+	}
+	if err := app.RunImageUpdates(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case free := <-announced:
+		if !free {
+			t.Fatal("Check now was announced while it still held a lock")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Check now never announced its end")
+	}
+}
+
+// An app holding NET_ADMIN or the GPU grant runs only the build the catalog
+// pins, so it is never updated by itself; Notify only still reports it.
+func TestAnAppWithNetworkRightsIsLeftToItsPin(t *testing.T) {
+	app := newAppUnderTest(t)
+	svc, ok := app.catalog.Get("mysterium")
+	if !ok || !svc.Docker.FenceGated {
+		t.Fatal("mysterium should be in the catalog and fence-gated")
+	}
+	if err := app.store.UpsertDeployment(store.Deployment{Slug: "mysterium", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if why := app.imageUpdateBlocker("mysterium", imageUpdateDrift{}); why != i18n.T("go.imageupdates.blocker.pinnedRights") {
+		t.Fatalf("a fence-gated app: %q", why)
+	}
+	// The control: an app with no such rights is not held by it.
+	if err := app.store.UpsertDeployment(store.Deployment{Slug: "honeygain", Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	if why := app.imageUpdateBlocker("honeygain", imageUpdateDrift{}); why != "" {
+		t.Fatalf("an app with no extra rights: %q", why)
+	}
+}
+
+// A custom app whose image declares a VOLUME outside its data path would start
+// that folder empty in a new container, so it is left to its owner.
+func TestACustomAppWithDataInAnImageVolumeIsLeftToTheOwner(t *testing.T) {
+	settle, gap := imageUpdateSettle, imageupdates.Gap
+	imageUpdateSettle, imageupdates.Gap = 1, 0
+	t.Cleanup(func() { imageUpdateSettle, imageupdates.Gap = settle, gap })
+	app := newAppUnderTest(t)
+	deploy := func(name, image string) string {
+		t.Helper()
+		view, err := app.SaveCustomService("", services.CustomDefinition{Name: name, Image: image, DataPath: "/data"})
+		if err != nil {
+			t.Fatalf("SaveCustomService: %v", err)
+		}
+		app.Docker.SetImage(image, buildOne, "sha256:d1")
+		if _, err := app.DeployService(view.Slug, nil, nil, nil); err != nil {
+			t.Fatalf("DeployService: %v", err)
+		}
+		app.Docker.SetImage(image, buildTwo, "sha256:d2")
+		return view.Slug
+	}
+	app.Docker.SetImageVolumes(buildOne, "/var/lib/mine")
+	app.Docker.SetImageVolumes(buildTwo, "/var/lib/mine")
+	loose := deploy("Loose", "org/loose:stable")
+	app.Docker.SetImageVolumes(buildOne)
+	app.Docker.SetImageVolumes(buildTwo)
+	plain := deploy("Plain", "org/plain:stable")
+	got := app.runImageUpdates(context.Background(), true)
+	if got[loose] != "skipped" || got[plain] != imageupdates.Updated {
+		t.Fatalf("outcomes %v; want %s skipped and %s updated", got, loose, plain)
+	}
+	view, _ := app.GetImageUpdates()
+	for _, row := range view.History {
+		if row.Slug == loose && !strings.Contains(row.Detail, "/var/lib/mine") {
+			t.Fatalf("the reason does not name the folder: %q", row.Detail)
+		}
 	}
 }

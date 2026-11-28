@@ -44,3 +44,28 @@ func (m *Manager) ContainerDrift(ctx context.Context) map[string][]string {
 	}
 	return out
 }
+
+// LooseMounts is, per custom app, the folders its running container keeps
+// outside what a redeploy mounts (see runtime.LooseMounts). A runtime that
+// cannot be read reports nothing.
+func (m *Manager) LooseMounts(ctx context.Context) map[string][]string {
+	reader, ok := m.providers[m.defaultKind].(shapeReader)
+	if !ok || m.catalog == nil {
+		return nil
+	}
+	shapes, err := reader.ContainerShapes(ctx)
+	if err != nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for _, shape := range shapes {
+		svc, found := m.catalog.Get(shape.Slug)
+		if !found {
+			continue
+		}
+		if loose := runtime.LooseMounts(svc, shape); len(loose) > 0 {
+			out[shape.Slug] = loose
+		}
+	}
+	return out
+}

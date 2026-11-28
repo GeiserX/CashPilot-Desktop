@@ -55,11 +55,15 @@ func (s *Store) RecordImageUpdate(u ImageUpdate) error {
 	return err
 }
 
-// ImageUpdateSeen says whether a row with one of results already names newImage for slug.
+// ImageUpdateSeen says whether a row with one of results already names newImage
+// for slug. A cleared row still counts for rolled_back, so an undone build stays
+// held; for any other result it does not, so a build offered again after a
+// later check cleared it reaches the bell again.
 func (s *Store) ImageUpdateSeen(slug, newImage string, results ...string) (bool, error) {
 	for _, result := range results {
 		var n int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM image_updates WHERE slug = ? AND new_image = ? AND result = ?`,
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM image_updates WHERE slug = ? AND new_image = ? AND result = ?
+			AND (cleared = 0 OR result = 'rolled_back')`,
 			slug, newImage, result).Scan(&n); err != nil {
 			return false, err
 		}

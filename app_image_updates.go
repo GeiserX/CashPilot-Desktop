@@ -31,6 +31,10 @@ var imageUpdateTick = 5 * time.Minute
 // imageUpdateSettle is the check period of an update deploy, short in tests.
 var imageUpdateSettle = imageupdates.SettleSeconds
 
+// announceImageUpdates tells the window that a run finished; tests replace it
+// to see when it fires.
+var announceImageUpdates = func(a *App) { a.emitEvent("imageupdates:changed") }
+
 // imageUpdateHistory is how many rows the Settings card shows.
 const imageUpdateHistory = 200
 
@@ -116,17 +120,39 @@ func (a *App) SaveImageUpdates(mode string, hour int, apps map[string]string) (c
 }
 
 // RunImageUpdates checks every app now, as the daily run does, in the
-// background. It does not count as the day's run.
+// background. It does not count as the day's run. It takes the run before it
+// answers, so a busy run is reported and never acknowledged as started.
 func (a *App) RunImageUpdates() error {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	if !imageUpdateRun.TryLock() {
+	release, ok := a.reserveImageUpdates(a.ctx)
+	if !ok {
 		return errors.New(i18n.T("go.imageupdates.running"))
 	}
-	imageUpdateRun.Unlock()
-	go a.runImageUpdates(a.ctx, true)
+	go func() {
+		a.runReservedImageUpdates(a.ctx, true)
+		release()
+		announceImageUpdates(a)
+	}()
 	return nil
+}
+
+// reserveImageUpdates takes this process's run and the lock file that the
+// window and the background helper share. release gives both back.
+func (a *App) reserveImageUpdates(ctx context.Context) (release func(), ok bool) {
+	if !imageUpdateRun.TryLock() {
+		return nil, false
+	}
+	unlock, ok := filelock.Acquire(ctx, filepath.Join(a.cfg.DataDir(), "image_updates.lock"), 0)
+	if !ok {
+		imageUpdateRun.Unlock()
+		return nil, false
+	}
+	return func() {
+		unlock()
+		imageUpdateRun.Unlock()
+	}, true
 }
 
 // startImageUpdates looks every few minutes whether the daily run is due.
@@ -147,24 +173,32 @@ func (a *App) startImageUpdates(ctx context.Context) {
 
 // runImageUpdates is the daily run (force false: only when it is due, and it
 // stamps the day) or Check now (force true). Never panics, never overlaps.
+// The event goes out after both locks are free, so the card never reads a
+// finished run as running.
 func (a *App) runImageUpdates(ctx context.Context, force bool) map[string]string {
 	if ctx == nil || a.cfg == nil || a.store == nil || a.services == nil {
 		return nil
 	}
-	if !imageUpdateRun.TryLock() {
-		return nil
-	}
-	defer imageUpdateRun.Unlock()
-	release, ok := filelock.Acquire(ctx, filepath.Join(a.cfg.DataDir(), "image_updates.lock"), 0)
+	release, ok := a.reserveImageUpdates(ctx)
 	if !ok {
 		return nil
 	}
-	defer release()
+	outcomes, ran := a.runReservedImageUpdates(ctx, force)
+	release()
+	if ran {
+		announceImageUpdates(a)
+	}
+	return outcomes
+}
+
+// runReservedImageUpdates is the run itself, with both locks held by the
+// caller. ran is false when the daily run was not due.
+func (a *App) runReservedImageUpdates(ctx context.Context, force bool) (outcomes map[string]string, ran bool) {
 	settings := imageupdates.Normalize(a.cfg.Config().ImageUpdates)
 	if !force {
 		// A cheap look first: the config is written only on the day's run.
 		if !imageupdates.AnythingOn(settings) || !imageupdates.Due(settings, time.Now()) {
-			return nil
+			return nil, false
 		}
 		due := false
 		// Decide again and stamp in one write, from the file: the window and the
@@ -181,10 +215,10 @@ func (a *App) runImageUpdates(ctx context.Context, force bool) map[string]string
 			cfg.ImageUpdates = &stamped
 		}); err != nil {
 			log.Printf("image updates: cannot save the day's run: %v", err)
-			return nil
+			return nil, false
 		}
 		if !due {
-			return nil
+			return nil, false
 		}
 	}
 	var slugs []string
@@ -193,7 +227,7 @@ func (a *App) runImageUpdates(ctx context.Context, force bool) map[string]string
 	}
 	sort.Strings(slugs)
 	log.Printf("image updates: checking %d app(s)", len(slugs))
-	outcomes := imageupdates.Run(ctx, a.imageUpdateHooks(), settings, slugs)
+	outcomes = imageupdates.Run(ctx, a.imageUpdateHooks(), settings, slugs)
 	for slug, outcome := range outcomes {
 		if slices.Contains([]string{"current", imageupdates.Updated, "pinned", "off"}, outcome) {
 			if err := a.store.ClearImageUpdates(slug); err != nil {
@@ -201,13 +235,12 @@ func (a *App) runImageUpdates(ctx context.Context, force bool) map[string]string
 			}
 		}
 	}
-	a.emitEvent("imageupdates:changed")
-	return outcomes
+	return outcomes, true
 }
 
 func (a *App) imageUpdateHooks() imageupdates.Hooks {
 	// Read once per run, not once per app: each read inspects every container.
-	var drift map[string][]string
+	var drift imageUpdateDrift
 	var driftOnce sync.Once
 	return imageupdates.Hooks{
 		Check: func(ctx context.Context, slug string) (imageupdates.Check, bool, error) {
@@ -225,7 +258,9 @@ func (a *App) imageUpdateHooks() imageupdates.Hooks {
 			}, true, nil
 		},
 		Blocker: func(ctx context.Context, slug string) string {
-			driftOnce.Do(func() { drift = a.services.ContainerDrift(ctx) })
+			driftOnce.Do(func() {
+				drift = imageUpdateDrift{found: a.services.ContainerDrift(ctx), loose: a.services.LooseMounts(ctx)}
+			})
 			return a.imageUpdateBlocker(slug, drift)
 		},
 		Deploy: func(_ context.Context, slug, containerID, newImage string, checkedAt time.Time) (imageupdates.DeployResult, bool, error) {
@@ -258,15 +293,29 @@ func (a *App) imageUpdateHooks() imageupdates.Hooks {
 	}
 }
 
+// imageUpdateDrift is how the running containers differ from what a redeploy
+// builds (found), and the folders of custom apps a new container would start
+// empty (loose), by slug.
+type imageUpdateDrift struct {
+	found map[string][]string
+	loose map[string][]string
+}
+
 // imageUpdateBlocker says why slug is not updated by itself, or "": the same
 // cases the web app leaves to the owner.
-func (a *App) imageUpdateBlocker(slug string, drift map[string][]string) string {
+func (a *App) imageUpdateBlocker(slug string, drift imageUpdateDrift) string {
 	dep, ok, err := a.store.GetDeployment(slug)
 	if err != nil || !ok {
 		return i18n.T("go.imageupdates.blocker.noRecord")
 	}
-	if svc, inCatalog := a.catalog.Get(slug); inCatalog && catalog.IsRetired(svc.Status) {
+	svc, inCatalog := a.catalog.Get(slug)
+	if inCatalog && catalog.IsRetired(svc.Status) {
 		return i18n.T("go.imageupdates.blocker.retired")
+	}
+	if inCatalog && (svc.Docker.FenceGated || svc.Docker.GPU != nil) {
+		// NET_ADMIN and the GPU grant trust the reviewed build the catalog pins
+		// (DeployWallet), never whatever its tag names later.
+		return i18n.T("go.imageupdates.blocker.pinnedRights")
 	}
 	if dep.CustomImage != "" {
 		return i18n.T("go.imageupdates.blocker.chosenImage")
@@ -282,8 +331,11 @@ func (a *App) imageUpdateBlocker(slug string, drift map[string][]string) string 
 			return i18n.T("go.imageupdates.blocker.proxied")
 		}
 	}
-	if found := drift[slug]; len(found) > 0 {
+	if found := drift.found[slug]; len(found) > 0 {
 		return i18n.T("go.imageupdates.blocker.drift", "what", strings.Join(found, "; "))
+	}
+	if loose := drift.loose[slug]; len(loose) > 0 {
+		return i18n.T("go.imageupdates.blocker.imageVolume", "paths", strings.Join(loose, ", "))
 	}
 	return ""
 }
