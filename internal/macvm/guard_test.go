@@ -667,4 +667,23 @@ func TestPlaceThatFailsMarksAGuestCopyThatMayRun(t *testing.T) {
 	if e.busy != "verify" {
 		t.Fatalf("a refused move changed the busy action to %q", e.busy)
 	}
+	// With no install record and no VM there is nothing to ask. An install
+	// record that cannot be read proves nothing, so the guest is asked.
+	if err := os.WriteFile(answer, []byte("wipter|y|y|y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rec := filepath.Join(p.State, InstallFile)
+	if err := os.Remove(rec); err != nil {
+		t.Fatal(err)
+	}
+	var may securevm.MayStillRun
+	if err := e.Place(context.Background(), "wipter", securevm.VM, nil); err == nil || errors.As(err, &may) {
+		t.Fatalf("no VM: got %v, want a plain error", err)
+	}
+	if err := os.WriteFile(rec, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Place(context.Background(), "wipter", securevm.VM, nil); !errors.As(err, &may) {
+		t.Fatalf("unreadable record: got %v, want MayStillRun", err)
+	}
 }
