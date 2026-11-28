@@ -628,6 +628,16 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 	if err != nil {
 		return err
 	}
+	if where == securevm.VM && s.MacOS != nil {
+		// A move into the VM can fail while the app already runs there,
+		// from an earlier move or from an install that failed late. The
+		// caller then must not start its copy on this computer again.
+		defer func() {
+			if err != nil && e.guestMayRun(ctx, slug, *s.MacOS) {
+				err = securevm.MayStillRun{Err: err}
+			}
+		}()
+	}
 	p, end, err := e.begin("place")
 	if err != nil {
 		return err
@@ -655,18 +665,19 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 		}
 	}
 	progress(i18n.T("go.macvm.stepInstallApp", "app", s.Name), -1)
-	if err := g.InstallApp(ctx, slug, *s.MacOS); err != nil {
-		// The app can start before the install reports its error. Unless
-		// the guest says it is not running, it may run there now.
-		c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-		got, rerr := g.ReadApps(c, map[string]catalog.GuestMacOS{slug: *s.MacOS})
-		cancel()
-		if rerr != nil || got[slug].Running != securevm.No {
-			return securevm.MayStillRun{Err: err}
-		}
-		return err
+	return g.InstallApp(ctx, slug, *s.MacOS)
+}
+
+// guestMayRun is false only when no VM is installed, or when the guest says
+// that the app is not running.
+func (e *Engine) guestMayRun(ctx context.Context, slug string, m catalog.GuestMacOS) bool {
+	if _, ok := e.installed(); !ok {
+		return false
 	}
-	return nil
+	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+	defer cancel()
+	got, err := e.guest().ReadApps(c, map[string]catalog.GuestMacOS{slug: m})
+	return err != nil || got[slug].Running != securevm.No
 }
 
 // OpenScreen opens the VM's screen in Screen Sharing, with the earner's app
