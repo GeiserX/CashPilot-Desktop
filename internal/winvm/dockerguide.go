@@ -1,9 +1,10 @@
 package winvm
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
@@ -55,13 +56,6 @@ const DockerDownloadURL = "https://www.docker.com/products/docker-desktop/"
 
 // VirtualizationHelpURL is Microsoft's page on turning on virtualization.
 const VirtualizationHelpURL = "https://support.microsoft.com/en-us/windows/enable-virtualization-on-windows-c5578302-6e43-4b4b-a12d-29d6d7b86a1c"
-
-// DockerTermsSentence says what the user is asked to accept, and that CashPilot
-// never accepts it for them (https://docs.docker.com/subscription/desktop-license/).
-const DockerTermsSentence = "Docker Desktop waits for you to accept its terms in its own window; CashPilot never accepts them for you. It is free for personal use and for companies with fewer than 250 staff and less than $10 million a year in revenue."
-
-// BIOSHelp is the vendor help text the virtualization step shows.
-const BIOSHelp = "The setting is called Intel Virtualization Technology, Intel VT-x, AMD-V or SVM Mode. It usually sits under Advanced, CPU Configuration or Security. The key that opens the BIOS at power-on is often F2 or Del; HP uses F10 or Esc, and some Lenovo PCs use F1. Turn the setting on, then save and exit (often F10)."
 
 // Windows builds Docker Desktop supports
 // (https://docs.docker.com/desktop/setup/install/windows-install/).
@@ -180,10 +174,33 @@ func markBlocked(steps []Step) []Step {
 	return steps
 }
 
+// checkAgainLabel is the checklist's own "Check again" button, as the frontend
+// shows it, so a text that names the button says it the same way.
+func checkAgainLabel() string { return i18n.T("dockerguide.checkAgain") }
+
+// dockerTermsSentence says what the user is asked to accept, and that CashPilot
+// never accepts it for them (https://docs.docker.com/subscription/desktop-license/).
+func dockerTermsSentence() string { return i18n.T("go.winvm.guide.termsSentence") }
+
+// biosHelp is the vendor help text the virtualization step shows.
+func biosHelp() string { return i18n.T("go.winvm.guide.biosHelp") }
+
+// hypervisorNames joins the names of the other virtual machine software found,
+// or names it in general when the probe found no names.
+func hypervisorNames(names []string) string {
+	switch len(names) {
+	case 0:
+		return i18n.T("go.winvm.guide.a10.unnamed")
+	case 1:
+		return names[0]
+	}
+	return i18n.T("go.winvm.guide.a10.namesAnd", "list", strings.Join(names[:len(names)-1], i18n.T("go.winvm.guide.a10.namesSeparator")), "last", names[len(names)-1])
+}
+
 func windowsStep(f HostFacts, proven bool) Step {
-	s := Step{ID: "a1", Title: "Windows version"}
+	s := Step{ID: "a1", Title: i18n.T("go.winvm.guide.a1.title")}
 	if f.Build == 0 {
-		s.State, s.Text = StepUnknown, "CashPilot could not read which Windows version this PC runs."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a1.unknown")
 		return s
 	}
 	win11 := f.Build >= Windows11Build
@@ -191,14 +208,15 @@ func windowsStep(f HostFacts, proven bool) Step {
 	if win11 {
 		name = "Windows 11"
 	}
+	build := strconv.Itoa(f.Build)
 	supported := f.Build >= minWindows11Build || (!win11 && f.Build >= minWindows10Build)
 	if supported || proven {
 		s.State = StepDone
 		if win11 {
-			s.Text = fmt.Sprintf("This PC runs Windows 11 (build %d), which Docker supports.", f.Build)
+			s.Text = i18n.T("go.winvm.guide.a1.win11", "build", build)
 		} else {
 			// The Windows 10 note, shown once: here and nowhere else.
-			s.Text = fmt.Sprintf("This PC runs Windows 10 (build %d). Docker still runs on it, but Windows 10 stopped getting security updates in October 2025.", f.Build)
+			s.Text = i18n.T("go.winvm.guide.a1.win10", "build", build)
 		}
 		return s
 	}
@@ -207,130 +225,130 @@ func windowsStep(f HostFacts, proven bool) Step {
 		need = minWindows11Build
 	}
 	s.State = StepNeedsYou
-	s.Text = fmt.Sprintf("This PC runs %s build %d, and Docker needs build %d or newer. Install the Windows updates, restart, then click Check again.", name, f.Build, need)
-	s.Action = StepAction{Kind: ActionWindowsUpdate, Label: "Open Windows Update"}
+	s.Text = i18n.T("go.winvm.guide.a1.tooOld", "name", name, "build", build, "need", strconv.Itoa(need), "check", checkAgainLabel())
+	s.Action = StepAction{Kind: ActionWindowsUpdate, Label: i18n.T("go.winvm.guide.a1.action")}
 	return s
 }
 
 func virtualizationStep(f HostFacts, proven bool) Step {
-	s := Step{ID: "a2", Title: "Virtualization in the BIOS"}
+	s := Step{ID: "a2", Title: i18n.T("go.winvm.guide.a2.title")}
 	switch {
 	case proven:
-		s.State, s.Text = StepDone, "Virtualization is on: Docker's engine runs on this PC."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a2.done")
 	case f.IsVM == Yes:
 		// Inside a VM, HypervisorPresent describes the outer machine.
-		s.State, s.Text = StepUnknown, "This PC is itself a virtual machine, so CashPilot cannot tell whether virtualization reaches it. See the virtual machine step below."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a2.inVM")
 	case f.Virtualization == No:
 		s.State = StepNeedsYou
-		s.Text = "Virtualization is turned off in this PC's BIOS (UEFI), and Docker needs it. Restart into the BIOS and turn it on; CashPilot never changes BIOS settings itself."
-		s.Action = StepAction{Kind: ActionFirmware, Label: "Restart into BIOS"}
-		s.Help, s.HelpURL = BIOSHelp, VirtualizationHelpURL
+		s.Text = i18n.T("go.winvm.guide.a2.off")
+		s.Action = StepAction{Kind: ActionFirmware, Label: i18n.T("go.winvm.guide.a2.action")}
+		s.Help, s.HelpURL = biosHelp(), VirtualizationHelpURL
 	case f.Virtualization == Yes && f.HypervisorPresent == No && f.SLAT == No:
 		// SLAT reads false whenever a hypervisor runs, so it means something only
 		// when none does.
 		s.State = StepNeedsYou
-		s.Text = "This processor lacks SLAT (Second Level Address Translation), which Docker needs, so Docker cannot run on this PC. You can still use the apps that run without Docker."
+		s.Text = i18n.T("go.winvm.guide.a2.noSLAT")
 	case f.Virtualization == Yes:
-		s.State, s.Text = StepDone, "Virtualization is on."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a2.on")
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read whether virtualization is on."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a2.unknown")
 	}
 	return s
 }
 
 func wslFeatureStep(f HostFacts, proven bool) Step {
-	s := Step{ID: "a3", Title: "WSL 2 backend: Windows features"}
+	s := Step{ID: "a3", Title: i18n.T("go.winvm.guide.a3.title")}
 	switch {
 	case proven:
-		s.State, s.Text = StepDone, "Docker's engine runs, so the Windows features it needs are on."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a3.proven")
 	case f.WSL == WSLMissing:
 		s.State = StepNeedsYou
-		s.Text = "Docker's WSL 2 backend needs WSL, the Linux layer built into Windows, and it is off. Turning it on needs an administrator and one restart."
-		s.Action = StepAction{Kind: ActionElevated, Op: OpWSLInstall, Label: "Turn on WSL",
-			Manual: "Open PowerShell as administrator, run wsl --install --no-distribution, then restart the PC."}
+		s.Text = i18n.T("go.winvm.guide.a3.missing")
+		s.Action = StepAction{Kind: ActionElevated, Op: OpWSLInstall, Label: i18n.T("go.winvm.guide.a3.action"),
+			Manual: i18n.T("go.winvm.guide.a3.manual", "command", "wsl --install --no-distribution")}
 	case f.VMPlatformFeature == Yes:
-		s.State, s.Text = StepDone, "The Virtual Machine Platform feature that WSL 2 needs is on."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a3.on")
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read whether the Windows features WSL 2 needs are on."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a3.unknown")
 	}
 	return s
 }
 
 func wslVersionStep(f HostFacts, proven bool) Step {
-	s := Step{ID: "a4", Title: "WSL 2 backend: WSL version"}
+	s := Step{ID: "a4", Title: i18n.T("go.winvm.guide.a4.title")}
 	switch {
 	case proven:
-		s.State, s.Text = StepDone, "Docker's engine runs, so WSL is new enough."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a4.proven")
 	case f.WSL == WSLReady:
-		s.State, s.Text = StepDone, fmt.Sprintf("WSL is version %s; Docker needs %s or newer.", f.WSLVersion, MinWSLVersion)
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a4.ready", "version", f.WSLVersion, "min", MinWSLVersion)
 	case f.WSL == WSLOutdated:
-		have := "too old"
-		if f.WSLVersion != "" {
-			have = "version " + f.WSLVersion
-		}
 		s.State = StepNeedsYou
-		s.Text = fmt.Sprintf("WSL on this PC is %s, and Docker needs %s or newer.", have, MinWSLVersion)
-		s.Action = StepAction{Kind: ActionElevated, Op: OpWSLUpdate, Label: "Update WSL",
-			Manual: "Open PowerShell, run wsl --update, then open Docker Desktop again."}
+		if f.WSLVersion != "" {
+			s.Text = i18n.T("go.winvm.guide.a4.outdatedVersion", "version", f.WSLVersion, "min", MinWSLVersion)
+		} else {
+			s.Text = i18n.T("go.winvm.guide.a4.outdated", "min", MinWSLVersion)
+		}
+		s.Action = StepAction{Kind: ActionElevated, Op: OpWSLUpdate, Label: i18n.T("go.winvm.guide.a4.action"),
+			Manual: i18n.T("go.winvm.guide.a4.manual", "command", "wsl --update")}
 	case f.WSL == WSLMissing:
-		s.State, s.Text = StepNeedsYou, "WSL is not installed yet."
+		s.State, s.Text = StepNeedsYou, i18n.T("go.winvm.guide.a4.missing")
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read which WSL version this PC has."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a4.unknown")
 	}
 	return s
 }
 
 func installedStep(f HostFacts, proven bool) Step {
-	s := Step{ID: "a5", Title: "Docker Desktop installed"}
+	s := Step{ID: "a5", Title: i18n.T("go.winvm.guide.a5.title")}
 	switch {
 	case proven || f.DockerDesktopInstalled == Yes:
-		s.State, s.Text = StepDone, "Docker Desktop is installed."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a5.done")
 	case f.DockerDesktopInstalled == No:
 		s.State = StepNeedsYou
-		s.Text = "Docker Desktop is not installed, and CashPilot runs most apps inside it. CashPilot can install it with winget, Windows' app installer, or you can download it yourself. The installer may ask you to restart."
+		s.Text = i18n.T("go.winvm.guide.a5.missing")
 		// URL is the download page: the second button, and the fallback when
 		// this PC has no winget.
-		s.Action = StepAction{Kind: ActionRun, Op: OpDockerInstall, Label: "Install Docker Desktop", URL: DockerDownloadURL}
+		s.Action = StepAction{Kind: ActionRun, Op: OpDockerInstall, Label: i18n.T("go.winvm.guide.a5.action"), URL: DockerDownloadURL}
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read whether Docker Desktop is installed."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a5.unknown")
 	}
 	return s
 }
 
 func runningStep(f HostFacts, engineUp bool) Step {
-	s := Step{ID: "a6", Title: "Docker Desktop running"}
+	s := Step{ID: "a6", Title: i18n.T("go.winvm.guide.a6.title")}
 	switch {
 	case engineUp:
-		s.State, s.Text = StepDone, "Docker's engine answers."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a6.done")
 	case f.DockerDesktopRunning == Yes:
 		s.State = StepNeedsYou
-		s.Text = "Docker Desktop is open, but its engine is not running yet. Starting can take a minute or two; if Docker shows a message, read it in its window."
-		s.Action = StepAction{Kind: ActionShowDocker, Label: "Show Docker Desktop"}
+		s.Text = i18n.T("go.winvm.guide.a6.starting")
+		s.Action = StepAction{Kind: ActionShowDocker, Label: i18n.T("go.winvm.guide.action.showDocker")}
 	case f.DockerDesktopRunning == No:
-		s.State, s.Text = StepNeedsYou, "Docker Desktop is not running."
-		s.Action = StepAction{Kind: ActionStartDocker, Label: "Start Docker Desktop"}
+		s.State, s.Text = StepNeedsYou, i18n.T("go.winvm.guide.a6.stopped")
+		s.Action = StepAction{Kind: ActionStartDocker, Label: i18n.T("go.winvm.guide.action.startDocker")}
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read whether Docker Desktop is running."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a6.unknown")
 	}
 	return s
 }
 
 func termsStep(f HostFacts, reason string, engineUp bool) Step {
-	s := Step{ID: "a7", Title: "Docker's terms"}
-	open := StepAction{Kind: ActionStartDocker, Label: "Start Docker Desktop"}
+	s := Step{ID: "a7", Title: i18n.T("go.winvm.guide.a7.title")}
+	open := StepAction{Kind: ActionStartDocker, Label: i18n.T("go.winvm.guide.action.startDocker")}
 	if f.DockerDesktopRunning == Yes {
-		open = StepAction{Kind: ActionShowDocker, Label: "Show Docker Desktop"}
+		open = StepAction{Kind: ActionShowDocker, Label: i18n.T("go.winvm.guide.action.showDocker")}
 	}
 	switch {
 	case engineUp:
-		s.State, s.Text = StepDone, "Docker's terms are accepted: its engine runs."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a7.done")
 	case reason == runtime.ReasonFirstStart || (f.DockerDesktopInstalled == Yes && f.DockerDesktopStarted == No):
-		s.State, s.Text, s.Action = StepNeedsYou, "Docker Desktop has not been opened on this account yet. "+DockerTermsSentence, open
+		s.State, s.Text, s.Action = StepNeedsYou, i18n.T("go.winvm.guide.a7.notOpened", "terms", dockerTermsSentence()), open
 	default:
 		// Docker writes its settings file on its first start, which may come before
 		// the terms are accepted, so nothing here proves they were.
 		s.State = StepUnknown
-		s.Text = "CashPilot cannot read whether Docker's terms are accepted. If Docker Desktop shows them, read and accept them there."
+		s.Text = i18n.T("go.winvm.guide.a7.unknown")
 		if f.DockerDesktopRunning == Yes {
 			s.Action = open
 		}
@@ -341,64 +359,62 @@ func termsStep(f HostFacts, reason string, engineUp bool) Step {
 // dockerUsersStep appears only when the engine refused this account: the WSL 2
 // backend with Linux containers does not need the group.
 func dockerUsersStep(f HostFacts) Step {
-	s := Step{ID: "a8", Title: "docker-users group", State: StepNeedsYou}
+	s := Step{ID: "a8", Title: i18n.T("go.winvm.guide.a8.title"), State: StepNeedsYou}
 	if f.DockerUsersListed == Yes && f.DockerUsersToken != Yes {
-		s.Text = "Your account is in the docker-users group, but Windows applies a new group only after you sign in again. Save your work, sign out and back in, then click Check again."
+		s.Text = i18n.T("go.winvm.guide.a8.signIn", "check", checkAgainLabel())
 		return s
 	}
 	if f.DockerUsersToken == Yes {
 		// This session carries the group, so the group is not what refuses it:
 		// adding the account again would change nothing.
-		s.Text = "Your account is in the docker-users group, and this session carries it, yet Docker still refuses it. Restart Docker Desktop; if that does not help, reinstall it."
+		s.Text = i18n.T("go.winvm.guide.a8.refused")
 		return s
 	}
-	s.Text = "Docker runs, but your Windows account may not use it. This happens when another account installed Docker Desktop. Your account must join the docker-users group, then sign out and back in."
-	s.Action = StepAction{Kind: ActionElevated, Op: OpDockerUsers, Label: "Add my account to docker-users",
-		Manual: "Ask an administrator of this PC to add your account to the docker-users group, then sign out and back in."}
+	s.Text = i18n.T("go.winvm.guide.a8.join")
+	s.Action = StepAction{Kind: ActionElevated, Op: OpDockerUsers, Label: i18n.T("go.winvm.guide.a8.action"),
+		Manual: i18n.T("go.winvm.guide.a8.manual")}
 	return s
 }
 
 func linuxContainersStep(reason string) Step {
-	s := Step{ID: "a9", Title: "Linux containers"}
+	s := Step{ID: "a9", Title: i18n.T("go.winvm.guide.a9.title")}
 	switch reason {
 	case runtime.ReasonRunning:
-		s.State, s.Text = StepDone, "Docker runs Linux containers, which the apps need."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a9.done")
 	case runtime.ReasonWindowsContainers:
 		// Switching affects the user's other Docker work, so the user does it.
 		s.State = StepNeedsYou
-		s.Text = "Docker Desktop is set to Windows containers, and the apps CashPilot runs are Linux containers."
-		s.Action = StepAction{Kind: ActionRun, Op: OpLinuxEngine, Label: "Switch to Linux containers",
-			Manual: "Right-click the Docker icon next to the clock, choose Switch to Linux containers, then click Check again."}
+		s.Text = i18n.T("go.winvm.guide.a9.windows")
+		s.Action = StepAction{Kind: ActionRun, Op: OpLinuxEngine, Label: i18n.T("go.winvm.guide.a9.action"),
+			// Docker Desktop's menu is in English, so its item stays in English.
+			Manual: i18n.T("go.winvm.guide.a9.manual", "menu", "Switch to Linux containers", "check", checkAgainLabel())}
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot reads this once Docker's engine runs."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a9.unknown")
 	}
 	return s
 }
 
 func otherHypervisorStep(f HostFacts, linuxUp bool) Step {
-	s := Step{ID: "a10", Title: "Other virtual machine software"}
-	names := strings.Join(f.OtherHypervisorNames, " and ")
-	if names == "" {
-		names = "Other virtual machine software"
-	}
+	s := Step{ID: "a10", Title: i18n.T("go.winvm.guide.a10.title")}
+	names := hypervisorNames(f.OtherHypervisorNames)
 	switch {
 	case f.OtherHypervisors == Yes && linuxUp:
-		s.State, s.Text = StepDone, names+" is installed, and Docker runs next to it."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a10.coexists", "names", names)
 	case f.OtherHypervisors == Yes && hypervisorOffAtBoot(f):
 		// The boot option itself needs admin rights to read, so this row cannot say
 		// it is off: the change reads it first and changes nothing when it is auto.
 		s.State = StepNeedsYou
-		s.Text = names + " is installed, and Windows' hypervisor is not running, although virtualization and the Virtual Machine Platform feature are on. Older versions of " + names + " may have turned it off at boot, and Docker needs it. CashPilot reads that boot option first and changes it only when it is not set to start the hypervisor."
-		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: "Check and turn Windows' hypervisor back on",
-			Manual: "Open PowerShell as administrator and run bcdedit /enum \"{current}\" (PowerShell needs the quotes). If hypervisorlaunchtype is not Auto, run bcdedit /set hypervisorlaunchtype auto, then restart the PC."}
+		s.Text = i18n.T("go.winvm.guide.a10.offAtBoot", "names", names)
+		s.Action = StepAction{Kind: ActionElevated, Op: OpHypervisorLaunch, Label: i18n.T("go.winvm.guide.a10.action"),
+			Manual: i18n.T("go.winvm.guide.a10.manual", "enum", `bcdedit /enum "{current}"`, "setting", "hypervisorlaunchtype", "value", "Auto", "set", "bcdedit /set hypervisorlaunchtype auto")}
 	case f.OtherHypervisors == Yes:
 		// Nothing here proves it is what stops Docker, so it is a note, not a step.
 		s.State = StepNote
-		s.Text = names + " is installed. It works next to WSL 2 but can run slower, and old versions can stop Windows' hypervisor at boot. If Docker does not start, update " + names + " to its newest version."
+		s.Text = i18n.T("go.winvm.guide.a10.note", "names", names)
 	case f.OtherHypervisors == No:
-		s.State, s.Text = StepDone, "No VirtualBox or VMware drivers are installed."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a10.none")
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read whether VirtualBox or VMware is installed."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a10.unknown")
 	}
 	return s
 }
@@ -413,43 +429,41 @@ func hypervisorOffAtBoot(f HostFacts) bool {
 }
 
 func virtualMachineStep(f HostFacts, linuxUp bool) Step {
-	s := Step{ID: "a11", Title: "This PC is a virtual machine"}
+	s := Step{ID: "a11", Title: i18n.T("go.winvm.guide.a11.title")}
 	switch {
 	case f.IsVM == Yes && linuxUp:
-		s.State, s.Text = StepDone, "This PC is a virtual machine, and Docker runs in it."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a11.done")
 	case f.IsVM == Yes:
 		s.State = StepNeedsYou
-		s.Text = "This PC is itself a virtual machine. Docker needs nested virtualization turned on in the machine that runs it. On Hyper-V, its owner turns this VM off and runs Set-VMProcessor -VMName <name> -ExposeVirtualizationExtensions $true."
+		s.Text = i18n.T("go.winvm.guide.a11.nested", "command", "Set-VMProcessor -VMName <name> -ExposeVirtualizationExtensions $true")
 	case f.IsVM == No:
-		s.State, s.Text = StepDone, "This PC is not a virtual machine."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a11.notVM")
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read whether this PC is a virtual machine."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a11.unknown")
 	}
 	return s
 }
 
 func lanmanStep(f HostFacts, linuxUp bool) Step {
-	s := Step{ID: "a12", Title: "Windows Server service"}
+	s := Step{ID: "a12", Title: i18n.T("go.winvm.guide.a12.title")}
 	if linuxUp && (f.LanmanServer == "manual" || f.LanmanServer == "disabled" || f.LanmanServer == "absent") {
 		// Docker runs, so the service blocks nothing now.
-		word := map[string]string{"manual": "is set to Manual", "disabled": "is turned off", "absent": "is missing"}[f.LanmanServer]
 		s.State = StepNote
-		s.Text = "Docker runs, but the Windows Server service (LanmanServer) " + word + ". If Docker stops starting after a restart, this is a place to look."
+		s.Text = i18n.T("go.winvm.guide.a12.runs", "start", f.LanmanServer)
 		return s
 	}
 	switch f.LanmanServer {
 	case "auto":
-		s.State, s.Text = StepDone, "The Server service (LanmanServer) starts automatically, as Docker needs."
+		s.State, s.Text = StepDone, i18n.T("go.winvm.guide.a12.auto")
 	case "absent":
-		s.State, s.Text = StepNeedsYou, "The Windows Server service (LanmanServer) is missing from this PC, and Docker needs it. Some clean-up tools remove it; Windows' own repair (Settings, System, Recovery) brings it back."
+		s.State, s.Text = StepNeedsYou, i18n.T("go.winvm.guide.a12.absent")
 	case "manual", "disabled":
-		word := map[string]string{"manual": "set to Manual", "disabled": "turned off"}[f.LanmanServer]
 		s.State = StepNeedsYou
-		s.Text = "The Windows Server service (LanmanServer) is " + word + ", and Docker needs it set to Automatic. Some clean-up tools turn it off."
-		s.Action = StepAction{Kind: ActionElevated, Op: OpLanmanServer, Label: "Set it to Automatic",
-			Manual: "Open PowerShell as administrator and run Set-Service LanmanServer -StartupType Automatic."}
+		s.Text = i18n.T("go.winvm.guide.a12.needsAuto", "start", f.LanmanServer)
+		s.Action = StepAction{Kind: ActionElevated, Op: OpLanmanServer, Label: i18n.T("go.winvm.guide.a12.action"),
+			Manual: i18n.T("go.winvm.guide.a12.manual", "command", "Set-Service LanmanServer -StartupType Automatic")}
 	default:
-		s.State, s.Text = StepUnknown, "CashPilot could not read how the Windows Server service (LanmanServer) starts."
+		s.State, s.Text = StepUnknown, i18n.T("go.winvm.guide.a12.unknown")
 	}
 	return s
 }

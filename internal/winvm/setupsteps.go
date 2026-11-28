@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 )
 
@@ -328,49 +329,49 @@ func SetupOutcome(op string, res runtime.ElevatedResult, err error, timedOut, we
 	code, hasCode := runtime.ExitCodeOf(err)
 	if timedOut || (hasCode && code == runtime.ExitTimeout) {
 		mins := int(SetupTimeout(op) / time.Minute)
-		o := Outcome{State: OutcomeTimeout, Text: fmt.Sprintf("This did not finish within %d minutes, so CashPilot stopped waiting.", mins)}
+		text := i18n.T("go.winvm.outcome.timeout", "minutes", mins, "check", checkAgainLabel())
 		if op == OpDockerInstall {
-			o.Text += " If winget's window is still open, finish there, then click Check again."
+			text = i18n.T("go.winvm.outcome.timeoutWinget", "minutes", mins, "check", checkAgainLabel())
 		} else if wsl {
-			o.Text += " A WSL download from the Microsoft Store can hang. You can try again with a direct download from Microsoft's GitHub page."
+			text = i18n.T("go.winvm.outcome.timeoutWSL", "minutes", mins, "check", checkAgainLabel())
 		}
-		return retry(o)
+		return retry(Outcome{State: OutcomeTimeout, Text: text})
 	}
 	if err == nil {
 		if res.RestartNeeded {
-			return Outcome{State: OutcomeRestart, Text: "Done. Windows needs a restart to finish this change."}
+			return Outcome{State: OutcomeRestart, Text: i18n.T("go.winvm.outcome.restart")}
 		}
 		if op == OpDockerUsers {
-			return Outcome{State: OutcomeSignOut, Text: "Your account is now in the docker-users group. Windows applies a new group only after you sign out and back in."}
+			return Outcome{State: OutcomeSignOut, Text: i18n.T("go.winvm.outcome.signOut")}
 		}
-		return Outcome{State: OutcomeDone, Text: "Done."}
+		return Outcome{State: OutcomeDone, Text: i18n.T("go.winvm.outcome.done")}
 	}
 	if !hasCode {
-		return Outcome{State: OutcomeFailed, Text: "CashPilot could not run this change: " + err.Error()}
+		return Outcome{State: OutcomeFailed, Text: i18n.T("go.winvm.outcome.runFailed", "error", err.Error())}
 	}
 	hex := fmt.Sprintf("0x%08X", code)
 	switch code {
 	case runtime.ExitCancelled:
-		return Outcome{State: OutcomeCancelled, Text: "You said no at the Windows permission prompt, so nothing changed."}
+		return Outcome{State: OutcomeCancelled, Text: i18n.T("go.winvm.outcome.cancelled")}
 	case CodePolicy, codeAccessDisabledByPolicy, hrAccessDisabledByPolicy:
-		return Outcome{State: OutcomePolicy, Code: hex, Text: "A policy on this PC, set by whoever manages it (often an employer or school), does not allow this. CashPilot stops here and changes nothing. Ask that person to allow WSL and Docker Desktop on this PC."}
+		return Outcome{State: OutcomePolicy, Code: hex, Text: i18n.T("go.winvm.outcome.policy")}
 	case CodeToolMissing:
-		return Outcome{State: OutcomeFailed, Code: hex, Text: "The Windows tool this change needs is missing from System32. Install the Windows updates, then try again."}
+		return Outcome{State: OutcomeFailed, Code: hex, Text: i18n.T("go.winvm.outcome.toolMissing")}
 	case CodeGroupMissing:
-		return Outcome{State: OutcomeFailed, Code: hex, Text: "This PC has no docker-users group. Docker Desktop's installer creates it, so install or repair Docker Desktop first."}
+		return Outcome{State: OutcomeFailed, Code: hex, Text: i18n.T("go.winvm.outcome.groupMissing")}
 	case CodeBadSID, CodeNotAdded:
-		return Outcome{State: OutcomeFailed, Code: hex, Text: "CashPilot could not add your account to docker-users. Ask an administrator of this PC to add it, then sign out and back in."}
+		return Outcome{State: OutcomeFailed, Code: hex, Text: i18n.T("go.winvm.outcome.notAdded")}
 	case CodeService:
-		return Outcome{State: OutcomeFailed, Code: hex, Text: "Windows did not let CashPilot set the Server service to start automatically. A clean-up tool or a policy may hold it off."}
+		return Outcome{State: OutcomeFailed, Code: hex, Text: i18n.T("go.winvm.outcome.service")}
 	case CodeLaunchAuto:
-		return Outcome{State: OutcomeNote, Text: "Windows' hypervisor is already set to start at boot, so CashPilot changed nothing and no restart is needed for this. Restart the PC once if you have not since installing the other virtual machine software; if Docker still does not start, update that software to its newest version."}
+		return Outcome{State: OutcomeNote, Text: i18n.T("go.winvm.outcome.launchAuto")}
 	case WingetRebootForInstall:
-		return Outcome{State: OutcomeFailed, Code: hex, Text: "winget says Windows must restart before Docker Desktop can install. Restart the PC, then click Install Docker Desktop again."}
+		return Outcome{State: OutcomeFailed, Code: hex, Text: i18n.T("go.winvm.outcome.wingetReboot", "button", i18n.T("go.winvm.guide.a5.action"))}
 	case CodeWingetGone:
-		return Outcome{State: OutcomeFallback, URL: DockerDownloadURL, Text: "winget, Windows' app installer, is not on this PC. CashPilot opened Docker's download page instead: download the installer, run it, then click Check again."}
+		return Outcome{State: OutcomeFallback, URL: DockerDownloadURL, Text: i18n.T("go.winvm.outcome.wingetGone", "check", checkAgainLabel())}
 	}
 	if wsl && wslDownloadCodes[code] {
-		return retry(Outcome{State: OutcomeFailed, Code: hex, Text: fmt.Sprintf("WSL could not download through the Microsoft Store (code %s). You can try again with a direct download from Microsoft's GitHub page.", hex)})
+		return retry(Outcome{State: OutcomeFailed, Code: hex, Text: i18n.T("go.winvm.outcome.wslDownload", "code", hex)})
 	}
-	return Outcome{State: OutcomeFailed, Code: hex, Text: fmt.Sprintf("Windows reported code %s, and nothing was confirmed as changed.", hex)}
+	return Outcome{State: OutcomeFailed, Code: hex, Text: i18n.T("go.winvm.outcome.code", "code", hex)}
 }
