@@ -655,8 +655,9 @@ func (a *App) upstreamPayload() upstream.Payload {
 			// the server records UNKNOWN rather than a match -- never a guess,
 			// because a wrong version hides exactly the stale install this is
 			// meant to reveal.
-			Version:   AppVersion(),
-			GPUGrants: a.gpuGrants(),
+			Version:       AppVersion(),
+			GPUGrants:     a.gpuGrants(),
+			EarnerSecrets: runtime.EarnerSecretsReport(),
 		},
 	}
 }

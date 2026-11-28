@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -399,6 +400,13 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.initImage", "image", image, "tag", "':lite'"))
 	}
 	applyInit(hostConfig, bringsOwnInit(inspected.Config.Entrypoint, inspected.Config.Cmd, config.Entrypoint, config.Cmd), facts.OSType)
+	// With CASHPILOT_EARNER_SECRETS=file the secret values leave the config here and
+	// reach the container as a file after the create (secretenv.go).
+	secrets := planSecrets(svc, spec.Slug, env, config.Cmd, config.Entrypoint,
+		imageRun{inspected.Config.Entrypoint, inspected.Config.Cmd, inspected.Config.User}, ArchFamily(facts.Architecture))
+	if secrets != nil {
+		secrets.apply(config)
+	}
 
 	// Which network a bridge earner joins is settled on this side of the line too: if
 	// the LAN fence cannot be applied, the deploy is refused and the running container
@@ -599,6 +607,12 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 			}
 		}
 		return ContainerInfo{}, rollBack(withGPUHint(err), madeID)
+	}
+	if secrets != nil {
+		// Before any start, a restore's included: without the file the earner exits 126.
+		if _, err := cli.CopyToContainer(ctx, created.ID, client.CopyToContainerOptions{DestinationPath: "/", Content: bytes.NewReader(secrets.archive())}); err != nil {
+			return ContainerInfo{}, rollBack(err, created.ID)
+		}
 	}
 	if spec.CreateOnly {
 		// Nothing was set aside (the name was free), so there is nothing to put back.

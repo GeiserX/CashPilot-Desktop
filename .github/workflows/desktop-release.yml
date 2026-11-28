@@ -88,6 +88,13 @@ jobs:
             jq --arg v "$VERSION" '.version = $v' "$f" > "$tmp" && mv "$tmp" "$f"
           done
 
+      # The earner start program of CASHPILOT_EARNER_SECRETS=file, for linux/amd64
+      # and linux/arm64, embedded by the build below (internal/shimbin). Without
+      # it the app still works, and earners keep their credentials in their
+      # environment.
+      - name: Build the earner start program
+        run: go generate ./internal/shimbin
+
       - name: Test
         run: go test ./...
 
