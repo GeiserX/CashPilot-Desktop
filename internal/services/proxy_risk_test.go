@@ -76,6 +76,9 @@ func TestAServiceWithNoProxyRiskNeedsNoTick(t *testing.T) {
 	if got := m.ProxyNeeds("example"); len(got) != 0 {
 		t.Fatalf("no proxy_risk, no tick: %v", got)
 	}
+	if got := m.ProxyNeeds("not-in-the-catalog"); got == nil || len(got) != 0 {
+		t.Fatalf("an unknown service needs no tick, as an empty list: %#v", got)
+	}
 	if got := proxies.MissingAcknowledgements(catalog.Service{}, nil); len(got) != 0 {
 		t.Fatalf("missing: %v", got)
 	}

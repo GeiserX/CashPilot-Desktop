@@ -348,3 +348,36 @@ func TestACapOutOfRangeNamesBothBounds(t *testing.T) {
 		}
 	}
 }
+
+// A service whose terms forbid a proxy and can suspend its account (proxy_risk) needs
+// the owner's account_risk tick; any other needs none, and a stale or foreign tick
+// never stands in for it.
+func TestAcknowledgementsAskTheAccountRiskTickOnlyOfAProxyRisk(t *testing.T) {
+	plain := catalog.Service{Name: "Earner", Slug: "earner"}
+	risky := plain
+	risky.Requirements.ProxyRisk = &catalog.ProxyProhibited{Source: "https://support.example.net/terms"}
+	if got := Acknowledgements(plain); got == nil || len(got) != 0 {
+		t.Fatalf("no proxy_risk, no tick (and never nil, the UI reads a list): %#v", got)
+	}
+	if got := Acknowledgements(risky); len(got) != 1 || got[0] != AckAccountRisk {
+		t.Fatalf("proxy_risk asks account_risk: %v", got)
+	}
+	cases := []struct {
+		given []string
+		want  int
+	}{
+		{nil, 1},
+		{[]string{}, 1},
+		{[]string{"net_admin"}, 1},
+		{[]string{"net_admin", AckAccountRisk}, 0},
+		{[]string{AckAccountRisk, AckAccountRisk}, 0},
+	}
+	for _, c := range cases {
+		if got := MissingAcknowledgements(risky, c.given); len(got) != c.want || (c.want == 1 && got[0] != AckAccountRisk) {
+			t.Fatalf("given %v: missing %v, want %d", c.given, got, c.want)
+		}
+	}
+	if got := MissingAcknowledgements(plain, nil); got == nil || len(got) != 0 {
+		t.Fatalf("a plain service misses nothing: %#v", got)
+	}
+}
