@@ -668,10 +668,11 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 	return g.InstallApp(ctx, slug, *s.MacOS)
 }
 
-// guestMayRun is false only when no VM is installed, or when the guest says
-// that the app is not running.
+// guestMayRun is false only when there is surely no VM (no install record
+// and no VM files), or when the guest says that the app is not running. A
+// record that cannot be read proves nothing, so the guest is asked.
 func (e *Engine) guestMayRun(ctx context.Context, slug string, m catalog.GuestMacOS) bool {
-	if _, ok := e.installed(); !ok {
+	if _, err := os.Stat(filepath.Join(e.P.State, InstallFile)); errors.Is(err, os.ErrNotExist) && !e.vmExists() {
 		return false
 	}
 	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
