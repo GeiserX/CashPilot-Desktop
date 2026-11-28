@@ -2134,5 +2134,5 @@
   "main.scope.worker": "वर्कर",
   "logs.wrap": "पंक्तियाँ लपेटें",
   "logs.empty": "(कोई लॉग नहीं)",
-  "go.importers.refuse.m4bEncrypted": "{name} एक एन्क्रिप्ट की गई money4band 5.0 फ़ाइल है। `m4b config edit` चलाएँ, वह जो डिक्रिप्ट किया हुआ JSON खोलता है उसे कॉपी करें, और यहाँ पेस्ट करें।"
+  "go.importers.refuse.m4bEncrypted": "{name} एक एन्क्रिप्ट की गई money4band 5.0 फ़ाइल है। अपने money4band फ़ोल्डर में, रिलीज़ बाइनरी के लिए `./Money4Band-<os>-<arch> config edit` चलाएँ, या सोर्स से चलाने पर `python main.py config edit` चलाएँ। वह जो डिक्रिप्ट किया गया JSON खोलता है, उसे कॉपी करें और यहाँ पेस्ट करें।"
 }

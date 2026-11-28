@@ -2134,5 +2134,5 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Retour à la ligne",
   "logs.empty": "(aucun journal)",
-  "go.importers.refuse.m4bEncrypted": "{name} est un fichier money4band 5.0 chiffré. Exécutez `m4b config edit`, copiez le JSON déchiffré qu'il ouvre, puis collez-le ici."
+  "go.importers.refuse.m4bEncrypted": "{name} est un fichier money4band 5.0 chiffré. Dans votre dossier money4band, exécutez `./Money4Band-<os>-<arch> config edit` pour le binaire publié, ou `python main.py config edit` depuis les sources. Copiez le JSON déchiffré qu'il ouvre, puis collez-le ici."
 }

@@ -560,8 +560,10 @@ func m4b5Encrypted(t *testing.T, content string) string {
 	return "M4B_ENCRYPTED:" + base64.URLEncoding.EncodeToString(token)
 }
 
-const m4b5Refusal = "user-config.json is an encrypted money4band 5.0 file. Run `m4b config edit`, " +
-	"copy the decrypted JSON it opens, and paste it here."
+const m4b5Refusal = "user-config.json is an encrypted money4band 5.0 file. In your money4band folder, run " +
+	"`./Money4Band-<os>-<arch> config edit` for the release binary, or " +
+	"`python main.py config edit` from source. Copy the decrypted JSON it opens, " +
+	"and paste it here."
 
 func TestAnEncryptedMoney4band5FileIsRefusedWithHowToDecrypt(t *testing.T) {
 	content := m4b5Encrypted(t, fixtures(t, "money4band/user-config.json")[0].Content)
@@ -597,7 +599,7 @@ func TestAnEncryptedFileBesideAPlainEnvIsStillRefused(t *testing.T) {
 	content := m4b5Encrypted(t, fixtures(t, "money4band/user-config.json")[0].Content)
 	files := append([]File{{Name: "user-config.json", Content: content + "\n"}}, fixtures(t, "money4band/generated.env")...)
 	_, err := Run(files, "auto", getService(t), nil)
-	refusedWith(t, err, "m4b config edit")
+	refusedWith(t, err, "`python main.py config edit`")
 }
 
 // --- Hostile input ---

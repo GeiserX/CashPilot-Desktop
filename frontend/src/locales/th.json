@@ -2134,5 +2134,5 @@
   "main.scope.worker": "เวิร์กเกอร์",
   "logs.wrap": "ตัดบรรทัด",
   "logs.empty": "(ไม่มีบันทึก)",
-  "go.importers.refuse.m4bEncrypted": "{name} เป็นไฟล์ money4band 5.0 ที่เข้ารหัสไว้ ให้รัน `m4b config edit` คัดลอก JSON ที่ถอดรหัสแล้วซึ่งคำสั่งนี้เปิดขึ้นมา แล้ววางที่นี่"
+  "go.importers.refuse.m4bEncrypted": "{name} เป็นไฟล์ money4band 5.0 ที่เข้ารหัสไว้ ในโฟลเดอร์ money4band ให้รัน `./Money4Band-<os>-<arch> config edit` สำหรับไบนารีที่เผยแพร่ หรือรัน `python main.py config edit` หากใช้จากซอร์สโค้ด คัดลอก JSON ที่ถอดรหัสแล้วซึ่งคำสั่งนี้เปิดขึ้นมา แล้ววางที่นี่"
 }

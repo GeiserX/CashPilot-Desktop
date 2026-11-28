@@ -2134,5 +2134,5 @@
   "main.scope.worker": "воркер",
   "logs.wrap": "Переносить строки",
   "logs.empty": "(логов нет)",
-  "go.importers.refuse.m4bEncrypted": "{name} — зашифрованный файл money4band 5.0. Выполните `m4b config edit`, скопируйте расшифрованный JSON, который откроется, и вставьте его сюда."
+  "go.importers.refuse.m4bEncrypted": "{name} — зашифрованный файл money4band 5.0. В папке money4band выполните `./Money4Band-<os>-<arch> config edit` для выпущенного бинарного файла или `python main.py config edit`, если запускаете из исходного кода. Скопируйте расшифрованный JSON, который откроется, и вставьте его сюда."
 }

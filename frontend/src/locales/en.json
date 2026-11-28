@@ -1437,7 +1437,7 @@
   "go.importers.refuse.notUTF8": "{name} is not a UTF-8 text file.",
   "go.importers.refuse.tooManyLines": "{name} has more than {max} lines; this is not a config file.",
   "go.importers.refuse.longLine": "{name} has a line longer than {max} KiB.",
-  "go.importers.refuse.m4bEncrypted": "{name} is an encrypted money4band 5.0 file. Run `m4b config edit`, copy the decrypted JSON it opens, and paste it here.",
+  "go.importers.refuse.m4bEncrypted": "{name} is an encrypted money4band 5.0 file. In your money4band folder, run `./Money4Band-<os>-<arch> config edit` for the release binary, or `python main.py config edit` from source. Copy the decrypted JSON it opens, and paste it here.",
   "go.importers.refuse.tooDeep": "{name} is nested too deeply; this is not a config file.",
   "go.importers.refuse.tooManyKeys": "{name} has more than {max} keys; this is not a config file.",
   "go.importers.refuse.badJSON": "{name} is not valid JSON.",

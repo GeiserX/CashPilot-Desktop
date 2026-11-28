@@ -2134,5 +2134,5 @@
   "main.scope.worker": "工作节点",
   "logs.wrap": "自动换行",
   "logs.empty": "（无日志）",
-  "go.importers.refuse.m4bEncrypted": "{name} 是加密的 money4band 5.0 文件。请运行 `m4b config edit`，复制它打开的已解密 JSON，然后粘贴到这里。"
+  "go.importers.refuse.m4bEncrypted": "{name} 是加密的 money4band 5.0 文件。请在 money4band 文件夹中运行 `./Money4Band-<os>-<arch> config edit`（发布版二进制文件），或运行 `python main.py config edit`（从源码运行）。复制它打开的已解密 JSON，然后粘贴到这里。"
 }

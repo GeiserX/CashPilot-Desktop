@@ -2134,5 +2134,5 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Bungkus baris",
   "logs.empty": "(tidak ada log)",
-  "go.importers.refuse.m4bEncrypted": "{name} adalah file money4band 5.0 yang terenkripsi. Jalankan `m4b config edit`, salin JSON terdekripsi yang dibukanya, lalu tempel di sini."
+  "go.importers.refuse.m4bEncrypted": "{name} adalah file money4band 5.0 yang terenkripsi. Di folder money4band Anda, jalankan `./Money4Band-<os>-<arch> config edit` untuk biner rilis, atau `python main.py config edit` jika dari kode sumber. Salin JSON terdekripsi yang dibukanya, lalu tempel di sini."
 }
