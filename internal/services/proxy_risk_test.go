@@ -2,6 +2,8 @@ package services
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -140,5 +142,58 @@ func TestACopyAddedBeforeTheTickNeverStartsAgainWithoutIt(t *testing.T) {
 	}
 	if err := m.StartProxied(ctx, "example", view.ID); err != nil {
 		t.Fatalf("a copy added again with the tick starts: %v", err)
+	}
+}
+
+// A cap stop whose cap lifted while it ran reads the copy's tick before it starts the
+// copy again. If that read fails, the copy stays marked as the cap's, so the next
+// pass starts it once the record reads again; unmarked it would stay stopped for good.
+func TestACapStopThatCannotReadTheTickKeepsTheCopyForTheRetry(t *testing.T) {
+	old := detectOwnIP
+	detectOwnIP = func(context.Context) string { return "192.0.2.1" }
+	t.Cleanup(func() { detectOwnIP = old })
+	dir, st := newTestStoreInDir(t)
+	p := newFakeProxyProvider()
+	m := NewManager(p, newTestCatalog(t), st)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, err := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	d, _, err := m.loadProxy(view.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "cashpilot-desktop.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	exec := func(q string) {
+		t.Helper()
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The record cannot be read, but it can still be marked.
+	exec(`ALTER TABLE proxied_copies RENAME COLUMN acknowledged TO acknowledged_gone`)
+	m.stopCappedCopy(ctx, p, view.ID, d, "example")
+	exec(`ALTER TABLE proxied_copies RENAME COLUMN acknowledged_gone TO acknowledged`)
+
+	k := key("example", view.ID)
+	if p.running[k] {
+		t.Fatal("a copy whose tick could not be read is not started")
+	}
+	records, err := st.ListProxiedCopies(view.ID)
+	if err != nil || len(records) != 1 || !records[0].StoppedByCap {
+		t.Fatalf("the copy stays marked as the cap's: %+v %v", records, err)
+	}
+	if !m.retryCapStart(ctx, p, view.ID, "example", "192.0.2.1") || !p.running[k] {
+		t.Fatal("the next pass starts the copy once its record reads again")
 	}
 }

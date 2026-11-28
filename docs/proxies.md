@@ -192,9 +192,10 @@ suspended at once:
 https://support.honeygain.com/hc/en-us/articles/30688484350492-Does-Honeygain-work-with-VPNs
 
 So a Honeygain copy or route runs only after you tick that your Honeygain
-account may be suspended. A copy that already runs keeps running. Once it
-stops, it does not start again, by your Start or after a cap reset, until you
-add it again with the tick.
+account may be suspended. A copy added before this tick existed keeps running.
+Once it stops, it does not start again, by your Start or after a cap reset,
+until you add it again with the tick. A copy added with the tick stops and
+starts as usual.
 
 ## Volumes of its own
 
