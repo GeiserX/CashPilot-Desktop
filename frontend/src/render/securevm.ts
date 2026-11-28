@@ -58,6 +58,7 @@ function kindLabel(k: string): string {
     case "red": return t("securevm.kind.red");
     case "green": return t("securevm.kind.green");
     case "check": return t("securevm.kind.check");
+    case "function": return t("securevm.kind.function");
   }
   return k;
 }
@@ -70,6 +71,7 @@ function outcomeLabel(o: string): string {
     case "broken": return t("securevm.outcome.broken");
     case "leak": return t("securevm.outcome.leak");
     case "unproven": return t("securevm.outcome.unproven");
+    case "n/a": return t("securevm.outcome.notApplicable");
   }
   return o;
 }
