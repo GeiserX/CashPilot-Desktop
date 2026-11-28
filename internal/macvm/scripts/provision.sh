@@ -7,7 +7,7 @@
 # which logs in by itself, and the system settings every earner needs.
 #
 # stdin, one per line, so they never show in `ps`:
-#   line 1: the earner password (random, never kept)
+#   line 1: the earner password (random; the host never keeps it)
 #   line 2: the same password as /etc/kcpassword bytes, in hex
 #
 # It prints "PROVISIONED new" on the first run, "PROVISIONED already" after.
@@ -44,8 +44,9 @@ launchctl bootout system/com.openssh.sshd 2>/dev/null || true
 spctl --status | grep -q "assessments enabled" || { echo "Gatekeeper is off in the guest" >&2; exit 1; }
 # Public DNS on every network service. The fence blocks the gateway, and the
 # gateway's DNS would also answer the host's private names.
-networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r svc; do
-  networksetup -setdnsservers "$svc" 9.9.9.9 149.112.112.112
+svcs=$(networksetup -listallnetworkservices) || { echo "could not list the guest's network services" >&2; exit 1; }
+printf '%s\n' "$svcs" | tail -n +2 | sed 's/^\*//' | while IFS= read -r svc; do
+  networksetup -setdnsservers "$svc" 9.9.9.9 149.112.112.112 || { echo "could not set the DNS of $svc" >&2; exit 1; }
 done
 # No automatic macOS upgrade: CashPilot proved this guest, and an upgrade
 # restarts it. Security data (XProtect) still updates.
