@@ -42,6 +42,20 @@ func TestProxiesStateNeverCarriesSecretsAndSaysWhatCannotRun(t *testing.T) {
 	if !strings.Contains(refusals["mysterium"], "cannot") {
 		t.Fatalf("mysterium runs only behind the LAN fence and cannot, got %q", refusals["mysterium"])
 	}
+	needs := map[string][]string{}
+	for _, c := range state.Candidates {
+		needs[c.Slug] = c.Needs
+	}
+	if len(needs["honeygain"]) != 1 || needs["honeygain"][0] != "account_risk" {
+		t.Fatalf("Honeygain's copy form asks its account-risk tick, got %v", needs["honeygain"])
+	}
+	if len(needs["mysterium"]) != 0 {
+		t.Fatalf("a service with no proxy_risk asks no tick, got %v", needs["mysterium"])
+	}
+	// The binding passes the owner's ticks on: without account_risk the copy is refused.
+	if _, err := app.DeployProxiedCopy("honeygain", view.ID, nil); err == nil || !strings.Contains(err.Error(), "must acknowledge") {
+		t.Fatalf("a Honeygain copy without its tick must be refused: %v", err)
+	}
 	if state.TunnelImage != "" || !strings.Contains(state.TunnelImageError, "CASHPILOT_TUNNEL_IMAGE") {
 		t.Fatalf("a refused tunnel image is said: %+v", state)
 	}

@@ -180,6 +180,20 @@ Storj, Sia, Anyone Protocol, and the two GPU miners, SRBMiner-Multi and Kryptex
 Pool (Pearl). Services that need UDP do not work through SOCKS5 or HTTP
 CONNECT; a Tailscale exit node carries UDP.
 
+Some terms forbid proxies or VPNs but leave the risk to you:
+`requirements.proxy_risk` in the catalog, with a link to those terms. Such a
+service is not refused. Its copy, or its route from the deploy, runs only
+after you tick the risk, and the app refuses it without the tick.
+
+Honeygain is the one today. Its help centre strictly prohibits VPNs. It wants
+your regular home or mobile connection, and it does not support data-center
+IPs. It can suspend the account, and one shared IP can get several accounts
+suspended at once:
+https://support.honeygain.com/hc/en-us/articles/30688484350492-Does-Honeygain-work-with-VPNs
+
+So a Honeygain copy or route runs only after you tick that your Honeygain
+account may be suspended. A copy that already runs keeps running.
+
 ## Volumes of its own
 
 A volume holds the device's identity: a key, a wallet, a session. A copy that

@@ -25,6 +25,8 @@ type ProxyCandidate struct {
 	Slug    string `json:"slug"`
 	Name    string `json:"name"`
 	Refusal string `json:"refusal"`
+	// Needs are the ticks a copy needs (proxies.Acknowledgements): one checkbox each.
+	Needs []string `json:"needs"`
 }
 
 // ProxiesState is everything the Proxies section shows.
@@ -49,7 +51,7 @@ func (a *App) GetProxiesState() (ProxiesState, error) {
 	}
 	out := ProxiesState{Proxies: views, Candidates: []ProxyCandidate{}}
 	for _, dep := range a.store.ListDeployments() {
-		out.Candidates = append(out.Candidates, ProxyCandidate{Slug: dep.Slug, Name: a.serviceName(dep.Slug), Refusal: a.services.ProxyRefusal(dep.Slug)})
+		out.Candidates = append(out.Candidates, ProxyCandidate{Slug: dep.Slug, Name: a.serviceName(dep.Slug), Refusal: a.services.ProxyRefusal(dep.Slug), Needs: a.services.ProxyNeeds(dep.Slug)})
 	}
 	sort.Slice(out.Candidates, func(i, j int) bool { return out.Candidates[i].Name < out.Candidates[j].Name })
 	if image, err := runtime.TunnelImage(); err != nil {
@@ -87,14 +89,15 @@ func (a *App) TestProxy(id int64) (services.ProxyTestResult, error) {
 	return a.services.TestProxy(ctx, id)
 }
 
-// DeployProxiedCopy runs a copy of a deployed service through a proxy.
-func (a *App) DeployProxiedCopy(slug string, id int64) (services.ProxiedResult, error) {
+// DeployProxiedCopy runs a copy of a deployed service through a proxy. acknowledged
+// are the owner's ticks for it (ProxyCandidate.Needs).
+func (a *App) DeployProxiedCopy(slug string, id int64, acknowledged []string) (services.ProxiedResult, error) {
 	if err := a.ready(); err != nil {
 		return services.ProxiedResult{}, err
 	}
 	ctx, cancel := context.WithTimeout(a.opCtx(), 4*time.Minute)
 	defer cancel()
-	result, err := a.services.DeployProxied(ctx, slug, id)
+	result, err := a.services.DeployProxied(ctx, slug, id, acknowledged...)
 	if err == nil {
 		a.proxyTickOnce(ctx)
 	}

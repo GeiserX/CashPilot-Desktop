@@ -624,7 +624,12 @@ type Requirements struct {
 	// (internal/proxies.Refusal). nil means nobody has documented it, never that it
 	// is allowed.
 	ProxyProhibited *ProxyProhibited `json:"proxyProhibited,omitempty" yaml:"proxy_prohibited"`
-	Note            string           `json:"note" yaml:"note"`
+	// ProxyRisk is set when the provider's terms forbid proxies or VPNs and can
+	// suspend the account, and the owner may still choose that risk: a copy or a
+	// route through a proxy then runs only after the owner ticks it
+	// (internal/proxies.Acknowledgements). Honeygain's, with its help centre as Source.
+	ProxyRisk *ProxyProhibited `json:"proxyRisk,omitempty" yaml:"proxy_risk"`
+	Note      string           `json:"note" yaml:"note"`
 	// NoteColumn says which column Note is a footnote for (vps_ip, devices_per_ip).
 	NoteColumn string `json:"noteColumn" yaml:"note_column"`
 	// HostingNote is the web app's advice for a worker that reports a hosting

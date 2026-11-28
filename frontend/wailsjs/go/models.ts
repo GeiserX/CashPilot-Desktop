@@ -1008,6 +1008,7 @@ export namespace catalog {
 	    minStorage: string;
 	    containerProhibited: boolean;
 	    proxyProhibited?: ProxyProhibited;
+	    proxyRisk?: ProxyProhibited;
 	    note: string;
 	    noteColumn: string;
 	
@@ -1026,6 +1027,7 @@ export namespace catalog {
 	        this.minStorage = source["minStorage"];
 	        this.containerProhibited = source["containerProhibited"];
 	        this.proxyProhibited = this.convertValues(source["proxyProhibited"], ProxyProhibited);
+	        this.proxyRisk = this.convertValues(source["proxyRisk"], ProxyProhibited);
 	        this.note = source["note"];
 	        this.noteColumn = source["noteColumn"];
 	    }
@@ -1795,6 +1797,7 @@ export namespace main {
 	export class RouteState {
 	    proxies: RouteProxy[];
 	    refusals: Record<string, string>;
+	    needs: Record<string, string[]>;
 	    recorded: Record<string, number>;
 	    running: Record<string, number>;
 	    proxiedOnly: boolean;
@@ -1807,6 +1810,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.proxies = this.convertValues(source["proxies"], RouteProxy);
 	        this.refusals = source["refusals"];
+	        this.needs = source["needs"];
 	        this.recorded = source["recorded"];
 	        this.running = source["running"];
 	        this.proxiedOnly = source["proxiedOnly"];
@@ -2728,6 +2732,7 @@ export namespace main {
 	    slug: string;
 	    name: string;
 	    refusal: string;
+	    needs: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new ProxyCandidate(source);
@@ -2738,6 +2743,7 @@ export namespace main {
 	        this.slug = source["slug"];
 	        this.name = source["name"];
 	        this.refusal = source["refusal"];
+	        this.needs = source["needs"];
 	    }
 	}
 	export class ProxiesState {

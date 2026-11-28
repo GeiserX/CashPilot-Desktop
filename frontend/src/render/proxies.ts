@@ -14,6 +14,7 @@ import type { ProxiesState, ProxyCopyView, ProxyView } from "../wails";
 import { deployNotice, type DeployStatus } from "./deploy_consent.js";
 import { escapeHtml } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
 import { ht, raw, t } from "./i18n.js";
+import { ackText } from "./route.js";
 import { dockerBlocked, dockerBlockedNote, type RuntimeInput } from "./runtime_state.js";
 
 const GB = 1_000_000_000;
@@ -222,6 +223,12 @@ export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "
   const options = candidates
     .map((c) => `<option value="${escapeHtml(c.slug)}" ${c.refusal ? "disabled" : ""}>${c.refusal ? ht("proxies.candidateRefused", { name: c.name, refusal: c.refusal }) : escapeHtml(c.name)}</option>`)
     .join("");
+  // The ticks a service needs behind a proxy (Honeygain's account risk); Deploy sends
+  // only the chosen service's ticks, and the backend refuses the copy without them.
+  const acks = candidates
+    .filter((c) => !c.refusal)
+    .flatMap((c) => (c.needs || []).map((key) => `<label class="muted compact-copy"><input type="checkbox" data-proxy-ack-for="${escapeHtml(c.slug)}" value="${escapeHtml(key)}"> ${escapeHtml(ackText(key))}</label>`))
+    .join("");
   const proxyOptions = proxies.map((p) => `<option value="${p.id}" ${p.cap.cappedAt ? "disabled" : ""}>${p.cap.cappedAt ? ht("proxies.proxyCapped", { name: p.name }) : escapeHtml(p.name)}</option>`).join("");
   const runForm = proxies.length && candidates.some((c) => !c.refusal)
     ? `
@@ -229,7 +236,7 @@ export function renderProxiesSection(state: ProxiesState, editing: ProxyView | "
         <select data-proxy-run-service>${options}</select>
         <select data-proxy-run-proxy>${proxyOptions}</select>
         <button class="primary compact-btn" data-proxy-run-deploy${deployStatus?.kind === "busy" || blocked ? " disabled" : ""}>${ht("proxies.runCopy")}</button>
-      </div>`
+      </div>${acks}`
     : `<p class="muted compact-copy">${proxies.length ? ht("proxies.deployFirst") : ht("proxies.addFirst")}</p>`;
   return `
     <section class="card proxies-panel">

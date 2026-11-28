@@ -342,6 +342,16 @@ func (m *Manager) ProxyRefusal(slug string) string {
 	return proxies.Refusal(svc)
 }
 
+// ProxyNeeds are the ticks slug needs before a copy of it runs through a proxy
+// (proxies.Acknowledgements); empty for none.
+func (m *Manager) ProxyNeeds(slug string) []string {
+	svc, ok := m.catalog.Get(slug)
+	if !ok {
+		return []string{}
+	}
+	return proxies.Acknowledgements(svc)
+}
+
 // refuseNonDocker refuses a deployment that does not run on Docker: only Docker can
 // run a copy through a proxy. ProxyRefusal says it up front, DeployProxied enforces it.
 func refuseNonDocker(svc catalog.Service, dep store.Deployment) error {
@@ -354,8 +364,9 @@ func refuseNonDocker(svc catalog.Service, dep store.Deployment) error {
 // DeployProxied runs a copy of slug through proxy id. The service must already be
 // deployed here: the copy runs with its image and credentials, under its own device
 // names. It holds the service's deploy lock, so a removal never lands between the
-// copy's record and its start.
-func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (ProxiedResult, error) {
+// copy's record and its start. acknowledged are the owner's ticks
+// (proxies.Acknowledgements): the copy is refused without each one it needs.
+func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64, acknowledged ...string) (ProxiedResult, error) {
 	defer m.lockDeploy(slug)()
 	_, s, err := m.loadProxy(id)
 	if err != nil {
@@ -399,14 +410,19 @@ func (m *Manager) DeployProxied(ctx context.Context, slug string, id int64) (Pro
 			svc.Docker.ImageByArch = nil
 		}
 	}
-	return m.runProxied(ctx, slug, id, svc, credentials, false)
+	return m.runProxied(ctx, slug, id, svc, credentials, false, acknowledged)
 }
 
 // runProxied starts slug through proxy id: a copy beside the service, or with routed
 // the service itself (DeployRouted), under its own device names.
-func (m *Manager) runProxied(ctx context.Context, slug string, id int64, svc catalog.Service, credentials map[string]string, routed bool) (ProxiedResult, error) {
+func (m *Manager) runProxied(ctx context.Context, slug string, id int64, svc catalog.Service, credentials map[string]string, routed bool, acknowledged []string) (ProxiedResult, error) {
 	if why := proxies.Refusal(svc); why != "" {
 		return ProxiedResult{}, errors.New(why)
+	}
+	// The one tick today: terms that can suspend the account behind a proxy
+	// (Honeygain's). Nothing is recorded or started without it.
+	if missing := proxies.MissingAcknowledgements(svc, acknowledged); len(missing) > 0 {
+		return ProxiedResult{}, errors.New(i18n.T("go.proxies.ack.accountRisk", "name", orText(svc.Name, slug)))
 	}
 	if err := validateRequired(svc, credentials); err != nil {
 		return ProxiedResult{}, err

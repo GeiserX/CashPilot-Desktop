@@ -45,8 +45,26 @@ export function routeChoiceSection(service: Service, route: RouteState | null | 
         <select data-wizard-route="${slug}">${options}</select>
       </label>
       <p class="muted compact-copy route-hint">${ht("route.hint", { name: service.name })}${route.proxiedOnly ? ` ${ht("route.proxiedOnly")}` : ""}</p>
+      ${(route.needs?.[service.slug] || []).map((key) => `<label class="muted compact-copy route-hint"><input type="checkbox" data-wizard-route-ack="${slug}" value="${escapeHtml(key)}"> ${escapeHtml(ackText(key))}</label>`).join("")}
     </div>
   `;
+}
+
+/** The words of one tick a service needs behind a proxy (proxies.Acknowledgements). */
+export function ackText(key: string): string {
+  return key === "account_risk" ? t("proxies.ack.accountRisk") : key;
+}
+
+/** One tick box as main.ts reads it: whether it is checked, its service, its key. */
+export interface AckTick {
+  checked: boolean;
+  slug: string;
+  value: string;
+}
+
+/** The keys a deploy of slug sends: the checked ticks of that service only. */
+export function chosenAcks(ticks: AckTick[], slug: string): string[] {
+  return ticks.filter((tick) => tick.checked && tick.slug === slug).map((tick) => tick.value);
 }
 
 /** The proxy id to deploy through, or null for this computer's own IP. */

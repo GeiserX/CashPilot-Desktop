@@ -271,6 +271,15 @@ func TestReferralCodesParse(t *testing.T) {
 	}
 }
 
+// TestHoneygainProxyRiskParses guards the owner tick on a Honeygain copy behind a
+// proxy: a proxy_risk that fails to parse lets the copy run with no tick at all.
+func TestHoneygainProxyRiskParses(t *testing.T) {
+	risk := mustGet(t, realCatalog(t), "honeygain").Requirements.ProxyRisk
+	if risk == nil || !strings.HasPrefix(risk.Source, "https://support.honeygain.com/") {
+		t.Errorf("honeygain requirements.proxy_risk must parse with its help-centre source: %+v", risk)
+	}
+}
+
 // TestEarnAppContainerProhibitedParses guards the strongest verdict in the catalog.
 // EarnApp forbids containers, VMs and servers; the penalty is a terminated account
 // with the pending balance cancelled. A field that fails to parse turns that into

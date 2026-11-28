@@ -106,7 +106,7 @@ func TestADockerDeployWithoutAnEngineIsRefusedBeforeAnythingChanges(t *testing.T
 	if err == nil || !strings.Contains(err.Error(), "Docker is not set up") || !strings.Contains(err.Error(), "Nothing was deployed") {
 		t.Fatalf("DeployService error = %v, want the plain refusal", err)
 	}
-	if _, err := app.DeployServiceRouted("earnfm", values, 1); err == nil || !strings.Contains(err.Error(), "Docker is not set up") {
+	if _, err := app.DeployServiceRouted("earnfm", values, 1, nil); err == nil || !strings.Contains(err.Error(), "Docker is not set up") {
 		t.Fatalf("DeployServiceRouted error = %v, want the plain refusal", err)
 	}
 	if len(provider.deployed) != 0 {
@@ -237,7 +237,7 @@ func TestFailedDeployKeepsPreviouslySavedCredentials(t *testing.T) {
 	if err := app.SaveCredentials("earnfm", map[string]string{"EARNFM_TOKEN": "saved"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := app.DeployServiceRouted("earnfm", typed, -1); err == nil {
+	if _, err := app.DeployServiceRouted("earnfm", typed, -1, nil); err == nil {
 		t.Fatal("the routed deploy was meant to fail")
 	}
 	if got, _ := app.store.GetCredentials("earnfm"); got["EARNFM_TOKEN"] != "saved" {
