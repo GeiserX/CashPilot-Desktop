@@ -23,5 +23,9 @@ packaging/** text eol=lf
 # The Secure VM's golden desired.json files are compared byte for byte.
 internal/winvm/testdata/** text eol=lf
 
+# cmd/i18nnsis writes the installer's strings with LF, and a test compares the
+# committed file with that output byte for byte.
+build/windows/installer/i18n.nsh text eol=lf
+
 # The BIP-39 wordlist is checked against its published sha256.
 internal/siaseed/english.txt text eol=lf
