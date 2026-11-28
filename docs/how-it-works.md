@@ -242,8 +242,10 @@ follows `latest`. A custom image pinned by digest alone is not followed. An
 update deploys with `DeploySpec.FollowTag`, `SettleSeconds` (120) and
 `ExpectImage` (the image ID the check found). The runtime refuses a tag that
 moved since the check, watches the new container, and puts the old one back when
-it fails (`runtime.ImageUpdateUndone`). A build that was undone is held in the
-`image_updates` table and never tried again.
+it fails (`runtime.ImageUpdateUndone`). The undo restores the container, not
+the data on its volume. A build that was undone is held in the
+`image_updates` table and never tried again. An app with `fence_gated` or a GPU
+grant is never updated by itself: those rights trust the pinned build.
 
 ### `internal/collectors` — earnings collectors (the dispatch pattern)
 

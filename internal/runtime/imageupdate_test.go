@@ -68,7 +68,8 @@ func TestCheckImageComparesTheTagWithTheRunningBuild(t *testing.T) {
 	}
 	docker.SetImage(tagRef, newBuild, "sha256:d2")
 	check, err = p.CheckImage(context.Background(), svc.Slug, svc)
-	if err != nil || check.LatestID != newBuild || check.LatestDigest != "sha256:d2" || check.RunningID != oldBuild {
+	// The running build is inspected by its ID, and still names its repository's digest.
+	if err != nil || check.LatestID != newBuild || check.LatestDigest != "sha256:d2" || check.RunningID != oldBuild || check.RunningDigest != "sha256:d1" {
 		t.Fatalf("a moved tag: %+v, %v", check, err)
 	}
 	if _, err := p.CheckImage(context.Background(), "other", svc); !errors.Is(err, ErrNoContainer) {
@@ -153,16 +154,11 @@ func TestAnUnhealthyUpdateIsUndone(t *testing.T) {
 		t.Fatalf("deploy: %v", err)
 	}
 	docker.SetImage(tagRef, newBuild, "")
-	go func() {
-		// The new container turns unhealthy once it runs.
-		for range 100 {
-			if c, ok := docker.Container(containerName(svc.Slug)); ok && c.ImageID == newBuild {
-				docker.SetHealth(c.Name, "unhealthy")
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}()
+	name := containerName(svc.Slug)
+	// The new container turns unhealthy on the first look after its start.
+	docker.BeforeCall("POST /containers/"+name+"/start", func() {
+		docker.BeforeCall("GET /containers/"+name+"/json", func() { docker.SetHealth(name, "unhealthy") })
+	})
 	_, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
 	var undone *ImageUpdateUndone
 	if !errors.As(err, &undone) || !strings.Contains(err.Error(), "unhealthy") {
@@ -215,15 +211,15 @@ func TestAnUpdateDockerCannotDescribeAtTheEndIsUndone(t *testing.T) {
 	}
 	before, _ := docker.Container(containerName(svc.Slug))
 	docker.SetImage(tagRef, newBuild, "")
-	go func() {
-		for range 200 {
-			if c, ok := docker.Container(containerName(svc.Slug)); ok && c.ImageID == newBuild && c.State == "running" {
+	name := containerName(svc.Slug)
+	// From the first look after its start, Docker cannot describe the new container.
+	docker.BeforeCall("POST /containers/"+name+"/start", func() {
+		docker.BeforeCall("GET /containers/"+name+"/json", func() {
+			if c, ok := docker.Container(name); ok && c.ImageID == newBuild {
 				docker.FailInspect(c.ID)
-				return
 			}
-			time.Sleep(2 * time.Millisecond)
-		}
-	}()
+		})
+	})
 	_, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
 	docker.ClearFailures()
 	var undone *ImageUpdateUndone
@@ -260,25 +256,31 @@ func deployPinned(t *testing.T, svc catalog.Service) (*harness.Docker, *DockerPr
 // answers it after: the container can stop meanwhile, and the next look decides.
 func TestOnlyALookThatStartsAfterThePeriodPassesIt(t *testing.T) {
 	fastSettle(t)
+	// Room for the second look: past the period, well inside the grace.
+	settleGrace = time.Minute
 	var skew atomic.Int64
 	clock := settleNow
 	settleNow = func() time.Time { return time.Now().Add(time.Duration(skew.Load())) }
 	t.Cleanup(func() { settleNow = clock })
+	var second atomic.Bool
 	svc := pinned()
 	docker, p, before := deployPinned(t, svc)
 	name := containerName(svc.Slug)
 	docker.BeforeCall("POST /containers/"+name+"/start", func() {
 		// The first look: Docker takes past the end of the period to answer it.
 		docker.BeforeCall("GET /containers/"+name+"/json", func() {
-			skew.Store(int64(time.Hour))
+			skew.Store(int64(2 * time.Second))
 			// The second look: the new container has stopped meanwhile.
-			docker.BeforeCall("GET /containers/"+name+"/json", func() { docker.SetState(name, "exited") })
+			docker.BeforeCall("GET /containers/"+name+"/json", func() {
+				second.Store(true)
+				docker.SetState(name, "exited")
+			})
 		})
 	})
 	_, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
 	var undone *ImageUpdateUndone
-	if !errors.As(err, &undone) {
-		t.Fatalf("a stop seen only after a late look: %v; want ImageUpdateUndone", err)
+	if !errors.As(err, &undone) || !second.Load() || !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("a stop seen only after a late look: %v (second look %v); want the stop, undone", err, second.Load())
 	}
 	if after, _ := docker.Container(name); after.ID != before.ID || after.State != "running" {
 		t.Fatalf("the old container is not back: %+v", after)
@@ -301,11 +303,42 @@ func TestAFailureLineAnywhereInTheLogCounts(t *testing.T) {
 
 func TestAnUnlessLineAnywhereInTheLogCancelsTheSignal(t *testing.T) {
 	fastSettle(t)
+	// The unless line first, the failure line last: a reader that kept only a
+	// part of the log would see one without the other.
+	log := "connected to server\n" + strings.Repeat("waiting\n", 1000) + "update server cannot be reached\n"
+	failing := withSignal("")
+	docker, p, _ := deployPinned(t, failing)
+	docker.SetLogs(log)
+	var undone *ImageUpdateUndone
+	if _, err := p.Deploy(context.Background(), updateSpec(failing, newBuild), nil); !errors.As(err, &undone) {
+		t.Fatalf("the same log with no unless line: %v; want undone", err)
+	}
 	svc := withSignal("connected to server")
-	docker, p, _ := deployPinned(t, svc)
-	docker.SetLogs("connected to server\n" + strings.Repeat("waiting\n", 1000) + "update server cannot be reached\n" + strings.Repeat("waiting\n", 1000))
+	docker, p, _ = deployPinned(t, svc)
+	docker.SetLogs(log)
 	if _, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil); err != nil {
 		t.Fatalf("a signal its unless line cancels: %v", err)
+	}
+}
+
+// The log is judged after the period: an unless line written late in the period
+// still cancels a failure line written early.
+func TestAnUnlessLineWrittenLateInThePeriodStillCounts(t *testing.T) {
+	fastSettle(t)
+	svc := withSignal("connected to server")
+	docker, p, _ := deployPinned(t, svc)
+	name := containerName(svc.Slug)
+	docker.SetLogs("update server cannot be reached\n")
+	docker.BeforeCall("POST /containers/"+name+"/start", func() {
+		docker.BeforeCall("GET /containers/"+name+"/json", func() {
+			// After the first look, the node connects.
+			docker.BeforeCall("GET /containers/"+name+"/json", func() {
+				docker.SetLogs("update server cannot be reached\nconnected to server\n")
+			})
+		})
+	})
+	if _, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil); err != nil {
+		t.Fatalf("a failure line cancelled later in the period: %v", err)
 	}
 }
 
@@ -360,5 +393,82 @@ func TestRepoDigestNamesOnlyTheCheckedRepository(t *testing.T) {
 	}
 	if got := repoDigest([]string{"mirror.example/other@sha256:c", "example/orderly@sha256:d"}, tagRef); got != "sha256:d" {
 		t.Fatalf("the checked repository's digest: %q", got)
+	}
+}
+
+// A look Docker takes and never answers is bounded: the period still ends, and
+// a new container nobody could describe is undone.
+func TestALookDockerNeverAnswersStillEndsThePeriod(t *testing.T) {
+	fastSettle(t)
+	look := settleLookTimeout
+	settleLookTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { settleLookTimeout = look })
+	svc := pinned()
+	docker, p, before := deployPinned(t, svc)
+	name := containerName(svc.Slug)
+	until := time.Now().Add(1500 * time.Millisecond)
+	var stall func()
+	stall = func() {
+		if time.Now().After(until) {
+			return
+		}
+		docker.BeforeCall("GET /containers/"+name+"/json", stall)
+		time.Sleep(4 * time.Second)
+	}
+	docker.BeforeCall("POST /containers/"+name+"/start", func() {
+		docker.BeforeCall("GET /containers/"+name+"/json", stall)
+	})
+	began := time.Now()
+	_, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
+	if took := time.Since(began); took > 3*time.Second {
+		t.Fatalf("a stalled look held the update for %s", took)
+	}
+	var undone *ImageUpdateUndone
+	if !errors.As(err, &undone) || !strings.Contains(err.Error(), "did not describe") {
+		t.Fatalf("a daemon that never answers: %v", err)
+	}
+	if after, _ := docker.Container(name); after.ID != before.ID || after.State != "running" {
+		t.Fatalf("the old container is not back: %+v", after)
+	}
+}
+
+// The delete of the old image is bounded too: a daemon that never answers it
+// leaves the image on disk and says so, and the passed update stands.
+func TestAnOldImageDeleteDockerNeverAnswersIsBounded(t *testing.T) {
+	fastSettle(t)
+	remove := imageRemoveTimeout
+	imageRemoveTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { imageRemoveTimeout = remove })
+	svc := pinned()
+	docker, p, _ := deployPinned(t, svc)
+	docker.BeforeCall("DELETE /images/"+oldBuild, func() { time.Sleep(3 * time.Second) })
+	began := time.Now()
+	info, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
+	if took := time.Since(began); took > 2500*time.Millisecond {
+		t.Fatalf("a stalled image delete held the update for %s", took)
+	}
+	if err != nil || info.ImageUpdate == nil || info.ImageUpdate.OldKept == "" {
+		t.Fatalf("a stalled image delete: %v, %+v; want a passed update that keeps the old image", err, info.ImageUpdate)
+	}
+}
+
+// A stop Docker took after the manager's check keeps the container's ID. The
+// update still refuses it: replacing it would start the app.
+func TestAnUpdateOfACopyThatStoppedAfterTheCheckIsRefused(t *testing.T) {
+	fastSettle(t)
+	svc := pinned()
+	docker, p, before := deployPinned(t, svc)
+	name := containerName(svc.Slug)
+	docker.SetState(name, "exited")
+	_, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
+	if err == nil || !strings.Contains(err.Error(), "not running") {
+		t.Fatalf("an update of a stopped copy: %v", err)
+	}
+	var undone *ImageUpdateUndone
+	if errors.As(err, &undone) {
+		t.Fatal("a refused update must not read as undone")
+	}
+	if after, _ := docker.Container(name); after.ID != before.ID || after.State != "exited" {
+		t.Fatalf("the stopped copy was touched: %+v", after)
 	}
 }

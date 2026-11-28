@@ -87,6 +87,18 @@ const newer = edits.beginLoad();
 check("the newest load is drawn", edits.isLatest(newer), "");
 check("an older load answering last is not drawn", !edits.isLatest(older), "");
 
+// A page redraw's unsaved choices reach whichever load draws: a newer load with
+// no draft of its own still puts them back, once.
+const kept = new ImageUpdateEdits();
+kept.holdDraft({ "image-updates-mode": "notify" });
+const withDraft = kept.beginLoad();
+kept.holdDraft(null);
+const without = kept.beginLoad();
+check("the older load with the draft is not drawn", !kept.isLatest(withDraft), "");
+const drawn = kept.isLatest(without) ? kept.takeDraft() : null;
+check("the newest load draws the held draft", drawn?.["image-updates-mode"] === "notify", JSON.stringify(drawn));
+check("a draft is put back only once", kept.takeDraft() === null, "");
+
 if (failures) {
   console.error(`\n${failures} of ${checks} image update checks failed`);
   process.exit(1);

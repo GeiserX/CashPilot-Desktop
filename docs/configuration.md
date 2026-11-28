@@ -51,7 +51,9 @@ app its own choice if you want:
   for 2 minutes. The check fails if the container stops, Docker restarts it, its
   health check turns unhealthy, or its log shows a known failure line of the app.
   Then CashPilot removes it and starts the old container again. That build is
-  never tried again. Only a newer one is.
+  never tried again. Only a newer one is. An undo puts back the container, not
+  the data: the old and the new container use the same volume, so anything the
+  new build wrote there stays.
 
 The check runs at 04:00 by default, in this computer's time zone. **Check now**
 runs it at once. A new install starts on **Update automatically**. An install
@@ -61,7 +63,11 @@ offers one button to turn them on.
 CashPilot leaves an app to you when an update would change more than its image.
 That is the case when the app is stopped, runs several copies or runs through a
 proxy. It is also the case when the app runs an image you chose, or differs from
-what a redeploy builds. The history table says why.
+what a redeploy builds. An app that holds network or GPU rights, such as
+Mysterium, runs only the build the catalog pins, so a CashPilot Desktop release
+moves it. And a custom app that keeps data in a folder outside its data path is
+left to you, because a new container would start that folder empty. The history
+table says why.
 
 Every app has a known-good build pinned in the catalog. A fresh deploy and the
 **Redeploy** button install that build. An update installs the newer build of its

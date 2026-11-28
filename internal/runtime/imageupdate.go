@@ -41,6 +41,13 @@ var settleGrace = 30 * time.Second
 // look take long.
 var settleNow = time.Now
 
+// settleLookTimeout bounds one look at the new container: a daemon that takes
+// a request and never answers counts as no answer, so the period still ends.
+var settleLookTimeout = 30 * time.Second
+
+// imageRemoveTimeout bounds the delete of the old image after a pass.
+var imageRemoveTimeout = 2 * time.Minute
+
 // settleLineBytes caps one log line a check period keeps while it waits for the
 // line's end. A longer line is judged in parts.
 const settleLineBytes = 64 << 10
@@ -165,11 +172,16 @@ func settle(ctx context.Context, cli *client.Client, id, name string, svc catalo
 		// Passing needs a look that started once the period was over: one that
 		// began earlier can miss a stop that came while Docker answered it.
 		started := settleNow()
-		problem, seen := settleProblem(ctx, cli, id, svc, since)
+		// The log is judged once, on a look after the period: an unless line
+		// written late in the period still cancels a failure line before it.
+		final := !started.Before(deadline)
+		look, cancel := context.WithTimeout(ctx, settleLookTimeout)
+		problem, seen := settleProblem(look, cli, id, svc, since, final)
+		cancel()
 		if problem != "" {
 			return errors.New(i18n.T("go.runtime.update.failed", "name", name, "problem", problem, "seconds", seconds))
 		}
-		if !started.Before(deadline) && seen {
+		if final && seen {
 			return nil
 		}
 		now := settleNow()
@@ -188,10 +200,11 @@ func settle(ctx context.Context, cli *client.Client, id, name string, svc catalo
 	}
 }
 
-// settleProblem says what is wrong with the new container now, or "". seen is
-// false when Docker did not describe it on this look, or did not return the log
-// of a service with failure signals to look for.
-func settleProblem(ctx context.Context, cli *client.Client, id string, svc catalog.Service, since time.Time) (problem string, seen bool) {
+// settleProblem says what is wrong with the new container now, or "". With
+// logs, it also judges the catalog failure signals in the log of the period.
+// seen is false when Docker did not describe it on this look, or did not return
+// the log it was asked for.
+func settleProblem(ctx context.Context, cli *client.Client, id string, svc catalog.Service, since time.Time, logs bool) (problem string, seen bool) {
 	got, err := cli.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
 	if cerrdefs.IsNotFound(err) {
 		return i18n.T("go.runtime.update.gone"), true
@@ -213,6 +226,9 @@ func settleProblem(ctx context.Context, cli *client.Client, id string, svc catal
 	}
 	if c.State.Health != nil && c.State.Health.Status == container.Unhealthy {
 		return i18n.T("go.runtime.update.unhealthy"), true
+	}
+	if !logs {
+		return "", true
 	}
 	means, read := failureSignal(ctx, cli, id, svc, since)
 	if !read {
@@ -336,7 +352,9 @@ func demuxLog(r io.Reader, w io.Writer) error {
 // removeOldImage deletes the image the replaced container ran, never by force.
 // It returns why the image stays, "" when it went or was already gone.
 func removeOldImage(cli *client.Client, imageID string) string {
-	_, err := cli.ImageRemove(context.Background(), imageID, client.ImageRemoveOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), imageRemoveTimeout)
+	defer cancel()
+	_, err := cli.ImageRemove(ctx, imageID, client.ImageRemoveOptions{})
 	switch {
 	case err == nil, cerrdefs.IsNotFound(err):
 		return ""
