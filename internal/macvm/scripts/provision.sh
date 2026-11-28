@@ -80,6 +80,9 @@ fi
 createhomedir -c -u earner >/dev/null 2>&1 || true
 dseditgroup -o checkmember -m earner admin >/dev/null 2>&1 && { echo "earner is an admin" >&2; exit 1; }
 defaults write /Library/Preferences/com.apple.loginwindow autoLoginUser earner
+# A screen that was locked when the guest stopped locks again at the next
+# automatic login, and nobody knows the earner's password to unlock it.
+defaults write /Library/Preferences/com.apple.loginwindow autoLoginUserScreenLocked -bool false
 
 # Skip the per-user Setup Assistant screens.
 v=$(sw_vers -productVersion); b=$(sw_vers -buildVersion)
