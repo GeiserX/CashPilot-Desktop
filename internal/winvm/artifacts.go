@@ -299,19 +299,18 @@ func dropNewArtifacts(dir string, before map[string][]string, hadLog bool) {
 	if err != nil {
 		return
 	}
-	// A record is new by its file ID: the journal keeps the names of files
-	// already deleted, and a later write reuses the name.
+	// The journal only grows, so a record is new by its place: past the
+	// records its path had before. A file ID cannot tell, because the
+	// journal keeps the names of files already deleted, a later write
+	// reuses the name, and Linux reuses a freed inode number at once.
 	fresh := map[string][]string{}
 	var paths []string
 	for rel, ids := range records {
-		for _, id := range ids {
-			if rel != artifactLogName && !slices.Contains(before[rel], id) {
-				fresh[rel] = append(fresh[rel], id)
-			}
+		if rel == artifactLogName || len(ids) <= len(before[rel]) {
+			continue
 		}
-		if len(fresh[rel]) > 0 {
-			paths = append(paths, rel)
-		}
+		fresh[rel] = ids[len(before[rel]):]
+		paths = append(paths, rel)
 	}
 	// Descendants sort after their directory.
 	slices.Sort(paths)

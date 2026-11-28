@@ -960,6 +960,7 @@ function Set-NetFirewallRule {
 func TestPktmonKeepsForeignFilters(t *testing.T) {
 	const mock = `
 function Get-EtwTraceSession {}
+function Get-NetAdapter {}
 function Join-Path { 'Invoke-FakePktmon' }
 function Start-Sleep {}
 function Invoke-FakePktmon {
@@ -976,6 +977,7 @@ func TestPktmonStopReadsETLMetadataByProviderID(t *testing.T) {
 	const mock = `
 param($filtered)
 function Get-EtwTraceSession { [pscustomobject]@{ LocalFilePath = 'capture.etl' } }
+function Get-NetAdapter {}
 function Join-Path { 'Invoke-FakePktmon' }
 function Invoke-FakePktmon {
   if ($args[0] -ne 'stop') { throw 'expected pktmon stop' }
