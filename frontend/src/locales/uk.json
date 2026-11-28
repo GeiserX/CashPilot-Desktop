@@ -2,7 +2,7 @@
   "language.name": "Українська",
   "language.title": "Мова",
   "language.help": "CashPilot Desktop використовує мову вашого комп'ютера, якщо вона доступна. Виберіть тут іншу.",
-  "language.system": "Мова системи ({language})",
+  "language.system": "Як у системі ({language})",
   "language.systemNone": "Мова системи (недоступна, тому англійська)",
   "language.error.unsupported": "У CashPilot Desktop немає мови з кодом {code}.",
   "tray.show": "Показати CashPilot Desktop",

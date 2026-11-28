@@ -2,7 +2,7 @@
   "language.name": "Filipino",
   "language.title": "Wika",
   "language.help": "Ginagamit ng CashPilot Desktop ang wika ng iyong computer kapag mayroon ito. Pumili ng iba rito.",
-  "language.system": "Wika ng system ({language})",
+  "language.system": "Kapareho ng system ({language})",
   "language.systemNone": "Wika ng system (wala, kaya Ingles)",
   "language.error.unsupported": "Walang wika ang CashPilot Desktop na may code na {code}.",
   "tray.show": "Ipakita ang CashPilot Desktop",

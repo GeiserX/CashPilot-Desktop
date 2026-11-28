@@ -2,7 +2,7 @@
   "language.name": "ไทย",
   "language.title": "ภาษา",
   "language.help": "CashPilot Desktop ใช้ภาษาของคอมพิวเตอร์คุณหากมีให้ เลือกภาษาอื่นได้ที่นี่",
-  "language.system": "ภาษาของระบบ ({language})",
+  "language.system": "เหมือนกับระบบ ({language})",
   "language.systemNone": "ภาษาของระบบ (ไม่มีให้ จึงใช้ภาษาอังกฤษ)",
   "language.error.unsupported": "CashPilot Desktop ไม่มีภาษาที่ใช้รหัส {code}",
   "tray.show": "แสดง CashPilot Desktop",

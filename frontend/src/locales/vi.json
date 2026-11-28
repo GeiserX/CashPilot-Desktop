@@ -2,7 +2,7 @@
   "language.name": "Tiếng Việt",
   "language.title": "Ngôn ngữ",
   "language.help": "CashPilot Desktop dùng ngôn ngữ của máy tính nếu có. Chọn ngôn ngữ khác tại đây.",
-  "language.system": "Ngôn ngữ hệ thống ({language})",
+  "language.system": "Giống hệ thống ({language})",
   "language.systemNone": "Ngôn ngữ hệ thống (không có, nên dùng tiếng Anh)",
   "language.error.unsupported": "CashPilot Desktop không có ngôn ngữ nào có mã {code}.",
   "tray.show": "Hiện CashPilot Desktop",

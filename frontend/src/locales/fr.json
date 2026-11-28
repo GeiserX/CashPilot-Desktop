@@ -2,7 +2,7 @@
   "language.name": "Français",
   "language.title": "Langue",
   "language.help": "CashPilot Desktop utilise la langue de votre ordinateur quand il la propose. Choisissez-en une autre ici.",
-  "language.system": "Langue du système ({language})",
+  "language.system": "Identique au système ({language})",
   "language.systemNone": "Langue du système (non disponible, donc anglais)",
   "language.error.unsupported": "CashPilot Desktop n'a aucune langue avec le code {code}.",
   "tray.show": "Afficher CashPilot Desktop",

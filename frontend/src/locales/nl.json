@@ -2,7 +2,7 @@
   "language.name": "Nederlands",
   "language.title": "Taal",
   "language.help": "CashPilot Desktop gebruikt de taal van je computer als die beschikbaar is. Kies hier een andere.",
-  "language.system": "Systeemtaal ({language})",
+  "language.system": "Zelfde als het systeem ({language})",
   "language.systemNone": "Systeemtaal (niet beschikbaar, dus Engels)",
   "language.error.unsupported": "CashPilot Desktop heeft geen taal met de code {code}.",
   "tray.show": "CashPilot Desktop tonen",

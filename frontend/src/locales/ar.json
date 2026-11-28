@@ -2,7 +2,7 @@
   "language.name": "العربية",
   "language.title": "اللغة",
   "language.help": "يستخدم CashPilot Desktop لغة جهاز الكمبيوتر إذا كانت متوفرة. اختر لغة أخرى هنا.",
-  "language.system": "لغة النظام ({language})",
+  "language.system": "مثل لغة النظام ({language})",
   "language.systemNone": "لغة النظام (غير متوفرة، لذا الإنجليزية)",
   "language.error.unsupported": "لا يوجد في CashPilot Desktop لغة بالرمز {code}.",
   "tray.show": "إظهار CashPilot Desktop",

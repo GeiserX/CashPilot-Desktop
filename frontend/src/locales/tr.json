@@ -2,7 +2,7 @@
   "language.name": "Türkçe",
   "language.title": "Dil",
   "language.help": "CashPilot Desktop, varsa bilgisayarınızın dilini kullanır. Başka bir dili buradan seçin.",
-  "language.system": "Sistem dili ({language})",
+  "language.system": "Sistemle aynı ({language})",
   "language.systemNone": "Sistem dili (yok, bu yüzden İngilizce)",
   "language.error.unsupported": "CashPilot Desktop'ta {code} kodlu bir dil yok.",
   "tray.show": "CashPilot Desktop'u göster",
