@@ -680,6 +680,24 @@ func TestPlaceThatFailsMarksAGuestCopyThatMayRun(t *testing.T) {
 	if err := e.Place(context.Background(), "wipter", securevm.VM, nil); err == nil || errors.As(err, &may) {
 		t.Fatalf("no VM: got %v, want a plain error", err)
 	}
+	// VM files that cannot be looked at prove nothing either.
+	vm := VMDir(dir)
+	if err := os.MkdirAll(vm, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vm, "config.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getuid() != 0 {
+		if err := os.Chmod(vm, 0); err != nil {
+			t.Fatal(err)
+		}
+		err := e.Place(context.Background(), "wipter", securevm.VM, nil)
+		_ = os.Chmod(vm, 0o755)
+		if !errors.As(err, &may) {
+			t.Fatalf("unreadable VM folder: got %v, want MayStillRun", err)
+		}
+	}
 	if err := os.WriteFile(rec, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
