@@ -444,7 +444,7 @@ Hibernation stays untested unless we turn it on for the test.
    - pktmon captures on all NICs (`--comp nics`) and waits 3 s first (Q11).
    - Red 3 swaps the own-IP Deny for an Allow and back (Q11).
    - A new IPv6 red step targets the host's link-local canary, and an IPv6 stack-off green step repeats it with `ms_tcpip6` unbound (Q3).
-   - Green requires no arrival **and** a rising `FailedSecurityPolicy` (Q4).
+   - A green step requires no arrival **and** its own witness (Q4, Q3). Where a Deny closes the path (l2-alone, green), the witness is a rising `FailedSecurityPolicy`. Where the step opens the port to the host (l3-alone, ipv6-stack-off), it is the frame delivered past the VM's port, and the counter may stay flat. In any other green step, a probe frame at the host's vNIC is a leak.
 4. **The physical-adapter test** accepts the host `vEthernet` of an External switch that is bound to a physical NIC (Q12).
 5. **NetNat preflight:** Setup refuses to start while any other NetNat exists, and names it (Q7).
 6. **Install mode:** it stays in `earner`'s session. Admin installers get UAC with `cpadmin`'s credentials (Q9).
