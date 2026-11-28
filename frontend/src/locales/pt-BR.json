@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Ele não está rodando na Secure VM.",
   "go.macvm.appSignedOut": "Ele não está conectado. Clique em Entrar para abri-lo na Secure VM.",
   "go.macvm.badExePath": "O caminho do app tem um caractere que a etapa de administrador não aceita.",
-  "go.macvm.adminCancelled": "O pedido de administrador foi cancelado, então nada mudou neste Mac.",
+  "go.macvm.adminCancelled": "A solicitação de administrador foi cancelada, então o CashPilot não configurou nem removeu nada que precise de permissões de administrador.",
   "go.macvm.adminFailed": "A etapa de administrador falhou: {detail}",
   "go.macvm.stepCheck": "Verificando este Mac",
   "go.macvm.stepTools": "Baixando as ferramentas da VM",

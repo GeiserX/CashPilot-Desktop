@@ -71,8 +71,14 @@ func (d *Daemon) Start(ctx context.Context, opt StartOptions) error {
 	cfg := filepath.Join(VMDir(inst.TartHome), "config.json")
 	deadline := d.now().Add(vmDiskWait)
 	for {
-		if _, err := os.Stat(cfg); err == nil {
+		_, err := os.Stat(cfg)
+		if err == nil {
 			break
+		}
+		// Only a missing file is worth the wait (a disk that mounts late);
+		// any other error says what is wrong now.
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("could not read the Secure VM's files at %s: %w", VMDir(inst.TartHome), err)
 		}
 		if d.now().After(deadline) {
 			return fmt.Errorf("the Secure VM's files are not at %s", VMDir(inst.TartHome))
@@ -115,9 +121,23 @@ func (d *Daemon) Start(ctx context.Context, opt StartOptions) error {
 		return err
 	}
 	started := false
+	var cutBr, cutPort string
 	defer func() {
-		if !started {
-			d.stopVM(context.WithoutCancel(ctx), inst)
+		if started {
+			return
+		}
+		bg := context.WithoutCancel(ctx)
+		d.stopVM(bg, inst)
+		// Our port goes away with our VM. A port that this start cut and
+		// that is still there once Tart says our VM stopped belonged to
+		// another VM: give it back. A VM that did not stop keeps its port cut.
+		if cutPort != "" {
+			if run, err := d.running(bg, inst); err != nil || run {
+				return
+			}
+			if _, err := d.R.Run(bg, "/sbin/ifconfig", cutPort); err == nil {
+				_, _ = d.R.Run(bg, "/sbin/ifconfig", cutBr, "addm", cutPort)
+			}
 		}
 	}()
 	// Our port is the vmenet member that was not there before. It shows
@@ -146,6 +166,7 @@ func (d *Daemon) Start(ctx context.Context, opt StartOptions) error {
 	if _, err := d.R.Run(ctx, "/sbin/ifconfig", br, "deletem", port); err != nil {
 		return fmt.Errorf("could not cut the new guest port: %w", err)
 	}
+	cutBr, cutPort = br, port
 	d.logf("start: cut %s from %s", port, br)
 	// Another VM that starts in the same moment adds a port too, and the port
 	// that showed first need not be ours. A second new port within the settle
@@ -155,8 +176,12 @@ func (d *Daemon) Start(ctx context.Context, opt StartOptions) error {
 		d.logf("start: %s also showed, so %s cannot be told apart; stopping %s", other, port, VMName)
 		d.stopVM(ctx, inst)
 		started = true // stopped already
-		if _, err := d.R.Run(ctx, "/sbin/ifconfig", port); err == nil {
-			_, _ = d.R.Run(ctx, "/sbin/ifconfig", br, "addm", port)
+		// Only once our VM is confirmed stopped is a port still there
+		// another VM's.
+		if run, err := d.running(ctx, inst); err == nil && !run {
+			if _, err := d.R.Run(ctx, "/sbin/ifconfig", port); err == nil {
+				_, _ = d.R.Run(ctx, "/sbin/ifconfig", br, "addm", port)
+			}
 		}
 		return errPortAmbiguous
 	}
@@ -293,7 +318,13 @@ func (d *Daemon) recordDesired(ctx context.Context, b Bridge, port, block string
 	return ds, WriteJSON(d.state(DesiredFile), ds, 0o644)
 }
 
-var vncURL = regexp.MustCompile(`vnc://[^\s]*@127\.0\.0\.1:[0-9]+`)
+// vncURL finds Tart's screen address in its log: its own loopback only.
+// vncExact is the whole of a saved address, so nothing can ride along in
+// front of the loopback part.
+var (
+	vncURL   = regexp.MustCompile(`vnc://[^\s/@]*@127\.0\.0\.1:[0-9]+`)
+	vncExact = regexp.MustCompile(`^vnc://[^\s/@]*@127\.0\.0\.1:[0-9]+$`)
+)
 
 // handOverVNC copies the guest screen's address to the owner's folder. The
 // owner already controls the VM through Tart, so this gives nothing new; it

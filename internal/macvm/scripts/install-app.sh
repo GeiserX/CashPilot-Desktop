@@ -24,8 +24,14 @@ case "$name" in ''|*/*|.*) echo "RESULT refused: file name must be a plain name"
 # Root's own staging folder: the earner user cannot plant a file or a symlink here.
 dl=$(mktemp -d /private/var/tmp/cp-dl.XXXXXX) || { echo "RESULT refused: no staging folder"; exit 1; }
 f="$dl/$name"
-mnt="" x=""
-refuse() { [ -n "$mnt" ] && hdiutil detach "$mnt" >/dev/null 2>&1; rm -rf "$dl"; [ -n "$x" ] && rm -rf "$x"; echo "RESULT refused: $*"; exit 1; }
+mnt="" x="" keep=""
+# A refusal after a package wrote over the app puts the kept copy back.
+refuse() {
+  [ -n "$mnt" ] && hdiutil detach "$mnt" >/dev/null 2>&1
+  rm -rf "$dl"; [ -n "$x" ] && rm -rf "$x"
+  if [ -n "$keep" ] && [ -d "$keep" ]; then rm -rf "/Applications/$want_app" && mv "$keep" "/Applications/$want_app"; fi
+  echo "RESULT refused: $*"; exit 1
+}
 # The bundle must be the one the catalog names: an archive with another app
 # would leave an old copy of the named one in place and pass the check below.
 named() { [ "$(basename "$1")" = "$want_app" ] || refuse "the download holds $(basename "$1"), not $want_app"; }
@@ -51,11 +57,18 @@ place() {
 pkg_install() {
   a="/Applications/$want_app"
   before=$(stat -f %c "$a/Contents/Info.plist" 2>/dev/null || echo none)
+  # installer writes in place, so a copy of the old app waits aside until
+  # the new one passes its checks.
+  if [ -d "$a" ]; then
+    keep="/Applications/.cp-old-$want_app"; rm -rf "$keep"
+    ditto "$a" "$keep" || { keep=""; refuse "could not keep a copy of the old version"; }
+  fi
   out=$(installer -pkg "$1" -target / 2>&1) || refuse "pkg install failed: $(echo "$out" | tail -1)"
   echo "$out" | tail -1
   [ -d "$a" ] || refuse "the installer did not put $want_app in /Applications"
   [ "$(stat -f %c "$a/Contents/Info.plist" 2>/dev/null || echo none)" != "$before" ] || refuse "the package did not install $want_app"
   check "$a"
+  [ -n "$keep" ] && rm -rf "$keep"; keep=""
 }
 # HTTPS only, also after a redirect: the checks below come later, and a plain
 # HTTP hop would let anyone on the path change the bytes first.
@@ -135,7 +148,7 @@ cat > "$la" <<PLIST || { echo "RESULT refused: could not write $la"; exit 1; }
 <dict>
   <key>Label</key><string>org.cashpilot.earner.$slug</string>
   <key>ProgramArguments</key>
-  <array><string>/usr/bin/open</string><string>-g</string><string>/Applications/$want_app</string></array>
+  <array><string>/bin/sh</string><string>-c</string><string>[ "\$(/usr/bin/id -un)" = earner ] &amp;&amp; exec /usr/bin/open -g "\$0"</string><string>/Applications/$want_app</string></array>
   <key>RunAtLoad</key><true/>
   <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict>
@@ -143,6 +156,7 @@ cat > "$la" <<PLIST || { echo "RESULT refused: could not write $la"; exit 1; }
 PLIST
 chown root:wheel "$la" && chmod 644 "$la" || { echo "RESULT refused: could not set up $la"; exit 1; }
 # Open it now when the earner is logged in; otherwise its next login does.
+# The agent runs at every account's login, so it opens the app only for earner.
 if uid=$(id -u earner 2>/dev/null) && [ "$(stat -f %u /dev/console)" = "$uid" ]; then
   launchctl asuser "$uid" /usr/bin/sudo -u earner /usr/bin/open -g "/Applications/$want_app" \
     || { echo "RESULT refused: it is installed, but it did not open"; exit 1; }

@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Nó không chạy trong Secure VM.",
   "go.macvm.appSignedOut": "Nó chưa đăng nhập. Nhấn Đăng nhập để mở nó trong Secure VM.",
   "go.macvm.badExePath": "Đường dẫn của ứng dụng có một ký tự mà bước quản trị không chuyển được.",
-  "go.macvm.adminCancelled": "Lời nhắc quản trị viên đã bị hủy, nên không có gì thay đổi trên Mac này.",
+  "go.macvm.adminCancelled": "Yêu cầu quản trị viên đã bị hủy, nên CashPilot không thiết lập hay gỡ bỏ bất kỳ thứ gì cần quyền quản trị viên.",
   "go.macvm.adminFailed": "Bước quản trị thất bại: {detail}",
   "go.macvm.stepCheck": "Đang kiểm tra Mac này",
   "go.macvm.stepTools": "Đang tải công cụ VM",

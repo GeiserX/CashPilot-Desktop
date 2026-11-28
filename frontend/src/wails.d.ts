@@ -266,6 +266,7 @@ export interface SecureVMStatus {
   installed: boolean;
   updateNeeded: boolean;
   unfinished: boolean;
+  leftovers?: boolean;
   network: "connected" | "disconnected" | "off" | "absent" | string;
   fence: "held" | "cut" | "reprove-needed" | "unproven" | string;
   reason: string;
