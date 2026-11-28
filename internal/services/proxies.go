@@ -549,8 +549,10 @@ func (m *Manager) StartProxied(ctx context.Context, slug string, id int64) error
 	if s.CappedAt != "" {
 		return errors.New(orText(s.CapReason, i18n.T("go.services.proxy.capReached")))
 	}
-	if err := m.copyTickRefusal(id, slug); err != nil {
+	if refused, err := m.copyTickRefusal(id, slug); err != nil {
 		return err
+	} else if refused != nil {
+		return refused
 	}
 	p, err := m.proxier()
 	if err != nil {
@@ -857,18 +859,18 @@ func (m *Manager) tickRefusal(c store.ProxiedCopy) error {
 }
 
 // copyTickRefusal is tickRefusal for the record of slug through proxy id; none when
-// there is no record.
-func (m *Manager) copyTickRefusal(id int64, slug string) error {
+// there is no record. err is a failed lookup, which says nothing about the tick.
+func (m *Manager) copyTickRefusal(id int64, slug string) (refused, err error) {
 	records, err := m.store.ListProxiedCopies(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, r := range records {
 		if r.Slug == slug {
-			return m.tickRefusal(r)
+			return m.tickRefusal(r), nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // copyLock is the mutex of one copy; see proxyState.copyMu.
@@ -971,14 +973,23 @@ func (m *Manager) stopCappedCopy(ctx context.Context, p runtime.ProxyProvider, i
 		m.proxy.proxyMu.Unlock()
 		if stillCapped {
 			m.store.RecordEvent(slug, "proxied_capped", fmt.Sprintf("proxy %d", id))
-		} else if refused := m.copyTickRefusal(id, slug); loadErr == nil && refused != nil {
-			// Stopped, and not marked: it waits for its owner, not for the cap.
-			m.store.RecordEvent(slug, "proxied_start_error", refused.Error())
 		} else if loadErr == nil {
-			if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), specOf(fresh), detectOwnIP(ctx)); err != nil {
-				m.store.RecordEvent(slug, "proxied_start_error", maskSecrets(err.Error(), fresh))
-				// Marked, so the next pass starts it; unmarked it would stay stopped.
+			refused, lookErr := m.copyTickRefusal(id, slug)
+			switch {
+			case lookErr != nil:
+				// Unknown whether it may start: marked, so the next pass reads its
+				// record again and starts it if it may.
+				m.store.RecordEvent(slug, "proxied_start_error", lookErr.Error())
 				_ = m.store.SetProxiedCopyCapped(id, slug, true)
+			case refused != nil:
+				// Stopped, and not marked: it waits for its owner, not for the cap.
+				m.store.RecordEvent(slug, "proxied_start_error", refused.Error())
+			default:
+				if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), specOf(fresh), detectOwnIP(ctx)); err != nil {
+					m.store.RecordEvent(slug, "proxied_start_error", maskSecrets(err.Error(), fresh))
+					// Marked, so the next pass starts it; unmarked it would stay stopped.
+					_ = m.store.SetProxiedCopyCapped(id, slug, true)
+				}
 			}
 		}
 	}
