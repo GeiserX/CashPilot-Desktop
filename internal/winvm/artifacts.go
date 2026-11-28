@@ -288,11 +288,11 @@ func isStagedScript(rel string) bool {
 }
 
 // dropNewArtifacts takes off the staged scripts dir's journal recorded since
-// before, and the journal itself when there was none before and nothing it
-// records is left. A Remove that touches nothing uses it to leave no file of
-// its own. Only staged scripts count: the PowerShell bootstrap of a Setup can
-// record other files in the same folder at the same time, outside the Go
-// mutation lock. It is best effort: whatever stays is listed by unknownData.
+// before. A Remove that touches nothing uses it to leave no script of its
+// own. Only staged scripts count, and the journal stays: the PowerShell
+// bootstrap of a Setup can record other files in the same folder at the same
+// time, outside the Go mutation lock. It is best effort: whatever stays is
+// listed by unknownData.
 func dropNewArtifacts(dir string, before map[string][]string, hadLog bool) {
 	if hadLog && before == nil {
 		return
@@ -310,30 +310,11 @@ func dropNewArtifacts(dir string, before map[string][]string, hadLog bool) {
 	// records its path had before. A file ID cannot tell, because the
 	// journal keeps the names of files already deleted, a later write
 	// reuses the name, and Linux reuses a freed inode number at once.
-	fresh := map[string][]string{}
-	var paths []string
 	for rel, ids := range records {
-		if !isStagedScript(rel) || len(ids) <= len(before[rel]) {
-			continue
-		}
-		fresh[rel] = ids[len(before[rel]):]
-		paths = append(paths, rel)
-	}
-	// Descendants sort after their directory.
-	slices.Sort(paths)
-	slices.Reverse(paths)
-	for _, rel := range paths {
-		_ = removeRecorded(dir, j.root, rel, fresh[rel])
-	}
-	if hadLog {
-		return
-	}
-	for rel := range records {
-		if _, err := os.Lstat(filepath.Join(dir, rel)); rel != artifactLogName && err == nil {
-			return
+		if isStagedScript(rel) && len(ids) > len(before[rel]) {
+			_ = removeRecorded(dir, j.root, rel, ids[len(before[rel]):])
 		}
 	}
-	_ = removeRecorded(dir, j.root, artifactLogName, []string{j.id})
 }
 
 // CheckJournaledFile verifies a file the elevated bootstrap created.
