@@ -2134,5 +2134,17 @@
   "main.scope.worker": "工作节点",
   "logs.wrap": "自动换行",
   "logs.empty": "（无日志）",
-  "go.importers.refuse.m4bEncrypted": "{name} 是加密的 money4band 5.0 文件。请运行 `m4b config edit`，复制它打开的已解密 JSON，然后粘贴到这里。"
+  "go.importers.refuse.m4bEncrypted": "{name} 是加密的 money4band 5.0 文件。请运行 `m4b config edit`，复制它打开的已解密 JSON，然后粘贴到这里。",
+  "installer.finishRun": "打开 CashPilot Desktop",
+  "installer.closing": "如果 CashPilot Desktop 正从 {dir} 运行，正在将其关闭",
+  "installer.options.title": "选择还要移除的内容",
+  "installer.options.subtitle": "应用、其快捷方式和后台助手始终会被移除。",
+  "installer.options.intro": "CashPilot Desktop 将从 {dir} 中移除。它还可以移除它启动的收益应用以及你的数据。不勾选某一项即可保留该部分。",
+  "installer.options.removeEarners": "停止并移除 CashPilot Desktop 启动的收益应用(&S)",
+  "installer.options.removeEarnersHelp": "仅限 CashPilot Desktop 创建的容器及其原生收益应用。不会改动其他容器。Docker 卷会保留。不勾选时，这些容器会继续运行。",
+  "installer.options.deleteData": "删除我的 CashPilot 数据(&D)",
+  "installer.options.deleteDataHelp": "设置、收益数据库、日志和已保存的登录信息。不勾选时，它们会保留，新安装或便携版 exe 会再次找到它们。",
+  "installer.options.uninstall": "卸载(&U)",
+  "installer.cleanupFailed": "应用的清理未完成（结果：{result}）。上面几行说明了剩余的内容。",
+  "installer.somePartsLeft": "部分内容无法移除。详细信息列表说明了是哪些。"
 }

@@ -2134,5 +2134,17 @@
   "main.scope.worker": "воркер",
   "logs.wrap": "Переносити рядки",
   "logs.empty": "(журналів немає)",
-  "go.importers.refuse.m4bEncrypted": "{name} — зашифрований файл money4band 5.0. Виконайте `m4b config edit`, скопіюйте розшифрований JSON, який відкриється, і вставте його сюди."
+  "go.importers.refuse.m4bEncrypted": "{name} — зашифрований файл money4band 5.0. Виконайте `m4b config edit`, скопіюйте розшифрований JSON, який відкриється, і вставте його сюди.",
+  "installer.finishRun": "Відкрити CashPilot Desktop",
+  "installer.closing": "Закриття CashPilot Desktop, якщо він запущений з {dir}",
+  "installer.options.title": "Виберіть, що ще видалити",
+  "installer.options.subtitle": "Застосунок, його ярлики й фоновий помічник видаляються завжди.",
+  "installer.options.intro": "CashPilot Desktop буде видалено з {dir}. Він також може видалити запущені ним застосунки для заробітку та ваші дані. Залиште прапорець порожнім, щоб зберегти відповідну частину.",
+  "installer.options.removeEarners": "&Зупинити й видалити застосунки для заробітку, запущені CashPilot Desktop",
+  "installer.options.removeEarnersHelp": "Лише контейнери, створені CashPilot Desktop, і його нативні застосунки для заробітку. Інші контейнери не зачіпаються. Томи Docker залишаються. Якщо не позначено, контейнери продовжують працювати.",
+  "installer.options.deleteData": "Видалити &мої дані CashPilot",
+  "installer.options.deleteDataHelp": "Налаштування, база даних заробітку, журнали й збережені логіни. Якщо не позначено, вони залишаються, і нове встановлення чи портативний exe знайде їх знову.",
+  "installer.options.uninstall": "&Видалити",
+  "installer.cleanupFailed": "Очищення застосунку не завершилося (результат: {result}). Рядки вище показують, що залишилося.",
+  "installer.somePartsLeft": "Деякі частини не вдалося видалити. Список подробиць показує, які саме."
 }

@@ -2134,5 +2134,17 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Ajustar líneas",
   "logs.empty": "(sin registros)",
-  "go.importers.refuse.m4bEncrypted": "{name} es un archivo cifrado de money4band 5.0. Ejecuta `m4b config edit`, copia el JSON descifrado que abre y pégalo aquí."
+  "go.importers.refuse.m4bEncrypted": "{name} es un archivo cifrado de money4band 5.0. Ejecuta `m4b config edit`, copia el JSON descifrado que abre y pégalo aquí.",
+  "installer.finishRun": "Abrir CashPilot Desktop",
+  "installer.closing": "Cerrando CashPilot Desktop si se está ejecutando desde {dir}",
+  "installer.options.title": "Elige qué más quitar",
+  "installer.options.subtitle": "La app, sus accesos directos y su asistente en segundo plano se quitan siempre.",
+  "installer.options.intro": "CashPilot Desktop se quitará de {dir}. También puede quitar las apps de ingresos que inició, y tus datos. Deja una casilla sin marcar para conservar esa parte.",
+  "installer.options.removeEarners": "&Detener y quitar las apps de ingresos que inició CashPilot Desktop",
+  "installer.options.removeEarnersHelp": "Solo los contenedores que creó CashPilot Desktop y sus apps de ingresos nativas. Los demás contenedores no se tocan. Los volúmenes de Docker se conservan. Si no la marcas, los contenedores siguen funcionando.",
+  "installer.options.deleteData": "&Borrar mis datos de CashPilot",
+  "installer.options.deleteDataHelp": "Los ajustes, la base de datos de ganancias, los registros y los inicios de sesión guardados. Si no la marcas, se conservan, y una instalación nueva o el exe portable los vuelve a encontrar.",
+  "installer.options.uninstall": "&Desinstalar",
+  "installer.cleanupFailed": "La limpieza de la app no terminó (resultado: {result}). Las líneas de arriba indican lo que queda.",
+  "installer.somePartsLeft": "Algunas partes no se pudieron quitar. La lista de detalles indica cuáles."
 }
