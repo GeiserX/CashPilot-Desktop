@@ -167,6 +167,8 @@ Function un.OptionsPage
     ${If} $0 == error
         Abort
     ${EndIf}
+    # Arabic lays the page out right to left; $(^RTL) is 0 for the other languages.
+    nsDialogs::SetRTL $(^RTL)
 
     ${NSD_CreateLabel} 0 0 100% 24u "$(OPTIONS_INTRO)"
     Pop $0
