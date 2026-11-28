@@ -2,7 +2,7 @@
 
 > Some catalog links are affiliate/referral links -- see [Disclosure](#disclosure).
 
-CashPilot bundles a catalog of 49 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
+CashPilot bundles a catalog of 50 active passive-income services across multiple categories (the catalog also carries 11 retired entries, which the app hides and refuses to deploy). A representative selection is shown below.
 
 ## Before you start: how bandwidth-sharing works
 
@@ -29,7 +29,7 @@ Services CashPilot can deploy and manage automatically via Docker containers.
 | [MystNodes](https://mystnodes.co/?referral_code=do7v7YOoBBpbOstKQovX2pUvZYKia4ZhH3QIdNtE) | ✅ | ✅ | Unlimited | Unlimited | Crypto (MYST) |
 | [PacketStream](https://packetstream.io/?psr=7xgZ) | ✅ | ❌ | Unlimited | Undocumented | PayPal |
 | [ProxyBase](https://peer.proxybase.org/dashboard/signup?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto |
-| [ProxyBase Markets](https://proxybase.xyz?referral=nXzS3c6iTO) | ✅ | ✅ | Unlimited | Undocumented | Crypto (USDC) |
+| [ProxyBase Markets](https://proxybase.xyz/console?ref=cashpilot) | ✅ | ✅ | Unlimited | Undocumented | Crypto (USDC) |
 | [ProxyLite](https://proxylite.ru/?r=KMUPRZIZ) | ✅ | ✅ | Unlimited | Undocumented | Crypto, PayPal |
 | [ProxyRack](https://peer.proxyrack.com/ref/mpwiok3xlaxeycnn5znqlg7ipjeutxyxr6xl7vmn) | ✅ | ✅ | 500 | Undocumented | PayPal, Gift cards, Bank |
 | [Repocket](https://link.repocket.com/b1zM) | ✅ | ❌ | 5 | Undocumented | Gift Cards, Crypto |
@@ -68,11 +68,11 @@ These services have no Docker image. CashPilot lists them in the catalog with si
 | [Grass](https://app.grass.io/register?referralCode=kn8FNEPnUr2tMqE) | ✅ | ❌ | Unlimited | 1 | Crypto (GRASS) | Active |
 | [Helium](https://helium.com) | ✅ | ❌ | Unlimited | 1 | Crypto (HNT) | Active |
 | [Nodepay](https://app.nodepay.ai/register?ref=0wzzyznen64j9zx) | ✅ | ❌ | Unlimited | 1 | Crypto (NC) | Active |
-| [Nodle](https://nodle.com) | ✅ | ✅ | Unlimited | 1 | Crypto (NODL) | Active |
+| [Nodle](https://join.nodle.com/p/YDFoLA4iO08LI7igSskPjw) | ✅ | ✅ | Unlimited | 1 | Crypto (NODL) | Active |
 | [PassiveApp](https://passiveapp.com/i/bqpC4M) | ✅ | ❌ | Unlimited | 1 | Crypto, PayPal | Active |
 | [Sentinel dVPN](https://sentinel.co) | ✅ | ✅ | Unlimited | 1 | Crypto (DVPN) | Active |
 | [Spide](https://spide.network/register.html?f3bc51) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
-| [Teneo Protocol](https://dashboard.teneo.pro/auth/signup?referralCode=CAqef) | ✅ | ❌ | Unlimited | 1 | Crypto (TENEO) | Active |
+| [Teneo Protocol](https://hub.teneo.pro/signup?ref=PSA3BHPJ) | ✅ | ❌ | Unlimited | 1 | Crypto (TENEO) | Active |
 | [Theta Edge Node](https://thetatoken.org) | ✅ | ✅ | Unlimited | 1 | Crypto (TFUEL) | Active |
 | [Titan Network](https://edge.titannet.info/signup?inviteCode=2GKKJ495) | ✅ | ❌ | Unlimited | 1 | Crypto (TNT) | Active |
 | [Uprock](https://link.uprock.com/i/33e8492e) | ✅ | ❌ | Unlimited | 1 | Crypto | Active |
@@ -86,6 +86,7 @@ GPU-intensive computing services. Requires compatible hardware.
 
 | Service | Residential IP | GPU Required | Min Storage | Payout | Status |
 |---------|:-:|:-:|:-:|--------|--------|
+| [Clore.ai](https://clore.ai/register?ref_id=hq5z8kvc) | ✅ | ✅ (NVIDIA) | 32GB | Crypto (CLORE, BTC, USDT or USDC) | Active |
 | [Flux](https://runonflux.io) | ✅ | ❌ | 220GB | Crypto (FLUX) | Active |
 | [Golem Network](https://golem.network) | ✅ | ❌ | 20GB | Crypto (GLM) | Active |
 | [io.net](https://io.net) | ✅ | ✅ | N/A | Crypto (IO) | Active |
