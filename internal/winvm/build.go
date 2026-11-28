@@ -89,6 +89,11 @@ func ParseSetupParams(b []byte) (SetupParams, error) {
 	if sp.ISO != "" && (!winPathRe.MatchString(sp.ISO) || strings.Contains(sp.ISO, "..") || !strings.HasSuffix(strings.ToLower(sp.ISO), ".iso")) {
 		return SetupParams{}, fmt.Errorf("setup params: %q is not an absolute path to an .iso", sp.ISO)
 	}
+	// An ISO means a new install, and Render refuses a bad index only after
+	// the switch, NAT, firewall and guardian exist.
+	if sp.ISO != "" && (sp.ImageIndex < 1 || sp.ImageIndex > 32) {
+		return SetupParams{}, fmt.Errorf("setup params: image index %d is outside 1..32", sp.ImageIndex)
+	}
 	if sp.ProductKey != "" && !productKeyRe.MatchString(sp.ProductKey) {
 		return SetupParams{}, errors.New("setup params: the product key is not five groups of five letters and digits")
 	}

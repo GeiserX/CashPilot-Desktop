@@ -307,6 +307,9 @@ try {
     Stop-VM -VM (Get-OwnedVM $id $in.owner) -TurnOff -Force -ErrorAction SilentlyContinue
     Remove-VM -VM (Get-OwnedVM $id $in.owner) -Force -ErrorAction SilentlyContinue
     if (-not (Test-DiskInUse $diskID)) { [CpdDisk]::DeleteOwned($disk, $diskID) | Out-Null }
+  } elseif (-not (Test-DiskInUse $diskID)) {
+    # No VM holds the new disk, and Setup records it only on success.
+    [CpdDisk]::DeleteOwned($disk, $diskID) | Out-Null
   }
   throw
 }

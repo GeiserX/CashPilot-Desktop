@@ -1168,6 +1168,29 @@ function New-VHD($Path, [switch]$Dynamic, $SizeBytes) {
 	}
 }
 
+// A New-VM that throws after New-VHD made the disk leaves no VM, and Setup
+// records the disk only on success, so nothing would ever delete it.
+func TestCreateVMDeletesItsDiskWhenNewVMFails(t *testing.T) {
+	const mock = `
+param($root)
+function Get-VM {}
+function Open-CPDDirectory($path, $create, $tag) { [IO.MemoryStream]::new() }
+function New-VHD($Path, [switch]$Dynamic, $SizeBytes) { [pscustomobject]@{ Path = $Path } }
+class CpdDisk {
+  static [string] Identify([string]$path) { return 'disk-id' }
+  static [bool] DeleteOwned([string]$path, [string]$id) { throw 'deleted the new disk' }
+}
+function Test-DiskInUse($id) { $false }
+function New-VM { throw 'New-VM failed' }
+`
+	root := t.TempDir()
+	code, out := runOwnedScriptWithFake(t, mock, buildPrelude+scriptCreateVMBody,
+		map[string]any{"dataDir": root, "vm": "CashPilot-VM", "owner": tOwner, "diskBytes": 1, "memory": 1}, root)
+	if code == 0 || !strings.Contains(string(out), "deleted the new disk") {
+		t.Fatalf("the disk outlived a failed New-VM: exit %d: %s", code, out)
+	}
+}
+
 func TestEjectLeavesUnrecordedDVDDrives(t *testing.T) {
 	const mock = `
 param($vmId, $owner)

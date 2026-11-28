@@ -799,3 +799,29 @@ func TestR6SetupRejectsUnusedStorageArgument(t *testing.T) {
 		t.Fatalf("Setup accepted an unused storage setting: %v", err)
 	}
 }
+
+// An ISO means a new Windows install, which needs an edition. A bad index
+// must stop Setup before it touches the host, not at the answer file after
+// the switch, NAT, firewall and guardian exist. Repair has no ISO.
+func TestSetupParamsRefuseABadImageIndexWithAnISO(t *testing.T) {
+	for _, index := range []int{0, 33} {
+		sp := setupParams()
+		sp.ImageIndex = index
+		raw, err := json.Marshal(sp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := winvm.ParseSetupParams(raw); err == nil || !strings.Contains(err.Error(), "image index") {
+			t.Fatalf("image index %d with an ISO: err = %v, want a refusal", index, err)
+		}
+	}
+	sp := setupParams()
+	sp.ISO, sp.ImageIndex = "", 0
+	raw, err := json.Marshal(sp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := winvm.ParseSetupParams(raw); err != nil {
+		t.Fatalf("a Repair with no ISO and no index: %v", err)
+	}
+}
