@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -28,6 +29,7 @@ const (
 	FenceCut      = "cut"            // the fence changed or could not be read, so the guest is cut off
 	FenceReprove  = "reprove-needed" // macOS or a tool changed since the proof
 	FenceUnproven = "unproven"       // no green proof yet, or one is running
+	FenceUnknown  = "unknown"        // the app's own reading: the guard's report is too old to trust
 )
 
 // Status is what the daemon last saw and did. It writes it after every pass;
@@ -150,7 +152,20 @@ func WriteAtomic(path string, b []byte, perm os.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	// The rename is durable only once its folder is synced: Remove needs some
+	// of these files after a power loss.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // ReadStatus reads status.json.

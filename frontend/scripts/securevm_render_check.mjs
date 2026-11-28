@@ -50,6 +50,9 @@ check("RULE 1: the green state has no warning tone", !/class="text-warn" data-se
 const cut = renderSecureVM(base({ network: "disconnected", fence: "cut", reason: "the fence changed, so the Secure VM is cut off the network: rules" }), { now });
 check("RULE 1: a cut fence warns", /class="text-warn" data-securevm-state="disconnected\/cut"/.test(cut), cut);
 check("RULE 1: a cut fence shows the guard's reason", cut.includes("cut off the network: rules"));
+const silent = renderSecureVM(base({ fence: "unknown", reason: "The guard has not checked the fence for 5m0s." }), { now });
+check("RULE 1: a silent guard is not green", !secureVMGreen(base({ fence: "unknown" })) && /class="text-warn" data-securevm-state="connected\/unknown"/.test(silent), silent);
+check("RULE 1: a silent guard says so", silent.includes(t("securevm.fence.unknown")) && silent.includes("has not checked the fence"), silent);
 
 // 2. Unknowns
 const noCount = renderSecureVM(base({ blocked: null }), { now });
