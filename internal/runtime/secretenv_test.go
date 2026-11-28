@@ -234,6 +234,20 @@ func TestTheImageCommandIsKeptWhenTheCatalogSetsNone(t *testing.T) {
 	}
 }
 
+func TestAnEmptyEntrypointClearsItAndTheCommandRunsFirst(t *testing.T) {
+	secretsOn(t)
+	svc, env := honeygain(), honeygainEnv()
+	cmd := buildCommandArgs(svc.Docker.Command, env)
+	run := imageRun{Entrypoint: []string{"./honeygain"}}
+	p := planSecrets(svc, "honeygain", env, cmd, []string{""}, run, "amd64")
+	if p == nil || p.cmd[0] != "-tou-accept" || p.entrypointLen != 0 {
+		t.Fatalf("the start program would exec %+v", p)
+	}
+	if planSecrets(svc, "honeygain", env, nil, []string{""}, run, "amd64") != nil {
+		t.Fatal("nothing to run, but a plan was made")
+	}
+}
+
 func TestTheHeartbeatReportsTheSetting(t *testing.T) {
 	old := shimFor
 	t.Cleanup(func() { shimFor = old })
