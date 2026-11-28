@@ -558,7 +558,7 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 type tunnelDocker interface {
 	facts(ctx context.Context) daemonInfo
 	pull(ctx context.Context, image string) error
-	imageRuns(ctx context.Context, image string) (entrypoint, cmd []string, err error)
+	imageRuns(ctx context.Context, image string) (imageRun, error)
 	create(ctx context.Context, opts client.ContainerCreateOptions) (string, error)
 	copyTo(ctx context.Context, id, dir string, archive []byte) error
 	start(ctx context.Context, id string) error
@@ -601,15 +601,15 @@ func (d liveTunnelDocker) facts(ctx context.Context) daemonInfo { return daemonF
 func (d liveTunnelDocker) pull(ctx context.Context, image string) error {
 	return pullImage(ctx, d.cli, image, nil)
 }
-func (d liveTunnelDocker) imageRuns(ctx context.Context, image string) ([]string, []string, error) {
+func (d liveTunnelDocker) imageRuns(ctx context.Context, image string) (imageRun, error) {
 	inspected, err := d.cli.ImageInspect(ctx, image)
 	if err != nil {
-		return nil, nil, err
+		return imageRun{}, err
 	}
 	if inspected.Config == nil {
-		return nil, nil, errors.New("the daemon returned no image config")
+		return imageRun{}, errors.New("the daemon returned no image config")
 	}
-	return inspected.Config.Entrypoint, inspected.Config.Cmd, nil
+	return imageRun{inspected.Config.Entrypoint, inspected.Config.Cmd, inspected.Config.User}, nil
 }
 func (d liveTunnelDocker) create(ctx context.Context, opts client.ContainerCreateOptions) (string, error) {
 	created, err := d.cli.ContainerCreate(ctx, opts)
@@ -864,7 +864,8 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 	if err := d.pull(ctx, image); err != nil {
 		return Exit{}, err
 	}
-	entrypoint, cmd, err := d.imageRuns(ctx, image)
+	run, err := d.imageRuns(ctx, image)
+	entrypoint, cmd := run.Entrypoint, run.Cmd
 	if err != nil {
 		return Exit{}, fmt.Errorf("%s: %w", i18n.T("go.runtime.proxy.inspectImageFailed", "image", image), err)
 	}
@@ -924,10 +925,23 @@ func deployProxied(ctx context.Context, d tunnelDocker, req ProxiedDeploy) (Exit
 		return Exit{}, err
 	}
 	applyInit(opts.HostConfig, bringsOwnInit(entrypoint, cmd, opts.Config.Entrypoint, opts.Config.Cmd), facts.OSType)
+	// With CASHPILOT_EARNER_SECRETS=file the secret values reach the copy as a file
+	// (secretenv.go). The env is the one earnerCreate built, from the config itself.
+	secrets := planSecrets(req.Service, req.Slug, envMap(opts.Config.Env), opts.Config.Cmd, opts.Config.Entrypoint, run, ArchFamily(facts.Architecture))
+	if secrets != nil {
+		secrets.apply(opts.Config)
+	}
 	earnerID, err := d.create(ctx, opts)
 	if err != nil {
 		removeQuietly(d, sidecarID, 2)
 		return Exit{}, &ProxyError{redact(i18n.T("go.runtime.proxy.copyRefused", "error", err.Error()), req.Proxy.secrets())}
+	}
+	if secrets != nil {
+		if err := d.copyTo(ctx, earnerID, "/", secrets.archive()); err != nil {
+			removeQuietly(d, earnerID, 2)
+			removeQuietly(d, sidecarID, 2)
+			return Exit{}, &ProxyError{redact(i18n.T("go.runtime.proxy.copyRefused", "error", err.Error()), req.Proxy.secrets())}
+		}
 	}
 	if err := d.start(ctx, earnerID); err != nil {
 		removeQuietly(d, earnerID, 2)

@@ -336,8 +336,12 @@ type DockerConfig struct {
 	// Entrypoint replaces the image's ENTRYPOINT when set. Storj uses it to give its
 	// node a real stop grace: the image's supervisord otherwise kills the node 10
 	// seconds after any stop, however long Docker is willing to wait.
-	Entrypoint  []string `json:"entrypoint" yaml:"entrypoint"`
-	NetworkMode string   `json:"networkMode" yaml:"network_mode"`
+	Entrypoint []string `json:"entrypoint" yaml:"entrypoint"`
+	// SecretsInFile false keeps this service's secret variables in its environment
+	// even with CASHPILOT_EARNER_SECRETS=file (internal/runtime/secretenv.go): for an
+	// image that reads a secret where the start program cannot reach. Unset is true.
+	SecretsInFile *bool  `json:"secretsInFile,omitempty" yaml:"secrets_in_file"`
+	NetworkMode   string `json:"networkMode" yaml:"network_mode"`
 	// Runtime is the one container runtime this service works under ("runc"), set on
 	// the container whatever the daemon's default is. Mysterium needs it: gVisor has
 	// no iptables-nft and no kernel WireGuard, so the node starts there and carries

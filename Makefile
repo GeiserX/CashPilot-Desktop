@@ -1,12 +1,17 @@
 WAILS ?= $(shell go env GOPATH)/bin/wails
 
-.PHONY: dev build test test-race e2e check generate catalog-sync catalog-check
+.PHONY: dev build shim test test-race e2e check generate catalog-sync catalog-check
 
 dev:
 	$(WAILS) dev
 
-build:
+build: shim
 	$(WAILS) build
+
+# The earner start program of CASHPILOT_EARNER_SECRETS=file, built for linux/amd64
+# and linux/arm64 and embedded in the app (internal/shimbin).
+shim:
+	go generate ./internal/shimbin
 
 test:
 	go test ./...

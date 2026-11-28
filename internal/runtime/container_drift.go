@@ -133,6 +133,15 @@ func shapeOf(ctr container.InspectResponse) ContainerShape {
 			key, _, _ := strings.Cut(item, "=")
 			keys[key] = true
 		}
+		// One whose credentials are in a file (secretenv.go) is judged as the earner it
+		// starts: its own entrypoint, and the variables the file gives it.
+		if secretShaped(cfg) {
+			entrypoint, secret := secretLogicalView(cfg)
+			shape.Entrypoint = entrypoint
+			for _, key := range secret {
+				keys[key] = true
+			}
+		}
 		shape.EnvKeys = sortedKeys(keys)
 	}
 	if host := ctr.HostConfig; host != nil {

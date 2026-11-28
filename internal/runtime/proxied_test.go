@@ -112,11 +112,11 @@ func (f *fakeTunnelDocker) pull(_ context.Context, image string) error {
 	f.record("pull " + image)
 	return nil
 }
-func (f *fakeTunnelDocker) imageRuns(context.Context, string) ([]string, []string, error) {
+func (f *fakeTunnelDocker) imageRuns(context.Context, string) (imageRun, error) {
 	if f.imageEntrypoint != nil {
-		return f.imageEntrypoint, nil, nil
+		return imageRun{Entrypoint: f.imageEntrypoint}, nil
 	}
-	return []string{"entrypoint"}, nil, nil
+	return imageRun{Entrypoint: []string{"entrypoint"}}, nil
 }
 func (f *fakeTunnelDocker) create(_ context.Context, opts client.ContainerCreateOptions) (string, error) {
 	f.mu.Lock()
