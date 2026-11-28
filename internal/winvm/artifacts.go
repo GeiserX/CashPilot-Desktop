@@ -282,10 +282,17 @@ func journaledNames(dir string) (map[string][]string, bool) {
 	return records, true
 }
 
-// dropNewArtifacts takes off the files dir's journal recorded since before,
-// and the journal itself when there was none before and nothing it records
-// is left. A Remove that touches nothing uses it to leave no file of its
-// own. It is best effort: whatever stays is listed by unknownData.
+// isStagedScript is a top-level PowerShell script that a host call staged.
+func isStagedScript(rel string) bool {
+	return filepath.Base(rel) == rel && strings.HasPrefix(rel, "cashpilot-") && strings.HasSuffix(rel, ".ps1")
+}
+
+// dropNewArtifacts takes off the staged scripts dir's journal recorded since
+// before, and the journal itself when there was none before and nothing it
+// records is left. A Remove that touches nothing uses it to leave no file of
+// its own. Only staged scripts count: the PowerShell bootstrap of a Setup can
+// record other files in the same folder at the same time, outside the Go
+// mutation lock. It is best effort: whatever stays is listed by unknownData.
 func dropNewArtifacts(dir string, before map[string][]string, hadLog bool) {
 	if hadLog && before == nil {
 		return
@@ -306,7 +313,7 @@ func dropNewArtifacts(dir string, before map[string][]string, hadLog bool) {
 	fresh := map[string][]string{}
 	var paths []string
 	for rel, ids := range records {
-		if rel == artifactLogName || len(ids) <= len(before[rel]) {
+		if !isStagedScript(rel) || len(ids) <= len(before[rel]) {
 			continue
 		}
 		fresh[rel] = ids[len(before[rel]):]

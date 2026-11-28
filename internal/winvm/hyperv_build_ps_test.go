@@ -901,7 +901,7 @@ func TestHeaderOnlyPktmonExportLeavesProofUnproven(t *testing.T) {
 					results = append(results, Judge(step, evidence))
 					continue
 				}
-				witness := Evidence{DropDelta: 1, Delivered: true}
+				witness := Evidence{DropDelta: 1, Delivered: step.Witness == WitnessDelivered}
 				if step.Kind == Red {
 					witness.Arrived = []string{"red control"}
 				}
