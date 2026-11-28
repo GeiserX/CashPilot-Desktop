@@ -480,23 +480,40 @@ func (p *prover) send(ctx context.Context, targets []Target) (arrived []string, 
 	return p.can.arrived(token), captured, nil
 }
 
+// redTries is how many times the red step sends its probes. A guest that
+// just booted can lose its first packets, and a red step only needs each
+// probe to get through once.
+const redTries = 3
+
 // red opens holes to targets and needs each one to get through.
 func (p *prover) red(ctx context.Context, id string, targets []Target) bool {
-	arrived, captured, err := p.send(ctx, targets)
-	if err != nil {
-		p.add(id, securevm.KindRed, securevm.Broken, err.Error())
-		return false
-	}
-	// Each protocol needs its own arrival: a later green step reads the
-	// silence of both as the fence holding.
-	var missing []string
-	for _, t := range targets {
-		for _, proto := range []string{"/tcp", "/udp"} {
-			if k := t.Label + proto; !slices.Contains(arrived, k) && !slices.Contains(captured, k) {
-				missing = append(missing, k)
+	var arrived, captured, missing []string
+	for try := 1; try <= redTries; try++ {
+		a, c, err := p.send(ctx, targets)
+		if err != nil {
+			p.add(id, securevm.KindRed, securevm.Broken, err.Error())
+			return false
+		}
+		arrived, captured = append(arrived, a...), append(captured, c...)
+		// Each protocol needs its own arrival: a later green step reads the
+		// silence of both as the fence holding.
+		missing = nil
+		for _, t := range targets {
+			for _, proto := range []string{"/tcp", "/udp"} {
+				if k := t.Label + proto; !slices.Contains(arrived, k) && !slices.Contains(captured, k) {
+					missing = append(missing, k)
+				}
 			}
 		}
+		if len(missing) == 0 {
+			break
+		}
+		p.d.logf("proof: %s try %d: nothing arrived from %s", id, try, strings.Join(missing, ", "))
 	}
+	slices.Sort(arrived)
+	arrived = slices.Compact(arrived)
+	slices.Sort(captured)
+	captured = slices.Compact(captured)
 	if len(missing) > 0 {
 		p.add(id, securevm.KindRed, securevm.Broken, "the hole was open but nothing arrived from "+strings.Join(missing, ", ")+", so this check proves nothing")
 		return false
