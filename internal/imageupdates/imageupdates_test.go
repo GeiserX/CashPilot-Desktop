@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -229,19 +230,42 @@ func TestRunGoesOnAfterAnErrorAndPausesAfterAnUpdate(t *testing.T) {
 	}
 }
 
-// Docker recreated the app even when the history write failed: the pause still
-// follows, so the next app is not recreated right after it.
+// The pause follows each deploy, before the next one, even when the history
+// write failed; the error keeps the deploy's reason as well as the write's.
 func TestRunPausesAfterARecreateWhoseRowCannotBeWritten(t *testing.T) {
-	f := newFake(map[string]Check{"a": moved("a"), "b": moved("b")})
+	f := newFake(map[string]Check{"a": moved("a"), "b": moved("b"), "c": moved("c")})
 	f.undo["b"] = true
+	var events []string
 	h := f.hooks()
+	deploy := h.Deploy
+	h.Deploy = func(ctx context.Context, slug, containerID, newImage string, checkedAt time.Time) (DeployResult, bool, error) {
+		events = append(events, "deploy "+slug)
+		return deploy(ctx, slug, containerID, newImage, checkedAt)
+	}
+	h.Sleep = func(_ context.Context, d time.Duration) { events = append(events, "gap") }
 	h.Record = func(Record) error { return errors.New("the disk is full") }
-	got := Run(context.Background(), h, config.ImageUpdates{Mode: Auto}, []string{"a", "b"})
-	if got["a"] != "error" || got["b"] != "error" {
+	got := Run(context.Background(), h, config.ImageUpdates{Mode: Auto}, []string{"a", "b", "c"})
+	if got["a"] != "error" || got["b"] != "error" || got["c"] != "error" {
 		t.Fatalf("outcomes %v; want the write errors reported", got)
 	}
-	if len(f.slept) != 2 {
-		t.Fatalf("slept %v; want a gap after the update and after the undo", f.slept)
+	want := []string{"deploy a", "gap", "deploy b", "gap", "deploy c", "gap"}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events %v; want %v", events, want)
+	}
+	_, err := UpdateService(context.Background(), h, "b", Auto)
+	if err == nil || !strings.Contains(err.Error(), "stopped within") || !strings.Contains(err.Error(), "disk is full") {
+		t.Fatalf("the error of an undone update whose row failed: %v; want both reasons", err)
+	}
+}
+
+// A deploy that failed may still have replaced the container before a later
+// step failed, so the next app waits too.
+func TestRunPausesAfterAFailedDeploy(t *testing.T) {
+	f := newFake(map[string]Check{"a": moved("a"), "b": moved("b")})
+	f.fail["a"] = true
+	got := Run(context.Background(), f.hooks(), config.ImageUpdates{Mode: Auto}, []string{"a", "b"})
+	if got["a"] != Failed || got["b"] != Updated || len(f.slept) != 2 {
+		t.Fatalf("outcomes %v, slept %v; want a gap after each deploy", got, f.slept)
 	}
 }
 

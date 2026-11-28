@@ -301,6 +301,21 @@ func TestAFailureLineAnywhereInTheLogCounts(t *testing.T) {
 	}
 }
 
+// A line longer than the scan keeps is judged in parts that overlap, so a
+// failure signal cut by a part's end still counts.
+func TestAFailureSignalAcrossALongLinesCutCounts(t *testing.T) {
+	fastSettle(t)
+	svc := withSignal("")
+	docker, p, _ := deployPinned(t, svc)
+	// The cut falls inside the signal: "canno" ends one part, "t be reached" starts the next.
+	docker.SetLogs(strings.Repeat("x", settleLineBytes-5) + "cannot be reached\n")
+	_, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil)
+	var undone *ImageUpdateUndone
+	if !errors.As(err, &undone) || !strings.Contains(err.Error(), "It cannot start") {
+		t.Fatalf("a failure signal across the cut of a long line: %v; want undone", err)
+	}
+}
+
 func TestAnUnlessLineAnywhereInTheLogCancelsTheSignal(t *testing.T) {
 	fastSettle(t)
 	// The unless line first, the failure line last: a reader that kept only a
@@ -432,8 +447,9 @@ func TestALookDockerNeverAnswersStillEndsThePeriod(t *testing.T) {
 	}
 }
 
-// The delete of the old image is bounded too: a daemon that never answers it
-// leaves the image on disk and says so, and the passed update stands.
+// The delete of the old image is bounded too. When the daemon does not answer in
+// time, nobody knows whether the image went: the passed update stands, and its
+// row says the old image may still be on disk.
 func TestAnOldImageDeleteDockerNeverAnswersIsBounded(t *testing.T) {
 	fastSettle(t)
 	remove := imageRemoveTimeout

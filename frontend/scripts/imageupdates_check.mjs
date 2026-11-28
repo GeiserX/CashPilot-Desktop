@@ -6,7 +6,7 @@
 //
 //   node scripts/imageupdates_check.mjs      # against ./.harness-build
 
-import { ImageUpdateEdits, renderImageUpdatesCard, shortDigest } from "../.harness-build/render/imageupdates.js";
+import { ImageUpdateEdits, draftOf, drawsOver, renderImageUpdatesCard, shortDigest } from "../.harness-build/render/imageupdates.js";
 
 let failures = 0;
 let checks = 0;
@@ -98,6 +98,19 @@ check("the older load with the draft is not drawn", !kept.isLatest(withDraft), "
 const drawn = kept.isLatest(without) ? kept.takeDraft() : null;
 check("the newest load draws the held draft", drawn?.["image-updates-mode"] === "notify", JSON.stringify(drawn));
 check("a draft is put back only once", kept.takeDraft() === null, "");
+
+// A redraw of a slot with no choices on it (empty, or the error card) holds no
+// draft, so the one held from before survives.
+check("a slot with no choices makes no draft", draftOf([]) === null, "");
+check("a card's choices make the draft", draftOf([["image-updates-mode", "off"]])?.["image-updates-mode"] === "off", "");
+
+// What a load draws over: an error card gives way to the next answer, and a card
+// stays when the reload failed or a change on it is not saved.
+check("an empty slot takes an error", drawsOver("empty", true, false), "");
+check("an error card gives way to a later answer, even with unsaved choices held", drawsOver("error", false, false), "");
+check("a card stays when the reload failed", !drawsOver("card", true, true), "");
+check("a card with an unsaved change stays", !drawsOver("card", false, false), "");
+check("a card with every change saved is redrawn", drawsOver("card", false, true), "");
 
 if (failures) {
   console.error(`\n${failures} of ${checks} image update checks failed`);

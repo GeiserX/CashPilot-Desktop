@@ -52,6 +52,10 @@ var imageRemoveTimeout = 2 * time.Minute
 // line's end. A longer line is judged in parts.
 const settleLineBytes = 64 << 10
 
+// settleLineOverlap is how much of a line cut at settleLineBytes the next part
+// starts with, so a signal that straddles the cut still matches.
+const settleLineOverlap = 1 << 10
+
 // FollowRef is the reference an image update checks and deploys for svc: the tag
 // that its image names, without the digest. ok is false for an image that names
 // no tag to follow: a custom image pinned by digest alone. A catalog image with a
@@ -294,11 +298,15 @@ type signalScan struct {
 
 func (s *signalScan) Write(p []byte) (int, error) {
 	for _, b := range p {
-		if b == '\n' || len(s.line) >= settleLineBytes {
+		if b == '\n' {
 			s.flush()
-			if b == '\n' {
-				continue
-			}
+			continue
+		}
+		if len(s.line) >= settleLineBytes {
+			// A long line goes on: the next part starts with the end of this one.
+			tail := append([]byte(nil), s.line[len(s.line)-settleLineOverlap:]...)
+			s.flush()
+			s.line = append(s.line, tail...)
 		}
 		s.line = append(s.line, b)
 	}
