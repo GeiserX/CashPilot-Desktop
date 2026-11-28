@@ -75,7 +75,7 @@ The fence is proven red, then green, at install, before any earner exists.
 | M8 | **Tart, softnet and VZ allow it. Apple's licence does not.** | VZ refused a third macOS guest. The SLA excludes "relay service" use. Tart and softnet are under source-available licences that allow non-competing use. Code-Hex/vz (MIT) is a Go binding to VZ. | Decision 1. Phase 2 can drive VZ from Go and drop the setuid softnet. |
 | M9 | **Yes for the cap. No for pf drop counters.** | A dummynet pipe of 10 Mbit/s cut upload to 8.9 Mbit/s. Download was not touched. Removing it gave back full speed. pf counted 0 for packets that softnet had already dropped. | The slider is an upload limit. The tile does not show "blocked packets" from pf. |
 | M10 | **Yes.** Notarized apps install. Unsigned ones are refused. | Five apps passed the SHA-256, Team ID and Gatekeeper checks. Spide ("no usable signature") and Noderr (no Team ID) were refused. Two apps need Rosetta. | Apps go to `/Applications` as root. CashPilot updates them from the catalog pin. |
-| M11 | **Yes.** Three apps by a file, Theta by its process, UpRock by its log. | Wipter, Teneo and Grass write a file or key only after sign-in. Theta has no account. UpRock's database is encrypted, and its log says "logged in". | The reader returns presence and a state word only. |
+| M11 | **Yes.** Four apps by a file, Theta by its process. | Wipter, Teneo, Grass and UpRock write a file or key only after sign-in. Theta has no account. UpRock's database is encrypted, so its marker is its credentials file (§7). | The reader returns presence and a state word only. |
 | M12 | **No vendor in the set forbids VMs.** EarnApp does, so it is out. | Read on 2026-11-27. The table is in §4. | The catalog gets three macOS fixes and one new entry. |
 | M13 | **Yes, beside Colima.** The cost is 6 GB of RAM and about 1.4 CPU cores. | Colima's VM ran for the whole lab. The guest's memory footprint was its full 6 GB. CPU averaged 1.44 cores, of which macOS's own update scan was 0.66. The disk used 38 GB of 80. VZ held host sleep back by 30 s. | The setup check needs 6 GB of free RAM. Decision 7. |
 
@@ -236,8 +236,9 @@ Packer typed capital letters and symbols. Our own VNC client (`vncdotool`) could
 - Pin the IPSW URL and its hash.
 - `tart create --from-ipsw` installs macOS. Before the first boot, the admin step attaches the disk image (`hdiutil attach -nomount`), finds the APFS volume with the Data role and writes three files into it: the agent, its LaunchDaemon (`--run-rpc` only) and `private/var/db/.AppleSetupDone`. Every write refuses a path through a link.
 - The guest boots with no account: no admin, no password, no SSH. Root reaches it only through the agent over vsock.
-- After the green proof, `internal/macvm/scripts/provision.sh` makes the standard user `earner` with a random password that is never kept, turns on its autologin, keeps the guest awake, turns Spotlight, Screen Sharing and Remote Login off, checks Gatekeeper, sets public DNS, turns automatic macOS upgrades off and sets UTC.
+- After the green proof, `internal/macvm/scripts/provision.sh` makes the standard user `earner` with a random password and turns on its autologin. It also keeps the guest awake, turns Spotlight, Screen Sharing and Remote Login off, checks Gatekeeper, sets public DNS, turns automatic macOS upgrades off and sets UTC.
 - This replaces Packer and the Setup Assistant typing, which succeeded in 1 of 3 builds.
+- CashPilot keeps the earner's password nowhere on the host. The guest keeps it in one place: `/etc/kcpassword`, the obfuscated copy that autologin needs, owned by root with mode 600. macOS only obfuscates that file, so a process that runs as root in the guest can read the password. Such a process can already do everything the earner can. The guest has no admin account, so the password opens no admin door.
 
 ### M7. Accounts, FileVault and Keychain
 
@@ -327,7 +328,7 @@ All paths are under `/Users/earner/Library/Application Support/`.
 | Wipter | `wipter-app/secure-credentials.json` exists | the file is absent | presence |
 | Teneo | `teneo.node/.token`, `.email`, `.consent_accepted`, `.node_api_key` exist | the files are absent | presence |
 | Grass | `io.getgrass.desktop/store.json` has the keys `wynd:device_id` and `wynd:status` | `store.json` already has `accessToken`, `refreshToken` and `wynd:authenticated: "true"` before any account sign-in, from an anonymous device login. Only the two keys above are new | the key names, never a value |
-| UpRock | `UpRock/logs/mining.log` has `logged in` and `set earning {"enabled": true}` | not seen | the last state words in the log |
+| UpRock | `UpRock/credentials.json` has the key `main`. The lab saw `logged in` in its log, but only with the keychain store (§7) | the file is `{}` | the key name, never a value |
 | Theta | no account. The node wallet lives in `Theta Edge Node/ThetaEdgeNode/` | none | process running |
 
 UpRock's `main.db` is encrypted ("file is not a database").
@@ -393,7 +394,7 @@ The guest checks for macOS updates on its own, with automatic download on.
 8. **App updates** come from the catalog pin. The apps are root-owned and cannot update themselves (M10).
 9. **The user's window** uses a client that sends modifier keys, such as Apple's Screen Sharing. Sign-in text that needs Shift goes through the earner's pasteboard and the app's Paste menu. The pasteboard is cleared after each use (M6).
 10. **The bandwidth slider** is an upload limit. The tile does not count blocked packets (M9).
-11. **Sign-in markers:** the Grass marker is `wynd:device_id`, not `accessToken`. UpRock is read from its log (M11).
+11. **Sign-in markers:** the Grass marker is `wynd:device_id`, not `accessToken`. The UpRock marker is the key `main` in `UpRock/credentials.json` (M11, §7).
 12. **The catalog:**
     - Teneo, UpRock and Spide get their macOS clients listed.
     - Spide and Noderr stay out of the guest: unsigned.
@@ -416,9 +417,9 @@ The guest checks for macOS updates on its own, with automatic download on.
 
 Closed by the app's own build (§7):
 
-- M6, VNC modifier keys: the pasteboard path is the design. Text goes into the earner's pasteboard through the guest agent, and the app's Paste menu takes it.
+- M6, VNC modifier keys: the pasteboard path is the design. Text goes into the earner's pasteboard through the guest agent. Over Tart's VNC, the Option key arrives as Command, so Option-V pastes it.
 - M10, autostart after a login: after a reboot of the Mac, all five earners started at the earner's login.
-- M11, UpRock's red state: a fresh install logs "not logged in". The reader now judges only UpRock's last sign-in line, so that line reads as signed out.
+- M11, UpRock's sign-in: its log is no marker. With the file store it logs `auto login done` both before and after a sign-in, and never `logged in`. The marker is now the key `main` in `UpRock/credentials.json`, which is `{}` until a sign-in.
 - M13, guest updates: `provision.sh` turns off automatic macOS downloads and installs (decision 7).
 
 ## 7. The app's own build on a real Mac
@@ -453,3 +454,21 @@ Wipter, Teneo and Theta came back signed in. UpRock did not. Its log said `keyri
 A status file written before the shutdown said "connected" until the guard's first pass after the boot. The page now shows such a status as stopped.
 
 **The earners in the VM:** Wipter signed in and online. UpRock signed in and earning. Teneo signed in, with "IP not eligible". Theta runs. Grass waits for its reCAPTCHA.
+
+**A removal from the page.** It took about 30 seconds. The app listed what it removed:
+
+- the guard, then the stopped VM and the VM itself
+- the pf anchor
+- the Internet Sharing preference, put back as it was
+- the guard's plist, the Secure VM folder and the download cache
+
+Then it said "Nothing is left". Our own check agreed. It found no Secure VM folder, no guard loaded, no VM, no rules in the anchor, no VM bridge and no Tart or softnet process. The Internet Sharing preference had its first 333 bytes again.
+
+**A second install on the same Mac** asked once for the administrator password. Its proof was green with the red step first, and the page showed Online with the fence held.
+
+**The earner's screen locked itself.** Ten minutes after the second install, the guest's display slept and macOS locked the earner's screen. Nobody knows the earner's password, so nobody could unlock it. Two causes:
+
+- `pmset` applies the no-sleep settings at once, but powerd saves them to disk up to a minute later. The restart after provisioning came first, so the guest woke with the default 10-minute display sleep. `provision.sh` now waits until the settings are on disk.
+- A screen that was locked when the guest stopped locks again at the next automatic login (`autoLoginUserScreenLocked`). `provision.sh` now turns that off.
+
+With both changes, the guest's screen stayed open after a restart and the earners were signed in through it.
