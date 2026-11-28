@@ -389,6 +389,18 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 			if st.Network, terr = d.takeOff(ctx, inst, l); terr != nil {
 				st.Reason += "; " + terr.Error()
 			}
+			return st
+		}
+		// No port to cut: a running VM must stop, or it could still be on
+		// the network.
+		if run, rerr := d.running(ctx, inst); rerr != nil || run {
+			d.stopVM(ctx, inst)
+			if run, rerr = d.running(ctx, inst); rerr == nil && !run {
+				st.Network = NetOff
+				st.Reason += "; the Secure VM was stopped, because its port could not be found"
+			} else {
+				st.Reason += "; its port could not be found, and the Secure VM did not stop"
+			}
 		}
 		return st
 	}
@@ -425,7 +437,11 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 		}
 	}
 	drift := Drift(l, desired, d.P.Bin)
-	d.ownIPChanged(ctx)
+	if err := d.ownIPChanged(ctx); err != nil {
+		// A new own IP that could not be saved is not blocked yet.
+		d.logf("own public IP changed, but %v", err)
+		drift = append(drift, "own-ip")
+	}
 	// The deny list on disk must be the one the running fence applies. A new
 	// own IP changes the list, and only a new start applies it, so the guest
 	// stays cut until then, also when a restart failed.
@@ -487,22 +503,24 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 // ownIPChanged asks for the host's public IPs now and then, and reports one
 // that deny.list lacks. It adds it, so the next start blocks it. A failed ask
 // changes nothing: the last known list stays.
-func (d *Daemon) ownIPChanged(ctx context.Context) bool {
+// An IP it found but could not save is an error, and the next pass asks again.
+func (d *Daemon) ownIPChanged(ctx context.Context) error {
 	if d.PublicIPs == nil || d.now().Sub(d.lastOwnIP) < ownIPEvery {
-		return false
+		return nil
 	}
 	ips, err := d.PublicIPs(ctx)
 	if err != nil || len(ips) == 0 {
-		return false
+		return nil
 	}
 	d.lastOwnIP = d.now()
+	// The pass already cuts the guest when deny.list cannot be read.
 	raw, err := os.ReadFile(d.state(DenyFile))
 	if err != nil {
-		return false
+		return nil
 	}
 	deny, err := ParseDeny(string(raw))
 	if err != nil {
-		return false
+		return nil
 	}
 	added := false
 	for _, ip := range ips {
@@ -512,14 +530,15 @@ func (d *Daemon) ownIPChanged(ctx context.Context) bool {
 		}
 	}
 	if !added {
-		return false
+		return nil
 	}
 	slices.SortFunc(deny, func(a, b netip.Addr) int { return a.Compare(b) })
 	if err := WriteAtomic(d.state(DenyFile), []byte(FormatDeny(deny)), 0o644); err != nil {
-		return false
+		d.lastOwnIP = time.Time{}
+		return fmt.Errorf("could not save it to the deny list: %w", err)
 	}
 	d.logf("own public IP changed: deny list now %v; the guest restarts with it", deny)
-	return true
+	return nil
 }
 
 func (d *Daemon) writeStatus(st *Status) {

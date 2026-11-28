@@ -391,3 +391,79 @@ func TestSafeOwnerPathRefusesASymlinkedParent(t *testing.T) {
 		t.Fatal("a plain path inside the home was refused")
 	}
 }
+
+// A new own IP that cannot be saved is not blocked yet: the guest stays cut,
+// and the next pass asks again.
+func TestPassCutsWhenANewOwnIPCannotBeSaved(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only folder")
+	}
+	d, h := guardFixture(t)
+	d.PublicIPs = func(context.Context) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr("198.51.100.9")}, nil
+	}
+	if err := os.Chmod(d.P.State, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(d.P.State, 0o755)
+	st := d.Pass(context.Background(), false)
+	if st.Network == NetConnected || h.member || !slices.Contains(st.Changes, "own-ip") {
+		t.Fatalf("an own IP that could not be saved must keep the guest cut: %+v", st)
+	}
+	if !d.lastOwnIP.IsZero() {
+		t.Fatal("a failed save must make the next pass ask again")
+	}
+}
+
+// Only a plain file that could be removed is a request, so an entry that
+// stays never runs again at every poll.
+func TestTakeRequestsOnlyRemovedPlainFiles(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root removes files from a read-only folder")
+	}
+	root := t.TempDir()
+	d := &Daemon{P: PathsAt(root, filepath.Join(root, "plist"))}
+	if err := os.MkdirAll(d.P.Request, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/hosts", filepath.Join(d.P.Request, RequestRestart)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d.P.Request, RequestStart), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.takeRequests(); !slices.Equal(got, []string{RequestStart}) {
+		t.Fatalf("only the plain file is a request, got %v", got)
+	}
+	// A request that cannot be removed was never claimed.
+	if err := os.WriteFile(filepath.Join(d.P.Request, RequestProve), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(d.P.Request, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(d.P.Request, 0o755)
+	for i := 0; i < 2; i++ {
+		if got := d.takeRequests(); len(got) != 0 {
+			t.Fatalf("poll %d ran a request it could not remove: %v", i, got)
+		}
+	}
+}
+
+// A retry needs less free space by what the restore image already holds.
+func TestKeptIPSWCountsAPartialDownload(t *testing.T) {
+	home := t.TempDir()
+	if got := keptIPSW(home); got != 0 {
+		t.Fatalf("nothing kept, got %d", got)
+	}
+	part := IPSWPath(home) + ".part"
+	if err := os.MkdirAll(filepath.Dir(part), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(part, make([]byte, 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := keptIPSW(home); got != 4096 {
+		t.Fatalf("a 4096-byte partial, got %d", got)
+	}
+}
