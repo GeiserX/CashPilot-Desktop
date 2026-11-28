@@ -174,6 +174,10 @@ func planSecrets(svc catalog.Service, slug string, env map[string]string, cmd, e
 	base := slices.Clone(image.Entrypoint)
 	if entrypoint != nil {
 		base = slices.Clone(entrypoint)
+		if len(base) == 1 && base[0] == "" {
+			// Docker reads [""] as no entrypoint, so nothing precedes the command.
+			base = nil
+		}
 	}
 	tokens := slices.Clone(cmd)
 	if cmd == nil && entrypoint == nil {
