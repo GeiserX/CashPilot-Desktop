@@ -77,6 +77,10 @@ const (
 	// WitnessDrops: the host's drop counter rose.
 	WitnessDrops Witness = "drops"
 	// WitnessDelivered: pktmon saw the frame get past the port to the host.
+	// On a red step it counts as red: the LAN red control targets the
+	// host's own LAN address, which Windows' strong host model drops at
+	// the vNIC, so no canary there can ever hear it (setup 1m). Getting
+	// past the port is what its L2 hole shows.
 	WitnessDelivered Witness = "delivered"
 )
 
@@ -229,7 +233,7 @@ func Steps(p Plan, h HostNet, t ProofTargets) []StepSpec {
 	gw := p.Gateway
 	var out []StepSpec
 	out = append(out,
-		need(StepSpec{ID: StepRed1LAN, Kind: Red, Opens: []string{allow(t.LANIP), "L3 off"}}, t.LANIP.IsValid(), "this PC has no address on a physical network"),
+		need(StepSpec{ID: StepRed1LAN, Kind: Red, Opens: []string{allow(t.LANIP)}, Witness: WitnessDelivered}, t.LANIP.IsValid(), "this PC has no address on a physical network"),
 		need(StepSpec{ID: StepRed2Router, Kind: Red, Opens: []string{allow(t.Router)}}, t.Router.IsValid(), "this PC has no default route through a physical adapter"),
 		need(StepSpec{ID: StepRed3OwnIP, Kind: Red, Opens: []string{"own-IP Deny removed", allow(t.OwnIP)}}, t.OwnIP.IsValid(), "this line's public address is not known"),
 		StepSpec{ID: StepL3Alone, Kind: Green, Opens: []string{allow(gw)}, Applies: true, Witness: WitnessDelivered},
@@ -291,7 +295,7 @@ func Judge(s StepSpec, e Evidence) StepResult {
 		switch {
 		case e.Err != "":
 			r.Outcome, r.Detail = Broken, "the probe could not run: "+e.Err
-		case escaped(false):
+		case escaped(false), s.Witness == WitnessDelivered && e.Delivered:
 			r.Outcome = WentRed
 		default:
 			r.Outcome, r.Detail = Broken, "with the hole open nothing arrived and nothing left this PC, so this probe proves nothing"
@@ -816,13 +820,6 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 		to := netip.AddrPortFrom(target, r.port())
 		var canaries []netip.AddrPort
 		if s.ID == StepRed1LAN {
-			// The LAN target is the host's own LAN address, so the packet
-			// ends at the vNIC under L3, which blocks it before the canary
-			// (setup 1m). L2 is the LAN's only filter: with L3 off, the
-			// canary is what shows the L2 hole.
-			if err := r.l3Off(ctx); err != nil {
-				return fail(err), nil
-			}
 			canaries = append(canaries, to)
 		}
 		ps := r.watch(ctx, tok, canaries, []PktFilter{{Addr: target, Proto: "TCP", Port: to.Port()}})

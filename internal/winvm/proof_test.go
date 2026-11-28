@@ -449,3 +449,28 @@ func TestProofVMBusRedWaitsForTheHostToSeeTheToken(t *testing.T) {
 		t.Fatalf("VMBus red with a listener that records late = %+v, want went-red", rs[i])
 	}
 }
+
+// The LAN red control goes red when its frame gets past the port: the host
+// drops a packet for its own LAN address at the vNIC, so no canary can hear
+// it. Other red steps still need an arrival or a packet out of a NIC.
+func TestLANRedControlCountsDeliveryPastThePort(t *testing.T) {
+	var lan, router winvm.StepSpec
+	for _, s := range winvm.Steps(winvm.Plan{}, winvm.HostNet{}, winvm.ProofTargets{LANIP: netip.MustParseAddr("192.0.2.10"), Router: netip.MustParseAddr("192.0.2.1")}) {
+		switch s.ID {
+		case winvm.StepRed1LAN:
+			lan = s
+		case winvm.StepRed2Router:
+			router = s
+		}
+	}
+	delivered := winvm.Evidence{Delivered: true}
+	if got := winvm.Judge(lan, delivered).Outcome; got != winvm.WentRed {
+		t.Fatalf("LAN red with its frame past the port = %s, want went-red", got)
+	}
+	if got := winvm.Judge(lan, winvm.Evidence{DropDelta: 3}).Outcome; got != winvm.Broken {
+		t.Fatalf("LAN red with its frame dropped = %s, want broken", got)
+	}
+	if got := winvm.Judge(router, delivered).Outcome; got != winvm.Broken {
+		t.Fatalf("router red with only a delivery = %s, want broken", got)
+	}
+}

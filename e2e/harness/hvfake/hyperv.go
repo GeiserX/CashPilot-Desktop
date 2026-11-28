@@ -2170,16 +2170,13 @@ func (f *HyperV) send(proto string, to netip.AddrPort, token string, n int) (pas
 		f.arrive(dst, to.Port(), token)
 		return true, out
 	}
-	// A packet to one of the host's own addresses ends at the vNIC, under
-	// the host firewall's L3 rule, and never reaches a NIC (setup 1m).
+	// A packet to another of the host's own addresses ends at the vNIC and
+	// never reaches a NIC. Windows' strong host model drops it there, since
+	// the address is not the vNIC's, whatever L3 says (setup 1m).
 	for _, h := range f.addrs {
 		if h.Addr() == dst {
 			f.record(winvm.PktRecord{Component: "vEthernet", Class: "vnic", Src: src, Dst: dst, Proto: proto, Port: to.Port()}, n)
-			if f.l3Blocks(s) {
-				return false, out
-			}
-			f.arrive(dst, to.Port(), token)
-			return true, out
+			return false, out
 		}
 	}
 	r, ok := f.lookup(dst)
