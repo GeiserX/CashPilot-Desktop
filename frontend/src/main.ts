@@ -120,7 +120,7 @@ import { fleetRedrawIsCurrent, keepsLiveProxyEditor, proxyValuesFrom, renderProx
 import { renderActivityPage } from "./render/activity";
 import { attentionItems, renderAttention } from "./render/attention";
 import { renderReminders, withReminders } from "./render/reminders";
-import { ImageUpdateEdits, renderImageUpdatesCard } from "./render/imageupdates";
+import { ImageUpdateEdits, draftOf, drawsOver, renderImageUpdatesCard } from "./render/imageupdates";
 import { stallItems } from "./render/stall";
 import { adminConsentScreen, cancelledText, deployErrorText, deployNotice, renderDeployFeedback, runCheckedDeploy, runDeployWithStatus, type DeployAnswer, type DeployFeedback, type DeployStatus } from "./render/deploy_consent";
 import { serviceFormFields } from "./render/fields";
@@ -1931,11 +1931,8 @@ const imageUpdateEdits = new ImageUpdateEdits();
 
 function imageUpdateDraft(): Record<string, string> | null {
   if (imageUpdateEdits.canRedraw()) return null;
-  const draft: Record<string, string> = {};
-  document.querySelectorAll<HTMLSelectElement>("#image-updates-slot select").forEach((el) => {
-    draft[el.id || `app:${el.dataset.imageUpdatesApp}`] = el.value;
-  });
-  return draft;
+  const selects = document.querySelectorAll<HTMLSelectElement>("#image-updates-slot select");
+  return draftOf([...selects].map((el): [string, string] => [el.id || `app:${el.dataset.imageUpdatesApp}`, el.value]));
 }
 
 async function loadImageUpdates(draft: Record<string, string> | null = null) {
@@ -1953,11 +1950,13 @@ async function loadImageUpdates(draft: Record<string, string> | null = null) {
   if (!imageUpdateEdits.isLatest(load)) return;
   const slot = document.querySelector<HTMLElement>("#image-updates-slot");
   if (!slot) return;
-  // A slot with the card in it keeps what is on screen when a change is not
-  // saved yet, and when a reload failed: the error replaces only an empty slot.
-  if (slot.childElementCount > 0 && (failed || !imageUpdateEdits.canRedraw())) return;
+  // A card on screen stays when a change on it is not saved yet, and when a
+  // reload failed. An error card gives way to the next answer.
+  const shown = slot.childElementCount === 0 ? "empty" : slot.querySelector("[data-image-updates-error]") ? "error" : "card";
+  if (!drawsOver(shown, failed, imageUpdateEdits.canRedraw())) return;
   slot.innerHTML = html;
-  const kept = imageUpdateEdits.takeDraft();
+  // An error card has no choices: the draft waits for the card.
+  const kept = failed ? null : imageUpdateEdits.takeDraft();
   if (kept) {
     slot.querySelectorAll<HTMLSelectElement>("select").forEach((el) => {
       const key = el.id || `app:${el.dataset.imageUpdatesApp}`;

@@ -129,6 +129,23 @@ export function renderImageUpdatesCard(view: ImageUpdatesView | null, error = ""
 }
 
 /**
+ * The unsaved choices of a card, by select: null when the slot holds no card
+ * (empty, or the error), so a redraw keeps the draft held from before.
+ */
+export function draftOf(entries: Array<[string, string]>): Record<string, string> | null {
+  return entries.length ? Object.fromEntries(entries) : null;
+}
+
+/**
+ * Whether a load's answer is drawn into the slot. An empty slot and an error card
+ * always take it; a card on screen takes only a successful answer, and only when
+ * every change on it is saved.
+ */
+export function drawsOver(slot: "empty" | "error" | "card", failed: boolean, canRedraw: boolean): boolean {
+  return slot !== "card" || (!failed && canRedraw);
+}
+
+/**
  * Counts the owner's changes so a reload never draws over one that is not saved:
  * change() on each edit, sent() when a save starts (it returns the count the save
  * carries), saved(n) when that save went through. canRedraw is true only when

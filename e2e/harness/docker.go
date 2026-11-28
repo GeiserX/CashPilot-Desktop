@@ -30,6 +30,9 @@ import (
 type Mount struct {
 	Source string
 	Target string
+	// Anonymous is a volume Docker made for an image's VOLUME path: a removal
+	// with v=1 deletes it, as Docker does.
+	Anonymous bool
 }
 
 // Container is one container the fake daemon is holding, as the tests want to
@@ -159,6 +162,7 @@ type Docker struct {
 	// crashing holds the build IDs whose containers Docker restarts right after
 	// each start (SetCrashing). removedImages lists every image deleted.
 	builds        map[string]Build
+	byID          map[string]Build
 	imageVolumes  map[string][]string
 	crashing      map[string]bool
 	removedImages []string
@@ -184,9 +188,13 @@ func (d *Docker) SetImage(ref, id, digest string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.builds == nil {
-		d.builds = map[string]Build{}
+		d.builds, d.byID = map[string]Build{}, map[string]Build{}
 	}
-	d.builds[ref] = Build{ID: id, Digest: digest, Repo: repoOf(ref)}
+	b := Build{ID: id, Digest: digest, Repo: repoOf(ref)}
+	d.builds[ref] = b
+	// Docker keeps a build when its tag moves on: the containers made from it
+	// still resolve to it by ID.
+	d.byID[id] = b
 }
 
 // SetImageVolumes makes build id declare VOLUME paths, as an image's Dockerfile
@@ -241,10 +249,8 @@ func (d *Docker) build(ref string) Build {
 	if b, ok := d.builds[ref]; ok {
 		return b
 	}
-	for _, b := range d.builds {
-		if b.ID == ref {
-			return b
-		}
+	if b, ok := d.byID[ref]; ok {
+		return b
 	}
 	return Build{ID: "sha256:" + ref}
 }
@@ -665,7 +671,7 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 	for _, p := range d.imageVolumes[c.ImageID] {
 		if !slices.ContainsFunc(c.Mounts, func(m Mount) bool { return m.Target == p }) {
 			anon := fmt.Sprintf("%064x", d.nextID*1000+len(c.Mounts))
-			c.Mounts = append(c.Mounts, Mount{Source: anon, Target: p})
+			c.Mounts = append(c.Mounts, Mount{Source: anon, Target: p, Anonymous: true})
 			d.volumes[anon] = true
 		}
 	}
@@ -787,7 +793,7 @@ func (d *Docker) container(w http.ResponseWriter, r *http.Request, rest string) 
 	case action == "rename" && r.Method == http.MethodPost:
 		d.rename(w, id, r.URL.Query().Get("name"))
 	case action == "" && r.Method == http.MethodDelete:
-		d.remove(w, id, r.URL.Query().Get("force") == "1")
+		d.remove(w, id, r.URL.Query().Get("force") == "1", r.URL.Query().Get("v") == "1")
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "fake daemon: no container route " + rest})
 	}
@@ -1101,7 +1107,7 @@ func (d *Docker) SetRestartPolicy(name, policy string) {
 	}
 }
 
-func (d *Docker) remove(w http.ResponseWriter, id string, force bool) {
+func (d *Docker) remove(w http.ResponseWriter, id string, force, volumes bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	c := d.find(id)
@@ -1115,7 +1121,14 @@ func (d *Docker) remove(w http.ResponseWriter, id string, force bool) {
 		return
 	}
 	// A named volume survives its container, exactly as the real daemon leaves it:
-	// only an explicit volume delete removes it.
+	// only an explicit volume delete removes it. v=1 takes the anonymous ones.
+	if volumes {
+		for _, m := range c.Mounts {
+			if m.Anonymous {
+				delete(d.volumes, m.Source)
+			}
+		}
+	}
 	delete(d.containers, c.Name)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -14,6 +14,7 @@ package imageupdates
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -204,7 +205,8 @@ func UpdateService(ctx context.Context, h Hooks, slug, mode string) (string, err
 			rec.Result = RolledBack
 		}
 		if recErr := h.Record(rec); recErr != nil {
-			return rec.Result, recErr
+			// Both reasons reach the log: the deploy's and the history's.
+			return rec.Result, errors.Join(err, recErr)
 		}
 		return rec.Result, nil
 	}
@@ -238,9 +240,9 @@ func Run(ctx context.Context, h Hooks, s config.ImageUpdates, slugs []string) ma
 			break
 		}
 		outcome, err := UpdateService(ctx, h, slug, EffectiveMode(s, slug))
-		// Docker recreated the app even when its history row could not be
-		// written, so the pause follows what Docker did, not the error.
-		recreated := outcome == Updated || outcome == RolledBack
+		// The pause follows every deploy, whatever its row or its error says:
+		// Docker may have replaced the container before a later step failed.
+		recreated := outcome == Updated || outcome == RolledBack || outcome == Failed
 		if err != nil {
 			log.Printf("image updates: check of %s failed: %v", slug, err)
 			outcome = "error"
