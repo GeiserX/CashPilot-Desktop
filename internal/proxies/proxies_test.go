@@ -141,17 +141,22 @@ func TestRefusal(t *testing.T) {
 		t.Fatalf("a plain earner must be allowed, got %q", r)
 	}
 	cases := map[string]func(*catalog.Service){
-		"host's network":    func(s *catalog.Service) { s.Docker.NetworkMode = "host" },
-		"another container": func(s *catalog.Service) { s.Docker.NetworkMode = "container:x" },
-		"publishes a port":  func(s *catalog.Service) { s.Docker.Ports = []string{"1:1"} },
-		"LAN fence":         func(s *catalog.Service) { s.Docker.FenceGated = true },
-		"volume":            func(s *catalog.Service) { s.Docker.Volumes = []string{"v:/d"} },
-		"device":            func(s *catalog.Service) { s.Docker.Devices = []string{"/dev/net/tun"} },
-		"GPU":               func(s *catalog.Service) { s.Docker.GPU = &catalog.GPU{Vendor: "nvidia"} },
-		"privileged":        func(s *catalog.Service) { s.Docker.Privileged = true },
-		"NET_RAW":           func(s *catalog.Service) { s.Docker.CapAdd = []string{"cap_net_raw", "SETUID"} },
+		"host's network":     func(s *catalog.Service) { s.Docker.NetworkMode = "host" },
+		"another container":  func(s *catalog.Service) { s.Docker.NetworkMode = "container:x" },
+		"publishes a port":   func(s *catalog.Service) { s.Docker.Ports = []string{"1:1"} },
+		"LAN fence":          func(s *catalog.Service) { s.Docker.FenceGated = true },
+		"folder on the host": func(s *catalog.Service) { s.Docker.Volumes = []string{"v:/d", "/srv/earner:/e"} },
+		"device":             func(s *catalog.Service) { s.Docker.Devices = []string{"/dev/net/tun"} },
+		"GPU":                func(s *catalog.Service) { s.Docker.GPU = &catalog.GPU{Vendor: "nvidia"} },
+		"privileged":         func(s *catalog.Service) { s.Docker.Privileged = true },
+		"NET_RAW":            func(s *catalog.Service) { s.Docker.CapAdd = []string{"cap_net_raw", "SETUID"} },
 		"terms forbid": func(s *catalog.Service) {
 			s.Requirements.ProxyProhibited = &catalog.ProxyProhibited{Source: "https://example.com/tos"}
+		},
+		// EarnApp: its terms forbid containers, and a copy is one.
+		"terms forbid running": func(s *catalog.Service) {
+			s.Docker.Volumes = []string{"earnapp-data:/etc/earnapp"}
+			s.Requirements.ContainerProhibited = true
 		},
 	}
 	for want, mutate := range cases {
@@ -176,6 +181,23 @@ func TestRefusal(t *testing.T) {
 	ok.Docker.CapAdd = []string{"SETUID"}
 	if r := Refusal(ok); r != "" {
 		t.Fatalf("a harmless capability must be allowed, got %q", r)
+	}
+	// A named volume is fine: the copy gets its own (CopyVolume). A folder on the
+	// host, typed or filled in from the env, is not.
+	named := base
+	named.Docker.Volumes = []string{"earner-data:/data", "earner-cfg:/cfg:ro"}
+	if r := Refusal(named); r != "" {
+		t.Fatalf("a named volume must be allowed, got %q", r)
+	}
+	for _, v := range []string{"/srv/x:/d", "./x:/d", "~/x:/d", "${DATA_DIR}:/d"} {
+		svc := base
+		svc.Docker.Volumes = []string{v}
+		if r := Refusal(svc); !strings.Contains(r, "folder on the host") {
+			t.Errorf("Refusal(%s) = %q, want the host folder refused", v, r)
+		}
+	}
+	if CopyVolume("earner-data", 7) != "earner-data-p7" {
+		t.Fatalf("CopyVolume = %q", CopyVolume("earner-data", 7))
 	}
 }
 
