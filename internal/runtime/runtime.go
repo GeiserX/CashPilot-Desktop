@@ -671,9 +671,17 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 		if err := p.settling.mark(name); err != nil {
 			return ContainerInfo{}, rollBack(err, created.ID)
 		}
-		// Taken away once the update is undone or passed. One that cannot be taken
-		// away only makes the next app start undo an update that passed.
-		defer func() { _ = p.settling.clear(name) }()
+		// Taken away once the update is undone or passed. While the old container is
+		// still set aside (an undo that could not remove the replacement or put the
+		// old one back), it stays, so the next app start undoes the update. One that
+		// cannot be taken away only makes the next start undo an update that passed.
+		defer func() {
+			left, err := cli.ContainerInspect(context.Background(), aside, client.ContainerInspectOptions{})
+			if (err == nil && left.Container.ID == live.Container.ID) || (err != nil && !cerrdefs.IsNotFound(err)) {
+				return
+			}
+			_ = p.settling.clear(name)
+		}()
 	}
 	// The check period reads the new container's log from its start on.
 	started := time.Now().Add(-time.Second)

@@ -14,6 +14,11 @@ import (
 // period: the old container stopped and set aside, the replacement running under
 // its name. It returns the old container's ID and the replacement's.
 func leaveMidCheck(t *testing.T, p *DockerProvider, node string) (string, string) {
+	return leaveMarked(t, node, true)
+}
+
+// leaveMarked is leaveMidCheck with the replacement started or only made.
+func leaveMarked(t *testing.T, node string, start bool) (string, string) {
 	t.Helper()
 	ctx := context.Background()
 	cli, err := dockerClient()
@@ -35,8 +40,10 @@ func leaveMidCheck(t *testing.T, p *DockerProvider, node string) (string, string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cli.ContainerStart(ctx, made.ID, client.ContainerStartOptions{}); err != nil {
-		t.Fatal(err)
+	if start {
+		if _, err := cli.ContainerStart(ctx, made.ID, client.ContainerStartOptions{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return old.Container.ID, made.ID
 }
@@ -67,6 +74,61 @@ func TestAnUpdateCutOffInItsCheckIsUndoneAtTheNextStart(t *testing.T) {
 	_, newID = leaveMidCheck(t, p, node)
 	p.RecoverSetAside(context.Background())
 	sameBox(t, box(docker, svc.Slug), map[string]string{node: newID + " running"})
+}
+
+// A mark with a replacement that was made and never started, or with no
+// replacement at all, still undoes the update: the old container runs again.
+func TestAMarkedUpdateCutOffBeforeItsStartRunsTheOldContainerAgain(t *testing.T) {
+	svc := plainEarner()
+	node := containerName(svc.Slug)
+	for _, gone := range []bool{false, true} {
+		docker, p, _ := rollbackDaemon(t)
+		deployed(t, docker, p, svc)
+		oldID, newID := leaveMarked(t, node, false)
+		if gone {
+			docker.Rename(node, "someone-else")
+			cli, err := dockerClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := cli.ContainerRemove(context.Background(), newID, client.ContainerRemoveOptions{Force: true}); err != nil {
+				t.Fatal(err)
+			}
+			cli.Close()
+		}
+		if err := p.settling.mark(node); err != nil {
+			t.Fatal(err)
+		}
+		p.RecoverSetAside(context.Background())
+		sameBox(t, box(docker, svc.Slug), map[string]string{node: oldID + " running"})
+	}
+}
+
+// An undo that cannot remove the replacement leaves the old container set aside,
+// so the mark stays and the next app start finishes the undo.
+func TestAnUndoThatCannotRemoveTheReplacementKeepsTheMark(t *testing.T) {
+	fastSettle(t)
+	docker, p, _ := rollbackDaemon(t)
+	svc := pinned()
+	name := containerName(svc.Slug)
+	docker.SetImage(pinnedRef, oldBuild, "")
+	if _, err := p.Deploy(context.Background(), DeploySpec{Slug: svc.Slug, Service: svc}, nil); err != nil {
+		t.Fatalf("deploy: %v", err)
+	}
+	before, _ := docker.Container(name)
+	docker.SetImage(tagRef, newBuild, "")
+	docker.SetCrashing(newBuild, true)
+	docker.FailRemove(name)
+	if _, err := p.Deploy(context.Background(), updateSpec(svc, newBuild), nil); err == nil {
+		t.Fatal("a crashing build passed")
+	}
+	if !p.settling.pending(name) {
+		t.Fatal("the mark went while the old container was still set aside")
+	}
+	docker.ClearFailures()
+	docker.SetCrashing(newBuild, false)
+	p.RecoverSetAside(context.Background())
+	sameBox(t, box(docker, svc.Slug), map[string]string{name: before.ID + " running"})
 }
 
 // The mark is there from before the replacement starts until its check is over,
