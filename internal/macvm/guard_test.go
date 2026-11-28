@@ -312,6 +312,20 @@ func TestPassCutsAPortPutBackDuringTheCheck(t *testing.T) {
 	}
 }
 
+func TestPassCutsWhenTheSecondReadCannotListBridges(t *testing.T) {
+	d, h := guardFixture(t)
+	h.member = false
+	// Something puts the port back, and the second read fails at the first
+	// thing it reads, the bridge list, so it finds no port at all.
+	h.onPS = map[int]func(*fakeHost){
+		1: func(h *fakeHost) { h.member = true; h.failCall = "/sbin/ifconfig -l" },
+	}
+	st := d.Pass(context.Background(), false)
+	if h.member || st.Network == NetConnected {
+		t.Fatalf("a failed second read must cut the port the first read found: %+v %v", st, h.calls)
+	}
+}
+
 func TestPassTwoSoftnetsForOurMACIsDrift(t *testing.T) {
 	d, h := guardFixture(t)
 	h.softnet += "\n" + h.softnet

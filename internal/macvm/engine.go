@@ -162,8 +162,11 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 		}
 	}
 	if !installed {
-		if _, err := os.Stat(e.P.Root); err == nil || e.vmExists() {
-			st.Leftovers = true
+		st.Leftovers = e.vmExists()
+		for _, p := range e.leftPaths() {
+			if _, err := os.Lstat(p); err == nil {
+				st.Leftovers = true
+			}
 		}
 	}
 	if st.Installed {
@@ -570,9 +573,16 @@ func (e *Engine) Undo(ctx context.Context, progress securevm.Progress) (res secu
 
 // leftAsUser is the check the app runs itself after Undo: every file,
 // process and launchd job it can see without root.
+// leftPaths are the files that Install makes and Undo removes. Status offers
+// Remove while any of them is there, and Undo checks them again afterwards.
+func (e *Engine) leftPaths() []string {
+	ipsw := IPSWPath(e.TartHome)
+	return []string{e.P.Root, e.P.Plist, ipsw, ipsw + ".part", e.Tools.Dir}
+}
+
 func (e *Engine) leftAsUser(ctx context.Context) []string {
 	var left []string
-	for _, p := range []string{e.P.Root, e.P.Plist, VMDir(e.TartHome), IPSWPath(e.TartHome), e.Tools.Dir} {
+	for _, p := range append(e.leftPaths(), VMDir(e.TartHome)) {
 		if _, err := os.Lstat(p); err == nil {
 			left = append(left, p)
 		}
@@ -679,22 +689,14 @@ func (e *Engine) OpenScreen(ctx context.Context, slug string) error {
 	return noFront
 }
 
-// idle refuses Start and Stop while an action runs, so neither pulls the VM
-// from under an Install or a Verify.
-func (e *Engine) idle() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.busy != "" {
-		return errors.New(i18n.T("go.macvm.busy", "action", e.busy))
-	}
-	return nil
-}
-
-// Start asks the guard to start the VM with the fence.
-func (e *Engine) Start(ctx context.Context) error {
-	if err := e.idle(); err != nil {
+// Start asks the guard to start the VM with the fence. It holds the busy
+// state like every other action, so no Install or Verify starts under it.
+func (e *Engine) Start(ctx context.Context) (err error) {
+	_, end, err := e.begin("start")
+	if err != nil {
 		return err
 	}
+	defer func() { err = end(err) }()
 	if _, ok := e.installed(); !ok {
 		return errors.New(i18n.T("go.macvm.notInstalled"))
 	}
@@ -702,10 +704,12 @@ func (e *Engine) Start(ctx context.Context) error {
 }
 
 // Stop stops the VM. The guard starts it again when the Mac starts.
-func (e *Engine) Stop(ctx context.Context) error {
-	if err := e.idle(); err != nil {
+func (e *Engine) Stop(ctx context.Context) (err error) {
+	_, end, err := e.begin("stop")
+	if err != nil {
 		return err
 	}
+	defer func() { err = end(err) }()
 	if _, ok := e.installed(); !ok {
 		return nil
 	}

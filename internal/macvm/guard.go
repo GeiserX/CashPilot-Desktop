@@ -516,9 +516,16 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 			again, err := d.Read(ctx, inst, desired)
 			if err != nil || len(Drift(again, desired, d.P.Bin)) > 0 || again.Port != l.Port {
 				st.Network, st.Fence, st.Reason = NetDisconnected, FenceCut, "the fence changed during the check, so the Secure VM stays cut"
-				// Something put a port back on in the meantime: take it off.
-				if again.Port != "" && again.Member {
-					net, terr := d.takeOff(ctx, inst, again)
+				// Something may have put a port back on in the meantime: take it
+				// off. A failed read shows no port, so it cuts the port that the
+				// first read found, as the read-error path above does.
+				cut := again
+				if err != nil {
+					cut = l
+					cut.Member = true
+				}
+				if cut.Port != "" && cut.Member {
+					net, terr := d.takeOff(ctx, inst, cut)
 					st.Network = net
 					if terr != nil {
 						st.Reason += "; " + terr.Error()
