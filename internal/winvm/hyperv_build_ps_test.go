@@ -1026,6 +1026,62 @@ function Get-WinEvent {
 	}
 }
 
+// The NIC counters judge a silent NIC, so they must cover only time the
+// capture covers. Read before pktmon start and after pktmon stop, they also
+// counted the seconds around the capture, and 4 packets on an idle uplink
+// in those seconds failed a proof step on real Windows (setup 1r).
+func TestPktmonCountersAreReadWhileTheCaptureRuns(t *testing.T) {
+	const mock = `
+param($running)
+$global:capturing = ($running -eq 'yes')
+function Get-EtwTraceSession { if ($global:capturing) { [pscustomobject]@{ LocalFilePath = 'capture.etl' } } }
+function Join-Path { 'Invoke-FakePktmon' }
+function Start-Sleep {}
+function Invoke-FakePktmon {
+  if ($args[0] -eq 'start') { $global:capturing = $true } elseif ($args[0] -eq 'stop') { $global:capturing = $false } else { throw 'unexpected pktmon call' }
+  $global:LASTEXITCODE = 0
+}
+function Get-NetAdapter { [CmdletBinding()] param([switch]$IncludeHidden) [pscustomobject]@{ Name = 'Ethernet'; ifIndex = 7 } }
+function Get-NetAdapterStatistics {
+  [CmdletBinding()] param([string]$Name, [switch]$IncludeHidden)
+  # 10 per counter while the capture runs, 1 outside it.
+  $n = if ($global:capturing) { 10 } else { 1 }
+  [pscustomobject]@{ ReceivedUnicastPackets = $n; ReceivedMulticastPackets = $n; ReceivedBroadcastPackets = $n
+    SentUnicastPackets = $n; SentMulticastPackets = $n; SentBroadcastPackets = $n }
+}
+function Get-WinEvent {
+  [CmdletBinding()] param([hashtable]$FilterHashtable, [switch]$Oldest)
+  [pscustomobject]@{ ProviderId = [guid]'4d4f80d9-c8bd-4d73-bb5b-19c90402c5ac'; Id = 20; Properties = @(4, 2, 'e1d.sys', 'Ethernet' | ForEach-Object { [pscustomobject]@{ Value = $_ } }) }
+}
+`
+	const fakeDisk = `Add-Type 'public static class CpdDisk { public static string Identify(string path) { return "capture-id"; } }'
+`
+	stop := strings.Replace(scriptPktmonStop, diskIdentityPrelude, fakeDisk, 1)
+	for _, c := range []struct {
+		name, script, running string
+	}{
+		{"start", scriptPktmonStart, "no"},
+		{"stop", stop, "yes"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, out := runOwnedScriptWithFake(t, mock, c.script, map[string]any{"etl": "capture.etl", "etlId": "capture-id"}, c.running)
+			doc, err := decodeOutput(out)
+			if code != 0 || err != nil {
+				t.Fatalf("%s exit %d, decode %v: %s", c.name, code, err, out)
+			}
+			var got struct {
+				Stats map[int]uint64
+			}
+			if err := json.Unmarshal(doc, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Stats[7] != 60 {
+				t.Fatalf("%s read the counters outside the capture: %v, want 60 for ifIndex 7", c.name, got.Stats)
+			}
+		})
+	}
+}
+
 func runOwnedScriptWithFake(t *testing.T, mock, script string, arg map[string]any, args ...string) (int, []byte) {
 	t.Helper()
 	raw, err := json.Marshal(arg)

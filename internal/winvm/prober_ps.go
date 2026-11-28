@@ -89,8 +89,8 @@ Write-Doc ([ordered]@{ list = $list })
 `
 
 // nicPacketsPrelude reads each adapter's packet counters, by ifIndex. Taken
-// before the capture starts and after it stops, they tell an idle NIC from
-// one whose packets the capture missed.
+// once the capture runs and again before it stops, they tell an idle NIC
+// from one whose packets the capture missed.
 const nicPacketsPrelude = `function Get-NICPackets {
   $o = @{}
   foreach ($a in @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue)) {
@@ -108,10 +108,11 @@ const nicPacketsPrelude = `function Get-NICPackets {
 // then verify from the ETL metadata that no filter narrowed the capture.
 const scriptPktmonStart = buildPrelude + nicPacketsPrelude + `if (Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue) { throw 'A pktmon session is already running.' }
 $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
-$stats = Get-NICPackets
 & $pm start --capture --comp nics --pkt-size 128 -f $in.etl | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ('pktmon start failed: ' + $LASTEXITCODE) }
 Start-Sleep -Seconds 3
+# Read inside the capture, so a counted packet is one pktmon could log.
+$stats = Get-NICPackets
 Write-Doc ([ordered]@{ ok = $true; stats = $stats })
 `
 
@@ -121,9 +122,9 @@ Write-Doc ([ordered]@{ ok = $true; stats = $stats })
 const scriptPktmonStop = buildPrelude + diskIdentityPrelude + nicPacketsPrelude + `$s = @(Get-EtwTraceSession -Name 'PktMon' -ErrorAction SilentlyContinue)
 if ($s.Count -ne 1 -or [string]$s[0].LocalFilePath -ne $in.etl -or [CpdDisk]::Identify($in.etl) -cne $in.etlId) { throw 'The running pktmon capture is not the one this proof started.' }
 $pm = Join-Path $env:SystemRoot 'System32\PktMon.exe'
+$stats = Get-NICPackets
 & $pm stop | Out-Null
 if ($LASTEXITCODE -ne 0) { throw ('pktmon stop failed: ' + $LASTEXITCODE) }
-$stats = Get-NICPackets
 # Windows PowerShell 5.1 can return no matches for the ETL when the
 # hashtable includes ProviderName. Check the publisher GUID on the results.
 $pktmonProvider = [guid]'4d4f80d9-c8bd-4d73-bb5b-19c90402c5ac'
