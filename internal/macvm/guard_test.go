@@ -15,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
+	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
 )
 
 // fakeHost answers the commands the guard runs, from a small model of the
@@ -615,5 +618,53 @@ func TestRemoveWaitsForTheInstallLock(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("Remove did not run after the lock was released")
+	}
+}
+
+// A move into the VM that fails, here because Verify holds the engine, must
+// not let the caller start the copy on this computer while the guest copy
+// runs. When the guest says the app is not running, the error stays plain.
+func TestPlaceThatFailsMarksAGuestCopyThatMayRun(t *testing.T) {
+	dir := t.TempDir()
+	p := PathsAt(filepath.Join(dir, "root"), filepath.Join(dir, "plist"))
+	tart := TartExe(p.Bin)
+	answer := filepath.Join(dir, "answer")
+	for _, f := range []struct {
+		path, body string
+		mode       os.FileMode
+	}{
+		{tart, "#!/bin/sh\ncat >/dev/null\ncat " + answer + "\n", 0o755},
+		{filepath.Join(p.State, InstallFile), `{"owner":"sergio"}`, 0o644},
+	} {
+		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(f.path, []byte(f.body), f.mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := &Engine{P: p, TartHome: dir, Apps: func() []AppSpec {
+		return []AppSpec{{Slug: "wipter", Name: "Wipter", MacOS: &catalog.GuestMacOS{App: "Wipter.app", Process: "Wipter"}}}
+	}}
+	e.busy = "verify"
+	for _, c := range []struct {
+		answer string
+		may    bool
+	}{
+		{"wipter|y|y|y\n", true},
+		{"wipter|y|u|u\n", true},
+		{"wipter|y|n|n\n", false},
+	} {
+		if err := os.WriteFile(answer, []byte(c.answer), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := e.Place(context.Background(), "wipter", securevm.VM, nil)
+		var may securevm.MayStillRun
+		if err == nil || errors.As(err, &may) != c.may {
+			t.Fatalf("guest says %q: got %v, want MayStillRun %v", strings.TrimSpace(c.answer), err, c.may)
+		}
+	}
+	if e.busy != "verify" {
+		t.Fatalf("a refused move changed the busy action to %q", e.busy)
 	}
 }
