@@ -37,3 +37,7 @@ func (s OwnerSpy) forPlan(p Plan) Prober {
 	*s.Got = p.Owner
 	return s.Prober
 }
+
+// WriteArtifact writes a journaled file, admin-only, the way the elevated
+// roles write theirs.
+func WriteArtifact(path string, b []byte) error { return writeAtomic(path, b, adminOnly) }

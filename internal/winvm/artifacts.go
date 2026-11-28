@@ -263,6 +263,73 @@ func finishArtifactRemoval(dir string) (bool, error) {
 	return true, nil
 }
 
+// journaledNames is what dir's journal records now, and whether dir has a
+// journal at all. An unreadable journal gives nil and true, so nothing is
+// taken off on its word.
+func journaledNames(dir string) (map[string][]string, bool) {
+	j, err := openArtifactLog(dir, false)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false
+	}
+	if err != nil {
+		return nil, true
+	}
+	defer j.file.Close()
+	records, err := j.records()
+	if err != nil {
+		return nil, true
+	}
+	return records, true
+}
+
+// dropNewArtifacts takes off the files dir's journal recorded since before,
+// and the journal itself when there was none before and nothing it records
+// is left. A Remove that touches nothing uses it to leave no file of its
+// own. It is best effort: whatever stays is listed by unknownData.
+func dropNewArtifacts(dir string, before map[string][]string, hadLog bool) {
+	if hadLog && before == nil {
+		return
+	}
+	j, err := openArtifactLog(dir, false)
+	if err != nil {
+		return
+	}
+	records, err := j.records()
+	j.file.Close()
+	if err != nil {
+		return
+	}
+	// A record is new by its file ID: the journal keeps the names of files
+	// already deleted, and a later write reuses the name.
+	fresh := map[string][]string{}
+	var paths []string
+	for rel, ids := range records {
+		for _, id := range ids {
+			if rel != artifactLogName && !slices.Contains(before[rel], id) {
+				fresh[rel] = append(fresh[rel], id)
+			}
+		}
+		if len(fresh[rel]) > 0 {
+			paths = append(paths, rel)
+		}
+	}
+	// Descendants sort after their directory.
+	slices.Sort(paths)
+	slices.Reverse(paths)
+	for _, rel := range paths {
+		_ = removeRecorded(dir, j.root, rel, fresh[rel])
+	}
+	if hadLog {
+		return
+	}
+	for rel := range records {
+		if _, err := os.Lstat(filepath.Join(dir, rel)); rel != artifactLogName && err == nil {
+			return
+		}
+	}
+	_ = removeRecorded(dir, j.root, artifactLogName, []string{j.id})
+}
+
 // CheckJournaledFile verifies a file the elevated bootstrap created.
 func CheckJournaledFile(dir, path string) error {
 	rel, err := filepath.Rel(dir, path)

@@ -76,6 +76,10 @@ func Remove(ctx context.Context, d RemoveDeps, n Names) (res RemoveResult, retEr
 	}
 	p, err := loadPlanFile(filepath.Join(d.Dir, PlanFile))
 	if errors.Is(err, fs.ErrNotExist) {
+		// Listing the host stages scripts in d.Dir. This Remove touches
+		// nothing, so it takes off the files it wrote, and only those.
+		before, hadLog := journaledNames(d.Dir)
+		defer dropNewArtifacts(d.Dir, before, hadLog)
 		inv, ierr := d.HV.Inventory(ctx, n, KnownIDs{}, "")
 		if ierr != nil {
 			return res, ierr

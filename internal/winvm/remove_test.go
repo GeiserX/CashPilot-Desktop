@@ -285,6 +285,58 @@ func TestRemoveWithoutAPlanTouchesNothing(t *testing.T) {
 	}
 }
 
+// stagingHV journals a script in the instance folder on each Inventory, as
+// the real host stages its PowerShell scripts there.
+type stagingHV struct {
+	*hvfake.HyperV
+	dir string
+}
+
+func (s stagingHV) Inventory(ctx context.Context, n winvm.Names, known winvm.KnownIDs, userSID string) (winvm.Inventory, error) {
+	if err := winvm.WriteArtifact(filepath.Join(s.dir, "cashpilot-inventory.ps1"), []byte("script")); err != nil {
+		return winvm.Inventory{}, err
+	}
+	return s.HyperV.Inventory(ctx, n, known, userSID)
+}
+
+// TestRemoveWithoutAPlanLeavesNoFileOfItsOwn: a Remove with no desired.json
+// touches nothing, so it must not leave the scripts it staged to list the
+// host either. A third Remove on real Windows left two scripts and a new
+// journal in the instance folder. Files it did not write stay, and listed.
+func TestRemoveWithoutAPlanLeavesNoFileOfItsOwn(t *testing.T) {
+	for _, earlier := range []bool{false, true} {
+		t.Run("earlier file "+strconv.FormatBool(earlier), func(t *testing.T) {
+			f := hvfake.New()
+			dir := t.TempDir()
+			if earlier {
+				if err := winvm.WriteArtifact(filepath.Join(dir, "state.json"), []byte("{}")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for range 2 {
+				if _, err := winvm.Remove(context.Background(), winvm.RemoveDeps{HV: stagingHV{f, dir}, Dir: dir}, winvm.ProductNames()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var names []string
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			want := []string{}
+			if earlier {
+				want = []string{".cashpilot-files.jsonl", "state.json"}
+			}
+			if !slices.Equal(names, want) && !(len(names) == 0 && len(want) == 0) {
+				t.Fatalf("the folder holds %v after Remove, want %v", names, want)
+			}
+		})
+	}
+}
+
 // TestRemoveKeepsTheGuardianAKeyProtectorUses: a VM with a local key protector
 // and no vTPM (encrypted state only) still needs the guardian.
 func TestRemoveKeepsTheGuardianAKeyProtectorUses(t *testing.T) {
