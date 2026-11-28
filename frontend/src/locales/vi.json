@@ -642,7 +642,7 @@
   "fence_status.on.empty": "Đã dựng. Chưa có ứng dụng kiếm tiền nào chạy, nên chưa có gì nằm sau hàng rào.",
   "fence_status.on.inPlace": "Đã dựng: {n, plural, other {# ứng dụng kiếm tiền đang chạy}} nằm sau hàng rào.",
   "fence_status.legacy.outside": "Chưa dựng: {n, plural, other {# ứng dụng kiếm tiền đang chạy có thể truy cập LAN của bạn. Hãy bật cách ly trên bảng điều khiển để dựng hàng rào cho chúng.}}",
-  "fence_status.legacy.none": "Chưa dựng: bản cài đặt này triển khai ứng dụng kiếm tiền trên mạng mặc định của Docker, nơi chúng có thể truy cập LAN của bạn. Hãy đặt cách ly LAN thành bật để dựng hàng rào cho lần triển khai tiếp theo.",
+  "fence_status.legacy.none": "Chưa dựng: bản cài đặt này triển khai ứng dụng kiếm tiền trên mạng mặc định của Docker, nơi chúng có thể truy cập LAN của bạn. Hãy đặt cách ly LAN thành on để dựng hàng rào cho lần triển khai tiếp theo.",
   "fence_status.off": "Tắt: các ứng dụng kiếm tiền dạng container dùng mạng mặc định của Docker và có thể truy cập LAN của bạn.",
   "fence_status.unsupported": "Không có hàng rào: CashPilot không thể dựng hàng rào cho ứng dụng kiếm tiền trên môi trường chạy container này (Podman).",
   "fence_status.failed": "Không rõ: CashPilot không thể kiểm tra. Mục Cần chú ý cho biết lý do.",
