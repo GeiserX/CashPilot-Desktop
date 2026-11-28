@@ -1,6 +1,10 @@
 package catalog
 
 import (
+	"io/fs"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 )
@@ -90,5 +94,56 @@ demo.disclosure.sells: {text: "", source: "` + h("Your IP address.") + `"}
 	}
 	if got := cat.Localized([]Service{english}, "de"); got[0].Description != english.Description {
 		t.Errorf("a locale with no file must show English")
+	}
+}
+
+// openLog records every _i18n file a catalog opens.
+type openLog struct {
+	fs.FS
+	mu     sync.Mutex
+	opened []string
+}
+
+func (o *openLog) Open(name string) (fs.File, error) {
+	if strings.Contains(name, I18nDir+"/") {
+		o.mu.Lock()
+		o.opened = append(o.opened, name)
+		o.mu.Unlock()
+	}
+	return o.FS.Open(name)
+}
+
+func (o *openLog) files() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return slices.Clone(o.opened)
+}
+
+// Loading the catalog must not parse the translations: the 19 locale files took
+// about a second under the race detector, on every Load, and pushed the test
+// suite past its 10 minute limit. A locale's file is read when a screen first
+// asks for it, and only once.
+func TestTranslationsAreReadOnFirstUseOnly(t *testing.T) {
+	h := sourceHash("Shares your bandwidth.\n")
+	log := &openLog{FS: i18nFS(`demo.description: {text: "Comparte.", source: "` + h + `"}` + "\n")}
+	log.FS.(fstest.MapFS)["services/_i18n/de.yml"] = &fstest.MapFile{Data: []byte("{}")}
+
+	cat, err := LoadEmbedded(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := log.files(); len(got) != 0 {
+		t.Fatalf("Load read translation files %v; it must read none", got)
+	}
+
+	english, _ := cat.Get("demo")
+	if got := cat.LocalizedOne(english, "es").Description; got != "Comparte." {
+		t.Fatalf("description = %q", got)
+	}
+	cat.LocalizedOne(english, "es")
+	cat.Localized([]Service{english}, "en")
+	want := []string{"services/_i18n/en.yml", "services/_i18n/es.yml"}
+	if got := log.files(); !slices.Equal(got, want) {
+		t.Fatalf("read %v; want only %v, each once", got, want)
 	}
 }
