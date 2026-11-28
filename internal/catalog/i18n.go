@@ -34,18 +34,26 @@ type translationSource struct {
 	dir  string // the _i18n folder inside fsys
 
 	mu       sync.Mutex
-	english  map[string]string            // en.yml, read with the first locale
-	byLocale map[string]map[string]string // locale -> current translations; nil = none
+	english  map[string]string               // en.yml, read with the first locale
+	byLocale map[string]map[string]localText // locale -> current translations; nil = none
+}
+
+// localText is one current translation and the English it was made from. A field
+// takes the translation only while it still holds that English: the loader can
+// drop a list item (normalizeSignals does), and then an index in the key names a
+// different item, whose English differs.
+type localText struct {
+	text, en string
 }
 
 func newTranslationSource(fsys fs.FS, root string) *translationSource {
-	return &translationSource{fsys: fsys, dir: path.Join(root, I18nDir), byLocale: map[string]map[string]string{}}
+	return &translationSource{fsys: fsys, dir: path.Join(root, I18nDir), byLocale: map[string]map[string]localText{}}
 }
 
 // texts returns the current translations for locale. A translation whose source
 // hash is not the hash of today's English, or that is empty, is left out, so the
 // English shows. A missing or unreadable file means no translations, never an error.
-func (s *translationSource) texts(locale string) map[string]string {
+func (s *translationSource) texts(locale string) map[string]localText {
 	if s == nil || locale == "" || locale == "en" || strings.ContainsAny(locale, `/\.`) {
 		return nil
 	}
@@ -59,7 +67,7 @@ func (s *translationSource) texts(locale string) map[string]string {
 	return m
 }
 
-func (s *translationSource) read(locale string) map[string]string {
+func (s *translationSource) read(locale string) map[string]localText {
 	if s.english == nil {
 		raw, err := fs.ReadFile(s.fsys, path.Join(s.dir, "en.yml"))
 		if err != nil || yaml.Unmarshal(raw, &s.english) != nil || s.english == nil {
@@ -74,13 +82,13 @@ func (s *translationSource) read(locale string) map[string]string {
 	if yaml.Unmarshal(raw, &target) != nil {
 		return nil
 	}
-	m := map[string]string{}
+	m := map[string]localText{}
 	for key, tr := range target {
 		en, ok := s.english[key]
 		if !ok || tr.Text == "" || tr.Source != sourceHash(en) {
 			continue
 		}
-		m[key] = tr.Text
+		m[key] = localText{text: tr.Text, en: en}
 	}
 	return m
 }
@@ -115,9 +123,9 @@ func (c *Catalog) LocalizedOne(svc Service, locale string) Service {
 	return svc
 }
 
-func localize(svc Service, texts map[string]string) Service {
+func localize(svc Service, texts map[string]localText) Service {
 	prefix := svc.Slug + "."
-	var rating map[string]string // "cons.0" -> text
+	var rating map[string]localText // "cons.0" -> text
 	for key, text := range texts {
 		if !strings.HasPrefix(key, prefix) {
 			continue
@@ -125,7 +133,7 @@ func localize(svc Service, texts map[string]string) Service {
 		field := strings.TrimPrefix(key, prefix)
 		if rest, ok := strings.CutPrefix(field, "rating."); ok {
 			if rating == nil {
-				rating = map[string]string{}
+				rating = map[string]localText{}
 			}
 			rating[strings.TrimSuffix(rest, ".text")] = text
 			continue
@@ -140,7 +148,7 @@ func localize(svc Service, texts map[string]string) Service {
 
 // localizeRating translates the computed pros and cons, which keep the order of
 // the entry's rating block. TopCons are cons too, matched by their English text.
-func localizeRating(r RatingResult, texts map[string]string) *RatingResult {
+func localizeRating(r RatingResult, texts map[string]localText) *RatingResult {
 	byEnglish := map[string]string{}
 	tr := func(items []RatingItem, kind string) []RatingItem {
 		if items == nil {
@@ -148,9 +156,9 @@ func localizeRating(r RatingResult, texts map[string]string) *RatingResult {
 		}
 		out := append([]RatingItem(nil), items...)
 		for i := range out {
-			if text, ok := texts[kind+"."+strconv.Itoa(i)]; ok {
-				byEnglish[out[i].Text] = text
-				out[i].Text = text
+			if text, ok := texts[kind+"."+strconv.Itoa(i)]; ok && out[i].Text == text.en {
+				byEnglish[out[i].Text] = text.text
+				out[i].Text = text.text
 			}
 		}
 		return out
@@ -172,11 +180,12 @@ func localizeRating(r RatingResult, texts map[string]string) *RatingResult {
 // setPath writes text at the field path, walking structs by their yaml names and
 // lists by an item's key or id, or by index. It copies every slice, map and
 // pointer it passes through, so the value it started from shares nothing it wrote.
-// A path that names nothing is ignored.
-func setPath(v reflect.Value, segs []string, text string) {
+// A path that names nothing, or a field that no longer holds the English the
+// translation was made from, is left as it is.
+func setPath(v reflect.Value, segs []string, text localText) {
 	if len(segs) == 0 {
-		if v.Kind() == reflect.String && v.CanSet() {
-			v.SetString(text)
+		if v.Kind() == reflect.String && v.CanSet() && v.String() == text.en {
+			v.SetString(text.text)
 		}
 		return
 	}
@@ -230,8 +239,8 @@ func setPath(v reflect.Value, segs []string, text string) {
 			clone.SetMapIndex(iter.Key(), iter.Value())
 		}
 		key := reflect.ValueOf(segs[0]).Convert(v.Type().Key())
-		if clone.MapIndex(key).IsValid() {
-			clone.SetMapIndex(key, reflect.ValueOf(text).Convert(v.Type().Elem()))
+		if cur := clone.MapIndex(key); cur.IsValid() && cur.String() == text.en {
+			clone.SetMapIndex(key, reflect.ValueOf(text.text).Convert(v.Type().Elem()))
 		}
 		v.Set(clone)
 	}
