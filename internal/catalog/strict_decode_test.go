@@ -32,6 +32,11 @@ func TestEveryVendoredKeyIsReadByTheLoader(t *testing.T) {
 		if walkErr != nil {
 			return walkErr
 		}
+		if entry.IsDir() && entry.Name() == I18nDir {
+			// Translations, not services: they have their own shape.
+			checkI18nFiles(t, path)
+			return filepath.SkipDir
+		}
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yml") || strings.HasPrefix(entry.Name(), "_") {
 			return nil
 		}
@@ -125,5 +130,42 @@ func TestTheVendoredSeedFileIsValid(t *testing.T) {
 		if !strings.Contains(problem, want) {
 			t.Errorf("SeedFileProblem missed %q: %s", want, problem)
 		}
+	}
+}
+
+// checkI18nFiles decodes services/_i18n strictly: en.yml maps each key to its
+// English, and every other file maps each key to {text, source}. A field the
+// loader does not read would drop that translation at load without a word.
+func checkI18nFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var targets int
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yml") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoder := yaml.NewDecoder(bytes.NewReader(raw))
+		decoder.KnownFields(true)
+		if e.Name() == "en.yml" {
+			var english map[string]string
+			err = decoder.Decode(&english)
+		} else {
+			var target map[string]translation
+			err = decoder.Decode(&target)
+			targets++
+		}
+		if err != nil {
+			t.Errorf("_i18n/%s does not have the shape the loader reads: %v", e.Name(), err)
+		}
+	}
+	if targets == 0 {
+		t.Errorf("%s holds no translation files", dir)
 	}
 }
