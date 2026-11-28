@@ -164,9 +164,15 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 			st.Network, st.Fence, st.Reason, st.Changes = s.Network, s.Fence, s.Reason, s.Changes
 			st.ProvedAt, st.Proving, st.StartError, st.GuestLimit = s.ProvedAt, s.Proving, s.StartError, s.GuestLimit
 			st.FreeDisk, st.Blocked, st.BlockedSince = s.FreeDisk, s.Blocked, s.BlockedSince
-			if age := time.Since(s.WrittenAt); age > 3*GuardInterval && st.Busy == "" {
+			// A proof can keep the guard from writing for minutes, and its
+			// status is not green; it gets the proof's own time limit.
+			limit := guardStaleAfter
+			if s.Proving {
+				limit = proofLimit
+			}
+			if age := time.Since(s.WrittenAt); age > limit {
 				// A silent guard proves nothing about the fence now, so the
-				// page must not show the old green.
+				// page must not show the old green, also during an action.
 				st.Fence = FenceUnknown
 				st.Reason = i18n.T("go.macvm.guardStale", "age", age.Round(time.Minute).String())
 			}
@@ -347,7 +353,7 @@ func (e *Engine) Install(ctx context.Context, progress securevm.Progress) (err e
 		}
 
 		progress(i18n.T("go.macvm.stepProve"), -1)
-		pr, err := e.waitProof(ctx, since, 30*time.Minute)
+		pr, err := e.waitProof(ctx, since, proofLimit)
 		if err != nil {
 			return err
 		}
@@ -368,8 +374,28 @@ func (e *Engine) rootCurrent() bool {
 	if !ok || e.AppVersion == "" || inst.App != e.AppVersion {
 		return false
 	}
-	s, err := ReadStatus(e.P)
-	return err == nil && s.Network == NetConnected && s.Fence == FenceHeld
+	return heldNow(context.Background(), e.P)
+}
+
+// proofLimit is how long a proof may take.
+const proofLimit = 30 * time.Minute
+
+// guardStaleAfter is how old the guard's status may be before it proves
+// nothing about the fence now.
+const guardStaleAfter = 3 * GuardInterval
+
+// heldNow is whether the guard says that it holds the fence on a connected
+// VM, in a status written since this boot of the Mac and recently. Guest
+// work starts only then.
+func heldNow(ctx context.Context, p Paths) bool {
+	s, err := ReadStatus(p)
+	if err != nil || s.Network != NetConnected || s.Fence != FenceHeld || time.Since(s.WrittenAt) > guardStaleAfter {
+		return false
+	}
+	if boot, err := host.BootTimeWithContext(ctx); err == nil && s.WrittenAt.Before(time.Unix(int64(boot), 0)) {
+		return false
+	}
+	return true
 }
 
 // prepareGuest makes the earner account and restarts the VM so it logs in.
@@ -383,7 +409,10 @@ func (e *Engine) prepareGuest(ctx context.Context, progress securevm.Progress) e
 	if err != nil {
 		return err
 	}
-	if !fresh {
+	// The earner logs in for the first time only after the restart, and
+	// Install writes PreparedFile only after the restart came back. A guest
+	// set up by an earlier try that stopped before it still needs it.
+	if _, perr := os.Stat(PreparedFile(e.TartHome)); !fresh && perr == nil {
 		return nil
 	}
 	progress(i18n.T("go.macvm.stepRestart"), -1)
@@ -479,7 +508,7 @@ func (e *Engine) Verify(ctx context.Context, progress securevm.Progress) (pr sec
 	if err := e.request(RequestProve); err != nil {
 		return pr, err
 	}
-	return e.waitProof(ctx, since, 30*time.Minute)
+	return e.waitProof(ctx, since, proofLimit)
 }
 
 // Undo removes everything Install made, then checks for itself what is left.
@@ -582,8 +611,7 @@ func (e *Engine) Place(ctx context.Context, slug string, where securevm.Placemen
 	if ok, why := securevm.Lock(s.Refused, s.MacOS != nil); !ok {
 		return errors.New(why)
 	}
-	st, err := ReadStatus(e.P)
-	if err != nil || st.Network != NetConnected || st.Fence != FenceHeld {
+	if !heldNow(ctx, e.P) {
 		return errors.New(i18n.T("go.macvm.notHeld"))
 	}
 	g := e.guest()
