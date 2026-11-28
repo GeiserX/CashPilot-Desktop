@@ -681,7 +681,7 @@ Write-Doc @{ kept = '' }
 `
 
 // scriptRemoveNAT removes the exact recorded provider object.
-const scriptRemoveNAT = natOwnershipPrelude + `$n = @(Get-NetNat -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $in.nat })
+const scriptRemoveNAT = natOwnershipPrelude + `$n = @(Get-NetNat -ErrorAction Stop | Where-Object { $_.Name -eq $in.nat })
 if ($n.Count -gt 0) {
   if ($n.Count -ne 1 -or -not (Test-RecordedNAT $n[0] $in)) {
     throw 'The NAT changed since inventory.'

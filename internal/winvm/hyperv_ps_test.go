@@ -613,3 +613,15 @@ func TestNewHostOtherOS(t *testing.T) {
 		t.Fatalf("got %v, want ErrUnsupported", err)
 	}
 }
+
+// ::/0 is the one IPv6 Deny allowed, and it still goes through the repeat
+// check: two of them would reach the provider as two writes.
+func TestCheckDeniesRefusesARepeatedAllIPv6(t *testing.T) {
+	if _, err := checkDenies([]netip.Prefix{allIPv6, allIPv6}); err == nil || !strings.Contains(err.Error(), "listed twice") {
+		t.Fatalf("two ::/0 rows: err = %v, want the repeat refusal", err)
+	}
+	got, err := checkDenies([]netip.Prefix{allIPv6, netip.MustParsePrefix("198.51.100.0/24")})
+	if err != nil || !slices.Equal(got, []string{"::/0", "198.51.100.0/24"}) {
+		t.Fatalf("::/0 and one IPv4 prefix = %v, %v", got, err)
+	}
+}

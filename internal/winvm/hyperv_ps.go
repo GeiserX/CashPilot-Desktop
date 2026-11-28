@@ -1070,14 +1070,13 @@ func checkDenies(ps []netip.Prefix) ([]string, error) {
 	}
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
-		if p == allIPv6 {
-			out = append(out, p.String())
-			continue
+		s := p.String()
+		if p != allIPv6 {
+			if !p.IsValid() || !p.Addr().Is4() || p != p.Masked() {
+				return nil, fmt.Errorf("prefix %v is not a masked IPv4 prefix", p)
+			}
+			s = aclArg(p)
 		}
-		if !p.IsValid() || !p.Addr().Is4() || p != p.Masked() {
-			return nil, fmt.Errorf("prefix %v is not a masked IPv4 prefix", p)
-		}
-		s := aclArg(p)
 		if slices.Contains(out, s) {
 			return nil, fmt.Errorf("prefix %v is listed twice", p)
 		}

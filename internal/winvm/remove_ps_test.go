@@ -64,6 +64,21 @@ function Remove-NetNat { throw 'would remove the unverified NAT' }
 	}
 }
 
+// A NAT listing that cannot be read is not an absent NAT: Remove would
+// report a removal that never happened.
+func TestRemoveNATScriptFailsWhenTheListingCannotBeRead(t *testing.T) {
+	const mock = `
+function Get-NetNat { [CmdletBinding()] param() Write-Error 'WinNAT is not answering' }
+function Get-NetNatStaticMapping {}
+function Remove-NetNat { throw 'would remove an unread NAT' }
+`
+	code, out := runOwnedScriptWithFake(t, mock, scriptRemoveNAT,
+		map[string]any{"nat": "CashPilot-VM", "id": "nat-id", "prefix": "172.31.250.0/29"})
+	if code == 0 || !strings.Contains(string(out), "WinNAT is not answering") {
+		t.Fatalf("an unreadable NAT listing passed as absent: exit %d: %s", code, out)
+	}
+}
+
 func TestRemoveVMScriptRefusesIndependentConfiguration(t *testing.T) {
 	const mock = `
 param($vmId, $owner, $adapter, $change)
