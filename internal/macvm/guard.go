@@ -36,6 +36,12 @@ type Daemon struct {
 
 	lastPass  time.Time
 	lastOwnIP time.Time
+	// distrust is set when an old verdict could not be cleared before a new
+	// proof. The guard then treats the verdict on disk as unproven, until a
+	// new green verdict is written.
+	distrust bool
+	// startErr is the last start's error, nil after a start that worked.
+	startErr error
 }
 
 func (d *Daemon) now() time.Time {
@@ -76,20 +82,7 @@ func (d *Daemon) Read(ctx context.Context, inst Install, desired Desired) (Live,
 		return l, err
 	}
 	l.Bridges = bs
-	if b, p, ok := GuestPort(bs, inst.MAC); ok {
-		l.Bridge, l.Port = b, p
-	} else if desired.Port != "" {
-		// A cut port has no traffic, so its MAC leaves the cache: fall back to
-		// the port the start recorded, while that bridge still has it or the
-		// interface still exists.
-		for _, b := range bs {
-			if b.Name == desired.Bridge {
-				if _, err := d.R.Run(ctx, "/sbin/ifconfig", desired.Port); err == nil {
-					l.Bridge, l.Port = b, desired.Port
-				}
-			}
-		}
-	}
+	l.Bridge, l.Port = d.locate(ctx, bs, inst, desired)
 	l.Member = l.Port != "" && l.Bridge.HasMember(l.Port)
 	info, _ := d.R.Run(ctx, "/sbin/pfctl", "-s", "info")
 	l.PFEnabled = strings.Contains(info, "Status: Enabled")
@@ -106,6 +99,26 @@ func (d *Daemon) Read(ctx context.Context, inst Install, desired Desired) (Live,
 	return l, nil
 }
 
+// locate finds the guest's bridge and port: by its MAC in a bridge's cache,
+// or else by the port the start recorded. A cut port has no traffic, so its
+// MAC leaves the cache; the recorded port counts while its bridge exists and
+// the interface is still there.
+func (d *Daemon) locate(ctx context.Context, bs []Bridge, inst Install, desired Desired) (Bridge, string) {
+	if b, p, ok := GuestPort(bs, inst.MAC); ok {
+		return b, p
+	}
+	if desired.Port != "" {
+		for _, b := range bs {
+			if b.Name == desired.Bridge {
+				if _, err := d.R.Run(ctx, "/sbin/ifconfig", desired.Port); err == nil {
+					return b, desired.Port
+				}
+			}
+		}
+	}
+	return Bridge{}, ""
+}
+
 func (d *Daemon) bridges(ctx context.Context) ([]Bridge, error) {
 	names, err := d.R.Run(ctx, "/sbin/ifconfig", "-l")
 	if err != nil {
@@ -118,7 +131,13 @@ func (d *Daemon) bridges(ctx context.Context) ([]Bridge, error) {
 		}
 		out, err := d.R.Run(ctx, "/sbin/ifconfig", n)
 		if err != nil {
-			continue // a bridge that went away between the two reads
+			// A bridge that went away between the two reads is fine. A bridge
+			// that is still there but cannot be read can hold the guest, so
+			// it fails the read: the guard must not take it for an absent guest.
+			if again, lerr := d.R.Run(ctx, "/sbin/ifconfig", "-l"); lerr != nil || slices.Contains(strings.Fields(again), n) {
+				return nil, fmt.Errorf("could not read bridge %s: %w", n, err)
+			}
+			continue
 		}
 		bs = append(bs, ParseBridge(n, out))
 	}
@@ -212,13 +231,33 @@ func Drift(l Live, desired Desired, bin string) []string {
 	}
 	if l.Bridge.Name == "" || l.Bridge.Name != desired.Bridge || l.Port != desired.Port {
 		d = append(d, "wrong-bridge")
-	} else if !strings.Contains(l.RawRules, " on "+l.Bridge.Name+" ") {
+	} else if !rulesOnBridge(l.RawRules, l.Bridge.Name) {
 		d = append(d, "wrong-bridge")
 	}
 	if !l.Bridge.Addr.IsValid() || l.Bridge.Addr != desired.Gateway || !gatewayRule(l.RawRules, desired.Gateway) {
 		d = append(d, "wrong-gateway")
 	}
 	return d
+}
+
+// rulesOnBridge is whether raw has rules and every rule that names an
+// interface names bridge. NormalizeRules drops the name, so only this check
+// sees a rule moved to another interface.
+func rulesOnBridge(raw, bridge string) bool {
+	found := false
+	for _, line := range strings.Split(raw, "\n") {
+		f := strings.Fields(line)
+		for i := 0; i+1 < len(f); i++ {
+			if f[i] != "on" {
+				continue
+			}
+			if f[i+1] != bridge {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
 }
 
 func gatewayRule(raw string, gw netip.Addr) bool {
@@ -250,6 +289,26 @@ func (d *Daemon) cut(ctx context.Context, l Live) error {
 	}
 	_, err := d.R.Run(ctx, "/sbin/ifconfig", l.Bridge.Name, "deletem", l.Port)
 	return err
+}
+
+// takeOff takes the guest off the network. It cuts the port, tries once more
+// when the cut fails, and then stops the VM. The network state it returns is
+// the truth: disconnected after a cut, off after a stop, and connected with
+// the error when both failed.
+func (d *Daemon) takeOff(ctx context.Context, inst Install, l Live) (string, error) {
+	err := d.cut(ctx, l)
+	if err == nil {
+		return NetDisconnected, nil
+	}
+	if err = d.cut(ctx, l); err == nil {
+		return NetDisconnected, nil
+	}
+	d.logf("cut of %s from %s FAILED: %v; stopping %s", l.Port, l.Bridge.Name, err, VMName)
+	d.stopVM(ctx, inst)
+	if run, rerr := d.running(ctx, inst); rerr == nil && !run {
+		return NetOff, nil
+	}
+	return NetConnected, fmt.Errorf("could not cut the Secure VM off the network (%v), and it did not stop", err)
 }
 
 func (d *Daemon) connect(ctx context.Context, l Live) error {
@@ -300,29 +359,64 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 	_ = ReadJSON(d.state(VerdictFile), &pr)
 	st.ProvedAt = pr.At
 
+	if boot {
+		// Cut before anything else is read: only the port is needed for it.
+		if bs, err := d.bridges(ctx); err == nil {
+			var pre Live
+			pre.Bridge, pre.Port = d.locate(ctx, bs, inst, desired)
+			if pre.Port != "" && pre.Bridge.HasMember(pre.Port) {
+				pre.Member = true
+				if net, err := d.takeOff(ctx, inst, pre); err == nil && net == NetDisconnected {
+					d.logf("boot/wake: %s cut from %s before the check", pre.Port, pre.Bridge.Name)
+				} else if err != nil {
+					st.Network, st.Fence, st.Reason = net, FenceCut, err.Error()
+					return st
+				}
+			}
+		}
+	}
 	l, err := d.Read(ctx, inst, desired)
 	if err != nil {
-		st.Network, st.Fence, st.Reason = NetDisconnected, FenceCut, "could not read the fence: "+err.Error()
-		// Fail closed: cut whatever we can find.
+		st.Fence, st.Reason = FenceCut, "could not read the fence: "+err.Error()
+		// Fail closed: cut whatever we can find, or the port the start
+		// recorded when the read found none.
+		if l.Port == "" && desired.Port != "" && desired.Bridge != "" {
+			l.Bridge, l.Port, l.Member = Bridge{Name: desired.Bridge}, desired.Port, true
+		}
+		st.Network = NetDisconnected
 		if l.Port != "" {
-			_ = d.cut(ctx, l)
+			var terr error
+			if st.Network, terr = d.takeOff(ctx, inst, l); terr != nil {
+				st.Reason += "; " + terr.Error()
+			}
 		}
 		return st
 	}
+	build := ""
+	if d.HostBuild != nil {
+		build, _ = d.HostBuild(ctx)
+	}
+	ok, fence, why := ProofValid(pr, inst, build)
+	if ok && d.distrust {
+		ok, fence, why = false, FenceUnproven, "the last proof could not be cleared before a new one"
+	}
 	if l.Port == "" {
-		st.Network, st.Fence = NetOff, FenceCut
+		// A stopped VM shows the proof's scope too: a proof from another
+		// macOS build is not held.
+		st.Network, st.Fence = NetOff, fence
 		st.Reason = "the Secure VM is not running"
-		if pr.Green {
-			st.Fence = FenceHeld
-		} else {
-			st.Fence = FenceUnproven
+		if !ok {
+			st.Reason += "; " + why
 		}
 		return st
 	}
 	if boot && l.Member {
-		if err := d.cut(ctx, l); err == nil {
+		if net, err := d.takeOff(ctx, inst, l); err == nil && net == NetDisconnected {
 			d.logf("boot/wake: %s cut from %s before the check", l.Port, l.Bridge.Name)
 			l.Member = false
+		} else if err != nil {
+			st.Network, st.Fence, st.Reason = net, FenceCut, err.Error()
+			return st
 		}
 	}
 	if out, err := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-vsr"); err == nil {
@@ -331,30 +425,50 @@ func (d *Daemon) Pass(ctx context.Context, boot bool) Status {
 		}
 	}
 	drift := Drift(l, desired, d.P.Bin)
-	if d.ownIPChanged(ctx) {
+	d.ownIPChanged(ctx)
+	// The deny list on disk must be the one the running fence applies. A new
+	// own IP changes the list, and only a new start applies it, so the guest
+	// stays cut until then, also when a restart failed.
+	if raw, err := os.ReadFile(d.state(DenyFile)); err != nil {
+		drift = append(drift, "own-ip")
+	} else if deny, err := ParseDeny(string(raw)); err != nil || SoftnetBlock(deny) != desired.SoftnetBlock {
 		drift = append(drift, "own-ip")
 	}
-	build := ""
-	if d.HostBuild != nil {
-		build, _ = d.HostBuild(ctx)
-	}
-	ok, fence, why := ProofValid(pr, inst, build)
 	switch {
 	case len(drift) > 0:
-		if err := d.cut(ctx, l); err != nil {
-			d.logf("MISMATCH:%s; cut FAILED: %v", strings.Join(drift, " "), err)
-		} else if l.Member {
+		net, err := d.takeOff(ctx, inst, l)
+		switch {
+		case err != nil:
+			d.logf("MISMATCH: %s; %v", strings.Join(drift, " "), err)
+		case l.Member:
 			d.logf("MISMATCH: %s; %s cut from %s", strings.Join(drift, " "), l.Port, l.Bridge.Name)
-		} else {
+		default:
 			d.logf("MISMATCH: %s; staying cut", strings.Join(drift, " "))
 		}
-		st.Network, st.Fence, st.Changes = NetDisconnected, FenceCut, drift
+		st.Network, st.Fence, st.Changes = net, FenceCut, drift
 		st.Reason = "the fence changed, so the Secure VM is cut off the network: " + strings.Join(drift, ", ")
+		if err != nil {
+			st.Reason = "the fence changed (" + strings.Join(drift, ", ") + "), and " + err.Error()
+		}
 	case !ok:
-		_ = d.cut(ctx, l)
-		st.Network, st.Fence, st.Reason = NetDisconnected, fence, why
+		net, err := d.takeOff(ctx, inst, l)
+		st.Network, st.Fence, st.Reason = net, fence, why
+		if err != nil {
+			st.Reason = why + "; " + err.Error()
+		}
 		d.logf("match, but %s; staying cut", why)
 	default:
+		// The checks above took time: read the fence again right before the
+		// port goes on, and connect only if it still matches.
+		if !l.Member {
+			again, err := d.Read(ctx, inst, desired)
+			if err != nil || len(Drift(again, desired, d.P.Bin)) > 0 || again.Port != l.Port {
+				st.Network, st.Fence, st.Reason = NetDisconnected, FenceCut, "the fence changed during the check, so the Secure VM stays cut"
+				d.logf("match, but the fence changed before the connect; staying cut")
+				return st
+			}
+			l = again
+		}
 		if err := d.connect(ctx, l); err != nil {
 			st.Network, st.Fence, st.Reason = NetDisconnected, FenceCut, "could not connect: "+err.Error()
 			d.logf("match; connect FAILED: %v", err)
@@ -410,6 +524,9 @@ func (d *Daemon) ownIPChanged(ctx context.Context) bool {
 
 func (d *Daemon) writeStatus(st *Status) {
 	st.FreeDisk = d.freeDisk()
+	if d.startErr != nil {
+		st.StartError, st.GuestLimit = d.startErr.Error(), errors.Is(d.startErr, errGuestLimit)
+	}
 	if err := WriteJSON(d.state(StatusFile), st, 0o644); err != nil {
 		d.logf("status.json: %v", err)
 	}

@@ -159,6 +159,16 @@ func NewMember(before, after map[string]bool) (bridge, port string, ok bool) {
 	return b, p, true
 }
 
+// OtherNewMember is a member in after that is not in before and is not cut.
+func OtherNewMember(before, after map[string]bool, cut string) string {
+	for k := range after {
+		if !before[k] && k != cut {
+			return k
+		}
+	}
+	return ""
+}
+
 // DefaultRoute reads `route -n get default`: the router and its interface.
 func DefaultRoute(out string) (gateway netip.Addr, iface string, err error) {
 	for _, line := range strings.Split(out, "\n") {

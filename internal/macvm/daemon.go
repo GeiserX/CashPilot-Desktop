@@ -3,6 +3,7 @@ package macvm
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/netip"
 	"os"
@@ -38,10 +39,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			case RequestStart:
 				d.start(ctx)
 			case RequestRestart:
-				if inst, err := d.loadInstall(); err == nil {
-					d.stopVM(ctx, inst)
-				}
-				d.start(ctx)
+				d.restart(ctx)
 			case RequestProve:
 				d.Prove(ctx)
 			}
@@ -55,10 +53,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if (slicesContains(st.Changes, "own-ip") || slicesContains(st.Changes, "softnet")) && st.Network != NetOff {
 			// The block list must change, or softnet runs with a wrong one:
 			// both are fixed only by a new start, which records a new fence.
-			if inst, err := d.loadInstall(); err == nil && slicesContains(st.Changes, "own-ip") {
+			if slicesContains(st.Changes, "own-ip") {
 				d.logf("restarting %s with the new deny list", VMName)
-				d.stopVM(ctx, inst)
-				d.start(ctx)
+				d.restart(ctx)
 			}
 		}
 		if st.Fence == FenceReprove && st.Network != NetOff {
@@ -77,15 +74,43 @@ func slicesContains(s []string, v string) bool {
 	return false
 }
 
+// restart stops the VM and starts it again. A VM that does not stop is not
+// started: the error goes into the status, and the guard keeps it cut.
+func (d *Daemon) restart(ctx context.Context) {
+	inst, err := d.loadInstall()
+	if err != nil {
+		d.startErr = err
+		d.Pass(ctx, false)
+		return
+	}
+	d.stopVM(ctx, inst)
+	if run, err := d.running(ctx, inst); err != nil || run {
+		if err == nil {
+			err = errors.New("the Secure VM did not stop, so it was not started again")
+		}
+		d.logf("restart: %v", err)
+		d.startErr = err
+		d.Pass(ctx, false)
+		return
+	}
+	d.start(ctx)
+}
+
 // start starts the VM and records why a start failed in the status.
 func (d *Daemon) start(ctx context.Context) {
 	err := d.Start(ctx, StartOptions{})
+	for i := 0; i < 3 && errors.Is(err, errPortAmbiguous); i++ {
+		if sleep(ctx, 5*time.Second) != nil {
+			break
+		}
+		err = d.Start(ctx, StartOptions{})
+	}
+	// The error stays in every status until a start succeeds, so a pass
+	// right after it cannot wipe it before the app reads it.
+	d.startErr = err
 	st := d.Pass(ctx, false)
 	if err != nil {
 		d.logf("start failed: %v", err)
-		st.StartError = err.Error()
-		st.GuestLimit = errors.Is(err, errGuestLimit)
-		d.writeStatus(&st)
 		return
 	}
 	// A green proof that still covers this host lets the pass above connect.
@@ -134,10 +159,15 @@ func PublicIPv4(ctx context.Context) ([]netip.Addr, error) {
 			lastErr = err
 			continue
 		}
-		b := make([]byte, 64)
-		n, _ := resp.Body.Read(b)
+		// An address is at most 15 bytes and a newline; read to the end, and
+		// refuse a longer answer or a read error.
+		b, rerr := io.ReadAll(io.LimitReader(resp.Body, 65))
 		resp.Body.Close()
-		a, err := netip.ParseAddr(strings.TrimSpace(string(b[:n])))
+		if rerr != nil || len(b) > 64 {
+			lastErr = errors.New(u + " gave no IPv4 address")
+			continue
+		}
+		a, err := netip.ParseAddr(strings.TrimSpace(string(b)))
 		if err != nil || !a.Is4() {
 			lastErr = errors.New(u + " gave no IPv4 address")
 			continue
