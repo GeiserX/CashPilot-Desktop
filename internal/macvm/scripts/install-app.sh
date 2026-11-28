@@ -24,8 +24,11 @@ case "$name" in ''|*/*|.*) echo "RESULT refused: file name must be a plain name"
 # Root's own staging folder: the earner user cannot plant a file or a symlink here.
 dl=$(mktemp -d /private/var/tmp/cp-dl.XXXXXX) || { echo "RESULT refused: no staging folder"; exit 1; }
 f="$dl/$name"
-mnt=""
-refuse() { [ -n "$mnt" ] && hdiutil detach "$mnt" >/dev/null 2>&1; rm -rf "$dl"; echo "RESULT refused: $*"; exit 1; }
+mnt="" x=""
+refuse() { [ -n "$mnt" ] && hdiutil detach "$mnt" >/dev/null 2>&1; rm -rf "$dl"; [ -n "$x" ] && rm -rf "$x"; echo "RESULT refused: $*"; exit 1; }
+# The bundle must be the one the catalog names: an archive with another app
+# would leave an old copy of the named one in place and pass the check below.
+named() { [ "$(basename "$1")" = "$want_app" ] || refuse "the download holds $(basename "$1"), not $want_app"; }
 # Copy under a temporary name first, so a failed copy keeps the old version.
 place() {
   dst="/Applications/$(basename "$1")"; tmp="/Applications/.cp-new-$(basename "$1")"
@@ -74,7 +77,7 @@ case "$f" in
     app=$(find "$mnt" -maxdepth 1 -name '*.app' | head -1)
     pkg=$(find "$mnt" -maxdepth 1 -name '*.pkg' | head -1)
     if [ -n "$app" ]; then
-      check "$app"; place "$app"
+      named "$app"; check "$app"; place "$app"
     elif [ -n "$pkg" ]; then
       check "$pkg"; pkg_install "$pkg"
     else refuse "no .app or .pkg in the dmg"; fi
@@ -83,10 +86,10 @@ case "$f" in
   *.zip)
     x=$(mktemp -d /tmp/cpzip.XXXX); ditto -x -k "$f" "$x"
     app=$(find "$x" -maxdepth 2 -name '*.app' | head -1); [ -n "$app" ] || refuse "no .app in the zip"
-    check "$app"; place "$app" ;;
+    named "$app"; check "$app"; place "$app" ;;
   *) refuse "unknown file type" ;;
 esac
-rm -rf "$dl"
+rm -rf "$dl"; [ -n "$x" ] && rm -rf "$x"
 [ -d "/Applications/$want_app" ] || { echo "RESULT refused: the installer did not put $want_app in /Applications"; exit 1; }
 # UpRock keeps its sign-in in the keychain, unless its credentials file exists.
 # Under boot load its keychain probe can time out: it then makes that file
@@ -101,7 +104,7 @@ if [ "$slug" = uprock ] && id earner >/dev/null 2>&1; then
   fi
 fi
 la="/Library/LaunchAgents/org.cashpilot.earner.$slug.plist"
-cat > "$la" <<PLIST
+cat > "$la" <<PLIST || { echo "RESULT refused: could not write $la"; exit 1; }
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -114,7 +117,7 @@ cat > "$la" <<PLIST
 </dict>
 </plist>
 PLIST
-chown root:wheel "$la"; chmod 644 "$la"
+chown root:wheel "$la" && chmod 644 "$la" || { echo "RESULT refused: could not set up $la"; exit 1; }
 # Open it now when the earner is logged in; otherwise its next login does.
 if uid=$(id -u earner 2>/dev/null) && [ "$(stat -f %u /dev/console)" = "$uid" ]; then
   launchctl asuser "$uid" /usr/bin/sudo -u earner /usr/bin/open -g "/Applications/$want_app" || true

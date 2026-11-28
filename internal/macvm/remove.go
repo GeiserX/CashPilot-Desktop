@@ -40,9 +40,14 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 	if req.TartHome == "" {
 		req.TartHome = inst.TartHome
 	}
-	if err := d.removeDaemon(ctx); err == nil {
-		did("the guard daemon " + Label)
+	// The guard uses the fence, the tools and the state. While it runs,
+	// deleting them would leave it guarding nothing, so a guard that does not
+	// stop stops the removal.
+	if err := d.removeDaemon(ctx); err != nil {
+		rep.Left = append(rep.Left, "the guard "+Label+" did not stop, so CashPilot removed nothing else: "+err.Error())
+		return rep
 	}
+	did("the guard daemon " + Label)
 	if ierr == nil {
 		tart := TartExe(d.P.Bin)
 		if _, err := os.Stat(tart); err != nil && req.Tools != "" {
@@ -62,22 +67,34 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 	if _, err := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-F", "all"); err == nil {
 		did("the pf anchor " + Anchor)
 	}
+	// The pf token and the saved Internet Sharing file are what a second
+	// Remove needs to finish, so the state folder stays when either step fails.
+	keepState := false
 	if tok, err := os.ReadFile(d.state(PFToken)); err == nil {
 		if t := strings.TrimSpace(string(tok)); t != "" {
 			if _, err := d.R.Run(ctx, "/sbin/pfctl", "-X", t); err == nil {
 				did("CashPilot's pf reference")
+			} else {
+				keepState = true
+				rep.Left = append(rep.Left, "CashPilot's pf reference could not be released: "+err.Error())
 			}
 		}
 	}
 	if orig, err := os.ReadFile(d.state(SharingOrig)); err == nil {
 		switch {
 		case string(orig) == "absent":
-			if os.Remove(SharingPlist) == nil {
+			if err := os.Remove(SharingPlist); err == nil || errors.Is(err, os.ErrNotExist) {
 				did("softnet's DHCP setting in " + SharingPlist)
+			} else {
+				keepState = true
+				rep.Left = append(rep.Left, SharingPlist+" could not be removed: "+err.Error())
 			}
 		default:
-			if WriteAtomic(SharingPlist, orig, 0o644) == nil {
+			if err := WriteAtomic(SharingPlist, orig, 0o644); err == nil {
 				did("put back " + SharingPlist + " as it was")
+			} else {
+				keepState = true
+				rep.Left = append(rep.Left, SharingPlist+" could not be put back: "+err.Error())
 			}
 		}
 	} else if _, err := os.Lstat(SharingPlist); err == nil {
@@ -86,7 +103,12 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 	if err := os.Remove(d.P.Plist); err == nil {
 		did(d.P.Plist)
 	}
-	if err := os.RemoveAll(d.P.Root); err == nil {
+	if keepState {
+		// Only the state folder stays, with what a second Remove needs.
+		for _, dir := range []string{d.P.Bin, d.P.Request, d.P.Owner} {
+			_ = os.RemoveAll(dir)
+		}
+	} else if err := os.RemoveAll(d.P.Root); err == nil {
 		did(d.P.Root)
 	}
 	if req.TartHome != "" {
@@ -113,9 +135,35 @@ func (d *Daemon) Remove(ctx context.Context, req RemoveRequest) RemoveReport {
 }
 
 // safeOwnerPath keeps a root delete inside the owner's home or Tart folder.
+// It checks the path as written, and then its real path: a symlinked parent
+// folder could otherwise lead the delete out of the home. The last part is not
+// followed, because a delete of a symlink removes only the link.
 func safeOwnerPath(p, home, tartHome string) bool {
-	p = filepath.Clean(p)
-	for _, root := range []string{home, tartHome} {
+	if !underRoot(filepath.Clean(p), home, tartHome) {
+		return false
+	}
+	dir, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if errors.Is(err, os.ErrNotExist) {
+		return true // nothing there to delete
+	}
+	if err != nil {
+		return false
+	}
+	var real []string
+	for _, r := range []string{home, tartHome} {
+		if r == "" {
+			continue
+		}
+		if rr, err := filepath.EvalSymlinks(r); err == nil {
+			real = append(real, rr)
+		}
+	}
+	return underRoot(filepath.Join(dir, filepath.Base(p)), real...)
+}
+
+// underRoot is whether p is inside one of roots, by its cleaned text.
+func underRoot(p string, roots ...string) bool {
+	for _, root := range roots {
 		if root == "" {
 			continue
 		}
@@ -134,18 +182,30 @@ func (d *Daemon) Leftovers(ctx context.Context, req RemoveRequest, inst Install)
 	if _, err := d.R.Run(ctx, "/bin/launchctl", "print", "system/"+Label); err == nil {
 		left = append(left, "the daemon "+Label+" is still loaded")
 	}
-	for _, p := range []string{d.P.Plist, d.P.Root} {
+	// A check that could not run proves nothing is gone, so it counts as left.
+	exists := func(p string) {
 		if _, err := os.Lstat(p); err == nil {
 			left = append(left, p)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			left = append(left, p+" (could not check: "+err.Error()+")")
 		}
 	}
-	if out, err := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-sr"); err == nil && strings.TrimSpace(out) != "" {
+	for _, p := range []string{d.P.Plist, d.P.Root} {
+		exists(p)
+	}
+	if out, err := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-sr"); err != nil {
+		left = append(left, "pf rules in "+Anchor+" (could not check: "+err.Error()+")")
+	} else if strings.TrimSpace(out) != "" {
 		left = append(left, "pf rules in "+Anchor)
 	}
-	if out, err := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-s", "Tables"); err == nil && strings.TrimSpace(out) != "" {
+	if out, err := d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-s", "Tables"); err != nil {
+		left = append(left, "pf tables in "+Anchor+" (could not check: "+err.Error()+")")
+	} else if strings.TrimSpace(out) != "" {
 		left = append(left, "pf tables in "+Anchor)
 	}
-	if ps, err := d.R.Run(ctx, "/bin/ps", "-axww", "-o", "args="); err == nil {
+	if ps, err := d.R.Run(ctx, "/bin/ps", "-axww", "-o", "args="); err != nil {
+		left = append(left, "the VM's processes (could not check: "+err.Error()+")")
+	} else {
 		for _, l := range strings.Split(ps, "\n") {
 			if strings.Contains(l, "tart run "+VMName) || strings.Contains(l, filepath.Join(d.P.Bin, SoftnetExe)) || strings.Contains(l, filepath.Join(d.P.Bin, DaemonExe)) {
 				left = append(left, "a process: "+strings.TrimSpace(l))
@@ -154,15 +214,11 @@ func (d *Daemon) Leftovers(ctx context.Context, req RemoveRequest, inst Install)
 	}
 	if req.TartHome != "" {
 		for _, p := range []string{VMDir(req.TartHome), IPSWPath(req.TartHome), IPSWPath(req.TartHome) + ".part"} {
-			if _, err := os.Lstat(p); err == nil {
-				left = append(left, p)
-			}
+			exists(p)
 		}
 	}
 	if req.Tools != "" {
-		if _, err := os.Lstat(req.Tools); err == nil {
-			left = append(left, req.Tools)
-		}
+		exists(req.Tools)
 	}
 	return left
 }
