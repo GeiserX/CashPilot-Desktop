@@ -2134,5 +2134,17 @@
   "main.scope.worker": "वर्कर",
   "logs.wrap": "पंक्तियाँ लपेटें",
   "logs.empty": "(कोई लॉग नहीं)",
-  "go.importers.refuse.m4bEncrypted": "{name} एक एन्क्रिप्ट की गई money4band 5.0 फ़ाइल है। `m4b config edit` चलाएँ, वह जो डिक्रिप्ट किया हुआ JSON खोलता है उसे कॉपी करें, और यहाँ पेस्ट करें।"
+  "go.importers.refuse.m4bEncrypted": "{name} एक एन्क्रिप्ट की गई money4band 5.0 फ़ाइल है। `m4b config edit` चलाएँ, वह जो डिक्रिप्ट किया हुआ JSON खोलता है उसे कॉपी करें, और यहाँ पेस्ट करें।",
+  "installer.finishRun": "CashPilot Desktop खोलें",
+  "installer.closing": "अगर CashPilot Desktop {dir} से चल रहा है तो उसे बंद किया जा रहा है",
+  "installer.options.title": "चुनें कि और क्या हटाना है",
+  "installer.options.subtitle": "ऐप, इसके शॉर्टकट और इसका बैकग्राउंड हेल्पर हमेशा हटाए जाते हैं।",
+  "installer.options.intro": "CashPilot Desktop को {dir} से हटाया जाएगा। यह अपने शुरू किए कमाई ऐप और आपका डेटा भी हटा सकता है। किसी हिस्से को रखने के लिए उसका बॉक्स खाली छोड़ें।",
+  "installer.options.removeEarners": "&CashPilot Desktop के शुरू किए कमाई ऐप बंद करें और हटाएँ",
+  "installer.options.removeEarnersHelp": "केवल CashPilot Desktop के बनाए कंटेनर, और इसके नेटिव कमाई ऐप। दूसरे कंटेनरों को छुआ नहीं जाता। Docker वॉल्यूम बने रहते हैं। खाली छोड़ने पर कंटेनर चलते रहते हैं।",
+  "installer.options.deleteData": "&मेरा CashPilot डेटा मिटाएँ",
+  "installer.options.deleteDataHelp": "सेटिंग्स, कमाई डेटाबेस, लॉग और सहेजे गए लॉगिन। खाली छोड़ने पर ये बने रहते हैं, और नया इंस्टॉल या पोर्टेबल exe इन्हें फिर से ढूँढ लेता है।",
+  "installer.options.uninstall": "&अनइंस्टॉल करें",
+  "installer.cleanupFailed": "ऐप की सफ़ाई पूरी नहीं हुई (परिणाम: {result})। ऊपर की पंक्तियाँ बताती हैं कि क्या बचा है।",
+  "installer.somePartsLeft": "कुछ हिस्से हटाए नहीं जा सके। विवरण की सूची बताती है कि कौन-से।"
 }
