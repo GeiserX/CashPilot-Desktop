@@ -53,6 +53,28 @@ func TestADeletedImageIsGoneUntilItIsPulledAgain(t *testing.T) {
 	}
 }
 
+// The default build of a tag, one SetImage never named, is deleted and pulled
+// back the same way.
+func TestADeletedDefaultBuildIsGoneUntilItIsPulledAgain(t *testing.T) {
+	d := NewDocker()
+	defer d.Close()
+	if code := call(t, d, http.MethodDelete, "/images/sha256:example/app:latest", ""); code != http.StatusOK {
+		t.Fatalf("delete = %d", code)
+	}
+	if code := call(t, d, http.MethodGet, "/images/example/app:latest/json", ""); code != http.StatusNotFound {
+		t.Fatalf("inspect of the tag after the delete = %d; want 404", code)
+	}
+	if code := call(t, d, http.MethodPost, "/containers/create?name=a", `{"Image":"example/app:latest"}`); code != http.StatusNotFound {
+		t.Fatalf("create from a deleted image = %d; want 404", code)
+	}
+	if code := call(t, d, http.MethodPost, "/images/create?fromImage=example/app&tag=latest", ""); code != http.StatusOK {
+		t.Fatalf("pull = %d", code)
+	}
+	if code := call(t, d, http.MethodGet, "/images/example/app:latest/json", ""); code != http.StatusOK {
+		t.Fatalf("inspect after the pull = %d; want 200", code)
+	}
+}
+
 // A bind at a path the image declares as a VOLUME is that path's mount: Docker
 // makes no anonymous volume there.
 func TestABindAtAnImageVolumePathGetsNoAnonymousVolume(t *testing.T) {

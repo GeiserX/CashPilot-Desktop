@@ -254,6 +254,10 @@ func (d *Docker) build(ref string) Build {
 	if b, ok := d.byID[ref]; ok {
 		return b
 	}
+	if strings.HasPrefix(ref, "sha256:") {
+		// An image ID names itself, as the default build of a tag does.
+		return Build{ID: ref}
+	}
 	return Build{ID: "sha256:" + ref}
 }
 
