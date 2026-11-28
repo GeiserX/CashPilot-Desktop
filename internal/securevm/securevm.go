@@ -101,6 +101,8 @@ const (
 	KindRed   = "red"
 	KindGreen = "green"
 	KindCheck = "check"
+	// KindFunction is the last step: the earner's own path really works.
+	KindFunction = "function"
 
 	WentRed     = "went-red"
 	StayedGreen = "stayed-green"
@@ -108,6 +110,9 @@ const (
 	Broken      = "broken"
 	Leak        = "leak"
 	NotProven   = "unproven"
+	// NotApplicable is a step that does not apply on this computer, such
+	// as a tunnel step with no tunnel.
+	NotApplicable = "n/a"
 )
 
 // Proof is one run of Verify.
