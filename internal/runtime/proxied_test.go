@@ -18,6 +18,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/catalog"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 )
 
@@ -386,6 +387,47 @@ func TestEarnerJoinsTheSidecarAndCannotEscapeIt(t *testing.T) {
 		req.Service = svc
 		if _, err := earnerCreate(req, "sidecar-id", "example/earner:1.0", "linux"); err == nil {
 			t.Errorf("%s: a proxied earner that could leave the tunnel must be refused", name)
+		}
+	}
+}
+
+// A copy gets fresh named volumes of its own, so it is a new device and never the
+// original on a second address. A routed service is the service itself, moved, so it
+// keeps its own volumes. A folder on the host is refused even if Refusal missed it.
+func TestProxiedCopyGetsVolumesOfItsOwn(t *testing.T) {
+	withVolumes := func(volumes ...string) ProxiedDeploy {
+		req := deployRequest()
+		svc := req.Service
+		svc.Docker.Volumes = volumes
+		req.Service = svc
+		return req
+	}
+	opts, err := earnerCreate(withVolumes("earner-data:/data", "earner-cfg:/cfg:ro"), "sidecar-id", "example/earner:1.0", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := opts.HostConfig.Mounts
+	if len(got) != 2 || got[0].Type != mount.TypeVolume || got[0].Source != "earner-data-p3" || got[0].Target != "/data" ||
+		got[1].Source != "earner-cfg-p3" || !got[1].ReadOnly {
+		t.Fatalf("a copy's volumes must be its own: %+v", got)
+	}
+	if len(opts.HostConfig.Binds) != 0 {
+		t.Fatalf("binds: %v", opts.HostConfig.Binds)
+	}
+
+	routed := withVolumes("earner-data:/data")
+	routed.Routed = true
+	opts, err = earnerCreate(routed, "sidecar-id", "example/earner:1.0", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := opts.HostConfig.Mounts; len(m) != 1 || m[0].Source != "earner-data" {
+		t.Fatalf("a routed service keeps its own volume: %+v", m)
+	}
+
+	for _, v := range []string{"/srv/earner:/data", "${DATA_DIR}:/data"} {
+		if _, err := earnerCreate(withVolumes(v), "sidecar-id", "example/earner:1.0", "linux"); err == nil {
+			t.Errorf("%s: a host folder would be shared with the original, so it must be refused", v)
 		}
 	}
 }

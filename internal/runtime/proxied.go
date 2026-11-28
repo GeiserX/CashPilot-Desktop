@@ -44,6 +44,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/proxies"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
 )
 
@@ -495,6 +496,13 @@ func proxiedEnv(svc catalog.Service, env map[string]string, proxyID int64) (map[
 	return env, nil
 }
 
+func serviceName(svc catalog.Service, slug string) string {
+	if svc.Name != "" {
+		return svc.Name
+	}
+	return slug
+}
+
 // earnerCreate is the proxied earner: the service's own container spec, inside the
 // sidecar's namespace, with no network settings of its own.
 func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.ContainerCreateOptions, error) {
@@ -507,11 +515,7 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 		env, err = proxiedEnv(svc, env, req.ProxyID)
 	}
 	if err != nil {
-		name := svc.Name
-		if name == "" {
-			name = req.Slug
-		}
-		return client.ContainerCreateOptions{}, proxyErr(name + ": " + err.Error())
+		return client.ContainerCreateOptions{}, proxyErr(serviceName(svc, req.Slug) + ": " + err.Error())
 	}
 	// No GPU for a proxied copy (Refusal says so first), so it gets the void stamp
 	// like any container without an NVIDIA grant.
@@ -541,6 +545,18 @@ func earnerCreate(req ProxiedDeploy, sidecarID, image, osType string) (client.Co
 	applyHardening(host, svc, osType)
 	if err := applyResourceLimits(host, svc.Docker.Resources); err != nil {
 		return client.ContainerCreateOptions{}, err
+	}
+	// Named volumes only, each the copy's own (proxies.CopyVolume): a volume holds the
+	// device's identity, so sharing the original's would make the copy the same
+	// device. A routed service is the service itself, moved: it keeps its own.
+	for _, m := range buildMounts(svc.Docker.Volumes, env) {
+		if m.Type != mount.TypeVolume || proxies.HostFolder(m.Source) {
+			return client.ContainerCreateOptions{}, proxyErr(i18n.T("go.proxies.refusal.volumes", "name", serviceName(svc, req.Slug)))
+		}
+		if !req.Routed {
+			m.Source = proxies.CopyVolume(m.Source, req.ProxyID)
+		}
+		host.Mounts = append(host.Mounts, m)
 	}
 	// The backstop for Refusal: whatever the entry says, a proxied earner gets no
 	// device, no privilege and nothing that could rewrite or bypass the firewall.

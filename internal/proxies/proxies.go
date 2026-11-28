@@ -365,8 +365,9 @@ func capView(d Definition, s State) CapView {
 // Refusal says why svc cannot run through a proxy, or "".
 //
 // A proxied copy lives inside its tunnel's network namespace. Host networking,
-// published ports and devices need the host's own network or hardware, and a volume
-// would be shared with the copy on this machine.
+// published ports and devices need the host's own network or hardware, and a host
+// folder would be shared with the original. Named volumes are fine: each copy gets
+// its own (CopyVolume).
 func Refusal(svc catalog.Service) string {
 	name := svc.Name
 	if name == "" {
@@ -388,8 +389,12 @@ func Refusal(svc catalog.Service) string {
 	if dc.PublishesPorts() {
 		return i18n.T("go.proxies.refusal.ports", "name", name)
 	}
-	if len(dc.Volumes) > 0 {
-		return i18n.T("go.proxies.refusal.volumes", "name", name)
+	// A copy gets named volumes of its own (runtime earnerCreate); a host folder
+	// cannot be copied, and sharing it would make the copy the same device.
+	for _, v := range dc.Volumes {
+		if HostFolder(strings.SplitN(v, ":", 2)[0]) {
+			return i18n.T("go.proxies.refusal.volumes", "name", name)
+		}
 	}
 	if len(dc.Devices) > 0 {
 		return i18n.T("go.proxies.refusal.devices", "name", name)
@@ -403,6 +408,11 @@ func Refusal(svc catalog.Service) string {
 	if risky := RiskyCaps(dc.CapAdd); len(risky) > 0 {
 		return i18n.T("go.proxies.refusal.caps", "name", name, "caps", strings.Join(risky, ", "))
 	}
+	// Terms that forbid running it in a container (EarnApp) forbid a proxied copy too:
+	// the web UI refuses both (app/proxies.py refusal).
+	if svc.Requirements.ContainerProhibited {
+		return i18n.T("go.proxies.refusal.terms", "name", name)
+	}
 	if p := svc.Requirements.ProxyProhibited; p != nil {
 		if p.Source != "" {
 			return i18n.T("go.proxies.refusal.termsSource", "name", name, "source", p.Source)
@@ -410,6 +420,20 @@ func Refusal(svc catalog.Service) string {
 		return i18n.T("go.proxies.refusal.terms", "name", name)
 	}
 	return ""
+}
+
+// HostFolder is whether a volume source is a folder on the host rather than a named
+// volume. An unexpanded ${VAR} counts as a folder: it is one once the env fills it.
+func HostFolder(source string) bool {
+	return strings.HasPrefix(source, "/") || strings.HasPrefix(source, ".") ||
+		strings.HasPrefix(source, "~") || strings.HasPrefix(source, "$")
+}
+
+// CopyVolume is the name a proxied copy's own volume gets: the original's, plus
+// "-p<proxy id>", as its device name gets. A new volume starts empty, so the copy is
+// a new device to the provider and never the original on a second address.
+func CopyVolume(source string, proxyID int64) string {
+	return fmt.Sprintf("%s-p%d", source, proxyID)
 }
 
 // RiskyCaps are the forbidden capabilities among caps, upper-cased, sorted.
