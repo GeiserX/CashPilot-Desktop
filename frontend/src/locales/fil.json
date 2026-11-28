@@ -798,7 +798,7 @@
   "go.app.lead.ask.replaceNamed": "I-redeploy ang {name} sa {worker}? Papalitan ang kasalukuyang container ({container}), pero mananatili ang mga volume nito.",
   "go.app.lead.thisComputer": "ang computer na ito",
   "go.app.lead.unknownCommand": "hindi kilalang command na {command}: gamitin ang stop, start, restart o remove",
-  "go.app.lead.commandDone": "{command, select, stop {Inihinto ang {instance, plural, =1 {{slug}} other {kopya {instance} ng {slug}}} sa {worker}.} start {Sinimulan ang {instance, plural, =1 {{slug}} other {kopya {instance} ng {slug}}} sa {worker}.} restart {Ni-restart ang {instance, plural, =1 {{slug}} other {kopya {instance} ng {slug}}} sa {worker}.} other {Inalis ang {instance, plural, =1 {{slug}} other {kopya {instance} ng {slug}}} sa {worker}; mananatili ang data nito para sa susunod na deploy.}}",
+  "go.app.lead.commandDone": "Ang {instance, plural, =1 {{slug}} other {kopya {instance} ng {slug}}} sa {worker} ay {command, select, stop {inihinto} start {sinimulan} restart {ni-restart} other {inalis; mananatili ang data nito para sa susunod na deploy}}.",
   "go.app.mode.firstRunOver": "tapos na ang unang pagtakbo; lumipat sa Settings, sa ilalim ng Paano tumatakbo ang computer na ito",
   "go.app.mode.alreadyJoined": "nakasali na ang computer na ito sa isang CashPilot; lumipat muna sa Patakbuhin ang lahat dito",
   "go.app.mode.savePairingFailed": "pag-save ng pairing",
