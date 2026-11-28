@@ -1011,7 +1011,7 @@
   "go.runtime.restore.undoHeld": "Não foi possível remover {left}, então {name} continua retido: Implantar e Iniciar o recusam até você excluir a restauração parcial em Configurações, Restaurar de um backup.",
   "go.runtime.restore.notCreated.unchecked": "não pôde ser verificado ({error})",
   "go.runtime.restore.notCreated.status": "está {status}, não recém-criado",
-  "go.runtime.restore.notCreated.unknown": "está em um estado desconhecido, não recém-criado",
+  "go.runtime.restore.notCreated.unknown": "está com status desconhecido, não recém-criado",
   "go.runtime.restore.tooLarge": "lido de volta, ele é maior do que um backup pode ser, então não é o backup",
   "go.runtime.restore.partial.foreign": "{name} pertence a outra coisa, então foi deixado como estava",
   "go.runtime.restore.partial.running": "{name} está em execução, então a restauração parcial não foi excluída. Pare-o primeiro",
