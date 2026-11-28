@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/config"
+	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
 	"github.com/GeiserX/CashPilot-Desktop/internal/store"
 )
 
@@ -194,5 +195,30 @@ func TestRemindersReadTheEarningsHistory(t *testing.T) {
 	rows, err := app.store.ListObligationState()
 	if err != nil || len(rows) != 1 || rows[0].Rule != "keep-active-6-months" || rows[0].AnchorAt != start {
 		t.Fatalf("the clock start was not stored: %+v, %v", rows, err)
+	}
+}
+
+// A reminder's title, loss and how-to come from the catalog's translations.
+func TestRemindersShowTheCatalogTextInTheUsersLanguage(t *testing.T) {
+	app := newPayloadTestApp(t, []store.Deployment{grassDeployment()})
+	pinReminderDay(t, grassWarnDay)
+	prev := i18n.Current()
+	i18n.SetLocale("es")
+	t.Cleanup(func() { i18n.SetLocale(prev) })
+
+	svc, _ := app.catalog.Get("grass")
+	want := app.catalog.LocalizedOne(svc, "es").Obligations[0]
+	if want.Title == svc.Obligations[0].Title {
+		t.Fatal("the catalog has no Spanish title for grass's reminder")
+	}
+	view, err := app.GetReminders()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Items) != 1 {
+		t.Fatalf("got %+v", view)
+	}
+	if it := view.Items[0]; it.Title != want.Title || it.Loss != want.Loss || it.How != want.How {
+		t.Fatalf("got %q / %q / %q, want %q / %q / %q", it.Title, it.Loss, it.How, want.Title, want.Loss, want.How)
 	}
 }

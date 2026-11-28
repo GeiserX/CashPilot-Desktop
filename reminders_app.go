@@ -126,7 +126,9 @@ func (a *App) evaluateReminders(now time.Time) (obligations.Evaluation, map[obli
 	if err != nil {
 		return obligations.Evaluation{}, nil, err
 	}
-	ev := obligations.Evaluate(a.catalog.List(), facts, state, now)
+	// The rules' ids and dates are the same in every language; only their title,
+	// loss and how-to text are translated, and the panel shows those.
+	ev := obligations.Evaluate(a.catalog.Localized(a.catalog.List(), i18n.Current()), facts, state, now)
 	for _, anchor := range ev.Anchors {
 		if err := a.store.SetObligationAnchor(anchor.Slug, anchor.Rule, anchor.At, anchor.Censored); err != nil {
 			return obligations.Evaluation{}, nil, err
