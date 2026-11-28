@@ -53,9 +53,12 @@ type Status struct {
 	UpdateNeeded bool `json:"updateNeeded"`
 	// Unfinished is set when Install made the VM and its fence but stopped
 	// before the guest was ready; Install runs again to finish it.
-	Unfinished bool   `json:"unfinished"`
-	Network    string `json:"network"`
-	Fence      string `json:"fence"`
+	Unfinished bool `json:"unfinished"`
+	// Leftovers is set when no install completed but an earlier try left
+	// files or a VM behind; Remove clears them.
+	Leftovers bool   `json:"leftovers"`
+	Network   string `json:"network"`
+	Fence     string `json:"fence"`
 	// Reason is one line for the user about Network and Fence.
 	Reason   string    `json:"reason"`
 	Changes  []string  `json:"changes"`

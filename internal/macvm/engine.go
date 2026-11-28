@@ -161,6 +161,11 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 			st.Unfinished = true
 		}
 	}
+	if !installed {
+		if _, err := os.Stat(e.P.Root); err == nil || e.vmExists() {
+			st.Leftovers = true
+		}
+	}
 	if st.Installed {
 		if s, err := ReadStatus(e.P); err == nil {
 			st.Network, st.Fence, st.Reason, st.Changes = s.Network, s.Fence, s.Reason, s.Changes
@@ -175,7 +180,7 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 			if age := time.Since(s.WrittenAt); age > limit {
 				// A silent guard proves nothing about the fence now, so the
 				// page must not show the old green, also during an action.
-				st.Fence = FenceUnknown
+				st.Fence, st.Proving = FenceUnknown, false
 				st.Reason = i18n.T("go.macvm.guardStale", "age", age.Round(time.Minute).String())
 			}
 			if boot, err := host.BootTimeWithContext(ctx); err == nil {
@@ -343,6 +348,12 @@ func (e *Engine) Install(ctx context.Context, progress securevm.Progress) (err e
 		}
 		// The VM holds its own copy; the image only takes space now.
 		_ = os.Remove(ipsw)
+	} else {
+		// A VM made by an install that stopped may not be sized yet. Tart
+		// can size only a stopped VM, and on an update the guard still runs
+		// it, so this is best effort: the VM works at Tart's default size,
+		// and the next install tries again.
+		_ = SizeVM(ctx, e.Tools.Tart, e.TartHome)
 	}
 
 	// A root side from this version whose fence holds needs no second
@@ -399,7 +410,9 @@ func heldNow(ctx context.Context, p Paths) bool {
 	if err != nil || s.Network != NetConnected || s.Fence != FenceHeld || time.Since(s.WrittenAt) > guardStaleAfter {
 		return false
 	}
-	if boot, err := host.BootTimeWithContext(ctx); err == nil && s.WrittenAt.Before(time.Unix(int64(boot), 0)) {
+	// Without the boot time the status cannot be shown to be from this boot.
+	boot, err := host.BootTimeWithContext(ctx)
+	if err != nil || s.WrittenAt.Before(time.Unix(int64(boot), 0)) {
 		return false
 	}
 	return true
@@ -436,8 +449,10 @@ func (e *Engine) prepareGuest(ctx context.Context, progress securevm.Progress) e
 	// the request with the VM held and connected again.
 	deadline := time.Now().Add(10 * time.Minute)
 	for {
+		// A restart that failed still writes a status, for the VM that
+		// never stopped: it carries the start error and does not count.
 		if s, err := ReadStatus(e.P); err == nil && s.WrittenAt.After(since.Add(5*time.Second)) &&
-			s.Network == NetConnected && s.Fence == FenceHeld {
+			s.Network == NetConnected && s.Fence == FenceHeld && s.StartError == "" {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -655,7 +670,7 @@ func (e *Engine) OpenScreen(ctx context.Context, slug string) error {
 		return errors.New(i18n.T("go.macvm.noScreen"))
 	}
 	u := strings.TrimSpace(string(b))
-	if !vncURL.MatchString(u) {
+	if !vncExact.MatchString(u) {
 		return errors.New(i18n.T("go.macvm.badScreen"))
 	}
 	if _, err = e.R.Run(ctx, "/usr/bin/open", u); err != nil {
@@ -664,8 +679,22 @@ func (e *Engine) OpenScreen(ctx context.Context, slug string) error {
 	return noFront
 }
 
+// idle refuses Start and Stop while an action runs, so neither pulls the VM
+// from under an Install or a Verify.
+func (e *Engine) idle() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.busy != "" {
+		return errors.New(i18n.T("go.macvm.busy", "action", e.busy))
+	}
+	return nil
+}
+
 // Start asks the guard to start the VM with the fence.
 func (e *Engine) Start(ctx context.Context) error {
+	if err := e.idle(); err != nil {
+		return err
+	}
 	if _, ok := e.installed(); !ok {
 		return errors.New(i18n.T("go.macvm.notInstalled"))
 	}
@@ -674,6 +703,9 @@ func (e *Engine) Start(ctx context.Context) error {
 
 // Stop stops the VM. The guard starts it again when the Mac starts.
 func (e *Engine) Stop(ctx context.Context) error {
+	if err := e.idle(); err != nil {
+		return err
+	}
 	if _, ok := e.installed(); !ok {
 		return nil
 	}

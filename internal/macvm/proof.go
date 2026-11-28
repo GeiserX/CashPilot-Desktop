@@ -48,15 +48,21 @@ func (t Target) dial() string {
 
 // hostTargets reads the host's own addresses (every IPv4 and IPv6 address on
 // an up interface but loopback), the router and the owner's public IPs.
-func hostTargets(gw netip.Addr, bridge string, router netip.Addr, routerIf string, deny []netip.Addr) []Target {
+func hostTargets(gw netip.Addr, bridge string, router netip.Addr, routerIf string, deny []netip.Addr) ([]Target, error) {
 	var ts []Target
-	ifs, _ := net.Interfaces()
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
 	n := 0
 	for _, ifc := range ifs {
 		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		addrs, _ := ifc.Addrs()
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", ifc.Name, err)
+		}
 		for _, a := range addrs {
 			p, err := netip.ParsePrefix(a.String())
 			if err != nil {
@@ -86,7 +92,7 @@ func hostTargets(gw netip.Addr, bridge string, router netip.Addr, routerIf strin
 	for i, a := range deny {
 		ts = append(ts, Target{Label: fmt.Sprintf("own-ip%d", i+1), Addr: a, Iface: routerIf})
 	}
-	return ts
+	return ts, nil
 }
 
 // canary listens for tokens on one port, TCP and UDP, every address.
@@ -94,12 +100,13 @@ type canary struct {
 	port uint16
 	mu   sync.Mutex
 	got  map[string]bool // "<token>-<label>"
+	want map[string]int  // tokens this proof sent, and how many labels each kept
 	ls   []net.Listener
 	pcs  []net.PacketConn
 }
 
 func newCanary(port uint16) (*canary, error) {
-	c := &canary{port: port, got: map[string]bool{}}
+	c := &canary{port: port, got: map[string]bool{}, want: map[string]int{}}
 	for _, nw := range []string{"tcp4", "tcp6"} {
 		l, err := net.Listen(nw, fmt.Sprintf(":%d", port))
 		if err != nil {
@@ -121,10 +128,31 @@ func newCanary(port uint16) (*canary, error) {
 	return c, nil
 }
 
+// maxLabels bounds what one token can keep: a proof sends a few dozen labels.
+const maxLabels = 256
+
+// expect registers a token before it is sent. The canary listens on every
+// address, so it keeps only lines with a registered token, and a bounded
+// number of them: anything else that reaches it costs no memory.
+func (c *canary) expect(token string) {
+	c.mu.Lock()
+	c.want[token] = 0
+	c.mu.Unlock()
+}
+
 func (c *canary) note(b []byte) {
 	for _, line := range strings.Fields(string(b)) {
+		// A line is "<token>-<label>", and newToken makes every token the
+		// same length.
+		if len(line) <= tokenLen || line[tokenLen] != '-' {
+			continue
+		}
+		token := line[:tokenLen]
 		c.mu.Lock()
-		c.got[line] = true
+		if n, ok := c.want[token]; ok && n < maxLabels && !c.got[line] {
+			c.got[line] = true
+			c.want[token] = n + 1
+		}
 		c.mu.Unlock()
 	}
 }
@@ -371,6 +399,9 @@ func randomBytes(n int) []byte {
 
 func newToken() string { return "cpm-" + hex.EncodeToString(randomBytes(8)) }
 
+// tokenLen is the length of every newToken: "cpm-" and 16 hex digits.
+const tokenLen = 4 + 16
+
 func randomPort() uint16 { return 40000 + binary.BigEndian.Uint16(randomBytes(2))%20000 }
 
 // prover runs one proof.
@@ -424,6 +455,7 @@ func (p *prover) connectFor(ctx context.Context, b Bridge) error {
 // and what the captures saw.
 func (p *prover) send(ctx context.Context, targets []Target) (arrived []string, captured []string, err error) {
 	token := newToken()
+	p.can.expect(token)
 	byIface := map[string][]netip.Addr{}
 	for _, t := range targets {
 		if !t.Canary && t.Iface != "" {
@@ -594,6 +626,12 @@ func (d *Daemon) Prove(ctx context.Context) (pf securevm.Proof) {
 		if pf.Green && ctx.Err() != nil {
 			pf.Green, pf.Why = false, "the proof was stopped before its verdict was saved"
 		}
+		// A proof that stops half way can leave a step's holes in the
+		// fence: the guest goes off its bridge before anything else is
+		// written, and the guard's pass below keeps it off.
+		if !pf.Green {
+			p.cutNow(context.WithoutCancel(ctx))
+		}
 		if pf.Green {
 			build := ""
 			if d.HostBuild != nil {
@@ -640,6 +678,7 @@ func (d *Daemon) Prove(ctx context.Context) (pf securevm.Proof) {
 	// The host's own positive control: a token sent from the host must reach
 	// its canary, or a silent green would mean a deaf canary.
 	ctlTok := newToken()
+	p.can.expect(ctlTok)
 	for _, proto := range []string{"tcp", "udp"} {
 		if conn, err := net.DialTimeout(proto+"4", fmt.Sprintf("127.0.0.1:%d", p.port), 2*time.Second); err == nil {
 			fmt.Fprintf(conn, "%s-control/%s\n", ctlTok, proto)
@@ -745,7 +784,11 @@ func (d *Daemon) Prove(ctx context.Context) (pf securevm.Proof) {
 	if err := d.loadFence(ctx, b, p.deny, nil); err != nil {
 		return fail(err.Error())
 	}
-	all := hostTargets(b.Addr, b.Name, p.router, p.rIface, p.deny)
+	all, err := hostTargets(b.Addr, b.Name, p.router, p.rIface, p.deny)
+	if err != nil {
+		// A list with an address missing would prove less than it says.
+		return fail("could not list this Mac's addresses: " + err.Error())
+	}
 	okGreen := p.green(ctx, "green-production", "", all, nil)
 
 	okBonjour := false

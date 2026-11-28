@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -226,8 +227,23 @@ func CreateVM(ctx context.Context, tart, tartHome, ipsw string, progress Progres
 	if err := cmd.Wait(); err != nil {
 		return fmt.Errorf("macOS did not install into the VM: %v %s %s", err, strings.Join(tail, " "), strings.TrimSpace(errb.String()))
 	}
+	return SizeVM(ctx, tart, tartHome)
+}
+
+// SizeVM gives the stopped VM its CPUs and memory, unless its config already
+// has them. It is its own step, so an install that stopped between creating
+// the VM and sizing it sizes it on the next try.
+func SizeVM(ctx context.Context, tart, tartHome string) error {
+	var c struct {
+		CPU    int   `json:"cpuCount"`
+		Memory int64 `json:"memorySize"`
+	}
+	if err := ReadJSON(filepath.Join(VMDir(tartHome), "config.json"), &c); err == nil &&
+		c.CPU == GuestCPUs && c.Memory == int64(GuestMemoryMB)*1024*1024 {
+		return nil
+	}
 	set := exec.CommandContext(ctx, tart, "set", VMName, "--cpu", strconv.Itoa(GuestCPUs), "--memory", strconv.Itoa(GuestMemoryMB))
-	set.Env = cmd.Env
+	set.Env = append(os.Environ(), "TART_HOME="+tartHome)
 	if b, err := set.CombinedOutput(); err != nil {
 		return fmt.Errorf("could not size the VM: %v %s", err, b)
 	}
@@ -282,7 +298,16 @@ func Inject(ctx context.Context, r Runner, disk, agent string) (err error) {
 	if err != nil {
 		return fmt.Errorf("could not open the VM's disk: %w", err)
 	}
-	whole, slices, err := attachedDisk(ctx, out)
+	// The disk is attached now, whatever happens to ctx: finding its name
+	// must not fail on a cancel, or nothing would release it.
+	pc, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	whole, slices, err := attachedDisk(pc, out)
+	cancel()
+	if whole == "" {
+		if m := attachedWhole.FindStringSubmatch(out); m != nil {
+			whole = m[1]
+		}
+	}
 	if whole != "" {
 		// The disk is attached even when it holds no macOS volume, so the
 		// detach covers that error too.
@@ -328,6 +353,10 @@ func Inject(ctx context.Context, r Runner, disk, agent string) (err error) {
 }
 
 // attachedDisk reads `hdiutil attach -plist`: the whole disk and its slices.
+// attachedWhole finds the whole disk in hdiutil's plist when it cannot be
+// parsed: hdiutil lists it first.
+var attachedWhole = regexp.MustCompile(`<string>/dev/(disk[0-9]+)</string>`)
+
 func attachedDisk(ctx context.Context, plist string) (string, []string, error) {
 	js, err := plistJSON(ctx, plist)
 	if err != nil {

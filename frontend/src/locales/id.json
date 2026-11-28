@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Aplikasi ini tidak berjalan di Secure VM.",
   "go.macvm.appSignedOut": "Aplikasi ini belum masuk. Tekan Masuk untuk membukanya di Secure VM.",
   "go.macvm.badExePath": "Jalur aplikasi berisi karakter yang tidak diteruskan oleh langkah administrator.",
-  "go.macvm.adminCancelled": "Permintaan administrator dibatalkan, jadi tidak ada yang berubah di Mac ini.",
+  "go.macvm.adminCancelled": "Permintaan administrator dibatalkan, jadi CashPilot tidak menyiapkan atau menghapus apa pun yang memerlukan hak administrator.",
   "go.macvm.adminFailed": "Langkah administrator gagal: {detail}",
   "go.macvm.stepCheck": "Memeriksa Mac ini",
   "go.macvm.stepTools": "Mengunduh alat VM",

@@ -2243,7 +2243,7 @@
   "go.macvm.appNotRunning": "Він не працює в Secure VM.",
   "go.macvm.appSignedOut": "Вхід не виконано. Натисніть «Увійти», щоб відкрити його в Secure VM.",
   "go.macvm.badExePath": "Шлях до застосунку містить символ, який крок адміністратора не передає.",
-  "go.macvm.adminCancelled": "Запит адміністратора скасовано, тому на цьому Mac нічого не змінилося.",
+  "go.macvm.adminCancelled": "Запит адміністратора скасовано, тому CashPilot нічого не налаштував і не видалив із того, що потребує прав адміністратора.",
   "go.macvm.adminFailed": "Крок адміністратора не вдався: {detail}",
   "go.macvm.stepCheck": "Перевірка цього Mac",
   "go.macvm.stepTools": "Завантаження інструментів VM",

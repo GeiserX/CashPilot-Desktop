@@ -107,6 +107,13 @@ check("an unfinished setup offers to finish it", unf.includes("data-securevm-unf
 check("a finished setup offers no finish", !green.includes("data-securevm-unfinished"));
 check("no update needed offers no update", !green.includes("data-securevm-update") && !green.includes('data-securevm-action="install"'));
 
+// A first install that failed half way: its leftovers can be removed.
+const left = renderSecureVM(base({ installed: false, network: "absent", fence: "unproven", leftovers: true }), { now });
+check("leftovers of a failed first install offer removal", left.includes('data-securevm-action="install"') && left.includes('data-securevm-action="undo-ask"'), left);
+check("a clean Mac offers no removal", !absent.includes('data-securevm-action="undo-ask"'), absent);
+const leftAsk = renderSecureVM(base({ installed: false, network: "absent", fence: "unproven", leftovers: true }), { now, askUndo: true });
+check("removing leftovers asks first", leftAsk.includes("data-securevm-undo-ask"), leftAsk);
+
 // A failed refresh: the last reading must not stay on screen as held.
 const stale = unreadSecureVM(base({ apps: [app({ placement: "vm", installed: "yes", running: "yes", signedIn: "yes", layers: ["secure-vm", "vm-fence"] })] }));
 const unread = renderSecureVM(stale, { now });

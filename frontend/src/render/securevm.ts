@@ -16,7 +16,7 @@
 
 import type { SecureVMApp, SecureVMProof, SecureVMRemoveResult, SecureVMStatus } from "../wails";
 import { escapeHtml, relativeTime } from "./format.js"; // .js so the emitted ESM resolves in Node; Vite maps it back to .ts
-import { ht, t } from "./i18n.js";
+import { ht, intlLocale, t } from "./i18n.js";
 
 function networkLabel(n: string): string {
   switch (n) {
@@ -161,13 +161,16 @@ function errorLines(s: SecureVMStatus, now: number): string {
 function actions(s: SecureVMStatus, askUndo: boolean): string {
   const busy = !!s.busy;
   const dis = busy ? " disabled" : "";
-  if (!s.installed) {
-    return `<div class="header-actions"><button class="btn btn-primary" data-securevm-action="install"${dis}>${ht("securevm.install")}</button></div>`;
-  }
   if (askUndo) {
     return `<div data-securevm-undo-ask><p>${ht("securevm.undoAsk")}</p><div class="header-actions">
       <button class="btn btn-primary" data-securevm-action="undo"${dis}>${ht("securevm.undoYes")}</button>
       <button class="btn btn-ghost" data-securevm-action="undo-cancel">${ht("securevm.undoNo")}</button></div></div>`;
+  }
+  if (!s.installed) {
+    // A first install that failed half way can leave files and a VM: they
+    // can go without a second try.
+    const undo = s.leftovers ? `<button class="btn btn-ghost" data-securevm-action="undo-ask"${dis}>${ht("securevm.undo")}</button>` : "";
+    return `<div class="header-actions"><button class="btn btn-primary" data-securevm-action="install"${dis}>${ht("securevm.install")}</button>${undo}</div>`;
   }
   const running = s.network === "connected" || s.network === "disconnected";
   const update = s.updateNeeded
@@ -197,7 +200,7 @@ export function renderSecureVMProof(p: SecureVMProof | null | undefined): string
   return `<section data-securevm-proof="${p.green ? "green" : "red"}">
     <div class="block-head"><span class="block-title">${ht("securevm.proofHead")}</span></div>
     <p class="${p.green ? "" : "text-warn"}">${p.green ? ht("securevm.proofGreen") : ht("securevm.proofRed")}</p>
-    ${p.at && !p.at.startsWith("0001") ? `<p class="muted compact-copy">${escapeHtml(new Date(p.at).toLocaleString())}</p>` : ""}
+    ${p.at && !p.at.startsWith("0001") ? `<p class="muted compact-copy">${escapeHtml(new Date(p.at).toLocaleString(intlLocale()))}</p>` : ""}
     ${rows}</section>`;
 }
 

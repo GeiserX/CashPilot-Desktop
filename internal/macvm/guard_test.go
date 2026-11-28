@@ -33,6 +33,11 @@ type fakeHost struct {
 	calls     []string
 	dropCount int
 	failCall  string // this call prints its normal output and still fails
+	portGone  bool   // the recorded port no longer exists
+	vmRuns    bool   // tart list shows the VM running
+	stopFails bool   // tart stop leaves the VM running
+	psCalls   int
+	onPS      map[int]func(h *fakeHost) // runs before the n-th process read
 }
 
 const (
@@ -69,7 +74,17 @@ func (h *fakeHost) run(call string) (string, error) {
 		}
 		return out, nil
 	case call == "/sbin/ifconfig vmenet0":
+		if h.portGone {
+			return "", errors.New("ifconfig: interface vmenet0 does not exist")
+		}
 		return "vmenet0: flags=8963<UP>", nil
+	case strings.HasPrefix(call, "/bin/launchctl ") && strings.HasSuffix(call, " list --format json"):
+		return fmt.Sprintf(`[{"Name":%q,"Running":%t}]`, VMName, h.vmRuns), nil
+	case strings.HasPrefix(call, "/bin/launchctl ") && strings.HasSuffix(call, " stop "+VMName):
+		if !h.stopFails {
+			h.vmRuns = false
+		}
+		return "", nil
 	case call == "/sbin/ifconfig bridge100 deletem vmenet0":
 		if h.cutFails {
 			return "", errors.New("ifconfig: deletem failed")
@@ -100,6 +115,10 @@ func (h *fakeHost) run(call string) (string, error) {
 	case call == "/sbin/pfctl -a "+Anchor+" -t cp_deny -T show":
 		return h.table, nil
 	case call == "/bin/ps -axww -o args=":
+		h.psCalls++
+		if f := h.onPS[h.psCalls]; f != nil {
+			f(h)
+		}
 		if h.psFails {
 			return "", errors.New("ps failed")
 		}
@@ -262,6 +281,37 @@ func (f runnerFunc) Run(_ context.Context, name string, args ...string) (string,
 	return f(strings.TrimSpace(name + " " + strings.Join(args, " ")))
 }
 
+func TestPassStopsAVMWhosePortIsLost(t *testing.T) {
+	d, h := guardFixture(t)
+	h.member, h.cache, h.portGone, h.vmRuns = false, false, true, true
+	st := d.Pass(context.Background(), false)
+	if st.Network != NetOff || h.vmRuns {
+		t.Fatalf("a running VM with no port found must be stopped before it shows as off: %+v %v", st, h.calls)
+	}
+
+	d, h = guardFixture(t)
+	h.member, h.cache, h.portGone, h.vmRuns, h.stopFails = false, false, true, true, true
+	st = d.Pass(context.Background(), false)
+	if st.Network == NetOff || st.Network == NetDisconnected || st.Fence != FenceUnknown {
+		t.Fatalf("a VM that did not stop must not show as isolated: %+v", st)
+	}
+}
+
+func TestPassCutsAPortPutBackDuringTheCheck(t *testing.T) {
+	d, h := guardFixture(t)
+	h.member = false // the start left the port cut
+	// Between the check and the connect, something puts the port back and
+	// the second read fails.
+	h.onPS = map[int]func(*fakeHost){
+		1: func(h *fakeHost) { h.member = true }, // after the first read's bridges
+		2: func(h *fakeHost) { h.psFails = true },
+	}
+	st := d.Pass(context.Background(), false)
+	if h.member || st.Network == NetConnected {
+		t.Fatalf("a port put back during the check must be cut: %+v %v", st, h.calls)
+	}
+}
+
 func TestPassTwoSoftnetsForOurMACIsDrift(t *testing.T) {
 	d, h := guardFixture(t)
 	h.softnet += "\n" + h.softnet
@@ -393,6 +443,7 @@ func TestPassReportsAFailedCut(t *testing.T) {
 	d, h := guardFixture(t)
 	h.pfOn = false // drift
 	h.cutFails = true
+	h.vmRuns, h.stopFails = true, true // and the VM does not stop either
 	st := d.Pass(context.Background(), false)
 	if st.Network == NetDisconnected || !strings.Contains(st.Reason, "could not cut") {
 		t.Fatalf("a failed cut must not say disconnected: %+v", st)

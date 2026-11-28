@@ -5,7 +5,8 @@
 set -u
 app=$1 proc=$2 slug=$3
 case "$slug" in ''|*[!a-z0-9-]*) echo "bad slug" >&2; exit 1 ;; esac
-case "$app" in ''|*/*|.*|*..*) echo "bad app name" >&2; exit 1 ;; esac
+case "$app" in *.app) ;; *) echo "bad app name" >&2; exit 1 ;; esac
+case "$app" in */*|.*|*..*) echo "bad app name" >&2; exit 1 ;; esac
 la="/Library/LaunchAgents/org.cashpilot.earner.$slug.plist"
 if uid=$(id -u earner 2>/dev/null); then
   launchctl bootout "gui/$uid/org.cashpilot.earner.$slug" 2>/dev/null || true

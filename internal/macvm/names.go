@@ -133,6 +133,11 @@ func ValidOwner(name string) bool { return ownerName.MatchString(name) && name !
 // environment.
 func TartHome(home string) string {
 	if h := os.Getenv("TART_HOME"); h != "" {
+		// The app and the root daemon run in different folders, so a
+		// relative path would name two different places.
+		if abs, err := filepath.Abs(h); err == nil {
+			return abs
+		}
 		return h
 	}
 	return filepath.Join(home, ".tart")
