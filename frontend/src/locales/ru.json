@@ -2134,5 +2134,17 @@
   "main.scope.worker": "воркер",
   "logs.wrap": "Переносить строки",
   "logs.empty": "(логов нет)",
-  "go.importers.refuse.m4bEncrypted": "{name} — зашифрованный файл money4band 5.0. В папке money4band выполните `./Money4Band-<os>-<arch> config edit` для выпущенного бинарного файла или `python main.py config edit`, если запускаете из исходного кода. Скопируйте расшифрованный JSON, который откроется, и вставьте его сюда."
+  "go.importers.refuse.m4bEncrypted": "{name} — зашифрованный файл money4band 5.0. В папке money4band выполните `./Money4Band-<os>-<arch> config edit` для выпущенного бинарного файла или `python main.py config edit`, если запускаете из исходного кода. Скопируйте расшифрованный JSON, который откроется, и вставьте его сюда.",
+  "installer.finishRun": "Открыть CashPilot Desktop",
+  "installer.closing": "Закрытие CashPilot Desktop, если он запущен из {dir}",
+  "installer.options.title": "Выберите, что ещё удалить",
+  "installer.options.subtitle": "Приложение, его ярлыки и фоновый помощник удаляются всегда.",
+  "installer.options.intro": "CashPilot Desktop будет удалён из {dir}. Он также может удалить запущенные им приложения для заработка и ваши данные. Оставьте флажок пустым, чтобы сохранить эту часть.",
+  "installer.options.removeEarners": "&Остановить и удалить приложения для заработка, запущенные CashPilot Desktop",
+  "installer.options.removeEarnersHelp": "Только контейнеры, созданные CashPilot Desktop, и его нативные приложения для заработка. Другие контейнеры не затрагиваются. Тома Docker остаются. Если флажок не установлен, контейнеры продолжат работать.",
+  "installer.options.deleteData": "&Удалить мои данные CashPilot",
+  "installer.options.deleteDataHelp": "Настройки, база данных заработка, логи и сохранённые данные входа. Если флажок не установлен, они остаются, и новая установка или портативный exe снова их найдёт.",
+  "installer.options.uninstall": "&Удалить",
+  "installer.cleanupFailed": "Очистка приложения не завершилась (результат: {result}). В строках выше указано, что осталось.",
+  "installer.somePartsLeft": "Некоторые части не удалось удалить. В подробностях указано, какие именно."
 }

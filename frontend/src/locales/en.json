@@ -2134,5 +2134,17 @@
   "main.scope.settings": "settings",
   "main.scope.worker": "worker",
   "logs.wrap": "Wrap lines",
-  "logs.empty": "(no logs)"
+  "logs.empty": "(no logs)",
+  "installer.finishRun": "Open CashPilot Desktop",
+  "installer.closing": "Closing CashPilot Desktop if it runs from {dir}",
+  "installer.options.title": "Choose what else to remove",
+  "installer.options.subtitle": "The app, its shortcuts and its background helper are always removed.",
+  "installer.options.intro": "CashPilot Desktop will be removed from {dir}. It can also remove the earning apps it started, and your data. Leave a box empty to keep that part.",
+  "installer.options.removeEarners": "&Stop and remove the earning apps CashPilot Desktop started",
+  "installer.options.removeEarnersHelp": "Only the containers CashPilot Desktop made, and its native earning apps. Other containers are not touched. Docker volumes stay. Left empty, the containers keep running.",
+  "installer.options.deleteData": "&Delete my CashPilot data",
+  "installer.options.deleteDataHelp": "Settings, the earnings database, logs and saved logins. Left empty, they stay, and a new install or the portable exe finds them again.",
+  "installer.options.uninstall": "&Uninstall",
+  "installer.cleanupFailed": "The app's cleanup did not finish (result: {result}). The lines above say what is left.",
+  "installer.somePartsLeft": "Some parts could not be removed. The list of details says which."
 }

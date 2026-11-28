@@ -2134,5 +2134,17 @@
   "main.scope.worker": "ワーカー",
   "logs.wrap": "行を折り返す",
   "logs.empty": "（ログなし）",
-  "go.importers.refuse.m4bEncrypted": "{name} は暗号化された money4band 5.0 のファイルです。money4band のフォルダーで、リリース版のバイナリなら `./Money4Band-<os>-<arch> config edit` を、ソースから使う場合は `python main.py config edit` を実行してください。開かれた復号済みの JSON をコピーして、ここに貼り付けてください。"
+  "go.importers.refuse.m4bEncrypted": "{name} は暗号化された money4band 5.0 のファイルです。money4band のフォルダーで、リリース版のバイナリなら `./Money4Band-<os>-<arch> config edit` を、ソースから使う場合は `python main.py config edit` を実行してください。開かれた復号済みの JSON をコピーして、ここに貼り付けてください。",
+  "installer.finishRun": "CashPilot Desktop を開く",
+  "installer.closing": "{dir} から実行中の場合は CashPilot Desktop を終了しています",
+  "installer.options.title": "ほかに削除するものを選択",
+  "installer.options.subtitle": "アプリ、ショートカット、バックグラウンド ヘルパーは常に削除されます。",
+  "installer.options.intro": "CashPilot Desktop は {dir} から削除されます。CashPilot Desktop が起動した収益アプリと、あなたのデータも削除できます。残す項目はチェックを外したままにしてください。",
+  "installer.options.removeEarners": "CashPilot Desktop が起動した収益アプリを停止して削除する(&S)",
+  "installer.options.removeEarnersHelp": "CashPilot Desktop が作成したコンテナと、そのネイティブの収益アプリのみが対象です。他のコンテナには触れません。Docker ボリュームは残ります。チェックを外したままにすると、コンテナは動作し続けます。",
+  "installer.options.deleteData": "CashPilot のデータを削除する(&D)",
+  "installer.options.deleteDataHelp": "設定、収益データベース、ログ、保存済みのログイン情報。チェックを外したままにすると残り、新しくインストールしたアプリやポータブル版の exe が再び読み込みます。",
+  "installer.options.uninstall": "アンインストール(&U)",
+  "installer.cleanupFailed": "アプリのクリーンアップが完了しませんでした (結果: {result})。残っているものは上の行に表示されています。",
+  "installer.somePartsLeft": "一部を削除できませんでした。詳細の一覧に表示されています。"
 }

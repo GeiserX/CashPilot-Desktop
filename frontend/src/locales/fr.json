@@ -2134,5 +2134,17 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Retour à la ligne",
   "logs.empty": "(aucun journal)",
-  "go.importers.refuse.m4bEncrypted": "{name} est un fichier money4band 5.0 chiffré. Dans votre dossier money4band, exécutez `./Money4Band-<os>-<arch> config edit` pour le binaire publié, ou `python main.py config edit` depuis les sources. Copiez le JSON déchiffré qu'il ouvre, puis collez-le ici."
+  "go.importers.refuse.m4bEncrypted": "{name} est un fichier money4band 5.0 chiffré. Dans votre dossier money4band, exécutez `./Money4Band-<os>-<arch> config edit` pour le binaire publié, ou `python main.py config edit` depuis les sources. Copiez le JSON déchiffré qu'il ouvre, puis collez-le ici.",
+  "installer.finishRun": "Ouvrir CashPilot Desktop",
+  "installer.closing": "Fermeture de CashPilot Desktop s'il s'exécute depuis {dir}",
+  "installer.options.title": "Choisissez ce qu'il faut supprimer d'autre",
+  "installer.options.subtitle": "L'application, ses raccourcis et son assistant en arrière-plan sont toujours supprimés.",
+  "installer.options.intro": "CashPilot Desktop va être supprimé de {dir}. Il peut aussi supprimer les apps de gains qu'il a lancées, ainsi que vos données. Laissez une case décochée pour conserver cette partie.",
+  "installer.options.removeEarners": "&Arrêter et supprimer les apps de gains lancées par CashPilot Desktop",
+  "installer.options.removeEarnersHelp": "Uniquement les conteneurs créés par CashPilot Desktop et ses apps de gains natives. Les autres conteneurs ne sont pas touchés. Les volumes Docker restent. Si la case est décochée, les conteneurs continuent de tourner.",
+  "installer.options.deleteData": "&Supprimer mes données CashPilot",
+  "installer.options.deleteDataHelp": "Les paramètres, la base de données des gains, les journaux et les identifiants enregistrés. Si la case est décochée, ils restent, et une nouvelle installation ou l'exe portable les retrouve.",
+  "installer.options.uninstall": "&Désinstaller",
+  "installer.cleanupFailed": "Le nettoyage de l'application ne s'est pas terminé (résultat : {result}). Les lignes ci-dessus indiquent ce qui reste.",
+  "installer.somePartsLeft": "Certaines parties n'ont pas pu être supprimées. La liste des détails indique lesquelles."
 }

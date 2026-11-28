@@ -2134,5 +2134,17 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Ngắt dòng",
   "logs.empty": "(không có nhật ký)",
-  "go.importers.refuse.m4bEncrypted": "{name} là tệp money4band 5.0 đã được mã hóa. Trong thư mục money4band, hãy chạy `./Money4Band-<os>-<arch> config edit` nếu dùng bản nhị phân phát hành, hoặc `python main.py config edit` nếu chạy từ mã nguồn. Sao chép JSON đã giải mã mà lệnh này mở ra, rồi dán vào đây."
+  "go.importers.refuse.m4bEncrypted": "{name} là tệp money4band 5.0 đã được mã hóa. Trong thư mục money4band, hãy chạy `./Money4Band-<os>-<arch> config edit` nếu dùng bản nhị phân phát hành, hoặc `python main.py config edit` nếu chạy từ mã nguồn. Sao chép JSON đã giải mã mà lệnh này mở ra, rồi dán vào đây.",
+  "installer.finishRun": "Mở CashPilot Desktop",
+  "installer.closing": "Đang đóng CashPilot Desktop nếu nó chạy từ {dir}",
+  "installer.options.title": "Chọn những gì cần gỡ thêm",
+  "installer.options.subtitle": "Ứng dụng, các lối tắt và trình trợ giúp chạy nền của nó luôn được gỡ.",
+  "installer.options.intro": "CashPilot Desktop sẽ được gỡ khỏi {dir}. Nó cũng có thể gỡ các ứng dụng kiếm tiền mà nó đã khởi động, và dữ liệu của bạn. Để trống một ô để giữ lại phần đó.",
+  "installer.options.removeEarners": "&Dừng và gỡ các ứng dụng kiếm tiền mà CashPilot Desktop đã khởi động",
+  "installer.options.removeEarnersHelp": "Chỉ các container do CashPilot Desktop tạo, và các ứng dụng kiếm tiền dạng gốc của nó. Các container khác không bị động đến. Volume Docker vẫn được giữ. Nếu để trống, các container vẫn tiếp tục chạy.",
+  "installer.options.deleteData": "&Xóa dữ liệu CashPilot của tôi",
+  "installer.options.deleteDataHelp": "Cài đặt, cơ sở dữ liệu thu nhập, nhật ký và thông tin đăng nhập đã lưu. Nếu để trống, chúng vẫn được giữ, và một bản cài đặt mới hoặc bản exe di động sẽ tìm thấy chúng lại.",
+  "installer.options.uninstall": "&Gỡ cài đặt",
+  "installer.cleanupFailed": "Việc dọn dẹp của ứng dụng chưa hoàn tất (kết quả: {result}). Các dòng ở trên cho biết những gì còn lại.",
+  "installer.somePartsLeft": "Một số phần không thể gỡ. Danh sách chi tiết cho biết đó là những phần nào."
 }

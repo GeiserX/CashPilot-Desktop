@@ -2134,5 +2134,17 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Bungkus baris",
   "logs.empty": "(tidak ada log)",
-  "go.importers.refuse.m4bEncrypted": "{name} adalah file money4band 5.0 yang terenkripsi. Di folder money4band Anda, jalankan `./Money4Band-<os>-<arch> config edit` untuk biner rilis, atau `python main.py config edit` jika dari kode sumber. Salin JSON terdekripsi yang dibukanya, lalu tempel di sini."
+  "go.importers.refuse.m4bEncrypted": "{name} adalah file money4band 5.0 yang terenkripsi. Di folder money4band Anda, jalankan `./Money4Band-<os>-<arch> config edit` untuk biner rilis, atau `python main.py config edit` jika dari kode sumber. Salin JSON terdekripsi yang dibukanya, lalu tempel di sini.",
+  "installer.finishRun": "Buka CashPilot Desktop",
+  "installer.closing": "Menutup CashPilot Desktop jika berjalan dari {dir}",
+  "installer.options.title": "Pilih apa lagi yang akan dihapus",
+  "installer.options.subtitle": "Aplikasi, pintasannya, dan helper latar belakangnya selalu dihapus.",
+  "installer.options.intro": "CashPilot Desktop akan dihapus dari {dir}. Penginstal juga dapat menghapus aplikasi penghasil yang dimulainya, dan data Anda. Biarkan kotak kosong untuk mempertahankan bagian itu.",
+  "installer.options.removeEarners": "&Hentikan dan hapus aplikasi penghasil yang dimulai CashPilot Desktop",
+  "installer.options.removeEarnersHelp": "Hanya kontainer yang dibuat CashPilot Desktop, dan aplikasi penghasil native-nya. Kontainer lain tidak disentuh. Volume Docker tetap ada. Jika dibiarkan kosong, kontainer tetap berjalan.",
+  "installer.options.deleteData": "&Hapus data CashPilot saya",
+  "installer.options.deleteDataHelp": "Pengaturan, database penghasilan, log, dan login tersimpan. Jika dibiarkan kosong, semuanya tetap ada, dan instalasi baru atau exe portabel akan menemukannya lagi.",
+  "installer.options.uninstall": "&Copot",
+  "installer.cleanupFailed": "Pembersihan aplikasi tidak selesai (hasil: {result}). Baris-baris di atas menyebutkan apa yang tersisa.",
+  "installer.somePartsLeft": "Beberapa bagian tidak dapat dihapus. Daftar detail menyebutkan bagian mana."
 }

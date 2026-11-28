@@ -2134,5 +2134,17 @@
   "main.scope.worker": "87eba76e7f31",
   "logs.wrap": "6727132ac799",
   "logs.empty": "b52742a4ec0c",
-  "go.importers.refuse.m4bEncrypted": "a3ec30948592"
+  "go.importers.refuse.m4bEncrypted": "a3ec30948592",
+  "installer.finishRun": "1c79e8447fb6",
+  "installer.closing": "996a4c151c51",
+  "installer.options.title": "edbd9902f869",
+  "installer.options.subtitle": "e307f2245d7c",
+  "installer.options.intro": "ff3211f5edaa",
+  "installer.options.removeEarners": "9d0ccfebebe0",
+  "installer.options.removeEarnersHelp": "95991e665359",
+  "installer.options.deleteData": "256f427a54e7",
+  "installer.options.deleteDataHelp": "050caa838d60",
+  "installer.options.uninstall": "4cb6c6b561b4",
+  "installer.cleanupFailed": "22dbe9cd4e38",
+  "installer.somePartsLeft": "d029442ea469"
 }

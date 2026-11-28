@@ -2134,5 +2134,17 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Regels afbreken",
   "logs.empty": "(geen logboeken)",
-  "go.importers.refuse.m4bEncrypted": "{name} is een versleuteld money4band 5.0-bestand. Voer in je money4band-map `./Money4Band-<os>-<arch> config edit` uit voor het uitgebrachte binaire bestand, of `python main.py config edit` vanuit de broncode. Kopieer de ontsleutelde JSON die het opent en plak die hier."
+  "go.importers.refuse.m4bEncrypted": "{name} is een versleuteld money4band 5.0-bestand. Voer in je money4band-map `./Money4Band-<os>-<arch> config edit` uit voor het uitgebrachte binaire bestand, of `python main.py config edit` vanuit de broncode. Kopieer de ontsleutelde JSON die het opent en plak die hier.",
+  "installer.finishRun": "CashPilot Desktop openen",
+  "installer.closing": "CashPilot Desktop wordt gesloten als het vanuit {dir} draait",
+  "installer.options.title": "Kies wat er nog meer moet worden verwijderd",
+  "installer.options.subtitle": "De app, de snelkoppelingen en de achtergrondhelper worden altijd verwijderd.",
+  "installer.options.intro": "CashPilot Desktop wordt verwijderd uit {dir}. Het kan ook de verdien-apps verwijderen die het heeft gestart, en je gegevens. Laat een vakje leeg om dat deel te behouden.",
+  "installer.options.removeEarners": "&Stop en verwijder de verdien-apps die CashPilot Desktop heeft gestart",
+  "installer.options.removeEarnersHelp": "Alleen de containers die CashPilot Desktop heeft gemaakt, en de native verdien-apps. Andere containers worden niet aangeraakt. Docker-volumes blijven. Als je het leeg laat, blijven de containers draaien.",
+  "installer.options.deleteData": "&Mijn CashPilot-gegevens verwijderen",
+  "installer.options.deleteDataHelp": "Instellingen, de database met inkomsten, logboeken en opgeslagen logins. Als je het leeg laat, blijven ze staan, en een nieuwe installatie of de draagbare exe vindt ze terug.",
+  "installer.options.uninstall": "&Verwijderen",
+  "installer.cleanupFailed": "Het opruimen door de app is niet voltooid (resultaat: {result}). De regels hierboven zeggen wat er over is.",
+  "installer.somePartsLeft": "Sommige onderdelen konden niet worden verwijderd. De lijst met details zegt welke."
 }

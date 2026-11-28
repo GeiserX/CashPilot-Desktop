@@ -2134,5 +2134,17 @@
   "main.scope.worker": "Worker",
   "logs.wrap": "Zeilen umbrechen",
   "logs.empty": "(keine Protokolle)",
-  "go.importers.refuse.m4bEncrypted": "{name} ist eine verschlüsselte money4band-5.0-Datei. Führe in deinem money4band-Ordner `./Money4Band-<os>-<arch> config edit` für die veröffentlichte Binärdatei aus, oder `python main.py config edit`, wenn du aus dem Quellcode startest. Kopiere das entschlüsselte JSON, das sich öffnet, und füge es hier ein."
+  "go.importers.refuse.m4bEncrypted": "{name} ist eine verschlüsselte money4band-5.0-Datei. Führe in deinem money4band-Ordner `./Money4Band-<os>-<arch> config edit` für die veröffentlichte Binärdatei aus, oder `python main.py config edit`, wenn du aus dem Quellcode startest. Kopiere das entschlüsselte JSON, das sich öffnet, und füge es hier ein.",
+  "installer.finishRun": "CashPilot Desktop öffnen",
+  "installer.closing": "CashPilot Desktop wird geschlossen, falls es aus {dir} läuft",
+  "installer.options.title": "Wähle, was sonst noch entfernt werden soll",
+  "installer.options.subtitle": "Die App, ihre Verknüpfungen und ihr Hintergrundhelfer werden immer entfernt.",
+  "installer.options.intro": "CashPilot Desktop wird aus {dir} entfernt. Es kann auch die Verdienst-Apps entfernen, die es gestartet hat, und deine Daten. Lass ein Kästchen leer, um diesen Teil zu behalten.",
+  "installer.options.removeEarners": "Die von CashPilot Desktop gestarteten Verdienst-Apps &stoppen und entfernen",
+  "installer.options.removeEarnersHelp": "Nur die Container, die CashPilot Desktop erstellt hat, und seine nativen Verdienst-Apps. Andere Container werden nicht angerührt. Docker-Volumes bleiben erhalten. Bleibt das Kästchen leer, laufen die Container weiter.",
+  "installer.options.deleteData": "Meine CashPilot-Daten &löschen",
+  "installer.options.deleteDataHelp": "Einstellungen, die Einnahmen-Datenbank, Protokolle und gespeicherte Logins. Bleibt das Kästchen leer, bleiben sie erhalten, und eine neue Installation oder die portable exe findet sie wieder.",
+  "installer.options.uninstall": "&Deinstallieren",
+  "installer.cleanupFailed": "Die Bereinigung der App wurde nicht abgeschlossen (Ergebnis: {result}). Die Zeilen oben sagen, was übrig ist.",
+  "installer.somePartsLeft": "Manche Teile konnten nicht entfernt werden. Die Liste der Details sagt, welche."
 }

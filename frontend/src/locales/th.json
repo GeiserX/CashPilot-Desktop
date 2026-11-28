@@ -2134,5 +2134,17 @@
   "main.scope.worker": "เวิร์กเกอร์",
   "logs.wrap": "ตัดบรรทัด",
   "logs.empty": "(ไม่มีบันทึก)",
-  "go.importers.refuse.m4bEncrypted": "{name} เป็นไฟล์ money4band 5.0 ที่เข้ารหัสไว้ ในโฟลเดอร์ money4band ให้รัน `./Money4Band-<os>-<arch> config edit` สำหรับไบนารีที่เผยแพร่ หรือรัน `python main.py config edit` หากใช้จากซอร์สโค้ด คัดลอก JSON ที่ถอดรหัสแล้วซึ่งคำสั่งนี้เปิดขึ้นมา แล้ววางที่นี่"
+  "go.importers.refuse.m4bEncrypted": "{name} เป็นไฟล์ money4band 5.0 ที่เข้ารหัสไว้ ในโฟลเดอร์ money4band ให้รัน `./Money4Band-<os>-<arch> config edit` สำหรับไบนารีที่เผยแพร่ หรือรัน `python main.py config edit` หากใช้จากซอร์สโค้ด คัดลอก JSON ที่ถอดรหัสแล้วซึ่งคำสั่งนี้เปิดขึ้นมา แล้ววางที่นี่",
+  "installer.finishRun": "เปิด CashPilot Desktop",
+  "installer.closing": "กำลังปิด CashPilot Desktop หากทำงานจาก {dir}",
+  "installer.options.title": "เลือกสิ่งอื่นที่จะนำออก",
+  "installer.options.subtitle": "แอป ทางลัด และตัวช่วยเบื้องหลังจะถูกนำออกเสมอ",
+  "installer.options.intro": "CashPilot Desktop จะถูกนำออกจาก {dir} และยังนำแอปหารายได้ที่ CashPilot Desktop เริ่มไว้และข้อมูลของคุณออกได้ด้วย เว้นช่องว่างไว้เพื่อเก็บส่วนนั้น",
+  "installer.options.removeEarners": "หยุดและนำแอปหารายได้ที่ CashPilot Desktop เริ่มไว้ออก(&S)",
+  "installer.options.removeEarnersHelp": "เฉพาะคอนเทนเนอร์ที่ CashPilot Desktop สร้างและแอปหารายได้แบบเนทีฟเท่านั้น ไม่แตะต้องคอนเทนเนอร์อื่น วอลุ่ม Docker ยังคงอยู่ หากเว้นว่างไว้ คอนเทนเนอร์จะทำงานต่อไป",
+  "installer.options.deleteData": "ลบข้อมูล CashPilot ของฉัน(&D)",
+  "installer.options.deleteDataHelp": "การตั้งค่า ฐานข้อมูลรายได้ บันทึก และข้อมูลเข้าสู่ระบบที่บันทึกไว้ หากเว้นว่างไว้ ข้อมูลเหล่านี้จะคงอยู่ และการติดตั้งใหม่หรือ exe แบบพกพาจะพบข้อมูลอีกครั้ง",
+  "installer.options.uninstall": "ถอนการติดตั้ง(&U)",
+  "installer.cleanupFailed": "การล้างข้อมูลของแอปไม่เสร็จสิ้น (ผลลัพธ์: {result}) บรรทัดด้านบนระบุสิ่งที่เหลืออยู่",
+  "installer.somePartsLeft": "นำบางส่วนออกไม่ได้ รายการรายละเอียดระบุว่าส่วนใด"
 }

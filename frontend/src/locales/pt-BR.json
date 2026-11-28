@@ -2134,5 +2134,17 @@
   "main.scope.worker": "worker",
   "logs.wrap": "Quebrar linhas",
   "logs.empty": "(sem logs)",
-  "go.importers.refuse.m4bEncrypted": "{name} é um arquivo criptografado do money4band 5.0. Na sua pasta do money4band, execute `./Money4Band-<os>-<arch> config edit` para o binário da versão publicada, ou `python main.py config edit` a partir do código-fonte. Copie o JSON descriptografado que ele abre e cole-o aqui."
+  "go.importers.refuse.m4bEncrypted": "{name} é um arquivo criptografado do money4band 5.0. Na sua pasta do money4band, execute `./Money4Band-<os>-<arch> config edit` para o binário da versão publicada, ou `python main.py config edit` a partir do código-fonte. Copie o JSON descriptografado que ele abre e cole-o aqui.",
+  "installer.finishRun": "Abrir o CashPilot Desktop",
+  "installer.closing": "Fechando o CashPilot Desktop se ele estiver rodando a partir de {dir}",
+  "installer.options.title": "Escolha o que mais remover",
+  "installer.options.subtitle": "O app, os atalhos dele e o auxiliar em segundo plano são sempre removidos.",
+  "installer.options.intro": "O CashPilot Desktop será removido de {dir}. Ele também pode remover os apps de renda que iniciou, e os seus dados. Deixe uma caixa desmarcada para manter essa parte.",
+  "installer.options.removeEarners": "&Parar e remover os apps de renda que o CashPilot Desktop iniciou",
+  "installer.options.removeEarnersHelp": "Só os contêineres que o CashPilot Desktop criou e os apps de renda nativos dele. Outros contêineres não são tocados. Os volumes do Docker continuam. Se ficar desmarcada, os contêineres continuam rodando.",
+  "installer.options.deleteData": "&Excluir meus dados do CashPilot",
+  "installer.options.deleteDataHelp": "Configurações, o banco de dados de ganhos, os logs e os logins salvos. Se ficar desmarcada, eles continuam, e uma nova instalação ou o exe portátil os encontra de novo.",
+  "installer.options.uninstall": "&Desinstalar",
+  "installer.cleanupFailed": "A limpeza do app não terminou (resultado: {result}). As linhas acima dizem o que restou.",
+  "installer.somePartsLeft": "Algumas partes não puderam ser removidas. A lista de detalhes diz quais."
 }
