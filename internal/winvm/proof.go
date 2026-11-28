@@ -229,7 +229,7 @@ func Steps(p Plan, h HostNet, t ProofTargets) []StepSpec {
 	gw := p.Gateway
 	var out []StepSpec
 	out = append(out,
-		need(StepSpec{ID: StepRed1LAN, Kind: Red, Opens: []string{allow(t.LANIP)}}, t.LANIP.IsValid(), "this PC has no address on a physical network"),
+		need(StepSpec{ID: StepRed1LAN, Kind: Red, Opens: []string{allow(t.LANIP), "L3 off"}}, t.LANIP.IsValid(), "this PC has no address on a physical network"),
 		need(StepSpec{ID: StepRed2Router, Kind: Red, Opens: []string{allow(t.Router)}}, t.Router.IsValid(), "this PC has no default route through a physical adapter"),
 		need(StepSpec{ID: StepRed3OwnIP, Kind: Red, Opens: []string{"own-IP Deny removed", allow(t.OwnIP)}}, t.OwnIP.IsValid(), "this line's public address is not known"),
 		StepSpec{ID: StepL3Alone, Kind: Green, Opens: []string{allow(gw)}, Applies: true, Witness: WitnessDelivered},
@@ -816,6 +816,13 @@ func (r *proofRun) step(ctx context.Context, s StepSpec) ([]StepResult, error) {
 		to := netip.AddrPortFrom(target, r.port())
 		var canaries []netip.AddrPort
 		if s.ID == StepRed1LAN {
+			// The LAN target is the host's own LAN address, so the packet
+			// ends at the vNIC under L3, which blocks it before the canary
+			// (setup 1m). L2 is the LAN's only filter: with L3 off, the
+			// canary is what shows the L2 hole.
+			if err := r.l3Off(ctx); err != nil {
+				return fail(err), nil
+			}
 			canaries = append(canaries, to)
 		}
 		ps := r.watch(ctx, tok, canaries, []PktFilter{{Addr: target, Proto: "TCP", Port: to.Port()}})
