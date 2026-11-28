@@ -34,6 +34,7 @@ function fenceLabel(f: string): string {
     case "cut": return t("securevm.fence.cut");
     case "reprove-needed": return t("securevm.fence.reprove");
     case "unproven": return t("securevm.fence.unproven");
+    case "unknown": return t("securevm.fence.unknown");
   }
   return f;
 }
