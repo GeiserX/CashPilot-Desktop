@@ -276,7 +276,7 @@ $folderLease = Open-CPDDirectory $folder $true $in.owner
 $disk = Join-Path $folder ($in.vm + '.vhdx')
 $vm = $null
 $createdDisk = New-VHD -Path $disk -Dynamic -SizeBytes ([uint64]$in.diskBytes)
-if (-not $createdDisk -or [IO.Path]::GetFullPath($createdDisk.Path) -ne $disk) { throw 'The disk creation did not return the requested file.' }
+if (-not $createdDisk -or [IO.Path]::GetFullPath($createdDisk.Path) -ne [IO.Path]::GetFullPath($disk)) { throw 'The disk creation did not return the requested file.' }
 $diskID = [CpdDisk]::Identify($disk)
 if (-not $diskID) { throw 'Could not verify the created disk.' }
 try {
