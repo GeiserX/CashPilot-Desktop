@@ -1133,6 +1133,8 @@
   "go.runtime.aside.removeUnstartedFailed": "kon {name} niet verwijderen, dat een niet voltooide uitrol had gemaakt en nooit had gestart",
   "go.runtime.aside.putBackFailed": "kon {aside} niet terugzetten als {name}",
   "go.runtime.aside.putBack": "{name} is teruggezet, dat een niet voltooide uitrol opzij had gezet als {aside}. Het is gestopt.",
+  "go.runtime.aside.updateUndone": "Undid the update of {name}: the app stopped before the new build passed its check, so the previous container is back.",
+  "go.runtime.aside.removeUncheckedFailed": "could not remove {name}, which an image update made and did not finish checking",
   "go.runtime.aside.removeAsideFailed": "kon {name} niet verwijderen, de container die een niet voltooide uitrol opzij had gezet",
   "go.runtime.aside.previousUnchecked": "De vorige container kon niet worden gecontroleerd ({error}): hij blijft bewaard, gestopt, als {aside} of {name}, met zijn gegevens. Rol opnieuw uit",
   "go.runtime.aside.previousNotPutBack": "De vorige container kon niet worden teruggezet ({error}): hij blijft bewaard, gestopt, als {aside}, met zijn gegevens. Hernoem hem terug naar {name}, of rol opnieuw uit",

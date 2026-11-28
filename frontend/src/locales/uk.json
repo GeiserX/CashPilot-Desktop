@@ -1133,6 +1133,8 @@
   "go.runtime.aside.removeUnstartedFailed": "не вдалося видалити {name}, який створило незавершене розгортання й так і не запустило",
   "go.runtime.aside.putBackFailed": "не вдалося повернути {aside} як {name}",
   "go.runtime.aside.putBack": "Повернуто {name}, який незавершене розгортання відклало як {aside}. Він зупинений.",
+  "go.runtime.aside.updateUndone": "Undid the update of {name}: the app stopped before the new build passed its check, so the previous container is back.",
+  "go.runtime.aside.removeUncheckedFailed": "could not remove {name}, which an image update made and did not finish checking",
   "go.runtime.aside.removeAsideFailed": "не вдалося видалити {name}, контейнер, який відклало незавершене розгортання",
   "go.runtime.aside.previousUnchecked": "Попередній контейнер не вдалося перевірити ({error}): його збережено, зупиненим, як {aside} або {name}, разом із даними. Розгорніть знову",
   "go.runtime.aside.previousNotPutBack": "Попередній контейнер не вдалося повернути ({error}): його збережено, зупиненим, як {aside}, разом із даними. Перейменуйте його назад на {name} або розгорніть знову",

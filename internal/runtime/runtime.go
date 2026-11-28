@@ -180,6 +180,9 @@ type DockerProvider struct {
 	// hostHints reads facts about this PC that tell apart why the engine does not
 	// answer (engine_state.go). Unset, Status knows only what Docker says.
 	hostHints hostHintsFn
+	// settling marks the replacements still in an image update's check period
+	// (settling.go), so recovery does not keep one the check never passed.
+	settling settlingMarks
 }
 
 // lockReplacing takes name's replacement lock (replacing) and returns its release.
@@ -460,7 +463,7 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 
 	// A deploy that did not finish may have left the old container set aside
 	// (setaside.go). It is settled first, so the name below is the one that counts.
-	if note, err := recoverSetAside(ctx, cli, name); err != nil {
+	if note, err := p.recoverSetAside(ctx, cli, name); err != nil {
 		return ContainerInfo{}, errors.New(i18n.T("go.runtime.deploy.errorUntouched", "error", err))
 	} else if note != "" && progress != nil {
 		progress(note)
@@ -661,19 +664,33 @@ func (p *DockerProvider) Deploy(ctx context.Context, spec DeploySpec, progress f
 	if progress != nil {
 		progress("Starting " + name)
 	}
+	checked := spec.SettleSeconds > 0 && setAside
+	if checked {
+		// Before the start: an app that stops in the check period leaves this mark,
+		// and recovery undoes the replacement (settling.go). No mark, no update.
+		if err := p.settling.mark(name); err != nil {
+			return ContainerInfo{}, rollBack(err, created.ID)
+		}
+		// Taken away once the update is undone or passed. One that cannot be taken
+		// away only makes the next app start undo an update that passed.
+		defer func() { _ = p.settling.clear(name) }()
+	}
 	// The check period reads the new container's log from its start on.
 	started := time.Now().Add(-time.Second)
 	if _, err := cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return ContainerInfo{}, rollBack(withGPUHint(err), created.ID)
 	}
 	var update *ImageUpdateResult
-	if spec.SettleSeconds > 0 && setAside {
+	if checked {
 		if progress != nil {
 			progress(i18n.T("go.runtime.update.watching", "name", name, "seconds", spec.SettleSeconds))
 		}
 		if err := settle(ctx, cli, created.ID, name, svc, spec.SettleSeconds, started); err != nil {
 			return ContainerInfo{}, &ImageUpdateUndone{err: rollBack(err, created.ID)}
 		}
+		// Passed: from here the replacement is the one to keep, so the mark goes
+		// before the old container does.
+		_ = p.settling.clear(name)
 		update = &ImageUpdateResult{OldImage: live.Container.Image, NewImage: inspected.ID}
 	}
 	if setAside {

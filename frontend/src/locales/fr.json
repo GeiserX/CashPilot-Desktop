@@ -1133,6 +1133,8 @@
   "go.runtime.aside.removeUnstartedFailed": "impossible de supprimer {name}, qu'un déploiement inachevé a créé sans jamais le démarrer",
   "go.runtime.aside.putBackFailed": "impossible de remettre {aside} en place sous le nom {name}",
   "go.runtime.aside.putBack": "{name} remis en place : un déploiement inachevé l'avait mis de côté sous le nom {aside}. Il est arrêté.",
+  "go.runtime.aside.updateUndone": "Undid the update of {name}: the app stopped before the new build passed its check, so the previous container is back.",
+  "go.runtime.aside.removeUncheckedFailed": "could not remove {name}, which an image update made and did not finish checking",
   "go.runtime.aside.removeAsideFailed": "impossible de supprimer {name}, le conteneur qu'un déploiement inachevé avait mis de côté",
   "go.runtime.aside.previousUnchecked": "Le conteneur précédent n'a pas pu être vérifié ({error}) : il est conservé, arrêté, sous le nom {aside} ou {name}, avec ses données. Déployez à nouveau",
   "go.runtime.aside.previousNotPutBack": "Le conteneur précédent n'a pas pu être remis en place ({error}) : il est conservé, arrêté, sous le nom {aside}, avec ses données. Renommez-le en {name}, ou déployez à nouveau",

@@ -1133,6 +1133,8 @@
   "go.runtime.aside.removeUnstartedFailed": "完了しなかったデプロイが作成し、一度も起動しなかった {name} を削除できませんでした",
   "go.runtime.aside.putBackFailed": "{aside} を {name} として元に戻せませんでした",
   "go.runtime.aside.putBack": "完了しなかったデプロイが {aside} として退避していた {name} を元に戻しました。停止しています。",
+  "go.runtime.aside.updateUndone": "Undid the update of {name}: the app stopped before the new build passed its check, so the previous container is back.",
+  "go.runtime.aside.removeUncheckedFailed": "could not remove {name}, which an image update made and did not finish checking",
   "go.runtime.aside.removeAsideFailed": "完了しなかったデプロイが退避していたコンテナ {name} を削除できませんでした",
   "go.runtime.aside.previousUnchecked": "以前のコンテナを確認できませんでした ({error})。データとともに停止した状態で {aside} または {name} として保持されています。もう一度デプロイしてください",
   "go.runtime.aside.previousNotPutBack": "以前のコンテナを元に戻せませんでした ({error})。データとともに停止した状態で {aside} として保持されています。名前を {name} に戻すか、もう一度デプロイしてください",

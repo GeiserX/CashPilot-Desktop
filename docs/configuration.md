@@ -69,6 +69,20 @@ moves it. And a custom app that keeps data in a folder outside its data path is
 left to you, because a new container would start that folder empty. The history
 table says why.
 
+CashPilot can stop during the 2 minutes, for example when the computer shuts
+down. Then the next start undoes the update: it removes the new container and
+starts the old one again. The next daily check tries that build again.
+
+Two limits come with **Update automatically**:
+
+- **The tag decides the build.** CashPilot installs whatever the app's publisher
+  puts under the tag that the app follows. It checks that the new container
+  runs, not who made the build. If you do not trust a publisher to do this,
+  choose **Notify only** for that app.
+- **Data is not undone.** An undo puts back the old container and its image,
+  not the files in the app's volume. A new build that changes its data, for
+  example with a migration, leaves the changed data to the old build.
+
 Every app has a known-good build pinned in the catalog. A fresh deploy and the
 **Redeploy** button install that build. An update installs the newer build of its
 tag. So a Redeploy can take an app back to its pinned build, and the next daily
