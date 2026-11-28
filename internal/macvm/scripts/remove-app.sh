@@ -13,6 +13,7 @@ if uid=$(id -u earner 2>/dev/null); then
   sleep 2
   /usr/bin/pkill -9 -x -u "$uid" "$proc" 2>/dev/null || true
 fi
-rm -f "$la"
-rm -rf "/Applications/$app"
+rm -f "$la" || { echo "could not remove $la" >&2; exit 1; }
+rm -rf "/Applications/$app" || { echo "could not remove /Applications/$app" >&2; exit 1; }
+[ -e "$la" ] || [ -e "/Applications/$app" ] && { echo "$slug is still there" >&2; exit 1; }
 echo "removed $slug"
