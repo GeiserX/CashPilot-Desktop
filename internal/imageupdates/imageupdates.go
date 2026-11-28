@@ -144,7 +144,7 @@ type Hooks struct {
 	// cannot be checked here at all (a native process, no container).
 	Check func(ctx context.Context, slug string) (check Check, ok bool, err error)
 	// Blocker says why the app will not be updated by itself, or "".
-	Blocker func(ctx context.Context, slug string) string
+	Blocker func(ctx context.Context, slug, containerID string) string
 	// Deploy runs the update deploy of the container containerID, installing only
 	// the build newImage. checkedAt is when the check began: a Stop since then
 	// refuses the update. rolledBack says the new build failed its check period
@@ -190,7 +190,7 @@ func UpdateService(ctx context.Context, h Hooks, slug, mode string) (string, err
 	if mode == Notify {
 		return "available", recordOnce(h, rec, Available)
 	}
-	why := h.Blocker(ctx, slug)
+	why := h.Blocker(ctx, slug, check.ContainerID)
 	if why == "" && check.Status != "running" {
 		why = i18n.T("go.imageupdates.notRunning")
 	}

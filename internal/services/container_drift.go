@@ -46,10 +46,10 @@ func (m *Manager) ContainerDrift(ctx context.Context) map[string][]string {
 	return out
 }
 
-// LooseMounts is, per custom app, the folders its running container keeps
-// outside what a redeploy mounts (see runtime.LooseMounts). Every custom app
-// whose container was read has a key, with no folders when it has none; one
-// that could not be read has none. An error means nothing was read.
+// LooseMounts is, per container ID of an app, the folders it keeps outside
+// what a redeploy mounts (see runtime.LooseMounts). Every container that was
+// read has a key, with no folders when it has none; one that could not be read
+// has none. An error means nothing was read.
 func (m *Manager) LooseMounts(ctx context.Context) (map[string][]string, error) {
 	reader, ok := m.providers[m.defaultKind].(shapeReader)
 	if !ok || m.catalog == nil {
@@ -65,7 +65,7 @@ func (m *Manager) LooseMounts(ctx context.Context) (map[string][]string, error) 
 		if !found {
 			continue
 		}
-		out[shape.Slug] = append(out[shape.Slug], runtime.LooseMounts(svc, shape)...)
+		out[shape.ID] = runtime.LooseMounts(svc, shape)
 	}
 	return out, nil
 }

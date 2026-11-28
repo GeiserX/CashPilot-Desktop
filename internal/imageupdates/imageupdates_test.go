@@ -35,7 +35,7 @@ func (f *fake) hooks() Hooks {
 			c, ok := f.checks[slug]
 			return c, ok, nil
 		},
-		Blocker: func(_ context.Context, slug string) string { return f.blocker[slug] },
+		Blocker: func(_ context.Context, slug, _ string) string { return f.blocker[slug] },
 		Deploy: func(_ context.Context, slug, containerID, newImage string, checkedAt time.Time) (DeployResult, bool, error) {
 			f.deployed = append(f.deployed, slug+"@"+containerID)
 			f.installs = append(f.installs, newImage)
