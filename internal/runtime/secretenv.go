@@ -23,8 +23,10 @@ package runtime
 // container only at that one path, which must then exist before the start.
 //
 // What this does not do: root on the host still reads the values from
-// /proc/<pid>/environ and from the container's layer on disk, and `docker exec env`
-// shows them. It keeps them out of the container config and every copy of it.
+// /proc/<pid>/environ and from the container's layer on disk, and any client with
+// the Docker API can read the file with `docker cp` (the archive endpoint) or
+// `docker exec`. It keeps them out of `docker inspect`, the container config and
+// every copy of it.
 //
 // Off unless CASHPILOT_EARNER_SECRETS=file is set, so nothing changes for an existing
 // install. A service opts out with docker.secrets_in_file: false; custom services
