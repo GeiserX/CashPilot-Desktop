@@ -56,19 +56,21 @@ func checkPlurals(t *testing.T, locale, key string, nodes []node) {
 	}
 }
 
-// showsCount: the case prints its own number, as # or as {arg}. A case that
-// does not says "one" in words, which is wrong for any other count the
+// showsCount: the case prints its own number, as # or as {arg}, or a select
+// in it does so in every branch. A case that does not says "one" in words, which is wrong for any other count the
 // locale's one category covers (0 in French, 21 in Russian, 2 in Filipino).
 func showsCount(nodes []node, arg string) bool {
 	for _, n := range nodes {
 		if n.pound || (n.kind == "" && n.arg == arg) {
 			return true
 		}
-		if n.kind == "select" {
+		if n.kind == "select" && len(n.cases) > 0 {
+			every := true
 			for _, c := range n.cases {
-				if showsCount(c, arg) {
-					return true
-				}
+				every = every && showsCount(c, arg)
+			}
+			if every {
+				return true
 			}
 		}
 	}
@@ -101,4 +103,19 @@ func seq(from, to int64) []int64 {
 		out = append(out, n)
 	}
 	return out
+}
+
+// A select inside a one case shows the count only when all its branches do.
+
+func TestShowsCountNeedsEverySelectBranch(t *testing.T) {
+	parse := func(s string) []node { p := parser{src: s}; n, _ := p.parse(false); return n[0].cases["one"] }
+	if showsCount(parse("{n, plural, one {{m, select, a {# x} other {one x}}} other {# x}}"), "n") {
+		t.Error("a select with one branch that names no count passed")
+	}
+	if !showsCount(parse("{n, plural, one {{m, select, a {# x} other {{n} x}}} other {# x}}"), "n") {
+		t.Error("a select that shows the count in every branch failed")
+	}
+	if showsCount(parse("{n, plural, one {One x} other {# x}}"), "n") {
+		t.Error("a case that names no count passed")
+	}
 }
