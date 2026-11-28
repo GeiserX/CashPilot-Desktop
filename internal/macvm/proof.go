@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/GeiserX/CashPilot-Desktop/internal/securevm"
@@ -220,10 +221,14 @@ func startCapture(ctx context.Context, iface string, port uint16, addrs []netip.
 		defer pipes.Done()
 		sc := bufio.NewScanner(out)
 		for sc.Scan() {
+			proto := "/tcp"
+			if strings.Contains(sc.Text(), ": UDP") {
+				proto = "/udp"
+			}
 			for _, a := range addrs {
 				if strings.Contains(sc.Text(), "> "+a.String()+".") {
 					c.mu.Lock()
-					c.seen[a.String()] = true
+					c.seen[a.String()+proto] = true
 					c.mu.Unlock()
 				}
 			}
@@ -286,7 +291,9 @@ func (c *capture) stop() (map[string]bool, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if early {
+	// Only our kill ends a capture that saw the whole step. tcpdump can exit
+	// by itself just before the kill, while its pipes still drain.
+	if early || !killedByUs(c.waited) {
 		return nil, fmt.Errorf("packet capture stopped during the step: %v", c.waited)
 	}
 	if c.scan != nil {
@@ -295,14 +302,24 @@ func (c *capture) stop() (map[string]bool, error) {
 	return c.seen, nil
 }
 
+// killedByUs is whether a capture ended by the SIGKILL that stop sends.
+func killedByUs(err error) bool {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		return false
+	}
+	ws, ok := ee.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && ws.Signal() == syscall.SIGKILL
+}
+
 // probeScript runs in the guest as root. It sends "<token>-<label>" to every
 // target on stdin, over TCP and UDP, all at once. What it prints only says a
 // probe was sent: the verdict reads the host's canaries and captures.
 const probeScript = `tok=$1; port=$2
 while read -r label addr; do
   case $addr in *:*) v=-6 ;; *) v=-4 ;; esac
-  ( printf '%s-%s\n' "$tok" "$label" | /usr/bin/nc $v -G 2 -w 2 "$addr" "$port" >/dev/null 2>&1
-    printf '%s-%s\n' "$tok" "$label" | /usr/bin/nc $v -u -w 1 "$addr" "$port" >/dev/null 2>&1
+  ( printf '%s-%s/tcp\n' "$tok" "$label" | /usr/bin/nc $v -G 2 -w 2 "$addr" "$port" >/dev/null 2>&1
+    printf '%s-%s/udp\n' "$tok" "$label" | /usr/bin/nc $v -u -w 1 "$addr" "$port" >/dev/null 2>&1
     echo "sent $label" ) &
 done
 wait`
@@ -445,10 +462,11 @@ func (p *prover) send(ctx context.Context, targets []Target) (arrived []string, 
 			stopAll()
 			return nil, nil, serr
 		}
-		for a := range seen {
+		for k := range seen {
+			a, proto, _ := strings.Cut(k, "/")
 			for _, t := range targets {
 				if t.Addr.String() == a {
-					captured = append(captured, t.Label)
+					captured = append(captured, t.Label+"/"+proto)
 				}
 			}
 		}
@@ -469,10 +487,14 @@ func (p *prover) red(ctx context.Context, id string, targets []Target) bool {
 		p.add(id, securevm.KindRed, securevm.Broken, err.Error())
 		return false
 	}
+	// Each protocol needs its own arrival: a later green step reads the
+	// silence of both as the fence holding.
 	var missing []string
 	for _, t := range targets {
-		if !slices.Contains(arrived, t.Label) && !slices.Contains(captured, t.Label) {
-			missing = append(missing, t.Label)
+		for _, proto := range []string{"/tcp", "/udp"} {
+			if k := t.Label + proto; !slices.Contains(arrived, k) && !slices.Contains(captured, k) {
+				missing = append(missing, k)
+			}
 		}
 	}
 	if len(missing) > 0 {
@@ -504,6 +526,19 @@ func (p *prover) green(ctx context.Context, id, witness string, targets []Target
 	return true
 }
 
+// stopped stops the VM and checks that it stopped, before a proof boot.
+func (p *prover) stopped(ctx context.Context) error {
+	p.d.stopVM(ctx, p.inst)
+	run, err := p.d.running(ctx, p.inst)
+	if err != nil {
+		return fmt.Errorf("could not check that the VM stopped: %w", err)
+	}
+	if run {
+		return errors.New("the VM did not stop, so the next proof boot cannot change its network")
+	}
+	return nil
+}
+
 // counters reads the anchor's drop counters.
 func (p *prover) counters(ctx context.Context) map[string]uint64 {
 	out, _ := p.d.R.Run(ctx, "/sbin/pfctl", "-a", Anchor, "-vsr")
@@ -523,8 +558,8 @@ func (p *prover) counters(ctx context.Context) map[string]uint64 {
 //	  green: the production fence; nothing of every target may arrive
 //	  Bonjour: the guest sees none of the host's services
 //	  function: the guest reaches the internet and public DNS
-func (d *Daemon) Prove(ctx context.Context) securevm.Proof {
-	pf := securevm.Proof{At: d.now()}
+func (d *Daemon) Prove(ctx context.Context) (pf securevm.Proof) {
+	pf = securevm.Proof{At: d.now()}
 	st := Status{Version: StatusVersion, WrittenAt: d.now(), VM: VMName, Network: NetDisconnected, Fence: FenceUnproven, Proving: true, Reason: "CashPilot is checking the fence"}
 	d.writeStatus(&st)
 	p := &prover{d: d, port: randomPort()}
@@ -535,10 +570,14 @@ func (d *Daemon) Prove(ctx context.Context) securevm.Proof {
 		d.distrust = true
 		d.logf("proof: could not clear the old verdict: %v; the guard ignores it", err)
 	}
+	// The verdict is saved first. The report, in the file and as the return
+	// value, says green only when the guard has that verdict.
 	defer func() {
 		pf.Steps = p.steps
-		_ = WriteJSON(d.state(ProofFile), pf, 0o644)
-		if pf.Green && ctx.Err() == nil {
+		if pf.Green && ctx.Err() != nil {
+			pf.Green, pf.Why = false, "the proof was stopped before its verdict was saved"
+		}
+		if pf.Green {
 			build := ""
 			if d.HostBuild != nil {
 				build, _ = d.HostBuild(ctx)
@@ -547,10 +586,15 @@ func (d *Daemon) Prove(ctx context.Context) securevm.Proof {
 				d.distrust = false
 			} else {
 				d.logf("proof: green, but the verdict could not be saved: %v", err)
+				pf.Green, pf.Why = false, "every check passed, but the verdict could not be saved: "+err.Error()
 			}
-		} else if err := os.Remove(d.state(VerdictFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			d.distrust = true
 		}
+		if !pf.Green {
+			if err := os.Remove(d.state(VerdictFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				d.distrust = true
+			}
+		}
+		_ = WriteJSON(d.state(ProofFile), pf, 0o644)
 		d.Pass(context.WithoutCancel(ctx), false)
 	}()
 	fail := func(why string) securevm.Proof {
@@ -579,19 +623,24 @@ func (d *Daemon) Prove(ctx context.Context) securevm.Proof {
 	// The host's own positive control: a token sent from the host must reach
 	// its canary, or a silent green would mean a deaf canary.
 	ctlTok := newToken()
-	if conn, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", p.port), 2*time.Second); err == nil {
-		fmt.Fprintf(conn, "%s-control\n", ctlTok)
-		conn.Close()
+	for _, proto := range []string{"tcp", "udp"} {
+		if conn, err := net.DialTimeout(proto+"4", fmt.Sprintf("127.0.0.1:%d", p.port), 2*time.Second); err == nil {
+			fmt.Fprintf(conn, "%s-control/%s\n", ctlTok, proto)
+			conn.Close()
+		}
 	}
 	_ = sleep(ctx, 500*time.Millisecond)
-	if !slices.Contains(p.can.arrived(ctlTok), "control") {
+	if got := p.can.arrived(ctlTok); !slices.Contains(got, "control/tcp") || !slices.Contains(got, "control/udp") {
 		p.add("canary", securevm.KindCheck, securevm.Broken, "the host canary did not hear the host's own token")
 		return fail("the host canary does not work")
 	}
-	p.add("canary", securevm.KindCheck, securevm.Held, "the host canary heard the host's own token")
+	p.add("canary", securevm.KindCheck, securevm.Held, "the host canary heard the host's own token over TCP and UDP")
 
-	// Boot A: softnet with holes.
-	d.stopVM(ctx, p.inst)
+	// Boot A: softnet with holes. Start leaves a running VM as it is, so a
+	// VM that did not stop would keep its old softnet options.
+	if err := p.stopped(ctx); err != nil {
+		return fail(err.Error())
+	}
 	lanIP := netip.Addr{}
 	if ifc, err := net.InterfaceByName(p.rIface); err == nil {
 		addrs, _ := ifc.Addrs()
@@ -651,8 +700,10 @@ func (d *Daemon) Prove(ctx context.Context) securevm.Proof {
 	})
 	p.cutNow(ctx)
 
-	// Boot B: production softnet.
-	d.stopVM(ctx, p.inst)
+	// Boot B: production softnet, so the holes of boot A must be gone.
+	if err := p.stopped(ctx); err != nil {
+		return fail(err.Error())
+	}
 	if err := d.Start(ctx, StartOptions{}); err != nil {
 		return fail("could not restart the VM with the fence: " + err.Error())
 	}
