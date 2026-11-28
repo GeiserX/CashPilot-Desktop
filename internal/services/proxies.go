@@ -447,7 +447,7 @@ func (m *Manager) runProxied(ctx context.Context, slug string, id int64, svc cat
 			for _, r := range records {
 				hadRecord = hadRecord || r.Slug == slug
 			}
-			err = m.store.SaveProxiedCopy(id, slug)
+			err = m.store.SaveProxiedCopy(id, slug, proxies.Acknowledgements(svc))
 		}
 	}
 	m.proxy.proxyMu.Unlock()
@@ -549,6 +549,9 @@ func (m *Manager) StartProxied(ctx context.Context, slug string, id int64) error
 	if s.CappedAt != "" {
 		return errors.New(orText(s.CapReason, i18n.T("go.services.proxy.capReached")))
 	}
+	if err := m.copyTickRefusal(id, slug); err != nil {
+		return err
+	}
 	p, err := m.proxier()
 	if err != nil {
 		return err
@@ -634,6 +637,10 @@ func (m *Manager) releaseCapped(ctx context.Context, id int64, d proxies.Definit
 	var started []string
 	for _, c := range copies {
 		if !c.StoppedByCap {
+			continue
+		}
+		if err := m.tickRefusal(c); err != nil {
+			m.store.RecordEvent(c.Slug, "proxied_start_error", err.Error())
 			continue
 		}
 		mu := m.copyLock(id, c.Slug)
@@ -837,6 +844,33 @@ func (m *Manager) restartCapStoppedDown(ctx context.Context, p runtime.ProxyProv
 	}
 }
 
+// tickRefusal is why a recorded copy may not start: a tick its service needs now that
+// it was not added with. A copy added before the tick existed (Honeygain's account
+// risk) stays stopped until its owner adds it again with the tick. A service no
+// longer in the catalog needs none here.
+func (m *Manager) tickRefusal(c store.ProxiedCopy) error {
+	svc, ok := m.catalog.Get(c.Slug)
+	if !ok || len(proxies.MissingAcknowledgements(svc, c.Acknowledged)) == 0 {
+		return nil
+	}
+	return errors.New(i18n.T("go.proxies.ack.accountRisk", "name", orText(svc.Name, c.Slug)))
+}
+
+// copyTickRefusal is tickRefusal for the record of slug through proxy id; none when
+// there is no record.
+func (m *Manager) copyTickRefusal(id int64, slug string) error {
+	records, err := m.store.ListProxiedCopies(id)
+	if err != nil {
+		return err
+	}
+	for _, r := range records {
+		if r.Slug == slug {
+			return m.tickRefusal(r)
+		}
+	}
+	return nil
+}
+
 // copyLock is the mutex of one copy; see proxyState.copyMu.
 func (m *Manager) copyLock(id int64, slug string) *sync.Mutex {
 	mu, _ := m.proxy.copyMu.LoadOrStore(fmt.Sprintf("%d/%s", id, slug), &sync.Mutex{})
@@ -862,7 +896,10 @@ func (m *Manager) retryCapStart(ctx context.Context, p runtime.ProxyProvider, id
 	}
 	marked := false
 	for _, r := range records {
-		marked = marked || (r.Slug == slug && r.StoppedByCap)
+		if r.Slug == slug && r.StoppedByCap {
+			// Not an event either: releaseCapped recorded why it stays stopped.
+			marked = m.tickRefusal(r) == nil
+		}
 	}
 	if !marked {
 		return false
@@ -934,6 +971,9 @@ func (m *Manager) stopCappedCopy(ctx context.Context, p runtime.ProxyProvider, i
 		m.proxy.proxyMu.Unlock()
 		if stillCapped {
 			m.store.RecordEvent(slug, "proxied_capped", fmt.Sprintf("proxy %d", id))
+		} else if refused := m.copyTickRefusal(id, slug); loadErr == nil && refused != nil {
+			// Stopped, and not marked: it waits for its owner, not for the cap.
+			m.store.RecordEvent(slug, "proxied_start_error", refused.Error())
 		} else if loadErr == nil {
 			if _, err := p.StartProxied(ctx, slug, id, m.stopTimeout(slug), specOf(fresh), detectOwnIP(ctx)); err != nil {
 				m.store.RecordEvent(slug, "proxied_start_error", maskSecrets(err.Error(), fresh))

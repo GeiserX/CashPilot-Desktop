@@ -83,3 +83,62 @@ func TestAServiceWithNoProxyRiskNeedsNoTick(t *testing.T) {
 		t.Fatalf("missing: %v", got)
 	}
 }
+
+// A copy added before the tick existed (the catalog gained Honeygain's proxy_risk
+// later) has no tick on record. It keeps running, and is the owner's to remove; but
+// it never starts again, by the owner's Start, a cap reset or the cap's retry,
+// until the owner adds it again with the tick.
+func TestACopyAddedBeforeTheTickNeverStartsAgainWithoutIt(t *testing.T) {
+	m, p, st := newProxyManager(t)
+	ctx := context.Background()
+	deployExample(t, st)
+	view, err := m.SaveProxy(ctx, 0, map[string]string{"name": "Gate", "kind": "socks5", "host": "203.0.113.50", "port": "7000", "cap_gb": "1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.DeployProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	m.catalog = riskyExample(t)
+	k := key("example", view.ID)
+
+	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	p.starts = nil
+	if err := m.StartProxied(ctx, "example", view.ID); err == nil || !strings.Contains(err.Error(), "must acknowledge") {
+		t.Fatalf("the owner's Start of a copy with no tick must be refused: %v", err)
+	}
+	if len(p.starts) != 0 {
+		t.Fatalf("a refused Start starts nothing: %v", p.starts)
+	}
+
+	// Running again (as it would be from before), the cap stops it; neither the
+	// reset nor the retry starts it.
+	p.running[k] = true
+	p.rx[k] = 950_000_000
+	if _, err := m.ProxyTick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p.running[k] {
+		t.Fatal("the cap stops the copy")
+	}
+	p.starts = nil
+	if started, err := m.ResetProxy(ctx, view.ID); err != nil || len(started) != 0 || len(p.starts) != 0 {
+		t.Fatalf("a reset must not start a copy with no tick: %v %v %v", started, p.starts, err)
+	}
+	if m.retryCapStart(ctx, p, view.ID, "example", "192.0.2.1") || len(p.starts) != 0 {
+		t.Fatalf("the retry must not start a copy with no tick: %v", p.starts)
+	}
+
+	// Added again with the tick, it starts.
+	if _, err := m.DeployProxied(ctx, "example", view.ID, proxies.AckAccountRisk); err != nil {
+		t.Fatalf("adding it again with the tick: %v", err)
+	}
+	if err := m.StopProxied(ctx, "example", view.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.StartProxied(ctx, "example", view.ID); err != nil {
+		t.Fatalf("a copy added again with the tick starts: %v", err)
+	}
+}
