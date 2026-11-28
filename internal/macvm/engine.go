@@ -165,6 +165,9 @@ func (e *Engine) Status(ctx context.Context) securevm.Status {
 			st.ProvedAt, st.Proving, st.StartError, st.GuestLimit = s.ProvedAt, s.Proving, s.StartError, s.GuestLimit
 			st.FreeDisk, st.Blocked, st.BlockedSince = s.FreeDisk, s.Blocked, s.BlockedSince
 			if age := time.Since(s.WrittenAt); age > 3*GuardInterval && st.Busy == "" {
+				// A silent guard proves nothing about the fence now, so the
+				// page must not show the old green.
+				st.Fence = FenceUnknown
 				st.Reason = i18n.T("go.macvm.guardStale", "age", age.Round(time.Minute).String())
 			}
 			if boot, err := host.BootTimeWithContext(ctx); err == nil {

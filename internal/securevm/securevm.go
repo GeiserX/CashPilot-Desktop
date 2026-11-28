@@ -26,6 +26,7 @@ const (
 	FenceCut      = "cut"
 	FenceReprove  = "reprove-needed"
 	FenceUnproven = "unproven"
+	FenceUnknown  = "unknown"
 )
 
 // Tri is yes, no or unknown. Unknown is never shown as no.

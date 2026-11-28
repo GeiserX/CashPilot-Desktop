@@ -710,17 +710,38 @@ function renderSecurityView(current: AppState) {
   }
 }
 
+// secureVMSeq numbers each read, so a slow read that ends after a newer one
+// cannot draw the older status over it.
+let secureVMSeq = 0;
+
 async function refreshSecureVM() {
+  const seq = ++secureVMSeq;
+  let status: SecureVMReading;
   try {
-    secureVM = await SecureVMStatus();
+    status = await SecureVMStatus();
   } catch (error) {
-    showErrorToast({scope: "securevm", error: String(error)});
+    if (seq === secureVMSeq) showErrorToast({scope: "securevm", error: String(error)});
     return;
   }
+  if (seq !== secureVMSeq) return;
+  secureVM = status;
   const slot = document.querySelector<HTMLDivElement>("#securevm-slot");
   if (!slot || activeView !== "security") return;
+  const focus = secureVMFocusSelector(slot);
   slot.innerHTML = renderSecureVM(secureVM, { askUndo: secureVMAskUndo, removal: secureVMRemoval });
   wireSecureVM();
+  if (focus) slot.querySelector<HTMLElement>(focus)?.focus();
+}
+
+// secureVMFocusSelector names the focused control by its data attributes, so
+// the redraw every few seconds puts the keyboard focus back on the same one.
+function secureVMFocusSelector(slot: HTMLElement): string {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement) || !slot.contains(el)) return "";
+  const parts = Array.from(el.attributes)
+    .filter((a) => a.name.startsWith("data-securevm") || a.name === "data-slug")
+    .map((a) => `[${a.name}="${CSS.escape(a.value)}"]`);
+  return parts.length ? el.tagName.toLowerCase() + parts.join("") : "";
 }
 
 // runSecureVM starts an action and redraws at once, so the page shows it busy;

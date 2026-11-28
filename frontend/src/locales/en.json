@@ -2176,6 +2176,7 @@
   "securevm.fence.cut": "Fence changed: VM cut off",
   "securevm.fence.reprove": "Fence needs a new proof",
   "securevm.fence.unproven": "Fence not proven yet",
+  "securevm.fence.unknown": "Fence state unknown: the guard is not reporting",
   "securevm.provedAt": "Proven {when}.",
   "securevm.neverProved": "Not proven yet.",
   "securevm.proving": "Proving the fence now. The VM stays cut off until the proof is green.",
