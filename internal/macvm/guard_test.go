@@ -28,6 +28,8 @@ type fakeHost struct {
 	table     string
 	softnet   string // the softnet command line ("" = none)
 	psFails   bool
+	brFails   bool // bridge100 is listed but cannot be read
+	cutFails  bool // deletem fails
 	calls     []string
 	dropCount int
 }
@@ -46,6 +48,9 @@ func (h *fakeHost) Run(_ context.Context, name string, args ...string) (string, 
 	case call == "/sbin/ifconfig -l":
 		return "lo0 en0 bridge0 bridge100 vmenet0", nil
 	case call == "/sbin/ifconfig bridge100":
+		if h.brFails {
+			return "", errors.New("ifconfig: ioctl failed")
+		}
 		out := "bridge100: flags=8a63<UP> mtu 1500\n\tinet " + testGW + " netmask 0xffffff00 broadcast 192.168.64.255\n"
 		if h.member {
 			out += "\tmember: vmenet0 flags=10803<LEARNING,DISCOVER,PRIVATE,CSUM>\n"
@@ -57,6 +62,9 @@ func (h *fakeHost) Run(_ context.Context, name string, args ...string) (string, 
 	case call == "/sbin/ifconfig vmenet0":
 		return "vmenet0: flags=8963<UP>", nil
 	case call == "/sbin/ifconfig bridge100 deletem vmenet0":
+		if h.cutFails {
+			return "", errors.New("ifconfig: deletem failed")
+		}
 		h.member = false
 		return "", nil
 	case call == "/sbin/ifconfig bridge100 addm vmenet0":
@@ -126,6 +134,9 @@ func guardFixture(t *testing.T) (*Daemon, *fakeHost) {
 			t.Fatal(err)
 		}
 	}
+	if err := WriteAtomic(filepath.Join(p.State, DenyFile), []byte(FormatDeny(deny)), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	d := &Daemon{P: p, R: h, HostBuild: func(context.Context) (string, error) { return "25G83", nil }}
 	return d, h
 }
@@ -151,8 +162,13 @@ func TestPassAtBootCutsBeforeItChecks(t *testing.T) {
 	d.Pass(context.Background(), true)
 	cut := slices.Index(h.calls, "/sbin/ifconfig bridge100 deletem vmenet0")
 	add := slices.Index(h.calls, "/sbin/ifconfig bridge100 addm vmenet0")
-	if cut < 0 || add < 0 || cut > add {
-		t.Fatalf("boot must cut first, then connect after the check: %v", h.calls)
+	// The bridges may be read to find the port, but no pf or softnet read
+	// may come before the cut.
+	firstCheck := slices.IndexFunc(h.calls, func(c string) bool {
+		return strings.HasPrefix(c, "/sbin/pfctl") || strings.HasPrefix(c, "/bin/ps")
+	})
+	if cut < 0 || add < 0 || cut > add || firstCheck < cut {
+		t.Fatalf("boot must cut first, then check, then connect: %v", h.calls)
 	}
 }
 
@@ -284,5 +300,94 @@ func TestDevicesOffReadsTartThroughItsWrapper(t *testing.T) {
 		if ok, why := d.devicesOff(context.Background(), Install{}); ok != c.ok {
 			t.Errorf("%s: devicesOff = %v (%s), want %v", name, ok, why, c.ok)
 		}
+	}
+}
+
+// A new own IP changes deny.list; until a start applies it, the guest stays cut.
+func TestPassCutsUntilTheDenyListIsApplied(t *testing.T) {
+	d, h := guardFixture(t)
+	more := []netip.Addr{netip.MustParseAddr("198.51.100.9"), netip.MustParseAddr("203.0.113.7")}
+	if err := WriteAtomic(d.state(DenyFile), []byte(FormatDeny(more)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st := d.Pass(context.Background(), false)
+	if st.Network == NetConnected || h.member || !slices.Contains(st.Changes, "own-ip") {
+		t.Fatalf("a deny list the fence does not apply must keep the guest cut: %+v", st)
+	}
+}
+
+// A bridge that is listed but cannot be read may hold the guest: fail closed
+// on the port the start recorded, never report the guest as absent.
+func TestPassFailsClosedOnAnUnreadableBridge(t *testing.T) {
+	d, h := guardFixture(t)
+	h.brFails = true
+	st := d.Pass(context.Background(), false)
+	if st.Network == NetOff || st.Network == NetConnected || st.Fence != FenceCut || !h.did("/sbin/ifconfig bridge100 deletem vmenet0") {
+		t.Fatalf("an unreadable bridge must cut the recorded port: %+v", st)
+	}
+}
+
+// A cut that fails is not reported as a cut.
+func TestPassReportsAFailedCut(t *testing.T) {
+	d, h := guardFixture(t)
+	h.pfOn = false // drift
+	h.cutFails = true
+	st := d.Pass(context.Background(), false)
+	if st.Network == NetDisconnected || !strings.Contains(st.Reason, "could not cut") {
+		t.Fatalf("a failed cut must not say disconnected: %+v", st)
+	}
+}
+
+// A rule moved to another interface passes the normalized compare, which
+// drops interface names, so every rule must name the guest's bridge.
+func TestPassCutsARuleOnAnotherBridge(t *testing.T) {
+	d, h := guardFixture(t)
+	h.member = false
+	h.rules = strings.Replace(h.rules, " on bridge100 ", " on bridge101 ", 1)
+	st := d.Pass(context.Background(), false)
+	if st.Network == NetConnected || !slices.Contains(st.Changes, "wrong-bridge") {
+		t.Fatalf("a rule on another bridge must count as drift: %+v", st)
+	}
+}
+
+// A verdict that could not be cleared before a new proof connects nothing.
+func TestPassIgnoresADistrustedVerdict(t *testing.T) {
+	d, h := guardFixture(t)
+	h.member = false
+	d.distrust = true
+	if st := d.Pass(context.Background(), false); st.Network == NetConnected || h.member {
+		t.Fatalf("a distrusted verdict must not connect: %+v", st)
+	}
+}
+
+func TestOtherNewMember(t *testing.T) {
+	before := map[string]bool{"bridge100 vmenet0": true}
+	after := map[string]bool{"bridge100 vmenet0": true, "bridge101 vmenet1": true}
+	if got := OtherNewMember(before, after, "bridge101 vmenet1"); got != "" {
+		t.Fatalf("only the cut port is new, got %q", got)
+	}
+	after["bridge102 vmenet2"] = true
+	if got := OtherNewMember(before, after, "bridge101 vmenet1"); got != "bridge102 vmenet2" {
+		t.Fatalf("a second new port must be found, got %q", got)
+	}
+}
+
+// A symlinked parent folder must not lead a root delete out of the home.
+func TestSafeOwnerPathRefusesASymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	home, outside := filepath.Join(root, "home"), filepath.Join(root, "outside")
+	for _, dir := range []string{filepath.Join(home, "Library", "Caches"), filepath.Join(outside, "keep")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(home, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if safeOwnerPath(filepath.Join(home, "link", "keep"), home, "") {
+		t.Fatal("a path through a symlink out of the home passed")
+	}
+	if !safeOwnerPath(filepath.Join(home, "Library", "Caches", "CashPilot"), home, "") {
+		t.Fatal("a plain path inside the home was refused")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -179,10 +180,16 @@ func (c *canary) close() {
 // capture counts packets toward addrs on port leaving iface, for targets with
 // no canary (the router, the owner's public IPs).
 type capture struct {
-	cmd  *exec.Cmd
-	mu   sync.Mutex
-	seen map[string]bool
+	cmd    *exec.Cmd
+	mu     sync.Mutex
+	seen   map[string]bool
+	done   chan struct{} // closed when tcpdump exited and both pipes are drained
+	scan   error         // a read error on tcpdump's output
+	waited error         // tcpdump's exit
 }
+
+// captureReady is how long tcpdump may take to say it listens.
+const captureReady = 10 * time.Second
 
 func startCapture(ctx context.Context, iface string, port uint16, addrs []netip.Addr) (*capture, error) {
 	if iface == "" || len(addrs) == 0 {
@@ -198,11 +205,19 @@ func startCapture(ctx context.Context, iface string, port uint16, addrs []netip.
 	if err != nil {
 		return nil, err
 	}
+	errOut, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	c := &capture{cmd: cmd, seen: map[string]bool{}}
+	c := &capture{cmd: cmd, seen: map[string]bool{}, done: make(chan struct{})}
+	ready := make(chan struct{})
+	var pipes sync.WaitGroup
+	pipes.Add(2)
 	go func() {
+		defer pipes.Done()
 		sc := bufio.NewScanner(out)
 		for sc.Scan() {
 			for _, a := range addrs {
@@ -213,20 +228,71 @@ func startCapture(ctx context.Context, iface string, port uint16, addrs []netip.
 				}
 			}
 		}
+		c.mu.Lock()
+		c.scan = sc.Err()
+		c.mu.Unlock()
 	}()
-	// tcpdump needs a moment before it captures.
-	time.Sleep(time.Second)
-	return c, nil
+	go func() {
+		// tcpdump says "listening on <iface>" on stderr once it captures.
+		defer pipes.Done()
+		sc := bufio.NewScanner(errOut)
+		said := false
+		for sc.Scan() {
+			if !said && strings.Contains(sc.Text(), "listening on") {
+				said = true
+				close(ready)
+			}
+		}
+	}()
+	go func() {
+		// Wait closes the pipes, so it runs only after both are drained.
+		pipes.Wait()
+		err := cmd.Wait()
+		c.mu.Lock()
+		c.waited = err
+		c.mu.Unlock()
+		close(c.done)
+	}()
+	select {
+	case <-ready:
+		return c, nil
+	case <-c.done:
+		return nil, fmt.Errorf("tcpdump stopped before it listened on %s: %v", iface, c.waited)
+	case <-time.After(captureReady):
+		_ = cmd.Process.Kill()
+		<-c.done
+		return nil, fmt.Errorf("tcpdump did not start listening on %s", iface)
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		<-c.done
+		return nil, ctx.Err()
+	}
 }
 
-func (c *capture) stop() map[string]bool {
-	if c.cmd != nil && c.cmd.Process != nil {
+// stop ends the capture and returns what it saw, after tcpdump's whole output
+// was read. A capture that stopped by itself, or whose output could not be
+// read, saw nothing for sure, so it returns an error.
+func (c *capture) stop() (map[string]bool, error) {
+	if c.cmd == nil {
+		return c.seen, nil
+	}
+	var early bool
+	select {
+	case <-c.done:
+		early = true
+	default:
 		_ = c.cmd.Process.Kill()
-		_ = c.cmd.Wait()
+		<-c.done
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.seen
+	if early {
+		return nil, fmt.Errorf("packet capture stopped during the step: %v", c.waited)
+	}
+	if c.scan != nil {
+		return nil, fmt.Errorf("could not read the packet capture: %w", c.scan)
+	}
+	return c.seen, nil
 }
 
 // probeScript runs in the guest as root. It sends "<token>-<label>" to every
@@ -348,9 +414,15 @@ func (p *prover) send(ctx context.Context, targets []Target) (arrived []string, 
 		}
 	}
 	var caps []*capture
+	stopAll := func() {
+		for _, cp := range caps {
+			_, _ = cp.stop()
+		}
+	}
 	for ifc, addrs := range byIface {
 		c, err := startCapture(ctx, ifc, p.port, addrs)
 		if err != nil {
+			stopAll()
 			return nil, nil, fmt.Errorf("packet capture on %s: %w", ifc, err)
 		}
 		caps = append(caps, c)
@@ -362,9 +434,18 @@ func (p *prover) send(ctx context.Context, targets []Target) (arrived []string, 
 	c, cancel := context.WithTimeout(ctx, 90*time.Second)
 	_, err = p.d.guestRun(c, p.inst, in.String(), probeScript, token, fmt.Sprint(p.port))
 	cancel()
-	_ = sleep(ctx, proofWait)
+	// A wait cut short saw less than a step needs, so it scores nothing.
+	if werr := sleep(ctx, proofWait); werr != nil {
+		stopAll()
+		return nil, nil, werr
+	}
 	for _, cp := range caps {
-		for a := range cp.stop() {
+		seen, serr := cp.stop()
+		if serr != nil {
+			stopAll()
+			return nil, nil, serr
+		}
+		for a := range seen {
 			for _, t := range targets {
 				if t.Addr.String() == a {
 					captured = append(captured, t.Label)
@@ -374,6 +455,9 @@ func (p *prover) send(ctx context.Context, targets []Target) (arrived []string, 
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("the guest could not run the probe: %w", err)
+	}
+	if ctx.Err() != nil {
+		return nil, nil, ctx.Err()
 	}
 	return p.can.arrived(token), captured, nil
 }
@@ -444,17 +528,28 @@ func (d *Daemon) Prove(ctx context.Context) securevm.Proof {
 	st := Status{Version: StatusVersion, WrittenAt: d.now(), VM: VMName, Network: NetDisconnected, Fence: FenceUnproven, Proving: true, Reason: "CashPilot is checking the fence"}
 	d.writeStatus(&st)
 	p := &prover{d: d, port: randomPort()}
+	// The old verdict goes first: a proof that fails half way must not leave
+	// it in place to connect the guest. When it cannot be removed, the guard
+	// distrusts it until a new green verdict is written.
+	if err := os.Remove(d.state(VerdictFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		d.distrust = true
+		d.logf("proof: could not clear the old verdict: %v; the guard ignores it", err)
+	}
 	defer func() {
 		pf.Steps = p.steps
 		_ = WriteJSON(d.state(ProofFile), pf, 0o644)
-		if pf.Green {
+		if pf.Green && ctx.Err() == nil {
 			build := ""
 			if d.HostBuild != nil {
 				build, _ = d.HostBuild(ctx)
 			}
-			_ = WriteJSON(d.state(VerdictFile), Proven{At: pf.At, HostBuild: build, Tart: p.inst.Tart, Softnet: p.inst.Softnet, Green: true}, 0o644)
-		} else {
-			_ = os.Remove(d.state(VerdictFile))
+			if err := WriteJSON(d.state(VerdictFile), Proven{At: pf.At, HostBuild: build, Tart: p.inst.Tart, Softnet: p.inst.Softnet, Green: true}, 0o644); err == nil {
+				d.distrust = false
+			} else {
+				d.logf("proof: green, but the verdict could not be saved: %v", err)
+			}
+		} else if err := os.Remove(d.state(VerdictFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			d.distrust = true
 		}
 		d.Pass(context.WithoutCancel(ctx), false)
 	}()
