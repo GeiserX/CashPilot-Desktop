@@ -298,7 +298,8 @@ func (a *App) imageUpdateHooks() imageupdates.Hooks {
 				OldDigest: r.OldDigest, NewDigest: r.NewDigest, Detail: r.Detail,
 			})
 		},
-		Seen: a.store.ImageUpdateSeen,
+		Seen:  a.store.ImageUpdateSeen,
+		Holds: &a.imageUpdateHolds,
 	}
 }
 

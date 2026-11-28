@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	goruntime "runtime"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -166,6 +165,9 @@ type Docker struct {
 	imageVolumes  map[string][]string
 	crashing      map[string]bool
 	removedImages []string
+	// deleted holds the build IDs deleted and not pulled again: an inspect or a
+	// create of one answers that the image is missing, as Docker does.
+	deleted map[string]bool
 	// onImageInspect runs after each image inspect is answered (OnImageInspect).
 	onImageInspect func(ref string)
 	// failLogs makes every log read answer a server error (FailLogs).
@@ -513,6 +515,8 @@ func (d *Docker) pull(w http.ResponseWriter, r *http.Request) {
 	d.pullError = ""
 	if failure == "" {
 		d.images = append(d.images, image)
+		// The registry still has the build: a pull brings a deleted one back.
+		delete(d.deleted, d.build(image).ID)
 	}
 	d.mu.Unlock()
 
@@ -538,9 +542,14 @@ func (d *Docker) image(w http.ResponseWriter, ref string) {
 	d.mu.Lock()
 	b := d.build(ref)
 	after := d.onImageInspect
+	gone := d.deleted[b.ID]
 	d.mu.Unlock()
 	if after != nil {
 		defer after(ref)
+	}
+	if gone {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + ref})
+		return
 	}
 	answer := map[string]any{
 		"Id":     b.ID,
@@ -576,6 +585,10 @@ func (d *Docker) removeImage(w http.ResponseWriter, id string) {
 		}
 	}
 	d.removedImages = append(d.removedImages, id)
+	if d.deleted == nil {
+		d.deleted = map[string]bool{}
+	}
+	d.deleted[d.build(id).ID] = true
 	writeJSON(w, http.StatusOK, []map[string]string{{"Deleted": id}})
 }
 
@@ -630,6 +643,10 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if d.deleted[d.build(body.Image).ID] {
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "No such image: " + body.Image})
+		return
+	}
 	d.nextID++
 	c := &Container{
 		ID:          fmt.Sprintf("ctr%09d", d.nextID),
@@ -661,7 +678,11 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		delete(d.refuseNextStart, name)
 		c.refuseStart = why
 	}
+	// Every mounted path, binds included: an image VOLUME at one of them gets
+	// no anonymous volume.
+	mounted := map[string]bool{}
 	for _, m := range body.HostConfig.Mounts {
+		mounted[m.Target] = true
 		if m.Type == "volume" && m.Source != "" {
 			c.Mounts = append(c.Mounts, Mount{Source: m.Source, Target: m.Target})
 			// The daemon creates a named volume on first use.
@@ -669,7 +690,7 @@ func (d *Docker) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, p := range d.imageVolumes[c.ImageID] {
-		if !slices.ContainsFunc(c.Mounts, func(m Mount) bool { return m.Target == p }) {
+		if !mounted[p] {
 			anon := fmt.Sprintf("%064x", d.nextID*1000+len(c.Mounts))
 			c.Mounts = append(c.Mounts, Mount{Source: anon, Target: p, Anonymous: true})
 			d.volumes[anon] = true

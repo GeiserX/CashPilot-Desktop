@@ -1983,7 +1983,11 @@ async function saveImageUpdates(mode?: string) {
   slot.querySelectorAll<HTMLSelectElement>("[data-image-updates-app]").forEach((el) => {
     apps[el.dataset.imageUpdatesApp || ""] = el.value;
   });
-  const chosen = mode || slot.querySelector<HTMLSelectElement>("#image-updates-mode")?.value || "off";
+  const modeSelect = slot.querySelector<HTMLSelectElement>("#image-updates-mode");
+  // Enable saves Update automatically: the select shows it too, so a page
+  // redraw before the answer carries that choice, not the old one.
+  if (mode && modeSelect) modeSelect.value = mode;
+  const chosen = mode || modeSelect?.value || "off";
   const hour = Number(slot.querySelector<HTMLSelectElement>("#image-updates-hour")?.value ?? 4);
   const sent = imageUpdateEdits.sent();
   try {

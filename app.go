@@ -28,6 +28,7 @@ import (
 	"github.com/GeiserX/CashPilot-Desktop/internal/exchange"
 	"github.com/GeiserX/CashPilot-Desktop/internal/health"
 	"github.com/GeiserX/CashPilot-Desktop/internal/i18n"
+	"github.com/GeiserX/CashPilot-Desktop/internal/imageupdates"
 	"github.com/GeiserX/CashPilot-Desktop/internal/preflight"
 	"github.com/GeiserX/CashPilot-Desktop/internal/runtime"
 	"github.com/GeiserX/CashPilot-Desktop/internal/services"
@@ -38,6 +39,8 @@ import (
 
 type App struct {
 	ctx context.Context
+	// imageUpdateHolds are the builds an app image update undid while the app runs.
+	imageUpdateHolds imageupdates.Holds
 	// startErr holds the error that stopped startCore, so ready() can report it
 	// instead of errStillStarting, which the window would wait on.
 	startErr   atomic.Pointer[error]
